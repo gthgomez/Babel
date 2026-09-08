@@ -85,7 +85,7 @@ describe('implementorPolicy', () => {
     );
     assert.equal(detectEnvBlockedFromText('all tests passed'), false);
     assert.equal(
-      detectEnvBlockedFromToolLog([{ error: 'python was not found' }]),
+      detectEnvBlockedFromToolLog([{ tool: 'run_command', error: 'python was not found' }]),
       true,
     );
     assert.equal(

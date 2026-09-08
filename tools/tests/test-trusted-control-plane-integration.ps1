@@ -14,7 +14,8 @@
 [CmdletBinding()]
 param(
   [string]$RepoRoot = (Join-Path $PSScriptRoot '..\..'),
-  [string]$DebugOutputDirectory = ''
+  [string]$DebugOutputDirectory = '',
+  [ValidateSet('RED', 'GREEN')][string]$CandidateLane = 'RED'
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -57,7 +58,9 @@ try {
   & $git -C $seedPath update-ref refs/remotes/origin/main $baseSha
 
   # ---- candidate commit changes the RED control plane (main stays at base) ----
-  Add-Content -LiteralPath (Join-Path $seedPath 'scripts/agent-git-common.psm1') -Value '# candidate control-plane change' -Encoding utf8NoBOM
+  if ($CandidateLane -eq 'RED') {
+    Add-Content -LiteralPath (Join-Path $seedPath 'scripts/agent-git-common.psm1') -Value '# candidate control-plane change' -Encoding utf8NoBOM
+  }
   Set-Content -LiteralPath (Join-Path $seedPath 'feature.txt') -Value 'candidate feature' -Encoding utf8NoBOM
   & $git -C $seedPath add -A
   & $git -C $seedPath commit -m 'candidate control-plane change' 2>&1 | Out-Null
@@ -93,17 +96,19 @@ try {
     review_provider = 'opencode-go'
     reviewer_model = 'deepseek-v4-flash'
     reviewed_at = $reviewedAt
-    scope = @('scripts/agent-git-common.psm1', 'feature.txt')
+    scope = @(if ($CandidateLane -eq 'RED') { 'scripts/agent-git-common.psm1'; 'feature.txt' } else { 'feature.txt' })
     findings = @('example non-blocking finding')
     blocking_findings = @()
     verdict = 'APPROVE'
     builder_id = 'codex-implementation'
     diff_numstat_digest = $numstatDigest
-    isolation = [ordered]@{ mode = 'text_only_no_tools'; candidate_write = $false; github_mutation = $false; merge = $false; controller_state_access = $false }
+    isolation = [ordered]@{ mode = 'readonly_sandbox'; candidate_write = $false; github_mutation = $false; merge = $false; controller_state_access = $false }
+    harness = [ordered]@{ name = 'babel'; mode = 'chat'; version = ('c' * 64); source_sha = $baseSha; execution_id = 'execution-101' }
   }
   $secondEvidence = $evidence | ConvertTo-Json -Depth 10 | ConvertFrom-Json
   $secondEvidence.reviewer_id = 'isolated-adversarial-reviewer'
   $secondEvidence.execution_id = 'execution-102'
+  $secondEvidence.harness.execution_id = 'execution-102'
   $handoff = [ordered]@{
     schema_version = 2; kind = 'host_review_handoff_v2'
     repository = 'gthgomez/Babel'; pr_number = 4242; base_sha = $baseSha; head_sha = $headSha
@@ -284,7 +289,9 @@ exit 0
     $run = Invoke-Gate -Label 'positive' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath }
     if ($run.exitCode -ne 0) { throw "exit=$($run.exitCode) blockers=$($run.result.blockers -join ',')" }
     if ($run.result.blockers.Count -ne 0) { throw "unexpected blockers: $($run.result.blockers -join ',')" }
-    if ($run.result.reviewPolicy.effectiveRiskLane -ne 'RED') { throw "unexpected lane: $($run.result.reviewPolicy.effectiveRiskLane)" }
+    if ($run.result.reviewPolicy.effectiveRiskLane -ne $CandidateLane) { throw "unexpected lane: $($run.result.reviewPolicy.effectiveRiskLane)" }
+    $minimum = if ($CandidateLane -eq 'RED') { 2 } else { 1 }
+    if (-not $run.result.reviewPolicy.independentReviewRequired -or $run.result.reviewPolicy.minimumIndependentReviewCount -ne $minimum) { throw 'Every PR must require proportionate independent chat review.' }
     if ($run.result.reviewPolicy.observedIndependentReviewCount -ne 2) { throw 'two independent reviews were not observed' }
   }
 
@@ -323,8 +330,10 @@ exit 0
     } finally {
       Get-Content -Raw (Join-Path $root 'comment-102.json') | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
     }
-    if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-    if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
+    if ($CandidateLane -eq 'RED') {
+      if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
+      if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
+    } elseif ($run.exitCode -ne 0) { throw 'One valid Babel chat review must satisfy GREEN review policy.' }
   }
 
   # 3. A local bundle from a different owner cannot impersonate the live owner handoff.
@@ -352,6 +361,7 @@ exit 0
     $run = Invoke-Gate -Label 'missing-review' -Extra @{}
     if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
     if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
+    if (-not $run.result.reviewPolicy.independentReviewRequired) { throw "$CandidateLane PR skipped independent review." }
   }
 
   # 5. dirty candidate worktree
@@ -375,6 +385,10 @@ exit 0
   exit 0
 } finally {
   if (Test-Path $root) {
+    $resolvedTestRoot = [IO.Path]::GetFullPath($root)
+    $expectedTempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    if ([IO.Path]::GetDirectoryName($resolvedTestRoot) -ne $expectedTempParent -or [IO.Path]::GetFileName($resolvedTestRoot) -notmatch '^babel-tcp-integration-[0-9a-f]{32}$') { throw 'Refusing unexpected test cleanup target.' }
+    if ([IO.Path]::GetFullPath($candidatePath) -ne (Join-Path $resolvedTestRoot 'candidate')) { throw 'Refusing unexpected candidate cleanup target.' }
     & $git worktree remove --force $candidatePath 2>$null
     try { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop } catch { Write-Output "warning: temp cleanup deferred ($($_.Exception.Message))" }
   }

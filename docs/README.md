@@ -23,6 +23,7 @@ architecture underneath.
 
 - [Integration guide](../INTEGRATION.md) — model-facing invocation contract
 - [Autonomy policy](./AUTONOMY_POLICY.md) — canonical autonomous engineering defaults and authority boundaries
+- [Babel chat PR review](./BABEL_PR_REVIEW.md) — every-PR review, owner provenance, separate repairs and harness telemetry
 - [Autonomy policy changelog](./AUTONOMY_POLICY_CHANGELOG.md) — review record for the policy refactor
 - [Architecture](./architecture/ARCHITECTURE.md) — Prompt OS layers, catalog, V9 pipeline
 - [**Harness architecture v1**](./architecture/HARNESS_ARCHITECTURE_V1.md) — **normative** runtime harness specification (`harness-v1`)

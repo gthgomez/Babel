@@ -252,7 +252,7 @@ function Read-AgentAutonomousReviewEvidence {
   }
   $scopeResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('-c', 'core.quotepath=false', 'diff', '--no-ext-diff', '--no-textconv', '--name-only', "$BaseSha...$HeadSha")
   if ($scopeResult.exitCode -ne 0) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('autonomous_review_scope_unavailable'); reviewCount = 0 } }
-  $validation = Test-AgentControllerReviewEvidenceBundle -Bundle $evidence -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount $MinimumReviewCount -PublisherId $publisherId -ExpectedScope @($scopeResult.output)
+  $validation = Test-AgentControllerReviewEvidenceBundle -Bundle $evidence -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount $MinimumReviewCount -PublisherId $publisherId -ExpectedScope @($scopeResult.output) -RequireBabelChat
   return [pscustomobject]@{ path = $path; valid = [bool]$validation.valid; errors = @($validation.errors); reviewCount = [int]$validation.reviewCount }
 }
 
@@ -386,13 +386,15 @@ try {
   $baseDerivedLane = Get-AgentRiskLane -ChangedPaths $diffPaths
   $requestedLane = ConvertTo-AgentRiskLane -Lane $RiskTier
   $effectiveLane = if ((Get-AgentLaneRank -Lane $requestedLane) -gt (Get-AgentLaneRank -Lane $baseDerivedLane)) { $requestedLane } else { $baseDerivedLane }
-  $minimumReviewCount = switch ($effectiveLane) { 'YELLOW' { 1 }; 'RED' { 2 }; default { 0 } }
-  $independentRequired = $minimumReviewCount -gt 0
-  $autonomousEvidenceResult = [pscustomobject]@{ path = ''; valid = $true; errors = @(); reviewCount = 0 }
+  # Every PR exercises Babel chat; consequence adds a second perspective.
+  # BLACK remains blocked separately and cannot opt out of review.
+  $minimumReviewCount = if ($effectiveLane -eq 'RED') { 2 } else { 1 }
+  $independentRequired = $true
+  $autonomousEvidenceResult = [pscustomobject]@{ path = ''; valid = $false; errors = @('autonomous_review_evidence_missing'); reviewCount = 0 }
   if ($independentRequired -and $prAvailable) {
     $autonomousEvidenceResult = Read-AgentAutonomousReviewEvidence -BaseSha $prBase -HeadSha $prHead -MinimumReviewCount $minimumReviewCount
   }
-  $independentReviewTier = if ($independentRequired) { 'CONTROLLER_OWNED_AI' } else { 'NOT_REQUIRED' }
+  $independentReviewTier = 'CONTROLLER_OWNED_BABEL_CHAT'
   $independentReviewSatisfied = (-not $independentRequired) -or $autonomousEvidenceResult.valid
   Add-AgentCheck -Name 'INDEPENDENT_REVIEW_SATISFIED' -Passed $independentReviewSatisfied -Blocker 'independent_review_not_satisfied'
   Add-AgentCheck -Name 'RISK_LANE_NOT_BLACK' -Passed ($effectiveLane -ne 'BLACK') -Blocker 'black_scope_requires_owner_decision'

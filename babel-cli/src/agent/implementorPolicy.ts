@@ -257,18 +257,22 @@ export function extractEnvBlockedReason(
 }
 
 /** Scan tool log detail/error/stdout/stderr for env-red signals. */
+type EnvToolObservation = { tool?: string; exit_code?: number; detail?: string; error?: string; stdout?: string; stderr?: string };
+
+/** Source text and successful command output are data, not failed execution receipts. */
+export function extractToolEnvBlockedSignal(t: EnvToolObservation, options?: EnvBlockedDetectOptions): string | null {
+  if (!t.tool || !isShellTool(t.tool) || t.exit_code === 0) return null;
+  if (!t.error && !t.stderr && !(typeof t.exit_code === 'number' && t.exit_code !== 0)) return null;
+  const blob = [t.detail, t.error, t.stdout, t.stderr].filter(Boolean).join('\n');
+  return blob && detectEnvBlockedFromText(blob, options) ? blob.replace(/\s+/g, ' ').trim().slice(0, 220) : null;
+}
+
 export function detectEnvBlockedFromToolLog(
-  toolCalls: Array<{
-    detail?: string;
-    error?: string;
-    stdout?: string;
-    stderr?: string;
-  }>,
+  toolCalls: EnvToolObservation[],
   options?: EnvBlockedDetectOptions,
 ): boolean {
   for (const t of toolCalls) {
-    const blob = [t.detail, t.error, t.stdout, t.stderr].filter(Boolean).join('\n');
-    if (blob && detectEnvBlockedFromText(blob, options)) return true;
+    if (extractToolEnvBlockedSignal(t, options)) return true;
   }
   return false;
 }
@@ -309,6 +313,7 @@ export function resolveImplementorHarnessFields(input: {
   hasAnyWrites: boolean;
   emptyPatch: boolean;
   legacyAnswerStatus: string;
+  readOnly?: boolean;
 }): {
   env_blocked: boolean;
   status: string;
@@ -319,7 +324,7 @@ export function resolveImplementorHarnessFields(input: {
 } {
   const envOpts: EnvBlockedDetectOptions = { hasAnyWrites: input.hasAnyWrites };
   const envBlocked =
-    detectEnvBlockedFromText(input.answer ?? '', envOpts) ||
+    (!input.readOnly && detectEnvBlockedFromText(input.answer ?? '', envOpts)) ||
     detectEnvBlockedFromToolLog(input.toolCalls ?? [], envOpts);
   const honesty = classifyEmptyPatchHonesty({
     emptyPatch: input.emptyPatch,

@@ -9,6 +9,22 @@ import {
   resolveChatEngineLimits,
 } from './chatEngineLimits.js';
 
+test('explicit unlimited monetary policy retains wall, turn and stall controls', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  try {
+    process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
+    const limits = resolveChatEngineLimits();
+    assert.equal(limits.maxCostUsd, Infinity);
+    assert.ok(Number.isFinite(limits.maxWallMs) && limits.maxWallMs > 0);
+    assert.ok(Number.isFinite(limits.maxTurns) && limits.maxTurns > 0);
+    assert.ok(Number.isFinite(limits.stallTurns) && limits.stallTurns > 0);
+    assert.equal(resolveChatEngineLimits({ maxCostUsd: 1 }).maxCostUsd, 1);
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
 test('resolveChatEngineLimits uses defaults when env unset', () => {
   const previous = {
     turns: process.env['BABEL_CHAT_MAX_TURNS'],

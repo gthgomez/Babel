@@ -96,7 +96,7 @@ function parseBoundedFloat(
  * - BABEL_CHAT_MAX_TURNS (default 200, safety ceiling)
  * - BABEL_CHAT_MAX_MESSAGES (default 20)
  * - BABEL_CHAT_MAX_TOKENS (default 128000)
- * - BABEL_CHAT_MAX_COST (default 2.00, USD)
+ * - BABEL_CHAT_MAX_COST (default 2.00 USD; explicit 'unlimited' disables only the monetary cap)
  * - BABEL_CHAT_MAX_WALL_MS (default 600000, 10 minutes)
  * - BABEL_CHAT_STALL_TURNS (default 8)
  * - BABEL_CHAT_MAX_TOKENS_PER_ROUND (default 200_000, R11 per-round token ceiling)
@@ -222,7 +222,7 @@ export function resolveChatEngineLimits(
       200_000,
       Math.max(4_000, overrides.maxEstimatedTokens ?? fromEnv.maxEstimatedTokens),
     ),
-    maxCostUsd: Math.min(
+    maxCostUsd: process.env['BABEL_CHAT_MAX_COST'] === 'unlimited' && overrides.maxCostUsd === undefined ? Infinity : Math.min(
       100.00,
       Math.max(0.01, overrides.maxCostUsd ?? fromEnv.maxCostUsd),
     ),

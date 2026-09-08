@@ -61,7 +61,7 @@ import {
   type ChatOperatorMode,
   type ChatPlanExecuteHandoff,
 } from './planExecuteMode.js';
-import { detectEnvBlockedFromText, evaluateCompletionPrefersPatch } from './implementorPolicy.js';
+import { detectEnvBlockedFromText, extractToolEnvBlockedSignal, evaluateCompletionPrefersPatch } from './implementorPolicy.js';
 import { evaluatePhaseToolGate } from './phaseToolPolicy.js';
 import { extractJson } from '../utils/extractJson.js';
 import type { BlockedReport, TerminalOutcome } from '../schemas/agentContracts.js';
@@ -366,7 +366,14 @@ export interface SubmitMessageOptions {
   continueTask?: boolean;
 }
 
+import { deniesReadOnlyChatAction, isReadOnlyChat, resolveChatRangePath } from './chatReadOnly.js';
+
 export interface ChatEngineOptions {
+  instructionRoot?: string;
+  /** Trusted embedding seam: pins all inference phases to one observed runner. */
+  providerRunner?: DeepInfraApiRunner;
+  /** Immutable policy for a trusted embedded provider, never model-supplied. */
+  providerPolicy?: ResolvedModelPolicy;
   task: string;
   projectRoot: string;
   runId?: string;
@@ -953,7 +960,7 @@ export class ChatEngine {
     this.initializeVerifierGuard();
 
     // P-4.2 / Gap-2: structured memory dir with task relevance, else BABEL.md.
-    const babelMd = readProjectMemoryStructured(this.options.projectRoot, this.options.task);
+    const babelMd = readProjectMemoryStructured(this.options.instructionRoot ?? this.options.projectRoot, this.options.task);
     if (babelMd) {
       this.options.systemContext =
         babelMd + (this.options.systemContext ? '\n\n' + this.options.systemContext : '');
@@ -990,13 +997,16 @@ export class ChatEngine {
 
     // Resolve model policy for provider selection.
     // Always resolve — when no model is specified, use the policy default tier.
-    const { policy: modelPolicy, offline: isOffline } = resolveChatModelPolicy({
+    const { policy: modelPolicy, offline: isOffline } = options.providerPolicy && options.providerRunner ? { policy: options.providerPolicy, offline: false } : resolveChatModelPolicy({
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.modelTier !== undefined ? { modelTier: options.modelTier } : {}),
       ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
       ...(process.env['BABEL_ROOT'] ? { babelRoot: process.env['BABEL_ROOT'] } : {}),
     });
     this.modelPolicy = modelPolicy;
+    if (options.providerRunner) {
+      this.deliberationRunner = this.synthesisRunner = this.fallbackRunner = options.providerRunner;
+    }
     // Exact experimental routes are campaign boundaries: phase-specific
     // environment overrides must not recruit another provider/model.
     if (
@@ -1427,7 +1437,7 @@ export class ChatEngine {
     const sessionCost = globalCostTracker.getSessionSummary().totalCostUSD;
     // After first critic reject or post-write repair, use the tighter cost cap.
     const maxCostUsd =
-      this.criticRepairCostCapUsd != null
+      Number.isFinite(this.limits.maxCostUsd) && this.criticRepairCostCapUsd != null
         ? Math.min(this.limits.maxCostUsd, this.criticRepairCostCapUsd)
         : this.limits.maxCostUsd;
     // After first write: absolute wall cap from session start (repair window).
@@ -2717,10 +2727,8 @@ export class ChatEngine {
         const sessionHasWrites = this.hasAnyWrites();
         const envBlockedSignal = (() => {
           for (const t of turnSlice) {
-            const blob = [t.detail, t.error, t.stdout, t.stderr].filter(Boolean).join('\n');
-            if (blob && detectEnvBlockedFromText(blob, { hasAnyWrites: sessionHasWrites })) {
-              return blob.replace(/\s+/g, ' ').trim().slice(0, 220);
-            }
+            const signal = extractToolEnvBlockedSignal(t, { hasAnyWrites: sessionHasWrites });
+            if (signal) return signal;
           }
           return null;
         })();
@@ -2977,9 +2985,9 @@ export class ChatEngine {
         const completionHasWrites = this.hasAnyWrites();
         const envDetectOpts = { hasAnyWrites: completionHasWrites };
         const envBlocked =
-          detectEnvBlockedFromText(answer, envDetectOpts) ||
+          (!isReadOnlyChat() && detectEnvBlockedFromText(answer, envDetectOpts)) ||
           this.toolCallLog.some((t) =>
-            detectEnvBlockedFromText(`${t.detail ?? ''} ${t.error ?? ''}`, envDetectOpts),
+            extractToolEnvBlockedSignal(t, envDetectOpts) !== null,
           );
         const completionPref = evaluateCompletionPrefersPatch({
           executeIntent: resolvedIntent === 'execute',
@@ -3457,6 +3465,7 @@ export class ChatEngine {
   ) {
     const hasMutation = this.hasAnyWrites();
     let requestedOutcome = computeTerminalOutcome({
+      readOnly: isReadOnlyChat(),
       finalStatus: extra?.blockedReport
         ? 'blocked'
         : this.budgetExceeded
@@ -3983,7 +3992,7 @@ export class ChatEngine {
       const isMutationSubAgent =
         action.type === 'sub_agent' && (action as { mutation?: boolean }).mutation === true;
       // Implementor W1.3: hard plan mode (mutations blocked until /execute-plan).
-      const hardPlanGate = evaluateHardPlanModeGate({
+      const hardPlanGate = deniesReadOnlyChatAction(action.type) ? { blocked: true, observation: 'Read-only chat policy denied this tool; use only read_file/read_range/list_dir/grep/glob inspection.' } : evaluateHardPlanModeGate({
         toolName: tool,
         hardPlanMode: this.hardPlanMode,
         isMutationSubAgent,
@@ -4441,6 +4450,7 @@ export class ChatEngine {
       // Path-normalized keys so absolute/relative variants share one slot.
       let fileReadCacheHash: string | undefined;
       if (action.type === 'read_file') {
+        if (isReadOnlyChat()) resolveChatRangePath(this.options.projectRoot, action.path);
         const pathKey = this.readCacheKey(action.path);
         const maxFull = getChatTaskTune(this.taskClass).maxFullReadsPerFile;
         const priorFull = this.fullReadCounts.get(pathKey) ?? 0;
@@ -4597,7 +4607,7 @@ export class ChatEngine {
 
       // ── B1: read_range — read specific lines ────────────────────────
       if (action.type === 'read_range') {
-        const rPath = resolveProjectPath(this.options.projectRoot, action.file_path);
+        const rPath = resolveChatRangePath(this.options.projectRoot, action.file_path);
         const rContent = await readFile(rPath, 'utf-8');
         const rHash = this.hashContent(rContent);
         const rKey = this.readCacheKey(rPath);
@@ -4796,7 +4806,7 @@ export class ChatEngine {
         // Future evolutions:
         //   B — new 'auto' preset that allows everything (no approval, no denial)
         //   C — BABEL_ALLOW_NETWORK_COMMANDS=1 env flag for graduated autonomy
-        this.executionProfile === 'plan' ? 'read_only' : 'workspace_write',
+        this.executionProfile === 'plan' || process.env['BABEL_READ_ONLY'] === 'true' || process.env['BABEL_EXECUTION_PROFILE'] === 'read_only_audit' ? 'read_only' : 'workspace_write',
         toolContext,
         {
           executor: defaultToolExecutor,
@@ -5832,6 +5842,7 @@ export class ChatEngine {
     | OllamaApiRunner
     | OpenRouterApiRunner
     | null {
+    if (this.options.providerRunner) return this.options.providerRunner;
     if (
       !isOfflineChatMode() &&
       this.modelPolicy?.provider === 'openrouter' &&
@@ -6342,6 +6353,7 @@ export class ChatEngine {
     // Compute truthful TerminalOutcome from status and runtime state.
     const hasMutation = this.hasAnyWrites();
     let outcome: TerminalOutcome = computeTerminalOutcome({
+      readOnly: isReadOnlyChat(),
       finalStatus,
       budgetExceeded: this.budgetExceeded,
       lastVerifierReceipt: this.lastVerifierReceipt,
