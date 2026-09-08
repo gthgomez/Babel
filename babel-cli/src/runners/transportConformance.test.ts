@@ -71,6 +71,7 @@ const API_TRANSPORT_MODULES = [
   'groqApi.js',
   'openRouterApi.ts',
   'openCodeApi.ts',
+  'openCodeGoApi.ts',
   'providerMessages.ts',
   'providerNormalize.ts',
   'credentialHub.ts',
@@ -125,6 +126,7 @@ const ADAPTER_INDEX: Readonly<Record<ProviderId, { module: string; adapterClass:
   deepinfra: { module: 'deepInfraApi.ts', adapterClass: 'DeepInfraApiRunner' },
   openrouter: { module: 'openRouterApi.ts', adapterClass: 'OpenRouterApiRunner' },
   opencode: { module: 'openCodeApi.ts', adapterClass: 'OpenCodeApiRunner' },
+  'opencode-go': { module: 'openCodeGoApi.ts', adapterClass: 'OpenCodeGoApiRunner' },
   openai: { module: 'openAiApi.ts', adapterClass: 'OpenAiApiRunner' },
   anthropic: { module: 'apiFallback.ts', adapterClass: 'ApiFallbackRunner' },
   gemini: { module: 'geminiApi.ts', adapterClass: 'GeminiApiRunner' },
@@ -143,6 +145,7 @@ const CLASS_EXTENDS: Readonly<Record<string, string | null>> = {
   OllamaApiRunner: 'DeepInfraApiRunner',
   OpenRouterApiRunner: 'DeepInfraApiRunner',
   OpenCodeApiRunner: 'DeepInfraApiRunner',
+  OpenCodeGoApiRunner: 'DeepInfraApiRunner',
   OpenAiApiRunner: null,
   GeminiApiRunner: null,
   ApiFallbackRunner: null,
@@ -176,6 +179,7 @@ const EVIDENCE_EXPECTATIONS: Readonly<
   openrouter: { protocol: 'openai_compatible', requiresCredential: true },
   // Dormant providers carry no evidence expectations until they are vetted.
   opencode: { protocol: 'openai_compatible', requiresCredential: true },
+  'opencode-go': { protocol: 'openai_compatible', requiresCredential: true },
   openai: { protocol: 'openai_compatible', requiresCredential: true },
   anthropic: { protocol: 'anthropic', requiresCredential: true },
   gemini: { protocol: 'gemini', requiresCredential: true },
@@ -295,18 +299,24 @@ test('transport: API transports never import or call raw effect primitives', () 
   }
 });
 
-test('transport: all process creation in the transport layer funnels through cliBase.spawnCliProcess', () => {
+test('transport: process creation is limited to CLI dispatch and the approved OpenCode Go helper', () => {
   const importers = listTransportFiles().filter((file) =>
     collectImportSpecifiers(readTransportSource(file)).includes('node:child_process'),
   );
   // cliBase.ts is the SINGLE sanctioned spawn site; CLI runners go through it.
-  assert.deepEqual(importers, ['cliBase.ts']);
+  assert.deepEqual(importers, ['cliBase.ts', 'openCodeGoCredential.ts']);
   assert.match(readTransportSource('cliBase.ts'), /export function spawnCliProcess/);
   for (const cli of ['claudeCli.ts', 'codexCli.ts', 'geminiCli.ts']) {
     const source = readTransportSource(cli);
     assert.match(source, /spawnCliProcess/, `${cli} must spawn through cliBase`);
     assert.doesNotMatch(source, /node:child_process/, `${cli} must not spawn directly`);
   }
+  const credentialHelper = readTransportSource('openCodeGoCredential.ts');
+  assert.match(
+    credentialHelper,
+    /runHelper\(process\.execPath, \[helperPath\]/,
+    'OpenCode Go may execute only the approved Node helper path',
+  );
 });
 
 test('transport: transports only EMIT tool_use events — the agent lane executes them', () => {

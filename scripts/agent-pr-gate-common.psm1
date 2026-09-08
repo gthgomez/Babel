@@ -246,7 +246,11 @@ function Get-AgentNumstatDigest {
   param(
     [Parameter(Mandatory = $true)][string[]]$NumstatLines
   )
-  $canonical = (@($NumstatLines) | Sort-Object) -join "`n"
+  # Match JavaScript Array.sort(): ordinal UTF-16 order, independent of culture.
+  # Sort a copy so collecting evidence cannot mutate the caller's snapshot.
+  $sortedLines = [string[]]$NumstatLines.Clone()
+  [Array]::Sort($sortedLines, [StringComparer]::Ordinal)
+  $canonical = $sortedLines -join "`n"
   $bytes = [Text.Encoding]::UTF8.GetBytes($canonical)
   $digest = [Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
   return ([BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant()

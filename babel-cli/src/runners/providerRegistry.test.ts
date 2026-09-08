@@ -15,7 +15,8 @@ describe('provider credential hub', () => {
       [
         'deepinfra',
         'deepseek',
-        'opencode',
+      'opencode',
+      'opencode-go',
         'openrouter',
         'openai',
         'anthropic',
