@@ -3,6 +3,12 @@ param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$chatReviewController = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\babel-pr-review.mts')
+if ($chatReviewController -notmatch [regex]::Escape("gitAt(trustedRoot, ['merge-base', '--is-ancestor', trustedSha, baseSha])") -or
+    $chatReviewController -notmatch 'TRUSTED_REVIEW_SOURCE_NOT_IN_BASE_HISTORY') {
+  throw 'Babel review controller must reject a trusted installation that is not in the PR base history before cache or provider use.'
+}
 $env:GIT_ALLOW_PROTOCOL = 'file'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path

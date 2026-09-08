@@ -30,6 +30,9 @@ const repository = 'gthgomez/Babel'
 if (!['https://github.com/gthgomez/Babel.git', 'git@github.com:gthgomez/Babel.git'].includes(git(['remote', 'get-url', 'origin']).trim())) throw new Error('REVIEW_REPOSITORY_MISMATCH')
 const trustedSha = gitAt(trustedRoot, ['rev-parse', 'HEAD']).trim()
 if (options.has('--publish') && gitAt(trustedRoot, ['status', '--porcelain']).trim()) throw new Error('PUBLISH_REQUIRES_CLEAN_TRUSTED_INSTALLATION')
+function trustedSourceIsInBase(baseSha: string): boolean {
+  try { gitAt(trustedRoot, ['merge-base', '--is-ancestor', trustedSha, baseSha]); return true } catch { return false }
+}
 function sourceVersion(): string {
   const untracked = gitAt(trustedRoot, ['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean).map(path => {
     if (!safeReviewPath(path) || secretRiskReviewPath(path) || lstatSync(join(trustedRoot, path)).isSymbolicLink()) throw new Error('UNSAFE_UNTRACKED_REVIEW_SOURCE')
@@ -61,6 +64,9 @@ for (const number of prs) {
   try {
     const pr = readPr(number)
     if (pr.state !== 'OPEN') continue
+    // A later gate independently verifies this provenance. Refuse it here too,
+    // before cache reuse, provider exposure, or owner-comment publication.
+    if (!trustedSourceIsInBase(pr.baseRefOid)) throw new Error('TRUSTED_REVIEW_SOURCE_NOT_IN_BASE_HISTORY')
     const key = createHash('sha256').update(JSON.stringify([repository, number, pr.baseRefOid, pr.headRefOid, version, task])).digest('hex')
     jobDir = assertReviewStateOutsideGit(join(state, 'jobs', key))
     lease = acquireBabelReviewLease(join(jobDir, 'running.lock'))
