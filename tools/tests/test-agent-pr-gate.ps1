@@ -97,33 +97,21 @@ try {
   $malformedThreads = Resolve-AgentReviewThreadPages -Pages @([pscustomobject]@{ nodes = @(); pageInfo = [pscustomobject]@{ hasNextPage = $true; endCursor = '' } })
   Assert-AgentGateTest (-not [bool]$malformedThreads.available -and $malformedThreads.error -eq 'review_threads_pagination_incomplete') 'incomplete review-thread pagination must fail closed'
 
-  $zeroReview = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 0 -ObservedApprovalCount 0 -ThreadsRequired $true -ThreadsResolved $true -IndependentRequired $true -IndependentSatisfied $true -MergeAuthorized $true
+  $zeroReview = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 0 -ObservedApprovalCount 0 -ThreadsRequired $true -ThreadsResolved $true -IndependentRequired $true -IndependentSatisfied $true
   Assert-AgentGateTest ([bool]$zeroReview.github_approval_satisfied) 'zero GitHub approvals must satisfy the GitHub approval dimension'
-  $oneReview = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 1 -ObservedApprovalCount 0 -ThreadsRequired $false -ThreadsResolved $true -IndependentRequired $false -IndependentSatisfied $false -MergeAuthorized $true
+  $oneReview = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 1 -ObservedApprovalCount 0 -ThreadsRequired $false -ThreadsResolved $true -IndependentRequired $false -IndependentSatisfied $false
   Assert-AgentGateTest (-not [bool]$oneReview.github_approval_satisfied) 'one required GitHub approval must remain unsatisfied without approval'
-  $unresolvedThreads = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 0 -ObservedApprovalCount 0 -ThreadsRequired $true -ThreadsResolved $false -IndependentRequired $false -IndependentSatisfied $true -MergeAuthorized $true
+  $unresolvedThreads = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 0 -ObservedApprovalCount 0 -ThreadsRequired $true -ThreadsResolved $false -IndependentRequired $false -IndependentSatisfied $true
   Assert-AgentGateTest (-not [bool]$unresolvedThreads.review_threads_satisfied) 'unresolved review threads must remain a separate blocker'
   Assert-AgentGateTest ([bool]$zeroReview.independent_review_satisfied) 'independent review must remain a separate dimension'
-  Assert-AgentGateTest ([bool]$zeroReview.merge_authority_satisfied) 'merge authority must remain a separate dimension'
+  Assert-AgentGateTest (-not ($zeroReview.PSObject.Properties.Name -contains 'merge_authority_satisfied')) 'task authority must not require a separate merge switch'
 
-  $receipt = [pscustomobject][ordered]@{
-    schema_version = 1; kind = 'independent_review_receipt_v1'; repository = 'gthgomez/Babel'; pr_number = 118
-    base_sha = $otherHead; head_sha = $head; reviewer_id = 'codex-reviewer'; reviewer_class = 'independent_readonly'
-    review_mode = 'exact_head'; reviewed_at = '2026-08-28T10:05:00Z'; scope = @('scripts/agent-pr-gate.ps1')
-    findings = @(); blocking_findings = @(); verdict = 'APPROVE'; artifact_hash = ''; builder_id = 'codex-implementation'
-  }
-  $receipt.artifact_hash = Get-AgentIndependentReviewReceiptHash -Receipt $receipt
-  $validReceipt = Test-AgentIndependentReviewReceipt -Receipt $receipt -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
-  Assert-AgentGateTest ([bool]$validReceipt.valid) 'well-formed exact-head independent receipt must validate'
-  $wrongHeadReceipt = $receipt | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-  $wrongHeadReceipt.head_sha = $otherHead
-  $wrongHead = Test-AgentIndependentReviewReceipt -Receipt $wrongHeadReceipt -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
-  Assert-AgentGateTest (-not [bool]$wrongHead.valid) 'independent receipt for another head must be rejected'
-  $builderReceipt = $receipt | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-  $builderReceipt.reviewer_id = 'codex-implementation'
-  $builderReceipt.artifact_hash = Get-AgentIndependentReviewReceiptHash -Receipt $builderReceipt
-  $builderReview = Test-AgentIndependentReviewReceipt -Receipt $builderReceipt -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
-  Assert-AgentGateTest (-not [bool]$builderReview.valid) 'builder-issued independent review must be rejected'
+  Assert-AgentGateTest ((Get-AgentRiskLane -ChangedPaths @('src/example.ts')) -eq 'GREEN') 'ordinary paths must remain GREEN'
+  Assert-AgentGateTest ((Get-AgentRiskLane -ChangedPaths @('babel-cli/src/services/provider.ts')) -eq 'YELLOW') 'service paths must require YELLOW evidence'
+  Assert-AgentGateTest ((Get-AgentRiskLane -ChangedPaths @('tools/agent-host-review.ps1')) -eq 'RED') 'owner-host review launcher must be base-derived RED'
+  Assert-AgentGateTest ((Get-AgentRiskLane -ChangedPaths @('tools/host-review-worker.mts')) -eq 'RED') 'owner-host review worker must be base-derived RED'
+  Assert-AgentGateTest ((Get-AgentRiskLane -ChangedPaths @('babel-cli/src/runners/openCodeGoApi.ts')) -eq 'RED') 'OpenCode-Go review adapter must be base-derived RED'
+  Assert-AgentGateTest ((Get-AgentRiskLane -ChangedPaths @('scripts/agent-pr-gate.ps1')) -eq 'RED') 'merge-control paths must be base-derived RED'
 
   Write-Output 'agent-pr-gate: PASS'
   exit 0

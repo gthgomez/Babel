@@ -4,12 +4,9 @@ param(
   [Parameter(Mandatory = $true)][string]$BaseSha,
   [Parameter(Mandatory = $true)][string]$RepoRoot,
   [Parameter(Mandatory = $true)][string]$ReviewedHeadSha,
-  [string]$IndependentReviewReceiptPath = '',
-  [string]$ReviewChallengeLedgerPath = '',
+  [ValidateSet('GREEN', 'YELLOW', 'RED', 'BLACK', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')][string]$RiskTier = 'GREEN',
   [string]$AutonomousReviewEvidencePath = '',
-  [string]$TrustRootUpgradeAuthorizationPath = '',
   [string]$BuilderIdentity = 'codex-implementation',
-  [switch]$MergeAuthorized,
   [switch]$AuditOnly,
   [switch]$RequireIsolatedWorktree,
   [ValidateSet('json', 'text')][string]$OutputFormat = 'json'
@@ -30,7 +27,7 @@ $resolvedRepo = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path
 $materialized = Join-Path ([IO.Path]::GetTempPath()) ('babel-trusted-gate-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $materialized -Force | Out-Null
 try {
-  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-git-common.psm1')) {
+  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-git-common.psm1', 'scripts/agent-review-evidence.ps1')) {
     $target = Join-Path $materialized ([IO.Path]::GetFileName($relative))
     $spec = '{0}:{1}' -f $BaseSha, $relative
     $content = & $git -C $resolvedRepo show $spec 2>$null
@@ -41,14 +38,10 @@ try {
   }
   $args = @(
     '-NoProfile', '-NonInteractive', '-File', (Join-Path $materialized 'agent-pr-gate.ps1'),
-    '-PR', $PR, '-RepoRoot', $resolvedRepo, '-ReviewedHeadSha', $ReviewedHeadSha,
-    '-IndependentReviewReceiptPath', $IndependentReviewReceiptPath,
-    '-ReviewChallengeLedgerPath', $ReviewChallengeLedgerPath,
+    '-PR', $PR, '-RepoRoot', $resolvedRepo, '-ReviewedHeadSha', $ReviewedHeadSha, '-RiskTier', $RiskTier,
     '-AutonomousReviewEvidencePath', $AutonomousReviewEvidencePath,
-    '-TrustRootUpgradeAuthorizationPath', $TrustRootUpgradeAuthorizationPath,
     '-BuilderIdentity', $BuilderIdentity, '-OutputFormat', $OutputFormat
   )
-  if ($MergeAuthorized) { $args += '-MergeAuthorized' }
   if ($AuditOnly) { $args += '-AuditOnly' }
   if ($RequireIsolatedWorktree) { $args += '-RequireIsolatedWorktree' }
   & $pwsh @args
