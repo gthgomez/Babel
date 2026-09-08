@@ -65,7 +65,7 @@ try {
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('remote', 'add', 'origin', 'https://github.com/gthgomez/Babel.git') | Out-Null
   $mappedRemote = 'file:///' + ([IO.Path]::GetFullPath($remote)).Replace('\', '/')
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', "url.$mappedRemote.insteadOf", 'https://github.com/gthgomez/Babel.git') | Out-Null
-  Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', "url.$mappedRemote.insteadOf", 'https://github.com/gthgomez/Babel') | Out-Null
+  Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--add', "url.$mappedRemote.insteadOf", 'https://github.com/gthgomez/Babel') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', 'protocol.file.allow', 'always') | Out-Null
   Invoke-TestGit -WorkingDirectory $remote -Arguments @('update-ref', 'refs/heads/main', $mainSha) | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('switch', '-c', 'agent/fixture') | Out-Null
@@ -145,14 +145,14 @@ try {
 
   $prJson = '{"number":42,"url":"https://github.com/gthgomez/Babel/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","baseRefOid":"' + $mainSha + '","headRefName":"agent/fixture","headRefOid":"' + $headSha + '","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","reviews":[],"isCrossRepository":false,"headRepositoryOwner":{"login":"gthgomez"},"headRepository":{"nameWithOwner":"gthgomez/Babel"}}'
   $rulesetList = '[{"id":19597161,"name":"protect-main","enforcement":"active"}]'
-  $rulesetDetail = '{"id":19597161,"name":"protect-main","enforcement":"active","rules":[{"type":"pull_request","parameters":{"required_approving_review_count":0,"required_review_thread_resolution":true,"require_code_owner_review":false,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[{"context":"security"},{"context":"public-content-policy"},{"context":"linux-validation"},{"context":"public-pr-metadata"},{"context":"windows-portability"}]}}],"bypass_actors":[]}'
+  $rulesetDetail = '{"id":19597161,"name":"protect-main","enforcement":"active","rules":[{"type":"pull_request","parameters":{"required_approving_review_count":0,"required_review_thread_resolution":true,"require_code_owner_review":false,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"security","integration_id":15368},{"context":"public-content-policy","integration_id":15368},{"context":"linux-validation","integration_id":15368},{"context":"public-pr-metadata","integration_id":15368},{"context":"windows-portability","integration_id":15368}]}}],"bypass_actors":[]}'
   $graphqlJson = '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
   $checkItems = @()
-  $checkItems += '{"id":101,"name":"security","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"101","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
-  $checkItems += '{"id":102,"name":"public-content-policy","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"102","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
-  $checkItems += '{"id":103,"name":"linux-validation","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"103","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
-  $checkItems += '{"id":104,"name":"public-pr-metadata","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request_target","workflow_name":"Public PR Metadata","workflow_id":"workflow-2","workflow_run_id":"104","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
-  $checkItems += '{"id":105,"name":"windows-portability","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"105","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
+  $checkItems += '{"app":{"id":15368,"slug":"github-actions","name":"GitHub Actions"},"id":101,"name":"security","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"101","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
+  $checkItems += '{"app":{"id":15368,"slug":"github-actions","name":"GitHub Actions"},"id":102,"name":"public-content-policy","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"102","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
+  $checkItems += '{"app":{"id":15368,"slug":"github-actions","name":"GitHub Actions"},"id":103,"name":"linux-validation","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"103","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
+  $checkItems += '{"app":{"id":15368,"slug":"github-actions","name":"GitHub Actions"},"id":104,"name":"public-pr-metadata","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request_target","workflow_name":"Public PR Metadata","workflow_id":"workflow-2","workflow_run_id":"104","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
+  $checkItems += '{"app":{"id":15368,"slug":"github-actions","name":"GitHub Actions"},"id":105,"name":"windows-portability","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"105","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
   $checkJson = '{"check_runs":[' + ($checkItems -join ',') + ']}'
   @(
     'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)',
@@ -177,8 +177,7 @@ try {
     '-GitPath', $git,
     '-GhPath', $fakeGh,
     '-ReviewedHeadSha', $headSha,
-    '-RiskTier', 'LOW',
-    '-MergeAuthorized'
+    '-RiskTier', 'LOW'
   )
   Assert-AgentTest ($gateRun.exitCode -eq 0) "PR gate should pass: $($gateRun.text)"
   $gate = $gateRun.text | ConvertFrom-Json
@@ -196,8 +195,7 @@ try {
     '-GitPath', $git,
     '-GhPath', $fakeGh,
     '-ReviewedHeadSha', $zeroSha,
-    '-RiskTier', 'LOW',
-    '-MergeAuthorized'
+    '-RiskTier', 'LOW'
   )
   Assert-AgentTest ($blockedRun.exitCode -eq 1) 'PR gate should block a reviewed-head mismatch'
   $blocked = $blockedRun.text | ConvertFrom-Json

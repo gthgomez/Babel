@@ -1,19 +1,16 @@
 # Offline integration test for the trusted control plane.
 #
-# Builds a fixture git repository whose BASE commit carries the full trust
-# root (gate scripts, verifier, supervisor key registry), materializes the
+# Builds a fixture git repository whose BASE commit carries the base-rooted
+# gate, materializes the
 # candidate as a detached isolated worktree exactly like the GitHub workflow
 # does, and runs the real trusted-merge-gate launcher against a shim `gh`
 # executable so no network access is needed.
 #
 # Coverage:
-#   1. trust-root modification + valid supervisor-signed upgrade
-#      authorization + autonomous review evidence -> audit passes
-#   2. missing upgrade authorization -> protected_trust_root_modified blocker
-#   3. authorization signed by an unregistered key -> protected_trust_root_modified blocker
-#   4. trust-root change without review evidence -> independent_review_not_satisfied
-#   5. dirty candidate worktree -> dirty_worktree blocker
-#   6. detached head without RequireIsolatedWorktree -> detached_head blocker
+#   1. RED control-plane change + two controller-owned reviews -> audit passes
+#   2. one review cannot satisfy RED evidence
+#   3. missing review evidence blocks deterministically
+#   4. dirty candidate worktree blocks
 [CmdletBinding()]
 param(
   [string]$RepoRoot = (Join-Path $PSScriptRoot '..\..'),
@@ -23,7 +20,6 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $git = (Get-Command git -ErrorAction Stop).Source
-$node = (Get-Command node -ErrorAction Stop).Source
 $root = Join-Path ([IO.Path]::GetTempPath()) ('babel-tcp-integration-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 $candidatePath = Join-Path $root 'candidate'
@@ -36,11 +32,6 @@ function Invoke-Step {
 }
 
 try {
-  # ---- key material (throwaway, test-only) ----
-  $keyArgs = @('-e', 'const {generateKeyPairSync}=require("node:crypto");const s=generateKeyPairSync("ed25519");const r=generateKeyPairSync("ed25519");require("node:fs").writeFileSync(process.argv[1],s.publicKey.export({type:"spki",format:"pem"}));require("node:fs").writeFileSync(process.argv[2],s.privateKey.export({type:"pkcs8",format:"pem"}));require("node:fs").writeFileSync(process.argv[3],r.publicKey.export({type:"spki",format:"pem"}));require("node:fs").writeFileSync(process.argv[4],r.privateKey.export({type:"pkcs8",format:"pem"}));', (Join-Path $root 'supervisor-public.pem'), (Join-Path $root 'supervisor-private.pem'), (Join-Path $root 'reviewer-public.pem'), (Join-Path $root 'reviewer-private.pem'))
-  & $node @keyArgs | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'key generation failed' }
-
   # ---- fixture remote (bare) + base commit ----
   # Forward slashes keep Get-AgentRemoteSlug's github.com/ pattern matching
   # working on Windows paths.
@@ -53,148 +44,82 @@ try {
   & $git -C $seedPath config user.email gate-test@example.com
   & $git -C $seedPath config user.name 'Gate Test'
   & $git -C $seedPath remote add origin $barePath
-  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-git-common.psm1', 'scripts/trusted-merge-gate.ps1', 'scripts/verify-trust-root-upgrade.mjs', 'scripts/verify-independent-review.mjs', 'scripts/bootstrap-trust-root.ps1', 'scripts/materialize-independent-review-receipt.ps1')) {
+  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-review-evidence.ps1', 'scripts/agent-git-common.psm1', 'scripts/trusted-merge-gate.ps1', 'scripts/materialize-independent-review-receipt.ps1')) {
     $target = Join-Path $seedPath $relative
     New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $RepoRoot $relative) -Destination $target -Force
   }
-  New-Item -ItemType Directory -Path (Join-Path $seedPath 'config') -Force | Out-Null
-  $registry = [ordered]@{ schema_version = 1; keys = [ordered]@{ 'integration-supervisor-v1' = (Get-Content -Raw (Join-Path $root 'supervisor-public.pem')) } }
-  $registry | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $seedPath 'config/trusted-supervisor-keys.json') -Encoding utf8NoBOM
-  $reviewRegistry = [ordered]@{ schema_version = 1; keys = [ordered]@{ 'integration-reviewer-v1' = (Get-Content -Raw (Join-Path $root 'reviewer-public.pem')) } }
-  $reviewRegistry | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $seedPath 'config/independent-review-keys.json') -Encoding utf8NoBOM
   Set-Content -LiteralPath (Join-Path $seedPath 'product.txt') -Value 'base product file' -Encoding utf8NoBOM
   & $git -C $seedPath add -A
-  & $git -C $seedPath commit -m 'base with trust root' 2>&1 | Out-Null
+  & $git -C $seedPath commit -m 'base with merge gate' 2>&1 | Out-Null
   $baseSha = (& $git -C $seedPath rev-parse HEAD).Trim()
   & $git -C $seedPath push origin main 2>&1 | Out-Null
   & $git -C $seedPath update-ref refs/remotes/origin/main $baseSha
 
-  # ---- candidate commit modifies the trust root (main stays at base) ----
-  Add-Content -LiteralPath (Join-Path $seedPath 'scripts/agent-git-common.psm1') -Value '# candidate trust change' -Encoding utf8NoBOM
+  # ---- candidate commit changes the RED control plane (main stays at base) ----
+  Add-Content -LiteralPath (Join-Path $seedPath 'scripts/agent-git-common.psm1') -Value '# candidate control-plane change' -Encoding utf8NoBOM
   Set-Content -LiteralPath (Join-Path $seedPath 'feature.txt') -Value 'candidate feature' -Encoding utf8NoBOM
   & $git -C $seedPath add -A
-  & $git -C $seedPath commit -m 'candidate trust change' 2>&1 | Out-Null
+  & $git -C $seedPath commit -m 'candidate control-plane change' 2>&1 | Out-Null
   $headSha = (& $git -C $seedPath rev-parse HEAD).Trim()
   & $git -C $seedPath branch candidate-head $headSha
   & $git -C $seedPath push origin candidate-head:refs/heads/candidate-head 2>&1 | Out-Null
   & $git -C $seedPath checkout --detach HEAD 2>&1 | Out-Null
 
-  # ---- evidence computed against the fixture history ----
-  $protectedChanged = @('scripts/agent-git-common.psm1')
-  $digestLines = @()
-  foreach ($path in $protectedChanged) {
-    $blob = (& $git -C $seedPath rev-parse ('{0}:{1}' -f $headSha, $path)).Trim()
-    $digestLines += ("{0}`t{1}" -f $path, $blob)
-  }
-  $canonical = (($digestLines | Sort-Object) -join "`n")
+  # ---- controller review evidence computed against the fixture history ----
   $sha256 = [System.Security.Cryptography.SHA256]::Create()
-  $protectedDigest = ([BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($canonical))) -replace '-', '').ToLowerInvariant()
 
   $numstat = @(& $git -C $seedPath diff --numstat ('{0}...{1}' -f $baseSha, $headSha) | ForEach-Object { [string]$_ })
   $numstatCanonical = (($numstat | Sort-Object) -join "`n")
   $numstatDigest = ([BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($numstatCanonical))) -replace '-', '').ToLowerInvariant()
 
-  $unsignedPath = Join-Path $root 'authorization-unsigned.json'
-  $authorizationPath = Join-Path $root 'authorization.json'
-  $foreignAuthorizationPath = Join-Path $root 'authorization-foreign.json'
-  $evidencePath = Join-Path $root 'ai-review.json'
-  $unsigned = [ordered]@{
-    schema_version = 1
-    kind = 'trust_root_upgrade_authorization_v1'
-    intent = 'trust_root_upgrade'
-    decision = 'AUTHORIZE_TRUST_ROOT_UPGRADE'
-    repository = 'gthgomez/Babel'
-    pr_number = 4242
-    base_sha = $baseSha
-    head_sha = $headSha
-    protected_paths = $protectedChanged
-    protected_diff_digest = $protectedDigest
-    issued_at = '2026-09-01T00:00:00.000Z'
-    expires_at = '2099-01-01T00:00:00.000Z'
-    signature_key_id = 'integration-supervisor-v1'
-  }
-  $unsigned | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $unsignedPath -Encoding utf8NoBOM
-  & $node (Join-Path $RepoRoot 'tools/tests/helpers/make-trust-upgrade-authorization.mjs') (Join-Path $root 'supervisor-private.pem') $unsignedPath | Set-Content -LiteralPath $authorizationPath -Encoding utf8NoBOM
-  # Foreign key authorization: signed by a key that is not in the registry.
-  & $node @('-e', 'const {generateKeyPairSync}=require("node:crypto");require("node:fs").writeFileSync(process.argv[1],generateKeyPairSync("ed25519").privateKey.export({type:"pkcs8",format:"pem"}));', (Join-Path $root 'foreign-private.pem')) | Out-Null
-  & $node (Join-Path $RepoRoot 'tools/tests/helpers/make-trust-upgrade-authorization.mjs') (Join-Path $root 'foreign-private.pem') $unsignedPath | Set-Content -LiteralPath $foreignAuthorizationPath -Encoding utf8NoBOM
+  $evidencePath = Join-Path $root 'ai-reviews.json'
 
+  $taskHash = 'a' * 64
+  $reviewedAt = [DateTimeOffset]::UtcNow.ToString('o')
   $evidence = [ordered]@{
-    schema_version = 1
-    kind = 'autonomous_review_evidence_v1'
+    schema_version = 2
+    kind = 'autonomous_review_evidence_v2'
     repository = 'gthgomez/Babel'
     pr_number = 4242
     base_sha = $baseSha
     head_sha = $headSha
+    task_id = 'task-4242'
+    task_hash = $taskHash
     reviewer_id = 'isolated-ai-reviewer'
     reviewer_class = 'independent_readonly_ai'
     review_mode = 'exact_diff'
-    reviewed_at = '2026-09-04T00:00:00.000Z'
+    execution_id = 'execution-101'
+    review_provider = 'opencode-go'
+    reviewer_model = 'deepseek-v4-flash'
+    reviewed_at = $reviewedAt
     scope = @('scripts/agent-git-common.psm1', 'feature.txt')
     findings = @('example non-blocking finding')
     blocking_findings = @()
     verdict = 'APPROVE'
     builder_id = 'codex-implementation'
     diff_numstat_digest = $numstatDigest
+    isolation = [ordered]@{ mode = 'text_only_no_tools'; candidate_write = $false; github_mutation = $false; merge = $false; controller_state_access = $false }
   }
-  $evidence | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $evidencePath -Encoding utf8NoBOM
-
-  # ---- signed independent review receipt + supervisor challenge ledger ----
-  $receiptUnsigned = [ordered]@{
-    schema_version = 1
-    kind = 'independent_review_receipt_v1'
-    repository = 'gthgomez/Babel'
-    pr_number = 4242
-    base_sha = $baseSha
-    head_sha = $headSha
-    reviewer_id = 'isolated-reviewer-lane'
-    reviewer_class = 'independent_readonly'
-    review_mode = 'exact_diff'
-    reviewed_at = '2026-09-04T00:00:00Z'
-    scope = @('scripts/agent-git-common.psm1', 'feature.txt')
-    findings = @('no blocking findings')
-    blocking_findings = @()
-    verdict = 'APPROVE'
-    builder_id = 'codex-implementation'
-    challenge_id = 'challenge-integration-0001'
-    task_id = 'task-integration'
-    run_id = 'run-integration'
-    contract_hash = '0f' * 32
-    authority_provenance = [ordered]@{ issuer = 'supervisor_review_lane'; key_id = 'integration-supervisor-v1' }
+  $secondEvidence = $evidence | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+  $secondEvidence.reviewer_id = 'isolated-adversarial-reviewer'
+  $secondEvidence.execution_id = 'execution-102'
+  $handoff = [ordered]@{
+    schema_version = 2; kind = 'host_review_handoff_v2'
+    repository = 'gthgomez/Babel'; pr_number = 4242; base_sha = $baseSha; head_sha = $headSha
+    task_id = 'task-4242'; task_hash = $taskHash; controller_run_id = 'controller-run-4242'
+    reviews = @($evidence, $secondEvidence)
   }
-  $payload = [ordered]@{}
-  $fieldOrder = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'builder_id', 'challenge_id', 'task_id', 'run_id', 'contract_hash', 'authority_provenance')
-  foreach ($fieldName in $fieldOrder) {
-    if ($receiptUnsigned.Contains($fieldName)) {
-      $fieldValue = $receiptUnsigned[$fieldName]
-      if ($fieldName -in @('scope', 'findings', 'blocking_findings')) { $payload[$fieldName] = @($fieldValue) } else { $payload[$fieldName] = $fieldValue }
-    }
+  $bundle = [ordered]@{
+    schema_version = 2; kind = 'github_host_review_bundle_v2'
+    repository = 'gthgomez/Babel'; pr_number = 4242; base_sha = $baseSha; head_sha = $headSha
+    publisher_id = '91163862'; comment_id = '102'; handoff = $handoff
   }
-  $canonical = $payload | ConvertTo-Json -Depth 50 -Compress
-  $artifactHash = ([BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($canonical))) -replace '-', '').ToLowerInvariant()
-  $receiptWithHash = [ordered]@{}
-  foreach ($key in $receiptUnsigned.Keys) { $receiptWithHash[$key] = $receiptUnsigned[$key] }
-  $receiptWithHash['artifact_hash'] = $artifactHash
-  $reviewSpec = [ordered]@{
-    unsignedReceipt = $receiptWithHash
-    reviewerPrivateKeyPem = (Get-Content -Raw (Join-Path $root 'reviewer-private.pem'))
-    reviewerKeyId = 'integration-reviewer-v1'
-    supervisorPrivateKeyPem = (Get-Content -Raw (Join-Path $root 'supervisor-private.pem'))
-    supervisorKeyId = 'integration-supervisor-v1'
-    challenge = [ordered]@{ challenge_id = 'challenge-integration-0001'; task_id = 'task-integration'; run_id = 'run-integration'; contract_hash = ('0f' * 32); issued_at = '2026-09-01T00:00:00.000Z'; expires_at = '2099-01-01T00:00:00.000Z' }
-  }
-  $reviewSpecPath = Join-Path $root 'review-spec.json'
-  $reviewSpec | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $reviewSpecPath -Encoding utf8NoBOM
-  $signedReceiptPath = Join-Path $root 'receipt.json'
-  $signedLedgerPath = Join-Path $root 'ledger.json'
-  & $node (Join-Path $RepoRoot 'tools/tests/helpers/make-independent-review-evidence.mjs') $reviewSpecPath $signedReceiptPath $signedLedgerPath | Out-Null
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $signedReceiptPath)) { throw 'review evidence signing helper failed' }
-  if ($DebugOutputDirectory) {
-    New-Item -ItemType Directory -Path $DebugOutputDirectory -Force | Out-Null
-    Copy-Item -LiteralPath $signedReceiptPath -Destination (Join-Path $DebugOutputDirectory 'receipt.json') -Force
-    Copy-Item -LiteralPath $signedLedgerPath -Destination (Join-Path $DebugOutputDirectory 'ledger.json') -Force
-  }
+  $bundle | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $evidencePath -Encoding utf8NoBOM
+  @{ id = 102; user = @{ id = 91163862; login = 'gthgomez'; type = 'User' }
+     issue_url = 'https://api.github.com/repos/gthgomez/Babel/issues/4242'
+     body = '<!-- babel-controller-ai-reviews-v2 -->' + ($handoff | ConvertTo-Json -Depth 20 -Compress)
+  } | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $root 'comment-102.json') -Encoding utf8NoBOM
 
   # ---- gh shim ----
   $shimDir = Join-Path $root 'shim'
@@ -203,7 +128,7 @@ try {
     id = 19597161; name = 'protect-main'; enforcement = 'active'; bypass_actors = @()
     rules = @(
       [ordered]@{ type = 'pull_request'; parameters = [ordered]@{ required_approving_review_count = 0; required_review_thread_resolution = $true; require_code_owner_review = $false; allowed_merge_methods = @('merge'); } },
-      [ordered]@{ type = 'required_status_checks'; parameters = [ordered]@{ strict_required_status_checks_policy = $false; required_status_checks = @([ordered]@{ context = 'security' }, [ordered]@{ context = 'public-content-policy' }, [ordered]@{ context = 'linux-validation' }, [ordered]@{ context = 'public-pr-metadata' }, [ordered]@{ context = 'windows-portability' }, [ordered]@{ context = 'trusted-control-plane' }) } }
+      [ordered]@{ type = 'required_status_checks'; parameters = [ordered]@{ strict_required_status_checks_policy = $true; required_status_checks = @([ordered]@{ context = 'security'; integration_id = 15368 }, [ordered]@{ context = 'public-content-policy'; integration_id = 15368 }, [ordered]@{ context = 'linux-validation'; integration_id = 15368 }, [ordered]@{ context = 'public-pr-metadata'; integration_id = 15368 }, [ordered]@{ context = 'windows-portability'; integration_id = 15368 }, [ordered]@{ context = 'trusted-control-plane'; integration_id = 15368 }) } }
     )
   }
   $checkRuns = @()
@@ -218,7 +143,7 @@ try {
       workflow_name = if ($peer[1] -eq 'pull_request_target') { 'Public PR Metadata' } else { 'Public Release Gate' }
       workflow_id = [string]$runId; workflow_run_id = [string]$runId; workflow_run_attempt = 1
       details_url = "https://ci.example.test/runs/$runId"
-      app = $null
+      app = [ordered]@{ id = 15368; slug = 'github-actions'; name = 'GitHub Actions' }
     }
   }
   $runsJson = [ordered]@{ total_count = $checkRuns.Count; check_runs = $checkRuns }
@@ -237,7 +162,7 @@ $root = $env:TCP_TEST_ROOT
 $text = $GhArguments -join ' '
 function Emit([string]$Value) { Write-Output $Value; exit 0 }
 if ($text -match 'repos/gthgomez/Babel --jq') { Emit 'gthgomez/Babel' }
-if ($text -match 'repos/gthgomez/Babel$') { Emit '{"full_name":"gthgomez/Babel"}' }
+if ($text -match 'repos/gthgomez/Babel$') { Emit '{"full_name":"gthgomez/Babel","owner":{"id":91163862,"type":"User"}}' }
 if ($text -match '^repo view') { Emit '{"nameWithOwner":"gthgomez/Babel","defaultBranchRef":{"name":"main"}}' }
 if ($text -match '^pr view') { Emit (Get-Content -Raw (Join-Path $root 'pr-view.json')) }
 if ($text -match 'rulesets\?per_page') { Emit '[{"name":"protect-main","enforcement":"active","id":19597161}]' }
@@ -253,7 +178,8 @@ if ($text -match 'actions/runs/(\d+)') {
 if ($text -match 'api graphql') {
   Emit '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
 }
-if ($text -match 'issues/4242/comments') { Emit '[]' }
+if ($text -match 'issues/comments/(\d+)') { Emit (Get-Content -Raw (Join-Path $root ("comment-{0}.json" -f $Matches[1]))) }
+if ($text -match 'issues/4242/comments') { Emit (Get-Content -Raw (Join-Path $root 'comments.json')) }
 Emit '{"message":"shim-default"}' | Out-Null
 Write-Output '{"message":"shim-default"}'
 exit 0
@@ -275,7 +201,7 @@ exit 0
   & $git -C $seedPath worktree add --detach $candidatePath $headSha 2>&1 | Out-Null
 
   function Invoke-Gate {
-    param([string]$Label, [hashtable]$Extra)
+    param([string]$Label, [hashtable]$Extra, [string]$EventName = 'pull_request_target')
     $outputPath = Join-Path $root ("result-{0}.json" -f $Label)
     $argumentList = @(
       '-NoProfile', '-NonInteractive', '-File', (Join-Path $seedPath 'scripts/trusted-merge-gate.ps1'),
@@ -289,7 +215,7 @@ exit 0
     # Mirror the trusted workflow environment so the gate's self-check
     # deferral for trusted-control-plane activates exactly as in CI.
     $env:GITHUB_ACTIONS = 'true'
-    $env:GITHUB_EVENT_NAME = 'pull_request_target'
+    $env:GITHUB_EVENT_NAME = $EventName
     $env:GITHUB_WORKFLOW = 'Trusted Control Plane'
     $env:GITHUB_JOB = 'trusted-control-plane'
     try {
@@ -314,47 +240,116 @@ exit 0
     return [pscustomobject]@{ exitCode = $code; result = $result; raw = $text }
   }
 
-  # 1. positive: signed receipt + supervisor-signed upgrade authorization
-  Invoke-Step 'trust-upgrade-authorized-passes' {
-    $run = Invoke-Gate -Label 'positive' -Extra @{
-      '-IndependentReviewReceiptPath' = $signedReceiptPath
-      '-ReviewChallengeLedgerPath' = $signedLedgerPath
-      '-TrustRootUpgradeAuthorizationPath' = $authorizationPath
+  function Invoke-Transport {
+    $previousPath = $env:PATH
+    $previousTestRoot = $env:TCP_TEST_ROOT
+    $env:PATH = "$shimDir;$previousPath"
+    $env:TCP_TEST_ROOT = $root
+    try {
+      $transportDirectory = Join-Path $root 'transport'
+      & pwsh -NoProfile -NonInteractive -File (Join-Path $seedPath 'scripts/materialize-independent-review-receipt.ps1') `
+        -PR 4242 -Repository gthgomez/Babel -BaseSha $baseSha -HeadSha $headSha `
+        -EvidenceDirectory $transportDirectory | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw 'Review transport failed.' }
+      return Join-Path $transportDirectory 'ai-reviews.json'
+    } finally {
+      $env:PATH = $previousPath
+      $env:TCP_TEST_ROOT = $previousTestRoot
     }
-    if ($run.exitCode -ne 0) { throw "exit=$($run.exitCode) blockers=$($run.result.blockers -join ',')" }
-    if ($run.result.blockers.Count -ne 0) { throw "unexpected blockers: $($run.result.blockers -join ',')" }
-    if ($run.result.trustRoot.upgradeAuthorization.valid -ne $true) { throw 'upgrade authorization not reported valid' }
-    if ($run.result.reviewPolicy.independentReviewTier -ne 'CERTIFIED') { throw "unexpected tier: $($run.result.reviewPolicy.independentReviewTier)" }
   }
 
-  # 1b. trust-root change with only autonomous evidence must stay blocked.
-  Invoke-Step 'trust-change-autonomous-tier-blocked' {
-    $run = Invoke-Gate -Label 'autonomous-on-trust' -Extra @{
-      '-AutonomousReviewEvidencePath' = $evidencePath; '-TrustRootUpgradeAuthorizationPath' = $authorizationPath
+  Invoke-Step 'transport-filters-untrusted-comments-and-passes-gate' {
+    $validComment = Get-Content -Raw (Join-Path $root 'comment-102.json') | ConvertFrom-Json
+    $spoof = $validComment | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $spoof.id = 103
+    $spoof.user = @{ id = 15368; login = 'github-actions[bot]'; type = 'Bot' }
+    $malformed = $validComment | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $malformed.id = 104
+    $malformed.user = @{ id = 15368; login = 'github-actions[bot]'; type = 'Bot' }
+    $malformed.body = '<!-- babel-controller-ai-reviews-v2 -->{"head_sha":"missing-base"}'
+    $stale = $validComment | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $stale.id = 105
+    $stale.body = $stale.body.Replace($headSha, ('0' * 40))
+    @($validComment, $spoof, $malformed, $stale) | ConvertTo-Json -Depth 30 |
+      Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
+    $transportPath = Invoke-Transport
+    $transported = Get-Content -Raw $transportPath | ConvertFrom-Json
+    if ($transported.handoff.reviews.Count -ne 2 -or $transported.publisher_id -ne '91163862') { throw 'Transport accepted untrusted comments or lost the owner handoff.' }
+    $run = Invoke-Gate -Label 'transport-positive' -Extra @{ '-AutonomousReviewEvidencePath' = $transportPath }
+    if ($run.exitCode -ne 0) { throw "Transported evidence did not pass gate: $($run.result.blockers -join ',')" }
+  }
+
+  # 1. positive: base-derived RED change with two controller-owned reviews.
+  Invoke-Step 'red-controller-reviews-pass' {
+    $run = Invoke-Gate -Label 'positive' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath }
+    if ($run.exitCode -ne 0) { throw "exit=$($run.exitCode) blockers=$($run.result.blockers -join ',')" }
+    if ($run.result.blockers.Count -ne 0) { throw "unexpected blockers: $($run.result.blockers -join ',')" }
+    if ($run.result.reviewPolicy.effectiveRiskLane -ne 'RED') { throw "unexpected lane: $($run.result.reviewPolicy.effectiveRiskLane)" }
+    if ($run.result.reviewPolicy.observedIndependentReviewCount -ne 2) { throw 'two independent reviews were not observed' }
+  }
+
+  Invoke-Step 'non-strict-required-check-policy-blocked' {
+    $rulesetDetail.rules[1].parameters.strict_required_status_checks_policy = $false
+    $rulesetDetail | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'ruleset.json') -Encoding utf8NoBOM
+    try {
+      $run = Invoke-Gate -Label 'non-strict-policy' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath }
+    } finally {
+      $rulesetDetail.rules[1].parameters.strict_required_status_checks_policy = $true
+      $rulesetDetail | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'ruleset.json') -Encoding utf8NoBOM
+    }
+    if ($run.exitCode -eq 0 -or $run.result.blockers -notcontains 'required_status_checks_not_strict') { throw 'Non-strict required checks unexpectedly certified exact-base evidence.' }
+  }
+
+  # A comment event cannot represent the required PR check. The separate
+  # comment job requests a rerun of the original pull_request_target audit.
+  Invoke-Step 'issue-comment-cannot-satisfy-pr-check' {
+    $run = Invoke-Gate -Label 'issue-comment' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath } -EventName 'issue_comment'
+    if ($run.exitCode -eq 0) { throw 'Comment event unexpectedly satisfied the PR check.' }
+  }
+
+  # 2. A RED change cannot self-downgrade to one review.
+  Invoke-Step 'red-one-review-blocked' {
+    $oneReviewPath = Join-Path $root 'ai-review-one.json'
+    $oneReviewBundle = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $oneReviewBundle.comment_id = '106'
+    $oneReviewBundle.handoff.reviews = @($oneReviewBundle.handoff.reviews[0])
+    $oneReviewBundle | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $oneReviewPath -Encoding utf8NoBOM
+    @{ id = 106; user = @{ id = 91163862; login = 'gthgomez'; type = 'User' }
+       issue_url = 'https://api.github.com/repos/gthgomez/Babel/issues/4242'
+       body = '<!-- babel-controller-ai-reviews-v2 -->' + ($oneReviewBundle.handoff | ConvertTo-Json -Depth 20 -Compress)
+    } | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
+    try {
+      $run = Invoke-Gate -Label 'one-review' -Extra @{ '-AutonomousReviewEvidencePath' = $oneReviewPath }
+    } finally {
+      Get-Content -Raw (Join-Path $root 'comment-102.json') | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
     }
     if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
     if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
   }
 
-  # 2. missing authorization
-  Invoke-Step 'missing-authorization-blocked' {
-    $run = Invoke-Gate -Label 'missing-auth' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath }
+  # 3. A local bundle from a different owner cannot impersonate the live owner handoff.
+  Invoke-Step 'wrong-owner-bundle-blocked' {
+    $wrongControllerPath = Join-Path $root 'ai-review-wrong-controller.json'
+    $wrongControllerBundle = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $wrongControllerBundle.publisher_id = '15368'
+    $wrongControllerBundle | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $wrongControllerPath -Encoding utf8NoBOM
+    $run = Invoke-Gate -Label 'wrong-controller' -Extra @{ '-AutonomousReviewEvidencePath' = $wrongControllerPath }
     if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-    if ($run.result.blockers -notcontains 'protected_trust_root_modified') { throw "blockers=$($run.result.blockers -join ',')" }
+    if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
   }
 
-  # 3. foreign-key authorization
-  Invoke-Step 'foreign-authorization-blocked' {
-    $run = Invoke-Gate -Label 'foreign-auth' -Extra @{
-      '-AutonomousReviewEvidencePath' = $evidencePath; '-TrustRootUpgradeAuthorizationPath' = $foreignAuthorizationPath
-    }
-    if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-    if ($run.result.blockers -notcontains 'protected_trust_root_modified') { throw "blockers=$($run.result.blockers -join ',')" }
+  Invoke-Step 'forged-local-review-body-blocked' {
+    $forgedPath = Join-Path $root 'forged-reviews.json'
+    $forged = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $forged.handoff.reviews[0].scope = @('forged local scope')
+    $forged | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $forgedPath -Encoding utf8NoBOM
+    $run = Invoke-Gate -Label 'forged-body' -Extra @{ '-AutonomousReviewEvidencePath' = $forgedPath }
+    if ($run.exitCode -eq 0 -or $run.result.reviewPolicy.independentReviewEvidenceErrors -notcontains 'controller_review_live_provenance_mismatch') { throw 'Forged review body was not rejected by live provenance validation.' }
   }
 
-  # 4. trust-root change without any review evidence
-  Invoke-Step 'trust-change-without-review-blocked' {
-    $run = Invoke-Gate -Label 'no-review' -Extra @{ '-TrustRootUpgradeAuthorizationPath' = $authorizationPath }
+  # 4. Missing controller evidence fails closed.
+  Invoke-Step 'missing-review-blocked' {
+    $run = Invoke-Gate -Label 'missing-review' -Extra @{}
     if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
     if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
   }
@@ -363,9 +358,7 @@ exit 0
   Invoke-Step 'dirty-candidate-blocked' {
     Set-Content -LiteralPath (Join-Path $candidatePath 'feature.txt') -Value 'tampered' -Encoding utf8NoBOM
     try {
-      $run = Invoke-Gate -Label 'dirty' -Extra @{
-        '-AutonomousReviewEvidencePath' = $evidencePath; '-TrustRootUpgradeAuthorizationPath' = $authorizationPath
-      }
+      $run = Invoke-Gate -Label 'dirty' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath }
       if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
       if ($run.result.blockers -notcontains 'dirty_worktree') { throw "blockers=$($run.result.blockers -join ',')" }
     } finally {

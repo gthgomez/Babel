@@ -1,6 +1,6 @@
 # Merge Control Plane V1
 
-Status: implemented foundation; future merge-train execution remains disabled.
+Status: authorization simplification migration in progress. The base-rooted gate is authoritative; custom owner signing is no longer part of normal merges.
 
 This document defines the boundary between repository policy, technical evidence,
 and the authority to perform a public merge. No one of those dimensions can
@@ -17,15 +17,25 @@ record:
 - PR state: open, non-draft, same-repository, mergeable, and clean merge state
 - repository policy: the active `protect-main` ruleset read from GitHub
 - CI: required contexts resolved only from the exact head with workflow authority
-- technical review: an exact-head, signed `independent_review_receipt_v2` plus
-  its signed challenge ledger for HIGH and CRITICAL risk tiers
-- merge authority: an explicit current-task authorization switch, never inferred
-  from CI, a review receipt, PR text, or agent output
+- technical review: controller-owned exact-head independent AI evidence when
+  the base-derived risk lane requires it
+- task authority: the original task authorizes routine Git/PR actions; no
+  separate per-merge switch exists
 - scope: exact diff paths and optional path allowlist
 
 The result is `MERGE_READY` only when every required dimension is satisfied.
 Unreadable policy, missing provenance, pending checks, ambiguous check lineage,
-stale review evidence, or missing merge authority produces `BLOCKED`.
+stale review evidence, or insufficient lane evidence produces `BLOCKED`.
+
+## Risk lanes
+
+The immutable base derives a minimum path-based lane; callers may raise, never lower it.
+GREEN requires deterministic checks; YELLOW
+requires one controller-owned independent AI review; RED requires two distinct
+independent reviews; BLACK requires a real owner decision. Merge-control,
+workflow, policy, and authority paths are RED. A trusted dispatcher classifies BLACK by action/context, not candidate path.
+A candidate cannot rewrite its own evaluator, label itself
+GREEN, or clear a trusted BLACK classification.
 
 ## GitHub policy versus Babel policy
 
@@ -38,10 +48,8 @@ reviewThreadsRequired
 reviewThreadsSatisfied
 independentReviewRequired
 independentReviewSatisfied
-independentReviewReceipt
-mergeAuthorityRequired
-mergeAuthoritySatisfied
-mergeAuthoritySource
+independentReviewEvidence
+taskAuthorization
 ```
 
 GitHub's required approval count is discovered from the active ruleset. A ruleset
@@ -75,40 +83,39 @@ For each required context the resolver:
 The result is invariant under GitHub API response permutation. Historical success
 on another SHA is never admissible.
 
-The ordinary validation workflow owns `pull_request`. The privileged metadata
-workflow owns only `pull_request_target`, checks out the default branch, and has a
-distinct workflow name. It does not execute PR-controlled code and does not emit
-misleading skipped twins for ordinary validation contexts.
+The required producer map is explicit: `trusted-control-plane` is produced by
+`pull_request_target / Trusted Control Plane`; `public-pr-metadata` is produced by
+`pull_request_target / Public PR Metadata`; and `security`,
+`public-content-policy`, `linux-validation`, and `windows-portability` are
+produced by `pull_request / Public Release Gate`. Each ruleset entry must also
+retain its GitHub Actions integration identity (currently integration `15368`).
+The ordinary validation workflow owns `pull_request`. The privileged workflows
+check out the default branch, have distinct workflow names, do not execute
+PR-controlled code, and cannot satisfy a differently bound same-name check.
 
-## Independent technical review receipt
+## Independent technical review evidence
 
-The current receipt shape is:
+The existing owner-controlled host runs fresh text-only OpenCode Go AI workers.
+GitHub transports/enforces evidence; no new App, AI credits or signing keys are needed.
+Workers receive original task and exact diff; models supply findings, controllers supply provenance.
+Each `autonomous_review_evidence_v2` binds task hash, repo/PR/base/head, full scope,
+numstat digest, execution/reviewer ID, observed model/provider, isolation and timestamp.
+Invalid, stale, uncertain, blocking, self-reviewed or mismatched evidence blocks merge.
 
-```text
-schema_version: 2
-kind: independent_review_receipt_v2
-repository, pr_number, task_id, run_id, contract_hash, base_sha, head_sha
-reviewer_id, reviewer_class, review_mode, reviewed_at, challenge_id, builder_id
-reviewed_scope, verdict, blocking_findings, authority_provenance, signature
-```
+The host publishes one whole `host_review_handoff_v2` under `<!-- babel-controller-ai-reviews-v2 -->`.
+Immutable-base transport creates `github_host_review_bundle_v2` with actual owner/comment IDs.
+Transport and gate paginate live comments and use GitHub's numeric repository-owner User ID.
+The latest matching whole round wins, including rejection; local bundles are only untrusted caches.
+Workers have no shell, candidate-write, GitHub-write, merge or controller-state capability.
+The owner launcher/session is trusted: this is **not** isolation against malicious processes
+already holding owner credentials. Stronger principal isolation is a separate requirement.
 
-The receipt must be exact-head and exact-base bound, have a non-empty reviewed
-scope, have no blocking findings, use `APPROVE`, identify a reviewer distinct
-from the builder, and carry an Ed25519 signature plus supervisor challenge
-provenance. The challenge ledger binds the review request and response to the
-same repository, PR, base, and head. Cryptographic verification is performed by
-`scripts/verify-independent-review.mjs` against the trusted key configuration;
-the receipt remains technical evidence and never becomes user merge authority.
-
-The trusted `pull_request_target` workflow checks out immutable base code and
-uses `scripts/materialize-independent-review-receipt.ps1` to extract exactly one
-head-matching receipt and challenge ledger from PR comments. Missing or multiple
-handoffs are materialized as verifier-visible transport errors. Comment text is
-untrusted transport data, not authority.
-
-Initial policy: LOW may use CI plus exact-head review under repository policy;
-MEDIUM is policy-dependent; HIGH and CRITICAL require an independent exact-head
-receipt; CRITICAL also requires explicit current-task merge authority.
+Privileged workflows execute immutable base only. Owner comment creation/editing reruns
+the original PR audit; a comment-workflow check cannot satisfy the required PR check.
+GitHub must require an up-to-date branch, closing the base-change race after an audit.
+Task authority survives repairs; changed base/head still requires fresh checks and review.
+Use one task-wide spend ledger, retain unknown-usage reservations, scan sources before
+transmission, and recheck PR identity before publication.
 
 ## Trusted execution ownership
 
@@ -143,13 +150,12 @@ PR_HEAD_CREATED -> LOCAL_VERIFIED -> INDEPENDENT_REVIEWED
                          \-> main changed: INVALIDATE / UPDATE / REVERIFY
 ```
 
-Every meaningful SHA change invalidates prior review and CI evidence. Autonomous
-mutation, autonomous merge-train execution, rollback, deployment, credential
-delegation, and self-modification are not enabled by this document.
+Every meaningful SHA change invalidates prior review and CI evidence, not the
+original task's routine-action authority. The dispatcher handles the authorized
+repair/review/merge loop; GitHub required checks remain the final enforcement.
 
-The repair PR itself has one explicit bootstrap path: `-BootstrapRepairAuthorized`
-may be supplied only after the frozen-base gate has been run and its sole
-remaining blockers are the proven old approval mismatch and the new
-target-workflow authority gap. The gate records the exception, requires all
-other dimensions plus a successful exact-head legacy metadata result, and never
-treats the mode as a general check bypass.
+The obsolete `BootstrapRepairAuthorized` per-invocation exception is removed.
+A migration from the former signing system may use only the separately
+authorized, exact-candidate, snapshot/restore procedure. It must retain every
+unaffected check, restore the ruleset immediately, leave no standing bypass,
+and be followed by a normal protected PR. This is not a normal merge option.
