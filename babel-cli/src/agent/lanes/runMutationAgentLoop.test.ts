@@ -1,5 +1,5 @@
 /**
- * Tests for runMutationAgentLoop.ts — live LLM sub-agent mutation loop.
+ * Deterministic tests for the sub-agent mutation loop; no live provider calls.
  *
  * Covers: tool acceptance, write-scope enforcement, WorktreeSafetyController
  * snapshots, BackgroundTaskRegistry registration, abort cancellation,
@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { describe, it, mock } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 
 import type { ToolContext, ToolResult } from '../../localTools.js';
 import type { AgentAction } from '../actions.js';
@@ -18,11 +18,58 @@ import { backgroundTaskRegistry } from '../../services/backgroundTaskRegistry.js
 import type { WorktreeRollbackSummary } from '../../services/worktreeSafety.js';
 
 import {
-  runMutationAgentLoop,
+  runMutationAgentLoop as runMutationAgentLoopImpl,
   buildMutationAgentTurnPrompt,
   DEFAULT_MUTATION_LOOP_MAX_ROUNDS,
   type MutationAgentLoopInput,
 } from './runMutationAgentLoop.js';
+
+// Tool mocks alone do not isolate model inference. Every call in this file goes
+// through the real loop with an explicit deterministic model-boundary resolver.
+let providerRequests = 0;
+let resolvedTurns = 0;
+let previousOffline: string | undefined;
+beforeEach(() => {
+  previousOffline = process.env['BABEL_LITE_OFFLINE'];
+  delete process.env['BABEL_LITE_OFFLINE'];
+  providerRequests = 0;
+  resolvedTurns = 0;
+  mock.method(globalThis, 'fetch', async () => {
+    providerRequests++;
+    throw new Error('Unexpected provider/network request in mutation loop unit test');
+  });
+});
+afterEach(() => {
+  mock.restoreAll();
+  if (previousOffline === undefined) delete process.env['BABEL_LITE_OFFLINE'];
+  else process.env['BABEL_LITE_OFFLINE'] = previousOffline;
+  assert.equal(providerRequests, 0, 'unit tests must never contact a provider');
+});
+
+function runMutationAgentLoop(input: MutationAgentLoopInput) {
+  const finish: AgentAction = { type: 'finish', summary: 'Deterministic completion', verification: [] };
+  const write = (path: string): AgentAction => ({ type: 'write_file', path, content: 'test content\n' });
+  const scripted: Record<string, AgentAction[]> = {
+    'agent-1': [write('src/result.txt'), finish],
+    writer: [write('src/result.txt'), finish],
+    'bad-agent': [write('../outside.txt')],
+    'max-rounds-test': [{ type: 'read_file', path: 'src/original.txt' }],
+    'hash-test': [write('src/newfile.txt'), finish],
+    'log-test': [{ type: 'read_file', path: 'src/original.txt' }, finish],
+    'blocked-test': [write('src/blocked.txt'), finish],
+    'cmd-test': [{ type: 'run_command', command: 'echo hello' }, finish],
+    'approval-test': [{ type: 'ask_approval', reason: 'Fixture approval', requested_action: write('src/new.txt') }, finish],
+  };
+  return runMutationAgentLoopImpl({
+    ...input,
+    useDeterministicMock: false,
+    actionResolver: async () => {
+      resolvedTurns++;
+      if (input.agentId === 'fail-test') throw new Error('deterministic resolver failure');
+      return scripted[input.agentId] ?? [finish];
+    },
+  });
+}
 
 // ─── Mock Tool Executor ──────────────────────────────────────────────────────
 
@@ -31,7 +78,10 @@ type MockResults = Record<string, ToolResult>;
 function mockExecutor(results: MockResults): import('../toolExecutor.js').ToolExecutor {
   return {
     mapAction(action: AgentAction) {
-      if (action.type === 'read_file' || action.type === 'write_file') {
+      if (action.type === 'write_file') {
+        return [{ kind: 'execute' as const, request: { tool: 'file_write' as const, path: action.path, content: action.content } }];
+      }
+      if (action.type === 'read_file') {
         return [{ kind: 'execute' as const, request: { tool: 'file_read' as const, path: action.path } }];
       }
       if (action.type === 'list_dir') {
@@ -158,7 +208,6 @@ describe('runMutationAgentLoop', () => {
       toolContext: createToolContext(),
       maxRounds: 3,
       executor: exec,
-      useDeterministicMock: true,
     });
 
     assert.ok(result.success);
@@ -183,7 +232,6 @@ describe('runMutationAgentLoop', () => {
       toolContext: createToolContext(),
       maxRounds: 3,
       executor: exec,
-      useDeterministicMock: true,
     });
 
     assert.ok(result.success);
@@ -191,17 +239,16 @@ describe('runMutationAgentLoop', () => {
 
   it('respects write_scope and blocks writes outside declared paths', async () => {
     const root = createProjectRoot();
-    let outsideWriteAttempted = false;
 
     // Use an executor that reports the write to an outside path would succeed,
     // but the mutation loop should block it before it reaches the executor.
     const exec = mockExecutor({
-      'write:/etc/passwd': { exit_code: 0, stdout: 'written', stderr: '' },
+      'write:../outside.txt': { exit_code: 0, stdout: 'written', stderr: '' },
     });
 
     const result = await runMutationAgentLoop({
       agentId: 'bad-agent',
-      task: 'Write to /etc/passwd',
+      task: 'Write to ../outside.txt',
       projectRoot: root,
       writeScope: ['src'], // Only src/ is allowed
       toolContext: createToolContext(),
@@ -209,10 +256,10 @@ describe('runMutationAgentLoop', () => {
       executor: exec,
     });
 
-    // The agent may fail because it tries to write outside scope
-    // (the task won't match a valid action, so it may finish with no changes)
-    // This tests that outside-scope writes are rejected
-    assert.ok(typeof result.success === 'boolean');
+    // The scripted outside-scope action must be rejected before execution.
+    assert.equal(result.success, false);
+    assert.match(result.error!, /outside write scope/);
+    assert.equal(result.changedFiles.length, 0);
     assert.ok(typeof result.rollback === 'function');
   });
 
@@ -271,7 +318,9 @@ describe('runMutationAgentLoop', () => {
       executor: exec,
     });
 
-    assert.ok(result.success || result.stepsExecuted <= 10);
+    assert.equal(resolvedTurns, 2);
+    assert.equal(attempts, 2);
+    assert.equal(result.stepsExecuted, 2);
     assert.ok(typeof result.rollback === 'function');
   });
 
@@ -293,6 +342,7 @@ describe('runMutationAgentLoop', () => {
     });
 
     assert.ok(!result.success);
+    assert.equal(resolvedTurns, 0);
     assert.ok(result.error === null || result.error!.includes('Abort') || result.error!.includes('abort'));
   });
 
@@ -323,8 +373,7 @@ describe('runMutationAgentLoop', () => {
       },
     };
 
-    // This will fail because the mock executor returns no tool calls
-    // The loop doesn't actually execute anything
+    // The deterministic model boundary throws before any tool calls.
     const result = await runMutationAgentLoop({
       agentId: 'fail-test',
       task: 'Will fail',
@@ -335,7 +384,8 @@ describe('runMutationAgentLoop', () => {
       executor: exec as any,
     });
 
-    assert.ok(typeof result.success === 'boolean');
+    assert.equal(result.success, false);
+    assert.match(result.error!, /deterministic resolver failure/);
     assert.ok(typeof result.rollback === 'function');
   });
 
@@ -349,11 +399,10 @@ describe('runMutationAgentLoop', () => {
       toolContext: createToolContext(),
       maxRounds: 1,
       executor: mockExecutor({}),
-      useDeterministicMock: true,
     });
 
     // With empty write scope, the agent cannot run mutation actions
-    // The mock path produces a successful result
+    // The scripted finish action completes without mutation.
     assert.ok(result.success);
     assert.ok(typeof result.rollback === 'function');
   });
@@ -437,8 +486,7 @@ describe('runMutationAgentLoop', () => {
       executor: exec,
     });
 
-    // The test may succeed or fail depending on whether the model tries
-    // a legal action first
+    assert.ok(result.toolCallLog.some(entry => entry.stderr.includes('Policy blocked: write denied')));
     assert.ok(typeof result.success === 'boolean');
     assert.ok(typeof result.rollback === 'function');
   });

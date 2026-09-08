@@ -63,6 +63,8 @@ export interface MutationAgentLoopInput {
   runDir?: string;
   /** If true, use deterministic mock actions instead of calling the LLM */
   useDeterministicMock?: boolean;
+  /** Optional model-boundary resolver for deterministic integration tests. */
+  actionResolver?: (prompt: string) => Promise<AgentAction[]>;
 }
 
 export interface MutationAgentLoopResult {
@@ -376,7 +378,9 @@ export async function runMutationAgentLoop(
       // Resolve agent actions from LLM
       let actions: AgentAction[];
       try {
-        const envelope = await runWithPrimaryOnlyFallback(prompt, AgentActionsEnvelopeSchema, {
+        const envelope = input.actionResolver
+          ? AgentActionsEnvelopeSchema.parse({ actions: await input.actionResolver(prompt) })
+          : await runWithPrimaryOnlyFallback(prompt, AgentActionsEnvelopeSchema, {
           stage: 'executor',
           schemaName: 'AgentActionsEnvelopeSchema',
           maxCliAttempts: 2,

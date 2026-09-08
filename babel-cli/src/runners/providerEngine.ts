@@ -15,11 +15,12 @@ import { GroqApiRunner } from './groqApi.js'
 import { OllamaApiRunner } from './ollamaApi.js'
 import { OpenAiApiRunner } from './openAiApi.js'
 import { OpenCodeApiRunner } from './openCodeApi.js'
-import { OpenCodeGoApiRunner } from './openCodeGoApi.js'
-import type { OpenCodeGoCredentialSource } from './openCodeGoCredential.js'
+import { OpenCodeGoApiRunner } from '../claude-babel-astra-lab/openCodeGoApi.js'
+import type { OpenCodeGoCredentialSource } from '../claude-babel-astra-lab/credentialResolver.js'
 import { OpenRouterApiRunner } from './openRouterApi.js'
 import {
   providerSupportsOperation,
+  type BenchmarkProviderId,
   type ProviderId,
   type ProviderOperation,
 } from './providerRegistry.js'
@@ -40,20 +41,17 @@ interface RawLlmRunner extends LlmRunner {
 }
 
 export interface ProviderEngineOptions {
-  provider: ProviderId
+  /** Production providers plus explicitly benchmark-only adapters. */
+  provider: ProviderId | BenchmarkProviderId
   modelId: string
   sampling?: { maxTokens?: number; temperature?: number }
   apiKeyEnvVar?: string
   explicitCredential?: string
-  /** Explicit credential source for the opt-in OpenCode Go transport. */
-  credentialSource?: OpenCodeGoCredentialSource
-  /** In-memory credential handoff for the opt-in OpenCode Go transport. */
-  resolvedCredential?: string
-  /** Stable provider session identity for the opt-in OpenCode Go transport. */
-  sessionId?: string
-  /** Per-request timeout for the opt-in OpenCode Go transport. */
-  requestTimeoutMs?: number
   env?: NodeJS.ProcessEnv
+  /** Required for benchmark-only credential boundary selection. */
+  credentialSource?: OpenCodeGoCredentialSource
+  benchmarkRunId?: string
+  requestTimeoutMs?: number
   /** Optional immutable capability-resolved policy for this invocation lane. */
   executionEnvelope?: ResolvedExecutionEnvelope
 }
@@ -92,12 +90,13 @@ function createAdapter(options: ProviderEngineOptions): RawLlmRunner {
       })
     case 'opencode-go':
       return new OpenCodeGoApiRunner(options.modelId, options.sampling, {
-        ...(options.credentialSource ? { credentialSource: options.credentialSource } : {}),
+        credentialSource: options.credentialSource ?? (options.explicitCredential ? 'explicit-test' : 'opencode-auth-helper'),
         ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}),
-        ...(options.resolvedCredential ? { resolvedCredential: options.resolvedCredential } : {}),
-        ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-        ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }),
+        ...(options.benchmarkRunId ? { benchmarkRunId: options.benchmarkRunId } : {}),
+        ...(options.requestTimeoutMs ? { requestTimeoutMs: options.requestTimeoutMs } : {}),
       })
+    case 'opencode-zen':
+      throw new Error('MODEL_UNAVAILABLE: benchmark provider opencode-zen is not registered in ProviderEngine.')
     case 'openai':
       return new OpenAiApiRunner(runtimeOptions)
     case 'anthropic':
@@ -113,7 +112,7 @@ function createAdapter(options: ProviderEngineOptions): RawLlmRunner {
 
 /** Provider-neutral engine that delegates wire details to protocol adapters. */
 export class ProviderEngine implements LlmRunner {
-  readonly provider: ProviderId
+  readonly provider: ProviderId | BenchmarkProviderId
   readonly modelId: string
   private readonly adapter: RawLlmRunner
 
@@ -162,11 +161,12 @@ export class ProviderEngine implements LlmRunner {
     systemPrompt?: string,
     signal?: AbortSignal,
     toolChoice?: 'auto' | 'required',
+    callbacks?: RunnerCallbacks,
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
     if (!this.adapter.executeWithToolsStream) {
       throw new Error(`[ProviderEngine] ${this.provider} does not support native tool streaming.`)
     }
-    return this.adapter.executeWithToolsStream(messages, tools, systemPrompt, signal, toolChoice)
+    return this.adapter.executeWithToolsStream(messages, tools, systemPrompt, signal, toolChoice, callbacks)
   }
 
   getLastInvocationMetadata(): RunnerInvocationMetadata | null {
@@ -174,6 +174,10 @@ export class ProviderEngine implements LlmRunner {
   }
 
   supports(operation: ProviderOperation): boolean {
+    if (this.provider === 'opencode-go') {
+      return ['structured', 'raw', 'raw_stream', 'native_tool_stream'].includes(operation)
+    }
+    if (this.provider === 'opencode-zen') return false
     return providerSupportsOperation(this.provider, operation)
   }
 }

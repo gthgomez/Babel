@@ -14,6 +14,10 @@ export const PROVIDER_IDS = [
 
 export type ProviderId = (typeof PROVIDER_IDS)[number]
 
+/** Benchmark-only identities; intentionally excluded from production ProviderId. */
+export const BENCHMARK_PROVIDER_IDS = ['opencode-go', 'opencode-zen'] as const
+export type BenchmarkProviderId = (typeof BENCHMARK_PROVIDER_IDS)[number]
+
 export type ProviderProtocol =
   | 'openai_compatible'
   | 'deepseek'

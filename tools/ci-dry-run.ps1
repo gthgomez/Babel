@@ -76,6 +76,9 @@ npm ci
 echo "=== BUILD ==="
 npm run build
 
+echo "=== TYPECHECK ==="
+npm run typecheck
+
 if [ "$QUICK_MODE" != "true" ]; then
   echo "=== TEST ==="
   if [ "$UPDATE_SNAPSHOTS" = "true" ]; then
@@ -88,31 +91,36 @@ fi
 echo "=== PASS ==="
 '@
 
-$scriptPath = Join-Path $env:TEMP "babel-ci-dry-run.sh"
-$scriptBlock | Set-Content -Path $scriptPath -Encoding UTF8 -NoNewline
+$runId = [guid]::NewGuid().ToString('N')
+$scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) "babel-ci-dry-run-$runId.sh"
 
 $envFlags = @()
 if ($Quick) { $envFlags += "-e"; $envFlags += "QUICK_MODE=true" }
 if ($Snapshots) { $envFlags += "-e"; $envFlags += "UPDATE_SNAPSHOTS=true" }
 
-$containerName = "babel-ci-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+$containerName = "babel-ci-$runId"
 
 Write-Host "`nRunning CI simulation in Docker..." -ForegroundColor Cyan
 Write-Host "  Mode: $(
-    if ($Quick) { "Quick (build only)" }
+    if ($Quick) { "Quick (build + typecheck)" }
     elseif ($Snapshots) { "Snapshots (tests with --update-snapshots)" }
     else { "Full (build + test)" }
 )" -ForegroundColor Cyan
 
-# Convert Windows path to something Docker can mount
+# Docker's native CLI accepts drive-qualified paths on Windows. MSYS-style
+# /c/... rewriting is incorrect when this script runs directly in PowerShell.
 $mountPath = $Root -replace '\\', '/'
-$mountPath = "/$($mountPath.Substring(0, 1).ToLowerInvariant())$($mountPath.Substring(2))"
 
 $dockerArgs = @(
-    "run", "--rm",
+    "run"
+)
+if (-not $KeepContainer) { $dockerArgs += "--rm" }
+$dockerArgs += @(
     "--name", $containerName,
     "-v", "${mountPath}:/workspace",
-    "-v", "$($scriptPath -replace '\\', '/'):/tmp/babel-ci-run.sh",
+    # npm ci must never remove the host's dependencies or a worktree junction.
+    "-v", "/workspace/babel-cli/node_modules",
+    "-v", "$($scriptPath -replace '\\', '/'):/tmp/babel-ci-run.sh:ro",
     "-w", "/workspace"
 ) + $envFlags + @(
     $image,
@@ -120,12 +128,30 @@ $dockerArgs = @(
 )
 
 $start = Get-Date
-$output = & docker @dockerArgs 2>&1
-$exitCode = $LASTEXITCODE
+$output = @()
+$exitCode = 2
+$cleanupStatus = 'NOT_CREATED'
+$cleanupError = $null
+try {
+    $scriptBlock | Set-Content -LiteralPath $scriptPath -Encoding utf8NoBOM -NoNewline
+    $cleanupStatus = 'PENDING'
+    $output = @(& docker @dockerArgs 2>&1)
+    $exitCode = $LASTEXITCODE
+} catch {
+    $output += $_.ToString()
+} finally {
+    if ($cleanupStatus -eq 'PENDING') {
+        try {
+            Remove-Item -LiteralPath $scriptPath -Force -ErrorAction Stop
+            $cleanupStatus = 'REMOVED'
+        } catch {
+            $cleanupStatus = 'FAILED'
+            $cleanupError = $_.Exception.Message
+            Write-Warning "Temporary script cleanup failed; preserving Docker result. Retained path: $scriptPath. $cleanupError"
+        }
+    }
+}
 $elapsed = [math]::Round(((Get-Date) - $start).TotalSeconds, 1)
-
-# Clean up temp script
-Remove-Item $scriptPath -Force -ErrorAction SilentlyContinue
 
 # ── Output interpretation ───────────────────────────────────────────────────
 if ($exitCode -eq 0 -and $output -match "=== PASS ===") {
@@ -143,6 +169,7 @@ if ($exitCode -eq 0 -and $output -match "=== PASS ===") {
 } else {
     $status = "RED"
     $summary = "CI simulation FAILED (${elapsed}s). See output above for errors."
+    if ($exitCode -eq 0) { $exitCode = 1 }
 }
 
 $result = [PSCustomObject]@{
@@ -152,6 +179,11 @@ $result = [PSCustomObject]@{
     ExitCode  = $exitCode
     Timestamp = (Get-Date -Format "o")
     Output    = if ($output) { ($output -join "`n") } else { "" }
+    Container = $containerName
+    ContainerRetained = [bool]$KeepContainer
+    CleanupStatus = $cleanupStatus
+    CleanupError = $cleanupError
+    RetainedScript = if ($cleanupStatus -eq 'FAILED') { $scriptPath } else { $null }
 }
 
 # ── Display ─────────────────────────────────────────────────────────────────

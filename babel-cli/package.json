@@ -81,8 +81,8 @@
     "analysis:historical-calibration": "tsx --no-warnings=ExperimentalWarning scripts/build_historical_calibration.ts",
     "analysis:chat-calibration": "tsx --no-warnings=ExperimentalWarning scripts/analyze_chat_calibration.ts",
     "benchmark:chat-calibration": "tsx --no-warnings=ExperimentalWarning scripts/run_chat_calibration.ts",
-      "snapshot:model-intelligence": "tsx --no-warnings=ExperimentalWarning scripts/snapshot_openrouter_metadata.ts",
-      "live:model-intelligence": "tsx --no-warnings=ExperimentalWarning scripts/run_model_intelligence_live_qualification.ts",
+    "snapshot:model-intelligence": "tsx --no-warnings=ExperimentalWarning scripts/snapshot_openrouter_metadata.ts",
+    "live:model-intelligence": "tsx --no-warnings=ExperimentalWarning scripts/run_model_intelligence_live_qualification.ts",
     "reconcile:model-intelligence-history": "tsx --no-warnings=ExperimentalWarning scripts/reconcile_model_intelligence_history.ts",
     "package:model-intelligence-review": "node ../tools/build-final-recertification-package.mjs --repo ..",
     "certify:model-intelligence": "tsx --no-warnings=ExperimentalWarning scripts/run_model_intelligence_certification.ts",
@@ -150,7 +150,14 @@
     "format": "prettier --check src/",
     "format:fix": "prettier --write src/",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
-    "prepublishOnly": "npm run check:source-provenance && npm run check:dist"
+    "prepublishOnly": "npm run check:source-provenance && npm run check:dist",
+    "benchmark:claude-babel:certify": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_go_certification.ts",
+    "benchmark:claude-babel:smoke": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_babel_smoke.ts",
+    "benchmark:claude-babel:canary": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_mimo_t1_canary.ts",
+    "benchmark:claude-babel:pilot": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_profile_pilot.ts",
+    "test:claude-babel-lab": "tsx --no-warnings=ExperimentalWarning --test src/runners/openCodeApi.test.ts src/runners/providerRegistry.test.ts src/runners/providerEngine.test.ts src/claude-babel-astra-lab/lab.test.ts",
+    "test:comparison": "tsx --no-warnings=ExperimentalWarning --test src/claude-babel-astra-lab/comparison-contract.test.ts src/claude-babel-astra-lab/comparison-runner.test.ts src/claude-babel-astra-lab/frozen-evaluator.test.ts src/claude-babel-astra-lab/recovery-observation.test.ts",
+    "benchmark:claude-babel:compare": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_comparison.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
