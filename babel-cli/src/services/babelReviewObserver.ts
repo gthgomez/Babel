@@ -14,15 +14,15 @@ export function validateBabelReviewCalls(calls: unknown, model: string): void {
     if (call?.status === 'completed' && call.metadata?.provider === 'opencode-go' && call.metadata.observed_model_id === model) continue;
     const next = calls[i + 1] as BabelReviewCall | undefined;
     if (call?.status === 'failed' && call.path === 'native_tools' && call.retry_reason === 'transient_before_output' && call.attempt === 1 && typeof call.request_id === 'string' && call.request_id.length > 0 &&
-        call.metadata?.provider === 'opencode-go' && call.metadata.observed_model_id === null && next?.path === 'native_tools' && next.request_id === call.request_id && next.attempt === 2 && next.status === 'completed' && next.metadata?.observed_model_id === model && next.metadata.provider === 'opencode-go') continue;
+        call.metadata?.provider === 'opencode-go' && (call.metadata.observed_model_id === null || call.metadata.observed_model_id === model) && next?.path === 'native_tools' && next.request_id === call.request_id && next.attempt === 2 && next.status === 'completed' && next.metadata?.observed_model_id === model && next.metadata.provider === 'opencode-go') continue;
     throw new Error('CHAT_REVIEW_ATTRIBUTION_INCOMPLETE');
   }
 }
 
 /** Observe every inference entrypoint, including failed and non-native calls. */
 export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
-  constructor(model: OpenCodeGoModel, private readonly record: (call: BabelReviewCall) => void, options: OpenCodeGoRunnerOptions = {}) {
-    super(model, { maxTokens: 8192, temperature: 0 }, options);
+  constructor(private readonly reviewModel: OpenCodeGoModel, private readonly record: (call: BabelReviewCall) => void, options: OpenCodeGoRunnerOptions = {}) {
+    super(reviewModel, { maxTokens: 8192, temperature: 0 }, options);
   }
   private finish(path: string, started: number, completed: boolean) {
     this.record({ path, status: completed ? 'completed' : 'failed', elapsed_ms: Date.now() - started, metadata: this.getLastInvocationMetadata() });
@@ -43,23 +43,50 @@ export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
     finally { this.finish('raw_stream', started, completed); }
   }
   override async *executeWithToolsStream(messages: ProviderMessage[], tools: ToolDefinition[], system?: string, signal?: AbortSignal, choice?: 'auto' | 'required', callbacks?: RunnerCallbacks): AsyncGenerator<ToolStreamEvent, void, undefined> {
+    signal?.throwIfAborted();
     const requestId = randomUUID();
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const started = Date.now(); let completed = false; let delivered = false;
+      signal?.throwIfAborted();
+      const started = Date.now(); let completed = false;
+      const buffered: ToolStreamEvent[] = [];
+      let bufferedBytes = 0;
       let failure: Extract<ToolStreamEvent, { type: 'error' }> | undefined;
       let retry = false;
       try {
+        // Review-only adapter: never expose text or tool calls until the
+        // provider has checked DONE and model identity for the entire request.
         for await (const event of super.executeWithToolsStream(messages, tools, system, signal, choice, callbacks)) {
-          if (event.type === 'error') { failure = event; break; }
-          delivered = true; yield event;
+          if (event.type === 'error') { failure ??= event; continue; }
+          signal?.throwIfAborted();
+          if (failure) continue;
+          bufferedBytes += Buffer.byteLength(JSON.stringify(event));
+          if (bufferedBytes > 4 * 1024 * 1024 || buffered.length >= 32768) throw new Error('CHAT_REVIEW_NATIVE_BUFFER_LIMIT');
+          buffered.push(event);
         }
-        completed = !failure;
-        retry = !!failure && attempt === 1 && !delivered && !signal?.aborted && /^\[deepInfraApi\] (Network error|request timeout|HTTP 50[234]\b)/i.test(failure.message);
+        // Drain error events instead of breaking: provider metadata and model
+        // attribution are finalized after its error yield. Any throw stays failed.
+        signal?.throwIfAborted();
+        if (!failure && !buffered.some(event => event.type === 'done')) failure = { type: 'error', message: 'CHAT_REVIEW_NATIVE_COMPLETION_MISSING' };
+        const metadata = this.getLastInvocationMetadata();
+        retry = !!failure && attempt === 1 && metadata?.provider === 'opencode-go' &&
+          (metadata.observed_model_id === null || metadata.observed_model_id === this.reviewModel) && (
+          /^\[deepInfraApi\] (Network error|request timeout|HTTP 50[234]\b)/i.test(failure.message) ||
+          failure.message === '[deepInfraApi] stream closed before terminal [DONE] marker'
+        );
+        if (!retry) {
+          if (failure) yield failure;
+          else {
+            for (const event of buffered) { signal?.throwIfAborted(); yield event; }
+            signal?.throwIfAborted();
+            // Match the original adapter contract: completion includes full
+            // consumer delivery; cancellation/early return never retries.
+            completed = true;
+          }
+        }
       } finally {
         this.record({ path: 'native_tools', request_id: requestId, attempt, status: completed ? 'completed' : 'failed', elapsed_ms: Date.now() - started, metadata: this.getLastInvocationMetadata(), ...(retry ? { retry_reason: 'transient_before_output' as const } : {}) });
       }
       if (retry) continue;
-      if (failure) yield failure;
       return;
     }
   }

@@ -110,10 +110,13 @@ stall, concurrency and bounded retry controls to prevent runaway or duplicate
 work. Measure tokens, latency and provider-reported usage; distinguish estimates
 from billed cost and preserve unknown values rather than reporting zero.
 
-Native chat requests allow one retry for a transient transport failure before
-any model output is delivered. Both attempts remain recorded; unknown usage is
-not discarded. Partial-output, identity and authentication failures are not
-silently retried or accepted as completed review evidence.
+The review adapter buffers native response events until the provider validates
+completion and model identity. It allows one retry for an eligible transient
+transport failure, including a stream closed before its terminal marker, before
+any buffered output is delivered to chat. Failed partial responses are discarded
+from delivery, never executed or treated as completed evidence. Both attempts
+remain recorded; unknown usage is not discarded. Identity, authentication and
+cancellation failures are not retried.
 
 Keep per-run artifacts, tool outcomes, completion classification, requested and
 observed models, installation identity, malformed output and failed attempts in
