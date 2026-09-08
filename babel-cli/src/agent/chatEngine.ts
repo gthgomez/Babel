@@ -2659,6 +2659,7 @@ export class ChatEngine {
           name === 'read_file' || name === 'file_read' || name === 'read_range' || name === 'grep';
         const projected = projectDurableToolBatch({
           turnSlice,
+          observationsByActionIndex: observationList,
           ...(turnResult.type === 'tool_calls'
             ? { actions: turnResult.actions as Array<Record<string, unknown>> }
             : {}),
