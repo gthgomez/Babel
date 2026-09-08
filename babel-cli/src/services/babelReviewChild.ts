@@ -40,10 +40,17 @@ export async function launchBabelReviewChild(input: { source: string; trustedRoo
   child.stdout.on('data', chunk => appendFileSync(log, chunk, { mode: 0o600 }));
   child.stderr.on('data', chunk => appendFileSync(log, chunk, { mode: 0o600 }));
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; child.kill(); }, input.timeoutMs ?? 1250000);
+  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill();
+    // SIGTERM is cooperative on POSIX. Do not leave an unresponsive review
+    // child holding the lease forever; Windows already terminates it directly.
+    forceKillTimer = setTimeout(() => { if (!child.exitCode) child.kill('SIGKILL'); }, 2000);
+  }, input.timeoutMs ?? 1250000);
   const code = await new Promise<number | null>((resolve, reject) => {
     child.once('error', reject); child.once('close', resolve);
-  }).finally(() => { clearTimeout(timer); input.onExit?.(); });
+  }).finally(() => { clearTimeout(timer); if (forceKillTimer) clearTimeout(forceKillTimer); input.onExit?.(); });
   let artifact: Record<string, unknown> | null = null;
   try { artifact = JSON.parse(readFileSync(input.output, 'utf8')) as Record<string, unknown>; } catch { /* retained as failed process evidence */ }
   return { exitCode: code, timedOut, artifact };

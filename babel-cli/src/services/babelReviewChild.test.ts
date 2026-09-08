@@ -28,6 +28,7 @@ function workerFixture() {
 const pid: number = process.pid;
 writeFileSync(process.env.BABEL_REVIEW_OUTPUT!, JSON.stringify({ pid }));
 if (process.env.BABEL_REVIEW_PURPOSE === 'repair_proposal') setInterval(() => {}, 100);
+if (process.env.BABEL_REVIEW_PURPOSE === 'repair_proposal') process.on('SIGTERM', () => {});
 `);
   return { source, output, worker, trustedRoot: source, runs: join(source, 'runs'), model: 'mimo-v2.5', tsx: resolve(fileURLToPath(new URL('../..', import.meta.url)), 'node_modules/tsx/dist/cli.mjs') };
 }
@@ -46,11 +47,11 @@ test('actual TypeScript worker PID is the leased process, including paths with s
   assert.ok(exitObserved);
 });
 
-test('timeout ends the actual worker before clearing its lease', async () => {
+test('timeout force-kills an unresponsive actual worker before clearing its lease', async () => {
   const fixture = workerFixture();
   let trackedPid = 0;
   let clearedAfterExit = false;
-  const result = await launchBabelReviewChild({ ...fixture, purpose: 'repair_proposal', timeoutMs: 5000,
+  const result = await launchBabelReviewChild({ ...fixture, purpose: 'repair_proposal', timeoutMs: 1000,
     onSpawn: pid => { trackedPid = pid; },
     onExit: () => {
       assert.equal(JSON.parse(readFileSync(fixture.output, 'utf8')).pid, trackedPid);
