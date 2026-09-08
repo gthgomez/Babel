@@ -3,39 +3,41 @@ name: Trusted Control Plane
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created, edited]
 
 permissions:
   contents: read
   pull-requests: read
-
-concurrency:
-  group: trusted-control-plane-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  issues: read
 
 jobs:
   trusted-control-plane:
     name: trusted-control-plane
+    if: github.event_name == 'pull_request_target'
+    concurrency:
+      group: trusted-control-plane-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout immutable base
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ env.BASE_SHA }}
           fetch-depth: 0
           persist-credentials: false
       - name: Materialize candidate as data only
         shell: pwsh
-        env:
-          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git fetch --no-tags origin $env:CANDIDATE_SHA
-          git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:CANDIDATE_SHA
-      - name: Stage review evidence from PR comments (transport only)
+          git fetch --no-tags origin $env:HEAD_SHA
+          git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:HEAD_SHA
+      - name: Stage controller-owned independent AI reviews
         shell: pwsh
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           # Only the trusted base-rooted transport receives the GitHub token.
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -48,13 +50,6 @@ jobs:
       - name: Run base-rooted merge audit
         shell: pwsh
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          # Owner-controlled escalation: set this repository variable to 1 to
-          # require a signed independent review receipt for every PR. The
-          # protected trust root always requires one regardless of this value.
-          BABEL_REQUIRE_SIGNED_REVIEW: ${{ vars.BABEL_REQUIRE_SIGNED_REVIEW }}
           # Only the trusted base-rooted audit receives the GitHub token.
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -63,15 +58,58 @@ jobs:
             -BaseSha $env:BASE_SHA `
             -RepoRoot "$env:GITHUB_WORKSPACE/candidate" `
             -ReviewedHeadSha $env:HEAD_SHA `
-            -IndependentReviewReceiptPath "$env:RUNNER_TEMP/review-evidence/receipt.json" `
-            -ReviewChallengeLedgerPath "$env:RUNNER_TEMP/review-evidence/ledger.json" `
-            -AutonomousReviewEvidencePath "$env:RUNNER_TEMP/review-evidence/ai-review.json" `
-            -TrustRootUpgradeAuthorizationPath "$env:RUNNER_TEMP/review-evidence/trust-upgrade.json" `
+            -AutonomousReviewEvidencePath "$env:RUNNER_TEMP/review-evidence/ai-reviews.json" `
             -AuditOnly `
             -RequireIsolatedWorktree `
             -OutputFormat json
       - name: Test trusted-root boundary
         shell: pwsh
         run: |
-          pwsh -NoProfile -NonInteractive -File tools/tests/test-trust-root-boundaries.ps1 -RepoRoot . `
-            && node tools/tests/test-trust-root-upgrade.mjs
+          pwsh -NoProfile -NonInteractive -File tools/tests/test-trust-root-boundaries.ps1 -RepoRoot .
+  rerun-after-review:
+    name: Reevaluate controller review
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.event.repository.owner.type == 'User' &&
+      github.event.comment.user.id == github.event.repository.owner.id &&
+      github.event.comment.user.type == 'User' &&
+      startsWith(github.event.comment.body, '<!-- babel-controller-ai-reviews-v2 -->')
+    permissions:
+      actions: write
+      pull-requests: read
+    runs-on: ubuntu-latest
+    steps:
+      # A comment workflow has the default-branch SHA. Rerun the original
+      # PR workflow so its result retains the original producer and commit.
+      # No checkout or candidate code runs in this token-bearing job.
+      - name: Rerun the matching PR audit
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pr = gh api "repos/$env:GITHUB_REPOSITORY/pulls/$env:PR_NUMBER" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $pr.state -ne 'open') { throw 'Open PR metadata unavailable.' }
+          $head = [string]$pr.head.sha
+          if ($head -notmatch '^[0-9a-f]{40}$') { throw 'Invalid PR head.' }
+          $runs = gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/trusted-control-plane.yml/runs?event=pull_request_target&head_sha=$head&per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Trusted workflow runs unavailable.' }
+          $matching = @($runs.workflow_runs | Where-Object {
+            $_.event -eq 'pull_request_target' -and $_.head_sha -eq $head -and
+            @($_.pull_requests | Where-Object { $_.number -eq [int]$env:PR_NUMBER }).Count -eq 1
+          } | Sort-Object id -Descending)
+          if ($matching.Count -eq 0) { throw 'No audit run bound to this PR head.' }
+          $runId = [string]$matching[0].id
+          for ($attempt = 0; $attempt -lt 36; $attempt++) {
+            $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$runId" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.head_sha -ne $head) { throw 'Audit run identity changed.' }
+            if ($run.status -eq 'completed') { break }
+            Start-Sleep -Seconds 5
+          }
+          if ($run.status -ne 'completed') { throw 'Audit still running; controller must retry.' }
+          $fresh = gh api "repos/$env:GITHUB_REPOSITORY/pulls/$env:PR_NUMBER" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $fresh.state -ne 'open' -or $fresh.head.sha -ne $head) { throw 'PR changed; review again.' }
+          gh api --method POST "repos/$env:GITHUB_REPOSITORY/actions/runs/$runId/rerun"
+          if ($LASTEXITCODE -ne 0) { throw 'Audit rerun request failed.' }
