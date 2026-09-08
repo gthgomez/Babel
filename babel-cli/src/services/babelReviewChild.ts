@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /** Construct a fresh child environment; never forward GitHub or ambient provider keys. */
 export function babelReviewChildEnv(input: { source: string; trustedRoot: string; output: string; runs: string; model: string; purpose?: 'review' | 'repair_proposal' }, parent: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -23,7 +25,11 @@ export function babelReviewChildEnv(input: { source: string; trustedRoot: string
 
 /** One separate process per review. Private logs survive timeout and malformed output. */
 export async function launchBabelReviewChild(input: { source: string; trustedRoot: string; output: string; runs: string; model: string; purpose?: 'review' | 'repair_proposal'; worker: string; tsx: string; timeoutMs?: number; onSpawn?: (pid: number) => void; onExit?: () => void }) {
-  const child = spawn(process.execPath, [input.tsx, input.worker], {
+  // tsx's CLI is a process wrapper. Import its package-exported loader in the
+  // actual worker process so the lease PID and timeout target own inference.
+  // A file URL also handles drive letters and spaces on Windows.
+  const loader = pathToFileURL(join(dirname(input.tsx), 'loader.mjs')).href;
+  const child = spawn(process.execPath, ['--import', loader, input.worker], {
     cwd: input.source, env: babelReviewChildEnv(input), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   });
   const log = input.output + '.log';

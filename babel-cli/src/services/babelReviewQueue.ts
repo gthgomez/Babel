@@ -4,6 +4,7 @@ import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openS
 import { dirname } from 'node:path'
 import { z } from 'zod'
 import { parseBabelChatVerdict } from './babelChatReview.js'
+import { validateBabelReviewCalls } from './babelReviewObserver.js'
 import type { HostReviewCandidate, HostReviewHandoffV2 } from './hostReviewController.js'
 
 // Leave a one-hour publication/check margin inside the base gate's 24h policy.
@@ -55,11 +56,12 @@ export function validateBabelReviewArtifact(value: unknown, expected: { executio
     schema_version: z.literal(1), harness: z.literal('babel'), mode: z.literal('chat'), status: z.literal('review_completed'),
     execution_id: z.literal(expected.executionId), model: z.literal(expected.model),
     payload: z.record(z.string(), z.unknown()), verdict: z.unknown(),
-    calls: z.array(z.object({ status: z.literal('completed'), metadata: z.object({
-      provider: z.literal('opencode-go'), observed_model_id: z.literal(expected.model),
+    calls: z.array(z.object({ status: z.enum(['completed', 'failed']), metadata: z.object({
+      provider: z.literal('opencode-go'), observed_model_id: z.literal(expected.model).nullable(),
       prompt_tokens: z.number().finite().nonnegative().nullable(), completion_tokens: z.number().finite().nonnegative().nullable(), latency_ms: z.number().finite().nonnegative().nullable(),
     }).passthrough() }).passthrough()).min(1),
   }).passthrough().parse(value)
+  validateBabelReviewCalls(artifact.calls, expected.model)
   const verdict = parseBabelChatVerdict(artifact.payload, expected.scope)
   if (JSON.stringify(verdict) !== JSON.stringify(artifact.verdict)) throw new Error('CHILD_VERDICT_MISMATCH')
   const sum = (field: 'prompt_tokens' | 'completion_tokens' | 'latency_ms') => artifact.calls.some(c => c.metadata[field] === null) ? null : artifact.calls.reduce((n, c) => n + c.metadata[field]!, 0)

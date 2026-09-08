@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { linkSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { applyBabelRepairProposal, parseBabelRepairProposal } from './babelReviewRepair.js'
+import { applyBabelRepairProposal, parseBabelRepairProposal, recordBabelRepairAttempt, selectBabelRepairAttempt, validateBabelAppliedRepair, validateBabelRepairSnapshot } from './babelReviewRepair.js'
 
 const proposal = { summary: 'Correct arithmetic', edits: [{ path: 'add.ts', old_text: 'a - b', new_text: 'a + b' }] }
 const payload = (value: unknown) => ({ mode: 'chat', terminal_outcome: 'NO_CHANGE_REQUIRED', answer: { answer: JSON.stringify(value) } })
@@ -102,4 +102,91 @@ test('rejects binary results and oversized proposals', () => {
   const { input } = fixture()
   assert.throws(() => applyBabelRepairProposal({ ...input, proposal: { ...proposal, edits: [{ ...proposal.edits[0], new_text: 'a\0b' }] } }), /REPAIR_INVALID_RESULT/)
   assert.throws(() => parseBabelRepairProposal(payload({ ...proposal, edits: [{ ...proposal.edits[0], new_text: 'x'.repeat(2 * 1024 * 1024) }] }), ['add.ts']), /REPAIR_SIZE_LIMIT/)
+})
+
+const harness = { source_sha: 'a'.repeat(40), version: 'b'.repeat(64), dirty: false }
+
+test('invalid exact replacements cannot become completed cached proposals and a fresh attempt follows', () => {
+  const job = mkdtempSync(join(tmpdir(), 'babel-repair-recovery-'))
+  const { root } = fixture()
+  const first = selectBabelRepairAttempt(job, harness)
+  assert.throws(() => validateBabelRepairSnapshot(root, ['add.ts'], { ...proposal, edits: [{ ...proposal.edits[0], old_text: 'missing' }] }), /REPAIR_MATCH_NOT_UNIQUE/)
+  recordBabelRepairAttempt(first, 'failed', 'REPAIR_MATCH_NOT_UNIQUE')
+  const second = selectBabelRepairAttempt(job, harness)
+  assert.equal(second.number, 2)
+  assert.deepEqual(validateBabelRepairSnapshot(root, ['add.ts'], proposal), proposal)
+  recordBabelRepairAttempt(second, 'proposal_complete')
+  assert.equal(selectBabelRepairAttempt(job, harness).number, 2)
+  assert.equal(JSON.parse(readFileSync(join(first.directory, 'attempt.json'), 'utf8')).stage, 'failed')
+  assert.equal(readdirSync(join(first.directory, 'events')).length, 2)
+})
+
+test('interrupted copy keeps its owned worktree and gets a new bounded attempt', () => {
+  const job = mkdtempSync(join(tmpdir(), 'babel-repair-copy-recovery-'))
+  const first = selectBabelRepairAttempt(job, harness)
+  mkdirSync(join(first.directory, 'worktree'))
+  writeFileSync(join(first.directory, 'worktree', 'partial.ts'), 'retained data')
+  const second = selectBabelRepairAttempt(job, harness)
+  assert.equal(second.number, 2)
+  assert.equal(readFileSync(join(first.directory, 'worktree', 'partial.ts'), 'utf8'), 'retained data')
+  recordBabelRepairAttempt(second, 'failed', 'FIXTURE_FAILED')
+  const third = selectBabelRepairAttempt(job, harness)
+  recordBabelRepairAttempt(third, 'failed', 'FIXTURE_FAILED')
+  assert.throws(() => selectBabelRepairAttempt(job, harness), /REPAIR_RETRY_EXHAUSTED/)
+})
+
+test('a proposal-complete attempt with an unfinished worktree is quarantined and retried', () => {
+  const job = mkdtempSync(join(tmpdir(), 'babel-repair-copy-stage-'))
+  const first = selectBabelRepairAttempt(job, harness)
+  recordBabelRepairAttempt(first, 'proposal_complete')
+  const { git, input } = fixture()
+  const worktree = join(first.directory, 'worktree')
+  git(['worktree', 'add', '--detach', worktree, input.expectedHead])
+  const resumed = selectBabelRepairAttempt(job, harness)
+  assert.equal(resumed.stage, 'proposal_complete')
+  assert.throws(() => validateBabelAppliedRepair({ ...input, worktree }), /REPAIR_APPLIED_STATE_CHANGED/)
+  recordBabelRepairAttempt(resumed, 'failed', 'REPAIR_APPLIED_STATE_CHANGED')
+  assert.equal(selectBabelRepairAttempt(job, harness).number, 2)
+  assert.equal(readFileSync(join(worktree, 'add.ts'), 'utf8'), 'export const add = (a, b) => a - b\n')
+})
+
+test('applied repair cache is valid only while head, index and every file remain exact', () => {
+  for (const drift of ['none', 'head', 'index', 'target', 'other', 'missing']) {
+    const { root, input, git } = fixture()
+    applyBabelRepairProposal(input)
+    if (drift === 'head') input.expectedHead = 'a'.repeat(40)
+    if (drift === 'index') git(['add', 'add.ts'])
+    if (drift === 'target') writeFileSync(join(root, 'add.ts'), 'a different patch')
+    if (drift === 'other') writeFileSync(join(root, 'other.ts'), 'unrelated change')
+    if (drift === 'missing') renameSync(join(root, 'add.ts'), join(mkdtempSync(join(tmpdir(), 'babel-repair-retained-')), 'add.ts'))
+    if (drift === 'none') assert.doesNotThrow(() => validateBabelAppliedRepair(input))
+    else assert.throws(() => validateBabelAppliedRepair(input))
+  }
+})
+
+test('a crash after application resumes the completed proposal without another model call', () => {
+  const job = mkdtempSync(join(tmpdir(), 'babel-repair-resume-'))
+  const first = selectBabelRepairAttempt(job, harness)
+  recordBabelRepairAttempt(first, 'proposal_complete')
+  const { input } = fixture()
+  applyBabelRepairProposal(input)
+  const resumed = selectBabelRepairAttempt(job, harness)
+  assert.equal(resumed.number, first.number)
+  validateBabelAppliedRepair(input)
+  recordBabelRepairAttempt(resumed, 'applied')
+  assert.equal(selectBabelRepairAttempt(job, harness).stage, 'applied')
+})
+
+test('changed harness attribution and malformed state are quarantined rather than reused', () => {
+  const job = mkdtempSync(join(tmpdir(), 'babel-repair-version-'))
+  const first = selectBabelRepairAttempt(job, harness)
+  recordBabelRepairAttempt(first, 'proposal_complete')
+  const second = selectBabelRepairAttempt(job, { ...harness, version: 'c'.repeat(64) })
+  assert.equal(second.number, 2)
+  assert.ok(readdirSync(first.directory).some(name => name.startsWith('attempt.invalid-')))
+  writeFileSync(join(second.directory, 'attempt.json'), '{broken')
+  const third = selectBabelRepairAttempt(job, harness)
+  assert.equal(third.number, 3)
+  assert.ok(existsSync(join(second.directory, 'events')))
+  assert.ok(readdirSync(second.directory).some(name => name.startsWith('attempt.invalid-')))
 })

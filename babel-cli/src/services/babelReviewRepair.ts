@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { lstatSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join, parse, resolve } from 'node:path'
 import { z } from 'zod'
 import { safeReviewPath, secretRiskReviewPath } from './babelReviewSnapshot.js'
+import { atomicReviewJson } from './babelReviewQueue.js'
 
 const maximumBytes = 2 * 1024 * 1024
 export const BabelRepairProposal = z.object({
@@ -65,7 +66,7 @@ function regularFile(root: string, path: string): string {
 }
 
 /** Build all replacements before any write; the exact Git candidate must be pristine. */
-export function planBabelRepair(input: { worktree: string; expectedHead: string; scope: string[]; proposal: unknown }): Array<{ path: string; before: Buffer; after: Buffer }> {
+export function planBabelRepair(input: { worktree: string; expectedHead: string; scope: string[]; proposal: unknown }, applied = false): Array<{ path: string; before: Buffer; after: Buffer }> {
   if (!/^[a-f0-9]{40}$/.test(input.expectedHead)) throw new Error('REPAIR_INVALID_HEAD')
   const root = resolve(input.worktree)
   const git = (args: string[]) => repairGit(root, args)
@@ -76,6 +77,7 @@ export function planBabelRepair(input: { worktree: string; expectedHead: string;
   const expectedIndex = records.map(record => record.replace(/^(\d+) blob ([a-f0-9]+)\t/, '$1 $2 0\t'))
   if (JSON.stringify(index.sort()) !== JSON.stringify(expectedIndex.sort())) throw new Error('REPAIR_DIRTY_INDEX')
   const originals = new Map<string, Buffer>()
+  const proposal = validateProposal(input.proposal, input.scope)
   for (const record of records) {
     const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/.exec(record)
     if (!match) throw new Error('REPAIR_UNSUPPORTED_TREE')
@@ -86,10 +88,17 @@ export function planBabelRepair(input: { worktree: string; expectedHead: string;
     if (info.size > maximumBytes) throw new Error('REPAIR_SIZE_LIMIT')
     const bytes = readFileSync(file)
     const hash = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
-    if (hash !== match[2] || (process.platform !== 'win32' && !!(info.mode & 0o111) !== (match[1] === '100755'))) throw new Error('REPAIR_SOURCE_CHANGED')
-    originals.set(path, bytes)
+    const edited = applied && proposal.edits.some(edit => edit.path === path)
+    if ((!edited && hash !== match[2]) || (process.platform !== 'win32' && !!(info.mode & 0o111) !== (match[1] === '100755'))) throw new Error('REPAIR_SOURCE_CHANGED')
+    originals.set(path, edited ? execFileSync('git', ['-C', root, 'cat-file', 'blob', match[2]!], { windowsHide: true, maxBuffer: maximumBytes }) : bytes)
   }
-  return validateProposal(input.proposal, input.scope).edits.map(edit => {
+  const edits = buildReplacements(originals, proposal)
+  if (applied) for (const edit of edits) if (!readFileSync(regularFile(root, edit.path)).equals(edit.after)) throw new Error('REPAIR_APPLIED_STATE_CHANGED')
+  return edits
+}
+
+function buildReplacements(originals: Map<string, Buffer>, proposal: BabelRepairProposalValue): Array<{ path: string; before: Buffer; after: Buffer }> {
+  return proposal.edits.map(edit => {
     const before = originals.get(edit.path)
     if (!before || before.includes(0)) throw new Error('REPAIR_BINARY_OR_MISSING_FILE')
     const source = before.toString('utf8')
@@ -100,6 +109,62 @@ export function planBabelRepair(input: { worktree: string; expectedHead: string;
     if (!after.length || after.length > maximumBytes || after.includes(0)) throw new Error('REPAIR_INVALID_RESULT')
     return { path: edit.path, before, after }
   })
+}
+
+/** Validate unique replacement semantics before caching a proposal or creating a worktree. */
+export function validateBabelRepairSnapshot(source: string, scope: string[], value: unknown): BabelRepairProposalValue {
+  const proposal = validateProposal(value, scope)
+  const originals = new Map<string, Buffer>()
+  for (const edit of proposal.edits) {
+    const path = regularFile(resolve(source), edit.path)
+    if (lstatSync(path).size > maximumBytes) throw new Error('REPAIR_SIZE_LIMIT')
+    originals.set(edit.path, readFileSync(path))
+  }
+  buildReplacements(originals, proposal)
+  return proposal
+}
+
+/** Revalidate an applied cache against HEAD, the untouched index and every actual file. */
+export function validateBabelAppliedRepair(input: Parameters<typeof planBabelRepair>[0]): void {
+  planBabelRepair(input, true)
+}
+
+export interface BabelRepairHarnessVersion { source_sha: string; version: string; dirty: boolean }
+export type BabelRepairAttemptStage = 'running' | 'proposal_complete' | 'applied' | 'failed'
+export interface BabelRepairAttempt { number: number; directory: string; stage: BabelRepairAttemptStage; harness: BabelRepairHarnessVersion }
+
+/** Durable stage records retain every failed attempt and its worktree, without deleting evidence. */
+export function recordBabelRepairAttempt(attempt: BabelRepairAttempt, stage: BabelRepairAttemptStage, failure?: string): void {
+  attempt.stage = stage
+  const record = { number: attempt.number, stage, harness: attempt.harness, at: new Date().toISOString(), ...(failure ? { failure } : {}) }
+  atomicReviewJson(join(attempt.directory, 'events', `${Date.now()}-${randomUUID()}.json`), record)
+  atomicReviewJson(join(attempt.directory, 'attempt.json'), record)
+}
+
+/** Under the job lease, recover a completed proposal or allocate a bounded fresh attempt. */
+export function selectBabelRepairAttempt(job: string, harness: BabelRepairHarnessVersion, maximumAttempts = 3): BabelRepairAttempt {
+  if (!Number.isInteger(maximumAttempts) || maximumAttempts < 1 || maximumAttempts > 10) throw new Error('REPAIR_INVALID_ATTEMPT_LIMIT')
+  for (let number = 1; number <= maximumAttempts; number++) {
+    const directory = join(job, 'attempts', String(number))
+    if (!existsSync(directory)) {
+      mkdirSync(directory, { recursive: true, mode: 0o700 })
+      const attempt: BabelRepairAttempt = { number, directory, stage: 'running', harness }
+      recordBabelRepairAttempt(attempt, 'running')
+      return attempt
+    }
+    let prior: { number?: number; stage?: string; harness?: BabelRepairHarnessVersion } = {}
+    try { prior = JSON.parse(readFileSync(join(directory, 'attempt.json'), 'utf8')) as typeof prior } catch { /* retained interrupted allocation */ }
+    if (JSON.stringify(prior.harness) !== JSON.stringify(harness) || prior.number !== number || !['running', 'proposal_complete', 'applied', 'failed'].includes(prior.stage || '')) {
+      const attempt: BabelRepairAttempt = { number, directory, stage: 'failed', harness }
+      if (existsSync(join(directory, 'attempt.json'))) renameSync(join(directory, 'attempt.json'), join(directory, `attempt.invalid-${randomUUID()}.json`))
+      recordBabelRepairAttempt(attempt, 'failed', 'REPAIR_ATTEMPT_STATE_INVALID')
+      continue
+    }
+    const attempt: BabelRepairAttempt = { number, directory, stage: prior.stage as BabelRepairAttemptStage, harness }
+    if (attempt.stage === 'proposal_complete' || attempt.stage === 'applied') return attempt
+    if (attempt.stage === 'running') recordBabelRepairAttempt(attempt, 'failed', 'REPAIR_INTERRUPTED_ATTEMPT')
+  }
+  throw new Error('REPAIR_RETRY_EXHAUSTED')
 }
 
 /** Apply prevalidated exact replacements; never stage, execute, publish, or approve. */

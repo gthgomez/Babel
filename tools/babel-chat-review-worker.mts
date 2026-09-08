@@ -6,7 +6,7 @@ import { ChatEngine } from '../babel-cli/src/agent/chatEngine.js';
 import { runCliChatTask } from '../babel-cli/src/interactive/execution/chatCore.js';
 import { isOpenCodeGoModel } from '../babel-cli/src/runners/openCodeGoApi.js';
 import { babelReviewModelPolicy, babelReviewPrompt, parseBabelChatVerdict } from '../babel-cli/src/services/babelChatReview.js';
-import { ObservedBabelReviewRunner } from '../babel-cli/src/services/babelReviewObserver.js';
+import { ObservedBabelReviewRunner, validateBabelReviewCalls } from '../babel-cli/src/services/babelReviewObserver.js';
 import { babelRepairPrompt, parseBabelRepairProposal } from '../babel-cli/src/services/babelReviewRepair.js';
 
 const source = process.env['BABEL_PROJECT_ROOT'];
@@ -30,7 +30,7 @@ try {
   const run = (task: string) => runCliChatTask({
     task, projectRoot: source, instructionRoot: trustedRoot,
     model, outputFormat: 'json', executionProfile: 'chat',
-    engineFactory: options => engine ??= new ChatEngine({ ...options, runId: manifest.execution_id, providerRunner: runner, providerPolicy: babelReviewModelPolicy(model, trustedRoot), appendSystemPrompt: 'Integration output contract: this read-only review ends with exactly one JSON object matching the requested verdict schema. No prose, Markdown fences, or trailing characters. Do not change findings merely to satisfy formatting.' }),
+    engineFactory: options => engine ??= new ChatEngine({ ...options, runId: manifest.execution_id, providerRunner: runner, providerPolicy: babelReviewModelPolicy(model, trustedRoot), appendSystemPrompt: 'Integration output contract: this read-only investigation ends with exactly one JSON object matching the requested integration schema. No prose, Markdown fences, or trailing characters. Do not change findings or proposed replacements merely to satisfy formatting.' }),
   });
   const repair = purpose === 'repair_proposal';
   const parseAnswer = (payload: Record<string, unknown>) => repair ? parseBabelRepairProposal(payload, manifest.scope) : parseBabelChatVerdict(payload, manifest.scope);
@@ -50,7 +50,7 @@ try {
     persist({ status: 'cli_completed', payload: result.payload, attempts, format_repairs: 1 });
     parsed = parseAnswer(result.payload);
   }
-  if (!calls.length || calls.some(c => c['status'] !== 'completed' || (c['metadata'] as { observed_model_id?: string } | null)?.observed_model_id !== model)) throw new Error('CHAT_REVIEW_ATTRIBUTION_INCOMPLETE');
+  validateBabelReviewCalls(calls, model);
   persist({ status: repair ? 'repair_proposal_completed' : 'review_completed', payload: result.payload, attempts, ...(repair ? { proposal: parsed } : { verdict: parsed }) });
 } catch (error) {
   // Preserve all partial CLI/provider artifacts without exposing error payloads.

@@ -45,6 +45,8 @@ try {
   & $git -C $seedPath config user.email gate-test@example.com
   & $git -C $seedPath config user.name 'Gate Test'
   & $git -C $seedPath remote add origin $barePath
+  & $git -C $seedPath commit --allow-empty -m 'previously merged installation' 2>&1 | Out-Null
+  $previousInstallationSha = (& $git -C $seedPath rev-parse HEAD).Trim()
   foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-review-evidence.ps1', 'scripts/agent-git-common.psm1', 'scripts/trusted-merge-gate.ps1', 'scripts/materialize-independent-review-receipt.ps1')) {
     $target = Join-Path $seedPath $relative
     New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
@@ -56,6 +58,11 @@ try {
   $baseSha = (& $git -C $seedPath rev-parse HEAD).Trim()
   & $git -C $seedPath push origin main 2>&1 | Out-Null
   & $git -C $seedPath update-ref refs/remotes/origin/main $baseSha
+
+  # Not merged into base: a predecessor of the candidate must not be allowed
+  # to certify its own descendant merely because their SHA strings differ.
+  & $git -C $seedPath commit --allow-empty -m 'unmerged reviewer installation' 2>&1 | Out-Null
+  $unmergedInstallationSha = (& $git -C $seedPath rev-parse HEAD).Trim()
 
   # ---- candidate commit changes the RED control plane (main stays at base) ----
   if ($CandidateLane -eq 'RED') {
@@ -293,6 +300,32 @@ exit 0
     $minimum = if ($CandidateLane -eq 'RED') { 2 } else { 1 }
     if (-not $run.result.reviewPolicy.independentReviewRequired -or $run.result.reviewPolicy.minimumIndependentReviewCount -ne $minimum) { throw 'Every PR must require proportionate independent chat review.' }
     if ($run.result.reviewPolicy.observedIndependentReviewCount -ne 2) { throw 'two independent reviews were not observed' }
+  }
+
+  foreach ($installationCase in @(
+      @{ Name = 'previously-merged-reviewer-pass'; Sha = $previousInstallationSha; Pass = $true },
+      @{ Name = 'unmerged-candidate-ancestor-reviewer-blocked'; Sha = $unmergedInstallationSha; Pass = $false },
+      @{ Name = 'missing-reviewer-source-blocked'; Sha = ('d' * 40); Pass = $false }
+    )) {
+    Invoke-Step $installationCase.Name {
+      $sourceBundle = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+      foreach ($review in $sourceBundle.handoff.reviews) { $review.harness.source_sha = $installationCase.Sha }
+      $sourcePath = Join-Path $root ('{0}.json' -f $installationCase.Name)
+      $sourceBundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $sourcePath -Encoding utf8NoBOM
+      $sourceComment = Get-Content -Raw (Join-Path $root 'comment-102.json') | ConvertFrom-Json
+      $sourceComment.body = '<!-- babel-controller-ai-reviews-v2 -->' + ($sourceBundle.handoff | ConvertTo-Json -Depth 30 -Compress)
+      $sourceComment | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
+      try {
+        $run = Invoke-Gate -Label $installationCase.Name -Extra @{ '-AutonomousReviewEvidencePath' = $sourcePath }
+      } finally {
+        Get-Content -Raw (Join-Path $root 'comment-102.json') | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
+      }
+      if ($installationCase.Pass) {
+        if ($run.exitCode -ne 0) { throw 'Previously merged reviewer installation must remain eligible.' }
+      } elseif ($run.exitCode -eq 0 -or $run.result.reviewPolicy.independentReviewEvidenceErrors -notcontains 'autonomous_evidence_harness_source_not_in_trusted_base') {
+        throw 'Unmerged or unavailable installation must not satisfy trusted chat review.'
+      }
+    }
   }
 
   Invoke-Step 'non-strict-required-check-policy-blocked' {

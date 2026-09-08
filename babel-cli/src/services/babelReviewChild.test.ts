@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { babelReviewChildEnv } from './babelReviewChild.js';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { babelReviewChildEnv, launchBabelReviewChild } from './babelReviewChild.js';
 
 test('review child strips publication credentials, preload hooks and ambient overrides', () => {
   const env = babelReviewChildEnv({ source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'mimo-v2.5' }, {
@@ -14,4 +18,47 @@ test('review child strips publication credentials, preload hooks and ambient ove
   assert.ok(!env['BABEL_ALLOWED_TOOLS']!.includes('shell_exec'));
   assert.ok(!env['BABEL_ALLOWED_TOOLS']!.includes('semantic_search'));
   assert.equal(env['BABEL_READ_ONLY_NO_INDEX_WRITE'], '1');
+});
+
+function workerFixture() {
+  const source = mkdtempSync(join(tmpdir(), 'babel child process '));
+  const output = join(source, 'result.json');
+  const worker = join(source, 'worker.mts');
+  writeFileSync(worker, `import { writeFileSync } from 'node:fs';
+const pid: number = process.pid;
+writeFileSync(process.env.BABEL_REVIEW_OUTPUT!, JSON.stringify({ pid }));
+if (process.env.BABEL_REVIEW_PURPOSE === 'repair_proposal') setInterval(() => {}, 100);
+`);
+  return { source, output, worker, trustedRoot: source, runs: join(source, 'runs'), model: 'mimo-v2.5', tsx: resolve(fileURLToPath(new URL('../..', import.meta.url)), 'node_modules/tsx/dist/cli.mjs') };
+}
+
+test('actual TypeScript worker PID is the leased process, including paths with spaces', async () => {
+  const fixture = workerFixture();
+  let trackedPid = 0;
+  let exitObserved = false;
+  const result = await launchBabelReviewChild({ ...fixture, timeoutMs: 10000,
+    onSpawn: pid => { trackedPid = pid; },
+    onExit: () => { exitObserved = true; },
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.artifact?.['pid'], trackedPid);
+  assert.ok(exitObserved);
+});
+
+test('timeout ends the actual worker before clearing its lease', async () => {
+  const fixture = workerFixture();
+  let trackedPid = 0;
+  let clearedAfterExit = false;
+  const result = await launchBabelReviewChild({ ...fixture, purpose: 'repair_proposal', timeoutMs: 5000,
+    onSpawn: pid => { trackedPid = pid; },
+    onExit: () => {
+      assert.equal(JSON.parse(readFileSync(fixture.output, 'utf8')).pid, trackedPid);
+      assert.throws(() => process.kill(trackedPid, 0), (error: unknown) => (error as NodeJS.ErrnoException).code === 'ESRCH');
+      clearedAfterExit = true;
+    },
+  });
+  assert.equal(result.timedOut, true);
+  assert.equal(result.artifact?.['pid'], trackedPid);
+  assert.ok(clearedAfterExit);
 });

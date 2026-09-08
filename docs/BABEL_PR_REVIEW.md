@@ -28,7 +28,8 @@ review rejection or another SHA does not require repeated owner approval.
 
 Run the controller from a clean, independently verified, pinned installation,
 not from the PR checkout. Its code supplies trusted instructions and execution
-policy. Candidate Git blobs are copied to a separate inert snapshot: no candidate
+policy; its source commit must belong to the immutable PR base's merged history.
+Candidate Git blobs are copied to a separate inert snapshot: no candidate
 checkout hooks, dependency installation, or candidate code execution is needed
 for review. Secret scanning precedes provider exposure.
 
@@ -108,6 +109,11 @@ Owner-authorized Babel PR review has no dollar cap. Retain wall-clock, turn,
 stall, concurrency and bounded retry controls to prevent runaway or duplicate
 work. Measure tokens, latency and provider-reported usage; distinguish estimates
 from billed cost and preserve unknown values rather than reporting zero.
+
+Native chat requests allow one retry for a transient transport failure before
+any model output is delivered. Both attempts remain recorded; unknown usage is
+not discarded. Partial-output, identity and authentication failures are not
+silently retried or accepted as completed review evidence.
 
 Keep per-run artifacts, tool outcomes, completion classification, requested and
 observed models, installation identity, malformed output and failed attempts in

@@ -253,6 +253,19 @@ function Read-AgentAutonomousReviewEvidence {
   $scopeResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('-c', 'core.quotepath=false', 'diff', '--no-ext-diff', '--no-textconv', '--name-only', "$BaseSha...$HeadSha")
   if ($scopeResult.exitCode -ne 0) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('autonomous_review_scope_unavailable'); reviewCount = 0 } }
   $validation = Test-AgentControllerReviewEvidenceBundle -Bundle $evidence -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount $MinimumReviewCount -PublisherId $publisherId -ExpectedScope @($scopeResult.output) -RequireBabelChat
+  if ($validation.valid) {
+    # A different SHA alone is insufficient: an unmerged candidate ancestor
+    # could otherwise review its own descendant. Only previously merged
+    # installations from the immutable base history may provide chat evidence.
+    foreach ($sourceSha in @($evidence.handoff.reviews | Where-Object { $null -ne $_.PSObject.Properties['harness'] } | ForEach-Object { $_.harness.source_sha } | Select-Object -Unique)) {
+      $sourceType = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('--no-replace-objects', 'cat-file', '-t', $sourceSha)
+      $sourceAncestry = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('--no-replace-objects', 'merge-base', '--is-ancestor', $sourceSha, $BaseSha)
+      if ($sourceType.exitCode -ne 0 -or $sourceType.text.Trim() -cne 'commit' -or $sourceAncestry.exitCode -ne 0) {
+        $validation.valid = $false
+        $validation.errors += 'autonomous_evidence_harness_source_not_in_trusted_base'
+      }
+    }
+  }
   return [pscustomobject]@{ path = $path; valid = [bool]$validation.valid; errors = @($validation.errors); reviewCount = [int]$validation.reviewCount }
 }
 
