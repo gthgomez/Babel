@@ -79,7 +79,7 @@ export function verifyFindingAgainstSnapshot(
 ): StructuredFinding {
   return verifyFindingStatically(finding, {
     snapshotRoot,
-    scope: scope ?? [finding.location.path],
+    scope: scope ?? [],
   });
 }
 

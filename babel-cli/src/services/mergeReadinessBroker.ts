@@ -155,6 +155,13 @@ export function evaluateMergeReadiness(input: {
       codeReviewStatus = 'INSUFFICIENT';
       blockers.push('critical_risk_tier_requires_distinct_independent_reviewer_models');
     }
+    const hasSufficientIndependence = approvedReviews.every(
+      (r) => ['I3', 'I4'].includes(r.independence.computed_class)
+    );
+    if (!hasSufficientIndependence) {
+      codeReviewStatus = 'INSUFFICIENT';
+      blockers.push('critical_risk_tier_requires_minimum_i3_individual_independence');
+    }
   }
 
   // 2. Evaluate Deterministic Tests

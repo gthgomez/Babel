@@ -163,7 +163,7 @@ export const AdjudicatedReviewOutcomeSchema = z.object({
         'FALSE_NEGATIVE',
         'INCONCLUSIVE',
       ]),
-      evidence_level: z.enum(['ASSERTED', 'OBSERVED', 'REPRODUCED', 'VERIFIED']),
+      evidence_level: z.enum(['ASSERTED', 'OBSERVED', 'CORRELATED', 'REPRODUCED', 'VERIFIED']),
       evidence_details: z.string(),
       evidence_sources: z.array(z.string()),
     }),

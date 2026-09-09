@@ -303,26 +303,36 @@ export function registerIndependentReviewCommands(program: Command): void {
           ...(candidate.pr_number !== undefined ? { prNumber: candidate.pr_number } : {}),
           ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
         });
-        if (handoffs.length > 0 && handoffs[0]?.reviews?.[0]) {
-          const r = handoffs[0].reviews[0];
-          provider = {
-            review: async () => ({
-              repository: r.repository,
-              ...(r.pr_number !== undefined ? { pr_number: r.pr_number } : {}),
-              base_sha: r.base_sha,
-              head_sha: r.head_sha,
-              builder_identity: r.builder_id,
-              reviewer_identity: r.reviewer_id,
-              reviewer_model: r.reviewer_model,
-              review_provider: r.review_provider,
-              review_mode: 'independent-read-only',
-              verdict: r.verdict === 'APPROVE' ? 'PASS' : 'FAIL',
-              blocking_findings: r.blocking_findings,
-              non_blocking_findings: r.findings.filter((f) => !r.blocking_findings.includes(f)),
-              tests_considered: [],
-              reviewed_at: r.reviewed_at,
-            }),
-          };
+        if (handoffs.length > 0) {
+          const allReviews = handoffs.flatMap((h) => h.reviews);
+          if (allReviews.length > 0) {
+            const hasBlock = allReviews.some((r) => r.verdict === 'BLOCK');
+            const allBlocking = Array.from(new Set(allReviews.flatMap((r) => r.blocking_findings)));
+            const allNonBlocking = Array.from(
+              new Set(allReviews.flatMap((r) => r.findings.filter((f) => !r.blocking_findings.includes(f))))
+            );
+            const primary = allReviews[0]!;
+            provider = {
+              review: async () => ({
+                repository: primary.repository,
+                ...(primary.pr_number !== undefined ? { pr_number: primary.pr_number } : {}),
+                base_sha: primary.base_sha,
+                head_sha: primary.head_sha,
+                builder_identity: primary.builder_id,
+                reviewer_identity: allReviews.map((r) => r.reviewer_id).join('+'),
+                reviewer_model: allReviews.map((r) => r.reviewer_model).join('+'),
+                review_provider: primary.review_provider,
+                review_mode: 'independent-read-only',
+                verdict: hasBlock ? 'FAIL' : 'PASS',
+                blocking_findings: allBlocking,
+                non_blocking_findings: allNonBlocking,
+                tests_considered: [],
+                reviewed_at: primary.reviewed_at,
+              }),
+            };
+          } else {
+            provider = undefined;
+          }
         } else {
           provider = undefined;
         }

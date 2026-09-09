@@ -113,6 +113,8 @@ try {
             if ($Staged) { $cliArgs += "--staged" }
             & node $cliArgs
             exit $LASTEXITCODE
+        } else {
+            throw "JSON candidate collection requested, but TypeScript CLI or tsx is unavailable at $cliScript"
         }
     }
 

@@ -167,3 +167,19 @@ test('findingVerifier: corroborateFindings upgrades findings identified by multi
   assert.equal(corroborated[0]!.verification_status, 'CORROBORATED');
   assert.equal(corroborated[0]!.verification_source, 'multi_reviewer_corroboration');
 });
+
+test('findingVerifier: verifyFindingAgainstSnapshot fails closed with LOCATION_INVALID when scope is omitted', () => {
+  const f = createStructuredFinding({
+    candidateDigest: 'a'.repeat(64),
+    executionId: 'exec-1',
+    reviewerId: 'reviewer',
+    category: 'correctness',
+    severity: 'P1',
+    path: 'src/file.ts',
+    line: 1,
+    claim: 'Issue without explicit scope',
+  });
+  const verified = verifyFindingAgainstSnapshot(f, '/nonexistent/root');
+  assert.equal(verified.verification_status, 'LOCATION_INVALID');
+  assert.match(verified.evidence_refs?.[0] ?? '', /path_not_in_candidate_scope/);
+});
