@@ -10,12 +10,17 @@ import { launchBabelReviewChild } from '../babel-cli/src/services/babelReviewChi
 import { createHostReviewController } from '../babel-cli/src/services/hostReviewController.js'
 import type { HostReviewCandidate, HostReviewExecutionResult, HostReviewHandoffV2 } from '../babel-cli/src/services/hostReviewController.js'
 import { acquireBabelReviewLease, atomicReviewJson, babelReviewVersion, findPublishedBabelReview, validateBabelReviewArtifact, validateBabelReviewCache } from '../babel-cli/src/services/babelReviewQueue.js'
+import { evaluateReviewCoverage } from '../babel-cli/src/services/reviewCoverage.js'
+import { computeIndependenceClass, evaluateEnsembleIndependence, evaluateReviewerIndependence } from '../babel-cli/src/services/reviewIndependence.js'
+import { createStructuredFinding, parseFindingFromModelClaim } from '../babel-cli/src/services/structuredFinding.js'
+import { verifyFindingAgainstSnapshot, corroborateFindings } from '../babel-cli/src/services/findingVerifier.js'
+import { collectCandidateEnvelope } from '../babel-cli/src/services/candidateCollector.js'
 
 const args = process.argv.slice(2)
 const options = new Map<string, string>()
 for (let i = 0; i < args.length; i++) {
   const key = args[i]!
-  if (!['--repo-root', '--state-dir', '--pr', '--all', '--task', '--publish', '--legacy-evidence'].includes(key) || options.has(key)) throw new Error('INVALID_ARGUMENT')
+  if (!['--repo-root', '--state-dir', '--pr', '--all', '--task', '--publish', '--legacy-evidence', '--repository', '--trust-mode'].includes(key) || options.has(key)) throw new Error('INVALID_ARGUMENT')
   const value = ['--all', '--publish', '--legacy-evidence'].includes(key) ? 'true' : args[++i]
   if (!value || value.startsWith('--')) throw new Error('ARGUMENT_VALUE_REQUIRED')
   options.set(key, value)
@@ -26,10 +31,33 @@ const trustedRoot = resolve(import.meta.dirname, '..')
 const gitAt = (root: string, argv: string[]) => execFileSync('git', ['-C', root, ...argv], { encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 })
 const git = (argv: string[]) => gitAt(repoRoot, argv)
 const gh = (argv: string[], input?: string) => execFileSync('gh', argv, { encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024, ...(input ? { input } : {}) })
-const repository = 'gthgomez/Babel'
-if (!['https://github.com/gthgomez/Babel.git', 'git@github.com:gthgomez/Babel.git'].includes(git(['remote', 'get-url', 'origin']).trim())) throw new Error('REVIEW_REPOSITORY_MISMATCH')
+
+function parseRepoSlug(remote: string): string {
+  const normalized = remote.trim().replace(/\.git$/, '')
+  const match = normalized.match(/github\.com[/:]([^/]+\/[^/]+)$/i)
+  if (match?.[1]) return match[1]
+  const parts = normalized.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (parts.length >= 2) return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`
+  return 'gthgomez/Babel'
+}
+
+const targetRemote = git(['remote', 'get-url', 'origin']).trim()
+const detectedRepo = parseRepoSlug(targetRemote)
+if (options.has('--repository') && options.get('--repository') !== detectedRepo) {
+  throw new Error('REPOSITORY_IDENTITY_MISMATCH')
+}
+const repository = detectedRepo
+if (repository.toLowerCase() === 'gthgomez/babel' && options.get('--trust-mode') === 'external') {
+  throw new Error('TRUST_MODE_DOWNGRADE_DENIED')
+}
+const trustMode: 'SELF_REVIEW' | 'EXTERNAL_REPO_REVIEW' =
+  repository.toLowerCase() === 'gthgomez/babel' ? 'SELF_REVIEW' : 'EXTERNAL_REPO_REVIEW'
+
+if (trustMode === 'SELF_REVIEW') {
+  if (!['https://github.com/gthgomez/Babel.git', 'git@github.com:gthgomez/Babel.git'].includes(targetRemote)) throw new Error('REVIEW_REPOSITORY_MISMATCH')
+}
 const trustedSha = gitAt(trustedRoot, ['rev-parse', 'HEAD']).trim()
-if (options.has('--publish') && gitAt(trustedRoot, ['status', '--porcelain']).trim()) throw new Error('PUBLISH_REQUIRES_CLEAN_TRUSTED_INSTALLATION')
+if (options.has('--publish') && gitAt(trustedRoot, ['status', '--porcelain']).trim()) throw new Error('CLEAN_TRUSTED_INSTALLATION_REQUIRED')
 function trustedSourceIsInBase(baseSha: string): boolean {
   try { gitAt(trustedRoot, ['merge-base', '--is-ancestor', trustedSha, baseSha]); return true } catch { return false }
 }
@@ -64,19 +92,24 @@ for (const number of prs) {
   try {
     const pr = readPr(number)
     if (pr.state !== 'OPEN') continue
-    // A later gate independently verifies this provenance. Refuse it here too,
-    // before cache reuse, provider exposure, or owner-comment publication.
-    if (!trustedSourceIsInBase(pr.baseRefOid)) throw new Error('TRUSTED_REVIEW_SOURCE_NOT_IN_BASE_HISTORY')
-    const key = createHash('sha256').update(JSON.stringify([repository, number, pr.baseRefOid, pr.headRefOid, version, task])).digest('hex')
+    if (trustMode === 'SELF_REVIEW' && !trustedSourceIsInBase(pr.baseRefOid)) {
+      throw new Error('TRUSTED_REVIEW_SOURCE_NOT_IN_BASE_HISTORY')
+    }
+    git(['fetch', '--no-tags', 'origin', `refs/pull/${number}/head`, pr.baseRefOid])
+    const candidateEnvelope = await collectCandidateEnvelope({
+      repoRoot,
+      pr: number,
+      base: pr.baseRefOid,
+      head: pr.headRefOid,
+      task,
+    })
+    const candidate: HostReviewCandidate = candidateEnvelope
+    const scope = candidateEnvelope.scope
+    if (!scope.length || scope.some(p => !safeReviewPath(p) || secretRiskReviewPath(p))) throw new Error('UNSAFE_REVIEW_SCOPE')
+    const key = candidateEnvelope.candidate_digest
     jobDir = assertReviewStateOutsideGit(join(state, 'jobs', key))
     lease = acquireBabelReviewLease(join(jobDir, 'running.lock'))
     if (!lease) { console.log(JSON.stringify({ pr: number, status: 'running_or_recovering', job: key })); continue }
-    git(['fetch', '--no-tags', 'origin', `refs/pull/${number}/head`, pr.baseRefOid])
-    const range = `${pr.baseRefOid}...${pr.headRefOid}`
-    const scope = git(['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', range]).split('\0').filter(Boolean).sort()
-    if (!scope.length || scope.some(p => !safeReviewPath(p) || secretRiskReviewPath(p))) throw new Error('UNSAFE_REVIEW_SCOPE')
-    const numstat = git(['diff', '--no-ext-diff', '--no-textconv', '--numstat', range]).trimEnd().split(/\r?\n/)
-    const candidate: HostReviewCandidate = { repository, pr_number: number, task_id: taskHash.slice(0, 16), task_hash: taskHash, base_sha: pr.baseRefOid, head_sha: pr.headRefOid, builder_id: 'codex-implementation', diff_numstat_digest: createHash('sha256').update([...numstat].sort().join('\n')).digest('hex'), scope }
     const reviews: HostReviewHandoffV2[] = []
     for (const model of ['mimo-v2.5', 'longcat-2.0']) {
       const cachedPath = join(jobDir, model + '-handoff.json')
@@ -105,8 +138,70 @@ for (const number of prs) {
           const run = await launchBabelReviewChild({ source: snapshot.root, trustedRoot, output, runs: join(jobDir!, 'runs'), model, worker: join(trustedRoot, 'tools/babel-chat-review-worker.mts'), tsx: join(trustedRoot, 'babel-cli/node_modules/tsx/dist/cli.mjs'), onSpawn: pid => lease!.child(pid, request.execution_id), onExit: () => lease!.childExited() })
           if (run.exitCode !== 0 || run.timedOut) throw new Error('BABEL_CHAT_REVIEW_FAILED')
           const artifact = validateBabelReviewArtifact(run.artifact, { executionId: request.execution_id, model, scope })
+
+          const toolTraces = []
+          const rawPayload = (run.artifact?.['payload'] ?? {}) as Record<string, unknown>
+          if (Array.isArray(rawPayload['tool_calls'])) {
+            for (const tc of rawPayload['tool_calls'] as Record<string, unknown>[]) {
+              const args = (tc['arguments'] || tc['args']) as Record<string, unknown> | undefined
+              toolTraces.push({
+                tool: String(tc['tool'] || tc['name'] || 'unknown'),
+                targetPath: (tc['path'] || args?.['path'] || args?.['file'] || args?.['target']) as string | undefined,
+                args,
+              })
+            }
+          }
+          const diffTotalLines = snapshot.diff ? snapshot.diff.split(/\r?\n/).length : undefined
+          const coverageReceipt = evaluateReviewCoverage({
+            scope: candidate.scope,
+            toolTraces,
+            claimedReviewedFiles: artifact.verdict.reviewed_files,
+            changesDiffTotalLines: diffTotalLines,
+          })
+          atomicReviewJson(join(jobDir!, `${model}-coverage.json`), coverageReceipt)
+
+          const indClass = computeIndependenceClass({
+            fresh_context: true,
+            fresh_process: true,
+            read_only_capability: true,
+            controller_state_isolated: true,
+            builder_identity: candidate.builder_id,
+            reviewer_identity: `babel-chat-${model}-${request.execution_id}`,
+            reviewer_model: model,
+            reviewer_provider: 'opencode-go',
+            trusted_harness: true,
+            trusted_source_sha: trustedSha,
+            installation_digest: version,
+            process_id: process.pid,
+            session_id: request.execution_id,
+            sandbox_profile: 'readonly_sandbox',
+          })
+          atomicReviewJson(join(jobDir!, `${model}-independence.json`), { computed_class: indClass, evaluated_at: new Date().toISOString() })
+
+          const verifiedFindings = []
+          for (const finding of [...artifact.verdict.blocking_findings, ...artifact.verdict.findings]) {
+            const isBlocking = artifact.verdict.blocking_findings.includes(finding)
+            const parsed = parseFindingFromModelClaim(finding, candidate.scope)
+            const sf = createStructuredFinding({
+              candidateDigest: key,
+              executionId: request.execution_id,
+              reviewerId: `babel-chat-${model}-${request.execution_id}`,
+              category: parsed.category,
+              severity: isBlocking ? 'P1' : 'P2',
+              path: parsed.path,
+              line: parsed.line,
+              end_line: parsed.end_line,
+              claim: finding,
+              recommended_blocking: isBlocking,
+            })
+            const verified = verifyFindingAgainstSnapshot(sf, snapshot.root, candidate.scope)
+            verifiedFindings.push(verified)
+          }
+          atomicReviewJson(join(jobDir!, `${model}-findings.json`), verifiedFindings)
+
           return { ...request, status: 'COMPLETED', reviewed_candidate: { ...candidate }, reviewer_id: `babel-chat-${model}-${request.execution_id}`, review_provider: 'opencode-go', reviewer_model: model, reviewed_at: new Date().toISOString(), scope,
             verdict: artifact.verdict.verdict, findings: artifact.verdict.findings, blocking_findings: artifact.verdict.blocking_findings, isolation: request.required_isolation, usage: artifact.usage,
+            tool_traces: toolTraces, changes_diff_fully_read: coverageReceipt.diff_coverage_ratio >= 1.0,
             harness: { name: 'babel', mode: 'chat', version, source_sha: trustedSha, execution_id: request.execution_id } }
         },
       } })

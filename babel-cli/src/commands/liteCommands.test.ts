@@ -75,7 +75,7 @@ describe('Babel CLI command registration', () => {
     assert.ok(review, 'independent-review coordinator must be registered');
     assert.deepEqual(
       review.commands.map((command) => command.name()).sort(),
-      ['certify'],
+      ['adjudicate', 'bench', 'certify', 'collect', 'readiness'],
     );
     assert.equal(
       program.commands.some((command) => command.name() === 'lite'),

@@ -8,6 +8,7 @@ param(
     [string]$Range = "",
     [string]$Pr = "",
     [switch]$Structure,
+    [switch]$Json,
     [int]$WarnBytes = 1048576,
     [int]$AbortBytes = 10485760
 )
@@ -101,12 +102,38 @@ try {
     $mergeBase = ''
     $diffText = ''
 
-    if ($Pr) {
-        Write-Report -Status 'ERROR' -Message 'PR target is parsed by the skill. Fetch with gh only when asked; this collector does not post reviews. Pass a local range instead, or let the agent run gh pr diff.'
-        exit 2
+    if ($Json) {
+        $cliScript = Join-Path $RepoRoot "babel-cli/src/services/candidateCollectorCli.ts"
+        $tsxCli = Join-Path $RepoRoot "babel-cli/node_modules/tsx/dist/cli.mjs"
+        if ((Test-Path -LiteralPath $cliScript) -and (Test-Path -LiteralPath $tsxCli)) {
+            $cliArgs = @($tsxCli, $cliScript, "--json")
+            if ($RepoRoot) { $cliArgs += @("--repo-root", $RepoRoot) }
+            if ($Pr) { $cliArgs += @("--pr", $Pr) }
+            if ($Range) { $cliArgs += @("--range", $Range) }
+            if ($Staged) { $cliArgs += "--staged" }
+            & node $cliArgs
+            exit $LASTEXITCODE
+        } else {
+            throw "JSON candidate collection requested, but TypeScript CLI or tsx is unavailable at $cliScript"
+        }
     }
 
-    if ($Staged) {
+    if ($Pr) {
+        $mode = 'pr'
+        $prJson = gh pr view $Pr --json number,baseRefOid,headRefOid 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $prJson) {
+            Write-Report -Status 'ERROR' -Message "Failed to fetch PR $Pr metadata with gh."
+            exit 2
+        }
+        $prObj = $prJson | ConvertFrom-Json
+        $base = $prObj.baseRefOid
+        $mergeBase = $prObj.baseRefOid
+        $head = $prObj.headRefOid
+        $diffText = git -c core.quotepath=false diff "$base...$head"
+        $names = @(git -c core.quotepath=false diff --name-only "$base...$head")
+        foreach ($n in $names) { if ($n -and -not (Test-ExcludedPath $n)) { $files.Add($n) } }
+    }
+    elseif ($Staged) {
         $mode = 'staged'
         $diffText = git -c core.quotepath=false diff --cached
         $names = @(git -c core.quotepath=false diff --cached --name-only)

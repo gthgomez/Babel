@@ -123,6 +123,10 @@ function promptForCandidate(candidate: IndependentReviewCandidate, diff: string)
   ].join('\n');
 }
 
+/**
+ * @deprecated Legacy static diff reviewer. Retained for fixture tests only.
+ * Production PR review must go through the PR #155 Babel chat reviewer protocol (`tools/babel-pr-review.mts`).
+ */
 export function createLiveIndependentReviewProvider(options: LiveReviewProviderOptions): IndependentReviewProvider {
   const runCommand = options.runCommand;
   const reviewerPrincipal = options.reviewerPrincipal ?? process.env['BABEL_REVIEWER_PRINCIPAL']?.trim() ?? 'reviewer:babel-independent-ai';

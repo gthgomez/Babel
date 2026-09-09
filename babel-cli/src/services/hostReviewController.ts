@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 /** Immutable review tuple collected by the trusted host before worker launch. */
 export interface HostReviewCandidate {
@@ -12,6 +12,42 @@ export interface HostReviewCandidate {
   diff_numstat_digest: string
   /** Exact paths supplied by the trusted controller; it must not infer this list. */
   scope: string[]
+}
+
+export type RiskTier = 'TRIVIAL' | 'NORMAL' | 'ELEVATED' | 'CRITICAL' | 'AMBIGUOUS'
+export type ReviewTrustMode = 'SELF_REVIEW' | 'EXTERNAL_REPO_REVIEW'
+
+/** Evolved, versioned CandidateEnvelope extending HostReviewCandidate with full protocol metadata. */
+export interface CandidateEnvelope extends HostReviewCandidate {
+  schema_version: 2
+  candidate_digest: string
+  risk_tier: RiskTier
+  trust_mode: ReviewTrustMode
+  tree_sha?: string
+  task_contract_hash?: string
+  instruction_hash?: string
+  omitted_files?: Array<{ path: string; reason: 'binary' | 'generated' | 'oversized' | 'excluded' }>
+  created_at: string
+}
+
+/** Compute canonical SHA-256 digest over candidate identity fields. */
+export function computeCandidateDigest(candidate: HostReviewCandidate | CandidateEnvelope): string {
+  const candidateEnv = candidate as Partial<CandidateEnvelope>
+  const payload = [
+    candidate.repository,
+    candidate.pr_number ?? null,
+    candidate.base_sha,
+    candidate.head_sha,
+    candidateEnv.tree_sha ?? null,
+    candidate.diff_numstat_digest,
+    [...candidate.scope].sort(),
+    candidate.task_hash,
+    candidateEnv.risk_tier ?? null,
+    candidateEnv.trust_mode ?? null,
+    candidateEnv.task_contract_hash ?? null,
+    candidateEnv.instruction_hash ?? null,
+  ]
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }
 
 /**
@@ -73,6 +109,8 @@ export interface HostReviewExecutionResult {
   isolation: HostReviewIsolationProfile
   usage?: HostReviewUsage
   harness?: HostReviewHarness
+  tool_traces?: Array<{ tool: string; targetPath?: string; args?: Record<string, unknown> }>
+  changes_diff_fully_read?: boolean
 }
 
 /** Adapter implemented by the controller-owned Astra/Codex worker launcher. */
@@ -107,6 +145,8 @@ export interface AutonomousReviewEvidenceV2 {
   isolation: HostReviewIsolationProfile
   usage?: HostReviewUsage
   harness?: HostReviewHarness
+  tool_traces?: Array<{ tool: string; targetPath?: string; args?: Record<string, unknown> }>
+  changes_diff_fully_read?: boolean
 }
 
 /** One controller-owned review round suitable for a single GitHub handoff comment. */
@@ -198,6 +238,10 @@ function snapshotIsolation(isolation: HostReviewIsolationProfile): HostReviewIso
 
 function snapshotUsage(usage: HostReviewUsage): HostReviewUsage {
   return Object.freeze({ ...usage })
+}
+
+function snapshotToolTraces(traces: readonly { tool: string; targetPath?: string; args?: Record<string, unknown> }[]): Array<{ tool: string; targetPath?: string; args?: Record<string, unknown> }> {
+  return Object.freeze([...traces]) as unknown as Array<{ tool: string; targetPath?: string; args?: Record<string, unknown> }>
 }
 
 function scopesMatch(left: string[], right: string[]): boolean {
@@ -315,6 +359,8 @@ export function createHostReviewController(input: {
           isolation: snapshotIsolation(result.isolation),
           ...(result.usage ? { usage: snapshotUsage(result.usage) } : {}),
           ...(result.harness ? { harness: Object.freeze({ ...result.harness }) } : {}),
+          ...(result.tool_traces ? { tool_traces: snapshotToolTraces(result.tool_traces) } : {}),
+          ...(result.changes_diff_fully_read !== undefined ? { changes_diff_fully_read: result.changes_diff_fully_read } : {}),
         }))
       }
       const handoffReviews = (risk === 'RED'
