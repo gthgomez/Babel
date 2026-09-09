@@ -1,15 +1,17 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 import { Command } from 'commander';
 
 import {
   runIndependentReviewBroker,
   type IndependentReviewCandidate,
+  type IndependentReviewProvider,
   type IndependentReviewVerdict,
 } from '../services/independentReviewBroker.js';
 import {
-  createLiveIndependentReviewProvider,
   resolveLivePullRequestCandidate,
 } from '../services/independentReviewProvider.js';
 import {
@@ -19,9 +21,174 @@ import {
   type JsonServiceCommand,
 } from '../services/reviewServiceTransport.js';
 import { collectCandidateEnvelope } from '../services/candidateCollector.js';
-import { evaluateMergeReadiness } from '../services/mergeReadinessBroker.js';
+import {
+  evaluateMergeReadiness,
+  type CodeReviewReceipt,
+  type RemoteCICheckObservation,
+} from '../services/mergeReadinessBroker.js';
 import { CANONICAL_BENCHMARK_FIXTURES, verifyFixtureAntiLeakage } from '../services/babelBench.js';
-import { collectGitHubPRState, adjudicateCandidateReview, saveAdjudicatedOutcome } from '../services/outcomeCollector.js';
+import {
+  collectGitHubPRState,
+  adjudicateCandidateReview,
+  saveAdjudicatedOutcome,
+} from '../services/outcomeCollector.js';
+import type {
+  AutonomousReviewEvidenceV2,
+  HostReviewHandoffV2,
+} from '../services/hostReviewController.js';
+import {
+  createStructuredFinding,
+  parseFindingFromModelClaim,
+} from '../services/structuredFinding.js';
+import { evaluateReviewCoverage } from '../services/reviewCoverage.js';
+import { evaluateReviewerIndependence } from '../services/reviewIndependence.js';
+
+export function loadCandidateReviewHandoffs(options: {
+  repository: string;
+  prNumber?: number;
+  candidateDigest: string;
+  stateDir?: string;
+  ghExec?: (args: string[]) => string;
+}): HostReviewHandoffV2[] {
+  const handoffs: HostReviewHandoffV2[] = [];
+  const candidateDigest = options.candidateDigest;
+
+  const stateDir = options.stateDir ?? process.env['BABEL_REVIEW_STATE_DIR'];
+  if (stateDir) {
+    const jobDir = join(resolve(stateDir), 'jobs', candidateDigest);
+    if (existsSync(jobDir)) {
+      try {
+        const files = readdirSync(jobDir);
+        for (const file of files) {
+          if (file.endsWith('-handoff.json')) {
+            try {
+              const content = JSON.parse(readFileSync(join(jobDir, file), 'utf8')) as HostReviewHandoffV2;
+              if (content.kind === 'host_review_handoff_v2' && Array.isArray(content.reviews)) {
+                handoffs.push(content);
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (options.prNumber) {
+    const runner = options.ghExec ?? ((args: string[]) =>
+      execFileSync('gh', args, {
+        encoding: 'utf8',
+        windowsHide: true,
+        maxBuffer: 16 * 1024 * 1024,
+      })
+    );
+    try {
+      const raw = runner(['api', `repos/${options.repository}/issues/${options.prNumber}/comments`]);
+      const comments = JSON.parse(raw) as Array<{ body?: string }>;
+      const marker = '<!-- babel-controller-ai-reviews-v2 -->';
+      for (const comment of comments) {
+        if (typeof comment.body === 'string' && comment.body.startsWith(marker)) {
+          try {
+            const parsed = JSON.parse(comment.body.slice(marker.length)) as unknown;
+            if (Array.isArray(parsed)) {
+              for (const item of parsed) {
+                if ((item as HostReviewHandoffV2)?.kind === 'host_review_handoff_v2') {
+                  handoffs.push(item as HostReviewHandoffV2);
+                }
+              }
+            } else if ((parsed as HostReviewHandoffV2)?.kind === 'host_review_handoff_v2') {
+              handoffs.push(parsed as HostReviewHandoffV2);
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      // Non-fatal if GitHub is unreachable
+    }
+  }
+
+  return handoffs;
+}
+
+export function handoffEvidenceToCodeReviewReceipt(
+  review: AutonomousReviewEvidenceV2,
+  candidateDigest: string,
+): CodeReviewReceipt {
+  const structuredFindings = review.findings.map((claim) => {
+    const parsed = parseFindingFromModelClaim(claim, review.scope);
+    return createStructuredFinding({
+      candidateDigest,
+      executionId: review.execution_id,
+      reviewerId: review.reviewer_id,
+      category: parsed.category,
+      severity: review.blocking_findings.includes(claim) ? 'P1' : 'P2',
+      path: parsed.path,
+      ...(parsed.line !== undefined ? { line: parsed.line } : {}),
+      ...(parsed.end_line !== undefined ? { end_line: parsed.end_line } : {}),
+      claim,
+      recommended_blocking: review.blocking_findings.includes(claim),
+    });
+  });
+
+  const blockingFindings = review.blocking_findings.map((claim) => {
+    const parsed = parseFindingFromModelClaim(claim, review.scope);
+    return createStructuredFinding({
+      candidateDigest,
+      executionId: review.execution_id,
+      reviewerId: review.reviewer_id,
+      category: parsed.category,
+      severity: 'P1',
+      path: parsed.path,
+      ...(parsed.line !== undefined ? { line: parsed.line } : {}),
+      ...(parsed.end_line !== undefined ? { end_line: parsed.end_line } : {}),
+      claim,
+      recommended_blocking: true,
+      policy_blocking: true,
+    });
+  });
+
+  const independence = evaluateReviewerIndependence({
+    fresh_context: true,
+    fresh_process: true,
+    read_only_capability: true,
+    controller_state_isolated: true,
+    builder_identity: review.builder_id,
+    reviewer_identity: review.reviewer_id,
+    reviewer_model: review.reviewer_model,
+    reviewer_provider: review.review_provider,
+    trusted_harness: true,
+    trusted_source_sha: review.harness?.source_sha ?? '0'.repeat(40),
+    installation_digest: review.harness?.version ?? '0'.repeat(64),
+  });
+
+  const coverage = evaluateReviewCoverage({
+    scope: review.scope,
+    toolTraces: [],
+    claimedReviewedFiles: review.scope,
+    changesDiffFullyRead: true,
+  });
+
+  return {
+    schema_version: 2,
+    receipt_id: review.execution_id,
+    candidate_digest: candidateDigest,
+    head_sha: review.head_sha,
+    verdict: review.verdict === 'APPROVE' ? 'APPROVE' : 'BLOCK',
+    reviewer_id: review.reviewer_id,
+    reviewer_model: review.reviewer_model,
+    independence,
+    coverage,
+    findings: structuredFindings,
+    blocking_findings: blockingFindings,
+    certified_at: review.reviewed_at,
+    receipt_hash: createHash('sha256').update(JSON.stringify(review)).digest('hex'),
+  };
+}
 
 function readJson<T>(filePath: string): T {
   try {
@@ -89,32 +256,85 @@ export function registerIndependentReviewCommands(program: Command): void {
     .option('--pr <number>', 'Resolve the live PR and exact immutable base/head')
     .option('--candidate <path>', 'Test-only JSON candidate fixture; production uses --pr')
     .option('--review-result <path>', 'Read-only reviewer JSON fixture for deterministic local testing')
+    .option('--state-dir <dir>', 'Directory containing review job receipts')
     .option('--json', 'Emit structured JSON only')
-    .action(async (options: { pr?: string; candidate?: string; reviewResult?: string; json?: boolean }) => {
+    .action(async (options: { pr?: string; candidate?: string; reviewResult?: string; stateDir?: string; json?: boolean }) => {
       if (!options.pr && !options.candidate) throw new Error('Provide --pr <number> for live certification or --candidate only for fixture testing.');
       const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
-      const candidate = options.pr
-        ? await resolveLivePullRequestCandidate(projectRoot, Number(options.pr))
-        : readJson<IndependentReviewCandidate>(options.candidate as string);
+
+      let candidate: IndependentReviewCandidate;
+      let candidateDigest = '';
+
+      if (options.pr) {
+        const envelope = await collectCandidateEnvelope({
+          repoRoot: projectRoot,
+          pr: Number(options.pr),
+        });
+        candidateDigest = envelope.candidate_digest;
+        candidate = {
+          repository: envelope.repository,
+          ...(envelope.pr_number !== undefined ? { pr_number: envelope.pr_number } : {}),
+          task_id: envelope.task_id,
+          run_id: `review-${Date.now()}-${envelope.pr_number ?? 'local'}`,
+          contract_hash: envelope.task_contract_hash ?? envelope.candidate_digest,
+          base_sha: envelope.base_sha,
+          head_sha: envelope.head_sha,
+          builder_id: envelope.builder_id,
+          reviewed_scope: { kind: 'files', paths: envelope.scope },
+        };
+      } else {
+        candidate = readJson<IndependentReviewCandidate>(options.candidate as string);
+        candidateDigest = createHash('sha256').update(JSON.stringify(candidate)).digest('hex');
+      }
+
       const provenanceSigner = configuredService('BABEL_REVIEW_PROVENANCE_SIGNER');
       const trustedIssuer = configuredService('BABEL_TRUSTED_REVIEW_ISSUER');
       const trustedVerifier = configuredService('BABEL_TRUSTED_REVIEW_VERIFIER');
-      const provider = options.reviewResult
-        ? {
-            review: async () => readJson<IndependentReviewVerdict>(options.reviewResult as string),
-          }
-        : options.pr
-          ? createLiveIndependentReviewProvider({
-              projectRoot,
-              ...(provenanceSigner ? { signAttestation: createProcessAttestationSigner(provenanceSigner) } : {}),
-            })
-          : undefined;
+
+      let provider: IndependentReviewProvider | undefined;
+      if (options.reviewResult) {
+        provider = {
+          review: async () => readJson<IndependentReviewVerdict>(options.reviewResult as string),
+        };
+      } else if (options.pr) {
+        const handoffs = loadCandidateReviewHandoffs({
+          repository: candidate.repository,
+          candidateDigest,
+          ...(candidate.pr_number !== undefined ? { prNumber: candidate.pr_number } : {}),
+          ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
+        });
+        if (handoffs.length > 0 && handoffs[0]?.reviews?.[0]) {
+          const r = handoffs[0].reviews[0];
+          provider = {
+            review: async () => ({
+              repository: r.repository,
+              ...(r.pr_number !== undefined ? { pr_number: r.pr_number } : {}),
+              base_sha: r.base_sha,
+              head_sha: r.head_sha,
+              builder_identity: r.builder_id,
+              reviewer_identity: r.reviewer_id,
+              reviewer_model: r.reviewer_model,
+              review_provider: r.review_provider,
+              review_mode: 'independent-read-only',
+              verdict: r.verdict === 'APPROVE' ? 'PASS' : 'FAIL',
+              blocking_findings: r.blocking_findings,
+              non_blocking_findings: r.findings.filter((f) => !r.blocking_findings.includes(f)),
+              tests_considered: [],
+              reviewed_at: r.reviewed_at,
+            }),
+          };
+        } else {
+          provider = undefined;
+        }
+      }
+
       const result = await runIndependentReviewBroker({
         candidate,
         ...(provider ? { provider } : {}),
         ...(trustedIssuer ? { issuer: createProcessTrustedReviewIssuer(trustedIssuer) } : {}),
         ...(trustedVerifier ? { verifier: createProcessTrustedReviewVerifier(trustedVerifier) } : {}),
       });
+
       if (options.json === true) {
         process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       } else {
@@ -157,16 +377,51 @@ export function registerIndependentReviewCommands(program: Command): void {
     .description('Evaluate multi-gate merge readiness for an exact candidate head')
     .option('--repo-root <dir>', 'Repository root directory')
     .option('--pr <number>', 'Pull request number')
+    .option('--state-dir <dir>', 'State directory containing review job receipts')
     .option('--json', 'Emit structured MergeReadinessReceipt JSON')
-    .action(async (options: { repoRoot?: string; pr?: string; json?: boolean }) => {
+    .action(async (options: { repoRoot?: string; pr?: string; stateDir?: string; json?: boolean }) => {
       const envelope = await collectCandidateEnvelope({
         repoRoot: options.repoRoot,
         pr: options.pr ? Number(options.pr) : undefined,
       });
+
+      const reviews: CodeReviewReceipt[] = [];
+      let remoteCI: RemoteCICheckObservation[] | undefined;
+
+      if (options.pr) {
+        const prNumber = Number(options.pr);
+        try {
+          const prState = collectGitHubPRState(envelope.repository, prNumber);
+          remoteCI = prState.checks.map((c) => ({
+            name: c.name,
+            head_sha: prState.head_sha,
+            status: c.status,
+            conclusion: c.conclusion,
+          }));
+        } catch {
+          // Non-fatal if GitHub is unreachable
+        }
+
+        const handoffs = loadCandidateReviewHandoffs({
+          repository: envelope.repository,
+          candidateDigest: envelope.candidate_digest,
+          prNumber,
+          ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
+        });
+
+        for (const handoff of handoffs) {
+          for (const rev of handoff.reviews) {
+            reviews.push(handoffEvidenceToCodeReviewReceipt(rev, envelope.candidate_digest));
+          }
+        }
+      }
+
       const readiness = evaluateMergeReadiness({
         candidate: envelope,
-        reviews: [],
+        reviews,
+        ...(remoteCI ? { remoteCI } : {}),
       });
+
       if (options.json !== false) {
         process.stdout.write(`${JSON.stringify(readiness, null, 2)}\n`);
       } else {
@@ -230,13 +485,46 @@ export function registerIndependentReviewCommands(program: Command): void {
     .description('Adjudicate candidate PR review against observed GitHub and git outcomes')
     .requiredOption('--repo <slug>', 'Repository slug (e.g. gthgomez/Babel)')
     .requiredOption('--pr <number>', 'Pull request number')
+    .option('--repo-root <dir>', 'Repository root directory')
     .option('--state-dir <dir>', 'Directory for review state outcomes')
     .option('--json', 'Emit structured JSON output')
-    .action((options: { repo: string; pr: string; stateDir?: string; json?: boolean }) => {
-      const prState = collectGitHubPRState(options.repo, Number(options.pr));
+    .action(async (options: { repo: string; pr: string; repoRoot?: string; stateDir?: string; json?: boolean }) => {
+      const prNumber = Number(options.pr);
+      const prState = collectGitHubPRState(options.repo, prNumber);
+
+      let candidateDigest = '0'.repeat(64);
+      try {
+        const envelope = await collectCandidateEnvelope({
+          repoRoot: options.repoRoot ?? process.cwd(),
+          pr: prNumber,
+          repository: options.repo,
+        });
+        candidateDigest = envelope.candidate_digest;
+      } catch {
+        candidateDigest = createHash('sha256')
+          .update(JSON.stringify([options.repo, prNumber, prState.head_sha]))
+          .digest('hex');
+      }
+
+      const handoffs = loadCandidateReviewHandoffs({
+        repository: options.repo,
+        candidateDigest,
+        prNumber,
+        ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
+      });
+
+      const firstHandoff = handoffs[0];
       const outcome = adjudicateCandidateReview({
-        candidateDigest: '0'.repeat(64),
+        candidateDigest,
         prState,
+        handoff: firstHandoff ? {
+          reviews: firstHandoff.reviews.map((r) => ({
+            reviewer_id: r.reviewer_id,
+            reviewer_model: r.reviewer_model,
+            verdict: r.verdict,
+            blocking_findings: r.blocking_findings,
+          })),
+        } : undefined,
       });
 
       if (options.stateDir) {

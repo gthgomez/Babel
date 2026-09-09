@@ -11,9 +11,10 @@ import { createHostReviewController } from '../babel-cli/src/services/hostReview
 import type { HostReviewCandidate, HostReviewExecutionResult, HostReviewHandoffV2 } from '../babel-cli/src/services/hostReviewController.js'
 import { acquireBabelReviewLease, atomicReviewJson, babelReviewVersion, findPublishedBabelReview, validateBabelReviewArtifact, validateBabelReviewCache } from '../babel-cli/src/services/babelReviewQueue.js'
 import { evaluateReviewCoverage } from '../babel-cli/src/services/reviewCoverage.js'
-import { computeIndependenceClass } from '../babel-cli/src/services/reviewIndependence.js'
-import { createStructuredFinding } from '../babel-cli/src/services/structuredFinding.js'
-import { verifyFindingAgainstSnapshot } from '../babel-cli/src/services/findingVerifier.js'
+import { computeIndependenceClass, evaluateEnsembleIndependence, evaluateReviewerIndependence } from '../babel-cli/src/services/reviewIndependence.js'
+import { createStructuredFinding, parseFindingFromModelClaim } from '../babel-cli/src/services/structuredFinding.js'
+import { verifyFindingAgainstSnapshot, corroborateFindings } from '../babel-cli/src/services/findingVerifier.js'
+import { collectCandidateEnvelope } from '../babel-cli/src/services/candidateCollector.js'
 
 const args = process.argv.slice(2)
 const options = new Map<string, string>()
@@ -41,17 +42,22 @@ function parseRepoSlug(remote: string): string {
 }
 
 const targetRemote = git(['remote', 'get-url', 'origin']).trim()
-const repository = options.get('--repository') || parseRepoSlug(targetRemote)
+const detectedRepo = parseRepoSlug(targetRemote)
+if (options.has('--repository') && options.get('--repository') !== detectedRepo) {
+  throw new Error('REPOSITORY_IDENTITY_MISMATCH')
+}
+const repository = detectedRepo
+if (repository.toLowerCase() === 'gthgomez/babel' && options.get('--trust-mode') === 'external') {
+  throw new Error('TRUST_MODE_DOWNGRADE_DENIED')
+}
 const trustMode: 'SELF_REVIEW' | 'EXTERNAL_REPO_REVIEW' =
-  options.get('--trust-mode') === 'external' ? 'EXTERNAL_REPO_REVIEW' :
-  options.get('--trust-mode') === 'self' ? 'SELF_REVIEW' :
   repository.toLowerCase() === 'gthgomez/babel' ? 'SELF_REVIEW' : 'EXTERNAL_REPO_REVIEW'
 
 if (trustMode === 'SELF_REVIEW') {
   if (!['https://github.com/gthgomez/Babel.git', 'git@github.com:gthgomez/Babel.git'].includes(targetRemote)) throw new Error('REVIEW_REPOSITORY_MISMATCH')
 }
 const trustedSha = gitAt(trustedRoot, ['rev-parse', 'HEAD']).trim()
-if (options.has('--publish') && gitAt(trustedRoot, ['status', '--porcelain']).trim()) throw new Error('PUBLISH_REQUIRES_CLEAN_TRUSTED_INSTALLATION')
+if (gitAt(trustedRoot, ['status', '--porcelain']).trim()) throw new Error('CLEAN_TRUSTED_INSTALLATION_REQUIRED')
 function trustedSourceIsInBase(baseSha: string): boolean {
   try { gitAt(trustedRoot, ['merge-base', '--is-ancestor', trustedSha, baseSha]); return true } catch { return false }
 }
@@ -89,16 +95,21 @@ for (const number of prs) {
     if (trustMode === 'SELF_REVIEW' && !trustedSourceIsInBase(pr.baseRefOid)) {
       throw new Error('TRUSTED_REVIEW_SOURCE_NOT_IN_BASE_HISTORY')
     }
-    const key = createHash('sha256').update(JSON.stringify([repository, number, pr.baseRefOid, pr.headRefOid, version, task])).digest('hex')
+    git(['fetch', '--no-tags', 'origin', `refs/pull/${number}/head`, pr.baseRefOid])
+    const candidateEnvelope = await collectCandidateEnvelope({
+      repoRoot,
+      pr: number,
+      base: pr.baseRefOid,
+      head: pr.headRefOid,
+      task,
+    })
+    const candidate: HostReviewCandidate = candidateEnvelope
+    const scope = candidateEnvelope.scope
+    if (!scope.length || scope.some(p => !safeReviewPath(p) || secretRiskReviewPath(p))) throw new Error('UNSAFE_REVIEW_SCOPE')
+    const key = candidateEnvelope.candidate_digest
     jobDir = assertReviewStateOutsideGit(join(state, 'jobs', key))
     lease = acquireBabelReviewLease(join(jobDir, 'running.lock'))
     if (!lease) { console.log(JSON.stringify({ pr: number, status: 'running_or_recovering', job: key })); continue }
-    git(['fetch', '--no-tags', 'origin', `refs/pull/${number}/head`, pr.baseRefOid])
-    const range = `${pr.baseRefOid}...${pr.headRefOid}`
-    const scope = git(['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', range]).split('\0').filter(Boolean).sort()
-    if (!scope.length || scope.some(p => !safeReviewPath(p) || secretRiskReviewPath(p))) throw new Error('UNSAFE_REVIEW_SCOPE')
-    const numstat = git(['diff', '--no-ext-diff', '--no-textconv', '--numstat', range]).trimEnd().split(/\r?\n/)
-    const candidate: HostReviewCandidate = { repository, pr_number: number, task_id: taskHash.slice(0, 16), task_hash: taskHash, base_sha: pr.baseRefOid, head_sha: pr.headRefOid, builder_id: 'codex-implementation', diff_numstat_digest: createHash('sha256').update([...numstat].sort().join('\n')).digest('hex'), scope }
     const reviews: HostReviewHandoffV2[] = []
     for (const model of ['mimo-v2.5', 'longcat-2.0']) {
       const cachedPath = join(jobDir, model + '-handoff.json')
@@ -140,11 +151,12 @@ for (const number of prs) {
               })
             }
           }
+          const diffTotalLines = snapshot.diff ? snapshot.diff.split(/\r?\n/).length : undefined
           const coverageReceipt = evaluateReviewCoverage({
             scope: candidate.scope,
             toolTraces,
             claimedReviewedFiles: artifact.verdict.reviewed_files,
-            changesDiffFullyRead: true,
+            changesDiffTotalLines: diffTotalLines,
           })
           atomicReviewJson(join(jobDir!, `${model}-coverage.json`), coverageReceipt)
 
@@ -160,25 +172,29 @@ for (const number of prs) {
             trusted_harness: true,
             trusted_source_sha: trustedSha,
             installation_digest: version,
-            multi_agent: true,
-            finding_verification: true,
+            process_id: process.pid,
+            session_id: request.execution_id,
+            sandbox_profile: 'readonly_sandbox',
           })
           atomicReviewJson(join(jobDir!, `${model}-independence.json`), { computed_class: indClass, evaluated_at: new Date().toISOString() })
 
           const verifiedFindings = []
           for (const finding of [...artifact.verdict.blocking_findings, ...artifact.verdict.findings]) {
             const isBlocking = artifact.verdict.blocking_findings.includes(finding)
+            const parsed = parseFindingFromModelClaim(finding, candidate.scope)
             const sf = createStructuredFinding({
               candidateDigest: key,
               executionId: request.execution_id,
               reviewerId: `babel-chat-${model}-${request.execution_id}`,
-              category: 'correctness',
+              category: parsed.category,
               severity: isBlocking ? 'P1' : 'P2',
-              path: candidate.scope[0] || 'unknown',
+              path: parsed.path,
+              line: parsed.line,
+              end_line: parsed.end_line,
               claim: finding,
               recommended_blocking: isBlocking,
             })
-            const verified = verifyFindingAgainstSnapshot(sf, snapshot.root)
+            const verified = verifyFindingAgainstSnapshot(sf, snapshot.root, candidate.scope)
             verifiedFindings.push(verified)
           }
           atomicReviewJson(join(jobDir!, `${model}-findings.json`), verifiedFindings)

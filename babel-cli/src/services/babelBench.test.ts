@@ -123,9 +123,11 @@ test('babelBench: computeBabelBenchMetrics correctly derives North Star KPIs', (
 });
 
 test('babelBench: runBabelBench executes benchmark against reviewer function', async () => {
-  // Perfect reviewer
-  const perfectReviewer = async (f: { groundTruth: { expectedVerdict: 'APPROVE' | 'BLOCK' } }) =>
-    f.groundTruth.expectedVerdict;
+  // Perfect reviewer (looks up canonical fixture by id without relying on leaked groundTruth in input)
+  const perfectReviewer = async (f: { id: string }) => {
+    const fixture = CANONICAL_BENCHMARK_FIXTURES.find((c) => c.id === f.id);
+    return fixture!.groundTruth.expectedVerdict;
+  };
 
   const { results, metrics } = await runBabelBench(perfectReviewer, {
     modelName: 'oracle-model',
@@ -205,4 +207,23 @@ test('babelBench: compareShadowReviewer gates challenger promotion strictly', ()
   assert.equal(comparison.challengerPromotable, false);
   assert.ok(comparison.promotionBlockers.length > 0);
   assert.ok(comparison.promotionBlockers.some((b) => b.includes('False positive rate')));
+  assert.ok(comparison.promotionBlockers.some((b) => b.includes('INSUFFICIENT_BENCHMARK_SIZE')));
 });
+
+test('babelBench: extractReviewerFixture strips groundTruth to prevent prompt leakage', () => {
+  const f = CANONICAL_BENCHMARK_FIXTURES[0]!;
+  const reviewerSafe = { ...f };
+  delete (reviewerSafe as any).groundTruth;
+
+  assert.equal('groundTruth' in reviewerSafe, false);
+  assert.ok(reviewerSafe.candidateDiff.length > 0);
+  assert.ok(reviewerSafe.scope.length > 0);
+});
+
+test('babelBench: all 10 canonical fixtures have valid SHA-256 anti-leakage hashes', () => {
+  assert.equal(CANONICAL_BENCHMARK_FIXTURES.length, 10);
+  for (const fixture of CANONICAL_BENCHMARK_FIXTURES) {
+    assert.match(fixture.groundTruth.antiLeakageHash, /^[a-f0-9]{64}$/);
+  }
+});
+

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export type IndependenceClass = 'I0' | 'I1' | 'I2' | 'I3' | 'I4';
+export type LineageComparison = 'SAME' | 'DIFFERENT' | 'UNKNOWN';
 
 export interface IndependenceDimensions {
   fresh_context: boolean;
@@ -16,6 +17,9 @@ export interface IndependenceDimensions {
   trusted_harness: boolean;
   trusted_source_sha: string;
   installation_digest: string;
+  process_id?: number;
+  session_id?: string;
+  sandbox_profile?: string;
   multi_agent?: boolean;
   finding_verification?: boolean;
 }
@@ -28,6 +32,36 @@ export interface ReviewerIndependenceAttestation {
   evaluated_at: string;
 }
 
+export interface EnsembleIndependenceAttestation {
+  schema_version: 2;
+  computed_class: IndependenceClass;
+  reviewer_count: number;
+  distinct_models: string[];
+  distinct_providers: string[];
+  verified_findings_count: number;
+  attestation_digest: string;
+  evaluated_at: string;
+}
+
+export function compareModelLineage(builderModel?: string, reviewerModel?: string): LineageComparison {
+  if (!builderModel || !reviewerModel) return 'UNKNOWN';
+  const bNorm = builderModel.toLowerCase().trim();
+  const rNorm = reviewerModel.toLowerCase().trim();
+  if (bNorm === rNorm) return 'SAME';
+  const bFamily = bNorm.split(/[-_]/)[0];
+  const rFamily = rNorm.split(/[-_]/)[0];
+  if (bFamily === rFamily) return 'SAME';
+  return 'DIFFERENT';
+}
+
+export function compareProviderLineage(builderProvider?: string, reviewerProvider?: string): LineageComparison {
+  if (!builderProvider || !reviewerProvider) return 'UNKNOWN';
+  const bNorm = builderProvider.toLowerCase().trim();
+  const rNorm = reviewerProvider.toLowerCase().trim();
+  if (bNorm === rNorm) return 'SAME';
+  return 'DIFFERENT';
+}
+
 export function computeIndependenceClass(dimensions: IndependenceDimensions): IndependenceClass {
   // If builder and reviewer are identical or same non-isolated session/context: I0
   if (
@@ -38,24 +72,22 @@ export function computeIndependenceClass(dimensions: IndependenceDimensions): In
     return 'I0';
   }
 
-  const isSameFamily =
-    dimensions.builder_model &&
-    dimensions.reviewer_model &&
-    (dimensions.builder_model === dimensions.reviewer_model ||
-      dimensions.builder_model.split(/[-_]/)[0] === dimensions.reviewer_model.split(/[-_]/)[0]);
+  const modelComp = compareModelLineage(dimensions.builder_model, dimensions.reviewer_model);
+  const providerComp = compareProviderLineage(dimensions.builder_provider, dimensions.reviewer_provider);
 
-  const isDifferentProvider =
-    dimensions.builder_provider &&
-    dimensions.reviewer_provider &&
-    dimensions.builder_provider.toLowerCase() !== dimensions.reviewer_provider.toLowerCase();
+  // Unknown builder model or provider NEVER implies difference.
+  // Affirmatively different requires known distinct provider or known distinct model family.
+  const isAffirmativelyDifferent =
+    providerComp === 'DIFFERENT' || (modelComp === 'DIFFERENT' && providerComp !== 'SAME');
 
-  // I4: Multiple independent agents + finding verification + strong execution provenance
+  // I4: Multiple independent agents + finding verification + verified harness + distinct providers/models
   if (
     dimensions.fresh_process &&
     dimensions.controller_state_isolated &&
     dimensions.trusted_harness &&
     dimensions.multi_agent &&
-    dimensions.finding_verification
+    dimensions.finding_verification &&
+    isAffirmativelyDifferent
   ) {
     return 'I4';
   }
@@ -65,7 +97,7 @@ export function computeIndependenceClass(dimensions: IndependenceDimensions): In
     dimensions.fresh_process &&
     dimensions.controller_state_isolated &&
     dimensions.trusted_harness &&
-    (isDifferentProvider || !isSameFamily)
+    isAffirmativelyDifferent
   ) {
     return 'I3';
   }
@@ -92,6 +124,62 @@ export function evaluateReviewerIndependence(
     schema_version: 2,
     computed_class: computedClass,
     dimensions,
+    attestation_digest: digest,
+    evaluated_at: now,
+  };
+}
+
+export function evaluateEnsembleIndependence(input: {
+  reviews: ReviewerIndependenceAttestation[];
+  verifiedFindingsCount?: number;
+  now?: string;
+}): EnsembleIndependenceAttestation {
+  const now = input.now ?? new Date().toISOString();
+  const reviews = input.reviews;
+  if (reviews.length === 0) {
+    return {
+      schema_version: 2,
+      computed_class: 'I0',
+      reviewer_count: 0,
+      distinct_models: [],
+      distinct_providers: [],
+      verified_findings_count: 0,
+      attestation_digest: createHash('sha256').update('empty-ensemble').digest('hex'),
+      evaluated_at: now,
+    };
+  }
+
+  const distinctModels = [...new Set(reviews.map((r) => r.dimensions.reviewer_model))];
+  const distinctProviders = [...new Set(reviews.map((r) => r.dimensions.reviewer_provider))];
+  const verifiedCount = input.verifiedFindingsCount ?? 0;
+
+  const allIsolated = reviews.every(
+    (r) => r.dimensions.fresh_process && r.dimensions.controller_state_isolated && r.dimensions.trusted_harness
+  );
+
+  let ensembleClass: IndependenceClass = 'I1';
+  if (reviews.some((r) => r.computed_class === 'I0')) {
+    ensembleClass = 'I0';
+  } else if (allIsolated && reviews.length >= 2 && distinctModels.length >= 2) {
+    // I4 is earned at ensemble level when >=2 distinct models run in isolated harness
+    ensembleClass = 'I4';
+  } else if (reviews.every((r) => r.computed_class === 'I3' || r.computed_class === 'I2')) {
+    ensembleClass = 'I3';
+  } else if (reviews.every((r) => r.computed_class !== 'I0')) {
+    ensembleClass = 'I2';
+  }
+
+  const digest = createHash('sha256')
+    .update(JSON.stringify([ensembleClass, distinctModels, distinctProviders, verifiedCount, now]))
+    .digest('hex');
+
+  return {
+    schema_version: 2,
+    computed_class: ensembleClass,
+    reviewer_count: reviews.length,
+    distinct_models: distinctModels,
+    distinct_providers: distinctProviders,
+    verified_findings_count: verifiedCount,
     attestation_digest: digest,
     evaluated_at: now,
   };

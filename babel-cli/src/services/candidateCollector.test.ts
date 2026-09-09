@@ -77,3 +77,42 @@ test('candidateCollector: collectCandidateEnvelope builds valid CandidateEnvelop
   assert.ok(envelope.omitted_files?.some((o) => o.path === 'assets/sprite.png' && o.reason === 'binary'));
   assert.match(envelope.candidate_digest, /^[a-f0-9]{64}$/);
 });
+
+test('candidateCollector: fails closed on trust mode downgrade for Babel', async () => {
+  const gitMock = (args: string[]) => {
+    if (args.includes('--show-toplevel')) return 'C:/Mock/Babel';
+    if (args.includes('--git-common-dir')) return 'C:/Mock/Babel/.git';
+    if (args.includes('get-url')) return 'https://github.com/gthgomez/Babel.git';
+    return '';
+  };
+
+  await assert.rejects(
+    () =>
+      collectCandidateEnvelope({
+        repoRoot: 'C:/Mock/Babel',
+        trustMode: 'EXTERNAL_REPO_REVIEW',
+        gitExec: gitMock,
+      }),
+    /TRUST_MODE_DOWNGRADE_DENIED/
+  );
+});
+
+test('candidateCollector: fails closed on repository identity mismatch', async () => {
+  const gitMock = (args: string[]) => {
+    if (args.includes('--show-toplevel')) return 'C:/Mock/DragonWake';
+    if (args.includes('--git-common-dir')) return 'C:/Mock/DragonWake/.git';
+    if (args.includes('get-url')) return 'https://github.com/gthgomez/DragonWake.git';
+    return '';
+  };
+
+  await assert.rejects(
+    () =>
+      collectCandidateEnvelope({
+        repoRoot: 'C:/Mock/DragonWake',
+        repository: 'attacker/spoofed-repo',
+        gitExec: gitMock,
+      }),
+    /REPOSITORY_IDENTITY_MISMATCH/
+  );
+});
+

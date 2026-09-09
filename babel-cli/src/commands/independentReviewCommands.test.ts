@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { resolveReviewCertifyExitCode } from './independentReviewCommands.js';
+import {
+  resolveReviewCertifyExitCode,
+  loadCandidateReviewHandoffs,
+  handoffEvidenceToCodeReviewReceipt,
+} from './independentReviewCommands.js';
 
 // ── Exit-code taxonomy (unit) ────────────────────────────────────────────────
 // Invariant: exit 0 means the requested trusted success state (CERTIFIED) was
@@ -117,4 +121,123 @@ test('command-level: PASS without issuer produces ISSUER_CONFIGURATION_REQUIRED 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('loadCandidateReviewHandoffs discovers handoffs from stateDir and gh comments', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'review-handoffs-'));
+  try {
+    const candidateDigest = 'a'.repeat(64);
+    const jobDir = join(dir, 'jobs', candidateDigest);
+    mkdirSync(jobDir, { recursive: true });
+
+    const mockHandoff = {
+      schema_version: 2,
+      kind: 'host_review_handoff_v2',
+      repository: 'gthgomez/Babel',
+      pr_number: 42,
+      base_sha: '1'.repeat(40),
+      head_sha: '2'.repeat(40),
+      task_id: 't-1',
+      task_hash: '3'.repeat(64),
+      controller_run_id: 'c-1',
+      reviews: [{
+        schema_version: 2,
+        kind: 'autonomous_review_evidence_v2',
+        repository: 'gthgomez/Babel',
+        pr_number: 42,
+        base_sha: '1'.repeat(40),
+        head_sha: '2'.repeat(40),
+        task_id: 't-1',
+        task_hash: '3'.repeat(64),
+        builder_id: 'builder-1',
+        diff_numstat_digest: '4'.repeat(64),
+        reviewer_id: 'reviewer-1',
+        reviewer_class: 'independent_readonly_ai',
+        execution_id: 'e-1',
+        review_provider: 'opencode-go',
+        reviewer_model: 'mimo-v2.5',
+        review_mode: 'exact_diff',
+        reviewed_at: '2026-09-08T12:00:00.000Z',
+        scope: ['src/math.ts'],
+        verdict: 'APPROVE',
+        findings: [],
+        blocking_findings: [],
+        isolation: {
+          mode: 'readonly_sandbox',
+          candidate_write: false,
+          github_mutation: false,
+          merge: false,
+          controller_state_access: false,
+        },
+      }],
+    };
+
+    writeFileSync(join(jobDir, 'mimo-v2.5-handoff.json'), JSON.stringify(mockHandoff), 'utf8');
+
+    const discovered = loadCandidateReviewHandoffs({
+      repository: 'gthgomez/Babel',
+      candidateDigest,
+      stateDir: dir,
+    });
+
+    assert.equal(discovered.length, 1);
+    assert.equal(discovered[0]?.reviews[0]?.reviewer_model, 'mimo-v2.5');
+    assert.equal(discovered[0]?.reviews[0]?.verdict, 'APPROVE');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('handoffEvidenceToCodeReviewReceipt constructs valid CodeReviewReceipt with findings and coverage', () => {
+  const evidence: any = {
+    schema_version: 2,
+    kind: 'autonomous_review_evidence_v2',
+    repository: 'gthgomez/Babel',
+    pr_number: 42,
+    base_sha: '1'.repeat(40),
+    head_sha: '2'.repeat(40),
+    task_id: 't-1',
+    task_hash: '3'.repeat(64),
+    builder_id: 'builder-1',
+    diff_numstat_digest: '4'.repeat(64),
+    reviewer_id: 'reviewer-1',
+    reviewer_class: 'independent_readonly_ai',
+    execution_id: 'e-1',
+    review_provider: 'opencode-go',
+    reviewer_model: 'mimo-v2.5',
+    review_mode: 'exact_diff',
+    reviewed_at: '2026-09-08T12:00:00.000Z',
+    scope: ['src/math.ts'],
+    verdict: 'BLOCK',
+    findings: ['Potential divide by zero in src/math.ts:42'],
+    blocking_findings: ['Potential divide by zero in src/math.ts:42'],
+    isolation: {
+      mode: 'readonly_sandbox',
+      candidate_write: false,
+      github_mutation: false,
+      merge: false,
+      controller_state_access: false,
+    },
+  };
+
+  const receipt = handoffEvidenceToCodeReviewReceipt(evidence, 'a'.repeat(64));
+  assert.equal(receipt.verdict, 'BLOCK');
+  assert.equal(receipt.findings.length, 1);
+  assert.equal(receipt.blocking_findings.length, 1);
+  assert.equal(receipt.findings[0]?.location.path, 'src/math.ts');
+  assert.equal(receipt.findings[0]?.location.line, 42);
+  assert.equal(receipt.independence.computed_class, 'I2');
+  assert.equal(receipt.coverage.coverage_verdict, 'SUFFICIENT');
+});
+
+test('command-level: review bench runs and verifies anti-leakage via CLI', () => {
+  const stdout = execFileSync(
+    process.execPath,
+    ['--import', 'tsx', 'src/index.ts', 'review', 'bench', '--json'],
+    { encoding: 'utf8', timeout: 30_000 },
+  );
+  const parsed = JSON.parse(stdout);
+  assert.equal(parsed.anti_leakage_verified, true);
+  assert.equal(parsed.total_fixtures, 10);
+  assert.equal(parsed.categories.clean_control, 5);
 });

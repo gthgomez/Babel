@@ -17,7 +17,11 @@ export type FindingConfidence = 'high' | 'medium' | 'low';
 
 export type VerificationStatus =
   | 'UNVERIFIED'
+  | 'LOCATION_VALID'
+  | 'LOCATION_INVALID'
   | 'CONFIRMED'
+  | 'REPRODUCED'
+  | 'CORROBORATED'
   | 'REJECTED_FALSE_POSITIVE'
   | 'INCONCLUSIVE'
   | 'DUPLICATE'
@@ -79,7 +83,11 @@ export const StructuredFindingSchema = z.object({
   policy_blocking: z.boolean(),
   verification_status: z.enum([
     'UNVERIFIED',
+    'LOCATION_VALID',
+    'LOCATION_INVALID',
     'CONFIRMED',
+    'REPRODUCED',
+    'CORROBORATED',
     'REJECTED_FALSE_POSITIVE',
     'INCONCLUSIVE',
     'DUPLICATE',
@@ -178,6 +186,53 @@ export function createStructuredFinding(input: {
   };
 }
 
+const VERIFICATION_PRECEDENCE: Record<VerificationStatus, number> = {
+  REPRODUCED: 6,
+  CORROBORATED: 5,
+  CONFIRMED: 4,
+  LOCATION_VALID: 3,
+  UNVERIFIED: 2,
+  INCONCLUSIVE: 1,
+  LOCATION_INVALID: 0,
+  REJECTED_FALSE_POSITIVE: 0,
+  DUPLICATE: 0,
+  SUPERSEDED: 0,
+};
+
+export function parseFindingFromModelClaim(
+  claim: string,
+  candidateScope: string[],
+): { path: string; line?: number; end_line?: number; category: FindingCategory } {
+  for (const file of candidateScope) {
+    const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(?:^|\\s|\`|"|'|\\()(${escaped})(?::(\\d+)(?:-(\\d+))?|\\s+line\\s+(\\d+))?`, 'i');
+    const match = regex.exec(claim);
+    if (match) {
+      const line = match[2] ? Number(match[2]) : match[4] ? Number(match[4]) : undefined;
+      const endLine = match[3] ? Number(match[3]) : undefined;
+      return {
+        path: file,
+        category: inferCategoryFromClaim(claim),
+        ...(line !== undefined ? { line } : {}),
+        ...(endLine !== undefined ? { end_line: endLine } : {}),
+      };
+    }
+  }
+
+  // Never synthesize scope[0] when claim does not specify a valid path
+  return { path: 'unspecified', category: inferCategoryFromClaim(claim) };
+}
+
+function inferCategoryFromClaim(claim: string): FindingCategory {
+  const lower = claim.toLowerCase();
+  if (lower.includes('secur') || lower.includes('inject') || lower.includes('auth') || lower.includes('secret') || lower.includes('credential')) return 'security';
+  if (lower.includes('race') || lower.includes('deadlock') || lower.includes('concurrent') || lower.includes('atomic')) return 'concurrency';
+  if (lower.includes('portable') || lower.includes('windows') || lower.includes('linux') || lower.includes('crlf') || lower.includes('path')) return 'portability';
+  if (lower.includes('trust') || lower.includes('permission') || lower.includes('authority') || lower.includes('lease')) return 'trust_authority';
+  if (lower.includes('crash') || lower.includes('unhandled') || lower.includes('exception') || lower.includes('leak')) return 'failure_safety';
+  return 'correctness';
+}
+
 export function deduplicateFindings(findings: StructuredFinding[]): StructuredFinding[] {
   const byFingerprint = new Map<string, StructuredFinding>();
 
@@ -186,12 +241,9 @@ export function deduplicateFindings(findings: StructuredFinding[]): StructuredFi
     if (!existing) {
       byFingerprint.set(finding.finding_fingerprint, finding);
     } else {
-      // Keep the one with higher severity or confirmed verification
-      if (
-        (finding.verification_status === 'CONFIRMED' && existing.verification_status !== 'CONFIRMED') ||
-        finding.severity === 'P0' ||
-        (finding.severity === 'P1' && existing.severity !== 'P0')
-      ) {
+      const existingScore = (VERIFICATION_PRECEDENCE[existing.verification_status] ?? 0) * 10 + (existing.severity === 'P0' ? 3 : existing.severity === 'P1' ? 2 : 1);
+      const findingScore = (VERIFICATION_PRECEDENCE[finding.verification_status] ?? 0) * 10 + (finding.severity === 'P0' ? 3 : finding.severity === 'P1' ? 2 : 1);
+      if (findingScore > existingScore) {
         byFingerprint.set(finding.finding_fingerprint, finding);
       }
     }

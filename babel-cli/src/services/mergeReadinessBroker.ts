@@ -90,6 +90,28 @@ export interface MergeReadinessReceipt {
   evaluated_at: string;
 }
 
+export interface RequiredGatesPolicy {
+  codeReview: { minApprovals: number; requireI4?: boolean };
+  deterministicTests: boolean;
+  securityScan: boolean;
+  remoteCI: boolean;
+}
+
+export function resolveRequiredGates(riskTier: string): RequiredGatesPolicy {
+  switch (riskTier) {
+    case 'TRIVIAL':
+      return { codeReview: { minApprovals: 1 }, deterministicTests: false, securityScan: false, remoteCI: false };
+    case 'NORMAL':
+      return { codeReview: { minApprovals: 1 }, deterministicTests: true, securityScan: false, remoteCI: false };
+    case 'ELEVATED':
+      return { codeReview: { minApprovals: 2 }, deterministicTests: true, securityScan: true, remoteCI: true };
+    case 'CRITICAL':
+      return { codeReview: { minApprovals: 2, requireI4: true }, deterministicTests: true, securityScan: true, remoteCI: true };
+    default:
+      return { codeReview: { minApprovals: 2 }, deterministicTests: true, securityScan: true, remoteCI: true };
+  }
+}
+
 export function evaluateMergeReadiness(input: {
   candidate: CandidateEnvelope;
   reviews: CodeReviewReceipt[];
@@ -112,7 +134,8 @@ export function evaluateMergeReadiness(input: {
     (r) => r.verdict === 'APPROVE' && r.coverage.is_sufficient && r.blocking_findings.length === 0
   );
 
-  const minRequiredReviews = input.candidate.risk_tier === 'CRITICAL' || input.candidate.risk_tier === 'ELEVATED' ? 2 : 1;
+  const requiredGates = resolveRequiredGates(input.candidate.risk_tier);
+  const minRequiredReviews = requiredGates.codeReview.minApprovals;
 
   let codeReviewStatus: 'PASS' | 'FAIL' | 'INSUFFICIENT' = 'PASS';
   const allBlockingFindings = headReviews.flatMap((r) => r.blocking_findings);
@@ -126,6 +149,12 @@ export function evaluateMergeReadiness(input: {
   } else if (approvedReviews.length < minRequiredReviews) {
     codeReviewStatus = 'INSUFFICIENT';
     blockers.push(`insufficient_approved_reviews:have_${approvedReviews.length}_need_${minRequiredReviews}`);
+  } else if (requiredGates.codeReview.requireI4) {
+    const distinctReviewers = new Set(approvedReviews.map((r) => r.reviewer_model));
+    if (distinctReviewers.size < 2) {
+      codeReviewStatus = 'INSUFFICIENT';
+      blockers.push('critical_risk_tier_requires_distinct_independent_reviewer_models');
+    }
   }
 
   // 2. Evaluate Deterministic Tests
@@ -140,6 +169,8 @@ export function evaluateMergeReadiness(input: {
       testStatus = 'FAIL';
       blockers.push(`deterministic_tests_failed:${input.deterministicTests.failed_count}`);
     }
+  } else if (requiredGates.deterministicTests) {
+    blockers.push('deterministic_tests_required_but_unavailable');
   }
 
   // 3. Evaluate Remote CI
@@ -168,6 +199,8 @@ export function evaluateMergeReadiness(input: {
     } else if (successCount > 0) {
       ciStatus = 'PASS';
     }
+  } else if (requiredGates.remoteCI) {
+    blockers.push('remote_ci_checks_required_but_unavailable');
   }
 
   // 4. Evaluate Security Scan
@@ -182,18 +215,24 @@ export function evaluateMergeReadiness(input: {
       secStatus = 'FAIL';
       blockers.push('security_scan_failed');
     }
+  } else if (requiredGates.securityScan) {
+    blockers.push('security_scan_required_but_unavailable');
   }
 
   // 5. Synthesize Readiness Verdict
   let verdict: ReadinessVerdict = 'READY';
-  if (allBlockingFindings.length > 0) {
+  if (allBlockingFindings.length > 0 || ciStatus === 'FAIL' || testStatus === 'FAIL' || secStatus === 'FAIL' || codeReviewStatus === 'FAIL') {
     verdict = 'REPAIR';
-  } else if (codeReviewStatus === 'INSUFFICIENT' || ciStatus === 'PENDING') {
+  } else if (
+    codeReviewStatus === 'INSUFFICIENT' ||
+    ciStatus === 'PENDING' ||
+    (requiredGates.deterministicTests && testStatus === 'UNAVAILABLE') ||
+    (requiredGates.securityScan && secStatus === 'UNAVAILABLE') ||
+    (requiredGates.remoteCI && ciStatus === 'UNAVAILABLE')
+  ) {
     verdict = 'INSUFFICIENT';
-  } else if (ciStatus === 'FAIL' || testStatus === 'FAIL' || secStatus === 'FAIL') {
-    verdict = 'REPAIR';
   } else if (blockers.length > 0) {
-    verdict = 'REPAIR';
+    verdict = 'INSUFFICIENT';
   }
 
   const now = input.now ?? new Date().toISOString();

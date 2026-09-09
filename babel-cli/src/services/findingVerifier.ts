@@ -15,10 +15,10 @@ export function verifyFindingStatically(
   const normScope = options.scope.map((p) => p.replace(/\\/g, '/').replace(/^source\//, ''));
 
   // 1. Verify that the file belongs to the candidate scope
-  if (!normScope.includes(normPath)) {
+  if (normPath === 'unspecified' || !normScope.includes(normPath)) {
     return {
       ...finding,
-      verification_status: 'REJECTED_FALSE_POSITIVE',
+      verification_status: 'LOCATION_INVALID',
       verification_source: 'static_scope_check',
       evidence_refs: [`rejected:path_not_in_candidate_scope:${normPath}`],
     };
@@ -32,7 +32,7 @@ export function verifyFindingStatically(
   if (!targetPath) {
     return {
       ...finding,
-      verification_status: 'REJECTED_FALSE_POSITIVE',
+      verification_status: 'LOCATION_INVALID',
       verification_source: 'static_filesystem_check',
       evidence_refs: [`rejected:file_not_found_in_snapshot:${normPath}`],
     };
@@ -46,7 +46,7 @@ export function verifyFindingStatically(
       if (finding.location.line > lines.length) {
         return {
           ...finding,
-          verification_status: 'REJECTED_FALSE_POSITIVE',
+          verification_status: 'LOCATION_INVALID',
           verification_source: 'static_bounds_check',
           evidence_refs: [
             `rejected:line_${finding.location.line}_exceeds_total_lines_${lines.length}`,
@@ -63,13 +63,24 @@ export function verifyFindingStatically(
     }
   }
 
-  // File and line span verified statically in candidate snapshot
+  // Location verified on disk in candidate snapshot (structural validity only, not semantic confirmation)
   return {
     ...finding,
-    verification_status: 'CONFIRMED',
+    verification_status: 'LOCATION_VALID',
     verification_source: 'static_snapshot_verification',
-    evidence_refs: [`confirmed:static_location_verified:${normPath}:${finding.location.line ?? 1}`],
+    evidence_refs: [`location_valid:static_location_verified:${normPath}:${finding.location.line ?? 1}`],
   };
+}
+
+export function verifyFindingAgainstSnapshot(
+  finding: StructuredFinding,
+  snapshotRoot: string,
+  scope?: string[],
+): StructuredFinding {
+  return verifyFindingStatically(finding, {
+    snapshotRoot,
+    scope: scope ?? [finding.location.path],
+  });
 }
 
 export function verifyFindingsList(
@@ -77,4 +88,39 @@ export function verifyFindingsList(
   options: FindingVerificationOptions,
 ): StructuredFinding[] {
   return findings.map((f) => verifyFindingStatically(f, options));
+}
+
+export function corroborateFindings(
+  findingsByReviewer: StructuredFinding[][],
+): StructuredFinding[] {
+  const allFindings = findingsByReviewer.flat();
+  const byFingerprint = new Map<string, StructuredFinding[]>();
+
+  for (const f of allFindings) {
+    const list = byFingerprint.get(f.finding_fingerprint) ?? [];
+    list.push(f);
+    byFingerprint.set(f.finding_fingerprint, list);
+  }
+
+  const result: StructuredFinding[] = [];
+  for (const [fingerprint, instances] of byFingerprint.entries()) {
+    const distinctReviewers = new Set(instances.map((i) => i.reviewer_id));
+    const base = instances[0]!;
+
+    if (distinctReviewers.size >= 2 && base.verification_status === 'LOCATION_VALID') {
+      result.push({
+        ...base,
+        verification_status: 'CORROBORATED',
+        verification_source: 'multi_reviewer_corroboration',
+        evidence_refs: [
+          ...(base.evidence_refs ?? []),
+          `corroborated:distinct_reviewers:${distinctReviewers.size}`,
+        ],
+      });
+    } else {
+      result.push(base);
+    }
+  }
+
+  return result;
 }

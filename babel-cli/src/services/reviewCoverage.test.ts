@@ -49,3 +49,58 @@ test('reviewCoverage: catches unaccounted files and emits INSUFFICIENT_REVIEW_CO
   assert.equal(receipt.is_sufficient, false);
   assert.equal(receipt.coverage_verdict, 'INSUFFICIENT_REVIEW_COVERAGE');
 });
+
+test('reviewCoverage: exclusions record causal replacement evidence', () => {
+  const lock = isExcludableFile('package-lock.json');
+  assert.equal(lock?.reason, 'lockfile');
+  assert.equal(lock?.replacement_evidence, 'dependency_audit_and_lockfile_integrity_gate');
+
+  const bin = isExcludableFile('assets/model.bin');
+  assert.equal(bin?.reason, 'binary');
+  assert.equal(bin?.replacement_evidence, 'binary_sha256_manifest_and_size_attestation');
+
+  const gen = isExcludableFile('dist/index.js');
+  assert.equal(gen?.reason, 'generated');
+  assert.equal(gen?.replacement_evidence, 'clean_build_and_source_generation_verification');
+});
+
+test('reviewCoverage: derives full diff coverage from observed read intervals', () => {
+  const scope = ['src/a.ts', 'src/b.ts'];
+  // Total diff has 100 lines. Reviewer reads 1-60 then 55-100.
+  const traces = [
+    { tool: 'read_range', targetPath: 'changes.diff', args: { start_line: 1, end_line: 60 } },
+    { tool: 'read_range', targetPath: 'changes.diff', args: { start_line: 55, end_line: 100 } },
+  ];
+
+  const receipt = evaluateReviewCoverage({
+    scope,
+    toolTraces: traces,
+    changesDiffTotalLines: 100,
+  });
+
+  assert.equal(receipt.is_sufficient, true);
+  assert.equal(receipt.coverage_verdict, 'SUFFICIENT');
+  assert.equal(receipt.diff_coverage_ratio, 1.0);
+  assert.deepEqual(receipt.covered_by_diff_files, ['src/a.ts', 'src/b.ts']);
+  assert.equal(receipt.unaccounted_files.length, 0);
+});
+
+test('reviewCoverage: partial diff intervals without full coverage leaves files unaccounted', () => {
+  const scope = ['src/a.ts', 'src/b.ts'];
+  // Total diff has 100 lines. Reviewer only reads lines 1-40.
+  const traces = [
+    { tool: 'read_range', targetPath: 'changes.diff', args: { start_line: 1, end_line: 40 } },
+  ];
+
+  const receipt = evaluateReviewCoverage({
+    scope,
+    toolTraces: traces,
+    changesDiffTotalLines: 100,
+  });
+
+  assert.equal(receipt.is_sufficient, false);
+  assert.equal(receipt.coverage_verdict, 'INSUFFICIENT_REVIEW_COVERAGE');
+  assert.equal(receipt.diff_coverage_ratio, 0.4);
+  assert.equal(receipt.unaccounted_files.length, 2);
+});
+

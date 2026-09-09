@@ -142,3 +142,45 @@ test('mergeReadinessBroker: Stale review receipt for prior head is rejected', ()
   assert.equal(readiness.verdict, 'INSUFFICIENT');
   assert.ok(readiness.unresolved_blockers.some((b) => b.includes('stale_review_receipt_rejected')));
 });
+
+test('mergeReadinessBroker: Required gate UNAVAILABLE yields INSUFFICIENT, never READY', () => {
+  // NORMAL risk tier requires deterministicTests.
+  // Passing code review only without deterministicTests must yield INSUFFICIENT.
+  const readiness = evaluateMergeReadiness({
+    candidate: mockCandidate, // NORMAL tier
+    reviews: [mockPassReview],
+  });
+
+  assert.equal(readiness.verdict, 'INSUFFICIENT');
+  assert.ok(readiness.unresolved_blockers.includes('deterministic_tests_required_but_unavailable'));
+});
+
+test('mergeReadinessBroker: CRITICAL risk tier requires 2 distinct independent reviewer models', () => {
+  const criticalCandidate: CandidateEnvelope = {
+    ...mockCandidate,
+    risk_tier: 'CRITICAL',
+  };
+
+  // Only 1 review provided
+  const r1 = evaluateMergeReadiness({
+    candidate: criticalCandidate,
+    reviews: [mockPassReview],
+  });
+  assert.equal(r1.verdict, 'INSUFFICIENT');
+  assert.ok(r1.unresolved_blockers.some((b) => b.includes('insufficient_approved_reviews')));
+
+  // 2 reviews provided, but both by the same model!
+  const review2SameModel: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'receipt-pass-2',
+    reviewer_id: 'mimo-v2.5-second-run',
+    reviewer_model: 'mimo-v2.5',
+  };
+  const r2 = evaluateMergeReadiness({
+    candidate: criticalCandidate,
+    reviews: [mockPassReview, review2SameModel],
+  });
+  assert.equal(r2.verdict, 'INSUFFICIENT');
+  assert.ok(r2.unresolved_blockers.includes('critical_risk_tier_requires_distinct_independent_reviewer_models'));
+});
+

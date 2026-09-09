@@ -159,6 +159,7 @@ test('outcomeCollector: adjudicateCandidateReview derives True Positives and Fal
     prState: prStateMergedClean,
     handoff: handoffWithFalsePositive,
     postMergeRegression: { detected: false, related_commits: [] },
+    assumeCleanMergeIsFalsePositive: true,
   });
 
   assert.equal(outcomeFP.adjudicated_findings.length, 1);
@@ -166,6 +167,16 @@ test('outcomeCollector: adjudicateCandidateReview derives True Positives and Fal
   assert.equal(outcomeFP.flywheel_metrics.false_positives, 1);
   assert.equal(outcomeFP.flywheel_metrics.true_positives, 0);
   assert.equal(outcomeFP.flywheel_metrics.precision, 0);
+
+  // Default without causal proof must be INCONCLUSIVE, never naive FP
+  const outcomeDefault = adjudicateCandidateReview({
+    candidateDigest,
+    prState: prStateMergedClean,
+    handoff: handoffWithFalsePositive,
+    postMergeRegression: { detected: false, related_commits: [] },
+  });
+  assert.equal(outcomeDefault.adjudicated_findings[0]!.ground_truth_verdict, 'INCONCLUSIVE');
+  assert.equal(outcomeDefault.adjudicated_findings[0]!.evidence_level, 'CORRELATED');
 
   // Now test with regression detected (True Positive)
   const outcomeTP = adjudicateCandidateReview({

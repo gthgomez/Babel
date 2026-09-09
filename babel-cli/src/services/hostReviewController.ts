@@ -32,14 +32,20 @@ export interface CandidateEnvelope extends HostReviewCandidate {
 
 /** Compute canonical SHA-256 digest over candidate identity fields. */
 export function computeCandidateDigest(candidate: HostReviewCandidate | CandidateEnvelope): string {
+  const candidateEnv = candidate as Partial<CandidateEnvelope>
   const payload = [
     candidate.repository,
     candidate.pr_number ?? null,
     candidate.base_sha,
     candidate.head_sha,
+    candidateEnv.tree_sha ?? null,
     candidate.diff_numstat_digest,
     [...candidate.scope].sort(),
     candidate.task_hash,
+    candidateEnv.risk_tier ?? null,
+    candidateEnv.trust_mode ?? null,
+    candidateEnv.task_contract_hash ?? null,
+    candidateEnv.instruction_hash ?? null,
   ]
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }

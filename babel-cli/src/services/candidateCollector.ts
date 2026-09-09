@@ -20,6 +20,8 @@ export interface CollectCandidateOptions {
   task?: string | undefined;
   taskId?: string | undefined;
   builderId?: string | undefined;
+  repository?: string | undefined;
+  trustMode?: ReviewTrustMode | undefined;
   gitExec?: ((args: string[]) => string) | undefined;
   ghExec?: ((args: string[]) => string) | undefined;
 }
@@ -137,7 +139,19 @@ export async function collectCandidateEnvelope(options: CollectCandidateOptions 
   } catch {
     remoteUrl = repoRoot;
   }
-  const repository = parseRepositorySlug(remoteUrl);
+  const detectedRepository = parseRepositorySlug(remoteUrl);
+  if (options.repository && detectedRepository !== 'local/repository') {
+    if (options.repository.toLowerCase() !== detectedRepository.toLowerCase()) {
+      throw new Error('REPOSITORY_IDENTITY_MISMATCH');
+    }
+  }
+  const repository = options.repository || detectedRepository;
+
+  const authoritativeTrustMode = determineTrustMode(repository);
+  if (authoritativeTrustMode === 'SELF_REVIEW' && options.trustMode === 'EXTERNAL_REPO_REVIEW') {
+    throw new Error('TRUST_MODE_DOWNGRADE_DENIED');
+  }
+  const trustMode = authoritativeTrustMode;
 
   let baseSha = options.base ?? '';
   let headSha = options.head ?? '';
@@ -257,7 +271,13 @@ export async function collectCandidateEnvelope(options: CollectCandidateOptions 
   const builderId = options.builderId ?? process.env['BABEL_BUILDER_ID']?.trim() ?? 'builder:babel-agent';
 
   const riskTier = determineRiskTier(sortedScope);
-  const trustMode = determineTrustMode(repository);
+
+  let treeSha: string | undefined;
+  try {
+    treeSha = git(['rev-parse', `${headSha}^{tree}`]).trim();
+  } catch {
+    // Tree sha is optional when git revision is not available in local tree
+  }
 
   const baseEnvelope: Omit<CandidateEnvelope, 'candidate_digest'> = {
     schema_version: 2,
@@ -267,6 +287,7 @@ export async function collectCandidateEnvelope(options: CollectCandidateOptions 
     task_hash: taskHash,
     base_sha: baseSha,
     head_sha: headSha,
+    ...(treeSha ? { tree_sha: treeSha } : {}),
     builder_id: builderId,
     diff_numstat_digest: diffNumstatDigest,
     scope: sortedScope,

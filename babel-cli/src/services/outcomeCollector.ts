@@ -19,7 +19,7 @@ import { assertReviewStateOutsideGit } from './babelReviewSnapshot.js';
 import type { HostReviewHandoffV2 } from './hostReviewController.js';
 import type { StructuredFinding } from './structuredFinding.js';
 
-export type EvidenceLevel = 'ASSERTED' | 'OBSERVED' | 'REPRODUCED' | 'VERIFIED';
+export type EvidenceLevel = 'ASSERTED' | 'OBSERVED' | 'CORRELATED' | 'REPRODUCED' | 'VERIFIED';
 
 export type GroundTruthVerdict =
   | 'TRUE_POSITIVE'
@@ -337,6 +337,12 @@ export function detectPostMergeRegression(
   };
 }
 
+export interface CausalEvidence {
+  reproducers?: Array<{ findingFingerprint: string; passedOnHead: boolean; testCommand?: string }>;
+  repairCommits?: Array<{ findingFingerprint: string; commitSha: string; diffStat?: string }>;
+  auditNotes?: Array<{ findingFingerprint: string; verdict: GroundTruthVerdict; reason: string }>;
+}
+
 /**
  * Adjudicate a candidate review against ground truth observed outcomes.
  */
@@ -357,6 +363,8 @@ export function adjudicateCandidateReview(input: {
     revert_commit_sha?: string | undefined;
     related_commits?: Array<{ sha: string; message: string }> | undefined;
   } | undefined;
+  causalEvidence?: CausalEvidence | undefined;
+  assumeCleanMergeIsFalsePositive?: boolean | undefined;
   now?: string | undefined;
 }): AdjudicatedReviewOutcome {
   const now = input.now ?? new Date().toISOString();
@@ -392,43 +400,56 @@ export function adjudicateCandidateReview(input: {
     for (const claim of review.blocking_findings) {
       const fingerprint = createHash('sha256').update(claim.trim().toLowerCase()).digest('hex');
       const sf = structMap.get(fingerprint);
+      const reproducer = input.causalEvidence?.reproducers?.find((r) => r.findingFingerprint === fingerprint);
+      const auditNote = input.causalEvidence?.auditNotes?.find((a) => a.findingFingerprint === fingerprint);
 
       let gtv: GroundTruthVerdict = 'INCONCLUSIVE';
-      let el: EvidenceLevel = 'OBSERVED';
+      let el: EvidenceLevel = 'ASSERTED';
       let details = '';
       const sources: string[] = [];
 
-      if (sf?.verification_status === 'REJECTED_FALSE_POSITIVE') {
+      if (sf?.verification_status === 'REPRODUCED' || (reproducer && !reproducer.passedOnHead)) {
+        gtv = 'TRUE_POSITIVE';
+        el = 'REPRODUCED';
+        details = reproducer?.testCommand ? `Causal reproducer failed: ${reproducer.testCommand}` : 'Reproducer proved defect';
+        sources.push('reproducer:execution_failure');
+        truePositives++;
+      } else if (sf?.verification_status === 'REJECTED_FALSE_POSITIVE' || (reproducer && reproducer.passedOnHead)) {
         gtv = 'FALSE_POSITIVE';
         el = 'VERIFIED';
-        details = `Static finding verification rejected claim: ${sf.verification_source ?? 'invalid'}`;
-        sources.push(`verifier:${sf.verification_source ?? 'syntax'}`);
+        details = reproducer ? 'Reproducer passed without error on head' : `Static verification rejected claim: ${sf?.verification_source ?? 'invalid'}`;
+        sources.push(`verifier:${sf?.verification_source ?? 'reproducer'}`);
         falsePositives++;
-      } else if (isMerged && !regressionDetected && !ciFailed) {
-        // Code merged cleanly with green CI and no revert/regression: blocker was likely a false positive
+      } else if (auditNote) {
+        gtv = auditNote.verdict;
+        el = 'VERIFIED';
+        details = auditNote.reason;
+        sources.push('audit:ground_truth_adjudication');
+        if (gtv === 'TRUE_POSITIVE') truePositives++;
+        else if (gtv === 'FALSE_POSITIVE') falsePositives++;
+      } else if (regressionDetected && input.postMergeRegression?.revert_commit_sha) {
+        gtv = 'TRUE_POSITIVE';
+        el = 'VERIFIED';
+        details = `Post-merge regression observed in follow-up commit: ${input.postMergeRegression.revert_commit_sha}`;
+        sources.push(`commit:${input.postMergeRegression.revert_commit_sha}`);
+        truePositives++;
+      } else if (isMerged && !regressionDetected && !ciFailed && input.assumeCleanMergeIsFalsePositive) {
         gtv = 'FALSE_POSITIVE';
         el = 'OBSERVED';
         details = 'PR merged cleanly with passing CI and no subsequent reverts or fixes';
         if (input.prState.merge_commit_sha) sources.push(`commit:${input.prState.merge_commit_sha}`);
         falsePositives++;
-      } else if (ciFailed || regressionDetected) {
-        // Blocker correlated with observed failure or regression
-        gtv = 'TRUE_POSITIVE';
-        el = 'OBSERVED';
-        details = regressionDetected
-          ? `Post-merge regression observed in follow-up commit: ${input.postMergeRegression?.revert_commit_sha ?? 'related'}`
-          : 'PR CI check runs failed on candidate head SHA';
-        if (input.postMergeRegression?.revert_commit_sha) {
-          sources.push(`commit:${input.postMergeRegression.revert_commit_sha}`);
-        }
+      } else if (ciFailed) {
+        gtv = 'INCONCLUSIVE';
+        el = 'CORRELATED';
+        details = 'PR CI check runs failed on candidate head SHA; causal link to finding unverified';
         for (const c of input.prState.checks.filter((chk) => chk.conclusion === 'failure')) {
           sources.push(`check_run:${c.name}`);
         }
-        truePositives++;
       } else {
         gtv = 'INCONCLUSIVE';
-        el = 'ASSERTED';
-        details = 'PR still open or pending CI resolution';
+        el = 'CORRELATED';
+        details = 'PR outcome unproven by causal evidence';
       }
 
       findings.push({
