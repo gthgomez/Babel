@@ -425,8 +425,9 @@ export async function runBabelBench(
 
   for (const fixture of selected) {
     const started = Date.now();
-    // Pass fixture directly so both clean ReviewerFixture callers and oracle test callers function smoothly
-    const observed = await reviewer(fixture);
+    // Anti-leakage: strip ground truth before passing fixture to reviewer
+    const cleanInput = extractReviewerFixture(fixture);
+    const observed = await reviewer(cleanInput);
     const elapsed = Date.now() - started;
 
     const isExpectedApprove = fixture.groundTruth.expectedVerdict === 'APPROVE';

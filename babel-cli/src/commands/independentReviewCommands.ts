@@ -419,7 +419,7 @@ export function registerIndependentReviewCommands(program: Command): void {
       const readiness = evaluateMergeReadiness({
         candidate: envelope,
         reviews,
-        ...(remoteCI ? { remoteCI } : {}),
+        ...(remoteCI ? { remoteCIChecks: remoteCI } : {}),
       });
 
       if (options.json !== false) {
