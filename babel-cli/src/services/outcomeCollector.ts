@@ -435,8 +435,8 @@ export function adjudicateCandidateReview(input: {
         truePositives++;
       } else if (isMerged && !regressionDetected && !ciFailed && input.assumeCleanMergeIsFalsePositive) {
         gtv = 'FALSE_POSITIVE';
-        el = 'OBSERVED';
-        details = 'PR merged cleanly with passing CI and no subsequent reverts or fixes';
+        el = 'CORRELATED';
+        details = 'PR merged cleanly with passing CI and no subsequent reverts or fixes (heuristic correlation)';
         if (input.prState.merge_commit_sha) sources.push(`commit:${input.prState.merge_commit_sha}`);
         falsePositives++;
       } else if (ciFailed) {

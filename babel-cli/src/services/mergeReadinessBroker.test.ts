@@ -182,5 +182,23 @@ test('mergeReadinessBroker: CRITICAL risk tier requires 2 distinct independent r
   });
   assert.equal(r2.verdict, 'INSUFFICIENT');
   assert.ok(r2.unresolved_blockers.includes('critical_risk_tier_requires_distinct_independent_reviewer_models'));
+
+  // 2 reviews provided with distinct models: must pass model distinctness check
+  const review2DistinctModel: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'receipt-pass-3',
+    reviewer_id: 'longcat-second-run',
+    reviewer_model: 'longcat-2.0',
+    independence: {
+      ...mockPassReview.independence,
+      computed_class: 'I3',
+    },
+  };
+  const r3 = evaluateMergeReadiness({
+    candidate: criticalCandidate,
+    reviews: [mockPassReview, review2DistinctModel],
+  });
+  assert.equal(r3.verdict, 'INSUFFICIENT'); // blocked only by missing tests/CI/security, not model distinctness
+  assert.ok(!r3.unresolved_blockers.includes('critical_risk_tier_requires_distinct_independent_reviewer_models'));
 });
 

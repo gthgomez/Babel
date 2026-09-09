@@ -173,14 +173,24 @@ export async function collectCandidateEnvelope(options: CollectCandidateOptions 
   if (!baseSha) {
     if (options.range) {
       const parts = options.range.split('...');
-      if (parts.length === 2) {
-        baseSha = git(['rev-parse', parts[0]!]).trim();
-        headSha = git(['rev-parse', parts[1]!]).trim();
+      if (parts.length === 2 && parts[0] && parts[1]) {
+        try {
+          baseSha = git(['rev-parse', parts[0]!]).trim();
+          headSha = git(['rev-parse', parts[1]!]).trim();
+        } catch {
+          throw new Error(`Failed to resolve range refs: ${options.range}`);
+        }
       } else {
         const double = options.range.split('..');
-        if (double.length === 2) {
-          baseSha = git(['rev-parse', double[0]!]).trim();
-          headSha = git(['rev-parse', double[1]!]).trim();
+        if (double.length === 2 && double[0] && double[1]) {
+          try {
+            baseSha = git(['rev-parse', double[0]!]).trim();
+            headSha = git(['rev-parse', double[1]!]).trim();
+          } catch {
+            throw new Error(`Failed to resolve range refs: ${options.range}`);
+          }
+        } else {
+          throw new Error(`Invalid range format: ${options.range}. Expected <base>...<head> or <base>..<head>`);
         }
       }
     }
@@ -221,9 +231,7 @@ export async function collectCandidateEnvelope(options: CollectCandidateOptions 
       .split('\0')
       .filter(Boolean);
   } else if (baseSha === headSha) {
-    rawScope = git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--name-only', '-z'])
-      .split('\0')
-      .filter(Boolean);
+    rawScope = [];
   } else {
     rawScope = git(['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', range])
       .split('\0')
@@ -247,7 +255,7 @@ export async function collectCandidateEnvelope(options: CollectCandidateOptions 
   const numstatRaw = options.staged
     ? git(['diff', '--cached', '--no-ext-diff', '--no-textconv', '--numstat'])
     : baseSha === headSha
-      ? git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--numstat'])
+      ? ''
       : git(['diff', '--no-ext-diff', '--no-textconv', '--numstat', range]);
 
   const numstatLines = numstatRaw.trimEnd().split(/\r?\n/).filter(Boolean);

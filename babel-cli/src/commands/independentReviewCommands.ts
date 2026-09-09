@@ -40,7 +40,7 @@ import {
   createStructuredFinding,
   parseFindingFromModelClaim,
 } from '../services/structuredFinding.js';
-import { evaluateReviewCoverage } from '../services/reviewCoverage.js';
+import { evaluateReviewCoverage, type ToolExecutionTrace } from '../services/reviewCoverage.js';
 import { evaluateReviewerIndependence } from '../services/reviewIndependence.js';
 
 export function loadCandidateReviewHandoffs(options: {
@@ -152,25 +152,48 @@ export function handoffEvidenceToCodeReviewReceipt(
     });
   });
 
+  const isolation = review.isolation;
+  const hasSandboxedProcess = Boolean(
+    isolation && (isolation.mode === 'readonly_sandbox' || isolation.mode === 'text_only_no_tools')
+  );
+  const isReadOnly = Boolean(
+    isolation &&
+      isolation.candidate_write === false &&
+      isolation.github_mutation === false &&
+      isolation.merge === false
+  );
+  const isControllerIsolated = Boolean(
+    isolation && isolation.controller_state_access === false
+  );
+  const isFreshContext = Boolean(review.execution_id && isReadOnly);
+
   const independence = evaluateReviewerIndependence({
-    fresh_context: true,
-    fresh_process: true,
-    read_only_capability: true,
-    controller_state_isolated: true,
+    fresh_context: isFreshContext,
+    fresh_process: hasSandboxedProcess,
+    read_only_capability: isReadOnly,
+    controller_state_isolated: isControllerIsolated,
     builder_identity: review.builder_id,
     reviewer_identity: review.reviewer_id,
     reviewer_model: review.reviewer_model,
     reviewer_provider: review.review_provider,
-    trusted_harness: true,
+    trusted_harness: Boolean(review.harness?.source_sha && review.harness?.version),
     trusted_source_sha: review.harness?.source_sha ?? '0'.repeat(40),
     installation_digest: review.harness?.version ?? '0'.repeat(64),
+    session_id: review.execution_id,
+    sandbox_profile: isolation?.mode,
   });
+
+  const toolTraces = ((review as { tool_traces?: ToolExecutionTrace[] }).tool_traces ??
+    (review as { calls?: ToolExecutionTrace[] }).calls ??
+    []) as ToolExecutionTrace[];
 
   const coverage = evaluateReviewCoverage({
     scope: review.scope,
-    toolTraces: [],
+    toolTraces,
     claimedReviewedFiles: review.scope,
-    changesDiffFullyRead: true,
+    ...((review as { changes_diff_fully_read?: boolean }).changes_diff_fully_read !== undefined
+      ? { changesDiffFullyRead: (review as { changes_diff_fully_read?: boolean }).changes_diff_fully_read }
+      : {}),
   });
 
   return {
@@ -319,8 +342,8 @@ export function registerIndependentReviewCommands(program: Command): void {
                 base_sha: primary.base_sha,
                 head_sha: primary.head_sha,
                 builder_identity: primary.builder_id,
-                reviewer_identity: allReviews.map((r) => r.reviewer_id).join('+'),
-                reviewer_model: allReviews.map((r) => r.reviewer_model).join('+'),
+                reviewer_identity: primary.reviewer_id,
+                reviewer_model: primary.reviewer_model,
                 review_provider: primary.review_provider,
                 review_mode: 'independent-read-only',
                 verdict: hasBlock ? 'FAIL' : 'PASS',

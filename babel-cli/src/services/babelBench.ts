@@ -316,8 +316,8 @@ export function computeBabelBenchMetrics(results: BabelBenchRunResult[]): BabelB
   }
 
   const total = results.length;
-  const precision = tp + fp > 0 ? tp / (tp + fp) : 1.0;
-  const recall = tp + fn > 0 ? tp / (tp + fn) : 1.0;
+  const precision = tp + fp > 0 ? tp / (tp + fp) : (defectCases === 0 ? 1.0 : 0.0);
+  const recall = defectCases > 0 ? tp / defectCases : 1.0;
   const accuracy = total > 0 ? (tp + tn) / total : 1.0;
   const fpr = cleanControls > 0 ? fp / cleanControls : 0.0;
   const fnr = defectCases > 0 ? fn / defectCases : 0.0;

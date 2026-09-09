@@ -201,6 +201,7 @@ for (const number of prs) {
 
           return { ...request, status: 'COMPLETED', reviewed_candidate: { ...candidate }, reviewer_id: `babel-chat-${model}-${request.execution_id}`, review_provider: 'opencode-go', reviewer_model: model, reviewed_at: new Date().toISOString(), scope,
             verdict: artifact.verdict.verdict, findings: artifact.verdict.findings, blocking_findings: artifact.verdict.blocking_findings, isolation: request.required_isolation, usage: artifact.usage,
+            tool_traces: toolTraces, changes_diff_fully_read: coverageReceipt.changes_diff_coverage_ratio >= 1.0,
             harness: { name: 'babel', mode: 'chat', version, source_sha: trustedSha, execution_id: request.execution_id } }
         },
       } })

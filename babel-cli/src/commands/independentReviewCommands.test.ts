@@ -218,6 +218,7 @@ test('handoffEvidenceToCodeReviewReceipt constructs valid CodeReviewReceipt with
       merge: false,
       controller_state_access: false,
     },
+    changes_diff_fully_read: true,
   };
 
   const receipt = handoffEvidenceToCodeReviewReceipt(evidence, 'a'.repeat(64));
@@ -228,6 +229,16 @@ test('handoffEvidenceToCodeReviewReceipt constructs valid CodeReviewReceipt with
   assert.equal(receipt.findings[0]?.location.line, 42);
   assert.equal(receipt.independence.computed_class, 'I2');
   assert.equal(receipt.coverage.coverage_verdict, 'SUFFICIENT');
+
+  // Without diff read or tool traces, coverage must fail closed as INSUFFICIENT_REVIEW_COVERAGE
+  const uncoveredEvidence = { ...evidence, changes_diff_fully_read: undefined };
+  const uncoveredReceipt = handoffEvidenceToCodeReviewReceipt(uncoveredEvidence, 'a'.repeat(64));
+  assert.equal(uncoveredReceipt.coverage.coverage_verdict, 'INSUFFICIENT_REVIEW_COVERAGE');
+
+  // Without isolation, independence must fail closed as I0
+  const unisolatedEvidence = { ...evidence, isolation: { ...evidence.isolation, candidate_write: true } };
+  const unisolatedReceipt = handoffEvidenceToCodeReviewReceipt(unisolatedEvidence, 'a'.repeat(64));
+  assert.equal(unisolatedReceipt.independence.computed_class, 'I0');
 });
 
 test('command-level: review bench runs and verifies anti-leakage via CLI', () => {

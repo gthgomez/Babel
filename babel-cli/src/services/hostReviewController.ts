@@ -109,6 +109,8 @@ export interface HostReviewExecutionResult {
   isolation: HostReviewIsolationProfile
   usage?: HostReviewUsage
   harness?: HostReviewHarness
+  tool_traces?: Array<{ tool: string; targetPath?: string; args?: Record<string, unknown> }>
+  changes_diff_fully_read?: boolean
 }
 
 /** Adapter implemented by the controller-owned Astra/Codex worker launcher. */
@@ -143,6 +145,8 @@ export interface AutonomousReviewEvidenceV2 {
   isolation: HostReviewIsolationProfile
   usage?: HostReviewUsage
   harness?: HostReviewHarness
+  tool_traces?: Array<{ tool: string; targetPath?: string; args?: Record<string, unknown> }>
+  changes_diff_fully_read?: boolean
 }
 
 /** One controller-owned review round suitable for a single GitHub handoff comment. */
@@ -234,6 +238,10 @@ function snapshotIsolation(isolation: HostReviewIsolationProfile): HostReviewIso
 
 function snapshotUsage(usage: HostReviewUsage): HostReviewUsage {
   return Object.freeze({ ...usage })
+}
+
+function snapshotToolTraces(traces: readonly { tool: string; targetPath?: string; args?: Record<string, unknown> }[]): Array<{ tool: string; targetPath?: string; args?: Record<string, unknown> }> {
+  return Object.freeze([...traces]) as unknown as Array<{ tool: string; targetPath?: string; args?: Record<string, unknown> }>
 }
 
 function scopesMatch(left: string[], right: string[]): boolean {
@@ -351,6 +359,8 @@ export function createHostReviewController(input: {
           isolation: snapshotIsolation(result.isolation),
           ...(result.usage ? { usage: snapshotUsage(result.usage) } : {}),
           ...(result.harness ? { harness: Object.freeze({ ...result.harness }) } : {}),
+          ...(result.tool_traces ? { tool_traces: snapshotToolTraces(result.tool_traces) } : {}),
+          ...(result.changes_diff_fully_read !== undefined ? { changes_diff_fully_read: result.changes_diff_fully_read } : {}),
         }))
       }
       const handoffReviews = (risk === 'RED'

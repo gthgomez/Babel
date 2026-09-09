@@ -150,7 +150,9 @@ export function evaluateMergeReadiness(input: {
     codeReviewStatus = 'INSUFFICIENT';
     blockers.push(`insufficient_approved_reviews:have_${approvedReviews.length}_need_${minRequiredReviews}`);
   } else if (requiredGates.codeReview.requireI4) {
-    const distinctReviewers = new Set(approvedReviews.map((r) => r.reviewer_model));
+    const distinctReviewers = new Set(
+      approvedReviews.flatMap((r) => r.reviewer_model.split('+').map((m) => m.trim())).filter(Boolean)
+    );
     if (distinctReviewers.size < 2) {
       codeReviewStatus = 'INSUFFICIENT';
       blockers.push('critical_risk_tier_requires_distinct_independent_reviewer_models');
@@ -187,24 +189,28 @@ export function evaluateMergeReadiness(input: {
 
   if (input.remoteCIChecks && input.remoteCIChecks.length > 0) {
     const headChecks = input.remoteCIChecks.filter((c) => c.head_sha === headSha);
-    for (const check of headChecks) {
-      if (check.status !== 'completed') {
-        // Pending
-      } else if (check.conclusion === 'success') {
-        successCount++;
-      } else if (check.conclusion === 'failure' || check.conclusion === 'timed_out') {
-        failedChecks.push(check.name);
+    if (headChecks.length === 0 && requiredGates.remoteCI) {
+      blockers.push('remote_ci_checks_required_but_unavailable');
+    } else {
+      for (const check of headChecks) {
+        if (check.status !== 'completed') {
+          // Pending
+        } else if (check.conclusion === 'success') {
+          successCount++;
+        } else if (check.conclusion === 'failure' || check.conclusion === 'timed_out') {
+          failedChecks.push(check.name);
+        }
       }
-    }
 
-    if (failedChecks.length > 0) {
-      ciStatus = 'FAIL';
-      blockers.push(`remote_ci_checks_failed:${failedChecks.join(',')}`);
-    } else if (headChecks.some((c) => c.status !== 'completed')) {
-      ciStatus = 'PENDING';
-      blockers.push('remote_ci_checks_pending');
-    } else if (successCount > 0) {
-      ciStatus = 'PASS';
+      if (failedChecks.length > 0) {
+        ciStatus = 'FAIL';
+        blockers.push(`remote_ci_checks_failed:${failedChecks.join(',')}`);
+      } else if (headChecks.some((c) => c.status !== 'completed')) {
+        ciStatus = 'PENDING';
+        blockers.push('remote_ci_checks_pending');
+      } else if (successCount > 0) {
+        ciStatus = 'PASS';
+      }
     }
   } else if (requiredGates.remoteCI) {
     blockers.push('remote_ci_checks_required_but_unavailable');
