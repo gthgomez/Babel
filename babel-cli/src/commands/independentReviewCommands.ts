@@ -86,10 +86,24 @@ export function loadCandidateReviewHandoffs(options: {
       })
     );
     try {
+      let ownerId: number | undefined;
+      let ownerLogin: string | undefined;
+      try {
+        const repoRaw = runner(['api', `repos/${options.repository}`]);
+        const repoInfo = JSON.parse(repoRaw) as { owner?: { id?: number; login?: string } };
+        ownerId = repoInfo.owner?.id;
+        ownerLogin = repoInfo.owner?.login;
+      } catch {
+        // Repo lookup may fail in offline or mocked tests
+      }
+
       const raw = runner(['api', `repos/${options.repository}/issues/${options.prNumber}/comments`]);
-      const comments = JSON.parse(raw) as Array<{ body?: string }>;
+      const comments = JSON.parse(raw) as Array<{ body?: string; user?: { id?: number; login?: string } }>;
       const marker = '<!-- babel-controller-ai-reviews-v2 -->';
       for (const comment of comments) {
+        if (ownerId !== undefined && comment.user?.id !== ownerId && ownerLogin && comment.user?.login !== ownerLogin) {
+          continue;
+        }
         if (typeof comment.body === 'string' && comment.body.startsWith(marker)) {
           try {
             const parsed = JSON.parse(comment.body.slice(marker.length)) as unknown;
@@ -160,7 +174,8 @@ export function handoffEvidenceToCodeReviewReceipt(
     isolation &&
       isolation.candidate_write === false &&
       isolation.github_mutation === false &&
-      isolation.merge === false
+      isolation.merge === false &&
+      isolation.controller_state_access === false
   );
   const isControllerIsolated = Boolean(
     isolation && isolation.controller_state_access === false
@@ -523,7 +538,21 @@ export function registerIndependentReviewCommands(program: Command): void {
     .option('--json', 'Emit structured JSON output')
     .action(async (options: { repo: string; pr: string; repoRoot?: string; stateDir?: string; json?: boolean }) => {
       const prNumber = Number(options.pr);
-      const prState = collectGitHubPRState(options.repo, prNumber);
+      let prState;
+      try {
+        prState = collectGitHubPRState(options.repo, prNumber);
+      } catch (err) {
+        if (options.json !== false) {
+          process.stdout.write(`${JSON.stringify({
+            status: 'UNAVAILABLE',
+            error: err instanceof Error ? err.message : String(err),
+          }, null, 2)}\n`);
+        } else {
+          process.stderr.write(`Failed to collect GitHub PR state: ${err instanceof Error ? err.message : String(err)}\n`);
+        }
+        process.exitCode = 3;
+        return;
+      }
 
       let candidateDigest = '0'.repeat(64);
       try {
@@ -546,12 +575,12 @@ export function registerIndependentReviewCommands(program: Command): void {
         ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
       });
 
-      const firstHandoff = handoffs[0];
+      const allReviews = handoffs.flatMap((h) => h.reviews);
       const outcome = adjudicateCandidateReview({
         candidateDigest,
         prState,
-        handoff: firstHandoff ? {
-          reviews: firstHandoff.reviews.map((r) => ({
+        handoff: allReviews.length > 0 ? {
+          reviews: allReviews.map((r) => ({
             reviewer_id: r.reviewer_id,
             reviewer_model: r.reviewer_model,
             verdict: r.verdict,

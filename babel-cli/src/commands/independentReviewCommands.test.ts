@@ -239,6 +239,56 @@ test('handoffEvidenceToCodeReviewReceipt constructs valid CodeReviewReceipt with
   const unisolatedEvidence = { ...evidence, isolation: { ...evidence.isolation, candidate_write: true } };
   const unisolatedReceipt = handoffEvidenceToCodeReviewReceipt(unisolatedEvidence, 'a'.repeat(64));
   assert.equal(unisolatedReceipt.independence.computed_class, 'I0');
+
+  // Controller state leakage must fail closed as I0
+  const controllerLeakedEvidence = { ...evidence, isolation: { ...evidence.isolation, controller_state_access: true } };
+  const controllerLeakedReceipt = handoffEvidenceToCodeReviewReceipt(controllerLeakedEvidence, 'a'.repeat(64));
+  assert.equal(controllerLeakedReceipt.independence.computed_class, 'I0');
+});
+
+test('loadCandidateReviewHandoffs authenticates gh comment authors against repo owner', () => {
+  const marker = '<!-- babel-controller-ai-reviews-v2 -->';
+  const mockHandoff = {
+    schema_version: 2,
+    kind: 'host_review_handoff_v2',
+    repository: 'gthgomez/Babel',
+    pr_number: 42,
+    base_sha: '1'.repeat(40),
+    head_sha: '2'.repeat(40),
+    task_id: 't-1',
+    task_hash: '3'.repeat(64),
+    controller_run_id: 'c-1',
+    reviews: [],
+  };
+
+  const fakeGhExec = (args: string[]) => {
+    if (args.includes('repos/gthgomez/Babel')) {
+      return JSON.stringify({ owner: { id: 12345, login: 'gthgomez' } });
+    }
+    if (args.some((a) => a.includes('comments'))) {
+      return JSON.stringify([
+        {
+          user: { id: 99999, login: 'attacker' },
+          body: marker + JSON.stringify(mockHandoff),
+        },
+        {
+          user: { id: 12345, login: 'gthgomez' },
+          body: marker + JSON.stringify(mockHandoff),
+        },
+      ]);
+    }
+    return '[]';
+  };
+
+  const discovered = loadCandidateReviewHandoffs({
+    repository: 'gthgomez/Babel',
+    candidateDigest: 'a'.repeat(64),
+    prNumber: 42,
+    ghExec: fakeGhExec,
+  });
+
+  // Only the comment from owner (12345) should be accepted, spoofed comment (99999) must be ignored
+  assert.equal(discovered.length, 1);
 });
 
 test('command-level: review bench runs and verifies anti-leakage via CLI', () => {

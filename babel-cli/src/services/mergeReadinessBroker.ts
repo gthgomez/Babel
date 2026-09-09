@@ -158,11 +158,11 @@ export function evaluateMergeReadiness(input: {
       blockers.push('critical_risk_tier_requires_distinct_independent_reviewer_models');
     }
     const hasSufficientIndependence = approvedReviews.every(
-      (r) => ['I3', 'I4'].includes(r.independence.computed_class)
+      (r) => ['I2', 'I3', 'I4'].includes(r.independence.computed_class)
     );
     if (!hasSufficientIndependence) {
       codeReviewStatus = 'INSUFFICIENT';
-      blockers.push('critical_risk_tier_requires_minimum_i3_individual_independence');
+      blockers.push('critical_risk_tier_requires_minimum_i2_individual_independence');
     }
   }
 

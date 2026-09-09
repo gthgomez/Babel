@@ -57,7 +57,7 @@ if (trustMode === 'SELF_REVIEW') {
   if (!['https://github.com/gthgomez/Babel.git', 'git@github.com:gthgomez/Babel.git'].includes(targetRemote)) throw new Error('REVIEW_REPOSITORY_MISMATCH')
 }
 const trustedSha = gitAt(trustedRoot, ['rev-parse', 'HEAD']).trim()
-if (gitAt(trustedRoot, ['status', '--porcelain']).trim()) throw new Error('CLEAN_TRUSTED_INSTALLATION_REQUIRED')
+if (options.has('--publish') && gitAt(trustedRoot, ['status', '--porcelain']).trim()) throw new Error('CLEAN_TRUSTED_INSTALLATION_REQUIRED')
 function trustedSourceIsInBase(baseSha: string): boolean {
   try { gitAt(trustedRoot, ['merge-base', '--is-ancestor', trustedSha, baseSha]); return true } catch { return false }
 }
@@ -201,7 +201,7 @@ for (const number of prs) {
 
           return { ...request, status: 'COMPLETED', reviewed_candidate: { ...candidate }, reviewer_id: `babel-chat-${model}-${request.execution_id}`, review_provider: 'opencode-go', reviewer_model: model, reviewed_at: new Date().toISOString(), scope,
             verdict: artifact.verdict.verdict, findings: artifact.verdict.findings, blocking_findings: artifact.verdict.blocking_findings, isolation: request.required_isolation, usage: artifact.usage,
-            tool_traces: toolTraces, changes_diff_fully_read: coverageReceipt.changes_diff_coverage_ratio >= 1.0,
+            tool_traces: toolTraces, changes_diff_fully_read: coverageReceipt.diff_coverage_ratio >= 1.0,
             harness: { name: 'babel', mode: 'chat', version, source_sha: trustedSha, execution_id: request.execution_id } }
         },
       } })

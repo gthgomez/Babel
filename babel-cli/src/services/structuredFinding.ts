@@ -205,7 +205,7 @@ export function parseFindingFromModelClaim(
 ): { path: string; line?: number; end_line?: number; category: FindingCategory } {
   for (const file of candidateScope) {
     const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(?:^|\\s|\`|"|'|\\()(${escaped})(?::(\\d+)(?:-(\\d+))?|\\s+line\\s+(\\d+))?`, 'i');
+    const regex = new RegExp(`(?:^|[\\s\`"'(])(?:\\.\\/|\\.\\\\)?(${escaped})(?::(\\d+)(?:-(\\d+))?|\\s+line\\s+(\\d+))?`, 'i');
     const match = regex.exec(claim);
     if (match) {
       const line = match[2] ? Number(match[2]) : match[4] ? Number(match[4]) : undefined;

@@ -60,6 +60,15 @@ test('structuredFinding: parseFindingFromModelClaim extracts location without sy
   assert.equal(p1.line, 42);
   assert.equal(p1.category, 'correctness');
 
+  // Claim references relative ./src/b.ts:42 or .\src/b.ts:42
+  const p1Rel = parseFindingFromModelClaim('Buffer overflow in ./src/b.ts:42', scope);
+  assert.equal(p1Rel.path, 'src/b.ts');
+  assert.equal(p1Rel.line, 42);
+
+  const p1Win = parseFindingFromModelClaim('Buffer overflow in .\\src/b.ts:42', scope);
+  assert.equal(p1Win.path, 'src/b.ts');
+  assert.equal(p1Win.line, 42);
+
   // Claim mentions security secret in src/c.ts line 15
   const p2 = parseFindingFromModelClaim('Hardcoded credential secret found in src/c.ts line 15', scope);
   assert.equal(p2.path, 'src/c.ts');
