@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 /** Immutable review tuple collected by the trusted host before worker launch. */
 export interface HostReviewCandidate {
@@ -12,6 +12,36 @@ export interface HostReviewCandidate {
   diff_numstat_digest: string
   /** Exact paths supplied by the trusted controller; it must not infer this list. */
   scope: string[]
+}
+
+export type RiskTier = 'TRIVIAL' | 'NORMAL' | 'ELEVATED' | 'CRITICAL' | 'AMBIGUOUS'
+export type ReviewTrustMode = 'SELF_REVIEW' | 'EXTERNAL_REPO_REVIEW'
+
+/** Evolved, versioned CandidateEnvelope extending HostReviewCandidate with full protocol metadata. */
+export interface CandidateEnvelope extends HostReviewCandidate {
+  schema_version: 2
+  candidate_digest: string
+  risk_tier: RiskTier
+  trust_mode: ReviewTrustMode
+  tree_sha?: string
+  task_contract_hash?: string
+  instruction_hash?: string
+  omitted_files?: Array<{ path: string; reason: 'binary' | 'generated' | 'oversized' | 'excluded' }>
+  created_at: string
+}
+
+/** Compute canonical SHA-256 digest over candidate identity fields. */
+export function computeCandidateDigest(candidate: HostReviewCandidate | CandidateEnvelope): string {
+  const payload = [
+    candidate.repository,
+    candidate.pr_number ?? null,
+    candidate.base_sha,
+    candidate.head_sha,
+    candidate.diff_numstat_digest,
+    [...candidate.scope].sort(),
+    candidate.task_hash,
+  ]
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }
 
 /**

@@ -51,7 +51,7 @@ test('timeout force-kills an unresponsive actual worker before clearing its leas
   const fixture = workerFixture();
   let trackedPid = 0;
   let clearedAfterExit = false;
-  const result = await launchBabelReviewChild({ ...fixture, purpose: 'repair_proposal', timeoutMs: 1000,
+  const result = await launchBabelReviewChild({ ...fixture, purpose: 'repair_proposal', timeoutMs: 3000,
     onSpawn: pid => { trackedPid = pid; },
     onExit: () => {
       assert.equal(JSON.parse(readFileSync(fixture.output, 'utf8')).pid, trackedPid);

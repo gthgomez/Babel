@@ -1,0 +1,247 @@
+import { createHash } from 'node:crypto';
+import type { CandidateEnvelope } from './hostReviewController.js';
+import type { ReviewCoverageReceipt } from './reviewCoverage.js';
+import type { ReviewerIndependenceAttestation } from './reviewIndependence.js';
+import type { StructuredFinding } from './structuredFinding.js';
+
+export interface CodeReviewReceipt {
+  schema_version: 2;
+  receipt_id: string;
+  candidate_digest: string;
+  head_sha: string;
+  verdict: 'APPROVE' | 'BLOCK' | 'REPAIR_REQUIRED' | 'INSUFFICIENT_REVIEW_COVERAGE';
+  reviewer_id: string;
+  reviewer_model: string;
+  independence: ReviewerIndependenceAttestation;
+  coverage: ReviewCoverageReceipt;
+  findings: StructuredFinding[];
+  blocking_findings: StructuredFinding[];
+  certified_at: string;
+  receipt_hash: string;
+}
+
+export interface RemoteCICheckObservation {
+  name: string;
+  head_sha: string;
+  status: 'completed' | 'in_progress' | 'queued';
+  conclusion: 'success' | 'failure' | 'neutral' | 'cancelled' | 'timed_out' | 'action_required' | null;
+  workflow_id?: string;
+  check_run_id?: string;
+}
+
+export interface DeterministicTestReceipt {
+  status: 'PASS' | 'FAIL';
+  head_sha: string;
+  passed_count: number;
+  failed_count: number;
+  suite_name?: string;
+  executed_at: string;
+}
+
+export interface SecurityReceipt {
+  status: 'PASS' | 'FAIL';
+  head_sha: string;
+  gitleaks_passed: boolean;
+  clean_source: boolean;
+  scanned_at: string;
+}
+
+export type ReadinessVerdict = 'READY' | 'REPAIR' | 'INSUFFICIENT' | 'ESCALATE';
+
+export type HumanEscalationReason =
+  | 'OBJECTIVE_AMBIGUOUS'
+  | 'POLICY_DECISION_REQUIRED'
+  | 'IRREVERSIBLE_AUTHORITY_REQUIRED'
+  | 'REVIEW_DISAGREEMENT_UNRESOLVED'
+  | 'EVIDENCE_INSUFFICIENT_AFTER_BOUNDED_RETRY'
+  | 'NEW_RISK_CLASS';
+
+export interface MergeReadinessReceipt {
+  schema_version: 2;
+  readiness_id: string;
+  candidate_digest: string;
+  head_sha: string;
+  verdict: ReadinessVerdict;
+  gate_checks: {
+    code_review: {
+      status: 'PASS' | 'FAIL' | 'INSUFFICIENT';
+      approved_reviews_count: number;
+      blocking_findings_count: number;
+      receipt_ids: string[];
+    };
+    deterministic_tests: {
+      status: 'PASS' | 'FAIL' | 'UNAVAILABLE';
+      details?: string | undefined;
+    };
+    remote_ci: {
+      status: 'PASS' | 'FAIL' | 'PENDING' | 'UNAVAILABLE';
+      total_checks: number;
+      successful_checks: number;
+      failed_checks: string[];
+    };
+    security_scan: {
+      status: 'PASS' | 'FAIL' | 'UNAVAILABLE';
+      details?: string | undefined;
+    };
+  };
+  unresolved_blockers: string[];
+  escalation_reason: HumanEscalationReason | null;
+  receipt_hash: string;
+  evaluated_at: string;
+}
+
+export function evaluateMergeReadiness(input: {
+  candidate: CandidateEnvelope;
+  reviews: CodeReviewReceipt[];
+  deterministicTests?: DeterministicTestReceipt;
+  remoteCIChecks?: RemoteCICheckObservation[];
+  securityReceipt?: SecurityReceipt;
+  now?: string;
+}): MergeReadinessReceipt {
+  const headSha = input.candidate.head_sha;
+  const blockers: string[] = [];
+  let escalationReason: HumanEscalationReason | null = null;
+
+  // 1. Evaluate Code Reviews
+  const headReviews = input.reviews.filter((r) => r.head_sha === headSha);
+  if (headReviews.length < input.reviews.length) {
+    blockers.push('stale_review_receipt_rejected_for_prior_head');
+  }
+
+  const approvedReviews = headReviews.filter(
+    (r) => r.verdict === 'APPROVE' && r.coverage.is_sufficient && r.blocking_findings.length === 0
+  );
+
+  const minRequiredReviews = input.candidate.risk_tier === 'CRITICAL' || input.candidate.risk_tier === 'ELEVATED' ? 2 : 1;
+
+  let codeReviewStatus: 'PASS' | 'FAIL' | 'INSUFFICIENT' = 'PASS';
+  const allBlockingFindings = headReviews.flatMap((r) => r.blocking_findings);
+
+  if (allBlockingFindings.length > 0) {
+    codeReviewStatus = 'FAIL';
+    blockers.push(`blocking_findings_present:${allBlockingFindings.length}`);
+  } else if (headReviews.some((r) => !r.coverage.is_sufficient)) {
+    codeReviewStatus = 'INSUFFICIENT';
+    blockers.push('insufficient_review_coverage');
+  } else if (approvedReviews.length < minRequiredReviews) {
+    codeReviewStatus = 'INSUFFICIENT';
+    blockers.push(`insufficient_approved_reviews:have_${approvedReviews.length}_need_${minRequiredReviews}`);
+  }
+
+  // 2. Evaluate Deterministic Tests
+  let testStatus: 'PASS' | 'FAIL' | 'UNAVAILABLE' = 'UNAVAILABLE';
+  if (input.deterministicTests) {
+    if (input.deterministicTests.head_sha !== headSha) {
+      testStatus = 'FAIL';
+      blockers.push('deterministic_tests_stale_for_head');
+    } else if (input.deterministicTests.status === 'PASS' && input.deterministicTests.failed_count === 0) {
+      testStatus = 'PASS';
+    } else {
+      testStatus = 'FAIL';
+      blockers.push(`deterministic_tests_failed:${input.deterministicTests.failed_count}`);
+    }
+  }
+
+  // 3. Evaluate Remote CI
+  let ciStatus: 'PASS' | 'FAIL' | 'PENDING' | 'UNAVAILABLE' = 'UNAVAILABLE';
+  const failedChecks: string[] = [];
+  let successCount = 0;
+
+  if (input.remoteCIChecks && input.remoteCIChecks.length > 0) {
+    const headChecks = input.remoteCIChecks.filter((c) => c.head_sha === headSha);
+    for (const check of headChecks) {
+      if (check.status !== 'completed') {
+        // Pending
+      } else if (check.conclusion === 'success') {
+        successCount++;
+      } else if (check.conclusion === 'failure' || check.conclusion === 'timed_out') {
+        failedChecks.push(check.name);
+      }
+    }
+
+    if (failedChecks.length > 0) {
+      ciStatus = 'FAIL';
+      blockers.push(`remote_ci_checks_failed:${failedChecks.join(',')}`);
+    } else if (headChecks.some((c) => c.status !== 'completed')) {
+      ciStatus = 'PENDING';
+      blockers.push('remote_ci_checks_pending');
+    } else if (successCount > 0) {
+      ciStatus = 'PASS';
+    }
+  }
+
+  // 4. Evaluate Security Scan
+  let secStatus: 'PASS' | 'FAIL' | 'UNAVAILABLE' = 'UNAVAILABLE';
+  if (input.securityReceipt) {
+    if (input.securityReceipt.head_sha !== headSha) {
+      secStatus = 'FAIL';
+      blockers.push('security_scan_stale_for_head');
+    } else if (input.securityReceipt.status === 'PASS' && input.securityReceipt.gitleaks_passed) {
+      secStatus = 'PASS';
+    } else {
+      secStatus = 'FAIL';
+      blockers.push('security_scan_failed');
+    }
+  }
+
+  // 5. Synthesize Readiness Verdict
+  let verdict: ReadinessVerdict = 'READY';
+  if (allBlockingFindings.length > 0) {
+    verdict = 'REPAIR';
+  } else if (codeReviewStatus === 'INSUFFICIENT' || ciStatus === 'PENDING') {
+    verdict = 'INSUFFICIENT';
+  } else if (ciStatus === 'FAIL' || testStatus === 'FAIL' || secStatus === 'FAIL') {
+    verdict = 'REPAIR';
+  } else if (blockers.length > 0) {
+    verdict = 'REPAIR';
+  }
+
+  const now = input.now ?? new Date().toISOString();
+  const receiptPayload = [
+    input.candidate.candidate_digest,
+    headSha,
+    verdict,
+    blockers,
+    codeReviewStatus,
+    testStatus,
+    ciStatus,
+    secStatus,
+    now,
+  ];
+  const receiptHash = createHash('sha256').update(JSON.stringify(receiptPayload)).digest('hex');
+  const readinessId = createHash('sha256').update(`readiness:${receiptHash}`).digest('hex').slice(0, 32);
+
+  return {
+    schema_version: 2,
+    readiness_id: readinessId,
+    candidate_digest: input.candidate.candidate_digest,
+    head_sha: headSha,
+    verdict,
+    gate_checks: {
+      code_review: {
+        status: codeReviewStatus,
+        approved_reviews_count: approvedReviews.length,
+        blocking_findings_count: allBlockingFindings.length,
+        receipt_ids: headReviews.map((r) => r.receipt_id),
+      },
+      deterministic_tests: {
+        status: testStatus,
+        details: input.deterministicTests ? `passed: ${input.deterministicTests.passed_count}` : undefined,
+      },
+      remote_ci: {
+        status: ciStatus,
+        total_checks: input.remoteCIChecks?.length ?? 0,
+        successful_checks: successCount,
+        failed_checks: failedChecks,
+      },
+      security_scan: {
+        status: secStatus,
+        details: input.securityReceipt ? `gitleaks: ${input.securityReceipt.gitleaks_passed}` : undefined,
+      },
+    },
+    unresolved_blockers: blockers,
+    escalation_reason: escalationReason,
+    receipt_hash: receiptHash,
+    evaluated_at: now,
+  };
+}
