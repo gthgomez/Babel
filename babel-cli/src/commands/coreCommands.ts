@@ -12,6 +12,7 @@ import { Command } from "commander";
 import { z } from "zod";
 
 import { registerEvidenceProductSubcommands } from "./evidenceProductCommands.js";
+import { registerRunIntelligenceCommands } from './runIntelligenceCommands.js';
 import { registerInspectTuiCommand } from "../ui/observe/inspectTui.js";
 import { registerMaintenanceCommands } from "./maintenanceCommands.js";
 import { printJsonErrorAndExit, printJsonOrHuman } from "./output.js";
@@ -1920,6 +1921,7 @@ export function resolveBenchmarkProvider(
 }
 
 export function registerCoreCommands(program: Command): void {
+  registerRunIntelligenceCommands(program);
   program.option(
     "--experimental",
     "Enable experimental features (daemon, goal loop)",
