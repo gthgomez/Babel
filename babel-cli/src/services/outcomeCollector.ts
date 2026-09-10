@@ -221,11 +221,15 @@ export function collectGitHubPRState(
         ? 'CLOSED'
         : 'OPEN';
 
+  if (!prJson.headRefOid || !/^[a-f0-9]{40}$/.test(prJson.headRefOid)) {
+    throw new Error(`INVALID_HEAD_SHA: ${prJson.headRefOid}`);
+  }
+  if (!prJson.baseRefOid || !/^[a-f0-9]{40}$/.test(prJson.baseRefOid)) {
+    throw new Error(`INVALID_BASE_SHA: ${prJson.baseRefOid}`);
+  }
+
   let checks: ObservedCICheck[] = [];
   try {
-    if (!/^[a-f0-9]{40}$/.test(prJson.headRefOid)) {
-      throw new Error(`INVALID_HEAD_SHA: ${prJson.headRefOid}`);
-    }
     const checksRaw = runner([
       'api',
       `repos/${repository}/commits/${prJson.headRefOid}/check-runs`,

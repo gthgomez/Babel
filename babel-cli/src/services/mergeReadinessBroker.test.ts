@@ -45,6 +45,7 @@ const mockPassReview: CodeReviewReceipt = {
       reviewer_identity: 'mimo-v2.5',
       reviewer_model: 'mimo-v2.5',
       reviewer_provider: 'opencode-go',
+      session_id: 'session-pass-1',
       trusted_harness: true,
       trusted_source_sha: '0000000000000000000000000000000000000000',
       installation_digest: 'inst-1',
@@ -207,6 +208,7 @@ test('mergeReadinessBroker: CRITICAL risk tier requires 2 distinct independent r
         reviewer_identity: 'longcat-second-run',
         reviewer_model: 'longcat-2.0',
         reviewer_provider: 'longcat-ai',
+        session_id: 'session-pass-3',
       },
       attestation_digest: 'att-pass-3',
     },
@@ -320,5 +322,90 @@ test('mergeReadinessBroker: duplicate session IDs or duplicate attestations fail
   assert.equal(readiness.verdict, 'INSUFFICIENT');
   assert.ok(readiness.unresolved_blockers.includes('critical_risk_tier_requires_ensemble_i4_independence'));
 });
+
+test('mergeReadinessBroker: local unauthenticated review evidence cannot manufacture PASS readiness', () => {
+  const unauthReview: CodeReviewReceipt = {
+    ...mockPassReview,
+    provenance: 'LOCAL_UNAUTHENTICATED',
+  };
+
+  const readiness = evaluateMergeReadiness({
+    candidate: mockCandidate,
+    reviews: [unauthReview],
+  });
+
+  // Local unauthenticated review must not grant approval
+  assert.equal(readiness.gate_checks.code_review.approved_reviews_count, 0);
+  assert.equal(readiness.gate_checks.code_review.status, 'INSUFFICIENT');
+  assert.equal(readiness.verdict, 'INSUFFICIENT');
+  assert.ok(
+    readiness.unresolved_blockers.includes(
+      'unauthenticated_local_review_evidence_rejected_for_authoritative_gate'
+    )
+  );
+});
+
+test('mergeReadinessBroker: conflicting review receipts sharing receipt_id fail closed regardless of arrival order', () => {
+  const receiptA: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'shared-receipt-1',
+    verdict: 'APPROVE',
+  };
+
+  const receiptBConflict: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'shared-receipt-1',
+    verdict: 'BLOCK',
+  };
+
+  // Order [A, B]
+  const readinessAB = evaluateMergeReadiness({
+    candidate: mockCandidate,
+    reviews: [receiptA, receiptBConflict],
+  });
+  assert.equal(readinessAB.gate_checks.code_review.status, 'FAIL');
+  assert.ok(
+    readinessAB.unresolved_blockers.includes('conflicting_review_evidence_detected:shared-receipt-1')
+  );
+
+  // Order [B, A] (order reversal)
+  const readinessBA = evaluateMergeReadiness({
+    candidate: mockCandidate,
+    reviews: [receiptBConflict, receiptA],
+  });
+  assert.equal(readinessBA.gate_checks.code_review.status, 'FAIL');
+  assert.ok(
+    readinessBA.unresolved_blockers.includes('conflicting_review_evidence_detected:shared-receipt-1')
+  );
+});
+
+test('mergeReadinessBroker: identical review receipts sharing receipt_id collapse identically regardless of arrival order', () => {
+  const receipt1: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'identical-receipt-1',
+  };
+
+  const receipt2Duplicate: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'identical-receipt-1',
+  };
+
+  // Forward order
+  const readiness1 = evaluateMergeReadiness({
+    candidate: mockCandidate,
+    reviews: [receipt1, receipt2Duplicate],
+  });
+  assert.equal(readiness1.gate_checks.code_review.approved_reviews_count, 1);
+  assert.equal(readiness1.gate_checks.code_review.receipt_ids.length, 1);
+
+  // Reverse order
+  const readiness2 = evaluateMergeReadiness({
+    candidate: mockCandidate,
+    reviews: [receipt2Duplicate, receipt1],
+  });
+  assert.equal(readiness2.gate_checks.code_review.approved_reviews_count, 1);
+  assert.equal(readiness2.gate_checks.code_review.receipt_ids.length, 1);
+});
+
 
 

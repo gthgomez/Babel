@@ -148,6 +148,7 @@ test('reviewIndependence: evaluateEnsembleIndependence computes round-level I4 a
     trusted_harness: true,
     trusted_source_sha: '0000000000000000000000000000000000000000',
     installation_digest: 'abcdef',
+    session_id: 'session-exec-1',
   });
 
   const r2 = evaluateReviewerIndependence({
@@ -164,6 +165,7 @@ test('reviewIndependence: evaluateEnsembleIndependence computes round-level I4 a
     trusted_harness: true,
     trusted_source_sha: '0000000000000000000000000000000000000000',
     installation_digest: 'abcdef',
+    session_id: 'session-exec-2',
   });
 
   const ensemble = evaluateEnsembleIndependence({
@@ -175,6 +177,79 @@ test('reviewIndependence: evaluateEnsembleIndependence computes round-level I4 a
   assert.equal(ensemble.reviewer_count, 2);
   assert.deepEqual(ensemble.distinct_models, ['mimo-v2.5', 'longcat-2.0']);
   assert.match(ensemble.attestation_digest, /^[a-f0-9]{64}$/);
+});
+
+test('reviewIndependence: Section D invariants - missing or duplicate session IDs never earn I4', () => {
+  const baseDim = {
+    fresh_context: true,
+    fresh_process: true,
+    read_only_capability: true,
+    controller_state_isolated: true,
+    builder_identity: 'builder-agent',
+    builder_model: 'deepseek-v3',
+    builder_provider: 'deepseek',
+    trusted_harness: true,
+    trusted_source_sha: '0'.repeat(40),
+    installation_digest: 'abcdef',
+  };
+
+  // Case 1: Two reviews, both missing session IDs -> MUST NOT earn I4
+  const rNoSession1 = evaluateReviewerIndependence({
+    ...baseDim,
+    reviewer_identity: 'reviewer-1',
+    reviewer_model: 'mimo-v2.5',
+    reviewer_provider: 'opencode-go',
+    // session_id omitted
+  });
+  const rNoSession2 = evaluateReviewerIndependence({
+    ...baseDim,
+    reviewer_identity: 'reviewer-2',
+    reviewer_model: 'longcat-2.0',
+    reviewer_provider: 'longcat-ai',
+    // session_id omitted
+  });
+  const ensBothMissing = evaluateEnsembleIndependence({ reviews: [rNoSession1, rNoSession2] });
+  assert.equal(ensBothMissing.computed_class, 'I3');
+
+  // Case 2: One missing session ID -> MUST NOT earn I4
+  const rWithSession = evaluateReviewerIndependence({
+    ...baseDim,
+    reviewer_identity: 'reviewer-1',
+    reviewer_model: 'mimo-v2.5',
+    reviewer_provider: 'opencode-go',
+    session_id: 'session-123',
+  });
+  const ensOneMissing = evaluateEnsembleIndependence({ reviews: [rWithSession, rNoSession2] });
+  assert.equal(ensOneMissing.computed_class, 'I3');
+
+  // Case 3: Duplicate session ID -> MUST NOT earn I4
+  const rDupSession = evaluateReviewerIndependence({
+    ...baseDim,
+    reviewer_identity: 'reviewer-2',
+    reviewer_model: 'longcat-2.0',
+    reviewer_provider: 'longcat-ai',
+    session_id: 'session-123', // duplicate!
+  });
+  const ensDupSession = evaluateEnsembleIndependence({ reviews: [rWithSession, rDupSession] });
+  assert.equal(ensDupSession.computed_class, 'I3');
+
+  // Case 4: Duplicate attestation -> MUST NOT earn I4
+  const ensDupAttestation = evaluateEnsembleIndependence({ reviews: [rWithSession, rWithSession] });
+  assert.equal(ensDupAttestation.computed_class, 'I3');
+
+  // Case 5: Clean zero-finding candidate with two genuinely distinct executions -> EARNS I4
+  const rDistinct2 = evaluateReviewerIndependence({
+    ...baseDim,
+    reviewer_identity: 'reviewer-2',
+    reviewer_model: 'longcat-2.0',
+    reviewer_provider: 'longcat-ai',
+    session_id: 'session-456',
+  });
+  const ensCleanDistinct = evaluateEnsembleIndependence({
+    reviews: [rWithSession, rDistinct2],
+    verifiedFindingsCount: 0,
+  });
+  assert.equal(ensCleanDistinct.computed_class, 'I4');
 });
 
 test('reviewIndependence: compareModelLineage identifies same-family models correctly', () => {

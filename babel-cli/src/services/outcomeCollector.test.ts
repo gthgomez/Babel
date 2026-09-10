@@ -58,6 +58,31 @@ test('outcomeCollector: collectGitHubPRState parses PR and check runs correctly'
   assert.equal(state.overall_ci_verdict, 'PASS');
 });
 
+test('outcomeCollector: malformed headRefOid throws INVALID_HEAD_SHA and prevents check-run API call', () => {
+  let checkRunsCalled = false;
+  const ghMock = (args: string[]) => {
+    if (args.includes('view')) {
+      return JSON.stringify({
+        number: 102,
+        headRefOid: 'malformed-not-a-40-char-hex-sha',
+        baseRefOid: '0000000000000000000000000000000000000000',
+        state: 'OPEN',
+      });
+    }
+    if (args.some((a) => a.includes('check-runs'))) {
+      checkRunsCalled = true;
+      return '{"check_runs":[]}';
+    }
+    return '';
+  };
+
+  assert.throws(
+    () => collectGitHubPRState('org/repo', 102, ghMock),
+    /INVALID_HEAD_SHA: malformed-not-a-40-char-hex-sha/,
+  );
+  assert.equal(checkRunsCalled, false);
+});
+
 test('outcomeCollector: detectPostMergeRegression flags revert and bugfix commits', () => {
   const gitMock = (args: string[]) => {
     return [

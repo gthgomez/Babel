@@ -24,6 +24,7 @@ import {
   type RemoteCICheckObservation,
 } from '../services/mergeReadinessBroker.js';
 import { CANONICAL_BENCHMARK_FIXTURES, verifyFixtureAntiLeakage } from '../services/babelBench.js';
+import { assertReviewStateOutsideGit } from '../services/babelReviewSnapshot.js';
 import {
   collectGitHubPRState,
   adjudicateCandidateReview,
@@ -33,7 +34,10 @@ import type {
   AutonomousReviewEvidenceV2,
   CandidateEnvelope,
   HostReviewHandoffV2,
+  ReviewEvidenceProvenance,
 } from '../services/hostReviewController.js';
+
+export type { ReviewEvidenceProvenance };
 import {
   createStructuredFinding,
   parseFindingFromModelClaim,
@@ -48,7 +52,7 @@ export function validateReviewEvidenceCandidateBinding(
   if (review.repository.toLowerCase() !== candidate.repository.toLowerCase()) {
     throw new Error(`CANDIDATE_BINDING_MISMATCH: repository mismatch (${review.repository} != ${candidate.repository})`);
   }
-  if (candidate.pr_number !== undefined && review.pr_number !== undefined && review.pr_number !== candidate.pr_number) {
+  if (candidate.pr_number !== review.pr_number) {
     throw new Error(`CANDIDATE_BINDING_MISMATCH: pr_number mismatch (${review.pr_number} != ${candidate.pr_number})`);
   }
   if (review.base_sha !== candidate.base_sha) {
@@ -66,8 +70,8 @@ export function validateReviewEvidenceCandidateBinding(
   if (review.diff_numstat_digest !== candidate.diff_numstat_digest) {
     throw new Error(`CANDIDATE_BINDING_MISMATCH: diff_numstat_digest mismatch`);
   }
-  if (candidate.builder_id && review.builder_id && review.builder_id !== candidate.builder_id) {
-    throw new Error(`CANDIDATE_BINDING_MISMATCH: builder_id mismatch`);
+  if (candidate.builder_id !== review.builder_id) {
+    throw new Error(`CANDIDATE_BINDING_MISMATCH: builder_id mismatch (${review.builder_id} != ${candidate.builder_id})`);
   }
   const normReviewScope = [...review.scope].map((p) => p.replace(/\\/g, '/')).sort();
   const normCandidateScope = [...candidate.scope].map((p) => p.replace(/\\/g, '/')).sort();
@@ -79,12 +83,78 @@ export function validateReviewEvidenceCandidateBinding(
   }
 }
 
+export function computeCanonicalReviewEvidenceDigest(review: AutonomousReviewEvidenceV2): string {
+  const normScope = [...(review.scope ?? [])].map((p) => p.replace(/\\/g, '/')).sort();
+  const normFindings = [...(review.findings ?? [])].sort();
+  const normBlockingFindings = [...(review.blocking_findings ?? [])].sort();
+  const isolationPayload = review.isolation
+    ? [
+        review.isolation.mode,
+        review.isolation.candidate_write,
+        review.isolation.github_mutation,
+        review.isolation.merge,
+        review.isolation.controller_state_access,
+      ]
+    : null;
+  const harnessPayload = review.harness
+    ? [
+        review.harness.name,
+        review.harness.mode,
+        review.harness.version,
+        review.harness.source_sha,
+        review.harness.execution_id,
+      ]
+    : null;
+  const payload = [
+    review.repository?.toLowerCase() ?? '',
+    review.pr_number ?? null,
+    review.base_sha ?? '',
+    review.head_sha ?? '',
+    review.task_id ?? '',
+    review.task_hash ?? '',
+    review.diff_numstat_digest ?? '',
+    normScope,
+    review.builder_id ?? '',
+    review.reviewer_id ?? '',
+    review.reviewer_class ?? '',
+    review.reviewer_model ?? '',
+    review.review_provider ?? '',
+    review.execution_id ?? '',
+    review.review_mode ?? '',
+    review.verdict ?? '',
+    normFindings,
+    normBlockingFindings,
+    isolationPayload,
+    harnessPayload,
+    review.changes_diff_fully_read ?? null,
+  ];
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+export function computeCanonicalHandoffDigest(handoff: HostReviewHandoffV2): string {
+  const reviewDigests = (handoff.reviews ?? [])
+    .map((r) => ({ id: r.execution_id, digest: computeCanonicalReviewEvidenceDigest(r) }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const payload = [
+    handoff.repository?.toLowerCase() ?? '',
+    handoff.pr_number ?? null,
+    handoff.base_sha ?? '',
+    handoff.head_sha ?? '',
+    handoff.task_id ?? '',
+    handoff.task_hash ?? '',
+    handoff.controller_run_id ?? '',
+    reviewDigests,
+  ];
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
 export function loadCandidateReviewHandoffs(options: {
   repository: string;
   prNumber?: number;
   candidateDigest: string;
   stateDir?: string;
   ghExec?: (args: string[]) => string;
+  trustedProvenance?: ReviewEvidenceProvenance;
 }): HostReviewHandoffV2[] {
   const candidateDigest = options.candidateDigest;
   if (!candidateDigest || !/^[a-f0-9]{64}$/.test(candidateDigest)) {
@@ -95,7 +165,8 @@ export function loadCandidateReviewHandoffs(options: {
 
   const stateDir = options.stateDir ?? process.env['BABEL_REVIEW_STATE_DIR'];
   if (stateDir) {
-    const jobDir = join(resolve(stateDir), 'jobs', candidateDigest);
+    const safeStateDir = assertReviewStateOutsideGit(stateDir);
+    const jobDir = join(safeStateDir, 'jobs', candidateDigest);
     if (existsSync(jobDir)) {
       try {
         const files = readdirSync(jobDir);
@@ -104,6 +175,12 @@ export function loadCandidateReviewHandoffs(options: {
             try {
               const content = JSON.parse(readFileSync(join(jobDir, file), 'utf8')) as HostReviewHandoffV2;
               if (content.kind === 'host_review_handoff_v2' && Array.isArray(content.reviews)) {
+                const provenance: ReviewEvidenceProvenance =
+                  options.trustedProvenance ?? 'LOCAL_UNAUTHENTICATED';
+                content.provenance = provenance;
+                for (const r of content.reviews) {
+                  r.provenance = provenance;
+                }
                 handoffs.push(content);
               }
             } catch {
@@ -151,11 +228,21 @@ export function loadCandidateReviewHandoffs(options: {
               if (Array.isArray(parsed)) {
                 for (const item of parsed) {
                   if ((item as HostReviewHandoffV2)?.kind === 'host_review_handoff_v2') {
-                    handoffs.push(item as HostReviewHandoffV2);
+                    const h = item as HostReviewHandoffV2;
+                    h.provenance = 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE';
+                    for (const r of h.reviews) {
+                      r.provenance = 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE';
+                    }
+                    handoffs.push(h);
                   }
                 }
               } else if ((parsed as HostReviewHandoffV2)?.kind === 'host_review_handoff_v2') {
-                handoffs.push(parsed as HostReviewHandoffV2);
+                const h = parsed as HostReviewHandoffV2;
+                h.provenance = 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE';
+                for (const r of h.reviews) {
+                  r.provenance = 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE';
+                }
+                handoffs.push(h);
               }
             } catch {
               // ignore
@@ -168,18 +255,46 @@ export function loadCandidateReviewHandoffs(options: {
     }
   }
 
-  // Deduplicate identical handoffs by controller_run_id
+  // Deduplicate identical handoffs by controller_run_id, detecting conflicts first
   const dedupedHandoffs: HostReviewHandoffV2[] = [];
-  const seenRuns = new Map<string, HostReviewHandoffV2>();
+  const seenRuns = new Map<string, { handoff: HostReviewHandoffV2; digest: string }>();
+  const seenExecutions = new Map<string, { review: AutonomousReviewEvidenceV2; digest: string }>();
+
   for (const h of handoffs) {
+    // 1. Check all execution_ids in this handoff for conflicts across all reviews seen so far
+    for (const rev of h.reviews) {
+      if (rev.execution_id) {
+        const revDigest = computeCanonicalReviewEvidenceDigest(rev);
+        const existingExec = seenExecutions.get(rev.execution_id);
+        if (existingExec) {
+          if (existingExec.digest !== revDigest) {
+            throw new Error(
+              `CONFLICTING_REVIEW_EVIDENCE: differing payload for execution_id ${rev.execution_id}`
+            );
+          }
+        } else {
+          seenExecutions.set(rev.execution_id, { review: rev, digest: revDigest });
+        }
+      }
+    }
+
+    // 2. Check controller_run_id for conflicts
     const runId = h.controller_run_id;
     if (!runId) {
       dedupedHandoffs.push(h);
       continue;
     }
+    const hDigest = computeCanonicalHandoffDigest(h);
     const existing = seenRuns.get(runId);
-    if (!existing) {
-      seenRuns.set(runId, h);
+    if (existing) {
+      if (existing.digest !== hDigest) {
+        throw new Error(
+          `CONFLICTING_REVIEW_EVIDENCE: differing payload for controller_run_id ${runId}`
+        );
+      }
+      // Identical collapse: already in dedupedHandoffs
+    } else {
+      seenRuns.set(runId, { handoff: h, digest: hDigest });
       dedupedHandoffs.push(h);
     }
   }
@@ -187,20 +302,13 @@ export function loadCandidateReviewHandoffs(options: {
   return dedupedHandoffs;
 }
 
-export function handoffEvidenceToCodeReviewReceipt(
+function buildCodeReviewReceipt(
   review: AutonomousReviewEvidenceV2,
-  candidateOrDigest: CandidateEnvelope | string,
+  candidateDigest: string,
+  provenance?: ReviewEvidenceProvenance,
 ): CodeReviewReceipt {
-  let candidateDigest: string;
-  if (typeof candidateOrDigest === 'object' && candidateOrDigest !== null && 'candidate_digest' in candidateOrDigest) {
-    validateReviewEvidenceCandidateBinding(review, candidateOrDigest);
-    candidateDigest = candidateOrDigest.candidate_digest;
-  } else {
-    if (!/^[a-f0-9]{64}$/.test(candidateOrDigest)) {
-      throw new Error(`INVALID_CANDIDATE_DIGEST: ${candidateOrDigest}`);
-    }
-    candidateDigest = candidateOrDigest;
-  }
+  const effectiveProvenance = provenance ?? review.provenance ?? 'LOCAL_UNAUTHENTICATED';
+
   const structuredFindings = review.findings.map((claim) => {
     const parsed = parseFindingFromModelClaim(claim, review.scope);
     return createStructuredFinding({
@@ -293,7 +401,28 @@ export function handoffEvidenceToCodeReviewReceipt(
     blocking_findings: blockingFindings,
     certified_at: review.reviewed_at,
     receipt_hash: createHash('sha256').update(JSON.stringify(review)).digest('hex'),
+    provenance: effectiveProvenance,
   };
+}
+
+export function handoffEvidenceToCodeReviewReceipt(
+  review: AutonomousReviewEvidenceV2,
+  candidate: CandidateEnvelope,
+  provenance?: ReviewEvidenceProvenance,
+): CodeReviewReceipt {
+  validateReviewEvidenceCandidateBinding(review, candidate);
+  return buildCodeReviewReceipt(review, candidate.candidate_digest, provenance);
+}
+
+export function legacyTest_handoffEvidenceToCodeReviewReceipt(
+  review: AutonomousReviewEvidenceV2,
+  candidateDigest: string,
+  provenance?: ReviewEvidenceProvenance,
+): CodeReviewReceipt {
+  if (!/^[a-f0-9]{64}$/.test(candidateDigest)) {
+    throw new Error(`INVALID_CANDIDATE_DIGEST: ${candidateDigest}`);
+  }
+  return buildCodeReviewReceipt(review, candidateDigest, provenance);
 }
 
 function readJson<T>(filePath: string): T {
@@ -370,12 +499,14 @@ export function registerIndependentReviewCommands(program: Command): void {
 
       let candidate: IndependentReviewCandidate;
       let candidateDigest = '';
+      let prEnvelope: CandidateEnvelope | undefined;
 
       if (options.pr) {
         const envelope = await collectCandidateEnvelope({
           repoRoot: projectRoot,
           pr: Number(options.pr),
         });
+        prEnvelope = envelope;
         candidateDigest = envelope.candidate_digest;
         candidate = {
           repository: envelope.repository,
@@ -402,7 +533,7 @@ export function registerIndependentReviewCommands(program: Command): void {
         provider = {
           review: async () => readJson<IndependentReviewVerdict>(options.reviewResult as string),
         };
-      } else if (options.pr) {
+      } else if (options.pr && prEnvelope) {
         const handoffs = loadCandidateReviewHandoffs({
           repository: candidate.repository,
           candidateDigest,
@@ -411,13 +542,17 @@ export function registerIndependentReviewCommands(program: Command): void {
         });
         if (handoffs.length > 0) {
           const allReviews = handoffs.flatMap((h) => h.reviews);
-          if (allReviews.length > 0) {
-            const hasBlock = allReviews.some((r) => r.verdict === 'BLOCK');
-            const allBlocking = Array.from(new Set(allReviews.flatMap((r) => r.blocking_findings)));
+          const trustedReviews = allReviews.filter((r) => r.provenance !== 'LOCAL_UNAUTHENTICATED');
+          if (trustedReviews.length > 0) {
+            for (const r of trustedReviews) {
+              validateReviewEvidenceCandidateBinding(r, prEnvelope);
+            }
+            const hasBlock = trustedReviews.some((r) => r.verdict === 'BLOCK');
+            const allBlocking = Array.from(new Set(trustedReviews.flatMap((r) => r.blocking_findings)));
             const allNonBlocking = Array.from(
-              new Set(allReviews.flatMap((r) => r.findings.filter((f) => !r.blocking_findings.includes(f))))
+              new Set(trustedReviews.flatMap((r) => r.findings.filter((f) => !r.blocking_findings.includes(f))))
             );
-            const primary = allReviews[0]!;
+            const primary = trustedReviews[0]!;
             provider = {
               review: async () => ({
                 repository: primary.repository,
@@ -527,7 +662,7 @@ export function registerIndependentReviewCommands(program: Command): void {
 
         for (const handoff of handoffs) {
           for (const rev of handoff.reviews) {
-            reviews.push(handoffEvidenceToCodeReviewReceipt(rev, envelope));
+            reviews.push(handoffEvidenceToCodeReviewReceipt(rev, envelope, handoff.provenance));
           }
         }
       }

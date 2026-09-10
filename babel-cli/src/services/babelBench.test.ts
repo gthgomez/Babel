@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CANONICAL_BENCHMARK_FIXTURES,
+  CANONICAL_FIXTURE_SEAL_MANIFEST,
   verifyFixtureAntiLeakage,
   computeBabelBenchMetrics,
   compareShadowReviewer,
@@ -281,6 +282,32 @@ test('babelBench: verifyFixtureAntiLeakage detects and rejects tampered fixtures
     },
   };
   assert.equal(verifyFixtureAntiLeakage([invalidHashFixture]), false);
+
+  // Fixture source payload with stale expected seal fails
+  const staleManifest = {
+    ...CANONICAL_FIXTURE_SEAL_MANIFEST,
+    [validFixture.id]: '0'.repeat(64), // stale seal
+  };
+  assert.equal(verifyFixtureAntiLeakage([validFixture], staleManifest), false);
+
+  // Answer-key mutation fails
+  const tamperedAnswerKeyFixture = {
+    ...validFixture,
+    groundTruth: {
+      ...validFixture.groundTruth,
+      defectDescription: 'Tampered description that does not match original seal',
+    },
+  };
+  assert.equal(verifyFixtureAntiLeakage([tamperedAnswerKeyFixture]), false);
+
+  // Reviewer-facing fixture strictly contains no groundTruth or answer-key fields
+  const reviewerFixture = extractReviewerFixture(validFixture);
+  assert.equal('groundTruth' in reviewerFixture, false);
+  assert.equal('expectedVerdict' in (reviewerFixture as any), false);
+  assert.equal('antiLeakageHash' in (reviewerFixture as any), false);
+  assert.equal('hasDefect' in (reviewerFixture as any), false);
+  assert.equal('defectLocation' in (reviewerFixture as any), false);
+  assert.equal('defectDescription' in (reviewerFixture as any), false);
 });
 
 

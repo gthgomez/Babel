@@ -119,10 +119,16 @@ export interface HostReviewWorkerAdapter {
   launch(request: Readonly<HostReviewExecutionRequest>): Promise<HostReviewExecutionResult>
 }
 
+export type ReviewEvidenceProvenance =
+  | 'LOCAL_UNAUTHENTICATED'
+  | 'TRUSTED_CONTROLLER_EVIDENCE'
+  | 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE';
+
 /** Normalized, unsigned review evidence that GitHub later authenticates by publisher identity. */
 export interface AutonomousReviewEvidenceV2 {
   schema_version: 2
   kind: 'autonomous_review_evidence_v2'
+  provenance?: ReviewEvidenceProvenance
   repository: string
   pr_number?: number
   base_sha: string
@@ -153,6 +159,7 @@ export interface AutonomousReviewEvidenceV2 {
 export interface HostReviewHandoffV2 {
   schema_version: 2
   kind: 'host_review_handoff_v2'
+  provenance?: ReviewEvidenceProvenance
   repository: string
   pr_number?: number
   base_sha: string
@@ -337,6 +344,7 @@ export function createHostReviewController(input: {
         reviews.push(Object.freeze({
           schema_version: 2,
           kind: 'autonomous_review_evidence_v2',
+          provenance: 'TRUSTED_CONTROLLER_EVIDENCE',
           repository: record.candidate.repository,
           ...(record.candidate.pr_number !== undefined ? { pr_number: record.candidate.pr_number } : {}),
           base_sha: record.candidate.base_sha,
@@ -369,6 +377,7 @@ export function createHostReviewController(input: {
       return Object.freeze({
         schema_version: 2,
         kind: 'host_review_handoff_v2',
+        provenance: 'TRUSTED_CONTROLLER_EVIDENCE',
         repository: candidateSnapshot.repository,
         ...(candidateSnapshot.pr_number !== undefined ? { pr_number: candidateSnapshot.pr_number } : {}),
         base_sha: candidateSnapshot.base_sha,

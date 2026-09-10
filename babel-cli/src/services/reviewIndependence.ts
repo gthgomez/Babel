@@ -153,10 +153,11 @@ export function evaluateEnsembleIndependence(input: {
   const distinctProviders = [...new Set(reviews.map((r) => r.dimensions.reviewer_provider))];
   const verifiedCount = input.verifiedFindingsCount ?? 0;
 
-  const sessionIds = reviews.map((r) => r.dimensions.session_id).filter((s): s is string => Boolean(s));
-  const hasDuplicateSessionIds = sessionIds.length > 0 && new Set(sessionIds).size < sessionIds.length;
-  const hasDuplicateAttestations = new Set(reviews.map((r) => r.attestation_digest)).size < reviews.length;
-  const hasDistinctExecutions = reviews.length >= 2 && !hasDuplicateSessionIds && !hasDuplicateAttestations;
+  const sessionIds = reviews.map((r) => r.dimensions.session_id?.trim()).filter((s): s is string => !!s);
+  const allReviewsHaveSessionId = sessionIds.length === reviews.length;
+  const hasUniqueSessionIds = allReviewsHaveSessionId && new Set(sessionIds).size === reviews.length;
+  const hasUniqueAttestations = new Set(reviews.map((r) => r.attestation_digest)).size === reviews.length;
+  const hasDistinctExecutions = reviews.length >= 2 && hasUniqueSessionIds && hasUniqueAttestations;
 
   const hasAffirmativelyDifferentModels =
     distinctModels.length >= 2 &&

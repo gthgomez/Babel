@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
-import type { CandidateEnvelope } from './hostReviewController.js';
+import type { CandidateEnvelope, ReviewEvidenceProvenance } from './hostReviewController.js';
 import type { ReviewCoverageReceipt } from './reviewCoverage.js';
 import {
   evaluateEnsembleIndependence,
   type ReviewerIndependenceAttestation,
 } from './reviewIndependence.js';
 import type { StructuredFinding } from './structuredFinding.js';
+
+export type { ReviewEvidenceProvenance };
 
 export interface CodeReviewReceipt {
   schema_version: 2;
@@ -21,6 +23,7 @@ export interface CodeReviewReceipt {
   blocking_findings: StructuredFinding[];
   certified_at: string;
   receipt_hash: string;
+  provenance?: ReviewEvidenceProvenance;
 }
 
 export interface RemoteCICheckObservation {
@@ -115,6 +118,29 @@ export function resolveRequiredGates(riskTier: string): RequiredGatesPolicy {
   }
 }
 
+export function computeCanonicalReceiptDigest(receipt: CodeReviewReceipt): string {
+  const normFindings = [...(receipt.findings ?? [])]
+    .map((f) => `${f.severity}:${f.location?.path ?? ''}:${f.location?.line ?? ''}:${f.claim}`)
+    .sort();
+  const normBlockingFindings = [...(receipt.blocking_findings ?? [])]
+    .map((f) => `${f.severity}:${f.location?.path ?? ''}:${f.location?.line ?? ''}:${f.claim}`)
+    .sort();
+  const payload = [
+    receipt.receipt_id,
+    receipt.candidate_digest,
+    receipt.head_sha,
+    receipt.verdict,
+    receipt.reviewer_id,
+    receipt.reviewer_model,
+    receipt.independence?.attestation_digest ?? null,
+    receipt.coverage?.is_sufficient ?? null,
+    normFindings,
+    normBlockingFindings,
+    receipt.provenance ?? 'LOCAL_UNAUTHENTICATED',
+  ];
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
 export function evaluateMergeReadiness(input: {
   candidate: CandidateEnvelope;
   reviews: CodeReviewReceipt[];
@@ -135,29 +161,31 @@ export function evaluateMergeReadiness(input: {
     }
   }
 
-  // Detect conflicting review evidence
-  const seenReceipts = new Map<string, CodeReviewReceipt>();
+  // Enforce trusted provenance: reject unauthenticated local review evidence for authoritative gates
+  for (const r of input.reviews) {
+    if (r.provenance === 'LOCAL_UNAUTHENTICATED') {
+      blockers.push('unauthenticated_local_review_evidence_rejected_for_authoritative_gate');
+    }
+  }
+
+  // Detect conflicting review evidence before deduplicating
+  const seenReceipts = new Map<string, { receipt: CodeReviewReceipt; digest: string }>();
   let hasConflictingEvidence = false;
   for (const r of input.reviews) {
+    const rDigest = computeCanonicalReceiptDigest(r);
     const existing = seenReceipts.get(r.receipt_id);
     if (existing) {
-      if (
-        existing.verdict !== r.verdict ||
-        existing.head_sha !== r.head_sha ||
-        existing.reviewer_model !== r.reviewer_model ||
-        existing.candidate_digest !== r.candidate_digest ||
-        existing.blocking_findings.length !== r.blocking_findings.length
-      ) {
+      if (existing.digest !== rDigest) {
         hasConflictingEvidence = true;
         blockers.push(`conflicting_review_evidence_detected:${r.receipt_id}`);
       }
     } else {
-      seenReceipts.set(r.receipt_id, r);
+      seenReceipts.set(r.receipt_id, { receipt: r, digest: rDigest });
     }
   }
 
   // Deduplicate identical receipts by receipt_id
-  const uniqueReviews = Array.from(seenReceipts.values());
+  const uniqueReviews = Array.from(seenReceipts.values()).map((v) => v.receipt);
 
   const headReviews = uniqueReviews.filter((r) => r.head_sha === headSha);
   if (headReviews.length < uniqueReviews.length) {
@@ -165,7 +193,11 @@ export function evaluateMergeReadiness(input: {
   }
 
   const approvedReviews = headReviews.filter(
-    (r) => r.verdict === 'APPROVE' && r.coverage.is_sufficient && r.blocking_findings.length === 0
+    (r) =>
+      r.verdict === 'APPROVE' &&
+      r.coverage.is_sufficient &&
+      r.blocking_findings.length === 0 &&
+      r.provenance !== 'LOCAL_UNAUTHENTICATED'
   );
 
   const requiredGates = resolveRequiredGates(input.candidate.risk_tier);

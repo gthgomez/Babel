@@ -197,32 +197,26 @@ try {
         if ($symbolicOriginHead -and (git rev-parse --verify --quiet $symbolicOriginHead)) {
             $base = $symbolicOriginHead.Trim()
         }
-        elseif (git rev-parse --verify --quiet origin/main) { $base = 'origin/main' }
-        elseif (git rev-parse --verify --quiet origin/master) { $base = 'origin/master' }
-        elseif (git rev-parse --verify --quiet refs/heads/main) { $base = 'main' }
-        elseif (git rev-parse --verify --quiet refs/heads/master) { $base = 'master' }
-        elseif (git rev-parse --verify --quiet '@{upstream}') { $base = '@{upstream}' }
-
-        $onDefault = $false
-        if ($base) {
-            $baseShort = $base -replace '^refs/remotes/origin/', '' -replace '^origin/', ''
-            if ($current -eq $baseShort -or $current -in @('main', 'master')) {
-                $onDefault = $true
-            }
-        }
         else {
             $ghDefault = (gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>$null)
             if ($ghDefault -and (git rev-parse --verify --quiet "origin/$ghDefault")) {
                 $base = "origin/$ghDefault"
-                if ($current -eq $ghDefault) { $onDefault = $true }
             }
-            elseif ($current -in @('main', 'master')) {
+        }
+
+        $onDefault = $false
+        if ($base) {
+            $baseShort = $base -replace '^refs/remotes/origin/', '' -replace '^origin/', ''
+            if ($current -eq $baseShort) {
                 $onDefault = $true
             }
-            else {
-                Write-Report -Status 'ERROR' -Message "UNABLE_TO_RESOLVE_CANDIDATE_BASE: Unable to resolve default base branch for candidate."
-                exit 2
-            }
+        }
+        elseif ($current -in @('main', 'master')) {
+            $onDefault = $true
+        }
+        else {
+            Write-Report -Status 'ERROR' -Message "UNABLE_TO_RESOLVE_CANDIDATE_BASE: Unable to resolve default base branch for candidate."
+            exit 2
         }
 
         if ($onDefault) {

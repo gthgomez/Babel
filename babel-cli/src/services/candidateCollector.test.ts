@@ -163,4 +163,55 @@ test('candidateCollector: fails closed with UNABLE_TO_RESOLVE_CANDIDATE_BASE whe
   );
 });
 
+test('candidateCollector: Section F - does not guess from feature branch @{upstream} or unverified origin/main', async () => {
+  const gitMock = (args: string[]) => {
+    if (args.includes('--show-toplevel')) return 'C:/Mock/FeatureRepo';
+    if (args.includes('--git-common-dir')) return 'C:/Mock/FeatureRepo/.git';
+    if (args.includes('get-url')) return 'https://github.com/gthgomez/FeatureRepo.git';
+    if (args.includes('--abbrev-ref') && args.includes('HEAD')) return 'feature-x';
+    if (args.includes('rev-parse') && args.length === 2 && args[1] === 'HEAD') return 'head-sha-feat';
+    if (args.includes('@{upstream}')) return 'origin/feature-x'; // tracking own feature branch!
+    if (args.includes('--verify') && args.includes('origin/main')) return 'main-sha'; // origin/main exists on remote
+    // Neither origin/HEAD nor gh defaultBranchRef exists
+    throw new Error(`git ref not found: ${args.join(' ')}`);
+  };
+
+  // Must NOT guess origin/main or @{upstream}; must fail closed!
+  await assert.rejects(
+    () =>
+      collectCandidateEnvelope({
+        repoRoot: 'C:/Mock/FeatureRepo',
+        gitExec: gitMock,
+        ghExec: () => { throw new Error('gh offline'); },
+      }),
+    /UNABLE_TO_RESOLVE_CANDIDATE_BASE/
+  );
+});
+
+test('candidateCollector: Section F - fails closed when multiple plausible branch names exist without authoritative metadata', async () => {
+  const gitMock = (args: string[]) => {
+    if (args.includes('--show-toplevel')) return 'C:/Mock/MultiBranchRepo';
+    if (args.includes('--git-common-dir')) return 'C:/Mock/MultiBranchRepo/.git';
+    if (args.includes('get-url')) return 'https://github.com/gthgomez/MultiBranchRepo.git';
+    if (args.includes('--abbrev-ref') && args.includes('HEAD')) return 'feature-branch';
+    if (args.includes('rev-parse') && args.length === 2 && args[1] === 'HEAD') return 'head-sha-feat';
+    // Both origin/main and origin/master exist, but no origin/HEAD or defaultBranchRef
+    if (args.includes('--verify') && (args.includes('origin/main') || args.includes('origin/master') || args.includes('origin/trunk'))) {
+      return 'plausible-sha';
+    }
+    throw new Error(`git ref not found: ${args.join(' ')}`);
+  };
+
+  await assert.rejects(
+    () =>
+      collectCandidateEnvelope({
+        repoRoot: 'C:/Mock/MultiBranchRepo',
+        gitExec: gitMock,
+        ghExec: () => { throw new Error('gh offline'); },
+      }),
+    /UNABLE_TO_RESOLVE_CANDIDATE_BASE/
+  );
+});
+
+
 

@@ -253,38 +253,30 @@ export async function collectCandidateEnvelope(options: CollectCandidateOptions 
         }
       }
 
-      // 3. Upstream branch tracking
-      if (!authoritativeDefaultRef) {
-        try {
-          const upstream = git(['rev-parse', '--abbrev-ref', '@{upstream}']).trim();
-          if (upstream) {
-            authoritativeDefaultRef = upstream;
-          }
-        } catch {
-          // continue
-        }
+      let currentBranch = '';
+      try {
+        currentBranch = git(['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+      } catch {
+        // detached HEAD or error
       }
 
-      // 4. Standard default branch probe if origin/HEAD was not materialized
-      if (!authoritativeDefaultRef) {
-        for (const candidate of ['origin/main', 'origin/master', 'main', 'master']) {
-          try {
-            git(['rev-parse', '--verify', '--quiet', candidate]);
-            authoritativeDefaultRef = candidate;
-            break;
-          } catch {
-            // continue
-          }
-        }
-      }
-
+      // If we are currently checked out on the authoritative default branch, baseSha is headSha
       if (authoritativeDefaultRef) {
-        try {
-          baseSha = git(['merge-base', headSha, authoritativeDefaultRef]).trim();
-        } catch {
-          throw new Error('UNABLE_TO_RESOLVE_CANDIDATE_BASE');
+        const defShort = authoritativeDefaultRef.replace(/^refs\/remotes\/origin\//, '').replace(/^origin\//, '');
+        if (currentBranch === defShort) {
+          baseSha = headSha;
+        } else {
+          try {
+            baseSha = git(['merge-base', headSha, authoritativeDefaultRef]).trim();
+          } catch {
+            throw new Error('UNABLE_TO_RESOLVE_CANDIDATE_BASE');
+          }
         }
+      } else if (currentBranch === 'main' || currentBranch === 'master') {
+        // Explicitly checked out on standard default branch locally with no remote metadata
+        baseSha = headSha;
       } else {
+        // Feature branch with no authoritative default branch metadata -> FAIL CLOSED
         throw new Error('UNABLE_TO_RESOLVE_CANDIDATE_BASE');
       }
     }
