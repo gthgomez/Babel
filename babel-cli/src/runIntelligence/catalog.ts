@@ -11,9 +11,11 @@ import {
   type ExtractionReceipt,
   type QueryResult,
   type SavedQueryName,
+  TASK_OUTCOME_POLICY_VERSION,
+  type TaskOutcomeAssessment,
 } from "./contracts.js";
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS bri_schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -117,6 +119,18 @@ ALTER TABLE failure_occurrences ADD COLUMN evidence_ref TEXT;
 CREATE INDEX IF NOT EXISTS idx_bri_failure_segment ON failure_occurrences(segment_id);
 `;
 
+const MIGRATION_4 = `
+ALTER TABLE outcome_observations ADD COLUMN authority TEXT NOT NULL DEFAULT 'CONTROL_RECEIPT';
+ALTER TABLE outcome_observations ADD COLUMN revision_binding TEXT NOT NULL DEFAULT 'TARGET_UNKNOWN';
+ALTER TABLE outcome_observations ADD COLUMN revision_token TEXT;
+CREATE TABLE IF NOT EXISTS task_outcome_assessments (
+  trial_id TEXT PRIMARY KEY, policy_version TEXT NOT NULL, assessment TEXT NOT NULL,
+  reason TEXT NOT NULL, input_observation_count INTEGER NOT NULL, conflict_count INTEGER NOT NULL,
+  FOREIGN KEY(trial_id) REFERENCES trials(logical_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bri_assessment ON task_outcome_assessments(assessment);
+`;
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -150,6 +164,7 @@ export class RunIntelligenceCatalog {
       [1, MIGRATION_1],
       [2, MIGRATION_2],
       [3, MIGRATION_3],
+      [4, MIGRATION_4],
     ] as const) {
       const applied = rows(
         this.db,
@@ -380,8 +395,8 @@ export class RunIntelligenceCatalog {
       for (const outcome of run.outcomes) {
         this.db
           .prepare(
-            `INSERT OR IGNORE INTO outcome_observations(observation_id,trial_id,segment_id,dimension,value,observer,evidence_ref,validity,availability,observed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT OR IGNORE INTO outcome_observations(observation_id,trial_id,segment_id,dimension,value,observer,evidence_ref,validity,availability,observed_at,authority,revision_binding,revision_token)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             opaqueId(
@@ -401,8 +416,12 @@ export class RunIntelligenceCatalog {
             outcome.validity,
             outcome.availability,
             outcome.observedAt,
+            outcome.authority,
+            outcome.revision,
+            outcome.revisionToken,
           );
       }
+      this.assessTrial(trialId);
       for (const artifact of run.artifacts) {
         if (artifact.contentDigest)
           this.db
@@ -476,6 +495,56 @@ export class RunIntelligenceCatalog {
     return receipt;
   }
 
+  /** Derive task correctness from revision-bound task-correctness observations only. */
+  private assessTrial(trialId: string): void {
+    const observations = rows(
+      this.db,
+      `SELECT value,validity,authority,revision_binding FROM outcome_observations
+       WHERE trial_id=? AND dimension='TASK_CORRECTNESS'`,
+      trialId,
+    );
+    const valid = observations.filter(
+      (row) =>
+        row["validity"] === "VALID" &&
+        (row["authority"] === "DETERMINISTIC_VERIFICATION" ||
+          row["authority"] === "INDEPENDENT_VERIFICATION") &&
+        row["revision_binding"] === "BOUND" &&
+        (row["value"] === "PASS" || row["value"] === "FAIL"),
+    );
+    const values = new Set(valid.map((row) => String(row["value"])));
+    let assessment: TaskOutcomeAssessment = "UNKNOWN";
+    let reason = "no revision-bound task-correctness observation";
+    if (values.size > 1) {
+      assessment = "CONFLICTED";
+      reason = "conflicting revision-bound task-correctness observations";
+    } else if (values.has("FAIL")) {
+      assessment = "ESTABLISHED_FAIL";
+      reason =
+        "revision-bound deterministic or independent task-correctness evidence failed";
+    } else if (values.has("PASS")) {
+      assessment = "ESTABLISHED_PASS";
+      reason =
+        "revision-bound deterministic or independent task-correctness evidence passed";
+    } else if (observations.some((row) => row["validity"] === "INVALID")) {
+      assessment = "INVALID_EVIDENCE";
+      reason = "task-correctness evidence was invalid";
+    }
+    this.db
+      .prepare(
+        `INSERT INTO task_outcome_assessments(trial_id,policy_version,assessment,reason,input_observation_count,conflict_count)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(trial_id) DO UPDATE SET policy_version=excluded.policy_version,assessment=excluded.assessment,reason=excluded.reason,input_observation_count=excluded.input_observation_count,conflict_count=excluded.conflict_count`,
+      )
+      .run(
+        trialId,
+        TASK_OUTCOME_POLICY_VERSION,
+        assessment,
+        reason,
+        observations.length,
+        values.size > 1 ? 1 : 0,
+      );
+  }
+
   private identity(
     namespace: string,
     role: string,
@@ -534,6 +603,93 @@ export class RunIntelligenceCatalog {
         eligibleDenominator: coverage.extractedRuns,
         rows: [{ ...coverage }],
       };
+    if (name === "task-outcome-coverage") {
+      const values = rows(
+        this.db,
+        `SELECT assessment,COUNT(*) AS count FROM task_outcome_assessments GROUP BY assessment`,
+      );
+      const total = values.reduce(
+        (sum, row) => sum + Number(row["count"] ?? 0),
+        0,
+      );
+      const byAssessment = Object.fromEntries(
+        values.map((row) => [
+          String(row["assessment"]),
+          Number(row["count"] ?? 0),
+        ]),
+      );
+      const established =
+        Number(byAssessment["ESTABLISHED_PASS"] ?? 0) +
+        Number(byAssessment["ESTABLISHED_FAIL"] ?? 0);
+      const conflicted = Number(byAssessment["CONFLICTED"] ?? 0);
+      const invalid = Number(byAssessment["INVALID_EVIDENCE"] ?? 0);
+      return total === 0
+        ? {
+            ...base,
+            status: "NOT_ESTABLISHED",
+            warnings: ["No trials have a derived task outcome assessment."],
+          }
+        : {
+            ...base,
+            numerator: established,
+            eligibleDenominator: total,
+            unknownCount: Number(byAssessment["UNKNOWN"] ?? 0),
+            invalidCount: invalid,
+            excludedCount: Number(byAssessment["NOT_APPLICABLE"] ?? 0),
+            rows: [
+              {
+                policyVersion: TASK_OUTCOME_POLICY_VERSION,
+                established,
+                conflicted,
+                invalid,
+                coveragePercent: (established / total) * 100,
+                assessments: byAssessment,
+              },
+            ],
+          };
+    }
+    if (name === "task-outcome-summary") {
+      const assessments = rows(
+        this.db,
+        `SELECT assessment,COUNT(*) AS trials FROM task_outcome_assessments GROUP BY assessment ORDER BY assessment`,
+      );
+      const authorities = rows(
+        this.db,
+        `SELECT authority,COUNT(*) AS observations FROM outcome_observations GROUP BY authority ORDER BY authority`,
+      );
+      const total = assessments.reduce(
+        (sum, row) => sum + Number(row["trials"] ?? 0),
+        0,
+      );
+      return total === 0
+        ? {
+            ...base,
+            status: "NOT_ESTABLISHED",
+            warnings: ["No trials have a derived task outcome assessment."],
+          }
+        : {
+            ...base,
+            numerator: total,
+            eligibleDenominator: total,
+            unknownCount: Number(
+              assessments.find((row) => row["assessment"] === "UNKNOWN")?.[
+                "trials"
+              ] ?? 0,
+            ),
+            invalidCount: Number(
+              assessments.find(
+                (row) => row["assessment"] === "INVALID_EVIDENCE",
+              )?.["trials"] ?? 0,
+            ),
+            rows: [
+              {
+                policyVersion: TASK_OUTCOME_POLICY_VERSION,
+                assessments,
+                authorityCoverage: authorities,
+              },
+            ],
+          };
+    }
     if (name === "verifier-coverage") {
       const values =
         rows(

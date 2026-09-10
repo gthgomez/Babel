@@ -50,14 +50,44 @@ export interface OutcomeObservation {
   dimension:
     | "VERIFIER_RESULT"
     | "CONTROL_DECISION"
-    | "TERMINAL_EXECUTION_STATUS";
+    | "TERMINAL_EXECUTION_STATUS"
+    | "TEST_CORRECTNESS"
+    | "TASK_CORRECTNESS";
   value: string;
   observer: string;
   evidenceRef: string;
   validity: "VALID" | "INVALID" | "UNKNOWN";
   availability: FieldAvailability;
   observedAt: string | null;
+  authority: OutcomeAuthority;
+  revision: RevisionBinding;
+  revisionToken: string | null;
 }
+export type OutcomeAuthority =
+  | "AGENT_CLAIM"
+  | "EXECUTION_STATUS"
+  | "CONTROL_RECEIPT"
+  | "STATE_OBSERVATION"
+  | "DETERMINISTIC_VERIFICATION"
+  | "INDEPENDENT_VERIFICATION"
+  | "CASE_EXPECTATION";
+export type RevisionBinding =
+  | "BOUND"
+  | "STALE"
+  | "TARGET_UNKNOWN"
+  | "MISMATCHED"
+  | "NOT_APPLICABLE"
+  | "INVALID";
+export type TaskOutcomeAssessment =
+  | "ESTABLISHED_PASS"
+  | "ESTABLISHED_FAIL"
+  | "SAFE_REFUSAL"
+  | "INFRA_FAILURE"
+  | "CONFLICTED"
+  | "INVALID_EVIDENCE"
+  | "UNKNOWN"
+  | "NOT_APPLICABLE";
+export const TASK_OUTCOME_POLICY_VERSION = "bri.task-outcome.v1";
 export interface UsageObservation {
   provider: string | null;
   model: string | null;
@@ -120,6 +150,8 @@ export type SavedQueryName =
   | "verifier-coverage"
   | "outcome-evidence-summary"
   | "model-evidence-coverage"
+  | "task-outcome-coverage"
+  | "task-outcome-summary"
   | "failure-clusters"
   | "halt-frequency-by-subsystem"
   | "scope-violations-over-time"
@@ -229,6 +261,25 @@ export const SAVED_QUERY_DEFINITIONS: readonly SavedQueryDefinition[] = [
     requiredProvenance: ["routing or usage ledger model evidence"],
     denominator: "trials with a parsed routing or usage source",
     exclusions: ["runs with no parseable routing or usage source"],
+  },
+  {
+    name: "task-outcome-coverage",
+    support: "SUPPORTED",
+    requiredRelations: ["trials", "task_outcome_assessments"],
+    requiredProvenance: [
+      "versioned outcome policy",
+      "dimension-scoped authority",
+    ],
+    denominator: "all trials with a derived assessment",
+    exclusions: ["NOT_APPLICABLE task contracts"],
+  },
+  {
+    name: "task-outcome-summary",
+    support: "SUPPORTED",
+    requiredRelations: ["task_outcome_assessments", "outcome_observations"],
+    requiredProvenance: ["versioned outcome policy"],
+    denominator: "all trials with a derived assessment",
+    exclusions: [],
   },
   {
     name: "failure-clusters",

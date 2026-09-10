@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "kind": "bri_read_only_vertical_slice_canary",
   "date": "2026-09-09",
   "processing_budget": {
@@ -22,7 +22,14 @@
     "verifier_coverage": { "eligible_trials": 3, "valid": 0, "missing": 3, "invalid": 0, "stale": 0, "unknown": 3 },
     "outcome_evidence": { "dimension_observations": 8, "valid_terminal_status_observations": 5, "unknown_verifier_observations": 3 },
     "model_evidence": { "participating_trials": 5, "excluded_without_routing": 1 },
-    "failure_rate_by_model": "NOT_ESTABLISHED"
+    "failure_rate_by_model": "NOT_ESTABLISHED",
+    "task_outcome_authority": {
+      "policy_version": "bri.task-outcome.v1",
+      "eligible_trials": 6,
+      "established": 0,
+      "unknown": 6,
+      "reason": "No sampled source carried a revision-bound task-correctness contract; terminal and verifier-summary evidence was preserved without promotion."
+    }
   },
   "integrity": {
     "source_file_hashes_before_after_equal": true,
