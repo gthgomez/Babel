@@ -153,15 +153,32 @@ export function evaluateEnsembleIndependence(input: {
   const distinctProviders = [...new Set(reviews.map((r) => r.dimensions.reviewer_provider))];
   const verifiedCount = input.verifiedFindingsCount ?? 0;
 
+  const sessionIds = reviews.map((r) => r.dimensions.session_id).filter((s): s is string => Boolean(s));
+  const hasDuplicateSessionIds = sessionIds.length > 0 && new Set(sessionIds).size < sessionIds.length;
+  const hasDuplicateAttestations = new Set(reviews.map((r) => r.attestation_digest)).size < reviews.length;
+  const hasDistinctExecutions = reviews.length >= 2 && !hasDuplicateSessionIds && !hasDuplicateAttestations;
+
+  const hasAffirmativelyDifferentModels =
+    distinctModels.length >= 2 &&
+    reviews.every((r1, i) =>
+      reviews
+        .slice(i + 1)
+        .every((r2) => compareModelLineage(r1.dimensions.reviewer_model, r2.dimensions.reviewer_model) === 'DIFFERENT')
+    );
+
   const allIsolated = reviews.every(
-    (r) => r.dimensions.fresh_process && r.dimensions.controller_state_isolated && r.dimensions.trusted_harness
+    (r) =>
+      r.dimensions.fresh_process &&
+      r.dimensions.controller_state_isolated &&
+      r.dimensions.trusted_harness &&
+      r.dimensions.read_only_capability
   );
 
   let ensembleClass: IndependenceClass = 'I1';
   if (reviews.some((r) => r.computed_class === 'I0')) {
     ensembleClass = 'I0';
-  } else if (allIsolated && reviews.length >= 2 && distinctModels.length >= 2) {
-    // I4 is earned at ensemble level when >=2 distinct models run in isolated harness
+  } else if (hasDistinctExecutions && allIsolated && hasAffirmativelyDifferentModels) {
+    // I4 is earned at ensemble level when >=2 distinct executions with affirmatively different model lineages run in isolated harness
     ensembleClass = 'I4';
   } else if (reviews.every((r) => r.computed_class === 'I3' || r.computed_class === 'I2')) {
     ensembleClass = 'I3';
@@ -170,7 +187,7 @@ export function evaluateEnsembleIndependence(input: {
   }
 
   const digest = createHash('sha256')
-    .update(JSON.stringify([ensembleClass, distinctModels, distinctProviders, verifiedCount, now]))
+    .update(JSON.stringify([ensembleClass, distinctModels, distinctProviders, verifiedCount, sessionIds, now]))
     .digest('hex');
 
   return {

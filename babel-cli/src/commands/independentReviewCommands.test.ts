@@ -302,3 +302,151 @@ test('command-level: review bench runs and verifies anti-leakage via CLI', () =>
   assert.equal(parsed.total_fixtures, 10);
   assert.equal(parsed.categories.clean_control, 5);
 });
+
+test('handoffEvidenceToCodeReviewReceipt: validates CandidateEnvelope exact binding invariants', () => {
+  const evidence: any = {
+    schema_version: 2,
+    kind: 'autonomous_review_evidence_v2',
+    repository: 'gthgomez/Babel',
+    pr_number: 42,
+    base_sha: '1'.repeat(40),
+    head_sha: '2'.repeat(40),
+    task_id: 't-1',
+    task_hash: '3'.repeat(64),
+    builder_id: 'builder-1',
+    diff_numstat_digest: '4'.repeat(64),
+    reviewer_id: 'reviewer-1',
+    reviewer_class: 'independent_readonly_ai',
+    execution_id: 'e-1',
+    review_provider: 'opencode-go',
+    reviewer_model: 'mimo-v2.5',
+    review_mode: 'exact_diff',
+    reviewed_at: '2026-09-08T12:00:00.000Z',
+    scope: ['src/math.ts'],
+    verdict: 'APPROVE',
+    findings: [],
+    blocking_findings: [],
+    isolation: {
+      mode: 'readonly_sandbox',
+      candidate_write: false,
+      github_mutation: false,
+      merge: false,
+      controller_state_access: false,
+    },
+    changes_diff_fully_read: true,
+  };
+
+  const validEnvelope: any = {
+    schema_version: 2,
+    repository: 'gthgomez/Babel',
+    pr_number: 42,
+    base_sha: '1'.repeat(40),
+    head_sha: '2'.repeat(40),
+    task_id: 't-1',
+    task_hash: '3'.repeat(64),
+    builder_id: 'builder-1',
+    diff_numstat_digest: '4'.repeat(64),
+    scope: ['src/math.ts'],
+    risk_tier: 'NORMAL',
+    trust_mode: 'BABEL_SELF_HOSTED',
+    created_at: new Date().toISOString(),
+    candidate_digest: 'c'.repeat(64),
+  };
+
+  // Valid binding succeeds and inherits candidate_digest
+  const receipt = handoffEvidenceToCodeReviewReceipt(evidence, validEnvelope);
+  assert.equal(receipt.candidate_digest, 'c'.repeat(64));
+
+  // Mismatched base_sha fails closed
+  assert.throws(
+    () => handoffEvidenceToCodeReviewReceipt(evidence, { ...validEnvelope, base_sha: '0'.repeat(40) }),
+    /CANDIDATE_BINDING_MISMATCH: base_sha mismatch/,
+  );
+
+  // Mismatched task_hash fails closed
+  assert.throws(
+    () => handoffEvidenceToCodeReviewReceipt(evidence, { ...validEnvelope, task_hash: '0'.repeat(64) }),
+    /CANDIDATE_BINDING_MISMATCH: task_hash mismatch/,
+  );
+
+  // Mismatched diff_numstat_digest fails closed
+  assert.throws(
+    () => handoffEvidenceToCodeReviewReceipt(evidence, { ...validEnvelope, diff_numstat_digest: '0'.repeat(64) }),
+    /CANDIDATE_BINDING_MISMATCH: diff_numstat_digest mismatch/,
+  );
+
+  // Mismatched scope fails closed
+  assert.throws(
+    () => handoffEvidenceToCodeReviewReceipt(evidence, { ...validEnvelope, scope: ['src/other.ts'] }),
+    /CANDIDATE_BINDING_MISMATCH: scope mismatch/,
+  );
+});
+
+test('loadCandidateReviewHandoffs: rejects candidateDigest path traversal attempts', () => {
+  assert.throws(
+    () =>
+      loadCandidateReviewHandoffs({
+        repository: 'gthgomez/Babel',
+        candidateDigest: '../../etc/passwd',
+      }),
+    /INVALID_CANDIDATE_DIGEST/,
+  );
+
+  assert.throws(
+    () =>
+      loadCandidateReviewHandoffs({
+        repository: 'gthgomez/Babel',
+        candidateDigest: 'non-hex-short-string',
+      }),
+    /INVALID_CANDIDATE_DIGEST/,
+  );
+});
+
+test('loadCandidateReviewHandoffs: authenticates immutable numeric owner ID even if login name changes', () => {
+  const marker = '<!-- babel-controller-ai-reviews-v2 -->';
+  const mockHandoff = {
+    schema_version: 2,
+    kind: 'host_review_handoff_v2',
+    repository: 'gthgomez/Babel',
+    pr_number: 42,
+    base_sha: '1'.repeat(40),
+    head_sha: '2'.repeat(40),
+    task_id: 't-1',
+    task_hash: '3'.repeat(64),
+    controller_run_id: 'c-run-unique-1',
+    reviews: [],
+  };
+
+  const fakeGhExec = (args: string[]) => {
+    if (args.includes('repos/gthgomez/Babel')) {
+      // Repo owner has id: 424242, current login 'gthgomez-renamed'
+      return JSON.stringify({ owner: { id: 424242, login: 'gthgomez-renamed' } });
+    }
+    if (args.some((a) => a.includes('comments'))) {
+      return JSON.stringify([
+        {
+          // Same user ID 424242, even if comment recorded older login 'gthgomez'
+          user: { id: 424242, login: 'gthgomez' },
+          body: marker + JSON.stringify(mockHandoff),
+        },
+        {
+          // Attacker who changed login to 'gthgomez-renamed' but has different numeric ID
+          user: { id: 999999, login: 'gthgomez-renamed' },
+          body: marker + JSON.stringify({ ...mockHandoff, controller_run_id: 'c-run-spoofed' }),
+        },
+      ]);
+    }
+    return '[]';
+  };
+
+  const discovered = loadCandidateReviewHandoffs({
+    repository: 'gthgomez/Babel',
+    candidateDigest: 'a'.repeat(64),
+    prNumber: 42,
+    ghExec: fakeGhExec,
+  });
+
+  assert.equal(discovered.length, 1);
+  assert.equal(discovered[0]?.controller_run_id, 'c-run-unique-1');
+});
+

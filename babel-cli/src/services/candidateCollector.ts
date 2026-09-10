@@ -164,6 +164,23 @@ export async function collectCandidateEnvelope(options: CollectCandidateOptions 
     prNumber = prData.number;
     baseSha = baseSha || prData.baseRefOid;
     headSha = headSha || prData.headRefOid;
+
+    const hasCommit = (sha: string) => {
+      try {
+        git(['cat-file', '-e', `${sha}^{commit}`]);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (!hasCommit(headSha) || !hasCommit(baseSha)) {
+      try {
+        git(['fetch', '--no-tags', 'origin', `refs/pull/${options.pr}/head`, baseSha]);
+      } catch {
+        // Non-fatal if offline or mocked
+      }
+    }
   }
 
   if (!headSha) {
@@ -197,28 +214,78 @@ export async function collectCandidateEnvelope(options: CollectCandidateOptions 
   }
 
   if (!baseSha) {
-    let baseRef = '';
-    for (const candidate of ['origin/main', 'origin/master', 'main', 'master']) {
+    if (options.staged) {
+      baseSha = headSha;
+    } else {
+      let authoritativeDefaultRef = '';
+
+      // 1. Authoritative git origin/HEAD symbolic-ref
       try {
-        git(['rev-parse', '--verify', '--quiet', candidate]);
-        baseRef = candidate;
-        break;
+        const sym = git(['symbolic-ref', 'refs/remotes/origin/HEAD']).trim();
+        if (sym) {
+          git(['rev-parse', '--verify', '--quiet', sym]);
+          authoritativeDefaultRef = sym;
+        }
       } catch {
         // continue
       }
-    }
 
-    if (baseRef) {
-      try {
-        baseSha = git(['merge-base', headSha, baseRef]).trim();
-      } catch {
-        baseSha = git(['rev-parse', `${headSha}~1`]).trim();
+      // 2. Authoritative GitHub repository default-branch metadata
+      if (!authoritativeDefaultRef && repository && repository !== 'local/repository') {
+        try {
+          const repoData = JSON.parse(gh(['repo', 'view', repository, '--json', 'defaultBranchRef'])) as {
+            defaultBranchRef?: { name?: string };
+          };
+          const defName = repoData.defaultBranchRef?.name;
+          if (defName) {
+            for (const candidate of [`origin/${defName}`, defName]) {
+              try {
+                git(['rev-parse', '--verify', '--quiet', candidate]);
+                authoritativeDefaultRef = candidate;
+                break;
+              } catch {
+                // continue
+              }
+            }
+          }
+        } catch {
+          // gh unavailable or offline
+        }
       }
-    } else {
-      try {
-        baseSha = git(['rev-parse', `${headSha}~1`]).trim();
-      } catch {
-        baseSha = headSha;
+
+      // 3. Upstream branch tracking
+      if (!authoritativeDefaultRef) {
+        try {
+          const upstream = git(['rev-parse', '--abbrev-ref', '@{upstream}']).trim();
+          if (upstream) {
+            authoritativeDefaultRef = upstream;
+          }
+        } catch {
+          // continue
+        }
+      }
+
+      // 4. Standard default branch probe if origin/HEAD was not materialized
+      if (!authoritativeDefaultRef) {
+        for (const candidate of ['origin/main', 'origin/master', 'main', 'master']) {
+          try {
+            git(['rev-parse', '--verify', '--quiet', candidate]);
+            authoritativeDefaultRef = candidate;
+            break;
+          } catch {
+            // continue
+          }
+        }
+      }
+
+      if (authoritativeDefaultRef) {
+        try {
+          baseSha = git(['merge-base', headSha, authoritativeDefaultRef]).trim();
+        } catch {
+          throw new Error('UNABLE_TO_RESOLVE_CANDIDATE_BASE');
+        }
+      } else {
+        throw new Error('UNABLE_TO_RESOLVE_CANDIDATE_BASE');
       }
     }
   }

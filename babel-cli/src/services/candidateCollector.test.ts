@@ -116,3 +116,51 @@ test('candidateCollector: fails closed on repository identity mismatch', async (
   );
 });
 
+test('candidateCollector: resolves custom default branch via refs/remotes/origin/HEAD', async () => {
+  const gitMock = (args: string[]) => {
+    if (args.includes('--show-toplevel')) return 'C:/Mock/CustomRepo';
+    if (args.includes('--git-common-dir')) return 'C:/Mock/CustomRepo/.git';
+    if (args.includes('get-url')) return 'https://github.com/gthgomez/CustomRepo.git';
+    if (args.includes('symbolic-ref') && args.includes('refs/remotes/origin/HEAD')) return 'refs/remotes/origin/develop';
+    if (args.includes('--abbrev-ref') && args.includes('HEAD')) return 'feature-123';
+    if (args.includes('rev-parse') && args.length === 2 && args[1] === 'HEAD') return 'head-sha-123';
+    if (args.includes('--verify') && args.includes('refs/remotes/origin/develop')) return 'develop-sha';
+    if (args.includes('merge-base')) return 'base-sha-develop';
+    if (args.includes('--name-only')) return 'src/app.ts\0';
+    if (args.includes('--numstat')) return '10\t2\tsrc/app.ts\n';
+    if (args.includes('^{tree}')) return 'tree-sha';
+    throw new Error(`git ref not found: ${args.join(' ')}`);
+  };
+
+  const envelope = await collectCandidateEnvelope({
+    repoRoot: 'C:/Mock/CustomRepo',
+    gitExec: gitMock,
+  });
+
+  assert.equal(envelope.base_sha, 'base-sha-develop');
+  assert.deepEqual(envelope.scope, ['src/app.ts']);
+});
+
+test('candidateCollector: fails closed with UNABLE_TO_RESOLVE_CANDIDATE_BASE when base is indeterminate', async () => {
+  const gitMock = (args: string[]) => {
+    if (args.includes('--show-toplevel')) return 'C:/Mock/OrphanRepo';
+    if (args.includes('--git-common-dir')) return 'C:/Mock/OrphanRepo/.git';
+    if (args.includes('get-url')) return 'https://github.com/gthgomez/OrphanRepo.git';
+    if (args.includes('--abbrev-ref') && args.includes('HEAD')) return 'feature-isolated';
+    if (args.includes('rev-parse') && args.length === 2 && args[1] === 'HEAD') return 'head-sha-orphan';
+    // All other git calls (symbolic-ref, verify, upstream, etc.) throw non-zero exit code
+    throw new Error(`git ref not found: ${args.join(' ')}`);
+  };
+
+  await assert.rejects(
+    () =>
+      collectCandidateEnvelope({
+        repoRoot: 'C:/Mock/OrphanRepo',
+        gitExec: gitMock,
+        ghExec: () => { throw new Error('gh offline'); },
+      }),
+    /UNABLE_TO_RESOLVE_CANDIDATE_BASE/
+  );
+});
+
+

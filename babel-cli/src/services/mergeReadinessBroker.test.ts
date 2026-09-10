@@ -175,6 +175,16 @@ test('mergeReadinessBroker: CRITICAL risk tier requires 2 distinct independent r
     receipt_id: 'receipt-pass-2',
     reviewer_id: 'mimo-v2.5-second-run',
     reviewer_model: 'mimo-v2.5',
+    independence: {
+      ...mockPassReview.independence,
+      computed_class: 'I3',
+      dimensions: {
+        ...mockPassReview.independence.dimensions,
+        reviewer_identity: 'mimo-v2.5-second-run',
+        reviewer_model: 'mimo-v2.5',
+      },
+      attestation_digest: 'att-pass-2',
+    },
   };
   const r2 = evaluateMergeReadiness({
     candidate: criticalCandidate,
@@ -192,6 +202,13 @@ test('mergeReadinessBroker: CRITICAL risk tier requires 2 distinct independent r
     independence: {
       ...mockPassReview.independence,
       computed_class: 'I3',
+      dimensions: {
+        ...mockPassReview.independence.dimensions,
+        reviewer_identity: 'longcat-second-run',
+        reviewer_model: 'longcat-2.0',
+        reviewer_provider: 'longcat-ai',
+      },
+      attestation_digest: 'att-pass-3',
     },
   };
   const r3 = evaluateMergeReadiness({
@@ -201,4 +218,107 @@ test('mergeReadinessBroker: CRITICAL risk tier requires 2 distinct independent r
   assert.equal(r3.verdict, 'INSUFFICIENT'); // blocked only by missing tests/CI/security, not model distinctness
   assert.ok(!r3.unresolved_blockers.includes('critical_risk_tier_requires_distinct_independent_reviewer_models'));
 });
+
+test('mergeReadinessBroker: rejects review receipt candidate digest mismatch', () => {
+  const mismatchedReview: CodeReviewReceipt = {
+    ...mockPassReview,
+    candidate_digest: 'tampered-candidate-digest-999',
+  };
+
+  const readiness = evaluateMergeReadiness({
+    candidate: mockCandidate,
+    reviews: [mismatchedReview],
+  });
+
+  assert.equal(readiness.verdict, 'INSUFFICIENT');
+  assert.ok(readiness.unresolved_blockers.includes('review_receipt_candidate_digest_mismatch'));
+});
+
+test('mergeReadinessBroker: detects conflicting review evidence for same receipt_id', () => {
+  const receipt1: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'receipt-conflict-1',
+    verdict: 'APPROVE',
+  };
+
+  const receipt2Conflicting: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'receipt-conflict-1',
+    verdict: 'BLOCK',
+    blocking_findings: [
+      {
+        schema_version: 2,
+        finding_instance_id: 'f1',
+        finding_fingerprint: 'fp1',
+        claim: 'Critical issue found',
+        category: 'correctness',
+        severity: 'P1',
+        confidence: 'high',
+        location: { path: 'src/player.ts', line: 10 },
+        reviewer_id: 'reviewer',
+        recommended_blocking: true,
+        policy_blocking: true,
+        verification_status: 'UNVERIFIED',
+        created_at: new Date().toISOString(),
+      },
+    ],
+  };
+
+  const readiness = evaluateMergeReadiness({
+    candidate: mockCandidate,
+    reviews: [receipt1, receipt2Conflicting],
+  });
+
+  assert.equal(readiness.verdict, 'REPAIR');
+  assert.ok(readiness.unresolved_blockers.some((b) => b.startsWith('conflicting_review_evidence_detected:receipt-conflict-1')));
+});
+
+test('mergeReadinessBroker: duplicate session IDs or duplicate attestations fail ensemble I4 requirement', () => {
+  const criticalCandidate: CandidateEnvelope = {
+    ...mockCandidate,
+    risk_tier: 'CRITICAL',
+  };
+
+  // 2 reviews with different models but identical session_id (same execution re-attributed)
+  const rev1: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'receipt-rev-1',
+    reviewer_model: 'mimo-v2.5',
+    independence: {
+      ...mockPassReview.independence,
+      computed_class: 'I3',
+      dimensions: {
+        ...mockPassReview.independence.dimensions,
+        reviewer_model: 'mimo-v2.5',
+        session_id: 'shared-session-123',
+      },
+      attestation_digest: 'att-rev-1',
+    },
+  };
+
+  const rev2SharedSession: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'receipt-rev-2',
+    reviewer_model: 'longcat-2.0',
+    independence: {
+      ...mockPassReview.independence,
+      computed_class: 'I3',
+      dimensions: {
+        ...mockPassReview.independence.dimensions,
+        reviewer_model: 'longcat-2.0',
+        session_id: 'shared-session-123', // duplicate session ID!
+      },
+      attestation_digest: 'att-rev-2',
+    },
+  };
+
+  const readiness = evaluateMergeReadiness({
+    candidate: criticalCandidate,
+    reviews: [rev1, rev2SharedSession],
+  });
+
+  assert.equal(readiness.verdict, 'INSUFFICIENT');
+  assert.ok(readiness.unresolved_blockers.includes('critical_risk_tier_requires_ensemble_i4_independence'));
+});
+
 

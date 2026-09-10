@@ -12,9 +12,6 @@ import {
   type IndependentReviewVerdict,
 } from '../services/independentReviewBroker.js';
 import {
-  resolveLivePullRequestCandidate,
-} from '../services/independentReviewProvider.js';
-import {
   createProcessAttestationSigner,
   createProcessTrustedReviewIssuer,
   createProcessTrustedReviewVerifier,
@@ -34,6 +31,7 @@ import {
 } from '../services/outcomeCollector.js';
 import type {
   AutonomousReviewEvidenceV2,
+  CandidateEnvelope,
   HostReviewHandoffV2,
 } from '../services/hostReviewController.js';
 import {
@@ -43,6 +41,44 @@ import {
 import { evaluateReviewCoverage, type ToolExecutionTrace } from '../services/reviewCoverage.js';
 import { evaluateReviewerIndependence } from '../services/reviewIndependence.js';
 
+export function validateReviewEvidenceCandidateBinding(
+  review: AutonomousReviewEvidenceV2,
+  candidate: CandidateEnvelope,
+): void {
+  if (review.repository.toLowerCase() !== candidate.repository.toLowerCase()) {
+    throw new Error(`CANDIDATE_BINDING_MISMATCH: repository mismatch (${review.repository} != ${candidate.repository})`);
+  }
+  if (candidate.pr_number !== undefined && review.pr_number !== undefined && review.pr_number !== candidate.pr_number) {
+    throw new Error(`CANDIDATE_BINDING_MISMATCH: pr_number mismatch (${review.pr_number} != ${candidate.pr_number})`);
+  }
+  if (review.base_sha !== candidate.base_sha) {
+    throw new Error(`CANDIDATE_BINDING_MISMATCH: base_sha mismatch (${review.base_sha} != ${candidate.base_sha})`);
+  }
+  if (review.head_sha !== candidate.head_sha) {
+    throw new Error(`CANDIDATE_BINDING_MISMATCH: head_sha mismatch (${review.head_sha} != ${candidate.head_sha})`);
+  }
+  if (review.task_id !== candidate.task_id) {
+    throw new Error(`CANDIDATE_BINDING_MISMATCH: task_id mismatch (${review.task_id} != ${candidate.task_id})`);
+  }
+  if (review.task_hash !== candidate.task_hash) {
+    throw new Error(`CANDIDATE_BINDING_MISMATCH: task_hash mismatch (${review.task_hash} != ${candidate.task_hash})`);
+  }
+  if (review.diff_numstat_digest !== candidate.diff_numstat_digest) {
+    throw new Error(`CANDIDATE_BINDING_MISMATCH: diff_numstat_digest mismatch`);
+  }
+  if (candidate.builder_id && review.builder_id && review.builder_id !== candidate.builder_id) {
+    throw new Error(`CANDIDATE_BINDING_MISMATCH: builder_id mismatch`);
+  }
+  const normReviewScope = [...review.scope].map((p) => p.replace(/\\/g, '/')).sort();
+  const normCandidateScope = [...candidate.scope].map((p) => p.replace(/\\/g, '/')).sort();
+  if (
+    normReviewScope.length !== normCandidateScope.length ||
+    normReviewScope.some((p, i) => p !== normCandidateScope[i])
+  ) {
+    throw new Error(`CANDIDATE_BINDING_MISMATCH: scope mismatch`);
+  }
+}
+
 export function loadCandidateReviewHandoffs(options: {
   repository: string;
   prNumber?: number;
@@ -50,8 +86,12 @@ export function loadCandidateReviewHandoffs(options: {
   stateDir?: string;
   ghExec?: (args: string[]) => string;
 }): HostReviewHandoffV2[] {
-  const handoffs: HostReviewHandoffV2[] = [];
   const candidateDigest = options.candidateDigest;
+  if (!candidateDigest || !/^[a-f0-9]{64}$/.test(candidateDigest)) {
+    throw new Error(`INVALID_CANDIDATE_DIGEST: ${candidateDigest}`);
+  }
+
+  const handoffs: HostReviewHandoffV2[] = [];
 
   const stateDir = options.stateDir ?? process.env['BABEL_REVIEW_STATE_DIR'];
   if (stateDir) {
@@ -87,37 +127,39 @@ export function loadCandidateReviewHandoffs(options: {
     );
     try {
       let ownerId: number | undefined;
-      let ownerLogin: string | undefined;
       try {
         const repoRaw = runner(['api', `repos/${options.repository}`]);
         const repoInfo = JSON.parse(repoRaw) as { owner?: { id?: number; login?: string } };
-        ownerId = repoInfo.owner?.id;
-        ownerLogin = repoInfo.owner?.login;
+        if (typeof repoInfo.owner?.id === 'number' && Number.isInteger(repoInfo.owner.id) && repoInfo.owner.id > 0) {
+          ownerId = repoInfo.owner.id;
+        }
       } catch {
         // Repo lookup may fail in offline or mocked tests
       }
 
-      const raw = runner(['api', `repos/${options.repository}/issues/${options.prNumber}/comments`]);
-      const comments = JSON.parse(raw) as Array<{ body?: string; user?: { id?: number; login?: string } }>;
-      const marker = '<!-- babel-controller-ai-reviews-v2 -->';
-      for (const comment of comments) {
-        if (ownerId !== undefined && comment.user?.id !== ownerId && ownerLogin && comment.user?.login !== ownerLogin) {
-          continue;
-        }
-        if (typeof comment.body === 'string' && comment.body.startsWith(marker)) {
-          try {
-            const parsed = JSON.parse(comment.body.slice(marker.length)) as unknown;
-            if (Array.isArray(parsed)) {
-              for (const item of parsed) {
-                if ((item as HostReviewHandoffV2)?.kind === 'host_review_handoff_v2') {
-                  handoffs.push(item as HostReviewHandoffV2);
+      if (ownerId !== undefined) {
+        const raw = runner(['api', `repos/${options.repository}/issues/${options.prNumber}/comments`]);
+        const comments = JSON.parse(raw) as Array<{ body?: string; user?: { id?: number; login?: string } }>;
+        const marker = '<!-- babel-controller-ai-reviews-v2 -->';
+        for (const comment of comments) {
+          if (!comment.user || comment.user.id !== ownerId) {
+            continue;
+          }
+          if (typeof comment.body === 'string' && comment.body.startsWith(marker)) {
+            try {
+              const parsed = JSON.parse(comment.body.slice(marker.length)) as unknown;
+              if (Array.isArray(parsed)) {
+                for (const item of parsed) {
+                  if ((item as HostReviewHandoffV2)?.kind === 'host_review_handoff_v2') {
+                    handoffs.push(item as HostReviewHandoffV2);
+                  }
                 }
+              } else if ((parsed as HostReviewHandoffV2)?.kind === 'host_review_handoff_v2') {
+                handoffs.push(parsed as HostReviewHandoffV2);
               }
-            } else if ((parsed as HostReviewHandoffV2)?.kind === 'host_review_handoff_v2') {
-              handoffs.push(parsed as HostReviewHandoffV2);
+            } catch {
+              // ignore
             }
-          } catch {
-            // ignore
           }
         }
       }
@@ -126,13 +168,39 @@ export function loadCandidateReviewHandoffs(options: {
     }
   }
 
-  return handoffs;
+  // Deduplicate identical handoffs by controller_run_id
+  const dedupedHandoffs: HostReviewHandoffV2[] = [];
+  const seenRuns = new Map<string, HostReviewHandoffV2>();
+  for (const h of handoffs) {
+    const runId = h.controller_run_id;
+    if (!runId) {
+      dedupedHandoffs.push(h);
+      continue;
+    }
+    const existing = seenRuns.get(runId);
+    if (!existing) {
+      seenRuns.set(runId, h);
+      dedupedHandoffs.push(h);
+    }
+  }
+
+  return dedupedHandoffs;
 }
 
 export function handoffEvidenceToCodeReviewReceipt(
   review: AutonomousReviewEvidenceV2,
-  candidateDigest: string,
+  candidateOrDigest: CandidateEnvelope | string,
 ): CodeReviewReceipt {
+  let candidateDigest: string;
+  if (typeof candidateOrDigest === 'object' && candidateOrDigest !== null && 'candidate_digest' in candidateOrDigest) {
+    validateReviewEvidenceCandidateBinding(review, candidateOrDigest);
+    candidateDigest = candidateOrDigest.candidate_digest;
+  } else {
+    if (!/^[a-f0-9]{64}$/.test(candidateOrDigest)) {
+      throw new Error(`INVALID_CANDIDATE_DIGEST: ${candidateOrDigest}`);
+    }
+    candidateDigest = candidateOrDigest;
+  }
   const structuredFindings = review.findings.map((claim) => {
     const parsed = parseFindingFromModelClaim(claim, review.scope);
     return createStructuredFinding({
@@ -459,7 +527,7 @@ export function registerIndependentReviewCommands(program: Command): void {
 
         for (const handoff of handoffs) {
           for (const rev of handoff.reviews) {
-            reviews.push(handoffEvidenceToCodeReviewReceipt(rev, envelope.candidate_digest));
+            reviews.push(handoffEvidenceToCodeReviewReceipt(rev, envelope));
           }
         }
       }

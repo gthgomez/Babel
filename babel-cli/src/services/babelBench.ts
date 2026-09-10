@@ -97,7 +97,9 @@ export interface ShadowComparisonResult {
   promotionBlockers: string[];
 }
 
-export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = [
+const RAW_BENCHMARK_FIXTURES: Array<Omit<BabelBenchFixture, 'groundTruth'> & {
+  groundTruth: Omit<BabelBenchFixture['groundTruth'], 'antiLeakageHash'>;
+}> = [
   {
     id: 'BENCH-001',
     name: 'Off-by-one boundary defect in array chunking',
@@ -114,7 +116,6 @@ export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = [
       expectedVerdict: 'BLOCK',
       defectLocation: { path: 'src/chunk.ts', line: 3 },
       defectDescription: '<= causes empty trailing slice when arr.length is exact multiple of size',
-      antiLeakageHash: createHash('sha256').update('BENCH-001:off-by-one').digest('hex'),
     },
   },
   {
@@ -133,7 +134,6 @@ export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = [
       expectedVerdict: 'BLOCK',
       defectLocation: { path: 'src/exec.ts', line: 3 },
       defectDescription: 'Direct shell execution of unsanitized input',
-      antiLeakageHash: createHash('sha256').update('BENCH-002:cmd-injection').digest('hex'),
     },
   },
   {
@@ -150,7 +150,6 @@ export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = [
     groundTruth: {
       hasDefect: false,
       expectedVerdict: 'APPROVE',
-      antiLeakageHash: createHash('sha256').update('BENCH-003:clean-refactor').digest('hex'),
     },
   },
   {
@@ -167,7 +166,6 @@ export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = [
     groundTruth: {
       hasDefect: false,
       expectedVerdict: 'APPROVE',
-      antiLeakageHash: createHash('sha256').update('BENCH-004:docs-update').digest('hex'),
     },
   },
   {
@@ -186,7 +184,6 @@ export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = [
       expectedVerdict: 'BLOCK',
       defectLocation: { path: 'src/worker.ts', line: 2 },
       defectDescription: 'Floating unhandled promises spawned without await or catch',
-      antiLeakageHash: createHash('sha256').update('BENCH-005:floating-promise').digest('hex'),
     },
   },
   {
@@ -203,7 +200,6 @@ export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = [
     groundTruth: {
       hasDefect: false,
       expectedVerdict: 'APPROVE',
-      antiLeakageHash: createHash('sha256').update('BENCH-006:math-clamp').digest('hex'),
     },
   },
   {
@@ -222,7 +218,6 @@ export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = [
       expectedVerdict: 'BLOCK',
       defectLocation: { path: 'src/path_helper.ts', line: 2 },
       defectDescription: 'Hardcoded machine-specific absolute path breaks non-local execution',
-      antiLeakageHash: createHash('sha256').update('BENCH-007:hardcoded-path').digest('hex'),
     },
   },
   {
@@ -241,7 +236,6 @@ export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = [
       expectedVerdict: 'BLOCK',
       defectLocation: { path: 'src/independence.ts', line: 2 },
       defectDescription: 'Undefined builder model evaluates to true for inequality, creating unearned independence grant',
-      antiLeakageHash: createHash('sha256').update('BENCH-008:unearned-independence').digest('hex'),
     },
   },
   {
@@ -258,7 +252,6 @@ export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = [
     groundTruth: {
       hasDefect: false,
       expectedVerdict: 'APPROVE',
-      antiLeakageHash: createHash('sha256').update('BENCH-009:clean-normalize').digest('hex'),
     },
   },
   {
@@ -275,17 +268,73 @@ export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = [
     groundTruth: {
       hasDefect: false,
       expectedVerdict: 'APPROVE',
-      antiLeakageHash: createHash('sha256').update('BENCH-010:clean-tests').digest('hex'),
     },
   },
 ];
 
 /**
+ * Compute deterministic canonical SHA-256 integrity seal over fixture fields.
+ */
+export function computeFixtureIntegrityHash(fixture: {
+  id: string;
+  name: string;
+  category: BenchmarkCategory;
+  difficulty: BenchmarkDifficulty;
+  split: BenchmarkSplit;
+  files: Record<string, string>;
+  candidateDiff: string;
+  scope: string[];
+  groundTruth: {
+    hasDefect: boolean;
+    expectedVerdict: 'APPROVE' | 'BLOCK';
+    defectLocation?: { path: string; line: number } | undefined;
+    defectDescription?: string | undefined;
+  };
+}): string {
+  const sortedFiles = Object.keys(fixture.files)
+    .sort()
+    .map((k) => [k, fixture.files[k]]);
+  const sortedScope = [...fixture.scope].sort();
+  const canonicalPayload = [
+    fixture.id,
+    fixture.name,
+    fixture.category,
+    fixture.difficulty,
+    fixture.split,
+    sortedFiles,
+    fixture.candidateDiff,
+    sortedScope,
+    fixture.groundTruth.hasDefect,
+    fixture.groundTruth.expectedVerdict,
+    fixture.groundTruth.defectLocation?.path ?? null,
+    fixture.groundTruth.defectLocation?.line ?? null,
+    fixture.groundTruth.defectDescription ?? null,
+  ];
+  return createHash('sha256').update(JSON.stringify(canonicalPayload)).digest('hex');
+}
+
+export const CANONICAL_BENCHMARK_FIXTURES: BabelBenchFixture[] = RAW_BENCHMARK_FIXTURES.map((f) => ({
+  ...f,
+  groundTruth: {
+    ...f.groundTruth,
+    antiLeakageHash: computeFixtureIntegrityHash(f),
+  },
+}));
+
+/**
  * Verify anti-leakage integrity of benchmark fixtures.
+ * Validates canonical 64-char lowercase hex format and cryptographically recomputes
+ * integrity seal from source fields to fail closed upon tampering or mutation.
  */
 export function verifyFixtureAntiLeakage(fixtures: BabelBenchFixture[] = CANONICAL_BENCHMARK_FIXTURES): boolean {
+  if (!fixtures || fixtures.length === 0) return false;
   for (const fixture of fixtures) {
-    if (!fixture.groundTruth.antiLeakageHash || fixture.groundTruth.antiLeakageHash.length !== 64) {
+    const hash = fixture.groundTruth?.antiLeakageHash;
+    if (!hash || typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)) {
+      return false;
+    }
+    const expected = computeFixtureIntegrityHash(fixture);
+    if (hash !== expected) {
       return false;
     }
   }

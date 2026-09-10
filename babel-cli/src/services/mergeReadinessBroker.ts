@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { CandidateEnvelope } from './hostReviewController.js';
 import type { ReviewCoverageReceipt } from './reviewCoverage.js';
-import type { ReviewerIndependenceAttestation } from './reviewIndependence.js';
+import {
+  evaluateEnsembleIndependence,
+  type ReviewerIndependenceAttestation,
+} from './reviewIndependence.js';
 import type { StructuredFinding } from './structuredFinding.js';
 
 export interface CodeReviewReceipt {
@@ -125,8 +128,39 @@ export function evaluateMergeReadiness(input: {
   let escalationReason: HumanEscalationReason | null = null;
 
   // 1. Evaluate Code Reviews
-  const headReviews = input.reviews.filter((r) => r.head_sha === headSha);
-  if (headReviews.length < input.reviews.length) {
+  // Enforce candidate digest binding
+  for (const r of input.reviews) {
+    if (r.candidate_digest !== input.candidate.candidate_digest) {
+      blockers.push('review_receipt_candidate_digest_mismatch');
+    }
+  }
+
+  // Detect conflicting review evidence
+  const seenReceipts = new Map<string, CodeReviewReceipt>();
+  let hasConflictingEvidence = false;
+  for (const r of input.reviews) {
+    const existing = seenReceipts.get(r.receipt_id);
+    if (existing) {
+      if (
+        existing.verdict !== r.verdict ||
+        existing.head_sha !== r.head_sha ||
+        existing.reviewer_model !== r.reviewer_model ||
+        existing.candidate_digest !== r.candidate_digest ||
+        existing.blocking_findings.length !== r.blocking_findings.length
+      ) {
+        hasConflictingEvidence = true;
+        blockers.push(`conflicting_review_evidence_detected:${r.receipt_id}`);
+      }
+    } else {
+      seenReceipts.set(r.receipt_id, r);
+    }
+  }
+
+  // Deduplicate identical receipts by receipt_id
+  const uniqueReviews = Array.from(seenReceipts.values());
+
+  const headReviews = uniqueReviews.filter((r) => r.head_sha === headSha);
+  if (headReviews.length < uniqueReviews.length) {
     blockers.push('stale_review_receipt_rejected_for_prior_head');
   }
 
@@ -140,7 +174,9 @@ export function evaluateMergeReadiness(input: {
   let codeReviewStatus: 'PASS' | 'FAIL' | 'INSUFFICIENT' = 'PASS';
   const allBlockingFindings = headReviews.flatMap((r) => r.blocking_findings);
 
-  if (allBlockingFindings.length > 0) {
+  if (hasConflictingEvidence) {
+    codeReviewStatus = 'FAIL';
+  } else if (allBlockingFindings.length > 0) {
     codeReviewStatus = 'FAIL';
     blockers.push(`blocking_findings_present:${allBlockingFindings.length}`);
   } else if (headReviews.some((r) => !r.coverage.is_sufficient)) {
@@ -150,19 +186,13 @@ export function evaluateMergeReadiness(input: {
     codeReviewStatus = 'INSUFFICIENT';
     blockers.push(`insufficient_approved_reviews:have_${approvedReviews.length}_need_${minRequiredReviews}`);
   } else if (requiredGates.codeReview.requireI4) {
-    const distinctReviewers = new Set(
-      approvedReviews.flatMap((r) => r.reviewer_model.split('+').map((m) => m.trim())).filter(Boolean)
-    );
-    if (distinctReviewers.size < 2) {
+    const ensemble = evaluateEnsembleIndependence({
+      reviews: approvedReviews.map((r) => r.independence),
+    });
+    if (ensemble.computed_class !== 'I4') {
       codeReviewStatus = 'INSUFFICIENT';
+      blockers.push('critical_risk_tier_requires_ensemble_i4_independence');
       blockers.push('critical_risk_tier_requires_distinct_independent_reviewer_models');
-    }
-    const hasSufficientIndependence = approvedReviews.every(
-      (r) => ['I2', 'I3', 'I4'].includes(r.independence.computed_class)
-    );
-    if (!hasSufficientIndependence) {
-      codeReviewStatus = 'INSUFFICIENT';
-      blockers.push('critical_risk_tier_requires_minimum_i2_individual_independence');
     }
   }
 
