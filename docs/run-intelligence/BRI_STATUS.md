@@ -1,6 +1,6 @@
 # Babel Run Intelligence status
 
-Base SHA: `82fc080f71b87be117953284436fa5a8d6c502ac`  
+Base SHA: `82fc080f71b87be117953284436fa5a8d6c502ac`
 Schema version: `2`
 
 Completed: isolated `runIntelligence` module; random logical-identity registry for new records; additive SQLite migrations; explicit availability semantics; immutable extraction receipts; read-only adapters for session events, verifier execution summaries, cost ledgers, and terminal summaries; idempotent ingestion; saved query registry; bounded `babel runs` operator commands; deterministic failure signatures/clusters; relational seams for cases, immutable case versions, datasets, evaluations, experiments, annotations, exposure, and lineage.
