@@ -11,4 +11,6 @@ Known limitations: current adapters do not derive outcome observations, cost, ch
 
 Vertical-slice audit: schema v3 adds failure-to-segment/evidence binding while retaining v1 identity mappings and v2 catalogs. A six-sample bounded public/private canary verified selected source bytes were unchanged after two ingestions; see `PHASE2_CANARY_RECEIPT.json`.
 
+Outcome-authority audit: schema v4 records outcome authority class and revision-binding state, then derives immutable-in-spirit `task_outcome_assessments` using `bri.task-outcome.v1`. Only revision-bound `TASK_CORRECTNESS` observations from deterministic or independent authority can establish task PASS/FAIL. Current bounded historical samples contained terminal/control evidence but no qualifying task-correctness contract, so all six assessments remain `UNKNOWN` rather than being promoted from weaker evidence.
+
 Tests: see the BRI unit test and final verification receipt for executed commands.

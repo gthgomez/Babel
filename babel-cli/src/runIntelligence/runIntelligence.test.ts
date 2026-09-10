@@ -212,7 +212,7 @@ test("ingests evidence idempotently without treating unknown outcome as failure"
     assert.deepEqual(catalog.verify(), {
       ok: true,
       foreignKeyViolations: 0,
-      schemaVersion: 3,
+      schemaVersion: 4,
     });
     catalog.close();
   } finally {
@@ -245,6 +245,93 @@ test("records terminal execution state without converting it into task success",
       "NOT_ESTABLISHED",
     );
     catalog.close();
+  } finally {
+    cleanup(paths.root);
+  }
+});
+
+test("derives task outcome only from revision-bound task-correctness evidence and retains conflicts", () => {
+  const paths = fixture();
+  try {
+    const catalog = new RunIntelligenceCatalog(paths.catalog);
+    const extracted = extractRunDirectory(paths.run);
+    const authority = {
+      dimension: "TASK_CORRECTNESS" as const,
+      observer: "deterministic_fixture",
+      evidenceRef: "fixture#task",
+      validity: "VALID" as const,
+      availability: "PRESENT" as const,
+      observedAt: null,
+      authority: "DETERMINISTIC_VERIFICATION" as const,
+      revision: "BOUND" as const,
+      revisionToken: "revision_fixture",
+    };
+    catalog.ingest({
+      ...extracted,
+      sourceLocator: `${paths.run}-pass`,
+      outcomes: [{ ...authority, value: "PASS" }],
+    });
+    catalog.ingest({
+      ...extracted,
+      sourceLocator: `${paths.run}-conflict`,
+      outcomes: [
+        { ...authority, value: "PASS" },
+        { ...authority, evidenceRef: "fixture#task-fail", value: "FAIL" },
+      ],
+    });
+    const coverage = catalog.query("task-outcome-coverage");
+    assert.equal(coverage.status, "SUPPORTED");
+    assert.equal(coverage.numerator, 1);
+    assert.equal(coverage.eligibleDenominator, 2);
+    assert.match(JSON.stringify(coverage.rows), /CONFLICTED/);
+    assert.match(
+      JSON.stringify(catalog.query("task-outcome-summary").rows),
+      /DETERMINISTIC_VERIFICATION/,
+    );
+    catalog.close();
+  } finally {
+    cleanup(paths.root);
+  }
+});
+
+test("does not promote a stale revision-bound verifier receipt to task correctness", () => {
+  const paths = fixture();
+  try {
+    writeFileSync(
+      join(paths.run, "session-events.jsonl"),
+      JSON.stringify({
+        schema_version: 1,
+        event_id: "receipt",
+        session_id: "legacy-session",
+        turn_id: "turn",
+        seq: 0,
+        ts: "2026-09-09T00:00:00.000Z",
+        kind: "verifier_attempt",
+        authoritative: true,
+        exit_code: 0,
+        receipt: {
+          authority: true,
+          exit_code: 0,
+          scope: "full_suite",
+          stale: true,
+          boundRevision: {
+            compositeTreeHash: "tree-123",
+            gitCommitHash: null,
+            fileHashes: {},
+            capturedAt: 1,
+          },
+        },
+      }),
+    );
+    const extracted = extractRunDirectory(paths.run);
+    const testObservation = extracted.outcomes.find(
+      (item) => item.dimension === "TEST_CORRECTNESS",
+    );
+    assert.equal(testObservation?.revision, "STALE");
+    assert.equal(testObservation?.validity, "UNKNOWN");
+    assert.ok(
+      !extracted.outcomes.some((item) => item.dimension === "TASK_CORRECTNESS"),
+    );
   } finally {
     cleanup(paths.root);
   }

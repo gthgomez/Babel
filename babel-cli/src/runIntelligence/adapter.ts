@@ -200,7 +200,40 @@ function sessionEvents(
           validity: result === "UNKNOWN" ? "UNKNOWN" : "VALID",
           availability: "PRESENT",
           observedAt: metadata(value["ts"]),
+          authority: "CONTROL_RECEIPT",
+          revision: "TARGET_UNKNOWN",
+          revisionToken: null,
         });
+        const receipt = isRecord(value["receipt"]) ? value["receipt"] : null;
+        const bound =
+          receipt && isRecord(receipt["boundRevision"])
+            ? receipt["boundRevision"]
+            : null;
+        const tree = bound ? metadata(bound["compositeTreeHash"]) : null;
+        const receiptExit = receipt
+          ? finiteNumber(receipt["exit_code"] ?? receipt["exitCode"])
+          : null;
+        const isAuthoritative = receipt?.["authority"] === true;
+        const scope = receipt ? metadata(receipt["scope"]) : null;
+        if (
+          tree &&
+          receiptExit !== null &&
+          isAuthoritative &&
+          scope === "full_suite"
+        ) {
+          outcomes.push({
+            dimension: "TEST_CORRECTNESS",
+            value: receiptExit === 0 ? "PASS" : "FAIL",
+            observer: "revision_bound_verifier_receipt",
+            evidenceRef,
+            validity: receipt["stale"] === true ? "UNKNOWN" : "VALID",
+            availability: "PRESENT",
+            observedAt: metadata(value["ts"]),
+            authority: "DETERMINISTIC_VERIFICATION",
+            revision: receipt["stale"] === true ? "STALE" : "BOUND",
+            revisionToken: opaqueId("revision", tree),
+          });
+        }
       }
       if (value["kind"] === "completion_decision") {
         // This is a control-plane claim, not independent task-success evidence.
@@ -212,6 +245,9 @@ function sessionEvents(
           validity: "VALID",
           availability: "PRESENT",
           observedAt: metadata(value["ts"]),
+          authority: "AGENT_CLAIM",
+          revision: "NOT_APPLICABLE",
+          revisionToken: null,
         });
       }
       if (
@@ -306,6 +342,9 @@ function verifierSummary(summary: Record<string, unknown>): {
       validity: result === "PASS" || result === "FAIL" ? "VALID" : "UNKNOWN",
       availability: "PRESENT",
       observedAt: metadata(item["endedAt"]),
+      authority: "CONTROL_RECEIPT",
+      revision: "TARGET_UNKNOWN",
+      revisionToken: null,
     });
   }
   return { verifiers, outcomes };
@@ -365,6 +404,9 @@ function terminalSummary(
     validity: "VALID",
     availability: "PRESENT",
     observedAt: null,
+    authority: "EXECUTION_STATUS",
+    revision: "TARGET_UNKNOWN",
+    revisionToken: null,
   };
 }
 
