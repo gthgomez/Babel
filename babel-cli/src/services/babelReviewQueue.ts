@@ -14,6 +14,11 @@ const text = z.string().min(1).refine(v => v.trim().toLowerCase() !== 'unknown')
 const digest = z.string().regex(/^[a-f0-9]{64}$/)
 const sha = z.string().regex(/^[a-f0-9]{40}$/)
 const usage = z.object({ prompt_tokens: z.number().finite().nonnegative().nullable(), completion_tokens: z.number().finite().nonnegative().nullable(), total_tokens: z.number().finite().nonnegative().nullable(), latency_ms: z.number().finite().nonnegative().nullable() }).strict()
+const toolTraces = z.array(z.object({
+  tool: text,
+  targetPath: z.string().optional(),
+  args: z.record(z.string(), z.unknown()).optional(),
+}).strict()).optional()
 const evidence = z.object({
   schema_version: z.literal(2), kind: z.literal('autonomous_review_evidence_v2'), repository: text, pr_number: z.number().int().positive(),
   base_sha: sha, head_sha: sha, task_id: text, task_hash: digest, builder_id: text, diff_numstat_digest: digest,
@@ -22,6 +27,11 @@ const evidence = z.object({
   scope: z.array(text).min(1), verdict: z.enum(['APPROVE', 'BLOCK']), findings: z.array(z.string()), blocking_findings: z.array(z.string()),
   isolation: z.object({ mode: z.literal('readonly_sandbox'), candidate_write: z.literal(false), github_mutation: z.literal(false), merge: z.literal(false), controller_state_access: z.literal(false) }).strict(),
   usage: usage.optional(),
+  // Host-side provenance emitted by the review controller. These stay in the
+  // host cache but are stripped before publication: the trusted gate's
+  // evidence contract does not admit host-private diagnostic fields.
+  tool_traces: toolTraces,
+  changes_diff_fully_read: z.boolean().optional(),
   harness: z.object({ name: z.literal('babel'), mode: z.literal('chat'), version: digest, source_sha: sha, execution_id: text }).strict(),
 }).strict()
 const handoffSchema = z.object({
@@ -47,7 +57,7 @@ export function validateBabelReviewCache(value: unknown, expected: { candidate: 
       new Set(review.scope).size !== review.scope.length || JSON.stringify([...review.scope].sort()) !== JSON.stringify([...expected.candidate.scope].sort()) ||
       (review.verdict === 'APPROVE' && review.blocking_findings.length > 0)) throw new Error('CACHED_REVIEW_PROVENANCE_MISMATCH')
   const { usage: optionalUsage, ...fields } = review
-  return { ...parsed, reviews: [{ ...fields, ...(optionalUsage ? { usage: optionalUsage } : {}) }] }
+  return { ...parsed, reviews: [{ ...fields, ...(optionalUsage ? { usage: optionalUsage } : {}) }] } as HostReviewHandoffV2
 }
 
 /** Bind the child's artifact and verdict to the exact execution, including every observed call. */
