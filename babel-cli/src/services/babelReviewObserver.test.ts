@@ -239,7 +239,7 @@ test('reviewer requests the explicit non-thinking profile for every canonical mo
       assert.deepEqual(calls.map(call => call.path), ['structured', 'raw', 'raw_stream', 'native_tools']);
       assert.equal(bodies.length, 4);
       for (const body of bodies) {
-        assert.equal(body.model, model); assert.equal(body.max_tokens, 8192); assert.equal(body.temperature, 0);
+        assert.equal(body.model, model); assert.equal(body.max_tokens, 32768); assert.equal(body.temperature, 0);
         assert.deepEqual(body.thinking, { type: 'disabled' });
       }
       for (const call of calls) {
@@ -248,7 +248,7 @@ test('reviewer requests the explicit non-thinking profile for every canonical mo
         assert.equal(call.metadata?.thinking_disabled_reason, model === 'longcat-2.0' ? 'reviewer_observed_reasoning_only_output_exhaustion' : 'reviewer_missing_reasoning_content_replay');
         assert.equal(call.metadata?.thinking_mode_evidence, 'request_only_not_upstream_confirmed');
       }
-      const transport = new OpenCodeGoApiRunner(model, { maxTokens: 8192, temperature: 0 }, { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
+      const transport = new OpenCodeGoApiRunner(model, { maxTokens: 32768, temperature: 0 }, { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
       await transport.executeRaw('test');
       assert.equal(Object.hasOwn(bodies[4]!, 'thinking'), false, 'ordinary transport defaults must remain unchanged');
     }
