@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, lstatSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
 import {
@@ -14,9 +14,26 @@ import {
   type VerifierObservation,
 } from "./contracts.js";
 
-export const RUN_INTELLIGENCE_ADAPTER_VERSION = "1.0.0";
+// v2: canonical-grade TEST_CORRECTNESS admission (64-hex revision binding,
+// typed verifier authority source, deterministic-verifier receipt fields) and
+// streaming JSONL/digest ingestion for large runs. Catalog uniqueness keys on
+// adapter_version, so rows extracted by v1 are preserved, never rewritten.
+export const RUN_INTELLIGENCE_ADAPTER_VERSION = "2.0.0";
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
-const DIGEST_FILE_BYTES = 8 * 1024 * 1024;
+// Bounded total budget for one session-events.jsonl extraction. Long runs are
+// streamed line-by-line within this budget instead of being dropped wholesale.
+const SESSION_EVENTS_MAX_BYTES = 64 * 1024 * 1024;
+const STREAM_CHUNK_BYTES = 1024 * 1024;
+const MAX_LINE_BYTES = 8 * 1024 * 1024;
+// Canonical revision-bound receipt law (mirrors the canonical producer's
+// validator; BRI must not admit anything the canonical validator rejects).
+const CANONICAL_TREE_HASH = /^[0-9a-f]{64}$/;
+const VERIFIER_AUTHORITY_SOURCES = new Set([
+  "project_discovery",
+  "dataset_contract",
+  "explicit_user_command",
+  "built_in_runner",
+]);
 const PROVIDER_FAILURE_CATEGORIES = new Set([
   "TRANSPORT",
   "TIMEOUT",
@@ -76,9 +93,76 @@ function readJson(
 }
 
 function boundedDigest(path: string): string | null {
-  const size = lstatSync(path).size;
-  if (size > DIGEST_FILE_BYTES) return null;
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+  // Stream in bounded chunks: identical sha256 to a whole-file hash, but
+  // memory stays flat for arbitrarily large run artifacts.
+  const hash = createHash("sha256");
+  const buffer = Buffer.alloc(STREAM_CHUNK_BYTES);
+  const descriptor = openSync(path, "r");
+  try {
+    for (;;) {
+      const read = readSync(descriptor, buffer, 0, STREAM_CHUNK_BYTES, null);
+      if (read === 0) break;
+      hash.update(read === STREAM_CHUNK_BYTES ? buffer : buffer.subarray(0, read));
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * Stream a JSONL file line-by-line within a bounded byte budget. Memory stays
+ * flat for arbitrarily long runs; a malformed or truncated tail is reported
+ * explicitly with its line number instead of silently disappearing, and lines
+ * beyond the budget produce an explicit truncation warning.
+ */
+function* streamJsonlLines(
+  path: string,
+  warnings: ExtractionWarning[],
+): Generator<[number, string]> {
+  const buffer = Buffer.alloc(STREAM_CHUNK_BYTES);
+  let carry = "";
+  let bytesReadTotal = 0;
+  let lineNumber = 0;
+  let truncated = false;
+  const descriptor = openSync(path, "r");
+  try {
+    for (;;) {
+      const read = readSync(descriptor, buffer, 0, STREAM_CHUNK_BYTES, null);
+      if (read === 0) break;
+      bytesReadTotal += read;
+      if (bytesReadTotal > SESSION_EVENTS_MAX_BYTES) {
+        truncated = true;
+        break;
+      }
+      carry += buffer.toString("utf8", 0, read);
+      let newline = carry.indexOf("\n");
+      while (newline !== -1) {
+        const line = carry.slice(0, newline).replace(/\r$/, "");
+        carry = carry.slice(newline + 1);
+        if (line.length > 0) yield [lineNumber, line];
+        lineNumber += 1;
+        newline = carry.indexOf("\n");
+      }
+      if (carry.length > MAX_LINE_BYTES) {
+        truncated = true;
+        break;
+      }
+    }
+    if (!truncated && carry.replace(/\r$/, "").length > 0) {
+      yield [lineNumber, carry.replace(/\r$/, "")];
+      lineNumber += 1;
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  if (truncated) {
+    warnings.push({
+      code: "SESSION_EVENTS_TRUNCATED",
+      message: `session-events.jsonl extraction stopped at the bounded budget after ${lineNumber} complete lines`,
+      availability: "TRUNCATED",
+    });
+  }
 }
 
 function sourceDigest(
@@ -112,29 +196,13 @@ function sessionEvents(
   verifiers: VerifierObservation[];
   outcomes: OutcomeObservation[];
 } {
-  if (lstatSync(path).size > MAX_JSON_BYTES) {
-    warnings.push({
-      code: "SESSION_EVENTS_TRUNCATED",
-      message: "session-events.jsonl exceeds bounded parser size",
-      availability: "TRUNCATED",
-    });
-    return {
-      sessionId: null,
-      model: null,
-      failures: [],
-      routing: [],
-      verifiers: [],
-      outcomes: [],
-    };
-  }
   let sessionId: string | null = null;
   let model: string | null = null;
   const failures: FailureCandidate[] = [];
   const routing = new Map<string, ModelRoutingObservation>();
   const verifiers: VerifierObservation[] = [];
   const outcomes: OutcomeObservation[] = [];
-  const lines = readFileSync(path, "utf8").split(/\r?\n/).filter(Boolean);
-  for (const [index, line] of lines.entries()) {
+  for (const [index, line] of streamJsonlLines(path, warnings)) {
     try {
       const value: unknown = JSON.parse(line);
       if (!isRecord(value)) throw new Error("not record");
@@ -145,6 +213,7 @@ function sessionEvents(
       if (!model && typeof value["observed_model_id"] === "string")
         model = "MODEL_OBSERVED";
       const evidenceRef = `session-events.jsonl#${String(index + 1)}`;
+      if (process.env['BRI_DEBUG']) console.error('DEBUG line', index, String(value["kind"]), evidenceRef)
       const inferenceId = metadata(value["inference_id"]);
       if (value["kind"] === "model_input_receipt" && inferenceId) {
         const token = opaqueId("inference", inferenceId);
@@ -209,16 +278,42 @@ function sessionEvents(
           receipt && isRecord(receipt["boundRevision"])
             ? receipt["boundRevision"]
             : null;
-        const tree = bound ? metadata(bound["compositeTreeHash"]) : null;
+        // Canonical revision binding: exactly a 64-hex composite tree hash.
+        const rawTree = bound ? bound["compositeTreeHash"] : null;
+        const tree =
+          typeof rawTree === "string" && CANONICAL_TREE_HASH.test(rawTree)
+            ? rawTree
+            : null;
         const receiptExit = receipt
           ? finiteNumber(receipt["exit_code"] ?? receipt["exitCode"])
           : null;
         const isAuthoritative = receipt?.["authority"] === true;
+        const authoritySourceRaw = receipt
+          ? (receipt["authoritySource"] ?? receipt["authority_source"])
+          : null;
+        const hasCanonicalAuthority =
+          typeof authoritySourceRaw === "string" &&
+          VERIFIER_AUTHORITY_SOURCES.has(authoritySourceRaw);
         const scope = receipt ? metadata(receipt["scope"]) : null;
+        // Fail-closed parity with the canonical verifier conversion: unknown
+        // schema versions, timed-out/signalled runs, or skip-heavy greens are
+        // never converted into task-correctness observations.
+        const receiptSchemaVersion = receipt ? receipt["schema_version"] : null;
+        const knownSchema =
+          receiptSchemaVersion === undefined || receiptSchemaVersion === null || receiptSchemaVersion === 1;
+        const deterministicRun =
+          receipt?.["timed_out"] !== true &&
+          (receipt?.["signal"] === undefined || receipt?.["signal"] === null);
+        const testsFailed = finiteNumber(receipt?.["tests_failed"]);
+        const noFailedTests = testsFailed === null || testsFailed === 0;
         if (
           tree &&
           receiptExit !== null &&
           isAuthoritative &&
+          hasCanonicalAuthority &&
+          knownSchema &&
+          deterministicRun &&
+          noFailedTests &&
           scope === "full_suite"
         ) {
           outcomes.push({
@@ -290,6 +385,7 @@ function sessionEvents(
       });
     }
   }
+  if (process.env['BRI_DEBUG']) console.error('DEBUG routing', JSON.stringify([...routing.values()]))
   return {
     sessionId,
     model,
