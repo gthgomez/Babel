@@ -14,7 +14,11 @@ export function babelReviewChildEnv(input: { source: string; trustedRoot: string
     BABEL_REVIEW_OUTPUT: input.output, BABEL_REVIEW_MODEL: input.model,
     BABEL_REVIEW_PURPOSE: input.purpose ?? 'review',
     BABEL_EXECUTION_PROFILE: 'read_only_audit', BABEL_READ_ONLY: 'true', BABEL_HEADLESS: '1',
-    BABEL_CHAT_MAX_COST: 'unlimited', BABEL_CHAT_MAX_WALL_MS: '1200000', BABEL_CHAT_TASK_CLASS: 'investigate',
+    // 50-minute wall: a slower reviewer model can legitimately need >20 min to
+    // read a full PR diff; a wall kill mid-review wastes the whole paid child.
+    // Must stay below REVIEW_CHILD_LEASE_MS so an interrupted child's lease
+    // never outlives the wall that bounds it.
+    BABEL_CHAT_MAX_COST: 'unlimited', BABEL_CHAT_MAX_WALL_MS: '3000000', BABEL_CHAT_TASK_CLASS: 'investigate',
     BABEL_ALLOWED_TOOLS: JSON.stringify(['file_read', 'directory_list', 'grep', 'glob']),
     BABEL_DISALLOWED_TOOLS: JSON.stringify(['shell_exec', 'test_run', 'file_write', 'mcp_request', 'memory_query', 'memory_store', 'semantic_search']),
     BABEL_READ_ONLY_NO_INDEX_WRITE: '1',
@@ -47,7 +51,7 @@ export async function launchBabelReviewChild(input: { source: string; trustedRoo
     // SIGTERM is cooperative on POSIX. Do not leave an unresponsive review
     // child holding the lease forever; Windows already terminates it directly.
     forceKillTimer = setTimeout(() => { if (!child.exitCode) child.kill('SIGKILL'); }, 2000);
-  }, input.timeoutMs ?? 1250000);
+  }, input.timeoutMs ?? 3050000);
   const code = await new Promise<number | null>((resolve, reject) => {
     child.once('error', reject); child.once('close', resolve);
   }).finally(() => { clearTimeout(timer); if (forceKillTimer) clearTimeout(forceKillTimer); input.onExit?.(); });
