@@ -311,11 +311,12 @@ test("does not promote a stale revision-bound verifier receipt to task correctne
         exit_code: 0,
         receipt: {
           authority: true,
+          authoritySource: "built_in_runner",
           exit_code: 0,
           scope: "full_suite",
           stale: true,
           boundRevision: {
-            compositeTreeHash: "tree-123",
+            compositeTreeHash: "a".repeat(64),
             gitCommitHash: null,
             fileHashes: {},
             capturedAt: 1,
@@ -448,6 +449,158 @@ test("rejects a catalog inside the selected historical evidence tree", () => {
         paths.root,
         join(paths.root, ".bri", "catalog.sqlite"),
       ),
+    );
+  } finally {
+    cleanup(paths.root);
+  }
+});
+
+test("canonical admission: typed authority source and 64-hex revision binding are required", () => {
+  const paths = fixture();
+  try {
+    const event = (overrides: Record<string, unknown>) =>
+      JSON.stringify({
+        schema_version: 1,
+        event_id: "receipt",
+        session_id: "legacy-session",
+        turn_id: "turn",
+        seq: 0,
+        ts: "2026-09-09T00:00:00.000Z",
+        kind: "verifier_attempt",
+        authoritative: true,
+        exit_code: 0,
+        receipt: {
+          authority: true,
+          authoritySource: "built_in_runner",
+          exit_code: 0,
+          scope: "full_suite",
+          stale: false,
+          boundRevision: { compositeTreeHash: "a".repeat(64), gitCommitHash: null, fileHashes: {}, capturedAt: 1 },
+          ...overrides,
+        },
+      });
+    const write = (receiptOverrides: Record<string, unknown>) => {
+      writeFileSync(join(paths.run, "session-events.jsonl"), event(receiptOverrides));
+    };
+    const observation = () =>
+      extractRunDirectory(paths.run).outcomes.find(
+        (item) => item.dimension === "TEST_CORRECTNESS",
+      );
+
+    // Fully canonical positive receipt.
+    write({});
+    assert.equal(observation()?.value, "PASS");
+    assert.equal(observation()?.revision, "BOUND");
+    assert.equal(observation()?.validity, "VALID");
+
+    // Negative receipt converts to FAIL with the same binding law.
+    write({ exit_code: 1 });
+    assert.equal(observation()?.value, "FAIL");
+
+    // Missing authority source: authority===true alone is not enough.
+    write({ authoritySource: undefined });
+    assert.equal(observation(), undefined);
+
+    // Unknown authority source string: fail closed.
+    write({ authoritySource: "self_declared" });
+    assert.equal(observation(), undefined);
+
+    // Non-canonical revision binding: the old loose metadata format is gone.
+    write({ boundRevision: { compositeTreeHash: "tree-123", gitCommitHash: null, fileHashes: {}, capturedAt: 1 } });
+    assert.equal(observation(), undefined);
+
+    // Timed-out deterministic run is never a correctness observation.
+    write({ timed_out: true });
+    assert.equal(observation(), undefined);
+
+    // Skip-heavy green is never a correctness observation.
+    write({ tests_failed: 2 });
+    assert.equal(observation(), undefined);
+  } finally {
+    cleanup(paths.root);
+  }
+});
+
+test("long runs are streamed instead of dropped: receipts beyond the old cap still ingest", () => {
+  const paths = fixture();
+  try {
+    const filler = JSON.stringify({
+      schema_version: 1,
+      event_id: "noise",
+      session_id: "legacy-session",
+      turn_id: "turn",
+      ts: "2026-09-09T00:00:00.000Z",
+      kind: "model_started",
+      model: "model-a",
+    });
+    // ~3 MB of filler lines: beyond the old 2 MB whole-file cap.
+    const lines: string[] = [];
+    while (lines.join("\n").length < 3 * 1024 * 1024) lines.push(filler);
+    lines.push(
+      JSON.stringify({
+        schema_version: 1,
+        event_id: "receipt-at-end",
+        session_id: "legacy-session",
+        turn_id: "turn",
+        seq: 99999,
+        ts: "2026-09-09T00:00:09.000Z",
+        kind: "verifier_attempt",
+        authoritative: true,
+        exit_code: 0,
+        receipt: {
+          authority: true,
+          authoritySource: "built_in_runner",
+          exit_code: 0,
+          scope: "full_suite",
+          stale: false,
+          boundRevision: { compositeTreeHash: "b".repeat(64), gitCommitHash: null, fileHashes: {}, capturedAt: 1 },
+        },
+      }),
+    );
+    writeFileSync(join(paths.run, "session-events.jsonl"), lines.join("\n"));
+    const extracted = extractRunDirectory(paths.run);
+    const testObservation = extracted.outcomes.find(
+      (item) => item.dimension === "TEST_CORRECTNESS",
+    );
+    assert.equal(testObservation?.value, "PASS");
+    assert.ok(!extracted.warnings.some((w) => w.code === "SESSION_EVENTS_TRUNCATED"));
+  } finally {
+    cleanup(paths.root);
+  }
+});
+
+test("a malformed tail is explicit and does not poison preceding valid evidence", () => {
+  const paths = fixture();
+  try {
+    const good = JSON.stringify({
+      schema_version: 1,
+      event_id: "receipt",
+      session_id: "legacy-session",
+      turn_id: "turn",
+      seq: 0,
+      ts: "2026-09-09T00:00:00.000Z",
+      kind: "verifier_attempt",
+      authoritative: true,
+      exit_code: 0,
+      receipt: {
+        authority: true,
+        authoritySource: "built_in_runner",
+        exit_code: 1,
+        scope: "full_suite",
+        stale: false,
+        boundRevision: { compositeTreeHash: "c".repeat(64), gitCommitHash: null, fileHashes: {}, capturedAt: 1 },
+      },
+    });
+    // Valid line, then a truncated torn-write tail without a newline.
+    writeFileSync(join(paths.run, "session-events.jsonl"), good + "\n" + '{"kind": "verifier_att');
+    const extracted = extractRunDirectory(paths.run);
+    const testObservation = extracted.outcomes.find(
+      (item) => item.dimension === "TEST_CORRECTNESS",
+    );
+    assert.equal(testObservation?.value, "FAIL", "valid evidence before the tail must still ingest");
+    assert.ok(
+      extracted.warnings.some((w) => w.code === "SESSION_EVENT_INVALID"),
+      "the malformed tail must be reported explicitly",
     );
   } finally {
     cleanup(paths.root);
