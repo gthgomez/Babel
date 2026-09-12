@@ -329,12 +329,22 @@ describe('LLMSummarizeCompaction', () => {
     assert.strictEqual(result, false);
   });
 
-  it('canApply returns true when compaction is needed and key is available', () => {
+  it('canApply honors an explicit caller model, and fails closed when an ambient key cannot select a coherent model', () => {
     const savedKey = process.env['BABEL_COMPACTION_API_KEY'];
     process.env['BABEL_COMPACTION_API_KEY'] = 'test-key';
 
     const strategy = new LLMSummarizeCompaction();
-    const result = strategy.canApply([{ role: 'user', content: 'x'.repeat(10000) }], 10000, 100);
+    const messages = [{ role: 'user' as const, content: 'x'.repeat(10000) }];
+
+    // The dedicated key alone derives an Anthropic endpoint but no coherent
+    // default model: ambient credentials must not pick a cross-provider model
+    // id, so the LLM summarizer refuses and heuristic truncation is used.
+    const withoutModel = strategy.canApply(messages, 10000, 100);
+    assert.strictEqual(withoutModel, false);
+
+    // An explicit caller-provided model makes the target coherent again.
+    const withModel = strategy.canApply(messages, 10000, 100, { model: 'test-model' });
+    assert.strictEqual(withModel, true);
 
     // Restore
     if (savedKey) {
@@ -342,8 +352,6 @@ describe('LLMSummarizeCompaction', () => {
     } else {
       delete process.env['BABEL_COMPACTION_API_KEY'];
     }
-
-    assert.strictEqual(result, true);
   });
 
   it('circuit breaker trips after consecutive failures', () => {
