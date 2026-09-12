@@ -229,13 +229,16 @@ import { remoteMcpFailClosedObservation, remoteMcpIsFailClosed } from '../bridge
 import { deriveSubagentApprovalSession } from './approvalRequests.js';
 import { clearBackgroundShellRegistry, killAllBackgroundShells } from './backgroundShell.js';
 import {
+  createProviderProtocolInvariant,
   createRequestReconstructionInvariant,
   MODEL_VISIBLE_EQUALS_PERSISTED,
+  PROVIDER_PROTOCOL_VALID,
   resolveRuntimeInvariantMode,
   RuntimeInvariantRegistry,
   type RequestReconstructionContext,
   type RuntimeInvariantMode,
 } from './runtimeInvariants.js';
+import { validateProviderMessageProtocol } from '../runners/providerMessages.js';
 import { createHash } from 'node:crypto';
 import { buildContextManifest, type ContextDeliveryMode } from './contextManifest.js';
 import { buildModelRouteReceipt, hashRouteReference, type ModelRouteStage } from './modelRouteReceipt.js';
@@ -633,6 +636,36 @@ function isConversationalTurnText(task: string): boolean {
 }
 
 /**
+ * Provider tool_call ids are untrusted data: empty ids and duplicate ids both
+ * make tool results unpairable at the wire boundary. Canonicalize to a
+ * non-empty, turn-unique id so every declared call stays individually
+ * answerable (tool_cycle protocol invariant).
+ */
+function canonicalizeToolCallId(
+  event: { id?: string },
+  turn: number,
+  actionIndex: number,
+  seen: Set<string>,
+): string {
+  const candidates = [
+    event.id && event.id.length > 0 ? event.id : undefined,
+    `tool_call_${turn}_${actionIndex}`,
+    `tool_call_${turn}_${actionIndex}_${seen.size}`,
+  ].filter((value): value is string => Boolean(value));
+  for (const candidate of candidates) {
+    if (!seen.has(candidate)) {
+      seen.add(candidate);
+      return candidate;
+    }
+  }
+  let suffix = seen.size;
+  while (seen.has(`tool_call_${turn}_${actionIndex}_${suffix}`)) suffix += 1;
+  const fallback = `tool_call_${turn}_${actionIndex}_${suffix}`;
+  seen.add(fallback);
+  return fallback;
+}
+
+/**
  * Reconcile an already-streamed answer with the final parsed answer so the
  * renderer never displays duplicated text.
  *
@@ -924,6 +957,9 @@ export class ChatEngine {
       resolveRuntimeInvariantMode(options.runtimeInvariantMode),
     );
     this.runtimeInvariants.register(createRequestReconstructionInvariant());
+    this.runtimeInvariants.register(
+      createProviderProtocolInvariant(validateProviderMessageProtocol),
+    );
     // Per-session bg shell isolation — scoped to this run id so sibling
     // engines in the same process keep their jobs (matters for resume).
     clearBackgroundShellRegistry(this.engineRunId);
@@ -2016,6 +2052,7 @@ export class ChatEngine {
           : this.services.tools.buildDefinitions());
         const nativeActions: ChatToolAction[] = [];
         const nativeToolCallIds: string[] = [];
+        const seenToolCallIds = new Set<string>();
         let answerText = '';
         const systemPrompt = this.getOrBuildSystemPrompt('native');
 
@@ -2051,9 +2088,7 @@ export class ChatEngine {
                 const action = nativeToolUseToChatAction(event.name, event.input);
                 nativeActions.push(action);
                 nativeToolCallIds.push(
-                  event.id && event.id.length > 0
-                    ? event.id
-                    : `tool_call_${turn}_${nativeActions.length - 1}`,
+                  canonicalizeToolCallId(event, turn, nativeActions.length - 1, seenToolCallIds),
                 );
                 toolsAnnouncedInStream = true;
                 yield {
@@ -2102,6 +2137,7 @@ export class ChatEngine {
           }
           nativeActions.length = 0;
           nativeToolCallIds.length = 0;
+          seenToolCallIds.clear();
           answerText = '';
           this.assertNativeRequestMatchesDurable(providerMessages, systemPrompt, undefined);
           const fbStart = performance.now();
@@ -2135,9 +2171,7 @@ export class ChatEngine {
                   const action = nativeToolUseToChatAction(event.name, event.input);
                   nativeActions.push(action);
                   nativeToolCallIds.push(
-                    event.id && event.id.length > 0
-                      ? event.id
-                      : `tool_call_${turn}_${nativeActions.length - 1}`,
+                    canonicalizeToolCallId(event, turn, nativeActions.length - 1, seenToolCallIds),
                   );
                   toolsAnnouncedInStream = true;
                   yield {

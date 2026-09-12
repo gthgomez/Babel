@@ -23,7 +23,9 @@ export interface ProviderProtocolIssue {
     | 'orphan_tool_result'
     | 'system_in_user_content'
     | 'empty_messages'
-    | 'assistant_tool_call_missing_id';
+    | 'assistant_tool_call_missing_id'
+    | 'duplicate_tool_result'
+    | 'unanswered_tool_call';
   message: string;
   index?: number;
 }
@@ -75,12 +77,21 @@ export function mapProviderMessagesToWire(
   return result;
 }
 
+/** Minimal read-only shape the protocol validator needs (wire or neutral). */
+export interface ProtocolCheckableMessage {
+  readonly role: string;
+  readonly content: string;
+  readonly tool_call_id?: string;
+  readonly tool_calls?: readonly ProviderToolCall[];
+  readonly name?: string;
+}
+
 /**
  * Validate protocol fidelity of a ProviderMessage[] (pre-wire).
  * Does not mutate; returns issue list (empty = OK).
  */
 export function validateProviderMessageProtocol(
-  messages: ProviderMessage[],
+  messages: readonly ProtocolCheckableMessage[],
 ): ProviderProtocolIssue[] {
   const issues: ProviderProtocolIssue[] = [];
   if (messages.length === 0) {
@@ -89,6 +100,12 @@ export function validateProviderMessageProtocol(
   }
 
   const knownCallIds = new Set<string>();
+  const answeredCallIds = new Set<string>();
+  const seenResultIds = new Set<string>();
+  // Call ids declared by the most recent assistant tool_calls message whose
+  // results have not all been observed yet. A non-tool message (or end of
+  // payload) while ids are still pending is a protocol violation.
+  let pendingCallIds: Set<string> | null = null;
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]!;
@@ -99,7 +116,18 @@ export function validateProviderMessageProtocol(
         index: i,
       });
     }
+    if (pendingCallIds && msg.role !== 'tool') {
+      for (const id of pendingCallIds) {
+        issues.push({
+          code: 'unanswered_tool_call',
+          message: `Assistant tool_call id=${id} has no tool result before the next non-tool message`,
+          index: i,
+        });
+      }
+      pendingCallIds = null;
+    }
     if (msg.role === 'assistant' && msg.tool_calls) {
+      const declared: string[] = [];
       for (const tc of msg.tool_calls) {
         if (!tc.id) {
           issues.push({
@@ -109,8 +137,10 @@ export function validateProviderMessageProtocol(
           });
         } else {
           knownCallIds.add(tc.id);
+          declared.push(tc.id);
         }
       }
+      pendingCallIds = new Set(declared);
     }
     if (msg.role === 'tool') {
       if (!msg.tool_call_id) {
@@ -119,13 +149,34 @@ export function validateProviderMessageProtocol(
           message: 'Tool message missing tool_call_id',
           index: i,
         });
-      } else if (!knownCallIds.has(msg.tool_call_id)) {
+        continue;
+      }
+      if (!knownCallIds.has(msg.tool_call_id)) {
         issues.push({
           code: 'orphan_tool_result',
           message: `Tool result tool_call_id=${msg.tool_call_id} has no preceding assistant tool_call`,
           index: i,
         });
       }
+      if (seenResultIds.has(msg.tool_call_id)) {
+        issues.push({
+          code: 'duplicate_tool_result',
+          message: `Tool result tool_call_id=${msg.tool_call_id} appears more than once`,
+          index: i,
+        });
+      }
+      seenResultIds.add(msg.tool_call_id);
+      pendingCallIds?.delete(msg.tool_call_id);
+    }
+  }
+
+  if (pendingCallIds) {
+    for (const id of pendingCallIds) {
+      issues.push({
+        code: 'unanswered_tool_call',
+        message: `Assistant tool_call id=${id} has no tool result before the end of the payload`,
+        index: messages.length - 1,
+      });
     }
   }
 
