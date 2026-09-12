@@ -211,6 +211,7 @@ import {
   recordModelResultDelivery,
   recordModelFailover,
   recordMutationBatch,
+  recordPolicyIntervened,
   recordProgressRecovery,
   resumedToolRecoveryGuidance,
   operationFingerprint,
@@ -268,6 +269,7 @@ import { evaluateTokenExplosionAfterTurn } from './budgetKillPolicy.js';
 import {
   applyExploreFuses as applyExploreFusesPolicy,
   buildPolicyTerminalBlockedReport,
+  resolveInvestigateHardCapObserveOnly,
   type ExploreFuseResult,
 } from './chatZeroWritePolicy.js';
 import { PolicyEventLog, type PolicyEvent } from './policyEventLog.js';
@@ -2733,6 +2735,21 @@ export class ChatEngine {
           }
           return null;
         })();
+        // I01 observation mode: the identical counter and terminal candidate
+        // were computed above; withhold only this candidate from the arbiter
+        // and record durable would-fire evidence instead. All other terminals,
+        // nudges, budgets, and permissions are untouched.
+        const executeHardCapTerminal = !isReadOnlyInspection
+          ? exploreFuses.investigateHardCapTerminal
+          : null;
+        const i01ObserveOnly = executeHardCapTerminal !== null && resolveInvestigateHardCapObserveOnly();
+        if (i01ObserveOnly) {
+          recordPolicyIntervened(this.parity.sessionEvents, this.parity.turnId ?? 'policy', {
+            source: 'investigate_hard_cap',
+            action: 'would_fire_observe_only',
+            detail: `i01: tools_without_write=${this.toolsWithoutWrite} terminal_withheld_from_arbiter=1`,
+          });
+        }
         const arb = parityArbitrateCycle({
           rt: this.parity,
           isReadOnlyInspection,
@@ -2745,9 +2762,7 @@ export class ChatEngine {
           readOnlyHardCapTerminal: isReadOnlyInspection
             ? exploreFuses.investigateHardCapTerminal
             : null,
-          investigateHardCapTerminal: !isReadOnlyInspection
-            ? exploreFuses.investigateHardCapTerminal
-            : null,
+          investigateHardCapTerminal: i01ObserveOnly ? null : executeHardCapTerminal,
           stallMessage:
             stallIntervention && stallIntervention.level !== 'kill'
               ? stallIntervention.message
