@@ -41,10 +41,20 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
   delete process.env['BABEL_CHAT_MAX_WALL_MS'];
   delete process.env['BABEL_CHAT_STALL_TURNS'];
   try {
-    assert.deepEqual(resolveChatEngineLimits(), DEFAULT_CHAT_ENGINE_LIMITS);
+    const wallBudgetFor = (maxWallMs: number) => ({
+      effectiveMs: maxWallMs,
+      requestedMs: maxWallMs,
+      ceilingMs: 3_600_000,
+      longTaskProfile: false,
+    });
+    assert.deepEqual(resolveChatEngineLimits(), {
+      ...DEFAULT_CHAT_ENGINE_LIMITS,
+      wallBudget: wallBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs),
+    });
     assert.deepEqual(resolveChatEngineLimits({ maxTurns: 12 }), {
       ...DEFAULT_CHAT_ENGINE_LIMITS,
       maxTurns: 12,
+      wallBudget: wallBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs),
     });
   } finally {
     if (previous.turns === undefined) delete process.env['BABEL_CHAT_MAX_TURNS'];
@@ -205,5 +215,92 @@ test('resolveChatEngineLimits reads maxTokensPerRound from env', () => {
   } finally {
     if (previous === undefined) delete process.env['BABEL_CHAT_MAX_TOKENS_PER_ROUND'];
     else process.env['BABEL_CHAT_MAX_TOKENS_PER_ROUND'] = previous;
+  }
+});
+
+test('wall budget: one-hour ceiling without the long-task profile, observable requested value', () => {
+  const previousWall = process.env['BABEL_CHAT_MAX_WALL_MS'];
+  const previousLong = process.env['BABEL_CHAT_LONG_TASK'];
+  try {
+    delete process.env['BABEL_CHAT_LONG_TASK'];
+
+    // Default: no env, tune default wall, ceiling recorded, no profile.
+    delete process.env['BABEL_CHAT_MAX_WALL_MS'];
+    const defaults = resolveChatEngineLimits();
+    assert.equal(defaults.wallBudget?.effectiveMs, defaults.maxWallMs);
+    assert.equal(defaults.wallBudget?.ceilingMs, 3_600_000);
+    assert.equal(defaults.wallBudget?.longTaskProfile, false);
+    assert.equal(defaults.wallBudget?.requestedMs, defaults.maxWallMs);
+
+    // Request above one hour clamps to one hour without the profile.
+    process.env['BABEL_CHAT_MAX_WALL_MS'] = '7200000';
+    const clamped = resolveChatEngineLimits();
+    assert.equal(clamped.maxWallMs, 3_600_000);
+    assert.equal(clamped.wallBudget?.requestedMs, 7_200_000);
+    assert.equal(clamped.wallBudget?.effectiveMs, 3_600_000);
+    assert.equal(clamped.wallBudget?.longTaskProfile, false);
+
+    // Caller override clamps the same way.
+    const overrideClamped = resolveChatEngineLimits({ maxWallMs: 10_800_000 });
+    assert.equal(overrideClamped.maxWallMs, 3_600_000);
+    assert.equal(overrideClamped.wallBudget?.requestedMs, 10_800_000);
+  } finally {
+    if (previousWall === undefined) delete process.env['BABEL_CHAT_MAX_WALL_MS'];
+    else process.env['BABEL_CHAT_MAX_WALL_MS'] = previousWall;
+    if (previousLong === undefined) delete process.env['BABEL_CHAT_LONG_TASK'];
+    else process.env['BABEL_CHAT_LONG_TASK'] = previousLong;
+  }
+});
+
+test('wall budget: explicit long-task profile supports two-hour-class requests', () => {
+  const previousWall = process.env['BABEL_CHAT_MAX_WALL_MS'];
+  const previousLong = process.env['BABEL_CHAT_LONG_TASK'];
+  try {
+    delete process.env['BABEL_CHAT_MAX_WALL_MS'];
+    process.env['BABEL_CHAT_LONG_TASK'] = '1';
+
+    // Two-hour request honored under the profile.
+    process.env['BABEL_CHAT_MAX_WALL_MS'] = '7200000';
+    const twoHours = resolveChatEngineLimits();
+    assert.equal(twoHours.maxWallMs, 7_200_000);
+    assert.equal(twoHours.wallBudget?.longTaskProfile, true);
+    assert.equal(twoHours.wallBudget?.ceilingMs, 14_400_000);
+    assert.equal(twoHours.wallBudget?.effectiveMs, 7_200_000);
+
+    // Still finite: above the profile ceiling clamps to four hours.
+    process.env['BABEL_CHAT_MAX_WALL_MS'] = '99999999';
+    const clampedToCeiling = resolveChatEngineLimits();
+    assert.equal(clampedToCeiling.maxWallMs, 14_400_000);
+    assert.equal(clampedToCeiling.wallBudget?.requestedMs, 99_999_999);
+
+    // Overrides honor the profile ceiling too.
+    const override = resolveChatEngineLimits({ maxWallMs: 7_200_000 });
+    assert.equal(override.maxWallMs, 7_200_000);
+
+    // Non-truthy flag values never widen the ceiling.
+    process.env['BABEL_CHAT_LONG_TASK'] = '0';
+    process.env['BABEL_CHAT_MAX_WALL_MS'] = '7200000';
+    assert.equal(resolveChatEngineLimits().maxWallMs, 3_600_000);
+  } finally {
+    if (previousWall === undefined) delete process.env['BABEL_CHAT_MAX_WALL_MS'];
+    else process.env['BABEL_CHAT_MAX_WALL_MS'] = previousWall;
+    if (previousLong === undefined) delete process.env['BABEL_CHAT_LONG_TASK'];
+    else process.env['BABEL_CHAT_LONG_TASK'] = previousLong;
+  }
+});
+
+test('wall budget: product defaults unchanged and floor preserved', () => {
+  const previousWall = process.env['BABEL_CHAT_MAX_WALL_MS'];
+  try {
+    delete process.env['BABEL_CHAT_MAX_WALL_MS'];
+    const limits = resolveChatEngineLimits();
+    assert.equal(limits.maxWallMs, DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs);
+    assert.equal(limits.wallBudget?.requestedMs, DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs);
+
+    process.env['BABEL_CHAT_MAX_WALL_MS'] = '50';
+    assert.equal(resolveChatEngineLimits().maxWallMs, 10_000);
+  } finally {
+    if (previousWall === undefined) delete process.env['BABEL_CHAT_MAX_WALL_MS'];
+    else process.env['BABEL_CHAT_MAX_WALL_MS'] = previousWall;
   }
 });
