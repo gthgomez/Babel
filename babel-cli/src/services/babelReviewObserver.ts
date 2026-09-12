@@ -4,6 +4,23 @@ import type { ProviderMessage, ToolDefinition, ToolStreamEvent, RunnerCallbacks,
 import type { ZodType } from 'zod';
 import { randomUUID } from 'node:crypto';
 
+/**
+ * Configured per-inference output budget for review children. A full-diff
+ * verdict (plus any streamed reasoning the provider adds despite the disabled
+ * thinking profile) legitimately exceeds 8k completions; an exhausted budget
+ * truncates the final answer and discards the whole paid review. Single source
+ * of truth so the request body and the advertised model policy cannot drift.
+ */
+export const BABEL_REVIEW_OUTPUT_TOKENS = 32768;
+/**
+ * Native-response buffer bounds for one review inference. The event count is
+ * sized above the token budget (one token can arrive as several streamed
+ * events) and the byte bound above any full-length answer, so the configured
+ * output budget stays the only truncation limit. Bytes, not count, bound memory.
+ */
+export const BABEL_REVIEW_NATIVE_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
+export const BABEL_REVIEW_NATIVE_BUFFER_MAX_EVENTS = BABEL_REVIEW_OUTPUT_TOKENS * 4;
+
 type ReviewInvocationMetadata = RunnerInvocationMetadata & {
   requested_thinking?: { type: 'disabled' };
   thinking_mode_evidence?: 'request_only_not_upstream_confirmed';
@@ -38,10 +55,7 @@ export function parseObservedBabelReviewAnswer<T>(calls: unknown, model: string,
 /** Observe every inference entrypoint, including failed and non-native calls. */
 export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
   constructor(private readonly reviewModel: OpenCodeGoModel, private readonly record: (call: BabelReviewCall) => void, options: OpenCodeGoRunnerOptions = {}) {
-    // 32k output: a full-diff review verdict (findings + reviewed files) on a
-    // large PR legitimately exceeds 8k completions; an exhausted output budget
-    // truncated the final answer and wasted the whole paid review child.
-    super(reviewModel, { maxTokens: 32768, temperature: 0 }, options);
+    super(reviewModel, { maxTokens: BABEL_REVIEW_OUTPUT_TOKENS, temperature: 0 }, options);
   }
   protected override getRequestBodyExtras(): Record<string, unknown> {
     const extras = super.getRequestBodyExtras();
@@ -92,7 +106,7 @@ export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
           signal?.throwIfAborted();
           if (failure) continue;
           bufferedBytes += Buffer.byteLength(JSON.stringify(event));
-          if (bufferedBytes > 4 * 1024 * 1024 || buffered.length >= 32768) throw new Error('CHAT_REVIEW_NATIVE_BUFFER_LIMIT');
+          if (bufferedBytes > BABEL_REVIEW_NATIVE_BUFFER_MAX_BYTES || buffered.length >= BABEL_REVIEW_NATIVE_BUFFER_MAX_EVENTS) throw new Error('CHAT_REVIEW_NATIVE_BUFFER_LIMIT');
           buffered.push(event);
         }
         // Drain error events instead of breaking: provider metadata and model
