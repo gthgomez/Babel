@@ -19,7 +19,13 @@ export function validateBabelReviewCalls(calls: unknown, model: string): void {
     const next = calls[i + 1] as BabelReviewCall | undefined;
     if (call?.status === 'failed' && call.path === 'native_tools' && call.retry_reason === 'transient_before_output' && call.attempt === 1 && typeof call.request_id === 'string' && call.request_id.length > 0 &&
         call.metadata?.provider === 'opencode-go' && (call.metadata.observed_model_id === null || call.metadata.observed_model_id === model) && next?.path === 'native_tools' && next.request_id === call.request_id && next.attempt === 2 && next.status === 'completed' && next.metadata?.observed_model_id === model && next.metadata.provider === 'opencode-go') continue;
-    throw new Error('CHAT_REVIEW_ATTRIBUTION_INCOMPLETE');
+    // Surface the provider's own finish attribution so harness-policy failures
+    // (e.g. output budget exhaustion) are diagnosable from the failure code.
+    // The suffix stays ALL-CAPS so the worker's failure-code passthrough keeps
+    // the base code visible.
+    const metadata = call?.metadata as { normalized_finish_reason?: string } | null | undefined;
+    const finish = (metadata?.normalized_finish_reason ?? '').replace(/[^A-Z0-9]/gi, '_');
+    throw new Error(finish ? `CHAT_REVIEW_ATTRIBUTION_INCOMPLETE_LAST_CALL_${finish}` : 'CHAT_REVIEW_ATTRIBUTION_INCOMPLETE');
   }
 }
 
@@ -32,7 +38,10 @@ export function parseObservedBabelReviewAnswer<T>(calls: unknown, model: string,
 /** Observe every inference entrypoint, including failed and non-native calls. */
 export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
   constructor(private readonly reviewModel: OpenCodeGoModel, private readonly record: (call: BabelReviewCall) => void, options: OpenCodeGoRunnerOptions = {}) {
-    super(reviewModel, { maxTokens: 8192, temperature: 0 }, options);
+    // 32k output: a full-diff review verdict (findings + reviewed files) on a
+    // large PR legitimately exceeds 8k completions; an exhausted output budget
+    // truncated the final answer and wasted the whole paid review child.
+    super(reviewModel, { maxTokens: 32768, temperature: 0 }, options);
   }
   protected override getRequestBodyExtras(): Record<string, unknown> {
     const extras = super.getRequestBodyExtras();
