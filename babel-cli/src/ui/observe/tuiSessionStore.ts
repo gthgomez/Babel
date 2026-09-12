@@ -353,3 +353,21 @@ function fileBytes(path: string): number {
     return 0
   }
 }
+
+/**
+ * Append one run-lifecycle observation (terminal status, budget kill,
+ * cancellation, resume, verifier wording) to the bounded session sink. These
+ * records make post-run UI certification possible without turning product
+ * history retention into a research archive: the sink is opt-in and bounded
+ * by the same session byte budget as the terminal evidence.
+ */
+export function appendTuiLifecycleEvent(
+  sessionDir: string,
+  event: { kind: string; detail?: Record<string, unknown>; ts?: string },
+  options: TuiRetentionOptions = {},
+): void {
+  mkdirSync(sessionDir, { recursive: true })
+  const line = `${JSON.stringify({ kind: event.kind, detail: event.detail ?? {}, ts: event.ts ?? new Date().toISOString() })}\n`
+  writeFileSync(join(sessionDir, 'lifecycle-events.jsonl'), line, { flag: 'a', encoding: 'utf8' })
+  enforceTuiSessionBudget(sessionDir, resolveByteBudget(options.byteBudget))
+}
