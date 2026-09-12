@@ -125,3 +125,24 @@ test('recycled live PID does not strand a completed child lease', () => {
   assert.equal(acquireBabelReviewLease(path, () => true, now, () => 'different-process'), null)
   assert.equal(existsSync(path), false)
 })
+
+test('cache admits controller-emitted host provenance fields (schema-drift regression)', () => {
+  // The review controller emits tool_traces and changes_diff_fully_read on
+  // every fresh review. The strict evidence schema must admit exactly those
+  // fields (and nothing else), or the controller can never cache or publish a
+  // fresh review round.
+  const withProvenance = () => {
+    const value = cache() as Record<string, unknown>
+    ;(value.reviews as Array<Record<string, unknown>>)[0]!.tool_traces = [{ tool: 'read_file', targetPath: 'src/a.ts', args: { path: 'src/a.ts' } }]
+    ;(value.reviews as Array<Record<string, unknown>>)[0]!.changes_diff_fully_read = true
+    return value
+  }
+  const validated = validateBabelReviewCache(withProvenance(), expected)
+  assert.equal(validated.reviews[0].execution_id, executionId)
+  assert.deepEqual(validated.reviews[0].tool_traces, [{ tool: 'read_file', targetPath: 'src/a.ts', args: { path: 'src/a.ts' } }])
+  assert.equal(validated.reviews[0].changes_diff_fully_read, true)
+  // Unknown extra fields still fail closed.
+  const withUnknown = withProvenance() as { reviews: Array<Record<string, unknown>> }
+  withUnknown.reviews[0]!['controller_secret'] = 'x'
+  assert.throws(() => validateBabelReviewCache(withUnknown, expected))
+})
