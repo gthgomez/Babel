@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ResolvedModelPolicy } from '../modelPolicy.js';
 import type { OpenCodeGoModel } from '../runners/openCodeGoApi.js';
+import { BABEL_REVIEW_OUTPUT_TOKENS } from './babelReviewObserver.js';
 
 export const BabelChatVerdict = z.object({
   verdict: z.enum(['APPROVE', 'BLOCK']),
@@ -42,7 +43,7 @@ export function babelReviewModelPolicy(model: OpenCodeGoModel, trustedRoot: stri
     resolvedBackendKey: model, provider: 'opencode-go', providerModelId: model,
     expensive: false, enabled: true, experimental: true, blockedWithoutExplicitOptIn: false,
     approximateInputTokens: 0, approximateOutputTokens: 0, warnings: [], waterfall: [], stagePolicies: [],
-    contextWindow: 128000, contextLimit: 128000, maxOutputTokens: 8192, nativeToolUse: true,
+    contextWindow: 128000, contextLimit: 128000, maxOutputTokens: BABEL_REVIEW_OUTPUT_TOKENS, nativeToolUse: true,
     selectionReason: 'Owner-selected exact-model Babel PR review; measured usage, no monetary cap.',
   };
 }
