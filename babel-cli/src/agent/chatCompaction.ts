@@ -64,7 +64,12 @@ export interface CompactionStrategy {
   /** Human-readable strategy name for logging and debugging */
   name: string;
   /** Whether this strategy can be applied to the given messages */
-  canApply(messages: ChatMessage[], estimatedTokens: number, maxTokens: number): boolean;
+  canApply(
+    messages: ChatMessage[],
+    estimatedTokens: number,
+    maxTokens: number,
+    options?: { model?: string },
+  ): boolean;
   /** Apply compaction and return the compacted message list */
   compact(messages: ChatMessage[], options: CompactionOptions): Promise<ChatMessage[]>;
 }
@@ -333,12 +338,74 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     this.maxSummaryTokens = options?.maxSummaryTokens ?? DEFAULT_COMPACTION_CONFIG.maxSummaryTokens;
   }
 
-  canApply(_messages: ChatMessage[], estimatedTokens: number, maxTokens: number): boolean {
+  /**
+   * Resolve the effective compaction target (provider endpoint + model),
+   * failing closed when the endpoint, the credential and the model do not
+   * belong to the same provider.
+   *
+   * The caller's `options.model` is often ambient-derived (for example the
+   * default `Qwen/Qwen3-32B-Instruct`), so "a model was supplied" is not proof
+   * of an explicit operator choice. Instead this validates the resolved model
+   * against the endpoint that actually won: the Anthropic Messages API only
+   * accepts Anthropic model ids, and the OpenAI-compatible endpoints accept
+   * everything except a bare Anthropic id. The credential is also selected to
+   * match the winning endpoint, so a key issued for one provider is never sent
+   * to another provider's API. Returns null when no coherent target exists;
+   * the caller then falls back to heuristic truncation instead of guessing.
+   */
+  private resolveCompactionTarget(options: { model?: string }): {
+    apiKey: string;
+    baseUrl: string;
+    model: string;
+  } | null {
+    const { baseUrl } = this.resolveCompactionConfig();
+    const isAnthropic = baseUrl.includes('anthropic.com');
+
+    // Credential must match the endpoint that won, including when an operator
+    // sets an explicit BABEL_COMPACTION_API_BASE: a key issued for one provider
+    // is never transmitted to another provider's API. Unknown/custom endpoints
+    // fall back to the legacy priority because the operator chose the endpoint.
+    const apiKey = isAnthropic
+      ? (process.env['BABEL_COMPACTION_API_KEY'] || process.env['ANTHROPIC_API_KEY'])
+      : baseUrl.includes('openrouter.ai')
+        ? (process.env['OPENROUTER_API_KEY'] || process.env['BABEL_COMPACTION_API_KEY'])
+        : baseUrl.includes('deepinfra.com')
+          ? (process.env['DEEPINFRA_API_KEY'] || process.env['BABEL_COMPACTION_API_KEY'])
+          : (process.env['BABEL_COMPACTION_API_KEY'] ||
+             process.env['OPENROUTER_API_KEY'] ||
+             process.env['DEEPINFRA_API_KEY'] ||
+             process.env['ANTHROPIC_API_KEY']);
+    if (!apiKey) return null;
+
+    const explicitModel =
+      options.model ?? process.env['BABEL_COMPACTION_MODEL'] ?? undefined;
+    const model = (explicitModel ??
+      (process.env['OPENROUTER_API_KEY'] && !process.env['DEEPINFRA_API_KEY']
+        ? 'deepseek/deepseek-v4-flash-0731'
+        : DEFAULT_COMPACTION_CONFIG.compactionModel)).trim();
+    if (!model) return null;
+
+    // Model family and endpoint must agree. This is what stops an ambient key
+    // (or an ambient-derived default model id) from being dispatched
+    // cross-provider.
+    const isAnthropicModel = /^claude/i.test(model);
+    if (isAnthropic !== isAnthropicModel) return null;
+
+    return { apiKey, baseUrl, model };
+  }
+
+  canApply(
+    _messages: ChatMessage[],
+    estimatedTokens: number,
+    maxTokens: number,
+    options?: { model?: string },
+  ): boolean {
     // Check env var override
     if (process.env['BABEL_COMPACTION'] === 'off') return false;
 
-    // Check that we have an API key available
-    if (!this.resolveApiKey()) return false;
+    // Check that a coherent provider+model target is available (the caller's
+    // explicit model counts; ambient keys alone must not select one).
+    if (this.resolveCompactionTarget(options ?? {}) === null) return false;
 
     // Circuit breaker: skip after too many consecutive failures
     if (this.consecutiveFailures >= LLMSummarizeCompaction.MAX_CONSECUTIVE_FAILURES) {
@@ -420,24 +487,6 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
   }
 
   /**
-   * Resolve the API key for the compaction LLM.
-   * Checks environment variables in order: BABEL_COMPACTION_API_KEY,
-   * OPENROUTER_API_KEY, DEEPINFRA_API_KEY, ANTHROPIC_API_KEY.
-   *
-   * Uses || (not ??) so that empty string "" is treated as unset,
-   * matching the convention in every other API runner in the codebase
-   * (deepInfraApi, openAiApi, geminiApi, deepSeekApi).
-   */
-  private resolveApiKey(): string | undefined {
-    return (
-      process.env['BABEL_COMPACTION_API_KEY'] ||
-      process.env['OPENROUTER_API_KEY'] ||
-      process.env['DEEPINFRA_API_KEY'] ||
-      process.env['ANTHROPIC_API_KEY']
-    );
-  }
-
-  /**
    * Resolve the compaction config from a single env snapshot so apiKey and
    * baseUrl are always derived from the same set of environment variables.
    */
@@ -465,27 +514,6 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
   }
 
   /**
-   * Resolve the API base URL from environment or provider type.
-   */
-  private resolveApiBaseUrl(): string {
-    return this.resolveCompactionConfig().baseUrl;
-  }
-
-  /**
-   * Resolve the effective model ID.
-   * Priority: options.model > BABEL_COMPACTION_MODEL > DEFAULT
-   */
-  private resolveModel(options: CompactionOptions): string {
-    return (
-      options.model ??
-      process.env['BABEL_COMPACTION_MODEL'] ??
-      (process.env['OPENROUTER_API_KEY'] && !process.env['DEEPINFRA_API_KEY']
-        ? 'deepseek/deepseek-v4-flash-0731'
-        : DEFAULT_COMPACTION_CONFIG.compactionModel)
-    );
-  }
-
-  /**
    * Call the compaction LLM API.
    *
    * Supports:
@@ -499,9 +527,12 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     targetTokens: number,
     options: CompactionOptions,
   ): Promise<CompactionApiResult> {
-    const apiKey = this.resolveApiKey()!;
-    const baseUrl = this.resolveApiBaseUrl();
-    const model = this.resolveModel(options);
+    const target = this.resolveCompactionTarget(options);
+    if (!target) {
+      // No coherent provider+model pairing: refuse instead of guessing.
+      throw new Error('COMPACTION_PROVIDER_TARGET_UNRESOLVED');
+    }
+    const { apiKey, baseUrl, model } = target;
     const isAnthropic = baseUrl.includes('anthropic.com');
     const signal = options.signal;
 
@@ -879,7 +910,7 @@ export class CompactionManager {
     const errors: string[] = [];
 
     for (const strategy of this.strategies) {
-      if (!strategy.canApply(messages, tokensBefore, options.maxTokens)) {
+      if (!strategy.canApply(messages, tokensBefore, options.maxTokens, options)) {
         continue;
       }
 

@@ -29,6 +29,7 @@ import {
   type ChatMessage,
   type CompactionOptions,
   type CompactionStrategy,
+  resolveCompactionModelId,
 } from './chatCompaction.js';
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────
@@ -329,21 +330,70 @@ describe('LLMSummarizeCompaction', () => {
     assert.strictEqual(result, false);
   });
 
-  it('canApply returns true when compaction is needed and key is available', () => {
+  it('canApply fails closed on incoherent endpoint/model pairings and honors coherent models', () => {
     const savedKey = process.env['BABEL_COMPACTION_API_KEY'];
+    const savedOr = process.env['OPENROUTER_API_KEY'];
+    const savedDi = process.env['DEEPINFRA_API_KEY'];
+    const savedAn = process.env['ANTHROPIC_API_KEY'];
+    const savedBase = process.env['BABEL_COMPACTION_API_BASE'];
+    const savedModel = process.env['BABEL_COMPACTION_MODEL'];
+    delete process.env['OPENROUTER_API_KEY'];
+    delete process.env['DEEPINFRA_API_KEY'];
+    delete process.env['ANTHROPIC_API_KEY'];
+    delete process.env['BABEL_COMPACTION_API_BASE'];
+    delete process.env['BABEL_COMPACTION_MODEL'];
     process.env['BABEL_COMPACTION_API_KEY'] = 'test-key';
 
-    const strategy = new LLMSummarizeCompaction();
-    const result = strategy.canApply([{ role: 'user', content: 'x'.repeat(10000) }], 10000, 100);
+    try {
+      const strategy = new LLMSummarizeCompaction();
+      const messages = [{ role: 'user' as const, content: 'x'.repeat(10000) }];
 
-    // Restore
-    if (savedKey) {
-      process.env['BABEL_COMPACTION_API_KEY'] = savedKey;
-    } else {
-      delete process.env['BABEL_COMPACTION_API_KEY'];
+      // The dedicated key alone derives an Anthropic endpoint. An
+      // ambient-derived non-Anthropic default model id must be refused, both
+      // in the strategy-only shape and in the real production call shape
+      // (CompactionManager always passes the resolved model).
+      assert.strictEqual(strategy.canApply(messages, 10000, 100), false);
+      assert.strictEqual(
+        strategy.canApply(messages, 10000, 100, { model: 'Qwen/Qwen3-32B-Instruct' }),
+        false,
+      );
+      assert.strictEqual(
+        strategy.canApply(messages, 10000, 100, { model: resolveCompactionModelId({}) }),
+        false,
+      );
+
+      // A coherent Anthropic model is allowed against the Anthropic endpoint.
+      assert.strictEqual(
+        strategy.canApply(messages, 10000, 100, { model: 'claude-3-5-haiku-latest' }),
+        true,
+      );
+
+      // An explicitly configured non-Anthropic endpoint makes a non-Anthropic
+      // model coherent again...
+      process.env['BABEL_COMPACTION_API_BASE'] = 'https://api.deepinfra.com/v1/openai/chat/completions';
+      assert.strictEqual(
+        strategy.canApply(messages, 10000, 100, { model: 'Qwen/Qwen3-32B-Instruct' }),
+        true,
+      );
+      // ...but an Anthropic model must never be sent to it.
+      assert.strictEqual(
+        strategy.canApply(messages, 10000, 100, { model: 'claude-3-5-haiku-latest' }),
+        false,
+      );
+    } finally {
+      if (savedKey === undefined) delete process.env['BABEL_COMPACTION_API_KEY'];
+      else process.env['BABEL_COMPACTION_API_KEY'] = savedKey;
+      if (savedOr === undefined) delete process.env['OPENROUTER_API_KEY'];
+      else process.env['OPENROUTER_API_KEY'] = savedOr;
+      if (savedDi === undefined) delete process.env['DEEPINFRA_API_KEY'];
+      else process.env['DEEPINFRA_API_KEY'] = savedDi;
+      if (savedAn === undefined) delete process.env['ANTHROPIC_API_KEY'];
+      else process.env['ANTHROPIC_API_KEY'] = savedAn;
+      if (savedBase === undefined) delete process.env['BABEL_COMPACTION_API_BASE'];
+      else process.env['BABEL_COMPACTION_API_BASE'] = savedBase;
+      if (savedModel === undefined) delete process.env['BABEL_COMPACTION_MODEL'];
+      else process.env['BABEL_COMPACTION_MODEL'] = savedModel;
     }
-
-    assert.strictEqual(result, true);
   });
 
   it('circuit breaker trips after consecutive failures', () => {
@@ -584,8 +634,95 @@ describe('CompactionManager integration', () => {
     }
   });
 
+  it('never transmits a cross-provider credential to the compaction endpoint', async () => {
+    const savedKey = process.env['BABEL_COMPACTION_API_KEY'];
+    const savedOr = process.env['OPENROUTER_API_KEY'];
+    const savedDi = process.env['DEEPINFRA_API_KEY'];
+    const savedAn = process.env['ANTHROPIC_API_KEY'];
+    const savedBase = process.env['BABEL_COMPACTION_API_BASE'];
+    const savedModel = process.env['BABEL_COMPACTION_MODEL'];
+    delete process.env['BABEL_COMPACTION_API_KEY'];
+    delete process.env['DEEPINFRA_API_KEY'];
+    delete process.env['BABEL_COMPACTION_API_BASE'];
+    delete process.env['BABEL_COMPACTION_MODEL'];
+    process.env['OPENROUTER_API_KEY'] = 'router-secret';
+    process.env['ANTHROPIC_API_KEY'] = 'anthropic-secret';
+    const originalFetch = globalThis.fetch;
+    const seen: Array<{ url: string; key: string | null; model: unknown }> = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const headers = new Headers(init?.headers ?? {});
+      const url = typeof input === 'string' || input instanceof URL
+        ? String(input)
+        : String((input as { url?: string })?.url ?? input);
+      let model: unknown = null;
+      try { model = JSON.parse(String(init?.body ?? '{}')).model; } catch { /* ignore */ }
+      seen.push({ url, key: headers.get('x-api-key') ?? headers.get('authorization'), model });
+      return new Response(
+        JSON.stringify({ content: [{ type: 'text', text: 'KEY_DECISIONS:\n- x' }], usage: { input_tokens: 1, output_tokens: 1 } }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+    try {
+      const strategy = new LLMSummarizeCompaction({ keepRecentMessages: 2 });
+      const messages = makeLongConversation(5);
+
+      // The ambient-derived default model is not coherent with the Anthropic
+      // endpoint, so it must be refused without any dispatch.
+      const refused = await strategy.compact(messages, {
+        model: resolveCompactionModelId({}),
+        maxTokens: 100,
+      }).then(() => null, () => 'refused');
+      assert.strictEqual(refused, 'refused');
+      assert.strictEqual(seen.length, 0);
+
+      // A coherent Anthropic model dispatches to Anthropic with the Anthropic
+      // credential, never the ambient OpenRouter key.
+      await strategy.compact(messages, { model: 'claude-3-5-haiku-latest', maxTokens: 100 });
+      assert.strictEqual(seen.length, 1);
+      assert.ok(seen[0]!.url.includes('api.anthropic.com'), seen[0]!.url);
+      assert.strictEqual(seen[0]!.key, 'anthropic-secret');
+
+      // An explicit Anthropic base with only an OpenRouter credential must
+      // still refuse rather than send the wrong key.
+      process.env['BABEL_COMPACTION_API_BASE'] = 'https://api.anthropic.com';
+      delete process.env['ANTHROPIC_API_KEY'];
+      const onlyRouter = new LLMSummarizeCompaction({ keepRecentMessages: 2 });
+      assert.strictEqual(
+        onlyRouter.canApply(messages, 10000, 100, { model: 'claude-3-5-haiku-latest' }),
+        false,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (savedKey === undefined) delete process.env['BABEL_COMPACTION_API_KEY'];
+      else process.env['BABEL_COMPACTION_API_KEY'] = savedKey;
+      if (savedOr === undefined) delete process.env['OPENROUTER_API_KEY'];
+      else process.env['OPENROUTER_API_KEY'] = savedOr;
+      if (savedDi === undefined) delete process.env['DEEPINFRA_API_KEY'];
+      else process.env['DEEPINFRA_API_KEY'] = savedDi;
+      if (savedAn === undefined) delete process.env['ANTHROPIC_API_KEY'];
+      else process.env['ANTHROPIC_API_KEY'] = savedAn;
+      if (savedBase === undefined) delete process.env['BABEL_COMPACTION_API_BASE'];
+      else process.env['BABEL_COMPACTION_API_BASE'] = savedBase;
+      if (savedModel === undefined) delete process.env['BABEL_COMPACTION_MODEL'];
+      else process.env['BABEL_COMPACTION_MODEL'] = savedModel;
+    }
+  });
+
   it('uses LLM compaction when available and within limits', async () => {
     const savedKey = process.env['BABEL_COMPACTION_API_KEY'];
+    const savedOr = process.env['OPENROUTER_API_KEY'];
+    const savedDi = process.env['DEEPINFRA_API_KEY'];
+    const savedAn = process.env['ANTHROPIC_API_KEY'];
+    const savedBase = process.env['BABEL_COMPACTION_API_BASE'];
+    const savedModel = process.env['BABEL_COMPACTION_MODEL'];
+    // Isolate the derived endpoint: with only the dedicated key set, the
+    // endpoint is Anthropic and a Claude model is coherent. Ambient
+    // provider keys must not change this test's outcome.
+    delete process.env['OPENROUTER_API_KEY'];
+    delete process.env['DEEPINFRA_API_KEY'];
+    delete process.env['ANTHROPIC_API_KEY'];
+    delete process.env['BABEL_COMPACTION_API_BASE'];
+    delete process.env['BABEL_COMPACTION_MODEL'];
     process.env['BABEL_COMPACTION_API_KEY'] = 'test-key';
     const llmStrategy = new LLMSummarizeCompaction({ keepRecentMessages: 2 });
 
@@ -599,7 +736,7 @@ describe('CompactionManager integration', () => {
     const manager = new CompactionManager([llmStrategy, new HeuristicTruncationStrategy(2)]);
 
     const msgs = makeLongConversation(5); // System + 10 messages
-    const result = await manager.compact(msgs, { model: 'test-model', maxTokens: 100 });
+    const result = await manager.compact(msgs, { model: 'claude-3-5-haiku-latest', maxTokens: 100 });
 
     // Should have compacted — fewer messages than original
     assert.ok(result.length < msgs.length, `Expected ${result.length} < ${msgs.length}`);
@@ -612,11 +749,18 @@ describe('CompactionManager integration', () => {
     assert.strictEqual(summaryMsgs.length, 1);
 
     // Restore env
-    if (savedKey) {
-      process.env['BABEL_COMPACTION_API_KEY'] = savedKey;
-    } else {
-      delete process.env['BABEL_COMPACTION_API_KEY'];
-    }
+    if (savedKey === undefined) delete process.env['BABEL_COMPACTION_API_KEY'];
+    else process.env['BABEL_COMPACTION_API_KEY'] = savedKey;
+    if (savedOr === undefined) delete process.env['OPENROUTER_API_KEY'];
+    else process.env['OPENROUTER_API_KEY'] = savedOr;
+    if (savedDi === undefined) delete process.env['DEEPINFRA_API_KEY'];
+    else process.env['DEEPINFRA_API_KEY'] = savedDi;
+    if (savedAn === undefined) delete process.env['ANTHROPIC_API_KEY'];
+    else process.env['ANTHROPIC_API_KEY'] = savedAn;
+    if (savedBase === undefined) delete process.env['BABEL_COMPACTION_API_BASE'];
+    else process.env['BABEL_COMPACTION_API_BASE'] = savedBase;
+    if (savedModel === undefined) delete process.env['BABEL_COMPACTION_MODEL'];
+    else process.env['BABEL_COMPACTION_MODEL'] = savedModel;
   });
 
   it('falls back to heuristic when LLM compaction is disabled', async () => {
