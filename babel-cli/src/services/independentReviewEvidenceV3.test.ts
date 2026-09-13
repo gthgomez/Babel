@@ -341,3 +341,74 @@ test('independentReviewEvidenceV3: rejects LOCAL_UNAUTHENTICATED when requireAut
   )
 })
 
+test('independentReviewEvidenceV3: execution_purpose distinguishes certification from review and repair', () => {
+  const certEvidence = createValidEvidence({
+    provenance: 'TRUSTED_CONTROLLER_EVIDENCE',
+    execution_purpose: 'FINAL_CERTIFICATION',
+  })
+  // Final certification satisfies authoritative requirements
+  validateIndependentReviewEvidenceV3(certEvidence, { requireAuthoritative: true })
+
+  const dogfoodEvidence = createValidEvidence({
+    provenance: 'TRUSTED_CONTROLLER_EVIDENCE',
+    execution_purpose: 'DOGFOOD_REVIEW',
+  })
+  // Valid as review evidence
+  validateIndependentReviewEvidenceV3(dogfoodEvidence)
+  // Rejection: review/repair cannot masquerade as final independent certification
+  assert.throws(
+    () => validateIndependentReviewEvidenceV3(dogfoodEvidence, { requireAuthoritative: true }),
+    /NON_CERTIFICATION_EVIDENCE_CANNOT_SATISFY_AUTHORITY/
+  )
+
+  const repairEvidence = createValidEvidence({
+    provenance: 'TRUSTED_CONTROLLER_EVIDENCE',
+    execution_purpose: 'REVIEW_REPAIR',
+  })
+  assert.throws(
+    () => validateIndependentReviewEvidenceV3(repairEvidence, { requireAuthoritative: true }),
+    /NON_CERTIFICATION_EVIDENCE_CANNOT_SATISFY_AUTHORITY/
+  )
+})
+
+test('independentReviewEvidenceV3: candidate repair producer cannot certify the candidate it modified', () => {
+  const repairProducerExecutionId = 'exec-repair-agent-001'
+  const certifierEvidence = createValidEvidence({
+    reviewer: { kind: 'codex', principal_id: 'p-certifier', execution_id: repairProducerExecutionId },
+    runtime: { agent_kind: 'codex', adapter_id: 'codex-adapter', controller_execution_id: repairProducerExecutionId },
+    execution_purpose: 'FINAL_CERTIFICATION',
+  })
+
+  // Same execution that produced the repair cannot certify it
+  assert.throws(
+    () => validateIndependentReviewEvidenceV3(certifierEvidence, { producerExecutionId: repairProducerExecutionId }),
+    /CANDIDATE_PRODUCER_CANNOT_CERTIFY/
+  )
+
+  // A fresh distinct execution CAN certify
+  const freshExecutionId = 'exec-fresh-certifier-002'
+  const freshCertifierEvidence = createValidEvidence({
+    reviewer: { kind: 'codex', principal_id: 'p-certifier-fresh', execution_id: freshExecutionId },
+    runtime: { agent_kind: 'codex', adapter_id: 'codex-adapter', controller_execution_id: freshExecutionId },
+    execution_purpose: 'FINAL_CERTIFICATION',
+  })
+  validateIndependentReviewEvidenceV3(freshCertifierEvidence, { producerExecutionId: repairProducerExecutionId })
+})
+
+test('independentReviewEvidenceV3: mutation invalidates prior approval (approval(A) != approval(B))', () => {
+  const candidateADigest = 'a'.repeat(64)
+  const candidateBDigest = 'b'.repeat(64)
+
+  const evidenceA = createValidEvidence({
+    candidate_digest: candidateADigest,
+    execution_purpose: 'FINAL_CERTIFICATION',
+  })
+
+  // Evidence for A fails validation against candidate B
+  assert.throws(
+    () => validateIndependentReviewEvidenceV3(evidenceA, { candidate_digest: candidateBDigest }),
+    /CANDIDATE_BINDING_MISMATCH: candidate_digest/
+  )
+})
+
+

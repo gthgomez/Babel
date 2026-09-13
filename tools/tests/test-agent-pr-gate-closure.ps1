@@ -293,6 +293,22 @@ try {
   $blockApproval.blocking_findings = @('Unresolved security vulnerability')
   Assert-ClosureGate (-not (Test-AgentIndependentReviewEvidenceV3 -Evidence $blockApproval -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest).valid) 'V3 must reject APPROVE verdict with blocking findings'
 
+  # Accept: FINAL_CERTIFICATION purpose
+  $certV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $certV3 | Add-Member -NotePropertyName 'execution_purpose' -NotePropertyValue 'FINAL_CERTIFICATION' -Force
+  Assert-ClosureGate ((Test-AgentIndependentReviewEvidenceV3 -Evidence $certV3 -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest).valid) 'V3 must accept FINAL_CERTIFICATION execution purpose'
+
+  # Reject: DOGFOOD_REVIEW or REVIEW_REPAIR purpose at merge gate
+  $dogfoodV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $dogfoodV3 | Add-Member -NotePropertyName 'execution_purpose' -NotePropertyValue 'DOGFOOD_REVIEW' -Force
+  $dogfoodResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $dogfoodV3 -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
+  Assert-ClosureGate (-not $dogfoodResult.valid -and @($dogfoodResult.errors) -contains 'independent_evidence_non_certification_purpose') 'V3 must reject DOGFOOD_REVIEW for merge gate authority'
+
+  $repairV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $repairV3 | Add-Member -NotePropertyName 'execution_purpose' -NotePropertyValue 'REVIEW_REPAIR' -Force
+  $repairResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $repairV3 -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
+  Assert-ClosureGate (-not $repairResult.valid -and @($repairResult.errors) -contains 'independent_evidence_non_certification_purpose') 'V3 must reject REVIEW_REPAIR for merge gate authority'
+
   # V3 Bundle Test
   $v3Bundle = [pscustomobject][ordered]@{
     schema_version = 3; kind = 'github_host_review_bundle_v3'

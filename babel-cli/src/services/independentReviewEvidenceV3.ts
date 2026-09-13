@@ -16,6 +16,11 @@ export interface ReviewActorIdentity {
 
 export type ModelAttribution = 'observed' | 'configured' | 'unavailable'
 
+export type ReviewExecutionPurpose =
+  | 'DOGFOOD_REVIEW'
+  | 'REVIEW_REPAIR'
+  | 'FINAL_CERTIFICATION'
+
 export interface IndependentReviewRuntime {
   /** Agent family: codex, claude-code, babel, gemini, etc. */
   agent_kind: string
@@ -23,6 +28,7 @@ export interface IndependentReviewRuntime {
   adapter_id: string
   /** Must equal reviewer.execution_id. */
   controller_execution_id: string
+  execution_purpose?: ReviewExecutionPurpose
   source_sha?: string
   runtime_version?: string
   requested_provider?: string
@@ -72,6 +78,7 @@ export interface IndependentReviewEvidenceV3 {
   findings: string[]
   blocking_findings: string[]
   isolation: IndependentReviewIsolationProfile
+  execution_purpose?: ReviewExecutionPurpose
   usage?: IndependentReviewUsage
 }
 
@@ -98,6 +105,7 @@ const text = z.string().min(1).refine(v => v.trim().toLowerCase() !== 'unknown',
 const sha = z.string().regex(/^[a-f0-9]{40}$/i, { message: 'INVALID_SHA' })
 const digest = z.string().regex(/^[a-f0-9]{64}$/i, { message: 'INVALID_DIGEST' })
 const provenanceSchema = z.enum(['LOCAL_UNAUTHENTICATED', 'TRUSTED_CONTROLLER_EVIDENCE', 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'])
+export const reviewExecutionPurposeSchema = z.enum(['DOGFOOD_REVIEW', 'REVIEW_REPAIR', 'FINAL_CERTIFICATION'])
 
 export const challengeIdSchema = z.string()
   .min(1, { message: 'EMPTY_CHALLENGE_ID' })
@@ -131,6 +139,7 @@ export const independentReviewRuntimeSchema = z.object({
   agent_kind: text,
   adapter_id: text,
   controller_execution_id: text,
+  execution_purpose: reviewExecutionPurposeSchema.optional(),
   source_sha: sha.optional(),
   runtime_version: z.string().min(1).optional(),
   requested_provider: z.string().min(1).optional(),
@@ -174,6 +183,7 @@ export const independentReviewEvidenceV3Schema = z.object({
   challenge_id: challengeIdSchema,
   runtime: independentReviewRuntimeSchema,
   review_mode: z.literal('exact_diff'),
+  execution_purpose: reviewExecutionPurposeSchema.optional(),
   reviewed_at: text,
   scope: z.array(text).min(1),
   verdict: z.enum(['APPROVE', 'BLOCK']),
@@ -218,12 +228,27 @@ function assertSafePath(path: string): void {
  */
 export function validateIndependentReviewEvidenceV3(
   value: unknown,
-  expected?: Partial<IndependentReviewEvidenceV3> & { candidateScope?: string[] | undefined; now?: number | undefined; requireAuthoritative?: boolean | undefined }
+  expected?: Partial<IndependentReviewEvidenceV3> & {
+    candidateScope?: string[] | undefined
+    now?: number | undefined
+    requireAuthoritative?: boolean | undefined
+    producerExecutionId?: string | undefined
+  } | undefined
 ): IndependentReviewEvidenceV3 {
   const parsed = independentReviewEvidenceV3Schema.parse(value)
 
   if (expected?.requireAuthoritative && parsed.provenance === 'LOCAL_UNAUTHENTICATED') {
     throw new Error('LOCAL_UNAUTHENTICATED_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
+  }
+
+  // Merge gate authority strictly requires FINAL_CERTIFICATION purpose
+  if (expected?.requireAuthoritative && parsed.execution_purpose && parsed.execution_purpose !== 'FINAL_CERTIFICATION') {
+    throw new Error('NON_CERTIFICATION_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
+  }
+
+  // Candidate repair producer cannot certify the candidate it produced
+  if (expected?.producerExecutionId && parsed.reviewer.execution_id.toLowerCase() === expected.producerExecutionId.toLowerCase()) {
+    throw new Error('CANDIDATE_PRODUCER_CANNOT_CERTIFY')
   }
 
   // 1. Independence validation
@@ -326,7 +351,8 @@ export function validateHostReviewHandoffV3(
     controllerRunId?: string
     scope?: string[]
     now?: number
-    requireAuthoritative?: boolean
+    requireAuthoritative?: boolean | undefined
+    producerExecutionId?: string | undefined
   }
 ): HostReviewHandoffV3 {
   const parsed = hostReviewHandoffV3Schema.parse(value)
@@ -360,6 +386,7 @@ export function validateHostReviewHandoffV3(
       candidateScope: expected?.scope,
       now: expected?.now,
       requireAuthoritative: expected?.requireAuthoritative,
+      producerExecutionId: expected?.producerExecutionId,
     })
 
     if (reviewerPrincipals.has(review.reviewer.principal_id)) {

@@ -42,6 +42,47 @@ specific vendor or model family.
    - Anti-Approval Shopping: Substantive BLOCK verdicts are retained. Retrying without repairing the code is blocked.
    - Atomic Settlement: Bundles settle without partial approval.
 
+### Three Distinct Stages
+
+The reviewer architecture separates review, repair, and certification into three uncollapsed stages:
+
+```
+STAGE 1: BABEL DOGFOOD REVIEW
+Normal Babel Chat + Reviewer Persona + Candidate Diff
+       │
+       ├── Continuous Babel daily-driver Chat dogfooding (compaction, router, memory, tools)
+       └── Produces findings without stripping ChatEngine capabilities
+
+STAGE 2: AUTONOMOUS EXTERNAL REVIEW & REPAIR
+Native Coding Harness (Codex, Claude, Gemini, OpenCode) in Isolated Worktree
+       │
+       ├── Mode: Review (inspect, test, find) OR Repair (inspect, test, edit, commit candidate B)
+       └── Authorized to perform capable autonomous engineering in isolated worktree
+
+STAGE 3: FINAL INDEPENDENT CERTIFICATION
+Fresh Independent Certifier (distinct execution, not builder, not repair producer)
+       │
+       ├── Mode: Read-only, candidate-frozen, SHA/digest-bound
+       ├── V3 Evidence with execution_purpose: 'FINAL_CERTIFICATION'
+       └── Merge gate authority strictly requires Stage 3
+```
+
+#### Mutation Invalidation & Independence Rules
+- **Ordinary review capability != certification authority**: A review session or repair proposal does not carry merge gate authority.
+- **Repair capability != approval authority**: An agent modifying code under `--repair` cannot approve its own repair.
+- **Mutation Invalidation**:
+  $$\text{candidate } A \xrightarrow{\text{repair}} \text{candidate } B \implies \text{approval}(A) \ne \text{approval}(B)$$
+  Any code modification produces a new candidate $B$. Prior approval of $A$ is instantly stale.
+- **Fresh Execution Requirement**: The execution that produced candidate $B$ (`producer_execution_id`) CANNOT certify $B$. A fresh, distinct execution must independently inspect and certify exact $B$.
+- **Same Agent Family Allowed**: Codex Agent A (repair) $\to$ Codex Agent B (fresh certifier) is fully valid provided execution and principal IDs are distinct and proven by the controller.
+
+#### Evidence Execution Purpose
+V3 evidence explicitly types `execution_purpose`:
+- `DOGFOOD_REVIEW`: Telemetry and findings from normal Babel Chat dogfooding.
+- `REVIEW_REPAIR`: Autonomous repair proposals or modified candidates.
+- `FINAL_CERTIFICATION`: Read-only, frozen SHA/digest-bound attestation required for merge gate authority.
+The merge gate strictly rejects `DOGFOOD_REVIEW` or `REVIEW_REPAIR` as merge authority.
+
 ## V2 Babel Chat Review Contract (Legacy / Compatibility)
 
 Low-level V2 validation (`<!-- babel-controller-ai-reviews-v2 -->`) remains supported alongside

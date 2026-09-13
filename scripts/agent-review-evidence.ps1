@@ -273,7 +273,15 @@ function Test-AgentIndependentReviewEvidenceV3 {
     }
   }
 
-  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'candidate_digest', 'diff_numstat_digest', 'task_id', 'task_hash', 'builder', 'reviewer', 'controller_run_id', 'challenge_id', 'runtime', 'review_mode', 'reviewed_at', 'scope', 'verdict', 'findings', 'blocking_findings', 'isolation', 'usage', 'provenance')
+  $executionPurpose = [string](Get-AgentPropertyValue $Evidence 'execution_purpose')
+  if ($executionPurpose -and @('DOGFOOD_REVIEW', 'REVIEW_REPAIR', 'FINAL_CERTIFICATION') -cnotcontains $executionPurpose) {
+    $errors += 'independent_evidence_execution_purpose_invalid'
+  }
+  if ($executionPurpose -and $executionPurpose -cne 'FINAL_CERTIFICATION') {
+    $errors += 'independent_evidence_non_certification_purpose'
+  }
+
+  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'candidate_digest', 'diff_numstat_digest', 'task_id', 'task_hash', 'builder', 'reviewer', 'controller_run_id', 'challenge_id', 'runtime', 'review_mode', 'execution_purpose', 'reviewed_at', 'scope', 'verdict', 'findings', 'blocking_findings', 'isolation', 'usage', 'provenance')
   foreach ($field in @(Get-AgentPropertyNames $Evidence)) {
     if ($allowed -cnotcontains $field) { $errors += "independent_evidence_unknown_field:$field" }
   }

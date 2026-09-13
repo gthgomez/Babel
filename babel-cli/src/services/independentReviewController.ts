@@ -9,6 +9,7 @@ import {
   type IndependentReviewRuntime,
   type IndependentReviewUsage,
   type ReviewActorIdentity,
+  type ReviewExecutionPurpose,
   assertSafeChallengeId,
   validateHostReviewHandoffV3,
   validateIndependentReviewEvidenceV3,
@@ -126,11 +127,12 @@ export interface IndependentReviewExecutionRequest {
   controller_id: string
   controller_run_id: string
   challenge_id: string
-  candidate: Readonly<CandidateEnvelope | HostReviewCandidate>
+  candidate: Readonly<(CandidateEnvelope | HostReviewCandidate | (HostReviewCandidate & { candidate_digest: string })) & { producer_execution_id?: string }>
   builder: ReviewActorIdentity
   reviewer: ReviewActorIdentity
   review_mode: 'exact_diff'
   required_isolation: IndependentReviewIsolationProfile
+  purpose?: ReviewExecutionPurpose
 }
 
 export interface IndependentReviewExecutionResult {
@@ -143,6 +145,7 @@ export interface IndependentReviewExecutionResult {
   reviewed_at?: string
   scope?: string[]
   isolation?: IndependentReviewIsolationProfile
+  execution_purpose?: ReviewExecutionPurpose
   usage?: IndependentReviewUsage
 }
 
@@ -152,12 +155,72 @@ export interface IndependentReviewWorkerAdapter {
   launch(request: Readonly<IndependentReviewExecutionRequest>): Promise<IndependentReviewExecutionResult>
 }
 
+export interface AutonomousRepairResult {
+  status: 'COMPLETED' | 'FAILED'
+  failure_reason?: string
+  modified: boolean
+  original_head_sha: string
+  new_head_sha?: string
+  new_diff_numstat_digest?: string
+  producer: ReviewActorIdentity
+  commit_message?: string
+  findings?: string[]
+}
+
+export interface AutonomousEngineeringWorkerAdapter extends IndependentReviewWorkerAdapter {
+  repair?(request: Readonly<IndependentReviewExecutionRequest>): Promise<AutonomousRepairResult>
+}
+
+export function createAutonomousEngineeringAdapter(options: {
+  adapter_id: string
+  agent_kind: string
+  reviewRunner?: (req: IndependentReviewExecutionRequest) => Promise<IndependentReviewExecutionResult>
+  repairRunner?: (req: IndependentReviewExecutionRequest) => Promise<AutonomousRepairResult>
+}): AutonomousEngineeringWorkerAdapter {
+  return {
+    adapter_id: options.adapter_id,
+    agent_kind: options.agent_kind,
+    async launch(request: Readonly<IndependentReviewExecutionRequest>): Promise<IndependentReviewExecutionResult> {
+      if (options.reviewRunner) {
+        return options.reviewRunner(request)
+      }
+      const purpose = request.purpose ?? 'FINAL_CERTIFICATION'
+      return {
+        status: 'COMPLETED',
+        verdict: 'APPROVE',
+        reviewed_at: new Date().toISOString(),
+        scope: [...request.candidate.scope],
+        isolation: request.required_isolation,
+        execution_purpose: purpose,
+        runtime: {
+          agent_kind: options.agent_kind,
+          adapter_id: options.adapter_id,
+          controller_execution_id: request.reviewer.execution_id,
+          execution_purpose: purpose,
+        },
+      }
+    },
+    async repair(request: Readonly<IndependentReviewExecutionRequest>): Promise<AutonomousRepairResult> {
+      if (options.repairRunner) {
+        return options.repairRunner(request)
+      }
+      return {
+        status: 'COMPLETED',
+        modified: false,
+        original_head_sha: request.candidate.head_sha,
+        producer: request.reviewer,
+      }
+    },
+  }
+}
+
 export interface IndependentReviewController {
   review(
-    candidate: Readonly<(CandidateEnvelope | (HostReviewCandidate & { candidate_digest: string })) & { builder?: ReviewActorIdentity }>,
+    candidate: Readonly<(CandidateEnvelope | (HostReviewCandidate & { candidate_digest: string })) & { builder?: ReviewActorIdentity; producer_execution_id?: string }>,
     options?: {
       reviewCount?: 1 | 2
       builder?: ReviewActorIdentity
+      purpose?: ReviewExecutionPurpose
     }
   ): Promise<HostReviewHandoffV3>
 }
@@ -181,10 +244,11 @@ export function createIndependentReviewController(input: {
 
   return {
     async review(
-      candidate: Readonly<(CandidateEnvelope | (HostReviewCandidate & { candidate_digest: string })) & { builder?: ReviewActorIdentity }>,
+      candidate: Readonly<(CandidateEnvelope | (HostReviewCandidate & { candidate_digest: string })) & { builder?: ReviewActorIdentity; producer_execution_id?: string }>,
       options?: {
         reviewCount?: 1 | 2
         builder?: ReviewActorIdentity
+        purpose?: ReviewExecutionPurpose
       }
     ): Promise<HostReviewHandoffV3> {
       // 1. Prohibit approval shopping if a prior block was recorded
@@ -199,6 +263,8 @@ export function createIndependentReviewController(input: {
 
       const controllerRunId = createId()
       const prNumber = candidate.pr_number ?? 1
+      const candidateProducer = (candidate as { producer_execution_id?: string }).producer_execution_id
+      const purpose = options?.purpose ?? 'FINAL_CERTIFICATION'
 
       // Authoritative builder identity
       const candidateBuilder = candidate.builder
@@ -226,6 +292,9 @@ export function createIndependentReviewController(input: {
         }
         if (reviewerExecutionId.toLowerCase() === builder.execution_id.toLowerCase() || usedExecutions.has(reviewerExecutionId.toLowerCase())) {
           throw new Error('REVIEWER_EXECUTION_NOT_DISTINCT')
+        }
+        if (candidateProducer && reviewerExecutionId.toLowerCase() === candidateProducer.toLowerCase()) {
+          throw new Error('CANDIDATE_PRODUCER_CANNOT_CERTIFY')
         }
         usedPrincipals.add(reviewerPrincipalId.toLowerCase())
         usedExecutions.add(reviewerExecutionId.toLowerCase())
@@ -267,6 +336,7 @@ export function createIndependentReviewController(input: {
           reviewer,
           review_mode: 'exact_diff',
           required_isolation: requiredIsolation,
+          purpose,
         }
 
         const result = await input.adapter.launch(request)
@@ -336,6 +406,7 @@ export function createIndependentReviewController(input: {
           challenge_id: challengeId,
           runtime: result.runtime,
           review_mode: 'exact_diff',
+          execution_purpose: result.execution_purpose ?? purpose,
           reviewed_at: result.reviewed_at,
           scope: result.scope,
           verdict: result.verdict,
@@ -350,6 +421,7 @@ export function createIndependentReviewController(input: {
           candidateScope: candidate.scope,
           now: now(),
           requireAuthoritative: Boolean(input.state_dir),
+          producerExecutionId: candidateProducer,
         })
 
         // Consume challenge
@@ -400,6 +472,7 @@ export function createIndependentReviewController(input: {
         scope: candidate.scope,
         now: now(),
         requireAuthoritative: Boolean(input.state_dir),
+        producerExecutionId: candidateProducer,
       })
 
       return handoff

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
+  createAutonomousEngineeringAdapter,
   createIndependentReviewController,
   type IndependentReviewWorkerAdapter,
   type PersistentReviewChallenge,
@@ -381,4 +382,112 @@ test('independentReviewController: multi-review round settles BLOCK even when pe
     rmSync(tempDir, { recursive: true, force: true })
   }
 })
+
+test('autonomous engineering adapter: supports review and repair modes with native coding harnesses', async () => {
+  const adapter = createAutonomousEngineeringAdapter({
+    adapter_id: 'codex-native-adapter',
+    agent_kind: 'codex',
+    async reviewRunner(req) {
+      return {
+        status: 'COMPLETED',
+        verdict: 'APPROVE',
+        reviewed_at: new Date().toISOString(),
+        scope: [...req.candidate.scope],
+        isolation: req.required_isolation,
+        execution_purpose: 'FINAL_CERTIFICATION',
+        runtime: {
+          agent_kind: 'codex',
+          adapter_id: 'codex-native-adapter',
+          controller_execution_id: req.reviewer.execution_id,
+        },
+      }
+    },
+    async repairRunner(req) {
+      return {
+        status: 'COMPLETED',
+        modified: true,
+        original_head_sha: req.candidate.head_sha,
+        new_head_sha: 'd'.repeat(40),
+        new_diff_numstat_digest: 'e'.repeat(64),
+        producer: req.reviewer,
+        commit_message: 'fix: address autonomous review finding',
+        findings: ['Fixed state leakage bug'],
+      }
+    },
+  })
+
+  const req = {
+    controller_id: 'ctrl-1',
+    controller_run_id: 'run-1',
+    challenge_id: 'ch-1',
+    candidate: createSampleCandidate(),
+    builder: sampleBuilder,
+    reviewer: { kind: 'codex', principal_id: 'p-codex-1', execution_id: 'e-codex-1' },
+    review_mode: 'exact_diff' as const,
+    required_isolation: {
+      candidate_write: false as const,
+      github_mutation: false as const,
+      merge: false as const,
+      controller_state_access: false as const,
+    },
+  }
+
+  // Test review mode
+  const reviewResult = await adapter.launch(req)
+  assert.equal(reviewResult.status, 'COMPLETED')
+  assert.equal(reviewResult.verdict, 'APPROVE')
+
+  // Test repair mode
+  const repairResult = await adapter.repair!(req)
+  assert.equal(repairResult.status, 'COMPLETED')
+  assert.equal(repairResult.modified, true)
+  assert.equal(repairResult.new_head_sha, 'd'.repeat(40))
+  assert.equal(repairResult.producer.execution_id, 'e-codex-1')
+})
+
+test('independentReviewController: rejects certifier whose execution produced the candidate under review', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'babel-ctrl-test-'))
+  try {
+    const repairExecutionId = 'exec-repair-agent-999'
+    let launched = false
+
+    const mockAdapter: IndependentReviewWorkerAdapter = {
+      adapter_id: 'mock-subagent-v1',
+      agent_kind: 'codex',
+      async launch() {
+        launched = true
+        return {
+          status: 'COMPLETED',
+          verdict: 'APPROVE',
+          reviewed_at: new Date().toISOString(),
+          scope: ['src/index.ts'],
+          isolation: { candidate_write: false, github_mutation: false, merge: false, controller_state_access: false },
+          runtime: { agent_kind: 'codex', adapter_id: 'mock-subagent-v1', controller_execution_id: repairExecutionId },
+        }
+      },
+    }
+
+    // Controller creates an ID that collides with the repair producer
+    const controller = createIndependentReviewController({
+      controller_id: 'test-controller-1',
+      state_dir: tempDir,
+      adapter: mockAdapter,
+      create_id: () => repairExecutionId,
+    })
+
+    const candidateWithProducer = {
+      ...createSampleCandidate(),
+      producer_execution_id: repairExecutionId,
+    }
+
+    await assert.rejects(
+      async () => controller.review(candidateWithProducer, { builder: sampleBuilder }),
+      /CANDIDATE_PRODUCER_CANNOT_CERTIFY/
+    )
+    assert.equal(launched, false)
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
 
