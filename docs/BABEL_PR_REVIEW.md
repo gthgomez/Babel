@@ -1,28 +1,54 @@
 <!--
 status: ACTIVE
-last_verified: 2026-09-12
+last_verified: 2026-09-13
 -->
-# Babel chat PR review
+# Babel PR Review & Independent-Agent Review Authority
 
-The reviewer is Babel's actual chat engine, using OpenCode Go models on the
-owner's host. GitHub stores controller-published evidence and runs deterministic
-gates; it does not supply a paid AI reviewer. This path needs no separate GitHub
-App or custom signing/custody service.
+PR review authority in Babel is controller-verifiable and rooted in execution independence.
+GitHub stores controller-published evidence and runs deterministic gates; it does not supply
+a paid AI reviewer. This path needs no separate GitHub App or custom signing/custody service.
 
-## Review and merge contract
+## V3 Independent-Agent Review Authority (Canonical)
 
-Every PR needs one approving independent Babel chat review, including RED. The
-host review queue defaults to MiMo v2.5. DeepSeek V4 Flash is also a canonical supported
-OpenCode Go model. The model that actually answered is recorded; a configured
-name or fallback assumption is not sufficient attribution.
+Under V3 (`independent_agent_review_v3`, `host_review_handoff_v3`), review authority derives
+from a trusted controller launching a fresh, independent reviewer context bound to the exact
+candidate SHA and digest. Authority is **not** restricted to Babel chat, OpenCode Go, or any
+specific vendor or model family.
 
-The merge gate requires a Babel chat review on OpenCode Go: gate evidence must
-declare `review_provider: "opencode-go"` and a `babel`/`chat` harness. Any
-evidence claiming that Babel chat harness is rejected unless the provider is
-exactly `opencode-go`, and a review without the harness cannot satisfy the
-required Babel chat review. Claude Code is a benchmark-only comparison arm;
-its reviews are never gate evidence and cannot satisfy or substitute for the
-required Babel reviewer.
+### Core Principles
+1. **Execution Independence**: The reviewer must be a separately launched execution controlled
+   by the trusted controller and bound to the exact candidate. It is valid for:
+   - Codex Agent A (implementation) → Codex Agent B (independent review), provided A and B
+     are separately created agent contexts/executions.
+   - Any supported runtime/agent engine (Codex, Claude, Babel, OpenCode, etc.) to review.
+2. **Three-Level Actor Identity**:
+   - `kind`: Agent family/engine (e.g., `codex`, `claude_code`, `babel_chat`, `opencode_interpreter`).
+   - `principal_id`: Logical agent identity or persistent persona. Must differ from builder (`principal_id != builder.principal_id`).
+   - `execution_id`: Specific execution/run identifier. Must differ from builder (`execution_id != builder.execution_id`).
+3. **Generic Runtime & Model Attribution**:
+   - `runtime_kind`: Runtime environment classification.
+   - `model_attribution`: Tri-state model capture:
+     - `observed`: Exact model string verified from provider response metadata.
+     - `configured`: Requested or configured model string.
+     - `unavailable`: Explicit sentinel when model string cannot be verified (never synthetic `"OK"` or fabricated).
+   - Provider/model identity is telemetry and quality data, not a gate barrier.
+4. **Challenge Lifecycle**:
+   - The controller issues single-use challenges (`ISSUED`) bound to the candidate digest and base/head SHAs.
+   - Challenges are completed (`COMPLETED`) upon verified review generation, and atomically marked (`CONSUMED`) when settled.
+   - Challenge state lives in controller private storage outside Git worktrees; replaying consumed challenges fails closed.
+5. **Review Policy**:
+   - Default: 1 approving independent review is sufficient for normal PRs.
+   - Policy Escalation: 2 reviews required only when explicitly configured or triggered by policy rules.
+   - Anti-Approval Shopping: Substantive BLOCK verdicts are retained. Retrying without repairing the code is blocked.
+   - Atomic Settlement: Bundles settle without partial approval.
+
+## V2 Babel Chat Review Contract (Legacy / Compatibility)
+
+Low-level V2 validation (`<!-- babel-controller-ai-reviews-v2 -->`) remains supported alongside
+V3 (`<!-- babel-controller-independent-review-v3 -->`) for backward compatibility with existing
+candidates and historical bases. V2 evidence records `review_provider: "opencode-go"` and
+the `babel`/`chat` harness.
+
 
 The review/repair adapter explicitly requests `thinking: {type: "disabled"}`
 for all three canonical models, without changing ordinary transport defaults.
@@ -84,7 +110,20 @@ or cryptographic proof of isolation.
 The controller normalizes output and publishes through the existing owner
 GitHub identity. The base-rooted evaluator re-fetches that live comment and
 checks the owner numeric identity and complete body; a local evidence file is
-not sufficient provenance. The optional v2 `harness` object has exactly:
+not sufficient provenance.
+
+For V3 independent-agent reviews, comments are published with the marker:
+```html
+<!-- babel-controller-independent-review-v3 -->
+```
+containing a serialized `host_review_handoff_v3` bundle with `independent_agent_review_v3`
+reviews.
+
+For legacy V2 reviews, comments are published with:
+```html
+<!-- babel-controller-ai-reviews-v2 -->
+```
+with an optional `harness` object:
 
 ```json
 {
@@ -96,10 +135,11 @@ not sufficient provenance. The optional v2 `harness` object has exactly:
 }
 ```
 
-The current merge gate requires valid chat metadata. Low-level v2 validation
-retains compatibility with earlier receipts for bootstrap/older-base evaluation.
+The merge gate evaluator accepts both V3 and V2 evidence bundles, ensuring full
+backward compatibility while enabling modern controller-owned independent agent review.
 A changed evaluator does not authorize itself: use the previously trusted base
 and independent reviewers, then promote the new installation.
+
 
 ## Running and scheduling
 
