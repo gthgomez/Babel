@@ -142,6 +142,10 @@ try {
     }
     if (@($Result.handoff.reviews).Count -ne 1) { throw 'Expected one independently launched model result.' }
     $review = $Result.handoff.reviews[0]
+    # Controller-stamped provenance is host-private: the base gate derives
+    # provenance from the authenticated comment transport and rejects the field,
+    # so strip it before validating or publishing either model's evidence.
+    if ($null -ne $review.PSObject.Properties['provenance']) { $review.PSObject.Properties.Remove('provenance') }
     $check = Test-AgentAutonomousReviewEvidence -Evidence $review -Repository $Repository -PR $PR -BaseSha $base -HeadSha $head -BuilderIdentity $BuilderIdentity -ExpectedNumstatDigest $candidate.diff_numstat_digest -TaskId $candidate.task_id -TaskHash $taskHash -ExpectedScope $scope
     # A valid BLOCK is useful evidence too; never convert it to an approval.
     $allowedErrors = if ($review.verdict -ceq 'BLOCK') { @('autonomous_evidence_verdict_mismatch', 'autonomous_evidence_has_blocking_findings') } else { @() }
