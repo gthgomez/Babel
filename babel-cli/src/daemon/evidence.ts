@@ -29,7 +29,7 @@ export interface DaemonJobMeta {
 }
 
 export interface DaemonJobResult {
-  schema_version: 1;
+  schema_version: 2;
   artifact_type: 'babel_daemon_job_result';
   job_id: string;
   status: string;
@@ -37,7 +37,20 @@ export interface DaemonJobResult {
   duration_ms: number;
   error: string | null;
   rollback_performed: boolean;
+  /** Set only when checkpoint creation returned an authoritative record. */
   checkpoint_id: string | null;
+  /** Why checkpoint_id is null ('not_wired' | 'skipped') when no checkpoint exists. */
+  checkpoint_status: 'created' | 'not_wired' | 'skipped' | null;
+  checkpoint_note: string | null;
+  /** The model the job requested (from the job spec), if any. */
+  model_requested: string | null;
+  /** The daemon heuristic recommendation. This is NOT an observation. */
+  model_recommended: string | null;
+  /**
+   * Provider-observed model. The daemon never observes the provider model
+   * today, so this is always null; a recommendation must never be written
+   * into an observed-execution-truth field.
+   */
   model_used: string | null;
   cost_usd: number | null;
   token_count: number | null;
@@ -91,6 +104,10 @@ export function writeDaemonJobResult(
     error: string | null;
     rollbackPerformed?: boolean;
     checkpointId?: string | null;
+    checkpointStatus?: DaemonJobResult['checkpoint_status'];
+    checkpointNote?: string | null;
+    modelRequested?: string | null;
+    modelRecommended?: string | null;
     modelUsed?: string | null;
     costUsd?: number | null;
     tokenCount?: number | null;
@@ -98,7 +115,7 @@ export function writeDaemonJobResult(
 ): void {
   mkdirSync(runDir, { recursive: true });
   const jobResult: DaemonJobResult = {
-    schema_version: 1,
+    schema_version: 2,
     artifact_type: 'babel_daemon_job_result',
     job_id: jobId,
     status: result.status,
@@ -107,6 +124,12 @@ export function writeDaemonJobResult(
     error: result.error,
     rollback_performed: result.rollbackPerformed ?? false,
     checkpoint_id: result.checkpointId ?? null,
+    checkpoint_status: result.checkpointStatus ?? (result.checkpointId ? 'created' : 'not_wired'),
+    checkpoint_note: result.checkpointNote ?? null,
+    model_requested: result.modelRequested ?? null,
+    model_recommended: result.modelRecommended ?? null,
+    // Provider observation is never available in the daemon today; only a
+    // future pipeline/provider receipt may populate this field.
     model_used: result.modelUsed ?? null,
     cost_usd: result.costUsd ?? null,
     token_count: result.tokenCount ?? null,
