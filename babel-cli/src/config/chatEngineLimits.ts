@@ -180,7 +180,12 @@ export function resolveChatEngineLimits(
   // defaults never change: without the flag the ceiling stays at one hour.
   const longTaskProfile = isLongTaskWallProfileEnabled();
   const wallCeiling = longTaskProfile ? LONG_TASK_WALL_CEILING_MS : CHAT_WALL_CEILING_MS;
-  const requestedMaxWallMs = overrides.maxWallMs ??
+  // Public callers can provide a number directly. Treat non-finite values as
+  // absent so NaN cannot disable the elapsed-time comparison downstream.
+  const requestedOverrideMaxWallMs = Number.isFinite(overrides.maxWallMs)
+    ? overrides.maxWallMs
+    : undefined;
+  const requestedMaxWallMs = requestedOverrideMaxWallMs ??
     parseRawInt(process.env['BABEL_CHAT_MAX_WALL_MS'], baseDefaults.maxWallMs);
 
   const fromEnv: ChatEngineLimits = {
@@ -264,7 +269,7 @@ export function resolveChatEngineLimits(
 
   const resolvedMaxWallMs = Math.min(
     wallCeiling,
-    Math.max(10_000, overrides.maxWallMs ?? fromEnv.maxWallMs),
+    Math.max(10_000, requestedOverrideMaxWallMs ?? fromEnv.maxWallMs),
   );
 
   return {

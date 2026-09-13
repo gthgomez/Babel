@@ -33,6 +33,7 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
     cost: process.env['BABEL_CHAT_MAX_COST'],
     wall: process.env['BABEL_CHAT_MAX_WALL_MS'],
     stall: process.env['BABEL_CHAT_STALL_TURNS'],
+    longTask: process.env['BABEL_CHAT_LONG_TASK'],
   };
   delete process.env['BABEL_CHAT_MAX_TURNS'];
   delete process.env['BABEL_CHAT_MAX_MESSAGES'];
@@ -40,6 +41,7 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
   delete process.env['BABEL_CHAT_MAX_COST'];
   delete process.env['BABEL_CHAT_MAX_WALL_MS'];
   delete process.env['BABEL_CHAT_STALL_TURNS'];
+  delete process.env['BABEL_CHAT_LONG_TASK'];
   try {
     const wallBudgetFor = (maxWallMs: number) => ({
       effectiveMs: maxWallMs,
@@ -69,6 +71,8 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
     else process.env['BABEL_CHAT_MAX_WALL_MS'] = previous.wall;
     if (previous.stall === undefined) delete process.env['BABEL_CHAT_STALL_TURNS'];
     else process.env['BABEL_CHAT_STALL_TURNS'] = previous.stall;
+    if (previous.longTask === undefined) delete process.env['BABEL_CHAT_LONG_TASK'];
+    else process.env['BABEL_CHAT_LONG_TASK'] = previous.longTask;
   }
 });
 
@@ -116,10 +120,12 @@ test('budget fields are clamped to valid ranges', () => {
     cost: process.env['BABEL_CHAT_MAX_COST'],
     wall: process.env['BABEL_CHAT_MAX_WALL_MS'],
     stall: process.env['BABEL_CHAT_STALL_TURNS'],
+    longTask: process.env['BABEL_CHAT_LONG_TASK'],
   };
   delete process.env['BABEL_CHAT_MAX_COST'];
   delete process.env['BABEL_CHAT_MAX_WALL_MS'];
   delete process.env['BABEL_CHAT_STALL_TURNS'];
+  delete process.env['BABEL_CHAT_LONG_TASK'];
   try {
     // Below-min cost should clamp to floor
     const low = resolveChatEngineLimits({ maxCostUsd: 0 });
@@ -127,6 +133,10 @@ test('budget fields are clamped to valid ranges', () => {
     // Negative wall clock should clamp to floor
     const neg = resolveChatEngineLimits({ maxWallMs: -1 });
     assert.ok(neg.maxWallMs >= 10_000);
+    // NaN would otherwise survive Math.min/Math.max and disable wall checks.
+    const nonFinite = resolveChatEngineLimits({ maxWallMs: Number.NaN });
+    assert.ok(Number.isFinite(nonFinite.maxWallMs));
+    assert.ok(Number.isFinite(nonFinite.wallBudget?.requestedMs));
     // Below-min stall turns should clamp
     const stall = resolveChatEngineLimits({ stallTurns: 0 });
     assert.ok(stall.stallTurns >= 2);
@@ -137,6 +147,8 @@ test('budget fields are clamped to valid ranges', () => {
     else process.env['BABEL_CHAT_MAX_WALL_MS'] = previous.wall;
     if (previous.stall === undefined) delete process.env['BABEL_CHAT_STALL_TURNS'];
     else process.env['BABEL_CHAT_STALL_TURNS'] = previous.stall;
+    if (previous.longTask === undefined) delete process.env['BABEL_CHAT_LONG_TASK'];
+    else process.env['BABEL_CHAT_LONG_TASK'] = previous.longTask;
   }
 });
 
