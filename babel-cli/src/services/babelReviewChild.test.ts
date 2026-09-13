@@ -15,6 +15,11 @@ test('review child strips publication credentials, preload hooks and ambient ove
   assert.equal(env['OPENAI_API_KEY'], undefined); assert.equal(env['NODE_OPTIONS'], undefined);
   assert.equal(env['BABEL_CHAT_MAX_COST'], 'unlimited');
   assert.equal(env['BABEL_EXECUTION_PROFILE'], 'read_only_audit');
+  // A bounded review: parallel children converge quickly instead of running the
+  // 120-turn / 50-minute investigate ceiling.
+  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '720000');
+  assert.equal(env['BABEL_CHAT_MAX_TURNS'], '24');
+  assert.equal(env['BABEL_CHAT_STALL_TURNS'], '5');
   assert.ok(!env['BABEL_ALLOWED_TOOLS']!.includes('shell_exec'));
   assert.ok(!env['BABEL_ALLOWED_TOOLS']!.includes('semantic_search'));
   assert.equal(env['BABEL_READ_ONLY_NO_INDEX_WRITE'], '1');

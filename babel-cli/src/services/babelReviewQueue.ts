@@ -10,7 +10,7 @@ import type { HostReviewCandidate, HostReviewHandoffV2 } from './hostReviewContr
 // Leave a one-hour publication/check margin inside the base gate's 24h policy.
 export const REVIEW_FRESH_MS = 23 * 60 * 60 * 1000
 // Child lease must outlive the child's wall (BABEL_CHAT_MAX_WALL_MS in
-// babelReviewChild.ts, currently 50 min) so a live child never looks stale.
+// babelReviewChild.ts, currently 12 min) so a live child never looks stale.
 export const REVIEW_CHILD_LEASE_MS = 60 * 60 * 1000
 const text = z.string().min(1).refine(v => v.trim().toLowerCase() !== 'unknown')
 const digest = z.string().regex(/^[a-f0-9]{64}$/)
@@ -134,7 +134,8 @@ export function findPublishedBabelReview(comments: unknown[], ownerId: number, b
   return null
 }
 
-type ReviewLease = { token: string; pid: number; processIdentity?: string; startedAt: number; child?: { pid: number | null; processIdentity?: string; deadline: number; executionId: string } }
+type ReviewChild = { pid: number | null; processIdentity?: string; deadline: number; executionId: string }
+type ReviewLease = { token: string; pid: number; processIdentity?: string; startedAt: number; children?: ReviewChild[]; child?: ReviewChild }
 /** Unknown process state is live: never duplicate a paid worker on an inconclusive probe. */
 export function reviewProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid < 1) return false
@@ -158,7 +159,7 @@ export function reviewProcessIdentity(pid: number): string | undefined {
 }
 
 /** Publish an initialized exclusive lease; conservatively reconcile interrupted child ownership. */
-export function acquireBabelReviewLease(path: string, isAlive = reviewProcessAlive, now = Date.now(), identity = isAlive === reviewProcessAlive ? reviewProcessIdentity : (_pid: number): string | undefined => undefined): { child: (pid: number | null, executionId: string) => void; childExited: () => void; release: () => void } | null {
+export function acquireBabelReviewLease(path: string, isAlive = reviewProcessAlive, now = Date.now(), identity = isAlive === reviewProcessAlive ? reviewProcessIdentity : (_pid: number): string | undefined => undefined): { child: (pid: number | null, executionId: string) => void; childExited: (executionId: string) => void; release: () => void } | null {
   const sameProcess = (pid: number, expected?: string) => {
     if (!isAlive(pid)) return false
     const actual = expected ? identity(pid) : undefined
@@ -168,7 +169,10 @@ export function acquireBabelReviewLease(path: string, isAlive = reviewProcessAli
     const before = lstatSync(path)
     let prior: ReviewLease | undefined
     try { prior = JSON.parse(readFileSync(path, 'utf8')) as ReviewLease } catch { /* interrupted legacy empty lock */ }
-    if (prior && (sameProcess(prior.pid, prior.processIdentity) || (prior.child && (prior.child.pid ? sameProcess(prior.child.pid, prior.child.processIdentity) : now < prior.child.deadline)))) return null
+    // `child` is the legacy single-child shape; `children` tracks the parallel
+    // review children this controller may now own at once.
+    const priorChildren: ReviewChild[] = prior ? [...(prior.children ?? []), ...(prior.child ? [prior.child] : [])] : []
+    if (prior && (sameProcess(prior.pid, prior.processIdentity) || priorChildren.some(child => child.pid ? sameProcess(child.pid, child.processIdentity) : now < child.deadline))) return null
     if (!prior && now - lstatSync(path).mtimeMs < REVIEW_CHILD_LEASE_MS) return null
     // A stale lease is quarantined, not deleted. A later scan acquires the job;
     // recovery never starts a paid child in the same sweep as reclamation.
@@ -188,8 +192,13 @@ export function acquireBabelReviewLease(path: string, isAlive = reviewProcessAli
   const owns = () => { try { return (JSON.parse(readFileSync(path, 'utf8')) as ReviewLease).token === lease.token } catch { return false } }
   const save = () => { if (!owns()) throw new Error('REVIEW_LEASE_LOST'); atomicReviewJson(path, lease) }
   return {
-    child(pid, executionId) { const processIdentity = pid ? identity(pid) : undefined; lease.child = { pid, executionId, deadline: Date.now() + REVIEW_CHILD_LEASE_MS, ...(processIdentity ? { processIdentity } : {}) }; save() },
-    childExited() { delete lease.child; save() },
-    release() { if (owns() && !lease.child) unlinkSync(path) },
+    child(pid, executionId) {
+      const processIdentity = pid ? identity(pid) : undefined
+      lease.children = [...(lease.children ?? []).filter(existing => existing.executionId !== executionId), { pid, executionId, deadline: Date.now() + REVIEW_CHILD_LEASE_MS, ...(processIdentity ? { processIdentity } : {}) }]
+      delete lease.child
+      save()
+    },
+    childExited(executionId) { lease.children = (lease.children ?? []).filter(existing => existing.executionId !== executionId); delete lease.child; save() },
+    release() { if (owns() && !lease.children?.length && !lease.child) unlinkSync(path) },
   }
 }

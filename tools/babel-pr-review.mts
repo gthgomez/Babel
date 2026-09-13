@@ -2,7 +2,7 @@
 // --repo-root <clone> --state-dir <private non-Git directory>
 // (--pr <number> | --all) [--task <owner task file>] [--publish] [--legacy-evidence]
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { collectBabelReviewSnapshot, assertReviewStateOutsideGit, secretRiskReviewPath, safeReviewPath } from '../babel-cli/src/services/babelReviewSnapshot.js'
@@ -110,34 +110,34 @@ for (const number of prs) {
     jobDir = assertReviewStateOutsideGit(join(state, 'jobs', key))
     lease = acquireBabelReviewLease(join(jobDir, 'running.lock'))
     if (!lease) { console.log(JSON.stringify({ pr: number, status: 'running_or_recovering', job: key })); continue }
-    const reviews: HostReviewHandoffV2[] = []
-    // MiMo is the fast default. A caller that needs a second perspective can
-    // launch a separately bound review rather than making every PR wait on it.
-    for (const model of ['mimo-v2.5']) {
-      const cachedPath = join(jobDir, model + '-handoff.json')
+    // The fast default is one independently bound MiMo review. Keep the
+    // bounded controller structure so an explicit second perspective can use
+    // the same child lifecycle without making every ordinary PR wait for it.
+    const snapshot = collectBabelReviewSnapshot({ repoRoot, base: pr.baseRefOid, head: pr.headRefOid, state, task })
+    if (snapshot.numstatDigest !== candidate.diff_numstat_digest || JSON.stringify(snapshot.scope) !== JSON.stringify(scope)) throw new Error('SNAPSHOT_SCOPE_MISMATCH')
+    const settled = await Promise.allSettled(['mimo-v2.5'].map(async (model): Promise<HostReviewHandoffV2> => {
+      const cachedPath = join(jobDir!, model + '-handoff.json')
       if (existsSync(cachedPath)) {
         try {
           const cached = validateBabelReviewCache(JSON.parse(readFileSync(cachedPath, 'utf8')), { candidate, model, round: key, version, sourceSha: trustedSha })
           const executionId = cached.reviews[0].execution_id
           if (!/^[a-f0-9-]{36}$/.test(executionId)) throw new Error('CACHED_EXECUTION_ID_INVALID')
-          const artifact = validateBabelReviewArtifact(JSON.parse(readFileSync(join(jobDir, `${model}-${executionId}.json`), 'utf8')), { executionId, model, scope })
+          const artifact = validateBabelReviewArtifact(JSON.parse(readFileSync(join(jobDir!, `${model}-${executionId}.json`), 'utf8')), { executionId, model, scope })
           if (artifact.verdict.verdict !== cached.reviews[0].verdict || JSON.stringify(artifact.verdict.findings) !== JSON.stringify(cached.reviews[0].findings) || JSON.stringify(artifact.verdict.blocking_findings) !== JSON.stringify(cached.reviews[0].blocking_findings)) throw new Error('CACHED_ARTIFACT_MISMATCH')
-          reviews.push(cached)
-          continue
+          return cached
         } catch {
           // Invalid/stale cache never creates approval. Retain the rejection
           // and execute a fresh review under the current trusted code.
-          atomicReviewJson(join(jobDir, `${model}-cache-rejected.json`), { at: new Date().toISOString(), status: 'cache_rejected' })
+          atomicReviewJson(join(jobDir!, `${model}-cache-rejected.json`), { at: new Date().toISOString(), status: 'cache_rejected' })
         }
       }
-      const snapshot = collectBabelReviewSnapshot({ repoRoot, base: pr.baseRefOid, head: pr.headRefOid, state, task })
-      if (snapshot.numstatDigest !== candidate.diff_numstat_digest || JSON.stringify(snapshot.scope) !== JSON.stringify(scope)) throw new Error('SNAPSHOT_SCOPE_MISMATCH')
-      const output = join(jobDir, `${model}-${snapshot.id}.json`)
+      const executionId = randomUUID()
+      const output = join(jobDir!, `${model}-${executionId}.json`)
       let idIndex = 0
-      const controller = createHostReviewController({ controller_id: 'babel-chat-pr-review', create_id: () => idIndex++ === 0 ? key : snapshot.id, isolation_mode: 'readonly_sandbox', adapter: {
+      const controller = createHostReviewController({ controller_id: 'babel-chat-pr-review', create_id: () => idIndex++ === 0 ? key : executionId, isolation_mode: 'readonly_sandbox', adapter: {
         async launch(request): Promise<HostReviewExecutionResult> {
           lease!.child(null, request.execution_id)
-          const run = await launchBabelReviewChild({ source: snapshot.root, trustedRoot, output, runs: join(jobDir!, 'runs'), model, worker: join(trustedRoot, 'tools/babel-chat-review-worker.mts'), tsx: join(trustedRoot, 'babel-cli/node_modules/tsx/dist/cli.mjs'), onSpawn: pid => lease!.child(pid, request.execution_id), onExit: () => lease!.childExited() })
+          const run = await launchBabelReviewChild({ source: snapshot.root, trustedRoot, output, runs: join(jobDir!, 'runs'), model, worker: join(trustedRoot, 'tools/babel-chat-review-worker.mts'), tsx: join(trustedRoot, 'babel-cli/node_modules/tsx/dist/cli.mjs'), onSpawn: pid => lease!.child(pid, request.execution_id), onExit: () => lease!.childExited(request.execution_id) })
           if (run.exitCode !== 0 || run.timedOut) throw new Error('BABEL_CHAT_REVIEW_FAILED')
           const artifact = validateBabelReviewArtifact(run.artifact, { executionId: request.execution_id, model, scope })
 
@@ -208,9 +208,15 @@ for (const number of prs) {
         },
       } })
       const handoff = await controller.review(candidate)
-      reviews.push(validateBabelReviewCache(handoff, { candidate, model, round: key, version, sourceSha: trustedSha }))
+      const validated = validateBabelReviewCache(handoff, { candidate, model, round: key, version, sourceSha: trustedSha })
       atomicReviewJson(cachedPath, handoff)
-    }
+      return validated
+    }))
+    // Wait for both children to settle before releasing the lease or throwing,
+    // so a fast failure in one review never orphans the other paid child.
+    const rejected = settled.find(result => result.status === 'rejected')
+    if (rejected) throw rejected.reason
+    const reviews = settled.map(result => (result as PromiseFulfilledResult<HostReviewHandoffV2>).value)
     // The first review must still be fresh after its peer finishes.
     for (const review of reviews) validateBabelReviewCache(review, { candidate, model: review.reviews[0].reviewer_model, round: key, version, sourceSha: trustedSha })
     const fresh = readPr(number)
