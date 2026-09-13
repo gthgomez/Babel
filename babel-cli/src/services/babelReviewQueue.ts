@@ -10,7 +10,8 @@ import type { HostReviewCandidate, HostReviewHandoffV2 } from './hostReviewContr
 // Leave a one-hour publication/check margin inside the base gate's 24h policy.
 export const REVIEW_FRESH_MS = 23 * 60 * 60 * 1000
 // Child lease must outlive the child's wall (BABEL_CHAT_MAX_WALL_MS in
-// babelReviewChild.ts, currently 12 min) so a live child never looks stale.
+// babelReviewChild.ts: 12 min for reviews, 50 min for repair proposals) so a
+// live child never looks stale.
 export const REVIEW_CHILD_LEASE_MS = 60 * 60 * 1000
 const text = z.string().min(1).refine(v => v.trim().toLowerCase() !== 'unknown')
 const digest = z.string().regex(/^[a-f0-9]{64}$/)
