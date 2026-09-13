@@ -9,7 +9,7 @@ import { collectBabelReviewSnapshot, assertReviewStateOutsideGit, secretRiskRevi
 import { launchBabelReviewChild } from '../babel-cli/src/services/babelReviewChild.js'
 import { createHostReviewController } from '../babel-cli/src/services/hostReviewController.js'
 import type { HostReviewCandidate, HostReviewExecutionResult, HostReviewHandoffV2 } from '../babel-cli/src/services/hostReviewController.js'
-import { acquireBabelReviewLease, atomicReviewJson, babelReviewVersion, findPublishedBabelReview, validateBabelReviewArtifact, validateBabelReviewCache } from '../babel-cli/src/services/babelReviewQueue.js'
+import { acquireBabelReviewLease, atomicReviewJson, babelReviewVersion, findPublishedBabelReview, publicBabelReviewHandoff, validateBabelReviewArtifact, validateBabelReviewCache } from '../babel-cli/src/services/babelReviewQueue.js'
 import { evaluateReviewCoverage } from '../babel-cli/src/services/reviewCoverage.js'
 import { computeIndependenceClass, evaluateEnsembleIndependence, evaluateReviewerIndependence } from '../babel-cli/src/services/reviewIndependence.js'
 import { createStructuredFinding, parseFindingFromModelClaim } from '../babel-cli/src/services/structuredFinding.js'
@@ -224,18 +224,12 @@ for (const number of prs) {
       if (owner.type !== 'User' || owner.id !== actor.id) throw new Error('OWNER_PUBLICATION_IDENTITY_REQUIRED')
       // Explicit bootstrap transport compatibility only. Private evidence always
       // retains attribution; a base that requires Babel metadata rejects this.
-      // Host-private diagnostic fields (tool traces, coverage booleans) never
-      // leave the host: the trusted gate's evidence contract rejects unknown
-      // fields, so the published handoff carries the gate-admissible subset.
-      const publicReviews = handoff.reviews.map((review) => {
-        const { tool_traces: _traces, changes_diff_fully_read: _covered, ...rest } = review as Record<string, unknown>
-        if (options.has('--legacy-evidence')) {
-          const { harness: _harness, ...legacy } = rest
-          return legacy
-        }
-        return rest
-      })
-      const publicHandoff = { ...handoff, reviews: publicReviews }
+      // Host-private diagnostic fields (tool traces, coverage booleans) and the
+      // controller-stamped provenance label never leave the host: the trusted
+      // gate's evidence contract rejects unknown fields and derives provenance
+      // from the authenticated comment transport itself. Provenance is stripped
+      // from the handoff object and each review by publicBabelReviewHandoff.
+      const publicHandoff = publicBabelReviewHandoff(handoff, options.has('--legacy-evidence'))
       const body = '<!-- babel-controller-ai-reviews-v2 -->\n' + JSON.stringify(publicHandoff)
       const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${number}/comments?per_page=100`])) as unknown[][]
       publishedComment = findPublishedBabelReview(pages.flat(), owner.id, body)

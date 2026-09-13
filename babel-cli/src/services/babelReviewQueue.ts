@@ -21,6 +21,7 @@ const toolTraces = z.array(z.object({
   targetPath: z.string().optional(),
   args: z.record(z.string(), z.unknown()).optional(),
 }).strict()).optional()
+const provenance = z.enum(['LOCAL_UNAUTHENTICATED', 'TRUSTED_CONTROLLER_EVIDENCE', 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'])
 const evidence = z.object({
   schema_version: z.literal(2), kind: z.literal('autonomous_review_evidence_v2'), repository: text, pr_number: z.number().int().positive(),
   base_sha: sha, head_sha: sha, task_id: text, task_hash: digest, builder_id: text, diff_numstat_digest: digest,
@@ -28,6 +29,10 @@ const evidence = z.object({
   review_provider: z.literal('opencode-go'), reviewer_model: text, review_mode: z.literal('exact_diff'), reviewed_at: text,
   scope: z.array(text).min(1), verdict: z.enum(['APPROVE', 'BLOCK']), findings: z.array(z.string()), blocking_findings: z.array(z.string()),
   isolation: z.object({ mode: z.literal('readonly_sandbox'), candidate_write: z.literal(false), github_mutation: z.literal(false), merge: z.literal(false), controller_state_access: z.literal(false) }).strict(),
+  // Controller-stamped provenance (ReviewEvidenceProvenance). Host caches keep
+  // it; publication strips it because the trusted gate's evidence contract
+  // derives provenance from the authenticated comment transport itself.
+  provenance: provenance.optional(),
   usage: usage.optional(),
   // Host-side provenance emitted by the review controller. These stay in the
   // host cache but are stripped before publication: the trusted gate's
@@ -37,9 +42,26 @@ const evidence = z.object({
   harness: z.object({ name: z.literal('babel'), mode: z.literal('chat'), version: digest, source_sha: sha, execution_id: text }).strict(),
 }).strict()
 const handoffSchema = z.object({
-  schema_version: z.literal(2), kind: z.literal('host_review_handoff_v2'), repository: text, pr_number: z.number().int().positive(),
+  schema_version: z.literal(2), kind: z.literal('host_review_handoff_v2'), provenance: provenance.optional(), repository: text, pr_number: z.number().int().positive(),
   base_sha: sha, head_sha: sha, task_id: text, task_hash: digest, controller_run_id: text, reviews: z.tuple([evidence]),
 }).strict()
+
+/** Project a private handoff to the gate-admissible body. The controller-stamped
+ *  provenance label and host-private diagnostics never leave the host: the
+ *  trusted gate derives provenance from the authenticated comment transport,
+ *  and rejects unknown fields. */
+export function publicBabelReviewHandoff(handoff: HostReviewHandoffV2, legacy: boolean): Record<string, unknown> {
+  const { provenance: _handoffProvenance, ...rest } = handoff as unknown as Record<string, unknown>
+  const reviews = handoff.reviews.map((review) => {
+    const { tool_traces: _traces, changes_diff_fully_read: _covered, provenance: _reviewProvenance, ...reviewRest } = review as unknown as Record<string, unknown>
+    if (legacy) {
+      const { harness: _harness, ...legacyRest } = reviewRest
+      return legacyRest
+    }
+    return reviewRest
+  })
+  return { ...rest, reviews }
+}
 
 /** Validate cached evidence with the same complete candidate contract as a fresh launch. */
 export function validateBabelReviewCache(value: unknown, expected: { candidate: HostReviewCandidate; model: string; round: string; version: string; sourceSha: string; now?: number }): HostReviewHandoffV2 {
