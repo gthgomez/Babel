@@ -1,3 +1,10 @@
+/**
+ * LEGACY / BENCHMARK-ONLY: This pluggable independent-review coordinator is NOT
+ * Babel's production merge gate. The production gate is the Babel chat reviewer
+ * on OpenCode Go, invoked via `tools/babel-pr-review.mts`. Any Claude/Anthropic
+ * reviewer is confined to the `claude-babel-astra-lab` benchmark and requires
+ * `BABEL_ALLOW_EXTERNAL_REVIEWER=1`; see docs/REVIEWER_SCOPE.md.
+ */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';

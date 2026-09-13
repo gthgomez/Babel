@@ -14,6 +14,26 @@ import { fixturePrompt, type FixtureInstance, type FixtureTaskId } from '../fixt
 const DEFAULT_RUN_TIMEOUT_MS = 85_000;
 const ROUTATIC_LOG = join(homedir(), '.config', 'routatic-proxy', 'routatic-proxy.log');
 
+/** Explicit benchmark-only opt-in required before the Claude Code CLI may be invoked. */
+export const CLAUDE_BENCH_OPT_IN_ENV = 'BABEL_BENCH_ALLOW_CLAUDE';
+
+/**
+ * Typed refusal for Claude Code scope violations. The Claude reviewer is a
+ * benchmark arm only; it is never part of Babel's production merge gate.
+ */
+export class ClaudeBenchmarkOptInError extends Error {
+  readonly code = 'CLAUDE_BENCH_OPT_IN_REQUIRED';
+  constructor() {
+    super(`Refusing to invoke the Claude Code CLI: the Claude reviewer is a benchmark arm only and is not the Babel merge gate. Set ${CLAUDE_BENCH_OPT_IN_ENV}=1 to explicitly enable the claude-babel-astra-lab benchmark.`);
+    this.name = 'ClaudeBenchmarkOptInError';
+  }
+}
+
+/** Injectable guard: throws unless the benchmark lab is explicitly opted in. */
+export function assertClaudeBenchmarkOptIn(env: NodeJS.ProcessEnv = process.env): void {
+  if (env[CLAUDE_BENCH_OPT_IN_ENV] !== '1') throw new ClaudeBenchmarkOptInError();
+}
+
 export interface ClaudeHarnessCase {
   experimentId: string;
   pairId: string;
@@ -42,6 +62,7 @@ function claudeExecutable(): string {
 
 /** Observe version without launching a model session or reading credentials. */
 export function observeClaudeVersion(): string {
+  assertClaudeBenchmarkOptIn();
   try {
     return execFileSync(claudeExecutable(), ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 5_000 }).trim() || 'UNKNOWN';
   } catch {
@@ -50,6 +71,7 @@ export function observeClaudeVersion(): string {
 }
 
 function runClaudeProcess(input: ClaudeHarnessCase): Promise<ClaudeProcessResult> {
+  assertClaudeBenchmarkOptIn();
   const executable = claudeExecutable();
   const args = [
     '--print',
@@ -198,6 +220,7 @@ function buildReceipt(input: ClaudeHarnessCase, runId: string, start: string, en
 
 /** Execute one Claude Code turn through the existing Routatic/OpenCode Go path. */
 export async function runClaudeLiveCase(input: ClaudeHarnessCase): Promise<ControlledRun> {
+  assertClaudeBenchmarkOptIn();
   const runId = `claude-${input.profile}-${input.taskId.toLowerCase()}-${Date.now()}`;
   const rawPath = join(input.outputRoot, input.profile, input.pairId, `${runId}.jsonl`);
   const start = new Date().toISOString();

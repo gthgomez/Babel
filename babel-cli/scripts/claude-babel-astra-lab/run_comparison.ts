@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { preflight, type PairContract } from '../../src/claude-babel-astra-lab/comparison-contract.js'
 import { runComparisonCampaign, type ComparisonAdapter } from '../../src/claude-babel-astra-lab/comparison-runner.js'
+import { assertClaudeBenchmarkOptIn } from '../../src/claude-babel-astra-lab/claudeHarness.js'
 
 const option = (name: string): string | undefined => process.argv.find(v => v.startsWith(`--${name}=`))?.slice(name.length + 3)
 const input = option('contracts')
@@ -17,6 +18,8 @@ if (process.argv.includes('--preflight')) {
   const modulePath = option('adapters')
   const output = option('output')
   if (!modulePath || !output) throw new Error('Execution requires a trusted adapter module and fresh output directory; use --preflight for zero-call validation')
+  // The comparison campaign runs the Claude Code benchmark arm; require the same explicit opt-in as the harness itself.
+  assertClaudeBenchmarkOptIn()
   // Adapter code is evaluator-owned executable configuration, never contestant output.
   const module = await import(pathToFileURL(resolve(modulePath)).href) as { adapters: Record<'claude-code' | 'babel-live', ComparisonAdapter> }
   const controller = new AbortController()
