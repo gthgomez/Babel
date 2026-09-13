@@ -20,18 +20,25 @@ test('review child strips publication credentials, preload hooks and ambient ove
   assert.notEqual(env['BABEL_COMPACTION'], 'off');
   assert.equal(env['BABEL_ALLOWED_TOOLS'], JSON.stringify(['file_read', 'directory_list', 'grep', 'glob']));
   assert.equal(env['BABEL_DISALLOWED_TOOLS'], JSON.stringify(['shell_exec', 'test_run', 'file_write', 'mcp_request', 'memory_query', 'memory_store', 'semantic_search']));
-  // In normal Chat dogfood review, standard chat limits are preserved (no forced review caps)
-  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], undefined);
-  assert.equal(env['BABEL_CHAT_MAX_TURNS'], undefined);
-  assert.equal(env['BABEL_CHAT_STALL_TURNS'], undefined);
+  // Bounded budget defaults prevent runaway costs while allowing parent overrides
+  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '720000');
+  assert.equal(env['BABEL_CHAT_MAX_TURNS'], '24');
+  assert.equal(env['BABEL_CHAT_STALL_TURNS'], '5');
   assert.equal(env['BABEL_READ_ONLY_NO_INDEX_WRITE'], '1');
 });
 
-test('repair children keep normal chat budget unless parent sets override', () => {
+test('repair children keep generous repair budget and respect parent overrides', () => {
   const env = babelReviewChildEnv({ source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'deepseek-v4-flash', purpose: 'repair_proposal' });
-  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], undefined);
-  assert.equal(env['BABEL_CHAT_MAX_TURNS'], undefined);
-  assert.equal(env['BABEL_CHAT_STALL_TURNS'], undefined);
+  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '3000000');
+  assert.equal(env['BABEL_CHAT_MAX_TURNS'], '100');
+  assert.equal(env['BABEL_CHAT_STALL_TURNS'], '5');
+
+  const overridden = babelReviewChildEnv(
+    { source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'deepseek-v4-flash', purpose: 'repair_proposal' },
+    { BABEL_CHAT_MAX_WALL_MS: '5000000', BABEL_CHAT_MAX_TURNS: '200' }
+  );
+  assert.equal(overridden['BABEL_CHAT_MAX_WALL_MS'], '5000000');
+  assert.equal(overridden['BABEL_CHAT_MAX_TURNS'], '200');
 });
 
 test('review child forwards the documented non-secret credential helper override', () => {

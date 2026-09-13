@@ -20,11 +20,11 @@ export function babelReviewChildEnv(input: { source: string; trustedRoot: string
     BABEL_REVIEW_OUTPUT: input.output, BABEL_REVIEW_MODEL: input.model,
     BABEL_REVIEW_PURPOSE: input.purpose ?? 'review',
     BABEL_EXECUTION_PROFILE: 'read_only_audit', BABEL_READ_ONLY: 'true', BABEL_HEADLESS: '1',
-    // Review sessions run under normal ChatEngine budget semantics unless overridden.
-    ...(parent['BABEL_CHAT_MAX_COST'] ? { BABEL_CHAT_MAX_COST: parent['BABEL_CHAT_MAX_COST'] } : { BABEL_CHAT_MAX_COST: 'unlimited' }),
-    ...(parent['BABEL_CHAT_MAX_WALL_MS'] ? { BABEL_CHAT_MAX_WALL_MS: parent['BABEL_CHAT_MAX_WALL_MS'] } : {}),
-    ...(parent['BABEL_CHAT_MAX_TURNS'] ? { BABEL_CHAT_MAX_TURNS: parent['BABEL_CHAT_MAX_TURNS'] } : {}),
-    ...(parent['BABEL_CHAT_STALL_TURNS'] ? { BABEL_CHAT_STALL_TURNS: parent['BABEL_CHAT_STALL_TURNS'] } : {}),
+    // Bounded budget defaults prevent runaway costs while allowing parent overrides.
+    BABEL_CHAT_MAX_COST: parent['BABEL_CHAT_MAX_COST'] ?? 'unlimited',
+    BABEL_CHAT_MAX_WALL_MS: parent['BABEL_CHAT_MAX_WALL_MS'] ?? (input.purpose === 'repair_proposal' ? '3000000' : '720000'),
+    BABEL_CHAT_MAX_TURNS: parent['BABEL_CHAT_MAX_TURNS'] ?? (input.purpose === 'repair_proposal' ? '100' : '24'),
+    BABEL_CHAT_STALL_TURNS: parent['BABEL_CHAT_STALL_TURNS'] ?? '5',
     BABEL_ALLOWED_TOOLS: JSON.stringify(['file_read', 'directory_list', 'grep', 'glob']),
     BABEL_DISALLOWED_TOOLS: JSON.stringify(['shell_exec', 'test_run', 'file_write', 'mcp_request', 'memory_query', 'memory_store', 'semantic_search']),
     BABEL_READ_ONLY_NO_INDEX_WRITE: '1',

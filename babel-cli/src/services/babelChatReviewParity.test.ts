@@ -73,9 +73,10 @@ test('babelReviewChildEnv preserves normal Chat runtime without category D execu
   // Tool profile remains native
   assert.equal(env['BABEL_TOOL_PROFILE'], 'native')
 
-  // Standard chat limits are preserved (no forced review-only turn or wall caps)
-  assert.equal(env['BABEL_CHAT_MAX_TURNS'], undefined)
-  assert.equal(env['BABEL_CHAT_STALL_TURNS'], undefined)
+  // Bounded budget defaults prevent runaway costs while allowing parent overrides
+  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '720000')
+  assert.equal(env['BABEL_CHAT_MAX_TURNS'], '24')
+  assert.equal(env['BABEL_CHAT_STALL_TURNS'], '5')
 })
 
 test('reviewer persona layers behavioral guidance on top of Chat without deleting capabilities', () => {
