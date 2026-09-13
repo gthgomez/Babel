@@ -28,6 +28,10 @@ const evidence = z.object({
   review_provider: z.literal('opencode-go'), reviewer_model: text, review_mode: z.literal('exact_diff'), reviewed_at: text,
   scope: z.array(text).min(1), verdict: z.enum(['APPROVE', 'BLOCK']), findings: z.array(z.string()), blocking_findings: z.array(z.string()),
   isolation: z.object({ mode: z.literal('readonly_sandbox'), candidate_write: z.literal(false), github_mutation: z.literal(false), merge: z.literal(false), controller_state_access: z.literal(false) }).strict(),
+  // Controller-stamped provenance (ReviewEvidenceProvenance). Host caches keep
+  // it; publication strips it because the trusted gate's evidence contract
+  // derives provenance from the authenticated comment transport itself.
+  provenance: z.enum(['LOCAL_UNAUTHENTICATED', 'TRUSTED_CONTROLLER_EVIDENCE', 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE']).optional(),
   usage: usage.optional(),
   // Host-side provenance emitted by the review controller. These stay in the
   // host cache but are stripped before publication: the trusted gate's
