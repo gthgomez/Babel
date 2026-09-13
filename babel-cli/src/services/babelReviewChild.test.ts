@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { babelReviewChildEnv, launchBabelReviewChild } from './babelReviewChild.js';
 
-test('review child strips publication credentials, preload hooks and ambient overrides', () => {
+test('review child strips publication credentials, preload hooks and ambient overrides while maintaining normal Chat profile', () => {
   const env = babelReviewChildEnv({ source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'mimo-v2.5' }, {
     PATH: '/bin', GH_TOKEN: 'synthetic', GITHUB_TOKEN: 'synthetic', NODE_OPTIONS: '--require malicious',
     OPENAI_API_KEY: 'synthetic', BABEL_EXECUTION_PROFILE: 'dev_local', BABEL_ALLOWED_TOOLS: '["shell_exec"]',
@@ -14,14 +14,15 @@ test('review child strips publication credentials, preload hooks and ambient ove
   assert.equal(env['GH_TOKEN'], undefined); assert.equal(env['GITHUB_TOKEN'], undefined);
   assert.equal(env['OPENAI_API_KEY'], undefined); assert.equal(env['NODE_OPTIONS'], undefined);
   assert.equal(env['BABEL_CHAT_MAX_COST'], 'unlimited');
-  assert.equal(env['BABEL_EXECUTION_PROFILE'], 'read_only_audit');
-  // A bounded review: parallel children converge quickly instead of running the
-  // 120-turn / 50-minute investigate ceiling.
+  assert.equal(env['BABEL_EXECUTION_PROFILE'], 'chat');
+  // Compaction and tools are not stripped in normal Chat dogfood review
+  assert.notEqual(env['BABEL_COMPACTION'], 'off');
+  assert.equal(env['BABEL_ALLOWED_TOOLS'], undefined);
+  assert.equal(env['BABEL_DISALLOWED_TOOLS'], undefined);
+  // Bounded budget so parallel review sessions converge quickly
   assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '720000');
   assert.equal(env['BABEL_CHAT_MAX_TURNS'], '24');
   assert.equal(env['BABEL_CHAT_STALL_TURNS'], '5');
-  assert.ok(!env['BABEL_ALLOWED_TOOLS']!.includes('shell_exec'));
-  assert.ok(!env['BABEL_ALLOWED_TOOLS']!.includes('semantic_search'));
   assert.equal(env['BABEL_READ_ONLY_NO_INDEX_WRITE'], '1');
 });
 
