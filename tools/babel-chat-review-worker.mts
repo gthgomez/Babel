@@ -15,8 +15,8 @@ const output = process.env['BABEL_REVIEW_OUTPUT'];
 const model = process.env['BABEL_REVIEW_MODEL'];
 const purpose = process.env['BABEL_REVIEW_PURPOSE'] ?? 'review';
 if (!['review', 'repair_proposal'].includes(purpose)) throw new Error('REVIEW_PURPOSE_INVALID');
-if (!source || !trustedRoot || !output || !model) throw new Error('REVIEW_LAUNCH_INVALID');
-if (process.env['GH_TOKEN'] || process.env['GITHUB_TOKEN'] || !['chat', 'read_only_audit'].includes(process.env['BABEL_EXECUTION_PROFILE'] ?? '')) throw new Error('REVIEW_CHILD_CAPABILITY_INVALID');
+if (!source || !trustedRoot || !output || !model || !/^[a-zA-Z0-9_.-]+$/.test(model)) throw new Error('REVIEW_LAUNCH_INVALID');
+if (process.env['GH_TOKEN'] || process.env['GITHUB_TOKEN'] || process.env['BABEL_EXECUTION_PROFILE'] !== 'read_only_audit') throw new Error('REVIEW_CHILD_CAPABILITY_INVALID');
 const manifest = JSON.parse(readFileSync(join(source, 'review-manifest.json'), 'utf8')) as { scope: string[]; execution_id: string };
 const calls: Array<Record<string, unknown>> = [];
 function persist(extra: Record<string, unknown>) {

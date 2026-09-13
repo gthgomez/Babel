@@ -114,8 +114,8 @@ export interface HostReviewHandoffV3 {
   reviews: [IndependentReviewEvidenceV3] | [IndependentReviewEvidenceV3, IndependentReviewEvidenceV3]
 }
 
-// 23 hours fresh margin inside 24h boundary
-export const REVIEW_V3_FRESH_MS = 23 * 60 * 60 * 1000
+// 24 hours fresh boundary aligning with PowerShell merge gate
+export const REVIEW_V3_FRESH_MS = 24 * 60 * 60 * 1000
 
 const text = z.string().min(1).refine(v => v.trim().toLowerCase() !== 'unknown', { message: 'FIELD_CANNOT_BE_UNKNOWN' })
 const sha = z.string().regex(/^[a-f0-9]{40}$/i, { message: 'INVALID_SHA' })

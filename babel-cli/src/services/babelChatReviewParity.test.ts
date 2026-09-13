@@ -46,7 +46,7 @@ test('babel dogfood review maintains parity with canonical ChatEngine configurat
   assert.equal(strippedSystemPrompt.includes(BABEL_REVIEWER_PERSONA), false)
 })
 
-test('babelReviewChildEnv preserves normal Chat runtime without category D execution drift', () => {
+test('babelReviewChildEnv preserves normal Chat runtime without category D execution drift while enforcing security boundary', () => {
   const env = babelReviewChildEnv({
     source: '/mock/source',
     trustedRoot: '/mock/trusted',
@@ -56,17 +56,18 @@ test('babelReviewChildEnv preserves normal Chat runtime without category D execu
     purpose: 'review',
   })
 
-  // Execution profile is normal chat
-  assert.equal(env['BABEL_EXECUTION_PROFILE'], 'chat')
+  // Execution profile enforces read_only_audit security boundary
+  assert.equal(env['BABEL_EXECUTION_PROFILE'], 'read_only_audit')
+  assert.equal(env['BABEL_READ_ONLY'], 'true')
 
-  // Compaction must NOT be turned off
+  // Compaction must NOT be forced off (Category D drift eliminated)
   assert.notEqual(env['BABEL_COMPACTION'], 'off')
 
-  // Tools must NOT be stripped or constrained by review allowlists
-  assert.equal(env['BABEL_ALLOWED_TOOLS'], undefined)
-  assert.equal(env['BABEL_DISALLOWED_TOOLS'], undefined)
+  // Tool sandbox enforces read-only security boundary against untrusted diffs
+  assert.equal(env['BABEL_ALLOWED_TOOLS'], JSON.stringify(['file_read', 'directory_list', 'grep', 'glob']))
+  assert.equal(env['BABEL_DISALLOWED_TOOLS'], JSON.stringify(['shell_exec', 'test_run', 'file_write', 'mcp_request', 'memory_query', 'memory_store', 'semantic_search']))
 
-  // Memory writeback must NOT be disabled
+  // Memory writeback must NOT be disabled (Category D drift eliminated)
   assert.notEqual(env['BABEL_MEMORY_WRITEBACK'], '0')
 
   // Tool profile remains native

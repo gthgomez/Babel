@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { babelReviewChildEnv, launchBabelReviewChild } from './babelReviewChild.js';
 
-test('review child strips publication credentials, preload hooks and ambient overrides while maintaining normal Chat profile', () => {
+test('review child strips publication credentials, preload hooks and ambient overrides while enforcing read-only sandbox', () => {
   const env = babelReviewChildEnv({ source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'mimo-v2.5' }, {
     PATH: '/bin', GH_TOKEN: 'synthetic', GITHUB_TOKEN: 'synthetic', NODE_OPTIONS: '--require malicious',
     OPENAI_API_KEY: 'synthetic', BABEL_EXECUTION_PROFILE: 'dev_local', BABEL_ALLOWED_TOOLS: '["shell_exec"]',
@@ -14,10 +14,12 @@ test('review child strips publication credentials, preload hooks and ambient ove
   assert.equal(env['GH_TOKEN'], undefined); assert.equal(env['GITHUB_TOKEN'], undefined);
   assert.equal(env['OPENAI_API_KEY'], undefined); assert.equal(env['NODE_OPTIONS'], undefined);
   assert.equal(env['BABEL_CHAT_MAX_COST'], 'unlimited');
-  assert.equal(env['BABEL_EXECUTION_PROFILE'], 'chat');
-  // Compaction and tools are not stripped in normal Chat dogfood review
+  assert.equal(env['BABEL_EXECUTION_PROFILE'], 'read_only_audit');
+  assert.equal(env['BABEL_READ_ONLY'], 'true');
+  // Compaction is not forced off in dogfood review
   assert.notEqual(env['BABEL_COMPACTION'], 'off');
-  assert.equal(env['BABEL_ALLOWED_TOOLS'], undefined);
+  assert.equal(env['BABEL_ALLOWED_TOOLS'], JSON.stringify(['file_read', 'directory_list', 'grep', 'glob']));
+  assert.equal(env['BABEL_DISALLOWED_TOOLS'], JSON.stringify(['shell_exec', 'test_run', 'file_write', 'mcp_request', 'memory_query', 'memory_store', 'semantic_search']));
   // In normal Chat dogfood review, standard chat limits are preserved (no forced review caps)
   assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], undefined);
   assert.equal(env['BABEL_CHAT_MAX_TURNS'], undefined);

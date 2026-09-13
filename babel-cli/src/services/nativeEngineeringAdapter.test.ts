@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createIsolatedWorktreeEngineeringAdapter } from './nativeEngineeringAdapter.js'
 import type { IndependentReviewExecutionRequest } from './independentReviewController.js'
 
@@ -59,7 +60,7 @@ test('nativeEngineeringAdapter: executes review and repair in isolated worktree'
   const adapter = createIsolatedWorktreeEngineeringAdapter({
     adapter_id: 'gemini-native-adapter',
     agent_kind: 'gemini',
-    repoRoot: join(process.cwd(), '..'),
+    repoRoot: resolve(fileURLToPath(new URL('../../..', import.meta.url))),
     async workerCommandRunner(worktreeDir, req) {
       if (req.purpose === 'REVIEW_REPAIR') {
         writeFileSync(join(worktreeDir, 'repair-marker.txt'), 'repair by autonomous agent\n')

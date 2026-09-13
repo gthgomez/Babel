@@ -698,6 +698,7 @@ const HOST_PROCESS_SURFACE = new Set([
   'services/babelReviewQueue.ts',
   'services/babelReviewRepair.ts',
   'services/babelReviewSnapshot.ts',
+  'services/nativeEngineeringAdapter.ts',
   'services/candidateCollector.ts',
   'services/outcomeCollector.ts',
   'agent/backgroundShell.ts',
