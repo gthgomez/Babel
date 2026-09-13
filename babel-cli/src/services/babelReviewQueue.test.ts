@@ -146,3 +146,17 @@ test('cache admits controller-emitted host provenance fields (schema-drift regre
   withUnknown.reviews[0]!['controller_secret'] = 'x'
   assert.throws(() => validateBabelReviewCache(withUnknown, expected))
 })
+
+test('cache admits controller-stamped provenance (schema-drift regression, post-#157)', () => {
+  const withProvenance = () => {
+    const value = cache() as Record<string, unknown>
+    ;(value.reviews as Array<Record<string, unknown>>)[0]!.provenance = 'TRUSTED_CONTROLLER_EVIDENCE'
+    return value
+  }
+  const validated = validateBabelReviewCache(withProvenance(), expected)
+  assert.equal(validated.reviews[0].provenance, 'TRUSTED_CONTROLLER_EVIDENCE')
+  // Unknown provenance values still fail closed.
+  const badProvenance = withProvenance() as { reviews: Array<Record<string, unknown>> }
+  badProvenance.reviews[0]!.provenance = 'SELF_DECLARED'
+  assert.throws(() => validateBabelReviewCache(badProvenance, expected))
+})

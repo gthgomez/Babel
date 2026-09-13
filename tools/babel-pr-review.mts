@@ -224,11 +224,12 @@ for (const number of prs) {
       if (owner.type !== 'User' || owner.id !== actor.id) throw new Error('OWNER_PUBLICATION_IDENTITY_REQUIRED')
       // Explicit bootstrap transport compatibility only. Private evidence always
       // retains attribution; a base that requires Babel metadata rejects this.
-      // Host-private diagnostic fields (tool traces, coverage booleans) never
-      // leave the host: the trusted gate's evidence contract rejects unknown
-      // fields, so the published handoff carries the gate-admissible subset.
+      // Host-private diagnostic fields (tool traces, coverage booleans) and
+      // the controller-stamped provenance label never leave the host: the
+      // trusted gate's evidence contract rejects unknown fields and derives
+      // provenance from the authenticated comment transport itself.
       const publicReviews = handoff.reviews.map((review) => {
-        const { tool_traces: _traces, changes_diff_fully_read: _covered, ...rest } = review as Record<string, unknown>
+        const { tool_traces: _traces, changes_diff_fully_read: _covered, provenance: _provenance, ...rest } = review as Record<string, unknown>
         if (options.has('--legacy-evidence')) {
           const { harness: _harness, ...legacy } = rest
           return legacy
