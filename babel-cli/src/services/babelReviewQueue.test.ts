@@ -90,7 +90,21 @@ test('atomic JSON keeps a parseable current checkpoint and exclusive initialized
   first.child(123456, executionId)
   first.release()
   assert.equal(existsSync(lock), true) // never remove evidence of a possibly active child
-  first.childExited(); first.release()
+  first.childExited(executionId); first.release()
+  assert.equal(existsSync(lock), false)
+})
+
+test('parallel review children are tracked independently and hold the lease until all exit', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-review-parallel-')); const lock = join(root, 'running.lock')
+  const second = '22345678-1234-1234-1234-123456789abc'
+  const lease = acquireBabelReviewLease(lock)
+  assert.ok(lease)
+  lease.child(null, executionId)
+  lease.child(null, second)
+  assert.equal(acquireBabelReviewLease(lock, () => false), null)
+  lease.childExited(executionId); lease.release()
+  assert.equal(existsSync(lock), true) // the second reviewer is still running
+  lease.childExited(second); lease.release()
   assert.equal(existsSync(lock), false)
 })
 
