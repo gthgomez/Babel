@@ -155,11 +155,11 @@ inferences cannot trigger a syntax-only restatement request. Metadata retains
 the provider's original finish reason and unknown usage; no synthetic `OK` is
 accepted as review evidence.
 
-The configured reviewer output budget is 32k completions
-(`BABEL_REVIEW_OUTPUT_TOKENS`), shared by the request body and the advertised
+The reviewer output budget is a compile-time 32k completions
+(`REVIEW_OUTPUT_TOKEN_BUDGET`), shared by the request body and the advertised
 model policy so the two cannot drift. Native-response buffers are sized above
 that budget, so the configured output budget — not an event or byte buffer
-guard — is the only truncation limit on a legitimate long answer.
+guard — is the practical truncation limit on a legitimate long answer.
 
 Keep per-run artifacts, tool outcomes, completion classification, requested and
 observed models, installation identity, malformed output and failed attempts in
