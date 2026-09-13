@@ -18,6 +18,12 @@ LongCat 2.0 in separate contexts. DeepSeek V4 Flash is also a canonical supporte
 OpenCode Go model. The model that actually answered is recorded; a configured
 name or fallback assumption is not sufficient attribution.
 
+The merge gate requires a Babel chat review on OpenCode Go: gate evidence must
+declare `review_provider: "opencode-go"` and a `babel`/`chat` harness, and the
+validator rejects anything else. Claude Code is a benchmark-only comparison arm;
+its reviews are never gate evidence and cannot satisfy or substitute for the
+required Babel reviewer.
+
 The review/repair adapter explicitly requests `thinking: {type: "disabled"}`
 for all three canonical models, without changing ordinary transport defaults.
 [MiMo's protocol](https://mimo.mi.com/docs/en-US/api/chat/openai-api) documents
@@ -64,8 +70,14 @@ for review. Secret scanning precedes provider exposure.
 
 Each reviewer is a fresh child process with source-reading capabilities only.
 Writes, shell commands, subagents, shared-memory mutation, GitHub credentials,
-and controller-state reads are unavailable to it. Provider credentials are
-resolved through the approved helper without printing them. `readonly_sandbox`
+and controller-state reads are unavailable to it. The production reviewer's
+credential is Babel-native: the approved resolver selects the first existing
+helper in precedence order — an explicit test-injection path, then the
+`BABEL_OPENCODE_GO_HELPER` environment override, then the canonical Babel helper
+`~/.config/babel/get-auth-token.js`, and finally the deprecated Claude-named
+fallback `~/.claude/get-auth-token.js`, retained only for older hosts. The
+credential is invoked without printing it: its value stays in process memory and
+never enters diagnostics, receipts, logs or published evidence. `readonly_sandbox`
 in the receipt names this application/tool-enforced boundary, not an OS sandbox
 or cryptographic proof of isolation.
 

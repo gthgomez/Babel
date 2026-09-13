@@ -37,6 +37,19 @@ test('cache admits only a fresh full candidate and trusted harness execution', (
   assert.throws(() => validateBabelReviewCache(cache(), { ...expected, version: '0'.repeat(64) }))
 })
 
+test('merge gate requires a Babel chat review on OpenCode Go: a Claude Code reviewer cannot satisfy it', () => {
+  // The merge gate accepts only Babel chat evidence. A structurally complete
+  // review that claims the Claude Code benchmark arm as its provider fails closed.
+  const claudeProvider = cache()
+  claudeProvider.reviews[0]!.review_provider = 'claude-code'
+  assert.throws(() => validateBabelReviewCache(claudeProvider, expected))
+
+  // A review without the Babel chat harness block is not gate evidence either.
+  const missingHarness = cache() as Record<string, unknown>
+  delete (missingHarness.reviews as Array<Record<string, unknown>>)[0]!.harness
+  assert.throws(() => validateBabelReviewCache(missingHarness, expected))
+})
+
 test('a completed BLOCK remains BLOCK and cannot carry forged approval findings', () => {
   const blocked = cache(); blocked.reviews[0]!.verdict = 'BLOCK'
   blocked.reviews[0]!.blocking_findings = ['arithmetic defect'] as never

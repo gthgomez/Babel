@@ -6,11 +6,15 @@ import {
   OpenCodeApiRunner,
 } from './openCodeApi.js'
 import { OpenCodeGoApiRunner, OPENCODE_GO_DEFAULT_BASE_URL, OpenCodeGoError } from '../claude-babel-astra-lab/openCodeGoApi.js'
-import { resolveOpenCodeGoCredential, OpenCodeGoCredentialError } from '../claude-babel-astra-lab/credentialResolver.js'
+import { resolveOpenCodeGoCredential, OpenCodeGoCredentialError, BABEL_OPENCODE_GO_HELPER_ENV, BABEL_OPENCODE_GO_HELPER_PATH, DEPRECATED_CLAUDE_HELPER_PATH } from './openCodeGoCredential.js'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const originalFetch = globalThis.fetch
+
+test.beforeEach(() => {
+  delete process.env[BABEL_OPENCODE_GO_HELPER_ENV]
+})
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch
@@ -18,6 +22,7 @@ test.afterEach(() => {
   delete process.env['BABEL_OPENCODE_GO_BASE_URL']
   delete process.env['BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS']
   delete process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES']
+  delete process.env[BABEL_OPENCODE_GO_HELPER_ENV]
 })
 
 test('OpenCode Zen uses the declared credential variable and sampling body', async () => {
@@ -74,14 +79,14 @@ test('OpenCode Go credential resolver uses the approved helper source in memory'
   let invoked = false
   const resolution = resolveOpenCodeGoCredential({
     source: 'opencode-auth-helper',
-    helperPath: join(homedir(), '.claude', 'get-auth-token.js'),
+    helperPath: BABEL_OPENCODE_GO_HELPER_PATH,
+    existsSyncImpl: () => true,
     execFileSyncImpl: ((file: string, args?: readonly string[]) => {
-      invoked = file === process.execPath && args?.[0] === join(homedir(), '.claude', 'get-auth-token.js')
+      invoked = file === process.execPath && args?.[0] === BABEL_OPENCODE_GO_HELPER_PATH
       return 'synthetic-helper-credential\n'
     }) as never,
   })
   assert.equal(invoked, true)
-  assert.equal(resolution.authStatus, 'PRESENT')
   assert.equal(resolution.credentialSource, 'opencode-auth-helper')
   assert.equal(resolution.credential, 'synthetic-helper-credential')
 })
@@ -90,17 +95,18 @@ test('OpenCode Go credential resolver redacts helper failures', () => {
   assert.throws(
     () => resolveOpenCodeGoCredential({
       source: 'opencode-auth-helper',
-      helperPath: join(homedir(), '.claude', 'get-auth-token.js'),
+      helperPath: BABEL_OPENCODE_GO_HELPER_PATH,
+      existsSyncImpl: () => true,
       execFileSyncImpl: (() => { throw Object.assign(new Error('helper failed: secret-value'), { status: 7, stderr: 'secret-value' }) }) as never,
     }),
     (error: unknown) => {
       assert.equal(error instanceof OpenCodeGoCredentialError, true)
       assert.equal((error as Error).message.includes('secret-value'), false)
       assert.deepEqual((error as OpenCodeGoCredentialError).diagnostic, {
-        helper_present: true,
-        exit_code: 7,
-        stderr_present: true,
-        timed_out: false,
+        helperPresent: true,
+        exitCode: 7,
+        stderrPresent: true,
+        timedOut: false,
       })
       return true
     },
@@ -111,12 +117,79 @@ test('OpenCode Go benchmark source does not fall back to an unrelated environmen
   process.env['OPENCODE_API_KEY'] = 'unrelated-env-value'
   try {
     assert.throws(
-      () => resolveOpenCodeGoCredential({ source: 'opencode-auth-helper', helperPath: 'C:\\missing\\get-auth-token.js' }),
+      () => resolveOpenCodeGoCredential({
+        source: 'opencode-auth-helper',
+        helperPath: 'C:\\missing\\get-auth-token.js',
+        existsSyncImpl: () => false,
+      }),
       (error: unknown) => error instanceof OpenCodeGoCredentialError && error.code === 'AUTH_FAILURE',
     )
   } finally {
     delete process.env['OPENCODE_API_KEY']
   }
+})
+
+test('OpenCode Go credential resolver prefers the BABEL_OPENCODE_GO_HELPER override', () => {
+  const overrideHelper = join(homedir(), '.config', 'babel', 'override-helper.js')
+  process.env[BABEL_OPENCODE_GO_HELPER_ENV] = overrideHelper
+  let invokedPath = ''
+  const resolution = resolveOpenCodeGoCredential({
+    source: 'opencode-auth-helper',
+    existsSyncImpl: ((candidate: string) =>
+      candidate === overrideHelper ||
+      candidate === BABEL_OPENCODE_GO_HELPER_PATH ||
+      candidate === DEPRECATED_CLAUDE_HELPER_PATH) as never,
+    execFileSyncImpl: ((_file: string, args?: readonly string[]) => {
+      invokedPath = args?.[0] ?? ''
+      return 'override-helper-credential\n'
+    }) as never,
+  })
+  assert.equal(invokedPath, overrideHelper)
+  assert.equal(resolution.credential, 'override-helper-credential')
+  assert.equal(resolution.credentialSource, 'opencode-auth-helper')
+})
+
+test('OpenCode Go credential resolver prefers the Babel-native helper over the deprecated Claude helper', () => {
+  let invokedPath = ''
+  resolveOpenCodeGoCredential({
+    source: 'opencode-auth-helper',
+    existsSyncImpl: ((candidate: string) =>
+      candidate === BABEL_OPENCODE_GO_HELPER_PATH ||
+      candidate === DEPRECATED_CLAUDE_HELPER_PATH) as never,
+    execFileSyncImpl: ((_file: string, args?: readonly string[]) => {
+      invokedPath = args?.[0] ?? ''
+      return 'babel-helper-credential\n'
+    }) as never,
+  })
+  assert.equal(invokedPath, BABEL_OPENCODE_GO_HELPER_PATH)
+})
+
+test('OpenCode Go credential resolver falls back to the deprecated Claude helper only when the Babel path is absent', () => {
+  let invokedPath = ''
+  resolveOpenCodeGoCredential({
+    source: 'opencode-auth-helper',
+    existsSyncImpl: ((candidate: string) => candidate === DEPRECATED_CLAUDE_HELPER_PATH) as never,
+    execFileSyncImpl: ((_file: string, args?: readonly string[]) => {
+      invokedPath = args?.[0] ?? ''
+      return 'claude-helper-credential\n'
+    }) as never,
+  })
+  assert.equal(invokedPath, DEPRECATED_CLAUDE_HELPER_PATH)
+})
+
+test('OpenCode Go credential resolver fails closed when no helper candidate exists', () => {
+  assert.throws(
+    () => resolveOpenCodeGoCredential({
+      source: 'opencode-auth-helper',
+      existsSyncImpl: () => false,
+    }),
+    (error: unknown) => {
+      assert.equal(error instanceof OpenCodeGoCredentialError, true)
+      assert.equal((error as OpenCodeGoCredentialError).code, 'AUTH_FAILURE')
+      assert.equal((error as OpenCodeGoCredentialError).diagnostic.helperPresent, false)
+      return true
+    },
+  )
 })
 
 test('OpenCode Go pins the exact model, route, session, usage, and provider identity', async () => {
