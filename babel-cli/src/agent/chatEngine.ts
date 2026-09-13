@@ -3361,12 +3361,12 @@ export class ChatEngine {
     return this.parity;
   }
 
-  /** Content-free C1 mismatch count for shadow-mode telemetry consumers. */
+  /** Content-free invariant mismatch count for shadow-mode telemetry consumers. */
   getRuntimeInvariantViolationCount(invariantId = MODEL_VISIBLE_EQUALS_PERSISTED): number {
     return this.runtimeInvariants.getViolationCount(invariantId);
   }
 
-  /** Assert the exact native-provider wire request equals a fresh durable rebuild. */
+  /** Assert native wire reconstruction equality and provider protocol validity. */
   private assertNativeRequestMatchesDurable(
     outbound: readonly ProviderMessage[],
     systemPrompt: string,
@@ -3378,16 +3378,19 @@ export class ChatEngine {
     // Native runners share this deterministic final serializer. Compare its
     // exact output rather than neutral messages so committed capsules cannot
     // disappear between C1 and the provider POST body.
-    const evaluation = this.runtimeInvariants.evaluate(MODEL_VISIBLE_EQUALS_PERSISTED, {
+    const context: RequestReconstructionContext = {
       outbound: mapProviderMessagesToWire([...outbound], systemPrompt, systemPromptOverride),
       reconstructed: mapProviderMessagesToWire(reconstructed, systemPrompt, systemPromptOverride),
-    });
-    if (!evaluation.passed && evaluation.violation) {
-      trace.getActiveSpan()?.addEvent('runtime_invariant_mismatch', {
-        'runtime_invariant.id': evaluation.invariantId,
-        'runtime_invariant.expected_hash': evaluation.violation.expectedHash,
-        'runtime_invariant.actual_hash': evaluation.violation.actualHash,
-      });
+    };
+    for (const invariantId of [MODEL_VISIBLE_EQUALS_PERSISTED, PROVIDER_PROTOCOL_VALID]) {
+      const evaluation = this.runtimeInvariants.evaluate(invariantId, context);
+      if (!evaluation.passed && evaluation.violation) {
+        trace.getActiveSpan()?.addEvent('runtime_invariant_mismatch', {
+          'runtime_invariant.id': evaluation.invariantId,
+          'runtime_invariant.expected_hash': evaluation.violation.expectedHash,
+          'runtime_invariant.actual_hash': evaluation.violation.actualHash,
+        });
+      }
     }
   }
 
