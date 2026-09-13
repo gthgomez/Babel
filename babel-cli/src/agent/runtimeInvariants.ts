@@ -75,6 +75,7 @@ export class RuntimeInvariantRegistry<TContext> {
 }
 
 export const MODEL_VISIBLE_EQUALS_PERSISTED = 'model_visible_equals_persisted';
+export const PROVIDER_PROTOCOL_VALID = 'provider_protocol_valid';
 
 /** Provider-neutral or final wire message shape safe to compare at dispatch. */
 export interface ModelVisibleMessage {
@@ -163,6 +164,43 @@ export function createRequestReconstructionInvariant(): RuntimeInvariant<Request
         actualHash,
         expectedShape,
         actualShape,
+      };
+    },
+  };
+}
+
+/**
+ * Wire protocol issues that make a provider request structurally invalid.
+ * `system_in_user_content` is a heuristic flatten detector and stays advisory;
+ * every structural tool-cycle break fails the invariant.
+ */
+export function isHardProviderProtocolIssue(code: string): boolean {
+  return code !== 'system_in_user_content';
+}
+
+/**
+ * C2: every dispatched provider payload must be a structurally valid tool
+ * protocol conversation — each tool result pairs with a preceding declared
+ * call id, results appear exactly once, and no declared call is left
+ * unanswered before the payload ends.
+ */
+export function createProviderProtocolInvariant(
+  validate: (messages: readonly ModelVisibleMessage[]) => Array<{ code: string; message: string }>,
+): RuntimeInvariant<RequestReconstructionContext> {
+  return {
+    id: PROVIDER_PROTOCOL_VALID,
+    evaluate: ({ outbound }) => {
+      const issues = validate(outbound).filter((issue) => isHardProviderProtocolIssue(issue.code));
+      if (issues.length === 0) return null;
+      return {
+        invariantId: PROVIDER_PROTOCOL_VALID,
+        message: `Outbound provider payload breaks the tool protocol: ${issues
+          .map((issue) => `${issue.code} (${issue.message})`)
+          .join('; ')}`,
+        expectedHash: sha256('protocol-valid'),
+        actualHash: sha256(issues.map((issue) => `${issue.code}:${issue.message}`).join('\n')),
+        expectedShape: [],
+        actualShape: summarizeProviderMessages(outbound),
       };
     },
   };
