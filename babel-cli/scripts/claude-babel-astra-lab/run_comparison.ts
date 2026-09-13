@@ -18,7 +18,10 @@ if (process.argv.includes('--preflight')) {
   const modulePath = option('adapters')
   const output = option('output')
   if (!modulePath || !output) throw new Error('Execution requires a trusted adapter module and fresh output directory; use --preflight for zero-call validation')
-  // The comparison campaign runs the Claude Code benchmark arm; require the same explicit opt-in as the harness itself.
+  // Keep the CLI check as defense-in-depth: it runs before importing the
+  // evaluator-supplied adapter module (whose top-level code could otherwise
+  // spawn a process). `runComparisonCampaign` independently fails closed for
+  // programmatic callers, so both entry points enforce the same opt-in.
   assertClaudeBenchmarkOptIn()
   // Adapter code is evaluator-owned executable configuration, never contestant output.
   const module = await import(pathToFileURL(resolve(modulePath)).href) as { adapters: Record<'claude-code' | 'babel-live', ComparisonAdapter> }

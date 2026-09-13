@@ -155,7 +155,7 @@
     "benchmark:claude-babel:smoke": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_babel_smoke.ts",
     "benchmark:claude-babel:canary": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_mimo_t1_canary.ts",
     "benchmark:claude-babel:pilot": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_profile_pilot.ts",
-    "test:claude-babel-lab": "tsx --no-warnings=ExperimentalWarning --test src/runners/openCodeApi.test.ts src/runners/providerRegistry.test.ts src/runners/providerEngine.test.ts src/claude-babel-astra-lab/lab.test.ts",
+    "test:claude-babel-lab": "tsx --no-warnings=ExperimentalWarning --test src/runners/openCodeApi.test.ts src/runners/providerRegistry.test.ts src/runners/providerEngine.test.ts src/claude-babel-astra-lab/lab.test.ts src/claude-babel-astra-lab/claudeHarness.test.ts",
     "test:comparison": "tsx --no-warnings=ExperimentalWarning --test src/claude-babel-astra-lab/comparison-contract.test.ts src/claude-babel-astra-lab/comparison-runner.test.ts src/claude-babel-astra-lab/frozen-evaluator.test.ts src/claude-babel-astra-lab/recovery-observation.test.ts",
     "benchmark:claude-babel:compare": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_comparison.ts"
   },

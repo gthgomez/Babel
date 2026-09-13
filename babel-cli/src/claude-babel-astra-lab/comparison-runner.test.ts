@@ -5,11 +5,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fixturePrompt } from '../fixtures/claude-babel-astra-lab/fixtures.js'
 import { digest, type ArmIdentity, type Harness, type PairContract } from './comparison-contract.js'
+import { CLAUDE_BENCH_OPT_IN_ENV, ClaudeBenchmarkOptInError } from './claudeHarness.js'
 import { runComparisonCampaign, type ComparisonAdapter } from './comparison-runner.js'
 import { freezeEvaluator } from './frozen-evaluator.js'
 import { buildNeutralReceipt } from './receipt.js'
 import { aggregateResults } from './comparison-report.js'
 import { runnerIdentity } from './runner-identity.js'
+
+// The campaign fails closed without this opt-in; the real guard is exercised here.
+const previousClaudeOptIn = process.env[CLAUDE_BENCH_OPT_IN_ENV]
+process.env[CLAUDE_BENCH_OPT_IN_ENV] = '1'
+process.once('exit', () => {
+  if (previousClaudeOptIn === undefined) delete process.env[CLAUDE_BENCH_OPT_IN_ENV]
+  else process.env[CLAUDE_BENCH_OPT_IN_ENV] = previousClaudeOptIn
+})
 
 function definition(pairId: string): PairContract {
   const arm = (harness: Harness): ArmIdentity => ({ harness, version: harness === 'babel-live' ? 'd'.repeat(40) : 'fake-observed-v1', configurationDigest: digest(harness), route: 'deterministic-fake/opencode-go', requestedProvider: 'opencode-go', requestedModel: 'mimo-v2.5', capabilities: { filesystem: { read: ['fixture/**'], write: ['fixture/src/**'] }, network: [], process: [], environment: ['deterministic-fixture'], limits: { timeoutMs: 1000, modelCalls: 1, toolCalls: 1, outputTokens: null } }, capabilityEvidence: ['fake-adapter fixed authority'] })
@@ -32,6 +41,26 @@ function adapter(identity: ArmIdentity, calls: string[], source = 'export functi
     },
   }
 }
+
+test('campaign itself fails closed without the Claude benchmark opt-in before any adapter or output', async () => {
+  const contract = definition('opt-in-required')
+  const calls: string[] = []
+  const parent = mkdtempSync(join(tmpdir(), 'astra-opt-in-required-'))
+  const outputRoot = join(parent, 'fresh-campaign-output')
+  const previous = process.env[CLAUDE_BENCH_OPT_IN_ENV]
+  delete process.env[CLAUDE_BENCH_OPT_IN_ENV]
+  try {
+    await assert.rejects(
+      runComparisonCampaign([contract], { outputRoot, adapters: { 'claude-code': adapter(contract.arms['claude-code'], calls), 'babel-live': adapter(contract.arms['babel-live'], calls) } }),
+      (error: unknown) => error instanceof ClaudeBenchmarkOptInError && /BABEL_BENCH_ALLOW_CLAUDE/.test((error as Error).message),
+    )
+    assert.deepEqual(calls, [])
+    assert.equal(existsSync(outputRoot), false)
+  } finally {
+    if (previous === undefined) delete process.env[CLAUDE_BENCH_OPT_IN_ENV]
+    else process.env[CLAUDE_BENCH_OPT_IN_ENV] = previous
+  }
+})
 
 test('actual runner and task repository SHAs are checked before provider calls', async () => {
   const good = definition('actual-source')
