@@ -347,6 +347,21 @@ try {
   $dupBundle.handoff.reviews[1].reviewer.principal_id = $dupBundle.handoff.reviews[0].reviewer.principal_id
   Assert-ClosureGate (-not (Test-AgentControllerReviewEvidenceBundle -Bundle $dupBundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 2 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')).valid) 'V3 bundle must reject duplicate reviewer principal in 2-review escalation'
 
+  # Public comment handoff (provenance stripped per publicIndependentReviewHandoffV3)
+  $publicHandoff = $v3Bundle.handoff | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $publicHandoff.PSObject.Properties.Remove('provenance')
+  $publicHandoff.reviews[0].PSObject.Properties.Remove('provenance')
+  $publicCommentBody = "<!-- babel-controller-independent-review-v3 -->`n" + ($publicHandoff | ConvertTo-Json -Depth 30)
+  $commentObj = [pscustomobject]@{
+    id = 1001
+    user = [pscustomobject]@{ id = '91163862'; type = 'User' }
+    body = $publicCommentBody
+    issue_url = "https://api.github.com/repos/gthgomez/Babel/issues/152"
+  }
+  $selectedBundle = Select-AgentHostReviewBundle -Comments @($commentObj) -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -PublisherId '91163862'
+  $selectedCheck = Test-AgentControllerReviewEvidenceBundle -Bundle $selectedBundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 1 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')
+  Assert-ClosureGate ($selectedCheck.valid -and $selectedCheck.reviewCount -eq 1) 'Public owner-authenticated V3 comment must pass bundle validation'
+
   Write-Output 'agent-pr-gate-closure: PASS'
   exit 0
 } catch {

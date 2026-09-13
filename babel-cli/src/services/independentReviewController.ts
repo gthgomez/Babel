@@ -13,7 +13,7 @@ import {
   validateHostReviewHandoffV3,
   validateIndependentReviewEvidenceV3,
 } from './independentReviewEvidenceV3.js'
-import { assertNoUnresolvedPriorBlock, recordUnresolvedBlock } from './independentReviewPolicy.js'
+import { assertNoUnresolvedPriorBlock, recordUnresolvedBlock, settleIndependentReviewRound } from './independentReviewPolicy.js'
 import type { CandidateEnvelope, HostReviewCandidate } from './hostReviewController.js'
 
 export interface PersistentReviewChallenge {
@@ -214,11 +214,10 @@ export function createIndependentReviewController(input: {
 
       const provenance = input.state_dir ? 'TRUSTED_CONTROLLER_EVIDENCE' : 'LOCAL_UNAUTHENTICATED'
 
-      const reviews: IndependentReviewEvidenceV3[] = []
       const usedPrincipals = new Set<string>()
       const usedExecutions = new Set<string>()
 
-      for (let i = 0; i < reviewCount; i++) {
+      const slotPromises = Array.from({ length: reviewCount }, async (_, i) => {
         const reviewerPrincipalId = createId()
         const reviewerExecutionId = createId()
 
@@ -358,15 +357,25 @@ export function createIndependentReviewController(input: {
           verifyAndConsumeChallenge(input.state_dir, challengeId, evidence)
         }
 
-        // If verdict is BLOCK, record it
-        if (evidence.verdict === 'BLOCK' && input.state_dir) {
-          recordUnresolvedBlock(candidate.candidate_digest, input.state_dir, evidence)
-        }
+        return { reviews: [evidence] as const }
+      })
 
-        reviews.push(evidence)
+      const settled = await Promise.allSettled(slotPromises)
+      const settledWrappers = settleIndependentReviewRound(settled)
+      const reviews = settledWrappers.flatMap((w) => w.reviews)
+
+      // If any settled verdict is BLOCK, record it
+      for (const review of reviews) {
+        if (review.verdict === 'BLOCK' && input.state_dir) {
+          recordUnresolvedBlock(candidate.candidate_digest, input.state_dir, review)
+        }
       }
 
-      const handoffReviews = (reviewCount === 2
+      if (reviews.length === 0) {
+        throw new Error('REVIEW_EXECUTION_FAILED: No reviews produced')
+      }
+
+      const handoffReviews = (reviews.length === 2
         ? [reviews[0], reviews[1]]
         : [reviews[0]]) as [IndependentReviewEvidenceV3] | [IndependentReviewEvidenceV3, IndependentReviewEvidenceV3]
 

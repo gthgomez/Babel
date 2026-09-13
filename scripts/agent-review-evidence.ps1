@@ -34,6 +34,7 @@ function Select-AgentHostReviewBundle {
         repository = $Repository; pr_number = $PR; base_sha = $BaseSha; head_sha = $HeadSha
         candidate_digest = [string](Get-AgentPropertyValue $handoff 'candidate_digest')
         publisher_id = $PublisherId; comment_id = [string](Get-AgentPropertyValue $comment 'id')
+        provenance = 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'
         handoff = $handoff
       }
     }
@@ -181,7 +182,7 @@ function Test-AgentIndependentReviewEvidenceV3 {
   $provenance = [string](Get-AgentPropertyValue $Evidence 'provenance')
   if ($provenance -ceq 'LOCAL_UNAUTHENTICATED') {
     $errors += 'independent_evidence_provenance_unauthenticated'
-  } elseif ($provenance -cne 'TRUSTED_CONTROLLER_EVIDENCE' -and $provenance -cne 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE') {
+  } elseif ($provenance -and $provenance -cne 'TRUSTED_CONTROLLER_EVIDENCE' -and $provenance -cne 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE') {
     $errors += 'independent_evidence_provenance_invalid'
   }
 
@@ -344,6 +345,8 @@ function Test-AgentHostReviewBundleV3 {
   $handoffProvenance = [string](Get-AgentPropertyValue $handoff 'provenance')
   if ($handoffProvenance -ceq 'LOCAL_UNAUTHENTICATED') {
     $errors += 'controller_review_handoff_provenance_unauthenticated'
+  } elseif ($handoffProvenance -and $handoffProvenance -cne 'TRUSTED_CONTROLLER_EVIDENCE' -and $handoffProvenance -cne 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE') {
+    $errors += 'controller_review_handoff_provenance_invalid'
   }
 
   $allowedBundle = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'candidate_digest', 'publisher_id', 'comment_id', 'handoff', 'provenance')

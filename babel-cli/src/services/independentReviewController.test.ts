@@ -336,3 +336,49 @@ test('independentReviewController: records block and prevents approval shopping 
     rmSync(tempDir, { recursive: true, force: true })
   }
 })
+
+test('independentReviewController: multi-review round settles BLOCK even when peer reviewer fails', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'babel-ctrl-test-'))
+  try {
+    let callCount = 0
+    const mockAdapter: IndependentReviewWorkerAdapter = {
+      adapter_id: 'mock-subagent-v1',
+      agent_kind: 'codex',
+      async launch(req) {
+        callCount++
+        if (callCount === 1) {
+          return {
+            status: 'COMPLETED',
+            verdict: 'BLOCK',
+            findings: ['Critical defect'],
+            blocking_findings: ['Critical defect'],
+            reviewed_at: new Date().toISOString(),
+            scope: [...req.candidate.scope],
+            isolation: req.required_isolation,
+            runtime: {
+              agent_kind: 'codex',
+              adapter_id: 'mock-subagent-v1',
+              controller_execution_id: req.reviewer.execution_id,
+            },
+          }
+        }
+        throw new Error('Adapter crashed during reviewer 2 execution')
+      },
+    }
+
+    const controller = createIndependentReviewController({
+      controller_id: 'test-controller-1',
+      state_dir: tempDir,
+      adapter: mockAdapter,
+    })
+
+    const candidate = createSampleCandidate()
+    const handoff = await controller.review(candidate, { reviewCount: 2, builder: sampleBuilder })
+
+    assert.equal(handoff.reviews.length, 1)
+    assert.equal(handoff.reviews[0]!.verdict, 'BLOCK')
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+

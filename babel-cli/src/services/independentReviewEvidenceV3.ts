@@ -23,6 +23,7 @@ export interface IndependentReviewRuntime {
   adapter_id: string
   /** Must equal reviewer.execution_id. */
   controller_execution_id: string
+  source_sha?: string
   runtime_version?: string
   requested_provider?: string
   observed_provider?: string
@@ -130,6 +131,7 @@ export const independentReviewRuntimeSchema = z.object({
   agent_kind: text,
   adapter_id: text,
   controller_execution_id: text,
+  source_sha: sha.optional(),
   runtime_version: z.string().min(1).optional(),
   requested_provider: z.string().min(1).optional(),
   observed_provider: z.string().min(1).optional(),
