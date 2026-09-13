@@ -208,6 +208,8 @@ function pairwise(
   candidate: CellResultV3,
 ): PairwiseVerdict {
   const reasons = [...cellInvalidReasonsV3(reference), ...cellInvalidReasonsV3(candidate)]
+  const expected = comparison === 'M_vs_B' ? ['M', 'B'] as const : ['B', 'I'] as const
+  if (reference.role !== expected[0] || candidate.role !== expected[1]) reasons.push('CELL_ROLE_SLOT_MISMATCH')
   if (reference.CONTRACT_DIGEST !== candidate.CONTRACT_DIGEST) reasons.push('PAIR_CONTRACT_MISMATCH')
   const unique = [...new Set(reasons)]
   let verdict: ExperimentVerdict = 'INCONCLUSIVE'

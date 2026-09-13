@@ -162,3 +162,10 @@ test('tampered contract digest invalidates the comparison', () => {
   assert.equal(result.EXPERIMENT_VERDICT, 'INVALID_COMPARISON')
   assert.ok(result.reasons.includes('CONTRACT_DIGEST_MISMATCH'))
 })
+
+test('a valid cell cannot be supplied in another experiment role slot', () => {
+  const full = cells()
+  const result = compareExperiment({ M: full.I, B: full.B, I: full.M })
+  assert.equal(result.EXPERIMENT_VERDICT, 'INVALID_COMPARISON')
+  assert.ok(result.reasons.includes('CELL_ROLE_SLOT_MISMATCH'))
+})
