@@ -30,6 +30,15 @@ Prevent live secrets from entering agent context or session transcripts. Tool pe
 | Debug auth failures | Use error messages + "is VAR set?" checks without printing values |
 | Scrub / gitleaks tests | Use **synthetic** fixtures only — never copy live token shapes |
 
+## Reviewer credential helper
+
+The canonical reviewer credential helper is Babel-native:
+`~/.config/babel/get-auth-token.js`, overridable with
+`BABEL_OPENCODE_GO_HELPER`. `~/.claude/get-auth-token.js` is a deprecated
+fallback used only when no Babel path exists. The helper's stdout is a live
+credential: only the approved resolver may invoke it, in memory, and its value
+must never be read, echoed, logged, or pasted.
+
 ## Enforcement surfaces
 
 | Layer | Where |

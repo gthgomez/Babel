@@ -41,11 +41,42 @@ export class OpenCodeGoCredentialError extends Error {
   }
 }
 
-const DEFAULT_HELPER_PATH = join(homedir(), '.claude', 'get-auth-token.js')
+/** Environment override selecting the credential helper path. */
+export const BABEL_OPENCODE_GO_HELPER_ENV = 'BABEL_OPENCODE_GO_HELPER'
 
 /**
- * Resolve an OpenCode Go credential through the approved helper. The key stays
- * only in process memory and is never included in diagnostics or receipts.
+ * Canonical Babel-native credential helper. Babel owns its reviewer credential;
+ * the Claude-named helper below is a deprecated compatibility fallback only.
+ */
+export const BABEL_OPENCODE_GO_HELPER_PATH = join(homedir(), '.config', 'babel', 'get-auth-token.js')
+
+/** Deprecated Claude-named helper, kept only so older hosts keep resolving. */
+export const DEPRECATED_CLAUDE_HELPER_PATH = join(homedir(), '.claude', 'get-auth-token.js')
+
+/** Return the first existing helper candidate, in precedence order. */
+function firstExistingHelperPath(
+  options: OpenCodeGoCredentialResolverOptions,
+  exists: typeof existsSync,
+): string | null {
+  const candidates = [
+    options.helperPath,
+    process.env[BABEL_OPENCODE_GO_HELPER_ENV],
+    BABEL_OPENCODE_GO_HELPER_PATH,
+    DEPRECATED_CLAUDE_HELPER_PATH,
+  ]
+  for (const candidate of candidates) {
+    const candidatePath = candidate?.trim()
+    if (candidatePath && exists(candidatePath)) return candidatePath
+  }
+  return null
+}
+
+/**
+ * Resolve an OpenCode Go credential through the approved helper. The credential
+ * is Babel-native: the canonical helper is `~/.config/babel/get-auth-token.js`,
+ * which `BABEL_OPENCODE_GO_HELPER` may override, and the deprecated Claude-named
+ * `~/.claude/get-auth-token.js` is used only when no Babel path exists. The key
+ * stays only in process memory and is never included in diagnostics or receipts.
  */
 export function resolveOpenCodeGoCredential(
   options: OpenCodeGoCredentialResolverOptions,
@@ -63,9 +94,8 @@ export function resolveOpenCodeGoCredential(
     return { credential, credentialSource: 'explicit-test' }
   }
 
-  const helperPath = options.helperPath ?? DEFAULT_HELPER_PATH
-  const helperPresent = (options.existsSyncImpl ?? existsSync)(helperPath)
-  if (!helperPresent) {
+  const helperPath = firstExistingHelperPath(options, options.existsSyncImpl ?? existsSync)
+  if (!helperPath) {
     throw new OpenCodeGoCredentialError('opencode-auth-helper', {
       helperPresent: false,
       exitCode: 'UNKNOWN',
