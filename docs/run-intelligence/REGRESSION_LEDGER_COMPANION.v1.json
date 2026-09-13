@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "kind": "bri_regression_ledger_companion",
+  "source": "REGRESSION_LEDGER.md",
+  "interpretation": "No failure-to-fix lineage is inferred from ledger prose. Reviewed lineage edges may be added to the BRI catalog later.",
+  "entries": []
+}

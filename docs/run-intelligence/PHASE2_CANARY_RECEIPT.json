@@ -1,0 +1,44 @@
+{
+  "schema_version": 3,
+  "kind": "bri_read_only_vertical_slice_canary",
+  "date": "2026-09-09",
+  "processing_budget": {
+    "samples": 6,
+    "public_samples": 4,
+    "private_samples": 2,
+    "parsed_artifacts": ["session-events.jsonl", "verifier_execution_summary.json", "cost_ledger.json", "terminal_status_summary.json"],
+    "copied_source_bytes": 0,
+    "ingestions_per_sample": 2
+  },
+  "samples": [
+    { "sample_id": "public-run-01", "session": false, "routing": 6, "verifiers": 1, "outcomes": 2, "usage": 6 },
+    { "sample_id": "public-run-02", "session": false, "routing": 1, "verifiers": 0, "outcomes": 1, "usage": 1 },
+    { "sample_id": "public-run-03", "session": false, "routing": 3, "verifiers": 1, "outcomes": 2, "usage": 3 },
+    { "sample_id": "public-run-04", "session": true, "routing": 0, "verifiers": 0, "outcomes": 0, "usage": 0 },
+    { "sample_id": "private-run-05", "session": false, "routing": 5, "verifiers": 1, "outcomes": 2, "usage": 5 },
+    { "sample_id": "private-run-06", "session": false, "routing": 5, "verifiers": 0, "outcomes": 1, "usage": 5 }
+  ],
+  "query_summary": {
+    "verifier_coverage": { "eligible_trials": 3, "valid": 0, "missing": 3, "invalid": 0, "stale": 0, "unknown": 3 },
+    "outcome_evidence": { "dimension_observations": 8, "valid_terminal_status_observations": 5, "unknown_verifier_observations": 3 },
+    "model_evidence": { "participating_trials": 5, "excluded_without_routing": 1 },
+    "failure_rate_by_model": "NOT_ESTABLISHED",
+    "task_outcome_authority": {
+      "policy_version": "bri.task-outcome.v1",
+      "eligible_trials": 6,
+      "established": 0,
+      "unknown": 6,
+      "reason": "No sampled source carried a revision-bound task-correctness contract; terminal and verifier-summary evidence was preserved without promotion."
+    }
+  },
+  "integrity": {
+    "source_file_hashes_before_after_equal": true,
+    "catalog_foreign_key_check": "ok",
+    "idempotent_second_ingestion": true
+  },
+  "limitations": [
+    "Sample identifiers are opaque; source paths and file digests are intentionally not committed.",
+    "Observed terminal status is execution evidence, not task-correctness evidence.",
+    "The sampled verifier summaries established missing-verifier control evidence, not an independent task-success verdict."
+  ]
+}
