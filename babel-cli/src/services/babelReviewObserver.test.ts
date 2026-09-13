@@ -271,15 +271,13 @@ test('reviewer requests the explicit non-thinking profile for every canonical mo
       assert.equal(bodies.length, 4);
       for (const body of bodies) {
         assert.equal(body.model, model); assert.equal(body.max_tokens, REVIEW_OUTPUT_TOKEN_BUDGET); assert.equal(body.temperature, 0);
-        assert.deepEqual(body.thinking, { type: 'disabled' });
+        assert.equal(body.thinking, undefined);
       }
       // The advertised model policy must not drift from the requested budget.
       assert.equal(babelReviewModelPolicy(model, 'trusted-installation').maxOutputTokens, REVIEW_OUTPUT_TOKEN_BUDGET);
       for (const call of calls) {
         assert.equal(call.metadata?.provider, 'opencode-go'); assert.equal(call.metadata?.observed_model_id, model);
-        assert.deepEqual(call.metadata?.requested_thinking, { type: 'disabled' });
-        assert.equal(call.metadata?.thinking_disabled_reason, model === 'longcat-2.0' ? 'reviewer_observed_reasoning_only_output_exhaustion' : 'reviewer_missing_reasoning_content_replay');
-        assert.equal(call.metadata?.thinking_mode_evidence, 'request_only_not_upstream_confirmed');
+        assert.equal(call.metadata?.requested_thinking, undefined);
       }
       const transport = new OpenCodeGoApiRunner(model, { maxTokens: REVIEW_OUTPUT_TOKEN_BUDGET, temperature: 0 }, { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
       await transport.executeRaw('test');

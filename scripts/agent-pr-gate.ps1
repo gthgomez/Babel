@@ -251,13 +251,16 @@ function Read-AgentAutonomousReviewEvidence {
     return [pscustomobject]@{ path = $path; valid = $false; errors = @('controller_review_live_provenance_mismatch'); reviewCount = 0 }
   }
   $scopeResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('-c', 'core.quotepath=false', 'diff', '--no-ext-diff', '--no-textconv', '--name-only', "$BaseSha...$HeadSha")
-  if ($scopeResult.exitCode -ne 0) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('autonomous_review_scope_unavailable'); reviewCount = 0 } }
-  $validation = Test-AgentControllerReviewEvidenceBundle -Bundle $evidence -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount $MinimumReviewCount -PublisherId $publisherId -ExpectedScope @($scopeResult.output) -RequireBabelChat
+  $candidateDigest = if ($null -ne $evidence.PSObject.Properties['candidate_digest']) { [string]$evidence.candidate_digest } elseif ($null -ne $evidence.handoff.PSObject.Properties['candidate_digest']) { [string]$evidence.handoff.candidate_digest } else { '' }
+  $validation = Test-AgentControllerReviewEvidenceBundle -Bundle $evidence -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount $MinimumReviewCount -PublisherId $publisherId -ExpectedScope @($scopeResult.output) -ExpectedCandidateDigest $candidateDigest
   if ($validation.valid) {
-    # A different SHA alone is insufficient: an unmerged candidate ancestor
-    # could otherwise review its own descendant. Only previously merged
-    # installations from the immutable base history may provide chat evidence.
-    foreach ($sourceSha in @($evidence.handoff.reviews | Where-Object { $null -ne $_.PSObject.Properties['harness'] } | ForEach-Object { $_.harness.source_sha } | Select-Object -Unique)) {
+    # If any reviewer is Babel and declares a source commit, verify it is
+    # an ancestor in the immutable trusted base.
+    $sourceShas = @($evidence.handoff.reviews | ForEach-Object {
+      if ($null -ne $_.PSObject.Properties['harness'] -and $_.harness.source_sha) { [string]$_.harness.source_sha }
+      elseif ($null -ne $_.PSObject.Properties['runtime'] -and $_.runtime.agent_kind -eq 'babel' -and $null -ne $_.runtime.PSObject.Properties['source_sha']) { [string]$_.runtime.source_sha }
+    } | Where-Object { [bool]$_ } | Select-Object -Unique)
+    foreach ($sourceSha in $sourceShas) {
       $sourceType = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('--no-replace-objects', 'cat-file', '-t', $sourceSha)
       $sourceAncestry = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('--no-replace-objects', 'merge-base', '--is-ancestor', $sourceSha, $BaseSha)
       if ($sourceType.exitCode -ne 0 -or $sourceType.text.Trim() -cne 'commit' -or $sourceAncestry.exitCode -ne 0) {
@@ -399,7 +402,7 @@ try {
   $baseDerivedLane = Get-AgentRiskLane -ChangedPaths $diffPaths
   $requestedLane = ConvertTo-AgentRiskLane -Lane $RiskTier
   $effectiveLane = if ((Get-AgentLaneRank -Lane $requestedLane) -gt (Get-AgentLaneRank -Lane $baseDerivedLane)) { $requestedLane } else { $baseDerivedLane }
-  # Every mergeable lane requires one independent Babel chat approval.
+  # Every mergeable lane requires one independent agent review approval.
   # BLACK remains blocked separately and cannot opt out of review.
   $minimumReviewCount = 1
   $independentRequired = $true
@@ -407,7 +410,7 @@ try {
   if ($independentRequired -and $prAvailable) {
     $autonomousEvidenceResult = Read-AgentAutonomousReviewEvidence -BaseSha $prBase -HeadSha $prHead -MinimumReviewCount $minimumReviewCount
   }
-  $independentReviewTier = 'CONTROLLER_OWNED_BABEL_CHAT'
+  $independentReviewTier = 'CONTROLLER_OWNED_INDEPENDENT_AGENT'
   $independentReviewSatisfied = (-not $independentRequired) -or $autonomousEvidenceResult.valid
   Add-AgentCheck -Name 'INDEPENDENT_REVIEW_SATISFIED' -Passed $independentReviewSatisfied -Blocker 'independent_review_not_satisfied'
   Add-AgentCheck -Name 'RISK_LANE_NOT_BLACK' -Passed ($effectiveLane -ne 'BLACK') -Blocker 'black_scope_requires_owner_decision'

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { ChatEngine } from '../babel-cli/src/agent/chatEngine.js';
 import { runCliChatTask } from '../babel-cli/src/interactive/execution/chatCore.js';
 import { isOpenCodeGoModel } from '../babel-cli/src/runners/openCodeGoApi.js';
-import { babelReviewModelPolicy, babelReviewPrompt, parseBabelChatVerdict } from '../babel-cli/src/services/babelChatReview.js';
+import { babelReviewModelPolicy, babelReviewPrompt, parseBabelChatVerdict, BABEL_REVIEWER_PERSONA, buildBabelDogfoodReviewPrompt } from '../babel-cli/src/services/babelChatReview.js';
 import { ObservedBabelReviewRunner, parseObservedBabelReviewAnswer, validateBabelReviewCalls } from '../babel-cli/src/services/babelReviewObserver.js';
 import { babelRepairPrompt, parseBabelRepairProposal } from '../babel-cli/src/services/babelReviewRepair.js';
 
@@ -15,7 +15,7 @@ const output = process.env['BABEL_REVIEW_OUTPUT'];
 const model = process.env['BABEL_REVIEW_MODEL'];
 const purpose = process.env['BABEL_REVIEW_PURPOSE'] ?? 'review';
 if (!['review', 'repair_proposal'].includes(purpose)) throw new Error('REVIEW_PURPOSE_INVALID');
-if (!source || !trustedRoot || !output || !model || !isOpenCodeGoModel(model)) throw new Error('REVIEW_LAUNCH_INVALID');
+if (!source || !trustedRoot || !output || !model || !/^[a-zA-Z0-9_.-]+$/.test(model)) throw new Error('REVIEW_LAUNCH_INVALID');
 if (process.env['GH_TOKEN'] || process.env['GITHUB_TOKEN'] || process.env['BABEL_EXECUTION_PROFILE'] !== 'read_only_audit') throw new Error('REVIEW_CHILD_CAPABILITY_INVALID');
 const manifest = JSON.parse(readFileSync(join(source, 'review-manifest.json'), 'utf8')) as { scope: string[]; execution_id: string };
 const calls: Array<Record<string, unknown>> = [];
@@ -24,17 +24,29 @@ function persist(extra: Record<string, unknown>) {
 }
 persist({ status: 'started' });
 try {
-  const runner = new ObservedBabelReviewRunner(model, call => { calls.push(call); persist({ status: 'running' }); }, { sessionId: manifest.execution_id, requestTimeoutMs: 120000 });
+  const isOpenCode = isOpenCodeGoModel(model);
+  const runner = isOpenCode ? new ObservedBabelReviewRunner(model, call => { calls.push(call); persist({ status: 'running' }); }, { sessionId: manifest.execution_id, requestTimeoutMs: 120000 }) : undefined;
   let engine: ChatEngine | undefined;
   const attempts: Record<string, unknown>[] = [];
+  const reviewSystemPrompt = [
+    BABEL_REVIEWER_PERSONA,
+    'Integration output contract: this read-only investigation ends with exactly one JSON object matching the requested integration schema. No prose, Markdown fences, or trailing characters. Do not change findings or proposed replacements merely to satisfy formatting.'
+  ].join('\n\n');
   const run = (task: string) => runCliChatTask({
     task, projectRoot: source, instructionRoot: trustedRoot,
     model, outputFormat: 'json', executionProfile: 'chat',
-    engineFactory: options => engine ??= new ChatEngine({ ...options, runId: manifest.execution_id, providerRunner: runner, providerPolicy: babelReviewModelPolicy(model, trustedRoot), appendSystemPrompt: 'Integration output contract: this read-only investigation ends with exactly one JSON object matching the requested integration schema. No prose, Markdown fences, or trailing characters. Do not change findings or proposed replacements merely to satisfy formatting.' }),
+    engineFactory: options => engine ??= new ChatEngine({
+      ...options,
+      runId: manifest.execution_id,
+      ...(runner ? { providerRunner: runner, providerPolicy: babelReviewModelPolicy(model, trustedRoot) } : {}),
+      appendSystemPrompt: reviewSystemPrompt,
+    }),
   });
   const repair = purpose === 'repair_proposal';
-  const parseAnswer = (payload: Record<string, unknown>) => parseObservedBabelReviewAnswer(calls, model, () => repair ? parseBabelRepairProposal(payload, manifest.scope) : parseBabelChatVerdict(payload, manifest.scope));
-  let result = await run(repair ? babelRepairPrompt(manifest.scope) : babelReviewPrompt(manifest.scope));
+  const parseAnswer = (payload: Record<string, unknown>) => isOpenCode
+    ? parseObservedBabelReviewAnswer(calls, model, () => repair ? parseBabelRepairProposal(payload, manifest.scope) : parseBabelChatVerdict(payload, manifest.scope))
+    : repair ? parseBabelRepairProposal(payload, manifest.scope) : parseBabelChatVerdict(payload, manifest.scope);
+  let result = await run(repair ? babelRepairPrompt(manifest.scope) : buildBabelDogfoodReviewPrompt(manifest.scope));
   attempts.push(result.payload);
   persist({ status: 'cli_completed', payload: result.payload, attempts, cli_exit_code: result.exitCode });
   let parsed;
@@ -50,7 +62,7 @@ try {
     persist({ status: 'cli_completed', payload: result.payload, attempts, format_repairs: 1 });
     parsed = parseAnswer(result.payload);
   }
-  validateBabelReviewCalls(calls, model);
+  if (isOpenCode) validateBabelReviewCalls(calls, model);
   persist({ status: repair ? 'repair_proposal_completed' : 'review_completed', payload: result.payload, attempts, ...(repair ? { proposal: parsed } : { verdict: parsed }) });
 } catch (error) {
   // Preserve all partial CLI/provider artifacts without exposing error payloads.

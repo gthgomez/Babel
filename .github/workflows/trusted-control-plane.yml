@@ -74,7 +74,7 @@ jobs:
       github.event.repository.owner.type == 'User' &&
       github.event.comment.user.id == github.event.repository.owner.id &&
       github.event.comment.user.type == 'User' &&
-      startsWith(github.event.comment.body, '<!-- babel-controller-ai-reviews-v2 -->')
+      (startsWith(github.event.comment.body, '<!-- babel-controller-independent-review-v3 -->') || startsWith(github.event.comment.body, '<!-- babel-controller-ai-reviews-v2 -->'))
     concurrency:
       group: trusted-control-plane-review-${{ github.event.issue.number }}
       cancel-in-progress: false

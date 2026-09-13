@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { babelReviewChildEnv, launchBabelReviewChild } from './babelReviewChild.js';
 
-test('review child strips publication credentials, preload hooks and ambient overrides', () => {
+test('review child strips publication credentials, preload hooks and ambient overrides while enforcing read-only sandbox', () => {
   const env = babelReviewChildEnv({ source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'mimo-v2.5' }, {
     PATH: '/bin', GH_TOKEN: 'synthetic', GITHUB_TOKEN: 'synthetic', NODE_OPTIONS: '--require malicious',
     OPENAI_API_KEY: 'synthetic', BABEL_EXECUTION_PROFILE: 'dev_local', BABEL_ALLOWED_TOOLS: '["shell_exec"]',
@@ -15,21 +15,30 @@ test('review child strips publication credentials, preload hooks and ambient ove
   assert.equal(env['OPENAI_API_KEY'], undefined); assert.equal(env['NODE_OPTIONS'], undefined);
   assert.equal(env['BABEL_CHAT_MAX_COST'], 'unlimited');
   assert.equal(env['BABEL_EXECUTION_PROFILE'], 'read_only_audit');
-  // A bounded review: parallel children converge quickly instead of running the
-  // 120-turn / 50-minute investigate ceiling.
+  assert.equal(env['BABEL_READ_ONLY'], 'true');
+  // Compaction is not forced off in dogfood review
+  assert.notEqual(env['BABEL_COMPACTION'], 'off');
+  assert.equal(env['BABEL_ALLOWED_TOOLS'], JSON.stringify(['file_read', 'directory_list', 'grep', 'glob']));
+  assert.equal(env['BABEL_DISALLOWED_TOOLS'], JSON.stringify(['shell_exec', 'test_run', 'file_write', 'mcp_request', 'memory_query', 'memory_store', 'semantic_search']));
+  // Bounded budget defaults prevent runaway costs while allowing parent overrides
   assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '720000');
   assert.equal(env['BABEL_CHAT_MAX_TURNS'], '24');
   assert.equal(env['BABEL_CHAT_STALL_TURNS'], '5');
-  assert.ok(!env['BABEL_ALLOWED_TOOLS']!.includes('shell_exec'));
-  assert.ok(!env['BABEL_ALLOWED_TOOLS']!.includes('semantic_search'));
   assert.equal(env['BABEL_READ_ONLY_NO_INDEX_WRITE'], '1');
 });
 
-test('repair children keep the generous research budget', () => {
+test('repair children keep generous repair budget and respect parent overrides', () => {
   const env = babelReviewChildEnv({ source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'deepseek-v4-flash', purpose: 'repair_proposal' });
   assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '3000000');
-  assert.equal(env['BABEL_CHAT_MAX_TURNS'], undefined);
-  assert.equal(env['BABEL_CHAT_STALL_TURNS'], undefined);
+  assert.equal(env['BABEL_CHAT_MAX_TURNS'], '100');
+  assert.equal(env['BABEL_CHAT_STALL_TURNS'], '5');
+
+  const overridden = babelReviewChildEnv(
+    { source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'deepseek-v4-flash', purpose: 'repair_proposal' },
+    { BABEL_CHAT_MAX_WALL_MS: '5000000', BABEL_CHAT_MAX_TURNS: '200' }
+  );
+  assert.equal(overridden['BABEL_CHAT_MAX_WALL_MS'], '5000000');
+  assert.equal(overridden['BABEL_CHAT_MAX_TURNS'], '200');
 });
 
 test('review child forwards the documented non-secret credential helper override', () => {
