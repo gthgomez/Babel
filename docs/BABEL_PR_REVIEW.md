@@ -19,8 +19,10 @@ OpenCode Go model. The model that actually answered is recorded; a configured
 name or fallback assumption is not sufficient attribution.
 
 The merge gate requires a Babel chat review on OpenCode Go: gate evidence must
-declare `review_provider: "opencode-go"` and a `babel`/`chat` harness, and the
-validator rejects anything else. Claude Code is a benchmark-only comparison arm;
+declare `review_provider: "opencode-go"` and a `babel`/`chat` harness. Any
+evidence claiming that Babel chat harness is rejected unless the provider is
+exactly `opencode-go`, and a review without the harness cannot satisfy the
+required Babel chat review. Claude Code is a benchmark-only comparison arm;
 its reviews are never gate evidence and cannot satisfy or substitute for the
 required Babel reviewer.
 

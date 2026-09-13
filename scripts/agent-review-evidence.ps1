@@ -85,6 +85,14 @@ function Test-AgentAutonomousReviewEvidence {
   # provenance, not a candidate-authored claim or cryptographic sandbox proof.
   $harness = Get-AgentPropertyValue $Evidence 'harness'
   if ($null -ne $Evidence.PSObject.Properties['harness']) {
+    # A claimed Babel chat harness is only credible when the Babel-native
+    # OpenCode Go transport produced the review. Pin it here, at the low-level
+    # validator, so a claude-code (or any other provider) review cannot borrow
+    # the harness block to satisfy the current chat gate. The pin is conditional
+    # on a harness being present because this validator deliberately retains
+    # compatibility with legacy/bootstrap v2 receipts that predate the harness;
+    # the merge gate separately requires a harness via -RequireBabelChat.
+    if ([string](Get-AgentPropertyValue $Evidence 'review_provider') -cne 'opencode-go') { $errors += 'autonomous_evidence_review_provider_not_babel' }
     if ($harness -isnot [pscustomobject]) { $errors += 'autonomous_evidence_harness_invalid' }
     else {
       $harnessExpected = @{ name = 'babel'; mode = 'chat'; execution_id = [string](Get-AgentPropertyValue $Evidence 'execution_id') }

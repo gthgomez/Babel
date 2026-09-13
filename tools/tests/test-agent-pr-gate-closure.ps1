@@ -140,6 +140,13 @@ try {
   $chatBundle.handoff.reviews[0] | Add-Member harness ([pscustomobject]@{ name = 'babel'; mode = 'chat'; version = ('f' * 64); source_sha = $base; execution_id = 'execution-152-a' })
   $chatResult = Test-AgentControllerReviewEvidenceBundle -Bundle $chatBundle @chatArgs
   Assert-ClosureGate ($chatResult.valid -and $chatResult.babelChatReviewCount -eq 1) 'one valid Babel chat review must satisfy the ordinary PR floor'
+  # The base gate must pin the provider, not just require a non-empty one: a
+  # claude-code review wearing a Babel harness block is still not Babel chat.
+  $claudeProvider = $chatBundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $claudeProvider.handoff.reviews[0].review_provider = 'claude-code'
+  $claudeProviderResult = Test-AgentControllerReviewEvidenceBundle -Bundle $claudeProvider @chatArgs
+  Assert-ClosureGate (-not $claudeProviderResult.valid -and @($claudeProviderResult.errors) -contains 'autonomous_evidence_review_provider_not_babel') 'a non-OpenCode-Go provider cannot claim the Babel chat harness'
+  Assert-ClosureGate ($claudeProviderResult.babelChatReviewCount -eq 0) 'a rejected non-Babel provider must not count as Babel chat evidence'
   foreach ($mutation in @(
       @{ Field = 'mode'; Value = 'deep' }, @{ Field = 'name'; Value = 'direct-api' },
       @{ Field = 'version'; Value = 'UNKNOWN' }, @{ Field = 'source_sha'; Value = 'main' },
