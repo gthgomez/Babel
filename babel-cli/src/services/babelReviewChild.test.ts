@@ -18,17 +18,16 @@ test('review child strips publication credentials, preload hooks and ambient ove
   // Compaction and tools are not stripped in normal Chat dogfood review
   assert.notEqual(env['BABEL_COMPACTION'], 'off');
   assert.equal(env['BABEL_ALLOWED_TOOLS'], undefined);
-  assert.equal(env['BABEL_DISALLOWED_TOOLS'], undefined);
-  // Bounded budget so parallel review sessions converge quickly
-  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '720000');
-  assert.equal(env['BABEL_CHAT_MAX_TURNS'], '24');
-  assert.equal(env['BABEL_CHAT_STALL_TURNS'], '5');
+  // In normal Chat dogfood review, standard chat limits are preserved (no forced review caps)
+  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], undefined);
+  assert.equal(env['BABEL_CHAT_MAX_TURNS'], undefined);
+  assert.equal(env['BABEL_CHAT_STALL_TURNS'], undefined);
   assert.equal(env['BABEL_READ_ONLY_NO_INDEX_WRITE'], '1');
 });
 
-test('repair children keep the generous research budget', () => {
+test('repair children keep normal chat budget unless parent sets override', () => {
   const env = babelReviewChildEnv({ source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'deepseek-v4-flash', purpose: 'repair_proposal' });
-  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '3000000');
+  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], undefined);
   assert.equal(env['BABEL_CHAT_MAX_TURNS'], undefined);
   assert.equal(env['BABEL_CHAT_STALL_TURNS'], undefined);
 });

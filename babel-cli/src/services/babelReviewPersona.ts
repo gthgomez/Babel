@@ -41,18 +41,3 @@ export function buildBabelDogfoodReviewPrompt(scope: string[]): string {
 export function buildBabelDogfoodReviewSystemContext(): string {
   return BABEL_REVIEWER_PERSONA
 }
-
-/**
- * Returns the effective canonical Chat configuration used for Babel dogfood review.
- * Proves normal Chat parity: compaction enabled, normal tools, normal memory.
- */
-export function getBabelDogfoodChatConfig() {
-  return {
-    executionProfile: 'chat',
-    compaction: 'normal',
-    memoryWriteback: true,
-    toolProfile: 'native',
-    toolsStripped: false,
-    personaLayered: true,
-  }
-}

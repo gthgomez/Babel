@@ -490,4 +490,121 @@ test('independentReviewController: rejects certifier whose execution produced th
   }
 })
 
+test('createAutonomousEngineeringAdapter: fails closed when reviewRunner or repairRunner is missing', async () => {
+  const adapter = createAutonomousEngineeringAdapter({
+    adapter_id: 'empty-adapter',
+    agent_kind: 'codex',
+  })
+
+  const req = {
+    controller_id: 'ctrl-1',
+    controller_run_id: 'run-1',
+    challenge_id: 'ch-1',
+    candidate: createSampleCandidate(),
+    builder: sampleBuilder,
+    reviewer: { kind: 'codex', principal_id: 'p-codex-1', execution_id: 'e-codex-1' },
+    review_mode: 'exact_diff' as const,
+    required_isolation: {
+      candidate_write: false as const,
+      github_mutation: false as const,
+      merge: false as const,
+      controller_state_access: false as const,
+    },
+  }
+
+  await assert.rejects(
+    async () => adapter.launch(req),
+    /AUTONOMOUS_REVIEW_RUNNER_REQUIRED/
+  )
+
+  await assert.rejects(
+    async () => adapter.repair!(req),
+    /AUTONOMOUS_REPAIR_RUNNER_REQUIRED/
+  )
+})
+
+test('independentReviewController: fails closed on purpose layer mismatch', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'babel-ctrl-test-'))
+  try {
+    const mockAdapter: IndependentReviewWorkerAdapter = {
+      adapter_id: 'mock-subagent-v1',
+      agent_kind: 'codex',
+      async launch(req) {
+        return {
+          status: 'COMPLETED',
+          verdict: 'APPROVE',
+          reviewed_at: new Date().toISOString(),
+          scope: [...req.candidate.scope],
+          isolation: req.required_isolation,
+          execution_purpose: 'DOGFOOD_REVIEW',
+          runtime: {
+            agent_kind: 'codex',
+            adapter_id: 'mock-subagent-v1',
+            controller_execution_id: req.reviewer.execution_id,
+            execution_purpose: 'DOGFOOD_REVIEW',
+          },
+        }
+      },
+    }
+
+    const controller = createIndependentReviewController({
+      controller_id: 'test-controller-1',
+      state_dir: tempDir,
+      adapter: mockAdapter,
+    })
+
+    await assert.rejects(
+      async () => controller.review(createSampleCandidate(), { builder: sampleBuilder, purpose: 'FINAL_CERTIFICATION' }),
+      /PURPOSE_LAYER_MISMATCH/
+    )
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('independentReviewController: rejects certifier from candidate producer lineage', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'babel-ctrl-test-'))
+  try {
+    const repairExecutionId = 'exec-lineage-repair-777'
+    const mockAdapter: IndependentReviewWorkerAdapter = {
+      adapter_id: 'mock-subagent-v1',
+      agent_kind: 'codex',
+      async launch() {
+        return {
+          status: 'COMPLETED',
+          verdict: 'APPROVE',
+          reviewed_at: new Date().toISOString(),
+          scope: ['src/services/auth.ts'],
+          isolation: { candidate_write: false, github_mutation: false, merge: false, controller_state_access: false },
+          runtime: { agent_kind: 'codex', adapter_id: 'mock-subagent-v1', controller_execution_id: repairExecutionId },
+        }
+      },
+    }
+
+    const controller = createIndependentReviewController({
+      controller_id: 'test-controller-1',
+      state_dir: tempDir,
+      adapter: mockAdapter,
+      create_id: () => repairExecutionId,
+    })
+
+    const candidateWithLineage = {
+      ...createSampleCandidate(),
+      lineage: {
+        parent_head_sha: 'a'.repeat(40),
+        new_head_sha: 'b'.repeat(40),
+        producer: { kind: 'codex', principal_id: 'p-repair', execution_id: repairExecutionId },
+        produced_at: new Date().toISOString(),
+      },
+    }
+
+    await assert.rejects(
+      async () => controller.review(candidateWithLineage, { builder: sampleBuilder }),
+      /CANDIDATE_PRODUCER_CANNOT_CERTIFY/
+    )
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
 

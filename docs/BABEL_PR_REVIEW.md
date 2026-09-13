@@ -57,7 +57,8 @@ STAGE 2: AUTONOMOUS EXTERNAL REVIEW & REPAIR
 Native Coding Harness (Codex, Claude, Gemini, OpenCode) in Isolated Worktree
        │
        ├── Mode: Review (inspect, test, find) OR Repair (inspect, test, edit, commit candidate B)
-       └── Authorized to perform capable autonomous engineering in isolated worktree
+       ├── Worktree Isolation: `createIsolatedWorktreeEngineeringAdapter` creates dedicated Git worktrees
+       └── Automatic Lineage: Records `CandidateProducerLineage` (parent SHA, new SHA, producer identity)
 
 STAGE 3: FINAL INDEPENDENT CERTIFICATION
 Fresh Independent Certifier (distinct execution, not builder, not repair producer)
@@ -73,7 +74,7 @@ Fresh Independent Certifier (distinct execution, not builder, not repair produce
 - **Mutation Invalidation**:
   $$\text{candidate } A \xrightarrow{\text{repair}} \text{candidate } B \implies \text{approval}(A) \ne \text{approval}(B)$$
   Any code modification produces a new candidate $B$. Prior approval of $A$ is instantly stale.
-- **Fresh Execution Requirement**: The execution that produced candidate $B$ (`producer_execution_id`) CANNOT certify $B$. A fresh, distinct execution must independently inspect and certify exact $B$.
+- **Fresh Execution Requirement**: The execution that produced candidate $B$ (`producer_execution_id` or `lineage.producer.execution_id`) CANNOT certify $B$. A fresh, distinct execution must independently inspect and certify exact $B$.
 - **Same Agent Family Allowed**: Codex Agent A (repair) $\to$ Codex Agent B (fresh certifier) is fully valid provided execution and principal IDs are distinct and proven by the controller.
 
 #### Evidence Execution Purpose
@@ -81,7 +82,7 @@ V3 evidence explicitly types `execution_purpose`:
 - `DOGFOOD_REVIEW`: Telemetry and findings from normal Babel Chat dogfooding.
 - `REVIEW_REPAIR`: Autonomous repair proposals or modified candidates.
 - `FINAL_CERTIFICATION`: Read-only, frozen SHA/digest-bound attestation required for merge gate authority.
-The merge gate strictly rejects `DOGFOOD_REVIEW` or `REVIEW_REPAIR` as merge authority.
+The merge gate strictly rejects `DOGFOOD_REVIEW` or `REVIEW_REPAIR` as merge authority. All layers (controller request, worker request, runtime, and evidence) must agree on `FINAL_CERTIFICATION` (`PURPOSE_LAYER_MISMATCH`).
 
 ## V2 Babel Chat Review Contract (Legacy / Compatibility)
 

@@ -226,6 +226,7 @@ try {
       agent_kind = 'codex'
       adapter_id = 'codex-subagent-v1'
       controller_execution_id = 'codex-reviewer-e2'
+      execution_purpose = 'FINAL_CERTIFICATION'
       requested_provider = 'openai'
       observed_provider = 'openai'
       requested_model = 'gpt-5-codex'
@@ -233,6 +234,7 @@ try {
       model_attribution = 'observed'
     }
     review_mode = 'exact_diff'
+    execution_purpose = 'FINAL_CERTIFICATION'
     reviewed_at = [DateTimeOffset]::UtcNow.ToString('o')
     scope = @('scripts/agent-pr-gate.ps1')
     verdict = 'APPROVE'
@@ -294,18 +296,28 @@ try {
   Assert-ClosureGate (-not (Test-AgentIndependentReviewEvidenceV3 -Evidence $blockApproval -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest).valid) 'V3 must reject APPROVE verdict with blocking findings'
 
   # Accept: FINAL_CERTIFICATION purpose
-  $certV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-  $certV3 | Add-Member -NotePropertyName 'execution_purpose' -NotePropertyValue 'FINAL_CERTIFICATION' -Force
-  Assert-ClosureGate ((Test-AgentIndependentReviewEvidenceV3 -Evidence $certV3 -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest).valid) 'V3 must accept FINAL_CERTIFICATION execution purpose'
+  Assert-ClosureGate ((Test-AgentIndependentReviewEvidenceV3 -Evidence $validV3Evidence -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest).valid) 'V3 must accept FINAL_CERTIFICATION execution purpose'
+
+  # Reject: missing execution_purpose
+  $missingPurposeV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $missingPurposeV3.PSObject.Properties.Remove('execution_purpose')
+  $missingPurposeResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $missingPurposeV3 -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
+  Assert-ClosureGate (-not $missingPurposeResult.valid -and @($missingPurposeResult.errors) -contains 'independent_evidence_non_certification_purpose') 'V3 must reject missing execution_purpose for merge gate authority'
+
+  # Reject: purpose layer mismatch between runtime and evidence
+  $mismatchPurposeV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $mismatchPurposeV3.runtime.execution_purpose = 'DOGFOOD_REVIEW'
+  $mismatchPurposeResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $mismatchPurposeV3 -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
+  Assert-ClosureGate (-not $mismatchPurposeResult.valid -and @($mismatchPurposeResult.errors) -contains 'independent_evidence_purpose_layer_mismatch') 'V3 must reject purpose layer mismatch between runtime and evidence'
 
   # Reject: DOGFOOD_REVIEW or REVIEW_REPAIR purpose at merge gate
   $dogfoodV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-  $dogfoodV3 | Add-Member -NotePropertyName 'execution_purpose' -NotePropertyValue 'DOGFOOD_REVIEW' -Force
+  $dogfoodV3.execution_purpose = 'DOGFOOD_REVIEW'
   $dogfoodResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $dogfoodV3 -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
   Assert-ClosureGate (-not $dogfoodResult.valid -and @($dogfoodResult.errors) -contains 'independent_evidence_non_certification_purpose') 'V3 must reject DOGFOOD_REVIEW for merge gate authority'
 
   $repairV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-  $repairV3 | Add-Member -NotePropertyName 'execution_purpose' -NotePropertyValue 'REVIEW_REPAIR' -Force
+  $repairV3.execution_purpose = 'REVIEW_REPAIR'
   $repairResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $repairV3 -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
   Assert-ClosureGate (-not $repairResult.valid -and @($repairResult.errors) -contains 'independent_evidence_non_certification_purpose') 'V3 must reject REVIEW_REPAIR for merge gate authority'
 

@@ -23,8 +23,8 @@ export const REVIEW_NATIVE_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
 export const REVIEW_NATIVE_BUFFER_MAX_EVENTS = 1_000_000;
 
 type ReviewInvocationMetadata = RunnerInvocationMetadata & {
-  requested_thinking?: { type: 'disabled' };
-  thinking_mode_evidence?: 'request_only_not_upstream_confirmed';
+  requested_thinking?: { type: 'disabled' | 'enabled' };
+  thinking_mode_evidence?: string;
 };
 export type BabelReviewCall = { path: string; status: 'completed' | 'failed'; elapsed_ms: number; metadata: ReviewInvocationMetadata | null; request_id?: string; attempt?: number; retry_reason?: 'transient_before_output' };
 
@@ -59,17 +59,10 @@ export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
     super(reviewModel, { maxTokens: REVIEW_OUTPUT_TOKEN_BUDGET, temperature: 0 }, options);
   }
   protected override getRequestBodyExtras(): Record<string, unknown> {
-    const extras = super.getRequestBodyExtras();
-    // Explicit review/repair compatibility profile, not a general model default.
-    // MiMo/DeepSeek document reasoning replay that our history cannot represent;
-    // LongCat has measured reasoning-only output exhaustion (replay requirement unknown).
-    // Provider-specific references and qualification limits: docs/BABEL_PR_REVIEW.md.
-    return { ...extras, thinking: { type: 'disabled' } };
+    return super.getRequestBodyExtras();
   }
   override getLastInvocationMetadata(): ReviewInvocationMetadata | null {
-    const metadata = super.getLastInvocationMetadata();
-    if (!metadata) return metadata;
-    return { ...metadata, requested_thinking: { type: 'disabled' }, thinking_disabled_reason: this.reviewModel === 'longcat-2.0' ? 'reviewer_observed_reasoning_only_output_exhaustion' : 'reviewer_missing_reasoning_content_replay', thinking_mode_evidence: 'request_only_not_upstream_confirmed' };
+    return super.getLastInvocationMetadata();
   }
   private finish(path: string, started: number, completed: boolean) {
     this.record({ path, status: completed ? 'completed' : 'failed', elapsed_ms: Date.now() - started, metadata: this.getLastInvocationMetadata() });

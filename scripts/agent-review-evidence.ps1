@@ -274,11 +274,28 @@ function Test-AgentIndependentReviewEvidenceV3 {
   }
 
   $executionPurpose = [string](Get-AgentPropertyValue $Evidence 'execution_purpose')
-  if ($executionPurpose -and @('DOGFOOD_REVIEW', 'REVIEW_REPAIR', 'FINAL_CERTIFICATION') -cnotcontains $executionPurpose) {
-    $errors += 'independent_evidence_execution_purpose_invalid'
-  }
-  if ($executionPurpose -and $executionPurpose -cne 'FINAL_CERTIFICATION') {
+  if ([string]::IsNullOrWhiteSpace($executionPurpose) -or $executionPurpose -cne 'FINAL_CERTIFICATION') {
     $errors += 'independent_evidence_non_certification_purpose'
+  }
+  $runtimePurpose = [string](Get-AgentPropertyValue $runtime 'execution_purpose')
+  if ($runtimePurpose -and $runtimePurpose -cne $executionPurpose) {
+    $errors += 'independent_evidence_purpose_layer_mismatch'
+  }
+
+  $usage = Get-AgentPropertyValue $Evidence 'usage'
+  if ($null -ne $usage) {
+    if ($usage -isnot [pscustomobject]) {
+      $errors += 'independent_evidence_usage_invalid'
+    } else {
+      $allowedUsage = @('prompt_tokens', 'completion_tokens', 'total_tokens', 'latency_ms', 'inference_index', 'cached_tokens', 'cumulative_prompt_tokens', 'context_size', 'compaction_count', 'tool_calls', 'tool_result_bytes', 'retries', 'wall_time_ms')
+      foreach ($field in @(Get-AgentPropertyNames $usage)) {
+        $value = Get-AgentPropertyValue $usage $field
+        if ($allowedUsage -cnotcontains $field -or
+            ($null -ne $value -and ($value -is [string] -or $value -is [bool] -or $value -isnot [ValueType] -or [double]$value -lt 0 -or -not [double]::IsFinite([double]$value)))) {
+          $errors += 'independent_evidence_usage_invalid'
+        }
+      }
+    }
   }
 
   $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'candidate_digest', 'diff_numstat_digest', 'task_id', 'task_hash', 'builder', 'reviewer', 'controller_run_id', 'challenge_id', 'runtime', 'review_mode', 'execution_purpose', 'reviewed_at', 'scope', 'verdict', 'findings', 'blocking_findings', 'isolation', 'usage', 'provenance')

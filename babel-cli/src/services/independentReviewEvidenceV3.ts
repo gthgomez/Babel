@@ -47,11 +47,27 @@ export interface IndependentReviewIsolationProfile {
   controller_state_access: false
 }
 
+export interface CandidateProducerLineage {
+  parent_head_sha: string
+  new_head_sha: string
+  producer: ReviewActorIdentity
+  produced_at: string
+}
+
 export interface IndependentReviewUsage {
-  prompt_tokens: number | null
-  completion_tokens: number | null
-  total_tokens: number | null
-  latency_ms: number | null
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  total_tokens?: number | null
+  latency_ms?: number | null
+  inference_index?: number
+  cached_tokens?: number | null
+  cumulative_prompt_tokens?: number | null
+  context_size?: number | null
+  compaction_count?: number
+  tool_calls?: number
+  tool_result_bytes?: number
+  retries?: number
+  wall_time_ms?: number
 }
 
 export interface IndependentReviewEvidenceV3 {
@@ -159,10 +175,19 @@ export const independentReviewIsolationSchema = z.object({
 }).strict()
 
 export const independentReviewUsageSchema = z.object({
-  prompt_tokens: z.number().finite().nonnegative().nullable(),
-  completion_tokens: z.number().finite().nonnegative().nullable(),
-  total_tokens: z.number().finite().nonnegative().nullable(),
-  latency_ms: z.number().finite().nonnegative().nullable(),
+  prompt_tokens: z.number().finite().nonnegative().nullable().optional(),
+  completion_tokens: z.number().finite().nonnegative().nullable().optional(),
+  total_tokens: z.number().finite().nonnegative().nullable().optional(),
+  latency_ms: z.number().finite().nonnegative().nullable().optional(),
+  inference_index: z.number().finite().nonnegative().optional(),
+  cached_tokens: z.number().finite().nonnegative().nullable().optional(),
+  cumulative_prompt_tokens: z.number().finite().nonnegative().nullable().optional(),
+  context_size: z.number().finite().nonnegative().nullable().optional(),
+  compaction_count: z.number().finite().nonnegative().optional(),
+  tool_calls: z.number().finite().nonnegative().optional(),
+  tool_result_bytes: z.number().finite().nonnegative().optional(),
+  retries: z.number().finite().nonnegative().optional(),
+  wall_time_ms: z.number().finite().nonnegative().optional(),
 }).strict()
 
 export const independentReviewEvidenceV3Schema = z.object({
@@ -233,6 +258,8 @@ export function validateIndependentReviewEvidenceV3(
     now?: number | undefined
     requireAuthoritative?: boolean | undefined
     producerExecutionId?: string | undefined
+    lineage?: CandidateProducerLineage | undefined
+    purpose?: ReviewExecutionPurpose | undefined
   } | undefined
 ): IndependentReviewEvidenceV3 {
   const parsed = independentReviewEvidenceV3Schema.parse(value)
@@ -242,12 +269,26 @@ export function validateIndependentReviewEvidenceV3(
   }
 
   // Merge gate authority strictly requires FINAL_CERTIFICATION purpose
-  if (expected?.requireAuthoritative && parsed.execution_purpose && parsed.execution_purpose !== 'FINAL_CERTIFICATION') {
-    throw new Error('NON_CERTIFICATION_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
+  if (expected?.requireAuthoritative) {
+    if (parsed.execution_purpose !== 'FINAL_CERTIFICATION') {
+      throw new Error('NON_CERTIFICATION_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
+    }
+  }
+
+  // Purpose layer agreement
+  if (parsed.runtime.execution_purpose && parsed.execution_purpose && parsed.runtime.execution_purpose !== parsed.execution_purpose) {
+    throw new Error('PURPOSE_LAYER_MISMATCH')
+  }
+  if (expected?.purpose && parsed.execution_purpose !== expected.purpose) {
+    throw new Error('PURPOSE_LAYER_MISMATCH')
   }
 
   // Candidate repair producer cannot certify the candidate it produced
-  if (expected?.producerExecutionId && parsed.reviewer.execution_id.toLowerCase() === expected.producerExecutionId.toLowerCase()) {
+  const producerExecId = expected?.producerExecutionId ?? expected?.lineage?.producer.execution_id
+  if (producerExecId && parsed.reviewer.execution_id.toLowerCase() === producerExecId.toLowerCase()) {
+    throw new Error('CANDIDATE_PRODUCER_CANNOT_CERTIFY')
+  }
+  if (expected?.lineage?.producer.principal_id && parsed.reviewer.principal_id.toLowerCase() === expected.lineage.producer.principal_id.toLowerCase()) {
     throw new Error('CANDIDATE_PRODUCER_CANNOT_CERTIFY')
   }
 
@@ -353,6 +394,8 @@ export function validateHostReviewHandoffV3(
     now?: number
     requireAuthoritative?: boolean | undefined
     producerExecutionId?: string | undefined
+    lineage?: CandidateProducerLineage | undefined
+    purpose?: ReviewExecutionPurpose | undefined
   }
 ): HostReviewHandoffV3 {
   const parsed = hostReviewHandoffV3Schema.parse(value)
@@ -387,6 +430,8 @@ export function validateHostReviewHandoffV3(
       now: expected?.now,
       requireAuthoritative: expected?.requireAuthoritative,
       producerExecutionId: expected?.producerExecutionId,
+      lineage: expected?.lineage,
+      purpose: expected?.purpose,
     })
 
     if (reviewerPrincipals.has(review.reviewer.principal_id)) {

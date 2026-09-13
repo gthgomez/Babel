@@ -17,6 +17,8 @@ export interface HostReviewCandidate {
 export type RiskTier = 'TRIVIAL' | 'NORMAL' | 'ELEVATED' | 'CRITICAL' | 'AMBIGUOUS'
 export type ReviewTrustMode = 'SELF_REVIEW' | 'EXTERNAL_REPO_REVIEW'
 
+import type { CandidateProducerLineage } from './independentReviewEvidenceV3.js'
+
 /** Evolved, versioned CandidateEnvelope extending HostReviewCandidate with full protocol metadata. */
 export interface CandidateEnvelope extends HostReviewCandidate {
   schema_version: 2
@@ -28,6 +30,8 @@ export interface CandidateEnvelope extends HostReviewCandidate {
   instruction_hash?: string
   omitted_files?: Array<{ path: string; reason: 'binary' | 'generated' | 'oversized' | 'excluded' }>
   created_at: string
+  lineage?: CandidateProducerLineage
+  producer_execution_id?: string
 }
 
 /** Compute canonical SHA-256 digest over candidate identity fields. */

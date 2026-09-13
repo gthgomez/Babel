@@ -20,12 +20,11 @@ export function babelReviewChildEnv(input: { source: string; trustedRoot: string
     BABEL_REVIEW_OUTPUT: input.output, BABEL_REVIEW_MODEL: input.model,
     BABEL_REVIEW_PURPOSE: input.purpose ?? 'review',
     BABEL_EXECUTION_PROFILE: 'chat', BABEL_HEADLESS: '1',
-    // Review and repair sessions run under normal ChatEngine semantics.
-    // The review child is capped at 24 turns and a 12-minute wall so parallel
-    // reviews converge quickly. Repair proposals keep the generous research budget.
-    BABEL_CHAT_MAX_COST: 'unlimited',
-    BABEL_CHAT_MAX_WALL_MS: input.purpose === 'repair_proposal' ? '3000000' : '720000',
-    ...(input.purpose === 'repair_proposal' ? {} : { BABEL_CHAT_MAX_TURNS: '24', BABEL_CHAT_STALL_TURNS: '5' }),
+    // Review sessions run under normal ChatEngine budget semantics.
+    ...(parent['BABEL_CHAT_MAX_COST'] ? { BABEL_CHAT_MAX_COST: parent['BABEL_CHAT_MAX_COST'] } : { BABEL_CHAT_MAX_COST: 'unlimited' }),
+    ...(parent['BABEL_CHAT_MAX_WALL_MS'] ? { BABEL_CHAT_MAX_WALL_MS: parent['BABEL_CHAT_MAX_WALL_MS'] } : {}),
+    ...(parent['BABEL_CHAT_MAX_TURNS'] ? { BABEL_CHAT_MAX_TURNS: parent['BABEL_CHAT_MAX_TURNS'] } : {}),
+    ...(parent['BABEL_CHAT_STALL_TURNS'] ? { BABEL_CHAT_STALL_TURNS: parent['BABEL_CHAT_STALL_TURNS'] } : {}),
     BABEL_READ_ONLY_NO_INDEX_WRITE: '1',
     BABEL_TOOL_PROFILE: 'native',
     NO_COLOR: '1',

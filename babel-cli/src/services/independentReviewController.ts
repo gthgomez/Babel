@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { atomicReviewJson } from './babelReviewQueue.js'
 import {
+  type CandidateProducerLineage,
   type HostReviewHandoffV3,
   type IndependentReviewEvidenceV3,
   type IndependentReviewIsolationProfile,
@@ -127,7 +128,7 @@ export interface IndependentReviewExecutionRequest {
   controller_id: string
   controller_run_id: string
   challenge_id: string
-  candidate: Readonly<(CandidateEnvelope | HostReviewCandidate | (HostReviewCandidate & { candidate_digest: string })) & { producer_execution_id?: string }>
+  candidate: Readonly<(CandidateEnvelope | HostReviewCandidate | (HostReviewCandidate & { candidate_digest: string })) & { lineage?: CandidateProducerLineage; producer_execution_id?: string }>
   builder: ReviewActorIdentity
   reviewer: ReviewActorIdentity
   review_mode: 'exact_diff'
@@ -181,35 +182,16 @@ export function createAutonomousEngineeringAdapter(options: {
     adapter_id: options.adapter_id,
     agent_kind: options.agent_kind,
     async launch(request: Readonly<IndependentReviewExecutionRequest>): Promise<IndependentReviewExecutionResult> {
-      if (options.reviewRunner) {
-        return options.reviewRunner(request)
+      if (!options.reviewRunner) {
+        throw new Error('AUTONOMOUS_REVIEW_RUNNER_REQUIRED')
       }
-      const purpose = request.purpose ?? 'FINAL_CERTIFICATION'
-      return {
-        status: 'COMPLETED',
-        verdict: 'APPROVE',
-        reviewed_at: new Date().toISOString(),
-        scope: [...request.candidate.scope],
-        isolation: request.required_isolation,
-        execution_purpose: purpose,
-        runtime: {
-          agent_kind: options.agent_kind,
-          adapter_id: options.adapter_id,
-          controller_execution_id: request.reviewer.execution_id,
-          execution_purpose: purpose,
-        },
-      }
+      return options.reviewRunner(request)
     },
     async repair(request: Readonly<IndependentReviewExecutionRequest>): Promise<AutonomousRepairResult> {
-      if (options.repairRunner) {
-        return options.repairRunner(request)
+      if (!options.repairRunner) {
+        throw new Error('AUTONOMOUS_REPAIR_RUNNER_REQUIRED')
       }
-      return {
-        status: 'COMPLETED',
-        modified: false,
-        original_head_sha: request.candidate.head_sha,
-        producer: request.reviewer,
-      }
+      return options.repairRunner(request)
     },
   }
 }
@@ -263,7 +245,9 @@ export function createIndependentReviewController(input: {
 
       const controllerRunId = createId()
       const prNumber = candidate.pr_number ?? 1
-      const candidateProducer = (candidate as { producer_execution_id?: string }).producer_execution_id
+      const candidateProducer = (candidate as { lineage?: CandidateProducerLineage; producer_execution_id?: string }).lineage?.producer.execution_id ??
+        (candidate as { producer_execution_id?: string }).producer_execution_id
+      const candidateProducerPrincipal = (candidate as { lineage?: CandidateProducerLineage }).lineage?.producer.principal_id
       const purpose = options?.purpose ?? 'FINAL_CERTIFICATION'
 
       // Authoritative builder identity
@@ -294,6 +278,9 @@ export function createIndependentReviewController(input: {
           throw new Error('REVIEWER_EXECUTION_NOT_DISTINCT')
         }
         if (candidateProducer && reviewerExecutionId.toLowerCase() === candidateProducer.toLowerCase()) {
+          throw new Error('CANDIDATE_PRODUCER_CANNOT_CERTIFY')
+        }
+        if (candidateProducerPrincipal && reviewerPrincipalId.toLowerCase() === candidateProducerPrincipal.toLowerCase()) {
           throw new Error('CANDIDATE_PRODUCER_CANNOT_CERTIFY')
         }
         usedPrincipals.add(reviewerPrincipalId.toLowerCase())
@@ -347,6 +334,15 @@ export function createIndependentReviewController(input: {
         // Fail closed on missing/invalid verdict (Repair A)
         if (result.verdict !== 'APPROVE' && result.verdict !== 'BLOCK') {
           throw new Error('REVIEW_EXECUTION_FAILED: Missing or invalid review verdict')
+        }
+
+        // Fail closed on purpose layer mismatch
+        const resultPurpose = result.execution_purpose ?? purpose
+        if (resultPurpose !== purpose) {
+          throw new Error('PURPOSE_LAYER_MISMATCH')
+        }
+        if (result.runtime?.execution_purpose && result.runtime.execution_purpose !== purpose) {
+          throw new Error('PURPOSE_LAYER_MISMATCH')
         }
 
         // Fail closed on missing/invalid reviewed_at (Repair F)
@@ -406,7 +402,7 @@ export function createIndependentReviewController(input: {
           challenge_id: challengeId,
           runtime: result.runtime,
           review_mode: 'exact_diff',
-          execution_purpose: result.execution_purpose ?? purpose,
+          execution_purpose: resultPurpose,
           reviewed_at: result.reviewed_at,
           scope: result.scope,
           verdict: result.verdict,
@@ -422,6 +418,8 @@ export function createIndependentReviewController(input: {
           now: now(),
           requireAuthoritative: Boolean(input.state_dir),
           producerExecutionId: candidateProducer,
+          lineage: (candidate as { lineage?: CandidateProducerLineage }).lineage,
+          purpose,
         })
 
         // Consume challenge
@@ -473,6 +471,8 @@ export function createIndependentReviewController(input: {
         now: now(),
         requireAuthoritative: Boolean(input.state_dir),
         producerExecutionId: candidateProducer,
+        lineage: (candidate as { lineage?: CandidateProducerLineage }).lineage,
+        purpose,
       })
 
       return handoff

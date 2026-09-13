@@ -52,7 +52,6 @@ export {
   BABEL_REVIEWER_PERSONA,
   buildBabelDogfoodReviewPrompt,
   buildBabelDogfoodReviewSystemContext,
-  getBabelDogfoodChatConfig,
 } from './babelReviewPersona.js';
 
 export function babelReviewPrompt(scope: string[]): string {
