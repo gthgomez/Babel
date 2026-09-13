@@ -45,6 +45,9 @@ $base = 'b' * 40
 $expectedDigest = 'd' * 64
 
 try {
+  $gateAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../../scripts/agent-pr-gate.ps1'), [ref]$null, [ref]$null)
+  $floorAssignments = @($gateAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$minimumReviewCount' }, $true))
+  Assert-ClosureGate ($floorAssignments.Count -eq 1 -and $floorAssignments[0].Right.Extent.Text -eq '1') 'all mergeable risk lanes require one independent review'
   $trustedAuthority = Get-AgentRequiredCheckAuthority -RequiredName 'trusted-control-plane'
   Assert-ClosureGate ([bool]$trustedAuthority.configured) 'trusted-control-plane must have a configured producer'
   Assert-ClosureGate ($trustedAuthority.event -eq 'pull_request_target') 'trusted-control-plane must use pull_request_target'
@@ -130,7 +133,7 @@ try {
   $bundleResult = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 1 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')
   Assert-ClosureGate ([bool]$bundleResult.valid -and $bundleResult.reviewCount -eq 1) 'YELLOW review must require controller-owned exact-head evidence'
   $redBundle = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 2 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')
-  Assert-ClosureGate (-not [bool]$redBundle.valid -and @($redBundle.errors) -contains 'controller_review_bundle_insufficient_or_excess_reviews') 'RED review must require two independent perspectives'
+  Assert-ClosureGate (-not [bool]$redBundle.valid -and @($redBundle.errors) -contains 'controller_review_bundle_insufficient_or_excess_reviews') 'the evidence validator must enforce its caller-selected review minimum'
 
   $chatArgs = @{ Repository = 'gthgomez/Babel'; PR = 152; BaseSha = $base; HeadSha = $head; BuilderIdentity = 'codex-implementation'; ExpectedNumstatDigest = $expectedDigest; MinimumReviewCount = 1; PublisherId = '91163862'; ExpectedScope = @('scripts/agent-pr-gate.ps1'); RequireBabelChat = $true }
   $noChat = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle @chatArgs

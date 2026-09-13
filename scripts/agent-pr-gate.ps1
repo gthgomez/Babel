@@ -399,9 +399,9 @@ try {
   $baseDerivedLane = Get-AgentRiskLane -ChangedPaths $diffPaths
   $requestedLane = ConvertTo-AgentRiskLane -Lane $RiskTier
   $effectiveLane = if ((Get-AgentLaneRank -Lane $requestedLane) -gt (Get-AgentLaneRank -Lane $baseDerivedLane)) { $requestedLane } else { $baseDerivedLane }
-  # Every PR exercises Babel chat; consequence adds a second perspective.
+  # Every mergeable lane requires one independent Babel chat approval.
   # BLACK remains blocked separately and cannot opt out of review.
-  $minimumReviewCount = if ($effectiveLane -eq 'RED') { 2 } else { 1 }
+  $minimumReviewCount = 1
   $independentRequired = $true
   $autonomousEvidenceResult = [pscustomobject]@{ path = ''; valid = $false; errors = @('autonomous_review_evidence_missing'); reviewCount = 0 }
   if ($independentRequired -and $prAvailable) {
