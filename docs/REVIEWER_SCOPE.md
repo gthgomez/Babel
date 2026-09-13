@@ -45,8 +45,8 @@ enforced by code** from what is only an **advisory convention**.
   benchmark-only** path. They are **not** the production merge gate, and must not
   be treated as merge authority or used to substitute a Claude/Anthropic
   reviewer for the Babel chat reviewer.
-- Mechanical coverage is **partial**, so the non-gate status is a convention, not
-  a guarantee:
+- Mechanical coverage is **partial**, so the non-gate status is an advisory
+  convention and does not establish a mechanical restriction:
   - `createLiveIndependentReviewProvider` calls
     `assertReviewerScopeAllowed(reviewerModel, reviewProvider)`, which throws
     `ExternalReviewerNotAllowedError` unless `BABEL_ALLOW_EXTERNAL_REVIEWER=1`.
