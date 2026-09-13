@@ -15,14 +15,14 @@ export function babelReviewChildEnv(input: { source: string; trustedRoot: string
     BABEL_REVIEW_PURPOSE: input.purpose ?? 'review',
     BABEL_EXECUTION_PROFILE: 'read_only_audit', BABEL_READ_ONLY: 'true', BABEL_HEADLESS: '1',
     // A review is a bounded investigation: read the diff, confirm findings,
-    // answer. The general `investigate` class allows 120 turns and a 50-minute
-    // wall with no convergence pressure, which let a single child run for the
-    // better part of an hour. Cap turns, stall, and wall so the two parallel
-    // reviewers converge quickly; hitting the wall becomes a fast, diagnosable
-    // failure instead of an hour of paid thrash. Must stay below
-    // REVIEW_CHILD_LEASE_MS so an interrupted child's lease never outlives it.
-    BABEL_CHAT_MAX_COST: 'unlimited', BABEL_CHAT_MAX_WALL_MS: '720000', BABEL_CHAT_TASK_CLASS: 'investigate',
-    BABEL_CHAT_MAX_TURNS: '24', BABEL_CHAT_STALL_TURNS: '5',
+    // answer. The review child is capped at 24 turns and a 12-minute wall so the
+    // two parallel reviewers converge quickly; hitting the wall becomes a fast,
+    // diagnosable failure instead of an hour of paid thrash. Repair proposals
+    // keep the generous research budget. Must stay below REVIEW_CHILD_LEASE_MS
+    // so an interrupted child's lease never outlives the wall that bounds it.
+    BABEL_CHAT_MAX_COST: 'unlimited', BABEL_CHAT_TASK_CLASS: 'investigate',
+    BABEL_CHAT_MAX_WALL_MS: input.purpose === 'repair_proposal' ? '3000000' : '720000',
+    ...(input.purpose === 'repair_proposal' ? {} : { BABEL_CHAT_MAX_TURNS: '24', BABEL_CHAT_STALL_TURNS: '5' }),
     BABEL_ALLOWED_TOOLS: JSON.stringify(['file_read', 'directory_list', 'grep', 'glob']),
     BABEL_DISALLOWED_TOOLS: JSON.stringify(['shell_exec', 'test_run', 'file_write', 'mcp_request', 'memory_query', 'memory_store', 'semantic_search']),
     BABEL_READ_ONLY_NO_INDEX_WRITE: '1',
@@ -55,7 +55,7 @@ export async function launchBabelReviewChild(input: { source: string; trustedRoo
     // SIGTERM is cooperative on POSIX. Do not leave an unresponsive review
     // child holding the lease forever; Windows already terminates it directly.
     forceKillTimer = setTimeout(() => { if (!child.exitCode) child.kill('SIGKILL'); }, 2000);
-  }, input.timeoutMs ?? 780000);
+  }, input.timeoutMs ?? (input.purpose === 'repair_proposal' ? 3050000 : 780000));
   const code = await new Promise<number | null>((resolve, reject) => {
     child.once('error', reject); child.once('close', resolve);
   }).finally(() => { clearTimeout(timer); if (forceKillTimer) clearTimeout(forceKillTimer); input.onExit?.(); });

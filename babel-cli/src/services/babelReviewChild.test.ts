@@ -25,6 +25,13 @@ test('review child strips publication credentials, preload hooks and ambient ove
   assert.equal(env['BABEL_READ_ONLY_NO_INDEX_WRITE'], '1');
 });
 
+test('repair children keep the generous research budget', () => {
+  const env = babelReviewChildEnv({ source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'deepseek-v4-flash', purpose: 'repair_proposal' });
+  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '3000000');
+  assert.equal(env['BABEL_CHAT_MAX_TURNS'], undefined);
+  assert.equal(env['BABEL_CHAT_STALL_TURNS'], undefined);
+});
+
 function workerFixture() {
   const source = mkdtempSync(join(tmpdir(), 'babel child process '));
   const output = join(source, 'result.json');
