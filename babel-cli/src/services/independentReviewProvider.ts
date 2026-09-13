@@ -8,6 +8,31 @@ import { runWithPrimaryOnlyFallback } from '../execute.js';
 import type { IndependentReviewCandidate, IndependentReviewProvider, IndependentReviewVerdict } from './independentReviewBroker.js';
 import { reviewResultDigest, type ReviewExecutionAttestation } from './reviewProvenance.js';
 
+/**
+ * Explicit benchmark-only opt-in for an external (Claude/Anthropic) reviewer.
+ * This legacy pluggable path is not Babel's production merge gate.
+ */
+export const EXTERNAL_REVIEWER_OPT_IN_ENV = 'BABEL_ALLOW_EXTERNAL_REVIEWER';
+
+/** Typed refusal for external reviewer scope violations. */
+export class ExternalReviewerNotAllowedError extends Error {
+  readonly code = 'EXTERNAL_REVIEWER_OPT_IN_REQUIRED';
+  constructor(reviewerModel: string, reviewProvider: string) {
+    super(`Refusing external reviewer model "${reviewerModel}" via provider "${reviewProvider}": Claude/Anthropic reviewers are not part of the production merge gate. Set ${EXTERNAL_REVIEWER_OPT_IN_ENV}=1 only for the claude-babel-astra-lab benchmark.`);
+    this.name = 'ExternalReviewerNotAllowedError';
+  }
+}
+
+/**
+ * Injectable guard: refuse a Claude/Anthropic reviewer unless explicitly opted
+ * in. The default path (`configured-independent-reviewer` /
+ * `babel-primary-readonly-review`) never matches and is unaffected.
+ */
+export function assertReviewerScopeAllowed(reviewerModel: string, reviewProvider: string, env: NodeJS.ProcessEnv = process.env): void {
+  const external = /claude|anthropic/i.test(reviewerModel) || /claude|anthropic/i.test(reviewProvider);
+  if (external && env[EXTERNAL_REVIEWER_OPT_IN_ENV] !== '1') throw new ExternalReviewerNotAllowedError(reviewerModel, reviewProvider);
+}
+
 const ModelReviewSchema = z.preprocess((value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const raw = value as Record<string, unknown>;
@@ -132,6 +157,7 @@ export function createLiveIndependentReviewProvider(options: LiveReviewProviderO
   const reviewerPrincipal = options.reviewerPrincipal ?? process.env['BABEL_REVIEWER_PRINCIPAL']?.trim() ?? 'reviewer:babel-independent-ai';
   const reviewerModel = options.reviewerModel ?? process.env['BABEL_REVIEWER_MODEL']?.trim() ?? 'configured-independent-reviewer';
   const reviewProvider = options.reviewProvider ?? 'babel-primary-readonly-review';
+  assertReviewerScopeAllowed(reviewerModel, reviewProvider);
   return {
     async review({ candidate }): Promise<IndependentReviewVerdict> {
       const diff = runCommand
