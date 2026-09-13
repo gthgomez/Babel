@@ -32,6 +32,21 @@ test('repair children keep the generous research budget', () => {
   assert.equal(env['BABEL_CHAT_STALL_TURNS'], undefined);
 });
 
+test('review child forwards the documented non-secret credential helper override', () => {
+  const helperPath = '/opt/babel/override-get-auth-token.js';
+  const env = babelReviewChildEnv(
+    { source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'mimo-v2.5' },
+    { PATH: '/bin', BABEL_OPENCODE_GO_HELPER: helperPath },
+  );
+  assert.equal(env['BABEL_OPENCODE_GO_HELPER'], helperPath);
+  // Never invent an override that the parent did not set.
+  const absent = babelReviewChildEnv(
+    { source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'mimo-v2.5' },
+    { PATH: '/bin' },
+  );
+  assert.equal(absent['BABEL_OPENCODE_GO_HELPER'], undefined);
+});
+
 function workerFixture() {
   const source = mkdtempSync(join(tmpdir(), 'babel child process '));
   const output = join(source, 'result.json');

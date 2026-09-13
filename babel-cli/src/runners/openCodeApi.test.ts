@@ -6,7 +6,11 @@ import {
   OpenCodeApiRunner,
 } from './openCodeApi.js'
 import { OpenCodeGoApiRunner, OPENCODE_GO_DEFAULT_BASE_URL, OpenCodeGoError } from '../claude-babel-astra-lab/openCodeGoApi.js'
-import { resolveOpenCodeGoCredential, OpenCodeGoCredentialError, BABEL_OPENCODE_GO_HELPER_ENV, BABEL_OPENCODE_GO_HELPER_PATH, DEPRECATED_CLAUDE_HELPER_PATH } from './openCodeGoCredential.js'
+// The lab runner consumes the lab credential resolver (credentialResolver.ts).
+// These tests pin its public shape and Babel-native precedence; the shared
+// `./openCodeGoCredential.js` core is covered by openCodeGoCredential.test.ts.
+import { resolveOpenCodeGoCredential, OpenCodeGoCredentialError } from '../claude-babel-astra-lab/credentialResolver.js'
+import { BABEL_OPENCODE_GO_HELPER_ENV, BABEL_OPENCODE_GO_HELPER_PATH, DEPRECATED_CLAUDE_HELPER_PATH } from './openCodeGoCredential.js'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -87,6 +91,7 @@ test('OpenCode Go credential resolver uses the approved helper source in memory'
     }) as never,
   })
   assert.equal(invoked, true)
+  assert.equal(resolution.authStatus, 'PRESENT')
   assert.equal(resolution.credentialSource, 'opencode-auth-helper')
   assert.equal(resolution.credential, 'synthetic-helper-credential')
 })
@@ -103,10 +108,10 @@ test('OpenCode Go credential resolver redacts helper failures', () => {
       assert.equal(error instanceof OpenCodeGoCredentialError, true)
       assert.equal((error as Error).message.includes('secret-value'), false)
       assert.deepEqual((error as OpenCodeGoCredentialError).diagnostic, {
-        helperPresent: true,
-        exitCode: 7,
-        stderrPresent: true,
-        timedOut: false,
+        helper_present: true,
+        exit_code: 7,
+        stderr_present: true,
+        timed_out: false,
       })
       return true
     },
@@ -186,7 +191,7 @@ test('OpenCode Go credential resolver fails closed when no helper candidate exis
     (error: unknown) => {
       assert.equal(error instanceof OpenCodeGoCredentialError, true)
       assert.equal((error as OpenCodeGoCredentialError).code, 'AUTH_FAILURE')
-      assert.equal((error as OpenCodeGoCredentialError).diagnostic.helperPresent, false)
+      assert.equal((error as OpenCodeGoCredentialError).diagnostic.helper_present, false)
       return true
     },
   )

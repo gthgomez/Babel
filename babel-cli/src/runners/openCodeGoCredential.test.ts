@@ -2,9 +2,21 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  BABEL_OPENCODE_GO_HELPER_ENV,
   OpenCodeGoCredentialError,
   resolveOpenCodeGoCredential,
 } from './openCodeGoCredential.js'
+
+// Hermeticity: the helper override must not leak between tests, and no test may
+// probe a real helper on the host. Every resolver call below either injects an
+// explicit helperPath with existsSyncImpl or asserts the fail-closed path.
+test.beforeEach(() => {
+  delete process.env[BABEL_OPENCODE_GO_HELPER_ENV]
+})
+
+test.afterEach(() => {
+  delete process.env[BABEL_OPENCODE_GO_HELPER_ENV]
+})
 
 test('OpenCode Go credential resolver keeps helper credentials in memory', () => {
   const resolution = resolveOpenCodeGoCredential({
@@ -52,6 +64,7 @@ test('OpenCode Go credential resolver does not fall back to environment keys', (
     () => resolveOpenCodeGoCredential({
       source: 'opencode-auth-helper',
       helperPath: 'C:\\missing\\get-auth-token.js',
+      existsSyncImpl: () => false,
     }),
     (error: unknown) => error instanceof OpenCodeGoCredentialError && error.code === 'AUTH_FAILURE',
   )
