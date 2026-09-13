@@ -5,9 +5,9 @@ last_verified: 2026-09-08
 # Independent Review Routing
 
 Every PR requires an independent Babel **chat** review of its exact current
-base/head. GREEN and YELLOW require at least one approving independent review;
-RED requires two distinct reviewer executions/perspectives, including at least
-one Babel chat review. BLACK remains an owner-decision boundary. Required CI,
+base/head. GREEN, YELLOW and RED require one approving independent Babel chat
+review. A second perspective remains an explicit escalation. BLACK remains an
+owner-decision boundary. Required CI,
 resolved review threads, and immutable-base merge evaluation still apply.
 
 Use the trusted host controller described in

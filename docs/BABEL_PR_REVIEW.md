@@ -11,10 +11,8 @@ App or custom signing/custody service.
 
 ## Review and merge contract
 
-Every PR needs at least one approving Babel chat review. GREEN and YELLOW need
-one independent perspective; RED needs two distinct reviewer executions, at
-least one using Babel chat. The host review queue currently runs MiMo v2.5 and
-LongCat 2.0 in separate contexts. DeepSeek V4 Flash is also a canonical supported
+Every PR needs one approving independent Babel chat review, including RED. The
+host review queue defaults to MiMo v2.5. DeepSeek V4 Flash is also a canonical supported
 OpenCode Go model. The model that actually answered is recorded; a configured
 name or fallback assumption is not sufficient attribution.
 

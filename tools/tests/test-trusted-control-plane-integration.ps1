@@ -297,7 +297,7 @@ exit 0
     if ($run.exitCode -ne 0) { throw "exit=$($run.exitCode) blockers=$($run.result.blockers -join ',')" }
     if ($run.result.blockers.Count -ne 0) { throw "unexpected blockers: $($run.result.blockers -join ',')" }
     if ($run.result.reviewPolicy.effectiveRiskLane -ne $CandidateLane) { throw "unexpected lane: $($run.result.reviewPolicy.effectiveRiskLane)" }
-    $minimum = if ($CandidateLane -eq 'RED') { 2 } else { 1 }
+    $minimum = 1
     if (-not $run.result.reviewPolicy.independentReviewRequired -or $run.result.reviewPolicy.minimumIndependentReviewCount -ne $minimum) { throw 'Every PR must require proportionate independent chat review.' }
     if ($run.result.reviewPolicy.observedIndependentReviewCount -ne 2) { throw 'two independent reviews were not observed' }
   }
@@ -347,8 +347,8 @@ exit 0
     if ($run.exitCode -eq 0) { throw 'Comment event unexpectedly satisfied the PR check.' }
   }
 
-  # 2. A RED change cannot self-downgrade to one review.
-  Invoke-Step 'red-one-review-blocked' {
+  # 2. One exact Babel chat review satisfies every mergeable lane.
+  Invoke-Step 'one-review-pass' {
     $oneReviewPath = Join-Path $root 'ai-review-one.json'
     $oneReviewBundle = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $oneReviewBundle.comment_id = '106'
@@ -363,10 +363,7 @@ exit 0
     } finally {
       Get-Content -Raw (Join-Path $root 'comment-102.json') | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
     }
-    if ($CandidateLane -eq 'RED') {
-      if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-      if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
-    } elseif ($run.exitCode -ne 0) { throw 'One valid Babel chat review must satisfy GREEN review policy.' }
+    if ($run.exitCode -ne 0) { throw 'One valid Babel chat review must satisfy every mergeable review lane.' }
   }
 
   # 3. A local bundle from a different owner cannot impersonate the live owner handoff.

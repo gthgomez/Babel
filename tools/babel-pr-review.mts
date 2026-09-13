@@ -111,7 +111,9 @@ for (const number of prs) {
     lease = acquireBabelReviewLease(join(jobDir, 'running.lock'))
     if (!lease) { console.log(JSON.stringify({ pr: number, status: 'running_or_recovering', job: key })); continue }
     const reviews: HostReviewHandoffV2[] = []
-    for (const model of ['mimo-v2.5', 'longcat-2.0']) {
+    // MiMo is the fast default. A caller that needs a second perspective can
+    // launch a separately bound review rather than making every PR wait on it.
+    for (const model of ['mimo-v2.5']) {
       const cachedPath = join(jobDir, model + '-handoff.json')
       if (existsSync(cachedPath)) {
         try {

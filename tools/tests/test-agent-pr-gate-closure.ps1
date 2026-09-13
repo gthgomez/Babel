@@ -45,6 +45,9 @@ $base = 'b' * 40
 $expectedDigest = 'd' * 64
 
 try {
+  $gateAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../../scripts/agent-pr-gate.ps1'), [ref]$null, [ref]$null)
+  $floorAssignments = @($gateAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$minimumReviewCount' }, $true))
+  Assert-ClosureGate ($floorAssignments.Count -eq 1 -and $floorAssignments[0].Right.Extent.Text -eq '1') 'all mergeable risk lanes require one independent review'
   $trustedAuthority = Get-AgentRequiredCheckAuthority -RequiredName 'trusted-control-plane'
   Assert-ClosureGate ([bool]$trustedAuthority.configured) 'trusted-control-plane must have a configured producer'
   Assert-ClosureGate ($trustedAuthority.event -eq 'pull_request_target') 'trusted-control-plane must use pull_request_target'
