@@ -273,7 +273,19 @@ describe('hostReviewController', () => {
     await assert.rejects(scopeController.review(candidate), /scope does not match/)
   })
 
-  it('serializes two distinct fresh reviews for RED and rejects a duplicate reviewer', async () => {
+  it('rejects invalid runtime review counts before launching workers', async () => {
+    let launches = 0
+    const controller = createHostReviewController({
+      controller_id: 'host-controller:primary', create_id: createIdFactory(),
+      adapter: { launch: async request => { launches++; return result(request) } },
+    })
+    for (const count of [0, 3, -1, 1.5, NaN]) {
+      await assert.rejects(controller.review(candidate, 'GREEN', count as 1), /count must be 1 or 2/)
+    }
+    assert.equal(launches, 0)
+  })
+
+  it('defaults RED to one review and supports explicit distinct-review escalation', async () => {
     let launches = 0
     const controller = createHostReviewController({
       controller_id: 'host-controller:primary',
@@ -281,18 +293,22 @@ describe('hostReviewController', () => {
       adapter: { launch: async (request) => result(request, { reviewer_id: `reviewer:astra-${++launches}` }) },
     })
 
-    const handoff = await controller.review(candidate, 'RED')
+    const ordinary = await controller.review(candidate, 'RED')
+    assert.equal(ordinary.reviews.length, 1)
+    assert.equal(launches, 1)
+    const handoff = await controller.review(candidate, 'RED', 2)
 
     assert.equal(handoff.reviews.length, 2)
     assert.notEqual(handoff.reviews[0].execution_id, handoff.reviews[1].execution_id)
     assert.notEqual(handoff.reviews[0].reviewer_id, handoff.reviews[1].reviewer_id)
     assert.equal(handoff.reviews[0].task_hash, handoff.reviews[1].task_hash)
+    assert.equal((await controller.review(candidate, 'GREEN', 2)).reviews.length, 2)
 
     const duplicateController = createHostReviewController({
       controller_id: 'host-controller:primary',
       create_id: createIdFactory(),
       adapter: { launch: async (request) => result(request, { reviewer_id: 'reviewer:reused' }) },
     })
-    await assert.rejects(duplicateController.review(candidate, 'RED'), /requires distinct reviewer identities/)
+    await assert.rejects(duplicateController.review(candidate, 'RED', 2), /requires distinct reviewer identities/)
   })
 })

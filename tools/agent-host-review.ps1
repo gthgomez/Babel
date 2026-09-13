@@ -8,7 +8,7 @@ param(
   [ValidateRange(0, 1000000)][double]$PriorReservedUsd = 0,
   [string]$Repository = 'gthgomez/Babel',
   [string]$BuilderIdentity = 'codex-implementation',
-  [string[]]$Models = @('deepseek-v4-flash', 'mimo-v2.5'),
+  [string[]]$Models = @('mimo-v2.5'),
   [string]$ExternalExecutionModule = '',
   [switch]$Publish,
   [switch]$PreflightOnly

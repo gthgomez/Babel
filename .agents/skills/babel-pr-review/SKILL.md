@@ -58,7 +58,7 @@ pwsh -File "$babelRoot\.agents\skills\code-review\scripts\collect-target.ps1" -J
 ```
 
 ### B. Execute Multi-Model Independent Review
-Runs isolated dual-model review (`mimo-v2.5` + `longcat-2.0`) in read-only sandbox with trace-based coverage and finding verification:
+Runs one isolated review (`mimo-v2.5`) by default. Optional `--reviewers 2` adds `longcat-2.0` in parallel, in a separate read-only context, with trace-based coverage and finding verification:
 ```powershell
 $privateState = "$env:LOCALAPPDATA\Babel\review-state"
 Push-Location "$babelRoot"
@@ -73,7 +73,7 @@ Pop-Location
 ```
 
 Key artifacts produced in `$privateState/jobs/<digest>/`:
-- `handoff.json`: Dual-model verdict and findings
+- `handoff.json`: Independent reviewer verdicts and findings
 - `completed.json`: Execution status and telemetry
 - `<model>-coverage.json`: Trace-derived `ReviewCoverageReceipt`
 - `<model>-independence.json`: Attestation of reviewer independence ($I_0 \dots I_4$)

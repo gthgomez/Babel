@@ -11,10 +11,17 @@ App or custom signing/custody service.
 
 ## Review and merge contract
 
-Every PR needs at least one approving Babel chat review. GREEN and YELLOW need
-one independent perspective; RED needs two distinct reviewer executions, at
-least one using Babel chat. The host review queue currently runs MiMo v2.5 and
-LongCat 2.0 in separate contexts. DeepSeek V4 Flash is also a canonical supported
+Every PR needs one approving independent Babel chat review, including RED.
+The host review queue defaults to MiMo v2.5; `--reviewers 2` explicitly adds
+LongCat 2.0 in a separate context, running both in parallel. An existing second
+handoff is retained on resume; reducing the count cannot discard its findings.
+Any retained blocking review still prevents publication of a replacement approval,
+even if its cache is stale or only the raw artifact survived. Repair the candidate
+before rerunning; do not delete retained evidence to obtain approval.
+If only an expired or raw BLOCK artifact survives, the orchestrator must inspect
+its findings and repair in a separate worktree. Such artifacts are not fresh
+approval evidence and are not accepted by the proposal command's handoff input.
+DeepSeek V4 Flash is also a canonical supported
 OpenCode Go model. The model that actually answered is recorded; a configured
 name or fallback assumption is not sufficient attribution.
 

@@ -3,7 +3,7 @@
 // (--pr <number> | --all) [--task <owner task file>] [--publish] [--legacy-evidence]
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { collectBabelReviewSnapshot, assertReviewStateOutsideGit, secretRiskReviewPath, safeReviewPath } from '../babel-cli/src/services/babelReviewSnapshot.js'
 import { launchBabelReviewChild } from '../babel-cli/src/services/babelReviewChild.js'
@@ -15,16 +15,18 @@ import { computeIndependenceClass, evaluateEnsembleIndependence, evaluateReviewe
 import { createStructuredFinding, parseFindingFromModelClaim } from '../babel-cli/src/services/structuredFinding.js'
 import { verifyFindingAgainstSnapshot, corroborateFindings } from '../babel-cli/src/services/findingVerifier.js'
 import { collectCandidateEnvelope } from '../babel-cli/src/services/candidateCollector.js'
+import { assertNoPriorReviewBlock, babelReviewModels, settledBabelReviews } from '../babel-cli/src/services/babelReviewPolicy.js'
 
 const args = process.argv.slice(2)
 const options = new Map<string, string>()
 for (let i = 0; i < args.length; i++) {
   const key = args[i]!
-  if (!['--repo-root', '--state-dir', '--pr', '--all', '--task', '--publish', '--legacy-evidence', '--repository', '--trust-mode'].includes(key) || options.has(key)) throw new Error('INVALID_ARGUMENT')
+  if (!['--repo-root', '--state-dir', '--pr', '--all', '--task', '--publish', '--legacy-evidence', '--repository', '--trust-mode', '--reviewers'].includes(key) || options.has(key)) throw new Error('INVALID_ARGUMENT')
   const value = ['--all', '--publish', '--legacy-evidence'].includes(key) ? 'true' : args[++i]
   if (!value || value.startsWith('--')) throw new Error('ARGUMENT_VALUE_REQUIRED')
   options.set(key, value)
 }
+babelReviewModels(options.get('--reviewers')) // Validate before any external work.
 const repoRoot = resolve(options.get('--repo-root') || '.')
 const state = assertReviewStateOutsideGit(options.get('--state-dir') || (() => { throw new Error('PRIVATE_STATE_REQUIRED') })())
 const trustedRoot = resolve(import.meta.dirname, '..')
@@ -110,11 +112,17 @@ for (const number of prs) {
     jobDir = assertReviewStateOutsideGit(join(state, 'jobs', key))
     lease = acquireBabelReviewLease(join(jobDir, 'running.lock'))
     if (!lease) { console.log(JSON.stringify({ pr: number, status: 'running_or_recovering', job: key })); continue }
-    // Both canonical reviewers run in parallel: wall time is the slower child,
-    // not the sum. Each collects its own inert snapshot, which is also its
-    // execution id and engine run id, so the two children stay independent in
-    // artifacts, cache and run directories.
-    const settled = await Promise.allSettled(['mimo-v2.5', 'longcat-2.0'].map(async (model): Promise<HostReviewHandoffV2> => {
+    const assertRetainedReviews = () => {
+      for (const name of readdirSync(jobDir!)) {
+        if (/^(mimo-v2\.5|longcat-2\.0)-(handoff|[a-f0-9-]{36})\.json$/.test(name)) {
+          assertNoPriorReviewBlock(JSON.parse(readFileSync(join(jobDir!, name), 'utf8')))
+        }
+      }
+    }
+    // Optional escalation runs in parallel with isolated snapshots and identities.
+    // Retain an existing second handoff even when resuming with the default count.
+    const models = babelReviewModels(options.get('--reviewers'), readdirSync(jobDir).some(name => name.startsWith('longcat-2.0-') && name.endsWith('.json')))
+    const settled = await Promise.allSettled(models.map(async (model): Promise<HostReviewHandoffV2> => {
       const cachedPath = join(jobDir!, model + '-handoff.json')
       if (existsSync(cachedPath)) {
         try {
@@ -130,6 +138,9 @@ for (const number of prs) {
           atomicReviewJson(join(jobDir!, `${model}-cache-rejected.json`), { at: new Date().toISOString(), status: 'cache_rejected' })
         }
       }
+      // A validated cached BLOCK can resume publication above. Never launch a
+      // replacement reviewer when retained evidence already requires repair.
+      assertRetainedReviews()
       const snapshot = collectBabelReviewSnapshot({ repoRoot, base: pr.baseRefOid, head: pr.headRefOid, state, task })
       if (snapshot.numstatDigest !== candidate.diff_numstat_digest || JSON.stringify(snapshot.scope) !== JSON.stringify(scope)) throw new Error('SNAPSHOT_SCOPE_MISMATCH')
       const output = join(jobDir!, `${model}-${snapshot.id}.json`)
@@ -214,9 +225,9 @@ for (const number of prs) {
     }))
     // Wait for both children to settle before releasing the lease or throwing,
     // so a fast failure in one review never orphans the other paid child.
-    const rejected = settled.find(result => result.status === 'rejected')
-    if (rejected) throw rejected.reason
-    const reviews = settled.map(result => (result as PromiseFulfilledResult<HostReviewHandoffV2>).value)
+    // A valid BLOCK must reach GitHub even if its peer failed, including retry
+    // after an interrupted POST. Partial success can never publish approval.
+    const reviews = settledBabelReviews(settled)
     // The first review must still be fresh after its peer finishes.
     for (const review of reviews) validateBabelReviewCache(review, { candidate, model: review.reviews[0].reviewer_model, round: key, version, sourceSha: trustedSha })
     const fresh = readPr(number)
@@ -226,6 +237,7 @@ for (const number of prs) {
     atomicReviewJson(join(jobDir, 'handoff.json'), handoff)
     let publishedComment: string | null = null
     if (options.has('--publish')) {
+      if (handoff.reviews.every(review => review.verdict === 'APPROVE')) assertRetainedReviews()
       if (gitAt(trustedRoot, ['status', '--porcelain']).trim()) throw new Error('TRUSTED_REVIEW_SOURCE_CHANGED')
       const owner = JSON.parse(gh(['api', `repos/${repository}`])).owner as { id: number; type: string }
       const actor = JSON.parse(gh(['api', 'user'])) as { id: number }

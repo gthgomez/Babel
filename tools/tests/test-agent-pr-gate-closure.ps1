@@ -45,6 +45,13 @@ $base = 'b' * 40
 $expectedDigest = 'd' * 64
 
 try {
+  # Verify the actual gate's policy assignment, not only a fixture supplied floor.
+  $gateAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../../scripts/agent-pr-gate.ps1'), [ref]$null, [ref]$null)
+  $floorAssignments = @($gateAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$minimumReviewCount' }, $true))
+  Assert-ClosureGate ($floorAssignments.Count -eq 1 -and $floorAssignments[0].Right.Extent.Text -eq '1') 'all mergeable risk lanes require exactly one review by default'
+  $hostAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../../tools/agent-host-review.ps1'), [ref]$null, [ref]$null)
+  $modelsDefault = @($hostAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Models' })
+  Assert-ClosureGate ($modelsDefault.Count -eq 1 -and $modelsDefault[0].DefaultValue.Extent.Text -eq "@('mimo-v2.5')") 'legacy host entrypoint must default to one Babel reviewer'
   $trustedAuthority = Get-AgentRequiredCheckAuthority -RequiredName 'trusted-control-plane'
   Assert-ClosureGate ([bool]$trustedAuthority.configured) 'trusted-control-plane must have a configured producer'
   Assert-ClosureGate ($trustedAuthority.event -eq 'pull_request_target') 'trusted-control-plane must use pull_request_target'
@@ -130,7 +137,7 @@ try {
   $bundleResult = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 1 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')
   Assert-ClosureGate ([bool]$bundleResult.valid -and $bundleResult.reviewCount -eq 1) 'YELLOW review must require controller-owned exact-head evidence'
   $redBundle = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 2 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')
-  Assert-ClosureGate (-not [bool]$redBundle.valid -and @($redBundle.errors) -contains 'controller_review_bundle_insufficient_or_excess_reviews') 'RED review must require two independent perspectives'
+  Assert-ClosureGate (-not [bool]$redBundle.valid -and @($redBundle.errors) -contains 'controller_review_bundle_insufficient_or_excess_reviews') 'explicit two-review escalation must require two independent perspectives'
 
   $chatArgs = @{ Repository = 'gthgomez/Babel'; PR = 152; BaseSha = $base; HeadSha = $head; BuilderIdentity = 'codex-implementation'; ExpectedNumstatDigest = $expectedDigest; MinimumReviewCount = 1; PublisherId = '91163862'; ExpectedScope = @('scripts/agent-pr-gate.ps1'); RequireBabelChat = $true }
   $noChat = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle @chatArgs
@@ -167,8 +174,12 @@ try {
   $second = $validEvidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
   $second.execution_id = 'execution-152-b'; $second.reviewer_id = 'second-independent-perspective'
   $chatBundle.handoff.reviews += $second
+  $blockedSecond = $chatBundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $blockedSecond.handoff.reviews[1].verdict = 'BLOCK'
+  $blockedSecond.handoff.reviews[1].blocking_findings = @('Confirmed regression in scripts/agent-pr-gate.ps1')
+  Assert-ClosureGate (-not (Test-AgentControllerReviewEvidenceBundle -Bundle $blockedSecond @chatArgs).valid) 'one-review floor must not ignore a blocking second perspective'
   $chatArgs.MinimumReviewCount = 2
-  Assert-ClosureGate ((Test-AgentControllerReviewEvidenceBundle -Bundle $chatBundle @chatArgs).valid) 'RED may combine one Babel chat review with a distinct independent perspective'
+  Assert-ClosureGate ((Test-AgentControllerReviewEvidenceBundle -Bundle $chatBundle @chatArgs).valid) 'explicit escalation may combine one Babel chat review with a distinct independent perspective'
 
   $evidenceCases = @(
     @{ Name = 'null evidence'; Value = $null; Error = 'autonomous_evidence_malformed' }

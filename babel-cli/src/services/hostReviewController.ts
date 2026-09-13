@@ -172,7 +172,7 @@ export interface HostReviewHandoffV2 {
 
 /** Serializes controller-owned worker completions into a normalized handoff. */
 export interface HostReviewController {
-  review(candidate: Readonly<HostReviewCandidate>, risk?: 'GREEN' | 'RED'): Promise<HostReviewHandoffV2>
+  review(candidate: Readonly<HostReviewCandidate>, risk?: 'GREEN' | 'RED', reviewCount?: 1 | 2): Promise<HostReviewHandoffV2>
 }
 
 interface HostReviewLaunchRecord {
@@ -312,13 +312,13 @@ export function createHostReviewController(input: {
   })
 
   return Object.freeze({
-    async review(candidate: Readonly<HostReviewCandidate>, risk: 'GREEN' | 'RED' = 'GREEN'): Promise<HostReviewHandoffV2> {
+    async review(candidate: Readonly<HostReviewCandidate>, risk: 'GREEN' | 'RED' = 'GREEN', reviewCount: 1 | 2 = 1): Promise<HostReviewHandoffV2> {
       const candidateSnapshot = snapshotCandidate(candidate)
       assertCandidate(candidateSnapshot)
       if (risk !== 'GREEN' && risk !== 'RED') throw new Error('Host review risk must be GREEN or RED.')
       const controllerRunId = createId()
       if (!controllerRunId) throw new Error('Host review controller generated an invalid controller run identifier.')
-      const reviewCount = risk === 'RED' ? 2 : 1
+      if (reviewCount !== 1 && reviewCount !== 2) throw new Error('Host review count must be 1 or 2.')
       const reviews: AutonomousReviewEvidenceV2[] = []
       const reviewerIds = new Set<string>()
       for (let index = 0; index < reviewCount; index += 1) {
@@ -338,7 +338,7 @@ export function createHostReviewController(input: {
         const result = await input.adapter.launch(request)
         if (result.isolation?.mode !== requiredIsolation.mode) throw new Error('Host review isolation mode differs from the requested profile.')
         assertResult(record, input.controller_id, executionId, result, now(), maxReviewAgeMs)
-        if (reviewerIds.has(result.reviewer_id)) throw new Error('Host review RED lane requires distinct reviewer identities.')
+        if (reviewerIds.has(result.reviewer_id)) throw new Error('Host review escalation requires distinct reviewer identities.')
         reviewerIds.add(result.reviewer_id)
         record.serialized = true
         reviews.push(Object.freeze({
@@ -371,7 +371,7 @@ export function createHostReviewController(input: {
           ...(result.changes_diff_fully_read !== undefined ? { changes_diff_fully_read: result.changes_diff_fully_read } : {}),
         }))
       }
-      const handoffReviews = (risk === 'RED'
+      const handoffReviews = (reviewCount === 2
         ? [reviews[0], reviews[1]]
         : [reviews[0]]) as [AutonomousReviewEvidenceV2] | [AutonomousReviewEvidenceV2, AutonomousReviewEvidenceV2]
       return Object.freeze({

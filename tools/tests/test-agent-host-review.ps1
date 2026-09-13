@@ -164,8 +164,7 @@ function Invoke-HostReviewCommand {
   $env:HOST_REVIEW_PR_COUNT = (Join-Path $testRoot ("pr-count-" + [guid]::NewGuid().ToString('N') + '.txt'))
   try {
     $arguments = @('-NoProfile', '-File', $command, '-PR', '77', '-RepoRoot', $repo, '-TaskPath', $Task,
-      '-BudgetLedgerPath', $Ledger, '-BudgetUsd', $Budget, '-Repository', 'gthgomez/Babel',
-      '-Models', 'deepseek-v4-flash')
+      '-BudgetLedgerPath', $Ledger, '-BudgetUsd', $Budget, '-Repository', 'gthgomez/Babel')
     if ($Mode -eq 'real-preflight') {
       $wrapper = Join-Path $testRoot 'bom-parent.ps1'
       @'
@@ -216,7 +215,7 @@ try {
   $candidateLedger = Invoke-HostReviewCommand -Task $task -Ledger (Join-Path $repo 'host-ledger.json') -Mode 'missing-usage'
   Assert-HostReviewCommand ($candidateLedger.exit_code -ne 0) 'candidate-controlled ledger must be rejected before a worker call'
   $real = Invoke-HostReviewCommand -Task $task -Ledger $realLedger -Mode 'real-preflight' -PreflightOnly
-  Assert-HostReviewCommand ($real.exit_code -eq 0 -and ($real.output -join "`n") -match 'PREFLIGHT_ONLY') 'real Node preflight must parse host-generated JSON without a BOM'
+  Assert-HostReviewCommand ($real.exit_code -eq 0 -and ($real.output -join "`n") -match 'PREFLIGHT_ONLY') ("real Node preflight must parse host-generated JSON without a BOM: " + ($real.output -join "`n"))
   Assert-HostReviewCommand ([double](Read-JsonFile $realLedger).reserved_usd -eq 0) 'preflight-only must not reserve or spend credits'
   Assert-HostReviewCommand ($real.publish_count -eq 0) 'preflight-only must not publish review evidence'
   $success = Invoke-HostReviewCommand -Task $task -Ledger $ledger -Mode 'missing-usage' -Budget 1 -Publish
@@ -227,6 +226,7 @@ try {
   Assert-HostReviewCommand ($sent.task_text -eq $taskText -and $sent.candidate.task_hash -eq (Get-TextHash $taskText)) 'worker payload must bind the exact task text and hash'
   Assert-HostReviewCommand ((Get-Content -Raw -LiteralPath $log) -match 'ACTUAL_RESERVED=0.05') 'reservation must be persisted before the paid worker callback'
   $successLedger = Read-JsonFile -Path $ledger
+  Assert-HostReviewCommand (@($successLedger.round.completed).Count -eq 1 -and $successLedger.round.completed[0].observed_model -eq 'mimo-v2.5') 'omitted Models must launch only the default Babel reviewer'
   Assert-HostReviewCommand ([double]$successLedger.reserved_usd -eq 0.05) 'missing usage must retain the full pre-call reservation'
   Assert-HostReviewCommand ($successLedger.repository -eq 'gthgomez/Babel' -and $successLedger.task_hash -eq (Get-TextHash $taskText)) 'ledger must bind its repository and trusted task hash'
   Assert-HostReviewCommand ($success.publish_count -eq 1) 'approval evidence must be published only after exact-state recheck'
