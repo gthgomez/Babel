@@ -8,7 +8,7 @@
 #
 # Coverage:
 #   1. RED control-plane change + two controller-owned reviews -> audit passes
-#   2. one review cannot satisfy RED evidence
+#   2. one independent review satisfies RED; an additional BLOCK cannot be ignored
 #   3. missing review evidence blocks deterministically
 #   4. dirty candidate worktree blocks
 [CmdletBinding()]
@@ -297,8 +297,7 @@ exit 0
     if ($run.exitCode -ne 0) { throw "exit=$($run.exitCode) blockers=$($run.result.blockers -join ',')" }
     if ($run.result.blockers.Count -ne 0) { throw "unexpected blockers: $($run.result.blockers -join ',')" }
     if ($run.result.reviewPolicy.effectiveRiskLane -ne $CandidateLane) { throw "unexpected lane: $($run.result.reviewPolicy.effectiveRiskLane)" }
-    $minimum = if ($CandidateLane -eq 'RED') { 2 } else { 1 }
-    if (-not $run.result.reviewPolicy.independentReviewRequired -or $run.result.reviewPolicy.minimumIndependentReviewCount -ne $minimum) { throw 'Every PR must require proportionate independent chat review.' }
+    if (-not $run.result.reviewPolicy.independentReviewRequired -or $run.result.reviewPolicy.minimumIndependentReviewCount -ne 1) { throw 'Every PR must require one independent chat review.' }
     if ($run.result.reviewPolicy.observedIndependentReviewCount -ne 2) { throw 'two independent reviews were not observed' }
   }
 
@@ -347,8 +346,8 @@ exit 0
     if ($run.exitCode -eq 0) { throw 'Comment event unexpectedly satisfied the PR check.' }
   }
 
-  # 2. A RED change cannot self-downgrade to one review.
-  Invoke-Step 'red-one-review-blocked' {
+  # 2. The trusted base requires one review even for RED changes.
+  Invoke-Step 'one-independent-review-passes' {
     $oneReviewPath = Join-Path $root 'ai-review-one.json'
     $oneReviewBundle = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $oneReviewBundle.comment_id = '106'
@@ -363,10 +362,27 @@ exit 0
     } finally {
       Get-Content -Raw (Join-Path $root 'comment-102.json') | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
     }
-    if ($CandidateLane -eq 'RED') {
-      if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-      if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
-    } elseif ($run.exitCode -ne 0) { throw 'One valid Babel chat review must satisfy GREEN review policy.' }
+    if ($run.exitCode -ne 0 -or $run.result.reviewPolicy.observedIndependentReviewCount -ne 1) { throw 'One valid Babel chat review must satisfy the trusted review floor.' }
+  }
+
+  Invoke-Step 'additional-blocking-review-cannot-be-ignored' {
+    $blockedPath = Join-Path $root 'ai-review-blocked-peer.json'
+    $blockedBundle = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $blockedBundle.handoff.reviews[1].verdict = 'BLOCK'
+    $blockedBundle.handoff.reviews[1].blocking_findings = @('Confirmed candidate regression')
+    $blockedBundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $blockedPath -Encoding utf8NoBOM
+    $blockedComment = Get-Content -Raw (Join-Path $root 'comment-102.json') | ConvertFrom-Json
+    $blockedComment.body = '<!-- babel-controller-ai-reviews-v2 -->' + ($blockedBundle.handoff | ConvertTo-Json -Depth 30 -Compress)
+    $blockedComment | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
+    try {
+      $run = Invoke-Gate -Label 'blocked-peer' -Extra @{ '-AutonomousReviewEvidencePath' = $blockedPath }
+    } finally {
+      Get-Content -Raw (Join-Path $root 'comment-102.json') | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
+    }
+    if ($run.exitCode -eq 0 -or $run.result.blockers -notcontains 'independent_review_not_satisfied') { throw 'A second blocking review was ignored under the one-review floor.' }
+    if ($run.result.reviewPolicy.observedIndependentReviewCount -ne 2 -or
+        $run.result.reviewPolicy.independentReviewEvidenceErrors -notcontains 'autonomous_evidence_has_blocking_findings' -or
+        $run.result.reviewPolicy.independentReviewEvidenceErrors -contains 'controller_review_live_provenance_mismatch') { throw 'The authenticated second review must cause rejection, not a provenance mismatch.' }
   }
 
   # 3. A local bundle from a different owner cannot impersonate the live owner handoff.
