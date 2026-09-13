@@ -7,6 +7,12 @@
  *   BABEL_CLAUDE_CMD     - CLI binary name.          Default: "claude"
  *   BABEL_CLAUDE_ARGS    - Space-separated flags.    Default: "--print"
  *   BABEL_CLI_TIMEOUT_MS - Hard timeout in ms.       Default: 120000
+ *
+ * Scope note: this is a LEGACY, UNREGISTERED public-use fallback runner (see the
+ * note in `execute.ts`); it is not part of Babel's internal runner waterfall or
+ * the review path. Because it spawns the `claude` binary it does NOT pass through
+ * the `claude-babel-astra-lab` benchmark opt-in guard (`BABEL_BENCH_ALLOW_CLAUDE`).
+ * If it is ever wired into review, it must be covered by docs/REVIEWER_SCOPE.md.
  */
 
 import type { ZodType } from 'zod';

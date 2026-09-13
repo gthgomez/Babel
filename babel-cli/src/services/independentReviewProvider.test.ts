@@ -10,9 +10,40 @@ import {
 const DEFAULT_MODEL = 'configured-independent-reviewer';
 const DEFAULT_PROVIDER = 'babel-primary-readonly-review';
 
+type ReviewerEnvKey = 'BABEL_REVIEWER_MODEL' | typeof EXTERNAL_REVIEWER_OPT_IN_ENV;
+const REVIEWER_ENV_KEYS: readonly ReviewerEnvKey[] = ['BABEL_REVIEWER_MODEL', EXTERNAL_REVIEWER_OPT_IN_ENV];
+
+/**
+ * Isolate assertions from ambient reviewer configuration: both vars are cleared
+ * (then optionally overridden) and restored so the result cannot depend on the
+ * shell the test happens to run in.
+ */
+function withCleanReviewerEnv(
+  run: () => void,
+  overrides: Partial<Record<ReviewerEnvKey, string>> = {},
+): void {
+  const previous = new Map<ReviewerEnvKey, string | undefined>();
+  for (const key of REVIEWER_ENV_KEYS) {
+    previous.set(key, process.env[key]);
+    delete process.env[key];
+  }
+  for (const [key, value] of Object.entries(overrides)) process.env[key] = value;
+  try {
+    run();
+  } finally {
+    for (const key of REVIEWER_ENV_KEYS) {
+      const prev = previous.get(key);
+      if (prev === undefined) delete process.env[key];
+      else process.env[key] = prev;
+    }
+  }
+}
+
 test('default legacy reviewer scope is allowed without opt-in', () => {
   assert.doesNotThrow(() => assertReviewerScopeAllowed(DEFAULT_MODEL, DEFAULT_PROVIDER, {}));
-  assert.doesNotThrow(() => createLiveIndependentReviewProvider({ projectRoot: '/tmp' }));
+  withCleanReviewerEnv(() => {
+    assert.doesNotThrow(() => createLiveIndependentReviewProvider({ projectRoot: '/tmp' }));
+  });
 });
 
 test('claude/anthropic reviewer model or provider requires explicit opt-in', () => {
@@ -32,17 +63,16 @@ test('claude/anthropic reviewer model or provider requires explicit opt-in', () 
 });
 
 test('factory refuses an external reviewer unless explicitly opted in', () => {
-  const previous = process.env[EXTERNAL_REVIEWER_OPT_IN_ENV];
-  try {
-    delete process.env[EXTERNAL_REVIEWER_OPT_IN_ENV];
+  withCleanReviewerEnv(() => {
     assert.throws(
       () => createLiveIndependentReviewProvider({ projectRoot: '/tmp', reviewerModel: 'claude-opus' }),
       ExternalReviewerNotAllowedError,
     );
-    process.env[EXTERNAL_REVIEWER_OPT_IN_ENV] = '1';
-    assert.doesNotThrow(() => createLiveIndependentReviewProvider({ projectRoot: '/tmp', reviewerModel: 'claude-opus' }));
-  } finally {
-    if (previous === undefined) delete process.env[EXTERNAL_REVIEWER_OPT_IN_ENV];
-    else process.env[EXTERNAL_REVIEWER_OPT_IN_ENV] = previous;
-  }
+  });
+  withCleanReviewerEnv(
+    () => {
+      assert.doesNotThrow(() => createLiveIndependentReviewProvider({ projectRoot: '/tmp', reviewerModel: 'claude-opus' }));
+    },
+    { [EXTERNAL_REVIEWER_OPT_IN_ENV]: '1' },
+  );
 });
