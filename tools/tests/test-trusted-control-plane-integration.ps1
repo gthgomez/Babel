@@ -7,8 +7,8 @@
 # executable so no network access is needed.
 #
 # Coverage:
-#   1. RED control-plane change + two controller-owned reviews -> audit passes
-#   2. one review cannot satisfy RED evidence
+#   1. RED control-plane change + controller-owned reviews -> audit passes
+#   2. one exact Babel chat review satisfies every mergeable lane
 #   3. missing review evidence blocks deterministically
 #   4. dirty candidate worktree blocks
 [CmdletBinding()]
@@ -291,7 +291,7 @@ exit 0
     if ($run.exitCode -ne 0) { throw "Transported evidence did not pass gate: $($run.result.blockers -join ',')" }
   }
 
-  # 1. positive: base-derived RED change with two controller-owned reviews.
+  # 1. positive: base-derived RED change with controller-owned reviews.
   Invoke-Step 'red-controller-reviews-pass' {
     $run = Invoke-Gate -Label 'positive' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath }
     if ($run.exitCode -ne 0) { throw "exit=$($run.exitCode) blockers=$($run.result.blockers -join ',')" }
@@ -299,7 +299,7 @@ exit 0
     if ($run.result.reviewPolicy.effectiveRiskLane -ne $CandidateLane) { throw "unexpected lane: $($run.result.reviewPolicy.effectiveRiskLane)" }
     $minimum = 1
     if (-not $run.result.reviewPolicy.independentReviewRequired -or $run.result.reviewPolicy.minimumIndependentReviewCount -ne $minimum) { throw 'Every PR must require proportionate independent chat review.' }
-    if ($run.result.reviewPolicy.observedIndependentReviewCount -ne 2) { throw 'two independent reviews were not observed' }
+    if ($run.result.reviewPolicy.observedIndependentReviewCount -ne 2) { throw 'the positive fixture must retain both valid reviews' }
   }
 
   foreach ($installationCase in @(
