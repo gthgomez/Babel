@@ -10,7 +10,8 @@ import type { HostReviewCandidate, HostReviewHandoffV2 } from './hostReviewContr
 // Leave a one-hour publication/check margin inside the base gate's 24h policy.
 export const REVIEW_FRESH_MS = 23 * 60 * 60 * 1000
 // Child lease must outlive the child's wall (BABEL_CHAT_MAX_WALL_MS in
-// babelReviewChild.ts, currently 50 min) so a live child never looks stale.
+// babelReviewChild.ts: 12 min for reviews, 50 min for repair proposals) so a
+// live child never looks stale.
 export const REVIEW_CHILD_LEASE_MS = 60 * 60 * 1000
 const text = z.string().min(1).refine(v => v.trim().toLowerCase() !== 'unknown')
 const digest = z.string().regex(/^[a-f0-9]{64}$/)
@@ -21,6 +22,7 @@ const toolTraces = z.array(z.object({
   targetPath: z.string().optional(),
   args: z.record(z.string(), z.unknown()).optional(),
 }).strict()).optional()
+const provenance = z.enum(['LOCAL_UNAUTHENTICATED', 'TRUSTED_CONTROLLER_EVIDENCE', 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'])
 const evidence = z.object({
   schema_version: z.literal(2), kind: z.literal('autonomous_review_evidence_v2'), repository: text, pr_number: z.number().int().positive(),
   base_sha: sha, head_sha: sha, task_id: text, task_hash: digest, builder_id: text, diff_numstat_digest: digest,
@@ -28,6 +30,10 @@ const evidence = z.object({
   review_provider: z.literal('opencode-go'), reviewer_model: text, review_mode: z.literal('exact_diff'), reviewed_at: text,
   scope: z.array(text).min(1), verdict: z.enum(['APPROVE', 'BLOCK']), findings: z.array(z.string()), blocking_findings: z.array(z.string()),
   isolation: z.object({ mode: z.literal('readonly_sandbox'), candidate_write: z.literal(false), github_mutation: z.literal(false), merge: z.literal(false), controller_state_access: z.literal(false) }).strict(),
+  // Controller-stamped provenance (ReviewEvidenceProvenance). Host caches keep
+  // it; publication strips it because the trusted gate's evidence contract
+  // derives provenance from the authenticated comment transport itself.
+  provenance: provenance.optional(),
   usage: usage.optional(),
   // Host-side provenance emitted by the review controller. These stay in the
   // host cache but are stripped before publication: the trusted gate's
@@ -37,9 +43,26 @@ const evidence = z.object({
   harness: z.object({ name: z.literal('babel'), mode: z.literal('chat'), version: digest, source_sha: sha, execution_id: text }).strict(),
 }).strict()
 const handoffSchema = z.object({
-  schema_version: z.literal(2), kind: z.literal('host_review_handoff_v2'), repository: text, pr_number: z.number().int().positive(),
+  schema_version: z.literal(2), kind: z.literal('host_review_handoff_v2'), provenance: provenance.optional(), repository: text, pr_number: z.number().int().positive(),
   base_sha: sha, head_sha: sha, task_id: text, task_hash: digest, controller_run_id: text, reviews: z.tuple([evidence]),
 }).strict()
+
+/** Project a private handoff to the gate-admissible body. The controller-stamped
+ *  provenance label and host-private diagnostics never leave the host: the
+ *  trusted gate derives provenance from the authenticated comment transport,
+ *  and rejects unknown fields. */
+export function publicBabelReviewHandoff(handoff: HostReviewHandoffV2, legacy: boolean): Record<string, unknown> {
+  const { provenance: _handoffProvenance, ...rest } = handoff as unknown as Record<string, unknown>
+  const reviews = handoff.reviews.map((review) => {
+    const { tool_traces: _traces, changes_diff_fully_read: _covered, provenance: _reviewProvenance, ...reviewRest } = review as unknown as Record<string, unknown>
+    if (legacy) {
+      const { harness: _harness, ...legacyRest } = reviewRest
+      return legacyRest
+    }
+    return reviewRest
+  })
+  return { ...rest, reviews }
+}
 
 /** Validate cached evidence with the same complete candidate contract as a fresh launch. */
 export function validateBabelReviewCache(value: unknown, expected: { candidate: HostReviewCandidate; model: string; round: string; version: string; sourceSha: string; now?: number }): HostReviewHandoffV2 {
@@ -112,7 +135,8 @@ export function findPublishedBabelReview(comments: unknown[], ownerId: number, b
   return null
 }
 
-type ReviewLease = { token: string; pid: number; processIdentity?: string; startedAt: number; child?: { pid: number | null; processIdentity?: string; deadline: number; executionId: string } }
+type ReviewChild = { pid: number | null; processIdentity?: string; deadline: number; executionId: string }
+type ReviewLease = { token: string; pid: number; processIdentity?: string; startedAt: number; children?: ReviewChild[]; child?: ReviewChild }
 /** Unknown process state is live: never duplicate a paid worker on an inconclusive probe. */
 export function reviewProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid < 1) return false
@@ -136,7 +160,7 @@ export function reviewProcessIdentity(pid: number): string | undefined {
 }
 
 /** Publish an initialized exclusive lease; conservatively reconcile interrupted child ownership. */
-export function acquireBabelReviewLease(path: string, isAlive = reviewProcessAlive, now = Date.now(), identity = isAlive === reviewProcessAlive ? reviewProcessIdentity : (_pid: number): string | undefined => undefined): { child: (pid: number | null, executionId: string) => void; childExited: () => void; release: () => void } | null {
+export function acquireBabelReviewLease(path: string, isAlive = reviewProcessAlive, now = Date.now(), identity = isAlive === reviewProcessAlive ? reviewProcessIdentity : (_pid: number): string | undefined => undefined): { child: (pid: number | null, executionId: string) => void; childExited: (executionId: string) => void; release: () => void } | null {
   const sameProcess = (pid: number, expected?: string) => {
     if (!isAlive(pid)) return false
     const actual = expected ? identity(pid) : undefined
@@ -146,7 +170,10 @@ export function acquireBabelReviewLease(path: string, isAlive = reviewProcessAli
     const before = lstatSync(path)
     let prior: ReviewLease | undefined
     try { prior = JSON.parse(readFileSync(path, 'utf8')) as ReviewLease } catch { /* interrupted legacy empty lock */ }
-    if (prior && (sameProcess(prior.pid, prior.processIdentity) || (prior.child && (prior.child.pid ? sameProcess(prior.child.pid, prior.child.processIdentity) : now < prior.child.deadline)))) return null
+    // `child` is the legacy single-child shape; `children` tracks the parallel
+    // review children this controller may now own at once.
+    const priorChildren: ReviewChild[] = prior ? [...(prior.children ?? []), ...(prior.child ? [prior.child] : [])] : []
+    if (prior && (sameProcess(prior.pid, prior.processIdentity) || priorChildren.some(child => child.pid ? sameProcess(child.pid, child.processIdentity) : now < child.deadline))) return null
     if (!prior && now - lstatSync(path).mtimeMs < REVIEW_CHILD_LEASE_MS) return null
     // A stale lease is quarantined, not deleted. A later scan acquires the job;
     // recovery never starts a paid child in the same sweep as reclamation.
@@ -166,8 +193,13 @@ export function acquireBabelReviewLease(path: string, isAlive = reviewProcessAli
   const owns = () => { try { return (JSON.parse(readFileSync(path, 'utf8')) as ReviewLease).token === lease.token } catch { return false } }
   const save = () => { if (!owns()) throw new Error('REVIEW_LEASE_LOST'); atomicReviewJson(path, lease) }
   return {
-    child(pid, executionId) { const processIdentity = pid ? identity(pid) : undefined; lease.child = { pid, executionId, deadline: Date.now() + REVIEW_CHILD_LEASE_MS, ...(processIdentity ? { processIdentity } : {}) }; save() },
-    childExited() { delete lease.child; save() },
-    release() { if (owns() && !lease.child) unlinkSync(path) },
+    child(pid, executionId) {
+      const processIdentity = pid ? identity(pid) : undefined
+      lease.children = [...(lease.children ?? []).filter(existing => existing.executionId !== executionId), { pid, executionId, deadline: Date.now() + REVIEW_CHILD_LEASE_MS, ...(processIdentity ? { processIdentity } : {}) }]
+      delete lease.child
+      save()
+    },
+    childExited(executionId) { lease.children = (lease.children ?? []).filter(existing => existing.executionId !== executionId); delete lease.child; save() },
+    release() { if (owns() && !lease.children?.length && !lease.child) unlinkSync(path) },
   }
 }

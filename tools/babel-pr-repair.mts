@@ -95,7 +95,7 @@ try {
       }
       const run = cached
         ? { exitCode: 0, timedOut: false, artifact: JSON.parse(readFileSync(output, 'utf8')) as Record<string, unknown> }
-        : await launchBabelReviewChild({ source: snapshot.root, trustedRoot, output, runs: join(directory, 'runs'), model: 'deepseek-v4-flash', purpose: 'repair_proposal', worker: join(trustedRoot, 'tools/babel-chat-review-worker.mts'), tsx: join(trustedRoot, 'babel-cli/node_modules/tsx/dist/cli.mjs'), onSpawn: pid => lease.child(pid, snapshot.id), onExit: () => lease.childExited() })
+        : await launchBabelReviewChild({ source: snapshot.root, trustedRoot, output, runs: join(directory, 'runs'), model: 'deepseek-v4-flash', purpose: 'repair_proposal', worker: join(trustedRoot, 'tools/babel-chat-review-worker.mts'), tsx: join(trustedRoot, 'babel-cli/node_modules/tsx/dist/cli.mjs'), onSpawn: pid => lease.child(pid, snapshot.id), onExit: () => lease.childExited(snapshot.id) })
       const execution = JSON.parse(readFileSync(join(directory, 'execution.json'), 'utf8')) as { harness: unknown; execution_id: string; base: string; head: string }
       if (JSON.stringify(execution.harness) !== JSON.stringify(harness) || execution.execution_id !== snapshot.id || execution.base !== handoff.base_sha || execution.head !== handoff.head_sha) throw new Error('REPAIR_EXECUTION_PROVENANCE_MISMATCH')
       const artifact = run.artifact

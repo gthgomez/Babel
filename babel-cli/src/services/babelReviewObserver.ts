@@ -4,6 +4,24 @@ import type { ProviderMessage, ToolDefinition, ToolStreamEvent, RunnerCallbacks,
 import type { ZodType } from 'zod';
 import { randomUUID } from 'node:crypto';
 
+/**
+ * Compile-time per-inference output budget for review children. A full-diff
+ * verdict (plus any streamed reasoning the provider adds despite the disabled
+ * thinking profile) legitimately exceeds 8k completions; an exhausted budget
+ * truncates the final answer and discards the whole paid review. Single source
+ * of truth so the request body and the advertised model policy cannot drift.
+ */
+export const REVIEW_OUTPUT_TOKEN_BUDGET = 32768;
+/**
+ * Native-response buffer bounds for one review inference. The byte bound is the
+ * memory limit and is sized well above any full-length answer. The event count
+ * is only a runaway guard, deliberately far above the byte bound at the
+ * smallest plausible event size, so the output budget -- not a buffer guard --
+ * is the practical truncation limit.
+ */
+export const REVIEW_NATIVE_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
+export const REVIEW_NATIVE_BUFFER_MAX_EVENTS = 1_000_000;
+
 type ReviewInvocationMetadata = RunnerInvocationMetadata & {
   requested_thinking?: { type: 'disabled' };
   thinking_mode_evidence?: 'request_only_not_upstream_confirmed';
@@ -21,11 +39,11 @@ export function validateBabelReviewCalls(calls: unknown, model: string): void {
         call.metadata?.provider === 'opencode-go' && (call.metadata.observed_model_id === null || call.metadata.observed_model_id === model) && next?.path === 'native_tools' && next.request_id === call.request_id && next.attempt === 2 && next.status === 'completed' && next.metadata?.observed_model_id === model && next.metadata.provider === 'opencode-go') continue;
     // Surface the provider's own finish attribution so harness-policy failures
     // (e.g. output budget exhaustion) are diagnosable from the failure code.
-    // The suffix stays ALL-CAPS so the worker's failure-code passthrough keeps
-    // the base code visible.
+    // This is the first call that failed validation; the suffix stays ALL-CAPS
+    // so the worker's failure-code passthrough keeps the base code visible.
     const metadata = call?.metadata as { normalized_finish_reason?: string } | null | undefined;
     const finish = (metadata?.normalized_finish_reason ?? '').replace(/[^A-Z0-9]/gi, '_');
-    throw new Error(finish ? `CHAT_REVIEW_ATTRIBUTION_INCOMPLETE_LAST_CALL_${finish}` : 'CHAT_REVIEW_ATTRIBUTION_INCOMPLETE');
+    throw new Error(finish ? `CHAT_REVIEW_ATTRIBUTION_INCOMPLETE_INVALID_CALL_${finish}` : 'CHAT_REVIEW_ATTRIBUTION_INCOMPLETE');
   }
 }
 
@@ -38,10 +56,7 @@ export function parseObservedBabelReviewAnswer<T>(calls: unknown, model: string,
 /** Observe every inference entrypoint, including failed and non-native calls. */
 export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
   constructor(private readonly reviewModel: OpenCodeGoModel, private readonly record: (call: BabelReviewCall) => void, options: OpenCodeGoRunnerOptions = {}) {
-    // 32k output: a full-diff review verdict (findings + reviewed files) on a
-    // large PR legitimately exceeds 8k completions; an exhausted output budget
-    // truncated the final answer and wasted the whole paid review child.
-    super(reviewModel, { maxTokens: 32768, temperature: 0 }, options);
+    super(reviewModel, { maxTokens: REVIEW_OUTPUT_TOKEN_BUDGET, temperature: 0 }, options);
   }
   protected override getRequestBodyExtras(): Record<string, unknown> {
     const extras = super.getRequestBodyExtras();
@@ -92,7 +107,7 @@ export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
           signal?.throwIfAborted();
           if (failure) continue;
           bufferedBytes += Buffer.byteLength(JSON.stringify(event));
-          if (bufferedBytes > 4 * 1024 * 1024 || buffered.length >= 32768) throw new Error('CHAT_REVIEW_NATIVE_BUFFER_LIMIT');
+          if (bufferedBytes > REVIEW_NATIVE_BUFFER_MAX_BYTES || buffered.length >= REVIEW_NATIVE_BUFFER_MAX_EVENTS) throw new Error('CHAT_REVIEW_NATIVE_BUFFER_LIMIT');
           buffered.push(event);
         }
         // Drain error events instead of breaking: provider metadata and model

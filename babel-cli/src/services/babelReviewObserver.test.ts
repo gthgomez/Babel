@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import type { ToolStreamEvent } from '../runners/base.js';
 import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
-import { ObservedBabelReviewRunner, parseObservedBabelReviewAnswer, validateBabelReviewCalls, type BabelReviewCall } from './babelReviewObserver.js';
+import { ObservedBabelReviewRunner, parseObservedBabelReviewAnswer, validateBabelReviewCalls, REVIEW_OUTPUT_TOKEN_BUDGET, REVIEW_NATIVE_BUFFER_MAX_BYTES, type BabelReviewCall } from './babelReviewObserver.js';
+import { babelReviewModelPolicy } from './babelChatReview.js';
 
 test('review telemetry covers all inference paths and records provider failures', async () => {
   const original = globalThis.fetch; const calls: BabelReviewCall[] = [];
@@ -212,11 +213,41 @@ test('abort or consumer return during validated replay retains usage but never c
 test('oversized native buffers fail closed without delivering content or retrying', async () => {
   const original = globalThis.fetch; const calls: BabelReviewCall[] = []; const events: ToolStreamEvent[] = []; let requests = 0;
   const runner = new ObservedBabelReviewRunner('mimo-v2.5', call => calls.push(call), { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
-  globalThis.fetch = async () => { requests++; return nativeResponse('x'.repeat(4 * 1024 * 1024), true); };
+  globalThis.fetch = async () => { requests++; return nativeResponse('x'.repeat(REVIEW_NATIVE_BUFFER_MAX_BYTES), true); };
   try {
     await assert.rejects(async () => { for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'test' }], [])) events.push(event); }, /CHAT_REVIEW_NATIVE_BUFFER_LIMIT/);
     assert.equal(requests, 1); assert.deepEqual(events, []); assert.equal(calls[0]?.status, 'failed');
     assert.equal(calls[0]?.retry_reason, undefined);
+  } finally { globalThis.fetch = original; }
+});
+
+test('a full-length streamed answer is not rejected by the buffer event guard', async () => {
+  const original = globalThis.fetch; const calls: BabelReviewCall[] = []; let requests = 0;
+  const runner = new ObservedBabelReviewRunner('mimo-v2.5', call => calls.push(call), { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
+  // The pre-fix event guard capped buffered events at 32768, a value that
+  // collided with the raised token budget, so a long but legitimate answer
+  // could fail as an oversized buffer. Deliver more events than that old cap
+  // but far fewer bytes than the byte bound.
+  const chunks = 40000;
+  globalThis.fetch = async () => {
+    requests++;
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        for (let i = 0; i < chunks; i++) controller.enqueue(encoder.encode(`data: ${JSON.stringify({ model: 'mimo-v2.5', choices: [{ delta: { content: 'x' } }] })}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ model: 'mimo-v2.5', choices: [{ delta: { content: 'y' }, finish_reason: 'stop' }] })}\n\n`));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    }));
+  };
+  try {
+    const events: ToolStreamEvent[] = [];
+    for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'review' }], [])) events.push(event);
+    assert.equal(requests, 1);
+    assert.ok(events.filter(event => event.type === 'text_delta').length >= chunks);
+    assert.equal(events.some(event => event.type === 'error'), false);
+    assert.equal(calls[0]?.status, 'completed');
   } finally { globalThis.fetch = original; }
 });
 
@@ -239,16 +270,18 @@ test('reviewer requests the explicit non-thinking profile for every canonical mo
       assert.deepEqual(calls.map(call => call.path), ['structured', 'raw', 'raw_stream', 'native_tools']);
       assert.equal(bodies.length, 4);
       for (const body of bodies) {
-        assert.equal(body.model, model); assert.equal(body.max_tokens, 32768); assert.equal(body.temperature, 0);
+        assert.equal(body.model, model); assert.equal(body.max_tokens, REVIEW_OUTPUT_TOKEN_BUDGET); assert.equal(body.temperature, 0);
         assert.deepEqual(body.thinking, { type: 'disabled' });
       }
+      // The advertised model policy must not drift from the requested budget.
+      assert.equal(babelReviewModelPolicy(model, 'trusted-installation').maxOutputTokens, REVIEW_OUTPUT_TOKEN_BUDGET);
       for (const call of calls) {
         assert.equal(call.metadata?.provider, 'opencode-go'); assert.equal(call.metadata?.observed_model_id, model);
         assert.deepEqual(call.metadata?.requested_thinking, { type: 'disabled' });
         assert.equal(call.metadata?.thinking_disabled_reason, model === 'longcat-2.0' ? 'reviewer_observed_reasoning_only_output_exhaustion' : 'reviewer_missing_reasoning_content_replay');
         assert.equal(call.metadata?.thinking_mode_evidence, 'request_only_not_upstream_confirmed');
       }
-      const transport = new OpenCodeGoApiRunner(model, { maxTokens: 32768, temperature: 0 }, { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
+      const transport = new OpenCodeGoApiRunner(model, { maxTokens: REVIEW_OUTPUT_TOKEN_BUDGET, temperature: 0 }, { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
       await transport.executeRaw('test');
       assert.equal(Object.hasOwn(bodies[4]!, 'thinking'), false, 'ordinary transport defaults must remain unchanged');
     }
@@ -279,7 +312,8 @@ test('invalid native finishes and empty finals withhold all content and cannot r
         try { parseObservedBabelReviewAnswer(calls, model, () => { parses++; return JSON.parse('OK'); }); }
         catch (error) { if (error instanceof SyntaxError) formatRepairs++; }
         assert.equal(parses, 0); assert.equal(formatRepairs, 0);
-        assert.throws(() => parseObservedBabelReviewAnswer(calls, model, () => JSON.parse(validLookingVerdict)), /CHAT_REVIEW_ATTRIBUTION_INCOMPLETE/);
+        assert.throws(() => parseObservedBabelReviewAnswer(calls, model, () => JSON.parse(validLookingVerdict)), { message: /^CHAT_REVIEW_ATTRIBUTION_INCOMPLETE(_INVALID_CALL_[A-Z_]+)?$/ });
+        if (finish === 'length') assert.throws(() => parseObservedBabelReviewAnswer(calls, model, () => JSON.parse(validLookingVerdict)), { message: /^CHAT_REVIEW_ATTRIBUTION_INCOMPLETE_INVALID_CALL_OUTPUT_BUDGET_EXHAUSTED$/ });
       }
     }
   } finally { globalThis.fetch = original; }

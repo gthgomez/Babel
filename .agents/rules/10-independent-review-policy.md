@@ -10,6 +10,17 @@ review. A second perspective remains an explicit escalation. BLACK remains an
 owner-decision boundary. Required CI,
 resolved review threads, and immutable-base merge evaluation still apply.
 
+**Gate identity.** The merge gate requires a Babel chat review executed on
+OpenCode Go: gate evidence declares `review_provider: "opencode-go"` with a
+`babel`/`chat` harness. Any evidence that claims the Babel chat harness must name
+`opencode-go` as its provider, so the low-level validator fails closed on any
+other provider; the merge gate additionally fails closed on a missing harness.
+Claude Code is a benchmark-only comparison arm — it may inform
+research and comparisons but can never satisfy the independent-review gate or
+substitute for the Babel reviewer. The reviewer credential is Babel-native
+(`~/.config/babel/get-auth-token.js`, overridable with
+`BABEL_OPENCODE_GO_HELPER`); the `~/.claude` helper is a deprecated fallback only.
+
 Use the trusted host controller described in
 [`docs/BABEL_PR_REVIEW.md`](../../docs/BABEL_PR_REVIEW.md). It invokes the actual
 Babel chat harness with source-reading tools in a fresh child context. A direct

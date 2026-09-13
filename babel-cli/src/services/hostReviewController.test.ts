@@ -7,6 +7,7 @@ import {
   type HostReviewExecutionRequest,
   type HostReviewExecutionResult,
 } from './hostReviewController.js'
+import { validateBabelReviewCache } from './babelReviewQueue.js'
 
 const candidate: HostReviewCandidate = {
   repository: 'gthgomez/Babel',
@@ -68,6 +69,33 @@ describe('hostReviewController', () => {
     assert.equal(handoff.reviews[0].diff_numstat_digest, candidate.diff_numstat_digest)
     assert.equal(handoff.reviews[0].execution_id, 'controller-id-2')
     assert.equal(handoff.reviews[0].review_provider, 'claude-code')
+  })
+
+  it('stamps controller provenance the strict cache validator admits at both levels', async () => {
+    const version = 'e'.repeat(64)
+    const sourceSha = 'f'.repeat(40)
+    const controller = createHostReviewController({
+      controller_id: 'host-controller:primary',
+      create_id: createIdFactory(),
+      isolation_mode: 'readonly_sandbox',
+      adapter: { launch: async (request) => result(request, {
+        reviewer_id: `babel-chat-mimo-v2.5-${request.execution_id}`,
+        review_provider: 'opencode-go',
+        reviewer_model: 'mimo-v2.5',
+        isolation: { mode: 'readonly_sandbox', candidate_write: false, github_mutation: false, merge: false, controller_state_access: false },
+        harness: { name: 'babel', mode: 'chat', version, source_sha: sourceSha, execution_id: request.execution_id },
+      }) },
+    })
+
+    const handoff = await controller.review(candidate)
+    // This is the exact regression: the controller stamps provenance on the
+    // handoff and on each review, and the strict queue/cache schema must admit
+    // both, or every fresh review round dies after the paid child completes.
+    assert.equal(handoff.provenance, 'TRUSTED_CONTROLLER_EVIDENCE')
+    assert.equal(handoff.reviews[0].provenance, 'TRUSTED_CONTROLLER_EVIDENCE')
+    const validated = validateBabelReviewCache(handoff, { candidate, model: 'mimo-v2.5', round: 'controller-id-1', version, sourceSha })
+    assert.equal(validated.provenance, 'TRUSTED_CONTROLLER_EVIDENCE')
+    assert.equal(validated.reviews[0].provenance, 'TRUSTED_CONTROLLER_EVIDENCE')
   })
 
   it('rejects a fabricated result from another controller or execution', async () => {

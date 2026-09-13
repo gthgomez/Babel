@@ -3,7 +3,7 @@ import test from 'node:test'
 import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { acquireBabelReviewLease, atomicReviewJson, babelReviewVersion, findPublishedBabelReview, REVIEW_CHILD_LEASE_MS, REVIEW_FRESH_MS, validateBabelReviewArtifact, validateBabelReviewCache } from './babelReviewQueue.js'
+import { acquireBabelReviewLease, atomicReviewJson, babelReviewVersion, findPublishedBabelReview, publicBabelReviewHandoff, REVIEW_CHILD_LEASE_MS, REVIEW_FRESH_MS, validateBabelReviewArtifact, validateBabelReviewCache } from './babelReviewQueue.js'
 import type { HostReviewCandidate } from './hostReviewController.js'
 
 const now = Date.now()
@@ -35,6 +35,19 @@ test('cache admits only a fresh full candidate and trusted harness execution', (
   const stale = changed(); stale.reviews[0]!.reviewed_at = new Date(now - REVIEW_FRESH_MS).toISOString()
   for (const invalid of [wrongSha, wrongScope, writable, wrongHarness, wrongRound, unknownModel, future, stale]) assert.throws(() => validateBabelReviewCache(invalid, expected))
   assert.throws(() => validateBabelReviewCache(cache(), { ...expected, version: '0'.repeat(64) }))
+})
+
+test('merge gate requires a Babel chat review on OpenCode Go: a Claude Code reviewer cannot satisfy it', () => {
+  // The merge gate accepts only Babel chat evidence. A structurally complete
+  // review that claims the Claude Code benchmark arm as its provider fails closed.
+  const claudeProvider = cache()
+  claudeProvider.reviews[0]!.review_provider = 'claude-code'
+  assert.throws(() => validateBabelReviewCache(claudeProvider, expected))
+
+  // A review without the Babel chat harness block is not gate evidence either.
+  const missingHarness = cache() as Record<string, unknown>
+  delete (missingHarness.reviews as Array<Record<string, unknown>>)[0]!.harness
+  assert.throws(() => validateBabelReviewCache(missingHarness, expected))
 })
 
 test('a completed BLOCK remains BLOCK and cannot carry forged approval findings', () => {
@@ -90,7 +103,21 @@ test('atomic JSON keeps a parseable current checkpoint and exclusive initialized
   first.child(123456, executionId)
   first.release()
   assert.equal(existsSync(lock), true) // never remove evidence of a possibly active child
-  first.childExited(); first.release()
+  first.childExited(executionId); first.release()
+  assert.equal(existsSync(lock), false)
+})
+
+test('parallel review children are tracked independently and hold the lease until all exit', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-review-parallel-')); const lock = join(root, 'running.lock')
+  const second = '22345678-1234-1234-1234-123456789abc'
+  const lease = acquireBabelReviewLease(lock)
+  assert.ok(lease)
+  lease.child(null, executionId)
+  lease.child(null, second)
+  assert.equal(acquireBabelReviewLease(lock, () => false), null)
+  lease.childExited(executionId); lease.release()
+  assert.equal(existsSync(lock), true) // the second reviewer is still running
+  lease.childExited(second); lease.release()
   assert.equal(existsSync(lock), false)
 })
 
@@ -145,4 +172,43 @@ test('cache admits controller-emitted host provenance fields (schema-drift regre
   const withUnknown = withProvenance() as { reviews: Array<Record<string, unknown>> }
   withUnknown.reviews[0]!['controller_secret'] = 'x'
   assert.throws(() => validateBabelReviewCache(withUnknown, expected))
+})
+
+test('cache admits controller-stamped provenance on the handoff and each review (post-#157 schema drift)', () => {
+  const withProvenance = () => {
+    const value = cache() as Record<string, unknown>
+    value['provenance'] = 'TRUSTED_CONTROLLER_EVIDENCE'
+    ;(value.reviews as Array<Record<string, unknown>>)[0]!.provenance = 'TRUSTED_CONTROLLER_EVIDENCE'
+    return value
+  }
+  const validated = validateBabelReviewCache(withProvenance(), expected)
+  assert.equal(validated.provenance, 'TRUSTED_CONTROLLER_EVIDENCE')
+  assert.equal(validated.reviews[0].provenance, 'TRUSTED_CONTROLLER_EVIDENCE')
+  // Unknown values at either level still fail closed.
+  const badReview = withProvenance() as { reviews: Array<Record<string, unknown>> }
+  badReview.reviews[0]!.provenance = 'SELF_DECLARED'
+  assert.throws(() => validateBabelReviewCache(badReview, expected))
+  const badHandoff = withProvenance()
+  badHandoff['provenance'] = 'SELF_DECLARED'
+  assert.throws(() => validateBabelReviewCache(badHandoff, expected))
+})
+
+test('publication strips controller provenance and host-private diagnostics at both levels', () => {
+  const value = cache() as Record<string, unknown>
+  value['provenance'] = 'TRUSTED_CONTROLLER_EVIDENCE'
+  const review = (value.reviews as Array<Record<string, unknown>>)[0]!
+  review.provenance = 'TRUSTED_CONTROLLER_EVIDENCE'
+  review.tool_traces = [{ tool: 'read_file' }]
+  review.changes_diff_fully_read = true
+  const handoff = validateBabelReviewCache(value, expected)
+  const published = publicBabelReviewHandoff(handoff, false)
+  assert.equal('provenance' in published, false)
+  const publishedReview = (published.reviews as Array<Record<string, unknown>>)[0]!
+  assert.equal('provenance' in publishedReview, false)
+  assert.equal('tool_traces' in publishedReview, false)
+  assert.equal('changes_diff_fully_read' in publishedReview, false)
+  assert.ok('harness' in publishedReview)
+  // The legacy transport also drops the harness provenance block.
+  const legacyReview = (publicBabelReviewHandoff(handoff, true).reviews as Array<Record<string, unknown>>)[0]!
+  assert.equal('harness' in legacyReview, false)
 })
