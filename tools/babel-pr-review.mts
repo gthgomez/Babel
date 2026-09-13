@@ -2,7 +2,7 @@
 // --repo-root <clone> --state-dir <private non-Git directory>
 // (--pr <number> | --all) [--task <owner task file>] [--publish] [--legacy-evidence]
 import { execFileSync } from 'node:child_process'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { collectBabelReviewSnapshot, assertReviewStateOutsideGit, secretRiskReviewPath, safeReviewPath } from '../babel-cli/src/services/babelReviewSnapshot.js'
@@ -110,11 +110,8 @@ for (const number of prs) {
     jobDir = assertReviewStateOutsideGit(join(state, 'jobs', key))
     lease = acquireBabelReviewLease(join(jobDir, 'running.lock'))
     if (!lease) { console.log(JSON.stringify({ pr: number, status: 'running_or_recovering', job: key })); continue }
-    // The fast default is one independently bound MiMo review. Keep the
-    // bounded controller structure so an explicit second perspective can use
-    // the same child lifecycle without making every ordinary PR wait for it.
-    const snapshot = collectBabelReviewSnapshot({ repoRoot, base: pr.baseRefOid, head: pr.headRefOid, state, task })
-    if (snapshot.numstatDigest !== candidate.diff_numstat_digest || JSON.stringify(snapshot.scope) !== JSON.stringify(scope)) throw new Error('SNAPSHOT_SCOPE_MISMATCH')
+    // MiMo is the independently bound fast default. Its snapshot remains
+    // isolated from its execution and artifact identifiers.
     const settled = await Promise.allSettled(['mimo-v2.5'].map(async (model): Promise<HostReviewHandoffV2> => {
       const cachedPath = join(jobDir!, model + '-handoff.json')
       if (existsSync(cachedPath)) {
@@ -131,10 +128,11 @@ for (const number of prs) {
           atomicReviewJson(join(jobDir!, `${model}-cache-rejected.json`), { at: new Date().toISOString(), status: 'cache_rejected' })
         }
       }
-      const executionId = randomUUID()
-      const output = join(jobDir!, `${model}-${executionId}.json`)
+      const snapshot = collectBabelReviewSnapshot({ repoRoot, base: pr.baseRefOid, head: pr.headRefOid, state, task })
+      if (snapshot.numstatDigest !== candidate.diff_numstat_digest || JSON.stringify(snapshot.scope) !== JSON.stringify(scope)) throw new Error('SNAPSHOT_SCOPE_MISMATCH')
+      const output = join(jobDir!, `${model}-${snapshot.id}.json`)
       let idIndex = 0
-      const controller = createHostReviewController({ controller_id: 'babel-chat-pr-review', create_id: () => idIndex++ === 0 ? key : executionId, isolation_mode: 'readonly_sandbox', adapter: {
+      const controller = createHostReviewController({ controller_id: 'babel-chat-pr-review', create_id: () => idIndex++ === 0 ? key : snapshot.id, isolation_mode: 'readonly_sandbox', adapter: {
         async launch(request): Promise<HostReviewExecutionResult> {
           lease!.child(null, request.execution_id)
           const run = await launchBabelReviewChild({ source: snapshot.root, trustedRoot, output, runs: join(jobDir!, 'runs'), model, worker: join(trustedRoot, 'tools/babel-chat-review-worker.mts'), tsx: join(trustedRoot, 'babel-cli/node_modules/tsx/dist/cli.mjs'), onSpawn: pid => lease!.child(pid, request.execution_id), onExit: () => lease!.childExited(request.execution_id) })
