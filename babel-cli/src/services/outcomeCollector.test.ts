@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   collectGitHubPRState,
   detectPostMergeRegression,
@@ -55,6 +56,31 @@ test('outcomeCollector: collectGitHubPRState parses PR and check runs correctly'
   assert.equal(state.merge_commit_sha, '2222222222222222222222222222222222222222');
   assert.equal(state.checks.length, 2);
   assert.equal(state.overall_ci_verdict, 'PASS');
+});
+
+test('outcomeCollector: malformed headRefOid throws INVALID_HEAD_SHA and prevents check-run API call', () => {
+  let checkRunsCalled = false;
+  const ghMock = (args: string[]) => {
+    if (args.includes('view')) {
+      return JSON.stringify({
+        number: 102,
+        headRefOid: 'malformed-not-a-40-char-hex-sha',
+        baseRefOid: '0000000000000000000000000000000000000000',
+        state: 'OPEN',
+      });
+    }
+    if (args.some((a) => a.includes('check-runs'))) {
+      checkRunsCalled = true;
+      return '{"check_runs":[]}';
+    }
+    return '';
+  };
+
+  assert.throws(
+    () => collectGitHubPRState('org/repo', 102, ghMock),
+    /INVALID_HEAD_SHA: malformed-not-a-40-char-hex-sha/,
+  );
+  assert.equal(checkRunsCalled, false);
 });
 
 test('outcomeCollector: detectPostMergeRegression flags revert and bugfix commits', () => {
@@ -154,7 +180,8 @@ test('outcomeCollector: adjudicateCandidateReview derives True Positives and Fal
     ],
   };
 
-  const outcomeFP = adjudicateCandidateReview({
+  // Clean merge without causal proof must be INCONCLUSIVE / CORRELATED, never naive FP
+  const outcomeCleanMerge = adjudicateCandidateReview({
     candidateDigest,
     prState: prStateMergedClean,
     handoff: handoffWithFalsePositive,
@@ -162,24 +189,14 @@ test('outcomeCollector: adjudicateCandidateReview derives True Positives and Fal
     assumeCleanMergeIsFalsePositive: true,
   });
 
-  assert.equal(outcomeFP.adjudicated_findings.length, 1);
-  assert.equal(outcomeFP.adjudicated_findings[0]!.ground_truth_verdict, 'FALSE_POSITIVE');
-  assert.equal(outcomeFP.flywheel_metrics.false_positives, 1);
-  assert.equal(outcomeFP.flywheel_metrics.true_positives, 0);
-  assert.equal(outcomeFP.flywheel_metrics.precision, 0);
+  assert.equal(outcomeCleanMerge.adjudicated_findings.length, 1);
+  assert.equal(outcomeCleanMerge.adjudicated_findings[0]!.ground_truth_verdict, 'INCONCLUSIVE');
+  assert.equal(outcomeCleanMerge.adjudicated_findings[0]!.evidence_level, 'CORRELATED');
+  assert.equal(outcomeCleanMerge.flywheel_metrics.false_positives, 0);
+  assert.equal(outcomeCleanMerge.flywheel_metrics.true_positives, 0);
 
-  // Default without causal proof must be INCONCLUSIVE, never naive FP
-  const outcomeDefault = adjudicateCandidateReview({
-    candidateDigest,
-    prState: prStateMergedClean,
-    handoff: handoffWithFalsePositive,
-    postMergeRegression: { detected: false, related_commits: [] },
-  });
-  assert.equal(outcomeDefault.adjudicated_findings[0]!.ground_truth_verdict, 'INCONCLUSIVE');
-  assert.equal(outcomeDefault.adjudicated_findings[0]!.evidence_level, 'CORRELATED');
-
-  // Now test with regression detected (True Positive)
-  const outcomeTP = adjudicateCandidateReview({
+  // Generic revert commit without causal linkage must be INCONCLUSIVE / OBSERVED
+  const outcomeGenericRevert = adjudicateCandidateReview({
     candidateDigest,
     prState: prStateMergedClean,
     handoff: handoffWithFalsePositive,
@@ -190,7 +207,50 @@ test('outcomeCollector: adjudicateCandidateReview derives True Positives and Fal
     },
   });
 
+  assert.equal(outcomeGenericRevert.adjudicated_findings[0]!.ground_truth_verdict, 'INCONCLUSIVE');
+  assert.equal(outcomeGenericRevert.adjudicated_findings[0]!.evidence_level, 'OBSERVED');
+  assert.equal(outcomeGenericRevert.flywheel_metrics.true_positives, 0);
+
+  // Verified causal evidence: reproducer passed on head -> FALSE_POSITIVE
+  const findingFingerprint = createHash('sha256').update('Imaginary memory leak in garbage collected runtime'.toLowerCase()).digest('hex');
+  const outcomeFP = adjudicateCandidateReview({
+    candidateDigest,
+    prState: prStateMergedClean,
+    handoff: handoffWithFalsePositive,
+    causalEvidence: {
+      reproducers: [
+        {
+          findingFingerprint,
+          testCommand: 'npm test',
+          passedOnHead: true,
+        },
+      ],
+    },
+  });
+
+  assert.equal(outcomeFP.adjudicated_findings[0]!.ground_truth_verdict, 'FALSE_POSITIVE');
+  assert.equal(outcomeFP.adjudicated_findings[0]!.evidence_level, 'VERIFIED');
+  assert.equal(outcomeFP.flywheel_metrics.false_positives, 1);
+  assert.equal(outcomeFP.flywheel_metrics.precision, 0);
+
+  // Causally verified repair commit -> TRUE_POSITIVE
+  const outcomeTP = adjudicateCandidateReview({
+    candidateDigest,
+    prState: prStateMergedClean,
+    handoff: handoffWithFalsePositive,
+    causalEvidence: {
+      repairCommits: [
+        {
+          findingFingerprint,
+          commitSha: '9'.repeat(40),
+          causallyVerified: true,
+        },
+      ],
+    },
+  });
+
   assert.equal(outcomeTP.adjudicated_findings[0]!.ground_truth_verdict, 'TRUE_POSITIVE');
+  assert.equal(outcomeTP.adjudicated_findings[0]!.evidence_level, 'VERIFIED');
   assert.equal(outcomeTP.flywheel_metrics.true_positives, 1);
   assert.equal(outcomeTP.flywheel_metrics.precision, 1);
 });

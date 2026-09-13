@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CANONICAL_BENCHMARK_FIXTURES,
+  CANONICAL_FIXTURE_SEAL_MANIFEST,
   verifyFixtureAntiLeakage,
   computeBabelBenchMetrics,
   compareShadowReviewer,
   runBabelBench,
+  computeFixtureIntegrityHash,
+  extractReviewerFixture,
+  extractAnswerKey,
   type BabelBenchRunResult,
 } from './babelBench.js';
 
@@ -212,18 +216,98 @@ test('babelBench: compareShadowReviewer gates challenger promotion strictly', ()
 
 test('babelBench: extractReviewerFixture strips groundTruth to prevent prompt leakage', () => {
   const f = CANONICAL_BENCHMARK_FIXTURES[0]!;
-  const reviewerSafe = { ...f };
-  delete (reviewerSafe as any).groundTruth;
+  const reviewerSafe = extractReviewerFixture(f);
 
   assert.equal('groundTruth' in reviewerSafe, false);
   assert.ok(reviewerSafe.candidateDiff.length > 0);
   assert.ok(reviewerSafe.scope.length > 0);
+  assert.equal(reviewerSafe.id, f.id);
+
+  const answerKey = extractAnswerKey(f);
+  assert.equal(answerKey.fixtureId, f.id);
+  assert.equal(answerKey.expectedVerdict, f.groundTruth.expectedVerdict);
+  assert.equal(answerKey.antiLeakageHash, f.groundTruth.antiLeakageHash);
 });
 
 test('babelBench: all 10 canonical fixtures have valid SHA-256 anti-leakage hashes', () => {
   assert.equal(CANONICAL_BENCHMARK_FIXTURES.length, 10);
   for (const fixture of CANONICAL_BENCHMARK_FIXTURES) {
     assert.match(fixture.groundTruth.antiLeakageHash, /^[a-f0-9]{64}$/);
+    const expectedHash = computeFixtureIntegrityHash({
+      id: fixture.id,
+      name: fixture.name,
+      category: fixture.category,
+      difficulty: fixture.difficulty,
+      split: fixture.split,
+      files: fixture.files,
+      candidateDiff: fixture.candidateDiff,
+      scope: fixture.scope,
+      groundTruth: {
+        hasDefect: fixture.groundTruth.hasDefect,
+        expectedVerdict: fixture.groundTruth.expectedVerdict,
+        defectLocation: fixture.groundTruth.defectLocation,
+        defectDescription: fixture.groundTruth.defectDescription,
+      },
+    });
+    assert.equal(fixture.groundTruth.antiLeakageHash, expectedHash);
   }
 });
+
+test('babelBench: verifyFixtureAntiLeakage detects and rejects tampered fixtures fail-closed', () => {
+  const validFixture = CANONICAL_BENCHMARK_FIXTURES[0]!;
+
+  // Tampered candidate diff
+  const tamperedDiffFixture = {
+    ...validFixture,
+    candidateDiff: validFixture.candidateDiff + '\n+ malicious code',
+  };
+  assert.equal(verifyFixtureAntiLeakage([tamperedDiffFixture]), false);
+
+  // Tampered expected verdict
+  const tamperedVerdictFixture = {
+    ...validFixture,
+    groundTruth: {
+      ...validFixture.groundTruth,
+      expectedVerdict: (validFixture.groundTruth.expectedVerdict === 'BLOCK' ? 'APPROVE' : 'BLOCK') as any,
+    },
+  };
+  assert.equal(verifyFixtureAntiLeakage([tamperedVerdictFixture]), false);
+
+  // Non-hex or invalid hash
+  const invalidHashFixture = {
+    ...validFixture,
+    groundTruth: {
+      ...validFixture.groundTruth,
+      antiLeakageHash: 'not-a-valid-sha256-hash',
+    },
+  };
+  assert.equal(verifyFixtureAntiLeakage([invalidHashFixture]), false);
+
+  // Fixture source payload with stale expected seal fails
+  const staleManifest = {
+    ...CANONICAL_FIXTURE_SEAL_MANIFEST,
+    [validFixture.id]: '0'.repeat(64), // stale seal
+  };
+  assert.equal(verifyFixtureAntiLeakage([validFixture], staleManifest), false);
+
+  // Answer-key mutation fails
+  const tamperedAnswerKeyFixture = {
+    ...validFixture,
+    groundTruth: {
+      ...validFixture.groundTruth,
+      defectDescription: 'Tampered description that does not match original seal',
+    },
+  };
+  assert.equal(verifyFixtureAntiLeakage([tamperedAnswerKeyFixture]), false);
+
+  // Reviewer-facing fixture strictly contains no groundTruth or answer-key fields
+  const reviewerFixture = extractReviewerFixture(validFixture);
+  assert.equal('groundTruth' in reviewerFixture, false);
+  assert.equal('expectedVerdict' in (reviewerFixture as any), false);
+  assert.equal('antiLeakageHash' in (reviewerFixture as any), false);
+  assert.equal('hasDefect' in (reviewerFixture as any), false);
+  assert.equal('defectLocation' in (reviewerFixture as any), false);
+  assert.equal('defectDescription' in (reviewerFixture as any), false);
+});
+
 

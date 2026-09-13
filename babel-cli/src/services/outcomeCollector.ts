@@ -221,6 +221,13 @@ export function collectGitHubPRState(
         ? 'CLOSED'
         : 'OPEN';
 
+  if (!prJson.headRefOid || !/^[a-f0-9]{40}$/.test(prJson.headRefOid)) {
+    throw new Error(`INVALID_HEAD_SHA: ${prJson.headRefOid}`);
+  }
+  if (!prJson.baseRefOid || !/^[a-f0-9]{40}$/.test(prJson.baseRefOid)) {
+    throw new Error(`INVALID_BASE_SHA: ${prJson.baseRefOid}`);
+  }
+
   let checks: ObservedCICheck[] = [];
   try {
     const checksRaw = runner([
@@ -339,7 +346,7 @@ export function detectPostMergeRegression(
 
 export interface CausalEvidence {
   reproducers?: Array<{ findingFingerprint: string; passedOnHead: boolean; testCommand?: string }>;
-  repairCommits?: Array<{ findingFingerprint: string; commitSha: string; diffStat?: string }>;
+  repairCommits?: Array<{ findingFingerprint: string; commitSha: string; diffStat?: string; causallyVerified?: boolean }>;
   auditNotes?: Array<{ findingFingerprint: string; verdict: GroundTruthVerdict; reason: string }>;
 }
 
@@ -402,6 +409,7 @@ export function adjudicateCandidateReview(input: {
       const sf = structMap.get(fingerprint);
       const reproducer = input.causalEvidence?.reproducers?.find((r) => r.findingFingerprint === fingerprint);
       const auditNote = input.causalEvidence?.auditNotes?.find((a) => a.findingFingerprint === fingerprint);
+      const repairCommit = input.causalEvidence?.repairCommits?.find((r) => r.findingFingerprint === fingerprint);
 
       let gtv: GroundTruthVerdict = 'INCONCLUSIVE';
       let el: EvidenceLevel = 'ASSERTED';
@@ -427,18 +435,29 @@ export function adjudicateCandidateReview(input: {
         sources.push('audit:ground_truth_adjudication');
         if (gtv === 'TRUE_POSITIVE') truePositives++;
         else if (gtv === 'FALSE_POSITIVE') falsePositives++;
+      } else if (repairCommit) {
+        if (repairCommit.causallyVerified) {
+          gtv = 'TRUE_POSITIVE';
+          el = 'VERIFIED';
+          details = `Causally verified repair commit: ${repairCommit.commitSha}`;
+          sources.push(`commit:${repairCommit.commitSha}`);
+          truePositives++;
+        } else {
+          gtv = 'INCONCLUSIVE';
+          el = 'CORRELATED';
+          details = `Repair commit ${repairCommit.commitSha} referenced finding but lacks causal verification`;
+          sources.push(`commit:${repairCommit.commitSha}`);
+        }
       } else if (regressionDetected && input.postMergeRegression?.revert_commit_sha) {
-        gtv = 'TRUE_POSITIVE';
-        el = 'VERIFIED';
-        details = `Post-merge regression observed in follow-up commit: ${input.postMergeRegression.revert_commit_sha}`;
+        gtv = 'INCONCLUSIVE';
+        el = 'OBSERVED';
+        details = `Post-merge regression observed in follow-up commit: ${input.postMergeRegression.revert_commit_sha}; causal link to specific finding unverified`;
         sources.push(`commit:${input.postMergeRegression.revert_commit_sha}`);
-        truePositives++;
       } else if (isMerged && !regressionDetected && !ciFailed && input.assumeCleanMergeIsFalsePositive) {
-        gtv = 'FALSE_POSITIVE';
+        gtv = 'INCONCLUSIVE';
         el = 'CORRELATED';
-        details = 'PR merged cleanly with passing CI and no subsequent reverts or fixes (heuristic correlation)';
+        details = 'PR merged cleanly with passing CI and no subsequent reverts or fixes (heuristic correlation, unproven as false positive)';
         if (input.prState.merge_commit_sha) sources.push(`commit:${input.prState.merge_commit_sha}`);
-        falsePositives++;
       } else if (ciFailed) {
         gtv = 'INCONCLUSIVE';
         el = 'CORRELATED';

@@ -129,7 +129,21 @@ try {
         $base = $prObj.baseRefOid
         $mergeBase = $prObj.baseRefOid
         $head = $prObj.headRefOid
+
+        $hasBase = (git rev-parse --verify --quiet "$base^{commit}")
+        $hasHead = (git rev-parse --verify --quiet "$head^{commit}")
+        if (-not $hasHead -or -not $hasBase) {
+            git fetch origin "pull/$Pr/head:refs/remotes/origin/pr/$Pr" 2>$null
+            if (-not (git rev-parse --verify --quiet "$base^{commit}")) {
+                git fetch origin $base 2>$null
+            }
+        }
+
         $diffText = git -c core.quotepath=false diff "$base...$head"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Report -Status 'ERROR' -Message "Failed to compute diff for PR $Pr between $base and $head."
+            exit 2
+        }
         $names = @(git -c core.quotepath=false diff --name-only "$base...$head")
         foreach ($n in $names) { if ($n -and -not (Test-ExcludedPath $n)) { $files.Add($n) } }
     }
@@ -178,16 +192,32 @@ try {
         foreach ($n in $names) { if ($n -and -not (Test-ExcludedPath $n)) { $files.Add($n) } }
     }
     else {
-        $current = (git rev-parse --abbrev-ref HEAD).Trim()
-        if (git rev-parse --verify --quiet origin/main) { $base = 'origin/main' }
-        elseif (git rev-parse --verify --quiet origin/master) { $base = 'origin/master' }
-        elseif (git rev-parse --verify --quiet refs/heads/main) { $base = 'main' }
-        elseif (git rev-parse --verify --quiet refs/heads/master) { $base = 'master' }
+        $current = (git rev-parse --abbrev-ref HEAD 2>$null).Trim()
+        $symbolicOriginHead = (git symbolic-ref --short refs/remotes/origin/HEAD 2>$null)
+        if ($symbolicOriginHead -and (git rev-parse --verify --quiet $symbolicOriginHead)) {
+            $base = $symbolicOriginHead.Trim()
+        }
+        else {
+            $ghDefault = (gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>$null)
+            if ($ghDefault -and (git rev-parse --verify --quiet "origin/$ghDefault")) {
+                $base = "origin/$ghDefault"
+            }
+        }
 
         $onDefault = $false
-        if (-not $base) { $onDefault = $true }
-        elseif ($current -in @('main', 'master')) { $onDefault = $true }
-        elseif ($current -eq ($base -replace '^origin/', '')) { $onDefault = $true }
+        if ($base) {
+            $baseShort = $base -replace '^refs/remotes/origin/', '' -replace '^origin/', ''
+            if ($current -eq $baseShort) {
+                $onDefault = $true
+            }
+        }
+        elseif ($current -in @('main', 'master')) {
+            $onDefault = $true
+        }
+        else {
+            Write-Report -Status 'ERROR' -Message "UNABLE_TO_RESOLVE_CANDIDATE_BASE: Unable to resolve default base branch for candidate."
+            exit 2
+        }
 
         if ($onDefault) {
             $mode = 'default-branch'

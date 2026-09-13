@@ -87,7 +87,7 @@ export function mergeIntervals(intervals: Array<[number, number]>): Array<[numbe
 
 export function evaluateReviewCoverage(input: {
   scope: string[];
-  toolTraces: ToolExecutionTrace[];
+  toolTraces: readonly ToolExecutionTrace[];
   claimedReviewedFiles?: string[];
   changesDiffFullyRead?: boolean;
   changesDiffTotalLines?: number;
