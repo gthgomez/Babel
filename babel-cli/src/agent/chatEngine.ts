@@ -394,6 +394,10 @@ export interface ChatEngineOptions {
   /** R11: Per-round token ceiling — a single turn exceeding this with zero
    *  tool calls is force-BLOCKED. Default 200_000. */
   maxTokensPerRound?: number;
+  /** Explicit wall-budget request. Still clamped by the resolver's ceiling
+   *  (one hour, or LONG_TASK ceiling when BABEL_CHAT_LONG_TASK is authorized);
+   *  requested vs effective stays observable via limits.wallBudget. */
+  maxWallMs?: number;
   allowExpensive?: boolean;
   workspaceRoot?: string | null;
   fallbackModel?: string;
@@ -912,6 +916,7 @@ export class ChatEngine {
         ...(options.maxTokensPerRound !== undefined
           ? { maxTokensPerRound: options.maxTokensPerRound }
           : {}),
+        ...(options.maxWallMs !== undefined ? { maxWallMs: options.maxWallMs } : {}),
       },
       undefined,
       { taskClass: this.taskClass, taskText: options.task },
@@ -3722,6 +3727,7 @@ export class ChatEngine {
           ...(this.options.maxTokensPerRound !== undefined
             ? { maxTokensPerRound: this.options.maxTokensPerRound }
             : {}),
+          ...(this.options.maxWallMs !== undefined ? { maxWallMs: this.options.maxWallMs } : {}),
         },
         undefined,
         { taskClass: runtime.taskClass, taskText: runtime.taskText },
