@@ -9,6 +9,7 @@ import {
   type IndependentReviewRuntime,
   type IndependentReviewUsage,
   type ReviewActorIdentity,
+  assertSafeChallengeId,
   validateHostReviewHandoffV3,
   validateIndependentReviewEvidenceV3,
 } from './independentReviewEvidenceV3.js'
@@ -29,10 +30,16 @@ export interface PersistentReviewChallenge {
   reviewer: ReviewActorIdentity
   controller_run_id: string
   issued_at: string
+  completed_at?: string
   consumed_at?: string
+  verdict?: 'APPROVE' | 'BLOCK'
 }
 
 export function issueReviewChallenge(stateDir: string, challenge: PersistentReviewChallenge): void {
+  assertSafeChallengeId(challenge.challenge_id)
+  if (challenge.status !== 'ISSUED') {
+    throw new Error(`CHALLENGE_MUST_BE_ISSUED_STATUS: ${challenge.status}`)
+  }
   const challengesDir = join(stateDir, 'challenges')
   mkdirSync(challengesDir, { recursive: true, mode: 0o700 })
   const challengePath = join(challengesDir, `${challenge.challenge_id}.json`)
@@ -42,11 +49,39 @@ export function issueReviewChallenge(stateDir: string, challenge: PersistentRevi
   atomicReviewJson(challengePath, challenge)
 }
 
+export function completeReviewChallenge(
+  stateDir: string,
+  challengeId: string,
+  completion: {
+    verdict: 'APPROVE' | 'BLOCK'
+    completed_at?: string
+  }
+): void {
+  assertSafeChallengeId(challengeId)
+  const challengePath = join(stateDir, 'challenges', `${challengeId}.json`)
+  if (!existsSync(challengePath)) {
+    throw new Error(`CHALLENGE_NOT_FOUND: ${challengeId}`)
+  }
+  const raw = JSON.parse(readFileSync(challengePath, 'utf8')) as PersistentReviewChallenge
+  if (raw.status !== 'ISSUED') {
+    throw new Error(`CHALLENGE_NOT_IN_ISSUED_STATE: ${raw.status}`)
+  }
+
+  const updated: PersistentReviewChallenge = {
+    ...raw,
+    status: 'COMPLETED',
+    verdict: completion.verdict,
+    completed_at: completion.completed_at ?? new Date().toISOString(),
+  }
+  atomicReviewJson(challengePath, updated)
+}
+
 export function verifyAndConsumeChallenge(
   stateDir: string,
   challengeId: string,
   evidence: IndependentReviewEvidenceV3
 ): void {
+  assertSafeChallengeId(challengeId)
   const challengePath = join(stateDir, 'challenges', `${challengeId}.json`)
   if (!existsSync(challengePath)) {
     throw new Error(`CHALLENGE_NOT_FOUND: ${challengeId}`)
@@ -54,6 +89,9 @@ export function verifyAndConsumeChallenge(
   const raw = JSON.parse(readFileSync(challengePath, 'utf8')) as PersistentReviewChallenge
   if (raw.status === 'CONSUMED') {
     throw new Error(`CHALLENGE_ALREADY_CONSUMED: ${challengeId}`)
+  }
+  if (raw.status !== 'COMPLETED') {
+    throw new Error(`CHALLENGE_NOT_COMPLETED: ${raw.status}`)
   }
 
   // Exact bindings
@@ -65,6 +103,7 @@ export function verifyAndConsumeChallenge(
   if (raw.head_sha !== evidence.head_sha) throw new Error('CHALLENGE_HEAD_SHA_MISMATCH')
   if (raw.diff_numstat_digest !== evidence.diff_numstat_digest) throw new Error('CHALLENGE_DIFF_DIGEST_MISMATCH')
   if (raw.controller_run_id !== evidence.controller_run_id) throw new Error('CHALLENGE_RUN_ID_MISMATCH')
+  if (raw.verdict !== evidence.verdict) throw new Error('CHALLENGE_VERDICT_MISMATCH')
 
   // Identity bindings
   if (raw.builder.principal_id !== evidence.builder.principal_id || raw.builder.execution_id !== evidence.builder.execution_id) {
@@ -115,7 +154,7 @@ export interface IndependentReviewWorkerAdapter {
 
 export interface IndependentReviewController {
   review(
-    candidate: Readonly<CandidateEnvelope | (HostReviewCandidate & { candidate_digest: string })>,
+    candidate: Readonly<(CandidateEnvelope | (HostReviewCandidate & { candidate_digest: string })) & { builder?: ReviewActorIdentity }>,
     options?: {
       reviewCount?: 1 | 2
       builder?: ReviewActorIdentity
@@ -142,7 +181,7 @@ export function createIndependentReviewController(input: {
 
   return {
     async review(
-      candidate: Readonly<CandidateEnvelope | (HostReviewCandidate & { candidate_digest: string })>,
+      candidate: Readonly<(CandidateEnvelope | (HostReviewCandidate & { candidate_digest: string })) & { builder?: ReviewActorIdentity }>,
       options?: {
         reviewCount?: 1 | 2
         builder?: ReviewActorIdentity
@@ -160,11 +199,20 @@ export function createIndependentReviewController(input: {
 
       const controllerRunId = createId()
       const prNumber = candidate.pr_number ?? 1
-      const builder: ReviewActorIdentity = options?.builder ?? {
-        kind: 'codex',
-        principal_id: `builder-principal-${createId()}`,
-        execution_id: `builder-exec-${createId()}`,
+
+      // Authoritative builder identity
+      const candidateBuilder = candidate.builder
+      const builderOpt = options?.builder ?? candidateBuilder
+      if (!builderOpt && input.state_dir) {
+        throw new Error('AUTHORITATIVE_BUILDER_IDENTITY_REQUIRED')
       }
+      const builder: ReviewActorIdentity = builderOpt ?? {
+        kind: 'unauthenticated',
+        principal_id: candidate.builder_id || 'unauthenticated-builder',
+        execution_id: `unauth-builder-${createId()}`,
+      }
+
+      const provenance = input.state_dir ? 'TRUSTED_CONTROLLER_EVIDENCE' : 'LOCAL_UNAUTHENTICATED'
 
       const reviews: IndependentReviewEvidenceV3[] = []
       const usedPrincipals = new Set<string>()
@@ -174,14 +222,14 @@ export function createIndependentReviewController(input: {
         const reviewerPrincipalId = createId()
         const reviewerExecutionId = createId()
 
-        if (reviewerPrincipalId === builder.principal_id || usedPrincipals.has(reviewerPrincipalId)) {
+        if (reviewerPrincipalId.toLowerCase() === builder.principal_id.toLowerCase() || usedPrincipals.has(reviewerPrincipalId.toLowerCase())) {
           throw new Error('REVIEWER_PRINCIPAL_NOT_INDEPENDENT')
         }
-        if (reviewerExecutionId === builder.execution_id || usedExecutions.has(reviewerExecutionId)) {
+        if (reviewerExecutionId.toLowerCase() === builder.execution_id.toLowerCase() || usedExecutions.has(reviewerExecutionId.toLowerCase())) {
           throw new Error('REVIEWER_EXECUTION_NOT_DISTINCT')
         }
-        usedPrincipals.add(reviewerPrincipalId)
-        usedExecutions.add(reviewerExecutionId)
+        usedPrincipals.add(reviewerPrincipalId.toLowerCase())
+        usedExecutions.add(reviewerExecutionId.toLowerCase())
 
         const reviewer: ReviewActorIdentity = {
           kind: input.adapter.agent_kind,
@@ -190,6 +238,7 @@ export function createIndependentReviewController(input: {
         }
 
         const challengeId = createId()
+        assertSafeChallengeId(challengeId)
 
         if (input.state_dir) {
           const challengeRecord: PersistentReviewChallenge = {
@@ -226,16 +275,54 @@ export function createIndependentReviewController(input: {
           throw new Error(`REVIEW_EXECUTION_FAILED: ${result.failure_reason || 'Unknown adapter failure'}`)
         }
 
-        const runtime: IndependentReviewRuntime = result.runtime ?? {
-          agent_kind: input.adapter.agent_kind,
-          adapter_id: input.adapter.adapter_id,
-          controller_execution_id: reviewerExecutionId,
+        // Fail closed on missing/invalid verdict (Repair A)
+        if (result.verdict !== 'APPROVE' && result.verdict !== 'BLOCK') {
+          throw new Error('REVIEW_EXECUTION_FAILED: Missing or invalid review verdict')
+        }
+
+        // Fail closed on missing/invalid reviewed_at (Repair F)
+        if (!result.reviewed_at || typeof result.reviewed_at !== 'string') {
+          throw new Error('REVIEW_EXECUTION_FAILED: Missing reviewed_at timestamp')
+        }
+
+        // Fail closed on missing/invalid scope (Repair F)
+        if (!result.scope || !Array.isArray(result.scope)) {
+          throw new Error('REVIEW_EXECUTION_FAILED: Missing review scope')
+        }
+        const candidateScopeSet = new Set(candidate.scope)
+        if (result.scope.length !== candidate.scope.length || !result.scope.every((s) => candidateScopeSet.has(s))) {
+          throw new Error('REVIEW_EXECUTION_FAILED: Scope mismatch')
+        }
+
+        // Fail closed on missing/unmet isolation (Repair F)
+        if (!result.isolation) {
+          throw new Error('REVIEW_EXECUTION_FAILED: Missing review isolation profile')
+        }
+        if (
+          result.isolation.candidate_write !== false ||
+          result.isolation.github_mutation !== false ||
+          result.isolation.merge !== false ||
+          result.isolation.controller_state_access !== false
+        ) {
+          throw new Error('REVIEW_EXECUTION_FAILED: Unmet isolation requirements')
+        }
+
+        // Fail closed on missing runtime (Repair F)
+        if (!result.runtime) {
+          throw new Error('REVIEW_EXECUTION_FAILED: Missing review runtime')
+        }
+
+        if (input.state_dir) {
+          completeReviewChallenge(input.state_dir, challengeId, {
+            verdict: result.verdict,
+            completed_at: result.reviewed_at,
+          })
         }
 
         const evidence: IndependentReviewEvidenceV3 = {
           schema_version: 3,
           kind: 'independent_agent_review_v3',
-          provenance: 'TRUSTED_CONTROLLER_EVIDENCE',
+          provenance,
           repository: candidate.repository,
           pr_number: prNumber,
           base_sha: candidate.base_sha,
@@ -248,14 +335,14 @@ export function createIndependentReviewController(input: {
           reviewer,
           controller_run_id: controllerRunId,
           challenge_id: challengeId,
-          runtime,
+          runtime: result.runtime,
           review_mode: 'exact_diff',
-          reviewed_at: result.reviewed_at ?? new Date(now()).toISOString(),
-          scope: result.scope ?? [...candidate.scope],
-          verdict: result.verdict ?? 'APPROVE',
+          reviewed_at: result.reviewed_at,
+          scope: result.scope,
+          verdict: result.verdict,
           findings: result.findings ?? [],
           blocking_findings: result.blocking_findings ?? [],
-          isolation: result.isolation ?? requiredIsolation,
+          isolation: result.isolation,
           ...(result.usage ? { usage: result.usage } : {}),
         }
 
@@ -263,6 +350,7 @@ export function createIndependentReviewController(input: {
         validateIndependentReviewEvidenceV3(evidence, {
           candidateScope: candidate.scope,
           now: now(),
+          requireAuthoritative: Boolean(input.state_dir),
         })
 
         // Consume challenge
@@ -285,7 +373,7 @@ export function createIndependentReviewController(input: {
       const handoff: HostReviewHandoffV3 = {
         schema_version: 3,
         kind: 'host_review_handoff_v3',
-        provenance: 'TRUSTED_CONTROLLER_EVIDENCE',
+        provenance,
         repository: candidate.repository,
         pr_number: prNumber,
         base_sha: candidate.base_sha,
@@ -302,6 +390,7 @@ export function createIndependentReviewController(input: {
         candidateDigest: candidate.candidate_digest,
         scope: candidate.scope,
         now: now(),
+        requireAuthoritative: Boolean(input.state_dir),
       })
 
       return handoff

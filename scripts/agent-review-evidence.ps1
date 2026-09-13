@@ -169,11 +169,20 @@ function Test-AgentIndependentReviewEvidenceV3 {
   if ($TaskHash -and [string](Get-AgentPropertyValue $Evidence 'task_hash') -cne $TaskHash) {
     $errors += 'independent_evidence_task_hash_mismatch'
   }
-  if ([string]::IsNullOrWhiteSpace([string](Get-AgentPropertyValue $Evidence 'challenge_id'))) {
+  $challengeId = [string](Get-AgentPropertyValue $Evidence 'challenge_id')
+  if ([string]::IsNullOrWhiteSpace($challengeId)) {
     $errors += 'independent_evidence_challenge_id_missing'
+  } elseif ($challengeId -notmatch '^[a-zA-Z0-9_-]{1,128}$') {
+    $errors += 'independent_evidence_challenge_id_invalid'
   }
   if ([string]::IsNullOrWhiteSpace([string](Get-AgentPropertyValue $Evidence 'controller_run_id'))) {
     $errors += 'independent_evidence_controller_run_id_missing'
+  }
+  $provenance = [string](Get-AgentPropertyValue $Evidence 'provenance')
+  if ($provenance -ceq 'LOCAL_UNAUTHENTICATED') {
+    $errors += 'independent_evidence_provenance_unauthenticated'
+  } elseif ($provenance -cne 'TRUSTED_CONTROLLER_EVIDENCE' -and $provenance -cne 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE') {
+    $errors += 'independent_evidence_provenance_invalid'
   }
 
   $builder = Get-AgentPropertyValue $Evidence 'builder'
@@ -332,11 +341,16 @@ function Test-AgentHostReviewBundleV3 {
     if ($challengeId) { $challenges[$challengeId] = $true }
   }
 
-  $allowedBundle = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'candidate_digest', 'publisher_id', 'comment_id', 'handoff')
+  $handoffProvenance = [string](Get-AgentPropertyValue $handoff 'provenance')
+  if ($handoffProvenance -ceq 'LOCAL_UNAUTHENTICATED') {
+    $errors += 'controller_review_handoff_provenance_unauthenticated'
+  }
+
+  $allowedBundle = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'candidate_digest', 'publisher_id', 'comment_id', 'handoff', 'provenance')
   foreach ($field in @(Get-AgentPropertyNames $Bundle)) {
     if ($allowedBundle -cnotcontains $field) { $errors += "controller_review_bundle_unknown_field:$field" }
   }
-  $allowedHandoff = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'candidate_digest', 'diff_numstat_digest', 'task_id', 'task_hash', 'controller_run_id', 'reviews')
+  $allowedHandoff = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'candidate_digest', 'diff_numstat_digest', 'task_id', 'task_hash', 'controller_run_id', 'reviews', 'provenance')
   foreach ($field in @(Get-AgentPropertyNames $handoff)) {
     if ($allowedHandoff -cnotcontains $field) { $errors += "controller_review_handoff_unknown_field:$field" }
   }

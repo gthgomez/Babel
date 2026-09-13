@@ -98,6 +98,28 @@ const sha = z.string().regex(/^[a-f0-9]{40}$/i, { message: 'INVALID_SHA' })
 const digest = z.string().regex(/^[a-f0-9]{64}$/i, { message: 'INVALID_DIGEST' })
 const provenanceSchema = z.enum(['LOCAL_UNAUTHENTICATED', 'TRUSTED_CONTROLLER_EVIDENCE', 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'])
 
+export const challengeIdSchema = z.string()
+  .min(1, { message: 'EMPTY_CHALLENGE_ID' })
+  .max(128, { message: 'CHALLENGE_ID_TOO_LONG' })
+  .regex(/^[a-zA-Z0-9_-]+$/, { message: 'INVALID_CHALLENGE_ID_FORMAT' })
+  .refine(v => !v.includes('..') && !v.includes('/') && !v.includes('\\') && !/^[A-Za-z]:/.test(v), { message: 'UNSAFE_CHALLENGE_ID_PATH' })
+
+export function assertSafeChallengeId(id: string): void {
+  if (
+    !id ||
+    typeof id !== 'string' ||
+    id.trim() !== id ||
+    id.length > 128 ||
+    !/^[a-zA-Z0-9_-]+$/.test(id) ||
+    id.includes('..') ||
+    id.includes('/') ||
+    id.includes('\\') ||
+    /^[A-Za-z]:/.test(id)
+  ) {
+    throw new Error(`UNSAFE_CHALLENGE_ID: ${id}`)
+  }
+}
+
 export const reviewActorIdentitySchema = z.object({
   kind: text,
   principal_id: text,
@@ -147,7 +169,7 @@ export const independentReviewEvidenceV3Schema = z.object({
   builder: reviewActorIdentitySchema,
   reviewer: reviewActorIdentitySchema,
   controller_run_id: text,
-  challenge_id: text,
+  challenge_id: challengeIdSchema,
   runtime: independentReviewRuntimeSchema,
   review_mode: z.literal('exact_diff'),
   reviewed_at: text,
@@ -194,9 +216,13 @@ function assertSafePath(path: string): void {
  */
 export function validateIndependentReviewEvidenceV3(
   value: unknown,
-  expected?: Partial<IndependentReviewEvidenceV3> & { candidateScope?: string[] | undefined; now?: number | undefined }
+  expected?: Partial<IndependentReviewEvidenceV3> & { candidateScope?: string[] | undefined; now?: number | undefined; requireAuthoritative?: boolean | undefined }
 ): IndependentReviewEvidenceV3 {
   const parsed = independentReviewEvidenceV3Schema.parse(value)
+
+  if (expected?.requireAuthoritative && parsed.provenance === 'LOCAL_UNAUTHENTICATED') {
+    throw new Error('LOCAL_UNAUTHENTICATED_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
+  }
 
   // 1. Independence validation
   if (parsed.reviewer.principal_id.toLowerCase() === parsed.builder.principal_id.toLowerCase()) {
@@ -298,9 +324,14 @@ export function validateHostReviewHandoffV3(
     controllerRunId?: string
     scope?: string[]
     now?: number
+    requireAuthoritative?: boolean
   }
 ): HostReviewHandoffV3 {
   const parsed = hostReviewHandoffV3Schema.parse(value)
+
+  if (expected?.requireAuthoritative && parsed.provenance === 'LOCAL_UNAUTHENTICATED') {
+    throw new Error('LOCAL_UNAUTHENTICATED_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
+  }
 
   if (expected?.repository && parsed.repository !== expected.repository) throw new Error('HANDOFF_REPOSITORY_MISMATCH')
   if (expected?.prNumber && parsed.pr_number !== expected.prNumber) throw new Error('HANDOFF_PR_MISMATCH')
@@ -311,6 +342,7 @@ export function validateHostReviewHandoffV3(
 
   const reviewerPrincipals = new Set<string>()
   const reviewerExecutions = new Set<string>()
+  const challengeIds = new Set<string>()
 
   for (const review of parsed.reviews) {
     validateIndependentReviewEvidenceV3(review, {
@@ -325,6 +357,7 @@ export function validateHostReviewHandoffV3(
       controller_run_id: parsed.controller_run_id,
       candidateScope: expected?.scope,
       now: expected?.now,
+      requireAuthoritative: expected?.requireAuthoritative,
     })
 
     if (reviewerPrincipals.has(review.reviewer.principal_id)) {
@@ -333,8 +366,12 @@ export function validateHostReviewHandoffV3(
     if (reviewerExecutions.has(review.reviewer.execution_id)) {
       throw new Error('DUPLICATE_REVIEWER_EXECUTION')
     }
+    if (challengeIds.has(review.challenge_id)) {
+      throw new Error('DUPLICATE_CHALLENGE_ID')
+    }
     reviewerPrincipals.add(review.reviewer.principal_id)
     reviewerExecutions.add(review.reviewer.execution_id)
+    challengeIds.add(review.challenge_id)
   }
 
   return parsed as HostReviewHandoffV3

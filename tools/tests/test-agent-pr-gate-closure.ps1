@@ -201,6 +201,7 @@ try {
   $validV3Evidence = [pscustomobject][ordered]@{
     schema_version = 3
     kind = 'independent_agent_review_v3'
+    provenance = 'TRUSTED_CONTROLLER_EVIDENCE'
     repository = 'gthgomez/Babel'
     pr_number = 152
     base_sha = $base
@@ -299,6 +300,7 @@ try {
     candidate_digest = $candDigest; publisher_id = '91163862'; comment_id = '1001'
     handoff = [pscustomobject][ordered]@{
       schema_version = 3; kind = 'host_review_handoff_v3'
+      provenance = 'TRUSTED_CONTROLLER_EVIDENCE'
       repository = 'gthgomez/Babel'; pr_number = 152; base_sha = $base; head_sha = $head
       candidate_digest = $candDigest; diff_numstat_digest = $expectedDigest
       task_id = 'task-152'; task_hash = ('e' * 64); controller_run_id = 'run-152'
@@ -307,6 +309,24 @@ try {
   }
   $bundleCheck = Test-AgentControllerReviewEvidenceBundle -Bundle $v3Bundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 1 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')
   Assert-ClosureGate ($bundleCheck.valid -and $bundleCheck.reviewCount -eq 1) 'V3 bundle must satisfy one-review floor'
+
+  # Reject: LOCAL_UNAUTHENTICATED evidence
+  $unauthV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $unauthV3.provenance = 'LOCAL_UNAUTHENTICATED'
+  $unauthResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $unauthV3 -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
+  Assert-ClosureGate (-not $unauthResult.valid -and @($unauthResult.errors) -contains 'independent_evidence_provenance_unauthenticated') 'V3 must reject LOCAL_UNAUTHENTICATED evidence'
+
+  # Reject: invalid/traversal challenge_id
+  $traversalV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $traversalV3.challenge_id = '../traversal'
+  $traversalResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $traversalV3 -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
+  Assert-ClosureGate (-not $traversalResult.valid -and @($traversalResult.errors) -contains 'independent_evidence_challenge_id_invalid') 'V3 must reject path traversal challenge_id'
+
+  # Reject: LOCAL_UNAUTHENTICATED handoff
+  $unauthBundle = $v3Bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $unauthBundle.handoff.provenance = 'LOCAL_UNAUTHENTICATED'
+  $unauthBundleResult = Test-AgentControllerReviewEvidenceBundle -Bundle $unauthBundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 1 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')
+  Assert-ClosureGate (-not $unauthBundleResult.valid -and @($unauthBundleResult.errors) -contains 'controller_review_handoff_provenance_unauthenticated') 'V3 bundle must reject LOCAL_UNAUTHENTICATED handoff'
 
   # Two-review bundle escalation
   $secondV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json

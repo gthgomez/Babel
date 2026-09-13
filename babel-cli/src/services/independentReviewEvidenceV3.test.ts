@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   type HostReviewHandoffV3,
   type IndependentReviewEvidenceV3,
+  assertSafeChallengeId,
   publicIndependentReviewHandoffV3,
   validateHostReviewHandoffV3,
   validateIndependentReviewEvidenceV3,
@@ -245,6 +246,7 @@ test('hostReviewHandoffV3: validates handoff and rejects duplicate reviewer iden
     runtime: { agent_kind: 'codex', adapter_id: 'a-1', controller_execution_id: 'e-1' },
   })
   const r2 = createValidEvidence({
+    challenge_id: 'challenge-180-abc',
     reviewer: { kind: 'claude-code', principal_id: 'p-2', execution_id: 'e-2' },
     runtime: { agent_kind: 'claude-code', adapter_id: 'a-2', controller_execution_id: 'e-2' },
   })
@@ -274,6 +276,7 @@ test('hostReviewHandoffV3: validates handoff and rejects duplicate reviewer iden
     reviews: [
       r1,
       createValidEvidence({
+        challenge_id: 'challenge-180-dup-p',
         reviewer: { kind: 'claude-code', principal_id: 'p-1', execution_id: 'e-3' },
         runtime: { agent_kind: 'claude-code', adapter_id: 'a-2', controller_execution_id: 'e-3' },
       }),
@@ -287,6 +290,7 @@ test('hostReviewHandoffV3: validates handoff and rejects duplicate reviewer iden
     reviews: [
       r1,
       createValidEvidence({
+        challenge_id: 'challenge-180-dup-e',
         reviewer: { kind: 'claude-code', principal_id: 'p-3', execution_id: 'e-1' },
         runtime: { agent_kind: 'claude-code', adapter_id: 'a-2', controller_execution_id: 'e-1' },
       }),
@@ -294,9 +298,46 @@ test('hostReviewHandoffV3: validates handoff and rejects duplicate reviewer iden
   }
   assert.throws(() => validateHostReviewHandoffV3(dupExecutionHandoff), /DUPLICATE_REVIEWER_EXECUTION/)
 
+  // Duplicate challenge ID must throw
+  const dupChallengeHandoff: HostReviewHandoffV3 = {
+    ...validHandoff,
+    reviews: [
+      r1,
+      createValidEvidence({
+        challenge_id: r1.challenge_id,
+        reviewer: { kind: 'claude-code', principal_id: 'p-4', execution_id: 'e-4' },
+        runtime: { agent_kind: 'claude-code', adapter_id: 'a-2', controller_execution_id: 'e-4' },
+      }),
+    ],
+  }
+  assert.throws(() => validateHostReviewHandoffV3(dupChallengeHandoff), /DUPLICATE_CHALLENGE_ID/)
+
   // Public projection strips provenance
   const pub = publicIndependentReviewHandoffV3(validHandoff)
   assert.equal(pub['provenance'], undefined)
   assert.equal((pub['reviews'] as Array<Record<string, unknown>>)[0]!['provenance'], undefined)
   assert.equal((pub['reviews'] as Array<Record<string, unknown>>)[0]!['schema_version'], 3)
 })
+
+test('independentReviewEvidenceV3: enforces safe challenge ID rules', () => {
+  assertSafeChallengeId('valid-challenge_123')
+  assert.throws(() => assertSafeChallengeId('../escape'), /UNSAFE_CHALLENGE_ID/)
+  assert.throws(() => assertSafeChallengeId('path/traversal'), /UNSAFE_CHALLENGE_ID/)
+  assert.throws(() => assertSafeChallengeId('C:\\windows'), /UNSAFE_CHALLENGE_ID/)
+  assert.throws(() => assertSafeChallengeId(''), /UNSAFE_CHALLENGE_ID/)
+  assert.throws(() => assertSafeChallengeId('a'.repeat(129)), /UNSAFE_CHALLENGE_ID/)
+  assert.throws(() => assertSafeChallengeId('has spaces'), /UNSAFE_CHALLENGE_ID/)
+})
+
+test('independentReviewEvidenceV3: rejects LOCAL_UNAUTHENTICATED when requireAuthoritative is set', () => {
+  const unauthEvidence = createValidEvidence({ provenance: 'LOCAL_UNAUTHENTICATED' })
+  // Valid when requireAuthoritative is false
+  validateIndependentReviewEvidenceV3(unauthEvidence)
+
+  // Throws when requireAuthoritative is true
+  assert.throws(
+    () => validateIndependentReviewEvidenceV3(unauthEvidence, { requireAuthoritative: true }),
+    /LOCAL_UNAUTHENTICATED_EVIDENCE_CANNOT_SATISFY_AUTHORITY/
+  )
+})
+
