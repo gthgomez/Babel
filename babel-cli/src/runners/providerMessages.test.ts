@@ -246,4 +246,150 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
     assert.equal(wire[3]!.role, 'tool');
     assert.equal(wire[3]!.tool_call_id, 'ds_call');
   });
+
+  test('Astra Probe P02: compaction preserves the retained tail and tool results in native reconstruction', () => {
+    const call = (id: string, name = 'read_file') => ({
+      id,
+      type: 'function' as const,
+      function: { name, arguments: '{}' },
+    });
+    const token = 'ONLY_KEPT_RESULT_HAS_THE_NONCE_4d713';
+    const initialLog = createThreadEventLog('p02-thread');
+    initialLog.events.push(
+      {
+        schema_version: 1,
+        event_id: 'e0',
+        thread_id: 'p02-thread',
+        turn_id: 't1',
+        item_id: 't1:0',
+        seq: 0,
+        ts: new Date().toISOString(),
+        kind: 'user_message',
+        content: 'Use the exact nonce returned by the tool.',
+      },
+      {
+        schema_version: 1,
+        event_id: 'e1',
+        thread_id: 'p02-thread',
+        turn_id: 't1',
+        item_id: 't1:1',
+        seq: 1,
+        ts: new Date().toISOString(),
+        kind: 'assistant_tool_calls',
+        content: '',
+        tool_calls: [call('c1')],
+      },
+      {
+        schema_version: 1,
+        event_id: 'e2',
+        thread_id: 'p02-thread',
+        turn_id: 't1',
+        item_id: 't1:2',
+        seq: 2,
+        ts: new Date().toISOString(),
+        kind: 'tool_result',
+        tool_call_id: 'c1',
+        tool_name: 'read_file',
+        content: token,
+      },
+    );
+    initialLog.nextSeq = 3;
+
+    const liveTail = rebuildProviderMessagesFromEvents(initialLog);
+    const compactedLog = {
+      ...initialLog,
+      events: [
+        ...initialLog.events,
+        {
+          schema_version: 1 as const,
+          event_id: 'e3',
+          thread_id: 'p02-thread',
+          turn_id: 't1',
+          item_id: 't1:3',
+          seq: 3,
+          ts: new Date().toISOString(),
+          kind: 'compaction_capsule' as const,
+          content: 'Task: use exact nonce. Recent tool: read_file.',
+          preserved_tool_call_ids: ['c1'],
+        },
+      ],
+      nextSeq: 4,
+    };
+
+    const outbound = rebuildProviderMessagesFromEvents(compactedLog, { systemPrompt: 'System' });
+    assert.equal(liveTail.some((m) => m.content.includes(token)), true);
+    // Fixed: Native reconstruction retains the nonce and tool results
+    assert.equal(outbound.some((m) => m.content.includes(token)), true);
+    assert.equal(outbound.some((m) => m.tool_call_id === 'c1'), true);
+    assert.deepEqual(validateProviderMessageProtocol(outbound), []);
+  });
+
+  test('Astra Probe P03: reloading durable log with compaction capsule preserves retained context', () => {
+    const call = (id: string, name = 'read_file') => ({
+      id,
+      type: 'function' as const,
+      function: { name, arguments: '{}' },
+    });
+    const token = 'ONLY_KEPT_RESULT_HAS_THE_NONCE_4d713';
+    const initialLog = createThreadEventLog('p03-thread');
+    initialLog.events.push(
+      {
+        schema_version: 1,
+        event_id: 'e0',
+        thread_id: 'p03-thread',
+        turn_id: 't1',
+        item_id: 't1:0',
+        seq: 0,
+        ts: new Date().toISOString(),
+        kind: 'user_message',
+        content: 'Use the exact nonce returned by the tool.',
+      },
+      {
+        schema_version: 1,
+        event_id: 'e1',
+        thread_id: 'p03-thread',
+        turn_id: 't1',
+        item_id: 't1:1',
+        seq: 1,
+        ts: new Date().toISOString(),
+        kind: 'assistant_tool_calls',
+        content: '',
+        tool_calls: [call('c1')],
+      },
+      {
+        schema_version: 1,
+        event_id: 'e2',
+        thread_id: 'p03-thread',
+        turn_id: 't1',
+        item_id: 't1:2',
+        seq: 2,
+        ts: new Date().toISOString(),
+        kind: 'tool_result',
+        tool_call_id: 'c1',
+        tool_name: 'read_file',
+        content: token,
+      },
+      {
+        schema_version: 1,
+        event_id: 'e3',
+        thread_id: 'p03-thread',
+        turn_id: 't1',
+        item_id: 't1:3',
+        seq: 3,
+        ts: new Date().toISOString(),
+        kind: 'compaction_capsule',
+        content: 'Task: use exact nonce.',
+        preserved_tool_call_ids: ['c1'],
+      },
+    );
+    initialLog.nextSeq = 4;
+
+    const restored = JSON.parse(JSON.stringify(initialLog));
+    const live = rebuildProviderMessagesFromEvents(initialLog, { systemPrompt: 'System' });
+    const rebuilt = rebuildProviderMessagesFromEvents(restored, { systemPrompt: 'System' });
+
+    assert.deepEqual(live, rebuilt);
+    assert.equal(rebuilt.some((m) => m.content.includes(token)), true);
+    assert.equal(rebuilt.some((m) => m.tool_call_id === 'c1'), true);
+  });
 });
