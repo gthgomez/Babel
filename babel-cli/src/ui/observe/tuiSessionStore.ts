@@ -53,7 +53,9 @@ export interface TuiLatestPointer {
 
 export const BYTE_BUDGET = 8 * 1024 * 1024
 const EVENT_LOG_BUDGET_FRACTION = 0.25
-const TERMINAL_EVENTS_FILENAME = 'terminal-events.jsonl'
+export const TERMINAL_EVENTS_FILENAME = 'terminal-events.jsonl'
+export const LIFECYCLE_EVENTS_FILENAME = 'lifecycle-events.jsonl'
+const LIFECYCLE_LOG_BUDGET_FRACTION = 0.25
 
 export interface TuiRetentionOptions {
   /** Override the production budget for deterministic tests. */
@@ -222,7 +224,11 @@ export function loadTerminalVisibleEvents(sessionDir: string): TerminalWriteEven
 export function enforceTuiSessionBudget(sessionDir: string, byteBudget = BYTE_BUDGET): void {
   const budget = resolveByteBudget(byteBudget)
   const eventPath = join(sessionDir, TERMINAL_EVENTS_FILENAME)
+  const lifecyclePath = join(sessionDir, LIFECYCLE_EVENTS_FILENAME)
   compactEventLog(eventPath, Math.floor(budget * EVENT_LOG_BUDGET_FRACTION))
+  if (existsSync(lifecyclePath)) {
+    compactEventLog(lifecyclePath, Math.floor(budget * LIFECYCLE_LOG_BUDGET_FRACTION))
+  }
 
   const latestFrameId = readLatestFrameId(sessionDir)
   if (latestFrameId !== null) {
@@ -230,7 +236,11 @@ export function enforceTuiSessionBudget(sessionDir: string, byteBudget = BYTE_BU
   }
 
   const nonEventBytes = getSessionBytes(sessionDir, false)
-  compactEventLog(eventPath, Math.max(0, budget - nonEventBytes))
+  const remainingForEvents = Math.max(0, budget - nonEventBytes)
+  compactEventLog(eventPath, Math.floor(remainingForEvents * 0.75))
+  if (existsSync(lifecyclePath)) {
+    compactEventLog(lifecyclePath, Math.floor(remainingForEvents * 0.25))
+  }
 }
 
 function atomicWriteJson(path: string, value: unknown): void {
@@ -339,8 +349,11 @@ function getSessionBytes(sessionDir: string, includeEventLog: boolean): number {
       }
       continue
     }
-    if (entry.isFile() && (includeEventLog || entry.name !== TERMINAL_EVENTS_FILENAME)) {
-      total += fileBytes(join(sessionDir, entry.name))
+    if (entry.isFile()) {
+      const isEventFile = entry.name === TERMINAL_EVENTS_FILENAME || entry.name === LIFECYCLE_EVENTS_FILENAME
+      if (includeEventLog || !isEventFile) {
+        total += fileBytes(join(sessionDir, entry.name))
+      }
     }
   }
   return total
@@ -352,4 +365,59 @@ function fileBytes(path: string): number {
   } catch {
     return 0
   }
+}
+
+export interface TuiLifecycleRecord {
+  seq?: number
+  kind: string
+  turn_id?: string | null
+  detail: Record<string, unknown>
+  ts: string
+}
+
+export interface TuiLifecycleEventInput {
+  seq?: number
+  kind: string
+  turn_id?: string | null
+  detail?: Record<string, unknown>
+  ts?: string
+}
+
+/**
+ * Append one run-lifecycle observation (terminal status, budget kill,
+ * cancellation, resume, verifier wording) to the bounded session sink. These
+ * records make post-run UI certification possible without turning product
+ * history retention into a research archive: the sink is opt-in and bounded
+ * by the same session byte budget as the terminal evidence.
+ */
+export function appendTuiLifecycleEvent(
+  sessionDir: string,
+  event: TuiLifecycleEventInput,
+  options: TuiRetentionOptions = {},
+): void {
+  mkdirSync(sessionDir, { recursive: true })
+  const record: TuiLifecycleRecord = {
+    ...(event.seq !== undefined ? { seq: event.seq } : {}),
+    kind: event.kind,
+    ...(event.turn_id !== undefined ? { turn_id: event.turn_id } : {}),
+    detail: event.detail ?? {},
+    ts: event.ts ?? new Date().toISOString(),
+  }
+  const line = `${JSON.stringify(record)}\n`
+  writeFileSync(join(sessionDir, LIFECYCLE_EVENTS_FILENAME), line, { flag: 'a', encoding: 'utf8' })
+  enforceTuiSessionBudget(sessionDir, resolveByteBudget(options.byteBudget))
+}
+
+/**
+ * Load lifecycle-events.jsonl if present.
+ *
+ * @param sessionDir Observation session directory
+ */
+export function loadTuiLifecycleEvents(sessionDir: string): TuiLifecycleRecord[] {
+  const path = join(sessionDir, LIFECYCLE_EVENTS_FILENAME)
+  if (!existsSync(path)) return []
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as TuiLifecycleRecord)
 }

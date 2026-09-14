@@ -16,7 +16,12 @@ import {
   capabilityProfileId,
   type TerminalCapabilityProfile,
 } from './terminalTransport.js'
-import { appendTerminalVisibleEvent, persistTuiFrame, writeSessionsLatestPointer } from './tuiSessionStore.js'
+import {
+  appendTerminalVisibleEvent,
+  appendTuiLifecycleEvent,
+  persistTuiFrame,
+  writeSessionsLatestPointer,
+} from './tuiSessionStore.js'
 
 /**
  * True when observation is requested.
@@ -58,13 +63,38 @@ export function startTuiObservation(profile?: TerminalCapabilityProfile): string
   })
   let lastObservedSeq = -1
   let semanticReducer = createObservationSemanticReducer()
-  setSessionEventObservationHook((events) => {
-    if (events.seq <= lastObservedSeq) {
+  const lifecycleKinds = new Set([
+    'completion_decision',
+    'policy_intervened',
+    'budget_snapshot',
+    'provider_failure_receipt',
+    'recovery_reconciled',
+    'model_failover',
+    'turn_ended',
+  ])
+  setSessionEventObservationHook((event) => {
+    if (event.seq <= lastObservedSeq) {
       semanticReducer = createObservationSemanticReducer()
     }
-    semanticReducer.apply(events)
-    lastObservedSeq = events.seq
+    semanticReducer.apply(event)
+    lastObservedSeq = event.seq
     getTerminalTransport()?.setSemantic(semanticReducer.current())
+    // Bounded evaluation evidence: cost/status, budget, recovery, and
+    // verification lifecycle records for later UI certification.
+    if (lifecycleKinds.has(event.kind)) {
+      try {
+        const { schema_version, event_id, session_id, turn_id, seq, ts, kind, ...rest } = event
+        appendTuiLifecycleEvent(sessionDir, {
+          seq,
+          kind,
+          turn_id,
+          detail: { turn_id, ...rest },
+          ts,
+        })
+      } catch {
+        // Observation must never break the durable log path.
+      }
+    }
   })
   return sessionDir
 }
