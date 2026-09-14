@@ -55,6 +55,21 @@ export function isLongTaskWallProfileEnabled(
   return raw === '1' || raw === 'true';
 }
 
+/**
+ * Whether the anti-thrash post-write repair window should shrink the wall.
+ *
+ * The repair window exists so thrash cannot burn a short class wall after a
+ * patch already exists. Against an explicitly authorized long-task wall it
+ * would silently kill a multi-hour run 3-8 minutes after the first write, so
+ * it is skipped while that profile is active. The hard wall, stall detector,
+ * turn limit and cost ceiling all remain in force.
+ */
+export function shouldShrinkWallForPostWriteRepair(
+  wallBudget?: ChatEngineLimits['wallBudget'],
+): boolean {
+  return wallBudget?.longTaskProfile !== true;
+}
+
 export const DEFAULT_CHAT_ENGINE_LIMITS: ChatEngineLimits = {
   maxTurns: 200,                       // safety ceiling — budgets stop the loop
   maxConversationMessages: 20,

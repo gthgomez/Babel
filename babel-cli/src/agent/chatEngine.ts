@@ -96,7 +96,7 @@ import {
   type FailureCapsuleV1,
 } from './taskContract.js';
 import { getGlobalTokenTracker } from '../ui/tokenHistory.js';
-import { resolveChatEngineLimits, type ChatEngineLimits } from '../config/chatEngineLimits.js';
+import { resolveChatEngineLimits, shouldShrinkWallForPostWriteRepair, type ChatEngineLimits } from '../config/chatEngineLimits.js';
 import {
   resolveChatTaskClass,
   getChatTaskTune,
@@ -1493,10 +1493,14 @@ export class ChatEngine {
     if (this.taskClass === 'investigate') return;
 
     const elapsedMs = this._sessionStartTime > 0 ? Date.now() - this._sessionStartTime : 0;
-    const { capMs, repairWindowMs } = computePostWriteRepairWallMs({
-      elapsedMs,
-      sessionMaxWallMs: this.limits.maxWallMs,
-    });
+    // An explicitly authorized long-task run keeps its full wall: the
+    // anti-thrash repair window would otherwise kill it minutes after the
+    // first write. Hard wall, stall, turn and cost budgets still apply.
+    const shrinkWall = shouldShrinkWallForPostWriteRepair(this.limits.wallBudget);
+    const repairWall = shrinkWall
+      ? computePostWriteRepairWallMs({ elapsedMs, sessionMaxWallMs: this.limits.maxWallMs })
+      : { capMs: this.limits.maxWallMs, repairWindowMs: Math.max(0, this.limits.maxWallMs - elapsedMs) };
+    const { capMs, repairWindowMs } = repairWall;
     this.postWriteRepairWallCapMs = capMs;
     this.postWriteRepairRestrict = true;
 

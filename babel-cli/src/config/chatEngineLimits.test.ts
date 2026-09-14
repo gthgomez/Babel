@@ -7,7 +7,20 @@ import {
   isChatStreamingEnabled,
   isSweChatProfileEnabled,
   resolveChatEngineLimits,
+  shouldShrinkWallForPostWriteRepair,
 } from './chatEngineLimits.js';
+
+test('post-write repair wall shrink is disabled only under the long-task profile', () => {
+  assert.equal(shouldShrinkWallForPostWriteRepair(undefined), true);
+  assert.equal(
+    shouldShrinkWallForPostWriteRepair({ effectiveMs: 600_000, requestedMs: 600_000, ceilingMs: 3_600_000, longTaskProfile: false }),
+    true,
+  );
+  assert.equal(
+    shouldShrinkWallForPostWriteRepair({ effectiveMs: 600_000, requestedMs: 7_200_000, ceilingMs: 14_400_000, longTaskProfile: true }),
+    false,
+  );
+});
 
 test('explicit unlimited monetary policy retains wall, turn and stall controls', () => {
   const previous = process.env['BABEL_CHAT_MAX_COST'];

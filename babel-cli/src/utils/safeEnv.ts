@@ -83,6 +83,11 @@ const BABEL_SAFE_VARS = new Set([
   'BABEL_LITE_WORKER_CHAIN',
   'BABEL_REPO_MAP_PATH',
   'BABEL_SESSION_START_PATH',
+  // Chat wall/long-task profile: non-secret configuration that must reach
+  // child/worker Babel runs so an explicitly authorized long task is not
+  // silently reverted to the default one-hour ceiling in a subprocess.
+  'BABEL_CHAT_LONG_TASK',
+  'BABEL_CHAT_MAX_WALL_MS',
 ]);
 
 export function getSafeEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {

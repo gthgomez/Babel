@@ -25,6 +25,18 @@ test('getSafeEnv strips all configured LLM provider secrets', () => {
   assert.equal(safe.PATH, '/usr/bin');
 });
 
+test('getSafeEnv forwards the chat long-task wall configuration to children', () => {
+  const safe = getSafeEnv({
+    BABEL_CHAT_LONG_TASK: '1',
+    BABEL_CHAT_MAX_WALL_MS: '7200000',
+    OPENROUTER_API_KEY: 'router-secret',
+    PATH: '/usr/bin',
+  });
+  assert.equal(safe.BABEL_CHAT_LONG_TASK, '1');
+  assert.equal(safe.BABEL_CHAT_MAX_WALL_MS, '7200000');
+  assert.equal(safe.OPENROUTER_API_KEY, undefined);
+});
+
 test('getSafeEnv preserves known-safe BABEL_* config variables', () => {
   const safe = getSafeEnv({
     BABEL_ROOT: '/opt/babel',
