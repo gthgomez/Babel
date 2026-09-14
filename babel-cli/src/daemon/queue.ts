@@ -13,9 +13,22 @@
 import { createAgentJob, updateAgentJob, listAgentJobs } from '../services/agentJobs.js';
 import type { AgentJob } from '../services/agentJobs.js';
 import { DAEMON_QUEUE_TICK_INTERVAL_MS } from './constants.js';
-import { writeDaemonJobMeta, writeDaemonJobResult, writeDaemonJobTelemetry } from './evidence.js';
+import { writeDaemonJobResult, writeDaemonJobTelemetry } from './evidence.js';
 import type { DaemonJobMeta } from './evidence.js';
 import { recommendModel } from './resourceOptimizer.js';
+
+/**
+ * Truthful queue wait: the wall time between the job record's creation and the
+ * moment the daemon actually started it. A malformed/absent created_at is an
+ * unknown wait, never a fabricated positive value; we report 0 rather than a
+ * negative or NaN measurement.
+ */
+export function realQueueWaitMs(startedAt: number, createdAt: string | null | undefined): number {
+  const parsed = Date.parse(String(createdAt ?? ''));
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, startedAt - parsed);
+}
+
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -204,21 +217,16 @@ export class DaemonQueue {
         );
       }
 
-      // Phase 12: Rollback — checkpoint before mutation for verified/autonomous modes
-      let checkpointId: string | null = null;
-      if (job.mode === 'deep') {
-        if (job.project_root) {
-          try {
-            const { createPreMutationCheckpoint } = await import('../services/checkpoints.js');
-            const cpDir = job.project_root;
-            checkpointId = `daemon-${job.id}-${Date.now()}`;
-            // Checkpoint creation is best-effort — don't block execution
-            console.log(`[daemon:queue] Checkpoint ${checkpointId} for job ${job.id}`);
-          } catch {
-            /* best effort */
-          }
-        }
-      }
+      // Phase 12: Rollback — checkpoint before mutation for verified/autonomous modes.
+      // The daemon is not wired to the checkpoint service: creating a real
+      // pre-mutation checkpoint requires the tool-executor request context.
+      // No checkpoint ID may be claimed without an authoritative creation
+      // receipt, so deep-mode jobs record an explicit not-wired status instead.
+      const checkpointId: string | null = null;
+      const checkpointStatus: 'not_wired' | 'skipped' = job.mode === 'deep' ? 'not_wired' : 'skipped';
+      const checkpointNote = checkpointStatus === 'not_wired'
+        ? 'Daemon deep-mode pre-mutation checkpointing is not wired to the checkpoint service; no recoverability claim is made.'
+        : null;
 
       const { runBabelPipeline } = await import('../pipeline.js');
       const result = await runBabelPipeline(job.task, {
@@ -237,11 +245,14 @@ export class DaemonQueue {
           pipelineStatus: result.status,
           durationMs,
           error: isSuccess ? null : `Pipeline ended with status: ${result.status}`,
-          modelUsed: modelRec.model,
+          modelRequested: job.model ?? null,
+          modelRecommended: modelRec.model,
           checkpointId,
+          checkpointStatus,
+          checkpointNote,
         });
         writeDaemonJobTelemetry(runDir, job.id, {
-          queueWaitMs: 0, // approximate
+          queueWaitMs: realQueueWaitMs(startedAt, job.created_at),
           executionDurationMs: durationMs,
           retryCount: job.retry_count ?? 0,
           rateLimitDelayMs: 0,
@@ -274,7 +285,8 @@ export class DaemonQueue {
         return;
       }
 
-      // Phase 12: Rollback on pipeline failure
+      // Phase 12: Rollback on pipeline failure — only meaningful when an
+      // authoritative checkpoint record exists (never today; see above).
       if (!isSuccess && checkpointId && job.project_root) {
         try {
           const { restoreCheckpoint, findCheckpoint } = await import('../services/checkpoints.js');
@@ -287,10 +299,12 @@ export class DaemonQueue {
                 status: 'failed',
                 pipelineStatus: result.status,
                 durationMs,
-                error: `Pipeline failed. Rollback performed.`,
+                error: 'Pipeline failed. Rollback performed.',
                 rollbackPerformed: true,
                 checkpointId,
-                modelUsed: modelRec.model,
+                checkpointStatus: 'created',
+                modelRequested: job.model ?? null,
+                modelRecommended: modelRec.model,
               });
             }
           }
@@ -302,7 +316,7 @@ export class DaemonQueue {
       if (isSuccess) {
         this._totalCompleted++;
         console.log(
-          `[daemon:queue] Job ${job.id} completed: ${result.status} (model: ${modelRec.model})`,
+          `[daemon:queue] Job ${job.id} completed: ${result.status} (recommended model: ${modelRec.model})`,
         );
       } else {
         this.handleFailure(job, `Pipeline status: ${result.status}`);
@@ -319,7 +333,7 @@ export class DaemonQueue {
             error: err.message ?? 'Unknown error',
           });
           writeDaemonJobTelemetry(runDir, job.id, {
-            queueWaitMs: 0,
+            queueWaitMs: realQueueWaitMs(startedAt, job.created_at),
             executionDurationMs: durationMs,
             retryCount: job.retry_count ?? 0,
             rateLimitDelayMs: 0,
