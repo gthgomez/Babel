@@ -116,9 +116,10 @@ docs/audit/
 docs/critiques/
 docs/plans/
 docs/research/
-# docs/status/audits/ is a tracked public audit chain; the rest of docs/status/ stays internal.
-docs/status/*
-!docs/status/audits/
+# docs/status/ is internal-only: the machine-readable public-content policy
+# forbids the docs/status/ prefix. Publishable audit material belongs under
+# docs/reconciliation/.
+docs/status/
 docs/guides/PARITY_BENCHMARK.md
 docs/OSS_DOCS_CRITIQUE_2026-08-01.md
 # Deterministic Remote UI browser artifacts (review locally or upload in CI).
