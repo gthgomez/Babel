@@ -246,4 +246,46 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
     assert.equal(wire[3]!.role, 'tool');
     assert.equal(wire[3]!.tool_call_id, 'ds_call');
   });
+
+  test('validateProviderMessageProtocol rejects duplicate declared tool IDs and catches unanswered call (Astra Probe P06)', () => {
+    const issues = validateProviderMessageProtocol([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'same', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+          { id: 'same', type: 'function', function: { name: 'grep', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', content: 'one result only', tool_call_id: 'same' },
+    ]);
+
+    assert.ok(issues.some((i) => i.code === 'duplicate_tool_call_id'), 'must flag duplicate_tool_call_id');
+    assert.ok(issues.some((i) => i.code === 'unanswered_tool_call'), 'must flag unanswered_tool_call for the 2nd call');
+  });
+
+  test('validateProviderMessageProtocol rejects whitespace-only tool IDs', () => {
+    const issuesAssistant = validateProviderMessageProtocol([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: '   ', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+        ],
+      },
+    ]);
+    assert.ok(issuesAssistant.some((i) => i.code === 'assistant_tool_call_missing_id'));
+
+    const issuesTool = validateProviderMessageProtocol([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'valid_id', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', content: 'result', tool_call_id: '   ' },
+    ]);
+    assert.ok(issuesTool.some((i) => i.code === 'tool_missing_call_id'));
+  });
 });

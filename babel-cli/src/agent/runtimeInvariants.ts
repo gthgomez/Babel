@@ -113,13 +113,29 @@ export interface RequestReconstructionContext {
  */
 export function resolveRuntimeInvariantMode(
   explicit?: RuntimeInvariantMode,
+  env: NodeJS.ProcessEnv = process.env,
 ): RuntimeInvariantMode {
   if (explicit) return explicit;
-  const configured = process.env['BABEL_RUNTIME_INVARIANTS'];
+  const configured = env['BABEL_RUNTIME_INVARIANTS'];
   if (configured === 'enforce' || configured === 'shadow' || configured === 'off') {
     return configured;
   }
-  return process.env['NODE_ENV'] === 'production' && !process.env['CI']
+  // Astra Probe P07: experiment preflight and benchmark runs enforce protocol invariants
+  const isExperimentPreflight =
+    env['BABEL_EXPERIMENT'] === '1' ||
+    env['BABEL_EXPERIMENT'] === 'true' ||
+    env['BABEL_PREFLIGHT'] === '1' ||
+    env['BABEL_PREFLIGHT'] === 'true' ||
+    env['BABEL_ASTRA_PREFLIGHT'] === '1' ||
+    env['BABEL_ASTRA_PREFLIGHT'] === 'true' ||
+    env['BABEL_LAB_PREFLIGHT'] === '1' ||
+    env['BABEL_LAB_PREFLIGHT'] === 'true';
+
+  if (isExperimentPreflight) {
+    return 'enforce';
+  }
+
+  return env['NODE_ENV'] === 'production' && !env['CI']
     ? 'shadow'
     : 'enforce';
 }

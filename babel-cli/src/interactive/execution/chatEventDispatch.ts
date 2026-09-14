@@ -22,6 +22,28 @@ export interface ChatEventDispatchSinks {
   toolIdQueue?: number[];
 }
 
+/**
+ * Detect whether an error message reflects infrastructure/disk/network/provider failure.
+ */
+export function isInfrastructureErrorText(error: string): boolean {
+  if (!error) return false;
+  return (
+    /\b(?:ENOSPC|EROFS|EIO|EBUSY|EMFILE|ENFILE|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH)\b/i.test(
+      error,
+    ) ||
+    /runtime-invariant/i.test(error) ||
+    /socket hang up|connection reset|fetch failed|undici|network (?:error|timeout)|broken pipe/i.test(
+      error,
+    ) ||
+    /provider (?:startup|stream) idle|idle timeout|request deadline|request timeout|timeout exceeded/i.test(
+      error,
+    ) ||
+    /\[provider\]|provider (?:error|disconnected)|finish_reason: error|overloaded|service unavailable|bad gateway|rate limit|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout/i.test(
+      error,
+    )
+  );
+}
+
 /** Dispatch one chat event to all configured sinks. Returns a terminal ChatResult on failure. */
 export function dispatchChatEvent(
   event: ChatEvent,
@@ -89,25 +111,45 @@ export function dispatchChatEvent(
   }
 
   if (event.type === 'failed') {
+    const outcome: TerminalOutcome =
+      event.outcome ??
+      (isInfrastructureErrorText(event.error) ? 'INFRA_FAILURE' : 'AGENT_FAILURE');
+    const ev = event as {
+      turnRouting?: TurnRoutingReceipt[];
+      verifierReceipt?: ChatResult['verifierReceipt'];
+    };
     return {
       status: 'failed',
-      outcome: event.outcome ?? 'AGENT_FAILURE',
+      outcome,
       answer: event.error,
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
-      ...(event.toolCalls ? { toolCalls: event.toolCalls } : {}),
-      ...(event.runDir ? { runDir: event.runDir } : {}),
+      ...(event.toolCalls !== undefined ? { toolCalls: event.toolCalls } : {}),
+      ...(event.runDir !== undefined ? { runDir: event.runDir } : {}),
+      ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
+      ...(ev.turnRouting !== undefined ? { turnRouting: ev.turnRouting } : {}),
+      ...(ev.verifierReceipt !== undefined ? { verifierReceipt: ev.verifierReceipt } : {}),
     };
   }
 
   if (event.type === 'cancelled') {
+    const ev = event as {
+      toolCalls?: ChatResult['toolCalls'];
+      runDir?: string;
+      turnRouting?: TurnRoutingReceipt[];
+      verifierReceipt?: ChatResult['verifierReceipt'];
+    };
     return {
       status: 'cancelled',
       outcome: 'CANCELLED',
       answer: 'Cancelled',
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
-      ...(event.turnTelemetry ? { turnTelemetry: event.turnTelemetry } : {}),
+      ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
+      ...(ev.toolCalls !== undefined ? { toolCalls: ev.toolCalls } : {}),
+      ...(ev.runDir !== undefined ? { runDir: ev.runDir } : {}),
+      ...(ev.turnRouting !== undefined ? { turnRouting: ev.turnRouting } : {}),
+      ...(ev.verifierReceipt !== undefined ? { verifierReceipt: ev.verifierReceipt } : {}),
     };
   }
 

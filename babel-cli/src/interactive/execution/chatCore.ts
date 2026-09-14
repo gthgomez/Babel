@@ -25,6 +25,7 @@ import { BABEL_RUNS_DIR } from '../../cli/constants.js';
 import { getProtocolClient } from '../../protocol/client/index.js';
 import {
   dispatchChatEvent,
+  isInfrastructureErrorText,
   terminalResultFromDoneEvent,
   type ChatStreamEvent,
 } from './chatEventDispatch.js';
@@ -215,6 +216,60 @@ function collectWorkspaceDepReadinessNote(targetRoot: string): string | undefine
 }
 
 /**
+ * Classify stream exceptions to honest terminal outcomes (operator cancel, budget, infra, agent).
+ */
+export function classifyChatStreamError(err: unknown): {
+  status: 'cancelled' | 'failed' | 'budget_exhausted';
+  outcome?: import('../../schemas/agentContracts.js').TerminalOutcome;
+} {
+  if (isOperatorAbortError(err)) {
+    return { status: 'cancelled', outcome: 'CANCELLED' };
+  }
+  const explicitOutcome =
+    err && typeof err === 'object' && 'outcome' in err
+      ? (err as { outcome?: import('../../schemas/agentContracts.js').TerminalOutcome }).outcome
+      : undefined;
+  if (explicitOutcome) {
+    return { status: 'failed', outcome: explicitOutcome };
+  }
+
+  const msg = err instanceof Error ? err.message : String(err);
+  const code =
+    err && typeof err === 'object' && 'code' in err
+      ? String((err as { code?: unknown }).code)
+      : '';
+  const name =
+    err && typeof err === 'object' && 'name' in err
+      ? String((err as { name?: unknown }).name)
+      : '';
+
+  if (/budget.*exceeded/i.test(msg)) {
+    return { status: 'budget_exhausted', outcome: 'BUDGET_EXHAUSTED' };
+  }
+
+  if (
+    code === 'ENOSPC' ||
+    code === 'EROFS' ||
+    code === 'EIO' ||
+    code === 'EBUSY' ||
+    code === 'EMFILE' ||
+    code === 'ENFILE' ||
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ETIMEDOUT' ||
+    code === 'EAI_AGAIN' ||
+    code === 'ENOTFOUND' ||
+    code === 'EHOSTUNREACH' ||
+    name === 'RuntimeInvariantViolationError' ||
+    isInfrastructureErrorText(msg)
+  ) {
+    return { status: 'failed', outcome: 'INFRA_FAILURE' };
+  }
+
+  return { status: 'failed', outcome: 'AGENT_FAILURE' };
+}
+
+/**
  * Consume the streaming ChatEvent generator and dispatch each event to sinks.
  */
 export async function consumeChatStream(
@@ -226,6 +281,7 @@ export async function consumeChatStream(
   let answer = '';
   let usage: SessionUsageSummary = globalCostTracker.getSessionSummary();
   let toolCalls: Array<{ tool: string; target: string; detail?: string; error?: string }> | undefined;
+  const accumulatedToolCalls: Array<{ tool: string; target: string; detail?: string; error?: string }> = [];
   let runDir: string | undefined;
   let verifierReceipt: { command: string; exit_code: number; summary: string } | null | undefined;
   let blockedReport: BlockedReport | null | undefined;
@@ -240,56 +296,100 @@ export async function consumeChatStream(
 
   try {
     for await (const event of stream) {
-      const failed = dispatchChatEvent(event, {
+      if (event.type === 'tool_complete') {
+        accumulatedToolCalls.push({
+          tool: event.tool,
+          target: event.target,
+          ...(event.detail !== undefined ? { detail: event.detail } : {}),
+          ...(event.error !== undefined ? { error: event.error } : {}),
+        });
+      }
+
+      const terminalFromDispatch = dispatchChatEvent(event, {
         convRenderer,
         ...(onStreamEvent ? { onStreamEvent } : {}),
         ...(protocolSession ? { protocolSession } : {}),
         toolIdQueue,
       });
-      if (failed) return failed;
+
+      if (terminalFromDispatch) {
+        receivedTerminalEvent = true;
+        if (!terminalFromDispatch.toolCalls && accumulatedToolCalls.length > 0) {
+          terminalFromDispatch.toolCalls = [...accumulatedToolCalls];
+        }
+        if (!terminalFromDispatch.runDir && runDir) {
+          terminalFromDispatch.runDir = runDir;
+        }
+        if (!terminalFromDispatch.turnRouting && turnRouting) {
+          terminalFromDispatch.turnRouting = turnRouting;
+        }
+        if (!terminalFromDispatch.turnTelemetry && doneTurnTelemetry) {
+          terminalFromDispatch.turnTelemetry = doneTurnTelemetry;
+        }
+        if (!terminalFromDispatch.verifierReceipt && verifierReceipt) {
+          terminalFromDispatch.verifierReceipt = verifierReceipt;
+        }
+        return terminalFromDispatch;
+      }
 
       if (event.type === 'done') {
         answer = event.answer;
         usage = event.usage;
-        toolCalls = event.toolCalls;
-        runDir = event.runDir;
-        verifierReceipt = event.verifierReceipt;
-        blockedReport = event.blockedReport;
-        criticReceipt = event.criticReceipt;
-        verifierTampered = event.verifierTampered;
-        turnRouting = event.turnRouting;
+        toolCalls = event.toolCalls ?? (accumulatedToolCalls.length > 0 ? [...accumulatedToolCalls] : undefined);
+        runDir = event.runDir ?? runDir;
+        verifierReceipt = event.verifierReceipt ?? verifierReceipt;
+        blockedReport = event.blockedReport ?? blockedReport;
+        criticReceipt = event.criticReceipt ?? criticReceipt;
+        verifierTampered = event.verifierTampered ?? verifierTampered;
+        turnRouting = event.turnRouting ?? turnRouting;
         doneOutcome = event.outcome;
         doneBudgetExceeded = event.budgetExceeded === true;
-        doneTurnTelemetry = event.turnTelemetry;
+        doneTurnTelemetry = event.turnTelemetry ?? doneTurnTelemetry;
         receivedTerminalEvent = true;
       }
     }
   } catch (err: unknown) {
-    if (isOperatorAbortError(err)) {
+    const classification = classifyChatStreamError(err);
+    if (classification.status === 'cancelled') {
       return {
         status: 'cancelled',
         outcome: 'CANCELLED',
         answer: 'Cancelled',
         usage: globalCostTracker.getSessionSummary(),
         conversation: [],
+        ...(accumulatedToolCalls.length > 0 ? { toolCalls: [...accumulatedToolCalls] } : {}),
+        ...(runDir !== undefined ? { runDir } : {}),
+        ...(turnRouting !== undefined ? { turnRouting } : {}),
+        ...(doneTurnTelemetry !== undefined ? { turnTelemetry: doneTurnTelemetry } : {}),
+        ...(verifierReceipt !== undefined ? { verifierReceipt } : {}),
       };
     }
     return {
-      status: 'failed',
-      outcome: 'AGENT_FAILURE',
+      status: classification.status,
+      ...(classification.outcome !== undefined ? { outcome: classification.outcome } : {}),
       answer: err instanceof Error ? err.message : String(err),
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
+      ...(accumulatedToolCalls.length > 0 ? { toolCalls: [...accumulatedToolCalls] } : {}),
+      ...(runDir !== undefined ? { runDir } : {}),
+      ...(turnRouting !== undefined ? { turnRouting } : {}),
+      ...(doneTurnTelemetry !== undefined ? { turnTelemetry: doneTurnTelemetry } : {}),
+      ...(verifierReceipt !== undefined ? { verifierReceipt } : {}),
     };
   }
 
   if (!receivedTerminalEvent) {
     return {
-      status: 'cancelled',
-      outcome: 'CANCELLED',
+      status: 'failed',
+      // outcome omitted: inconclusive per Astra Probe P15 (never CANCELLED)
       answer: 'Stream ended without a terminal event — possible internal error',
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
+      ...(accumulatedToolCalls.length > 0 ? { toolCalls: [...accumulatedToolCalls] } : {}),
+      ...(runDir !== undefined ? { runDir } : {}),
+      ...(turnRouting !== undefined ? { turnRouting } : {}),
+      ...(doneTurnTelemetry !== undefined ? { turnTelemetry: doneTurnTelemetry } : {}),
+      ...(verifierReceipt !== undefined ? { verifierReceipt } : {}),
     };
   }
 
@@ -557,13 +657,14 @@ export async function runChatEngineOnce(input: {
       });
     } else if (result.status === 'failed') {
       protocolSession?.emitChatEvent({ type: 'failed', error: result.answer });
+    } else if (result.status === 'cancelled') {
+      protocolSession?.emitChatEvent({ type: 'cancelled' });
     }
   }
 
-  if (result.status === 'completed') {
-    persistTurnAssistantCells(turnPersistence, convRenderer);
-    finalizeProtocolTurn(protocolSession);
-  }
+  // Ensure turn persistence and protocol finalization run on all terminal paths
+  persistTurnAssistantCells(turnPersistence, convRenderer);
+  finalizeProtocolTurn(protocolSession);
 
   // C1: Persist intent plan to run_dir/intent_plan.json after the run
   if (intentPlan && result.runDir) {
