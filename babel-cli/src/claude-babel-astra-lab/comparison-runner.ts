@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createFixture, fixturePrompt, type FixtureTaskId } from '../fixtures/claude-babel-astra-lab/fixtures.js'
+import { assertClaudeBenchmarkOptIn } from './claudeHarness.js'
 import type { ControlledRun } from './contracts.js'
 import { compareCells, digest, normalizeCapabilities, preflight, type ArmIdentity, type CellResult, type Harness, type PairContract, type PairResult, type Termination } from './comparison-contract.js'
 import { evaluateFrozen, freezeEvaluator } from './frozen-evaluator.js'
@@ -135,6 +136,10 @@ async function runCell(contract: PairContract, harness: Harness, dir: string, op
 
 /** Sequential, bounded campaign. One invalid cell never stops later pairs. */
 export async function runComparisonCampaign(contracts: PairContract[], options: CampaignOptions): Promise<PairResult[]> {
+  // Fail closed for every caller, not just the CLI: the campaign always runs the
+  // claude-code benchmark arm, so require the same explicit opt-in as the harness.
+  // Checked before any output directory mutation or adapter invocation.
+  assertClaudeBenchmarkOptIn()
   if (existsSync(options.outputRoot) && readdirSync(options.outputRoot).length) throw new Error('OUTPUT_ALREADY_EXISTS: choose a fresh directory; historical artifacts are immutable')
   mkdirSync(options.outputRoot, { recursive: true })
   const pairs: PairResult[] = []
