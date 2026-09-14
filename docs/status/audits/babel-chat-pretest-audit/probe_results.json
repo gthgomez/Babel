@@ -1,0 +1,222 @@
+{
+  "auditDate": "2026-09-14",
+  "sourceRepository": "gthgomez/Babel",
+  "sourceCommit": "18fd3f50b33525f41bba5e5ce0d233097b5b7413",
+  "finalMain": "017ec8cc28dbfbabf8138794096b1af00212b474",
+  "runtimeEquivalence": "GitHub comparison: only the readiness report was added between audited runtime and final main.",
+  "nodeVersion": "v24.12.0",
+  "scope": "Manual source transcriptions and explicitly labelled reduced control-flow models; NOT imported Babel or end-to-end tests.",
+  "networkCalls": 0,
+  "modelInferenceCalls": 0,
+  "assertionsSatisfied": 16,
+  "assertionsFailed": 0,
+  "interpretation": "Assertions reproduce local failure mechanisms and positive controls; they do not certify runtime reachability, frequency, or benchmark readiness.",
+  "results": [
+    {
+      "id": "P01",
+      "fidelity": "transcribed-function",
+      "assertion": "satisfied",
+      "finding": "positive control: uncompacted history retains the result",
+      "observation": {
+        "retained": true,
+        "protocolIssues": 0
+      }
+    },
+    {
+      "id": "P02",
+      "fidelity": "transcribed-function + explicit fixture",
+      "assertion": "satisfied",
+      "finding": "compaction drops the retained tail from native reconstruction",
+      "observation": {
+        "liveTailRetainsNonce": true,
+        "nativeRetainsNonce": false,
+        "claimedPreservedIds": [
+          "c1"
+        ],
+        "deliveredToolResultIds": [],
+        "protocolIssues": 0
+      }
+    },
+    {
+      "id": "P03",
+      "fidelity": "transcribed-function + explicit fixture",
+      "assertion": "satisfied",
+      "finding": "reloading the same durable log reproduces the loss",
+      "observation": {
+        "restartRepairsMissingContext": false
+      }
+    },
+    {
+      "id": "P04",
+      "fidelity": "transcribed-function + explicit fixture",
+      "assertion": "satisfied",
+      "finding": "a live-only working-state message cannot enter the durable projector",
+      "observation": {
+        "liveOnlyMessageDelivered": false,
+        "note": "Call-site reachability must be verified in integrated tests."
+      }
+    },
+    {
+      "id": "P05",
+      "fidelity": "transcribed-function",
+      "assertion": "satisfied",
+      "finding": "positive control: unanswered calls are detected",
+      "observation": [
+        "unanswered_tool_call"
+      ]
+    },
+    {
+      "id": "P06",
+      "fidelity": "transcribed-function",
+      "assertion": "satisfied",
+      "finding": "duplicate declared IDs collapse to one pending ID",
+      "observation": {
+        "declaredCalls": 2,
+        "declaredUniqueIds": 1,
+        "results": 1,
+        "validatorIssues": []
+      }
+    },
+    {
+      "id": "P07",
+      "fidelity": "transcribed-function, env parameterized",
+      "assertion": "satisfied",
+      "finding": "production defaults to observation rather than prevention",
+      "observation": {
+        "productionDefault": "shadow",
+        "explicitEnforce": "enforce",
+        "ciDefault": "enforce"
+      }
+    },
+    {
+      "id": "P08",
+      "fidelity": "transcribed-function + exact budget expression",
+      "assertion": "satisfied",
+      "finding": "finite session budget is narrowed to a repair slice",
+      "observation": {
+        "requestedCeilingUsd": 10,
+        "spentUsd": 1,
+        "effectiveCeilingUsd": 1.75,
+        "remainingAllowanceUsd": 0.75
+      }
+    },
+    {
+      "id": "P09",
+      "fidelity": "transcribed-function + exact budget expression",
+      "assertion": "satisfied",
+      "finding": "mitigation: unlimited bypasses the finite repair cap",
+      "observation": {
+        "effectiveCeiling": "Infinity",
+        "note": "External experiment spend ceiling still necessary; not a recommendation for unbounded spending."
+      }
+    },
+    {
+      "id": "P10",
+      "fidelity": "transcribed-function",
+      "assertion": "satisfied",
+      "finding": "ordinary 30-minute task can acquire a 5-minute deadline after writing at minute two",
+      "observation": {
+        "requestedWallMinutes": 30,
+        "firstWriteMinute": 2,
+        "effectiveDeadlineMinute": 5,
+        "note": "Long-task authorization skips this wall shrink."
+      }
+    },
+    {
+      "id": "P11",
+      "fidelity": "exact source expression",
+      "assertion": "satisfied",
+      "finding": "zero changed files matches the delegated mutation predicate",
+      "observation": {
+        "summary": "0 changed",
+        "creditedByPredicate": true
+      }
+    },
+    {
+      "id": "P12",
+      "fidelity": "reduced-control-flow model",
+      "assertion": "satisfied",
+      "finding": "premature EOF is compatible with synthesized completion",
+      "observation": {
+        "toolUses": [],
+        "done": {
+          "type": "done",
+          "finishReason": "stop"
+        },
+        "turn": {
+          "type": "completion",
+          "answer": "Partial answer"
+        }
+      }
+    },
+    {
+      "id": "P13",
+      "fidelity": "reduced-control-flow model",
+      "assertion": "satisfied",
+      "finding": "error finish reason is not itself an engine failure",
+      "observation": {
+        "toolUses": [],
+        "done": {
+          "type": "done",
+          "finishReason": "error"
+        },
+        "turn": {
+          "type": "completion",
+          "answer": "OK"
+        }
+      }
+    },
+    {
+      "id": "P14",
+      "fidelity": "reduced-control-flow model",
+      "assertion": "satisfied",
+      "finding": "partial JSON tool arguments become an empty object",
+      "observation": {
+        "toolUses": [
+          {
+            "type": "tool_use",
+            "id": "p",
+            "name": "write_file",
+            "input": {}
+          }
+        ],
+        "done": {
+          "type": "done",
+          "finishReason": "stop"
+        },
+        "turn": {
+          "type": "tool_calls",
+          "actions": [
+            {
+              "type": "tool_use",
+              "id": "p",
+              "name": "write_file",
+              "input": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "P15",
+      "fidelity": "reduced-control-flow model",
+      "assertion": "satisfied",
+      "finding": "missing terminal event is classified as cancellation",
+      "observation": {
+        "status": "cancelled",
+        "outcome": "CANCELLED"
+      }
+    },
+    {
+      "id": "P16",
+      "fidelity": "reduced-control-flow model",
+      "assertion": "satisfied",
+      "finding": "an untyped persistence exception can become AGENT_FAILURE",
+      "observation": {
+        "status": "failed",
+        "outcome": "AGENT_FAILURE",
+        "answer": "ENOSPC: failed evidence append"
+      }
+    }
+  ]
+}
