@@ -12,7 +12,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ChatMessage } from './chatCompaction.js';
 import { estimateTokens } from './chatCompaction.js';
-import type { RunnerCallbacks } from '../runners/base.js';
+import type { RunnerCallbacks, ProviderToolCall } from '../runners/base.js';
 import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js';
 import {
   appendThreadEvent,
@@ -313,6 +313,9 @@ export async function commitCompaction(
   let threadEventId: string | undefined;
   let sessionEventId: string | undefined;
 
+  const threadEventCountBefore = input.threadLog.events.length;
+  const threadNextSeqBefore = input.threadLog.nextSeq;
+
   try {
     recordCompactionStarted(input.sessionLog, input.turnId, {
       operation_id: operationId,
@@ -333,6 +336,83 @@ export async function commitCompaction(
     });
     threadEventId = threadEv.event_id;
 
+    // Atomically retain the kept working set (user messages, complete tool cycles, etc.)
+    // after the compaction capsule in threadLog so durable reconstruction never drops them.
+    const nonSystem = conversation.filter((m) => m.role !== 'system');
+    for (let i = 0; i < nonSystem.length; i++) {
+      const m = nonSystem[i]!;
+      if (m.role === 'user') {
+        appendThreadEvent(input.threadLog, {
+          kind: 'user_message',
+          turn_id: turnId,
+          content: m.content,
+        });
+      } else if (m.role === 'assistant') {
+        const toolCalls = (m as any).tool_calls as ProviderToolCall[] | undefined;
+        if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+          appendThreadEvent(input.threadLog, {
+            kind: 'assistant_tool_calls',
+            turn_id: turnId,
+            content: m.content || 'Using tools…',
+            tool_calls: toolCalls,
+          });
+        } else if (m.name === 'tool_calls') {
+          // Look ahead to find tool result IDs if tool_calls not directly on m
+          const nextTools = nonSystem.slice(i + 1).filter((n) => n.role === 'tool' && n.toolCallId);
+          const toolCallIds = new Set(nextTools.map((n) => n.toolCallId!));
+          const matchedCalls: ProviderToolCall[] = [];
+          for (const ev of input.threadLog.events) {
+            if (ev.kind === 'assistant_tool_calls') {
+              for (const tc of ev.tool_calls) {
+                if (toolCallIds.has(tc.id) && !matchedCalls.some((c) => c.id === tc.id)) {
+                  matchedCalls.push(tc);
+                }
+              }
+            }
+          }
+          if (matchedCalls.length > 0) {
+            appendThreadEvent(input.threadLog, {
+              kind: 'assistant_tool_calls',
+              turn_id: turnId,
+              content: m.content || 'Using tools…',
+              tool_calls: matchedCalls,
+            });
+          } else {
+            appendThreadEvent(input.threadLog, {
+              kind: 'assistant_message',
+              turn_id: turnId,
+              content: m.content,
+            });
+          }
+        } else {
+          appendThreadEvent(input.threadLog, {
+            kind: 'assistant_message',
+            turn_id: turnId,
+            content: m.content,
+          });
+        }
+      } else if (m.role === 'tool') {
+        const toolCallId = m.toolCallId ?? '';
+        let toolName = m.toolName ?? m.name ?? 'tool';
+        let exitCode: number | undefined;
+        for (const ev of input.threadLog.events) {
+          if (ev.kind === 'tool_result' && ev.tool_call_id === toolCallId) {
+            toolName = ev.tool_name || toolName;
+            exitCode = ev.exit_code;
+            break;
+          }
+        }
+        appendThreadEvent(input.threadLog, {
+          kind: 'tool_result',
+          turn_id: turnId,
+          tool_call_id: toolCallId,
+          tool_name: toolName,
+          content: m.content,
+          ...(exitCode !== undefined ? { exit_code: exitCode } : {}),
+        });
+      }
+    }
+
     const sessionEv = recordCompactionCommitted(input.sessionLog, input.turnId, {
       operation_id: operationId,
       thread_event_id: threadEv.event_id,
@@ -351,6 +431,8 @@ export async function commitCompaction(
       status: 'committed',
     });
   } catch (err) {
+    input.threadLog.events.splice(threadEventCountBefore);
+    input.threadLog.nextSeq = threadNextSeqBefore;
     const msg = err instanceof Error ? err.message : String(err);
     return {
       status: input.blockOnPersistFailure ? 'blocked_persistence' : 'degraded_persistence',

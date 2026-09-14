@@ -39,13 +39,15 @@ import type { TurnPersistence } from './turnPersistence.js';
 import { buildAskResultPayload } from '../../cli/structuredOutput.js';
 import { runGitCommandAsync } from '../../utils/gitExec.js';
 import { loadProjectSessionIdentity } from '../identity.js';
-import { isChatStreamingEnabled, resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
+import { isChatStreamingEnabled, resolveChatEngineLimits, type ChatEngineLimits } from '../../config/chatEngineLimits.js';
 import {
   detectWorkspaceDepPlan,
   formatWorkspaceDepUnreadyNote,
   probePythonImport,
 } from '../../services/workspaceDepPreflight.js';
-import { resolveChatTaskClass } from '../../config/chatTaskClass.js';
+import { resolveChatTaskClass, type ChatTaskClass } from '../../config/chatTaskClass.js';
+import { selectPlaybookForChatTask, buildPlaybookPrompt } from '../../services/playbooks/playbookService.js';
+import { readProjectMemoryStructured } from '../../services/projectMemory.js';
 import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
 import { isAuthoritativeVerifierCommand } from '../../agent/completionGatePolicy.js';
 import { computeToolCallAggregates } from '../../agent/toolCallExport.js';
@@ -104,6 +106,112 @@ export function compileChatStackForRun(input: {
   });
   _lastChatCompiledStack = stack;
   return stack;
+}
+
+/**
+ * Compile the intent plan user message if applicable for the task and task class.
+ */
+export function compileIntentPlanUserMessage(
+  task: string,
+  taskClass: ChatTaskClass,
+): string | undefined {
+  const intentPlan = compileIntentPlan(task, {
+    taskClass,
+  });
+  if (!intentPlan) return undefined;
+  let msg = formatIntentPlanUserMessage(intentPlan);
+  if (intentPlan.test_command) {
+    msg += '\n\n' + buildInteractiveFirstMoveHint(intentPlan.test_command);
+  }
+  const preloopEnv = process.env['BABEL_CHAT_PRELOOP_PLAN'];
+  const preloopDisabled =
+    preloopEnv !== undefined &&
+    (preloopEnv.trim() === '0' ||
+      preloopEnv.trim().toLowerCase() === 'false' ||
+      preloopEnv.trim().toLowerCase() === 'off');
+  const isExecuteClass = taskClass !== 'investigate';
+  if (isExecuteClass && !preloopDisabled) {
+    msg +=
+      '\n\n' +
+      buildPreLoopPlanningInstruction({
+        enforceMutateFirst: taskClass === 'general_swe',
+      });
+  }
+  return msg;
+}
+
+export interface EngineTurnPreparation {
+  task: string;
+  systemContext?: string | undefined;
+  appendSystemPrompt?: string | undefined;
+  preflightContext?: string | undefined;
+  model?: string | undefined;
+  limits: ChatEngineLimits;
+  intentPlanUserMessage?: string | undefined;
+  executionProfile?: ChatExecutionProfile | undefined;
+}
+
+/**
+ * Apply turn preparation to an existing or reused ChatEngine instance.
+ * Updates task text, systemContext, playbook, intentPlanUserMessage, limits,
+ * and clears cached system prompts so the next LLM call reflects the active turn.
+ */
+export function applyEngineTurnPreparation(
+  engine: ChatEngine,
+  preparation: EngineTurnPreparation,
+): void {
+  if (typeof (engine as any).applyTurnPreparation === 'function') {
+    (engine as any).applyTurnPreparation(preparation);
+    return;
+  }
+  const opts = (engine as any).options ?? ((engine as any).options = {});
+  opts.task = preparation.task;
+  if (preparation.systemContext !== undefined) {
+    const projectRoot = opts.instructionRoot ?? opts.projectRoot;
+    const babelMd = projectRoot
+      ? readProjectMemoryStructured(projectRoot, preparation.task)
+      : null;
+    let resolvedSysContext = preparation.systemContext ?? '';
+    if (babelMd) {
+      resolvedSysContext = babelMd + (resolvedSysContext ? '\n\n' + resolvedSysContext : '');
+    }
+    const chatPlaybook = selectPlaybookForChatTask(preparation.task);
+    if (chatPlaybook) {
+      (engine as any).activePlaybook = chatPlaybook;
+      const pbPrompt = buildPlaybookPrompt(chatPlaybook);
+      if (pbPrompt) {
+        resolvedSysContext = (resolvedSysContext ? resolvedSysContext + '\n\n' : '') + pbPrompt;
+      }
+    }
+    opts.systemContext = resolvedSysContext;
+  }
+  if (preparation.appendSystemPrompt !== undefined) {
+    opts.appendSystemPrompt = preparation.appendSystemPrompt;
+  }
+  if (preparation.preflightContext !== undefined) {
+    opts.preflightContext = preparation.preflightContext;
+  }
+  if (preparation.model !== undefined) {
+    opts.model = preparation.model;
+  }
+  if (preparation.executionProfile !== undefined) {
+    opts.executionProfile = preparation.executionProfile;
+  }
+  if (preparation.intentPlanUserMessage !== undefined) {
+    opts.intentPlanUserMessage = preparation.intentPlanUserMessage;
+  }
+  (engine as any).limits = preparation.limits;
+  opts.maxTurns = preparation.limits.maxTurns;
+  opts.maxConversationMessages = preparation.limits.maxConversationMessages;
+  opts.maxEstimatedTokens = preparation.limits.maxEstimatedTokens;
+
+  if (typeof (engine as any).clearSystemPromptCache === 'function') {
+    (engine as any).clearSystemPromptCache();
+  } else {
+    (engine as any).cachedSystemPromptNative = null;
+    (engine as any).cachedSystemPromptLegacy = null;
+    (engine as any).cachedSystemPromptText = null;
+  }
 }
 
 const defaultEngineFactory: ChatEngineFactory = (options) => new ChatEngine(options);
@@ -416,7 +524,12 @@ export async function runChatEngineOnce(input: {
   const preflightContext =
     input.preflightContext ?? (await gatherChatPreflightContext(input.target.targetRoot));
 
-  const limits = resolveChatEngineLimits();
+  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true });
+  const limits = resolveChatEngineLimits(
+    {},
+    undefined,
+    { taskClass: resolvedTaskClass, taskText: input.task },
+  );
 
   // Smallest compiled chat stack (identity / project / safety / provider / verifier)
   const chatStack = compileChatStackForRun({
@@ -431,37 +544,10 @@ export async function runChatEngineOnce(input: {
   // C1: Compile intent plan for execute tasks (heuristic, no LLM call).
   // Injects as a structured user message so the model sees expanded intent
   // before its first tool turn. Persisted to intent_plan.json after the run.
-  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: false });
   const intentPlan = compileIntentPlan(input.task, {
     taskClass: resolvedTaskClass,
   });
-  // C1: Format intent plan user message; append first-move hint when
-  // the intent plan detected a test command.
-  // D5: Append pre-loop planning instruction for execute tasks
-  // (controlled by BABEL_CHAT_PRELOOP_PLAN; default on for general_swe/default).
-  const intentPlanUserMessage = intentPlan
-    ? (() => {
-        let msg = formatIntentPlanUserMessage(intentPlan);
-        if (intentPlan.test_command) {
-          msg += '\n\n' + buildInteractiveFirstMoveHint(intentPlan.test_command);
-        }
-        // Pre-loop planning: inject "think before tools" instruction.
-        // Skip when env is explicitly '0'/'false'/'off', or for investigate tasks.
-        const preloopEnv = process.env['BABEL_CHAT_PRELOOP_PLAN'];
-        const preloopDisabled =
-          preloopEnv !== undefined &&
-          (preloopEnv.trim() === '0' || preloopEnv.trim().toLowerCase() === 'false' || preloopEnv.trim().toLowerCase() === 'off');
-        const isExecuteClass = resolvedTaskClass !== 'investigate';
-        if (isExecuteClass && !preloopDisabled) {
-          msg +=
-            '\n\n' +
-            buildPreLoopPlanningInstruction({
-              enforceMutateFirst: resolvedTaskClass === 'general_swe',
-            });
-        }
-        return msg;
-      })()
-    : undefined;
+  const intentPlanUserMessage = compileIntentPlanUserMessage(input.task, resolvedTaskClass);
 
   const engine =
     input.engine ??
@@ -482,6 +568,19 @@ export async function runChatEngineOnce(input: {
       ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
       ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
     });
+
+  if (input.engine) {
+    applyEngineTurnPreparation(input.engine, {
+      task: input.task,
+      systemContext: stackSystemContext,
+      appendSystemPrompt: input.appendSystemPrompt,
+      preflightContext,
+      model: input.model,
+      limits,
+      intentPlanUserMessage,
+      executionProfile: input.executionProfile,
+    });
+  }
 
   // Acceptance V0 is an opt-in recording lane. Build the patch-blind snapshot
   // before the first model turn; the kernel and TerminalOutcome stay untouched.

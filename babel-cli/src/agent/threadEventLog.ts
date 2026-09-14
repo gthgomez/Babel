@@ -279,7 +279,8 @@ export function recordToolResult(
 
 /**
  * Rebuild provider-neutral messages from the durable event log.
- * Compaction capsules replace prior history when present (after the capsule).
+ * Compaction capsules replace prior history when present (after the capsule),
+ * while preserving retained tool-call/result cycles and tail messages.
  */
 export function rebuildProviderMessagesFromEvents(
   log: ThreadEventLog,
@@ -293,11 +294,14 @@ export function rebuildProviderMessagesFromEvents(
   // Find last compaction capsule — history before it is replaced by capsule content.
   let startIdx = 0;
   let capsuleContent: string | null = null;
+  let lastCapsuleEvent: Extract<ThreadEvent, { kind: 'compaction_capsule' }> | null = null;
+  let lastCapsuleIdx = -1;
   for (let i = 0; i < events.length; i++) {
     if (events[i]!.kind === 'compaction_capsule') {
       startIdx = i + 1;
-      capsuleContent = (events[i] as Extract<ThreadEvent, { kind: 'compaction_capsule' }>)
-        .content;
+      lastCapsuleIdx = i;
+      lastCapsuleEvent = events[i] as Extract<ThreadEvent, { kind: 'compaction_capsule' }>;
+      capsuleContent = lastCapsuleEvent.content;
     }
   }
 
@@ -311,6 +315,48 @@ export function rebuildProviderMessagesFromEvents(
       content: capsuleContent,
       name: 'compaction_capsule',
     });
+  }
+
+  // If the last capsule has preserved_tool_call_ids that do not appear
+  // in post-capsule events (e.g. pre-appended fixtures like Astra Probe P02),
+  // project the complete tool-call/result cycles from before the capsule.
+  if (lastCapsuleEvent && lastCapsuleIdx >= 0) {
+    const postCapsuleEvents = events.slice(startIdx);
+    const postCapsuleToolIds = new Set<string>();
+    for (const e of postCapsuleEvents) {
+      if (e.kind === 'tool_result' && e.tool_call_id) {
+        postCapsuleToolIds.add(e.tool_call_id);
+      }
+    }
+
+    const preservedIds = lastCapsuleEvent.preserved_tool_call_ids ?? [];
+    const missingPreservedIds = new Set(
+      preservedIds.filter((id) => !postCapsuleToolIds.has(id)),
+    );
+
+    if (missingPreservedIds.size > 0) {
+      const preCapsuleEvents = events.slice(0, lastCapsuleIdx);
+      for (const e of preCapsuleEvents) {
+        if (e.kind === 'assistant_tool_calls') {
+          const matchingCalls = e.tool_calls.filter((tc) => missingPreservedIds.has(tc.id));
+          if (matchingCalls.length > 0) {
+            messages.push({
+              role: 'assistant',
+              content: e.content || 'Using tools…',
+              name: 'tool_calls',
+              tool_calls: matchingCalls,
+            });
+          }
+        } else if (e.kind === 'tool_result' && missingPreservedIds.has(e.tool_call_id)) {
+          messages.push({
+            role: 'tool',
+            content: e.content,
+            tool_call_id: e.tool_call_id,
+            name: e.tool_name,
+          });
+        }
+      }
+    }
   }
 
   for (let i = startIdx; i < events.length; i++) {
