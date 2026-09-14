@@ -7,11 +7,15 @@ import { describe, test } from 'node:test';
 
 import {
   buildCriticSkipReceipt,
+  buildGateRejectionMessage,
   buildPostWriteRepairMessage,
+  checkCostWallBudgets,
   computeCriticRepairCostCap,
   computePostWriteRepairWallMs,
+  currentTurnHasMutation,
   executeCriticWithTimeout,
   hasAnyWrites,
+  hasSubAgentWrites,
   POST_WRITE_REPAIR_WALL_MAX_MS,
   POST_WRITE_REPAIR_WALL_MIN_MS,
   resolveOrCreateCriticProRunner,
@@ -258,5 +262,104 @@ describe('runAsymmetricDiffCritic early paths (C1)', () => {
     } finally {
       restoreEnv('BABEL_DIFF_CRITIC', prev);
     }
+  });
+});
+
+describe('sub-agent mutation truthfulness (Astra Probe P11)', () => {
+  test('0 changed is never counted as a successful mutation or progress', () => {
+    const noOpLog = [
+      { tool: 'sub_agent', target: 'sub1', detail: '3 steps, 0 changed' },
+    ];
+    assert.equal(hasSubAgentWrites(noOpLog), false);
+    assert.equal(currentTurnHasMutation(noOpLog, 0), false);
+
+    const msg = buildGateRejectionMessage(noOpLog);
+    assert.match(msg, /0 file writes, 0 sub-agent mutations/);
+    assert.match(msg, /You have not made any file changes/);
+  });
+
+  test('positive changed counts are recognized as mutations', () => {
+    const mutLog = [
+      { tool: 'sub_agent', target: 'sub1', detail: '5 steps, 2 changed' },
+    ];
+    assert.equal(hasSubAgentWrites(mutLog), true);
+    assert.equal(currentTurnHasMutation(mutLog, 0), true);
+
+    const msg = buildGateRejectionMessage(mutLog);
+    assert.match(msg, /0 file writes, 1 sub-agent mutations/);
+    assert.match(msg, /Run the verifier/);
+  });
+});
+
+describe('long-running autonomy cost cap truth (Astra Probe P08)', () => {
+  test('does not shrink cost cap to 75-cent window under explicit cost ceiling', () => {
+    // Session max = $10, spent = $1 before first write
+    const r = computeCriticRepairCostCap({
+      spentUsd: 1.0,
+      sessionMaxCostUsd: 10.0,
+    });
+    // Cap must remain full $10.00 allowance, with $9.00 remaining
+    assert.equal(r.capUsd, 10.0);
+    assert.equal(r.repairWindowUsd, 9.0);
+  });
+
+  test('does not shrink cost cap under longTaskProfile', () => {
+    const r = computeCriticRepairCostCap({
+      spentUsd: 1.0,
+      sessionMaxCostUsd: 2.0,
+      longTaskProfile: true,
+    });
+    assert.equal(r.capUsd, 2.0);
+    assert.equal(r.repairWindowUsd, 1.0);
+  });
+
+  test('shrinks cost cap when repeated critic rejects / thrashing occurs', () => {
+    // With 2 critic strikes (repeated rejects), cost cap is clamped to protect budget
+    const r = computeCriticRepairCostCap({
+      spentUsd: 1.0,
+      sessionMaxCostUsd: 10.0,
+      criticStrikes: 2,
+    });
+    assert.ok(r.repairWindowUsd <= 0.75);
+    assert.equal(r.capUsd, 1.0 + r.repairWindowUsd);
+  });
+
+  test('checkCostWallBudgets attributes limiter to repair window vs declared budget', () => {
+    // Normal cost budget exceeded
+    const normalCost = checkCostWallBudgets({
+      totalCostUsd: 2.5,
+      maxCostUsd: 2.0,
+      sessionStartTime: Date.now(),
+      maxWallMs: 600_000,
+      declaredCostUsd: 2.0,
+    });
+    assert.equal(normalCost.ok, false);
+    assert.equal(normalCost.limiter, 'cost');
+
+    // Cost budget exceeded because of critic repair cap
+    const repairCost = checkCostWallBudgets({
+      totalCostUsd: 1.8,
+      maxCostUsd: 1.75,
+      sessionStartTime: Date.now(),
+      maxWallMs: 600_000,
+      declaredCostUsd: 10.0,
+      criticRepairCostCapUsd: 1.75,
+    });
+    assert.equal(repairCost.ok, false);
+    assert.equal(repairCost.limiter, 'cost_repair');
+    assert.match(repairCost.reason!, /\[cost_repair\]/);
+
+    // Wall exceeded because of post-write repair wall cap
+    const repairWall = checkCostWallBudgets({
+      totalCostUsd: 0.5,
+      maxCostUsd: 10.0,
+      sessionStartTime: Date.now() - 200_000,
+      maxWallMs: 180_000,
+      declaredWallMs: 3_600_000,
+      postWriteRepairWallCapMs: 180_000,
+    });
+    assert.equal(repairWall.ok, false);
+    assert.equal(repairWall.limiter, 'wall_repair');
+    assert.match(repairWall.reason!, /\[wall_repair\]/);
   });
 });
