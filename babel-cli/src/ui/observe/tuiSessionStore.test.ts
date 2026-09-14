@@ -9,9 +9,11 @@ import { DEFAULT_PROFILE, createTerminalTransport, setObservedTerminalSize } fro
 import {
   BYTE_BUDGET,
   appendTerminalVisibleEvent,
+  appendTuiLifecycleEvent,
   enforceTuiSessionBudget,
   loadLatestTuiFrame,
   loadTerminalVisibleEvents,
+  loadTuiLifecycleEvents,
   persistTuiFrame,
 } from './tuiSessionStore.js'
 import type { TerminalWriteEvent } from './terminalTransport.js'
@@ -145,6 +147,44 @@ describe('tuiSessionStore retention', () => {
       assert.ok(loadTerminalVisibleEvents(dir).length > 0)
     } finally {
       setObservedTerminalSize(null)
+    }
+  })
+
+  it('bounds lifecycle-events.jsonl alongside terminal-events without starving terminal replay log', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tui-retention-lifecycle-'))
+    const byteBudget = 4096
+    try {
+      writeFileSync(join(dir, 'profile.json'), '{}\n')
+      // Append a large volume of lifecycle events and terminal events
+      for (let i = 1; i <= 80; i += 1) {
+        appendTerminalVisibleEvent(dir, event(i), { byteBudget })
+        appendTuiLifecycleEvent(
+          dir,
+          {
+            seq: i,
+            kind: 'policy_intervened',
+            turn_id: `turn-${i}`,
+            detail: { rule: 'read_only_audit', action: 'blocked', payload: 'x'.repeat(100) },
+          },
+          { byteBudget },
+        )
+      }
+
+      const terminalEvents = loadTerminalVisibleEvents(dir)
+      const lifecycleEvents = loadTuiLifecycleEvents(dir)
+
+      assert.ok(terminalEvents.length > 0, 'terminal events must not be starved')
+      assert.ok(lifecycleEvents.length > 0, 'lifecycle events must be retained')
+      assert.ok(sessionBytes(dir) <= byteBudget, `session bytes (${sessionBytes(dir)}) must not exceed budget (${byteBudget})`)
+
+      // Lifecycle event records preserve seq, kind, turn_id, and detail payload
+      const lastLifecycle = lifecycleEvents.at(-1)
+      assert.ok(lastLifecycle)
+      assert.equal(lastLifecycle!.kind, 'policy_intervened')
+      assert.equal(lastLifecycle!.turn_id, 'turn-80')
+      assert.equal(lastLifecycle!.detail['rule'], 'read_only_audit')
+    } finally {
+      // cleanup handled by tmpdir
     }
   })
 })

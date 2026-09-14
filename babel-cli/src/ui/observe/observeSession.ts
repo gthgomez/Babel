@@ -68,8 +68,9 @@ export function startTuiObservation(profile?: TerminalCapabilityProfile): string
     'policy_intervened',
     'budget_snapshot',
     'provider_failure_receipt',
-    'recovered_outcome_reconciled',
+    'recovery_reconciled',
     'model_failover',
+    'turn_ended',
   ])
   setSessionEventObservationHook((event) => {
     if (event.seq <= lastObservedSeq) {
@@ -82,7 +83,14 @@ export function startTuiObservation(profile?: TerminalCapabilityProfile): string
     // verification lifecycle records for later UI certification.
     if (lifecycleKinds.has(event.kind)) {
       try {
-        appendTuiLifecycleEvent(sessionDir, { kind: event.kind, detail: { turn_id: event.turn_id }, ts: event.ts })
+        const { schema_version, event_id, session_id, turn_id, seq, ts, kind, ...rest } = event
+        appendTuiLifecycleEvent(sessionDir, {
+          seq,
+          kind,
+          turn_id,
+          detail: { turn_id, ...rest },
+          ts,
+        })
       } catch {
         // Observation must never break the durable log path.
       }
