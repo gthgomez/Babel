@@ -67,9 +67,21 @@ export interface MutationAgentLoopInput {
   actionResolver?: (prompt: string) => Promise<AgentAction[]>;
 }
 
+export type SubagentAttribution =
+  | 'child_success'
+  | 'child_noop'
+  | 'child_timeout'
+  | 'child_round_exhaustion'
+  | 'child_provider_failure'
+  | 'child_policy_block'
+  | 'child_environment_failure'
+  | 'child_cancellation';
+
 export interface MutationAgentLoopResult {
   /** Whether all steps completed successfully */
   success: boolean;
+  /** Failure or completion attribution code */
+  attribution: SubagentAttribution;
   /** Human-readable summary of what was done */
   summary: string;
   /** Changed files with before/after hashes */
@@ -90,6 +102,43 @@ export interface MutationAgentLoopResult {
   rollbackSummary: WorktreeRollbackSummary | null;
   /** Roll back all changes made by this agent */
   rollback(): Promise<WorktreeRollbackSummary>;
+}
+
+export function classifySubagentFailure(input: {
+  success: boolean;
+  error: string | null;
+  changedFilesCount: number;
+  aborted?: boolean;
+}): SubagentAttribution {
+  if (input.aborted) return 'child_cancellation';
+  if (input.error) {
+    const err = input.error.toLowerCase();
+    if (err.includes('abort') || err.includes('cancelled') || err.includes('canceled')) {
+      return 'child_cancellation';
+    }
+    if (err.includes('round limit reached without finish') || err.includes('max rounds reached')) {
+      return 'child_round_exhaustion';
+    }
+    if (err.includes('policy blocked') || err.includes('outside write scope') || err.includes('no write scope')) {
+      return 'child_policy_block';
+    }
+    if (err.includes('timeout') || err.includes('timed out')) {
+      return 'child_timeout';
+    }
+    if (
+      err.includes('failed to resolve agent actions') ||
+      err.includes('provider') ||
+      err.includes('resolver failure') ||
+      err.includes('model')
+    ) {
+      return 'child_provider_failure';
+    }
+    return 'child_environment_failure';
+  }
+  if (input.success) {
+    return input.changedFilesCount > 0 ? 'child_success' : 'child_noop';
+  }
+  return 'child_environment_failure';
 }
 
 // ─── Doterministic Mock Actions ──────────────────────────────────────────────
@@ -329,11 +378,25 @@ export async function runMutationAgentLoop(
       priorObservations += '\n' + formatMutationObservation(action, lastResult);
     }
 
-    backgroundTaskRegistry.complete(taskId);
+    const mockAttribution = classifySubagentFailure({
+      success: mockSuccess,
+      error: mockError,
+      changedFilesCount: changedFiles.length,
+    });
+
+    if (mockSuccess) {
+      backgroundTaskRegistry.complete(taskId);
+    } else {
+      backgroundTaskRegistry.fail(taskId, mockError ?? 'Failed');
+    }
+
     return {
       success: mockSuccess,
+      attribution: mockAttribution,
       summary: mockSuccess
-        ? `Sub-agent ${agentId} (mock) completed ${toolCallLog.length} step(s), ${changedFiles.length} file(s) changed.`
+        ? (changedFiles.length > 0
+            ? `Sub-agent ${agentId} (mock) completed ${toolCallLog.length} step(s), ${changedFiles.length} file(s) changed.`
+            : `Sub-agent ${agentId} (mock) completed ${toolCallLog.length} step(s), 0 changed (no-op).`)
         : `Sub-agent ${agentId} (mock) failed: ${mockError ?? 'unknown error'}`,
       changedFiles,
       toolCallLog,
@@ -352,6 +415,7 @@ export async function runMutationAgentLoop(
   let error: string | null = null;
   let rollbackSummary: WorktreeRollbackSummary | null = null;
   let round = 0;
+  let finished = false;
 
   try {
     while (round < maxRounds) {
@@ -413,6 +477,7 @@ export async function runMutationAgentLoop(
             verified: true,
           });
           // If we got here, we finished normally
+          finished = true;
           break;
         }
 
@@ -510,10 +575,27 @@ export async function runMutationAgentLoop(
 
       // Check if the last action was a finish
       const lastAction = actions[actions.length - 1];
-      if (lastAction?.type === 'finish') break;
+      if (lastAction?.type === 'finish') {
+        finished = true;
+        break;
+      }
     }
 
-    backgroundTaskRegistry.complete(taskId);
+    if (!finished && error === null) {
+      success = false;
+      error = 'Round limit reached without finish';
+      if (safetyController && changedFiles.length > 0 && rollbackSummary === null) {
+        rollbackSummary = safetyController.rollbackTouchedFiles(
+          `Rollback on sub-agent ${agentId} failure: ${error}`,
+        );
+      }
+    }
+
+    if (success) {
+      backgroundTaskRegistry.complete(taskId);
+    } else {
+      backgroundTaskRegistry.fail(taskId, error ?? 'Failed');
+    }
   } catch (err) {
     success = false;
     error = err instanceof Error ? err.message : String(err);
@@ -527,11 +609,21 @@ export async function runMutationAgentLoop(
     }
   }
 
+  const attribution = classifySubagentFailure({
+    success,
+    error,
+    changedFilesCount: changedFiles.length,
+    aborted: input.abortSignal?.aborted ?? false,
+  });
+
   // Build the result
   const result: MutationAgentLoopResult = {
     success,
+    attribution,
     summary: success
-      ? `Sub-agent ${agentId} completed ${toolCallLog.length} step(s), ${changedFiles.length} file(s) changed.`
+      ? (changedFiles.length > 0
+          ? `Sub-agent ${agentId} completed ${toolCallLog.length} step(s), ${changedFiles.length} file(s) changed.`
+          : `Sub-agent ${agentId} completed ${toolCallLog.length} step(s), 0 changed (no-op).`)
       : `Sub-agent ${agentId} failed: ${error ?? 'unknown error'}`,
     changedFiles,
     toolCallLog,
@@ -565,6 +657,7 @@ function buildAbortedResult(
 ): MutationAgentLoopResult {
   return {
     success: false,
+    attribution: 'child_cancellation',
     summary: `Sub-agent ${agentId} was aborted after ${round} round(s).`,
     changedFiles,
     toolCallLog,

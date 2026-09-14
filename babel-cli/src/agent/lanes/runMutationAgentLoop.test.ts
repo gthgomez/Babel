@@ -321,6 +321,9 @@ describe('runMutationAgentLoop', () => {
     assert.equal(resolvedTurns, 2);
     assert.equal(attempts, 2);
     assert.equal(result.stepsExecuted, 2);
+    assert.equal(result.success, false);
+    assert.equal(result.attribution, 'child_round_exhaustion');
+    assert.equal(result.error, 'Round limit reached without finish');
     assert.ok(typeof result.rollback === 'function');
   });
 
@@ -572,5 +575,100 @@ describe('runMutationAgentLoop', () => {
 
     assert.ok(typeof result.success === 'boolean');
     assert.ok(typeof result.rollback === 'function');
+  });
+
+  it('correctly attributes child_noop when 0 files changed on finish', async () => {
+    const root = createProjectRoot();
+    const result = await runMutationAgentLoop({
+      agentId: 'ro-test',
+      task: 'Read-only task',
+      projectRoot: root,
+      writeScope: [],
+      toolContext: createToolContext(),
+      maxRounds: 1,
+      executor: mockExecutor({}),
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.attribution, 'child_noop');
+    assert.equal(result.changedFiles.length, 0);
+    assert.match(result.summary, /0 changed \(no-op\)/);
+  });
+
+  it('correctly attributes child_success when files changed on finish', async () => {
+    const root = createProjectRoot();
+    const exec = mockExecutor({
+      'write:src/result.txt': { exit_code: 0, stdout: 'ok', stderr: '' },
+    });
+
+    const result = await runMutationAgentLoop({
+      agentId: 'agent-1',
+      task: 'Write src/result.txt',
+      projectRoot: root,
+      writeScope: ['src'],
+      toolContext: createToolContext(),
+      maxRounds: 3,
+      executor: exec,
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.attribution, 'child_success');
+    assert.ok(result.changedFiles.length > 0);
+  });
+
+  it('correctly attributes child_policy_block on write-scope violation', async () => {
+    const root = createProjectRoot();
+    const exec = mockExecutor({
+      'write:../outside.txt': { exit_code: 0, stdout: 'written', stderr: '' },
+    });
+
+    const result = await runMutationAgentLoop({
+      agentId: 'bad-agent',
+      task: 'Write to ../outside.txt',
+      projectRoot: root,
+      writeScope: ['src'],
+      toolContext: createToolContext(),
+      maxRounds: 3,
+      executor: exec,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.attribution, 'child_policy_block');
+  });
+
+  it('correctly attributes child_cancellation on aborted signal', async () => {
+    const root = createProjectRoot();
+    const abortController = new AbortController();
+    abortController.abort();
+
+    const result = await runMutationAgentLoop({
+      agentId: 'abort-test',
+      task: 'Should abort immediately',
+      projectRoot: root,
+      writeScope: ['src'],
+      toolContext: createToolContext(),
+      maxRounds: 10,
+      abortSignal: abortController.signal,
+      executor: mockExecutor({}),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.attribution, 'child_cancellation');
+  });
+
+  it('correctly attributes child_provider_failure on resolver exception', async () => {
+    const root = createProjectRoot();
+    const result = await runMutationAgentLoop({
+      agentId: 'fail-test',
+      task: 'Will fail',
+      projectRoot: root,
+      writeScope: [],
+      toolContext: createToolContext(),
+      maxRounds: 1,
+      executor: mockExecutor({}),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.attribution, 'child_provider_failure');
   });
 });

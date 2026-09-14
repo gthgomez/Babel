@@ -29,8 +29,10 @@ import {
 import type { ToolContext } from '../localTools.js';
 import type { ToolExecutor } from './toolExecutor.js';
 import {
+  classifySubagentFailure,
   runMutationAgentLoop,
   type MutationAgentLoopResult,
+  type SubagentAttribution,
 } from './lanes/runMutationAgentLoop.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -68,6 +70,7 @@ export interface ImplementWorktreeAgentOptions {
 export interface ImplementWorktreeAgentResult {
   agentId: string;
   success: boolean;
+  attribution: SubagentAttribution;
   summary: string;
   writeScope: string[];
   worktree: WorktreeInfo;
@@ -295,6 +298,7 @@ export async function runImplementWorktreeAgent(
     return {
       agentId: spec.id,
       success: false,
+      attribution: 'child_policy_block',
       summary: failedMutation.summary,
       writeScope: scopeValidation.normalizedScope,
       worktree: emptyWorktree,
@@ -325,6 +329,7 @@ export async function runImplementWorktreeAgent(
     return {
       agentId: spec.id,
       success: false,
+      attribution: 'child_environment_failure',
       summary: failedMutation.summary,
       writeScope: scopeValidation.normalizedScope,
       worktree: {
@@ -413,15 +418,35 @@ export async function runImplementWorktreeAgent(
     }
   }
 
-  const success =
-    mutation.success && parentTreeClean && !diagnostics.some((d) => d.code === 'write_scope_violation');
+  const hasScopeViolation = diagnostics.some((d) => d.code === 'write_scope_violation');
+  const success = mutation.success && parentTreeClean && !hasScopeViolation;
+
+  let attribution: SubagentAttribution;
+  if (!parentTreeClean) {
+    attribution = 'child_environment_failure';
+  } else if (hasScopeViolation) {
+    attribution = 'child_policy_block';
+  } else if (mutation.attribution) {
+    attribution = mutation.attribution;
+  } else {
+    attribution = classifySubagentFailure({
+      success,
+      error: mutation.error ?? (diagnostics.length > 0 ? diagnostics.map((d) => d.message).join('; ') : null),
+      changedFilesCount: mutation.changedFiles.length,
+    });
+  }
+
+  const summary = success
+    ? (mutation.changedFiles.length > 0
+        ? `Implement worktree agent ${spec.id}: ${mutation.changedFiles.length} file(s) in ${worktree.path} (parent clean).`
+        : `Implement worktree agent ${spec.id}: 0 file(s) changed in ${worktree.path} (no-op; parent clean).`)
+    : `Implement worktree agent ${spec.id} failed: ${mutation.error ?? diagnostics.map((d) => d.message).join('; ')}`;
 
   return {
     agentId: spec.id,
     success,
-    summary: success
-      ? `Implement worktree agent ${spec.id}: ${mutation.changedFiles.length} file(s) in ${worktree.path} (parent clean).`
-      : `Implement worktree agent ${spec.id} failed: ${mutation.error ?? diagnostics.map((d) => d.message).join('; ')}`,
+    attribution,
+    summary,
     writeScope: scopeValidation.normalizedScope,
     worktree,
     parentTreeClean,
@@ -452,6 +477,7 @@ export async function runImplementWorktreeAgents(
       return {
         agentId: spec.id,
         success: false,
+        attribution: 'child_policy_block' as SubagentAttribution,
         summary: failed.summary,
         writeScope: spec.writeScope.map(normalizeWriteScopeEntry),
         worktree: {
@@ -483,6 +509,7 @@ export async function runImplementWorktreeAgents(
 function emptyMutationResult(error: string): MutationAgentLoopResult {
   return {
     success: false,
+    attribution: classifySubagentFailure({ success: false, error, changedFilesCount: 0 }),
     summary: error,
     changedFiles: [],
     toolCallLog: [],

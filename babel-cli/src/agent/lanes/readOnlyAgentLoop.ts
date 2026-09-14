@@ -51,6 +51,8 @@ export interface ReadOnlyAgentLoopInput {
   toolStream?: LiteToolStreamSink;
   /** P-5: Model override for sub-agent LLM calls (e.g. 'deepseek-v4-flash'). */
   model?: string;
+  /** Optional deterministic action resolver for tests / scripted turns. */
+  actionResolver?: (prompt: string, round: number) => Promise<AgentAction[]>;
 }
 
 export interface ReadOnlyAgentLoopResult {
@@ -62,6 +64,10 @@ export interface ReadOnlyAgentLoopResult {
   degraded: boolean;
   policyBlocked: boolean;
   blockedReason: string | null;
+  /** Whether the loop completed normally via a terminal action (finish/ask_approval). */
+  completed: boolean;
+  /** True when the loop reached maxRounds without executing a terminal action. */
+  roundExhausted: boolean;
 }
 
 function agentActionToolName(action: AgentAction): string {
@@ -372,6 +378,8 @@ export async function runReadOnlyAgentLoop(
       degraded: anchorPaths.length === 0,
       policyBlocked: batch.policyBlocked,
       blockedReason: batch.blockedReason,
+      completed: true,
+      roundExhausted: false,
     };
     return mockResult;
     }
@@ -381,6 +389,7 @@ export async function runReadOnlyAgentLoop(
   let policyBlocked = false;
   let blockedReason: string | null = null;
   let degraded = false;
+  let terminalReached = false;
 
   const warmupActions = buildDiscoveryAnchorWarmupActions(anchorPaths);
   const warmupBatch = await executeActionBatch(
@@ -406,6 +415,8 @@ export async function runReadOnlyAgentLoop(
       degraded: anchorPaths.length === 0,
       policyBlocked,
       blockedReason,
+      completed: true,
+      roundExhausted: false,
     };
     return warmupBlockedResult;
   }
@@ -423,7 +434,11 @@ export async function runReadOnlyAgentLoop(
         priorObservations,
         allowedTools: ['directory_list', 'file_read', 'semantic_search', 'grep', 'glob'],
       });
-      actions = await resolveLiveActionTurn(prompt, input.evidence, input.model);
+      if (input.actionResolver) {
+        actions = await input.actionResolver(prompt, round);
+      } else {
+        actions = await resolveLiveActionTurn(prompt, input.evidence, input.model);
+      }
     } catch {
       degraded = true;
       break;
@@ -442,8 +457,15 @@ export async function runReadOnlyAgentLoop(
     policyBlocked = batch.policyBlocked;
     blockedReason = batch.blockedReason;
     if (batch.terminal) {
+      terminalReached = true;
       break;
     }
+  }
+
+  const roundExhausted = !terminalReached && !policyBlocked && round >= maxRounds;
+  if (roundExhausted) {
+    degraded = true;
+    priorObservations += '\n[Discovery incomplete: round limit reached without finish]';
   }
 
   if (steps.length === 0) {
@@ -466,18 +488,25 @@ export async function runReadOnlyAgentLoop(
       policyBlocked: false,
       toolResults: [],
     });
+    terminalReached = true;
   }
 
   const toolCallLog = buildToolCallLogFromSteps(steps);
+  const baseObservations = formatReadOnlyObservations(steps);
+  const finalObservations = roundExhausted
+    ? (baseObservations ? `${baseObservations}\n[Discovery incomplete: round limit reached without finish]` : '[Discovery incomplete: round limit reached without finish]')
+    : baseObservations;
   const loopResult = {
     steps,
     sessionLoopSteps: buildSessionLoopSteps(steps),
     toolCallLog,
-    observations: formatReadOnlyObservations(steps),
+    observations: finalObservations,
     stepsExecuted: toolCallLog.length,
     degraded,
     policyBlocked,
     blockedReason,
+    completed: terminalReached,
+    roundExhausted,
   };
     return loopResult;
   } finally {
