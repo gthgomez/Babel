@@ -19,11 +19,14 @@ audit reviewed Babel public `main` at revision
 
 The audit ran in an external ChatGPT session. The substantive findings and the
 proposed smallest repairs are captured in [README.md](./README.md). The raw
-ChatGPT session export is not published: it contains a private conversation
-permalink, second-precision activity timestamps, and exporter metadata. The
-clone log is not published either, because it records an absolute path on the
-operator's local machine. Both raw artifacts are withheld from this
-publication.
+ChatGPT session export contains a private conversation permalink,
+second-precision activity timestamps, and exporter metadata; the clone log
+records an absolute path on the operator's local machine. Neither artifact is
+tracked in this packet or reachable from this branch. An earlier revision that
+introduced them was removed by a history rewrite, but a hosting provider may
+retain unreachable objects retrievable by a direct object identifier until
+garbage collection or a support purge; a purge request is required if that
+residual retrievability matters for the threat model.
 
 ## Method limits
 
@@ -58,3 +61,5 @@ Node.js version used for the recorded run.
 This packet publishes the decision, the findings, the offline probes, and the
 recorded probe output. It withholds the raw session export and the clone log;
 future re-runs with session metadata or local machine paths follow the same rule.
+The packet makes no claim that an earlier revision's objects are unrecoverable
+from the hosting provider; see the note in "Where the findings live".
