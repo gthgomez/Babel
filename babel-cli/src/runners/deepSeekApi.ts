@@ -1362,25 +1362,52 @@ export class DeepSeekApiRunner implements LlmRunner {
 
       while (true) {
         let readTimeout: ReturnType<typeof setTimeout> | null = null;
+        let deadlineTimeout: ReturnType<typeof setTimeout> | null = null;
+        let onAbort: (() => void) | null = null;
+
         const read = reader.read();
         const idle = new Promise<never>((_, reject) => {
           readTimeout = setTimeout(() => {
             reject(
               new Error(`[deepSeekApi] stream read timeout after ${streamIdleTimeoutMs}ms`),
             );
-            reader.cancel().catch(() => {});
           }, streamIdleTimeoutMs);
+        });
+
+        const abortPromise = new Promise<never>((_, reject) => {
+          if (signal?.aborted) {
+            reject(new DOMException('Request cancelled', 'AbortError'));
+            return;
+          }
+          onAbort = () => {
+            reject(new DOMException('Request cancelled', 'AbortError'));
+          };
+          signal?.addEventListener('abort', onAbort, { once: true });
+        });
+
+        const remainingDeadlineMs = requestTimeoutMs - (Date.now() - startedAt);
+        const deadlinePromise = new Promise<never>((_, reject) => {
+          if (remainingDeadlineMs <= 0) {
+            reject(new Error(`[deepSeekApi] request timeout after ${requestTimeoutMs}ms (${this.model})`));
+            return;
+          }
+          deadlineTimeout = setTimeout(() => {
+            reject(new Error(`[deepSeekApi] request timeout after ${requestTimeoutMs}ms (${this.model})`));
+          }, remainingDeadlineMs);
         });
 
         let done: boolean;
         let value: Uint8Array | undefined;
         try {
-          const result = await Promise.race([read, idle]).finally(() => {
+          const result = await Promise.race([read, idle, abortPromise, deadlinePromise]).finally(() => {
             if (readTimeout) clearTimeout(readTimeout);
+            if (deadlineTimeout) clearTimeout(deadlineTimeout);
+            if (signal && onAbort) signal.removeEventListener('abort', onAbort);
           });
           done = result.done;
           value = result.value;
         } catch (err) {
+          reader.cancel().catch(() => {});
           invocationFailed = true;
           notifyPhase('provider_error', undefined, 'stream');
           notifyCompleted('failed', outputReceipt, {
@@ -1429,89 +1456,135 @@ export class DeepSeekApiRunner implements LlmRunner {
             continue;
           }
 
+          let json: {
+            error?: { message?: string; code?: unknown; type?: string };
+            choices?: Array<{
+              delta?: {
+                content?: string | null;
+                reasoning_content?: string;
+                tool_calls?: Array<{
+                  index: number;
+                  id?: string;
+                  type?: string;
+                  function?: { name?: string; arguments?: string };
+                }>;
+              };
+              finish_reason?: string | null;
+            }>;
+            usage?: ChatResponse['usage'];
+          };
           try {
-            const json = JSON.parse(data) as {
-              choices?: Array<{
-                delta?: {
-                  content?: string | null;
-                  reasoning_content?: string;
-                  tool_calls?: Array<{
-                    index: number;
-                    id?: string;
-                    type?: string;
-                    function?: { name?: string; arguments?: string };
-                  }>;
-                };
-                finish_reason?: string | null;
-              }>;
-              usage?: ChatResponse['usage'];
-            };
-
-            const choice = json.choices?.[0];
-            if (!choice) continue;
-
-            const delta = choice.delta;
-
-            // Reasoning content (e.g. DeepSeek's thinking tokens)
-            if (delta?.reasoning_content) {
-              partialModelOutput = true;
-              streamState.partialModelOutput = true;
-              outputReceipt += `reasoning:${delta.reasoning_content}\n`;
-              streamState.outputReceipt = outputReceipt;
-              yield { type: 'thought_delta', text: delta.reasoning_content };
-            }
-
-            // Text content
-            if (delta?.content) {
-              partialModelOutput = true;
-              streamState.partialModelOutput = true;
-              outputReceipt += delta.content;
-              streamState.outputReceipt = outputReceipt;
-              yield { type: 'text_delta', text: delta.content };
-            }
-
-            // Native tool call deltas — accumulate arguments incrementally
-            if (delta?.tool_calls) {
-              for (const tc of delta.tool_calls) {
-                const idx = tc.index;
-                if (!pendingToolCalls.has(idx)) {
-                  pendingToolCalls.set(idx, { id: '', name: '', arguments: '' });
-                  toolCallCount += 1;
-                }
-                const acc = pendingToolCalls.get(idx)!;
-                if (tc.id) {
-                  acc.id = tc.id;
-                  partialModelOutput = true;
-                  streamState.partialModelOutput = true;
-                  outputReceipt += `tool_id:${tc.id}\n`;
-                }
-                if (tc.function?.name) {
-                  acc.name = tc.function.name;
-                  partialModelOutput = true;
-                  streamState.partialModelOutput = true;
-                  outputReceipt += `tool_name:${tc.function.name}\n`;
-                }
-                if (tc.function?.arguments) {
-                  partialModelOutput = true;
-                  streamState.partialModelOutput = true;
-                  acc.arguments += tc.function.arguments;
-                  outputReceipt += `tool_arguments:${tc.function.arguments}\n`;
-                }
-                streamState.outputReceipt = outputReceipt;
-              }
-            }
-
-            // Track finish reason (set in the final delta chunk)
-            if (normalizeFinishReason(choice.finish_reason)) {
-              finishReason = normalizeFinishReason(choice.finish_reason);
-            }
-
-            // Track usage info (arrives in a non-delta chunk before [DONE])
-            if (json.usage) {
-              streamState.usage = json.usage;
-            }
+            json = JSON.parse(data);
           } catch {
-            // Ignore partial/invalid JSON chunks
+            invocationFailed = true;
+            notifyPhase('provider_error', undefined, 'malformed_sse');
+            const errMessage = `[deepSeekApi] Malformed SSE event chunk: ${data.slice(0, 100)}`;
+            notifyCompleted('failed', outputReceipt, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'stream',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          }
+
+          if (json.error) {
+            invocationFailed = true;
+            notifyPhase('provider_error', undefined, 'provider_error_payload');
+            const errMessage = `[deepSeekApi] Provider stream error: ${json.error.message || JSON.stringify(json.error)}`;
+            notifyCompleted('failed', outputReceipt, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'stream',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          }
+
+          const choice = json.choices?.[0];
+          if (!choice) continue;
+
+          const delta = choice.delta;
+
+          // Reasoning content (e.g. DeepSeek's thinking tokens)
+          if (delta?.reasoning_content) {
+            partialModelOutput = true;
+            streamState.partialModelOutput = true;
+            outputReceipt += `reasoning:${delta.reasoning_content}\n`;
+            streamState.outputReceipt = outputReceipt;
+            yield { type: 'thought_delta', text: delta.reasoning_content };
+          }
+
+          // Text content
+          if (delta?.content) {
+            partialModelOutput = true;
+            streamState.partialModelOutput = true;
+            outputReceipt += delta.content;
+            streamState.outputReceipt = outputReceipt;
+            yield { type: 'text_delta', text: delta.content };
+          }
+
+          // Native tool call deltas — accumulate arguments incrementally
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index;
+              if (!pendingToolCalls.has(idx)) {
+                pendingToolCalls.set(idx, { id: '', name: '', arguments: '' });
+                toolCallCount += 1;
+              }
+              const acc = pendingToolCalls.get(idx)!;
+              if (tc.id) {
+                acc.id = tc.id;
+                partialModelOutput = true;
+                streamState.partialModelOutput = true;
+                outputReceipt += `tool_id:${tc.id}\n`;
+              }
+              if (tc.function?.name) {
+                acc.name = tc.function.name;
+                partialModelOutput = true;
+                streamState.partialModelOutput = true;
+                outputReceipt += `tool_name:${tc.function.name}\n`;
+              }
+              if (tc.function?.arguments) {
+                partialModelOutput = true;
+                streamState.partialModelOutput = true;
+                acc.arguments += tc.function.arguments;
+                outputReceipt += `tool_arguments:${tc.function.arguments}\n`;
+              }
+              streamState.outputReceipt = outputReceipt;
+            }
+          }
+
+          // Track finish reason (set in the final delta chunk)
+          const isErrorFinish = choice.finish_reason === 'error';
+          if (isErrorFinish) {
+            finishReason = 'error';
+            invocationFailed = true;
+            notifyPhase('provider_error', undefined, 'finish_reason_error');
+            const errMessage = `[deepSeekApi] Provider error during generation (finish_reason: error)`;
+            notifyCompleted('failed', outputReceipt, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'stream',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          } else if (normalizeFinishReason(choice.finish_reason)) {
+            finishReason = normalizeFinishReason(choice.finish_reason);
+          }
+
+          // Track usage info (arrives in a non-delta chunk before [DONE])
+          if (json.usage) {
+            streamState.usage = json.usage;
           }
         }
       }
@@ -1535,6 +1608,21 @@ export class DeepSeekApiRunner implements LlmRunner {
             }
             if (json.choices?.[0]?.finish_reason) {
               finishReason = normalizeFinishReason(json.choices[0].finish_reason);
+              if (finishReason === 'error') {
+                invocationFailed = true;
+                notifyPhase('provider_error', undefined, 'finish_reason_error');
+                const errMessage = `[deepSeekApi] Provider error during generation (finish_reason: error)`;
+                notifyCompleted('failed', outputReceipt, {
+                  actualAttempt: lastAttempt,
+                  details: { message: errMessage },
+                  failureStage: 'stream',
+                  partialModelOutput,
+                  toolCallCount,
+                  outputMaterial: outputReceipt,
+                });
+                yield { type: 'error', message: errMessage };
+                return;
+              }
             }
           } catch { /* ignore */ }
         }
@@ -1547,34 +1635,99 @@ export class DeepSeekApiRunner implements LlmRunner {
       streamState.generationMs = Date.now() - startedAt - (streamState.ttftMs ?? 0);
 
       // ── Yield accumulated tool calls ──────────────────────────────────
+      if (finishReason === 'length') {
+        if (pendingToolCalls.size > 0) {
+          invocationFailed = true;
+          const errMessage = `[deepSeekApi] Incomplete tool call: truncated by token limit (finish_reason: length)`;
+          notifyPhase('response_normalization_failed', undefined, 'length_truncated_tool_call');
+          notifyCompleted('failed', outputReceipt, {
+            actualAttempt: lastAttempt,
+            details: { message: errMessage },
+            failureStage: 'response_normalization',
+            partialModelOutput,
+            toolCallCount,
+            outputMaterial: outputReceipt,
+          });
+          yield { type: 'error', message: errMessage };
+          return;
+        }
+        yield { type: 'done', finishReason: 'length' };
+        return;
+      }
+
       if ((finishReason === 'tool_calls' || pendingToolCalls.size > 0) && pendingToolCalls.size > 0) {
         for (const [, acc] of pendingToolCalls) {
-          let input: Record<string, unknown> = {};
-          if (acc.arguments) {
-            try {
-              const parsed = JSON.parse(acc.arguments) as unknown;
-              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                throw new Error('tool arguments must be a JSON object');
-              }
-              input = parsed as Record<string, unknown>;
-            } catch (error) {
-              invocationFailed = true;
-              notifyPhase('response_normalization_failed', undefined, 'tool_arguments');
-              notifyCompleted('failed', outputReceipt, {
-                actualAttempt: lastAttempt,
-                details: { message: error instanceof Error ? error.message : String(error) },
-                failureStage: 'response_normalization',
-                partialModelOutput,
-                toolCallCount,
-                outputMaterial: outputReceipt,
-              });
-              yield {
-                type: 'error',
-                message: `[deepSeekApi] Malformed arguments for tool ${acc.name || '<unknown>'}: ${error instanceof Error ? error.message : String(error)}`,
-              };
-              return;
-            }
+          if (!acc.id || !acc.id.trim()) {
+            invocationFailed = true;
+            const errMessage = `[deepSeekApi] Incomplete tool call: missing id for tool ${acc.name || '<unknown>'}`;
+            notifyPhase('response_normalization_failed', undefined, 'missing_tool_id');
+            notifyCompleted('failed', outputReceipt, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'response_normalization',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
           }
+          if (!acc.name || !acc.name.trim()) {
+            invocationFailed = true;
+            const errMessage = `[deepSeekApi] Incomplete tool call: missing name for tool call ${acc.id}`;
+            notifyPhase('response_normalization_failed', undefined, 'missing_tool_name');
+            notifyCompleted('failed', outputReceipt, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'response_normalization',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          }
+          if (!acc.arguments || !acc.arguments.trim()) {
+            invocationFailed = true;
+            const errMessage = `[deepSeekApi] Incomplete tool call: missing arguments for tool ${acc.name} (${acc.id})`;
+            notifyPhase('response_normalization_failed', undefined, 'missing_tool_arguments');
+            notifyCompleted('failed', outputReceipt, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'response_normalization',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          }
+
+          let input: Record<string, unknown>;
+          try {
+            const parsed = JSON.parse(acc.arguments) as unknown;
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              throw new Error('tool arguments must be a JSON object');
+            }
+            input = parsed as Record<string, unknown>;
+          } catch (error) {
+            invocationFailed = true;
+            notifyPhase('response_normalization_failed', undefined, 'tool_arguments');
+            notifyCompleted('failed', outputReceipt, {
+              actualAttempt: lastAttempt,
+              details: { message: error instanceof Error ? error.message : String(error) },
+              failureStage: 'response_normalization',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield {
+              type: 'error',
+              message: `[deepSeekApi] Malformed arguments for tool ${acc.name || '<unknown>'}: ${error instanceof Error ? error.message : String(error)}`,
+            };
+            return;
+          }
+
           yield { type: 'tool_use', id: acc.id, name: acc.name, input };
         }
         yield { type: 'done', finishReason: finishReason ?? 'tool_calls' };

@@ -24,6 +24,7 @@ export interface ProviderProtocolIssue {
     | 'system_in_user_content'
     | 'empty_messages'
     | 'assistant_tool_call_missing_id'
+    | 'duplicate_tool_call_id'
     | 'duplicate_tool_result'
     | 'unanswered_tool_call';
   message: string;
@@ -100,12 +101,11 @@ export function validateProviderMessageProtocol(
   }
 
   const knownCallIds = new Set<string>();
-  const answeredCallIds = new Set<string>();
   const seenResultIds = new Set<string>();
-  // Call ids declared by the most recent assistant tool_calls message whose
-  // results have not all been observed yet. A non-tool message (or end of
-  // payload) while ids are still pending is a protocol violation.
-  let pendingCallIds: Set<string> | null = null;
+  // Call ids declared by the most recent assistant tool_calls message mapped to
+  // count of unanswered calls. A non-tool message (or end of payload) while
+  // calls are still pending is a protocol violation.
+  let pendingCallCounts: Map<string, number> | null = null;
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]!;
@@ -116,34 +116,49 @@ export function validateProviderMessageProtocol(
         index: i,
       });
     }
-    if (pendingCallIds && msg.role !== 'tool') {
-      for (const id of pendingCallIds) {
-        issues.push({
-          code: 'unanswered_tool_call',
-          message: `Assistant tool_call id=${id} has no tool result before the next non-tool message`,
-          index: i,
-        });
+    if (pendingCallCounts && msg.role !== 'tool') {
+      for (const [id, count] of pendingCallCounts) {
+        for (let k = 0; k < count; k++) {
+          issues.push({
+            code: 'unanswered_tool_call',
+            message: `Assistant tool_call id=${id} has no tool result before the next non-tool message`,
+            index: i,
+          });
+        }
       }
-      pendingCallIds = null;
+      pendingCallCounts = null;
     }
     if (msg.role === 'assistant' && msg.tool_calls) {
-      const declared: string[] = [];
+      const counts = new Map<string, number>();
+      const declaredInThisMessage = new Set<string>();
       for (const tc of msg.tool_calls) {
-        if (!tc.id) {
+        const rawId = tc.id;
+        if (!rawId || !rawId.trim()) {
           issues.push({
             code: 'assistant_tool_call_missing_id',
             message: 'Assistant tool_call missing id',
             index: i,
           });
-        } else {
-          knownCallIds.add(tc.id);
-          declared.push(tc.id);
+          continue;
         }
+        const trimmedId = rawId.trim();
+        if (knownCallIds.has(trimmedId) || declaredInThisMessage.has(trimmedId)) {
+          issues.push({
+            code: 'duplicate_tool_call_id',
+            message: `Assistant tool_call id=${rawId} appears more than once`,
+            index: i,
+          });
+        } else {
+          knownCallIds.add(trimmedId);
+          declaredInThisMessage.add(trimmedId);
+        }
+        counts.set(trimmedId, (counts.get(trimmedId) ?? 0) + 1);
       }
-      pendingCallIds = new Set(declared);
+      pendingCallCounts = counts;
     }
     if (msg.role === 'tool') {
-      if (!msg.tool_call_id) {
+      const rawResultId = msg.tool_call_id;
+      if (!rawResultId || !rawResultId.trim()) {
         issues.push({
           code: 'tool_missing_call_id',
           message: 'Tool message missing tool_call_id',
@@ -151,32 +166,42 @@ export function validateProviderMessageProtocol(
         });
         continue;
       }
-      if (!knownCallIds.has(msg.tool_call_id)) {
+      const trimmedResultId = rawResultId.trim();
+      if (!knownCallIds.has(trimmedResultId)) {
         issues.push({
           code: 'orphan_tool_result',
-          message: `Tool result tool_call_id=${msg.tool_call_id} has no preceding assistant tool_call`,
+          message: `Tool result tool_call_id=${rawResultId} has no preceding assistant tool_call`,
           index: i,
         });
       }
-      if (seenResultIds.has(msg.tool_call_id)) {
+      if (seenResultIds.has(trimmedResultId)) {
         issues.push({
           code: 'duplicate_tool_result',
-          message: `Tool result tool_call_id=${msg.tool_call_id} appears more than once`,
+          message: `Tool result tool_call_id=${rawResultId} appears more than once`,
           index: i,
         });
       }
-      seenResultIds.add(msg.tool_call_id);
-      pendingCallIds?.delete(msg.tool_call_id);
+      seenResultIds.add(trimmedResultId);
+      if (pendingCallCounts?.has(trimmedResultId)) {
+        const remaining = pendingCallCounts.get(trimmedResultId)! - 1;
+        if (remaining <= 0) {
+          pendingCallCounts.delete(trimmedResultId);
+        } else {
+          pendingCallCounts.set(trimmedResultId, remaining);
+        }
+      }
     }
   }
 
-  if (pendingCallIds) {
-    for (const id of pendingCallIds) {
-      issues.push({
-        code: 'unanswered_tool_call',
-        message: `Assistant tool_call id=${id} has no tool result before the end of the payload`,
-        index: messages.length - 1,
-      });
+  if (pendingCallCounts) {
+    for (const [id, count] of pendingCallCounts) {
+      for (let k = 0; k < count; k++) {
+        issues.push({
+          code: 'unanswered_tool_call',
+          message: `Assistant tool_call id=${id} has no tool result before the end of the payload`,
+          index: messages.length - 1,
+        });
+      }
     }
   }
 
