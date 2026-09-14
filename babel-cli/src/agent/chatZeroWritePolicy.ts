@@ -274,6 +274,23 @@ export function resolveInvestigateToolHardCap(
 }
 
 /**
+ * I01 experimental observation mode (single mode field).
+ *
+ * When enabled, the engine computes the exact same tools-without-write counter
+ * and the exact same investigate hard-cap terminal candidate, records a
+ * durable `would_fire` receipt, and withholds ONLY this terminal candidate
+ * from the policy arbiter. Every other safety terminal, nudge, budget, and
+ * permission rule is unchanged. Off by default; baseline behavior is
+ * bit-identical when unset.
+ */
+export function resolveInvestigateHardCapObserveOnly(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const raw = env['BABEL_POLICY_I01_OBSERVE_ONLY'];
+  return raw === '1' || raw === 'true';
+}
+
+/**
  * Force-mutate + read-thrash + cumulative exploration fuses.
  * Mutates fuse state in place.
  *
