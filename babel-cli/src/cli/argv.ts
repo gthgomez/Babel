@@ -47,6 +47,7 @@ const KNOWN_TOP_LEVEL_COMMANDS = new Set([
   'plan',
   'deep',
   'run',
+  'runs',
   'resolve',
   'continue',
   'resume',
