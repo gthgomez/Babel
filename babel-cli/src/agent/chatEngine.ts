@@ -96,7 +96,7 @@ import {
   type FailureCapsuleV1,
 } from './taskContract.js';
 import { getGlobalTokenTracker } from '../ui/tokenHistory.js';
-import { resolveChatEngineLimits, type ChatEngineLimits } from '../config/chatEngineLimits.js';
+import { resolveChatEngineLimits, shouldShrinkWallForPostWriteRepair, type ChatEngineLimits } from '../config/chatEngineLimits.js';
 import {
   resolveChatTaskClass,
   getChatTaskTune,
@@ -396,6 +396,10 @@ export interface ChatEngineOptions {
   /** R11: Per-round token ceiling — a single turn exceeding this with zero
    *  tool calls is force-BLOCKED. Default 200_000. */
   maxTokensPerRound?: number;
+  /** Explicit wall-budget request. Still clamped by the resolver's ceiling
+   *  (one hour, or LONG_TASK ceiling when BABEL_CHAT_LONG_TASK is authorized);
+   *  requested vs effective stays observable via limits.wallBudget. */
+  maxWallMs?: number;
   allowExpensive?: boolean;
   workspaceRoot?: string | null;
   fallbackModel?: string;
@@ -914,6 +918,7 @@ export class ChatEngine {
         ...(options.maxTokensPerRound !== undefined
           ? { maxTokensPerRound: options.maxTokensPerRound }
           : {}),
+        ...(options.maxWallMs !== undefined ? { maxWallMs: options.maxWallMs } : {}),
       },
       undefined,
       { taskClass: this.taskClass, taskText: options.task },
@@ -1488,10 +1493,14 @@ export class ChatEngine {
     if (this.taskClass === 'investigate') return;
 
     const elapsedMs = this._sessionStartTime > 0 ? Date.now() - this._sessionStartTime : 0;
-    const { capMs, repairWindowMs } = computePostWriteRepairWallMs({
-      elapsedMs,
-      sessionMaxWallMs: this.limits.maxWallMs,
-    });
+    // An explicitly authorized long-task run keeps its full wall: the
+    // anti-thrash repair window would otherwise kill it minutes after the
+    // first write. Hard wall, stall, turn and cost budgets still apply.
+    const shrinkWall = shouldShrinkWallForPostWriteRepair(this.limits.wallBudget);
+    const repairWall = shrinkWall
+      ? computePostWriteRepairWallMs({ elapsedMs, sessionMaxWallMs: this.limits.maxWallMs })
+      : { capMs: this.limits.maxWallMs, repairWindowMs: Math.max(0, this.limits.maxWallMs - elapsedMs) };
+    const { capMs, repairWindowMs } = repairWall;
     this.postWriteRepairWallCapMs = capMs;
     this.postWriteRepairRestrict = true;
 
@@ -3737,6 +3746,7 @@ export class ChatEngine {
           ...(this.options.maxTokensPerRound !== undefined
             ? { maxTokensPerRound: this.options.maxTokensPerRound }
             : {}),
+          ...(this.options.maxWallMs !== undefined ? { maxWallMs: this.options.maxWallMs } : {}),
         },
         undefined,
         { taskClass: runtime.taskClass, taskText: runtime.taskText },
