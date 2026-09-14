@@ -5,7 +5,7 @@
 
 import * as assert from 'node:assert';
 import { createHash } from 'node:crypto';
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import {
   CompactionManager,
   HeuristicTruncationStrategy,
@@ -35,6 +35,24 @@ import {
   buildCompactionCapsule,
   formatCompactionCapsule,
 } from './providerCapabilities.js';
+
+// These fixtures drive the compaction machinery with non-Anthropic model ids
+// and a dedicated BABEL_COMPACTION_API_KEY. Declare the matching
+// OpenAI-compatible endpoint explicitly so the provider/model coherence guard
+// (which stops ambient keys from selecting a cross-provider default) accepts
+// the pairing. The base is restored after every test.
+const savedCompactionBase = process.env['BABEL_COMPACTION_API_BASE'];
+const savedCompactionModel = process.env['BABEL_COMPACTION_MODEL'];
+beforeEach(() => {
+  process.env['BABEL_COMPACTION_API_BASE'] = 'https://api.deepinfra.com/v1/openai/chat/completions';
+  delete process.env['BABEL_COMPACTION_MODEL'];
+});
+afterEach(() => {
+  if (savedCompactionBase === undefined) delete process.env['BABEL_COMPACTION_API_BASE'];
+  else process.env['BABEL_COMPACTION_API_BASE'] = savedCompactionBase;
+  if (savedCompactionModel === undefined) delete process.env['BABEL_COMPACTION_MODEL'];
+  else process.env['BABEL_COMPACTION_MODEL'] = savedCompactionModel;
+});
 
 function longConversation(n: number, critical?: string[]): ChatMessage[] {
   const msgs: ChatMessage[] = [
