@@ -22,76 +22,25 @@ export interface ChatEventDispatchSinks {
   toolIdQueue?: number[];
 }
 
-const INFRA_CODE_RE =
-  /\b(?:ENOSPC|EROFS|EIO|EBUSY|EMFILE|ENFILE|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH)\b/i;
+import {
+  classifyFailureText,
+  isBudgetErrorText,
+  isEnvironmentErrorText,
+  isInfrastructureErrorText,
+  isPolicyErrorText,
+  resolveFailedEventOutcome,
+  statusForOutcome,
+} from '../../agent/chatFailureClassification.js';
 
-/** Detect infrastructure/network/provider failure text without inventing agent blame. */
-export function isInfrastructureErrorText(error: string): boolean {
-  if (!error) return false;
-  return (
-    INFRA_CODE_RE.test(error) ||
-    /runtime-invariant/i.test(error) ||
-    /socket hang up|connection reset|fetch failed|undici|network (?:error|timeout)|broken pipe/i.test(error) ||
-    /provider (?:startup|stream) idle|idle timeout|request deadline|request timeout|timeout exceeded/i.test(error) ||
-    /stream closed before terminal|malformed sse|provider stream error|finish_reason: error/i.test(error) ||
-    /\[(?:deepSeekApi|deepInfraApi|openRouterApi|provider)\]/i.test(error) ||
-    /provider (?:error|disconnected)|overloaded|service unavailable|bad gateway|rate limit|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout/i.test(error)
-  );
-}
-
-export function isBudgetErrorText(error: string): boolean {
-  return /budget.*exceed(?:ed|s)|cost budget|wall (?:time|clock|budget)|token explosion/i.test(error);
-}
-
-export function isPolicyErrorText(error: string): boolean {
-  return /blocked_policy|policy (?:block|intervention|denied)|permission denied by policy/i.test(error);
-}
-
-export function isEnvironmentErrorText(error: string): boolean {
-  return /env(?:ironment)?[ _]blocked|toolchain cannot|missing (?:runtime|dependency)|permission denied(?! by policy)/i.test(error);
-}
-
-/**
- * Classify failure text into an established TerminalOutcome.
- * Returns undefined when the cause is not established (UNKNOWN/INCONCLUSIVE).
- * Never defaults to AGENT_FAILURE.
- */
-export function classifyFailureText(error: string): TerminalOutcome | undefined {
-  if (!error) return undefined;
-  if (isBudgetErrorText(error)) return 'BUDGET_EXHAUSTED';
-  if (isPolicyErrorText(error)) return 'BLOCKED_POLICY';
-  if (isEnvironmentErrorText(error)) return 'BLOCKED_EXTERNAL';
-  if (isInfrastructureErrorText(error)) return 'INFRA_FAILURE';
-  return undefined;
-}
-
-export function statusForOutcome(outcome: TerminalOutcome): ChatResult['status'] {
-  if (outcome === 'CANCELLED') return 'cancelled';
-  if (outcome === 'BUDGET_EXHAUSTED') return 'budget_exhausted';
-  if (
-    outcome === 'BLOCKED_POLICY' ||
-    outcome === 'BLOCKED_EXTERNAL' ||
-    outcome === 'INVALID_TASK' ||
-    outcome === 'NEEDS_HUMAN_DECISION'
-  ) {
-    return 'blocked';
-  }
-  if (outcome === 'VERIFIED_COMPLETE' || outcome === 'UNVERIFIED_PATCH' || outcome === 'NO_CHANGE_REQUIRED') {
-    return 'completed';
-  }
-  return 'failed';
-}
-
-/** Resolve a failed-event outcome without treating engine AGENT_FAILURE as proof. */
-export function resolveFailedEventOutcome(
-  error: string,
-  explicit?: TerminalOutcome,
-): TerminalOutcome | undefined {
-  const fromText = classifyFailureText(error);
-  if (fromText) return fromText;
-  if (explicit && explicit !== 'AGENT_FAILURE') return explicit;
-  return undefined;
-}
+export {
+  classifyFailureText,
+  isBudgetErrorText,
+  isEnvironmentErrorText,
+  isInfrastructureErrorText,
+  isPolicyErrorText,
+  resolveFailedEventOutcome,
+  statusForOutcome,
+};
 
 /** Dispatch one chat event to all configured sinks. Returns a terminal ChatResult on failure. */
 export function dispatchChatEvent(
@@ -175,6 +124,8 @@ export function dispatchChatEvent(
       ...(event.toolCalls !== undefined ? { toolCalls: event.toolCalls } : {}),
       ...(event.runDir !== undefined ? { runDir: event.runDir } : {}),
       ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
+      ...(event.costBudget !== undefined ? { costBudget: event.costBudget } : {}),
+      ...(event.runAllowance !== undefined ? { runAllowance: event.runAllowance } : {}),
       ...(ev.turnRouting !== undefined ? { turnRouting: ev.turnRouting } : {}),
       ...(ev.verifierReceipt !== undefined ? { verifierReceipt: ev.verifierReceipt } : {}),
       ...(ev.blockedReport !== undefined ? { blockedReport: ev.blockedReport } : {}),
@@ -220,6 +171,9 @@ export function terminalResultFromDoneEvent(
     verifierTampered?: boolean;
     turnRouting?: TurnRoutingReceipt[];
     turnTelemetry?: import('../../agent/chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+    costBudget?: ChatResult['costBudget'];
+    runAllowance?: ChatResult['runAllowance'];
+    policyEvents?: ChatResult['policyEvents'];
   },
 ): ChatResult {
   // Prefer the engine's authoritative TerminalOutcome. Only recompute when
@@ -255,5 +209,8 @@ export function terminalResultFromDoneEvent(
     ...(opts?.verifierTampered ? { verifierTampered: true as const } : {}),
     ...(opts?.turnRouting ? { turnRouting: opts.turnRouting } : {}),
     ...(opts?.turnTelemetry !== undefined ? { turnTelemetry: opts.turnTelemetry } : {}),
+    ...(opts?.costBudget ? { costBudget: opts.costBudget } : {}),
+    ...(opts?.runAllowance ? { runAllowance: opts.runAllowance } : {}),
+    ...(opts?.policyEvents ? { policyEvents: opts.policyEvents } : {}),
   };
 }

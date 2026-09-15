@@ -1579,6 +1579,8 @@ export class DeepSeekApiRunner implements LlmRunner {
             return;
           }
 
+          if (json.usage) streamState.usage = json.usage;
+
           const choice = json.choices?.[0];
           if (!choice) continue;
 
@@ -1650,10 +1652,6 @@ export class DeepSeekApiRunner implements LlmRunner {
             return;
           } else if (choice.finish_reason) {
             finishReason = normalizeFinishReason(choice.finish_reason);
-          }
-
-          if (json.usage) {
-            streamState.usage = json.usage;
           }
         }
       }

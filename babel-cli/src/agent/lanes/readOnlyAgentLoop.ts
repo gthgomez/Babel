@@ -19,6 +19,11 @@ import type { EvidenceBundle } from '../../evidence.js';
 import { runWithPrimaryOnlyFallback } from '../../execute.js';
 import type { ToolCallLog } from '../../schemas/agentContracts.js';
 import type { ToolContext, ToolResult } from '../../localTools.js';
+import { runWithProjectRoot } from '../../localTools.js';
+import {
+  compileObservation,
+  formatCompiledObservation,
+} from '../codingLoop/observationCompiler.js';
 import { AgentActionsEnvelopeSchema, parseAgentActions, type AgentAction } from '../actions.js';
 import type { LiteSessionVerb } from '../contracts.js';
 import type { PermissionPreset } from '../policy.js';
@@ -55,6 +60,8 @@ export interface ReadOnlyAgentLoopInput {
   abortSignal?: AbortSignal;
   /** Optional deterministic action resolver for tests / scripted turns. */
   actionResolver?: (prompt: string, round: number) => Promise<AgentAction[]>;
+  /** Extra instructions from the advertised sub_agent contract. */
+  additionalInstructions?: string;
 }
 
 export interface ReadOnlyAgentLoopResult {
@@ -70,6 +77,10 @@ export interface ReadOnlyAgentLoopResult {
   completed: boolean;
   /** True when the loop reached maxRounds without executing a terminal action. */
   roundExhausted: boolean;
+  /** True when the child stopped because it needs operator permission. */
+  needsApproval?: boolean;
+  /** Original provider/transport error when the loop degraded on a live turn. */
+  providerError?: string | null;
 }
 
 function agentActionToolName(action: AgentAction): string {
@@ -111,24 +122,20 @@ function agentActionTarget(action: AgentAction): string {
   }
 }
 
-function trimObservation(text: string, maxChars = 1200): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  return `${text.slice(0, maxChars)}\n...[truncated]`;
-}
-
-function formatToolResultObservation(action: AgentAction, result: ToolResult): string {
-  const tool = agentActionToolName(action);
-  const target = agentActionTarget(action);
-  const body =
-    result.stdout.trim().length > 0
-      ? result.stdout
-      : result.stderr.trim().length > 0
-        ? result.stderr
-        : '(no output)';
-  return [`### ${tool} ${target}`, `exit_code: ${result.exit_code}`, trimObservation(body)].join(
-    '\n',
+function formatToolResultObservation(
+  action: AgentAction,
+  result: ToolResult,
+  spillDir?: string,
+): string {
+  return formatCompiledObservation(
+    compileObservation({
+      tool: agentActionToolName(action),
+      target: agentActionTarget(action),
+      exitCode: result.exit_code,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      ...(spillDir ? { spillDir } : {}),
+    }),
   );
 }
 
@@ -157,7 +164,7 @@ export function buildToolCallLogFromSteps(steps: SmallFixLoopStep[], startStep =
   return entries;
 }
 
-export function formatReadOnlyObservations(steps: SmallFixLoopStep[]): string {
+export function formatReadOnlyObservations(steps: SmallFixLoopStep[], spillDir?: string): string {
   const chunks: string[] = [];
   for (const loopStep of steps) {
     if (loopStep.phase === 'finish' || loopStep.phase === 'blocked') {
@@ -167,7 +174,7 @@ export function formatReadOnlyObservations(steps: SmallFixLoopStep[]): string {
     if (!result) {
       continue;
     }
-    chunks.push(formatToolResultObservation(loopStep.action, result));
+    chunks.push(formatToolResultObservation(loopStep.action, result, spillDir));
   }
   return chunks.length > 0 ? chunks.join('\n\n') : 'No runtime tool observations were recorded.';
 }
@@ -180,6 +187,7 @@ export function buildReadOnlyAgentTurnPrompt(input: {
   maxRounds: number;
   priorObservations: string;
   allowedTools: string[];
+  additionalInstructions?: string;
 }): string {
   return [
     '# Babel Lite Read-Only Discovery',
@@ -197,6 +205,9 @@ export function buildReadOnlyAgentTurnPrompt(input: {
     `Allowed tools: ${input.allowedTools.join(', ')}`,
     '',
     `Task: ${input.task}`,
+    ...(input.additionalInstructions
+      ? ['', '# Additional Instructions', input.additionalInstructions]
+      : []),
     '',
     '# Prior Tool Observations',
     input.priorObservations.trim().length > 0 ? input.priorObservations : '(none yet)',
@@ -246,7 +257,12 @@ async function executeActionBatch(
   steps: SmallFixLoopStep[],
   startIndex: number,
   toolStream?: LiteToolStreamSink,
-): Promise<{ terminal: boolean; policyBlocked: boolean; blockedReason: string | null }> {
+): Promise<{
+  terminal: boolean;
+  policyBlocked: boolean;
+  blockedReason: string | null;
+  needsApproval: boolean;
+}> {
   let policyBlocked = false;
   let blockedReason: string | null = null;
 
@@ -261,10 +277,15 @@ async function executeActionBatch(
           phase: 'blocked',
           action,
           policyDecision: 'ask',
-          policyBlocked: false,
+          policyBlocked: true,
           toolResults: [],
         });
-        return { terminal: true, policyBlocked: false, blockedReason: action.reason };
+        return {
+          terminal: true,
+          policyBlocked: true,
+          blockedReason: action.reason,
+          needsApproval: true,
+        };
       }
       steps.push({
         phase: 'finish',
@@ -273,7 +294,7 @@ async function executeActionBatch(
         policyBlocked: false,
         toolResults: [],
       });
-      return { terminal: true, policyBlocked, blockedReason };
+      return { terminal: true, policyBlocked, blockedReason, needsApproval: false };
     }
 
     const toolName = agentActionToolName(action);
@@ -314,17 +335,18 @@ async function executeActionBatch(
         policyBlocked: true,
         toolResults: execution.results,
       });
-      return { terminal: true, policyBlocked: true, blockedReason };
+      return { terminal: true, policyBlocked: true, blockedReason, needsApproval: false };
     }
   }
 
-  return { terminal: false, policyBlocked, blockedReason };
+  return { terminal: false, policyBlocked, blockedReason, needsApproval: false };
 }
 
 async function resolveLiveActionTurn(
   prompt: string,
   evidence: EvidenceBundle | undefined,
   model?: string,
+  abortSignal?: AbortSignal,
 ): Promise<AgentAction[]> {
   const envelope = await runWithPrimaryOnlyFallback(prompt, AgentActionsEnvelopeSchema, {
     ...(evidence !== undefined ? { evidence } : {}),
@@ -332,6 +354,7 @@ async function resolveLiveActionTurn(
     schemaName: 'AgentActionsEnvelopeSchema',
     maxCliAttempts: 2,
     ...(model ? { model } : {}),
+    ...(abortSignal ? { signal: abortSignal } : {}),
   });
   return envelope.actions;
 }
@@ -359,6 +382,7 @@ export async function runReadOnlyAgentLoop(
   process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] = '1';
 
   try {
+    return await runWithProjectRoot(input.projectRoot, async () => {
     if (useDeterministicMock) {
     const mockActions = buildDeterministicMockActions(anchorPaths, input.verb);
     const batch = await executeActionBatch(
@@ -375,13 +399,15 @@ export async function runReadOnlyAgentLoop(
       steps,
       sessionLoopSteps: buildSessionLoopSteps(steps),
       toolCallLog,
-      observations: formatReadOnlyObservations(steps),
+      observations: formatReadOnlyObservations(steps, input.toolContext.runDir),
       stepsExecuted: toolCallLog.length,
       degraded: anchorPaths.length === 0,
       policyBlocked: batch.policyBlocked,
       blockedReason: batch.blockedReason,
       completed: true,
       roundExhausted: false,
+      needsApproval: batch.needsApproval,
+      providerError: null,
     };
     return mockResult;
     }
@@ -392,6 +418,8 @@ export async function runReadOnlyAgentLoop(
   let blockedReason: string | null = null;
   let degraded = false;
   let terminalReached = false;
+  let needsApproval = false;
+  let providerError: string | null = null;
 
   const warmupActions = buildDiscoveryAnchorWarmupActions(anchorPaths);
   const warmupBatch = await executeActionBatch(
@@ -403,9 +431,10 @@ export async function runReadOnlyAgentLoop(
     0,
     input.toolStream,
   );
-  priorObservations = formatReadOnlyObservations(steps);
+  priorObservations = formatReadOnlyObservations(steps, input.toolContext.runDir);
   policyBlocked = warmupBatch.policyBlocked;
   blockedReason = warmupBatch.blockedReason;
+  needsApproval = warmupBatch.needsApproval;
   if (warmupBatch.terminal) {
     const toolCallLog = buildToolCallLogFromSteps(steps);
     const warmupBlockedResult = {
@@ -419,6 +448,8 @@ export async function runReadOnlyAgentLoop(
       blockedReason,
       completed: true,
       roundExhausted: false,
+      needsApproval,
+      providerError: null,
     };
     return warmupBlockedResult;
   }
@@ -440,17 +471,28 @@ export async function runReadOnlyAgentLoop(
         maxRounds,
         priorObservations,
         allowedTools: ['directory_list', 'file_read', 'semantic_search', 'grep', 'glob'],
+        ...(input.additionalInstructions
+          ? { additionalInstructions: input.additionalInstructions }
+          : {}),
       });
       if (input.actionResolver) {
         actions = await input.actionResolver(prompt, round);
       } else {
-        actions = await resolveLiveActionTurn(prompt, input.evidence, input.model);
+        actions = await resolveLiveActionTurn(
+          prompt,
+          input.evidence,
+          input.model,
+          input.abortSignal,
+        );
       }
     } catch (err) {
       degraded = true;
       const message = err instanceof Error ? err.message : String(err);
       if (input.abortSignal?.aborted || /abort/i.test(message)) {
         blockedReason = blockedReason ?? 'Aborted by user or parent';
+      } else {
+        providerError = message;
+        blockedReason = blockedReason ?? message;
       }
       break;
     }
@@ -464,16 +506,18 @@ export async function runReadOnlyAgentLoop(
       steps.length,
       input.toolStream,
     );
-    priorObservations = formatReadOnlyObservations(steps);
+    priorObservations = formatReadOnlyObservations(steps, input.toolContext.runDir);
     policyBlocked = batch.policyBlocked;
     blockedReason = batch.blockedReason;
+    needsApproval = batch.needsApproval;
     if (batch.terminal) {
       terminalReached = true;
       break;
     }
   }
 
-  const roundExhausted = !terminalReached && !policyBlocked && round >= maxRounds;
+  const roundExhausted =
+    !terminalReached && !policyBlocked && !providerError && round >= maxRounds;
   if (roundExhausted) {
     degraded = true;
     priorObservations += '\n[Discovery incomplete: round limit reached without finish]';
@@ -503,12 +547,14 @@ export async function runReadOnlyAgentLoop(
   }
 
   const toolCallLog = buildToolCallLogFromSteps(steps);
-  const baseObservations = formatReadOnlyObservations(steps);
-  const finalObservations = roundExhausted
-    ? baseObservations
-      ? `${baseObservations}\n[Discovery incomplete: round limit reached without finish]`
-      : '[Discovery incomplete: round limit reached without finish]'
-    : baseObservations;
+  const baseObservations = formatReadOnlyObservations(steps, input.toolContext.runDir);
+  const finalObservations = [
+    baseObservations,
+    roundExhausted ? '[Discovery incomplete: round limit reached without finish]' : '',
+    providerError ? `[Provider error: ${providerError}]` : '',
+  ]
+    .filter((part) => part && part.trim().length > 0)
+    .join('\n');
   const loopResult = {
     steps,
     sessionLoopSteps: buildSessionLoopSteps(steps),
@@ -520,8 +566,11 @@ export async function runReadOnlyAgentLoop(
     blockedReason,
     completed: terminalReached,
     roundExhausted,
+    needsApproval,
+    providerError,
   };
     return loopResult;
+    });
   } finally {
     if (previousProjectRoot === undefined) {
       delete process.env['BABEL_PROJECT_ROOT'];

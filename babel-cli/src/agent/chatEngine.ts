@@ -99,12 +99,15 @@ import { getGlobalTokenTracker } from '../ui/tokenHistory.js';
 import {
   classifyTerminalLimiter,
   createRunAllowanceReport,
+  explicitFiniteCostOverride,
   resolveChatEngineLimits,
   shouldShrinkWallForPostWriteRepair,
   type ChatEngineLimits,
   type ChatEngineRunAllowanceReport,
   type ChatRunLimiter,
 } from '../config/chatEngineLimits.js';
+import { classifyFailureText } from './chatFailureClassification.js';
+import { nativeTurnFromStream, ProviderOutputTruncatedError } from './chatNativeTurn.js';
 import {
   resolveChatTaskClass,
   getChatTaskTune,
@@ -563,6 +566,8 @@ export type ChatEvent =
       }>;
       blockedAttempts?: import('./blockedAttemptLedger.js').BlockedAttempt[];
       turnTelemetry?: ChatTurnTelemetryRecord;
+      costBudget?: ChatEngineLimits['costBudget'];
+      runAllowance?: ChatEngineRunAllowanceReport;
     }
   | {
       type: 'failed';
@@ -578,6 +583,8 @@ export type ChatEvent =
       /** Preserve INFRA_FAILURE vs AGENT_FAILURE when the engine already classified. */
       outcome?: import('../schemas/agentContracts.js').TerminalOutcome;
       turnTelemetry?: ChatTurnTelemetryRecord;
+      costBudget?: ChatEngineLimits['costBudget'];
+      runAllowance?: ChatEngineRunAllowanceReport;
     }
   | { type: 'cancelled'; turnTelemetry?: ChatTurnTelemetryRecord }
   | {
@@ -1824,7 +1831,11 @@ export class ChatEngine {
             };
             break;
           case 'failed':
-            terminal = { kind: 'failed', error: event.error };
+            terminal = {
+              kind: 'failed',
+              error: event.error,
+              ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+            };
             break;
           case 'cancelled':
             terminal = { kind: 'cancelled' };
@@ -1834,32 +1845,63 @@ export class ChatEngine {
         }
       }
     } catch (error) {
-      // P0-D B4: unexpected throw must still finalize turn_ended on disk.
+      // Unexpected throw still finalizes the turn; unknown stays inconclusive.
       const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
       const message =
         captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error));
-      finalizeParityTurnSync(this.parity, this.engineRunDir, 'AGENT_FAILURE', 'failed');
-      return this.buildResult('failed', cb, message);
+      return this.buildResult('failed', cb, message, undefined, classifyFailureText(message));
     }
 
-    if (!terminal || terminal.kind === 'cancelled') {
+    if (!terminal) {
+      return this.buildResult(
+        'failed',
+        cb,
+        'Stream ended without a terminal event — possible internal error',
+      );
+    }
+    if (terminal.kind === 'cancelled') {
       return this.buildResult('cancelled', cb);
     }
     if (terminal.kind === 'failed') {
-      return this.buildResult('failed', cb, terminal.error ?? 'Stream failed');
+      const failedOutcome = terminal.outcome ?? classifyFailureText(terminal.error ?? '');
+      if (failedOutcome === 'BUDGET_EXHAUSTED' || this.budgetExceeded) {
+        this.budgetExceeded = true;
+        return this.buildResult(
+          'budget_exhausted',
+          cb,
+          terminal.error ?? 'Stream failed',
+          undefined,
+          'BUDGET_EXHAUSTED',
+        );
+      }
+      if (
+        failedOutcome === 'BLOCKED_POLICY' ||
+        failedOutcome === 'BLOCKED_EXTERNAL' ||
+        failedOutcome === 'NEEDS_HUMAN_DECISION' ||
+        failedOutcome === 'INVALID_TASK'
+      ) {
+        return this.buildResult('blocked', cb, terminal.error ?? 'Stream failed', undefined, failedOutcome);
+      }
+      return this.buildResult(
+        'failed',
+        cb,
+        terminal.error ?? 'Stream failed',
+        undefined,
+        failedOutcome,
+      );
     }
     if (terminal.blockedReport) {
-      return this.buildResult('blocked', cb, terminal.answer, terminal.blockedReport);
+      return this.buildResult('blocked', cb, terminal.answer, terminal.blockedReport, terminal.outcome);
     }
     // Preserve budget_exhausted status from streamDone (do not collapse to completed).
     if (terminal.budgetExceeded || terminal.outcome === 'BUDGET_EXHAUSTED' || this.budgetExceeded) {
       this.budgetExceeded = true;
-      return this.buildResult('budget_exhausted', cb, terminal.answer);
+      return this.buildResult('budget_exhausted', cb, terminal.answer, undefined, terminal.outcome);
     }
     if (terminal.outcome === 'AGENT_FAILURE' || terminal.outcome === 'INFRA_FAILURE') {
-      return this.buildResult('failed', cb, terminal.answer);
+      return this.buildResult('failed', cb, terminal.answer, undefined, terminal.outcome);
     }
-    return this.buildResult('completed', cb, terminal.answer);
+    return this.buildResult('completed', cb, terminal.answer, undefined, terminal.outcome);
   }
 
   /** #1 Async generator: yields typed ChatEvents as the conversation progresses.
@@ -2126,6 +2168,7 @@ export class ChatEngine {
         const nativeToolCallIds: string[] = [];
         const seenToolCallIds = new Set<string>();
         let answerText = '';
+        let nativeFinishReason: string | undefined;
         const systemPrompt = this.getOrBuildSystemPrompt('native');
 
         this.assertNativeRequestMatchesDurable(providerMessages, systemPrompt, systemPrompt);
@@ -2172,7 +2215,9 @@ export class ChatEngine {
               }
               case 'error':
                 throw new Error(event.message);
-              // 'done' is handled after the loop
+              case 'done':
+                nativeFinishReason = event.finishReason;
+                break;
             }
           }
           const providerEnd = performance.now();
@@ -2184,10 +2229,11 @@ export class ChatEngine {
           this.trackRunnerUsage(runner);
           this._streamNativeToolCallIds = nativeToolCallIds;
           streamedAnswerForTurn = answerText;
-          turnResult =
-            nativeActions.length > 0
-              ? { type: 'tool_calls', actions: nativeActions }
-              : { type: 'completion', answer: answerText || 'OK' };
+          turnResult = nativeTurnFromStream({
+            answerText,
+            actions: nativeActions,
+            finishReason: nativeFinishReason,
+          });
         } catch (err: any) {
           const providerEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
@@ -2211,6 +2257,7 @@ export class ChatEngine {
           nativeToolCallIds.length = 0;
           seenToolCallIds.clear();
           answerText = '';
+          nativeFinishReason = undefined;
           this.assertNativeRequestMatchesDurable(providerMessages, systemPrompt, undefined);
           const fbStart = performance.now();
           try {
@@ -2255,6 +2302,9 @@ export class ChatEngine {
                 }
                 case 'error':
                   throw new Error(event.message);
+                case 'done':
+                  nativeFinishReason = event.finishReason;
+                  break;
               }
             }
             const fbEnd = performance.now();
@@ -2266,10 +2316,11 @@ export class ChatEngine {
             this.trackRunnerUsage(fb);
             this._streamNativeToolCallIds = nativeToolCallIds;
             streamedAnswerForTurn = answerText;
-            turnResult =
-              nativeActions.length > 0
-                ? { type: 'tool_calls', actions: nativeActions }
-                : { type: 'completion', answer: answerText || 'OK' };
+            turnResult = nativeTurnFromStream({
+              answerText,
+              actions: nativeActions,
+              finishReason: nativeFinishReason,
+            });
           } catch (fbErr: any) {
             const fbEnd = performance.now();
             this.currentTurnTelemetry?.recordProviderSpan(
@@ -3671,6 +3722,9 @@ export class ChatEngine {
       cumulativeSessionTokens: globalCostTracker.getSessionSummary().totalTokens,
     });
     this.lastTurnTelemetry = finalizedTelemetry ?? null;
+    const runAllowance = this.assembleRunAllowance(
+      extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
+    );
     return buildStreamDone(this.obsHandles(), answer, {
       outcome,
       ...(decision.finalOutcome === 'PLAN_COMPLETE'
@@ -3678,16 +3732,25 @@ export class ChatEngine {
         : {}),
       ...(this.budgetExceeded ? { budgetExceeded: true as const } : {}),
       ...(extra ?? {}),
+      ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
+      runAllowance,
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     });
   }
 
   private streamFailed(error: string) {
-    const providerOrTransport =
-      /\[(?:deepSeekApi|deepInfraApi|openRouterApi)\]|stream closed before terminal|idle timeout|request timeout|request cancelled|ECONNRESET|finish_reason|malformed arguments|incomplete tool call/i.test(
-        error,
-      );
-    const outcome: TerminalOutcome = providerOrTransport ? 'INFRA_FAILURE' : 'AGENT_FAILURE';
+    const limiterOutcome: TerminalOutcome | undefined =
+      this.terminatingLimiter === 'turns' ||
+      this.terminatingLimiter === 'wall' ||
+      this.terminatingLimiter === 'cost' ||
+      this.terminatingLimiter === 'tokens'
+        ? 'BUDGET_EXHAUSTED'
+        : this.terminatingLimiter === 'stall'
+          ? 'BLOCKED_POLICY'
+          : undefined;
+    const outcome = classifyFailureText(error) ?? limiterOutcome;
+    if (outcome === 'BUDGET_EXHAUSTED') this.budgetExceeded = true;
+    const runAllowance = this.assembleRunAllowance('failed');
     finalizeParityTurnSync(this.parity, this.engineRunDir, outcome, 'failed');
     const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
       turnId: String(this.parity.turnId ?? this._turnIndex),
@@ -3698,6 +3761,9 @@ export class ChatEngine {
     });
     this.lastTurnTelemetry = finalizedTelemetry ?? null;
     return buildStreamFailed(this.obsHandles(), error, {
+      ...(outcome !== undefined ? { outcome } : {}),
+      ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
+      runAllowance,
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     });
   }
@@ -3865,6 +3931,7 @@ export class ChatEngine {
             : {}),
           ...(this.options.maxWallMs !== undefined ? { maxWallMs: this.options.maxWallMs } : {}),
           ...(this.options.maxCostUsd !== undefined ? { maxCostUsd: this.options.maxCostUsd } : {}),
+          ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
         },
         undefined,
         { taskClass: runtime.taskClass, taskText: runtime.taskText },
@@ -3983,8 +4050,11 @@ export class ChatEngine {
       this.options.maxEstimatedTokens = preparation.limits.maxEstimatedTokens;
       this.options.maxTokensPerRound = preparation.limits.maxTokensPerRound;
       this.options.maxWallMs = preparation.limits.maxWallMs;
-      if (preparation.limits.maxCostUsd !== undefined) {
-        this.options.maxCostUsd = preparation.limits.maxCostUsd;
+      const explicitCost = explicitFiniteCostOverride(preparation.limits);
+      if (explicitCost !== undefined) {
+        this.options.maxCostUsd = explicitCost;
+      } else {
+        delete this.options.maxCostUsd;
       }
     }
     this.taskClass = resolveChatTaskClass({
@@ -4485,9 +4555,16 @@ export class ChatEngine {
         });
         try {
           this.persistToolStartedAtExecutorDispatch(action, meta);
+          const requestedRounds = (action as { max_rounds?: number }).max_rounds;
+          const childRounds = Number.isFinite(requestedRounds)
+            ? Math.min(20, Math.max(1, Math.trunc(requestedRounds as number)))
+            : SUB_AGENT_MAX_ROUNDS;
+          const extraInstructions = (action as { instructions?: string }).instructions;
           const subResult = await runReadOnlyAgentLoop({
             verb: 'ask',
-            task: action.task,
+            task: extraInstructions
+              ? `${action.task}\n\nAdditional instructions:\n${extraInstructions}`
+              : action.task,
             projectRoot: this.options.projectRoot,
             seedPaths: [],
             toolContext: {
@@ -4497,14 +4574,22 @@ export class ChatEngine {
               babelRoot: process.env['BABEL_ROOT'] ?? process.cwd(),
               signal: childController.signal,
             },
-            maxRounds: SUB_AGENT_MAX_ROUNDS,
+            maxRounds: childRounds,
             preset: 'read_only',
             abortSignal: childController.signal,
             model:
               ((action as any).model as string | undefined) ?? this.modelPolicy?.providerModelId,
+            ...(extraInstructions ? { additionalInstructions: extraInstructions } : {}),
           } as any);
-          const attribution: SubagentAttribution = subResult.policyBlocked
+          const attribution: SubagentAttribution = subResult.needsApproval || subResult.policyBlocked
             ? 'child_policy_block'
+            : subResult.providerError
+              ? classifySubagentFailure({
+                  success: false,
+                  error: subResult.providerError,
+                  changedFilesCount: 0,
+                  aborted: childController.signal.aborted,
+                })
             : subResult.roundExhausted
               ? 'child_round_exhaustion'
               : childController.signal.aborted
@@ -4527,6 +4612,8 @@ export class ChatEngine {
             `attribution: ${attribution}`,
             `completed: ${subResult.completed}`,
             `round_exhausted: ${subResult.roundExhausted}`,
+            ...(subResult.needsApproval ? ['needs_approval: true'] : []),
+            ...(subResult.providerError ? [`provider_error: ${subResult.providerError}`] : []),
           ].join('\n');
           this.toolCallLog.push({
             tool,
@@ -6207,6 +6294,7 @@ export class ChatEngine {
         : this.services.tools.buildDefinitions());
       const nativeActions: ChatToolAction[] = [];
       let answerText = '';
+      let nativeFinishReason: string | undefined;
       const systemPrompt = this.getOrBuildSystemPrompt('native');
 
       for await (const event of runner.executeWithToolsStream(
@@ -6243,8 +6331,7 @@ export class ChatEngine {
           case 'error':
             throw new Error(event.message);
           case 'done':
-            // finishReason captured for debugging; usage is tracked via
-            // getLastInvocationMetadata() called by trackRunnerUsage below
+            nativeFinishReason = event.finishReason;
             break;
           default: {
             const _exhaustive: never = event;
@@ -6253,9 +6340,11 @@ export class ChatEngine {
         }
       }
       this.trackRunnerUsage(runner);
-      return nativeActions.length > 0
-        ? { type: 'tool_calls', actions: nativeActions }
-        : { type: 'completion', answer: answerText || 'OK' };
+      return nativeTurnFromStream({
+        answerText,
+        actions: nativeActions,
+        finishReason: nativeFinishReason,
+      });
     }
 
     // ── Text-tools path — simplified format for small local models ──────────
@@ -6336,6 +6425,13 @@ export class ChatEngine {
     const cancelled = this.emitCancelledIfOperatorAbort(err);
     if (cancelled) {
       yield cancelled;
+      return null;
+    }
+    if (
+      err instanceof ProviderOutputTruncatedError ||
+      /finish_reason: length/i.test(err?.message ?? '')
+    ) {
+      yield this.streamFailed(err?.message ?? String(err));
       return null;
     }
     if (turn > 0) {
@@ -6588,11 +6684,44 @@ export class ChatEngine {
     recordCompletionDecision(this.parity.sessionEvents, turnId, decision);
   }
 
+  private assembleRunAllowance(finalStatus: ChatResult['status']): ChatEngineRunAllowanceReport {
+    const runAllowance = createRunAllowanceReport(this.limits, {
+      postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
+      criticRepairCostCapUsd: this.criticRepairCostCapUsd,
+      terminatingLimiter: this.terminatingLimiter,
+      terminalClassification: this.terminatingLimiter
+        ? classifyTerminalLimiter(this.terminatingLimiter, this.terminalLimiterReason ?? undefined)
+        : finalStatus === 'cancelled'
+          ? 'cancelled'
+          : null,
+      terminalReason: this.terminalLimiterReason,
+      childLimits: { maxRounds: SUB_AGENT_MAX_ROUNDS },
+    });
+    if (runAllowance.terminatingLimiter === 'none' || runAllowance.terminatingLimiter == null) {
+      if (runAllowance.terminalClassification === 'success') {
+        runAllowance.terminalClassification = 'no_limit_triggered';
+      }
+    }
+    this.limits.runAllowance = runAllowance;
+    this.policyEventLog.record({
+      at_turn: this._turnIndex,
+      kind: 'progress_policy',
+      detail: `run_allowance ${JSON.stringify(runAllowance)}`,
+    });
+    try {
+      writeFileSync(join(this.engineRunDir, 'run-allowance.json'), JSON.stringify(runAllowance));
+    } catch {
+      /* evidence write must not fail the turn */
+    }
+    return runAllowance;
+  }
+
   private buildResult(
     status: ChatResult['status'],
     callbacks: ChatCallbacks,
     answer?: string,
     blockedReport?: BlockedReport | null,
+    knownOutcome?: TerminalOutcome,
   ): ChatResult {
     // R1: If the answer explicitly declares BLOCKED but no blockedReport was
     // provided (e.g., the detection ran in a code path that didn't provide it),
@@ -6618,26 +6747,36 @@ export class ChatEngine {
 
     // Compute truthful TerminalOutcome from status and runtime state.
     const hasMutation = this.hasAnyWrites();
-    let outcome: TerminalOutcome = computeTerminalOutcome({
-      readOnly: isReadOnlyChat(),
-      finalStatus,
-      budgetExceeded: this.budgetExceeded,
-      lastVerifierReceipt: this.lastVerifierReceipt,
-      blockedReport: finalBlockedReport,
-      hasAnyWrites: hasMutation,
-    });
-    outcome = applyHonestTaskOutcomeToCompletion({
-      contract: this.parity.liveAuthority?.taskContract,
-      requestedOutcome: outcome,
-      hasMutation,
-      planMode: this.executionProfile === 'plan',
-    });
+    const failedCause =
+      finalStatus === 'failed'
+        ? (knownOutcome ?? classifyFailureText(answer ?? ''))
+        : undefined;
+    let outcome: TerminalOutcome | undefined =
+      finalStatus === 'failed'
+        ? failedCause
+        : (knownOutcome ??
+          computeTerminalOutcome({
+            readOnly: isReadOnlyChat(),
+            finalStatus,
+            budgetExceeded: this.budgetExceeded,
+            lastVerifierReceipt: this.lastVerifierReceipt,
+            blockedReport: finalBlockedReport,
+            hasAnyWrites: hasMutation,
+          }));
+    if (outcome !== undefined && finalStatus !== 'failed') {
+      outcome = applyHonestTaskOutcomeToCompletion({
+        contract: this.parity.liveAuthority?.taskContract,
+        requestedOutcome: outcome,
+        hasMutation,
+        planMode: this.executionProfile === 'plan',
+      });
+    }
     const planCompletion = this.executionProfile === 'plan' && finalStatus === 'completed';
-    const kernelDecision = this.decideCompletion(
-      planCompletion ? 'PLAN_COMPLETE' : outcome,
-      hasMutation,
-    );
-    const authoritativeOutcome: TerminalOutcome =
+    const kernelDecision =
+      outcome !== undefined && finalStatus !== 'failed'
+        ? this.decideCompletion(planCompletion ? 'PLAN_COMPLETE' : outcome, hasMutation)
+        : null;
+    const authoritativeOutcome: TerminalOutcome | undefined =
       kernelDecision && kernelDecision.finalOutcome !== 'PLAN_COMPLETE'
         ? kernelDecision.finalOutcome
         : planCompletion
@@ -6646,7 +6785,7 @@ export class ChatEngine {
     if (kernelDecision) {
       this.recordCompletionDecisionOnce({
         requestedOutcome: kernelDecision.requestedOutcome,
-        finalOutcome: authoritativeOutcome,
+        finalOutcome: authoritativeOutcome ?? kernelDecision.finalOutcome,
         allowed: kernelDecision.allowed,
         reason: kernelDecision.reason,
         evidenceRefs: kernelDecision.evidenceRefs,
@@ -6660,7 +6799,7 @@ export class ChatEngine {
     // flag was just refreshed against the live workspace by decideCompletion)
     // and the completion-gate result (authoritativeOutcome IS the gate decision).
     const codingPassed = isCodingTaskSuccess({
-      terminalOutcome: authoritativeOutcome,
+      terminalOutcome: authoritativeOutcome ?? null,
       hasSuccessfulMutation: hasMutation,
       verifierOk: this.lastVerifierReceipt?.exit_code === 0,
       requireVerifier: false,
@@ -6672,45 +6811,17 @@ export class ChatEngine {
       atTurn: this._turnIndex,
       hasSuccessfulMutation: hasMutation,
       codingTaskPassed: codingPassed,
-      terminalOutcome: authoritativeOutcome,
+      terminalOutcome: authoritativeOutcome ?? 'unknown',
     });
 
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
     finalizeParityTurnSync(this.parity, this.engineRunDir, authoritativeOutcome, finalStatus);
 
-    const runAllowance = createRunAllowanceReport(this.limits, {
-      postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
-      criticRepairCostCapUsd: this.criticRepairCostCapUsd,
-      terminatingLimiter: this.terminatingLimiter,
-      terminalClassification: this.terminatingLimiter
-        ? classifyTerminalLimiter(this.terminatingLimiter, this.terminalLimiterReason ?? undefined)
-        : finalStatus === 'cancelled'
-          ? 'cancelled'
-          : null,
-      terminalReason: this.terminalLimiterReason,
-      childLimits: { maxRounds: SUB_AGENT_MAX_ROUNDS },
-    });
-    // Being under all limits is ACTIVE / no_limit_triggered, never task success.
-    if (runAllowance.terminatingLimiter === 'none' || runAllowance.terminatingLimiter == null) {
-      if (runAllowance.terminalClassification === 'success') {
-        runAllowance.terminalClassification = 'no_limit_triggered';
-      }
-    }
-    this.limits.runAllowance = runAllowance;
-    this.policyEventLog.record({
-      at_turn: this._turnIndex,
-      kind: 'progress_policy',
-      detail: `run_allowance ${JSON.stringify(runAllowance)}`,
-    });
-    try {
-      writeFileSync(join(this.engineRunDir, 'run-allowance.json'), JSON.stringify(runAllowance));
-    } catch {
-      /* evidence write must not fail the turn */
-    }
+    const runAllowance = this.assembleRunAllowance(finalStatus);
 
     const result: ChatResult = {
       status: finalStatus,
-      outcome: authoritativeOutcome,
+      ...(authoritativeOutcome !== undefined ? { outcome: authoritativeOutcome } : {}),
       ...(kernelDecision?.finalOutcome === 'PLAN_COMPLETE'
         ? { planOutcome: 'PLAN_COMPLETE' as const }
         : {}),

@@ -6,8 +6,8 @@
  * terminateChildTree path (backgroundShell → sandbox.terminateChildTree).
  * After waiting past the delayed-write time, the marker file must not exist.
  *
- * Linux is portable in this fixture. This host is Windows; Linux is marked
- * NOT RUN with the exact reason rather than claimed PASS.
+ * Portable across Windows and Linux: the same node child→grandchild delayed
+ * write is launched, then terminateChildTree must prevent the late write.
  */
 
 import assert from 'node:assert/strict';
@@ -91,8 +91,7 @@ describe('real process-tree termination (qualifying)', () => {
     resetBackgroundShellRegistryForTests();
   });
 
-  it('Windows: timeout kills descendant; delayed write does not appear', async () => {
-    assert.equal(process.platform, 'win32');
+  it('timeout kills descendant; delayed write does not appear', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'babel-ptree-timeout-'));
     const marker = join(dir, 'post-terminal.txt');
     const scripts = writeTreeScripts(dir, marker);
@@ -124,8 +123,7 @@ describe('real process-tree termination (qualifying)', () => {
     }
   });
 
-  it('Windows: cancellation DURING execution kills descendant; delayed write does not appear', async () => {
-    assert.equal(process.platform, 'win32');
+  it('cancellation DURING execution kills descendant; delayed write does not appear', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'babel-ptree-cancel-'));
     const marker = join(dir, 'post-terminal.txt');
     const scripts = writeTreeScripts(dir, marker);
@@ -167,8 +165,7 @@ describe('real process-tree termination (qualifying)', () => {
     }
   });
 
-  it('Windows: explicit killBackgroundShell prevents delayed descendant write', async () => {
-    assert.equal(process.platform, 'win32');
+  it('explicit killBackgroundShell prevents delayed descendant write', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'babel-ptree-kill-'));
     const marker = join(dir, 'post-terminal.txt');
     const scripts = writeTreeScripts(dir, marker);
@@ -196,15 +193,4 @@ describe('real process-tree termination (qualifying)', () => {
     }
   });
 
-  it('Linux process-tree fixture: NOT RUN', () => {
-    if (process.platform === 'linux') {
-      assert.ok(true, 'Linux host would execute the same portable fixture');
-      return;
-    }
-    assert.equal(
-      process.platform,
-      'win32',
-      'Linux NOT RUN: this isolated worktree host is Windows (process.platform=win32); no Linux runner is attached to this subagent. The fixture above is portable (node child→grandchild delayed write + terminateChildTree).',
-    );
-  });
 });

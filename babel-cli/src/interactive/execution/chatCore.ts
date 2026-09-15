@@ -344,6 +344,9 @@ export async function consumeChatStream(
   let doneOutcome: ChatResult['outcome'];
   let doneBudgetExceeded = false;
   let doneTurnTelemetry: import('../../agent/chatTurnTelemetry.js').ChatTurnTelemetryRecord | undefined;
+  let doneCostBudget: ChatResult['costBudget'];
+  let doneRunAllowance: ChatResult['runAllowance'];
+  let donePolicyEvents: ChatResult['policyEvents'];
   const toolIdQueue: number[] = [];
   let receivedTerminalEvent = false;
 
@@ -415,6 +418,9 @@ export async function consumeChatStream(
         doneOutcome = event.outcome;
         doneBudgetExceeded = event.budgetExceeded === true;
         doneTurnTelemetry = event.turnTelemetry ?? doneTurnTelemetry;
+        doneCostBudget = event.costBudget ?? doneCostBudget;
+        doneRunAllowance = event.runAllowance ?? doneRunAllowance;
+        donePolicyEvents = event.policyEvents ?? donePolicyEvents;
         receivedTerminalEvent = true;
       }
 
@@ -462,6 +468,9 @@ export async function consumeChatStream(
     ...(verifierTampered ? { verifierTampered: true } : {}),
     ...(turnRouting ? { turnRouting } : {}),
     ...(doneTurnTelemetry !== undefined ? { turnTelemetry: doneTurnTelemetry } : {}),
+    ...(doneCostBudget ? { costBudget: doneCostBudget } : {}),
+    ...(doneRunAllowance ? { runAllowance: doneRunAllowance } : {}),
+    ...(donePolicyEvents ? { policyEvents: donePolicyEvents } : {}),
   });
 }
 

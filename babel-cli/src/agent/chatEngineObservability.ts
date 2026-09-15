@@ -12,6 +12,10 @@ import { OllamaApiRunner } from '../runners/ollamaApi.js';
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { globalCostTracker, type SessionUsageSummary } from '../services/costTracker.js';
 import type { BlockedReport, TerminalOutcome } from '../schemas/agentContracts.js';
+import type {
+  ChatEngineLimits,
+  ChatEngineRunAllowanceReport,
+} from '../config/chatEngineLimits.js';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { ChatToolAction } from './chatToolDefinitions.js';
 import { chatActionToolName } from './chatToolDefinitions.js';
@@ -154,6 +158,8 @@ export type StreamDoneEvent = {
   blockedAttempts?: BlockedAttempt[];
   turnSummaries?: TurnSummary[];
   turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+  costBudget?: ChatEngineLimits['costBudget'];
+  runAllowance?: ChatEngineRunAllowanceReport;
 };
 
 export type StreamFailedEvent = {
@@ -162,6 +168,10 @@ export type StreamFailedEvent = {
   toolCalls: ExportedToolCall[];
   runDir?: string;
   turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+  /** Present only when the cause is established. Unknown stays omitted. */
+  outcome?: TerminalOutcome;
+  costBudget?: ChatEngineLimits['costBudget'];
+  runAllowance?: ChatEngineRunAllowanceReport;
 };
 
 export interface ObservabilityHandles {
@@ -254,6 +264,8 @@ export function buildStreamDone(
     verifierTampered?: boolean;
     criticReceipt?: DiffCriticVerdict | null;
     turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+    costBudget?: ChatEngineLimits['costBudget'];
+    runAllowance?: ChatEngineRunAllowanceReport;
   },
 ): StreamDoneEvent {
   if (!extra?.outcome) {
@@ -279,13 +291,20 @@ export function buildStreamDone(
   if (extra.criticReceipt) event.criticReceipt = extra.criticReceipt;
   if (extra.planOutcome) event.planOutcome = extra.planOutcome;
   if (extra.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
+  if (extra.costBudget) event.costBudget = extra.costBudget;
+  if (extra.runAllowance) event.runAllowance = extra.runAllowance;
   return event;
 }
 
 export function buildStreamFailed(
   h: ObservabilityHandles,
   error: string,
-  extra?: { turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord },
+  extra?: {
+    turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+    outcome?: TerminalOutcome;
+    costBudget?: ChatEngineLimits['costBudget'];
+    runAllowance?: ChatEngineRunAllowanceReport;
+  },
 ): StreamFailedEvent {
   const event: StreamFailedEvent = {
     type: 'failed',
@@ -294,6 +313,9 @@ export function buildStreamFailed(
   };
   if (h.engineRunDir) event.runDir = h.engineRunDir;
   if (extra?.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
+  if (extra?.outcome) event.outcome = extra.outcome;
+  if (extra?.costBudget) event.costBudget = extra.costBudget;
+  if (extra?.runAllowance) event.runAllowance = extra.runAllowance;
   return event;
 }
 
