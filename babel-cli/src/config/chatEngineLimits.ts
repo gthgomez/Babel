@@ -90,6 +90,16 @@ export function shouldShrinkWallForPostWriteRepair(
  * Skip shrink only for an explicit cost ceiling or cost-budget long-task
  * profile, unless critic strikes show thrash (strikes >= 2).
  */
+/**
+ * Numeric cost override that may be copied into constructor-style options.
+ * Defaults and unlimited env policy must not become a finite explicit ceiling.
+ */
+export function explicitFiniteCostOverride(limits: ChatEngineLimits): number | undefined {
+  if (limits.costBudget?.explicitCostCeiling !== true) return undefined;
+  const requested = limits.costBudget.requestedCostUsd;
+  return Number.isFinite(requested) ? requested : undefined;
+}
+
 export function shouldShrinkCostForPostWriteRepair(
   limits?: Partial<ChatEngineLimits>,
   criticStrikes?: number,

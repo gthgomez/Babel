@@ -220,7 +220,7 @@ describe('Live monomorphic ChatEngine loop', () => {
     );
     // Non-stream is a consumer of stream — result status must be a known terminal
     assert.ok(
-      ['completed', 'blocked', 'failed', 'cancelled'].includes(syncResult.status),
+      ['completed', 'blocked', 'failed', 'cancelled', 'budget_exhausted'].includes(syncResult.status),
       syncResult.status,
     );
     assert.ok(syncResult.outcome, 'sync path must set TerminalOutcome via buildResult');
@@ -464,7 +464,7 @@ describe('Live resume via event log', () => {
     }
   });
 
-  test('engine stream failed flushes AGENT_FAILURE turn_ended to disk', async () => {
+  test('engine stream failed flushes INFRA_FAILURE turn_ended to disk', async () => {
     // AC3: raw provider/tool failure after tools must finalize via streamFailed
     const root = mkdtempSync(join(tmpdir(), 'babel-fail-flush-'));
     try {
@@ -489,7 +489,7 @@ describe('Live resume via event log', () => {
             yield { type: 'done' as const, finishReason: 'tool_calls' };
             return;
           }
-          yield { type: 'error' as const, message: 'provider hard failure 500' };
+          yield { type: 'error' as const, message: '[deepSeekApi] provider hard failure 500' };
         },
         execute: async () => ({ type: 'completion', answer: 'x' }),
         getLastInvocationMetadata: () => null,
@@ -511,8 +511,8 @@ describe('Live resume via event log', () => {
       assert.ok(ended.length >= 1, 'turn_ended required on failed path');
       assert.equal(
         ended[ended.length - 1]!.outcome,
-        'AGENT_FAILURE',
-        'failed path TerminalOutcome must be AGENT_FAILURE',
+        'INFRA_FAILURE',
+        'failed path TerminalOutcome must be INFRA_FAILURE',
       );
       // If tools ran before failure, tool_result must still be on disk
       const tools = loaded.events.filter((e) => e.kind === 'tool_result');

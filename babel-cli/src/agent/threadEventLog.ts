@@ -105,7 +105,8 @@ export type ThreadEvent =
     })
   | (ThreadEventBase & {
       kind: 'turn_ended';
-      outcome: TerminalOutcome;
+      /** Omitted when the cause is not established. */
+      outcome?: TerminalOutcome;
       status: string;
     })
   | (ThreadEventBase & {
@@ -220,13 +221,13 @@ export function startTurn(
 export function endTurn(
   log: ThreadEventLog,
   turnId: string,
-  outcome: TerminalOutcome,
+  outcome: TerminalOutcome | undefined,
   status: string,
 ): void {
   appendThreadEvent(log, {
     kind: 'turn_ended',
     turn_id: turnId,
-    outcome,
+    ...(outcome !== undefined ? { outcome } : {}),
     status,
   });
 }
@@ -574,8 +575,10 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
       }
       return;
     case 'turn_ended':
-      if (typeof event['outcome'] !== 'string' || !TERMINAL_OUTCOMES.has(event['outcome'] as TerminalOutcome)) {
-        throw new Error(`${context} has invalid terminal outcome`);
+      if (event['outcome'] !== undefined) {
+        if (typeof event['outcome'] !== 'string' || !TERMINAL_OUTCOMES.has(event['outcome'] as TerminalOutcome)) {
+          throw new Error(`${context} has invalid terminal outcome`);
+        }
       }
       requireString(event, 'status', context);
       return;

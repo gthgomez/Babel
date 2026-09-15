@@ -14,7 +14,8 @@ export type ReviewCardKind =
   | 'CANCELLED'
   | 'BUDGET_EXHAUSTED'
   | 'INFRA_FAILURE'
-  | 'AGENT_FAILURE';
+  | 'AGENT_FAILURE'
+  | 'UNKNOWN';
 
 export interface ReviewVerification {
   ran: boolean;
@@ -61,6 +62,7 @@ const KIND_ORDER: ReviewCardKind[] = [
   'BUDGET_EXHAUSTED',
   'INFRA_FAILURE',
   'AGENT_FAILURE',
+  'UNKNOWN',
 ];
 
 export function classifyReviewCard(input: ReviewCardInput): ReviewCardKind {
@@ -80,7 +82,9 @@ export function classifyReviewCard(input: ReviewCardInput): ReviewCardKind {
     return 'BLOCKED';
   }
   if (o === 'INFRA_FAILURE') return 'INFRA_FAILURE';
-  if (o === 'AGENT_FAILURE' || status === 'failed') return 'AGENT_FAILURE';
+  if (o === 'AGENT_FAILURE') return 'AGENT_FAILURE';
+  if (o === 'UNKNOWN' || (status === 'failed' && !o)) return 'UNKNOWN';
+  if (status === 'failed') return 'AGENT_FAILURE';
 
   if (v?.ran && v.passed === false) return 'VERIFICATION_FAILED';
   if (o === 'VERIFIED_COMPLETE' && v?.ran && v.passed === true) return 'VERIFIED_COMPLETE';
@@ -123,6 +127,8 @@ export function reviewTitleTone(
     case 'INFRA_FAILURE':
     case 'AGENT_FAILURE':
       return 'error';
+    case 'UNKNOWN':
+      return 'warning';
   }
 }
 
@@ -160,6 +166,8 @@ function paintTitle(kind: ReviewCardKind, label: string, isNotApplicable = false
     case 'INFRA_FAILURE':
     case 'AGENT_FAILURE':
       return paintByTone(tone, `✖ ${label}`);
+    case 'UNKNOWN':
+      return paintByTone(tone, `? ${label}`);
   }
 }
 
@@ -172,6 +180,7 @@ const TITLES: Record<ReviewCardKind, string> = {
   BUDGET_EXHAUSTED: 'Budget exhausted',
   INFRA_FAILURE: 'Infrastructure failure',
   AGENT_FAILURE: 'Agent failure',
+  UNKNOWN: 'Unknown failure',
 };
 
 export function getContextualNextActions(
@@ -215,6 +224,8 @@ export function getContextualNextActions(
       return input.sessionConsistencyFailure
         ? ['Inspect diagnostics', 'Do not resume this session blindly']
         : ['Inspect diagnostics'];
+    case 'UNKNOWN':
+      return ['Inspect diagnostics — cause was not established'];
   }
 }
 

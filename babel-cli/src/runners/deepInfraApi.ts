@@ -2042,6 +2042,7 @@ export class DeepInfraApiRunner implements LlmRunner {
           const upstreamProvider = upstreamProviderFromResponse(json);
           if (upstreamProvider) streamState.upstreamProvider = upstreamProvider;
           if (json.openrouter_metadata) streamState.routerMetadata = json.openrouter_metadata;
+          if (json.usage) streamState.usage = json.usage;
 
           const choice = json.choices?.[0];
           if (!choice) continue;
@@ -2112,10 +2113,6 @@ export class DeepInfraApiRunner implements LlmRunner {
           } else if (choice.finish_reason) {
             finishReason = normalizeFinishReason(choice.finish_reason);
             streamState.finishReason = finishReason;
-          }
-
-          if (json.usage) {
-            streamState.usage = json.usage;
           }
         }
       }

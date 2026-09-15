@@ -514,4 +514,20 @@ describe('Canary B: Provider Fault Table Verification', () => {
     const prod = { NODE_ENV: 'production' } as NodeJS.ProcessEnv;
     assert.equal(resolveRuntimeInvariantMode(undefined, prod), 'shadow');
   });
+
+  it('usage-only empty-choice chunk is recorded, not dropped', async () => {
+    const runner = deepInfra();
+    globalThis.fetch = (async () =>
+      makeSseResponse([
+        'data: {"choices":[{"index":0,"delta":{"content":"hi"}}]}',
+        'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}',
+        'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+        'data: [DONE]',
+      ])) as typeof fetch;
+
+    await collect(runner.executeWithToolsStream(USER, []));
+    const meta = runner.getLastInvocationMetadata();
+    assert.equal(meta?.prompt_tokens, 100);
+    assert.equal(meta?.completion_tokens, 20);
+  });
 });

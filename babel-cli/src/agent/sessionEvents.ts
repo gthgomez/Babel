@@ -436,7 +436,8 @@ export type SessionEvent =
     })
   | (SessionEventBase & {
       kind: 'turn_ended';
-      outcome: TerminalOutcome;
+      /** Omitted when the cause is not established. */
+      outcome?: TerminalOutcome;
       status: string;
     })
   | (SessionEventBase & {
@@ -1527,12 +1528,12 @@ export function recordVerifierAttempt(
 
 export function recordTurnEnded(
   log: SessionEventLog,
-  input: { turn_id: string; outcome: TerminalOutcome; status: string },
+  input: { turn_id: string; outcome?: TerminalOutcome; status: string },
 ): SessionEvent {
   return appendSessionEvent(log, {
     kind: 'turn_ended',
     turn_id: input.turn_id,
-    outcome: input.outcome,
+    ...(input.outcome !== undefined ? { outcome: input.outcome } : {}),
     status: input.status,
   });
 }

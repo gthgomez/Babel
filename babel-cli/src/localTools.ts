@@ -24,6 +24,7 @@
  *                         Defaults to process.cwd() if not set.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import { z } from 'zod';
 import { SafeExecutor } from './sandbox.js';
@@ -112,6 +113,8 @@ export interface ToolContext {
   runId: string;
   runDir?: string;
   babelRoot: string;
+  /** Declared project root for this invocation. Preferred over process.env. */
+  projectRoot?: string;
   /** Optional turn/session cancellation propagated to foreground child processes. */
   signal?: AbortSignal;
   /** Called after local validation/cache gates, immediately before a real tool handler dispatches. */
@@ -139,8 +142,15 @@ export function refreshDryRunState(): boolean {
  * Creates a SafeExecutor rooted at the configured project root.
  * Called per-invocation in live mode; never called in dry-run mode.
  */
+const projectRootStore = new AsyncLocalStorage<string>();
+
+/** Bind tool path resolution to a declared root across overlapping awaits. */
+export function runWithProjectRoot<T>(root: string, fn: () => Promise<T>): Promise<T> {
+  return projectRootStore.run(root, fn);
+}
+
 function getExecutor(): SafeExecutor {
-  const root = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+  const root = getExecutorProjectRoot();
   const shadowRoot = process.env['BABEL_SHADOW_ROOT'] || null;
   const mode = readRuntimeMode();
   return new SafeExecutor(root, shadowRoot, mode, getDefaultProcessWitness());
@@ -159,7 +169,7 @@ function processContextFromToolContext(context: ToolContext): {
 }
 
 function getExecutorProjectRoot(): string {
-  return process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+  return projectRootStore.getStore() ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
 }
 
 function getLockedFiles(): string[] {

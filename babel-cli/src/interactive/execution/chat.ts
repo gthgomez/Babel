@@ -246,7 +246,7 @@ export async function executeChatTask(
     const turnUsage = usageDelta(preRunUsage, postRunUsage);
     const perRunCost = turnUsage.costUsd;
     const perRunTokens = turnUsage.tokens;
-    const resolvedOutcome: TerminalOutcome =
+    const resolvedOutcome: TerminalOutcome | undefined =
       result.outcome ??
       (result.status === 'completed'
         ? 'NO_CHANGE_REQUIRED'
@@ -256,7 +256,7 @@ export async function executeChatTask(
             ? 'BLOCKED_POLICY'
             : result.status === 'budget_exhausted'
               ? 'BUDGET_EXHAUSTED'
-              : 'AGENT_FAILURE');
+              : undefined);
 
     const projectedState = projectTurnViewState([
       {
@@ -301,7 +301,7 @@ export async function executeChatTask(
       {
         type: 'turn_terminal_resolved',
         timestamp: Date.now(),
-        outcome: resolvedOutcome,
+        ...(resolvedOutcome !== undefined ? { outcome: resolvedOutcome } : {}),
         status:
           result.status === 'completed' ||
           result.status === 'cancelled' ||

@@ -792,7 +792,7 @@ export function parityArbitrateCycle(input: {
 
 export function parityEndTurn(
   rt: ParityRuntime,
-  outcome: TerminalOutcome,
+  outcome: TerminalOutcome | undefined,
   status: string,
 ): void {
   // Idempotent: streamDone + buildResult both call this when submitMessage wraps stream.
@@ -804,33 +804,35 @@ export function parityEndTurn(
   ) {
     return;
   }
-  let event: AgentLoopEvent;
-  switch (outcome) {
-    case 'CANCELLED':
-      event = { type: 'cancel' };
-      break;
-    case 'BUDGET_EXHAUSTED':
-      event = { type: 'budget', exhausted: true, reason: status };
-      break;
-    case 'VERIFIED_COMPLETE':
-      event = { type: 'complete', verified: true };
-      break;
-    case 'UNVERIFIED_PATCH':
-      event = { type: 'complete', verified: false };
-      break;
-    case 'BLOCKED_POLICY':
-      event = { type: 'blocked', kind: 'policy', reason: status };
-      break;
-    case 'BLOCKED_EXTERNAL':
-      event = { type: 'blocked', kind: 'external', reason: status };
-      break;
-    case 'INFRA_FAILURE':
-      event = { type: 'infra_failure', reason: status };
-      break;
-    default:
-      event = { type: 'agent_failure', reason: status };
+  if (outcome !== undefined) {
+    let event: AgentLoopEvent;
+    switch (outcome) {
+      case 'CANCELLED':
+        event = { type: 'cancel' };
+        break;
+      case 'BUDGET_EXHAUSTED':
+        event = { type: 'budget', exhausted: true, reason: status };
+        break;
+      case 'VERIFIED_COMPLETE':
+        event = { type: 'complete', verified: true };
+        break;
+      case 'UNVERIFIED_PATCH':
+        event = { type: 'complete', verified: false };
+        break;
+      case 'BLOCKED_POLICY':
+        event = { type: 'blocked', kind: 'policy', reason: status };
+        break;
+      case 'BLOCKED_EXTERNAL':
+        event = { type: 'blocked', kind: 'external', reason: status };
+        break;
+      case 'INFRA_FAILURE':
+        event = { type: 'infra_failure', reason: status };
+        break;
+      default:
+        event = { type: 'agent_failure', reason: status };
+    }
+    parityReduce(rt, event);
   }
-  parityReduce(rt, event);
   if (rt.turnId) {
     endTurn(rt.eventLog, rt.turnId, outcome, status);
     // W2 PR-E: only one turn_ended per turn_id in session log.
@@ -840,7 +842,7 @@ export function parityEndTurn(
     if (!already) {
       recordTurnEnded(rt.sessionEvents, {
         turn_id: rt.turnId,
-        outcome,
+        ...(outcome !== undefined ? { outcome } : {}),
         status,
       });
     }
@@ -855,7 +857,7 @@ export function parityEndTurn(
 export async function finalizeParityTurn(
   rt: ParityRuntime,
   runDir: string,
-  outcome: TerminalOutcome,
+  outcome: TerminalOutcome | undefined,
   status: string,
 ): Promise<void> {
   parityEndTurn(rt, outcome, status);
@@ -952,7 +954,7 @@ function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
 export function finalizeParityTurnSync(
   rt: ParityRuntime,
   runDir: string,
-  outcome: TerminalOutcome,
+  outcome: TerminalOutcome | undefined,
   status: string,
 ): void {
   parityEndTurn(rt, outcome, status);

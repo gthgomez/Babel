@@ -27,7 +27,7 @@ export interface StatusBarProjection {
 
 export interface ReviewCardProjection {
   title: string;
-  terminalOutcome: TerminalOutcome;
+  terminalOutcome?: TerminalOutcome | undefined;
   status: 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed' | 'in_progress';
   verifiedBadge: 'verified' | 'unverified' | 'failed' | 'not_applicable';
   verifierCommand?: string | undefined;
@@ -76,7 +76,7 @@ export function projectTurnViewState(
   let sessionTokens = initialSessionTokens;
   let sessionCost = initialSessionCost;
   let answerBuffer = '';
-  let terminalOutcome: TerminalOutcome = 'NO_CHANGE_REQUIRED';
+  let terminalOutcome: TerminalOutcome | undefined = 'NO_CHANGE_REQUIRED';
   let terminalStatus: 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed' | 'in_progress' =
     'in_progress';
   let isTerminal = false;
@@ -203,6 +203,10 @@ export function projectTurnViewState(
       cardTitle = 'Budget exhausted';
     } else if (terminalOutcome === 'INFRA_FAILURE') {
       cardTitle = 'Infrastructure failure';
+    } else if (terminalOutcome === 'AGENT_FAILURE') {
+      cardTitle = 'Agent failure';
+    } else if (!terminalOutcome) {
+      cardTitle = 'Unknown failure';
     } else {
       cardTitle = 'Complete';
     }
@@ -237,7 +241,7 @@ export function projectTurnViewState(
       turnId,
       userInput,
       assistantAnswer: answerBuffer,
-      terminalOutcome: isTerminal ? terminalOutcome : null,
+      terminalOutcome: isTerminal ? terminalOutcome ?? null : null,
       toolCalls,
       policyInterventions,
     },

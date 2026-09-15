@@ -329,6 +329,9 @@ export interface RunOptions {
 
   /** Restrict all provider-backed tiers to direct DeepSeek models. */
   liveOnly?: boolean;
+
+  /** Cancel an in-flight provider call. */
+  signal?: AbortSignal;
 }
 
 export const RELIABILITY_REPAIR_PROOF_MARKER =
@@ -2130,6 +2133,7 @@ export async function runWithFallback<T>(
     options.onChunk,
     options.eventBus,
     options.systemPrompt,
+    options.signal,
   );
 
   // Record to evidence bundle for 05_waterfall_telemetry.json.

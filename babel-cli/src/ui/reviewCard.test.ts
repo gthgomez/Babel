@@ -68,6 +68,7 @@ describe('review card — truthful terminal states', () => {
       { outcome: 'BUDGET_EXHAUSTED', kind: 'BUDGET_EXHAUSTED' },
       { outcome: 'INFRA_FAILURE', kind: 'INFRA_FAILURE' },
       { outcome: 'AGENT_FAILURE', kind: 'AGENT_FAILURE' },
+      { outcome: 'UNKNOWN', kind: 'UNKNOWN' },
     ] as const;
     const titles = new Set<string>();
     for (const c of cases) {
