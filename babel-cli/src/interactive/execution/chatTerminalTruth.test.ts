@@ -13,6 +13,7 @@ import {
 import {
   dispatchChatEvent,
   isInfrastructureErrorText,
+  classifyFailureText,
 } from './chatEventDispatch.js';
 
 const EMPTY_USAGE = globalCostTracker.getSessionSummary();
@@ -186,6 +187,15 @@ describe('chatTerminalTruth (terminal cause and evidence)', () => {
   });
 
   describe('isInfrastructureErrorText helper', () => {
+    it('classifies provider output truncation as a token budget, not infrastructure', () => {
+      assert.equal(classifyFailureText('Output truncated by provider token limit (finish_reason: length)'), 'BUDGET_EXHAUSTED');
+      assert.equal(classifyFailureText('Incomplete tool call: truncated by provider token limit (finish_reason: length)'), 'BUDGET_EXHAUSTED');
+      assert.equal(classifyFailureText('finish_reason: stop'), undefined);
+      assert.equal(classifyFailureText('finish_reason: error'), 'INFRA_FAILURE');
+      assert.equal(classifyFailureText('stream closed before terminal [DONE] marker'), 'INFRA_FAILURE');
+      assert.equal(isInfrastructureErrorText('finish_reason: length'), false);
+    });
+
     it('identifies disk, network, provider, and invariant error strings', () => {
       assert.ok(isInfrastructureErrorText('ENOSPC: no space left on device'));
       assert.ok(isInfrastructureErrorText('fetch failed: socket hang up'));

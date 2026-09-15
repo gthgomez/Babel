@@ -26,7 +26,7 @@ import {
   removeWorktree,
   type WorktreeInfo,
 } from '../services/worktreeIsolation.js';
-import type { ToolContext } from '../localTools.js';
+import { runWithProjectRoot, type ToolContext } from '../localTools.js';
 import type { ToolExecutor } from './toolExecutor.js';
 import {
   classifySubagentFailure,
@@ -247,18 +247,6 @@ function gitPorcelainStatus(projectRoot: string): string {
   return filterParentStatusLines(result.stdout ?? '');
 }
 
-function withProjectRootEnv<T>(projectRoot: string, fn: () => Promise<T>): Promise<T> {
-  const previous = process.env['BABEL_PROJECT_ROOT'];
-  process.env['BABEL_PROJECT_ROOT'] = projectRoot;
-  return fn().finally(() => {
-    if (previous === undefined) {
-      delete process.env['BABEL_PROJECT_ROOT'];
-    } else {
-      process.env['BABEL_PROJECT_ROOT'] = previous;
-    }
-  });
-}
-
 function worktreeNameForAgent(agentId: string): string {
   const safe = agentId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 48);
   return `impl-${safe}-${Date.now().toString(36)}`;
@@ -357,13 +345,14 @@ export async function runImplementWorktreeAgent(
     runId: `implement-wt-${spec.id}`,
     runDir: join(runDir, 'tools'),
     babelRoot: process.env['BABEL_ROOT'] ?? projectRoot,
+    projectRoot: worktree.path,
     ...(options.toolContext?.signal ? { signal: options.toolContext.signal } : {}),
     ...(options.abortSignal ? { signal: options.abortSignal } : {}),
   };
 
   let mutation: MutationAgentLoopResult;
   try {
-    mutation = await withProjectRootEnv(worktree.path, () =>
+    mutation = await runWithProjectRoot(worktree.path, () =>
       runMutationAgentLoop({
         agentId: spec.id,
         task: spec.task,

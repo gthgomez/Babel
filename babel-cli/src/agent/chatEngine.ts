@@ -106,7 +106,7 @@ import {
   type ChatEngineRunAllowanceReport,
   type ChatRunLimiter,
 } from '../config/chatEngineLimits.js';
-import { classifyFailureText } from './chatFailureClassification.js';
+import { classifyFailureText, isProviderOutputLimitText } from './chatFailureClassification.js';
 import { nativeTurnFromStream, ProviderOutputTruncatedError } from './chatNativeTurn.js';
 import {
   resolveChatTaskClass,
@@ -3739,6 +3739,11 @@ export class ChatEngine {
   }
 
   private streamFailed(error: string) {
+    const providerOutputLimit = isProviderOutputLimitText(error);
+    if (providerOutputLimit && this.terminatingLimiter == null) {
+      this.terminatingLimiter = 'tokens';
+      this.terminalLimiterReason = error;
+    }
     const limiterOutcome: TerminalOutcome | undefined =
       this.terminatingLimiter === 'turns' ||
       this.terminatingLimiter === 'wall' ||
@@ -4562,9 +4567,7 @@ export class ChatEngine {
           const extraInstructions = (action as { instructions?: string }).instructions;
           const subResult = await runReadOnlyAgentLoop({
             verb: 'ask',
-            task: extraInstructions
-              ? `${action.task}\n\nAdditional instructions:\n${extraInstructions}`
-              : action.task,
+            task: action.task,
             projectRoot: this.options.projectRoot,
             seedPaths: [],
             toolContext: {

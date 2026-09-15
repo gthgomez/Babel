@@ -374,9 +374,11 @@ export async function runReadOnlyAgentLoop(
     process.env['BABEL_LITE_OFFLINE'] === '1';
 
   const steps: SmallFixLoopStep[] = [];
-  const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
   const previousNoIndexWrites = process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'];
-  process.env['BABEL_PROJECT_ROOT'] = input.projectRoot;
+  const scopedToolContext: ToolContext = {
+    ...input.toolContext,
+    projectRoot: input.projectRoot,
+  };
   // Semantic indexing creates/updates SQLite state. Read-only discovery may
   // query an already-open index, but must never warm or rebuild one.
   process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] = '1';
@@ -388,7 +390,7 @@ export async function runReadOnlyAgentLoop(
     const batch = await executeActionBatch(
       mockActions,
       preset,
-      input.toolContext,
+      scopedToolContext,
       executor,
       steps,
       0,
@@ -425,7 +427,7 @@ export async function runReadOnlyAgentLoop(
   const warmupBatch = await executeActionBatch(
     warmupActions,
     preset,
-    input.toolContext,
+    scopedToolContext,
     executor,
     steps,
     0,
@@ -500,7 +502,7 @@ export async function runReadOnlyAgentLoop(
     const batch = await executeActionBatch(
       actions,
       preset,
-      input.toolContext,
+      scopedToolContext,
       executor,
       steps,
       steps.length,
@@ -523,7 +525,7 @@ export async function runReadOnlyAgentLoop(
     priorObservations += '\n[Discovery incomplete: round limit reached without finish]';
   }
 
-  if (steps.length === 0) {
+  if (steps.length === 0 && !providerError && !input.abortSignal?.aborted) {
     degraded = true;
     steps.push({
       phase: 'observe',
@@ -572,11 +574,6 @@ export async function runReadOnlyAgentLoop(
     return loopResult;
     });
   } finally {
-    if (previousProjectRoot === undefined) {
-      delete process.env['BABEL_PROJECT_ROOT'];
-    } else {
-      process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
-    }
     if (previousNoIndexWrites === undefined) {
       delete process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'];
     } else {

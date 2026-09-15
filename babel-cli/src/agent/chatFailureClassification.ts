@@ -18,10 +18,15 @@ export function isInfrastructureErrorText(error: string): boolean {
     /runtime-invariant/i.test(error) ||
     /socket hang up|connection reset|fetch failed|undici|network (?:error|timeout)|broken pipe/i.test(error) ||
     /provider (?:startup|stream) idle|idle timeout|request deadline|request timeout|timeout exceeded/i.test(error) ||
-    /stream closed before terminal|malformed sse|provider stream error|finish_reason: (?:error|length)/i.test(error) ||
+    /stream closed before terminal|malformed sse|provider stream error|finish_reason: error/i.test(error) ||
     /\[(?:deepSeekApi|deepInfraApi|openRouterApi|provider)\]/i.test(error) ||
     /provider (?:error|disconnected)|overloaded|service unavailable|bad gateway|rate limit|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout/i.test(error)
   );
+}
+
+/** Provider output-token exhaustion is a budget condition, not transport failure. */
+export function isProviderOutputLimitText(error: string): boolean {
+  return /finish_reason:\s*length/i.test(error) || /output (?:token )?limit/i.test(error);
 }
 
 export function isBudgetErrorText(error: string): boolean {
@@ -43,6 +48,7 @@ export function isEnvironmentErrorText(error: string): boolean {
  */
 export function classifyFailureText(error: string): TerminalOutcome | undefined {
   if (!error) return undefined;
+  if (isProviderOutputLimitText(error)) return 'BUDGET_EXHAUSTED';
   if (isBudgetErrorText(error)) return 'BUDGET_EXHAUSTED';
   if (isPolicyErrorText(error)) return 'BLOCKED_POLICY';
   if (isEnvironmentErrorText(error)) return 'BLOCKED_EXTERNAL';

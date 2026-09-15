@@ -149,8 +149,8 @@ export function runWithProjectRoot<T>(root: string, fn: () => Promise<T>): Promi
   return projectRootStore.run(root, fn);
 }
 
-function getExecutor(): SafeExecutor {
-  const root = getExecutorProjectRoot();
+function getExecutor(projectRoot?: string): SafeExecutor {
+  const root = getExecutorProjectRoot(projectRoot);
   const shadowRoot = process.env['BABEL_SHADOW_ROOT'] || null;
   const mode = readRuntimeMode();
   return new SafeExecutor(root, shadowRoot, mode, getDefaultProcessWitness());
@@ -168,8 +168,8 @@ function processContextFromToolContext(context: ToolContext): {
   };
 }
 
-function getExecutorProjectRoot(): string {
-  return projectRootStore.getStore() ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+function getExecutorProjectRoot(projectRoot?: string): string {
+  return projectRoot ?? projectRootStore.getStore() ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
 }
 
 function getLockedFiles(): string[] {
@@ -535,17 +535,18 @@ export const TOOL_CALL_REQUEST_TOOL_NAMES = EXECUTOR_TOOL_NAMES;
 
 function handleDirectoryList(
   req: Extract<ToolCallRequest, { tool: 'directory_list' }>,
+  context: ToolContext,
 ): ToolResult {
   // directory_list is always live — listing is non-destructive.
-  return getExecutor().listDirectory(req.path);
+  return getExecutor(context.projectRoot).listDirectory(req.path);
 }
 
-function handleFileRead(req: Extract<ToolCallRequest, { tool: 'file_read' }>): ToolResult {
+function handleFileRead(req: Extract<ToolCallRequest, { tool: 'file_read' }>, context: ToolContext): ToolResult {
   // file_read is always live — reading is non-destructive.
-  return getExecutor().fileRead(req.path);
+  return getExecutor(context.projectRoot).fileRead(req.path);
 }
 
-function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>): ToolResult {
+function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>, context: ToolContext): ToolResult {
   refreshDryRunState();
   const lockedFile = isLockedWritePath(req.path);
   if (lockedFile) {
@@ -558,7 +559,7 @@ function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>):
 
   if (DRY_RUN) {
     if (process.env['BABEL_SHADOW_ROOT']) {
-      const result = getExecutor().fileWrite(req.path, req.content);
+      const result = getExecutor(context.projectRoot).fileWrite(req.path, req.content);
       console.log(`  [DRY RUN] file_write → ${req.path} (${result.stdout})`);
       return {
         ...result,
@@ -576,10 +577,10 @@ function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>):
     };
   }
 
-  return getExecutor().fileWrite(req.path, req.content);
+  return getExecutor(context.projectRoot).fileWrite(req.path, req.content);
 }
 
-function handleFileDelete(req: Extract<ToolCallRequest, { tool: 'file_delete' }>): ToolResult {
+function handleFileDelete(req: Extract<ToolCallRequest, { tool: 'file_delete' }>, context: ToolContext): ToolResult {
   refreshDryRunState();
   if (DRY_RUN) {
     console.log(`  [DRY RUN] file_delete → ${req.path}`);
@@ -589,7 +590,7 @@ function handleFileDelete(req: Extract<ToolCallRequest, { tool: 'file_delete' }>
       stderr: '',
     };
   }
-  return getExecutor().fileDelete(req.path);
+  return getExecutor(context.projectRoot).fileDelete(req.path);
 }
 
 async function handleGitReset(
@@ -608,7 +609,7 @@ async function handleGitReset(
       stderr: '',
     };
   }
-  return getExecutor().shellExecAsync(
+  return getExecutor(context.projectRoot).shellExecAsync(
     command.trim(),
     getExecutorProjectRoot(),
     30_000,
@@ -635,7 +636,7 @@ async function handleGitPush(
       stderr: '',
     };
   }
-  return getExecutor().shellExecAsync(
+  return getExecutor(context.projectRoot).shellExecAsync(
     command.trim(),
     getExecutorProjectRoot(),
     60_000,
@@ -659,7 +660,7 @@ async function handleShellExec(
     };
   }
 
-  return getExecutor().shellExecAsync(
+  return getExecutor(context.projectRoot).shellExecAsync(
     req.command,
     req.working_directory ?? getExecutorProjectRoot(),
     (req.timeout_seconds ?? 120) * 1000,
@@ -683,7 +684,7 @@ async function handleTestRun(
     };
   }
 
-  return getExecutor().testRunAsync(
+  return getExecutor(context.projectRoot).testRunAsync(
     req.command,
     req.working_directory ?? getExecutorProjectRoot(),
     (req.timeout_seconds ?? 300) * 1000,
@@ -915,8 +916,8 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'live',
     policyTags: ['read', 'filesystem'],
     input: { required: ['path'], optional: [] },
-    handler: (req) =>
-      handleDirectoryList(req as Extract<ToolCallRequest, { tool: 'directory_list' }>),
+    handler: (req, context) =>
+      handleDirectoryList(req as Extract<ToolCallRequest, { tool: 'directory_list' }>, context),
   },
   {
     name: 'file_read',
@@ -926,7 +927,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'live',
     policyTags: ['read', 'filesystem'],
     input: { required: ['path'], optional: [] },
-    handler: (req) => handleFileRead(req as Extract<ToolCallRequest, { tool: 'file_read' }>),
+    handler: (req, context) => handleFileRead(req as Extract<ToolCallRequest, { tool: 'file_read' }>, context),
   },
   {
     name: 'file_write',
@@ -936,7 +937,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'shadow_write',
     policyTags: ['write', 'filesystem'],
     input: { required: ['path', 'content'], optional: [] },
-    handler: (req) => handleFileWrite(req as Extract<ToolCallRequest, { tool: 'file_write' }>),
+    handler: (req, context) => handleFileWrite(req as Extract<ToolCallRequest, { tool: 'file_write' }>, context),
   },
   {
     name: 'file_delete',
@@ -946,7 +947,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'mocked',
     policyTags: ['write', 'filesystem', 'destructive'],
     input: { required: ['path'], optional: [] },
-    handler: (req) => handleFileDelete(req as Extract<ToolCallRequest, { tool: 'file_delete' }>),
+    handler: (req, context) => handleFileDelete(req as Extract<ToolCallRequest, { tool: 'file_delete' }>, context),
   },
   {
     name: 'git_reset',
@@ -1835,7 +1836,7 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
   const MUTATION_TOOLS = new Set(['file_write', 'shell_exec', 'test_run']);
   if (!MUTATION_TOOLS.has(req.tool)) {
     const cache = getSessionCache();
-    const cacheInput = extractCacheInput(req);
+    const cacheInput = extractCacheInput(req, context);
     const cached = cache.get(req.tool, cacheInput);
     if (cached) {
       gate.recordCall(req.tool, cached.exit_code);
@@ -1871,7 +1872,7 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
 
   if (!MUTATION_TOOLS.has(req.tool)) {
     const cache = getSessionCache();
-    const cacheInput = extractCacheInput(req);
+    const cacheInput = extractCacheInput(req, context);
     cache.set(req.tool, cacheInput, result);
   } else {
     // Mutations invalidate the entire cache
@@ -1901,9 +1902,13 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
  * Extract cache-relevant input fields from a tool call request.
  * Strips fields that don't affect the result (like internal metadata).
  */
-function extractCacheInput(req: ToolCallRequest): Record<string, unknown> {
+function extractCacheInput(req: ToolCallRequest, context?: ToolContext): Record<string, unknown> {
   const input: Record<string, unknown> = { ...req };
   // Remove tool name from input (it's part of the cache key already)
   delete input['tool'];
+  // Tool results are rooted in the request-scoped workspace. Including that
+  // root prevents overlapping Chat/subagent runs from sharing a relative
+  // read/search result from another project.
+  input['project_root'] = getExecutorProjectRoot(context?.projectRoot);
   return input;
 }

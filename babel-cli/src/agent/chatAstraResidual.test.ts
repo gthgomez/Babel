@@ -3,7 +3,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -18,6 +18,7 @@ import { consumeChatStream } from '../interactive/execution/chatCore.js';
 import { classifyReviewCard } from '../ui/reviewCard.js';
 import { nativeTurnFromStream, ProviderOutputTruncatedError } from './chatNativeTurn.js';
 import { runReadOnlyAgentLoop } from './lanes/readOnlyAgentLoop.js';
+import { defaultToolExecutor } from './toolExecutor.js';
 import { runWithProjectRoot } from '../localTools.js';
 import type { ToolStreamEvent } from '../runners/base.js';
 
@@ -93,9 +94,18 @@ describe('PR185 residual Chat runtime repairs', () => {
       },
     });
     const result = await consumeChatStream(engine.submitMessageStream('continue'), null);
-    assert.equal(result.status, 'failed');
-    assert.equal(result.outcome, 'INFRA_FAILURE');
+    assert.equal(result.status, 'budget_exhausted');
+    assert.equal(result.outcome, 'BUDGET_EXHAUSTED');
     assert.match(result.answer, /finish_reason: length/);
+    assert.equal(result.runAllowance?.terminatingLimiter, 'tokens');
+    assert.equal(result.runAllowance?.terminalClassification, 'limit_tokens');
+    assert.equal(classifyReviewCard({ status: result.status, outcome: result.outcome }), 'BUDGET_EXHAUSTED');
+    const allowance = JSON.parse(readFileSync(join(result.runDir!, 'run-allowance.json'), 'utf8')) as {
+      terminatingLimiter?: string;
+      terminalClassification?: string;
+    };
+    assert.equal(allowance.terminatingLimiter, 'tokens');
+    assert.equal(allowance.terminalClassification, 'limit_tokens');
   });
 
   it('unknown stream failure omits outcome through consumeChatStream', async () => {
@@ -252,6 +262,35 @@ describe('PR185 residual Chat runtime repairs', () => {
     assert.equal(result.roundExhausted, false);
     assert.equal(result.providerError, '[deepSeekApi] upstream 500');
     assert.match(result.observations, /Provider error/);
+    assert.equal(result.completed, false);
+    assert.equal(result.steps.some((step) => step.phase === 'finish'), false);
+  });
+
+  it('read-only provider failure after an observation remains incomplete', async () => {
+    let round = 0;
+    const result = await runReadOnlyAgentLoop({
+      verb: 'ask',
+      task: 'inspect then fail',
+      projectRoot,
+      toolContext: {
+        agentId: 'child',
+        runId: 'run-after-observation',
+        babelRoot: projectRoot,
+        projectRoot,
+      },
+      maxRounds: 2,
+      executor: defaultToolExecutor,
+      actionResolver: async () => {
+        round += 1;
+        if (round === 1) return [{ type: 'read_file', path: 'hello.txt' }];
+        throw new Error('provider failed after observation');
+      },
+    });
+    assert.equal(result.providerError, 'provider failed after observation');
+    assert.equal(result.completed, false);
+    assert.equal(result.roundExhausted, false);
+    assert.ok(result.steps.some((step) => step.phase === 'observe'));
+    assert.equal(result.steps.some((step) => step.phase === 'finish'), false);
   });
 
   it('read-only additional instructions reach the child prompt', async () => {
@@ -272,7 +311,7 @@ describe('PR185 residual Chat runtime repairs', () => {
         return [{ type: 'finish', summary: 'done', verification: [] }];
       },
     });
-    assert.match(seen, /Focus on src\/index\.ts/);
+    assert.equal((seen.match(/Focus on src\/index\.ts/g) ?? []).length, 1);
   });
 
   it('overlapping project roots stay bound to their declared root', async () => {
@@ -282,20 +321,39 @@ describe('PR185 residual Chat runtime repairs', () => {
     writeFileSync(join(b, 'sentinel.txt'), 'B');
     try {
       const seen: string[] = [];
-      await Promise.all([
-        runWithProjectRoot(a, async () => {
-          await new Promise((r) => setTimeout(r, 20));
-          const { readFileSync } = await import('node:fs');
-          const { join: j } = await import('node:path');
-          seen.push(readFileSync(j(a, 'sentinel.txt'), 'utf8'));
-        }),
-        runWithProjectRoot(b, async () => {
-          await new Promise((r) => setTimeout(r, 5));
-          const { readFileSync } = await import('node:fs');
-          const { join: j } = await import('node:path');
-          seen.push(readFileSync(j(b, 'sentinel.txt'), 'utf8'));
-        }),
-      ]);
+      const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
+      delete process.env['BABEL_PROJECT_ROOT'];
+      try {
+        await Promise.all([a, b].map((root, index) => runWithProjectRoot(root, async () => {
+          await new Promise((r) => setTimeout(r, index === 0 ? 20 : 5));
+          const result = await runReadOnlyAgentLoop({
+            verb: 'ask',
+            task: 'read sentinel',
+            projectRoot: root,
+            seedPaths: ['sentinel.txt'],
+            toolContext: {
+              agentId: `child-${index}`,
+              runId: `run-root-${index}`,
+              babelRoot: root,
+              projectRoot: root,
+            },
+            maxRounds: 1,
+            actionResolver: async () => [{ type: 'read_file', path: 'sentinel.txt' }, { type: 'finish', summary: 'done', verification: [] }],
+          });
+          const observations = result.steps
+            .filter((step) => step.action.type === 'read_file' && step.action.path === 'sentinel.txt')
+            .flatMap((step) => step.toolResults)
+            .map((toolResult) => toolResult.stdout.trim())
+            .at(-1)
+            ?.split(/\r?\n/)
+            .at(-1)
+            ?.replace(/^\d+│/, '');
+          seen.push(observations ?? '');
+        })));
+      } finally {
+        if (previousProjectRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
+        else process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
+      }
       assert.deepEqual(seen.sort(), ['A', 'B']);
     } finally {
       rmSync(a, { recursive: true, force: true });

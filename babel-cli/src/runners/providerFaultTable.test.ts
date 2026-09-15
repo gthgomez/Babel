@@ -272,7 +272,7 @@ describe('Canary B: Provider Fault Table Verification', () => {
     const errEvent = events.find((e) => e.type === 'error');
     assert.ok(errEvent);
     if (errEvent?.type === 'error') {
-      assert.match(errEvent.message, /truncated by token limit \(finish_reason: length\)/);
+      assert.match(errEvent.message, /truncated by (?:provider )?token limit \(finish_reason: length\)/);
     }
   });
 

@@ -8,7 +8,7 @@ import type { ChatToolAction, ChatTurn } from './chatToolDefinitions.js';
 export class ProviderOutputTruncatedError extends Error {
   readonly finishReason = 'length';
   constructor(
-    message = '[deepInfraApi] Output truncated by token limit (finish_reason: length)',
+    message = 'Output truncated by provider token limit (finish_reason: length)',
   ) {
     super(message);
     this.name = 'ProviderOutputTruncatedError';
