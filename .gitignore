@@ -5,6 +5,9 @@
 .env.local
 .env.*.local
 
+# ─── Local workspace context (managed-workspace checkouts only; never published) ───
+WORKSPACE_CONTEXT.local.md
+
 # ─── Evidence bundles (generated at runtime) ──────────────────────────────────
 runs/
 !tests/fixtures/normalize-local-evidence/runs/

@@ -55,6 +55,7 @@ Canonical identity-first startup sequence:
 2. **CLAUDE.md** — project invariants, high-risk zones, special rules, common task paths
 3. **ENGINEERING.md** — coding standards I follow
 4. **PROJECT_CONTEXT.md** — system topology, contracts, and runtime state
+5. **WORKSPACE_CONTEXT.local.md** — optional; present only in local managed-workspace checkouts (gitignored, never committed). If it exists, read it before any task that reaches beyond this repository.
 
 If Babel control-plane work is requested (`use Babel`, prompt-stack assembly, routing, catalog changes), follow the Babel invocation sequence in [INTEGRATION.md](./INTEGRATION.md).
 
