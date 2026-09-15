@@ -62,15 +62,25 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
       ceilingMs: 3_600_000,
       longTaskProfile: false,
     });
-    assert.deepEqual(resolveChatEngineLimits(), {
-      ...DEFAULT_CHAT_ENGINE_LIMITS,
-      wallBudget: wallBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs),
+    const costBudgetFor = (maxCostUsd: number) => ({
+      effectiveCostUsd: maxCostUsd,
+      requestedCostUsd: maxCostUsd,
+      ceilingCostUsd: 100.00,
+      explicitCostCeiling: false,
+      longTaskProfile: false,
     });
-    assert.deepEqual(resolveChatEngineLimits({ maxTurns: 12 }), {
-      ...DEFAULT_CHAT_ENGINE_LIMITS,
-      maxTurns: 12,
-      wallBudget: wallBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs),
-    });
+    const expectedBase = resolveChatEngineLimits();
+    assert.equal(expectedBase.maxTurns, DEFAULT_CHAT_ENGINE_LIMITS.maxTurns);
+    assert.deepEqual(expectedBase.wallBudget, wallBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs));
+    assert.deepEqual(expectedBase.costBudget, costBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxCostUsd));
+    assert.ok(expectedBase.runAllowance);
+    assert.equal(expectedBase.runAllowance?.declaredWallMs, DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs);
+    assert.equal(expectedBase.runAllowance?.declaredCostUsd, DEFAULT_CHAT_ENGINE_LIMITS.maxCostUsd);
+    const withTurns = resolveChatEngineLimits({ maxTurns: 12 });
+    assert.equal(withTurns.maxTurns, 12);
+    assert.deepEqual(withTurns.wallBudget, wallBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs));
+    assert.ok(JSON.parse(JSON.stringify(withTurns)).costBudget);
+    assert.ok(JSON.parse(JSON.stringify(withTurns)).runAllowance);
   } finally {
     if (previous.turns === undefined) delete process.env['BABEL_CHAT_MAX_TURNS'];
     else process.env['BABEL_CHAT_MAX_TURNS'] = previous.turns;

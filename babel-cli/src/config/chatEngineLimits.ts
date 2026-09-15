@@ -36,6 +36,19 @@ export interface ChatEngineLimits {
     ceilingMs: number;
     longTaskProfile: boolean;
   };
+  /**
+   * Observable cost-budget provenance. Enumerable so JSON / spreads / manifests
+   * retain requested vs effective cost (never attach with enumerable:false).
+   */
+  costBudget?: {
+    effectiveCostUsd: number;
+    requestedCostUsd: number;
+    ceilingCostUsd: number;
+    explicitCostCeiling: boolean;
+    longTaskProfile: boolean;
+  };
+  /** Observable run allowance report for the current session. Enumerable. */
+  runAllowance?: ChatEngineRunAllowanceReport;
 }
 
 /** Ordinary sessions never allow wall requests beyond one hour. */
@@ -68,6 +81,227 @@ export function shouldShrinkWallForPostWriteRepair(
   wallBudget?: ChatEngineLimits['wallBudget'],
 ): boolean {
   return wallBudget?.longTaskProfile !== true;
+}
+
+/**
+ * Whether the anti-thrash post-write repair window should shrink the cost cap.
+ *
+ * Long-task wall profile does NOT disable the finite cost-repair cap.
+ * Skip shrink only for an explicit cost ceiling or cost-budget long-task
+ * profile, unless critic strikes show thrash (strikes >= 2).
+ */
+export function shouldShrinkCostForPostWriteRepair(
+  limits?: Partial<ChatEngineLimits>,
+  criticStrikes?: number,
+): boolean {
+  if (typeof criticStrikes === 'number' && criticStrikes >= 2) return true;
+  if (!limits) return true;
+  if (limits.costBudget?.longTaskProfile === true) return false;
+  if (limits.costBudget?.explicitCostCeiling === true) return false;
+  return true;
+}
+
+export type ChatRunLimiter =
+  | 'wall'
+  | 'cost'
+  | 'turns'
+  | 'stall'
+  | 'tokens'
+  | 'wall_repair'
+  | 'cost_repair'
+  | 'critic_reject'
+  | 'child_exhaustion'
+  | 'none';
+
+export type ChatTerminalClassification =
+  | 'success'
+  | 'no_limit_triggered'
+  | 'limit_wall'
+  | 'limit_cost'
+  | 'limit_wall_repair'
+  | 'limit_cost_repair'
+  | 'limit_turns'
+  | 'limit_stall'
+  | 'limit_tokens'
+  | 'limit_child'
+  | 'model_failure'
+  | 'policy_block'
+  | 'cancelled';
+
+export interface ChatEngineChildLimits {
+  maxRounds: number;
+  timeoutMs?: number;
+}
+
+export const DEFAULT_CHILD_LIMITS: ChatEngineChildLimits = {
+  maxRounds: 8,
+};
+
+export interface ChatEngineRunAllowanceReport {
+  declaredWallMs: number;
+  effectiveWallMs: number;
+  declaredCostUsd: number;
+  effectiveCostCapUsd: number;
+  turnCap: number;
+  stallLimit: number;
+  childLimits: ChatEngineChildLimits;
+  postWriteRepairWallCapMs: number | null;
+  criticRepairCostCapUsd: number | null;
+  terminatingLimiter: ChatRunLimiter | null;
+  terminalClassification: ChatTerminalClassification | null;
+  terminalReason: string | null;
+}
+
+export function createRunAllowanceReport(
+  limits: ChatEngineLimits,
+  state?: {
+    postWriteRepairWallCapMs?: number | null;
+    criticRepairCostCapUsd?: number | null;
+    terminatingLimiter?: ChatRunLimiter | null;
+    terminalClassification?: ChatTerminalClassification | null;
+    terminalReason?: string | null;
+    childLimits?: ChatEngineChildLimits;
+  },
+): ChatEngineRunAllowanceReport {
+  const declaredWallMs = limits.wallBudget?.requestedMs ?? limits.maxWallMs;
+  const effectiveWallMs =
+    state?.postWriteRepairWallCapMs != null
+      ? Math.min(limits.maxWallMs, state.postWriteRepairWallCapMs)
+      : limits.maxWallMs;
+
+  const declaredCostUsd = limits.costBudget?.requestedCostUsd ?? limits.maxCostUsd;
+  const effectiveCostCapUsd =
+    state?.criticRepairCostCapUsd != null
+      ? Math.min(limits.maxCostUsd, state.criticRepairCostCapUsd)
+      : limits.maxCostUsd;
+
+  return {
+    declaredWallMs,
+    effectiveWallMs,
+    declaredCostUsd,
+    effectiveCostCapUsd,
+    turnCap: limits.maxTurns,
+    stallLimit: limits.stallTurns,
+    childLimits: state?.childLimits ?? DEFAULT_CHILD_LIMITS,
+    postWriteRepairWallCapMs: state?.postWriteRepairWallCapMs ?? null,
+    criticRepairCostCapUsd: state?.criticRepairCostCapUsd ?? null,
+    terminatingLimiter: state?.terminatingLimiter ?? null,
+    terminalClassification: state?.terminalClassification ?? null,
+    terminalReason: state?.terminalReason ?? null,
+  };
+}
+
+/**
+ * Classifies a terminal limiter. Being under all limits is NOT success —
+ * that is `no_limit_triggered` / ACTIVE. Child exhaustion is a harness
+ * limit, not a model reasoning failure.
+ */
+export function classifyTerminalLimiter(
+  limiter: ChatRunLimiter,
+  errorOrReason?: string,
+): ChatTerminalClassification {
+  if (
+    errorOrReason &&
+    (errorOrReason.toLowerCase().includes('cancel') ||
+      errorOrReason.toLowerCase().includes('abort'))
+  ) {
+    return 'cancelled';
+  }
+  switch (limiter) {
+    case 'wall':
+      return 'limit_wall';
+    case 'wall_repair':
+      return 'limit_wall_repair';
+    case 'cost':
+      return 'limit_cost';
+    case 'cost_repair':
+      return 'limit_cost_repair';
+    case 'turns':
+      return 'limit_turns';
+    case 'stall':
+      return 'limit_stall';
+    case 'tokens':
+      return 'limit_tokens';
+    case 'critic_reject':
+      return 'policy_block';
+    case 'child_exhaustion':
+      return 'limit_child';
+    case 'none':
+      return 'no_limit_triggered';
+    default:
+      return 'model_failure';
+  }
+}
+
+/**
+ * Evaluates the earliest limiter that has fired, or ACTIVE when none has.
+ * `limiter: 'none'` is never classified as task success.
+ */
+export function evaluateTimelineLimiter(input: {
+  limits: ChatEngineLimits;
+  elapsedMs: number;
+  spentUsd: number;
+  turns: number;
+  consecutiveStallTurns: number;
+  postWriteRepairWallCapMs?: number | null;
+  criticRepairCostCapUsd?: number | null;
+}): {
+  limiter: ChatRunLimiter;
+  reason?: string;
+  classification: ChatTerminalClassification;
+} {
+  const { limits, elapsedMs, spentUsd, turns, consecutiveStallTurns } = input;
+  const effectiveWall =
+    input.postWriteRepairWallCapMs != null
+      ? Math.min(limits.maxWallMs, input.postWriteRepairWallCapMs)
+      : limits.maxWallMs;
+  const effectiveCost =
+    input.criticRepairCostCapUsd != null
+      ? Math.min(limits.maxCostUsd, input.criticRepairCostCapUsd)
+      : limits.maxCostUsd;
+
+  if (spentUsd >= effectiveCost) {
+    const isRepair =
+      input.criticRepairCostCapUsd != null && effectiveCost < limits.maxCostUsd;
+    const limiter: ChatRunLimiter = isRepair ? 'cost_repair' : 'cost';
+    return {
+      limiter,
+      reason: `Cost budget exceeded ($${spentUsd.toFixed(2)} of $${effectiveCost.toFixed(2)}) [${limiter}].`,
+      classification: isRepair ? 'limit_cost_repair' : 'limit_cost',
+    };
+  }
+
+  if (elapsedMs >= effectiveWall) {
+    const isRepair =
+      input.postWriteRepairWallCapMs != null && effectiveWall < limits.maxWallMs;
+    const limiter: ChatRunLimiter = isRepair ? 'wall_repair' : 'wall';
+    return {
+      limiter,
+      reason: `Time budget exceeded (${Math.round(elapsedMs / 1000)}s of ${Math.round(effectiveWall / 1000)}s) [${limiter}].`,
+      classification: isRepair ? 'limit_wall_repair' : 'limit_wall',
+    };
+  }
+
+  if (turns >= limits.maxTurns) {
+    return {
+      limiter: 'turns',
+      reason: `Turn limit reached (${turns} of ${limits.maxTurns}).`,
+      classification: 'limit_turns',
+    };
+  }
+
+  if (consecutiveStallTurns >= limits.stallTurns) {
+    return {
+      limiter: 'stall',
+      reason: `Stall limit reached (${consecutiveStallTurns} consecutive turns without progress).`,
+      classification: 'limit_stall',
+    };
+  }
+
+  return {
+    limiter: 'none',
+    classification: 'no_limit_triggered',
+  };
 }
 
 export const DEFAULT_CHAT_ENGINE_LIMITS: ChatEngineLimits = {
@@ -143,6 +377,18 @@ function parseBoundedFloat(
   return Math.min(max, Math.max(min, parsed));
 }
 
+/** Raw pre-clamp float for observability: NaN/absent resolves to fallback. */
+function parseRawFloat(
+  raw: string | undefined,
+  fallback: number,
+): number {
+  if (raw === undefined || raw.trim() === '') {
+    return fallback;
+  }
+  const parsed = Number.parseFloat(raw.trim());
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 /**
  * Resolve chat engine limits from environment with optional per-engine overrides.
  *
@@ -193,7 +439,10 @@ export function resolveChatEngineLimits(
 
   // Explicitly authorized long-task profile widens the wall ceiling. Product
   // defaults never change: without the flag the ceiling stays at one hour.
-  const longTaskProfile = isLongTaskWallProfileEnabled();
+  const longTaskProfile =
+    overrides.wallBudget?.longTaskProfile === true ||
+    overrides.costBudget?.longTaskProfile === true ||
+    isLongTaskWallProfileEnabled();
   const wallCeiling = longTaskProfile ? LONG_TASK_WALL_CEILING_MS : CHAT_WALL_CEILING_MS;
   // Public callers can provide a number directly. Treat non-finite values as
   // absent so NaN cannot disable the elapsed-time comparison downstream.
@@ -287,7 +536,27 @@ export function resolveChatEngineLimits(
     Math.max(10_000, requestedOverrideMaxWallMs ?? fromEnv.maxWallMs),
   );
 
-  return {
+  const requestedOverrideMaxCostUsd = Number.isFinite(overrides.maxCostUsd)
+    ? overrides.maxCostUsd
+    : undefined;
+  const rawEnvCost = process.env['BABEL_CHAT_MAX_COST'];
+  const explicitCostCeiling =
+    requestedOverrideMaxCostUsd !== undefined || rawEnvCost !== undefined;
+  const requestedMaxCostUsd =
+    requestedOverrideMaxCostUsd ??
+    (rawEnvCost?.trim().toLowerCase() === 'unlimited'
+      ? Infinity
+      : parseRawFloat(rawEnvCost, baseDefaults.maxCostUsd));
+
+  const resolvedMaxCostUsd =
+    rawEnvCost?.trim().toLowerCase() === 'unlimited' && overrides.maxCostUsd === undefined
+      ? Infinity
+      : Math.min(
+          100.00,
+          Math.max(0.01, overrides.maxCostUsd ?? fromEnv.maxCostUsd),
+        );
+
+  const resolvedLimits: ChatEngineLimits = {
     maxTurns: Math.min(500, Math.max(1, overrides.maxTurns ?? fromEnv.maxTurns)),
     maxConversationMessages: Math.min(
       200,
@@ -297,10 +566,7 @@ export function resolveChatEngineLimits(
       200_000,
       Math.max(4_000, overrides.maxEstimatedTokens ?? fromEnv.maxEstimatedTokens),
     ),
-    maxCostUsd: process.env['BABEL_CHAT_MAX_COST'] === 'unlimited' && overrides.maxCostUsd === undefined ? Infinity : Math.min(
-      100.00,
-      Math.max(0.01, overrides.maxCostUsd ?? fromEnv.maxCostUsd),
-    ),
+    maxCostUsd: resolvedMaxCostUsd,
     maxWallMs: resolvedMaxWallMs,
     stallTurns,
     investigateModel: overrides.investigateModel ?? fromEnv.investigateModel,
@@ -315,7 +581,19 @@ export function resolveChatEngineLimits(
       ceilingMs: wallCeiling,
       longTaskProfile,
     },
+    costBudget: {
+      effectiveCostUsd: resolvedMaxCostUsd,
+      requestedCostUsd: requestedMaxCostUsd,
+      ceilingCostUsd: 100.00,
+      explicitCostCeiling,
+      // Wall long-task does not imply a cost long-task; only an explicit
+      // cost-budget long-task profile skips the finite cost-repair cap.
+      longTaskProfile: overrides.costBudget?.longTaskProfile === true,
+    },
   };
+
+  resolvedLimits.runAllowance = createRunAllowanceReport(resolvedLimits);
+  return resolvedLimits;
 }
 
 /** Streaming is on by default; set BABEL_STREAM_TOOLS=0 to disable (A5). */

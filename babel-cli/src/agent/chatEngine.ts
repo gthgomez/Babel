@@ -5,7 +5,7 @@
  */
 
 import { join } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { readFile, writeFile, stat } from 'node:fs/promises';
 
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
@@ -96,7 +96,15 @@ import {
   type FailureCapsuleV1,
 } from './taskContract.js';
 import { getGlobalTokenTracker } from '../ui/tokenHistory.js';
-import { resolveChatEngineLimits, shouldShrinkWallForPostWriteRepair, type ChatEngineLimits } from '../config/chatEngineLimits.js';
+import {
+  classifyTerminalLimiter,
+  createRunAllowanceReport,
+  resolveChatEngineLimits,
+  shouldShrinkWallForPostWriteRepair,
+  type ChatEngineLimits,
+  type ChatEngineRunAllowanceReport,
+  type ChatRunLimiter,
+} from '../config/chatEngineLimits.js';
 import {
   resolveChatTaskClass,
   getChatTaskTune,
@@ -200,6 +208,7 @@ import {
   checkpointParityEventLogStrict,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
+import { recordUserMessage } from './threadEventLog.js';
 import { isOperatorAbortError } from './operatorAbort.js';
 import {
   loadSessionEventLogForResume,
@@ -249,7 +258,13 @@ import {
 } from './chatBackgroundShell.js';
 
 import { runReadOnlyAgentLoop } from './lanes/readOnlyAgentLoop.js';
-import { runMutationAgentLoop } from './lanes/runMutationAgentLoop.js';
+import {
+  classifySubagentFailure,
+  runMutationAgentLoop,
+  subagentCountsAsMutation,
+  subagentFinishedCleanly,
+  type SubagentAttribution,
+} from './lanes/runMutationAgentLoop.js';
 import { runImplementWorktreeAgent } from './implementWorktreeAgent.js';
 import { executeTool, renderGitDiff, type ToolContext } from '../localTools.js';
 import {
@@ -403,6 +418,8 @@ export interface ChatEngineOptions {
    *  (one hour, or LONG_TASK ceiling when BABEL_CHAT_LONG_TASK is authorized);
    *  requested vs effective stays observable via limits.wallBudget. */
   maxWallMs?: number;
+  /** Explicit cost-budget request. Marks costBudget.explicitCostCeiling. */
+  maxCostUsd?: number;
   allowExpensive?: boolean;
   workspaceRoot?: string | null;
   fallbackModel?: string;
@@ -426,6 +443,18 @@ export interface ChatEngineOptions {
   runtimeInvariantMode?: RuntimeInvariantMode;
   /** Test-only: explicit live workspace revision hash for gate freshness tests. */
   testWorkspaceRevisionHash?: string | null;
+}
+
+/** Shared TUI/headless/direct preparation applied to a live or reused engine. */
+export interface ChatEngineTurnPreparation {
+  task: string;
+  systemContext?: string | undefined;
+  appendSystemPrompt?: string | undefined;
+  preflightContext?: string | undefined;
+  model?: string | undefined;
+  intentPlanUserMessage?: string | undefined;
+  limits?: ChatEngineLimits;
+  executionProfile?: ChatExecutionProfile;
 }
 
 export interface ContextCompactedInfo {
@@ -616,6 +645,10 @@ export interface ChatResult {
     source: 'provider_prompt_tokens' | 'estimated' | 'unknown';
   } | null;
   turnTelemetry?: ChatTurnTelemetryRecord;
+  /** Enumerable cost-budget provenance — survives JSON / spreads / manifests. */
+  costBudget?: ChatEngineLimits['costBudget'];
+  /** Enumerable declared vs effective run allowance + terminating limiter. */
+  runAllowance?: ChatEngineRunAllowanceReport;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────
@@ -757,6 +790,9 @@ export class ChatEngine {
   private criticProRunner: CriticRunner | null = null;
   private budgetExceeded = false;
   private budgetLastChanceDone = false;
+  /** Actual limiter that terminated the run, or null while still active. */
+  private terminatingLimiter: ChatRunLimiter | null = null;
+  private terminalLimiterReason: string | null = null;
   private midLoopCriticFired = false;
   private turnsWithoutWrite = 0;
   /** Resolved task class for this thread (recomputed per isolated submission). */
@@ -952,6 +988,7 @@ export class ChatEngine {
           ? { maxTokensPerRound: options.maxTokensPerRound }
           : {}),
         ...(options.maxWallMs !== undefined ? { maxWallMs: options.maxWallMs } : {}),
+        ...(options.maxCostUsd !== undefined ? { maxCostUsd: options.maxCostUsd } : {}),
       },
       undefined,
       { taskClass: this.taskClass, taskText: options.task },
@@ -1476,7 +1513,7 @@ export class ChatEngine {
     };
   }
 
-  private checkBudgets(): { ok: boolean; reason?: string } {
+  private checkBudgets(): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {
     const sessionCost = globalCostTracker.getSessionSummary().totalCostUSD;
     // After first critic reject or post-write repair, use the tighter cost cap.
     const maxCostUsd =
@@ -1488,12 +1525,21 @@ export class ChatEngine {
       this.postWriteRepairWallCapMs != null
         ? Math.min(this.limits.maxWallMs, this.postWriteRepairWallCapMs)
         : this.limits.maxWallMs;
-    return checkCostWallBudgets({
+    const result = checkCostWallBudgets({
       totalCostUsd: sessionCost,
       maxCostUsd,
       sessionStartTime: this._sessionStartTime,
       maxWallMs,
+      declaredCostUsd: this.limits.costBudget?.requestedCostUsd ?? this.limits.maxCostUsd,
+      declaredWallMs: this.limits.wallBudget?.requestedMs ?? this.limits.maxWallMs,
+      postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
+      criticRepairCostCapUsd: this.criticRepairCostCapUsd,
     });
+    if (!result.ok) {
+      this.terminatingLimiter = result.limiter ?? 'cost';
+      this.terminalLimiterReason = result.reason ?? 'Budget limit exceeded.';
+    }
+    return result;
   }
 
   /**
@@ -1506,6 +1552,10 @@ export class ChatEngine {
     const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
       spentUsd: spent,
       sessionMaxCostUsd: this.limits.maxCostUsd,
+      longTaskProfile: this.limits.costBudget?.longTaskProfile === true,
+      explicitCostCeiling: this.limits.costBudget?.explicitCostCeiling === true,
+      criticStrikes: this.criticStrikes,
+      limits: this.limits,
     });
     this.criticRepairCostCapUsd = capUsd;
     this.policyEventLog.record({
@@ -1546,6 +1596,10 @@ export class ChatEngine {
       const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
         spentUsd: spent,
         sessionMaxCostUsd: this.limits.maxCostUsd,
+        longTaskProfile: this.limits.costBudget?.longTaskProfile === true,
+        explicitCostCeiling: this.limits.costBudget?.explicitCostCeiling === true,
+        criticStrikes: this.criticStrikes,
+        limits: this.limits,
       });
       this.criticRepairCostCapUsd = capUsd;
       this.policyEventLog.record({
@@ -1885,6 +1939,13 @@ export class ChatEngine {
       submissionIndex: runtime.submissionIndex,
       continuedTask: runtime.continuedTask,
     });
+    if (this.options.intentPlanUserMessage && this.parity.turnId) {
+      recordUserMessage(
+        this.parity.eventLog,
+        this.parity.turnId,
+        this.options.intentPlanUserMessage,
+      );
+    }
     setChatApprovalTurnId(this.parity.turnId);
 
     // R4: Fire-and-forget repo map generation, awaited before first LLM call
@@ -2353,8 +2414,11 @@ export class ChatEngine {
         );
         endSpan(_turnSpan, SpanStatusCode.OK);
         _turnSpan = null;
+        this.terminatingLimiter = 'tokens';
+        this.terminalLimiterReason =
+          `Token explosion with zero mutations: ${streamExplosion.tokensThisTurn} tokens this turn (ceiling ${this.limits.maxTokensPerRound}).`;
         const kill = await this.handleBudgetKill(
-          `Token explosion with zero mutations: ${streamExplosion.tokensThisTurn} tokens this turn (ceiling ${this.limits.maxTokensPerRound}).`,
+          this.terminalLimiterReason,
           { onThought: () => {} },
           resolvedIntent,
         );
@@ -2571,7 +2635,15 @@ export class ChatEngine {
 
         // W3 Phase 3 Progress and Recovery Controller
         const signals: ProgressSignal[] = [];
-        if (turnCallsStr.some((tc) => isSuccessfulDirectMutation(tc.tool, tc.error))) {
+        if (
+          turnCallsStr.some(
+            (tc) =>
+              isSuccessfulDirectMutation(tc.tool, tc.error) ||
+              (tc.tool === 'sub_agent' &&
+                tc.error !== 'blocked' &&
+                subagentCountsAsMutation(tc.detail)),
+          )
+        ) {
           signals.push('production_mutation');
         }
 
@@ -3249,6 +3321,9 @@ export class ChatEngine {
     }
 
     // maxTurns exceeded
+    this.terminatingLimiter = this.terminatingLimiter ?? 'turns';
+    this.terminalLimiterReason =
+      this.terminalLimiterReason ?? `Turn limit reached (${maxTurns} of ${maxTurns}).`;
     const maxTurnAnswer = await this.synthesizeAnswer(allToolObservations, {
       onAnswerChunk: (_chunk) => {},
     }).catch(() => '');
@@ -3608,7 +3683,12 @@ export class ChatEngine {
   }
 
   private streamFailed(error: string) {
-    finalizeParityTurnSync(this.parity, this.engineRunDir, 'AGENT_FAILURE', 'failed');
+    const providerOrTransport =
+      /\[(?:deepSeekApi|deepInfraApi|openRouterApi)\]|stream closed before terminal|idle timeout|request timeout|request cancelled|ECONNRESET|finish_reason|malformed arguments|incomplete tool call/i.test(
+        error,
+      );
+    const outcome: TerminalOutcome = providerOrTransport ? 'INFRA_FAILURE' : 'AGENT_FAILURE';
+    finalizeParityTurnSync(this.parity, this.engineRunDir, outcome, 'failed');
     const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
       turnId: String(this.parity.turnId ?? this._turnIndex),
       taskClass: this.taskClass,
@@ -3784,6 +3864,7 @@ export class ChatEngine {
             ? { maxTokensPerRound: this.options.maxTokensPerRound }
             : {}),
           ...(this.options.maxWallMs !== undefined ? { maxWallMs: this.options.maxWallMs } : {}),
+          ...(this.options.maxCostUsd !== undefined ? { maxCostUsd: this.options.maxCostUsd } : {}),
         },
         undefined,
         { taskClass: runtime.taskClass, taskText: runtime.taskText },
@@ -3845,6 +3926,72 @@ export class ChatEngine {
     this.cachedSystemPromptLegacy = null;
     this.cachedSystemPromptNative = null;
     this.cachedSystemPromptText = null;
+  }
+
+  /**
+   * Apply the same preparation a freshly constructed engine receives so a
+   * reused TUI engine's next native request matches headless/direct Chat.
+   */
+  applyTurnPreparation(preparation: ChatEngineTurnPreparation): void {
+    this.options = {
+      ...this.options,
+      task: preparation.task,
+      ...(preparation.systemContext !== undefined
+        ? { systemContext: preparation.systemContext }
+        : {}),
+      ...(preparation.appendSystemPrompt !== undefined
+        ? { appendSystemPrompt: preparation.appendSystemPrompt }
+        : {}),
+      ...(preparation.preflightContext !== undefined
+        ? { preflightContext: preparation.preflightContext }
+        : {}),
+      ...(preparation.model !== undefined ? { model: preparation.model } : {}),
+      ...(preparation.executionProfile !== undefined
+        ? { executionProfile: preparation.executionProfile }
+        : {}),
+    };
+    if (preparation.intentPlanUserMessage !== undefined) {
+      this.options.intentPlanUserMessage = preparation.intentPlanUserMessage;
+    } else {
+      delete this.options.intentPlanUserMessage;
+    }
+    if (preparation.systemContext !== undefined) {
+      const projectRoot = this.options.instructionRoot ?? this.options.projectRoot;
+      const babelMd = readProjectMemoryStructured(projectRoot, preparation.task);
+      if (babelMd) {
+        this.options.systemContext =
+          babelMd + (this.options.systemContext ? '\n\n' + this.options.systemContext : '');
+      }
+      const chatPlaybook = selectPlaybookForChatTask(preparation.task);
+      this.activePlaybook = chatPlaybook ?? null;
+      if (chatPlaybook) {
+        const pbPrompt = buildPlaybookPrompt(chatPlaybook);
+        if (pbPrompt) {
+          this.options.systemContext =
+            (this.options.systemContext ? this.options.systemContext + '\n\n' : '') + pbPrompt;
+        }
+      }
+      this.requireTodoBeforeMutate = shouldRequireTodoPlan(
+        preparation.task,
+        this.activePlaybook,
+      );
+    }
+    if (preparation.limits) {
+      this.limits = preparation.limits;
+      this.options.maxTurns = preparation.limits.maxTurns;
+      this.options.maxConversationMessages = preparation.limits.maxConversationMessages;
+      this.options.maxEstimatedTokens = preparation.limits.maxEstimatedTokens;
+      this.options.maxTokensPerRound = preparation.limits.maxTokensPerRound;
+      this.options.maxWallMs = preparation.limits.maxWallMs;
+      if (preparation.limits.maxCostUsd !== undefined) {
+        this.options.maxCostUsd = preparation.limits.maxCostUsd;
+      }
+    }
+    this.taskClass = resolveChatTaskClass({
+      taskText: preparation.task,
+      autoClassify: true,
+    });
+    this.clearSystemPromptCache();
   }
 
   /**
@@ -4202,33 +4349,37 @@ export class ChatEngine {
                   },
                 },
               );
-              const details = implResult.success
-                ? `${implResult.stepsExecuted} steps, ${implResult.changedFiles.length} changed (worktree ${implResult.worktree.name})`
-                : `failed: ${implResult.error || 'unknown error'}`;
+              const attribution: SubagentAttribution = implResult.attribution;
+              const clean = subagentFinishedCleanly(attribution);
+              const details = clean
+                ? `${implResult.stepsExecuted} steps, ${implResult.changedFiles.length} changed, attribution=${attribution} (worktree ${implResult.worktree.name})`
+                : `failed: ${implResult.error || 'unknown error'}, attribution=${attribution}`;
               this.toolCallLog.push({
                 tool,
                 target,
                 detail: details,
                 index: meta.index,
-                exit_code: implResult.success ? 0 : 1,
+                exit_code: clean ? 0 : 1,
+                ...(clean ? {} : { error: implResult.error || attribution }),
               });
               callbacks?.onToolComplete?.(
                 toolId,
                 details,
-                implResult.success ? undefined : implResult.error || 'failed',
-                implResult.success ? 0 : 1,
+                clean ? undefined : implResult.error || attribution,
+                clean ? 0 : 1,
               );
-              if (implResult.success) {
+              if (clean) {
                 callbacks.onSubAgentComplete?.({ id: subId, summary: details });
               } else {
                 callbacks.onSubAgentFailed?.({
                   id: subId,
-                  error: implResult.error || 'unknown error',
+                  error: implResult.error || attribution,
                 });
               }
               const findings = [
                 `### sub_agent ${subId}: ${action.task}`,
-                `status: ${implResult.success ? 'success' : 'failed'}`,
+                `status: ${clean ? (attribution === 'child_noop' ? 'noop' : 'success') : 'failed'}`,
+                `attribution: ${attribution}`,
                 `isolation: git_worktree`,
                 `worktree: ${implResult.worktree.path}`,
                 `write_scope: ${implResult.writeScope.join(', ') || '(none)'}`,
@@ -4263,33 +4414,37 @@ export class ChatEngine {
                   }
                 : {}),
             });
-            const details = mutResult.success
-              ? `${mutResult.stepsExecuted} steps, ${mutResult.changedFiles.length} changed`
-              : `failed: ${mutResult.error || 'unknown error'}`;
+            const attribution: SubagentAttribution = mutResult.attribution;
+            const clean = subagentFinishedCleanly(attribution);
+            const details = clean
+              ? `${mutResult.stepsExecuted} steps, ${mutResult.changedFiles.length} changed, attribution=${attribution}`
+              : `failed: ${mutResult.error || 'unknown error'}, attribution=${attribution}`;
             this.toolCallLog.push({
               tool,
               target,
               detail: details,
               index: meta.index,
-              exit_code: mutResult.success ? 0 : 1,
+              exit_code: clean ? 0 : 1,
+              ...(clean ? {} : { error: mutResult.error || attribution }),
             });
             callbacks?.onToolComplete?.(
               toolId,
               details,
-              mutResult.success ? undefined : mutResult.error || 'failed',
-              mutResult.success ? 0 : 1,
+              clean ? undefined : mutResult.error || attribution,
+              clean ? 0 : 1,
             );
-            if (mutResult.success) {
+            if (clean) {
               callbacks.onSubAgentComplete?.({ id: subId, summary: details });
             } else {
               callbacks.onSubAgentFailed?.({
                 id: subId,
-                error: mutResult.error || 'unknown error',
+                error: mutResult.error || attribution,
               });
             }
             const findings = [
               `### sub_agent ${subId}: ${action.task}`,
-              `status: ${mutResult.success ? 'success' : 'failed'}`,
+              `status: ${clean ? (attribution === 'child_noop' ? 'noop' : 'success') : 'failed'}`,
+              `attribution: ${attribution}`,
               `steps: ${mutResult.stepsExecuted}`,
               `changed_files: ${mutResult.changedFiles.map((f) => f.path).join(', ') || 'none'}`,
               mutResult.summary,
@@ -4297,19 +4452,25 @@ export class ChatEngine {
             return { index: meta.index, observation: findings };
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
+            const attribution = classifySubagentFailure({
+              success: false,
+              error: errMsg,
+              changedFilesCount: 0,
+              aborted: childController.signal.aborted,
+            });
             this.toolCallLog.push({
               tool,
               target,
-              detail: 'failed',
+              detail: `failed, attribution=${attribution}`,
               error: 'error',
               index: meta.index,
               exit_code: 1,
             });
-            callbacks?.onToolComplete?.(toolId, 'failed', errMsg, 1);
+            callbacks?.onToolComplete?.(toolId, `failed, attribution=${attribution}`, errMsg, 1);
             callbacks.onSubAgentFailed?.({ id: subId, error: errMsg });
             return {
               index: meta.index,
-              observation: `### sub_agent ${subId}: ${action.task}\nError: ${errMsg}`,
+              observation: `### sub_agent ${subId}: ${action.task}\nattribution: ${attribution}\nError: ${errMsg}`,
             };
           } finally {
             restoreApproval();
@@ -4342,39 +4503,78 @@ export class ChatEngine {
             model:
               ((action as any).model as string | undefined) ?? this.modelPolicy?.providerModelId,
           } as any);
-          const findings = formatSubAgentFindings(subId, action.task, {
-            observations: subResult.observations,
-            stepsExecuted: subResult.stepsExecuted,
-            degraded: subResult.degraded,
-          });
+          const attribution: SubagentAttribution = subResult.policyBlocked
+            ? 'child_policy_block'
+            : subResult.roundExhausted
+              ? 'child_round_exhaustion'
+              : childController.signal.aborted
+                ? 'child_cancellation'
+                : subResult.completed
+                  ? 'child_noop'
+                  : classifySubagentFailure({
+                      success: false,
+                      error: subResult.blockedReason,
+                      changedFilesCount: 0,
+                    });
+          const clean = subagentFinishedCleanly(attribution);
+          const details = `${subResult.stepsExecuted} steps, 0 changed, attribution=${attribution}`;
+          const findings = [
+            formatSubAgentFindings(subId, action.task, {
+              observations: subResult.observations,
+              stepsExecuted: subResult.stepsExecuted,
+              degraded: subResult.degraded,
+            }),
+            `attribution: ${attribution}`,
+            `completed: ${subResult.completed}`,
+            `round_exhausted: ${subResult.roundExhausted}`,
+          ].join('\n');
           this.toolCallLog.push({
             tool,
             target,
-            detail: `${subResult.stepsExecuted} steps`,
+            detail: details,
             index: meta.index,
-            exit_code: 0,
+            exit_code: clean ? 0 : 1,
+            ...(clean ? {} : { error: subResult.blockedReason || attribution }),
           });
-          callbacks?.onToolComplete?.(toolId, `${subResult.stepsExecuted} steps`, undefined, 0);
-          callbacks.onSubAgentComplete?.({
-            id: subId,
-            summary: `${subResult.stepsExecuted} steps`,
-          });
+          callbacks?.onToolComplete?.(
+            toolId,
+            details,
+            clean ? undefined : subResult.blockedReason || attribution,
+            clean ? 0 : 1,
+          );
+          if (clean) {
+            callbacks.onSubAgentComplete?.({
+              id: subId,
+              summary: details,
+            });
+          } else {
+            callbacks.onSubAgentFailed?.({
+              id: subId,
+              error: subResult.blockedReason || attribution,
+            });
+          }
           return { index: meta.index, observation: findings };
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
+          const attribution = classifySubagentFailure({
+            success: false,
+            error: errMsg,
+            changedFilesCount: 0,
+            aborted: childController.signal.aborted,
+          });
           this.toolCallLog.push({
             tool,
             target,
-            detail: 'failed',
+            detail: `failed, attribution=${attribution}`,
             error: 'error',
             index: meta.index,
             exit_code: 1,
           });
-          callbacks?.onToolComplete?.(toolId, 'failed', errMsg, 1);
+          callbacks?.onToolComplete?.(toolId, `failed, attribution=${attribution}`, errMsg, 1);
           callbacks.onSubAgentFailed?.({ id: subId, error: errMsg });
           return {
             index: meta.index,
-            observation: `### sub_agent ${subId}: ${action.task}\nError: ${errMsg}`,
+            observation: `### sub_agent ${subId}: ${action.task}\nattribution: ${attribution}\nError: ${errMsg}`,
           };
         } finally {
           restoreApproval();
@@ -6478,6 +6678,36 @@ export class ChatEngine {
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
     finalizeParityTurnSync(this.parity, this.engineRunDir, authoritativeOutcome, finalStatus);
 
+    const runAllowance = createRunAllowanceReport(this.limits, {
+      postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
+      criticRepairCostCapUsd: this.criticRepairCostCapUsd,
+      terminatingLimiter: this.terminatingLimiter,
+      terminalClassification: this.terminatingLimiter
+        ? classifyTerminalLimiter(this.terminatingLimiter, this.terminalLimiterReason ?? undefined)
+        : finalStatus === 'cancelled'
+          ? 'cancelled'
+          : null,
+      terminalReason: this.terminalLimiterReason,
+      childLimits: { maxRounds: SUB_AGENT_MAX_ROUNDS },
+    });
+    // Being under all limits is ACTIVE / no_limit_triggered, never task success.
+    if (runAllowance.terminatingLimiter === 'none' || runAllowance.terminatingLimiter == null) {
+      if (runAllowance.terminalClassification === 'success') {
+        runAllowance.terminalClassification = 'no_limit_triggered';
+      }
+    }
+    this.limits.runAllowance = runAllowance;
+    this.policyEventLog.record({
+      at_turn: this._turnIndex,
+      kind: 'progress_policy',
+      detail: `run_allowance ${JSON.stringify(runAllowance)}`,
+    });
+    try {
+      writeFileSync(join(this.engineRunDir, 'run-allowance.json'), JSON.stringify(runAllowance));
+    } catch {
+      /* evidence write must not fail the turn */
+    }
+
     const result: ChatResult = {
       status: finalStatus,
       outcome: authoritativeOutcome,
@@ -6506,6 +6736,8 @@ export class ChatEngine {
       ...(this.budgetExceeded ? { budgetExceeded: true as const } : {}),
       ...(this.gatePolicy ? { gatePolicy: this.gatePolicy } : {}),
       ...(this.lastTurnTelemetry ? { turnTelemetry: this.lastTurnTelemetry } : {}),
+      ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
+      runAllowance,
       ...observabilityResultFields(this.obsHandles()),
     };
 
