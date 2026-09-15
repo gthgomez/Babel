@@ -321,6 +321,9 @@ describe('runMutationAgentLoop', () => {
     assert.equal(resolvedTurns, 2);
     assert.equal(attempts, 2);
     assert.equal(result.stepsExecuted, 2);
+    assert.equal(result.success, false);
+    assert.equal(result.attribution, 'child_round_exhaustion');
+    assert.equal(result.error, 'Round limit reached without finish');
     assert.ok(typeof result.rollback === 'function');
   });
 

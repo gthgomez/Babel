@@ -35,7 +35,7 @@ import {
   type ToolStreamEvent,
   buildStructuredOutputError,
 } from './base.js';
-import { mapProviderMessagesToWire } from './providerMessages.js';
+import { hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
 import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js';
 import { extractJson } from '../utils/extractJson.js';
 import { createVcrRecorder, createVcrPlayer, type VcrRecorder } from '../services/streamingVcr.js';
@@ -304,6 +304,76 @@ function retryDelayMs(attempt: number, response?: Response): number {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+function isCallerCancelError(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  if (!isAbortError(error)) return false;
+  const msg = error instanceof Error ? error.message : String(error);
+  return /request cancelled/i.test(msg) && !/request timeout/i.test(msg);
+}
+
+function readStreamWithLimits(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  opts: {
+    idleTimeoutMs: number;
+    deadlineAt: number;
+    requestTimeoutMs: number;
+    signal?: AbortSignal;
+    idleMessage: string;
+    deadlineMessage: string;
+  },
+): Promise<{ done: boolean; value: Uint8Array | undefined }> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const onAbort = () => {
+      finish(() => {
+        reader.cancel().catch(() => {});
+        reject(new DOMException('Request cancelled', 'AbortError'));
+      });
+    };
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      for (const timer of timers) clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
+      action();
+    };
+    if (opts.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    const remainingDeadline = opts.deadlineAt - Date.now();
+    if (remainingDeadline <= 0) {
+      finish(() => {
+        reader.cancel().catch(() => {});
+        reject(new Error(opts.deadlineMessage));
+      });
+      return;
+    }
+    timers.push(
+      setTimeout(() => {
+        finish(() => {
+          reader.cancel().catch(() => {});
+          reject(new Error(opts.idleMessage));
+        });
+      }, opts.idleTimeoutMs),
+    );
+    timers.push(
+      setTimeout(() => {
+        finish(() => {
+          reader.cancel().catch(() => {});
+          reject(new Error(opts.deadlineMessage));
+        });
+      }, remainingDeadline),
+    );
+    reader.read().then(
+      (result) => finish(() => resolve({ done: result.done, value: result.value })),
+      (err: unknown) => finish(() => reject(err)),
+    );
+  });
 }
 
 function isStreamIdleTimeoutError(error: unknown): boolean {
@@ -1656,10 +1726,26 @@ export class DeepInfraApiRunner implements LlmRunner {
     };
     notifyPhase('request_created');
 
+    const protocolIssues = hardProviderProtocolIssues(messages);
+    if (protocolIssues.length > 0) {
+      const errMessage = `[deepInfraApi] Invalid provider protocol: ${protocolIssues
+        .map((issue) => `${issue.code} (${issue.message})`)
+        .join('; ')}`;
+      notifyPhase('provider_error', undefined, 'invalid_protocol');
+      notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+        actualAttempt: 0,
+        details: { message: errMessage },
+        failureStage: 'request',
+      });
+      yield { type: 'error', message: errMessage };
+      return;
+    }
+
     // ── HTTP request loop (with retries) ─────────────────────────────────
     let response: Response | null = null;
     let lastError: Error | null = null;
     let retryAttempt: number | null = null;
+    let attemptDeadlineAt = Date.now() + requestTimeoutMs;
     const settleRetry = (outcome: 'succeeded' | 'failed' | 'cancelled'): void => {
       if (retryAttempt === null) return;
       callbacks?.onRetrySettled?.({
@@ -1670,6 +1756,7 @@ export class DeepInfraApiRunner implements LlmRunner {
 
     for (let attempt = 1; attempt <= requestMaxRetries; attempt += 1) {
       lastAttempt = attempt;
+      attemptDeadlineAt = Date.now() + requestTimeoutMs;
       const controller = new AbortController();
       let onExternalAbort: (() => void) | undefined;
       if (signal) {
@@ -1692,6 +1779,18 @@ export class DeepInfraApiRunner implements LlmRunner {
         });
       } catch (err) {
         this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
+        if (isCallerCancelError(err, signal)) {
+          lastError = new Error('[deepInfraApi] Request cancelled');
+          settleRetry('cancelled');
+          notifyPhase('provider_error', undefined, 'cancelled');
+          notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+            actualAttempt: attempt,
+            details: { message: lastError.message },
+            failureStage: 'request',
+          });
+          yield { type: 'error', message: lastError.message };
+          return;
+        }
         lastError = new Error(
           isAbortError(err)
             ? `[deepInfraApi] request timeout after ${requestTimeoutMs}ms (${this.model})`
@@ -1814,35 +1913,35 @@ export class DeepInfraApiRunner implements LlmRunner {
       let finishReason: string | null = null;
 
       while (true) {
-        let readTimeout: ReturnType<typeof setTimeout> | null = null;
-        const read = reader.read();
-        const idle = new Promise<never>((_, reject) => {
-          readTimeout = setTimeout(() => {
-            reject(
-              new Error(`[deepInfraApi] stream idle timeout after ${streamIdleTimeoutMs}ms`),
-            );
-            reader.cancel().catch(() => {});
-          }, streamIdleTimeoutMs);
-        });
-
         let done: boolean;
         let value: Uint8Array | undefined;
         try {
-          const result = await Promise.race([read, idle]).finally(() => {
-            if (readTimeout) clearTimeout(readTimeout);
+          const result = await readStreamWithLimits(reader, {
+            idleTimeoutMs: streamIdleTimeoutMs,
+            deadlineAt: attemptDeadlineAt,
+            requestTimeoutMs,
+            ...(signal ? { signal } : {}),
+            idleMessage: `[deepInfraApi] stream idle timeout after ${streamIdleTimeoutMs}ms`,
+            deadlineMessage: `[deepInfraApi] request timeout after ${requestTimeoutMs}ms (${this.model})`,
           });
           done = result.done;
           value = result.value;
         } catch (err) {
           invocationFailed = true;
-          notifyPhase('provider_error', undefined, 'stream');
+          const cancelled = isCallerCancelError(err, signal);
+          const errMessage = cancelled
+            ? '[deepInfraApi] Request cancelled'
+            : err instanceof Error
+              ? err.message
+              : String(err);
+          notifyPhase('provider_error', undefined, cancelled ? 'cancelled' : 'stream');
           // Every invocation must have a durable terminal receipt, including
           // reader stalls/cancellation that exit before the outer stream
           // finalizer runs.
           notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
             actualAttempt: lastAttempt,
             details: {
-              message: err instanceof Error ? err.message : String(err),
+              message: errMessage,
               providerRequestId: providerRequestIdFromResponse(response),
             },
             failureStage: 'stream',
@@ -1850,7 +1949,7 @@ export class DeepInfraApiRunner implements LlmRunner {
             toolCallCount,
             outputMaterial: outputReceipt,
           });
-          yield { type: 'error', message: err instanceof Error ? err.message : String(err) };
+          yield { type: 'error', message: errMessage };
           return;
         }
 
@@ -1885,92 +1984,135 @@ export class DeepInfraApiRunner implements LlmRunner {
             continue;
           }
 
+          let json: {
+            error?: { message?: string; code?: unknown; type?: string };
+            model?: string;
+            provider?: string;
+            openrouter_metadata?: OpenRouterResponseMetadata;
+            choices?: Array<{
+              delta?: {
+                content?: string | null;
+                reasoning_content?: string;
+                tool_calls?: Array<{
+                  index: number;
+                  id?: string;
+                  type?: string;
+                  function?: { name?: string; arguments?: string };
+                }>;
+              };
+              finish_reason?: string | null;
+            }>;
+            usage?: ChatResponse['usage'];
+          };
           try {
-            const json = JSON.parse(data) as {
-              model?: string;
-              provider?: string;
-              openrouter_metadata?: OpenRouterResponseMetadata;
-              choices?: Array<{
-                delta?: {
-                  content?: string | null;
-                  reasoning_content?: string;
-                  tool_calls?: Array<{
-                    index: number;
-                    id?: string;
-                    type?: string;
-                    function?: { name?: string; arguments?: string };
-                  }>;
-                };
-                finish_reason?: string | null;
-              }>;
-              usage?: ChatResponse['usage'];
-            };
-
-            if (json.model) streamState.observedModelId = json.model;
-            const upstreamProvider = upstreamProviderFromResponse(json);
-            if (upstreamProvider) streamState.upstreamProvider = upstreamProvider;
-            if (json.openrouter_metadata) streamState.routerMetadata = json.openrouter_metadata;
-
-            const choice = json.choices?.[0];
-            if (!choice) continue;
-            const delta = choice.delta;
-
-            if (delta?.reasoning_content) {
-              partialModelOutput = true;
-              streamState.partialModelOutput = true;
-              outputReceipt += `reasoning:${delta.reasoning_content}\n`;
-              streamState.outputReceipt = outputReceipt;
-              yield { type: 'thought_delta', text: delta.reasoning_content };
-            }
-
-            if (delta?.content) {
-              partialModelOutput = true;
-              streamState.partialModelOutput = true;
-              outputReceipt += delta.content;
-              streamState.outputReceipt = outputReceipt;
-              yield { type: 'text_delta', text: delta.content };
-            }
-
-            if (delta?.tool_calls) {
-              for (const tc of delta.tool_calls) {
-                const idx = tc.index;
-                if (!pendingToolCalls.has(idx)) {
-                  pendingToolCalls.set(idx, { id: '', name: '', arguments: '' });
-                  toolCallCount += 1;
-                }
-                const acc = pendingToolCalls.get(idx)!;
-                if (tc.id) {
-                  acc.id = tc.id;
-                  partialModelOutput = true;
-                  streamState.partialModelOutput = true;
-                  outputReceipt += `tool_id:${tc.id}\n`;
-                }
-                if (tc.function?.name) {
-                  acc.name = tc.function.name;
-                  partialModelOutput = true;
-                  streamState.partialModelOutput = true;
-                  outputReceipt += `tool_name:${tc.function.name}\n`;
-                }
-                if (tc.function?.arguments) {
-                  partialModelOutput = true;
-                  streamState.partialModelOutput = true;
-                  acc.arguments += tc.function.arguments;
-                  outputReceipt += `tool_arguments:${tc.function.arguments}\n`;
-                }
-                streamState.outputReceipt = outputReceipt;
-              }
-            }
-
-            if (normalizeFinishReason(choice.finish_reason)) {
-              finishReason = normalizeFinishReason(choice.finish_reason);
-              streamState.finishReason = finishReason;
-            }
-
-            if (json.usage) {
-              streamState.usage = json.usage;
-            }
+            json = JSON.parse(data) as typeof json;
           } catch {
-            // Ignore partial/invalid JSON chunks
+            invocationFailed = true;
+            const errMessage = `[deepInfraApi] Malformed SSE event chunk: ${data.slice(0, 100)}`;
+            notifyPhase('provider_error', undefined, 'malformed_sse');
+            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'stream',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          }
+
+          if (json.error) {
+            invocationFailed = true;
+            const errMessage = `[deepInfraApi] Provider stream error: ${json.error.message || JSON.stringify(json.error)}`;
+            notifyPhase('provider_error', undefined, 'provider_error_payload');
+            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'stream',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          }
+
+          if (json.model) streamState.observedModelId = json.model;
+          const upstreamProvider = upstreamProviderFromResponse(json);
+          if (upstreamProvider) streamState.upstreamProvider = upstreamProvider;
+          if (json.openrouter_metadata) streamState.routerMetadata = json.openrouter_metadata;
+          if (json.usage) streamState.usage = json.usage;
+
+          const choice = json.choices?.[0];
+          if (!choice) continue;
+          const delta = choice.delta;
+
+          if (delta?.reasoning_content) {
+            partialModelOutput = true;
+            streamState.partialModelOutput = true;
+            outputReceipt += `reasoning:${delta.reasoning_content}\n`;
+            streamState.outputReceipt = outputReceipt;
+            yield { type: 'thought_delta', text: delta.reasoning_content };
+          }
+
+          if (delta?.content) {
+            partialModelOutput = true;
+            streamState.partialModelOutput = true;
+            outputReceipt += delta.content;
+            streamState.outputReceipt = outputReceipt;
+            yield { type: 'text_delta', text: delta.content };
+          }
+
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index;
+              if (!pendingToolCalls.has(idx)) {
+                pendingToolCalls.set(idx, { id: '', name: '', arguments: '' });
+                toolCallCount += 1;
+              }
+              const acc = pendingToolCalls.get(idx)!;
+              if (tc.id) {
+                acc.id = tc.id;
+                partialModelOutput = true;
+                streamState.partialModelOutput = true;
+                outputReceipt += `tool_id:${tc.id}\n`;
+              }
+              if (tc.function?.name) {
+                acc.name = tc.function.name;
+                partialModelOutput = true;
+                streamState.partialModelOutput = true;
+                outputReceipt += `tool_name:${tc.function.name}\n`;
+              }
+              if (tc.function?.arguments) {
+                partialModelOutput = true;
+                streamState.partialModelOutput = true;
+                acc.arguments += tc.function.arguments;
+                outputReceipt += `tool_arguments:${tc.function.arguments}\n`;
+              }
+              streamState.outputReceipt = outputReceipt;
+            }
+          }
+
+          if (choice.finish_reason === 'error') {
+            finishReason = 'error';
+            streamState.finishReason = 'error';
+            invocationFailed = true;
+            const errMessage = '[deepInfraApi] Provider error during generation (finish_reason: error)';
+            notifyPhase('provider_error', undefined, 'finish_reason_error');
+            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, 'error', this.maxTokens, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'stream',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          } else if (choice.finish_reason) {
+            finishReason = normalizeFinishReason(choice.finish_reason);
+            streamState.finishReason = finishReason;
           }
         }
       }
@@ -2002,6 +2144,21 @@ export class DeepInfraApiRunner implements LlmRunner {
             if (json.usage) {
               streamState.usage = json.usage;
             }
+            if (json.choices?.[0]?.finish_reason === 'error') {
+              invocationFailed = true;
+              const errMessage = '[deepInfraApi] Provider error during generation (finish_reason: error)';
+              notifyPhase('provider_error', undefined, 'finish_reason_error');
+              notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, 'error', this.maxTokens, {
+                actualAttempt: lastAttempt,
+                details: { message: errMessage },
+                failureStage: 'stream',
+                partialModelOutput,
+                toolCallCount,
+                outputMaterial: outputReceipt,
+              });
+              yield { type: 'error', message: errMessage };
+              return;
+            }
             if (json.choices?.[0]?.finish_reason) {
               finishReason = normalizeFinishReason(json.choices[0].finish_reason);
               streamState.finishReason = finishReason;
@@ -2016,35 +2173,116 @@ export class DeepInfraApiRunner implements LlmRunner {
 
       streamState.generationMs = Date.now() - startedAt - (streamState.ttftMs ?? 0);
 
-      // ── Yield accumulated tool calls ──────────────────────────────────
       streamState.finishReason = finishReason ?? (pendingToolCalls.size > 0 ? 'tool_calls' : 'stop');
+      if (finishReason === 'length') {
+        if (pendingToolCalls.size > 0) {
+          invocationFailed = true;
+          const errMessage = 'Incomplete tool call: truncated by provider token limit (finish_reason: length)';
+          notifyPhase('response_normalization_failed', undefined, 'length_truncated_tool_call');
+          notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, 'length', this.maxTokens, {
+            actualAttempt: lastAttempt,
+            details: { message: errMessage },
+            failureStage: 'response_normalization',
+            partialModelOutput,
+            toolCallCount,
+            outputMaterial: outputReceipt,
+          });
+          yield { type: 'error', message: errMessage };
+          return;
+        }
+        yield { type: 'done', finishReason: 'length' };
+        return;
+      }
+
+      // ── Yield accumulated tool calls ──────────────────────────────────
       if ((finishReason === 'tool_calls' || pendingToolCalls.size > 0) && pendingToolCalls.size > 0) {
+        const seenToolIds = new Set<string>();
         for (const [, acc] of pendingToolCalls) {
-          let input: Record<string, unknown> = {};
-          if (acc.arguments) {
-            try {
-              const parsed = JSON.parse(acc.arguments) as unknown;
-              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                throw new Error('tool arguments must be a JSON object');
-              }
-              input = parsed as Record<string, unknown>;
-            } catch (error) {
-              invocationFailed = true;
-              notifyPhase('response_normalization_failed', undefined, 'tool_arguments');
-              notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-                actualAttempt: lastAttempt,
-                details: { message: error instanceof Error ? error.message : String(error) },
-                failureStage: 'response_normalization',
-                partialModelOutput,
-                toolCallCount,
-                outputMaterial: outputReceipt,
-              });
-              yield {
-                type: 'error',
-                message: `[deepInfraApi] Malformed arguments for tool ${acc.name || '<unknown>'}: ${error instanceof Error ? error.message : String(error)}`,
-              };
-              return;
+          if (!acc.id || !acc.id.trim()) {
+            invocationFailed = true;
+            const errMessage = `[deepInfraApi] Incomplete tool call: missing id for tool ${acc.name || '<unknown>'}`;
+            notifyPhase('response_normalization_failed', undefined, 'missing_tool_id');
+            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'response_normalization',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          }
+          if (!acc.name || !acc.name.trim()) {
+            invocationFailed = true;
+            const errMessage = `[deepInfraApi] Incomplete tool call: missing name for tool call ${acc.id}`;
+            notifyPhase('response_normalization_failed', undefined, 'missing_tool_name');
+            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'response_normalization',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          }
+          if (!acc.arguments || !acc.arguments.trim()) {
+            invocationFailed = true;
+            const errMessage = `[deepInfraApi] Incomplete tool call: missing arguments for tool ${acc.name} (${acc.id})`;
+            notifyPhase('response_normalization_failed', undefined, 'missing_tool_arguments');
+            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'response_normalization',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          }
+          if (seenToolIds.has(acc.id)) {
+            invocationFailed = true;
+            const errMessage = `[deepInfraApi] Duplicate tool call id ${acc.id}`;
+            notifyPhase('response_normalization_failed', undefined, 'duplicate_tool_id');
+            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+              actualAttempt: lastAttempt,
+              details: { message: errMessage },
+              failureStage: 'response_normalization',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield { type: 'error', message: errMessage };
+            return;
+          }
+          seenToolIds.add(acc.id);
+
+          let input: Record<string, unknown>;
+          try {
+            const parsed = JSON.parse(acc.arguments) as unknown;
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              throw new Error('tool arguments must be a JSON object');
             }
+            input = parsed as Record<string, unknown>;
+          } catch (error) {
+            invocationFailed = true;
+            notifyPhase('response_normalization_failed', undefined, 'tool_arguments');
+            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+              actualAttempt: lastAttempt,
+              details: { message: error instanceof Error ? error.message : String(error) },
+              failureStage: 'response_normalization',
+              partialModelOutput,
+              toolCallCount,
+              outputMaterial: outputReceipt,
+            });
+            yield {
+              type: 'error',
+              message: `[deepInfraApi] Malformed arguments for tool ${acc.name || '<unknown>'}: ${error instanceof Error ? error.message : String(error)}`,
+            };
+            return;
           }
           yield { type: 'tool_use', id: acc.id, name: acc.name, input };
         }

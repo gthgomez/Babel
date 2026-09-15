@@ -441,7 +441,11 @@ describe('PR-A Certification: Frozen Daily-Driver Scenarios (18 Scenarios)', () 
               gatherPreflight: noPreflight,
               engineFactory: () =>
                 createMockEngine(
-                  [{ type: 'thinking' }, { type: 'answer_chunk', text: 'cancelling...' }],
+                  [
+                    { type: 'thinking' },
+                    { type: 'answer_chunk', text: 'cancelling...' },
+                    { type: 'cancelled' },
+                  ],
                   { status: 'cancelled', outcome: 'CANCELLED', answer: 'Cancelled', usage: EMPTY_USAGE, conversation: [] },
                 ),
             });

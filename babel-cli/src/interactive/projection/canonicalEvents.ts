@@ -114,7 +114,8 @@ export interface VerificationEvaluatedEvent {
 export interface TurnTerminalResolvedEvent {
   type: 'turn_terminal_resolved';
   timestamp: number;
-  outcome: TerminalOutcome;
+  /** Omitted when the cause is not established. */
+  outcome?: TerminalOutcome;
   status: 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed';
   finalAnswer: string;
 }
@@ -257,12 +258,22 @@ export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): Canonical
       if (!outcome && !status) {
         return null;
       }
-      const resolvedOutcome = outcome ?? (status === 'cancelled' ? 'CANCELLED' : status === 'blocked' ? 'BLOCKED_POLICY' : status === 'budget_exhausted' ? 'BUDGET_EXHAUSTED' : 'AGENT_FAILURE');
+      const resolvedOutcome =
+        outcome ??
+        (status === 'cancelled'
+          ? 'CANCELLED'
+          : status === 'blocked'
+            ? 'BLOCKED_POLICY'
+            : status === 'budget_exhausted'
+              ? 'BUDGET_EXHAUSTED'
+              : status === 'completed'
+                ? 'NO_CHANGE_REQUIRED'
+                : undefined);
       return {
         type: 'turn_terminal_resolved',
         timestamp: ts,
-        outcome: resolvedOutcome,
-        status: status ?? mapOutcomeToStatus(resolvedOutcome),
+        ...(resolvedOutcome !== undefined ? { outcome: resolvedOutcome } : {}),
+        status: status ?? (resolvedOutcome ? mapOutcomeToStatus(resolvedOutcome) : 'failed'),
         finalAnswer: '',
       };
     }

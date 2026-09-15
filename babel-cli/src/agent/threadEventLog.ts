@@ -105,7 +105,8 @@ export type ThreadEvent =
     })
   | (ThreadEventBase & {
       kind: 'turn_ended';
-      outcome: TerminalOutcome;
+      /** Omitted when the cause is not established. */
+      outcome?: TerminalOutcome;
       status: string;
     })
   | (ThreadEventBase & {
@@ -220,13 +221,13 @@ export function startTurn(
 export function endTurn(
   log: ThreadEventLog,
   turnId: string,
-  outcome: TerminalOutcome,
+  outcome: TerminalOutcome | undefined,
   status: string,
 ): void {
   appendThreadEvent(log, {
     kind: 'turn_ended',
     turn_id: turnId,
-    outcome,
+    ...(outcome !== undefined ? { outcome } : {}),
     status,
   });
 }
@@ -257,6 +258,18 @@ export function recordAssistantMessage(
   });
 }
 
+export function recordUserMessage(
+  log: ThreadEventLog,
+  turnId: string,
+  content: string,
+): void {
+  appendThreadEvent(log, {
+    kind: 'user_message',
+    turn_id: turnId,
+    content,
+  });
+}
+
 export function recordToolResult(
   log: ThreadEventLog,
   turnId: string,
@@ -279,7 +292,9 @@ export function recordToolResult(
 
 /**
  * Rebuild provider-neutral messages from the durable event log.
- * Compaction capsules replace prior history when present (after the capsule).
+ * Compaction capsules replace prior history when present (after the capsule),
+ * while complete retained tool cycles that were not re-appended after the
+ * capsule are projected from their original durable identities.
  */
 export function rebuildProviderMessagesFromEvents(
   log: ThreadEventLog,
@@ -293,11 +308,14 @@ export function rebuildProviderMessagesFromEvents(
   // Find last compaction capsule — history before it is replaced by capsule content.
   let startIdx = 0;
   let capsuleContent: string | null = null;
+  let lastCapsuleEvent: Extract<ThreadEvent, { kind: 'compaction_capsule' }> | null = null;
+  let lastCapsuleIdx = -1;
   for (let i = 0; i < events.length; i++) {
     if (events[i]!.kind === 'compaction_capsule') {
       startIdx = i + 1;
-      capsuleContent = (events[i] as Extract<ThreadEvent, { kind: 'compaction_capsule' }>)
-        .content;
+      lastCapsuleIdx = i;
+      lastCapsuleEvent = events[i] as Extract<ThreadEvent, { kind: 'compaction_capsule' }>;
+      capsuleContent = lastCapsuleEvent.content;
     }
   }
 
@@ -311,6 +329,45 @@ export function rebuildProviderMessagesFromEvents(
       content: capsuleContent,
       name: 'compaction_capsule',
     });
+  }
+
+  // Legacy logs may record preserved_tool_call_ids without re-appending the
+  // kept cycles after the capsule. Project those cycles from before the
+  // capsule using each assistant's own tool_calls — never the remaining suffix.
+  if (lastCapsuleEvent && lastCapsuleIdx >= 0) {
+    const postCapsuleToolIds = new Set<string>();
+    for (let i = startIdx; i < events.length; i++) {
+      const event = events[i]!;
+      if (event.kind === 'tool_result' && event.tool_call_id) {
+        postCapsuleToolIds.add(event.tool_call_id);
+      }
+    }
+    const missingPreservedIds = new Set(
+      (lastCapsuleEvent.preserved_tool_call_ids ?? []).filter((id) => !postCapsuleToolIds.has(id)),
+    );
+    if (missingPreservedIds.size > 0) {
+      const preCapsuleEvents = events.slice(0, lastCapsuleIdx);
+      for (const event of preCapsuleEvents) {
+        if (event.kind === 'assistant_tool_calls') {
+          const matchingCalls = event.tool_calls.filter((call) => missingPreservedIds.has(call.id));
+          if (matchingCalls.length > 0) {
+            messages.push({
+              role: 'assistant',
+              content: event.content || 'Using tools…',
+              name: 'tool_calls',
+              tool_calls: matchingCalls,
+            });
+          }
+        } else if (event.kind === 'tool_result' && missingPreservedIds.has(event.tool_call_id)) {
+          messages.push({
+            role: 'tool',
+            content: event.content,
+            tool_call_id: event.tool_call_id,
+            name: event.tool_name,
+          });
+        }
+      }
+    }
   }
 
   for (let i = startIdx; i < events.length; i++) {
@@ -518,8 +575,10 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
       }
       return;
     case 'turn_ended':
-      if (typeof event['outcome'] !== 'string' || !TERMINAL_OUTCOMES.has(event['outcome'] as TerminalOutcome)) {
-        throw new Error(`${context} has invalid terminal outcome`);
+      if (event['outcome'] !== undefined) {
+        if (typeof event['outcome'] !== 'string' || !TERMINAL_OUTCOMES.has(event['outcome'] as TerminalOutcome)) {
+          throw new Error(`${context} has invalid terminal outcome`);
+        }
       }
       requireString(event, 'status', context);
       return;
