@@ -152,6 +152,11 @@ export interface ChatEngineRunAllowanceReport {
   effectiveWallMs: number;
   declaredCostUsd: number;
   effectiveCostCapUsd: number;
+  /** JSON-safe cost truth; numeric Infinity otherwise becomes indistinguishable from null. */
+  costAllowance:
+    | { kind: 'finite'; usd: number }
+    | { kind: 'unlimited' }
+    | { kind: 'unknown'; reason: string };
   turnCap: number;
   stallLimit: number;
   childLimits: ChatEngineChildLimits;
@@ -184,12 +189,18 @@ export function createRunAllowanceReport(
     state?.criticRepairCostCapUsd != null
       ? Math.min(limits.maxCostUsd, state.criticRepairCostCapUsd)
       : limits.maxCostUsd;
+  const costAllowance = Number.isFinite(declaredCostUsd)
+    ? { kind: 'finite' as const, usd: declaredCostUsd }
+    : declaredCostUsd === Infinity
+      ? { kind: 'unlimited' as const }
+      : { kind: 'unknown' as const, reason: 'cost allowance was not recorded as a finite value' };
 
   return {
     declaredWallMs,
     effectiveWallMs,
     declaredCostUsd,
     effectiveCostCapUsd,
+    costAllowance,
     turnCap: limits.maxTurns,
     stallLimit: limits.stallTurns,
     childLimits: state?.childLimits ?? DEFAULT_CHILD_LIMITS,

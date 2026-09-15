@@ -7,6 +7,7 @@ import {
   isChatStreamingEnabled,
   isSweChatProfileEnabled,
   resolveChatEngineLimits,
+  createRunAllowanceReport,
   shouldShrinkWallForPostWriteRepair,
 } from './chatEngineLimits.js';
 
@@ -32,6 +33,10 @@ test('explicit unlimited monetary policy retains wall, turn and stall controls',
     assert.ok(Number.isFinite(limits.maxTurns) && limits.maxTurns > 0);
     assert.ok(Number.isFinite(limits.stallTurns) && limits.stallTurns > 0);
     assert.equal(resolveChatEngineLimits({ maxCostUsd: 1 }).maxCostUsd, 1);
+    assert.deepEqual(limits.runAllowance?.costAllowance, { kind: 'unlimited' });
+    const persisted = JSON.parse(JSON.stringify(limits.runAllowance));
+    assert.deepEqual(persisted.costAllowance, { kind: 'unlimited' });
+    assert.notEqual(persisted.costAllowance, null);
   } finally {
     if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
     else process.env['BABEL_CHAT_MAX_COST'] = previous;
@@ -76,6 +81,10 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
     assert.ok(expectedBase.runAllowance);
     assert.equal(expectedBase.runAllowance?.declaredWallMs, DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs);
     assert.equal(expectedBase.runAllowance?.declaredCostUsd, DEFAULT_CHAT_ENGINE_LIMITS.maxCostUsd);
+    assert.deepEqual(expectedBase.runAllowance?.costAllowance, {
+      kind: 'finite',
+      usd: DEFAULT_CHAT_ENGINE_LIMITS.maxCostUsd,
+    });
     const withTurns = resolveChatEngineLimits({ maxTurns: 12 });
     assert.equal(withTurns.maxTurns, 12);
     assert.deepEqual(withTurns.wallBudget, wallBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs));
@@ -97,6 +106,18 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
     if (previous.longTask === undefined) delete process.env['BABEL_CHAT_LONG_TASK'];
     else process.env['BABEL_CHAT_LONG_TASK'] = previous.longTask;
   }
+});
+
+test('run allowance distinguishes finite, unlimited, and unknown cost evidence', () => {
+  const finite = resolveChatEngineLimits({ maxCostUsd: 10 });
+  assert.deepEqual(finite.runAllowance?.costAllowance, { kind: 'finite', usd: 10 });
+  const unknownLimits = { ...finite, maxCostUsd: Number.NaN };
+  delete unknownLimits.costBudget;
+  const unknown = createRunAllowanceReport(unknownLimits);
+  assert.equal(unknown.costAllowance.kind, 'unknown');
+  const parsed = JSON.parse(JSON.stringify(unknown));
+  assert.equal(parsed.costAllowance.kind, 'unknown');
+  assert.notEqual(parsed.costAllowance.kind, 'unlimited');
 });
 
 test('resolveChatEngineLimits reads bounded env overrides', () => {

@@ -2177,7 +2177,7 @@ export class DeepInfraApiRunner implements LlmRunner {
       if (finishReason === 'length') {
         if (pendingToolCalls.size > 0) {
           invocationFailed = true;
-          const errMessage = '[deepInfraApi] Incomplete tool call: truncated by token limit (finish_reason: length)';
+          const errMessage = 'Incomplete tool call: truncated by provider token limit (finish_reason: length)';
           notifyPhase('response_normalization_failed', undefined, 'length_truncated_tool_call');
           notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, 'length', this.maxTokens, {
             actualAttempt: lastAttempt,
