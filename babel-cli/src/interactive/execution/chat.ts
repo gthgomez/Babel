@@ -23,7 +23,10 @@ import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
 import { hydrateResumedThreadToScreen } from '../../services/threadStore/index.js';
 import {
+  applyEngineTurnPreparation,
   buildChatRunPayload,
+  compileChatStackForRun,
+  compileIntentPlanUserMessage,
   gatherChatPreflightContext,
   runChatEngineOnce,
   scanSessionCheckpoints,
@@ -137,11 +140,22 @@ export async function executeChatTask(
     const preflightContext = await gatherPreflight(target.targetRoot);
     const engineFactory = deps?.engineFactory ?? ((options) => new ChatEngine(options));
 
+    const limits = resolveChatEngineLimits({}, ctx.state.model, {
+      taskClass: activeProfile,
+      taskText: task,
+    });
+    const chatStack = compileChatStackForRun({
+      projectRoot: target.targetRoot,
+      task,
+      ...(ctx.state.model !== undefined ? { model: ctx.state.model } : {}),
+    });
+    const effectiveSystemContext = [systemContext, chatStack.system_context]
+      .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+      .join('\n\n');
+    const intentTaskClass = resolveChatTaskClass({ taskText: task, autoClassify: false });
+    const intentPlanUserMessage = compileIntentPlanUserMessage(task, intentTaskClass);
+
     if (!ctx.chatEngine) {
-      const limits = resolveChatEngineLimits({}, ctx.state.model, {
-        taskClass: activeProfile,
-        taskText: task,
-      });
       const operatorMode = normalizeChatOperatorMode(ctx.state.operatorMode) ?? 'default';
       if (operatorModeImpliesDryRun(operatorMode)) {
         process.env['BABEL_DRY_RUN'] = '1';
@@ -160,7 +174,7 @@ export async function executeChatTask(
       const engineOptions: ChatEngineOptions = {
         task,
         projectRoot: target.targetRoot,
-        ...(systemContext ? { systemContext } : {}),
+        ...(effectiveSystemContext ? { systemContext: effectiveSystemContext } : {}),
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         ...(preflightContext ? { preflightContext } : {}),
         ...(ctx.state.model !== undefined ? { model: ctx.state.model } : {}),
@@ -171,8 +185,19 @@ export async function executeChatTask(
         operatorMode,
         ...(operatorMode === 'hard_plan' ? { hardPlanMode: true } : {}),
         ...(planHandoff ? { planHandoff } : {}),
+        ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
       };
       ctx.chatEngine = await createChatEngineForSession(engineOptions, engineFactory);
+    } else {
+      applyEngineTurnPreparation(ctx.chatEngine, {
+        task,
+        ...(effectiveSystemContext ? { systemContext: effectiveSystemContext } : {}),
+        ...(appendSystemPrompt !== undefined ? { appendSystemPrompt } : {}),
+        ...(preflightContext !== undefined ? { preflightContext } : {}),
+        ...(ctx.state.model !== undefined ? { model: ctx.state.model } : {}),
+        limits,
+        ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
+      });
     }
 
     const result = await runChatEngineOnce({

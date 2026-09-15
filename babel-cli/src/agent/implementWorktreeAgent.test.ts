@@ -327,4 +327,58 @@ describe('promoteImplementWorktree (W2.1 merge)', () => {
       encoding: 'utf-8',
     });
   });
+
+  it('reports correct subagent attribution for worktree success and policy rejection', async () => {
+    const root = createGitProject();
+    const impl = await runImplementWorktreeAgent(
+      {
+        id: 'attr-success',
+        task: 'Write a result under src',
+        writeScope: ['src'],
+        maxRounds: 3,
+      },
+      {
+        projectRoot: root,
+        useDeterministicMock: true,
+        cleanupWorktree: true,
+      },
+    );
+    assert.equal(impl.success, true);
+    assert.equal(impl.attribution, 'child_success');
+
+    const blocked = await runImplementWorktreeAgent(
+      {
+        id: 'attr-blocked',
+        task: 'Invalid scope',
+        writeScope: [],
+      },
+      {
+        projectRoot: root,
+        useDeterministicMock: true,
+      },
+    );
+    assert.equal(blocked.success, false);
+    assert.equal(blocked.attribution, 'child_policy_block');
+  });
+
+  it('attributes worktree create failure as child_environment_failure', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-impl-not-git-'));
+    tempRoots.push(root);
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'main.ts'), 'export const n = 1;\n', 'utf-8');
+    const failed = await runImplementWorktreeAgent(
+      {
+        id: 'attr-create-fail',
+        task: 'Cannot create worktree',
+        writeScope: ['src'],
+      },
+      {
+        projectRoot: root,
+        useDeterministicMock: true,
+      },
+    );
+    assert.equal(failed.success, false);
+    assert.equal(failed.attribution, 'child_environment_failure');
+    assert.ok(failed.diagnostics.some((d) => d.code === 'worktree_create_failed'));
+  });
 });
