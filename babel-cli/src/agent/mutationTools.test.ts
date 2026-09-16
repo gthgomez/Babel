@@ -8,6 +8,7 @@ import {
   assessMutationEffect,
   confirmedMutationPaths,
   isConfirmedDirectMutation,
+  isConfirmedMutation,
   isSuccessfulDirectMutation,
   isVerifierAttemptTool,
   DIRECT_MUTATION_TOOLS,
@@ -71,6 +72,34 @@ describe('assessMutationEffect', () => {
     }).status, 'confirmed_change');
   });
 
+  test('confirms a changed receipt even when the process exits nonzero', () => {
+    assert.equal(assessMutationEffect({
+      tool: 'run_command',
+      exitCode: 1,
+      mutationPaths: ['a.txt'],
+      mutationReceipt: {
+        status: 'committed',
+        changedBytes: 3,
+        preImageHashes: { 'a.txt': 'before' },
+        postImageHashes: { 'a.txt': 'after' },
+      },
+    }).status, 'confirmed_change');
+  });
+
+  test('confirms a no-op receipt even when the process exits nonzero', () => {
+    assert.equal(assessMutationEffect({
+      tool: 'run_command',
+      exitCode: 1,
+      mutationPaths: ['a.txt'],
+      mutationReceipt: {
+        status: 'committed',
+        changedBytes: 0,
+        preImageHashes: { 'a.txt': 'same' },
+        postImageHashes: { 'a.txt': 'same' },
+      },
+    }).status, 'confirmed_no_change');
+  });
+
   test('confirms a committed no-op instead of counting a write', () => {
     assert.equal(assessMutationEffect({
       tool: 'str_replace',
@@ -92,6 +121,34 @@ describe('assessMutationEffect', () => {
       mutationPaths: ['a.txt'],
     }).status, 'indeterminate');
     assert.equal(assessMutationEffect({ tool: 'write_file', exitCode: 0 }).status, 'indeterminate');
+  });
+
+  test('requires rollback evidence to prove the pre-state was restored', () => {
+    const base = {
+      tool: 'write_file',
+      exitCode: 1,
+      effectTransaction: {
+        status: 'rollback',
+        rollback_result: 'success',
+      },
+    } as const;
+    assert.equal(assessMutationEffect(base).status, 'indeterminate');
+    assert.equal(assessMutationEffect({
+      ...base,
+      effectTransaction: {
+        ...base.effectTransaction,
+        pre_revision: { compositeTreeHash: 'same' },
+        post_revision: { compositeTreeHash: 'same' },
+      },
+    }).status, 'confirmed_no_change');
+    assert.equal(assessMutationEffect({
+      ...base,
+      effectTransaction: {
+        ...base.effectTransaction,
+        pre_revision: { compositeTreeHash: 'before' },
+        post_revision: { compositeTreeHash: 'after' },
+      },
+    }).status, 'indeterminate');
   });
 
   test('preserves explicit policy denial as not applicable', () => {
@@ -128,10 +185,33 @@ describe('assessMutationEffect', () => {
 });
 
 describe('isConfirmedDirectMutation', () => {
-  test('rejects a successful transport result with an indeterminate effect', () => {
+  test('requires an explicit confirmed-change effect', () => {
+    assert.equal(isConfirmedDirectMutation('write_file'), false);
     assert.equal(isConfirmedDirectMutation('write_file', undefined, 'indeterminate'), false);
     assert.equal(isConfirmedDirectMutation('write_file', undefined, 'confirmed_no_change'), false);
     assert.equal(isConfirmedDirectMutation('write_file', undefined, 'confirmed_change'), true);
+  });
+
+  test('retains a confirmed effect after a failed process outcome', () => {
+    assert.equal(isConfirmedDirectMutation('write_file', 'process exited 1', 'confirmed_change'), true);
+    assert.equal(isConfirmedDirectMutation('write_file', 'blocked', 'confirmed_change'), false);
+  });
+
+  test('requires explicit effect evidence for shell-backed paths', () => {
+    assert.equal(isConfirmedMutation({
+      tool: 'run_command',
+      mutationPaths: ['a.ts', 'b.ts'],
+    }), false);
+    assert.equal(isConfirmedMutation({
+      tool: 'run_command',
+      effectStatus: 'indeterminate',
+      mutationPaths: ['a.ts', 'b.ts'],
+    }), false);
+    assert.equal(isConfirmedMutation({
+      tool: 'run_command',
+      effectStatus: 'confirmed_change',
+      mutationPaths: ['a.ts', 'b.ts'],
+    }), true);
   });
 
   test('preserves all executor-reported paths for a confirmed mutation', () => {
@@ -146,6 +226,12 @@ describe('isConfirmedDirectMutation', () => {
       target: 'a.ts',
       effectStatus: 'confirmed_no_change',
     }), []);
+    assert.deepEqual(confirmedMutationPaths({
+      tool: 'run_command',
+      target: 'generator',
+      mutationPaths: ['a.ts', 'b.ts'],
+      effectStatus: 'confirmed_change',
+    }), ['a.ts', 'b.ts']);
   });
 });
 

@@ -87,14 +87,6 @@ export function assessMutationEffect(input: {
   if (transaction?.status === 'reconcile_needed' || transaction?.status === 'rollback_failed') {
     return { status: 'indeterminate', reason: `effect transaction requires reconciliation (${transaction.status})` };
   }
-  if (transaction?.status === 'rollback' && transaction.rollback_result === 'success') {
-    return { status: 'confirmed_no_change', reason: 'effect was rolled back and verified' };
-  }
-
-  if (input.exitCode !== undefined && input.exitCode !== null && input.exitCode !== 0) {
-    return { status: 'indeterminate', reason: 'mutation attempt failed before a committed effect was proven' };
-  }
-
   const receipt = input.mutationReceipt;
   let receiptEffect: MutationEffectStatus | undefined;
   if (receipt) {
@@ -121,6 +113,19 @@ export function assessMutationEffect(input: {
   if (transaction?.status === 'commit' && preRevision && postRevision) {
     transactionEffect = preRevision === postRevision ? 'confirmed_no_change' : 'confirmed_change';
   }
+  if (transaction?.status === 'rollback') {
+    if (
+      transaction.rollback_result !== 'success' ||
+      !preRevision ||
+      !postRevision
+    ) {
+      return { status: 'indeterminate', reason: 'rollback/reconciliation did not prove the pre-state was restored' };
+    }
+    transactionEffect = preRevision === postRevision ? 'confirmed_no_change' : undefined;
+    if (!transactionEffect) {
+      return { status: 'indeterminate', reason: 'rollback completed without restoring the pre-state' };
+    }
+  }
   if (receiptEffect && transactionEffect && receiptEffect !== transactionEffect) {
     return { status: 'indeterminate', reason: 'receipt and transaction revisions disagree' };
   }
@@ -131,7 +136,13 @@ export function assessMutationEffect(input: {
     return { status: 'confirmed_change', reason: 'committed evidence proves changed post-state' };
   }
 
-  return { status: 'indeterminate', reason: 'committed effect receipt is missing or incomplete' };
+  const processFailure = input.exitCode !== undefined && input.exitCode !== null && input.exitCode !== 0;
+  return {
+    status: 'indeterminate',
+    reason: processFailure
+      ? 'mutation process failed and no authoritative post-state effect was proven'
+      : 'committed effect receipt is missing or incomplete',
+  };
 }
 
 /** Tools that count as a verifier attempt for completion-gate Rule 2. */
@@ -146,7 +157,7 @@ export function isDirectMutationTool(tool: string): boolean {
 }
 
 /**
- * Successful direct mutation: recognized write tool with no error.
+ * Transport-successful direct mutation: recognized write tool with no error.
  *
  * - Policy deny sets `error: 'blocked'`.
  * - Failed str_replace sets e.g. `error: 'str_replace: old_str not found'`.
@@ -164,15 +175,32 @@ export function isSuccessfulDirectMutation(
   );
 }
 
-/** True only when a direct mutation is transport-successful and effect-confirmed. */
+/** True only when a direct mutation has an explicit confirmed-change effect. */
 export function isConfirmedDirectMutation(
   tool: string,
   error?: string | null,
   effectStatus?: MutationEffectStatus,
 ): boolean {
   return (
-    isSuccessfulDirectMutation(tool, error) &&
-    (effectStatus === undefined || effectStatus === 'confirmed_change')
+    isDirectMutationTool(tool) &&
+    error !== 'blocked' &&
+    effectStatus === 'confirmed_change'
+  );
+}
+
+/** True only when the runtime has explicit confirmed-change effect evidence. */
+export function isConfirmedMutation(input: {
+  tool: string;
+  error?: string | null | undefined;
+  effectStatus?: MutationEffectStatus | undefined;
+  mutationPaths?: readonly string[] | undefined;
+}): boolean {
+  if (input.effectStatus !== 'confirmed_change' || input.error === 'blocked') return false;
+  if (isConfirmedDirectMutation(input.tool, input.error, input.effectStatus)) return true;
+  return (
+    SHELL_MUTATION_TOOLS.has(input.tool) &&
+    Array.isArray(input.mutationPaths) &&
+    input.mutationPaths.some((path) => typeof path === 'string' && path.trim().length > 0)
   );
 }
 
@@ -184,11 +212,16 @@ export function confirmedMutationPaths(input: {
   effectStatus?: MutationEffectStatus | undefined;
   mutationPaths?: readonly string[] | undefined;
 }): string[] {
-  if (!isConfirmedDirectMutation(input.tool, input.error, input.effectStatus)) return [];
+  if (!isConfirmedMutation({
+    tool: input.tool,
+    error: input.error,
+    effectStatus: input.effectStatus,
+    mutationPaths: input.mutationPaths,
+  })) return [];
   if (input.mutationPaths && input.mutationPaths.length > 0) {
     return input.mutationPaths.filter((path) => typeof path === 'string' && path.length > 0);
   }
-  return input.target ? [input.target] : [];
+  return isDirectMutationTool(input.tool) && input.target ? [input.target] : [];
 }
 
 export function isVerifierAttemptTool(tool: string): boolean {

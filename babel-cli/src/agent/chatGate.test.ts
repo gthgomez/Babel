@@ -376,7 +376,11 @@ describe('Completion gate — positive paths', () => {
   });
 
   test('gate allows completion after successful write_file + verifier', () => {
-    pushToolLog(engine, { tool: 'write_file', target: '/tmp/test-project/src/math.js' });
+    pushToolLog(engine, {
+      tool: 'write_file',
+      target: '/tmp/test-project/src/math.js',
+      effect_status: 'confirmed_change',
+    });
     // 'required' policy needs a verifier attempt — green in log suffices
     pushToolLog(engine, { tool: 'test_run', target: 'npm test', exit_code: 0 });
     const turn: ChatTurn = { type: 'completion', answer: 'Fixed the test.' };
@@ -384,14 +388,22 @@ describe('Completion gate — positive paths', () => {
   });
 
   test('gate accepts legacy file_write string (backward-compat) with verifier', () => {
-    pushToolLog(engine, { tool: 'file_write', target: '/tmp/test-project/src/math.js' });
+    pushToolLog(engine, {
+      tool: 'file_write',
+      target: '/tmp/test-project/src/math.js',
+      effect_status: 'confirmed_change',
+    });
     pushToolLog(engine, { tool: 'test_run', target: 'npm test', exit_code: 0 });
     const turn: ChatTurn = { type: 'completion', answer: 'Fixed.' };
     assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'allow');
   });
 
   test('gate allows completion after apply_patch + verifier', () => {
-    pushToolLog(engine, { tool: 'apply_patch', target: '/tmp/test-project/src/math.js' });
+    pushToolLog(engine, {
+      tool: 'apply_patch',
+      target: '/tmp/test-project/src/math.js',
+      effect_status: 'confirmed_change',
+    });
     pushToolLog(engine, { tool: 'test_run', target: 'npm test', exit_code: 0 });
     const turn: ChatTurn = { type: 'completion', answer: 'Patched.' };
     assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'allow');
@@ -399,14 +411,22 @@ describe('Completion gate — positive paths', () => {
 
   test('gate rejects write without any verifier attempt (required policy)', () => {
     // The new 'required' policy demands at least a verifier attempt before completion.
-    pushToolLog(engine, { tool: 'write_file', target: '/tmp/test-project/src/math.js' });
+    pushToolLog(engine, {
+      tool: 'write_file',
+      target: '/tmp/test-project/src/math.js',
+      effect_status: 'confirmed_change',
+    });
     const turn: ChatTurn = { type: 'completion', answer: 'Fixed without verification.' };
     assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'reject');
   });
 
   // str_replace is the preferred edit primitive and must satisfy the gate
   test('gate allows completion after successful str_replace + verifier', () => {
-    pushToolLog(engine, { tool: 'str_replace', target: '/tmp/test-project/src/math.js' });
+    pushToolLog(engine, {
+      tool: 'str_replace',
+      target: '/tmp/test-project/src/math.js',
+      effect_status: 'confirmed_change',
+    });
     pushToolLog(engine, { tool: 'test_run', target: 'npm test', exit_code: 0 });
     const turn: ChatTurn = { type: 'completion', answer: 'Replaced the broken line.' };
     assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'allow');
@@ -434,7 +454,11 @@ describe('Completion gate — positive paths', () => {
   });
 
   test('hasAnyWrites true after str_replace', () => {
-    pushToolLog(engine, { tool: 'str_replace', target: '/tmp/test-project/src/math.js' });
+    pushToolLog(engine, {
+      tool: 'str_replace',
+      target: '/tmp/test-project/src/math.js',
+      effect_status: 'confirmed_change',
+    });
     assert.equal((engine as any).hasAnyWrites(), true);
   });
 
@@ -468,7 +492,11 @@ describe('Completion gate — positive paths', () => {
       task: 'fix the bug and run npm test after making changes',
       projectRoot: '/tmp/test-project',
     });
-    pushToolLog(verifyEngine, { tool: 'write_file', target: '/tmp/test-project/src/math.js' });
+    pushToolLog(verifyEngine, {
+      tool: 'write_file',
+      target: '/tmp/test-project/src/math.js',
+      effect_status: 'confirmed_change',
+    });
     // Has write but no green verifier — task explicitly asks for tests
     const turn: ChatTurn = { type: 'completion', answer: 'Fixed it.' };
     assert.equal((verifyEngine as any).evaluateCompletionGate(turn, 'execute'), 'reject');
@@ -479,7 +507,11 @@ describe('Completion gate — positive paths', () => {
       task: 'fix the bug and run npm test after making changes',
       projectRoot: '/tmp/test-project',
     });
-    pushToolLog(verifyEngine, { tool: 'write_file', target: '/tmp/test-project/src/math.js' });
+    pushToolLog(verifyEngine, {
+      tool: 'write_file',
+      target: '/tmp/test-project/src/math.js',
+      effect_status: 'confirmed_change',
+    });
     pushToolLog(verifyEngine, { tool: 'test_run', target: 'npm test', exit_code: 0 });
     setTestVerifierReceipt(verifyEngine, 'npm test');
     const turn: ChatTurn = { type: 'completion', answer: 'Fixed and verified.' };
@@ -492,7 +524,11 @@ describe('Completion gate — positive paths', () => {
       task: 'fix the bug and run npm test after making changes',
       projectRoot: '/tmp/test-project',
     });
-    pushToolLog(verifyEngine, { tool: 'str_replace', target: '/tmp/test-project/src/math.js' });
+    pushToolLog(verifyEngine, {
+      tool: 'str_replace',
+      target: '/tmp/test-project/src/math.js',
+      effect_status: 'confirmed_change',
+    });
     pushToolLog(verifyEngine, { tool: 'run_command', target: 'npm test', exit_code: 0 });
     setTestVerifierReceipt(verifyEngine, 'npm test');
     const turn: ChatTurn = { type: 'completion', answer: 'Fixed and verified via run_command.' };
@@ -507,7 +543,11 @@ describe('Completion gate — positive paths', () => {
         task: 'fix the multi-file regression',
         projectRoot: '/tmp/test-project',
       });
-      pushToolLog(eng, { tool: 'str_replace', target: '/tmp/test-project/src/a.ts' });
+      pushToolLog(eng, {
+        tool: 'str_replace',
+        target: '/tmp/test-project/src/a.ts',
+        effect_status: 'confirmed_change',
+      });
       const turn: ChatTurn = { type: 'completion', answer: 'Done.' };
       assert.equal((eng as any).evaluateCompletionGate(turn, 'execute'), 'reject');
       setTestVerifierReceipt(eng, 'pytest -q');
@@ -526,7 +566,11 @@ describe('Completion gate — positive paths', () => {
         task: 'fix the multi-file regression',
         projectRoot: '/tmp/test-project',
       });
-      pushToolLog(eng, { tool: 'write_file', target: '/tmp/x.py' });
+      pushToolLog(eng, {
+        tool: 'write_file',
+        target: '/tmp/x.py',
+        effect_status: 'confirmed_change',
+      });
       setTestVerifierReceipt(eng, 'pytest', 1);
       const turn: ChatTurn = { type: 'completion', answer: 'Ship it.' };
       assert.equal((eng as any).evaluateCompletionGate(turn, 'execute'), 'reject');
@@ -564,7 +608,11 @@ describe('Gate helpers', () => {
       task: 'fix the bug',
       projectRoot: '/tmp/test-project',
     });
-    pushToolLog(engine, { tool: 'write_file', target: 'src/test.ts' });
+    pushToolLog(engine, {
+      tool: 'write_file',
+      target: 'src/test.ts',
+      effect_status: 'confirmed_change',
+    });
     assert.equal((engine as any).hasAnyWrites(), true);
   });
 
@@ -608,7 +656,11 @@ describe('Gate helpers', () => {
       task: 'fix the bug',
       projectRoot: '/tmp/test-project',
     });
-    pushToolLog(engine, { tool: 'write_file', target: 'src/a.ts' });
+    pushToolLog(engine, {
+      tool: 'write_file',
+      target: 'src/a.ts',
+      effect_status: 'confirmed_change',
+    });
     const msg = (engine as any).buildRejectionMessage();
     assert.ok(msg.includes('1 file writes'));
     assert.ok(msg.includes('Run the verifier'));
@@ -633,7 +685,11 @@ describe('Gate helpers', () => {
     // Set _turnToolCallLogStart to after the read, so only the write is in "this turn"
     (engine as any)._turnToolCallLogStart = 1;
     pushToolLog(engine, { tool: 'read_file', target: 'src/a.ts' });
-    pushToolLog(engine, { tool: 'write_file', target: 'src/a.ts' });
+    pushToolLog(engine, {
+      tool: 'write_file',
+      target: 'src/a.ts',
+      effect_status: 'confirmed_change',
+    });
     assert.equal((engine as any).currentTurnHasMutation(), true);
   });
 });
@@ -868,7 +924,11 @@ describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
       taskIntent: 'execute',
       task: 'fix the critical bug in production',
       taskClass: 'general_swe',
-      toolCallLog: [{ tool: 'write_file', target: 'src/app.ts' }],
+      toolCallLog: [{
+        tool: 'write_file',
+        target: 'src/app.ts',
+        effect_status: 'confirmed_change',
+      }],
       lastVerifierReceipt: baseReceipt({ stale: true }),
       requiredVerifierCommands: ['npm test'],
       currentWorkspaceRevisionHash: 'rev-abc-123',
@@ -882,7 +942,11 @@ describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
       taskIntent: 'execute',
       task: 'fix the critical bug in production',
       taskClass: 'governance',
-      toolCallLog: [{ tool: 'write_file', target: 'src/app.ts' }],
+      toolCallLog: [{
+        tool: 'write_file',
+        target: 'src/app.ts',
+        effect_status: 'confirmed_change',
+      }],
       lastVerifierReceipt: baseReceipt(),
       requiredVerifierCommands: ['npm test'],
       currentWorkspaceRevisionHash: null, // Missing live revision
@@ -896,7 +960,11 @@ describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
       taskIntent: 'execute',
       task: 'fix the critical bug in production',
       taskClass: 'governance',
-      toolCallLog: [{ tool: 'write_file', target: 'src/app.ts' }],
+      toolCallLog: [{
+        tool: 'write_file',
+        target: 'src/app.ts',
+        effect_status: 'confirmed_change',
+      }],
       lastVerifierReceipt: baseReceipt({
         boundRevision: {
           gitCommitHash: null,
@@ -917,7 +985,11 @@ describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
       taskIntent: 'execute',
       task: 'fix the critical bug in production',
       taskClass: 'governance',
-      toolCallLog: [{ tool: 'write_file', target: 'src/app.ts' }],
+      toolCallLog: [{
+        tool: 'write_file',
+        target: 'src/app.ts',
+        effect_status: 'confirmed_change',
+      }],
       lastVerifierReceipt: baseReceipt({
         boundRevision: {
           gitCommitHash: null,
@@ -938,7 +1010,11 @@ describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
       taskIntent: 'execute',
       task: 'fix the critical bug in production',
       taskClass: 'governance',
-      toolCallLog: [{ tool: 'write_file', target: 'src/new-feature.ts' }],
+      toolCallLog: [{
+        tool: 'write_file',
+        target: 'src/new-feature.ts',
+        effect_status: 'confirmed_change',
+      }],
       executedVerifierLedger: [], // Current turn executed verifier ledger is empty
       lastVerifierReceipt: baseReceipt(), // From previous turn
       requiredVerifierCommands: ['npm test'],

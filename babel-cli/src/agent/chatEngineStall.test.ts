@@ -30,7 +30,7 @@ describe('updateStallState', () => {
     s = updateStallState(s, [{ tool: 'grep', target: 'pattern' }], 1);
     assert.equal(s.turnsSinceLastWrite, 2);
     // Now a write
-    s = updateStallState(s, [{ tool: 'write_file', target: 'src/a.ts' }], 2);
+    s = updateStallState(s, [{ tool: 'write_file', target: 'src/a.ts', effect_status: 'confirmed_change' }], 2);
     assert.equal(s.turnsSinceLastWrite, 0);
     assert.equal(s.lastWriteTurn, 2);
   });
@@ -41,7 +41,7 @@ describe('updateStallState', () => {
     s = updateStallState(s, [{ tool: 'read_file', target: 'src/a.ts' }], 0);
     s = updateStallState(s, [{ tool: 'read_file', target: 'src/b.ts' }], 1);
     assert.equal(s.turnsSinceLastWrite, 2);
-    s = updateStallState(s, [{ tool: 'str_replace', target: 'src/a.ts' }], 2);
+    s = updateStallState(s, [{ tool: 'str_replace', target: 'src/a.ts', effect_status: 'confirmed_change' }], 2);
     assert.equal(s.turnsSinceLastWrite, 0);
     assert.equal(s.lastWriteTurn, 2);
     assert.equal(s.totalWrites, 1);
@@ -114,7 +114,7 @@ describe('updateStallState', () => {
 
   test('stamps lastVerifierTurn on shell only after a successful write', () => {
     let s = createStallDetector();
-    s = updateStallState(s, [{ tool: 'str_replace', target: 'src/a.ts' }], 0);
+    s = updateStallState(s, [{ tool: 'str_replace', target: 'src/a.ts', effect_status: 'confirmed_change' }], 0);
     assert.equal(s.totalWrites, 1);
     s = updateStallState(s, [{ tool: 'run_command', target: 'pytest' }], 1);
     assert.equal(s.lastVerifierTurn, 1);
@@ -127,7 +127,7 @@ describe('updateStallState', () => {
     s = updateStallState(
       s,
       [
-        { tool: 'str_replace', target: 'src/a.ts' },
+        { tool: 'str_replace', target: 'src/a.ts', effect_status: 'confirmed_change' },
         { tool: 'run_command', target: 'pytest path' },
       ],
       0,

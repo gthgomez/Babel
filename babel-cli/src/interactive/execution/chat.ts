@@ -20,7 +20,7 @@ import {
   getChatTaskTune,
 } from '../../config/chatTaskClass.js';
 import type { TerminalOutcome } from '../../schemas/agentContracts.js';
-import { confirmedMutationPaths, isConfirmedDirectMutation } from '../../agent/mutationTools.js';
+import { confirmedMutationPaths, isConfirmedMutation } from '../../agent/mutationTools.js';
 import { hydrateResumedThreadToScreen } from '../../services/threadStore/index.js';
 import {
   applyEngineTurnPreparation,
@@ -387,7 +387,12 @@ export async function executeChatTask(
     // Preserve truthful terminal outcomes from TerminalOutcome
     const lo = result.outcome;
     const hasAnyWrites = (result.toolCalls ?? []).some((t) =>
-      isConfirmedDirectMutation(t.tool, t.error, t.effect_status),
+      isConfirmedMutation({
+        tool: t.tool,
+        error: t.error,
+        effectStatus: t.effect_status,
+        mutationPaths: t.mutation_paths,
+      }),
     );
     // W0.4: env-red from answer or tool observations (pytest/npm missing, etc.).
     // After writes, import-class failures are not scored as host ENV_BLOCKED.

@@ -17,9 +17,9 @@ void describe('computeToolCallAggregates', () => {
   });
 
   void it('counts write tools without error as writes', () => {
-    const log: Array<{ tool: string; error?: string }> = [
+    const log: Array<{ tool: string; error?: string; effect_status?: 'confirmed_change' }> = [
       { tool: 'read_file' },
-      { tool: 'write_file' },
+      { tool: 'write_file', effect_status: 'confirmed_change' },
       { tool: 'grep' },
     ];
     const result = computeToolCallAggregates(log);
@@ -29,7 +29,7 @@ void describe('computeToolCallAggregates', () => {
   });
 
   void it('does not count errored writes', () => {
-    const log: Array<{ tool: string; error?: string }> = [
+    const log: Array<{ tool: string; error?: string; effect_status?: 'confirmed_change' }> = [
       { tool: 'write_file', error: 'blocked' },
       { tool: 'str_replace', error: 'old_str not found' },
       { tool: 'apply_patch', error: 'patch_failed' },
@@ -54,9 +54,9 @@ void describe('computeToolCallAggregates', () => {
   });
 
   void it('counts str_replace as a write tool', () => {
-    const log: Array<{ tool: string; error?: string }> = [
-      { tool: 'str_replace' },
-      { tool: 'file_delete' },
+    const log: Array<{ tool: string; error?: string; effect_status?: 'confirmed_change' }> = [
+      { tool: 'str_replace', effect_status: 'confirmed_change' },
+      { tool: 'file_delete', effect_status: 'confirmed_change' },
     ];
     const result = computeToolCallAggregates(log);
     assert.equal(result.write_count, 2);
@@ -71,10 +71,25 @@ void describe('computeToolCallAggregates', () => {
     assert.equal(result.write_count, 1);
   });
 
+  void it('counts confirmed shell mutations only when paths are retained', () => {
+    assert.equal(computeToolCallAggregates([
+      {
+        tool: 'run_command',
+        effect_status: 'confirmed_change',
+        mutation_paths: ['a.ts', 'b.ts'],
+      },
+      {
+        tool: 'run_command',
+        effect_status: 'confirmed_change',
+        mutation_paths: [],
+      },
+    ]).write_count, 1);
+  });
+
   void it('computes all counts together in mixed log', () => {
-    const log: Array<{ tool: string; error?: string }> = [
+    const log: Array<{ tool: string; error?: string; effect_status?: 'confirmed_change' }> = [
       { tool: 'read_file' },
-      { tool: 'write_file' },
+      { tool: 'write_file', effect_status: 'confirmed_change' },
       { tool: 'run_command' },
       { tool: 'grep' },
       { tool: 'test_run' },

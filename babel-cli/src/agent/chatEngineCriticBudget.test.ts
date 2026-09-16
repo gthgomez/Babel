@@ -16,6 +16,7 @@ import {
   executeCriticWithTimeout,
   hasAnyWrites,
   hasSubAgentWrites,
+  mutationTargetsFromLog,
   POST_WRITE_REPAIR_WALL_MAX_MS,
   POST_WRITE_REPAIR_WALL_MIN_MS,
   resolveOrCreateCriticProRunner,
@@ -203,15 +204,45 @@ describe('runAsymmetricDiffCritic early paths (C1)', () => {
   test('confirmed mutation paths count as writes', () => {
     assert.equal(
       hasAnyWrites([
-        { tool: 'run_command', target: 'generator', mutation_paths: ['src/generated.ts'] },
+        {
+          tool: 'run_command',
+          target: 'generator',
+          mutation_paths: ['src/generated.ts'],
+          effect_status: 'confirmed_change',
+        },
       ]),
       true,
     );
     assert.equal(
       hasAnyWrites([
-        { tool: 'run_command', target: 'generator', mutation_paths: [] },
+        {
+          tool: 'run_command',
+          target: 'generator',
+          mutation_paths: [],
+          effect_status: 'confirmed_change',
+        },
       ]),
       false,
+    );
+    assert.equal(
+      hasAnyWrites([
+        { tool: 'run_command', target: 'generator', mutation_paths: ['src/generated.ts'] },
+      ]),
+      false,
+    );
+  });
+
+  test('mutation target projection retains every confirmed executor path', () => {
+    assert.deepEqual(
+      mutationTargetsFromLog([
+        {
+          tool: 'run_command',
+          target: 'generator',
+          mutation_paths: ['src/a.ts', 'src/b.ts'],
+          effect_status: 'confirmed_change',
+        },
+      ]),
+      ['src/a.ts', 'src/b.ts'],
     );
   });
 

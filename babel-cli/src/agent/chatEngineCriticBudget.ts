@@ -25,7 +25,7 @@ import {
   type DiffCriticVerdict,
 } from './diffCritic.js';
 import { formatBudgetExceededAnswer } from './budgetKillPolicy.js';
-import { isConfirmedDirectMutation, type MutationEffectStatus } from './mutationTools.js';
+import { isConfirmedMutation, type MutationEffectStatus } from './mutationTools.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { isOfflineChatMode } from './chatModelPolicy.js';
 import {
@@ -62,22 +62,23 @@ export function hasSubAgentWrites(toolCallLog: CriticToolLogEntry[]): boolean {
 /** Successful direct file writes or sub-agent mutations. */
 export function hasAnyWrites(toolCallLog: CriticToolLogEntry[]): boolean {
   return (
-    toolCallLog.some((e) => isConfirmedDirectMutation(e.tool, e.error, e.effect_status)) ||
-    toolCallLog.some(
-      (e) =>
-        e.error == null &&
-        (e.effect_status === undefined || e.effect_status === 'confirmed_change') &&
-        Array.isArray(e.mutation_paths) &&
-        e.mutation_paths.some((path) => typeof path === 'string' && path.trim().length > 0),
-    ) ||
+    toolCallLog.some((e) => isConfirmedMutation({
+      tool: e.tool,
+      error: e.error,
+      effectStatus: e.effect_status,
+      mutationPaths: e.mutation_paths,
+    })) ||
     hasSubAgentWrites(toolCallLog)
   );
 }
 
 export function buildGateRejectionMessage(toolCallLog: CriticToolLogEntry[]): string {
-  const writeCount = toolCallLog.filter((e) =>
-    isConfirmedDirectMutation(e.tool, e.error, e.effect_status),
-  ).length;
+  const writeCount = toolCallLog.filter((e) => isConfirmedMutation({
+    tool: e.tool,
+    error: e.error,
+    effectStatus: e.effect_status,
+    mutationPaths: e.mutation_paths,
+  })).length;
   const subAgentCount = toolCallLog.filter(
     (e) => e.tool === 'sub_agent' && /[1-9]\d*\s+changed/.test(e.detail ?? ''),
   ).length;
@@ -102,7 +103,12 @@ export function currentTurnHasMutation(
 ): boolean {
   return toolCallLog.slice(turnStart).some(
     (e) =>
-      isConfirmedDirectMutation(e.tool, e.error, e.effect_status) ||
+      isConfirmedMutation({
+        tool: e.tool,
+        error: e.error,
+        effectStatus: e.effect_status,
+        mutationPaths: e.mutation_paths,
+      }) ||
       (e.tool === 'sub_agent' &&
         e.error !== 'blocked' &&
         /[1-9]\d*\s+changed/.test(e.detail ?? '')),
@@ -303,10 +309,18 @@ export function buildCriticBlockedAnswer(report: BlockedReport): string {
 }
 
 export function mutationTargetsFromLog(toolCallLog: CriticToolLogEntry[]): string[] {
-  return toolCallLog
-    .filter((e) => isConfirmedDirectMutation(e.tool, e.error, e.effect_status) && e.target)
-    .map((e) => e.target!)
-    .filter((t, i, arr) => arr.indexOf(t) === i);
+  const targets: string[] = [];
+  for (const entry of toolCallLog) {
+    if (!isConfirmedMutation({
+      tool: entry.tool,
+      error: entry.error,
+      effectStatus: entry.effect_status,
+      mutationPaths: entry.mutation_paths,
+    })) continue;
+    if (entry.mutation_paths) targets.push(...entry.mutation_paths);
+    if (entry.target && !entry.mutation_paths?.length) targets.push(entry.target);
+  }
+  return targets.filter((target, index, all) => target.length > 0 && all.indexOf(target) === index);
 }
 
 export type CriticRunner = DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner;

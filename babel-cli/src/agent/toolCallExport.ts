@@ -7,7 +7,7 @@
  */
 
 import { exportToolCallLog } from './chatZeroWritePolicy.js';
-import { isConfirmedDirectMutation, type MutationEffectStatus } from './mutationTools.js';
+import { isConfirmedMutation, type MutationEffectStatus } from './mutationTools.js';
 
 export { exportToolCallLog };
 
@@ -33,14 +33,6 @@ export interface ToolCallAggregates {
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────
-
-/** All mutation tools that count as "writes". */
-const MUTATION_TOOLS = new Set([
-  'write_file',
-  'str_replace',
-  'apply_patch',
-  'file_delete',
-]);
 
 /** All verifier-participation tools. */
 const VERIFIER_TOOLS = new Set([
@@ -94,10 +86,12 @@ export function computeToolCallAggregates(
     mutation_paths?: string[];
   }>,
 ): ToolCallAggregates {
-  const writeCount = rawLog.filter((e) =>
-    MUTATION_TOOLS.has(e.tool) &&
-    isConfirmedDirectMutation(e.tool, e.error, e.effect_status),
-  ).length;
+  const writeCount = rawLog.filter((e) => isConfirmedMutation({
+    tool: e.tool,
+    error: e.error,
+    effectStatus: e.effect_status,
+    mutationPaths: e.mutation_paths,
+  })).length;
   const verifierCount = rawLog.filter((e) => VERIFIER_TOOLS.has(e.tool)).length;
   return {
     tool_call_count: rawLog.length,

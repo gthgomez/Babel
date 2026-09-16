@@ -12,8 +12,7 @@
 // escalation kicks in (force_status → BLOCKED).
 
 import {
-  isConfirmedDirectMutation,
-  isDirectMutationTool,
+  isConfirmedMutation,
   isVerifierAttemptTool,
   type MutationEffectStatus,
 } from './mutationTools.js';
@@ -78,6 +77,7 @@ export function updateStallState(
     target: string;
     error?: string;
     effect_status?: MutationEffectStatus;
+    mutation_paths?: string[];
   }>,
   turnIndex: number,
 ): StallState {
@@ -97,13 +97,23 @@ export function updateStallState(
   // Bug A fix: only successful mutations count as writes.
   // Blocked/failed str_replace must NOT reset turnsSinceLastWrite.
   const hasWriteThisTurn = turnToolCalls.some((tc) =>
-    isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status),
+    isConfirmedMutation({
+      tool: tc.tool,
+      error: tc.error,
+      effectStatus: tc.effect_status,
+      mutationPaths: tc.mutation_paths,
+    }),
   );
   const sessionHasWrites = state.totalWrites > 0 || hasWriteThisTurn;
 
   for (const tc of turnToolCalls) {
     // Track writes (includes str_replace) — successful only
-    if (isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status)) {
+    if (isConfirmedMutation({
+      tool: tc.tool,
+      error: tc.error,
+      effectStatus: tc.effect_status,
+      mutationPaths: tc.mutation_paths,
+    })) {
       next.turnsSinceLastWrite = 0;
       next.lastWriteTurn = turnIndex;
       next.totalWrites = state.totalWrites + 1;
