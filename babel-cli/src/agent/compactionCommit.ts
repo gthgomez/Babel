@@ -796,6 +796,8 @@ export interface ChatEngineCompactInfo {
   mode: 'llm' | 'heuristic';
   beforeMessages: number;
   afterMessages: number;
+  /** True when retained conversation content was replaced, even at equal count. */
+  changed: boolean;
   message: string;
   commit?: CompactionCommitResult;
 }
@@ -818,6 +820,7 @@ export async function runChatEngineCompaction(
 ): Promise<ChatEngineCompactInfo | null> {
   const before = host.conversation.length;
   let mode: 'llm' | 'heuristic' | null = null;
+  let changed = false;
   let commit: CompactionCommitResult | undefined;
   const tokenEstimate = host.estimateTokens(host.conversation);
   const modelId =
@@ -834,10 +837,12 @@ export async function runChatEngineCompaction(
     tokenEstimate > host.limits.maxEstimatedTokens - reserve;
   const applyHeuristic = async (): Promise<void> => {
     const prior = [...host.conversation]
+    const priorFingerprint = JSON.stringify(host.conversation);
     host.compactHeuristic();
     try {
       await host.checkpoint()
-      mode = 'heuristic';
+      changed = JSON.stringify(host.conversation) !== priorFingerprint;
+      if (changed) mode = 'heuristic';
     } catch (error) {
       host.conversation = prior
       throw new CompactionPersistenceError(
@@ -925,6 +930,7 @@ export async function runChatEngineCompaction(
           }
           host.conversation = commit.conversation;
           mode = strategyToCompactMode(commit.strategy);
+          changed = true;
         }
       } catch (error) {
         if (error instanceof CompactionPersistenceError) throw error
@@ -936,11 +942,12 @@ export async function runChatEngineCompaction(
   }
 
   const after = host.conversation.length;
-  if (mode == null || after >= before) return null;
+  if (mode == null || !changed) return null;
   return {
     mode,
     beforeMessages: before,
     afterMessages: after,
+    changed,
     message: `[Context compacted…] ${before}→${after} messages (${mode})`,
     ...(commit ? { commit } : {}),
   };
