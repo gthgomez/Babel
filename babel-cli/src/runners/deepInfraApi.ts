@@ -35,7 +35,8 @@ import {
   type ToolStreamEvent,
   buildStructuredOutputError,
 } from './base.js';
-import { accountProviderRequest, hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
+import { hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
+import { prepareProviderRequest } from './preparedProviderRequest.js';
 import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js';
 import { extractJson } from '../utils/extractJson.js';
 import { createVcrRecorder, createVcrPlayer, type VcrRecorder } from '../services/streamingVcr.js';
@@ -768,22 +769,37 @@ export class DeepInfraApiRunner implements LlmRunner {
       });
     };
     const inferenceId = randomUUID();
-    const requestBody = buildBody();
-    const requestAccounting = accountProviderRequest(requestBody, {
+    const preparedRequest = prepareProviderRequest({
+      body: buildBody(),
+      mode: 'text',
+      provider: this.providerId,
+      requestedModelId: this.model,
+      requestId: inferenceId,
+      attemptId: inferenceId,
       reservedCompletionTokens: this.executionEnvelope?.output.effective ?? this.maxTokens,
     });
+    const requestBody = preparedRequest.body;
+    const requestAccounting = preparedRequest.accounting;
     this.lastWirePolicyHash = this.executionEnvelope
       ? hashWirePolicy(JSON.parse(requestBody) as WireRequest)
       : null;
     const inputDigest = requestAccounting.request_digest;
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
+      request_id: preparedRequest.request_id,
+      attempt_id: preparedRequest.attempt_id,
       provider: this.providerId,
       requested_model_id: this.model,
       normalized_model_id: this.model,
       sent_model_id: this.model,
       input_digest: inputDigest,
-      input_message_count: 2,
+      input_bytes: preparedRequest.body_bytes,
+      accounting_kind: preparedRequest.accounting_kind,
+      context_limit_tokens: preparedRequest.context_limit_tokens,
+      context_limit_source: preparedRequest.context_limit_source,
+      ...(requestAccounting.input_message_count === null
+        ? {}
+        : { input_message_count: requestAccounting.input_message_count }),
       requested_output_budget: this.executionEnvelope?.output.requested ?? this.maxTokens,
       effective_output_budget: this.executionEnvelope?.output.effective ?? this.maxTokens,
       ...(this.executionEnvelope
@@ -1587,21 +1603,34 @@ export class DeepInfraApiRunner implements LlmRunner {
       });
     };
     const inferenceId = randomUUID();
-    const requestBody = buildBody();
-    const requestAccounting = accountProviderRequest(requestBody, {
+    const preparedRequest = prepareProviderRequest({
+      body: buildBody(),
+      mode: 'native',
+      provider: this.providerId,
+      requestedModelId: this.model,
+      requestId: inferenceId,
+      attemptId: inferenceId,
       reservedCompletionTokens: this.executionEnvelope?.output.effective ?? this.maxTokens,
     });
+    const requestBody = preparedRequest.body;
+    const requestAccounting = preparedRequest.accounting;
     this.lastWirePolicyHash = this.executionEnvelope
       ? hashWirePolicy(JSON.parse(requestBody) as WireRequest)
       : null;
     const inputDigest = requestAccounting.request_digest;
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
+      request_id: preparedRequest.request_id,
+      attempt_id: preparedRequest.attempt_id,
       provider: this.providerId,
       requested_model_id: this.model,
       normalized_model_id: this.model,
       sent_model_id: this.model,
       input_digest: inputDigest,
+      input_bytes: preparedRequest.body_bytes,
+      accounting_kind: preparedRequest.accounting_kind,
+      context_limit_tokens: preparedRequest.context_limit_tokens,
+      context_limit_source: preparedRequest.context_limit_source,
       ...(requestAccounting.input_message_count === null
         ? {}
         : { input_message_count: requestAccounting.input_message_count }),

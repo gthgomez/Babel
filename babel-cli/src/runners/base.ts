@@ -178,11 +178,19 @@ export interface ProviderRetrySettlement extends Pick<ProviderRetryEvent, 'provi
 /** Content-free lifecycle receipt for one provider inference. */
 export interface ProviderInvocationStarted {
   inference_id: string;
+  /** Stable identity for the immutable prepared body. */
+  request_id?: string;
+  /** Identity for this provider attempt; retries keep the request identity. */
+  attempt_id?: string;
   provider: ProviderId;
   requested_model_id: string;
   normalized_model_id: string;
   sent_model_id: string;
   input_digest: string;
+  input_bytes?: number;
+  accounting_kind?: 'exact_serialized_body';
+  context_limit_tokens?: number | null;
+  context_limit_source?: string;
   input_message_count?: number;
   /** Capability state attached to this exact provider input. */
   capability_bindings?: ProviderCapabilityBinding[];
