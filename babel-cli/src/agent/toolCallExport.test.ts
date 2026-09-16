@@ -62,6 +62,15 @@ void describe('computeToolCallAggregates', () => {
     assert.equal(result.write_count, 2);
   });
 
+  void it('does not count an explicitly unconfirmed mutation effect', () => {
+    const result = computeToolCallAggregates([
+      { tool: 'str_replace', effect_status: 'confirmed_no_change' },
+      { tool: 'write_file', effect_status: 'indeterminate' },
+      { tool: 'apply_patch', effect_status: 'confirmed_change' },
+    ]);
+    assert.equal(result.write_count, 1);
+  });
+
   void it('computes all counts together in mixed log', () => {
     const log: Array<{ tool: string; error?: string }> = [
       { tool: 'read_file' },

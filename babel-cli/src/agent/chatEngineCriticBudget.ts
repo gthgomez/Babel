@@ -25,7 +25,7 @@ import {
   type DiffCriticVerdict,
 } from './diffCritic.js';
 import { formatBudgetExceededAnswer } from './budgetKillPolicy.js';
-import { isSuccessfulDirectMutation } from './mutationTools.js';
+import { isConfirmedDirectMutation, type MutationEffectStatus } from './mutationTools.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { isOfflineChatMode } from './chatModelPolicy.js';
 import {
@@ -42,6 +42,7 @@ export type CriticToolLogEntry = {
   detail?: string;
   error?: string;
   mutation_paths?: string[];
+  effect_status?: MutationEffectStatus;
 };
 
 export type CriticGateDecision = 'allow' | 'reject' | 'block';
@@ -61,10 +62,11 @@ export function hasSubAgentWrites(toolCallLog: CriticToolLogEntry[]): boolean {
 /** Successful direct file writes or sub-agent mutations. */
 export function hasAnyWrites(toolCallLog: CriticToolLogEntry[]): boolean {
   return (
-    toolCallLog.some((e) => isSuccessfulDirectMutation(e.tool, e.error)) ||
+    toolCallLog.some((e) => isConfirmedDirectMutation(e.tool, e.error, e.effect_status)) ||
     toolCallLog.some(
       (e) =>
         e.error == null &&
+        (e.effect_status === undefined || e.effect_status === 'confirmed_change') &&
         Array.isArray(e.mutation_paths) &&
         e.mutation_paths.some((path) => typeof path === 'string' && path.trim().length > 0),
     ) ||
@@ -74,7 +76,7 @@ export function hasAnyWrites(toolCallLog: CriticToolLogEntry[]): boolean {
 
 export function buildGateRejectionMessage(toolCallLog: CriticToolLogEntry[]): string {
   const writeCount = toolCallLog.filter((e) =>
-    isSuccessfulDirectMutation(e.tool, e.error),
+    isConfirmedDirectMutation(e.tool, e.error, e.effect_status),
   ).length;
   const subAgentCount = toolCallLog.filter(
     (e) => e.tool === 'sub_agent' && /[1-9]\d*\s+changed/.test(e.detail ?? ''),
@@ -100,7 +102,7 @@ export function currentTurnHasMutation(
 ): boolean {
   return toolCallLog.slice(turnStart).some(
     (e) =>
-      isSuccessfulDirectMutation(e.tool, e.error) ||
+      isConfirmedDirectMutation(e.tool, e.error, e.effect_status) ||
       (e.tool === 'sub_agent' &&
         e.error !== 'blocked' &&
         /[1-9]\d*\s+changed/.test(e.detail ?? '')),
@@ -302,7 +304,7 @@ export function buildCriticBlockedAnswer(report: BlockedReport): string {
 
 export function mutationTargetsFromLog(toolCallLog: CriticToolLogEntry[]): string[] {
   return toolCallLog
-    .filter((e) => isSuccessfulDirectMutation(e.tool, e.error) && e.target)
+    .filter((e) => isConfirmedDirectMutation(e.tool, e.error, e.effect_status) && e.target)
     .map((e) => e.target!)
     .filter((t, i, arr) => arr.indexOf(t) === i);
 }

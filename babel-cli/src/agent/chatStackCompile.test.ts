@@ -152,6 +152,27 @@ describe("compileChatStack budget behavior", () => {
     assert.ok(stack.content_disposition.some((item) => item.status === "omitted" || item.status === "truncated"));
   });
 
+  it("packs decisive project context before generic identity at a tight budget", () => {
+    const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-priority-"));
+    try {
+      writeFileSync(join(root, "AGENTS.md"), "generic identity\n" + "x".repeat(8_000), "utf8");
+      writeFileSync(join(root, "PROJECT_CONTEXT.md"), "PROJECT_REQUIREMENT: preserve the public API\n", "utf8");
+      const stack = compileChatStack({
+        projectRoot: root,
+        promptBudgetChars: 2_000,
+        includeDomainSkill: false,
+      });
+
+      assert.match(stack.system_context, /PROJECT_REQUIREMENT: preserve the public API/);
+      assert.equal(
+        stack.content_disposition.find((item) => item.id === "project:context")?.status,
+        "included",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns an explicit context error when mandatory content cannot fit", () => {
     const stack = compileChatStack({
       projectRoot: "/tmp/test",

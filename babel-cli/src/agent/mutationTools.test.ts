@@ -5,6 +5,9 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
   isDirectMutationTool,
+  assessMutationEffect,
+  confirmedMutationPaths,
+  isConfirmedDirectMutation,
   isSuccessfulDirectMutation,
   isVerifierAttemptTool,
   DIRECT_MUTATION_TOOLS,
@@ -50,6 +53,99 @@ describe('isSuccessfulDirectMutation', () => {
   test('zero exit direct mutations count when the executor confirms success', () => {
     assert.equal(isSuccessfulDirectMutation('write_file', undefined, 0), true);
     assert.equal(isSuccessfulDirectMutation('apply_patch', '', 0), true);
+  });
+});
+
+describe('assessMutationEffect', () => {
+  test('confirms a changed committed receipt', () => {
+    assert.equal(assessMutationEffect({
+      tool: 'write_file',
+      exitCode: 0,
+      mutationPaths: ['a.txt'],
+      mutationReceipt: {
+        status: 'committed',
+        changedBytes: 3,
+        preImageHashes: { 'a.txt': 'before' },
+        postImageHashes: { 'a.txt': 'after' },
+      },
+    }).status, 'confirmed_change');
+  });
+
+  test('confirms a committed no-op instead of counting a write', () => {
+    assert.equal(assessMutationEffect({
+      tool: 'str_replace',
+      exitCode: 0,
+      mutationPaths: ['a.txt'],
+      mutationReceipt: {
+        status: 'committed',
+        changedBytes: 0,
+        preImageHashes: { 'a.txt': 'same' },
+        postImageHashes: { 'a.txt': 'same' },
+      },
+    }).status, 'confirmed_no_change');
+  });
+
+  test('keeps failed or receipt-less mutations indeterminate', () => {
+    assert.equal(assessMutationEffect({
+      tool: 'run_command',
+      exitCode: 1,
+      mutationPaths: ['a.txt'],
+    }).status, 'indeterminate');
+    assert.equal(assessMutationEffect({ tool: 'write_file', exitCode: 0 }).status, 'indeterminate');
+  });
+
+  test('preserves explicit policy denial as not applicable', () => {
+    assert.equal(assessMutationEffect({
+      tool: 'apply_patch',
+      exitCode: 1,
+      error: 'blocked',
+      policyBlocked: true,
+    }).status, 'not_applicable');
+  });
+
+  test('fails closed on conflicting receipt evidence', () => {
+    assert.equal(assessMutationEffect({
+      tool: 'write_file',
+      exitCode: 0,
+      mutationReceipt: {
+        status: 'committed',
+        changedBytes: 4,
+        preImageHashes: { 'a.txt': 'same' },
+        postImageHashes: { 'a.txt': 'same' },
+      },
+    }).status, 'indeterminate');
+    assert.equal(assessMutationEffect({
+      tool: 'write_file',
+      exitCode: 0,
+      mutationReceipt: {
+        status: 'committed',
+        changedBytes: 0,
+        preImageHashes: { 'a.txt': 'before' },
+        postImageHashes: { 'a.txt': 'after' },
+      },
+    }).status, 'indeterminate');
+  });
+});
+
+describe('isConfirmedDirectMutation', () => {
+  test('rejects a successful transport result with an indeterminate effect', () => {
+    assert.equal(isConfirmedDirectMutation('write_file', undefined, 'indeterminate'), false);
+    assert.equal(isConfirmedDirectMutation('write_file', undefined, 'confirmed_no_change'), false);
+    assert.equal(isConfirmedDirectMutation('write_file', undefined, 'confirmed_change'), true);
+  });
+
+  test('preserves all executor-reported paths for a confirmed mutation', () => {
+    assert.deepEqual(confirmedMutationPaths({
+      tool: 'apply_patch',
+      target: 'a.ts',
+      mutationPaths: ['a.ts', 'b.ts'],
+      effectStatus: 'confirmed_change',
+    }), ['a.ts', 'b.ts']);
+    assert.deepEqual(confirmedMutationPaths({
+      tool: 'apply_patch',
+      target: 'a.ts',
+      effectStatus: 'confirmed_no_change',
+    }), []);
   });
 });
 

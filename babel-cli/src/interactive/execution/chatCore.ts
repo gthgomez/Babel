@@ -50,7 +50,7 @@ import {
   probePythonImport,
 } from '../../services/workspaceDepPreflight.js';
 import { resolveChatTaskClass, type ChatTaskClass } from '../../config/chatTaskClass.js';
-import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
+import { confirmedMutationPaths, isConfirmedDirectMutation } from '../../agent/mutationTools.js';
 import { isAuthoritativeVerifierCommand } from '../../agent/completionGatePolicy.js';
 import { computeToolCallAggregates } from '../../agent/toolCallExport.js';
 import {
@@ -337,8 +337,8 @@ export async function consumeChatStream(
 ): Promise<ChatResult> {
   let answer = '';
   let usage: SessionUsageSummary = globalCostTracker.getSessionSummary();
-  let toolCalls: Array<{ tool: string; target: string; detail?: string; error?: string }> | undefined;
-  const accumulatedToolCalls: Array<{ tool: string; target: string; detail?: string; error?: string }> = [];
+  let toolCalls: ChatResult['toolCalls'] | undefined;
+  const accumulatedToolCalls: NonNullable<ChatResult['toolCalls']> = [];
   let runDir: string | undefined;
   let verifierReceipt: { command: string; exit_code: number; summary: string } | null | undefined;
   let blockedReport: BlockedReport | null | undefined;
@@ -377,6 +377,8 @@ export async function consumeChatStream(
           target: event.target,
           ...(event.detail !== undefined ? { detail: event.detail } : {}),
           ...(event.error !== undefined ? { error: event.error } : {}),
+          ...(event.effect_status !== undefined ? { effect_status: event.effect_status } : {}),
+          ...(event.mutation_paths !== undefined ? { mutation_paths: [...event.mutation_paths] } : {}),
         });
       }
 
@@ -769,8 +771,15 @@ export async function runChatEngineOnce(input: {
 
   if (result.runDir) {
     try {
+      const causalEvents = engine.getParityRuntime().sessionEvents.events;
       const causalEvidence = buildChatCausalEvidence(
-        engine.getParityRuntime().sessionEvents.events,
+        causalEvents,
+        {
+          ...(causalEvents[0]?.session_id
+            ? { expectedSessionId: causalEvents[0].session_id }
+            : {}),
+          expectedEventKinds: ['turn_ended'],
+        },
       );
       fs.writeFileSync(
         path.join(result.runDir, 'chat_causal_evidence.json'),
@@ -970,6 +979,7 @@ export function buildChatRunPayload(
       result.toolCalls.map(tc => ({
         tool: tc.tool,
         ...(tc.error !== undefined ? { error: tc.error } : {}),
+        ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
       }))
     );
     payload['tool_call_count'] = aggregates.tool_call_count;
@@ -980,6 +990,7 @@ export function buildChatRunPayload(
       result.toolCalls.map(tc => ({
         tool: tc.tool,
         ...(tc.error !== undefined ? { error: tc.error } : {}),
+        ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
       }))
     );
   } else {
@@ -991,13 +1002,18 @@ export function buildChatRunPayload(
 
   // A4: Patch reality snapshot (derived from toolCalls; harness fills git fields)
   const writeCountFromTools = result.toolCalls
-    ? result.toolCalls.filter(tc => isSuccessfulDirectMutation(tc.tool, tc.error)).length
+    ? result.toolCalls.filter(tc => isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status)).length
     : 0;
   const changedFiles = result.toolCalls && result.toolCalls.length > 0
     ? [...new Set(
         result.toolCalls
-          .filter(tc => isSuccessfulDirectMutation(tc.tool, tc.error))
-          .map(tc => tc.target)
+          .flatMap(tc => confirmedMutationPaths({
+            tool: tc.tool,
+            target: tc.target,
+            error: tc.error,
+            effectStatus: tc.effect_status,
+            mutationPaths: tc.mutation_paths,
+          }))
           .filter((t): t is string => typeof t === 'string' && t.length > 0)
       )]
     : [];
@@ -1017,8 +1033,13 @@ export function buildChatRunPayload(
   if (result.toolCalls && result.toolCalls.length > 0) {
     const changedFiles = [...new Set(
       result.toolCalls
-        .filter(tc => isSuccessfulDirectMutation(tc.tool, tc.error))
-        .map(tc => tc.target)
+        .flatMap(tc => confirmedMutationPaths({
+          tool: tc.tool,
+          target: tc.target,
+          error: tc.error,
+          effectStatus: tc.effect_status,
+          mutationPaths: tc.mutation_paths,
+        }))
         .filter((t): t is string => typeof t === 'string' && t.length > 0)
     )];
     payload['changed_files'] = changedFiles;

@@ -20,7 +20,7 @@ import {
   getChatTaskTune,
 } from '../../config/chatTaskClass.js';
 import type { TerminalOutcome } from '../../schemas/agentContracts.js';
-import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
+import { confirmedMutationPaths, isConfirmedDirectMutation } from '../../agent/mutationTools.js';
 import { hydrateResumedThreadToScreen } from '../../services/threadStore/index.js';
 import {
   applyEngineTurnPreparation,
@@ -61,13 +61,21 @@ function collectChangedFiles(result: {
     detail?: string;
     error?: string;
     exit_code?: number;
+    effect_status?: import('../../agent/mutationTools.js').MutationEffectStatus;
+    mutation_paths?: string[];
   }>;
 }): string[] {
   if (!result.toolCalls || result.toolCalls.length === 0) return [];
   const seen = new Set<string>();
   for (const tc of result.toolCalls) {
-    if (isSuccessfulDirectMutation(tc.tool, tc.error, tc.exit_code) && tc.target) {
-      seen.add(tc.target);
+    for (const changedPath of confirmedMutationPaths({
+      tool: tc.tool,
+      target: tc.target,
+      error: tc.error,
+      effectStatus: tc.effect_status,
+      mutationPaths: tc.mutation_paths,
+    })) {
+      seen.add(changedPath);
     }
   }
   // Also pick up sub-agent writes from detail
@@ -379,7 +387,7 @@ export async function executeChatTask(
     // Preserve truthful terminal outcomes from TerminalOutcome
     const lo = result.outcome;
     const hasAnyWrites = (result.toolCalls ?? []).some((t) =>
-      /str_replace|write_file|apply_patch|file_write/.test(t.tool),
+      isConfirmedDirectMutation(t.tool, t.error, t.effect_status),
     );
     // W0.4: env-red from answer or tool observations (pytest/npm missing, etc.).
     // After writes, import-class failures are not scored as host ENV_BLOCKED.

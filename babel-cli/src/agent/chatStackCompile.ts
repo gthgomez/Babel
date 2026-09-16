@@ -321,7 +321,18 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     'verifier:guidance',
   ]);
   const mandatorySections = sections.filter(({ entry }) => mandatoryIds.has(entry.id));
-  const optionalSections = sections.filter(({ entry }) => !mandatoryIds.has(entry.id));
+  // Project context is the task's decisive contract. Pack it before generic
+  // identity prose so a tight budget cannot silently evict the project rule
+  // while retaining only broad agent identity.
+  const optionalSections = sections
+    .filter(({ entry }) => !mandatoryIds.has(entry.id))
+    .sort((left, right) => {
+      const priority = (id: string): number =>
+        id === 'project:context' ? 0 :
+          id === 'project:memory' ? 1 :
+            id.startsWith('identity:') ? 2 : 3;
+      return priority(left.entry.id) - priority(right.entry.id);
+    });
   const mandatoryText = mandatorySections.map(({ content }) => content).join('\n\n');
   const content_disposition: ChatStackContentDisposition[] = [];
   let system_context = '';

@@ -46,3 +46,11 @@ test('quoteWindowsCommandArg quotes values needed by cmd.exe', () => {
   assert.equal(quoteWindowsCommandArg('plain.txt'), 'plain.txt');
   assert.equal(quoteWindowsCommandArg(''), '""');
 });
+
+test('Windows quoting round-trips trailing backslashes and embedded quotes', () => {
+  const values = ['C:\\work tree\\', 'a"b', 'C:\\work tree\\"quoted"'];
+  for (const value of values) {
+    const command = `node ${quoteWindowsCommandArg(value)}`;
+    assert.deepEqual(parseCommandArgv(command, 'win32'), ['node', value], value);
+  }
+});

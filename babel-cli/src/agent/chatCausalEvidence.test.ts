@@ -144,3 +144,98 @@ test('causal evidence keeps distinct model retry attempts separate', () => {
   assert.equal(view.readiness, 'ready', JSON.stringify(view));
   assert.deepEqual(view.contradictions, []);
 });
+
+test('causal evidence rejects events mixed across session identities', () => {
+  const input = {
+    ...base('model_input_receipt', 0),
+    session_id: 'session-a',
+    kind: 'model_input_receipt',
+    inference_id: 'inference-1',
+    provider: 'deepseek',
+    requested_model_id: 'deepseek-chat',
+    normalized_model_id: 'deepseek-chat',
+    sent_model_id: 'deepseek-chat',
+    input_digest: 'digest-a',
+    input_ref: 'input-a.json',
+  } as SessionEvent;
+  const result = {
+    ...base('model_result_delivery', 1),
+    session_id: 'session-b',
+    kind: 'model_result_delivery',
+    inference_id: 'inference-1',
+    provider: 'deepseek',
+    model: 'deepseek-chat',
+    status: 'delivered',
+  } as SessionEvent;
+  const view = buildChatCausalEvidence([input, result]);
+  assert.equal(view.readiness, 'contradictory');
+  assert.match(view.contradictions.join('\n'), /mixes session identities/);
+});
+
+test('causal evidence requires outcome coverage for a completeness claim', () => {
+  const turnStarted = {
+    ...base('turn_ended', 1),
+    kind: 'turn_started',
+  } as unknown as SessionEvent;
+  const view = buildChatCausalEvidence([turnStarted], {
+    expectedEventKinds: ['turn_ended'],
+  });
+  assert.equal(view.readiness, 'incomplete');
+  assert.equal(view.completeness, 'incomplete');
+  assert.match(view.unknowns.join('\n'), /no terminal or outcome coverage/);
+});
+
+test('causal evidence reports an explicit verified durable prefix binding', () => {
+  const input = {
+    ...base('model_input_receipt', 0),
+    kind: 'model_input_receipt',
+    inference_id: 'inference-1',
+    provider: 'deepseek',
+    requested_model_id: 'deepseek-chat',
+    normalized_model_id: 'deepseek-chat',
+    sent_model_id: 'deepseek-chat',
+    input_digest: 'digest-a',
+    input_ref: 'input-a.json',
+  } as SessionEvent;
+  const result = {
+    ...base('model_result_delivery', 1),
+    kind: 'model_result_delivery',
+    inference_id: 'inference-1',
+    provider: 'deepseek',
+    model: 'deepseek-chat',
+    status: 'delivered',
+  } as SessionEvent;
+  const view = buildChatCausalEvidence([input, result], {
+    durablePrefix: { sessionId: 'session-1', lastSeq: 1, lastEventId: 'event-1' },
+  });
+  assert.equal(view.readiness, 'ready');
+  assert.equal(view.durability, 'verified');
+});
+
+test('causal evidence does not verify a durable prefix with a sequence gap', () => {
+  const input = {
+    ...base('model_input_receipt', 0),
+    kind: 'model_input_receipt',
+    inference_id: 'inference-gap',
+    provider: 'deepseek',
+    requested_model_id: 'deepseek-chat',
+    normalized_model_id: 'deepseek-chat',
+    sent_model_id: 'deepseek-chat',
+    input_digest: 'digest-gap',
+    input_ref: 'input-gap.json',
+  } as SessionEvent;
+  const result = {
+    ...base('model_result_delivery', 2),
+    kind: 'model_result_delivery',
+    inference_id: 'inference-gap',
+    provider: 'deepseek',
+    model: 'deepseek-chat',
+    status: 'delivered',
+  } as SessionEvent;
+  const view = buildChatCausalEvidence([input, result], {
+    durablePrefix: { sessionId: 'session-1', lastSeq: 2, lastEventId: 'event-2' },
+  });
+  assert.equal(view.readiness, 'incomplete');
+  assert.equal(view.durability, 'unverified');
+  assert.match(view.unknowns.join('\n'), /does not match the supplied durable prefix/);
+});

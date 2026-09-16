@@ -284,7 +284,12 @@ import type { StallState, StallIntervention } from './stallDetector.js';
 import type { ProgressController, ProgressSignal } from './progressController.js';
 import { classifyShellCapability } from './progressController.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './chatPhaseNudge.js';
-import { isSuccessfulDirectMutation } from './mutationTools.js';
+import {
+  assessMutationEffect,
+  isConfirmedDirectMutation,
+  isSuccessfulDirectMutation,
+  type MutationEffectStatus,
+} from './mutationTools.js';
 import { ChatTurnTelemetryCollector, type ChatTurnTelemetryRecord } from './chatTurnTelemetry.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
 import { evaluateTokenExplosionAfterTurn } from './budgetKillPolicy.js';
@@ -513,6 +518,8 @@ export type ChatEvent =
       detail?: string;
       error?: string;
       exitCode?: number;
+      effect_status?: MutationEffectStatus;
+      mutation_paths?: string[];
     }
   | { type: 'thought'; text: string }
   | {
@@ -545,6 +552,8 @@ export type ChatEvent =
         target: string;
         detail?: string;
         error?: string;
+        effect_status?: MutationEffectStatus;
+        mutation_paths?: string[];
       }>;
       runDir?: string;
       verifierReceipt?: {
@@ -579,6 +588,8 @@ export type ChatEvent =
         target: string;
         detail?: string;
         error?: string;
+        effect_status?: MutationEffectStatus;
+        mutation_paths?: string[];
       }>;
       runDir?: string;
       /** Preserve INFRA_FAILURE vs AGENT_FAILURE when the engine already classified. */
@@ -611,6 +622,8 @@ export interface ChatResult {
     target: string;
     detail?: string;
     error?: string;
+    effect_status?: MutationEffectStatus;
+    mutation_paths?: string[];
   }>;
   runDir?: string;
   verifierReceipt?: {
@@ -782,6 +795,7 @@ export class ChatEngine {
     stderr?: string;
     verified?: boolean;
     mutation_paths?: string[];
+    effect_status?: MutationEffectStatus;
   }> = [];
   private lastVerifierReceipt: BoundChatVerifierReceipt | null = null;
   private executedVerifierLedger: BoundChatVerifierReceipt[] = [];
@@ -2653,6 +2667,8 @@ export class ChatEngine {
             ...(tc.detail ? { detail: tc.detail } : {}),
             ...(tc.error ? { error: tc.error } : {}),
             ...(tc.exit_code !== undefined ? { exitCode: tc.exit_code } : {}),
+            ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
+            ...(tc.mutation_paths !== undefined ? { mutation_paths: [...tc.mutation_paths] } : {}),
           };
         }
 
@@ -2692,7 +2708,7 @@ export class ChatEngine {
         if (
           turnCallsStr.some(
             (tc) =>
-              isSuccessfulDirectMutation(tc.tool, tc.error) ||
+              isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status) ||
               (tc.tool === 'sub_agent' &&
                 tc.error !== 'blocked' &&
                 subagentCountsAsMutation(tc.detail)),
@@ -2749,7 +2765,7 @@ export class ChatEngine {
               (e) =>
                 e.tool === 'read_file' ||
                 e.tool === 'read_range' ||
-                isSuccessfulDirectMutation(e.tool, e.error),
+                isConfirmedDirectMutation(e.tool, e.error, e.effect_status),
             )
             .map((e) => e.target)
             .filter(Boolean);
@@ -2852,7 +2868,7 @@ export class ChatEngine {
             toolCalls: projected.toolCalls,
             results: projected.results,
             patchAttempted: turnSlice.some(
-              (t) => isSuccessfulDirectMutation(t.tool, t.error) || t.tool === 'str_replace',
+              (t) => isConfirmedDirectMutation(t.tool, t.error, t.effect_status),
             ),
             patchFailed: turnSlice.some(
               (t) => t.tool === 'str_replace' && t.error != null && t.error !== '',
@@ -4918,6 +4934,16 @@ export class ChatEngine {
           });
         }
 
+        const strReplaceEffect = assessMutationEffect({
+          tool: 'str_replace',
+          error: gov.error,
+          exitCode: gov.exit_code,
+          policyBlocked: gov.policyBlocked,
+          mutationPaths: gov.mutationPaths,
+          mutationReceipt: gov.mutationReceipt,
+          effectTransaction: gov.effectTransaction,
+        });
+
         if (gov.exit_code !== 0) {
           this.toolCallLog.push({
             tool,
@@ -4926,6 +4952,8 @@ export class ChatEngine {
             error: gov.error ?? 'str_replace failed',
             index: meta.index,
             exit_code: gov.exit_code,
+            effect_status: strReplaceEffect.status,
+            ...(gov.mutationPaths ? { mutation_paths: [...gov.mutationPaths] } : {}),
           });
           callbacks?.onToolComplete?.(
             toolId,
@@ -4934,6 +4962,31 @@ export class ChatEngine {
             gov.exit_code,
           );
           return { index: meta.index, observation: gov.observation };
+        }
+        if (strReplaceEffect.status !== 'confirmed_change') {
+          invalidateReadCacheForPath(this.readCache, this.readCacheKey(gov.absolutePath));
+          this.fullReadCounts.delete(this.readCacheKey(gov.absolutePath));
+          if (strReplaceEffect.status === 'indeterminate') {
+            invalidateVerifierLedger(this as never, strReplaceEffect.reason);
+          }
+          this.toolCallLog.push({
+            tool,
+            target,
+            detail: `effect: ${strReplaceEffect.status}`,
+            index: meta.index,
+            exit_code: 0,
+            effect_status: strReplaceEffect.status,
+          });
+          callbacks?.onToolComplete?.(
+            toolId,
+            `effect: ${strReplaceEffect.status}`,
+            undefined,
+            0,
+          );
+          return {
+            index: meta.index,
+            observation: `${gov.observation}\n\nEffect: ${strReplaceEffect.status} (${strReplaceEffect.reason}).`,
+          };
         }
         invalidateReadCacheForPath(this.readCache, this.readCacheKey(gov.absolutePath));
         this.fullReadCounts.delete(this.readCacheKey(gov.absolutePath));
@@ -4949,6 +5002,7 @@ export class ChatEngine {
           detail: `line ${lineNumber}`,
           index: meta.index,
           exit_code: 0,
+          effect_status: strReplaceEffect.status,
           ...(gov.mutationPaths && gov.mutationPaths.length > 0
             ? { mutation_paths: [...gov.mutationPaths] }
             : {}),
@@ -5307,13 +5361,18 @@ export class ChatEngine {
         : lastResult && lastResult.exit_code !== 0
           ? lastResult.stderr || detail
           : undefined;
+      const mutationEffect = assessMutationEffect({
+        tool,
+        error: toolError,
+        exitCode: lastResult?.exit_code,
+        policyBlocked: result.policyBlocked,
+        mutationPaths: result.mutationPaths,
+        mutationReceipt: result.mutationReceipt,
+        effectTransaction: result.effectTransaction,
+      });
       const confirmedDirectMutation =
         directMutationAction &&
-        !result.policyBlocked &&
-        lastResult !== undefined &&
-        isSuccessfulDirectMutation(tool, toolError, lastResult.exit_code) &&
-        (result.mutationPaths?.length ?? 0) > 0 &&
-        (result.mutationReceipt?.changedBytes ?? 1) > 0;
+        mutationEffect.status === 'confirmed_change';
 
       // A direct mutation may have reached the executor without a confirmed
       // committed receipt (including a failed/partial effect). Refresh reads
@@ -5360,6 +5419,9 @@ export class ChatEngine {
         ...(toolError ? { error: toolError } : {}),
         ...(result.mutationPaths && result.mutationPaths.length > 0
           ? { mutation_paths: [...result.mutationPaths] }
+          : {}),
+        ...(mutationEffect.status !== 'not_applicable'
+          ? { effect_status: mutationEffect.status }
           : {}),
       });
 
@@ -5413,10 +5475,7 @@ export class ChatEngine {
         // shell action without paths is indeterminate and only invalidates prior
         // verifier evidence.
         if ((action.type === 'run_command' || action.type === 'test_run') && lastResult) {
-          const confirmedShellMutation =
-            lastResult.exit_code === 0 &&
-            result.mutationPaths !== undefined &&
-            result.mutationPaths.length > 0;
+          const confirmedShellMutation = mutationEffect.status === 'confirmed_change';
           if (confirmedShellMutation) {
             noteChatWorkspaceMutation(this as never);
           }
@@ -6960,7 +7019,7 @@ export class ChatEngine {
     if (finalStatus === 'completed' && this.writeCount > 0) {
       try {
         const changed = this.toolCallLog
-          .filter((t) => isSuccessfulDirectMutation(t.tool, t.error) && t.target)
+          .filter((t) => isConfirmedDirectMutation(t.tool, t.error, t.effect_status) && t.target)
           .map((t) => t.target)
           .filter((p, i, arr) => p && arr.indexOf(p) === i)
           .slice(0, 20);

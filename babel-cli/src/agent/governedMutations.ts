@@ -45,6 +45,7 @@ export interface GovernedStrReplaceResult {
   preBatchHash?: Record<string, string> | undefined;
   postBatchHash?: Record<string, string> | undefined;
   mutationReceipt?: MutationBatchReceipt | undefined;
+  effectTransaction?: PolicyGatedExecutionResult['effectTransaction'];
 }
 
 function resolveProjectPath(projectRoot: string, filePath: string): string {
@@ -180,6 +181,7 @@ export async function governedStrReplace(
       policyBlocked: false,
       terminal: result.terminal === true,
       absolutePath,
+      ...(result.effectTransaction ? { effectTransaction: result.effectTransaction } : {}),
     };
   }
 
@@ -195,6 +197,7 @@ export async function governedStrReplace(
       preBatchHash: result.preBatchHash,
       postBatchHash: result.postBatchHash,
       mutationReceipt: result.mutationReceipt,
+      ...(result.effectTransaction ? { effectTransaction: result.effectTransaction } : {}),
     };
   });
 }

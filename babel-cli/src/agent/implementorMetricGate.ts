@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { computeToolsBeforeFirstWrite } from './firstMoveCard.js';
-import { isSuccessfulDirectMutation } from './mutationTools.js';
+import { isConfirmedDirectMutation, type MutationEffectStatus } from './mutationTools.js';
 import {
   classifyEmptyPatchHonesty,
   detectEnvBlockedFromText,
@@ -222,6 +222,7 @@ export function sampleFromToolLog(input: {
     target?: string;
     error?: string;
     detail?: string;
+    effect_status?: MutationEffectStatus;
   }>;
   answer?: string;
   should_mutate?: boolean;
@@ -229,12 +230,13 @@ export function sampleFromToolLog(input: {
   notes?: string;
 }): ImplementorMetricSample {
   const write_count = input.toolCalls.filter((tc) =>
-    isSuccessfulDirectMutation(tc.tool, tc.error),
+    isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status),
   ).length;
   const tools_before_first_write = computeToolsBeforeFirstWrite(
     input.toolCalls.map((tc) => ({
       tool: tc.tool,
       ...(tc.error !== undefined ? { error: tc.error } : {}),
+      ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
     })),
   );
   const envOpts = { hasAnyWrites: write_count > 0 };
@@ -272,18 +274,24 @@ export function sampleFromHarnessPayload(
         target?: string;
         error?: string;
         detail?: string;
+        effect_status?: MutationEffectStatus;
       }>)
     : [];
   const writeFromTools = toolCalls.filter((tc) =>
-    isSuccessfulDirectMutation(tc.tool, tc.error),
+    isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status),
   ).length;
   const write_count =
-    typeof payload['write_count'] === 'number' ? payload['write_count'] : writeFromTools;
+    toolCalls.length > 0
+      ? writeFromTools
+      : typeof payload['write_count'] === 'number'
+        ? payload['write_count']
+        : 0;
   // Prefer computed TTF from tool log when present (more accurate than missing field)
   const computedTtf = computeToolsBeforeFirstWrite(
     toolCalls.map((tc) => ({
       tool: tc.tool,
       ...(tc.error !== undefined ? { error: tc.error } : {}),
+      ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
     })),
   );
   const tools_before_first_write =
