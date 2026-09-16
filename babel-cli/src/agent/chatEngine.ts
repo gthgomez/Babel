@@ -1106,6 +1106,18 @@ export class ChatEngine {
     )
       return 'explain';
 
+    // Review/audit prompts are read-only even when their evidence contains
+    // mutation-shaped words such as "repair" in a path or diff description.
+    // A paired edit directive remains executable (for example, "review and
+    // fix it"). Keeping this before the generic mutation verbs prevents the
+    // trusted reviewer from entering the coding zero-write recovery loop.
+    if (
+      /\b(review|audit|analyze|diagnose|inspect|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and\s+fix|then\s+fix|fix\s+it)\b)/i.test(
+        task,
+      )
+    )
+      return 'explain';
+
     // Fix/implement/create verbs → execute
     if (
       /\b(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update\s+dependency)\b/i.test(
@@ -1127,13 +1139,6 @@ export class ChatEngine {
       return 'explain';
     if (/\b(explain|what\s+does|how\s+does|what\s+is|document|summarize)\b/i.test(task))
       return 'explain';
-    if (
-      /\b(review|audit|analyze|diagnose|inspect|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and\s+fix|then\s+fix|fix\s+it)\b)/i.test(
-        task,
-      )
-    )
-      return 'explain';
-
     // Read-only file inspection verbs → explain (unless paired with edit intent)
     if (
       /\b(read|list|show|cat|head|tail|display|print|output)\b/i.test(task) &&
