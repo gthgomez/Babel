@@ -95,6 +95,18 @@ describe('ChatEngine.classifyChatTaskIntent', () => {
     assert.equal(ChatEngine.classifyChatTaskIntent('review the auth module and fix it'), 'execute');
   });
 
+  test('keeps all explicit review-and-mutate verbs executable', () => {
+    for (const task of [
+      'analyze and repair the code',
+      'diagnose and patch the vulnerability',
+      'check and refactor the module',
+      'inspect and implement the missing behavior',
+      'evaluate and remove the obsolete branch',
+    ]) {
+      assert.equal(ChatEngine.classifyChatTaskIntent(task), 'execute', task);
+    }
+  });
+
   test('classifies analyze/diagnose as explain', () => {
     assert.equal(
       ChatEngine.classifyChatTaskIntent('diagnose the slow database query'),

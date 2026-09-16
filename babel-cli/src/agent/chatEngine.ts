@@ -1112,7 +1112,7 @@ export class ChatEngine {
     // fix it"). Keeping this before the generic mutation verbs prevents the
     // trusted reviewer from entering the coding zero-write recovery loop.
     if (
-      /\b(review|audit|analyze|diagnose|inspect|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and\s+fix|then\s+fix|fix\s+it)\b)/i.test(
+      /\b(review|audit|analyze|diagnose|inspect|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and|then)\s+(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update|create|write|edit|modify|change|remove|delete|revert|rewrite|replace)\b)(?!.*\bfix\s+it\b)/i.test(
         task,
       )
     )
