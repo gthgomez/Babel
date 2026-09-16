@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -102,6 +102,31 @@ test('source manifest rejects ancestor and leaf symlink escapes', (t) => {
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('source manifest rejects an in-root alias into a private directory', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-source-manifest-'));
+  const privateRoot = join(root, '.codex');
+  try {
+    mkdirSync(privateRoot);
+    writeFileSync(join(privateRoot, 'secret.txt'), 'private\n', 'utf8');
+    try {
+      symlinkSync(privateRoot, join(root, 'alias'), process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP') {
+        t.skip(`symlink creation unavailable: ${code}`);
+        return;
+      }
+      throw error;
+    }
+    assert.throws(
+      () => buildByteAttestedSourceManifest({ root, files: [{ path: 'alias/secret.txt' }] }),
+      /private resolved path/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

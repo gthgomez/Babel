@@ -13,7 +13,7 @@ import {
   type ChatMessage,
   type ChatToolAction,
 } from './chatToolDefinitions.js';
-import { isSuccessfulDirectMutation } from './mutationTools.js';
+import { isConfirmedDirectMutation, type MutationEffectStatus } from './mutationTools.js';
 import { normalizeModelToolName } from './canonicalToolMapping.js';
 
 /**
@@ -360,7 +360,7 @@ export function detectAndBuildBlockedReport(
 
 export type CompactConversationState = {
   conversation: ChatMessage[];
-  toolCallLog: Array<{ tool: string; error?: string }>;
+  toolCallLog: Array<{ tool: string; error?: string; effect_status?: MutationEffectStatus }>;
   lastVerifierReceipt: { command: string; exit_code: number } | null;
   todosSize: number;
   lastPhase: string | null;
@@ -387,7 +387,7 @@ export function compactHeuristicConversation(state: CompactConversationState): v
   }
 
   const b3WriteCount = state.toolCallLog.filter((e) =>
-    isSuccessfulDirectMutation(e.tool, e.error),
+    isConfirmedDirectMutation(e.tool, e.error, e.effect_status),
   ).length;
   const b3VerifierInfo = state.lastVerifierReceipt
     ? `${state.lastVerifierReceipt.command} (exit ${state.lastVerifierReceipt.exit_code})`

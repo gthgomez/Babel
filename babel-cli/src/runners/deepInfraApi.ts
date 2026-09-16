@@ -1602,7 +1602,9 @@ export class DeepInfraApiRunner implements LlmRunner {
       normalized_model_id: this.model,
       sent_model_id: this.model,
       input_digest: inputDigest,
-      input_message_count: messages.length + 1,
+      ...(requestAccounting.input_message_count === null
+        ? {}
+        : { input_message_count: requestAccounting.input_message_count }),
       requested_output_budget: this.executionEnvelope?.output.requested ?? this.maxTokens,
       effective_output_budget: this.executionEnvelope?.output.effective ?? this.maxTokens,
       ...(this.executionEnvelope

@@ -2,6 +2,19 @@ import type { SessionEvent } from './sessionEvents.js';
 
 export type ChatCausalReadiness = 'ready' | 'incomplete' | 'contradictory';
 
+export interface ChatCausalEvidenceOptions {
+  /** Session identity the caller obtained from its authoritative run context. */
+  expectedSessionId?: string;
+  /** Event kinds required by the claim being made by the caller. */
+  expectedEventKinds?: readonly SessionEvent['kind'][];
+  /** Optional binding to a verified durable prefix used for this projection. */
+  durablePrefix?: {
+    sessionId: string;
+    lastSeq: number;
+    lastEventId?: string;
+  };
+}
+
 export interface ChatCausalEvidenceNode {
   seq: number;
   event_id: string;
@@ -22,6 +35,9 @@ export interface ChatCausalEvidenceNode {
 export interface ChatCausalEvidenceView {
   schema_version: 'chat-causal-evidence.v1';
   readiness: ChatCausalReadiness;
+  consistency: 'consistent' | 'contradictory';
+  completeness: 'complete' | 'incomplete';
+  durability: 'verified' | 'unverified';
   nodes: ChatCausalEvidenceNode[];
   contradictions: string[];
   unknowns: string[];
@@ -88,11 +104,15 @@ function nodeForEvent(event: SessionEvent): ChatCausalEvidenceNode {
  * Callers must bind it to a verified durable source before treating it as durable evidence.
  * Missing evidence stays UNKNOWN; this function never upgrades absence into success.
  */
-export function buildChatCausalEvidence(events: readonly SessionEvent[]): ChatCausalEvidenceView {
+export function buildChatCausalEvidence(
+  events: readonly SessionEvent[],
+  options: ChatCausalEvidenceOptions = {},
+): ChatCausalEvidenceView {
   const orderedEvents = [...events].sort((left, right) => left.seq - right.seq);
   const nodes = orderedEvents.map(nodeForEvent);
   const contradictions: string[] = [];
   const unknowns: string[] = [];
+  let durability: ChatCausalEvidenceView['durability'] = 'unverified';
   const inputs = new Map<string, SessionEvent & { kind: 'model_input_receipt' }>();
   const results = new Map<string, SessionEvent & { kind: 'model_result_delivery' }>();
   const lifecycles = new Map<string, {
@@ -108,6 +128,68 @@ export function buildChatCausalEvidence(events: readonly SessionEvent[]): ChatCa
 
   if (orderedEvents.length === 0) {
     unknowns.push('session event evidence is empty');
+  }
+
+  const sessionIds = new Set(orderedEvents.map((event) => event.session_id));
+  if (sessionIds.size > 1) {
+    contradictions.push(
+      `causal evidence mixes session identities: ${[...sessionIds].sort().join(', ')}`,
+    );
+  }
+  if (options.expectedSessionId !== undefined) {
+    for (const event of orderedEvents) {
+      if (event.session_id !== options.expectedSessionId) {
+        contradictions.push(
+          `event ${event.event_id} belongs to session ${event.session_id}, expected ${options.expectedSessionId}`,
+        );
+      }
+    }
+  }
+
+  const outcomeKinds = new Set<SessionEvent['kind']>([
+    'model_result_delivery',
+    'provider_failure_receipt',
+    'tool_completed',
+    'tool_failed',
+    'tool_cancelled',
+    'mutation_batch',
+    'verifier_attempt',
+    'completion_decision',
+    'turn_ended',
+    'policy_intervened',
+    'gate_decision',
+  ]);
+  if (!orderedEvents.some((event) => outcomeKinds.has(event.kind))) {
+    unknowns.push('causal evidence has no terminal or outcome coverage');
+  }
+
+  if (options.expectedEventKinds) {
+    const observedKinds = new Set(orderedEvents.map((event) => event.kind));
+    for (const kind of new Set(options.expectedEventKinds)) {
+      if (!observedKinds.has(kind)) {
+        unknowns.push(`expected event coverage missing for ${kind}`);
+      }
+    }
+  }
+
+  if (options.durablePrefix) {
+    const prefix = options.durablePrefix;
+    const last = orderedEvents.at(-1);
+    const contiguousFromZero =
+      orderedEvents.length > 0 &&
+      orderedEvents.every((event, index) => event.seq === index) &&
+      last?.seq === prefix.lastSeq;
+    const prefixMatches =
+      sessionIds.size === 1 &&
+      sessionIds.has(prefix.sessionId) &&
+      contiguousFromZero &&
+      orderedEvents.every((event) => event.session_id === prefix.sessionId) &&
+      (prefix.lastEventId === undefined || last?.event_id === prefix.lastEventId);
+    if (prefixMatches) {
+      durability = 'verified';
+    } else {
+      unknowns.push('causal evidence does not match the supplied durable prefix');
+    }
   }
 
   for (const event of orderedEvents) {
@@ -188,6 +270,9 @@ export function buildChatCausalEvidence(events: readonly SessionEvent[]): ChatCa
   return {
     schema_version: 'chat-causal-evidence.v1',
     readiness: contradictions.length > 0 ? 'contradictory' : unknowns.length > 0 ? 'incomplete' : 'ready',
+    consistency: contradictions.length > 0 ? 'contradictory' : 'consistent',
+    completeness: unknowns.length > 0 ? 'incomplete' : 'complete',
+    durability,
     nodes,
     contradictions,
     unknowns,

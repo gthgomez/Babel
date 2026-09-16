@@ -11,7 +11,12 @@
 // stall detector never sees any tools. After N consecutive text-only turns,
 // escalation kicks in (force_status → BLOCKED).
 
-import { isDirectMutationTool, isSuccessfulDirectMutation, isVerifierAttemptTool } from './mutationTools.js';
+import {
+  isConfirmedDirectMutation,
+  isDirectMutationTool,
+  isVerifierAttemptTool,
+  type MutationEffectStatus,
+} from './mutationTools.js';
 
 export interface StallState {
   turnsSinceLastWrite: number;
@@ -68,7 +73,12 @@ export const TEXT_ONLY_FORCE_BLOCKED_THRESHOLD = 5;
 
 export function updateStallState(
   state: StallState,
-  turnToolCalls: Array<{ tool: string; target: string; error?: string }>,
+  turnToolCalls: Array<{
+    tool: string;
+    target: string;
+    error?: string;
+    effect_status?: MutationEffectStatus;
+  }>,
   turnIndex: number,
 ): StallState {
   const next: StallState = {
@@ -87,13 +97,13 @@ export function updateStallState(
   // Bug A fix: only successful mutations count as writes.
   // Blocked/failed str_replace must NOT reset turnsSinceLastWrite.
   const hasWriteThisTurn = turnToolCalls.some((tc) =>
-    isSuccessfulDirectMutation(tc.tool, tc.error),
+    isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status),
   );
   const sessionHasWrites = state.totalWrites > 0 || hasWriteThisTurn;
 
   for (const tc of turnToolCalls) {
     // Track writes (includes str_replace) — successful only
-    if (isSuccessfulDirectMutation(tc.tool, tc.error)) {
+    if (isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status)) {
       next.turnsSinceLastWrite = 0;
       next.lastWriteTurn = turnIndex;
       next.totalWrites = state.totalWrites + 1;

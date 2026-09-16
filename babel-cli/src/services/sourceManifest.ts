@@ -92,6 +92,15 @@ function assertResolvedContainment(root: string, absolute: string, normalized: s
   ) {
     throw new Error(`source manifest path resolves outside root: ${normalized}`);
   }
+  // Apply the private-path policy after resolution as well as before it. An
+  // in-root directory alias can otherwise make `.codex`, `runs`, or another
+  // sensitive ancestor look harmless to the lexical check above.
+  if (
+    PRIVATE_PATH_RE.test(resolvedRelative) ||
+    PRIVATE_BASENAME_RE.test(basename(resolvedRelative))
+  ) {
+    throw new Error(`source manifest refuses private resolved path: ${normalized}`);
+  }
 }
 
 /**

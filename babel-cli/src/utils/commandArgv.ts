@@ -48,10 +48,26 @@ export function parseCommandArgv(
         continue
       }
       if (char === '\\') {
+        if (platform === 'win32') {
+          // CommandLineToArgvW/CRT-compatible handling: backslashes only
+          // acquire escape meaning immediately before a double quote. An
+          // even run closes the quoted token; an odd run emits a literal
+          // quote. This is required to round-trip quoted paths ending in `\`.
+          let slashCount = 0
+          while (command[index + slashCount] === '\\') slashCount++
+          if (command[index + slashCount] === '"') {
+            current += '\\'.repeat(Math.floor(slashCount / 2))
+            if (slashCount % 2 === 1) current += '"'
+            else quote = null
+            index += slashCount
+            continue
+          }
+          current += '\\'.repeat(slashCount)
+          index += slashCount - 1
+          continue
+        }
         const next = command[index + 1]
-        const escapesOnPlatform = platform !== 'win32'
-          ? next === '"' || next === '\\' || next === '$' || next === '`'
-          : next === '"'
+        const escapesOnPlatform = next === '"' || next === '\\' || next === '$' || next === '`'
         if (next !== undefined && escapesOnPlatform) {
           current += next
           index++

@@ -1195,7 +1195,9 @@ export class DeepSeekApiRunner implements LlmRunner {
       normalized_model_id: this.model,
       sent_model_id: this.model,
       input_digest: requestAccounting.request_digest,
-      input_message_count: messages.length + 1,
+      ...(requestAccounting.input_message_count === null
+        ? {}
+        : { input_message_count: requestAccounting.input_message_count }),
       requested_output_budget: MAX_TOKENS,
       effective_output_budget: MAX_TOKENS,
       capability_bindings: tools.map((tool) => ({

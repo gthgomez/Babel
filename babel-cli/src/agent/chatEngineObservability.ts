@@ -28,6 +28,7 @@ import {
 } from '../modelPolicy.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
 import { computeToolCallAggregates, type ToolCallAggregates } from './toolCallExport.js';
+import type { MutationEffectStatus } from './mutationTools.js';
 import type { PolicyEvent, PolicyEventKind, PolicyEventLog } from './policyEventLog.js';
 import type { ObservationTailBuffer, ObservationTailEntry } from './observationTails.js';
 import type {
@@ -122,6 +123,8 @@ export type ToolCallLogEntry = {
   stdout?: string;
   stderr?: string;
   verified?: boolean;
+  effect_status?: MutationEffectStatus;
+  mutation_paths?: string[];
 };
 
 /** Payload shape shared with ChatEvent done/failed (exactOptionalPropertyTypes-safe). */
@@ -135,6 +138,8 @@ export type ExportedToolCall = {
   /** Chat turn that executed this tool (from engine logIndexToTurn). */
   turn?: number;
   exit_code?: number;
+  effect_status?: MutationEffectStatus;
+  mutation_paths?: string[];
 };
 
 export type StreamDoneEvent = {
@@ -237,6 +242,8 @@ export function exportToolCallsWithTurns(
     if (entry.detail !== undefined) out.detail = entry.detail;
     if (entry.error !== undefined) out.error = entry.error;
     if (entry.exit_code !== undefined) out.exit_code = entry.exit_code;
+    if (entry.effect_status !== undefined) out.effect_status = entry.effect_status;
+    if (entry.mutation_paths !== undefined) out.mutation_paths = [...entry.mutation_paths];
     if (turn !== undefined) out.turn = turn;
     return out;
   });
