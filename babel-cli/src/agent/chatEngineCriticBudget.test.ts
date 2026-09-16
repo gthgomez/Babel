@@ -97,8 +97,10 @@ test('critic forwards provider lifecycle callbacks to its isolated runner', asyn
 test('exact GLM critic phases ignore mixed-model overrides and stay on OpenRouter', () => {
   const previousFlash = process.env['BABEL_DIFF_CRITIC_MODEL'];
   const previousPro = process.env['BABEL_DIFF_CRITIC_PRO_MODEL'];
+  const previousRouterKey = process.env['OPENROUTER_API_KEY'];
   process.env['BABEL_DIFF_CRITIC_MODEL'] = 'deepseek-v4-flash';
   process.env['BABEL_DIFF_CRITIC_PRO_MODEL'] = 'deepseek-v4-pro';
+  process.env['OPENROUTER_API_KEY'] = 'test-openrouter-key';
   try {
     const noFallback = (): CriticRunner => {
       throw new Error('fallback must not be reached for exact GLM');
@@ -112,17 +114,26 @@ test('exact GLM critic phases ignore mixed-model overrides and stay on OpenRoute
     else process.env['BABEL_DIFF_CRITIC_MODEL'] = previousFlash;
     if (previousPro === undefined) delete process.env['BABEL_DIFF_CRITIC_PRO_MODEL'];
     else process.env['BABEL_DIFF_CRITIC_PRO_MODEL'] = previousPro;
+    if (previousRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+    else process.env['OPENROUTER_API_KEY'] = previousRouterKey;
   }
 });
 
 test('GLM backend key is normalized to the exact OpenRouter critic route', () => {
+  const previousRouterKey = process.env['OPENROUTER_API_KEY'];
+  process.env['OPENROUTER_API_KEY'] = 'test-openrouter-key';
   const noFallback = (): CriticRunner => {
     throw new Error('fallback must not be reached for exact GLM');
   };
-  const flash = resolveOrCreateCriticRunner(GLM_BACKEND_KEY, null, noFallback);
-  const pro = resolveOrCreateCriticProRunner(GLM_BACKEND_KEY, null, noFallback);
-  assert.ok(flash.runner instanceof OpenRouterApiRunner);
-  assert.ok(pro.runner instanceof OpenRouterApiRunner);
+  try {
+    const flash = resolveOrCreateCriticRunner(GLM_BACKEND_KEY, null, noFallback);
+    const pro = resolveOrCreateCriticProRunner(GLM_BACKEND_KEY, null, noFallback);
+    assert.ok(flash.runner instanceof OpenRouterApiRunner);
+    assert.ok(pro.runner instanceof OpenRouterApiRunner);
+  } finally {
+    if (previousRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+    else process.env['OPENROUTER_API_KEY'] = previousRouterKey;
+  }
 });
 
 describe('buildCriticSkipReceipt', () => {

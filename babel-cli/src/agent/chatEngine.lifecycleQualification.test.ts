@@ -310,7 +310,7 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
       const killScript = writeNodeFixture(
         fixture.root,
         'kill-parent-after-write.mjs',
-        `import { appendFileSync } from 'node:fs';\nimport { spawn } from 'node:child_process';\nappendFileSync(process.argv[2], 'effect\\n', 'utf8');\nconst targetPid = Number(process.argv[3]);\nif (!Number.isInteger(targetPid) || targetPid <= 0) throw new Error('missing lifecycle parent pid');\nconst killer = spawn('taskkill', ['/PID', String(targetPid), '/T', '/F'], { detached: true, stdio: 'ignore', windowsHide: true });\nkiller.unref();\nsetTimeout(() => process.exit(137), 1000);\n`,
+        `import { appendFileSync } from 'node:fs';\nimport { spawn } from 'node:child_process';\nappendFileSync(process.argv[2], 'effect\\n', 'utf8');\nconst targetPid = Number(process.argv[3]);\nif (!Number.isInteger(targetPid) || targetPid <= 0) throw new Error('missing lifecycle parent pid');\nif (process.platform === 'win32') {\n  const killer = spawn('taskkill', ['/PID', String(targetPid), '/T', '/F'], { detached: true, stdio: 'ignore', windowsHide: true });\n  killer.unref();\n} else {\n  process.kill(targetPid, 'SIGKILL');\n}\nsetTimeout(() => process.exit(137), 1000);\n`,
       );
       const command = `node ${shellArg(killScript)} ${shellArg(marker)} __BABEL_LIFECYCLE_PARENT_PID__`;
       const driver = makeCrashDriver(join(fixture.root, 'crash-driver.mjs'), command);
