@@ -363,6 +363,52 @@ test('DeepSeek API runner executeWithToolsStream yields text_delta for completio
   assert.equal(events[2]!.finishReason, 'stop');
 });
 
+test('DeepSeek native stream preserves partial output provenance on malformed SSE', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  globalThis.fetch = (async () => makeSseResponse([
+    'data: {"choices":[{"delta":{"content":"partial"}}]}',
+    'data: {not-json}',
+    'data: [DONE]',
+  ])) as typeof fetch;
+
+  const events: any[] = [];
+  const completions: any[] = [];
+  for await (const event of new DeepSeekApiRunner('deepseek-v4-flash').executeWithToolsStream(
+    [{ role: 'user', content: 'hello' }],
+    [],
+    undefined,
+    undefined,
+    undefined,
+    { onInvocationCompleted: (event) => completions.push(event) },
+  )) events.push(event);
+
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
+  assert.match(events[1]!.message, /Malformed SSE event chunk/);
+  assert.equal(completions.at(-1)?.status, 'failed');
+  assert.equal(completions.at(-1)?.partial_model_output, true);
+});
+
+test('DeepSeek native stream rejects a malformed unterminated final SSE frame', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  globalThis.fetch = (async () => new Response(
+    'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n' +
+      'data: [DONE]\n\n' +
+      'data: {not-json}',
+    { status: 200 },
+  )) as typeof fetch;
+
+  const events: any[] = [];
+  for await (const event of new DeepSeekApiRunner('deepseek-v4-flash').executeWithToolsStream(
+    [{ role: 'user', content: 'hello' }],
+    [],
+  )) events.push(event);
+
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
+  assert.match(events[1]!.message, /Malformed SSE event chunk/);
+});
+
 test('DeepSeek API runner executeWithToolsStream yields error on HTTP failure', async () => {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   const { DeepSeekApiRunner } = await import('./deepSeekApi.js');

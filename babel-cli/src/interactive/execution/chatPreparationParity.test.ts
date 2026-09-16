@@ -89,6 +89,50 @@ function normalizeValue(value: unknown, root: string): unknown {
 }
 
 describe('chat preparation parity (actual provider-bound request)', () => {
+  it('clears omitted optional state when a reused engine changes roots', () => {
+    const firstRoot = mkdtempSync(join(tmpdir(), 'babel-prep-first-'));
+    const secondRoot = mkdtempSync(join(tmpdir(), 'babel-prep-second-'));
+    try {
+      const engine = new ChatEngine({
+        task: 'previous task',
+        instructionRoot: firstRoot,
+        projectRoot: firstRoot,
+        systemContext: 'old system context',
+        appendSystemPrompt: 'old append prompt',
+        preflightContext: 'old preflight',
+        model: 'mimo-v2.5',
+        executionProfile: 'chat',
+        runtimeMode: 'tui',
+        providerRunner: new OpenCodeGoApiRunner(
+          'mimo-v2.5',
+          {},
+          { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' },
+        ),
+        providerPolicy: babelReviewModelPolicy('mimo-v2.5', firstRoot),
+      });
+
+      engine.applyTurnPreparation({
+        task: 'new task',
+        projectRoot: secondRoot,
+      });
+
+      const options = (engine as unknown as {
+        options: Record<string, unknown>;
+      }).options;
+      assert.equal(options.projectRoot, secondRoot);
+      assert.equal(options.instructionRoot, undefined);
+      assert.equal(options.systemContext, undefined);
+      assert.equal(options.appendSystemPrompt, undefined);
+      assert.equal(options.preflightContext, undefined);
+      assert.equal(options.model, undefined);
+      assert.equal(options.executionProfile, undefined);
+      assert.equal(options.runtimeMode, undefined);
+    } finally {
+      rmSync(firstRoot, { recursive: true, force: true });
+      rmSync(secondRoot, { recursive: true, force: true });
+    }
+  });
+
   it('achieves 100% parity on system prompt, intent plan, limits, tools, and wire payload', async () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-prep-parity-'));
     const source = join(root, 'source');

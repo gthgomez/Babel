@@ -212,6 +212,10 @@ describe('isConfirmedDirectMutation', () => {
       effectStatus: 'confirmed_change',
       mutationPaths: ['a.ts', 'b.ts'],
     }), true);
+    assert.equal(isConfirmedMutation({
+      tool: 'run_command',
+      effectStatus: 'confirmed_change',
+    }), true);
   });
 
   test('preserves all executor-reported paths for a confirmed mutation', () => {

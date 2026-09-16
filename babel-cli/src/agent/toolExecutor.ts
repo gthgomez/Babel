@@ -1230,7 +1230,14 @@ export async function executeActionWithPolicy(
           } catch {
             rollbackResult = 'failed';
           }
-          effectTx = rollbackEffectTransaction(effectTx, rollbackResult);
+          const rolledBack = rollbackEffectTransaction(effectTx, rollbackResult);
+          effectTx = {
+            ...rolledBack,
+            post_revision:
+              rollbackResult === 'success'
+                ? { compositeTreeHash: batchTx.preRevisionHash }
+                : captureWorkspaceRevisionIdentity(workspaceRoot),
+          };
         } else {
           const postRevision = captureWorkspaceRevisionIdentity(workspaceRoot);
           effectTx = {
@@ -1315,7 +1322,13 @@ export async function executeActionWithPolicy(
           rollbackResult = 'failed';
         }
       }
-      effectTx = rollbackEffectTransaction(effectTx, rollbackResult);
+      effectTx = {
+        ...rollbackEffectTransaction(effectTx, rollbackResult),
+        post_revision:
+          batchTx && rollbackResult === 'success'
+            ? { compositeTreeHash: batchTx.preRevisionHash }
+            : captureWorkspaceRevisionIdentity(workspaceRoot),
+      };
     }
     throw error;
   }

@@ -318,6 +318,52 @@ test('DeepInfra API runner executeWithToolsStream yields text_delta for completi
   assert.equal(events[2]!.finishReason, 'stop');
 });
 
+test('DeepInfra native stream preserves partial output provenance on malformed SSE', async () => {
+  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  const { DeepInfraApiRunner } = await import('./deepInfraApi.js');
+  globalThis.fetch = (async () => makeSseResponse([
+    'data: {"choices":[{"delta":{"content":"partial"}}]}',
+    'data: {not-json}',
+    'data: [DONE]',
+  ])) as typeof fetch;
+
+  const events: any[] = [];
+  const completions: any[] = [];
+  for await (const event of new DeepInfraApiRunner('deepseek-ai/DeepSeek-V3-0324').executeWithToolsStream(
+    [{ role: 'user', content: 'hello' }],
+    [],
+    undefined,
+    undefined,
+    undefined,
+    { onInvocationCompleted: (event) => completions.push(event) },
+  )) events.push(event);
+
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
+  assert.match(events[1]!.message, /Malformed SSE event chunk/);
+  assert.equal(completions.at(-1)?.status, 'failed');
+  assert.equal(completions.at(-1)?.partial_model_output, true);
+});
+
+test('DeepInfra native stream rejects a malformed unterminated final SSE frame', async () => {
+  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  const { DeepInfraApiRunner } = await import('./deepInfraApi.js');
+  globalThis.fetch = (async () => new Response(
+    'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n' +
+      'data: [DONE]\n\n' +
+      'data: {not-json}',
+    { status: 200 },
+  )) as typeof fetch;
+
+  const events: any[] = [];
+  for await (const event of new DeepInfraApiRunner('deepseek-ai/DeepSeek-V3-0324').executeWithToolsStream(
+    [{ role: 'user', content: 'hello' }],
+    [],
+  )) events.push(event);
+
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
+  assert.match(events[1]!.message, /Malformed SSE event chunk/);
+});
+
 test('DeepInfra API runner executeWithToolsStream yields error on HTTP failure', async () => {
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
   const { DeepInfraApiRunner } = await import('./deepInfraApi.js');

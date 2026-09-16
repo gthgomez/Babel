@@ -75,6 +75,10 @@ import {
 } from '../../agent/chatStackCompile.js';
 import { buildChatCausalEvidence } from '../../agent/chatCausalEvidence.js';
 import {
+  flushSessionEventLogStrict,
+  inspectSessionEventLogFromDir,
+} from '../../agent/sessionEvents.js';
+import {
   isAcceptanceRecordingEnabled,
   prepareAcceptanceRecording,
   recordAcceptanceArtifacts,
@@ -645,6 +649,8 @@ export async function runChatEngineOnce(input: {
   if (input.engine) {
     applyEngineTurnPreparation(input.engine, {
       task: input.task,
+      projectRoot: input.target.targetRoot,
+      instructionRoot: input.instructionRoot,
       ...(stackSystemContext ? { systemContext: stackSystemContext } : {}),
       ...(input.appendSystemPrompt ? { appendSystemPrompt: input.appendSystemPrompt } : {}),
       ...(preflightContext ? { preflightContext } : {}),
@@ -775,14 +781,34 @@ export async function runChatEngineOnce(input: {
 
   if (result.runDir) {
     try {
-      const causalEvents = engine.getParityRuntime().sessionEvents.events;
+      const runtime = engine.getParityRuntime();
+      // The in-memory event list is not durable evidence.  Flush the required
+      // boundary, re-read the persisted log, and bind the projection to the
+      // verified prefix before publishing the additive sidecar.
+      flushSessionEventLogStrict(result.runDir, runtime.sessionEvents);
+      const inspected = inspectSessionEventLogFromDir(
+        result.runDir,
+        runtime.sessionEvents.session_id,
+      );
+      if (inspected.kind !== 'valid') {
+        throw new Error(
+          inspected.kind === 'missing'
+            ? `durable session event log missing at ${inspected.path}`
+            : `durable session event log invalid: ${inspected.error.message}`,
+        );
+      }
+      const causalEvents = inspected.log.events;
+      const lastEvent = causalEvents.at(-1);
       const causalEvidence = buildChatCausalEvidence(
         causalEvents,
         {
-          ...(causalEvents[0]?.session_id
-            ? { expectedSessionId: causalEvents[0].session_id }
-            : {}),
+          expectedSessionId: inspected.log.session_id,
           expectedEventKinds: ['turn_ended'],
+          durablePrefix: {
+            sessionId: inspected.log.session_id,
+            lastSeq: lastEvent?.seq ?? -1,
+            ...(lastEvent?.event_id ? { lastEventId: lastEvent.event_id } : {}),
+          },
         },
       );
       fs.writeFileSync(
@@ -790,8 +816,30 @@ export async function runChatEngineOnce(input: {
         JSON.stringify(causalEvidence, null, 2),
         'utf-8',
       );
-    } catch {
-      // Evidence projection is additive; the durable session log remains authoritative.
+    } catch (error) {
+      // Evidence projection is additive; never replace durable truth with an
+      // in-memory success claim. Keep the failure visible to operators and in
+      // a diagnostic artifact when the run directory is writable.
+      const message = error instanceof Error ? error.message : String(error);
+      const diagnostic = {
+        schema_version: 'chat-causal-evidence-error.v1',
+        consistency: 'unknown',
+        completeness: 'unknown',
+        durability: 'unverified',
+        error: message,
+      };
+      try {
+        fs.writeFileSync(
+          path.join(result.runDir, 'chat_causal_evidence_error.json'),
+          JSON.stringify(diagnostic, null, 2),
+          'utf-8',
+        );
+      } catch (diagnosticError) {
+        const diagnosticMessage =
+          diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError);
+        console.error(`[chat] causal evidence diagnostic persistence failed: ${diagnosticMessage}`);
+      }
+      console.error(`[chat] causal evidence projection failed: ${message}`);
     }
   }
 

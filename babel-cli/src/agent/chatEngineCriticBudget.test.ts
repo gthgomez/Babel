@@ -233,7 +233,7 @@ describe('runAsymmetricDiffCritic early paths (C1)', () => {
           effect_status: 'confirmed_change',
         },
       ]),
-      false,
+      true,
     );
     assert.equal(
       hasAnyWrites([

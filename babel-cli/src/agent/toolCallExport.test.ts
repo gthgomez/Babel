@@ -71,7 +71,7 @@ void describe('computeToolCallAggregates', () => {
     assert.equal(result.write_count, 1);
   });
 
-  void it('counts confirmed shell mutations only when paths are retained', () => {
+  void it('counts confirmed shell mutations even when paths are unavailable', () => {
     assert.equal(computeToolCallAggregates([
       {
         tool: 'run_command',
@@ -83,7 +83,7 @@ void describe('computeToolCallAggregates', () => {
         effect_status: 'confirmed_change',
         mutation_paths: [],
       },
-    ]).write_count, 1);
+    ]).write_count, 2);
   });
 
   void it('computes all counts together in mixed log', () => {

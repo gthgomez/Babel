@@ -23,9 +23,7 @@ import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 import { confirmedMutationPaths, isConfirmedMutation } from '../../agent/mutationTools.js';
 import { hydrateResumedThreadToScreen } from '../../services/threadStore/index.js';
 import {
-  applyEngineTurnPreparation,
   buildChatRunPayload,
-  compileChatStackForRun,
   compileIntentPlanUserMessage,
   gatherChatPreflightContext,
   runChatEngineOnce,
@@ -158,17 +156,6 @@ export async function executeChatTask(
       taskClass: activeProfile,
       taskText: task,
     });
-    const chatStack = compileChatStackForRun({
-      projectRoot: target.targetRoot,
-      task,
-      ...(ctx.state.model !== undefined ? { model: ctx.state.model } : {}),
-    });
-    if (chatStack.context_error) {
-      throw new Error(`[chat] ${chatStack.context_error}`);
-    }
-    const effectiveSystemContext = [systemContext, chatStack.system_context]
-      .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
-      .join('\n\n');
     const intentTaskClass = resolveChatTaskClass({ taskText: task, autoClassify: false });
     const intentPlanUserMessage = compileIntentPlanUserMessage(task, intentTaskClass);
 
@@ -191,7 +178,7 @@ export async function executeChatTask(
       const engineOptions: ChatEngineOptions = {
         task,
         projectRoot: target.targetRoot,
-        ...(effectiveSystemContext ? { systemContext: effectiveSystemContext } : {}),
+        ...(systemContext ? { systemContext } : {}),
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         ...(preflightContext ? { preflightContext } : {}),
         ...(ctx.state.model !== undefined ? { model: ctx.state.model } : {}),
@@ -206,17 +193,6 @@ export async function executeChatTask(
         runtimeMode: useConversational ? 'tui' : 'headless',
       };
       ctx.chatEngine = await createChatEngineForSession(engineOptions, engineFactory);
-    } else {
-      applyEngineTurnPreparation(ctx.chatEngine, {
-        task,
-        ...(effectiveSystemContext ? { systemContext: effectiveSystemContext } : {}),
-        ...(appendSystemPrompt !== undefined ? { appendSystemPrompt } : {}),
-        ...(preflightContext !== undefined ? { preflightContext } : {}),
-        ...(ctx.state.model !== undefined ? { model: ctx.state.model } : {}),
-        limits,
-        ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
-        runtimeMode: useConversational ? 'tui' : 'headless',
-      });
     }
 
     const result = await runChatEngineOnce({

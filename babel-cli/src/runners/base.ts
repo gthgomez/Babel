@@ -313,6 +313,8 @@ export interface ProviderInvocationPhaseEvent {
 }
 
 export interface RunnerCallbacks {
+  /** Prior logical request when the runner is rebuilding after compaction or fallback. */
+  parentRequestId?: string | null;
   onChunk?: (chunk: string) => void | Promise<void>;
   onProgress?: (event: RunnerProgressEvent) => void;
   onThought?: (thought: string) => void;

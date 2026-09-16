@@ -287,6 +287,7 @@ import { classifyShellCapability } from './progressController.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './chatPhaseNudge.js';
 import {
   assessMutationEffect,
+  confirmedMutationPaths,
   isConfirmedMutation,
   isSuccessfulDirectMutation,
   type MutationEffectStatus,
@@ -460,6 +461,8 @@ export interface ChatEngineOptions {
 /** Shared TUI/headless/direct preparation applied to a live or reused engine. */
 export interface ChatEngineTurnPreparation {
   task: string;
+  projectRoot?: string | undefined;
+  instructionRoot?: string | undefined;
   systemContext?: string | undefined;
   appendSystemPrompt?: string | undefined;
   preflightContext?: string | undefined;
@@ -4071,31 +4074,40 @@ export class ChatEngine {
    * reused TUI engine's next native request matches headless/direct Chat.
    */
   applyTurnPreparation(preparation: ChatEngineTurnPreparation): void {
-    this.options = {
+    const nextOptions: ChatEngineOptions = {
       ...this.options,
       task: preparation.task,
-      ...(preparation.systemContext !== undefined
-        ? { systemContext: preparation.systemContext }
-        : {}),
-      ...(preparation.appendSystemPrompt !== undefined
-        ? { appendSystemPrompt: preparation.appendSystemPrompt }
-        : {}),
-      ...(preparation.preflightContext !== undefined
-        ? { preflightContext: preparation.preflightContext }
-        : {}),
-      ...(preparation.model !== undefined ? { model: preparation.model } : {}),
-      ...(preparation.executionProfile !== undefined
-        ? { executionProfile: preparation.executionProfile }
-        : {}),
-      ...(preparation.runtimeMode !== undefined
-        ? { runtimeMode: preparation.runtimeMode }
-        : {}),
     };
+    // A reused engine is a new turn boundary, not an overlay on the prior
+    // request. Clear optional inputs first so omitted values cannot leak
+    // stale prompts, preflight facts, model routing, or runtime claims.
+    delete nextOptions.instructionRoot;
+    delete nextOptions.systemContext;
+    delete nextOptions.appendSystemPrompt;
+    delete nextOptions.preflightContext;
+    delete nextOptions.model;
+    delete nextOptions.executionProfile;
+    delete nextOptions.runtimeMode;
+    if (preparation.projectRoot !== undefined) nextOptions.projectRoot = preparation.projectRoot;
+    if (preparation.instructionRoot !== undefined) nextOptions.instructionRoot = preparation.instructionRoot;
+    if (preparation.systemContext !== undefined) nextOptions.systemContext = preparation.systemContext;
+    if (preparation.appendSystemPrompt !== undefined) nextOptions.appendSystemPrompt = preparation.appendSystemPrompt;
+    if (preparation.preflightContext !== undefined) nextOptions.preflightContext = preparation.preflightContext;
+    if (preparation.model !== undefined) nextOptions.model = preparation.model;
+    if (preparation.executionProfile !== undefined) nextOptions.executionProfile = preparation.executionProfile;
+    if (preparation.runtimeMode !== undefined) nextOptions.runtimeMode = preparation.runtimeMode;
+    this.options = nextOptions;
     if (preparation.intentPlanUserMessage !== undefined) {
       this.options.intentPlanUserMessage = preparation.intentPlanUserMessage;
     } else {
       delete this.options.intentPlanUserMessage;
     }
+    const chatPlaybook = selectPlaybookForChatTask(preparation.task);
+    this.activePlaybook = chatPlaybook ?? null;
+    this.requireTodoBeforeMutate = shouldRequireTodoPlan(
+      preparation.task,
+      this.activePlaybook,
+    );
     if (preparation.systemContext !== undefined) {
       const projectRoot = this.options.instructionRoot ?? this.options.projectRoot;
       const babelMd = readProjectMemoryStructured(projectRoot, preparation.task);
@@ -4103,8 +4115,6 @@ export class ChatEngine {
         this.options.systemContext =
           babelMd + (this.options.systemContext ? '\n\n' + this.options.systemContext : '');
       }
-      const chatPlaybook = selectPlaybookForChatTask(preparation.task);
-      this.activePlaybook = chatPlaybook ?? null;
       if (chatPlaybook) {
         const pbPrompt = buildPlaybookPrompt(chatPlaybook);
         if (pbPrompt) {
@@ -4112,10 +4122,6 @@ export class ChatEngine {
             (this.options.systemContext ? this.options.systemContext + '\n\n' : '') + pbPrompt;
         }
       }
-      this.requireTodoBeforeMutate = shouldRequireTodoPlan(
-        preparation.task,
-        this.activePlaybook,
-      );
     }
     if (preparation.limits) {
       this.limits = preparation.limits;
@@ -5008,6 +5014,39 @@ export class ChatEngine {
         });
 
         if (gov.exit_code !== 0) {
+          // Process failure does not erase an independently proven workspace
+          // effect.  Invalidate reads conservatively for every attempted target
+          // and project confirmed changes while preserving the failed outcome.
+          const effectPaths =
+            gov.mutationPaths && gov.mutationPaths.length > 0
+              ? gov.mutationPaths
+              : [gov.absolutePath];
+          for (const effectPath of effectPaths) {
+            const effectKey = this.readCacheKey(effectPath);
+            invalidateReadCacheForPath(this.readCache, effectKey);
+            this.fullReadCounts.delete(effectKey);
+          }
+          if (strReplaceEffect.status === 'indeterminate') {
+            invalidateVerifierLedger(this as never, strReplaceEffect.reason);
+          }
+          if (strReplaceEffect.status === 'confirmed_change') {
+            this.workingState = applyWorkingStateEvent(this.workingState, {
+              type: 'mutation',
+              path: gov.absolutePath,
+            });
+            noteChatWorkspaceMutation(this as never);
+            callbacks?.onFileChanged?.(
+              gov.absolutePath,
+              (action.new_str.match(/\n/g) ?? []).length,
+              (action.old_str.match(/\n/g) ?? []).length,
+            );
+            appendPatchRecovery(
+              this.patchRecoveryPath ?? '',
+              'str_replace',
+              action.file_path,
+              `old=${action.old_str.slice(0, 200)}\nnew=${action.new_str.slice(0, 200)}`,
+            );
+          }
           this.toolCallLog.push({
             tool,
             target,
@@ -6165,14 +6204,18 @@ export class ChatEngine {
   } = {}): RunnerCallbacks {
     let startedInvocation: ProviderInvocationStarted | null = null;
     let retryCount = 0;
+    const parentRequestId =
+      this.pendingParentRequestId ??
+      (context.substitutionOrFallback && this.lastLogicalRequestId !== null
+        ? this.lastLogicalRequestId
+        : null);
     return {
+      parentRequestId,
       onInvocationStarted: (event) => {
         if (!this.parity.turnId) return;
         startedInvocation = event;
         retryCount = 0;
-        if (this.pendingParentRequestId === null && context.substitutionOrFallback && this.lastLogicalRequestId !== null) {
-          this.pendingParentRequestId = this.lastLogicalRequestId;
-        }
+        const recordedParentRequestId = event.parent_request_id ?? parentRequestId;
         const derivedExpectedPriorEventIds = this.parity.sessionEvents.events
           .filter(
             (prior) =>
@@ -6240,8 +6283,8 @@ export class ChatEngine {
           input_digest: event.input_digest,
           ...(event.request_id !== undefined ? { request_id: event.request_id } : {}),
           ...(event.attempt_id !== undefined ? { attempt_id: event.attempt_id } : {}),
-          ...(this.pendingParentRequestId !== null
-            ? { parent_request_id: this.pendingParentRequestId }
+          ...(recordedParentRequestId !== null && recordedParentRequestId !== undefined
+            ? { parent_request_id: recordedParentRequestId }
             : {}),
           body_digest: event.input_digest,
           ...(event.input_bytes !== undefined ? { body_bytes: event.input_bytes } : {}),
@@ -7126,13 +7169,13 @@ export class ChatEngine {
     if (finalStatus === 'completed' && this.writeCount > 0) {
       try {
         const changed = this.toolCallLog
-          .filter((t) => isConfirmedMutation({
+          .flatMap((t) => confirmedMutationPaths({
             tool: t.tool,
+            target: t.target,
             error: t.error,
             effectStatus: t.effect_status,
             mutationPaths: t.mutation_paths,
-          }) && t.target)
-          .map((t) => t.target)
+          }))
           .filter((p, i, arr) => p && arr.indexOf(p) === i)
           .slice(0, 20);
         proposeProjectMemoryWriteback({

@@ -1,8 +1,8 @@
 /**
  * Plan-then-execute enforcement.
  *
- * For tasks above a size threshold (or playbooks with requireTodoPlan),
- * block direct file mutations until the agent has created at least one todo via
+ * When explicitly enabled, block direct file mutations until the agent has
+ * created at least one todo via
  * `todo_write`. Prompt-only multi-file warnings are insufficient; this is a
  * hard harness gate.
  *
@@ -12,14 +12,14 @@
  * explore and run verifiers before a plan exists. Treat shell side-effects as
  * a separate policy surface, not part of this gate.
  *
- * Chat / REPL note: the default word threshold (80) also applies to free-form
- * chat tasks without a playbook. Long pastes can require `todo_write` before
- * edits — disable with BABEL_REQUIRE_TODO_PLAN=0 or raise
- * BABEL_TODO_PLAN_WORD_THRESHOLD for looser REPL behavior.
+ * Chat / REPL note: todo planning is optional by default. A caller may opt into
+ * the hard gate with BABEL_REQUIRE_TODO_PLAN=1 when a workflow specifically
+ * requires it; task size and skill labels alone do not impose a write barrier.
  *
  * Disable: BABEL_REQUIRE_TODO_PLAN=0
  * Force on: BABEL_REQUIRE_TODO_PLAN=1
- * Word threshold (default 80): BABEL_TODO_PLAN_WORD_THRESHOLD
+ * BABEL_TODO_PLAN_WORD_THRESHOLD is retained as a compatibility helper for
+ * callers that display sizing guidance; it does not impose a mutation gate.
  */
 
 import type { PlaybookDefinition } from '../services/playbooks/playbookService.js';
@@ -52,15 +52,9 @@ export function shouldRequireTodoPlan(
   if (env === '0' || env === 'false') return false;
   if (env === '1' || env === 'true') return true;
 
-  if (playbook?.requireTodoPlan) return true;
-
-  // Multi-file skill tags always require a plan
-  const skills = playbook?.select?.skills ?? [];
-  if (skills.includes('multi_file') || skills.includes('multi_hunk')) return true;
-
-  // Size threshold for complex free-form tasks
-  if (countTaskWords(task) >= resolveTodoPlanWordThreshold()) return true;
-
+  // Complexity, file count, and playbook labels are recommendations, not an
+  // unconditional authority to block capable coding agents. Explicit runtime
+  // opt-in remains available for workflows that require a hard plan boundary.
   return false;
 }
 

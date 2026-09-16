@@ -168,6 +168,11 @@ export async function governedStrReplace(
       terminal: result.terminal === true,
       absolutePath,
       policyDecision: result.policyDecision,
+      ...(result.mutationPaths ? { mutationPaths: result.mutationPaths } : {}),
+      ...(result.preBatchHash ? { preBatchHash: result.preBatchHash } : {}),
+      ...(result.postBatchHash ? { postBatchHash: result.postBatchHash } : {}),
+      ...(result.mutationReceipt ? { mutationReceipt: result.mutationReceipt } : {}),
+      ...(result.effectTransaction ? { effectTransaction: result.effectTransaction } : {}),
     };
   }
 
@@ -181,6 +186,10 @@ export async function governedStrReplace(
       policyBlocked: false,
       terminal: result.terminal === true,
       absolutePath,
+      ...(result.mutationPaths ? { mutationPaths: result.mutationPaths } : {}),
+      ...(result.preBatchHash ? { preBatchHash: result.preBatchHash } : {}),
+      ...(result.postBatchHash ? { postBatchHash: result.postBatchHash } : {}),
+      ...(result.mutationReceipt ? { mutationReceipt: result.mutationReceipt } : {}),
       ...(result.effectTransaction ? { effectTransaction: result.effectTransaction } : {}),
     };
   }

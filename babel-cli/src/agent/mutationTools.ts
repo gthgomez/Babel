@@ -197,11 +197,10 @@ export function isConfirmedMutation(input: {
 }): boolean {
   if (input.effectStatus !== 'confirmed_change' || input.error === 'blocked') return false;
   if (isConfirmedDirectMutation(input.tool, input.error, input.effectStatus)) return true;
-  return (
-    SHELL_MUTATION_TOOLS.has(input.tool) &&
-    Array.isArray(input.mutationPaths) &&
-    input.mutationPaths.some((path) => typeof path === 'string' && path.trim().length > 0)
-  );
+  // A verified workspace effect is truthful even when the executor cannot
+  // enumerate every affected path.  Paths drive changed-file projection only;
+  // they must not gate the effect/write count itself.
+  return SHELL_MUTATION_TOOLS.has(input.tool);
 }
 
 /** Return every executor-reported path for a confirmed mutation. */

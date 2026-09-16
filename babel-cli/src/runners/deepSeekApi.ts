@@ -447,7 +447,10 @@ async function readStreamingResponse(
             reader.cancel().catch(() => {});
             throw err;
           }
-          // Ignore partial/invalid chunks.
+          throw new Error(
+            `[deepSeekApi] Malformed SSE event chunk: ${data.slice(0, 100)}`,
+            { cause: err },
+          );
         }
       }
     }
@@ -486,7 +489,10 @@ async function readStreamingResponse(
           reader.cancel().catch(() => {});
           throw err;
         }
-        // Ignore
+        throw new Error(
+          `[deepSeekApi] Malformed SSE event chunk: ${data.slice(0, 100)}`,
+          { cause: err },
+        );
       }
     }
   }
@@ -587,6 +593,9 @@ export class DeepSeekApiRunner implements LlmRunner {
       provider: 'deepseek',
       requestedModelId: this.model,
       requestId: inferenceId,
+      ...(callbacks?.parentRequestId !== undefined
+        ? { parentRequestId: callbacks.parentRequestId }
+        : {}),
       reservedCompletionTokens: MAX_TOKENS,
     });
     assertPreparedProviderRequestAdmissible(preparedRequest);
@@ -596,6 +605,9 @@ export class DeepSeekApiRunner implements LlmRunner {
       inference_id: inferenceId,
       request_id: preparedRequest.request_id,
       attempt_id: preparedRequest.attempt_id,
+      ...(preparedRequest.parent_request_id !== null
+        ? { parent_request_id: preparedRequest.parent_request_id }
+        : {}),
       provider: 'deepseek',
       requested_model_id: this.model,
       normalized_model_id: this.model,
@@ -743,8 +755,11 @@ export class DeepSeekApiRunner implements LlmRunner {
             if (json.usage) {
               streamState.usage = json.usage;
             }
-          } catch {
-            // Ignore partial/invalid chunks.
+          } catch (err) {
+            throw new Error(
+              `[deepSeekApi] Malformed SSE event chunk: ${data.slice(0, 100)}`,
+              { cause: err },
+            );
           }
         }
       }
@@ -1216,6 +1231,9 @@ export class DeepSeekApiRunner implements LlmRunner {
       provider: 'deepseek',
       requestedModelId: this.model,
       requestId: inferenceId,
+      ...(callbacks?.parentRequestId !== undefined
+        ? { parentRequestId: callbacks.parentRequestId }
+        : {}),
       reservedCompletionTokens: MAX_TOKENS,
     });
     assertPreparedProviderRequestAdmissible(preparedRequest);
@@ -1225,6 +1243,9 @@ export class DeepSeekApiRunner implements LlmRunner {
       inference_id: inferenceId,
       request_id: preparedRequest.request_id,
       attempt_id: preparedRequest.attempt_id,
+      ...(preparedRequest.parent_request_id !== null
+        ? { parent_request_id: preparedRequest.parent_request_id }
+        : {}),
       provider: 'deepseek',
       requested_model_id: this.model,
       normalized_model_id: this.model,
@@ -1749,7 +1770,12 @@ export class DeepSeekApiRunner implements LlmRunner {
             if (json.choices?.[0]?.finish_reason) {
               finishReason = normalizeFinishReason(json.choices[0].finish_reason);
             }
-          } catch { /* ignore */ }
+          } catch (err) {
+            throw new Error(
+              `[deepSeekApi] Malformed SSE event chunk: ${data.slice(0, 100)}`,
+              { cause: err },
+            );
+          }
         }
       }
 

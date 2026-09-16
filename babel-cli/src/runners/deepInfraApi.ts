@@ -406,6 +406,7 @@ interface SseLineResult {
   routerMetadata: OpenRouterResponseMetadata | null;
   finishReason: string | null;
   isDone: boolean;
+  malformed?: string;
 }
 
 interface StreamingState {
@@ -458,7 +459,17 @@ function parseSseLine(line: string): SseLineResult {
       isDone: false,
     };
   } catch {
-    return { delta: '', reasoning: '', usage: null, observedModelId: null, upstreamProvider: null, routerMetadata: null, finishReason: null, isDone: false };
+    return {
+      delta: '',
+      reasoning: '',
+      usage: null,
+      observedModelId: null,
+      upstreamProvider: null,
+      routerMetadata: null,
+      finishReason: null,
+      isDone: false,
+      malformed: `[deepInfraApi] Malformed SSE event chunk: ${data.slice(0, 100)}`,
+    };
   }
 }
 
@@ -487,6 +498,7 @@ async function readStreamingResponse(
     if (!normalizedLine.startsWith('data:')) return false;
     vcrRecorder?.record(normalizedLine);
     const parsed = parseSseLine(`data: ${normalizedLine.slice(5).trimStart()}`);
+    if (parsed.malformed) throw new Error(parsed.malformed);
     if (parsed.observedModelId) state.observedModelId = parsed.observedModelId;
     if (parsed.upstreamProvider) state.upstreamProvider = parsed.upstreamProvider;
     if (parsed.routerMetadata) state.routerMetadata = parsed.routerMetadata;
@@ -778,6 +790,9 @@ export class DeepInfraApiRunner implements LlmRunner {
       provider: this.providerId,
       requestedModelId: this.model,
       requestId: inferenceId,
+      ...(callbacks?.parentRequestId !== undefined
+        ? { parentRequestId: callbacks.parentRequestId }
+        : {}),
       reservedCompletionTokens: this.executionEnvelope?.output.effective ?? this.maxTokens,
     });
     assertPreparedProviderRequestAdmissible(preparedRequest);
@@ -791,6 +806,9 @@ export class DeepInfraApiRunner implements LlmRunner {
       inference_id: inferenceId,
       request_id: preparedRequest.request_id,
       attempt_id: preparedRequest.attempt_id,
+      ...(preparedRequest.parent_request_id !== null
+        ? { parent_request_id: preparedRequest.parent_request_id }
+        : {}),
       provider: this.providerId,
       requested_model_id: this.model,
       normalized_model_id: this.model,
@@ -948,6 +966,7 @@ export class DeepInfraApiRunner implements LlmRunner {
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           const parsed = parseSseLine(line);
+          if (parsed.malformed) throw new Error(parsed.malformed);
           if (parsed.observedModelId) {
             streamState.observedModelId = parsed.observedModelId;
           }
@@ -1620,6 +1639,9 @@ export class DeepInfraApiRunner implements LlmRunner {
       provider: this.providerId,
       requestedModelId: this.model,
       requestId: inferenceId,
+      ...(callbacks?.parentRequestId !== undefined
+        ? { parentRequestId: callbacks.parentRequestId }
+        : {}),
       reservedCompletionTokens: this.executionEnvelope?.output.effective ?? this.maxTokens,
     });
     assertPreparedProviderRequestAdmissible(preparedRequest);
@@ -1633,6 +1655,9 @@ export class DeepInfraApiRunner implements LlmRunner {
       inference_id: inferenceId,
       request_id: preparedRequest.request_id,
       attempt_id: preparedRequest.attempt_id,
+      ...(preparedRequest.parent_request_id !== null
+        ? { parent_request_id: preparedRequest.parent_request_id }
+        : {}),
       provider: this.providerId,
       requested_model_id: this.model,
       normalized_model_id: this.model,
@@ -2222,7 +2247,12 @@ export class DeepInfraApiRunner implements LlmRunner {
               finishReason = normalizeFinishReason(json.choices[0].finish_reason);
               streamState.finishReason = finishReason;
             }
-          } catch { /* ignore */ }
+          } catch (err) {
+            throw new Error(
+              `[deepInfraApi] Malformed SSE event chunk: ${data.slice(0, 100)}`,
+              { cause: err },
+            );
+          }
         }
       }
 
