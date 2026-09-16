@@ -22,6 +22,18 @@ test('parseCommandArgv preserves Windows backslashes', () => {
   ]);
 });
 
+test('parseCommandArgv preserves quoted Windows UNC prefixes', () => {
+  const command = String.raw`type "\\server\share\file.txt"`;
+  assert.deepEqual(parseCommandArgv(command, 'win32'), [
+    'type',
+    String.raw`\\server\share\file.txt`,
+  ]);
+});
+
+test('parseCommandArgv preserves empty Windows arguments', () => {
+  assert.deepEqual(parseCommandArgv('node ""', 'win32'), ['node', '']);
+});
+
 test('parseCommandArgv rejects unterminated quotes', () => {
   assert.throws(
     () => parseCommandArgv('node "missing-close'),
@@ -32,4 +44,5 @@ test('parseCommandArgv rejects unterminated quotes', () => {
 test('quoteWindowsCommandArg quotes values needed by cmd.exe', () => {
   assert.equal(quoteWindowsCommandArg('path with spaces.txt'), '"path with spaces.txt"');
   assert.equal(quoteWindowsCommandArg('plain.txt'), 'plain.txt');
+  assert.equal(quoteWindowsCommandArg(''), '""');
 });

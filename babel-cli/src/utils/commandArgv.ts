@@ -51,7 +51,7 @@ export function parseCommandArgv(
         const next = command[index + 1]
         const escapesOnPlatform = platform !== 'win32'
           ? next === '"' || next === '\\' || next === '$' || next === '`'
-          : next === '"' || next === '\\'
+          : next === '"'
         if (next !== undefined && escapesOnPlatform) {
           current += next
           index++
@@ -102,6 +102,7 @@ export function parseCommandArgv(
  * @returns command-line-safe Windows argument
  */
 export function quoteWindowsCommandArg(value: string): string {
+  if (value.length === 0) return '""'
   if (!/[\s"]/.test(value)) return value
   return `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`
 }

@@ -23,6 +23,8 @@ import {
   strategyToCompactMode,
   collectPreservedToolCallIds,
   buildRawObservationRefs,
+  runChatEngineCompaction,
+  type ChatEngineCompactionHost,
 } from './compactionCommit.js';
 import {
   createThreadEventLog,
@@ -559,5 +561,65 @@ describe('H1 durable capsule content helper', () => {
     assert.ok(content.includes('# cap'));
     assert.ok(content.includes('my summary body'));
     assert.ok(content.includes('compaction_summary'));
+  });
+});
+
+describe('H1 compaction lifecycle result', () => {
+  it('reports a changed context when compaction retains the same message count', async () => {
+    const prior: ChatMessage[] = [
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'old user 1' },
+      { role: 'assistant', content: 'old assistant 1' },
+      { role: 'user', content: 'old user 2' },
+      { role: 'assistant', content: 'old assistant 2' },
+    ];
+    const strategyMessages: ChatMessage[] = [
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'retained user' },
+      { role: 'assistant', content: 'retained assistant' },
+      { role: 'user', content: 'continue' },
+    ];
+    const threadLog = createThreadEventLog();
+    const sessionLog = createSessionEventLog();
+    const host: ChatEngineCompactionHost = {
+      conversation: prior,
+      compactionManager: {
+        compactWithResult: async () => ({
+          messages: strategyMessages,
+          strategy: 'heuristic-truncation',
+          tokensBefore: 100,
+          tokensAfter: 80,
+          changed: true,
+        }),
+      },
+      options: { task: 'preserve context', model: 'm' },
+      limits: { maxEstimatedTokens: 10 },
+      abortSignal: new AbortController().signal,
+      writeCount: 0,
+      turnIndex: 1,
+      toolCallLog: [],
+      progress: { receipts: [], consecutiveNoProgress: 0 },
+      threadLog,
+      sessionLog,
+      turnId: 'turn-1',
+      shouldUseTextTools: () => false,
+      compactHeuristic: () => {
+        throw new Error('heuristic fallback should not run');
+      },
+      checkpoint: async () => undefined,
+      reserveTokens: 0,
+      textToolsReserve: 0,
+      resolveModel: () => 'm',
+      shouldCompactByTokens: () => true,
+      estimateTokens: (messages) => messages.length,
+    };
+
+    const result = await runChatEngineCompaction(host);
+
+    assert.ok(result);
+    assert.equal(result.changed, true);
+    assert.equal(result.beforeMessages, 5);
+    assert.equal(result.afterMessages, 5);
+    assert.notDeepEqual(host.conversation, prior);
   });
 });
