@@ -3,6 +3,7 @@ import { describe, test } from 'node:test';
 import type { ProviderMessage } from './base.js';
 import {
   countMarkdownHistoryMarkers,
+  accountProviderRequest,
   ensureProviderUserTask,
   mapProviderMessagesToWire,
   validateProviderMessageProtocol,
@@ -16,6 +17,25 @@ import {
   recordAssistantMessage,
   rebuildProviderMessagesFromEvents,
 } from '../agent/threadEventLog.js';
+
+describe('provider request accounting', () => {
+  test('digests the exact body and includes tools, messages, and reserved output', () => {
+    const body = JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hello' }], tools: [{ name: 'read' }] });
+    const accounting = accountProviderRequest(body, { reservedCompletionTokens: 128, inputLimitTokens: 256 });
+    assert.equal(accounting.request_digest.length, 64);
+    assert.equal(accounting.input_message_count, 1);
+    assert.equal(accounting.reserved_completion_tokens, 128);
+    assert.equal(accounting.estimated_total_tokens, (accounting.estimated_input_tokens ?? 0) + 128);
+    assert.equal(accounting.within_limit, true);
+  });
+
+  test('keeps unknown limits and malformed accounting inputs explicit', () => {
+    const accounting = accountProviderRequest('not-json', { reservedCompletionTokens: null });
+    assert.equal(accounting.input_message_count, null);
+    assert.equal(accounting.estimated_total_tokens, null);
+    assert.equal(accounting.within_limit, null);
+  });
+});
 
 describe('providerMessages (P0-B protocol fidelity)', () => {
   test('mapProviderMessagesToWire emits system once and preserves tool_call ids', () => {

@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { resolveExecutionProfile } from './executionProfiles.js';
 import { validateDockerIsolationArgs } from './dockerIsolationArgs.js';
 import { isProjectRelativeExecutable } from '../authority/commandSpec.js';
+import { parseCommandArgv } from '../utils/commandArgv.js';
 import {
   BABEL_CONTAINER_EMPTY_HOOKS_DIR,
   BABEL_CONTAINER_NO_EDITOR,
@@ -85,7 +86,11 @@ const CONTAINER_SHELL_SYNTAX_RE = /[;&|><`$(){}!\\\r\n]/;
 const runtimeInventoryCache = new Map<string, BenchmarkRuntimeInventory>();
 
 function splitCommand(command: string): string[] {
-  return command.trim().split(/\s+/).filter(Boolean);
+  try {
+    return parseCommandArgv(command);
+  } catch {
+    return [];
+  }
 }
 
 function dockerPath(path: string): string {
@@ -555,7 +560,7 @@ export function getCachedBenchmarkContainerRuntimeInventory(
 }
 
 export function getBenchmarkCommandBase(rawCommand: string): string | null {
-  const rawBase = rawCommand.trim().split(/\s+/).find(Boolean);
+  const rawBase = splitCommand(rawCommand)[0];
   if (!rawBase) {
     return null;
   }
@@ -569,7 +574,7 @@ export function getBenchmarkRuntimeCommandUsability(
   allowedCommandBases: readonly string[],
   rawCommand: string,
 ): BenchmarkRuntimeCommandUsability {
-  const rawBase = rawCommand.trim().split(/\s+/).find(Boolean) ?? '';
+  const rawBase = splitCommand(rawCommand)[0] ?? '';
   if (isBenchmarkProjectExecutableCommand(rawBase)) {
     return {
       status: 'project_executable',

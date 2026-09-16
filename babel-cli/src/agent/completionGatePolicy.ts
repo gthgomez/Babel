@@ -20,6 +20,7 @@ import {
   type VerifierScope,
 } from './verifierKernel.js';
 import { isCatOrTypeCommand } from './codingLoop/verificationStages.js';
+import { parseCommandArgv } from '../utils/commandArgv.js';
 
 /** Preserve ledger scope; never force targeted → full_suite (H5 live gate). */
 export function receiptScopeFromLedgerEntry(r: unknown): VerifierScope {
@@ -1134,7 +1135,13 @@ export function evaluateCompletionGateForEngine(opts: {
       return buildVerifierReceiptV2({
         receipt_id: `gate-${i}`,
         verifier_id: cmd || `v-${i}`,
-        argv: cmd.split(/\s+/).filter(Boolean),
+        argv: (() => {
+          try {
+            return parseCommandArgv(cmd);
+          } catch {
+            return [];
+          }
+        })(),
         cwd: '.',
         env_profile_hash: 'gate',
         started_at: new Date().toISOString(),

@@ -78,6 +78,7 @@
     "clean:dist": "node scripts/clean_dist.mjs",
     "check:dist": "node scripts/check_dist_clean.mjs",
     "check:source-provenance": "node scripts/check_source_provenance.mjs",
+    "snapshot:source-manifest": "tsx --no-warnings=ExperimentalWarning scripts/build_source_manifest.ts",
     "analysis:historical-calibration": "tsx --no-warnings=ExperimentalWarning scripts/build_historical_calibration.ts",
     "analysis:chat-calibration": "tsx --no-warnings=ExperimentalWarning scripts/analyze_chat_calibration.ts",
     "benchmark:chat-calibration": "tsx --no-warnings=ExperimentalWarning scripts/run_chat_calibration.ts",

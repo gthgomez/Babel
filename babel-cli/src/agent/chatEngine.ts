@@ -6,7 +6,7 @@
 
 import { join } from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { readFile, writeFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
 import { resolveClassCGateDecision } from './autonomyEnforcement.js';
@@ -141,6 +141,7 @@ import {
   createWorkingState,
   decideReadInjection,
   evaluateReadRequest,
+  formatReadFailureObservation,
   formatReadObservation,
   formatVerifierReceiptSummary,
   invalidateReadCacheForPath,
@@ -899,6 +900,8 @@ export class ChatEngine {
   private compactionConsecutiveFailures = 0;
   private static readonly MAX_COMPACTION_FAILURES = 3;
   private readCache: ReadInjectionCache = new Map();
+  /** Read-injection generation; compaction and re-preparation start a new context. */
+  private readContextEpoch = 0;
   private dedupeHitCount = 0;
   private writeCount = 0;
   /** R8: Verifier receipt cache — avoids re-running identical verifier commands
@@ -4066,6 +4069,9 @@ export class ChatEngine {
       taskText: preparation.task,
       autoClassify: true,
     });
+    // Reused TUI engines start a new task/context. Do not let a previous
+    // task's read dedupe suppress evidence in the new request.
+    this.resetReadInjectionContext();
     this.clearSystemPromptCache();
   }
 
@@ -4129,6 +4135,9 @@ export class ChatEngine {
       runDir: this.engineRunDir,
       babelRoot: process.env['BABEL_ROOT'] ?? process.cwd(),
       signal: this.abortController.signal,
+      projectRoot: this.options.projectRoot,
+      sessionId: this.engineRunId,
+      ...(this.parity.turnId ? { turnId: this.parity.turnId } : {}),
     };
     let subAgentCounter = 0;
     // Order-preserving batches (only consecutive reads may parallelize).
@@ -4834,6 +4843,7 @@ export class ChatEngine {
           fileHash: fileReadCacheHash,
           request: { kind: 'full' },
           cache: this.readCache,
+          contextEpoch: this.readContextEpoch,
         });
         if (fullDecision.skip) {
           const cached = this.readCache.get(fullDecision.cacheKey);
@@ -4976,6 +4986,7 @@ export class ChatEngine {
             endLine: action.end_line,
           },
           cache: this.readCache,
+          contextEpoch: this.readContextEpoch,
         });
         if (
           evaluated.window.lines.length === 0 &&
@@ -5218,8 +5229,22 @@ export class ChatEngine {
       const obsParts: string[] = [];
       for (const r of result.results) {
         if (action.type === 'read_file') {
-          const window = selectReadWindow(r.stdout ?? '', { kind: 'full' });
-          obsParts.push(formatReadObservation('read_file', target, window));
+          if (r.exit_code === 0) {
+            const window = selectReadWindow(r.stdout ?? '', { kind: 'full' });
+            obsParts.push(formatReadObservation('read_file', target, window));
+          } else {
+            obsParts.push(
+              formatReadFailureObservation({
+                tool: 'read_file',
+                target,
+                exitCode: r.exit_code,
+                stdout: r.stdout,
+                stderr: r.stderr,
+                toolCallId: String(toolId),
+                spillDir: this.engineRunDir,
+              }),
+            );
+          }
         } else {
           obsParts.push(
             formatChatToolObservation(
@@ -5395,6 +5420,21 @@ export class ChatEngine {
           } else if (lastResult.exit_code === 0 && !confirmedShellMutation) {
             invalidateVerifierLedger(this as never, 'non-verifier shell command executed');
           }
+
+          // A command can mutate files and then fail. Prefer the executor's
+          // changed-path receipt; without one, invalidate conservatively.
+          if (!result.policyBlocked) {
+            if (result.mutationPaths && result.mutationPaths.length > 0) {
+              for (const changedPath of result.mutationPaths) {
+                const changedKey = this.readCacheKey(changedPath);
+                invalidateReadCacheForPath(this.readCache, changedKey);
+                this.fullReadCounts.delete(changedKey);
+              }
+            } else {
+              this.readCache.clear();
+              this.fullReadCounts.clear();
+            }
+          }
         }
 
         // B2: Update read cache after successful read_file execution
@@ -5410,6 +5450,7 @@ export class ChatEngine {
             pathKey,
             fileReadCacheHash,
             lastResult.stdout ?? '',
+            this.readContextEpoch,
           );
           this.fullReadCounts.set(pathKey, (this.fullReadCounts.get(pathKey) ?? 0) + 1);
           this.noteToolForReadThrash(tool);
@@ -5718,6 +5759,10 @@ export class ChatEngine {
     const result = await runChatEngineCompaction(host);
     this.conversation = host.conversation;
     if (!result) return null;
+    // A compaction changes which facts are retained by the model. Any prior
+    // read injection may be absent from the new context even when file bytes
+    // are unchanged, so force explicit reacquisition on the next request.
+    this.resetReadInjectionContext();
     const info: ContextCompactedInfo = {
       mode: result.mode,
       beforeMessages: result.beforeMessages,
@@ -6598,11 +6643,16 @@ export class ChatEngine {
   private async hashFilePath(filePath: string): Promise<string> {
     try {
       const resolved = resolveProjectPath(this.options.projectRoot, filePath);
-      const s = await stat(resolved);
-      return `${s.size}:${s.mtimeMs}`;
+      return this.hashContent(await readFile(resolved, 'utf-8'));
     } catch {
       return '';
     }
+  }
+
+  private resetReadInjectionContext(): void {
+    this.readContextEpoch = (this.readContextEpoch ?? 0) + 1;
+    this.readCache?.clear();
+    this.fullReadCounts?.clear();
   }
 
   /** B4: Resolve runner with phase-aware model routing.

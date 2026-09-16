@@ -23,14 +23,28 @@ export interface ChatStackEntry {
   path: string;
   /** Present when file was loaded. */
   contentPreview?: string;
+  /** Digest of the complete selected entry content before budget packing. */
+  content_digest?: string;
+}
+
+export interface ChatStackContentDisposition {
+  id: string;
+  status: 'included' | 'truncated' | 'omitted';
+  included_chars: number;
 }
 
 export interface ChatCompiledStack {
   selected_entries: ChatStackEntry[];
   /** sha256 of sorted entry ids + paths — stable across identical selection. */
   manifest_hash: string;
-  /** Concatenated instruction text (budget-trimmed). */
+  /** Concatenated instruction text after section-aware budget packing. */
   system_context: string;
+  /** sha256 of the exact system_context delivered to the provider. */
+  delivered_content_digest: string;
+  /** Selection entries retained for audit even when their content was omitted. */
+  content_disposition: ChatStackContentDisposition[];
+  /** Explicit when mandatory safety/provider/verifier content cannot fit. */
+  context_error?: string;
   /** True when planner/QA deep stages were NOT included (default). */
   deep_stages_excluded: true;
   /** Token-ish estimate (chars/4). */
@@ -164,6 +178,10 @@ function hashManifest(entries: ChatStackEntry[]): string {
   return h.digest('hex').slice(0, 24);
 }
 
+function hashContent(content: string): string {
+  return createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
 /**
  * Compile the smallest correct chat instruction stack.
  * Does not load planner or QA deep stages.
@@ -173,7 +191,7 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
   const babelRoot = options.babelRoot ? resolve(options.babelRoot) : projectRoot;
   const budget = options.promptBudgetChars ?? 24_000;
   const entries: ChatStackEntry[] = [];
-  const chunks: string[] = [];
+  const sections: Array<{ entry: ChatStackEntry; content: string }> = [];
 
   const push = (
     entry: ChatStackEntry,
@@ -182,8 +200,9 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     entries.push({
       ...entry,
       contentPreview: content.slice(0, 200),
+      content_digest: hashContent(content),
     });
-    chunks.push(content);
+    sections.push({ entry: entries[entries.length - 1]!, content });
   };
 
   // Identity
@@ -250,16 +269,71 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     VERIFIER_SNIPPET,
   );
 
-  // Budget-trim from the end of large identity/project chunks while keeping all entry records.
-  let system_context = chunks.join('\n\n');
-  if (system_context.length > budget) {
-    system_context = system_context.slice(0, budget) + '\n\n/* chat stack budget trim */';
+  const mandatoryIds = new Set([
+    'safety:chat-adapter',
+    'provider:adapter',
+    'verifier:guidance',
+  ]);
+  const mandatorySections = sections.filter(({ entry }) => mandatoryIds.has(entry.id));
+  const optionalSections = sections.filter(({ entry }) => !mandatoryIds.has(entry.id));
+  const mandatoryText = mandatorySections.map(({ content }) => content).join('\n\n');
+  const content_disposition: ChatStackContentDisposition[] = [];
+  let system_context = '';
+  let context_error: string | undefined;
+
+  if (mandatoryText.length > budget) {
+    context_error = 'mandatory_instruction_core_exceeds_prompt_budget';
+    for (const { entry } of sections) {
+      content_disposition.push({
+        id: entry.id,
+        status: 'omitted',
+        included_chars: 0,
+      });
+    }
+  } else {
+    const includedOptional: string[] = [];
+    for (const { entry, content } of optionalSections) {
+      const separatorBeforeMandatory = mandatoryText.length > 0 ? 2 : 0;
+      const separatorBefore = includedOptional.length > 0 ? 2 : 0;
+      const available = budget - mandatoryText.length - separatorBeforeMandatory -
+        includedOptional.join('\n\n').length - separatorBefore;
+      if (content.length <= available) {
+        includedOptional.push(content);
+        content_disposition.push({ id: entry.id, status: 'included', included_chars: content.length });
+      } else if (available > 0) {
+        const partial = Array.from(content).slice(0, available).join('');
+        includedOptional.push(partial);
+        content_disposition.push({ id: entry.id, status: 'truncated', included_chars: partial.length });
+        break;
+      } else {
+        content_disposition.push({ id: entry.id, status: 'omitted', included_chars: 0 });
+        continue;
+      }
+    }
+    const includedIds = new Set(content_disposition.map((item) => item.id));
+    for (const { entry } of optionalSections) {
+      if (!includedIds.has(entry.id)) {
+        content_disposition.push({ id: entry.id, status: 'omitted', included_chars: 0 });
+      }
+    }
+    system_context = [...includedOptional, mandatoryText].filter(Boolean).join('\n\n');
+    for (const { entry } of mandatorySections) {
+      content_disposition.push({
+        id: entry.id,
+        status: 'included',
+        included_chars:
+          sections.find((section) => section.entry.id === entry.id)?.content.length ?? 0,
+      });
+    }
   }
 
   return {
     selected_entries: entries,
     manifest_hash: hashManifest(entries),
     system_context,
+    delivered_content_digest: hashContent(system_context),
+    content_disposition,
+    ...(context_error ? { context_error } : {}),
     deep_stages_excluded: true,
     estimated_tokens: Math.ceil(system_context.length / 4),
     project_root: projectRoot,

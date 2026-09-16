@@ -35,7 +35,7 @@ import {
   type ToolStreamEvent,
   buildStructuredOutputError,
 } from './base.js';
-import { hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
+import { accountProviderRequest, hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
 import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js';
 import { extractJson } from '../utils/extractJson.js';
 import { createVcrRecorder, createVcrPlayer, type VcrRecorder } from '../services/streamingVcr.js';
@@ -769,10 +769,13 @@ export class DeepInfraApiRunner implements LlmRunner {
     };
     const inferenceId = randomUUID();
     const requestBody = buildBody();
+    const requestAccounting = accountProviderRequest(requestBody, {
+      reservedCompletionTokens: this.executionEnvelope?.output.effective ?? this.maxTokens,
+    });
     this.lastWirePolicyHash = this.executionEnvelope
       ? hashWirePolicy(JSON.parse(requestBody) as WireRequest)
       : null;
-    const inputDigest = createHash('sha256').update(requestBody).digest('hex');
+    const inputDigest = requestAccounting.request_digest;
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
       provider: this.providerId,
@@ -781,6 +784,8 @@ export class DeepInfraApiRunner implements LlmRunner {
       sent_model_id: this.model,
       input_digest: inputDigest,
       input_message_count: 2,
+      requested_output_budget: this.executionEnvelope?.output.requested ?? this.maxTokens,
+      effective_output_budget: this.executionEnvelope?.output.effective ?? this.maxTokens,
       ...(this.executionEnvelope
         ? {
             execution_envelope_hash: this.executionEnvelope.configurationHash,
@@ -1583,10 +1588,13 @@ export class DeepInfraApiRunner implements LlmRunner {
     };
     const inferenceId = randomUUID();
     const requestBody = buildBody();
+    const requestAccounting = accountProviderRequest(requestBody, {
+      reservedCompletionTokens: this.executionEnvelope?.output.effective ?? this.maxTokens,
+    });
     this.lastWirePolicyHash = this.executionEnvelope
       ? hashWirePolicy(JSON.parse(requestBody) as WireRequest)
       : null;
-    const inputDigest = createHash('sha256').update(requestBody).digest('hex');
+    const inputDigest = requestAccounting.request_digest;
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
       provider: this.providerId,
@@ -1595,6 +1603,8 @@ export class DeepInfraApiRunner implements LlmRunner {
       sent_model_id: this.model,
       input_digest: inputDigest,
       input_message_count: messages.length + 1,
+      requested_output_budget: this.executionEnvelope?.output.requested ?? this.maxTokens,
+      effective_output_budget: this.executionEnvelope?.output.effective ?? this.maxTokens,
       ...(this.executionEnvelope
         ? {
             execution_envelope_hash: this.executionEnvelope.configurationHash,

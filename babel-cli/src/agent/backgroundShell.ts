@@ -17,6 +17,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { resolve as pathResolve } from 'node:path';
 
 import { terminateChildTree } from '../sandbox.js';
+import { parseCommandArgv } from '../utils/commandArgv.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
 import { getDefaultProcessWitness, type ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 
@@ -147,7 +148,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
   const id = `bg-${nextId++}`;
   const isWin = process.platform === 'win32';
   // Whitespace split only — same tokenizer as sandbox shellExec (no quotes).
-  const argv = command.split(/\s+/);
+  const argv = parseCommandArgv(command, process.platform);
   const rawCmd = argv[0] ?? '';
   const normalizedRawCmd = isWin
     ? rawCmd.replace(/^\.\//, '.\\').replace(/\//g, '\\')

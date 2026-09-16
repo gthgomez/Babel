@@ -4,6 +4,7 @@ import { describe, test } from 'node:test'
 import {
   decideReadInjection,
   evaluateReadRequest,
+  formatReadFailureObservation,
   formatReadObservation,
   formatReadWindowBanner,
   invalidateReadCacheForPath,
@@ -172,5 +173,36 @@ describe('read window + injection keys (shipped)', () => {
       cache,
     })
     assert.equal(other.skip, false)
+  })
+
+  test('failed reads render failure evidence with the true exit status', () => {
+    const obs = formatReadFailureObservation({
+      tool: 'read_file',
+      target: 'missing.ts',
+      exitCode: 1,
+      stdout: '',
+      stderr: 'ENOENT: no such file or directory',
+      toolCallId: 'call-read-1',
+    })
+    assert.match(obs, /exit_code: 1/)
+    assert.match(obs, /ENOENT/)
+    assert.doesNotMatch(obs, /exit_code: 0/)
+  })
+
+  test('a new context epoch cannot reuse an identical prior read', () => {
+    const cache: ReadInjectionCache = new Map()
+    const input = {
+      pathKey: 'src/context.ts',
+      fileHash: 'same-bytes',
+      request: { kind: 'full' as const },
+      cache,
+    }
+    assert.equal(decideReadInjection({ ...input, contextEpoch: 0 }).skip, false)
+    cache.set(makeReadInjectionKey('src/context.ts', { kind: 'full' }, 0), {
+      hash: 'same-bytes',
+      timestamp: Date.now(),
+      requestKey: makeReadInjectionKey('src/context.ts', { kind: 'full' }, 0),
+    })
+    assert.equal(decideReadInjection({ ...input, contextEpoch: 1 }).skip, false)
   })
 })
