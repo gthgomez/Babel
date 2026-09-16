@@ -19,7 +19,7 @@ import {
   type ToolStreamEvent,
   buildStructuredOutputError,
 } from './base.js';
-import { hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
+import { accountProviderRequest, hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
 import { assertSupportedDeepSeekModel, type DeepSeekModelId } from '../services/deepSeekPricing.js';
 import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js';
 import { extractJson } from '../utils/extractJson.js';
@@ -578,14 +578,19 @@ export class DeepSeekApiRunner implements LlmRunner {
     };
     const inferenceId = randomUUID();
     const requestBody = buildBody();
+    const requestAccounting = accountProviderRequest(requestBody, {
+      reservedCompletionTokens: MAX_TOKENS,
+    });
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
       provider: 'deepseek',
       requested_model_id: this.model,
       normalized_model_id: this.model,
       sent_model_id: this.model,
-      input_digest: createHash('sha256').update(requestBody).digest('hex'),
+      input_digest: requestAccounting.request_digest,
       input_message_count: 2,
+      requested_output_budget: MAX_TOKENS,
+      effective_output_budget: MAX_TOKENS,
     });
     let completionSent = false;
     let lastAttempt = 0;
@@ -1180,14 +1185,19 @@ export class DeepSeekApiRunner implements LlmRunner {
 
     const inferenceId = randomUUID();
     const requestBody = buildBody();
+    const requestAccounting = accountProviderRequest(requestBody, {
+      reservedCompletionTokens: MAX_TOKENS,
+    });
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
       provider: 'deepseek',
       requested_model_id: this.model,
       normalized_model_id: this.model,
       sent_model_id: this.model,
-      input_digest: createHash('sha256').update(requestBody).digest('hex'),
+      input_digest: requestAccounting.request_digest,
       input_message_count: messages.length + 1,
+      requested_output_budget: MAX_TOKENS,
+      effective_output_budget: MAX_TOKENS,
       capability_bindings: tools.map((tool) => ({
         capability: tool.function.name,
         advertised: true,

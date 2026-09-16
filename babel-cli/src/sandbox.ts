@@ -68,6 +68,10 @@ import {
 import { getSafeEnv } from './utils/safeEnv.js';
 import { childEnvForSandbox, hardenGitHostEnvironment } from './authority/unprivilegedChildEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
+import {
+  CommandArgvParseError,
+  parseCommandArgv,
+} from './utils/commandArgv.js';
 import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
@@ -856,7 +860,18 @@ export function validateExecutorShellCommand(
     }
   }
 
-  const argv = trimmed.split(/\s+/);
+  let argv: string[];
+  try {
+    argv = parseCommandArgv(trimmed, platform);
+  } catch (err) {
+    const message = err instanceof CommandArgvParseError ? err.message : String(err);
+    return {
+      reason_code: 'command_argv_parse_error',
+      message: `Command rejected — ${message}.`,
+      evidence: [command],
+      command_base: null,
+    };
+  }
   const rawCmd = argv[0] ?? '';
 
   if (platform === 'win32' && WINDOWS_ENV_PREFIX_RE.test(rawCmd)) {
@@ -1675,7 +1690,18 @@ export class SafeExecutor {
     }
 
     // ── Parse argv ──────────────────────────────────────────────────────────
-    const argv = command.trim().split(/\s+/);
+    let argv: string[];
+    try {
+      argv = parseCommandArgv(command.trim(), process.platform);
+    } catch (err) {
+      const message = err instanceof CommandArgvParseError ? err.message : String(err);
+      return policyDeniedResult(
+        'command_argv_parse_error',
+        `[sandbox] ${message}.`,
+        toolName,
+        [command],
+      );
+    }
     const rawCmd = argv[0] ?? '';
     const normalizedRawCmd =
       process.platform === 'win32' ? rawCmd.replace(/^\.\//, '.\\').replace(/\//g, '\\') : rawCmd;

@@ -149,6 +149,9 @@ export async function executeChatTask(
       task,
       ...(ctx.state.model !== undefined ? { model: ctx.state.model } : {}),
     });
+    if (chatStack.context_error) {
+      throw new Error(`[chat] ${chatStack.context_error}`);
+    }
     const effectiveSystemContext = [systemContext, chatStack.system_context]
       .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
       .join('\n\n');

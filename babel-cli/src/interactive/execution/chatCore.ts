@@ -72,6 +72,7 @@ import {
   resolveStackBudgetForClass,
   type ChatCompiledStack,
 } from '../../agent/chatStackCompile.js';
+import { buildChatCausalEvidence } from '../../agent/chatCausalEvidence.js';
 import {
   isAcceptanceRecordingEnabled,
   prepareAcceptanceRecording,
@@ -106,6 +107,9 @@ export function compileChatStackForRun(input: {
     ...(input.model !== undefined ? { modelId: input.model } : {}),
     ...(input.babelRoot !== undefined ? { babelRoot: input.babelRoot } : {}),
   });
+  if (stack.context_error) {
+    throw new Error(`[chat] ${stack.context_error}`);
+  }
   _lastChatCompiledStack = stack;
   return stack;
 }
@@ -746,9 +750,12 @@ export async function runChatEngineOnce(input: {
               id: e.id,
               layer: e.layer,
               path: e.path,
+              ...(e.content_digest ? { content_digest: e.content_digest } : {}),
             })),
             deep_stages_excluded: true,
             estimated_tokens: chatStack.estimated_tokens,
+            delivered_content_digest: chatStack.delivered_content_digest,
+            content_disposition: chatStack.content_disposition,
           },
           null,
           2,
@@ -757,6 +764,21 @@ export async function runChatEngineOnce(input: {
       );
     } catch {
       // best-effort telemetry
+    }
+  }
+
+  if (result.runDir) {
+    try {
+      const causalEvidence = buildChatCausalEvidence(
+        engine.getParityRuntime().sessionEvents.events,
+      );
+      fs.writeFileSync(
+        path.join(result.runDir, 'chat_causal_evidence.json'),
+        JSON.stringify(causalEvidence, null, 2),
+        'utf-8',
+      );
+    } catch {
+      // Evidence projection is additive; the durable session log remains authoritative.
     }
   }
 

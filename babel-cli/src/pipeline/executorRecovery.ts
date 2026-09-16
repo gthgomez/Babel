@@ -3,13 +3,22 @@ import { join, relative } from 'node:path';
 
 import { isVerifierCommand } from '../services/terminalStatus.js';
 import { normalizeShellCommandForComparison } from './benchmarkTasks.js';
+import { parseCommandArgv } from '../utils/commandArgv.js';
+
+function commandBase(command: string): string {
+  try {
+    return parseCommandArgv(normalizeShellCommandForComparison(command))[0] ?? '';
+  } catch {
+    return '';
+  }
+}
 
 export function isVerifierNotFoundFailure(
   command: string,
   stdout: string,
   stderr: string,
 ): boolean {
-  const commandBase = normalizeShellCommandForComparison(command).split(/\s+/)[0] ?? '';
+  const base = commandBase(command);
   const evidence = `${stdout}\n${stderr}`.toLowerCase();
   return (
     evidence.includes('missing script') ||
@@ -18,7 +27,7 @@ export function isVerifierNotFoundFailure(
     evidence.includes('not recognized as the name of') ||
     evidence.includes('enoent') ||
     evidence.includes('could not determine executable to run') ||
-    (/npm/.test(commandBase) &&
+    (/npm/.test(base) &&
       /missing script:\s*["']?(?:test|typecheck|build)["']?/.test(evidence))
   );
 }
@@ -87,8 +96,8 @@ export function extractMissingNpmScript(
   stdout: string,
   stderr: string,
 ): string | null {
-  const commandBase = normalizeShellCommandForComparison(command).split(/\s+/)[0] ?? '';
-  if (!/npm/.test(commandBase)) {
+  const base = commandBase(command);
+  if (!/npm/.test(base)) {
     return null;
   }
   const evidence = `${stdout}\n${stderr}`.toLowerCase();

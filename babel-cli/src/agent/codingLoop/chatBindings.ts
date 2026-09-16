@@ -54,15 +54,20 @@ export function rememberFullReadWindow(
   pathKey: string,
   fileHash: string,
   stdout: string,
+  contextEpoch = 0,
 ): void {
   const window = selectReadWindow(stdout, { kind: 'full' })
   if (window.truncated) {
     rememberReadInjection(
       cache,
-      `${pathKey}::${window.startLine}-${window.endLine}`,
+      `${pathKey}::${window.startLine}-${window.endLine}::epoch=${Math.max(0, Math.floor(contextEpoch))}`,
       fileHash,
     )
     return
   }
-  rememberReadInjection(cache, `${pathKey}::full`, fileHash)
+  rememberReadInjection(
+    cache,
+    `${pathKey}::full::epoch=${Math.max(0, Math.floor(contextEpoch))}`,
+    fileHash,
+  )
 }

@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { parseCommandArgv } from '../utils/commandArgv.js';
 
 export type ApprovalDecision =
   | 'deny'
@@ -100,15 +101,21 @@ export function buildApprovalRequest(input: {
     cwd: input.cwd,
     capability: input.capability,
     risk: input.risk ?? 'medium',
-    proposed_scope:
-      input.proposed_scope ??
-      `${input.capability}:${input.command.split(/\s+/)[0] ?? '*'}`,
+    proposed_scope: input.proposed_scope ?? `${input.capability}:${parseCommandBase(input.command)}`,
     reason: input.reason,
     created_at: new Date().toISOString(),
     ...(input.operation_digest !== undefined
       ? { operation_digest: input.operation_digest }
       : {}),
   };
+}
+
+function parseCommandBase(command: string): string {
+  try {
+    return parseCommandArgv(command)[0] ?? '*';
+  } catch {
+    return '*';
+  }
 }
 
 function scopeKey(req: ApprovalRequest): string {

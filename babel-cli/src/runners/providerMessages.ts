@@ -6,7 +6,59 @@
  * pseudo-history flattened into a single user message.
  */
 
+import { createHash } from 'node:crypto';
 import type { ProviderMessage, ProviderToolCall } from './base.js';
+
+export interface ProviderRequestAccounting {
+  /** Digest of the exact serialized body sent to the provider. */
+  request_digest: string;
+  request_bytes: number;
+  input_message_count: number | null;
+  estimated_input_tokens: number | null;
+  reserved_completion_tokens: number | null;
+  estimated_total_tokens: number | null;
+  /** Null means the provider limit was not established, never an implicit pass. */
+  within_limit: boolean | null;
+}
+
+/**
+ * Account the exact provider body after request assembly. Unknown provider
+ * limits remain unknown; the request digest is always over the sent bytes.
+ */
+export function accountProviderRequest(
+  requestBody: string,
+  options: { reservedCompletionTokens?: number | null; inputLimitTokens?: number | null } = {},
+): ProviderRequestAccounting {
+  const request_digest = createHash('sha256').update(requestBody, 'utf8').digest('hex');
+  let input_message_count: number | null = null;
+  let estimated_input_tokens: number | null = null;
+  try {
+    const body = JSON.parse(requestBody) as { messages?: unknown; tools?: unknown };
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    input_message_count = messages.length;
+    const inputPayload = JSON.stringify({ messages, tools: body.tools ?? [] });
+    estimated_input_tokens = Math.ceil(Buffer.byteLength(inputPayload, 'utf8') / 4) + messages.length * 4;
+  } catch {
+    // The provider transport owns request validation; accounting stays explicit UNKNOWN.
+  }
+  const reserved_completion_tokens = options.reservedCompletionTokens ?? null;
+  const estimated_total_tokens =
+    estimated_input_tokens !== null && reserved_completion_tokens !== null
+      ? estimated_input_tokens + reserved_completion_tokens
+      : null;
+  return {
+    request_digest,
+    request_bytes: Buffer.byteLength(requestBody, 'utf8'),
+    input_message_count,
+    estimated_input_tokens,
+    reserved_completion_tokens,
+    estimated_total_tokens,
+    within_limit:
+      estimated_total_tokens !== null && options.inputLimitTokens !== undefined && options.inputLimitTokens !== null
+        ? estimated_total_tokens <= options.inputLimitTokens
+        : null,
+  };
+}
 
 /** OpenAI-compatible wire message shape used by DeepSeek / DeepInfra. */
 export type WireProviderMessage = {

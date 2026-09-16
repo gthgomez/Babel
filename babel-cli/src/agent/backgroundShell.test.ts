@@ -65,9 +65,21 @@ describe('backgroundShell', () => {
 
     const result = await awaitBackgroundShell(job.id, 15_000);
     assert.equal(result.timed_out, false);
-    assert.equal(result.exit_code, 0);
+    assert.equal(result.exit_code, 0, result.stderr);
     assert.match(result.stdout, /hello-bg/);
     assert.equal(result.status, 'completed');
+  });
+
+  it('passes quoted arguments as one argv item', async () => {
+    const script = join(mkdtempSync(join(tmpdir(), 'babel-bg-')), 'argv.mjs');
+    writeFileSync(script, 'process.stdout.write(process.argv[2] ?? "missing")', 'utf8');
+    const job = startBackgroundShell({
+      command: `node "${script}" "value with spaces"`,
+      cwd: process.cwd(),
+    });
+    const result = await awaitBackgroundShell(job.id, 15_000);
+    assert.equal(result.exit_code, 0, result.stderr);
+    assert.equal(result.stdout, 'value with spaces');
   });
 
   it('await reports timed_out without killing a still-running job', async () => {

@@ -440,6 +440,20 @@ test('empty command is rejected', () => {
   assert.equal(issue?.reason_code, 'empty_command_rejected');
 });
 
+test('argv validation accepts quoted arguments with spaces', () => {
+  assert.equal(
+    validateExecutorShellCommand('node app.js "path with spaces.txt"', process.platform, 'dev_local'),
+    null,
+  );
+});
+
+test('argv validation reports malformed quoting', () => {
+  assert.equal(
+    validateExecutorShellCommand('node "unterminated', process.platform, 'dev_local')?.reason_code,
+    'command_argv_parse_error',
+  );
+});
+
 test('dev_local execution profile allows common local build tools', () => {
   assert.equal(validateExecutorShellCommand('pnpm test', process.platform, 'dev_local'), null);
   assert.equal(validateExecutorShellCommand('cargo test', process.platform, 'dev_local'), null);
