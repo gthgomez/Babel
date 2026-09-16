@@ -10,7 +10,7 @@ dist/
 # Generated runtime paths (never search these)
 runs/
 artifacts/
-runtime/
+/runtime/
 
 # Git internals
 .git/

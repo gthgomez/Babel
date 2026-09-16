@@ -32,7 +32,7 @@ const TOOL_CATEGORY: Record<string, string> = {
   web_fetch: 'web',
 };
 
-/** Tools that invalidate the entire cache when executed successfully */
+/** Tools whose execution may invalidate cached observations, including partial failures. */
 const MUTATING_TOOLS = new Set(['file_write', 'shell_exec', 'test_run']);
 
 function getTtlMs(toolName: string): number {
@@ -114,12 +114,14 @@ export class ToolResultCache {
 
   /**
    * Check if this tool's execution should invalidate the cache.
-   * Mutating tools (file_write, shell_exec, test_run) clear the cache on success.
+   * Mutating tools clear the cache even on a nonzero result. A command can
+   * write files and then fail; exit code is not proof of no effect.
    */
   invalidateOnMutation(toolName: string, exitCode: number): void {
-    if (MUTATING_TOOLS.has(toolName) && exitCode === 0) {
+    if (MUTATING_TOOLS.has(toolName)) {
       this.invalidate();
     }
+    void exitCode;
   }
 
   /**

@@ -3,7 +3,7 @@
  * Pure helpers; no I/O.
  */
 
-import { isSuccessfulDirectMutation, isVerifierAttemptTool } from './mutationTools.js';
+import { isConfirmedMutation, isVerifierAttemptTool, type MutationEffectStatus } from './mutationTools.js';
 import { getChatTaskTune, isStrictVerification, type ChatTaskClass, type VerificationPolicy } from '../config/chatTaskClass.js';
 import {
   buildGateRejectionMessage,
@@ -20,6 +20,7 @@ import {
   type VerifierScope,
 } from './verifierKernel.js';
 import { isCatOrTypeCommand } from './codingLoop/verificationStages.js';
+import { parseCommandArgv } from '../utils/commandArgv.js';
 
 /** Preserve ledger scope; never force targeted → full_suite (H5 live gate). */
 export function receiptScopeFromLedgerEntry(r: unknown): VerifierScope {
@@ -462,6 +463,7 @@ export type GateToolLogEntry = {
   error?: string;
   exit_code?: number;
   mutation_paths?: string[];
+  effect_status?: MutationEffectStatus;
 };
 
 /**
@@ -875,7 +877,12 @@ export function logHasSuccessfulWrite(
   hasSubAgentWrites: (log: GateToolLogEntry[]) => boolean,
 ): boolean {
   return (
-    toolCallLog.some((e) => isSuccessfulDirectMutation(e.tool, e.error)) ||
+    toolCallLog.some((e) => isConfirmedMutation({
+      tool: e.tool,
+      error: e.error,
+      effectStatus: e.effect_status,
+      mutationPaths: e.mutation_paths,
+    })) ||
     hasSubAgentWrites(toolCallLog)
   );
 }
@@ -1134,7 +1141,13 @@ export function evaluateCompletionGateForEngine(opts: {
       return buildVerifierReceiptV2({
         receipt_id: `gate-${i}`,
         verifier_id: cmd || `v-${i}`,
-        argv: cmd.split(/\s+/).filter(Boolean),
+        argv: (() => {
+          try {
+            return parseCommandArgv(cmd);
+          } catch {
+            return [];
+          }
+        })(),
         cwd: '.',
         env_profile_hash: 'gate',
         started_at: new Date().toISOString(),

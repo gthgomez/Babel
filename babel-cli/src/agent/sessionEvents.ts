@@ -170,6 +170,15 @@ export type SessionEvent =
       normalized_model_id: string;
       sent_model_id: string;
       input_digest: string;
+      /** Prepared-request identity; request_id is stable across ordinary retries. */
+      request_id?: string;
+      attempt_id?: string;
+      parent_request_id?: string | null;
+      body_digest?: string;
+      body_bytes?: number;
+      accounting_kind?: 'exact_serialized_body';
+      context_limit_tokens?: number | null;
+      context_limit_source?: string;
       input_ref: string;
       input_message_count?: number;
       delivered_tool_call_ids?: string[];
@@ -270,6 +279,9 @@ export type SessionEvent =
       kind: 'provider_retry_scheduled';
       provider: ProviderId;
       model: string;
+      request_id?: string;
+      attempt_id?: string;
+      body_digest?: string;
       attempt: number;
       reason: 'transport' | 'timeout' | 'rate_limit' | 'server_error' | 'stream_idle';
       backoff_ms: number;
@@ -278,6 +290,9 @@ export type SessionEvent =
       kind: 'provider_retry_settled';
       provider: ProviderId;
       model: string;
+      request_id?: string;
+      attempt_id?: string;
+      body_digest?: string;
       attempt: number;
       outcome: 'succeeded' | 'failed' | 'cancelled';
     })
@@ -436,7 +451,8 @@ export type SessionEvent =
     })
   | (SessionEventBase & {
       kind: 'turn_ended';
-      outcome: TerminalOutcome;
+      /** Omitted when the cause is not established. */
+      outcome?: TerminalOutcome;
       status: string;
     })
   | (SessionEventBase & {
@@ -841,7 +857,12 @@ export function assertProviderRetryLifecycleCausality(
   subject: string,
 ): void {
   const sameRetry = (event: ProviderRetryLifecycleEvent): boolean =>
-    event.turn_id === candidate.turn_id && event.provider === candidate.provider && event.model === candidate.model;
+    event.turn_id === candidate.turn_id &&
+    event.provider === candidate.provider &&
+    event.model === candidate.model &&
+    (event.request_id === undefined || candidate.request_id === undefined
+      ? event.request_id === candidate.request_id
+      : event.request_id === candidate.request_id);
   const history = priorEvents.filter(
     (event): event is ProviderRetryLifecycleEvent => isProviderRetryLifecycleEvent(event) && sameRetry(event),
   );
@@ -1132,6 +1153,14 @@ export function recordModelInputReceipt(
     normalized_model_id: string;
     sent_model_id: string;
     input_digest: string;
+    request_id?: string;
+    attempt_id?: string;
+    parent_request_id?: string | null;
+    body_digest?: string;
+    body_bytes?: number;
+    accounting_kind?: 'exact_serialized_body';
+    context_limit_tokens?: number | null;
+    context_limit_source?: string;
     input_ref: string;
     input_message_count?: number;
     delivered_tool_call_ids?: string[];
@@ -1148,6 +1177,14 @@ export function recordModelInputReceipt(
     normalized_model_id: input.normalized_model_id,
     sent_model_id: input.sent_model_id,
     input_digest: input.input_digest,
+    ...(input.request_id !== undefined ? { request_id: input.request_id } : {}),
+    ...(input.attempt_id !== undefined ? { attempt_id: input.attempt_id } : {}),
+    ...(input.parent_request_id !== undefined ? { parent_request_id: input.parent_request_id } : {}),
+    ...(input.body_digest !== undefined ? { body_digest: input.body_digest } : {}),
+    ...(input.body_bytes !== undefined ? { body_bytes: input.body_bytes } : {}),
+    ...(input.accounting_kind !== undefined ? { accounting_kind: input.accounting_kind } : {}),
+    ...(input.context_limit_tokens !== undefined ? { context_limit_tokens: input.context_limit_tokens } : {}),
+    ...(input.context_limit_source !== undefined ? { context_limit_source: input.context_limit_source } : {}),
     input_ref: input.input_ref,
     ...(input.input_message_count !== undefined
       ? { input_message_count: input.input_message_count }
@@ -1354,6 +1391,9 @@ export function recordProviderRetryScheduled(
     turn_id: string;
     provider: ProviderId;
     model: string;
+    request_id?: string;
+    attempt_id?: string;
+    body_digest?: string;
     attempt: number;
     reason: 'transport' | 'timeout' | 'rate_limit' | 'server_error' | 'stream_idle';
     backoff_ms: number;
@@ -1369,6 +1409,9 @@ export function recordProviderRetrySettled(
     turn_id: string;
     provider: ProviderId;
     model: string;
+    request_id?: string;
+    attempt_id?: string;
+    body_digest?: string;
     attempt: number;
     outcome: 'succeeded' | 'failed' | 'cancelled';
   },
@@ -1527,12 +1570,12 @@ export function recordVerifierAttempt(
 
 export function recordTurnEnded(
   log: SessionEventLog,
-  input: { turn_id: string; outcome: TerminalOutcome; status: string },
+  input: { turn_id: string; outcome?: TerminalOutcome; status: string },
 ): SessionEvent {
   return appendSessionEvent(log, {
     kind: 'turn_ended',
     turn_id: input.turn_id,
-    outcome: input.outcome,
+    ...(input.outcome !== undefined ? { outcome: input.outcome } : {}),
     status: input.status,
   });
 }
@@ -1856,7 +1899,7 @@ export function parseSessionEventLog(
       mutation_batch: ['paths'], verifier_attempt: ['command_preview', 'authoritative'], gate_decision: ['decision'],
       policy_intervened: ['source', 'action'], progress_recovery: ['intervention', 'score', 'signals'],
       completion_decision: ['requested_outcome', 'final_outcome', 'allowed', 'reason', 'evidence_refs', 'policy_version'],
-      model_failover: [], compaction_started: ['operation_id', 'strategy', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count'], compaction_summary: ['operation_id', 'capsule_digest', 'raw_observation_refs', 'preserved_tool_call_ids'], compaction_committed: ['operation_id', 'thread_event_id', 'capsule_digest', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'preserved_tool_call_ids'], compaction_created: [], turn_ended: ['outcome', 'status'], budget_snapshot: [],
+      model_failover: [], compaction_started: ['operation_id', 'strategy', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count'], compaction_summary: ['operation_id', 'capsule_digest', 'raw_observation_refs', 'preserved_tool_call_ids'], compaction_committed: ['operation_id', 'thread_event_id', 'capsule_digest', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'preserved_tool_call_ids'], compaction_created: [], turn_ended: ['status'], budget_snapshot: [],
       approval_decision: ['request_id', 'decision'], repair_attempt: ['failure_class', 'attempt'],
     }
     const arrayFields = new Set(['paths', 'signals', 'evidence_refs', 'raw_observation_refs', 'preserved_tool_call_ids', 'delivered_tool_call_ids'])

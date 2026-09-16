@@ -7,11 +7,16 @@ import { describe, test } from 'node:test';
 
 import {
   buildCriticSkipReceipt,
+  buildGateRejectionMessage,
   buildPostWriteRepairMessage,
+  checkCostWallBudgets,
   computeCriticRepairCostCap,
   computePostWriteRepairWallMs,
+  currentTurnHasMutation,
   executeCriticWithTimeout,
   hasAnyWrites,
+  hasSubAgentWrites,
+  mutationTargetsFromLog,
   POST_WRITE_REPAIR_WALL_MAX_MS,
   POST_WRITE_REPAIR_WALL_MIN_MS,
   resolveOrCreateCriticProRunner,
@@ -92,8 +97,10 @@ test('critic forwards provider lifecycle callbacks to its isolated runner', asyn
 test('exact GLM critic phases ignore mixed-model overrides and stay on OpenRouter', () => {
   const previousFlash = process.env['BABEL_DIFF_CRITIC_MODEL'];
   const previousPro = process.env['BABEL_DIFF_CRITIC_PRO_MODEL'];
+  const previousRouterKey = process.env['OPENROUTER_API_KEY'];
   process.env['BABEL_DIFF_CRITIC_MODEL'] = 'deepseek-v4-flash';
   process.env['BABEL_DIFF_CRITIC_PRO_MODEL'] = 'deepseek-v4-pro';
+  process.env['OPENROUTER_API_KEY'] = 'test-openrouter-key';
   try {
     const noFallback = (): CriticRunner => {
       throw new Error('fallback must not be reached for exact GLM');
@@ -107,17 +114,26 @@ test('exact GLM critic phases ignore mixed-model overrides and stay on OpenRoute
     else process.env['BABEL_DIFF_CRITIC_MODEL'] = previousFlash;
     if (previousPro === undefined) delete process.env['BABEL_DIFF_CRITIC_PRO_MODEL'];
     else process.env['BABEL_DIFF_CRITIC_PRO_MODEL'] = previousPro;
+    if (previousRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+    else process.env['OPENROUTER_API_KEY'] = previousRouterKey;
   }
 });
 
 test('GLM backend key is normalized to the exact OpenRouter critic route', () => {
+  const previousRouterKey = process.env['OPENROUTER_API_KEY'];
+  process.env['OPENROUTER_API_KEY'] = 'test-openrouter-key';
   const noFallback = (): CriticRunner => {
     throw new Error('fallback must not be reached for exact GLM');
   };
-  const flash = resolveOrCreateCriticRunner(GLM_BACKEND_KEY, null, noFallback);
-  const pro = resolveOrCreateCriticProRunner(GLM_BACKEND_KEY, null, noFallback);
-  assert.ok(flash.runner instanceof OpenRouterApiRunner);
-  assert.ok(pro.runner instanceof OpenRouterApiRunner);
+  try {
+    const flash = resolveOrCreateCriticRunner(GLM_BACKEND_KEY, null, noFallback);
+    const pro = resolveOrCreateCriticProRunner(GLM_BACKEND_KEY, null, noFallback);
+    assert.ok(flash.runner instanceof OpenRouterApiRunner);
+    assert.ok(pro.runner instanceof OpenRouterApiRunner);
+  } finally {
+    if (previousRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+    else process.env['OPENROUTER_API_KEY'] = previousRouterKey;
+  }
 });
 
 describe('buildCriticSkipReceipt', () => {
@@ -199,15 +215,45 @@ describe('runAsymmetricDiffCritic early paths (C1)', () => {
   test('confirmed mutation paths count as writes', () => {
     assert.equal(
       hasAnyWrites([
-        { tool: 'run_command', target: 'generator', mutation_paths: ['src/generated.ts'] },
+        {
+          tool: 'run_command',
+          target: 'generator',
+          mutation_paths: ['src/generated.ts'],
+          effect_status: 'confirmed_change',
+        },
       ]),
       true,
     );
     assert.equal(
       hasAnyWrites([
-        { tool: 'run_command', target: 'generator', mutation_paths: [] },
+        {
+          tool: 'run_command',
+          target: 'generator',
+          mutation_paths: [],
+          effect_status: 'confirmed_change',
+        },
+      ]),
+      true,
+    );
+    assert.equal(
+      hasAnyWrites([
+        { tool: 'run_command', target: 'generator', mutation_paths: ['src/generated.ts'] },
       ]),
       false,
+    );
+  });
+
+  test('mutation target projection retains every confirmed executor path', () => {
+    assert.deepEqual(
+      mutationTargetsFromLog([
+        {
+          tool: 'run_command',
+          target: 'generator',
+          mutation_paths: ['src/a.ts', 'src/b.ts'],
+          effect_status: 'confirmed_change',
+        },
+      ]),
+      ['src/a.ts', 'src/b.ts'],
     );
   });
 
@@ -258,5 +304,115 @@ describe('runAsymmetricDiffCritic early paths (C1)', () => {
     } finally {
       restoreEnv('BABEL_DIFF_CRITIC', prev);
     }
+  });
+});
+
+describe('sub-agent mutation truthfulness (Astra Probe P11)', () => {
+  test('0 changed is never counted as a successful mutation or progress', () => {
+    const noOpLog = [
+      { tool: 'sub_agent', target: 'sub1', detail: '3 steps, 0 changed' },
+    ];
+    assert.equal(hasSubAgentWrites(noOpLog), false);
+    assert.equal(currentTurnHasMutation(noOpLog, 0), false);
+
+    const msg = buildGateRejectionMessage(noOpLog);
+    assert.match(msg, /0 file writes, 0 sub-agent mutations/);
+    assert.match(msg, /You have not made any file changes/);
+  });
+
+  test('positive changed counts are recognized as mutations', () => {
+    const mutLog = [
+      {
+        tool: 'sub_agent',
+        target: 'sub1',
+        detail: '5 steps, 2 changed, attribution=child_success',
+        effect_status: 'confirmed_change' as const,
+        mutation_paths: ['src/fix.ts'],
+      },
+    ];
+    assert.equal(hasSubAgentWrites(mutLog), true);
+    assert.equal(currentTurnHasMutation(mutLog, 0), true);
+
+    const msg = buildGateRejectionMessage(mutLog);
+    assert.match(msg, /0 file writes, 1 sub-agent mutations/);
+    assert.match(msg, /Run the verifier/);
+  });
+});
+
+describe('long-running autonomy cost cap truth (Astra Probe P08)', () => {
+  test('does not shrink cost cap under explicitCostCeiling flag', () => {
+    const r = computeCriticRepairCostCap({
+      spentUsd: 1.0,
+      sessionMaxCostUsd: 10.0,
+      explicitCostCeiling: true,
+    });
+    assert.equal(r.capUsd, 10.0);
+    assert.equal(r.repairWindowUsd, 9.0);
+  });
+
+  test('does not shrink cost cap under longTaskProfile flag', () => {
+    const r = computeCriticRepairCostCap({
+      spentUsd: 1.0,
+      sessionMaxCostUsd: 2.0,
+      longTaskProfile: true,
+    });
+    assert.equal(r.capUsd, 2.0);
+    assert.equal(r.repairWindowUsd, 1.0);
+  });
+
+  test('$10 without flags still applies the finite 75c repair window', () => {
+    const r = computeCriticRepairCostCap({
+      spentUsd: 1.0,
+      sessionMaxCostUsd: 10.0,
+    });
+    assert.equal(r.capUsd, 1.75);
+    assert.equal(r.repairWindowUsd, 0.75);
+  });
+
+  test('shrinks cost cap when repeated critic rejects / thrashing occurs', () => {
+    const r = computeCriticRepairCostCap({
+      spentUsd: 1.0,
+      sessionMaxCostUsd: 10.0,
+      criticStrikes: 2,
+      explicitCostCeiling: true,
+    });
+    assert.ok(r.repairWindowUsd <= 0.75);
+    assert.equal(r.capUsd, 1.0 + r.repairWindowUsd);
+  });
+
+  test('checkCostWallBudgets attributes limiter to repair window vs declared budget', () => {
+    const normalCost = checkCostWallBudgets({
+      totalCostUsd: 2.5,
+      maxCostUsd: 2.0,
+      sessionStartTime: Date.now(),
+      maxWallMs: 600_000,
+      declaredCostUsd: 2.0,
+    });
+    assert.equal(normalCost.ok, false);
+    assert.equal(normalCost.limiter, 'cost');
+
+    const repairCost = checkCostWallBudgets({
+      totalCostUsd: 1.8,
+      maxCostUsd: 1.75,
+      sessionStartTime: Date.now(),
+      maxWallMs: 600_000,
+      declaredCostUsd: 10.0,
+      criticRepairCostCapUsd: 1.75,
+    });
+    assert.equal(repairCost.ok, false);
+    assert.equal(repairCost.limiter, 'cost_repair');
+    assert.match(repairCost.reason!, /\[cost_repair\]/);
+
+    const repairWall = checkCostWallBudgets({
+      totalCostUsd: 0.5,
+      maxCostUsd: 10.0,
+      sessionStartTime: Date.now() - 200_000,
+      maxWallMs: 180_000,
+      declaredWallMs: 3_600_000,
+      postWriteRepairWallCapMs: 180_000,
+    });
+    assert.equal(repairWall.ok, false);
+    assert.equal(repairWall.limiter, 'wall_repair');
+    assert.match(repairWall.reason!, /\[wall_repair\]/);
   });
 });

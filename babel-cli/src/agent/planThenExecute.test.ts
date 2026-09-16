@@ -30,21 +30,26 @@ describe('planThenExecute', () => {
     assert.equal(countTaskWords('fix the bug in auth'), 5);
   });
 
-  it('requires plan when playbook.requireTodoPlan', () => {
+  it('does not impose a plan barrier from playbook or skill labels alone', () => {
     const pb: PlaybookDefinition = {
       id: 'multi-file',
       description: 'm',
       select: { skills: ['multi_file'] },
       requireTodoPlan: true,
     };
-    assert.equal(shouldRequireTodoPlan('short task', pb), true);
+    assert.equal(shouldRequireTodoPlan('short task', pb), false);
   });
 
-  it('requires plan above word threshold', () => {
+  it('does not impose a plan barrier from task size', () => {
     process.env['BABEL_TODO_PLAN_WORD_THRESHOLD'] = '5';
     const long = 'one two three four five six';
-    assert.equal(shouldRequireTodoPlan(long, null), true);
+    assert.equal(shouldRequireTodoPlan(long, null), false);
     assert.equal(shouldRequireTodoPlan('one two', null), false);
+  });
+
+  it('supports explicit plan-gate opt-in', () => {
+    process.env['BABEL_REQUIRE_TODO_PLAN'] = '1';
+    assert.equal(shouldRequireTodoPlan('short task', null), true);
   });
 
   it('env 0 disables even with playbook', () => {

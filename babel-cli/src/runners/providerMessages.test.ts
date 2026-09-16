@@ -3,6 +3,7 @@ import { describe, test } from 'node:test';
 import type { ProviderMessage } from './base.js';
 import {
   countMarkdownHistoryMarkers,
+  accountProviderRequest,
   ensureProviderUserTask,
   mapProviderMessagesToWire,
   validateProviderMessageProtocol,
@@ -16,6 +17,25 @@ import {
   recordAssistantMessage,
   rebuildProviderMessagesFromEvents,
 } from '../agent/threadEventLog.js';
+
+describe('provider request accounting', () => {
+  test('digests the exact body and includes tools, messages, and reserved output', () => {
+    const body = JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hello' }], tools: [{ name: 'read' }] });
+    const accounting = accountProviderRequest(body, { reservedCompletionTokens: 128, inputLimitTokens: 256 });
+    assert.equal(accounting.request_digest.length, 64);
+    assert.equal(accounting.input_message_count, 1);
+    assert.equal(accounting.reserved_completion_tokens, 128);
+    assert.equal(accounting.estimated_total_tokens, (accounting.estimated_input_tokens ?? 0) + 128);
+    assert.equal(accounting.within_limit, true);
+  });
+
+  test('keeps unknown limits and malformed accounting inputs explicit', () => {
+    const accounting = accountProviderRequest('not-json', { reservedCompletionTokens: null });
+    assert.equal(accounting.input_message_count, null);
+    assert.equal(accounting.estimated_total_tokens, null);
+    assert.equal(accounting.within_limit, null);
+  });
+});
 
 describe('providerMessages (P0-B protocol fidelity)', () => {
   test('mapProviderMessagesToWire emits system once and preserves tool_call ids', () => {
@@ -245,5 +265,274 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
     assert.equal(wire[2]!.tool_calls![0]!.id, 'ds_call');
     assert.equal(wire[3]!.role, 'tool');
     assert.equal(wire[3]!.tool_call_id, 'ds_call');
+  });
+
+  test('Astra Probe P02: compaction preserves the retained tail and tool results in native reconstruction', () => {
+    const call = (id: string, name = 'read_file') => ({
+      id,
+      type: 'function' as const,
+      function: { name, arguments: '{}' },
+    });
+    const token = 'ONLY_KEPT_RESULT_HAS_THE_NONCE_4d713';
+    const initialLog = createThreadEventLog('p02-thread');
+    initialLog.events.push(
+      {
+        schema_version: 1,
+        event_id: 'e0',
+        thread_id: 'p02-thread',
+        turn_id: 't1',
+        item_id: 't1:0',
+        seq: 0,
+        ts: new Date().toISOString(),
+        kind: 'user_message',
+        content: 'Use the exact nonce returned by the tool.',
+      },
+      {
+        schema_version: 1,
+        event_id: 'e1',
+        thread_id: 'p02-thread',
+        turn_id: 't1',
+        item_id: 't1:1',
+        seq: 1,
+        ts: new Date().toISOString(),
+        kind: 'assistant_tool_calls',
+        content: '',
+        tool_calls: [call('c1')],
+      },
+      {
+        schema_version: 1,
+        event_id: 'e2',
+        thread_id: 'p02-thread',
+        turn_id: 't1',
+        item_id: 't1:2',
+        seq: 2,
+        ts: new Date().toISOString(),
+        kind: 'tool_result',
+        tool_call_id: 'c1',
+        tool_name: 'read_file',
+        content: token,
+      },
+    );
+    initialLog.nextSeq = 3;
+
+    const liveTail = rebuildProviderMessagesFromEvents(initialLog);
+    const compactedLog = {
+      ...initialLog,
+      events: [
+        ...initialLog.events,
+        {
+          schema_version: 1 as const,
+          event_id: 'e3',
+          thread_id: 'p02-thread',
+          turn_id: 't1',
+          item_id: 't1:3',
+          seq: 3,
+          ts: new Date().toISOString(),
+          kind: 'compaction_capsule' as const,
+          content: 'Task: use exact nonce. Recent tool: read_file.',
+          preserved_tool_call_ids: ['c1'],
+        },
+      ],
+      nextSeq: 4,
+    };
+
+    const outbound = rebuildProviderMessagesFromEvents(compactedLog, { systemPrompt: 'System' });
+    const wire = mapProviderMessagesToWire(outbound, 'System');
+    assert.equal(liveTail.some((m) => m.content.includes(token)), true);
+    assert.equal(outbound.some((m) => m.content.includes(token)), true);
+    assert.equal(outbound.some((m) => m.tool_call_id === 'c1'), true);
+    assert.equal(wire.some((m) => m.content.includes(token)), true);
+    assert.deepEqual(validateProviderMessageProtocol(outbound), []);
+  });
+
+  test('Astra Probe P03: reloading durable log with compaction capsule preserves retained context', () => {
+    const call = (id: string, name = 'read_file') => ({
+      id,
+      type: 'function' as const,
+      function: { name, arguments: '{}' },
+    });
+    const token = 'ONLY_KEPT_RESULT_HAS_THE_NONCE_4d713';
+    const initialLog = createThreadEventLog('p03-thread');
+    initialLog.events.push(
+      {
+        schema_version: 1,
+        event_id: 'e0',
+        thread_id: 'p03-thread',
+        turn_id: 't1',
+        item_id: 't1:0',
+        seq: 0,
+        ts: new Date().toISOString(),
+        kind: 'user_message',
+        content: 'Use the exact nonce returned by the tool.',
+      },
+      {
+        schema_version: 1,
+        event_id: 'e1',
+        thread_id: 'p03-thread',
+        turn_id: 't1',
+        item_id: 't1:1',
+        seq: 1,
+        ts: new Date().toISOString(),
+        kind: 'assistant_tool_calls',
+        content: '',
+        tool_calls: [call('c1')],
+      },
+      {
+        schema_version: 1,
+        event_id: 'e2',
+        thread_id: 'p03-thread',
+        turn_id: 't1',
+        item_id: 't1:2',
+        seq: 2,
+        ts: new Date().toISOString(),
+        kind: 'tool_result',
+        tool_call_id: 'c1',
+        tool_name: 'read_file',
+        content: token,
+      },
+      {
+        schema_version: 1,
+        event_id: 'e3',
+        thread_id: 'p03-thread',
+        turn_id: 't1',
+        item_id: 't1:3',
+        seq: 3,
+        ts: new Date().toISOString(),
+        kind: 'compaction_capsule',
+        content: 'Task: use exact nonce.',
+        preserved_tool_call_ids: ['c1'],
+      },
+    );
+    initialLog.nextSeq = 4;
+
+    const restored = JSON.parse(JSON.stringify(initialLog));
+    const live = rebuildProviderMessagesFromEvents(initialLog, { systemPrompt: 'System' });
+    const rebuilt = rebuildProviderMessagesFromEvents(restored, { systemPrompt: 'System' });
+
+    assert.deepEqual(live, rebuilt);
+    assert.equal(rebuilt.some((m) => m.content.includes(token)), true);
+    assert.equal(rebuilt.some((m) => m.tool_call_id === 'c1'), true);
+  });
+
+  test('sequential two-batch reconstruction does not merge later tool results onto the first assistant', () => {
+    const call = (id: string) => ({
+      id,
+      type: 'function' as const,
+      function: { name: 'read_file', arguments: '{}' },
+    });
+    const log = createThreadEventLog('two-batch');
+    log.events.push(
+      {
+        schema_version: 1,
+        event_id: 'e0',
+        thread_id: 'two-batch',
+        turn_id: 't1',
+        item_id: 't1:0',
+        seq: 0,
+        ts: new Date().toISOString(),
+        kind: 'assistant_tool_calls',
+        content: 'A',
+        tool_calls: [call('A')],
+      },
+      {
+        schema_version: 1,
+        event_id: 'e1',
+        thread_id: 'two-batch',
+        turn_id: 't1',
+        item_id: 't1:1',
+        seq: 1,
+        ts: new Date().toISOString(),
+        kind: 'tool_result',
+        tool_call_id: 'A',
+        tool_name: 'read_file',
+        content: 'result-A',
+      },
+      {
+        schema_version: 1,
+        event_id: 'e2',
+        thread_id: 'two-batch',
+        turn_id: 't1',
+        item_id: 't1:2',
+        seq: 2,
+        ts: new Date().toISOString(),
+        kind: 'assistant_tool_calls',
+        content: 'B',
+        tool_calls: [call('B')],
+      },
+      {
+        schema_version: 1,
+        event_id: 'e3',
+        thread_id: 'two-batch',
+        turn_id: 't1',
+        item_id: 't1:3',
+        seq: 3,
+        ts: new Date().toISOString(),
+        kind: 'tool_result',
+        tool_call_id: 'B',
+        tool_name: 'read_file',
+        content: 'result-B',
+      },
+      {
+        schema_version: 1,
+        event_id: 'e4',
+        thread_id: 'two-batch',
+        turn_id: 't1',
+        item_id: 't1:4',
+        seq: 4,
+        ts: new Date().toISOString(),
+        kind: 'compaction_capsule',
+        content: 'capsule',
+        preserved_tool_call_ids: ['A', 'B'],
+      },
+    );
+    log.nextSeq = 5;
+    const rebuilt = rebuildProviderMessagesFromEvents(log, { systemPrompt: 'sys' });
+    const wire = mapProviderMessagesToWire(rebuilt, 'sys');
+    const batches = wire
+      .filter((m) => m.role === 'assistant' && m.tool_calls?.length)
+      .map((m) => (m.tool_calls ?? []).map((c) => c.id));
+    assert.deepEqual(batches, [['A'], ['B']]);
+    assert.deepEqual(validateProviderMessageProtocol(rebuilt), []);
+  });
+
+  test('validateProviderMessageProtocol rejects duplicate declared tool IDs', () => {
+    const issues = validateProviderMessageProtocol([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'same', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+          { id: 'same', type: 'function', function: { name: 'grep', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', content: 'one result only', tool_call_id: 'same' },
+    ]);
+    assert.ok(issues.some((i) => i.code === 'duplicate_tool_call_id'));
+    assert.ok(issues.some((i) => i.code === 'unanswered_tool_call'));
+  });
+
+  test('validateProviderMessageProtocol rejects whitespace-only tool IDs', () => {
+    const issuesAssistant = validateProviderMessageProtocol([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: '   ', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+        ],
+      },
+    ]);
+    assert.ok(issuesAssistant.some((i) => i.code === 'assistant_tool_call_missing_id'));
+
+    const issuesTool = validateProviderMessageProtocol([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'valid_id', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', content: 'result', tool_call_id: '   ' },
+    ]);
+    assert.ok(issuesTool.some((i) => i.code === 'tool_missing_call_id'));
   });
 });

@@ -20,10 +20,11 @@ import {
   getChatTaskTune,
 } from '../../config/chatTaskClass.js';
 import type { TerminalOutcome } from '../../schemas/agentContracts.js';
-import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
+import { confirmedMutationPaths, isConfirmedMutation } from '../../agent/mutationTools.js';
 import { hydrateResumedThreadToScreen } from '../../services/threadStore/index.js';
 import {
   buildChatRunPayload,
+  compileIntentPlanUserMessage,
   gatherChatPreflightContext,
   runChatEngineOnce,
   scanSessionCheckpoints,
@@ -52,13 +53,27 @@ import { isSessionConsistencyFailureMessage } from '../../agent/sessionEventDiag
  * Only includes files touched by successful mutation tools.
  */
 function collectChangedFiles(result: {
-  toolCalls?: Array<{ tool: string; target: string; detail?: string; error?: string }>;
+  toolCalls?: Array<{
+    tool: string;
+    target: string;
+    detail?: string;
+    error?: string;
+    exit_code?: number;
+    effect_status?: import('../../agent/mutationTools.js').MutationEffectStatus;
+    mutation_paths?: string[];
+  }>;
 }): string[] {
   if (!result.toolCalls || result.toolCalls.length === 0) return [];
   const seen = new Set<string>();
   for (const tc of result.toolCalls) {
-    if (isSuccessfulDirectMutation(tc.tool, tc.error) && tc.target) {
-      seen.add(tc.target);
+    for (const changedPath of confirmedMutationPaths({
+      tool: tc.tool,
+      target: tc.target,
+      error: tc.error,
+      effectStatus: tc.effect_status,
+      mutationPaths: tc.mutation_paths,
+    })) {
+      seen.add(changedPath);
     }
   }
   // Also pick up sub-agent writes from detail
@@ -137,11 +152,14 @@ export async function executeChatTask(
     const preflightContext = await gatherPreflight(target.targetRoot);
     const engineFactory = deps?.engineFactory ?? ((options) => new ChatEngine(options));
 
+    const limits = resolveChatEngineLimits({}, ctx.state.model, {
+      taskClass: activeProfile,
+      taskText: task,
+    });
+    const intentTaskClass = resolveChatTaskClass({ taskText: task, autoClassify: false });
+    const intentPlanUserMessage = compileIntentPlanUserMessage(task, intentTaskClass);
+
     if (!ctx.chatEngine) {
-      const limits = resolveChatEngineLimits({}, ctx.state.model, {
-        taskClass: activeProfile,
-        taskText: task,
-      });
       const operatorMode = normalizeChatOperatorMode(ctx.state.operatorMode) ?? 'default';
       if (operatorModeImpliesDryRun(operatorMode)) {
         process.env['BABEL_DRY_RUN'] = '1';
@@ -171,6 +189,8 @@ export async function executeChatTask(
         operatorMode,
         ...(operatorMode === 'hard_plan' ? { hardPlanMode: true } : {}),
         ...(planHandoff ? { planHandoff } : {}),
+        ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
+        runtimeMode: useConversational ? 'tui' : 'headless',
       };
       ctx.chatEngine = await createChatEngineForSession(engineOptions, engineFactory);
     }
@@ -221,7 +241,7 @@ export async function executeChatTask(
     const turnUsage = usageDelta(preRunUsage, postRunUsage);
     const perRunCost = turnUsage.costUsd;
     const perRunTokens = turnUsage.tokens;
-    const resolvedOutcome: TerminalOutcome =
+    const resolvedOutcome: TerminalOutcome | undefined =
       result.outcome ??
       (result.status === 'completed'
         ? 'NO_CHANGE_REQUIRED'
@@ -231,7 +251,7 @@ export async function executeChatTask(
             ? 'BLOCKED_POLICY'
             : result.status === 'budget_exhausted'
               ? 'BUDGET_EXHAUSTED'
-              : 'AGENT_FAILURE');
+              : undefined);
 
     const projectedState = projectTurnViewState([
       {
@@ -276,7 +296,7 @@ export async function executeChatTask(
       {
         type: 'turn_terminal_resolved',
         timestamp: Date.now(),
-        outcome: resolvedOutcome,
+        ...(resolvedOutcome !== undefined ? { outcome: resolvedOutcome } : {}),
         status:
           result.status === 'completed' ||
           result.status === 'cancelled' ||
@@ -345,7 +365,12 @@ export async function executeChatTask(
     // Preserve truthful terminal outcomes from TerminalOutcome
     const lo = result.outcome;
     const hasAnyWrites = (result.toolCalls ?? []).some((t) =>
-      /str_replace|write_file|apply_patch|file_write/.test(t.tool),
+      isConfirmedMutation({
+        tool: t.tool,
+        error: t.error,
+        effectStatus: t.effect_status,
+        mutationPaths: t.mutation_paths,
+      }),
     );
     // W0.4: env-red from answer or tool observations (pytest/npm missing, etc.).
     // After writes, import-class failures are not scored as host ENV_BLOCKED.

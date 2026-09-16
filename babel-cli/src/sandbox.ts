@@ -68,6 +68,11 @@ import {
 import { getSafeEnv } from './utils/safeEnv.js';
 import { childEnvForSandbox, hardenGitHostEnvironment } from './authority/unprivilegedChildEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
+import {
+  buildWindowsCommandShellArgs,
+  CommandArgvParseError,
+  parseCommandArgv,
+} from './utils/commandArgv.js';
 import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
@@ -447,6 +452,9 @@ export function spawnCommandAsync(
         cwd: options.cwd,
         env: options.env,
         windowsHide: true,
+        ...(process.platform === 'win32' && basename(executable).toLowerCase() === 'cmd.exe'
+          ? { windowsVerbatimArguments: true }
+          : {}),
         // POSIX: new process group so terminateChildTree can SIGTERM -pid.
         detached: process.platform !== 'win32',
       }) as ChildProcessWithoutNullStreams;
@@ -856,7 +864,18 @@ export function validateExecutorShellCommand(
     }
   }
 
-  const argv = trimmed.split(/\s+/);
+  let argv: string[];
+  try {
+    argv = parseCommandArgv(trimmed, platform);
+  } catch (err) {
+    const message = err instanceof CommandArgvParseError ? err.message : String(err);
+    return {
+      reason_code: 'command_argv_parse_error',
+      message: `Command rejected — ${message}.`,
+      evidence: [command],
+      command_base: null,
+    };
+  }
   const rawCmd = argv[0] ?? '';
 
   if (platform === 'win32' && WINDOWS_ENV_PREFIX_RE.test(rawCmd)) {
@@ -1675,7 +1694,18 @@ export class SafeExecutor {
     }
 
     // ── Parse argv ──────────────────────────────────────────────────────────
-    const argv = command.trim().split(/\s+/);
+    let argv: string[];
+    try {
+      argv = parseCommandArgv(command.trim(), process.platform);
+    } catch (err) {
+      const message = err instanceof CommandArgvParseError ? err.message : String(err);
+      return policyDeniedResult(
+        'command_argv_parse_error',
+        `[sandbox] ${message}.`,
+        toolName,
+        [command],
+      );
+    }
     const rawCmd = argv[0] ?? '';
     const normalizedRawCmd =
       process.platform === 'win32' ? rawCmd.replace(/^\.\//, '.\\').replace(/\//g, '\\') : rawCmd;
@@ -1707,7 +1737,9 @@ export class SafeExecutor {
     }
     const isWin = process.platform === 'win32';
     const spawnCmd = isWin ? resolveWindowsCommandShell() : normalizedRawCmd;
-    const spawnArgs = isWin ? ['/c', normalizedRawCmd, ...argv.slice(1)] : argv.slice(1);
+    const spawnArgs = isWin
+      ? buildWindowsCommandShellArgs([normalizedRawCmd, ...argv.slice(1)])
+      : argv.slice(1);
 
     const benchmarkDockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim();
     const isolation = evaluateGovernedIsolation(
@@ -1853,6 +1885,9 @@ export class SafeExecutor {
         encoding: 'utf-8',
         maxBuffer: MAX_SHELL_OUTPUT_BYTES,
         env: prepared.env,
+        ...(process.platform === 'win32' && basename(prepared.executable).toLowerCase() === 'cmd.exe'
+          ? { windowsVerbatimArguments: true }
+          : {}),
       });
 
       if (!result.error) {

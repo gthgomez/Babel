@@ -7,6 +7,8 @@
  * closed.
  */
 
+import { parseCommandArgv } from '../utils/commandArgv.js';
+
 export type ExecutionRisk = 'intrinsic' | 'project_code' | 'container_only' | 'forbidden';
 
 export type EffectFamily =
@@ -127,11 +129,19 @@ export function isProjectRelativeExecutable(rawCommand: string): boolean {
 }
 
 function firstToken(command: string): string {
-  return command.trim().split(/\s+/)[0] ?? '';
+  try {
+    return parseCommandArgv(command)[0] ?? '';
+  } catch {
+    return '';
+  }
 }
 
 function splitTokens(command: string): string[] {
-  return command.trim().split(/\s+/).filter(Boolean);
+  try {
+    return parseCommandArgv(command);
+  } catch {
+    return [];
+  }
 }
 
 function gitGlobalDenied(flag: string): boolean {

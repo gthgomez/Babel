@@ -2,8 +2,8 @@
   "id": "multi-file",
   "description": "Multi-file coordinated bug fix — all HUNK-B tier tasks",
   "select": { "skills": ["multi_file", "multi_hunk"] },
-  "requireTodoPlan": true,
-  "planFirstWarning": "⚠️ This is a multi-file task. You MUST use todo_write FIRST to list every file you plan to change AND the purpose of each change. Do NOT call str_replace or write_file until your todo plan is complete.",
+  "requireTodoPlan": false,
+  "planFirstWarning": "For multi-file work, use todo_write when it helps organize independent edits; it is optional unless explicitly required by the active workflow.",
   "phaseGuidance": {
     "explore": "Start from FAIL_TO_PASS / failing test files (headers name modules under test), then grep the affected function/class with a tight pattern — not repo-wide glob thrash. Read callers and callees only after the test file points at them. Prefer 2–4 targeted reads over broad directory walks.",
     "diagnose": "Decide: API/interface change (callers must update) vs contained module fix (other files are tests). That choice sets edit order. Keep a short todo of files+purpose before mutating.",

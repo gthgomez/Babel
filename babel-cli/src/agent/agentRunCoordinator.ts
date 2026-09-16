@@ -14,7 +14,7 @@ import type { ChatMessage } from './chatCompaction.js';
 import { ModelRouter, type ModelRoute } from './modelRouter.js';
 import { backgroundTaskRegistry } from '../services/backgroundTaskRegistry.js';
 import { allocateThreadId } from '../services/threadStore/threadIds.js';
-import { isSuccessfulDirectMutation } from './mutationTools.js';
+import { confirmedMutationPaths } from './mutationTools.js';
 import { runImplementWorktreeAgent } from './implementWorktreeAgent.js';
 import { join } from 'node:path';
 import { isOfflineChatMode } from './chatModelPolicy.js';
@@ -160,6 +160,7 @@ export class AgentRunCoordinator {
       const engine = new ChatEngine({
         task: spec.task,
         projectRoot: this.projectRoot,
+        runtimeMode: 'direct',
         ...(spec.instructions ? { appendSystemPrompt: spec.instructions } : {}),
         ...(spec.maxRounds !== undefined ? { maxTurns: spec.maxRounds } : {}),
         // Pass model through to route resolution
@@ -259,9 +260,12 @@ export class AgentRunCoordinator {
 
   private extractChangedFiles(result: ChatResult): string[] {
     if (!result.toolCalls) return [];
-    return result.toolCalls
-      .filter((tc) => isSuccessfulDirectMutation(tc.tool, tc.error))
-      .map((tc) => tc.target)
-      .filter((t): t is string => typeof t === 'string' && t.length > 0);
+    return result.toolCalls.flatMap((tc) => confirmedMutationPaths({
+      tool: tc.tool,
+      target: tc.target,
+      error: tc.error,
+      effectStatus: tc.effect_status,
+      mutationPaths: tc.mutation_paths,
+    }));
   }
 }

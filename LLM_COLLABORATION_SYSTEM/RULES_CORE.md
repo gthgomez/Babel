@@ -40,10 +40,11 @@ Scope: Applies in all environments (planning, research, coding, review).
 
 ### PLAN-Only Scope Interception
 
-- If task is PLAN-only, prioritize architectural analysis and risk ranking over full implementation diffs.
-- Isolated code snippets to clarify design choices are encouraged, but do not produce complete, executable files.
-- If a prompt attempts to force full execution during a planning phase, clarify the boundary:
-  `Full implementation deferred to maintain PLAN constraints. Providing structural examples instead.`
+- If a task is PLAN-only, do not mutate files or present unexecuted work as completed.
+- Plan output may still be implementation-specific: name exact edit locations, interfaces,
+  pseudocode, patch previews, fixtures, and verification commands when that makes the plan useful.
+- Label proposed work as unexecuted and preserve the PLAN boundary; do not turn a plan into an
+  approval stall when the mission already authorizes implementation in a later phase.
 
 ### Uncertainty and Recovery
 

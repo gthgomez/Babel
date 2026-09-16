@@ -7,6 +7,7 @@ export {
   decideReadInjection,
   evaluateReadRequest,
   formatReadObservation,
+  formatReadFailureObservation,
   formatReadWindowBanner,
   invalidateReadCacheForPath,
   makeReadInjectionKey,

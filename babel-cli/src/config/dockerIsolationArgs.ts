@@ -3,6 +3,8 @@
  * Unsafe extras mean isolation is not actually Docker.
  */
 
+import { parseCommandArgv } from '../utils/commandArgv.js';
+
 export type DockerExtraArgsDecision =
   | { ok: true; args: string[] }
   | { ok: false; reason: string };
@@ -23,7 +25,7 @@ const SAFE_FLAGS = new Set([
 const UNSAFE_EQ = /^(--privileged|--device|--cap-add|--pid|--userns|--mount|--volume|-v)(=|$)/i;
 
 export function parseDockerExtraArgTokens(raw: string): string[] {
-  return raw.trim().split(/\s+/).filter(Boolean);
+  return parseCommandArgv(raw);
 }
 
 export function validateDockerIsolationArgs(

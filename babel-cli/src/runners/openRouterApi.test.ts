@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { z } from 'zod'
 import { OpenRouterApiRunner } from './openRouterApi.js'
@@ -26,12 +27,15 @@ test('OpenRouter uses the declared credential variable and sampling body', async
   let observedUrl = ''
   let observedAuthorization = ''
   let observedMetadataHeader = ''
+  let postedBody = ''
+  let startedEvent: any
   let observedBody: Record<string, unknown> = {}
   globalThis.fetch = (async (input, init) => {
     observedUrl = String(input)
     observedAuthorization = String((init?.headers as Record<string, string>)?.Authorization ?? '')
     observedMetadataHeader = String((init?.headers as Record<string, string>)?.['X-OpenRouter-Metadata'] ?? '')
-    observedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+    postedBody = String(init?.body ?? '')
+    observedBody = JSON.parse(postedBody) as Record<string, unknown>
     return new Response(
       JSON.stringify({
         model: 'example/fixed-model',
@@ -48,7 +52,9 @@ test('OpenRouter uses the declared credential variable and sampling body', async
     { maxTokens: 321, temperature: 0.25 },
     { apiKeyEnvVar: 'CUSTOM_ROUTER_KEY', env: { CUSTOM_ROUTER_KEY: 'synthetic-router-key' } },
   )
-  const result = await runner.execute('respond', z.object({ ok: z.literal(true) }))
+  const result = await runner.execute('respond', z.object({ ok: z.literal(true) }), {
+    onInvocationStarted: (event) => { startedEvent = event },
+  })
 
   assert.deepEqual(result, { ok: true })
   assert.equal(observedUrl, 'https://openrouter.ai/api/v1/chat/completions')
@@ -57,6 +63,12 @@ test('OpenRouter uses the declared credential variable and sampling body', async
   assert.equal(observedBody.model, 'example/fixed-model')
   assert.equal(observedBody.max_tokens, 321)
   assert.equal(observedBody.temperature, 0.25)
+  assert.equal(startedEvent.input_bytes, Buffer.byteLength(postedBody, 'utf8'))
+  assert.equal(startedEvent.input_digest, createHash('sha256').update(postedBody, 'utf8').digest('hex'))
+  assert.equal(startedEvent.accounting_kind, 'exact_serialized_body')
+  assert.notEqual(startedEvent.request_id, startedEvent.attempt_id)
+  assert.equal(startedEvent.context_limit_tokens, null)
+  assert.equal(startedEvent.context_limit_source, 'unknown')
   const metadata = runner.getLastInvocationMetadata()
   assert.equal(metadata?.provider, 'openrouter')
   assert.equal(metadata?.provider_model_id, 'example/fixed-model')
@@ -72,8 +84,11 @@ test('OpenRouter uses the declared credential variable and sampling body', async
 test('OpenRouter telemetry reports the OpenRouter retry provider and pinned cost', async () => {
   let attempts = 0
   const retryProviders: string[] = []
-  globalThis.fetch = (async () => {
+  const postedBodies: string[] = []
+  let startedEvent: any
+  globalThis.fetch = (async (_input, init) => {
     attempts += 1
+    postedBodies.push(String(init?.body ?? ''))
     if (attempts === 1) return new Response('busy', { status: 503 })
     return new Response(
       JSON.stringify({
@@ -96,10 +111,18 @@ test('OpenRouter telemetry reports the OpenRouter retry provider and pinned cost
     z.object({ ok: z.literal(true) }),
     {
       onRetry: (event) => retryProviders.push(event.provider),
+      onInvocationStarted: (event) => { startedEvent = event },
     },
   )
 
   assert.deepEqual(retryProviders, ['openrouter'])
+  assert.equal(postedBodies.length, 2)
+  assert.equal(postedBodies[0], postedBodies[1])
+  assert.equal(startedEvent.input_bytes, Buffer.byteLength(postedBodies[0]!, 'utf8'))
+  assert.equal(startedEvent.input_digest, createHash('sha256').update(postedBodies[0]!, 'utf8').digest('hex'))
+  assert.notEqual(startedEvent.request_id, startedEvent.attempt_id)
+  assert.equal(startedEvent.context_limit_tokens, 1_310_720)
+  assert.equal(startedEvent.context_limit_source, 'policy')
   assert.equal(runner.getLastInvocationMetadata()?.observed_model_id, 'z-ai/glm-5.3-flash')
   assert.equal(runner.getLastInvocationMetadata()?.upstream_provider, 'ExampleProvider')
   assert.equal(runner.getLastInvocationMetadata()?.estimated_cost_usd, 0.325)

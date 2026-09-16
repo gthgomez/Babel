@@ -114,6 +114,7 @@ describe('review-card tones stay truthful', () => {
     assert.equal(reviewTitleTone('BUDGET_EXHAUSTED'), 'warning');
     assert.equal(reviewTitleTone('INFRA_FAILURE'), 'error');
     assert.equal(reviewTitleTone('AGENT_FAILURE'), 'error');
+    assert.equal(reviewTitleTone('UNKNOWN'), 'warning');
   });
 
   it('paints not-applicable complete as neutral success, distinct from verified', () => {

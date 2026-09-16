@@ -615,7 +615,7 @@ export function buildCausalAttributionReport(input: {
     ...(input.log?.session_id !== undefined
       ? { session_id: input.log.session_id }
       : {}),
-    terminal_outcome: terminal?.kind === "turn_ended" ? terminal.outcome : null,
+    terminal_outcome: terminal?.kind === "turn_ended" ? terminal.outcome ?? null : null,
     event_count: events.length,
     lifecycle: {
       inference_count: inputs.length,

@@ -3,16 +3,15 @@
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, it } from "node:test";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import {
   compileChatStack,
   INTERACTIVE_STACK_BUDGET,
   resolveStackBudgetForClass,
   SWE_STACK_BUDGET,
-  type ChatCompiledStack,
 } from "./chatStackCompile.js";
 
 describe("resolveStackBudgetForClass", () => {
@@ -137,6 +136,94 @@ describe("compileChatStack budget behavior", () => {
     const expected = Math.ceil(stack.system_context.length / 4);
     assert.equal(stack.estimated_tokens, expected);
   });
+
+  it("packs optional sections without dropping the mandatory safety core", () => {
+    const stack = compileChatStack({
+      projectRoot: process.cwd(),
+      task: "fix a cli shell bug",
+      promptBudgetChars: 2_000,
+    });
+    assert.ok(stack.system_context.length <= 2_000);
+    assert.match(stack.system_context, /# Chat safety adapter/);
+    assert.match(stack.system_context, /# Provider \/ model adapter/);
+    assert.match(stack.system_context, /# Task verifier guidance/);
+    assert.equal(stack.delivered_content_digest.length, 64);
+    assert.equal(stack.context_error, undefined);
+    assert.ok(stack.content_disposition.some((item) => item.status === "omitted" || item.status === "truncated"));
+  });
+
+  it("packs decisive project context before generic identity at a tight budget", () => {
+    const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-priority-"));
+    try {
+      writeFileSync(join(root, "AGENTS.md"), "generic identity\n" + "x".repeat(8_000), "utf8");
+      writeFileSync(join(root, "PROJECT_CONTEXT.md"), "PROJECT_REQUIREMENT: preserve the public API\n", "utf8");
+      const stack = compileChatStack({
+        projectRoot: root,
+        promptBudgetChars: 2_000,
+        includeDomainSkill: false,
+      });
+
+      assert.match(stack.system_context, /PROJECT_REQUIREMENT: preserve the public API/);
+      assert.equal(
+        stack.content_disposition.find((item) => item.id === "project:context")?.status,
+        "included",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns an explicit context error when mandatory content cannot fit", () => {
+    const stack = compileChatStack({
+      projectRoot: "/tmp/test",
+      promptBudgetChars: 1,
+      includeDomainSkill: false,
+    });
+    assert.equal(stack.context_error, "mandatory_instruction_core_exceeds_prompt_budget");
+    assert.equal(stack.system_context, "");
+  });
+
+  it("honors the declared UTF-16 budget without overflowing on emoji", () => {
+    const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-"));
+    try {
+      writeFileSync(join(root, "AGENTS.md"), "😀".repeat(7_000), "utf8");
+      const stack = compileChatStack({
+        projectRoot: root,
+        promptBudgetChars: 2_000,
+        includeDomainSkill: false,
+      });
+
+      assert.equal(stack.budget_unit, "utf16_code_units");
+      assert.ok(stack.system_context.length <= 2_000);
+      assert.ok(stack.content_disposition.every((item) => item.delivered_content_digest.length === 64));
+      assert.equal(stack.system_context.includes("\uD800"), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records full source identity separately from a pre-read-truncated fragment", () => {
+    const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-"));
+    try {
+      const prefix = "# instructions\n" + "x".repeat(12_500);
+      writeFileSync(join(root, "AGENTS.md"), prefix + "A", "utf8");
+      const first = compileChatStack({ projectRoot: root, includeDomainSkill: false });
+      const firstIdentity = first.selected_entries.find((entry) => entry.id === "identity:agents")!;
+
+      writeFileSync(join(root, "AGENTS.md"), prefix + "B", "utf8");
+      const second = compileChatStack({ projectRoot: root, includeDomainSkill: false });
+      const secondIdentity = second.selected_entries.find((entry) => entry.id === "identity:agents")!;
+
+      assert.equal(firstIdentity.source_truncated, true);
+      assert.equal(secondIdentity.source_truncated, true);
+      assert.notEqual(firstIdentity.source_digest, secondIdentity.source_digest);
+      assert.equal(firstIdentity.content_digest, secondIdentity.content_digest);
+      assert.equal(firstIdentity.source_length, secondIdentity.source_length);
+      assert.ok((firstIdentity.source_length ?? 0) > (firstIdentity.content_length ?? 0));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("compileChatStack shape invariants", () => {
@@ -243,8 +330,6 @@ describe("compileChatStack shape invariants", () => {
 });
 
 describe("compileChatStack with real project root", () => {
-  let tempDir: string;
-
   it("loads identity from AGENTS.md when present in project root", () => {
     // Use the real repo root which has AGENTS.md
     const stack = compileChatStack({

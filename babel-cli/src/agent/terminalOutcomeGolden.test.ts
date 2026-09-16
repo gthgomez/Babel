@@ -173,7 +173,7 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
     assertCrossSurface('complete', result, diskOutcome);
   });
 
-  test('failed stream retains tool_result and AGENT_FAILURE across surfaces', async () => {
+  test('failed stream retains tool_result and INFRA_FAILURE across surfaces', async () => {
     const engine = new ChatEngine({
       task: 'fail after tool',
       projectRoot,
@@ -194,7 +194,7 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
           yield { type: 'done', finishReason: 'tool_calls' };
           return;
         }
-        yield { type: 'error', message: 'provider hard failure 500' };
+        yield { type: 'error', message: '[deepSeekApi] provider hard failure 500' };
       },
       execute: async () => ({ type: 'completion', answer: 'x' }),
       getLastInvocationMetadata: () => null,
@@ -205,7 +205,7 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
     const ended = loaded.events.filter((e) => e.kind === 'turn_ended').at(-1);
     const tools = loaded.events.filter((e) => e.kind === 'tool_result');
 
-    assert.equal(result.outcome, 'AGENT_FAILURE');
+    assert.equal(result.outcome, 'INFRA_FAILURE');
     assert.equal(result.status, 'failed');
     assert.ok(tools.length >= 1, 'prior tool_result must persist');
     assertCrossSurface('failed', result, ended?.outcome);
@@ -306,7 +306,7 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
     assertCrossSurface('budget', result, diskOutcome);
   });
 
-  test('submitMessage unexpected throw finalizes AGENT_FAILURE on disk', async () => {
+  test('submitMessage unexpected throw stays inconclusive on disk', async () => {
     const engine = new ChatEngine({
       task: 'throw path',
       projectRoot,
@@ -326,24 +326,36 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
       } as typeof engine.submitMessageStream;
 
     const result = await engine.submitMessage('crash me', { onThought: () => {} });
-    assert.equal(result.outcome, 'AGENT_FAILURE');
     assert.equal(result.status, 'failed');
+    assert.equal(result.outcome, undefined);
 
     const loaded = await waitForThreadEventLog(chatSessionDir(engine.getEngineRunId()));
     const ended = loaded.events.filter((e) => e.kind === 'turn_ended').at(-1);
-    assert.equal(ended?.outcome, 'AGENT_FAILURE');
-    assertCrossSurface('throw', result, ended?.outcome);
+    assert.equal(ended?.outcome, undefined);
+    assert.equal(ended?.status, 'failed');
   });
 
-  test('stream failed event and consumeChatStream share AGENT_FAILURE', async () => {
+  test('stream failed event and consumeChatStream share unknown cause', async () => {
     const engine = new ChatEngine({
       task: 'event parity',
       projectRoot,
       model: 'deepseek-v4-flash',
       maxTurns: 2,
     });
+    let call = 0;
     installMockRunner(engine, {
       executeWithToolsStream: async function* () {
+        call += 1;
+        if (call === 1) {
+          yield {
+            type: 'tool_use',
+            id: 'g2',
+            name: 'read_file',
+            input: { path: 'hello.txt' },
+          };
+          yield { type: 'done', finishReason: 'tool_calls' };
+          return;
+        }
         yield { type: 'error', message: 'immediate fail' };
       },
       execute: async () => ({ type: 'completion', answer: 'x' }),
@@ -359,14 +371,10 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
     }
     const result = await consumeChatStream(tee(), null);
     assert.ok(collected.some((e) => e.type === 'failed'), 'must yield failed');
-    assert.equal(result.outcome, 'AGENT_FAILURE');
     assert.equal(result.status, 'failed');
+    assert.equal(result.outcome, undefined);
 
     const loaded = await waitForThreadEventLog(chatSessionDir(engine.getEngineRunId()));
-    assertCrossSurface(
-      'event-fail',
-      result,
-      loaded.events.filter((e) => e.kind === 'turn_ended').at(-1)?.outcome,
-    );
+    assert.equal(loaded.events.filter((e) => e.kind === 'turn_ended').at(-1)?.outcome, undefined);
   });
 });
