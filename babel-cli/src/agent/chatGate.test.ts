@@ -82,6 +82,31 @@ describe('ChatEngine.classifyChatTaskIntent', () => {
     assert.equal(ChatEngine.classifyChatTaskIntent('review the auth module'), 'explain');
   });
 
+  test('keeps review prompts read-only when evidence contains mutation words', () => {
+    assert.equal(
+      ChatEngine.classifyChatTaskIntent(
+        'Review this pull request and inspect docs/chat-truth-repair-review-handoff.md for defects.',
+      ),
+      'explain',
+    );
+  });
+
+  test('classifies an explicit review-and-fix request as execute', () => {
+    assert.equal(ChatEngine.classifyChatTaskIntent('review the auth module and fix it'), 'execute');
+  });
+
+  test('keeps all explicit review-and-mutate verbs executable', () => {
+    for (const task of [
+      'analyze and repair the code',
+      'diagnose and patch the vulnerability',
+      'check and refactor the module',
+      'inspect and implement the missing behavior',
+      'evaluate and remove the obsolete branch',
+    ]) {
+      assert.equal(ChatEngine.classifyChatTaskIntent(task), 'execute', task);
+    }
+  });
+
   test('classifies analyze/diagnose as explain', () => {
     assert.equal(
       ChatEngine.classifyChatTaskIntent('diagnose the slow database query'),
