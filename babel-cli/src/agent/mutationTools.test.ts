@@ -41,6 +41,16 @@ describe('isSuccessfulDirectMutation', () => {
       false,
     );
   });
+
+  test('nonzero direct mutation exits do not count without an error string', () => {
+    assert.equal(isSuccessfulDirectMutation('write_file', undefined, 1), false);
+    assert.equal(isSuccessfulDirectMutation('apply_patch', '', 1), false);
+  });
+
+  test('zero exit direct mutations count when the executor confirms success', () => {
+    assert.equal(isSuccessfulDirectMutation('write_file', undefined, 0), true);
+    assert.equal(isSuccessfulDirectMutation('apply_patch', '', 0), true);
+  });
 });
 
 describe('isVerifierAttemptTool', () => {

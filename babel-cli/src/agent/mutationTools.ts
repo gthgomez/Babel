@@ -41,8 +41,13 @@ export function isDirectMutationTool(tool: string): boolean {
 export function isSuccessfulDirectMutation(
   tool: string,
   error?: string | null,
+  exitCode?: number | null,
 ): boolean {
-  return isDirectMutationTool(tool) && (error == null || error === '');
+  return (
+    isDirectMutationTool(tool) &&
+    (error == null || error === '') &&
+    (exitCode == null || exitCode === 0)
+  );
 }
 
 export function isVerifierAttemptTool(tool: string): boolean {
