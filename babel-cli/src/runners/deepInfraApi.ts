@@ -36,7 +36,10 @@ import {
   buildStructuredOutputError,
 } from './base.js';
 import { hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
-import { prepareProviderRequest } from './preparedProviderRequest.js';
+import {
+  assertPreparedProviderRequestAdmissible,
+  prepareProviderRequest,
+} from './preparedProviderRequest.js';
 import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js';
 import { extractJson } from '../utils/extractJson.js';
 import { createVcrRecorder, createVcrPlayer, type VcrRecorder } from '../services/streamingVcr.js';
@@ -775,9 +778,9 @@ export class DeepInfraApiRunner implements LlmRunner {
       provider: this.providerId,
       requestedModelId: this.model,
       requestId: inferenceId,
-      attemptId: inferenceId,
       reservedCompletionTokens: this.executionEnvelope?.output.effective ?? this.maxTokens,
     });
+    assertPreparedProviderRequestAdmissible(preparedRequest);
     const requestBody = preparedRequest.body;
     const requestAccounting = preparedRequest.accounting;
     this.lastWirePolicyHash = this.executionEnvelope
@@ -1609,9 +1612,9 @@ export class DeepInfraApiRunner implements LlmRunner {
       provider: this.providerId,
       requestedModelId: this.model,
       requestId: inferenceId,
-      attemptId: inferenceId,
       reservedCompletionTokens: this.executionEnvelope?.output.effective ?? this.maxTokens,
     });
+    assertPreparedProviderRequestAdmissible(preparedRequest);
     const requestBody = preparedRequest.body;
     const requestAccounting = preparedRequest.accounting;
     this.lastWirePolicyHash = this.executionEnvelope

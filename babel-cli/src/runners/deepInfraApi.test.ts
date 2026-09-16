@@ -239,8 +239,9 @@ test('DeepInfra API runner executeWithToolsStream yields tool_use for native too
   assert.equal(startedEvent.input_message_count, body.messages.length);
   assert.equal(startedEvent.input_bytes, Buffer.byteLength(postedBody, 'utf8'));
   assert.equal(startedEvent.accounting_kind, 'exact_serialized_body');
-  assert.equal(startedEvent.request_id, startedEvent.attempt_id);
+  assert.notEqual(startedEvent.request_id, startedEvent.attempt_id);
   assert.equal(typeof startedEvent.request_id, 'string');
+  assert.equal(typeof startedEvent.attempt_id, 'string');
   assert.equal(
     startedEvent.input_digest,
     createHash('sha256').update(postedBody, 'utf8').digest('hex'),

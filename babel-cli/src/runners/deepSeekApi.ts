@@ -20,7 +20,10 @@ import {
   buildStructuredOutputError,
 } from './base.js';
 import { hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
-import { prepareProviderRequest } from './preparedProviderRequest.js';
+import {
+  assertPreparedProviderRequestAdmissible,
+  prepareProviderRequest,
+} from './preparedProviderRequest.js';
 import { assertSupportedDeepSeekModel, type DeepSeekModelId } from '../services/deepSeekPricing.js';
 import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js';
 import { extractJson } from '../utils/extractJson.js';
@@ -584,9 +587,9 @@ export class DeepSeekApiRunner implements LlmRunner {
       provider: 'deepseek',
       requestedModelId: this.model,
       requestId: inferenceId,
-      attemptId: inferenceId,
       reservedCompletionTokens: MAX_TOKENS,
     });
+    assertPreparedProviderRequestAdmissible(preparedRequest);
     const requestBody = preparedRequest.body;
     const requestAccounting = preparedRequest.accounting;
     callbacks?.onInvocationStarted?.({
@@ -1206,9 +1209,9 @@ export class DeepSeekApiRunner implements LlmRunner {
       provider: 'deepseek',
       requestedModelId: this.model,
       requestId: inferenceId,
-      attemptId: inferenceId,
       reservedCompletionTokens: MAX_TOKENS,
     });
+    assertPreparedProviderRequestAdmissible(preparedRequest);
     const requestBody = preparedRequest.body;
     const requestAccounting = preparedRequest.accounting;
     callbacks?.onInvocationStarted?.({
