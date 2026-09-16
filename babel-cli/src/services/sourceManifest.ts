@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, readlinkSync } from 'node:fs';
+import { lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { basename, relative, resolve, sep } from 'node:path';
 
 export type SourceManifestFileKind = 'tracked' | 'untracked' | 'supplement';
@@ -54,8 +54,44 @@ function lineEnding(bytes: Buffer): SourceManifestFile['line_ending'] {
 }
 
 function hashManifestFiles(files: SourceManifestFile[]): string {
-  const canonical = JSON.stringify(files);
+  const canonical = JSON.stringify(
+    [...files]
+      .sort((left, right) => left.path.localeCompare(right.path))
+      .map((file) => ({
+        path: file.path,
+        kind: file.kind,
+        sha256: file.sha256,
+        bytes: file.bytes,
+        line_ending: file.line_ending,
+        ...(file.symlink_target !== undefined ? { symlink_target: file.symlink_target } : {}),
+      })),
+  );
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
+}
+
+function portableFileIdentity(file: SourceManifestFile): Record<string, unknown> {
+  return {
+    path: file.path,
+    kind: file.kind,
+    sha256: file.sha256,
+    bytes: file.bytes,
+    line_ending: file.line_ending,
+    ...(file.symlink_target !== undefined ? { symlink_target: file.symlink_target } : {}),
+  };
+}
+
+function assertResolvedContainment(root: string, absolute: string, normalized: string): void {
+  const resolvedRoot = realpathSync(root);
+  const resolvedCandidate = realpathSync(absolute);
+  const resolvedRelative = relative(resolvedRoot, resolvedCandidate);
+  if (
+    !resolvedRelative ||
+    resolvedRelative === '..' ||
+    resolvedRelative.startsWith(`..${sep}`) ||
+    /^[A-Za-z]:/.test(resolvedRelative)
+  ) {
+    throw new Error(`source manifest path resolves outside root: ${normalized}`);
+  }
 }
 
 /**
@@ -66,7 +102,7 @@ export function buildByteAttestedSourceManifest(input: {
   root: string;
   files: SourceManifestFileInput[];
 }): ByteAttestedSourceManifest {
-  const root = resolve(input.root);
+  const root = realpathSync(resolve(input.root));
   const files: SourceManifestFile[] = [];
   const seen = new Set<string>();
 
@@ -75,6 +111,7 @@ export function buildByteAttestedSourceManifest(input: {
     if (seen.has(normalized)) throw new Error(`duplicate source manifest path: ${normalized}`);
     seen.add(normalized);
     const absolute = resolve(root, normalized);
+    assertResolvedContainment(root, absolute, normalized);
     const metadata = lstatSync(absolute);
     if (metadata.isDirectory()) throw new Error(`source manifest path is a directory: ${normalized}`);
 
@@ -116,20 +153,73 @@ export function buildByteAttestedSourceManifest(input: {
   };
 }
 
-/** Verify a manifest's file hashes and byte counts against the same root. */
+export interface SourceManifestVerificationResult {
+  ok: boolean;
+  /** Portable content-identity mismatches by relative path. */
+  mismatches: string[];
+  /** Metadata-only drift by relative path; does not invalidate content identity. */
+  metadata_mismatches: string[];
+  /** Manifest-level integrity or inventory-shape failures. */
+  manifest_mismatches: string[];
+}
+
+/**
+ * Verify an explicitly enumerated manifest against its declared root.
+ * This validates the unsigned manifest's internal consistency; it does not
+ * discover or authenticate repository-wide tracked/untracked inventory.
+ */
 export function verifyByteAttestedSourceManifest(
   manifest: ByteAttestedSourceManifest,
-): { ok: boolean; mismatches: string[] } {
+): SourceManifestVerificationResult {
   const mismatches: string[] = [];
+  const metadata_mismatches: string[] = [];
+  const manifest_mismatches: string[] = [];
+  const seen = new Set<string>();
+  for (const file of manifest.files) {
+    if (seen.has(file.path)) manifest_mismatches.push(`duplicate:${file.path}`);
+    seen.add(file.path);
+  }
+  if (manifest.files.length === 0) manifest_mismatches.push('inventory');
+  if (manifest.manifest_sha256 !== hashManifestFiles(manifest.files)) {
+    manifest_mismatches.push('manifest_sha256');
+  }
+
+  let root: string;
+  try {
+    root = realpathSync(resolve(manifest.root));
+  } catch {
+    manifest_mismatches.push('root');
+    return {
+      ok: false,
+      mismatches,
+      metadata_mismatches,
+      manifest_mismatches,
+    };
+  }
+
   for (const file of manifest.files) {
     try {
       const input: SourceManifestFileInput = { path: file.path };
       if (file.kind !== 'symlink') input.kind = file.kind;
-      const current = buildByteAttestedSourceManifest({ root: manifest.root, files: [input] }).files[0];
-      if (!current || JSON.stringify(current) !== JSON.stringify(file)) mismatches.push(file.path);
+      const current = buildByteAttestedSourceManifest({ root, files: [input] }).files[0];
+      if (!current || JSON.stringify(portableFileIdentity(current)) !== JSON.stringify(portableFileIdentity(file))) {
+        mismatches.push(file.path);
+      }
+      if (
+        current &&
+        (current.mode !== file.mode || current.mtime_ms !== file.mtime_ms) &&
+        !metadata_mismatches.includes(file.path)
+      ) {
+        metadata_mismatches.push(file.path);
+      }
     } catch {
       mismatches.push(file.path);
     }
   }
-  return { ok: mismatches.length === 0, mismatches };
+  return {
+    ok: mismatches.length === 0 && manifest_mismatches.length === 0,
+    mismatches,
+    metadata_mismatches,
+    manifest_mismatches,
+  };
 }
