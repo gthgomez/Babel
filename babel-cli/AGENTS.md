@@ -4,10 +4,10 @@ Agent-neutral startup router for the Babel CLI package. Root `ENGINEERING.md` an
 
 ## Startup Sequence
 
-1. Read `/workspace-root/ENGINEERING.md`.
-2. Read `/workspace-root/AGENTS.md`.
-3. Read `.\INTEGRATION.md`.
-4. Read `.\PROJECT_CONTEXT.md`.
+1. Read `..\ENGINEERING.md`.
+2. Read `..\AGENTS.md`.
+3. Read `..\INTEGRATION.md`.
+4. Read `..\PROJECT_CONTEXT.md`.
 5. Read `PROJECT_CONTEXT.md` in this directory.
 6. Read `README.md` for CLI command examples.
 
