@@ -119,6 +119,12 @@ jobs:
       - name: Run required harness runtime suite
         run: npm run test:harness-runtime
         working-directory: babel-cli
+      - name: Log Chat truth test selection
+        run: node scripts/print_chat_truth_selection.mjs
+        working-directory: babel-cli
+      - name: Run required Chat truth suite
+        run: npm run test:chat-truth
+        working-directory: babel-cli
       - name: Run required benchmark/eval suite
         run: npm run test:benchmark-eval
         working-directory: babel-cli
@@ -167,6 +173,12 @@ jobs:
         working-directory: babel-cli
       - name: Run required harness runtime suite
         run: npm run test:harness-runtime
+        working-directory: babel-cli
+      - name: Log Chat truth test selection
+        run: node scripts/print_chat_truth_selection.mjs
+        working-directory: babel-cli
+      - name: Run required Chat truth suite
+        run: npm run test:chat-truth
         working-directory: babel-cli
       - name: Run required benchmark/eval suite
         run: npm run test:benchmark-eval
