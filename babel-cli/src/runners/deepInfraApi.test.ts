@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import { z } from 'zod';
@@ -193,16 +194,20 @@ test('DeepInfra API runner executeWithToolsStream yields tool_use for native too
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
   const { DeepInfraApiRunner } = await import('./deepInfraApi.js');
 
-  globalThis.fetch = (async () =>
-    makeSseResponse([
+  let postedBody = '';
+  globalThis.fetch = (async (_input, init) => {
+    postedBody = String(init?.body ?? '');
+    return makeSseResponse([
       'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read_file","arguments":""}}]}}]}',
       'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"path\\": \\"src/file.ts\\"}"}}]}}]}',
       'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}',
       'data: [DONE]',
-    ])) as typeof fetch;
+    ]);
+  }) as typeof fetch;
 
   const runner = new DeepInfraApiRunner('deepseek-ai/DeepSeek-V3-0324');
   const events: any[] = [];
+  let startedEvent: any;
   for await (const event of runner.executeWithToolsStream(
     [{ role: 'user', content: 'read src/file.ts' }],
     [{
@@ -213,6 +218,12 @@ test('DeepInfra API runner executeWithToolsStream yields tool_use for native too
         parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
       },
     }],
+    undefined,
+    undefined,
+    undefined,
+    {
+      onInvocationStarted: (event) => { startedEvent = event; },
+    },
   )) {
     events.push(event);
   }
@@ -224,6 +235,17 @@ test('DeepInfra API runner executeWithToolsStream yields tool_use for native too
   assert.equal(events[0]!.id, 'call_1');
   assert.equal(events[1]!.type, 'done');
   assert.equal(events[1]!.finishReason, 'tool_calls');
+  const body = JSON.parse(postedBody) as { messages: unknown[] };
+  assert.equal(startedEvent.input_message_count, body.messages.length);
+  assert.equal(startedEvent.input_bytes, Buffer.byteLength(postedBody, 'utf8'));
+  assert.equal(startedEvent.accounting_kind, 'exact_serialized_body');
+  assert.notEqual(startedEvent.request_id, startedEvent.attempt_id);
+  assert.equal(typeof startedEvent.request_id, 'string');
+  assert.equal(typeof startedEvent.attempt_id, 'string');
+  assert.equal(
+    startedEvent.input_digest,
+    createHash('sha256').update(postedBody, 'utf8').digest('hex'),
+  );
 
   const metadata = runner.getLastInvocationMetadata();
   assert.equal(metadata?.provider, 'deepinfra');
@@ -294,6 +316,52 @@ test('DeepInfra API runner executeWithToolsStream yields text_delta for completi
   assert.equal(events[1]!.text, ' world');
   assert.equal(events[2]!.type, 'done');
   assert.equal(events[2]!.finishReason, 'stop');
+});
+
+test('DeepInfra native stream preserves partial output provenance on malformed SSE', async () => {
+  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  const { DeepInfraApiRunner } = await import('./deepInfraApi.js');
+  globalThis.fetch = (async () => makeSseResponse([
+    'data: {"choices":[{"delta":{"content":"partial"}}]}',
+    'data: {not-json}',
+    'data: [DONE]',
+  ])) as typeof fetch;
+
+  const events: any[] = [];
+  const completions: any[] = [];
+  for await (const event of new DeepInfraApiRunner('deepseek-ai/DeepSeek-V3-0324').executeWithToolsStream(
+    [{ role: 'user', content: 'hello' }],
+    [],
+    undefined,
+    undefined,
+    undefined,
+    { onInvocationCompleted: (event) => completions.push(event) },
+  )) events.push(event);
+
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
+  assert.match(events[1]!.message, /Malformed SSE event chunk/);
+  assert.equal(completions.at(-1)?.status, 'failed');
+  assert.equal(completions.at(-1)?.partial_model_output, true);
+});
+
+test('DeepInfra native stream rejects a malformed unterminated final SSE frame', async () => {
+  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  const { DeepInfraApiRunner } = await import('./deepInfraApi.js');
+  globalThis.fetch = (async () => new Response(
+    'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n' +
+      'data: [DONE]\n\n' +
+      'data: {not-json}',
+    { status: 200 },
+  )) as typeof fetch;
+
+  const events: any[] = [];
+  for await (const event of new DeepInfraApiRunner('deepseek-ai/DeepSeek-V3-0324').executeWithToolsStream(
+    [{ role: 'user', content: 'hello' }],
+    [],
+  )) events.push(event);
+
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
+  assert.match(events[1]!.message, /Malformed SSE event chunk/);
 });
 
 test('DeepInfra API runner executeWithToolsStream yields error on HTTP failure', async () => {

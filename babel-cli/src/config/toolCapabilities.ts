@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import { parseCommandArgv } from '../utils/commandArgv.js';
 
 import type {
   BenchmarkRuntimeCommandStatus,
@@ -154,7 +155,12 @@ export function getToolCapabilityRegistrySnapshot(
 }
 
 function getCommandBase(rawCommand: string): string | null {
-  const rawBase = rawCommand.trim().split(/\s+/).find(Boolean);
+  let rawBase: string | undefined;
+  try {
+    rawBase = parseCommandArgv(rawCommand)[0];
+  } catch {
+    rawBase = undefined;
+  }
   if (!rawBase) {
     return null;
   }
@@ -164,8 +170,11 @@ function getCommandBase(rawCommand: string): string | null {
 }
 
 function getFirstCommandArgument(rawCommand: string): string | null {
-  const [, firstArg] = rawCommand.trim().split(/\s+/).filter(Boolean);
-  return firstArg ?? null;
+  try {
+    return parseCommandArgv(rawCommand)[1] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function taskOrCommandMentionsGitBundle(rawTask: string, rawCommand: string): boolean {
@@ -185,7 +194,12 @@ function getPytestStyleTestOutputsTarget(
   if (!/\bTerminal-Bench 2 task\b/i.test(rawTask)) {
     return null;
   }
-  const parts = rawCommand.trim().split(/\s+/).filter(Boolean);
+  let parts: string[];
+  try {
+    parts = parseCommandArgv(rawCommand);
+  } catch {
+    return null;
+  }
   if (parts.length < 2) {
     return null;
   }

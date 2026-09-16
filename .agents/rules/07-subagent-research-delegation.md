@@ -13,10 +13,14 @@ Read this rule when performing extensive codebase research, multi-file code swee
 
 ## 1. Trigger Conditions for Sub-Agent Delegation
 
-Delegate research tasks to a sub-agent when any of the following conditions are met:
+Consider delegating research when any of the following conditions are met and the question is
+independently parallelizable:
 - **Broad File Searches:** Searching or inspecting more than 15 files across unindexed directories.
 - **Deep Log / Audit Sweeps:** Scanning transcript histories, test run logs, or architectural document trees.
 - **Background Exploration:** Exploring secondary subsystems while the primary agent continues active implementation or testing.
+
+Delegation is optional. Do not create a sub-agent solely because a task has a file-count threshold;
+delegate only when the context reduction or independent evidence is worth the coordination cost.
 
 ---
 

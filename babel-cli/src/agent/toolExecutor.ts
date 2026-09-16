@@ -35,6 +35,7 @@ import {
 
 import {
   executeTool,
+  runWithProjectRoot,
   type ToolCallRequest,
   type ToolContext,
   type ToolResult,
@@ -466,10 +467,15 @@ export function createToolExecutor(
         if (context.signal?.aborted) toolController.abort();
         else context.signal?.addEventListener('abort', onParentAbort, { once: true });
         try {
-          const promise = runTool(entry.request, {
+          const executionContext: ToolContext = {
             ...context,
             signal: toolController.signal,
-          });
+          };
+          const promise = executionContext.projectRoot
+            ? runWithProjectRoot(executionContext.projectRoot, () =>
+                runTool(entry.request, executionContext),
+              )
+            : runTool(entry.request, executionContext);
           const result =
             effectiveTimeout > 0
               ? await withTimeout(promise, effectiveTimeout, toolName, context.signal, () =>
@@ -535,8 +541,8 @@ function resolveWriteFileMutationPath(actionPath: string, workspaceRoot: string)
   return isAbsolute(actionPath) ? resolve(actionPath) : resolve(workspaceRoot, actionPath);
 }
 
-function projectRootForScope(preset: PermissionPreset): string | null {
-  const raw = process.env['BABEL_PROJECT_ROOT'];
+function projectRootForScope(preset: PermissionPreset, context?: ToolContext): string | null {
+  const raw = context?.projectRoot ?? process.env['BABEL_PROJECT_ROOT'];
   if (raw?.trim()) return resolve(raw);
 
   // Fail-closed for read_only: use cwd as scope boundary when
@@ -557,7 +563,7 @@ function projectRootForScope(preset: PermissionPreset): string | null {
   return null;
 }
 
-function pathsFromAgentAction(action: AgentAction): string[] {
+function pathsFromAgentAction(action: AgentAction, projectRoot = process.cwd()): string[] {
   switch (action.type) {
     case 'read_file':
     case 'list_dir':
@@ -567,7 +573,7 @@ function pathsFromAgentAction(action: AgentAction): string[] {
       return action.path !== undefined ? [action.path] : [];
     case 'glob':
       // Resolve relative patterns to detect traversal attempts
-      return [isAbsolute(action.pattern) ? action.pattern : resolve(process.cwd(), action.pattern)];
+      return [isAbsolute(action.pattern) ? action.pattern : resolve(projectRoot, action.pattern)];
     case 'apply_patch':
       return extractPatchRawTargets(action.patch);
     default:
@@ -580,7 +586,7 @@ function resolveScopedPath(projectRoot: string, rawPath: string): string {
 }
 
 function findOutOfScopeTarget(action: AgentAction, projectRoot: string): string | null {
-  for (const rawPath of pathsFromAgentAction(action)) {
+  for (const rawPath of pathsFromAgentAction(action, projectRoot)) {
     const resolved = resolveScopedPath(projectRoot, rawPath);
     if (!isPathInside(projectRoot, resolved)) {
       return resolved;
@@ -589,11 +595,11 @@ function findOutOfScopeTarget(action: AgentAction, projectRoot: string): string 
   return null;
 }
 
-function readOnlyScopeViolation(action: AgentAction, preset: PermissionPreset): string | null {
+function readOnlyScopeViolation(action: AgentAction, preset: PermissionPreset, context: ToolContext): string | null {
   if (preset !== 'read_only') {
     return null;
   }
-  const projectRoot = projectRootForScope(preset);
+  const projectRoot = projectRootForScope(preset, context);
   if (!projectRoot) {
     return null;
   }
@@ -923,7 +929,7 @@ export async function executeActionWithPolicy(
     };
   }
 
-  const scopeViolation = readOnlyScopeViolation(action, preset);
+  const scopeViolation = readOnlyScopeViolation(action, preset, context);
   const effectViolation = readOnlyEffectViolation(action, preset);
   if (scopeViolation || effectViolation) {
     incrementBlocks(context.runId);
@@ -931,7 +937,7 @@ export async function executeActionWithPolicy(
       type: 'scope_violation',
       action: action.type,
       target: scopeViolation ?? effectViolation ?? action.type,
-      projectRoot: process.env['BABEL_PROJECT_ROOT'] ?? process.cwd(),
+      projectRoot: context.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd(),
       preset,
     });
     return {
@@ -945,7 +951,7 @@ export async function executeActionWithPolicy(
 
   // ── Patch content validation (H1 hardening) ────────────────────────
   if (action.type === 'apply_patch') {
-    const projectRoot = projectRootForScope(preset) ?? resolve(process.cwd());
+    const projectRoot = projectRootForScope(preset, context) ?? resolve(process.cwd());
     const patchViolations = validatePatchContent(action.patch, projectRoot);
     if (patchViolations.length > 0) {
       incrementBlocks(context.runId);
@@ -990,7 +996,7 @@ export async function executeActionWithPolicy(
   if (action.type === 'write_file') {
     txPaths = [resolveWriteFileMutationPath(action.path, workspaceRoot)];
   } else if (action.type === 'apply_patch') {
-    txPaths = extractPatchTargets(action.patch, projectRootForScope(preset) ?? workspaceRoot);
+    txPaths = extractPatchTargets(action.patch, projectRootForScope(preset, context) ?? workspaceRoot);
   }
 
   let batchTx: Awaited<ReturnType<typeof WorkspaceTransactionManager.beginBatch>> | null = null;
@@ -1224,7 +1230,14 @@ export async function executeActionWithPolicy(
           } catch {
             rollbackResult = 'failed';
           }
-          effectTx = rollbackEffectTransaction(effectTx, rollbackResult);
+          const rolledBack = rollbackEffectTransaction(effectTx, rollbackResult);
+          effectTx = {
+            ...rolledBack,
+            post_revision:
+              rollbackResult === 'success'
+                ? { compositeTreeHash: batchTx.preRevisionHash }
+                : captureWorkspaceRevisionIdentity(workspaceRoot),
+          };
         } else {
           const postRevision = captureWorkspaceRevisionIdentity(workspaceRoot);
           effectTx = {
@@ -1309,7 +1322,13 @@ export async function executeActionWithPolicy(
           rollbackResult = 'failed';
         }
       }
-      effectTx = rollbackEffectTransaction(effectTx, rollbackResult);
+      effectTx = {
+        ...rollbackEffectTransaction(effectTx, rollbackResult),
+        post_revision:
+          batchTx && rollbackResult === 'success'
+            ? { compositeTreeHash: batchTx.preRevisionHash }
+            : captureWorkspaceRevisionIdentity(workspaceRoot),
+      };
     }
     throw error;
   }

@@ -109,10 +109,20 @@ export function validateContextManifest(manifest: ContextManifestV1): void {
   if (manifest.missing_event_ids.some((id) => !manifest.expected_prior_event_ids.includes(id))) {
     throw new Error('Context manifest missing_event_ids must be expected event ids')
   }
+  // A native/text delivery mode can be known while the adapter has not
+  // supplied the prior-event delivery list.  The builder records that state
+  // as null preservation evidence; do not reinterpret it as a proven true
+  // result during restore.  An explicitly supplied empty list with expected
+  // events would instead produce missing_event_ids and resolve to false.
+  const deliveryEvidenceUnknown =
+    manifest.delivery_mode === 'unknown' ||
+    (manifest.preservation_status === null &&
+      manifest.delivered_prior_event_ids.length === 0 &&
+      manifest.missing_event_ids.length === 0)
   const expectedStatus =
     manifest.context_truncated === true || manifest.missing_event_ids.length > 0
       ? false
-      : manifest.delivery_mode === 'unknown'
+      : deliveryEvidenceUnknown
         ? null
         : manifest.compaction_occurred
           ? manifest.expected_prior_event_ids.every((id) => manifest.preserved_event_ids.includes(id))

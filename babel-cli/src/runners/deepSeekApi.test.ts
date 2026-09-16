@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import { z } from 'zod';
@@ -204,16 +205,20 @@ test('DeepSeek API runner executeWithToolsStream yields tool_use for native tool
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
 
-  globalThis.fetch = (async () =>
-    makeSseResponse([
+  let postedBody = '';
+  globalThis.fetch = (async (_input, init) => {
+    postedBody = String(init?.body ?? '');
+    return makeSseResponse([
       'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read_file","arguments":""}}]}}]}',
       'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"path\\": \\"src/file.ts\\"}"}}]}}]}',
       'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}',
       'data: [DONE]',
-    ])) as typeof fetch;
+    ]);
+  }) as typeof fetch;
 
   const runner = new DeepSeekApiRunner('deepseek-v4-flash');
   const events: any[] = [];
+  let startedEvent: any;
   for await (const event of runner.executeWithToolsStream(
     [{ role: 'user', content: 'read src/file.ts' }],
     [{
@@ -224,6 +229,12 @@ test('DeepSeek API runner executeWithToolsStream yields tool_use for native tool
         parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
       },
     }],
+    undefined,
+    undefined,
+    undefined,
+    {
+      onInvocationStarted: (event) => { startedEvent = event; },
+    },
   )) {
     events.push(event);
   }
@@ -235,6 +246,19 @@ test('DeepSeek API runner executeWithToolsStream yields tool_use for native tool
   assert.equal(events[0]!.id, 'call_1');
   assert.equal(events[1]!.type, 'done');
   assert.equal(events[1]!.finishReason, 'tool_calls');
+  const body = JSON.parse(postedBody) as { messages: unknown[] };
+  assert.equal(startedEvent.input_message_count, body.messages.length);
+  assert.equal(startedEvent.input_bytes, Buffer.byteLength(postedBody, 'utf8'));
+  assert.equal(startedEvent.accounting_kind, 'exact_serialized_body');
+  assert.notEqual(startedEvent.request_id, startedEvent.attempt_id);
+  assert.equal(typeof startedEvent.request_id, 'string');
+  assert.equal(typeof startedEvent.attempt_id, 'string');
+  assert.equal(startedEvent.context_limit_tokens, 1_000_000);
+  assert.equal(startedEvent.context_limit_source, 'policy');
+  assert.equal(
+    startedEvent.input_digest,
+    createHash('sha256').update(postedBody, 'utf8').digest('hex'),
+  );
 
   // Verify metadata was populated
   const metadata = runner.getLastInvocationMetadata();
@@ -339,6 +363,52 @@ test('DeepSeek API runner executeWithToolsStream yields text_delta for completio
   assert.equal(events[2]!.finishReason, 'stop');
 });
 
+test('DeepSeek native stream preserves partial output provenance on malformed SSE', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  globalThis.fetch = (async () => makeSseResponse([
+    'data: {"choices":[{"delta":{"content":"partial"}}]}',
+    'data: {not-json}',
+    'data: [DONE]',
+  ])) as typeof fetch;
+
+  const events: any[] = [];
+  const completions: any[] = [];
+  for await (const event of new DeepSeekApiRunner('deepseek-v4-flash').executeWithToolsStream(
+    [{ role: 'user', content: 'hello' }],
+    [],
+    undefined,
+    undefined,
+    undefined,
+    { onInvocationCompleted: (event) => completions.push(event) },
+  )) events.push(event);
+
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
+  assert.match(events[1]!.message, /Malformed SSE event chunk/);
+  assert.equal(completions.at(-1)?.status, 'failed');
+  assert.equal(completions.at(-1)?.partial_model_output, true);
+});
+
+test('DeepSeek native stream rejects a malformed unterminated final SSE frame', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  globalThis.fetch = (async () => new Response(
+    'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n' +
+      'data: [DONE]\n\n' +
+      'data: {not-json}',
+    { status: 200 },
+  )) as typeof fetch;
+
+  const events: any[] = [];
+  for await (const event of new DeepSeekApiRunner('deepseek-v4-flash').executeWithToolsStream(
+    [{ role: 'user', content: 'hello' }],
+    [],
+  )) events.push(event);
+
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
+  assert.match(events[1]!.message, /Malformed SSE event chunk/);
+});
+
 test('DeepSeek API runner executeWithToolsStream yields error on HTTP failure', async () => {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
@@ -365,8 +435,8 @@ test('DeepSeek retry callbacks settle and abort during backoff without another r
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
   let calls = 0;
-  const scheduled: unknown[] = [];
-  const settled: unknown[] = [];
+  const scheduled: any[] = [];
+  const settled: any[] = [];
   globalThis.fetch = (async () => {
     calls += 1;
     return new Response('temporary overload', { status: 500 });
@@ -382,12 +452,32 @@ test('DeepSeek retry callbacks settle and abort during backoff without another r
     (error: unknown) => error instanceof Error && error.name === 'AbortError',
   );
   assert.equal(calls, 1);
-  assert.deepEqual(scheduled, [{
-    provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2,
-    reason: 'server_error', backoff_ms: (scheduled[0] as any).backoff_ms,
-  }]);
+  assert.equal(scheduled.length, 1);
+  assert.deepEqual(
+    {
+      provider: scheduled[0].provider,
+      model: scheduled[0].model,
+      attempt: scheduled[0].attempt,
+      reason: scheduled[0].reason,
+      backoff_ms: scheduled[0].backoff_ms,
+    },
+    {
+      provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2,
+      reason: 'server_error', backoff_ms: scheduled[0].backoff_ms,
+    },
+  );
+  assert.match(scheduled[0].request_id, /^[0-9a-f-]{36}$/);
+  assert.match(scheduled[0].attempt_id, /^[0-9a-f-]{36}$/);
+  assert.match(scheduled[0].body_digest, /^[a-f0-9]{64}$/);
   assert.equal((scheduled[0] as any).backoff_ms >= 200, true);
-  assert.deepEqual(settled, [{ provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2, outcome: 'cancelled' }]);
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].provider, 'deepseek');
+  assert.equal(settled[0].model, 'deepseek-v4-flash');
+  assert.equal(settled[0].attempt, 2);
+  assert.equal(settled[0].outcome, 'cancelled');
+  assert.equal(settled[0].request_id, scheduled[0].request_id);
+  assert.equal(settled[0].attempt_id, scheduled[0].attempt_id);
+  assert.equal(settled[0].body_digest, scheduled[0].body_digest);
 });
 test('DeepSeek retry callbacks record normalized successful lifecycle', async () => {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
@@ -410,14 +500,28 @@ test('DeepSeek retry callbacks record normalized successful lifecycle', async ()
   assert.deepEqual(result, { ok: true });
   assert.equal(calls, 2);
   assert.equal(scheduled.length, 1);
-  assert.deepEqual({ ...scheduled[0], backoff_ms: 0 }, {
+  assert.deepEqual({
+    provider: scheduled[0].provider,
+    model: scheduled[0].model,
+    attempt: scheduled[0].attempt,
+    reason: scheduled[0].reason,
+    backoff_ms: 0,
+  }, {
     provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2,
     reason: 'rate_limit', backoff_ms: 0,
   });
+  assert.match(scheduled[0].request_id, /^[0-9a-f-]{36}$/);
+  assert.match(scheduled[0].attempt_id, /^[0-9a-f-]{36}$/);
+  assert.match(scheduled[0].body_digest, /^[a-f0-9]{64}$/);
   assert.equal(scheduled[0].backoff_ms >= 0, true);
-  assert.deepEqual(settled, [{
-    provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2, outcome: 'succeeded',
-  }]);
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].provider, 'deepseek');
+  assert.equal(settled[0].model, 'deepseek-v4-flash');
+  assert.equal(settled[0].attempt, 2);
+  assert.equal(settled[0].outcome, 'succeeded');
+  assert.equal(settled[0].request_id, scheduled[0].request_id);
+  assert.equal(settled[0].attempt_id, scheduled[0].attempt_id);
+  assert.equal(settled[0].body_digest, scheduled[0].body_digest);
 });
 test('DeepSeek settles each retry before scheduling the next failed attempt', async () => {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';

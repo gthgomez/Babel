@@ -22,6 +22,26 @@ export interface ChatEventDispatchSinks {
   toolIdQueue?: number[];
 }
 
+import {
+  classifyFailureText,
+  isBudgetErrorText,
+  isEnvironmentErrorText,
+  isInfrastructureErrorText,
+  isPolicyErrorText,
+  resolveFailedEventOutcome,
+  statusForOutcome,
+} from '../../agent/chatFailureClassification.js';
+
+export {
+  classifyFailureText,
+  isBudgetErrorText,
+  isEnvironmentErrorText,
+  isInfrastructureErrorText,
+  isPolicyErrorText,
+  resolveFailedEventOutcome,
+  statusForOutcome,
+};
+
 /** Dispatch one chat event to all configured sinks. Returns a terminal ChatResult on failure. */
 export function dispatchChatEvent(
   event: ChatEvent,
@@ -89,25 +109,47 @@ export function dispatchChatEvent(
   }
 
   if (event.type === 'failed') {
+    const outcome = resolveFailedEventOutcome(event.error, event.outcome);
+    const ev = event as {
+      turnRouting?: TurnRoutingReceipt[];
+      verifierReceipt?: ChatResult['verifierReceipt'];
+      blockedReport?: ChatResult['blockedReport'];
+    };
     return {
-      status: 'failed',
-      outcome: event.outcome ?? 'AGENT_FAILURE',
+      status: outcome ? statusForOutcome(outcome) : 'failed',
+      ...(outcome !== undefined ? { outcome } : {}),
       answer: event.error,
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
-      ...(event.toolCalls ? { toolCalls: event.toolCalls } : {}),
-      ...(event.runDir ? { runDir: event.runDir } : {}),
+      ...(event.toolCalls !== undefined ? { toolCalls: event.toolCalls } : {}),
+      ...(event.runDir !== undefined ? { runDir: event.runDir } : {}),
+      ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
+      ...(event.costBudget !== undefined ? { costBudget: event.costBudget } : {}),
+      ...(event.runAllowance !== undefined ? { runAllowance: event.runAllowance } : {}),
+      ...(ev.turnRouting !== undefined ? { turnRouting: ev.turnRouting } : {}),
+      ...(ev.verifierReceipt !== undefined ? { verifierReceipt: ev.verifierReceipt } : {}),
+      ...(ev.blockedReport !== undefined ? { blockedReport: ev.blockedReport } : {}),
     };
   }
 
   if (event.type === 'cancelled') {
+    const ev = event as {
+      toolCalls?: ChatResult['toolCalls'];
+      runDir?: string;
+      turnRouting?: TurnRoutingReceipt[];
+      verifierReceipt?: ChatResult['verifierReceipt'];
+    };
     return {
       status: 'cancelled',
       outcome: 'CANCELLED',
       answer: 'Cancelled',
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
-      ...(event.turnTelemetry ? { turnTelemetry: event.turnTelemetry } : {}),
+      ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
+      ...(ev.toolCalls !== undefined ? { toolCalls: ev.toolCalls } : {}),
+      ...(ev.runDir !== undefined ? { runDir: ev.runDir } : {}),
+      ...(ev.turnRouting !== undefined ? { turnRouting: ev.turnRouting } : {}),
+      ...(ev.verifierReceipt !== undefined ? { verifierReceipt: ev.verifierReceipt } : {}),
     };
   }
 
@@ -129,6 +171,9 @@ export function terminalResultFromDoneEvent(
     verifierTampered?: boolean;
     turnRouting?: TurnRoutingReceipt[];
     turnTelemetry?: import('../../agent/chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+    costBudget?: ChatResult['costBudget'];
+    runAllowance?: ChatResult['runAllowance'];
+    policyEvents?: ChatResult['policyEvents'];
   },
 ): ChatResult {
   // Prefer the engine's authoritative TerminalOutcome. Only recompute when
@@ -164,5 +209,8 @@ export function terminalResultFromDoneEvent(
     ...(opts?.verifierTampered ? { verifierTampered: true as const } : {}),
     ...(opts?.turnRouting ? { turnRouting: opts.turnRouting } : {}),
     ...(opts?.turnTelemetry !== undefined ? { turnTelemetry: opts.turnTelemetry } : {}),
+    ...(opts?.costBudget ? { costBudget: opts.costBudget } : {}),
+    ...(opts?.runAllowance ? { runAllowance: opts.runAllowance } : {}),
+    ...(opts?.policyEvents ? { policyEvents: opts.policyEvents } : {}),
   };
 }

@@ -113,13 +113,20 @@ export interface RequestReconstructionContext {
  */
 export function resolveRuntimeInvariantMode(
   explicit?: RuntimeInvariantMode,
+  env: NodeJS.ProcessEnv = process.env,
 ): RuntimeInvariantMode {
   if (explicit) return explicit;
-  const configured = process.env['BABEL_RUNTIME_INVARIANTS'];
+  const configured = env['BABEL_RUNTIME_INVARIANTS'];
   if (configured === 'enforce' || configured === 'shadow' || configured === 'off') {
     return configured;
   }
-  return process.env['NODE_ENV'] === 'production' && !process.env['CI']
+  // Experiment/preflight configuration must enforce protocol invariants rather
+  // than inherit production shadow mode.
+  const experimentOrPreflight = ['BABEL_EXPERIMENT', 'BABEL_PREFLIGHT', 'BABEL_ASTRA_PREFLIGHT', 'BABEL_LAB_PREFLIGHT']
+    .map((key) => env[key]?.trim().toLowerCase())
+    .some((value) => value === '1' || value === 'true');
+  if (experimentOrPreflight) return 'enforce';
+  return env['NODE_ENV'] === 'production' && !env['CI']
     ? 'shadow'
     : 'enforce';
 }

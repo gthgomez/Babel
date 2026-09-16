@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { computeToolsBeforeFirstWrite } from './firstMoveCard.js';
-import { isSuccessfulDirectMutation } from './mutationTools.js';
+import { isConfirmedMutation, type MutationEffectStatus } from './mutationTools.js';
 import {
   classifyEmptyPatchHonesty,
   detectEnvBlockedFromText,
@@ -222,19 +222,25 @@ export function sampleFromToolLog(input: {
     target?: string;
     error?: string;
     detail?: string;
+    effect_status?: MutationEffectStatus;
+    mutation_paths?: string[];
   }>;
   answer?: string;
   should_mutate?: boolean;
   task_label?: string;
   notes?: string;
 }): ImplementorMetricSample {
-  const write_count = input.toolCalls.filter((tc) =>
-    isSuccessfulDirectMutation(tc.tool, tc.error),
-  ).length;
+  const write_count = input.toolCalls.filter((tc) => isConfirmedMutation({
+    tool: tc.tool,
+    error: tc.error,
+    effectStatus: tc.effect_status,
+    mutationPaths: tc.mutation_paths,
+  })).length;
   const tools_before_first_write = computeToolsBeforeFirstWrite(
     input.toolCalls.map((tc) => ({
       tool: tc.tool,
       ...(tc.error !== undefined ? { error: tc.error } : {}),
+      ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
     })),
   );
   const envOpts = { hasAnyWrites: write_count > 0 };
@@ -272,18 +278,28 @@ export function sampleFromHarnessPayload(
         target?: string;
         error?: string;
         detail?: string;
+        effect_status?: MutationEffectStatus;
+        mutation_paths?: string[];
       }>)
     : [];
-  const writeFromTools = toolCalls.filter((tc) =>
-    isSuccessfulDirectMutation(tc.tool, tc.error),
-  ).length;
+  const writeFromTools = toolCalls.filter((tc) => isConfirmedMutation({
+    tool: tc.tool,
+    error: tc.error,
+    effectStatus: tc.effect_status,
+    mutationPaths: tc.mutation_paths,
+  })).length;
   const write_count =
-    typeof payload['write_count'] === 'number' ? payload['write_count'] : writeFromTools;
+    toolCalls.length > 0
+      ? writeFromTools
+      : typeof payload['write_count'] === 'number'
+        ? payload['write_count']
+        : 0;
   // Prefer computed TTF from tool log when present (more accurate than missing field)
   const computedTtf = computeToolsBeforeFirstWrite(
     toolCalls.map((tc) => ({
       tool: tc.tool,
       ...(tc.error !== undefined ? { error: tc.error } : {}),
+      ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
     })),
   );
   const tools_before_first_write =

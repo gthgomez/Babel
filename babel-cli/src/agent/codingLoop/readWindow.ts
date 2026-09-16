@@ -6,6 +6,7 @@
  */
 
 import { normalizeReadCacheKey } from '../readThrashPolicy.js'
+import { compileObservation, formatCompiledObservation } from './observationCompiler.js'
 
 /** Default first-window size when the model asks for an unbounded full read. */
 export const DEFAULT_READ_WINDOW_LINES = 200
@@ -51,11 +52,16 @@ export interface ReadInjectionDecision {
  * @param pathKey - already-normalized path (see normalizeReadCacheKey)
  * @param request - full file or explicit line range
  */
-export function makeReadInjectionKey(pathKey: string, request: ReadRangeRequest): string {
-  if (request.kind === 'full') return `${pathKey}::full`
+export function makeReadInjectionKey(
+  pathKey: string,
+  request: ReadRangeRequest,
+  contextEpoch = 0,
+): string {
+  const epochKey = `::epoch=${Math.max(0, Math.floor(contextEpoch))}`
+  if (request.kind === 'full') return `${pathKey}::full${epochKey}`
   const start = Math.max(1, Math.floor(request.startLine))
   const end = Math.max(start, Math.floor(request.endLine))
-  return `${pathKey}::${start}-${end}`
+  return `${pathKey}::${start}-${end}${epochKey}`
 }
 
 /**
@@ -211,6 +217,34 @@ export function formatReadObservation(
 }
 
 /**
+ * Compile a failed file read with its real status and bounded output.
+ *
+ * @param input - failed read result and stable tool identity
+ * @returns model-facing failure observation
+ */
+export function formatReadFailureObservation(input: {
+  tool?: string
+  target: string
+  exitCode: number
+  stdout?: string
+  stderr?: string
+  toolCallId?: string
+  spillDir?: string
+}): string {
+  return formatCompiledObservation(
+    compileObservation({
+      tool: input.tool ?? 'read_file',
+      target: input.target,
+      exitCode: input.exitCode,
+      stdout: input.stdout ?? '',
+      stderr: input.stderr ?? '',
+      ...(input.toolCallId !== undefined ? { toolCallId: input.toolCallId } : {}),
+      ...(input.spillDir !== undefined ? { spillDir: input.spillDir } : {}),
+    }),
+  )
+}
+
+/**
  * Decide whether a requested read may skip re-injection.
  *
  * Identical full reads of unchanged bytes may skip. Range requests never
@@ -221,8 +255,9 @@ export function decideReadInjection(input: {
   fileHash: string
   request: ReadRangeRequest
   cache: ReadInjectionCache
+  contextEpoch?: number
 }): ReadInjectionDecision {
-  const cacheKey = makeReadInjectionKey(input.pathKey, input.request)
+  const cacheKey = makeReadInjectionKey(input.pathKey, input.request, input.contextEpoch)
   const cached = input.cache.get(cacheKey)
   if (!cached) {
     return { skip: false, reason: 'miss', cacheKey }
@@ -276,6 +311,7 @@ export function evaluateReadRequest(input: {
   cache: ReadInjectionCache
   maxLines?: number
   now?: number
+  contextEpoch?: number
 }): {
   decision: ReadInjectionDecision
   window: ReadWindow

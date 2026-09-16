@@ -12,6 +12,10 @@ import { OllamaApiRunner } from '../runners/ollamaApi.js';
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { globalCostTracker, type SessionUsageSummary } from '../services/costTracker.js';
 import type { BlockedReport, TerminalOutcome } from '../schemas/agentContracts.js';
+import type {
+  ChatEngineLimits,
+  ChatEngineRunAllowanceReport,
+} from '../config/chatEngineLimits.js';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { ChatToolAction } from './chatToolDefinitions.js';
 import { chatActionToolName } from './chatToolDefinitions.js';
@@ -24,6 +28,7 @@ import {
 } from '../modelPolicy.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
 import { computeToolCallAggregates, type ToolCallAggregates } from './toolCallExport.js';
+import type { MutationEffectStatus } from './mutationTools.js';
 import type { PolicyEvent, PolicyEventKind, PolicyEventLog } from './policyEventLog.js';
 import type { ObservationTailBuffer, ObservationTailEntry } from './observationTails.js';
 import type {
@@ -118,6 +123,8 @@ export type ToolCallLogEntry = {
   stdout?: string;
   stderr?: string;
   verified?: boolean;
+  effect_status?: MutationEffectStatus;
+  mutation_paths?: string[];
 };
 
 /** Payload shape shared with ChatEvent done/failed (exactOptionalPropertyTypes-safe). */
@@ -131,6 +138,8 @@ export type ExportedToolCall = {
   /** Chat turn that executed this tool (from engine logIndexToTurn). */
   turn?: number;
   exit_code?: number;
+  effect_status?: MutationEffectStatus;
+  mutation_paths?: string[];
 };
 
 export type StreamDoneEvent = {
@@ -154,6 +163,8 @@ export type StreamDoneEvent = {
   blockedAttempts?: BlockedAttempt[];
   turnSummaries?: TurnSummary[];
   turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+  costBudget?: ChatEngineLimits['costBudget'];
+  runAllowance?: ChatEngineRunAllowanceReport;
 };
 
 export type StreamFailedEvent = {
@@ -162,6 +173,10 @@ export type StreamFailedEvent = {
   toolCalls: ExportedToolCall[];
   runDir?: string;
   turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+  /** Present only when the cause is established. Unknown stays omitted. */
+  outcome?: TerminalOutcome;
+  costBudget?: ChatEngineLimits['costBudget'];
+  runAllowance?: ChatEngineRunAllowanceReport;
 };
 
 export interface ObservabilityHandles {
@@ -227,6 +242,8 @@ export function exportToolCallsWithTurns(
     if (entry.detail !== undefined) out.detail = entry.detail;
     if (entry.error !== undefined) out.error = entry.error;
     if (entry.exit_code !== undefined) out.exit_code = entry.exit_code;
+    if (entry.effect_status !== undefined) out.effect_status = entry.effect_status;
+    if (entry.mutation_paths !== undefined) out.mutation_paths = [...entry.mutation_paths];
     if (turn !== undefined) out.turn = turn;
     return out;
   });
@@ -254,6 +271,8 @@ export function buildStreamDone(
     verifierTampered?: boolean;
     criticReceipt?: DiffCriticVerdict | null;
     turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+    costBudget?: ChatEngineLimits['costBudget'];
+    runAllowance?: ChatEngineRunAllowanceReport;
   },
 ): StreamDoneEvent {
   if (!extra?.outcome) {
@@ -279,13 +298,20 @@ export function buildStreamDone(
   if (extra.criticReceipt) event.criticReceipt = extra.criticReceipt;
   if (extra.planOutcome) event.planOutcome = extra.planOutcome;
   if (extra.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
+  if (extra.costBudget) event.costBudget = extra.costBudget;
+  if (extra.runAllowance) event.runAllowance = extra.runAllowance;
   return event;
 }
 
 export function buildStreamFailed(
   h: ObservabilityHandles,
   error: string,
-  extra?: { turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord },
+  extra?: {
+    turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+    outcome?: TerminalOutcome;
+    costBudget?: ChatEngineLimits['costBudget'];
+    runAllowance?: ChatEngineRunAllowanceReport;
+  },
 ): StreamFailedEvent {
   const event: StreamFailedEvent = {
     type: 'failed',
@@ -294,6 +320,9 @@ export function buildStreamFailed(
   };
   if (h.engineRunDir) event.runDir = h.engineRunDir;
   if (extra?.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
+  if (extra?.outcome) event.outcome = extra.outcome;
+  if (extra?.costBudget) event.costBudget = extra.costBudget;
+  if (extra?.runAllowance) event.runAllowance = extra.runAllowance;
   return event;
 }
 

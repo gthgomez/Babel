@@ -5,8 +5,8 @@
  */
 
 import { join } from 'node:path';
-import { mkdirSync } from 'node:fs';
-import { readFile, writeFile, stat } from 'node:fs/promises';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
 import { resolveClassCGateDecision } from './autonomyEnforcement.js';
@@ -72,6 +72,7 @@ import {
   resolveCompactionModelId,
 } from './chatCompaction.js';
 import { runChatEngineCompaction } from './compactionCommit.js';
+import { PreparedRequestAdmissionError } from '../runners/preparedProviderRequest.js';
 import {
   initLiveAuthorityOnEngine,
   projectEngineLiveSession,
@@ -96,7 +97,18 @@ import {
   type FailureCapsuleV1,
 } from './taskContract.js';
 import { getGlobalTokenTracker } from '../ui/tokenHistory.js';
-import { resolveChatEngineLimits, shouldShrinkWallForPostWriteRepair, type ChatEngineLimits } from '../config/chatEngineLimits.js';
+import {
+  classifyTerminalLimiter,
+  createRunAllowanceReport,
+  explicitFiniteCostOverride,
+  resolveChatEngineLimits,
+  shouldShrinkWallForPostWriteRepair,
+  type ChatEngineLimits,
+  type ChatEngineRunAllowanceReport,
+  type ChatRunLimiter,
+} from '../config/chatEngineLimits.js';
+import { classifyFailureText, isProviderOutputLimitText } from './chatFailureClassification.js';
+import { nativeTurnFromStream, ProviderOutputTruncatedError } from './chatNativeTurn.js';
 import {
   resolveChatTaskClass,
   getChatTaskTune,
@@ -130,6 +142,7 @@ import {
   createWorkingState,
   decideReadInjection,
   evaluateReadRequest,
+  formatReadFailureObservation,
   formatReadObservation,
   formatVerifierReceiptSummary,
   invalidateReadCacheForPath,
@@ -158,6 +171,7 @@ import {
   type ChatMessage,
   type ChatToolAction,
   type ChatTurn,
+  type ChatRuntimeMode,
 } from './chatToolDefinitions.js';
 import { type ChatEngineServices, type ChatExecutionProfile } from './chatEngineServices.js';
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
@@ -200,6 +214,7 @@ import {
   checkpointParityEventLogStrict,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
+import { loadThreadEventLogFromDir, recordUserMessage } from './threadEventLog.js';
 import { isOperatorAbortError } from './operatorAbort.js';
 import {
   loadSessionEventLogForResume,
@@ -249,7 +264,12 @@ import {
 } from './chatBackgroundShell.js';
 
 import { runReadOnlyAgentLoop } from './lanes/readOnlyAgentLoop.js';
-import { runMutationAgentLoop } from './lanes/runMutationAgentLoop.js';
+import {
+  classifySubagentFailure,
+  runMutationAgentLoop,
+  subagentFinishedCleanly,
+  type SubagentAttribution,
+} from './lanes/runMutationAgentLoop.js';
 import { runImplementWorktreeAgent } from './implementWorktreeAgent.js';
 import { executeTool, renderGitDiff, type ToolContext } from '../localTools.js';
 import {
@@ -265,7 +285,13 @@ import type { StallState, StallIntervention } from './stallDetector.js';
 import type { ProgressController, ProgressSignal } from './progressController.js';
 import { classifyShellCapability } from './progressController.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './chatPhaseNudge.js';
-import { isSuccessfulDirectMutation } from './mutationTools.js';
+import {
+  assessMutationEffect,
+  confirmedMutationPaths,
+  isConfirmedMutation,
+  isSuccessfulDirectMutation,
+  type MutationEffectStatus,
+} from './mutationTools.js';
 import { ChatTurnTelemetryCollector, type ChatTurnTelemetryRecord } from './chatTurnTelemetry.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
 import { evaluateTokenExplosionAfterTurn } from './budgetKillPolicy.js';
@@ -403,6 +429,8 @@ export interface ChatEngineOptions {
    *  (one hour, or LONG_TASK ceiling when BABEL_CHAT_LONG_TASK is authorized);
    *  requested vs effective stays observable via limits.wallBudget. */
   maxWallMs?: number;
+  /** Explicit cost-budget request. Marks costBudget.explicitCostCeiling. */
+  maxCostUsd?: number;
   allowExpensive?: boolean;
   workspaceRoot?: string | null;
   fallbackModel?: string;
@@ -426,6 +454,23 @@ export interface ChatEngineOptions {
   runtimeInvariantMode?: RuntimeInvariantMode;
   /** Test-only: explicit live workspace revision hash for gate freshness tests. */
   testWorkspaceRevisionHash?: string | null;
+  /** Truthful delivery surface for the model-visible runtime metadata. */
+  runtimeMode?: ChatRuntimeMode;
+}
+
+/** Shared TUI/headless/direct preparation applied to a live or reused engine. */
+export interface ChatEngineTurnPreparation {
+  task: string;
+  projectRoot?: string | undefined;
+  instructionRoot?: string | undefined;
+  systemContext?: string | undefined;
+  appendSystemPrompt?: string | undefined;
+  preflightContext?: string | undefined;
+  model?: string | undefined;
+  intentPlanUserMessage?: string | undefined;
+  limits?: ChatEngineLimits;
+  executionProfile?: ChatExecutionProfile;
+  runtimeMode?: ChatRuntimeMode;
 }
 
 export interface ContextCompactedInfo {
@@ -480,6 +525,8 @@ export type ChatEvent =
       detail?: string;
       error?: string;
       exitCode?: number;
+      effect_status?: MutationEffectStatus;
+      mutation_paths?: string[];
     }
   | { type: 'thought'; text: string }
   | {
@@ -512,6 +559,8 @@ export type ChatEvent =
         target: string;
         detail?: string;
         error?: string;
+        effect_status?: MutationEffectStatus;
+        mutation_paths?: string[];
       }>;
       runDir?: string;
       verifierReceipt?: {
@@ -534,6 +583,8 @@ export type ChatEvent =
       }>;
       blockedAttempts?: import('./blockedAttemptLedger.js').BlockedAttempt[];
       turnTelemetry?: ChatTurnTelemetryRecord;
+      costBudget?: ChatEngineLimits['costBudget'];
+      runAllowance?: ChatEngineRunAllowanceReport;
     }
   | {
       type: 'failed';
@@ -544,11 +595,15 @@ export type ChatEvent =
         target: string;
         detail?: string;
         error?: string;
+        effect_status?: MutationEffectStatus;
+        mutation_paths?: string[];
       }>;
       runDir?: string;
       /** Preserve INFRA_FAILURE vs AGENT_FAILURE when the engine already classified. */
       outcome?: import('../schemas/agentContracts.js').TerminalOutcome;
       turnTelemetry?: ChatTurnTelemetryRecord;
+      costBudget?: ChatEngineLimits['costBudget'];
+      runAllowance?: ChatEngineRunAllowanceReport;
     }
   | { type: 'cancelled'; turnTelemetry?: ChatTurnTelemetryRecord }
   | {
@@ -574,6 +629,8 @@ export interface ChatResult {
     target: string;
     detail?: string;
     error?: string;
+    effect_status?: MutationEffectStatus;
+    mutation_paths?: string[];
   }>;
   runDir?: string;
   verifierReceipt?: {
@@ -616,6 +673,10 @@ export interface ChatResult {
     source: 'provider_prompt_tokens' | 'estimated' | 'unknown';
   } | null;
   turnTelemetry?: ChatTurnTelemetryRecord;
+  /** Enumerable cost-budget provenance — survives JSON / spreads / manifests. */
+  costBudget?: ChatEngineLimits['costBudget'];
+  /** Enumerable declared vs effective run allowance + terminating limiter. */
+  runAllowance?: ChatEngineRunAllowanceReport;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────
@@ -741,6 +802,7 @@ export class ChatEngine {
     stderr?: string;
     verified?: boolean;
     mutation_paths?: string[];
+    effect_status?: MutationEffectStatus;
   }> = [];
   private lastVerifierReceipt: BoundChatVerifierReceipt | null = null;
   private executedVerifierLedger: BoundChatVerifierReceipt[] = [];
@@ -757,7 +819,15 @@ export class ChatEngine {
   private criticProRunner: CriticRunner | null = null;
   private budgetExceeded = false;
   private budgetLastChanceDone = false;
+  /** Actual limiter that terminated the run, or null while still active. */
+  private terminatingLimiter: ChatRunLimiter | null = null;
+  private terminalLimiterReason: string | null = null;
   private midLoopCriticFired = false;
+  /** Bound final-request admission recovery to one rebuild per user submission. */
+  private preparedAdmissionCompactionAttempts = 0;
+  /** Logical request lineage for compaction/fallback rebuild receipts. */
+  private lastLogicalRequestId: string | null = null;
+  private pendingParentRequestId: string | null = null;
   private turnsWithoutWrite = 0;
   /** Resolved task class for this thread (recomputed per isolated submission). */
   private taskClass: ChatTaskClass;
@@ -856,6 +926,8 @@ export class ChatEngine {
   private compactionConsecutiveFailures = 0;
   private static readonly MAX_COMPACTION_FAILURES = 3;
   private readCache: ReadInjectionCache = new Map();
+  /** Read-injection generation; compaction and re-preparation start a new context. */
+  private readContextEpoch = 0;
   private dedupeHitCount = 0;
   private writeCount = 0;
   /** R8: Verifier receipt cache — avoids re-running identical verifier commands
@@ -952,6 +1024,7 @@ export class ChatEngine {
           ? { maxTokensPerRound: options.maxTokensPerRound }
           : {}),
         ...(options.maxWallMs !== undefined ? { maxWallMs: options.maxWallMs } : {}),
+        ...(options.maxCostUsd !== undefined ? { maxCostUsd: options.maxCostUsd } : {}),
       },
       undefined,
       { taskClass: this.taskClass, taskText: options.task },
@@ -1106,6 +1179,18 @@ export class ChatEngine {
     )
       return 'explain';
 
+    // Review/audit prompts are read-only even when their evidence contains
+    // mutation-shaped words such as "repair" in a path or diff description.
+    // A paired edit directive remains executable (for example, "review and
+    // fix it"). Keeping this before the generic mutation verbs prevents the
+    // trusted reviewer from entering the coding zero-write recovery loop.
+    if (
+      /\b(review|audit|analyze|diagnose|inspect|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and|then)\s+(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update|create|write|edit|modify|change|remove|delete|revert|rewrite|replace)\b)(?!.*\bfix\s+it\b)/i.test(
+        task,
+      )
+    )
+      return 'explain';
+
     // Fix/implement/create verbs → execute
     if (
       /\b(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update\s+dependency)\b/i.test(
@@ -1127,13 +1212,6 @@ export class ChatEngine {
       return 'explain';
     if (/\b(explain|what\s+does|how\s+does|what\s+is|document|summarize)\b/i.test(task))
       return 'explain';
-    if (
-      /\b(review|audit|analyze|diagnose|inspect|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and\s+fix|then\s+fix|fix\s+it)\b)/i.test(
-        task,
-      )
-    )
-      return 'explain';
-
     // Read-only file inspection verbs → explain (unless paired with edit intent)
     if (
       /\b(read|list|show|cat|head|tail|display|print|output)\b/i.test(task) &&
@@ -1476,7 +1554,7 @@ export class ChatEngine {
     };
   }
 
-  private checkBudgets(): { ok: boolean; reason?: string } {
+  private checkBudgets(): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {
     const sessionCost = globalCostTracker.getSessionSummary().totalCostUSD;
     // After first critic reject or post-write repair, use the tighter cost cap.
     const maxCostUsd =
@@ -1488,12 +1566,21 @@ export class ChatEngine {
       this.postWriteRepairWallCapMs != null
         ? Math.min(this.limits.maxWallMs, this.postWriteRepairWallCapMs)
         : this.limits.maxWallMs;
-    return checkCostWallBudgets({
+    const result = checkCostWallBudgets({
       totalCostUsd: sessionCost,
       maxCostUsd,
       sessionStartTime: this._sessionStartTime,
       maxWallMs,
+      declaredCostUsd: this.limits.costBudget?.requestedCostUsd ?? this.limits.maxCostUsd,
+      declaredWallMs: this.limits.wallBudget?.requestedMs ?? this.limits.maxWallMs,
+      postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
+      criticRepairCostCapUsd: this.criticRepairCostCapUsd,
     });
+    if (!result.ok) {
+      this.terminatingLimiter = result.limiter ?? 'cost';
+      this.terminalLimiterReason = result.reason ?? 'Budget limit exceeded.';
+    }
+    return result;
   }
 
   /**
@@ -1506,6 +1593,10 @@ export class ChatEngine {
     const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
       spentUsd: spent,
       sessionMaxCostUsd: this.limits.maxCostUsd,
+      longTaskProfile: this.limits.costBudget?.longTaskProfile === true,
+      explicitCostCeiling: this.limits.costBudget?.explicitCostCeiling === true,
+      criticStrikes: this.criticStrikes,
+      limits: this.limits,
     });
     this.criticRepairCostCapUsd = capUsd;
     this.policyEventLog.record({
@@ -1546,6 +1637,10 @@ export class ChatEngine {
       const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
         spentUsd: spent,
         sessionMaxCostUsd: this.limits.maxCostUsd,
+        longTaskProfile: this.limits.costBudget?.longTaskProfile === true,
+        explicitCostCeiling: this.limits.costBudget?.explicitCostCeiling === true,
+        criticStrikes: this.criticStrikes,
+        limits: this.limits,
       });
       this.criticRepairCostCapUsd = capUsd;
       this.policyEventLog.record({
@@ -1770,7 +1865,11 @@ export class ChatEngine {
             };
             break;
           case 'failed':
-            terminal = { kind: 'failed', error: event.error };
+            terminal = {
+              kind: 'failed',
+              error: event.error,
+              ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+            };
             break;
           case 'cancelled':
             terminal = { kind: 'cancelled' };
@@ -1780,32 +1879,63 @@ export class ChatEngine {
         }
       }
     } catch (error) {
-      // P0-D B4: unexpected throw must still finalize turn_ended on disk.
+      // Unexpected throw still finalizes the turn; unknown stays inconclusive.
       const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
       const message =
         captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error));
-      finalizeParityTurnSync(this.parity, this.engineRunDir, 'AGENT_FAILURE', 'failed');
-      return this.buildResult('failed', cb, message);
+      return this.buildResult('failed', cb, message, undefined, classifyFailureText(message));
     }
 
-    if (!terminal || terminal.kind === 'cancelled') {
+    if (!terminal) {
+      return this.buildResult(
+        'failed',
+        cb,
+        'Stream ended without a terminal event — possible internal error',
+      );
+    }
+    if (terminal.kind === 'cancelled') {
       return this.buildResult('cancelled', cb);
     }
     if (terminal.kind === 'failed') {
-      return this.buildResult('failed', cb, terminal.error ?? 'Stream failed');
+      const failedOutcome = terminal.outcome ?? classifyFailureText(terminal.error ?? '');
+      if (failedOutcome === 'BUDGET_EXHAUSTED' || this.budgetExceeded) {
+        this.budgetExceeded = true;
+        return this.buildResult(
+          'budget_exhausted',
+          cb,
+          terminal.error ?? 'Stream failed',
+          undefined,
+          'BUDGET_EXHAUSTED',
+        );
+      }
+      if (
+        failedOutcome === 'BLOCKED_POLICY' ||
+        failedOutcome === 'BLOCKED_EXTERNAL' ||
+        failedOutcome === 'NEEDS_HUMAN_DECISION' ||
+        failedOutcome === 'INVALID_TASK'
+      ) {
+        return this.buildResult('blocked', cb, terminal.error ?? 'Stream failed', undefined, failedOutcome);
+      }
+      return this.buildResult(
+        'failed',
+        cb,
+        terminal.error ?? 'Stream failed',
+        undefined,
+        failedOutcome,
+      );
     }
     if (terminal.blockedReport) {
-      return this.buildResult('blocked', cb, terminal.answer, terminal.blockedReport);
+      return this.buildResult('blocked', cb, terminal.answer, terminal.blockedReport, terminal.outcome);
     }
     // Preserve budget_exhausted status from streamDone (do not collapse to completed).
     if (terminal.budgetExceeded || terminal.outcome === 'BUDGET_EXHAUSTED' || this.budgetExceeded) {
       this.budgetExceeded = true;
-      return this.buildResult('budget_exhausted', cb, terminal.answer);
+      return this.buildResult('budget_exhausted', cb, terminal.answer, undefined, terminal.outcome);
     }
     if (terminal.outcome === 'AGENT_FAILURE' || terminal.outcome === 'INFRA_FAILURE') {
-      return this.buildResult('failed', cb, terminal.answer);
+      return this.buildResult('failed', cb, terminal.answer, undefined, terminal.outcome);
     }
-    return this.buildResult('completed', cb, terminal.answer);
+    return this.buildResult('completed', cb, terminal.answer, undefined, terminal.outcome);
   }
 
   /** #1 Async generator: yields typed ChatEvents as the conversation progresses.
@@ -1817,6 +1947,7 @@ export class ChatEngine {
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
     this._cancelled = false;
+    this.preparedAdmissionCompactionAttempts = 0;
     this.currentTurnTelemetry = new ChatTurnTelemetryCollector(performance.now());
     this.currentTurnTelemetry.markStarted();
     this.lastRequestPromptTokens = null;
@@ -1885,6 +2016,13 @@ export class ChatEngine {
       submissionIndex: runtime.submissionIndex,
       continuedTask: runtime.continuedTask,
     });
+    if (this.options.intentPlanUserMessage && this.parity.turnId) {
+      recordUserMessage(
+        this.parity.eventLog,
+        this.parity.turnId,
+        this.options.intentPlanUserMessage,
+      );
+    }
     setChatApprovalTurnId(this.parity.turnId);
 
     // R4: Fire-and-forget repo map generation, awaited before first LLM call
@@ -2043,6 +2181,11 @@ export class ChatEngine {
             providerStart,
             providerEnd,
           );
+          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+          if (admissionRecovery) {
+            yield { type: 'context_compacted', ...admissionRecovery };
+            continue;
+          }
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
           const cancelled = this.emitCancelledIfOperatorAbort(err);
@@ -2065,6 +2208,7 @@ export class ChatEngine {
         const nativeToolCallIds: string[] = [];
         const seenToolCallIds = new Set<string>();
         let answerText = '';
+        let nativeFinishReason: string | undefined;
         const systemPrompt = this.getOrBuildSystemPrompt('native');
 
         this.assertNativeRequestMatchesDurable(providerMessages, systemPrompt, systemPrompt);
@@ -2111,7 +2255,9 @@ export class ChatEngine {
               }
               case 'error':
                 throw new Error(event.message);
-              // 'done' is handled after the loop
+              case 'done':
+                nativeFinishReason = event.finishReason;
+                break;
             }
           }
           const providerEnd = performance.now();
@@ -2123,10 +2269,11 @@ export class ChatEngine {
           this.trackRunnerUsage(runner);
           this._streamNativeToolCallIds = nativeToolCallIds;
           streamedAnswerForTurn = answerText;
-          turnResult =
-            nativeActions.length > 0
-              ? { type: 'tool_calls', actions: nativeActions }
-              : { type: 'completion', answer: answerText || 'OK' };
+          turnResult = nativeTurnFromStream({
+            answerText,
+            actions: nativeActions,
+            finishReason: nativeFinishReason,
+          });
         } catch (err: any) {
           const providerEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
@@ -2134,6 +2281,11 @@ export class ChatEngine {
             providerStart,
             providerEnd,
           );
+          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+          if (admissionRecovery) {
+            yield { type: 'context_compacted', ...admissionRecovery };
+            continue;
+          }
           const fb = yield* this.resolveFallbackOrFail(err, turn);
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -2150,6 +2302,7 @@ export class ChatEngine {
           nativeToolCallIds.length = 0;
           seenToolCallIds.clear();
           answerText = '';
+          nativeFinishReason = undefined;
           this.assertNativeRequestMatchesDurable(providerMessages, systemPrompt, undefined);
           const fbStart = performance.now();
           try {
@@ -2194,6 +2347,9 @@ export class ChatEngine {
                 }
                 case 'error':
                   throw new Error(event.message);
+                case 'done':
+                  nativeFinishReason = event.finishReason;
+                  break;
               }
             }
             const fbEnd = performance.now();
@@ -2205,10 +2361,11 @@ export class ChatEngine {
             this.trackRunnerUsage(fb);
             this._streamNativeToolCallIds = nativeToolCallIds;
             streamedAnswerForTurn = answerText;
-            turnResult =
-              nativeActions.length > 0
-                ? { type: 'tool_calls', actions: nativeActions }
-                : { type: 'completion', answer: answerText || 'OK' };
+            turnResult = nativeTurnFromStream({
+              answerText,
+              actions: nativeActions,
+              finishReason: nativeFinishReason,
+            });
           } catch (fbErr: any) {
             const fbEnd = performance.now();
             this.currentTurnTelemetry?.recordProviderSpan(
@@ -2297,6 +2454,11 @@ export class ChatEngine {
             legacyStart,
             legacyEnd,
           );
+          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+          if (admissionRecovery) {
+            yield { type: 'context_compacted', ...admissionRecovery };
+            continue;
+          }
           const fb = yield* this.resolveFallbackOrFail(err, turn);
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -2353,8 +2515,11 @@ export class ChatEngine {
         );
         endSpan(_turnSpan, SpanStatusCode.OK);
         _turnSpan = null;
+        this.terminatingLimiter = 'tokens';
+        this.terminalLimiterReason =
+          `Token explosion with zero mutations: ${streamExplosion.tokensThisTurn} tokens this turn (ceiling ${this.limits.maxTokensPerRound}).`;
         const kill = await this.handleBudgetKill(
-          `Token explosion with zero mutations: ${streamExplosion.tokensThisTurn} tokens this turn (ceiling ${this.limits.maxTokensPerRound}).`,
+          this.terminalLimiterReason,
           { onThought: () => {} },
           resolvedIntent,
         );
@@ -2535,6 +2700,8 @@ export class ChatEngine {
             ...(tc.detail ? { detail: tc.detail } : {}),
             ...(tc.error ? { error: tc.error } : {}),
             ...(tc.exit_code !== undefined ? { exitCode: tc.exit_code } : {}),
+            ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
+            ...(tc.mutation_paths !== undefined ? { mutation_paths: [...tc.mutation_paths] } : {}),
           };
         }
 
@@ -2571,7 +2738,19 @@ export class ChatEngine {
 
         // W3 Phase 3 Progress and Recovery Controller
         const signals: ProgressSignal[] = [];
-        if (turnCallsStr.some((tc) => isSuccessfulDirectMutation(tc.tool, tc.error))) {
+        if (
+          turnCallsStr.some(
+            (tc) =>
+              isConfirmedMutation({
+                tool: tc.tool,
+                error: tc.error,
+                effectStatus: tc.effect_status,
+                mutationPaths: tc.mutation_paths,
+              }) ||
+              (tc.tool === 'sub_agent' &&
+                tc.effect_status === 'confirmed_change'),
+          )
+        ) {
           signals.push('production_mutation');
         }
 
@@ -2623,7 +2802,12 @@ export class ChatEngine {
               (e) =>
                 e.tool === 'read_file' ||
                 e.tool === 'read_range' ||
-                isSuccessfulDirectMutation(e.tool, e.error),
+                isConfirmedMutation({
+                  tool: e.tool,
+                  error: e.error,
+                  effectStatus: e.effect_status,
+                  mutationPaths: e.mutation_paths,
+                }),
             )
             .map((e) => e.target)
             .filter(Boolean);
@@ -2726,7 +2910,12 @@ export class ChatEngine {
             toolCalls: projected.toolCalls,
             results: projected.results,
             patchAttempted: turnSlice.some(
-              (t) => isSuccessfulDirectMutation(t.tool, t.error) || t.tool === 'str_replace',
+              (t) => isConfirmedMutation({
+                tool: t.tool,
+                error: t.error,
+                effectStatus: t.effect_status,
+                mutationPaths: t.mutation_paths,
+              }),
             ),
             patchFailed: turnSlice.some(
               (t) => t.tool === 'str_replace' && t.error != null && t.error !== '',
@@ -3249,6 +3438,9 @@ export class ChatEngine {
     }
 
     // maxTurns exceeded
+    this.terminatingLimiter = this.terminatingLimiter ?? 'turns';
+    this.terminalLimiterReason =
+      this.terminalLimiterReason ?? `Turn limit reached (${maxTurns} of ${maxTurns}).`;
     const maxTurnAnswer = await this.synthesizeAnswer(allToolObservations, {
       onAnswerChunk: (_chunk) => {},
     }).catch(() => '');
@@ -3596,6 +3788,9 @@ export class ChatEngine {
       cumulativeSessionTokens: globalCostTracker.getSessionSummary().totalTokens,
     });
     this.lastTurnTelemetry = finalizedTelemetry ?? null;
+    const runAllowance = this.assembleRunAllowance(
+      extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
+    );
     return buildStreamDone(this.obsHandles(), answer, {
       outcome,
       ...(decision.finalOutcome === 'PLAN_COMPLETE'
@@ -3603,12 +3798,34 @@ export class ChatEngine {
         : {}),
       ...(this.budgetExceeded ? { budgetExceeded: true as const } : {}),
       ...(extra ?? {}),
+      ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
+      runAllowance,
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     });
   }
 
   private streamFailed(error: string) {
-    finalizeParityTurnSync(this.parity, this.engineRunDir, 'AGENT_FAILURE', 'failed');
+    const providerOutputLimit = isProviderOutputLimitText(error);
+    if (providerOutputLimit && this.terminatingLimiter == null) {
+      this.terminatingLimiter = 'tokens';
+      this.terminalLimiterReason = error;
+    }
+    const limiterOutcome: TerminalOutcome | undefined =
+      this.terminatingLimiter === 'turns' ||
+      this.terminatingLimiter === 'wall' ||
+      this.terminatingLimiter === 'cost' ||
+      this.terminatingLimiter === 'tokens'
+        ? 'BUDGET_EXHAUSTED'
+        : this.terminatingLimiter === 'stall'
+          ? 'BLOCKED_POLICY'
+          : undefined;
+    // Preserve an unknown terminal cause when no classifier or limiter proves
+    // one. Durable validation accepts this explicit absence; guessing would
+    // make the model-visible outcome less truthful.
+    const outcome = classifyFailureText(error) ?? limiterOutcome;
+    if (outcome === 'BUDGET_EXHAUSTED') this.budgetExceeded = true;
+    const runAllowance = this.assembleRunAllowance('failed');
+    finalizeParityTurnSync(this.parity, this.engineRunDir, outcome, 'failed');
     const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
       turnId: String(this.parity.turnId ?? this._turnIndex),
       taskClass: this.taskClass,
@@ -3618,6 +3835,9 @@ export class ChatEngine {
     });
     this.lastTurnTelemetry = finalizedTelemetry ?? null;
     return buildStreamFailed(this.obsHandles(), error, {
+      ...(outcome !== undefined ? { outcome } : {}),
+      ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
+      runAllowance,
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     });
   }
@@ -3671,6 +3891,9 @@ export class ChatEngine {
     this.cachedSystemPromptLegacy = null;
     this.cachedSystemPromptNative = null;
     this.cachedSystemPromptText = null;
+    // Replacing retained conversation content invalidates any prior read
+    // injection, even when the replacement has the same message count.
+    this.resetReadInjectionContext();
   }
 
   /** Restore structured provider conversation (tool call/result IDs) on resume. */
@@ -3690,7 +3913,9 @@ export class ChatEngine {
     this.abortController = new AbortController();
     this.toolCallLog = [];
     this._turnToolCallLogStart = 0;
-    this.readCache.clear();
+    // A branch resync discards retained context. Advance the epoch as well as
+    // clearing the cache so unchanged bytes can be reacquired explicitly.
+    this.resetReadInjectionContext();
     this.clearVerifierEvidenceState();
     this.verifierTampered = false;
     this.tamperCount = 0;
@@ -3784,6 +4009,8 @@ export class ChatEngine {
             ? { maxTokensPerRound: this.options.maxTokensPerRound }
             : {}),
           ...(this.options.maxWallMs !== undefined ? { maxWallMs: this.options.maxWallMs } : {}),
+          ...(this.options.maxCostUsd !== undefined ? { maxCostUsd: this.options.maxCostUsd } : {}),
+          ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
         },
         undefined,
         { taskClass: runtime.taskClass, taskText: runtime.taskText },
@@ -3848,6 +4075,84 @@ export class ChatEngine {
   }
 
   /**
+   * Apply the same preparation a freshly constructed engine receives so a
+   * reused TUI engine's next native request matches headless/direct Chat.
+   */
+  applyTurnPreparation(preparation: ChatEngineTurnPreparation): void {
+    const nextOptions: ChatEngineOptions = {
+      ...this.options,
+      task: preparation.task,
+    };
+    // A reused engine is a new turn boundary, not an overlay on the prior
+    // request. Clear optional inputs first so omitted values cannot leak
+    // stale prompts, preflight facts, model routing, or runtime claims.
+    delete nextOptions.instructionRoot;
+    delete nextOptions.systemContext;
+    delete nextOptions.appendSystemPrompt;
+    delete nextOptions.preflightContext;
+    delete nextOptions.model;
+    delete nextOptions.executionProfile;
+    delete nextOptions.runtimeMode;
+    if (preparation.projectRoot !== undefined) nextOptions.projectRoot = preparation.projectRoot;
+    if (preparation.instructionRoot !== undefined) nextOptions.instructionRoot = preparation.instructionRoot;
+    if (preparation.systemContext !== undefined) nextOptions.systemContext = preparation.systemContext;
+    if (preparation.appendSystemPrompt !== undefined) nextOptions.appendSystemPrompt = preparation.appendSystemPrompt;
+    if (preparation.preflightContext !== undefined) nextOptions.preflightContext = preparation.preflightContext;
+    if (preparation.model !== undefined) nextOptions.model = preparation.model;
+    if (preparation.executionProfile !== undefined) nextOptions.executionProfile = preparation.executionProfile;
+    if (preparation.runtimeMode !== undefined) nextOptions.runtimeMode = preparation.runtimeMode;
+    this.options = nextOptions;
+    if (preparation.intentPlanUserMessage !== undefined) {
+      this.options.intentPlanUserMessage = preparation.intentPlanUserMessage;
+    } else {
+      delete this.options.intentPlanUserMessage;
+    }
+    const chatPlaybook = selectPlaybookForChatTask(preparation.task);
+    this.activePlaybook = chatPlaybook ?? null;
+    this.requireTodoBeforeMutate = shouldRequireTodoPlan(
+      preparation.task,
+      this.activePlaybook,
+    );
+    if (preparation.systemContext !== undefined) {
+      const projectRoot = this.options.instructionRoot ?? this.options.projectRoot;
+      const babelMd = readProjectMemoryStructured(projectRoot, preparation.task);
+      if (babelMd) {
+        this.options.systemContext =
+          babelMd + (this.options.systemContext ? '\n\n' + this.options.systemContext : '');
+      }
+      if (chatPlaybook) {
+        const pbPrompt = buildPlaybookPrompt(chatPlaybook);
+        if (pbPrompt) {
+          this.options.systemContext =
+            (this.options.systemContext ? this.options.systemContext + '\n\n' : '') + pbPrompt;
+        }
+      }
+    }
+    if (preparation.limits) {
+      this.limits = preparation.limits;
+      this.options.maxTurns = preparation.limits.maxTurns;
+      this.options.maxConversationMessages = preparation.limits.maxConversationMessages;
+      this.options.maxEstimatedTokens = preparation.limits.maxEstimatedTokens;
+      this.options.maxTokensPerRound = preparation.limits.maxTokensPerRound;
+      this.options.maxWallMs = preparation.limits.maxWallMs;
+      const explicitCost = explicitFiniteCostOverride(preparation.limits);
+      if (explicitCost !== undefined) {
+        this.options.maxCostUsd = explicitCost;
+      } else {
+        delete this.options.maxCostUsd;
+      }
+    }
+    this.taskClass = resolveChatTaskClass({
+      taskText: preparation.task,
+      autoClassify: true,
+    });
+    // Reused TUI engines start a new task/context. Do not let a previous
+    // task's read dedupe suppress evidence in the new request.
+    this.resetReadInjectionContext();
+    this.clearSystemPromptCache();
+  }
+
+  /**
    * Static factory: restore a ChatEngine from a previously persisted session.
    *
    * Reads `{runs}/chat-sessions/{engineRunId}/transcript.jsonl` via runsLayout,
@@ -3877,6 +4182,8 @@ export class ChatEngine {
       resumeExisting: true,
     });
     engine.conversation = messages;
+    const threadLog = loadThreadEventLogFromDir(sessionDir);
+    if (threadLog) engine.restoreEventLog(threadLog);
     engine.restoreSessionEvents(sessionLog, { runDir: sessionDir });
     engine.clearVerifierEvidenceState();
     engine.cachedSystemPromptLegacy = null;
@@ -3907,6 +4214,9 @@ export class ChatEngine {
       runDir: this.engineRunDir,
       babelRoot: process.env['BABEL_ROOT'] ?? process.cwd(),
       signal: this.abortController.signal,
+      projectRoot: this.options.projectRoot,
+      sessionId: this.engineRunId,
+      ...(this.parity.turnId ? { turnId: this.parity.turnId } : {}),
     };
     let subAgentCounter = 0;
     // Order-preserving batches (only consecutive reads may parallelize).
@@ -4202,33 +4512,45 @@ export class ChatEngine {
                   },
                 },
               );
-              const details = implResult.success
-                ? `${implResult.stepsExecuted} steps, ${implResult.changedFiles.length} changed (worktree ${implResult.worktree.name})`
-                : `failed: ${implResult.error || 'unknown error'}`;
+              const attribution: SubagentAttribution = implResult.attribution;
+              const clean = subagentFinishedCleanly(attribution);
+              const details = clean
+                ? `${implResult.stepsExecuted} steps, ${implResult.changedFiles.length} changed, attribution=${attribution} (worktree ${implResult.worktree.name})`
+                : `failed: ${implResult.error || 'unknown error'}, attribution=${attribution}`;
               this.toolCallLog.push({
                 tool,
                 target,
                 detail: details,
                 index: meta.index,
-                exit_code: implResult.success ? 0 : 1,
+                exit_code: clean ? 0 : 1,
+                ...(clean ? {} : { error: implResult.error || attribution }),
+                ...(implResult.changedFiles.length > 0
+                  ? {
+                      effect_status: 'confirmed_change' as const,
+                      mutation_paths: implResult.changedFiles.map((file) => file.path),
+                    }
+                  : clean
+                    ? { effect_status: 'confirmed_no_change' as const }
+                    : { effect_status: 'indeterminate' as const }),
               });
               callbacks?.onToolComplete?.(
                 toolId,
                 details,
-                implResult.success ? undefined : implResult.error || 'failed',
-                implResult.success ? 0 : 1,
+                clean ? undefined : implResult.error || attribution,
+                clean ? 0 : 1,
               );
-              if (implResult.success) {
+              if (clean) {
                 callbacks.onSubAgentComplete?.({ id: subId, summary: details });
               } else {
                 callbacks.onSubAgentFailed?.({
                   id: subId,
-                  error: implResult.error || 'unknown error',
+                  error: implResult.error || attribution,
                 });
               }
               const findings = [
                 `### sub_agent ${subId}: ${action.task}`,
-                `status: ${implResult.success ? 'success' : 'failed'}`,
+                `status: ${clean ? (attribution === 'child_noop' ? 'noop' : 'success') : 'failed'}`,
+                `attribution: ${attribution}`,
                 `isolation: git_worktree`,
                 `worktree: ${implResult.worktree.path}`,
                 `write_scope: ${implResult.writeScope.join(', ') || '(none)'}`,
@@ -4263,33 +4585,45 @@ export class ChatEngine {
                   }
                 : {}),
             });
-            const details = mutResult.success
-              ? `${mutResult.stepsExecuted} steps, ${mutResult.changedFiles.length} changed`
-              : `failed: ${mutResult.error || 'unknown error'}`;
+            const attribution: SubagentAttribution = mutResult.attribution;
+            const clean = subagentFinishedCleanly(attribution);
+            const details = clean
+              ? `${mutResult.stepsExecuted} steps, ${mutResult.changedFiles.length} changed, attribution=${attribution}`
+              : `failed: ${mutResult.error || 'unknown error'}, attribution=${attribution}`;
             this.toolCallLog.push({
               tool,
               target,
               detail: details,
               index: meta.index,
-              exit_code: mutResult.success ? 0 : 1,
+              exit_code: clean ? 0 : 1,
+              ...(clean ? {} : { error: mutResult.error || attribution }),
+              ...(mutResult.changedFiles.length > 0
+                ? {
+                    effect_status: 'confirmed_change' as const,
+                    mutation_paths: mutResult.changedFiles.map((file) => file.path),
+                  }
+                : clean
+                  ? { effect_status: 'confirmed_no_change' as const }
+                  : { effect_status: 'indeterminate' as const }),
             });
             callbacks?.onToolComplete?.(
               toolId,
               details,
-              mutResult.success ? undefined : mutResult.error || 'failed',
-              mutResult.success ? 0 : 1,
+              clean ? undefined : mutResult.error || attribution,
+              clean ? 0 : 1,
             );
-            if (mutResult.success) {
+            if (clean) {
               callbacks.onSubAgentComplete?.({ id: subId, summary: details });
             } else {
               callbacks.onSubAgentFailed?.({
                 id: subId,
-                error: mutResult.error || 'unknown error',
+                error: mutResult.error || attribution,
               });
             }
             const findings = [
               `### sub_agent ${subId}: ${action.task}`,
-              `status: ${mutResult.success ? 'success' : 'failed'}`,
+              `status: ${clean ? (attribution === 'child_noop' ? 'noop' : 'success') : 'failed'}`,
+              `attribution: ${attribution}`,
               `steps: ${mutResult.stepsExecuted}`,
               `changed_files: ${mutResult.changedFiles.map((f) => f.path).join(', ') || 'none'}`,
               mutResult.summary,
@@ -4297,19 +4631,25 @@ export class ChatEngine {
             return { index: meta.index, observation: findings };
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
+            const attribution = classifySubagentFailure({
+              success: false,
+              error: errMsg,
+              changedFilesCount: 0,
+              aborted: childController.signal.aborted,
+            });
             this.toolCallLog.push({
               tool,
               target,
-              detail: 'failed',
+              detail: `failed, attribution=${attribution}`,
               error: 'error',
               index: meta.index,
               exit_code: 1,
             });
-            callbacks?.onToolComplete?.(toolId, 'failed', errMsg, 1);
+            callbacks?.onToolComplete?.(toolId, `failed, attribution=${attribution}`, errMsg, 1);
             callbacks.onSubAgentFailed?.({ id: subId, error: errMsg });
             return {
               index: meta.index,
-              observation: `### sub_agent ${subId}: ${action.task}\nError: ${errMsg}`,
+              observation: `### sub_agent ${subId}: ${action.task}\nattribution: ${attribution}\nError: ${errMsg}`,
             };
           } finally {
             restoreApproval();
@@ -4324,6 +4664,11 @@ export class ChatEngine {
         });
         try {
           this.persistToolStartedAtExecutorDispatch(action, meta);
+          const requestedRounds = (action as { max_rounds?: number }).max_rounds;
+          const childRounds = Number.isFinite(requestedRounds)
+            ? Math.min(20, Math.max(1, Math.trunc(requestedRounds as number)))
+            : SUB_AGENT_MAX_ROUNDS;
+          const extraInstructions = (action as { instructions?: string }).instructions;
           const subResult = await runReadOnlyAgentLoop({
             verb: 'ask',
             task: action.task,
@@ -4336,45 +4681,94 @@ export class ChatEngine {
               babelRoot: process.env['BABEL_ROOT'] ?? process.cwd(),
               signal: childController.signal,
             },
-            maxRounds: SUB_AGENT_MAX_ROUNDS,
+            maxRounds: childRounds,
             preset: 'read_only',
             abortSignal: childController.signal,
             model:
               ((action as any).model as string | undefined) ?? this.modelPolicy?.providerModelId,
+            ...(extraInstructions ? { additionalInstructions: extraInstructions } : {}),
           } as any);
-          const findings = formatSubAgentFindings(subId, action.task, {
-            observations: subResult.observations,
-            stepsExecuted: subResult.stepsExecuted,
-            degraded: subResult.degraded,
-          });
+          const attribution: SubagentAttribution = subResult.needsApproval || subResult.policyBlocked
+            ? 'child_policy_block'
+            : subResult.providerError
+              ? classifySubagentFailure({
+                  success: false,
+                  error: subResult.providerError,
+                  changedFilesCount: 0,
+                  aborted: childController.signal.aborted,
+                })
+            : subResult.roundExhausted
+              ? 'child_round_exhaustion'
+              : childController.signal.aborted
+                ? 'child_cancellation'
+                : subResult.completed
+                  ? 'child_noop'
+                  : classifySubagentFailure({
+                      success: false,
+                      error: subResult.blockedReason,
+                      changedFilesCount: 0,
+                    });
+          const clean = subagentFinishedCleanly(attribution);
+          const details = `${subResult.stepsExecuted} steps, 0 changed, attribution=${attribution}`;
+          const findings = [
+            formatSubAgentFindings(subId, action.task, {
+              observations: subResult.observations,
+              stepsExecuted: subResult.stepsExecuted,
+              degraded: subResult.degraded,
+            }),
+            `attribution: ${attribution}`,
+            `completed: ${subResult.completed}`,
+            `round_exhausted: ${subResult.roundExhausted}`,
+            ...(subResult.needsApproval ? ['needs_approval: true'] : []),
+            ...(subResult.providerError ? [`provider_error: ${subResult.providerError}`] : []),
+          ].join('\n');
           this.toolCallLog.push({
             tool,
             target,
-            detail: `${subResult.stepsExecuted} steps`,
+            detail: details,
             index: meta.index,
-            exit_code: 0,
+            exit_code: clean ? 0 : 1,
+            ...(clean ? {} : { error: subResult.blockedReason || attribution }),
           });
-          callbacks?.onToolComplete?.(toolId, `${subResult.stepsExecuted} steps`, undefined, 0);
-          callbacks.onSubAgentComplete?.({
-            id: subId,
-            summary: `${subResult.stepsExecuted} steps`,
-          });
+          callbacks?.onToolComplete?.(
+            toolId,
+            details,
+            clean ? undefined : subResult.blockedReason || attribution,
+            clean ? 0 : 1,
+          );
+          if (clean) {
+            callbacks.onSubAgentComplete?.({
+              id: subId,
+              summary: details,
+            });
+          } else {
+            callbacks.onSubAgentFailed?.({
+              id: subId,
+              error: subResult.blockedReason || attribution,
+            });
+          }
           return { index: meta.index, observation: findings };
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
+          const attribution = classifySubagentFailure({
+            success: false,
+            error: errMsg,
+            changedFilesCount: 0,
+            aborted: childController.signal.aborted,
+          });
           this.toolCallLog.push({
             tool,
             target,
-            detail: 'failed',
+            detail: `failed, attribution=${attribution}`,
             error: 'error',
             index: meta.index,
             exit_code: 1,
           });
-          callbacks?.onToolComplete?.(toolId, 'failed', errMsg, 1);
+          callbacks?.onToolComplete?.(toolId, `failed, attribution=${attribution}`, errMsg, 1);
           callbacks.onSubAgentFailed?.({ id: subId, error: errMsg });
           return {
             index: meta.index,
-            observation: `### sub_agent ${subId}: ${action.task}\nError: ${errMsg}`,
+            observation: `### sub_agent ${subId}: ${action.task}\nattribution: ${attribution}\nError: ${errMsg}`,
           };
         } finally {
           restoreApproval();
@@ -4544,6 +4938,7 @@ export class ChatEngine {
           fileHash: fileReadCacheHash,
           request: { kind: 'full' },
           cache: this.readCache,
+          contextEpoch: this.readContextEpoch,
         });
         if (fullDecision.skip) {
           const cached = this.readCache.get(fullDecision.cacheKey);
@@ -4613,7 +5008,50 @@ export class ChatEngine {
           });
         }
 
+        const strReplaceEffect = assessMutationEffect({
+          tool: 'str_replace',
+          error: gov.error,
+          exitCode: gov.exit_code,
+          policyBlocked: gov.policyBlocked,
+          mutationPaths: gov.mutationPaths,
+          mutationReceipt: gov.mutationReceipt,
+          effectTransaction: gov.effectTransaction,
+        });
+
         if (gov.exit_code !== 0) {
+          // Process failure does not erase an independently proven workspace
+          // effect.  Invalidate reads conservatively for every attempted target
+          // and project confirmed changes while preserving the failed outcome.
+          const effectPaths =
+            gov.mutationPaths && gov.mutationPaths.length > 0
+              ? gov.mutationPaths
+              : [gov.absolutePath];
+          for (const effectPath of effectPaths) {
+            const effectKey = this.readCacheKey(effectPath);
+            invalidateReadCacheForPath(this.readCache, effectKey);
+            this.fullReadCounts.delete(effectKey);
+          }
+          if (strReplaceEffect.status === 'indeterminate') {
+            invalidateVerifierLedger(this as never, strReplaceEffect.reason);
+          }
+          if (strReplaceEffect.status === 'confirmed_change') {
+            this.workingState = applyWorkingStateEvent(this.workingState, {
+              type: 'mutation',
+              path: gov.absolutePath,
+            });
+            noteChatWorkspaceMutation(this as never);
+            callbacks?.onFileChanged?.(
+              gov.absolutePath,
+              (action.new_str.match(/\n/g) ?? []).length,
+              (action.old_str.match(/\n/g) ?? []).length,
+            );
+            appendPatchRecovery(
+              this.patchRecoveryPath ?? '',
+              'str_replace',
+              action.file_path,
+              `old=${action.old_str.slice(0, 200)}\nnew=${action.new_str.slice(0, 200)}`,
+            );
+          }
           this.toolCallLog.push({
             tool,
             target,
@@ -4621,6 +5059,8 @@ export class ChatEngine {
             error: gov.error ?? 'str_replace failed',
             index: meta.index,
             exit_code: gov.exit_code,
+            effect_status: strReplaceEffect.status,
+            ...(gov.mutationPaths ? { mutation_paths: [...gov.mutationPaths] } : {}),
           });
           callbacks?.onToolComplete?.(
             toolId,
@@ -4629,6 +5069,31 @@ export class ChatEngine {
             gov.exit_code,
           );
           return { index: meta.index, observation: gov.observation };
+        }
+        if (strReplaceEffect.status !== 'confirmed_change') {
+          invalidateReadCacheForPath(this.readCache, this.readCacheKey(gov.absolutePath));
+          this.fullReadCounts.delete(this.readCacheKey(gov.absolutePath));
+          if (strReplaceEffect.status === 'indeterminate') {
+            invalidateVerifierLedger(this as never, strReplaceEffect.reason);
+          }
+          this.toolCallLog.push({
+            tool,
+            target,
+            detail: `effect: ${strReplaceEffect.status}`,
+            index: meta.index,
+            exit_code: 0,
+            effect_status: strReplaceEffect.status,
+          });
+          callbacks?.onToolComplete?.(
+            toolId,
+            `effect: ${strReplaceEffect.status}`,
+            undefined,
+            0,
+          );
+          return {
+            index: meta.index,
+            observation: `${gov.observation}\n\nEffect: ${strReplaceEffect.status} (${strReplaceEffect.reason}).`,
+          };
         }
         invalidateReadCacheForPath(this.readCache, this.readCacheKey(gov.absolutePath));
         this.fullReadCounts.delete(this.readCacheKey(gov.absolutePath));
@@ -4644,6 +5109,7 @@ export class ChatEngine {
           detail: `line ${lineNumber}`,
           index: meta.index,
           exit_code: 0,
+          effect_status: strReplaceEffect.status,
           ...(gov.mutationPaths && gov.mutationPaths.length > 0
             ? { mutation_paths: [...gov.mutationPaths] }
             : {}),
@@ -4686,6 +5152,7 @@ export class ChatEngine {
             endLine: action.end_line,
           },
           cache: this.readCache,
+          contextEpoch: this.readContextEpoch,
         });
         if (
           evaluated.window.lines.length === 0 &&
@@ -4928,8 +5395,22 @@ export class ChatEngine {
       const obsParts: string[] = [];
       for (const r of result.results) {
         if (action.type === 'read_file') {
-          const window = selectReadWindow(r.stdout ?? '', { kind: 'full' });
-          obsParts.push(formatReadObservation('read_file', target, window));
+          if (r.exit_code === 0) {
+            const window = selectReadWindow(r.stdout ?? '', { kind: 'full' });
+            obsParts.push(formatReadObservation('read_file', target, window));
+          } else {
+            obsParts.push(
+              formatReadFailureObservation({
+                tool: 'read_file',
+                target,
+                exitCode: r.exit_code,
+                stdout: r.stdout,
+                stderr: r.stderr,
+                toolCallId: String(toolId),
+                spillDir: this.engineRunDir,
+              }),
+            );
+          }
         } else {
           obsParts.push(
             formatChatToolObservation(
@@ -4980,10 +5461,59 @@ export class ChatEngine {
           : `exit ${lastResult.exit_code}`
         : 'done';
 
+      const directMutationAction =
+        action.type === 'write_file' || action.type === 'apply_patch';
+      const toolError = result.policyBlocked
+        ? 'blocked'
+        : lastResult && lastResult.exit_code !== 0
+          ? lastResult.stderr || detail
+          : undefined;
+      const mutationEffect = assessMutationEffect({
+        tool,
+        error: toolError,
+        exitCode: lastResult?.exit_code,
+        policyBlocked: result.policyBlocked,
+        mutationPaths: result.mutationPaths,
+        mutationReceipt: result.mutationReceipt,
+        effectTransaction: result.effectTransaction,
+      });
+      const confirmedDirectMutation =
+        directMutationAction &&
+        mutationEffect.status === 'confirmed_change';
+
+      // A direct mutation may have reached the executor without a confirmed
+      // committed receipt (including a failed/partial effect). Refresh reads
+      // conservatively, but do not count or project it as a confirmed write.
+      if (directMutationAction && !result.policyBlocked && lastResult) {
+        const possiblePaths =
+          result.mutationPaths && result.mutationPaths.length > 0
+            ? result.mutationPaths
+            : [
+                action.type === 'write_file'
+                  ? action.path
+                  : primaryPatchPath(action.patch),
+              ];
+        for (const possiblePath of possiblePaths) {
+          const possibleKey = this.readCacheKey(possiblePath);
+          invalidateReadCacheForPath(this.readCache, possibleKey);
+          this.fullReadCounts.delete(possibleKey);
+        }
+        if (!confirmedDirectMutation) {
+          invalidateVerifierLedger(this as never, 'direct mutation effect not confirmed');
+        }
+      }
+
+      // Keep apply_patch's user-facing projection tied to the executor's
+      // actual path instead of the patch-text target summary.
+      const projectedTarget =
+        action.type === 'apply_patch' && result.mutationPaths?.[0]
+          ? result.mutationPaths[0]
+          : target;
+
       // Log tool call for structured result metadata
       this.toolCallLog.push({
         tool,
-        target,
+        target: projectedTarget,
         detail,
         index: meta.index,
         ...(lastResult
@@ -4993,9 +5523,12 @@ export class ChatEngine {
               stderr: lastResult.stderr,
             }
           : {}),
-        ...(result.policyBlocked ? { error: 'blocked' as const } : {}),
+        ...(toolError ? { error: toolError } : {}),
         ...(result.mutationPaths && result.mutationPaths.length > 0
           ? { mutation_paths: [...result.mutationPaths] }
+          : {}),
+        ...(mutationEffect.status !== 'not_applicable'
+          ? { effect_status: mutationEffect.status }
           : {}),
       });
 
@@ -5010,7 +5543,7 @@ export class ChatEngine {
           lastResult?.exit_code ?? 0,
         );
 
-        if (action.type === 'write_file' && !result.policyBlocked) {
+        if (action.type === 'write_file' && confirmedDirectMutation) {
           const diff = renderGitDiff(
             { tool: 'file_write', path: action.path, content: action.content },
             toolContext,
@@ -5018,7 +5551,6 @@ export class ChatEngine {
           const adds = (diff.match(/^\+[^+]/gm) ?? []).length;
           const dels = (diff.match(/^-[^-]/gm) ?? []).length;
           callbacks.onFileChanged?.(action.path, adds, dels, diff);
-          invalidateReadCacheForPath(this.readCache, this.readCacheKey(action.path));
           this.fullReadCounts.delete(this.readCacheKey(action.path));
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'mutation',
@@ -5032,15 +5564,10 @@ export class ChatEngine {
             action.path,
             action.content,
           );
-        } else if (action.type === 'apply_patch' && !result.policyBlocked) {
+        } else if (action.type === 'apply_patch' && confirmedDirectMutation) {
           const { adds, dels } = countPatchStats(action.patch);
           const path = primaryPatchPath(action.patch);
           callbacks.onFileChanged?.(path, adds, dels, action.patch);
-          // R8: Seed read cache after patch — hash the file on disk so
-          // subsequent reads hit the dedupe cache.
-          const pKey = this.readCacheKey(path);
-          invalidateReadCacheForPath(this.readCache, pKey);
-          this.fullReadCounts.delete(pKey);
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'mutation',
             path,
@@ -5055,10 +5582,7 @@ export class ChatEngine {
         // shell action without paths is indeterminate and only invalidates prior
         // verifier evidence.
         if ((action.type === 'run_command' || action.type === 'test_run') && lastResult) {
-          const confirmedShellMutation =
-            lastResult.exit_code === 0 &&
-            result.mutationPaths !== undefined &&
-            result.mutationPaths.length > 0;
+          const confirmedShellMutation = mutationEffect.status === 'confirmed_change';
           if (confirmedShellMutation) {
             noteChatWorkspaceMutation(this as never);
           }
@@ -5105,6 +5629,21 @@ export class ChatEngine {
           } else if (lastResult.exit_code === 0 && !confirmedShellMutation) {
             invalidateVerifierLedger(this as never, 'non-verifier shell command executed');
           }
+
+          // A command can mutate files and then fail. Prefer the executor's
+          // changed-path receipt; without one, invalidate conservatively.
+          if (!result.policyBlocked) {
+            if (result.mutationPaths && result.mutationPaths.length > 0) {
+              for (const changedPath of result.mutationPaths) {
+                const changedKey = this.readCacheKey(changedPath);
+                invalidateReadCacheForPath(this.readCache, changedKey);
+                this.fullReadCounts.delete(changedKey);
+              }
+            } else {
+              this.readCache.clear();
+              this.fullReadCounts.clear();
+            }
+          }
         }
 
         // B2: Update read cache after successful read_file execution
@@ -5120,6 +5659,7 @@ export class ChatEngine {
             pathKey,
             fileReadCacheHash,
             lastResult.stdout ?? '',
+            this.readContextEpoch,
           );
           this.fullReadCounts.set(pathKey, (this.fullReadCounts.get(pathKey) ?? 0) + 1);
           this.noteToolForReadThrash(tool);
@@ -5388,7 +5928,10 @@ export class ChatEngine {
   }
 
   /** H1 compaction: delegates to runChatEngineCompaction (atomic commit path). */
-  private async compactIfNeeded(callbacks?: ChatCallbacks): Promise<ContextCompactedInfo | null> {
+  private async compactIfNeeded(
+    callbacks?: ChatCallbacks,
+    forceCompaction = false,
+  ): Promise<ContextCompactedInfo | null> {
     const host: import('./compactionCommit.js').ChatEngineCompactionHost = {
       conversation: this.conversation,
       options: this.options,
@@ -5420,6 +5963,7 @@ export class ChatEngine {
       },
       reserveTokens: DEFAULT_COMPACTION_CONFIG.reserveTokens,
       textToolsReserve: 1024,
+      forceCompaction,
       resolveModel: resolveCompactionModelId,
       shouldCompactByTokens: parityShouldCompact,
       estimateTokens,
@@ -5428,6 +5972,13 @@ export class ChatEngine {
     const result = await runChatEngineCompaction(host);
     this.conversation = host.conversation;
     if (!result) return null;
+    if (this.lastLogicalRequestId !== null) {
+      this.pendingParentRequestId = this.lastLogicalRequestId;
+    }
+    // A compaction changes which facts are retained by the model. Any prior
+    // read injection may be absent from the new context even when file bytes
+    // are unchanged, so force explicit reacquisition on the next request.
+    this.resetReadInjectionContext();
     const info: ContextCompactedInfo = {
       mode: result.mode,
       beforeMessages: result.beforeMessages,
@@ -5441,6 +5992,17 @@ export class ChatEngine {
     }
     callbacks?.onContextCompacted?.(info);
     return info;
+  }
+
+  /** Rebuild one over-limit final request after a durable, bounded compaction. */
+  private async recoverPreparedRequestAdmission(
+    error: unknown,
+  ): Promise<ContextCompactedInfo | null> {
+    if (!(error instanceof PreparedRequestAdmissionError)) return null;
+    if (this.preparedAdmissionCompactionAttempts >= 1) return null;
+    this.preparedAdmissionCompactionAttempts += 1;
+    this.pendingParentRequestId = error.request.request_id;
+    return this.compactIfNeeded(undefined, true);
   }
 
   private compactConversation(): void {
@@ -5647,11 +6209,18 @@ export class ChatEngine {
   } = {}): RunnerCallbacks {
     let startedInvocation: ProviderInvocationStarted | null = null;
     let retryCount = 0;
+    const parentRequestId =
+      this.pendingParentRequestId ??
+      (context.substitutionOrFallback && this.lastLogicalRequestId !== null
+        ? this.lastLogicalRequestId
+        : null);
     return {
+      parentRequestId,
       onInvocationStarted: (event) => {
         if (!this.parity.turnId) return;
         startedInvocation = event;
         retryCount = 0;
+        const recordedParentRequestId = event.parent_request_id ?? parentRequestId;
         const derivedExpectedPriorEventIds = this.parity.sessionEvents.events
           .filter(
             (prior) =>
@@ -5717,6 +6286,16 @@ export class ChatEngine {
           normalized_model_id: event.normalized_model_id,
           sent_model_id: event.sent_model_id,
           input_digest: event.input_digest,
+          ...(event.request_id !== undefined ? { request_id: event.request_id } : {}),
+          ...(event.attempt_id !== undefined ? { attempt_id: event.attempt_id } : {}),
+          ...(recordedParentRequestId !== null && recordedParentRequestId !== undefined
+            ? { parent_request_id: recordedParentRequestId }
+            : {}),
+          body_digest: event.input_digest,
+          ...(event.input_bytes !== undefined ? { body_bytes: event.input_bytes } : {}),
+          ...(event.accounting_kind !== undefined ? { accounting_kind: event.accounting_kind } : {}),
+          ...(event.context_limit_tokens !== undefined ? { context_limit_tokens: event.context_limit_tokens } : {}),
+          ...(event.context_limit_source !== undefined ? { context_limit_source: event.context_limit_source } : {}),
           input_ref: join(this.engineRunDir, 'thread_events.json'),
           ...(event.input_message_count !== undefined
             ? { input_message_count: event.input_message_count }
@@ -5727,6 +6306,8 @@ export class ChatEngine {
           context_manifest: contextManifest,
           route_receipt: routeReceipt,
         });
+        this.lastLogicalRequestId = event.request_id ?? event.inference_id;
+        this.pendingParentRequestId = null;
         for (const capability of event.capability_bindings ?? []) {
           recordCapabilityBindingReceipt(this.parity.sessionEvents, {
             turn_id: this.parity.turnId,
@@ -5834,11 +6415,16 @@ export class ChatEngine {
       },
       onRetry: (event) => {
         retryCount += 1;
+        const retryRequestId = event.request_id ?? startedInvocation?.inference_id;
+        const retryBodyDigest = event.body_digest ?? startedInvocation?.input_digest;
         parityRecordProviderRetry(
           this.parity,
           {
             provider: event.provider,
             model: event.model,
+            ...(retryRequestId ? { requestId: retryRequestId } : {}),
+            ...(event.attempt_id !== undefined ? { attemptId: event.attempt_id } : {}),
+            ...(retryBodyDigest ? { bodyDigest: retryBodyDigest } : {}),
             attempt: event.attempt,
             reason: event.reason,
             backoffMs: event.backoff_ms,
@@ -5847,11 +6433,16 @@ export class ChatEngine {
         );
       },
       onRetrySettled: (event) => {
+        const retryRequestId = event.request_id ?? startedInvocation?.inference_id;
+        const retryBodyDigest = event.body_digest ?? startedInvocation?.input_digest;
         paritySettleProviderRetry(
           this.parity,
           {
             provider: event.provider,
             model: event.model,
+            ...(retryRequestId ? { requestId: retryRequestId } : {}),
+            ...(event.attempt_id !== undefined ? { attemptId: event.attempt_id } : {}),
+            ...(retryBodyDigest ? { bodyDigest: retryBodyDigest } : {}),
             attempt: event.attempt,
             outcome: event.outcome,
           },
@@ -6007,6 +6598,7 @@ export class ChatEngine {
         : this.services.tools.buildDefinitions());
       const nativeActions: ChatToolAction[] = [];
       let answerText = '';
+      let nativeFinishReason: string | undefined;
       const systemPrompt = this.getOrBuildSystemPrompt('native');
 
       for await (const event of runner.executeWithToolsStream(
@@ -6043,8 +6635,7 @@ export class ChatEngine {
           case 'error':
             throw new Error(event.message);
           case 'done':
-            // finishReason captured for debugging; usage is tracked via
-            // getLastInvocationMetadata() called by trackRunnerUsage below
+            nativeFinishReason = event.finishReason;
             break;
           default: {
             const _exhaustive: never = event;
@@ -6053,9 +6644,11 @@ export class ChatEngine {
         }
       }
       this.trackRunnerUsage(runner);
-      return nativeActions.length > 0
-        ? { type: 'tool_calls', actions: nativeActions }
-        : { type: 'completion', answer: answerText || 'OK' };
+      return nativeTurnFromStream({
+        answerText,
+        actions: nativeActions,
+        finishReason: nativeFinishReason,
+      });
     }
 
     // ── Text-tools path — simplified format for small local models ──────────
@@ -6138,6 +6731,13 @@ export class ChatEngine {
       yield cancelled;
       return null;
     }
+    if (
+      err instanceof ProviderOutputTruncatedError ||
+      /finish_reason: length/i.test(err?.message ?? '')
+    ) {
+      yield this.streamFailed(err?.message ?? String(err));
+      return null;
+    }
     if (turn > 0) {
       yield this.streamFailed(err.message);
       return null;
@@ -6212,6 +6812,7 @@ export class ChatEngine {
       nativeTools,
       textTools,
       executionFirst: true,
+      runtimeMode: this.options.runtimeMode ?? 'unknown',
       ...(systemCtx ? { systemContext: systemCtx } : {}),
     });
     if (isReadOnlyChat()) {
@@ -6299,11 +6900,16 @@ export class ChatEngine {
   private async hashFilePath(filePath: string): Promise<string> {
     try {
       const resolved = resolveProjectPath(this.options.projectRoot, filePath);
-      const s = await stat(resolved);
-      return `${s.size}:${s.mtimeMs}`;
+      return this.hashContent(await readFile(resolved, 'utf-8'));
     } catch {
       return '';
     }
+  }
+
+  private resetReadInjectionContext(): void {
+    this.readContextEpoch = (this.readContextEpoch ?? 0) + 1;
+    this.readCache?.clear();
+    this.fullReadCounts?.clear();
   }
 
   /** B4: Resolve runner with phase-aware model routing.
@@ -6388,11 +6994,44 @@ export class ChatEngine {
     recordCompletionDecision(this.parity.sessionEvents, turnId, decision);
   }
 
+  private assembleRunAllowance(finalStatus: ChatResult['status']): ChatEngineRunAllowanceReport {
+    const runAllowance = createRunAllowanceReport(this.limits, {
+      postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
+      criticRepairCostCapUsd: this.criticRepairCostCapUsd,
+      terminatingLimiter: this.terminatingLimiter,
+      terminalClassification: this.terminatingLimiter
+        ? classifyTerminalLimiter(this.terminatingLimiter, this.terminalLimiterReason ?? undefined)
+        : finalStatus === 'cancelled'
+          ? 'cancelled'
+          : null,
+      terminalReason: this.terminalLimiterReason,
+      childLimits: { maxRounds: SUB_AGENT_MAX_ROUNDS },
+    });
+    if (runAllowance.terminatingLimiter === 'none' || runAllowance.terminatingLimiter == null) {
+      if (runAllowance.terminalClassification === 'success') {
+        runAllowance.terminalClassification = 'no_limit_triggered';
+      }
+    }
+    this.limits.runAllowance = runAllowance;
+    this.policyEventLog.record({
+      at_turn: this._turnIndex,
+      kind: 'progress_policy',
+      detail: `run_allowance ${JSON.stringify(runAllowance)}`,
+    });
+    try {
+      writeFileSync(join(this.engineRunDir, 'run-allowance.json'), JSON.stringify(runAllowance));
+    } catch {
+      /* evidence write must not fail the turn */
+    }
+    return runAllowance;
+  }
+
   private buildResult(
     status: ChatResult['status'],
     callbacks: ChatCallbacks,
     answer?: string,
     blockedReport?: BlockedReport | null,
+    knownOutcome?: TerminalOutcome,
   ): ChatResult {
     // R1: If the answer explicitly declares BLOCKED but no blockedReport was
     // provided (e.g., the detection ran in a code path that didn't provide it),
@@ -6418,26 +7057,36 @@ export class ChatEngine {
 
     // Compute truthful TerminalOutcome from status and runtime state.
     const hasMutation = this.hasAnyWrites();
-    let outcome: TerminalOutcome = computeTerminalOutcome({
-      readOnly: isReadOnlyChat(),
-      finalStatus,
-      budgetExceeded: this.budgetExceeded,
-      lastVerifierReceipt: this.lastVerifierReceipt,
-      blockedReport: finalBlockedReport,
-      hasAnyWrites: hasMutation,
-    });
-    outcome = applyHonestTaskOutcomeToCompletion({
-      contract: this.parity.liveAuthority?.taskContract,
-      requestedOutcome: outcome,
-      hasMutation,
-      planMode: this.executionProfile === 'plan',
-    });
+    const failedCause =
+      finalStatus === 'failed'
+        ? (knownOutcome ?? classifyFailureText(answer ?? ''))
+        : undefined;
+    let outcome: TerminalOutcome | undefined =
+      finalStatus === 'failed'
+        ? failedCause
+        : (knownOutcome ??
+          computeTerminalOutcome({
+            readOnly: isReadOnlyChat(),
+            finalStatus,
+            budgetExceeded: this.budgetExceeded,
+            lastVerifierReceipt: this.lastVerifierReceipt,
+            blockedReport: finalBlockedReport,
+            hasAnyWrites: hasMutation,
+          }));
+    if (outcome !== undefined && finalStatus !== 'failed') {
+      outcome = applyHonestTaskOutcomeToCompletion({
+        contract: this.parity.liveAuthority?.taskContract,
+        requestedOutcome: outcome,
+        hasMutation,
+        planMode: this.executionProfile === 'plan',
+      });
+    }
     const planCompletion = this.executionProfile === 'plan' && finalStatus === 'completed';
-    const kernelDecision = this.decideCompletion(
-      planCompletion ? 'PLAN_COMPLETE' : outcome,
-      hasMutation,
-    );
-    const authoritativeOutcome: TerminalOutcome =
+    const kernelDecision =
+      outcome !== undefined && finalStatus !== 'failed'
+        ? this.decideCompletion(planCompletion ? 'PLAN_COMPLETE' : outcome, hasMutation)
+        : null;
+    const authoritativeOutcome: TerminalOutcome | undefined =
       kernelDecision && kernelDecision.finalOutcome !== 'PLAN_COMPLETE'
         ? kernelDecision.finalOutcome
         : planCompletion
@@ -6446,7 +7095,7 @@ export class ChatEngine {
     if (kernelDecision) {
       this.recordCompletionDecisionOnce({
         requestedOutcome: kernelDecision.requestedOutcome,
-        finalOutcome: authoritativeOutcome,
+        finalOutcome: authoritativeOutcome ?? kernelDecision.finalOutcome,
         allowed: kernelDecision.allowed,
         reason: kernelDecision.reason,
         evidenceRefs: kernelDecision.evidenceRefs,
@@ -6460,7 +7109,7 @@ export class ChatEngine {
     // flag was just refreshed against the live workspace by decideCompletion)
     // and the completion-gate result (authoritativeOutcome IS the gate decision).
     const codingPassed = isCodingTaskSuccess({
-      terminalOutcome: authoritativeOutcome,
+      terminalOutcome: authoritativeOutcome ?? null,
       hasSuccessfulMutation: hasMutation,
       verifierOk: this.lastVerifierReceipt?.exit_code === 0,
       requireVerifier: false,
@@ -6472,15 +7121,17 @@ export class ChatEngine {
       atTurn: this._turnIndex,
       hasSuccessfulMutation: hasMutation,
       codingTaskPassed: codingPassed,
-      terminalOutcome: authoritativeOutcome,
+      terminalOutcome: authoritativeOutcome ?? 'unknown',
     });
 
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
     finalizeParityTurnSync(this.parity, this.engineRunDir, authoritativeOutcome, finalStatus);
 
+    const runAllowance = this.assembleRunAllowance(finalStatus);
+
     const result: ChatResult = {
       status: finalStatus,
-      outcome: authoritativeOutcome,
+      ...(authoritativeOutcome !== undefined ? { outcome: authoritativeOutcome } : {}),
       ...(kernelDecision?.finalOutcome === 'PLAN_COMPLETE'
         ? { planOutcome: 'PLAN_COMPLETE' as const }
         : {}),
@@ -6506,6 +7157,8 @@ export class ChatEngine {
       ...(this.budgetExceeded ? { budgetExceeded: true as const } : {}),
       ...(this.gatePolicy ? { gatePolicy: this.gatePolicy } : {}),
       ...(this.lastTurnTelemetry ? { turnTelemetry: this.lastTurnTelemetry } : {}),
+      ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
+      runAllowance,
       ...observabilityResultFields(this.obsHandles()),
     };
 
@@ -6521,8 +7174,13 @@ export class ChatEngine {
     if (finalStatus === 'completed' && this.writeCount > 0) {
       try {
         const changed = this.toolCallLog
-          .filter((t) => isSuccessfulDirectMutation(t.tool, t.error) && t.target)
-          .map((t) => t.target)
+          .flatMap((t) => confirmedMutationPaths({
+            tool: t.tool,
+            target: t.target,
+            error: t.error,
+            effectStatus: t.effect_status,
+            mutationPaths: t.mutation_paths,
+          }))
           .filter((p, i, arr) => p && arr.indexOf(p) === i)
           .slice(0, 20);
         proposeProjectMemoryWriteback({

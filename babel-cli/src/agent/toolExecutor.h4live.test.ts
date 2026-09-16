@@ -224,7 +224,7 @@ describe('H4 executeActionWithPolicy live capability gates', () => {
     assert.ok(result.mutationPaths?.length);
   });
 
-  it('does not commit an effect transaction when a tool returns a nonzero exit code', async () => {
+  it('records successful rollback evidence when a tool returns a nonzero exit code', async () => {
     const file = join(tmp, 'failed-mut.ts');
     writeFileSync(file, 'before', 'utf-8');
     const action: AgentAction = { type: 'write_file', path: file, content: 'after' };
@@ -240,7 +240,14 @@ describe('H4 executeActionWithPolicy live capability gates', () => {
       mode: 'chat',
     });
     assert.ok(result.effectTransaction);
-    assert.notStrictEqual(result.effectTransaction!.status, 'commit');
+    assert.strictEqual(result.effectTransaction!.status, 'rollback');
+    assert.strictEqual(result.effectTransaction!.rollback_result, 'success');
+    assert.ok(result.effectTransaction!.pre_revision);
+    assert.ok(result.effectTransaction!.post_revision);
+    assert.strictEqual(
+      result.effectTransaction!.pre_revision!.compositeTreeHash,
+      result.effectTransaction!.post_revision!.compositeTreeHash,
+    );
     assert.strictEqual(readFileSync(file, 'utf-8'), 'before');
   });
 

@@ -315,7 +315,7 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
       case 'turn_ended':
         state.phase = 'terminal';
         state.terminal = {
-          outcome: e.outcome,
+          outcome: e.outcome ?? 'unknown',
           status: e.status,
           evidence_refs: state.terminal?.evidence_refs ?? [],
         };

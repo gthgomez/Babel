@@ -12,10 +12,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ChatMessage } from './chatCompaction.js';
 import { estimateTokens } from './chatCompaction.js';
-import type { RunnerCallbacks } from '../runners/base.js';
+import type { ProviderToolCall, RunnerCallbacks } from '../runners/base.js';
 import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js';
 import {
   appendThreadEvent,
+  type ThreadEvent,
   type ThreadEventLog,
 } from './threadEventLog.js';
 import {
@@ -229,6 +230,280 @@ export function buildRawObservationRefs(
   return refs.slice(0, 32);
 }
 
+/** ChatMessage plus optional native tool_calls carried by the live working set. */
+type WorkingSetMessage = ChatMessage & {
+  tool_calls?: ProviderToolCall[];
+};
+
+type DurableToolCycle = {
+  assistant: Extract<ThreadEvent, { kind: 'assistant_tool_calls' }>;
+  results: Array<Extract<ThreadEvent, { kind: 'tool_result' }>>;
+};
+
+type RetainedAppend =
+  | { kind: 'user_message'; content: string }
+  | { kind: 'assistant_message'; content: string }
+  | {
+      kind: 'assistant_tool_calls';
+      content: string;
+      tool_calls: ProviderToolCall[];
+    }
+  | {
+      kind: 'tool_result';
+      tool_call_id: string;
+      tool_name: string;
+      content: string;
+      exit_code?: number;
+    };
+
+export interface RetainedWorkingSetPlan {
+  appends: RetainedAppend[];
+  preservedToolCallIds: string[];
+}
+
+function collectDurableToolCycles(events: readonly ThreadEvent[]): DurableToolCycle[] {
+  const cycles: DurableToolCycle[] = [];
+  let current: DurableToolCycle | null = null;
+  for (const event of events) {
+    if (event.kind === 'assistant_tool_calls') {
+      current = { assistant: event, results: [] };
+      cycles.push(current);
+      continue;
+    }
+    if (event.kind === 'tool_result' && current) {
+      const declared = new Set(current.assistant.tool_calls.map((call) => call.id));
+      if (declared.has(event.tool_call_id)) current.results.push(event);
+    }
+  }
+  return cycles;
+}
+
+function consecutiveToolMessages(
+  messages: readonly WorkingSetMessage[],
+  afterIndex: number,
+): WorkingSetMessage[] {
+  const batch: WorkingSetMessage[] = [];
+  for (let index = afterIndex + 1; index < messages.length; index++) {
+    const next = messages[index]!;
+    if (next.role !== 'tool') break;
+    batch.push(next);
+  }
+  return batch;
+}
+
+function messageToolCalls(message: WorkingSetMessage): ProviderToolCall[] {
+  return Array.isArray(message.tool_calls) ? message.tool_calls : [];
+}
+
+function findCycleForBatch(
+  cycles: readonly DurableToolCycle[],
+  batchIds: readonly string[],
+  usedAssistantEventIds: ReadonlySet<string>,
+): DurableToolCycle | null {
+  if (batchIds.length === 0) return null;
+  const batchSet = new Set(batchIds);
+  for (const cycle of cycles) {
+    if (usedAssistantEventIds.has(cycle.assistant.event_id)) continue;
+    const declared = cycle.assistant.tool_calls.map((call) => call.id);
+    if (declared.length === batchIds.length && declared.every((id) => batchSet.has(id))) {
+      return cycle;
+    }
+  }
+  for (const cycle of cycles) {
+    if (usedAssistantEventIds.has(cycle.assistant.event_id)) continue;
+    const declared = new Set(cycle.assistant.tool_calls.map((call) => call.id));
+    if (batchIds.every((id) => declared.has(id))) return cycle;
+  }
+  // Never merge ids that belong to different assistant batches.
+  const firstId = batchIds[0];
+  if (!firstId) return null;
+  for (const cycle of cycles) {
+    if (usedAssistantEventIds.has(cycle.assistant.event_id)) continue;
+    if (cycle.assistant.tool_calls.some((call) => call.id === firstId)) return cycle;
+  }
+  return null;
+}
+
+function lookupToolResult(
+  events: readonly ThreadEvent[],
+  toolCallId: string,
+): Extract<ThreadEvent, { kind: 'tool_result' }> | undefined {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]!;
+    if (event.kind === 'tool_result' && event.tool_call_id === toolCallId) return event;
+  }
+  return undefined;
+}
+
+/**
+ * Plan the durable events that must follow a compaction capsule so native
+ * reconstruction delivers the actual retained working set. Batch membership
+ * is the assistant's own tool_calls or the immediately following consecutive
+ * tool results — never the remainder of the conversation suffix.
+ */
+export function planRetainedWorkingSet(
+  conversation: ChatMessage[],
+  threadLog: ThreadEventLog,
+): RetainedWorkingSetPlan {
+  const nonSystem = conversation.filter((message) => message.role !== 'system') as WorkingSetMessage[];
+  const cycles = collectDurableToolCycles(threadLog.events);
+  const usedAssistantEventIds = new Set<string>();
+  const usedCallIds = new Set<string>();
+  const appends: RetainedAppend[] = [];
+  const preservedToolCallIds: string[] = [];
+  let skipFollowingTools = 0;
+  let anonymousCount = 0;
+  for (let index = 0; index < nonSystem.length; index++) {
+    const message = nonSystem[index]!;
+    if (message.role !== 'assistant') continue;
+    const declared = messageToolCalls(message);
+    const consecutive = consecutiveToolMessages(nonSystem, index);
+    const batchIds = declared.length > 0
+      ? declared.map((call) => call.id)
+      : consecutive.map((tool) => tool.toolCallId).filter((id): id is string => Boolean(id));
+    const isToolAssistant =
+      declared.length > 0 || message.name === 'tool_calls' || consecutive.length > 0;
+    if (isToolAssistant && batchIds.length === 0) anonymousCount++;
+  }
+  const anonymousQueue = cycles.slice(-anonymousCount);
+  let anonymousAt = 0;
+
+  for (let index = 0; index < nonSystem.length; index++) {
+    if (skipFollowingTools > 0) {
+      skipFollowingTools--;
+      continue;
+    }
+    const message = nonSystem[index]!;
+    if (message.role === 'user') {
+      appends.push({ kind: 'user_message', content: message.content });
+      continue;
+    }
+    if (message.role === 'assistant') {
+      const declaredCalls = messageToolCalls(message);
+      const consecutiveTools = consecutiveToolMessages(nonSystem, index);
+      const batchIds = declaredCalls.length > 0
+        ? declaredCalls.map((call) => call.id)
+        : consecutiveTools
+            .map((tool) => tool.toolCallId)
+            .filter((id): id is string => Boolean(id));
+      const isToolAssistant =
+        declaredCalls.length > 0 ||
+        message.name === 'tool_calls' ||
+        consecutiveTools.length > 0;
+      if (!isToolAssistant) {
+        appends.push({ kind: 'assistant_message', content: message.content });
+        continue;
+      }
+
+      let cycle = findCycleForBatch(cycles, batchIds, usedAssistantEventIds);
+      if (!cycle && batchIds.length === 0) {
+        while (anonymousAt < anonymousQueue.length) {
+          const candidate = anonymousQueue[anonymousAt++]!;
+          if (!usedAssistantEventIds.has(candidate.assistant.event_id)) {
+            cycle = candidate;
+            break;
+          }
+        }
+      }
+      const toolCalls = cycle
+        ? cycle.assistant.tool_calls.filter((call) => {
+            if (batchIds.length === 0) return !usedCallIds.has(call.id);
+            return batchIds.includes(call.id) && !usedCallIds.has(call.id);
+          })
+        : declaredCalls.filter((call) => !usedCallIds.has(call.id));
+      if (toolCalls.length === 0) {
+        appends.push({ kind: 'assistant_message', content: message.content });
+        continue;
+      }
+      if (cycle) usedAssistantEventIds.add(cycle.assistant.event_id);
+      appends.push({
+        kind: 'assistant_tool_calls',
+        content: (cycle?.assistant.content || message.content || 'Using tools…'),
+        tool_calls: toolCalls,
+      });
+      const resultById = new Map<string, WorkingSetMessage>();
+      for (const tool of consecutiveTools) {
+        if (tool.toolCallId) resultById.set(tool.toolCallId, tool);
+      }
+      for (const call of toolCalls) {
+        if (usedCallIds.has(call.id)) continue;
+        usedCallIds.add(call.id);
+        const kept = resultById.get(call.id);
+        const durable = lookupToolResult(threadLog.events, call.id);
+        const cycleResult = cycle?.results.find((result) => result.tool_call_id === call.id);
+        appends.push({
+          kind: 'tool_result',
+          tool_call_id: call.id,
+          tool_name: kept?.toolName ?? durable?.tool_name ?? cycleResult?.tool_name ?? call.function.name,
+          content: kept?.content ?? durable?.content ?? cycleResult?.content ?? '',
+          ...(cycleResult?.exit_code !== undefined
+            ? { exit_code: cycleResult.exit_code }
+            : durable?.exit_code !== undefined
+              ? { exit_code: durable.exit_code }
+              : {}),
+        });
+        preservedToolCallIds.push(call.id);
+      }
+      skipFollowingTools = consecutiveTools.length;
+      continue;
+    }
+    if (message.role === 'tool') {
+      const toolCallId = message.toolCallId;
+      if (!toolCallId || usedCallIds.has(toolCallId)) continue;
+      usedCallIds.add(toolCallId);
+      const durable = lookupToolResult(threadLog.events, toolCallId);
+      appends.push({
+        kind: 'tool_result',
+        tool_call_id: toolCallId,
+        tool_name: message.toolName ?? durable?.tool_name ?? message.name ?? 'tool',
+        content: message.content,
+        ...(durable?.exit_code !== undefined ? { exit_code: durable.exit_code } : {}),
+      });
+      preservedToolCallIds.push(toolCallId);
+    }
+  }
+
+  return { appends, preservedToolCallIds };
+}
+
+function appendRetainedWorkingSet(
+  threadLog: ThreadEventLog,
+  turnId: string,
+  plan: RetainedWorkingSetPlan,
+): void {
+  for (const item of plan.appends) {
+    if (item.kind === 'user_message') {
+      appendThreadEvent(threadLog, {
+        kind: 'user_message',
+        turn_id: turnId,
+        content: item.content,
+      });
+    } else if (item.kind === 'assistant_message') {
+      appendThreadEvent(threadLog, {
+        kind: 'assistant_message',
+        turn_id: turnId,
+        content: item.content,
+      });
+    } else if (item.kind === 'assistant_tool_calls') {
+      appendThreadEvent(threadLog, {
+        kind: 'assistant_tool_calls',
+        turn_id: turnId,
+        content: item.content,
+        tool_calls: item.tool_calls,
+      });
+    } else {
+      appendThreadEvent(threadLog, {
+        kind: 'tool_result',
+        turn_id: turnId,
+        tool_call_id: item.tool_call_id,
+        tool_name: item.tool_name,
+        content: item.content,
+        ...(item.exit_code !== undefined ? { exit_code: item.exit_code } : {}),
+      });
+    }
+  }
+}
+
 /**
  * Canonical H1 compaction commit: memory + thread + session, recoverable.
  */
@@ -291,7 +566,11 @@ export async function commitCompaction(
     durableContent,
     summaryContent,
   );
-  const preservedToolCallIds = collectPreservedToolCallIds(conversation);
+  const retained = planRetainedWorkingSet(conversation, input.threadLog);
+  const preservedToolCallIds =
+    retained.preservedToolCallIds.length > 0
+      ? retained.preservedToolCallIds
+      : collectPreservedToolCallIds(conversation);
   const operationId = randomUUID();
   const capsuleDigest = createHash('sha256').update(durableContent).digest('hex');
   const replacementBoundary = {
@@ -312,6 +591,8 @@ export async function commitCompaction(
   const turnId = input.turnId ?? 'compaction';
   let threadEventId: string | undefined;
   let sessionEventId: string | undefined;
+  const threadEventCountBefore = input.threadLog.events.length;
+  const threadNextSeqBefore = input.threadLog.nextSeq;
 
   try {
     recordCompactionStarted(input.sessionLog, input.turnId, {
@@ -332,6 +613,7 @@ export async function commitCompaction(
       preserved_tool_call_ids: preservedToolCallIds,
     });
     threadEventId = threadEv.event_id;
+    appendRetainedWorkingSet(input.threadLog, turnId, retained);
 
     const sessionEv = recordCompactionCommitted(input.sessionLog, input.turnId, {
       operation_id: operationId,
@@ -351,6 +633,8 @@ export async function commitCompaction(
       status: 'committed',
     });
   } catch (err) {
+    input.threadLog.events.splice(threadEventCountBefore);
+    input.threadLog.nextSeq = threadNextSeqBefore;
     const msg = err instanceof Error ? err.message : String(err);
     return {
       status: input.blockOnPersistFailure ? 'blocked_persistence' : 'degraded_persistence',
@@ -506,12 +790,16 @@ export interface ChatEngineCompactionHost {
   }) => string;
   shouldCompactByTokens: (tokens: number, modelId: string) => boolean;
   estimateTokens: (messages: ChatMessage[]) => number;
+  /** Admission recovery may request one bounded compaction even before the normal token trigger. */
+  forceCompaction?: boolean;
 }
 
 export interface ChatEngineCompactInfo {
   mode: 'llm' | 'heuristic';
   beforeMessages: number;
   afterMessages: number;
+  /** True when retained conversation content was replaced, even at equal count. */
+  changed: boolean;
   message: string;
   commit?: CompactionCommitResult;
 }
@@ -534,6 +822,7 @@ export async function runChatEngineCompaction(
 ): Promise<ChatEngineCompactInfo | null> {
   const before = host.conversation.length;
   let mode: 'llm' | 'heuristic' | null = null;
+  let changed = false;
   let commit: CompactionCommitResult | undefined;
   const tokenEstimate = host.estimateTokens(host.conversation);
   const modelId =
@@ -546,14 +835,17 @@ export async function runChatEngineCompaction(
     ? host.textToolsReserve
     : host.reserveTokens;
   const compactionNeeded =
+    host.forceCompaction === true ||
     tokenTriggered ||
     tokenEstimate > host.limits.maxEstimatedTokens - reserve;
   const applyHeuristic = async (): Promise<void> => {
     const prior = [...host.conversation]
+    const priorFingerprint = JSON.stringify(host.conversation);
     host.compactHeuristic();
     try {
       await host.checkpoint()
-      mode = 'heuristic';
+      changed = JSON.stringify(host.conversation) !== priorFingerprint;
+      if (changed) mode = 'heuristic';
     } catch (error) {
       host.conversation = prior
       throw new CompactionPersistenceError(
@@ -641,6 +933,7 @@ export async function runChatEngineCompaction(
           }
           host.conversation = commit.conversation;
           mode = strategyToCompactMode(commit.strategy);
+          changed = true;
         }
       } catch (error) {
         if (error instanceof CompactionPersistenceError) throw error
@@ -652,11 +945,12 @@ export async function runChatEngineCompaction(
   }
 
   const after = host.conversation.length;
-  if (mode == null || after >= before) return null;
+  if (mode == null || !changed) return null;
   return {
     mode,
     beforeMessages: before,
     afterMessages: after,
+    changed,
     message: `[Context compacted…] ${before}→${after} messages (${mode})`,
     ...(commit ? { commit } : {}),
   };

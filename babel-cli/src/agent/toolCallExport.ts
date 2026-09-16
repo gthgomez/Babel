@@ -7,6 +7,7 @@
  */
 
 import { exportToolCallLog } from './chatZeroWritePolicy.js';
+import { isConfirmedMutation, type MutationEffectStatus } from './mutationTools.js';
 
 export { exportToolCallLog };
 
@@ -21,6 +22,8 @@ export interface ToolCallRecord {
   error?: string;
   exit_code?: number;
   duration_ms?: number;
+  effect_status?: MutationEffectStatus;
+  mutation_paths?: string[];
 }
 
 export interface ToolCallAggregates {
@@ -30,14 +33,6 @@ export interface ToolCallAggregates {
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────
-
-/** All mutation tools that count as "writes". */
-const MUTATION_TOOLS = new Set([
-  'write_file',
-  'str_replace',
-  'apply_patch',
-  'file_delete',
-]);
 
 /** All verifier-participation tools. */
 const VERIFIER_TOOLS = new Set([
@@ -56,6 +51,8 @@ export function enrichToolCallLog(
   rawLog: Array<{
     tool: string; target: string; detail?: string; error?: string;
     index: number; exit_code?: number; stdout?: string; stderr?: string; verified?: boolean;
+    effect_status?: MutationEffectStatus;
+    mutation_paths?: string[];
   }>,
   turnMap: Map<number, number>,  // logIndex → turn number
   durationMap?: Map<number, number>,  // logIndex → duration_ms
@@ -69,6 +66,8 @@ export function enrichToolCallLog(
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.exit_code !== undefined ? { exit_code: entry.exit_code } : {}),
     ...(durationMap?.has(entry.index) ? { duration_ms: durationMap.get(entry.index)! } : {}),
+    ...(entry.effect_status !== undefined ? { effect_status: entry.effect_status } : {}),
+    ...(entry.mutation_paths !== undefined ? { mutation_paths: [...entry.mutation_paths] } : {}),
   }));
 }
 
@@ -79,9 +78,20 @@ export function enrichToolCallLog(
  * ChatResult.toolCalls or the internal toolCallLog).
  */
 export function computeToolCallAggregates(
-  rawLog: Array<{ tool: string; error?: string; verified?: boolean }>,
+  rawLog: Array<{
+    tool: string;
+    error?: string;
+    verified?: boolean;
+    effect_status?: MutationEffectStatus;
+    mutation_paths?: string[];
+  }>,
 ): ToolCallAggregates {
-  const writeCount = rawLog.filter((e) => MUTATION_TOOLS.has(e.tool) && !e.error).length;
+  const writeCount = rawLog.filter((e) => isConfirmedMutation({
+    tool: e.tool,
+    error: e.error,
+    effectStatus: e.effect_status,
+    mutationPaths: e.mutation_paths,
+  })).length;
   const verifierCount = rawLog.filter((e) => VERIFIER_TOOLS.has(e.tool)).length;
   return {
     tool_call_count: rawLog.length,
@@ -100,6 +110,8 @@ export function exportEnrichedToolCallLog(
   rawLog: Array<{
     tool: string; target: string; detail?: string; error?: string;
     index: number; exit_code?: number; stdout?: string; stderr?: string; verified?: boolean;
+    effect_status?: MutationEffectStatus;
+    mutation_paths?: string[];
   }>,
   turnMap: Map<number, number>,
   durationMap?: Map<number, number>,

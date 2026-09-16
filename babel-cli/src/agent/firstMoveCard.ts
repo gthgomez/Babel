@@ -218,11 +218,19 @@ const MUTATION_TOOLS = new Set([
  * Used for the `tools_before_first_write` harness metric.
  */
 export function computeToolsBeforeFirstWrite(
-  toolCalls: Array<{ tool: string; error?: string }>,
+  toolCalls: Array<{
+    tool: string;
+    error?: string;
+    effect_status?: import('./mutationTools.js').MutationEffectStatus;
+  }>,
 ): number {
   for (let i = 0; i < toolCalls.length; i++) {
     const tc = toolCalls[i]!;
-    if (MUTATION_TOOLS.has(tc.tool) && !tc.error) {
+    if (
+      MUTATION_TOOLS.has(tc.tool) &&
+      !tc.error &&
+      (tc.effect_status === undefined || tc.effect_status === 'confirmed_change')
+    ) {
       return i;
     }
   }

@@ -11,11 +11,13 @@ import {
   ChatEngine,
   type ChatCallbacks,
   type ChatEngineOptions,
+  type ChatEngineTurnPreparation,
   type ChatEvent,
   type ChatResult,
   type TaskIntent,
 } from '../../agent/chatEngine.js';
 import type { ChatExecutionProfile } from '../../agent/chatEngineServices.js';
+import type { ChatRuntimeMode } from '../../agent/chatToolDefinitions.js';
 import type { SessionUsageSummary } from '../../services/costTracker.js';
 import type { BlockedReport } from '../../schemas/agentContracts.js';
 import { ConversationalRenderer } from '../../ui/waterfall.js';
@@ -24,10 +26,13 @@ import { isOperatorAbortError } from '../../agent/operatorAbort.js';
 import { BABEL_RUNS_DIR } from '../../cli/constants.js';
 import { getProtocolClient } from '../../protocol/client/index.js';
 import {
+  classifyFailureText,
   dispatchChatEvent,
+  statusForOutcome,
   terminalResultFromDoneEvent,
   type ChatStreamEvent,
 } from './chatEventDispatch.js';
+import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 import {
   finalizeProtocolTurn,
   getEngineThreadId,
@@ -45,8 +50,8 @@ import {
   formatWorkspaceDepUnreadyNote,
   probePythonImport,
 } from '../../services/workspaceDepPreflight.js';
-import { resolveChatTaskClass } from '../../config/chatTaskClass.js';
-import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
+import { resolveChatTaskClass, type ChatTaskClass } from '../../config/chatTaskClass.js';
+import { confirmedMutationPaths, isConfirmedMutation } from '../../agent/mutationTools.js';
 import { isAuthoritativeVerifierCommand } from '../../agent/completionGatePolicy.js';
 import { computeToolCallAggregates } from '../../agent/toolCallExport.js';
 import {
@@ -68,6 +73,11 @@ import {
   resolveStackBudgetForClass,
   type ChatCompiledStack,
 } from '../../agent/chatStackCompile.js';
+import { buildChatCausalEvidence } from '../../agent/chatCausalEvidence.js';
+import {
+  flushSessionEventLogStrict,
+  inspectSessionEventLogFromDir,
+} from '../../agent/sessionEvents.js';
 import {
   isAcceptanceRecordingEnabled,
   prepareAcceptanceRecording,
@@ -102,8 +112,53 @@ export function compileChatStackForRun(input: {
     ...(input.model !== undefined ? { modelId: input.model } : {}),
     ...(input.babelRoot !== undefined ? { babelRoot: input.babelRoot } : {}),
   });
+  if (stack.context_error) {
+    throw new Error(`[chat] ${stack.context_error}`);
+  }
   _lastChatCompiledStack = stack;
   return stack;
+}
+
+/**
+ * Compile the intent-plan user message for execute tasks (heuristic, no LLM).
+ * Matches the factory-path injection so reused TUI engines see the same text.
+ */
+export function compileIntentPlanUserMessage(
+  task: string,
+  taskClass: ChatTaskClass,
+): string | undefined {
+  const intentPlan = compileIntentPlan(task, {
+    taskClass,
+  });
+  if (!intentPlan) return undefined;
+  let msg = formatIntentPlanUserMessage(intentPlan);
+  if (intentPlan.test_command) {
+    msg += '\n\n' + buildInteractiveFirstMoveHint(intentPlan.test_command);
+  }
+  const preloopEnv = process.env['BABEL_CHAT_PRELOOP_PLAN'];
+  const preloopDisabled =
+    preloopEnv !== undefined &&
+    (preloopEnv.trim() === '0' ||
+      preloopEnv.trim().toLowerCase() === 'false' ||
+      preloopEnv.trim().toLowerCase() === 'off');
+  const isExecuteClass = taskClass !== 'investigate';
+  if (isExecuteClass && !preloopDisabled) {
+    msg +=
+      '\n\n' +
+      buildPreLoopPlanningInstruction({
+        enforceMutateFirst: taskClass === 'general_swe',
+      });
+  }
+  return msg;
+}
+
+export function applyEngineTurnPreparation(
+  engine: ChatEngine,
+  preparation: ChatEngineTurnPreparation,
+): void {
+  if (typeof engine.applyTurnPreparation === 'function') {
+    engine.applyTurnPreparation(preparation);
+  }
 }
 
 const defaultEngineFactory: ChatEngineFactory = (options) => new ChatEngine(options);
@@ -215,6 +270,68 @@ function collectWorkspaceDepReadinessNote(targetRoot: string): string | undefine
 }
 
 /**
+ * Classify stream exceptions to honest terminal outcomes.
+ * Unknown causes stay inconclusive (no outcome) rather than AGENT_FAILURE or CANCELLED.
+ */
+export function classifyChatStreamError(err: unknown): {
+  status: ChatResult['status'];
+  outcome?: TerminalOutcome;
+} {
+  if (isOperatorAbortError(err)) {
+    return { status: 'cancelled', outcome: 'CANCELLED' };
+  }
+  const explicitOutcome =
+    err && typeof err === 'object' && 'outcome' in err
+      ? (err as { outcome?: TerminalOutcome }).outcome
+      : undefined;
+  const msg = err instanceof Error ? err.message : String(err);
+  const fromText = classifyFailureText(msg);
+  if (fromText) {
+    return { status: statusForOutcome(fromText), outcome: fromText };
+  }
+  if (explicitOutcome && explicitOutcome !== 'AGENT_FAILURE') {
+    return { status: statusForOutcome(explicitOutcome), outcome: explicitOutcome };
+  }
+  const code =
+    err && typeof err === 'object' && 'code' in err
+      ? String((err as { code?: unknown }).code)
+      : '';
+  const name =
+    err && typeof err === 'object' && 'name' in err
+      ? String((err as { name?: unknown }).name)
+      : '';
+  if (
+    /^(ENOSPC|EROFS|EIO|EBUSY|EMFILE|ENFILE|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH)$/i.test(
+      code,
+    ) ||
+    name === 'RuntimeInvariantViolationError'
+  ) {
+    return { status: 'failed', outcome: 'INFRA_FAILURE' };
+  }
+  return { status: 'failed' };
+}
+
+function evidenceFields(input: {
+  toolCalls?: ChatResult['toolCalls'] | undefined;
+  runDir?: string | undefined;
+  turnRouting?: ChatResult['turnRouting'] | undefined;
+  turnTelemetry?: ChatResult['turnTelemetry'] | undefined;
+  verifierReceipt?: ChatResult['verifierReceipt'] | undefined;
+  blockedReport?: ChatResult['blockedReport'] | undefined;
+  criticReceipt?: ChatResult['criticReceipt'] | undefined;
+}): Partial<ChatResult> {
+  const out: Partial<ChatResult> = {};
+  if (input.toolCalls && input.toolCalls.length > 0) out.toolCalls = [...input.toolCalls];
+  if (input.runDir !== undefined) out.runDir = input.runDir;
+  if (input.turnRouting !== undefined) out.turnRouting = input.turnRouting;
+  if (input.turnTelemetry !== undefined) out.turnTelemetry = input.turnTelemetry;
+  if (input.verifierReceipt !== undefined) out.verifierReceipt = input.verifierReceipt;
+  if (input.blockedReport !== undefined) out.blockedReport = input.blockedReport;
+  if (input.criticReceipt !== undefined) out.criticReceipt = input.criticReceipt;
+  return out;
+}
+
+/**
  * Consume the streaming ChatEvent generator and dispatch each event to sinks.
  */
 export async function consumeChatStream(
@@ -225,7 +342,8 @@ export async function consumeChatStream(
 ): Promise<ChatResult> {
   let answer = '';
   let usage: SessionUsageSummary = globalCostTracker.getSessionSummary();
-  let toolCalls: Array<{ tool: string; target: string; detail?: string; error?: string }> | undefined;
+  let toolCalls: ChatResult['toolCalls'] | undefined;
+  const accumulatedToolCalls: NonNullable<ChatResult['toolCalls']> = [];
   let runDir: string | undefined;
   let verifierReceipt: { command: string; exit_code: number; summary: string } | null | undefined;
   let blockedReport: BlockedReport | null | undefined;
@@ -235,61 +353,122 @@ export async function consumeChatStream(
   let doneOutcome: ChatResult['outcome'];
   let doneBudgetExceeded = false;
   let doneTurnTelemetry: import('../../agent/chatTurnTelemetry.js').ChatTurnTelemetryRecord | undefined;
+  let doneCostBudget: ChatResult['costBudget'];
+  let doneRunAllowance: ChatResult['runAllowance'];
+  let donePolicyEvents: ChatResult['policyEvents'];
   const toolIdQueue: number[] = [];
   let receivedTerminalEvent = false;
 
+  const snapshotEvidence = () =>
+    evidenceFields({
+      ...(toolCalls && toolCalls.length > 0
+        ? { toolCalls }
+        : accumulatedToolCalls.length > 0
+          ? { toolCalls: accumulatedToolCalls }
+          : {}),
+      ...(runDir !== undefined ? { runDir } : {}),
+      ...(turnRouting !== undefined ? { turnRouting } : {}),
+      ...(doneTurnTelemetry !== undefined ? { turnTelemetry: doneTurnTelemetry } : {}),
+      ...(verifierReceipt !== undefined ? { verifierReceipt } : {}),
+      ...(blockedReport !== undefined ? { blockedReport } : {}),
+      ...(criticReceipt !== undefined ? { criticReceipt } : {}),
+    });
+
   try {
     for await (const event of stream) {
-      const failed = dispatchChatEvent(event, {
+      if (event.type === 'tool_complete') {
+        accumulatedToolCalls.push({
+          tool: event.tool,
+          target: event.target,
+          ...(event.detail !== undefined ? { detail: event.detail } : {}),
+          ...(event.error !== undefined ? { error: event.error } : {}),
+          ...(event.effect_status !== undefined ? { effect_status: event.effect_status } : {}),
+          ...(event.mutation_paths !== undefined ? { mutation_paths: [...event.mutation_paths] } : {}),
+        });
+      }
+
+      const terminalFromDispatch = dispatchChatEvent(event, {
         convRenderer,
         ...(onStreamEvent ? { onStreamEvent } : {}),
         ...(protocolSession ? { protocolSession } : {}),
         toolIdQueue,
       });
-      if (failed) return failed;
+
+      if (terminalFromDispatch) {
+        receivedTerminalEvent = true;
+        const mergedRunDir = terminalFromDispatch.runDir ?? runDir;
+        const mergedRouting = terminalFromDispatch.turnRouting ?? turnRouting;
+        const mergedTelemetry = terminalFromDispatch.turnTelemetry ?? doneTurnTelemetry;
+        const mergedVerifier = terminalFromDispatch.verifierReceipt ?? verifierReceipt;
+        const mergedBlocked = terminalFromDispatch.blockedReport ?? blockedReport;
+        const mergedCritic = terminalFromDispatch.criticReceipt ?? criticReceipt;
+        return {
+          ...terminalFromDispatch,
+          ...evidenceFields({
+            toolCalls: terminalFromDispatch.toolCalls ?? accumulatedToolCalls,
+            ...(mergedRunDir !== undefined ? { runDir: mergedRunDir } : {}),
+            ...(mergedRouting !== undefined ? { turnRouting: mergedRouting } : {}),
+            ...(mergedTelemetry !== undefined ? { turnTelemetry: mergedTelemetry } : {}),
+            ...(mergedVerifier !== undefined ? { verifierReceipt: mergedVerifier } : {}),
+            ...(mergedBlocked !== undefined ? { blockedReport: mergedBlocked } : {}),
+            ...(mergedCritic !== undefined ? { criticReceipt: mergedCritic } : {}),
+          }),
+        };
+      }
 
       if (event.type === 'done') {
         answer = event.answer;
         usage = event.usage;
-        toolCalls = event.toolCalls;
-        runDir = event.runDir;
-        verifierReceipt = event.verifierReceipt;
-        blockedReport = event.blockedReport;
-        criticReceipt = event.criticReceipt;
-        verifierTampered = event.verifierTampered;
-        turnRouting = event.turnRouting;
+        toolCalls = event.toolCalls ?? (accumulatedToolCalls.length > 0 ? [...accumulatedToolCalls] : undefined);
+        runDir = event.runDir ?? runDir;
+        verifierReceipt = event.verifierReceipt ?? verifierReceipt;
+        blockedReport = event.blockedReport ?? blockedReport;
+        criticReceipt = event.criticReceipt ?? criticReceipt;
+        verifierTampered = event.verifierTampered ?? verifierTampered;
+        turnRouting = event.turnRouting ?? turnRouting;
         doneOutcome = event.outcome;
         doneBudgetExceeded = event.budgetExceeded === true;
-        doneTurnTelemetry = event.turnTelemetry;
+        doneTurnTelemetry = event.turnTelemetry ?? doneTurnTelemetry;
+        doneCostBudget = event.costBudget ?? doneCostBudget;
+        doneRunAllowance = event.runAllowance ?? doneRunAllowance;
+        donePolicyEvents = event.policyEvents ?? donePolicyEvents;
         receivedTerminalEvent = true;
+      }
+
+      if (event.type === 'cancelled') {
+        receivedTerminalEvent = true;
+        return {
+          status: 'cancelled',
+          outcome: 'CANCELLED',
+          answer: 'Cancelled',
+          usage: globalCostTracker.getSessionSummary(),
+          conversation: [],
+          ...snapshotEvidence(),
+          ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
+        };
       }
     }
   } catch (err: unknown) {
-    if (isOperatorAbortError(err)) {
-      return {
-        status: 'cancelled',
-        outcome: 'CANCELLED',
-        answer: 'Cancelled',
-        usage: globalCostTracker.getSessionSummary(),
-        conversation: [],
-      };
-    }
+    const classification = classifyChatStreamError(err);
     return {
-      status: 'failed',
-      outcome: 'AGENT_FAILURE',
-      answer: err instanceof Error ? err.message : String(err),
+      status: classification.status,
+      ...(classification.outcome !== undefined ? { outcome: classification.outcome } : {}),
+      answer: classification.status === 'cancelled'
+        ? 'Cancelled'
+        : err instanceof Error ? err.message : String(err),
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
+      ...snapshotEvidence(),
     };
   }
 
   if (!receivedTerminalEvent) {
     return {
-      status: 'cancelled',
-      outcome: 'CANCELLED',
+      status: 'failed',
       answer: 'Stream ended without a terminal event — possible internal error',
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
+      ...snapshotEvidence(),
     };
   }
 
@@ -300,6 +479,9 @@ export async function consumeChatStream(
     ...(verifierTampered ? { verifierTampered: true } : {}),
     ...(turnRouting ? { turnRouting } : {}),
     ...(doneTurnTelemetry !== undefined ? { turnTelemetry: doneTurnTelemetry } : {}),
+    ...(doneCostBudget ? { costBudget: doneCostBudget } : {}),
+    ...(doneRunAllowance ? { runAllowance: doneRunAllowance } : {}),
+    ...(donePolicyEvents ? { policyEvents: donePolicyEvents } : {}),
   });
 }
 
@@ -411,12 +593,19 @@ export async function runChatEngineOnce(input: {
   onCancel?: () => void;
   taskIntent?: TaskIntent;
   executionProfile?: ChatExecutionProfile;
+  runtimeMode?: ChatRuntimeMode;
 }): Promise<ChatResult> {
   const factory = input.engineFactory ?? defaultEngineFactory;
   const preflightContext =
     input.preflightContext ?? (await gatherChatPreflightContext(input.target.targetRoot));
 
-  const limits = resolveChatEngineLimits();
+  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: false });
+  const limitsTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true });
+  const limits = resolveChatEngineLimits(
+    {},
+    input.model,
+    { taskClass: limitsTaskClass, taskText: input.task },
+  );
 
   // Smallest compiled chat stack (identity / project / safety / provider / verifier)
   const chatStack = compileChatStackForRun({
@@ -431,37 +620,10 @@ export async function runChatEngineOnce(input: {
   // C1: Compile intent plan for execute tasks (heuristic, no LLM call).
   // Injects as a structured user message so the model sees expanded intent
   // before its first tool turn. Persisted to intent_plan.json after the run.
-  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: false });
   const intentPlan = compileIntentPlan(input.task, {
     taskClass: resolvedTaskClass,
   });
-  // C1: Format intent plan user message; append first-move hint when
-  // the intent plan detected a test command.
-  // D5: Append pre-loop planning instruction for execute tasks
-  // (controlled by BABEL_CHAT_PRELOOP_PLAN; default on for general_swe/default).
-  const intentPlanUserMessage = intentPlan
-    ? (() => {
-        let msg = formatIntentPlanUserMessage(intentPlan);
-        if (intentPlan.test_command) {
-          msg += '\n\n' + buildInteractiveFirstMoveHint(intentPlan.test_command);
-        }
-        // Pre-loop planning: inject "think before tools" instruction.
-        // Skip when env is explicitly '0'/'false'/'off', or for investigate tasks.
-        const preloopEnv = process.env['BABEL_CHAT_PRELOOP_PLAN'];
-        const preloopDisabled =
-          preloopEnv !== undefined &&
-          (preloopEnv.trim() === '0' || preloopEnv.trim().toLowerCase() === 'false' || preloopEnv.trim().toLowerCase() === 'off');
-        const isExecuteClass = resolvedTaskClass !== 'investigate';
-        if (isExecuteClass && !preloopDisabled) {
-          msg +=
-            '\n\n' +
-            buildPreLoopPlanningInstruction({
-              enforceMutateFirst: resolvedTaskClass === 'general_swe',
-            });
-        }
-        return msg;
-      })()
-    : undefined;
+  const intentPlanUserMessage = compileIntentPlanUserMessage(input.task, resolvedTaskClass);
 
   const engine =
     input.engine ??
@@ -481,7 +643,24 @@ export async function runChatEngineOnce(input: {
       workspaceRoot: input.target.workspaceRoot ?? null,
       ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
       ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
+      ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
     });
+
+  if (input.engine) {
+    applyEngineTurnPreparation(input.engine, {
+      task: input.task,
+      projectRoot: input.target.targetRoot,
+      instructionRoot: input.instructionRoot,
+      ...(stackSystemContext ? { systemContext: stackSystemContext } : {}),
+      ...(input.appendSystemPrompt ? { appendSystemPrompt: input.appendSystemPrompt } : {}),
+      ...(preflightContext ? { preflightContext } : {}),
+      ...(input.model !== undefined ? { model: input.model } : {}),
+      limits,
+      ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
+      ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
+      ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
+    });
+  }
 
   // Acceptance V0 is an opt-in recording lane. Build the patch-blind snapshot
   // before the first model turn; the kernel and TerminalOutcome stay untouched.
@@ -557,13 +736,13 @@ export async function runChatEngineOnce(input: {
       });
     } else if (result.status === 'failed') {
       protocolSession?.emitChatEvent({ type: 'failed', error: result.answer });
+    } else if (result.status === 'cancelled') {
+      protocolSession?.emitChatEvent({ type: 'cancelled' });
     }
   }
 
-  if (result.status === 'completed') {
-    persistTurnAssistantCells(turnPersistence, convRenderer);
-    finalizeProtocolTurn(protocolSession);
-  }
+  persistTurnAssistantCells(turnPersistence, convRenderer);
+  finalizeProtocolTurn(protocolSession);
 
   // C1: Persist intent plan to run_dir/intent_plan.json after the run
   if (intentPlan && result.runDir) {
@@ -583,9 +762,12 @@ export async function runChatEngineOnce(input: {
               id: e.id,
               layer: e.layer,
               path: e.path,
+              ...(e.content_digest ? { content_digest: e.content_digest } : {}),
             })),
             deep_stages_excluded: true,
             estimated_tokens: chatStack.estimated_tokens,
+            delivered_content_digest: chatStack.delivered_content_digest,
+            content_disposition: chatStack.content_disposition,
           },
           null,
           2,
@@ -594,6 +776,70 @@ export async function runChatEngineOnce(input: {
       );
     } catch {
       // best-effort telemetry
+    }
+  }
+
+  if (result.runDir) {
+    try {
+      const runtime = engine.getParityRuntime();
+      // The in-memory event list is not durable evidence.  Flush the required
+      // boundary, re-read the persisted log, and bind the projection to the
+      // verified prefix before publishing the additive sidecar.
+      flushSessionEventLogStrict(result.runDir, runtime.sessionEvents);
+      const inspected = inspectSessionEventLogFromDir(
+        result.runDir,
+        runtime.sessionEvents.session_id,
+      );
+      if (inspected.kind !== 'valid') {
+        throw new Error(
+          inspected.kind === 'missing'
+            ? `durable session event log missing at ${inspected.path}`
+            : `durable session event log invalid: ${inspected.error.message}`,
+        );
+      }
+      const causalEvents = inspected.log.events;
+      const lastEvent = causalEvents.at(-1);
+      const causalEvidence = buildChatCausalEvidence(
+        causalEvents,
+        {
+          expectedSessionId: inspected.log.session_id,
+          expectedEventKinds: ['turn_ended'],
+          durablePrefix: {
+            sessionId: inspected.log.session_id,
+            lastSeq: lastEvent?.seq ?? -1,
+            ...(lastEvent?.event_id ? { lastEventId: lastEvent.event_id } : {}),
+          },
+        },
+      );
+      fs.writeFileSync(
+        path.join(result.runDir, 'chat_causal_evidence.json'),
+        JSON.stringify(causalEvidence, null, 2),
+        'utf-8',
+      );
+    } catch (error) {
+      // Evidence projection is additive; never replace durable truth with an
+      // in-memory success claim. Keep the failure visible to operators and in
+      // a diagnostic artifact when the run directory is writable.
+      const message = error instanceof Error ? error.message : String(error);
+      const diagnostic = {
+        schema_version: 'chat-causal-evidence-error.v1',
+        consistency: 'unknown',
+        completeness: 'unknown',
+        durability: 'unverified',
+        error: message,
+      };
+      try {
+        fs.writeFileSync(
+          path.join(result.runDir, 'chat_causal_evidence_error.json'),
+          JSON.stringify(diagnostic, null, 2),
+          'utf-8',
+        );
+      } catch (diagnosticError) {
+        const diagnosticMessage =
+          diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError);
+        console.error(`[chat] causal evidence diagnostic persistence failed: ${diagnosticMessage}`);
+      }
+      console.error(`[chat] causal evidence projection failed: ${message}`);
     }
   }
 
@@ -785,6 +1031,7 @@ export function buildChatRunPayload(
       result.toolCalls.map(tc => ({
         tool: tc.tool,
         ...(tc.error !== undefined ? { error: tc.error } : {}),
+        ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
       }))
     );
     payload['tool_call_count'] = aggregates.tool_call_count;
@@ -795,6 +1042,7 @@ export function buildChatRunPayload(
       result.toolCalls.map(tc => ({
         tool: tc.tool,
         ...(tc.error !== undefined ? { error: tc.error } : {}),
+        ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
       }))
     );
   } else {
@@ -806,13 +1054,23 @@ export function buildChatRunPayload(
 
   // A4: Patch reality snapshot (derived from toolCalls; harness fills git fields)
   const writeCountFromTools = result.toolCalls
-    ? result.toolCalls.filter(tc => isSuccessfulDirectMutation(tc.tool, tc.error)).length
+    ? result.toolCalls.filter(tc => isConfirmedMutation({
+      tool: tc.tool,
+      error: tc.error,
+      effectStatus: tc.effect_status,
+      mutationPaths: tc.mutation_paths,
+    })).length
     : 0;
   const changedFiles = result.toolCalls && result.toolCalls.length > 0
     ? [...new Set(
         result.toolCalls
-          .filter(tc => isSuccessfulDirectMutation(tc.tool, tc.error))
-          .map(tc => tc.target)
+          .flatMap(tc => confirmedMutationPaths({
+            tool: tc.tool,
+            target: tc.target,
+            error: tc.error,
+            effectStatus: tc.effect_status,
+            mutationPaths: tc.mutation_paths,
+          }))
           .filter((t): t is string => typeof t === 'string' && t.length > 0)
       )]
     : [];
@@ -832,8 +1090,13 @@ export function buildChatRunPayload(
   if (result.toolCalls && result.toolCalls.length > 0) {
     const changedFiles = [...new Set(
       result.toolCalls
-        .filter(tc => isSuccessfulDirectMutation(tc.tool, tc.error))
-        .map(tc => tc.target)
+        .flatMap(tc => confirmedMutationPaths({
+          tool: tc.tool,
+          target: tc.target,
+          error: tc.error,
+          effectStatus: tc.effect_status,
+          mutationPaths: tc.mutation_paths,
+        }))
         .filter((t): t is string => typeof t === 'string' && t.length > 0)
     )];
     payload['changed_files'] = changedFiles;
@@ -1130,6 +1393,7 @@ export async function runCliChatTask(input: {
     ...(input.onStreamEvent ? { onStreamEvent: input.onStreamEvent } : {}),
     ...(input.engineFactory ? { engineFactory: input.engineFactory } : {}),
     ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
+    runtimeMode: useConversational ? 'tui' : 'headless',
   });
 
   if (outputFormat === 'text') {

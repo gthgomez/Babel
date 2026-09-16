@@ -7,7 +7,11 @@ import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import type { BlockedReport } from '../schemas/agentContracts.js';
-import { isSweChatProfileEnabled } from '../config/chatEngineLimits.js';
+import {
+  isSweChatProfileEnabled,
+  type ChatRunLimiter,
+  type ChatEngineLimits,
+} from '../config/chatEngineLimits.js';
 import {
   buildDiffCriticRejectionMessage,
   collectWorkspacePatch,
@@ -21,7 +25,7 @@ import {
   type DiffCriticVerdict,
 } from './diffCritic.js';
 import { formatBudgetExceededAnswer } from './budgetKillPolicy.js';
-import { isSuccessfulDirectMutation } from './mutationTools.js';
+import { isConfirmedMutation, type MutationEffectStatus } from './mutationTools.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { isOfflineChatMode } from './chatModelPolicy.js';
 import {
@@ -38,42 +42,45 @@ export type CriticToolLogEntry = {
   detail?: string;
   error?: string;
   mutation_paths?: string[];
+  effect_status?: MutationEffectStatus;
 };
 
 export type CriticGateDecision = 'allow' | 'reject' | 'block';
 
 export const MAX_CRITIC_STRIKES = 2;
 
-/** Session has successful sub-agent mutations (detail: "N changed"). */
+/** Session has an explicitly confirmed sub-agent mutation effect. */
 export function hasSubAgentWrites(toolCallLog: CriticToolLogEntry[]): boolean {
   return toolCallLog.some(
     (e) =>
       e.tool === 'sub_agent' &&
       e.error !== 'blocked' &&
-      /[1-9]\d*\s+changed/.test(e.detail ?? ''),
+      e.effect_status === 'confirmed_change',
   );
 }
 
 /** Successful direct file writes or sub-agent mutations. */
 export function hasAnyWrites(toolCallLog: CriticToolLogEntry[]): boolean {
   return (
-    toolCallLog.some((e) => isSuccessfulDirectMutation(e.tool, e.error)) ||
-    toolCallLog.some(
-      (e) =>
-        e.error == null &&
-        Array.isArray(e.mutation_paths) &&
-        e.mutation_paths.some((path) => typeof path === 'string' && path.trim().length > 0),
-    ) ||
+    toolCallLog.some((e) => isConfirmedMutation({
+      tool: e.tool,
+      error: e.error,
+      effectStatus: e.effect_status,
+      mutationPaths: e.mutation_paths,
+    })) ||
     hasSubAgentWrites(toolCallLog)
   );
 }
 
 export function buildGateRejectionMessage(toolCallLog: CriticToolLogEntry[]): string {
-  const writeCount = toolCallLog.filter((e) =>
-    isSuccessfulDirectMutation(e.tool, e.error),
-  ).length;
+  const writeCount = toolCallLog.filter((e) => isConfirmedMutation({
+    tool: e.tool,
+    error: e.error,
+    effectStatus: e.effect_status,
+    mutationPaths: e.mutation_paths,
+  })).length;
   const subAgentCount = toolCallLog.filter(
-    (e) => e.tool === 'sub_agent' && /\d+\s+changed/.test(e.detail ?? ''),
+    (e) => e.tool === 'sub_agent' && e.effect_status === 'confirmed_change',
   ).length;
   const lastActions = toolCallLog.slice(-3).map((e) => e.tool).join(', ');
   if (writeCount + subAgentCount === 0) {
@@ -96,10 +103,15 @@ export function currentTurnHasMutation(
 ): boolean {
   return toolCallLog.slice(turnStart).some(
     (e) =>
-      isSuccessfulDirectMutation(e.tool, e.error) ||
+      isConfirmedMutation({
+        tool: e.tool,
+        error: e.error,
+        effectStatus: e.effect_status,
+        mutationPaths: e.mutation_paths,
+      }) ||
       (e.tool === 'sub_agent' &&
         e.error !== 'blocked' &&
-        /\d+\s+changed/.test(e.detail ?? '')),
+        /[1-9]\d*\s+changed/.test(e.detail ?? '')),
   );
 }
 
@@ -108,23 +120,38 @@ export function checkCostWallBudgets(input: {
   maxCostUsd: number;
   sessionStartTime: number;
   maxWallMs: number;
-}): { ok: boolean; reason?: string } {
+  declaredCostUsd?: number;
+  declaredWallMs?: number;
+  postWriteRepairWallCapMs?: number | null;
+  criticRepairCostCapUsd?: number | null;
+  nowMs?: number;
+}): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {
   if (input.totalCostUsd >= input.maxCostUsd) {
+    const isRepair =
+      input.criticRepairCostCapUsd != null &&
+      input.maxCostUsd < (input.declaredCostUsd ?? Infinity);
+    const limiter: ChatRunLimiter = isRepair ? 'cost_repair' : 'cost';
     return {
       ok: false,
-      reason: `Cost budget exceeded ($${input.totalCostUsd.toFixed(2)} of $${input.maxCostUsd.toFixed(2)}).`,
+      limiter,
+      reason: `Cost budget exceeded ($${input.totalCostUsd.toFixed(2)} of $${input.maxCostUsd.toFixed(2)}) [${limiter}].`,
     };
   }
   if (input.sessionStartTime > 0) {
-    const elapsed = Date.now() - input.sessionStartTime;
+    const elapsed = (input.nowMs ?? Date.now()) - input.sessionStartTime;
     if (elapsed >= input.maxWallMs) {
+      const isRepair =
+        input.postWriteRepairWallCapMs != null &&
+        input.maxWallMs < (input.declaredWallMs ?? Infinity);
+      const limiter: ChatRunLimiter = isRepair ? 'wall_repair' : 'wall';
       return {
         ok: false,
-        reason: `Time budget exceeded (${Math.round(elapsed / 1000)}s of ${Math.round(input.maxWallMs / 1000)}s).`,
+        limiter,
+        reason: `Time budget exceeded (${Math.round(elapsed / 1000)}s of ${Math.round(input.maxWallMs / 1000)}s) [${limiter}].`,
       };
     }
   }
-  return { ok: true };
+  return { ok: true, limiter: 'none' };
 }
 
 /**
@@ -144,14 +171,38 @@ export function computeCriticRepairCostCap(input: {
   fraction?: number;
   minUsd?: number;
   maxUsd?: number;
+  longTaskProfile?: boolean;
+  explicitCostCeiling?: boolean;
+  criticStrikes?: number;
+  limits?: Partial<ChatEngineLimits>;
 }): { capUsd: number; repairWindowUsd: number } {
-  const fraction = input.fraction ?? CRITIC_REPAIR_REMAINING_FRACTION;
-  const minUsd = input.minUsd ?? CRITIC_REPAIR_MIN_USD;
-  const maxUsd = input.maxUsd ?? CRITIC_REPAIR_MAX_USD;
   const remaining = Math.max(0, input.sessionMaxCostUsd - input.spentUsd);
   if (remaining <= 0) {
     return { capUsd: input.sessionMaxCostUsd, repairWindowUsd: 0 };
   }
+
+  const isAuthorizedLongOrExplicit =
+    input.longTaskProfile === true ||
+    input.explicitCostCeiling === true ||
+    input.limits?.costBudget?.longTaskProfile === true ||
+    input.limits?.costBudget?.explicitCostCeiling === true;
+  const hasThrashingOrRepeatedRejects =
+    typeof input.criticStrikes === 'number' && input.criticStrikes >= 2;
+
+  // Skip the 75c anti-thrash window only when ChatEngine actually passed
+  // long-task/explicit-ceiling flags, unless critic strikes show thrash.
+  // Do not infer skip from a large dollar amount alone ($10 + $1 spent
+  // still becomes $1.75 unless those flags are passed).
+  if (isAuthorizedLongOrExplicit && !hasThrashingOrRepeatedRejects) {
+    return {
+      capUsd: input.sessionMaxCostUsd,
+      repairWindowUsd: remaining,
+    };
+  }
+
+  const fraction = input.fraction ?? CRITIC_REPAIR_REMAINING_FRACTION;
+  const minUsd = input.minUsd ?? CRITIC_REPAIR_MIN_USD;
+  const maxUsd = input.maxUsd ?? CRITIC_REPAIR_MAX_USD;
   const raw = remaining * fraction;
   const repairWindowUsd = Math.min(maxUsd, Math.max(minUsd, raw));
   // Never exceed session max; never go below spent (window may exceed remaining if min > remaining)
@@ -258,10 +309,18 @@ export function buildCriticBlockedAnswer(report: BlockedReport): string {
 }
 
 export function mutationTargetsFromLog(toolCallLog: CriticToolLogEntry[]): string[] {
-  return toolCallLog
-    .filter((e) => isSuccessfulDirectMutation(e.tool, e.error) && e.target)
-    .map((e) => e.target!)
-    .filter((t, i, arr) => arr.indexOf(t) === i);
+  const targets: string[] = [];
+  for (const entry of toolCallLog) {
+    if (!isConfirmedMutation({
+      tool: entry.tool,
+      error: entry.error,
+      effectStatus: entry.effect_status,
+      mutationPaths: entry.mutation_paths,
+    })) continue;
+    if (entry.mutation_paths) targets.push(...entry.mutation_paths);
+    if (entry.target && !entry.mutation_paths?.length) targets.push(entry.target);
+  }
+  return targets.filter((target, index, all) => target.length > 0 && all.indexOf(target) === index);
 }
 
 export type CriticRunner = DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner;

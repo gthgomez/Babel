@@ -50,3 +50,14 @@ test('unknown delivery mode remains unknown instead of becoming model blame', ()
   assert.equal(manifest.preservation_status, null)
   assert.deepEqual(manifest.missing_event_ids, [])
 })
+
+test('known native mode with unavailable prior-event evidence remains validly unknown', () => {
+  const manifest = buildContextManifest({
+    inferenceId: 'inference-4',
+    deliveryMode: 'native',
+    compactionOccurred: false,
+  })
+
+  validateContextManifest(manifest)
+  assert.equal(manifest.preservation_status, null)
+})

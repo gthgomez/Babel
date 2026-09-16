@@ -17,6 +17,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { resolve as pathResolve } from 'node:path';
 
 import { terminateChildTree } from '../sandbox.js';
+import { buildWindowsCommandShellArgs, parseCommandArgv } from '../utils/commandArgv.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
 import { getDefaultProcessWitness, type ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 
@@ -147,13 +148,15 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
   const id = `bg-${nextId++}`;
   const isWin = process.platform === 'win32';
   // Whitespace split only — same tokenizer as sandbox shellExec (no quotes).
-  const argv = command.split(/\s+/);
+  const argv = parseCommandArgv(command, process.platform);
   const rawCmd = argv[0] ?? '';
   const normalizedRawCmd = isWin
     ? rawCmd.replace(/^\.\//, '.\\').replace(/\//g, '\\')
     : rawCmd;
   const spawnCmd = isWin ? resolveWindowsCommandShell() : normalizedRawCmd;
-  const spawnArgs = isWin ? ['/c', normalizedRawCmd, ...argv.slice(1)] : argv.slice(1);
+  const spawnArgs = isWin
+    ? buildWindowsCommandShellArgs([normalizedRawCmd, ...argv.slice(1)])
+    : argv.slice(1);
 
   let resolveDone!: () => void;
   const done = new Promise<void>((resolve) => {
@@ -202,6 +205,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
       // M10 parity with SafeExecutor.shellExec — strip secrets from child env.
       env: getSafeEnv(),
       windowsHide: true,
+      ...(isWin ? { windowsVerbatimArguments: true } : {}),
       // POSIX: new process group so terminateChildTree can SIGTERM -pid.
       detached: process.platform !== 'win32',
       // shell: false — cmd.exe invoked directly on Windows (same as SafeExecutor).
