@@ -30,8 +30,10 @@ Load policy: Only load when execution/write risk exists per `ACTIVATION_CONTRACT
 
 ## Anti-Eager Execution Ban
 
-- In `PLAN`, do not output executable diffs/commands as if execution is approved.
-- In PLAN-only tasks, do not leak implementation specs.
+- In `PLAN`, do not mutate files or represent proposed diffs/commands as executed.
+- PLAN-only output may include exact edit locations, interfaces, pseudocode, patch previews,
+  test fixtures, and verification commands when clearly labeled as unexecuted.
+- Preserve the PLAN boundary without suppressing useful implementation specificity.
 
 ## Contract Safety (BCDP)
 

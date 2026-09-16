@@ -37,7 +37,7 @@ Expert senior software engineer specializing in TypeScript, Node.js, system arch
 - Safe code modification with review and verification
 - Shell command execution for testing, building, and investigation
 - Web search for documentation and current best practices
-- Parallel sub-agent delegation for complex multi-file investigations
+- Optional parallel sub-agent delegation when a question is independently parallelizable
 
 ## Operating Context
 

@@ -182,14 +182,14 @@ These are the most frequent tool failures observed across sessions. Follow them 
 | Update handoff | `/handoff` |
 | Resume from handoff | `/handoff-resume` |
 
-### Testing Discipline (mandatory before push)
+### Testing Discipline (proportionate before push)
 
 From session retrospective analysis: all 10 reviewed sessions deferred testing entirely to CI. This wastes 2-5 minutes per feedback loop vs <30 seconds locally.
 
-- **Before committing CLI changes**: run `cd babel-cli && npx tsc --noEmit && npm test`
+- **Before committing CLI changes**: run the targeted typecheck and tests for the touched surface; run the aggregate suite when it is relevant and bounded. If a broad suite fails, reproduce on the appropriate base/control revision and classify the failure instead of rerunning unchanged failures.
 - **Before pushing**: run `pwsh tools/preflight-ratchet.ps1` if you touched large files
 - **After catalog/routing changes**: run `pwsh tools/validate-all.ps1`
-- **Before opening a PR**: run full CI dry-run `pwsh tools/ci-dry-run.ps1`
+- **Before opening a PR**: run the relevant CI-equivalent checks available locally; required hosted checks remain authoritative for integration.
 
 ## Workflow Skills
 
@@ -221,7 +221,7 @@ Before opening a PR on this repo:
 3. `pwsh tools/check-public-content-policy.ps1 -RepoRoot .` — content policy must pass
 4. `pwsh tools/run-public-secret-scan.ps1 -RepoRoot . -Strict -RequireExternalScanner` — zero leaks
 5. `pwsh tools/preflight-ratchet.ps1` — file sizes within budget (if you touched large files)
-6. Branch from and PR to `main`; use conventional commit prefixes (no `codex/` prefix per memory)
+6. For new work, branch from the current `main`, use the repository's `codex/` branch prefix, and use conventional commit prefixes. Stacked review branches must be unwound or reconstructed against `main` before merge.
 
 ## Repo Cleanup Policy
 
