@@ -197,6 +197,9 @@ export function parityRecordProviderRetry(
     provider: ProviderId;
     model: string;
     inferenceId?: string;
+    requestId?: string;
+    attemptId?: string;
+    bodyDigest?: string;
     attempt: number;
     reason: 'transport' | 'timeout' | 'rate_limit' | 'server_error' | 'stream_idle';
     backoffMs: number;
@@ -207,6 +210,9 @@ export function parityRecordProviderRetry(
   recordProviderRetryScheduled(rt.sessionEvents, {
     turn_id: rt.turnId,
     ...(input.inferenceId !== undefined ? { inference_id: input.inferenceId } : {}),
+    ...(input.requestId !== undefined ? { request_id: input.requestId } : {}),
+    ...(input.attemptId !== undefined ? { attempt_id: input.attemptId } : {}),
+    ...(input.bodyDigest !== undefined ? { body_digest: input.bodyDigest } : {}),
     provider: input.provider,
     model: input.model,
     attempt: input.attempt,
@@ -223,6 +229,9 @@ export function paritySettleProviderRetry(
     provider: ProviderId;
     model: string;
     inferenceId?: string;
+    requestId?: string;
+    attemptId?: string;
+    bodyDigest?: string;
     attempt: number;
     outcome: 'succeeded' | 'failed' | 'cancelled';
   },
@@ -232,6 +241,9 @@ export function paritySettleProviderRetry(
   recordProviderRetrySettled(rt.sessionEvents, {
     turn_id: rt.turnId,
     ...(input.inferenceId !== undefined ? { inference_id: input.inferenceId } : {}),
+    ...(input.requestId !== undefined ? { request_id: input.requestId } : {}),
+    ...(input.attemptId !== undefined ? { attempt_id: input.attemptId } : {}),
+    ...(input.bodyDigest !== undefined ? { body_digest: input.bodyDigest } : {}),
     provider: input.provider,
     model: input.model,
     attempt: input.attempt,

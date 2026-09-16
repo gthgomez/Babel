@@ -790,6 +790,8 @@ export interface ChatEngineCompactionHost {
   }) => string;
   shouldCompactByTokens: (tokens: number, modelId: string) => boolean;
   estimateTokens: (messages: ChatMessage[]) => number;
+  /** Admission recovery may request one bounded compaction even before the normal token trigger. */
+  forceCompaction?: boolean;
 }
 
 export interface ChatEngineCompactInfo {
@@ -833,6 +835,7 @@ export async function runChatEngineCompaction(
     ? host.textToolsReserve
     : host.reserveTokens;
   const compactionNeeded =
+    host.forceCompaction === true ||
     tokenTriggered ||
     tokenEstimate > host.limits.maxEstimatedTokens - reserve;
   const applyHeuristic = async (): Promise<void> => {

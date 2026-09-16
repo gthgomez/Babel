@@ -69,6 +69,7 @@ export async function handleWorkflow(
     return new ChatEngine({
       task: node.task,
       projectRoot,
+      runtimeMode: 'direct',
       ...(workspaceRoot ? { workspaceRoot } : {}),
       ...(systemContext ? { systemContext } : {}),
       ...(node.model || ctx.state.model

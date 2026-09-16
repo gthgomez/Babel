@@ -22,6 +22,10 @@ import type { ChatMessage } from './chatToolDefinitions.js';
 import type { ResolvedModelPolicy } from '../modelPolicy.js';
 import { buildProviderFailureReceipt } from '../runners/providerFailureReceipt.js';
 import type { RunnerCallbacks } from '../runners/base.js';
+import {
+  PreparedRequestAdmissionError,
+  prepareProviderRequest,
+} from '../runners/preparedProviderRequest.js';
 import { chatSessionDir } from '../cli/runsLayout.js';
 import {
   inspectSessionEventLogFromDir,
@@ -477,7 +481,59 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
       }
       const ended = durable.find((event) => event.kind === 'turn_ended');
       assert.ok(ended, 'partial provider failure must persist turn termination');
-      if (ended?.kind === 'turn_ended') assert.equal(ended.outcome, 'INFRA_FAILURE');
+      if (ended?.kind === 'turn_ended') {
+        assert.equal(ended.status, 'failed');
+        assert.equal(ended.outcome, undefined, 'unclassified provider failure must remain unknown');
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('final prepared-request admission compacts once and retries the rebuilt request', async () => {
+    const fixture = makeFixture();
+    try {
+      process.env['BABEL_COMPACTION'] = 'off';
+      const overLimit = prepareProviderRequest({
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'over-limit fixture' }] }),
+        mode: 'native',
+        provider: 'deepinfra',
+        requestedModelId: 'test-fixture-model',
+        contextLimitTokens: 1,
+        reservedCompletionTokens: 1,
+        requestId: 'request-over-limit',
+        attemptId: 'attempt-over-limit',
+      });
+      assert.equal(overLimit.admission, 'over_limit');
+
+      let calls = 0;
+      const runner: TestRunner = {
+        async *executeWithToolsStream() {
+          calls += 1;
+          if (calls === 1) throw new PreparedRequestAdmissionError(overLimit);
+          yield { type: 'text_delta', text: 'rebuilt request admitted' };
+          yield { type: 'done', finishReason: 'stop' };
+        },
+        async execute() { return { type: 'completion', answer: 'fixture complete' }; },
+        async executeRaw() { return 'fixture complete'; },
+        getLastInvocationMetadata() { return null; },
+      };
+      const engine = makeEngine(fixture.project, 'prepared-admission', runner, {
+        maxConversationMessages: 6,
+        maxEstimatedTokens: 80,
+      });
+      engine.replaceConversation([
+        { role: 'system', content: 'fixture system' },
+        ...Array.from({ length: 8 }, (_, index) => ({
+          role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+          content: `retained fact ${index}`,
+        })),
+      ]);
+
+      const events = await collectStream(engine.submitMessageStream('explain the retained facts', 'explain'));
+      assert.equal(calls, 2, `admission recovery must issue one rebuilt attempt: ${JSON.stringify(events)}`);
+      assert.ok(events.some((event) => event.type === 'context_compacted'));
+      assert.ok(events.some((event) => event.type === 'done' && event.answer.includes('rebuilt request admitted')));
     } finally {
       fixture.cleanup();
     }

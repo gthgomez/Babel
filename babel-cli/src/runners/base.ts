@@ -168,11 +168,18 @@ export interface ProviderRetryEvent {
   attempt: number;
   reason: 'transport' | 'timeout' | 'rate_limit' | 'server_error' | 'stream_idle';
   backoff_ms: number;
+  /** Logical prepared request and the newly allocated transport attempt. */
+  request_id?: string;
+  attempt_id?: string;
+  body_digest?: string;
 }
 
 /** Terminal state of a retry sequence; never contains provider payloads. */
 export interface ProviderRetrySettlement extends Pick<ProviderRetryEvent, 'provider' | 'model' | 'attempt'> {
   outcome: 'succeeded' | 'failed' | 'cancelled';
+  request_id?: string;
+  attempt_id?: string;
+  body_digest?: string;
 }
 
 /** Content-free lifecycle receipt for one provider inference. */
@@ -182,6 +189,8 @@ export interface ProviderInvocationStarted {
   request_id?: string;
   /** Identity for this provider attempt; retries keep the request identity. */
   attempt_id?: string;
+  /** Prior logical request when compaction or fallback rebuilt the body. */
+  parent_request_id?: string | null;
   provider: ProviderId;
   requested_model_id: string;
   normalized_model_id: string;

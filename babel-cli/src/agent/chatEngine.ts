@@ -72,6 +72,7 @@ import {
   resolveCompactionModelId,
 } from './chatCompaction.js';
 import { runChatEngineCompaction } from './compactionCommit.js';
+import { PreparedRequestAdmissionError } from '../runners/preparedProviderRequest.js';
 import {
   initLiveAuthorityOnEngine,
   projectEngineLiveSession,
@@ -170,6 +171,7 @@ import {
   type ChatMessage,
   type ChatToolAction,
   type ChatTurn,
+  type ChatRuntimeMode,
 } from './chatToolDefinitions.js';
 import { type ChatEngineServices, type ChatExecutionProfile } from './chatEngineServices.js';
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
@@ -212,7 +214,7 @@ import {
   checkpointParityEventLogStrict,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
-import { recordUserMessage } from './threadEventLog.js';
+import { loadThreadEventLogFromDir, recordUserMessage } from './threadEventLog.js';
 import { isOperatorAbortError } from './operatorAbort.js';
 import {
   loadSessionEventLogForResume,
@@ -265,7 +267,6 @@ import { runReadOnlyAgentLoop } from './lanes/readOnlyAgentLoop.js';
 import {
   classifySubagentFailure,
   runMutationAgentLoop,
-  subagentCountsAsMutation,
   subagentFinishedCleanly,
   type SubagentAttribution,
 } from './lanes/runMutationAgentLoop.js';
@@ -286,7 +287,7 @@ import { classifyShellCapability } from './progressController.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './chatPhaseNudge.js';
 import {
   assessMutationEffect,
-  isConfirmedDirectMutation,
+  isConfirmedMutation,
   isSuccessfulDirectMutation,
   type MutationEffectStatus,
 } from './mutationTools.js';
@@ -452,6 +453,8 @@ export interface ChatEngineOptions {
   runtimeInvariantMode?: RuntimeInvariantMode;
   /** Test-only: explicit live workspace revision hash for gate freshness tests. */
   testWorkspaceRevisionHash?: string | null;
+  /** Truthful delivery surface for the model-visible runtime metadata. */
+  runtimeMode?: ChatRuntimeMode;
 }
 
 /** Shared TUI/headless/direct preparation applied to a live or reused engine. */
@@ -464,6 +467,7 @@ export interface ChatEngineTurnPreparation {
   intentPlanUserMessage?: string | undefined;
   limits?: ChatEngineLimits;
   executionProfile?: ChatExecutionProfile;
+  runtimeMode?: ChatRuntimeMode;
 }
 
 export interface ContextCompactedInfo {
@@ -816,6 +820,11 @@ export class ChatEngine {
   private terminatingLimiter: ChatRunLimiter | null = null;
   private terminalLimiterReason: string | null = null;
   private midLoopCriticFired = false;
+  /** Bound final-request admission recovery to one rebuild per user submission. */
+  private preparedAdmissionCompactionAttempts = 0;
+  /** Logical request lineage for compaction/fallback rebuild receipts. */
+  private lastLogicalRequestId: string | null = null;
+  private pendingParentRequestId: string | null = null;
   private turnsWithoutWrite = 0;
   /** Resolved task class for this thread (recomputed per isolated submission). */
   private taskClass: ChatTaskClass;
@@ -1930,6 +1939,7 @@ export class ChatEngine {
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
     this._cancelled = false;
+    this.preparedAdmissionCompactionAttempts = 0;
     this.currentTurnTelemetry = new ChatTurnTelemetryCollector(performance.now());
     this.currentTurnTelemetry.markStarted();
     this.lastRequestPromptTokens = null;
@@ -2163,6 +2173,11 @@ export class ChatEngine {
             providerStart,
             providerEnd,
           );
+          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+          if (admissionRecovery) {
+            yield { type: 'context_compacted', ...admissionRecovery };
+            continue;
+          }
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
           const cancelled = this.emitCancelledIfOperatorAbort(err);
@@ -2258,6 +2273,11 @@ export class ChatEngine {
             providerStart,
             providerEnd,
           );
+          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+          if (admissionRecovery) {
+            yield { type: 'context_compacted', ...admissionRecovery };
+            continue;
+          }
           const fb = yield* this.resolveFallbackOrFail(err, turn);
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -2426,6 +2446,11 @@ export class ChatEngine {
             legacyStart,
             legacyEnd,
           );
+          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+          if (admissionRecovery) {
+            yield { type: 'context_compacted', ...admissionRecovery };
+            continue;
+          }
           const fb = yield* this.resolveFallbackOrFail(err, turn);
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -2708,10 +2733,14 @@ export class ChatEngine {
         if (
           turnCallsStr.some(
             (tc) =>
-              isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status) ||
+              isConfirmedMutation({
+                tool: tc.tool,
+                error: tc.error,
+                effectStatus: tc.effect_status,
+                mutationPaths: tc.mutation_paths,
+              }) ||
               (tc.tool === 'sub_agent' &&
-                tc.error !== 'blocked' &&
-                subagentCountsAsMutation(tc.detail)),
+                tc.effect_status === 'confirmed_change'),
           )
         ) {
           signals.push('production_mutation');
@@ -2765,7 +2794,12 @@ export class ChatEngine {
               (e) =>
                 e.tool === 'read_file' ||
                 e.tool === 'read_range' ||
-                isConfirmedDirectMutation(e.tool, e.error, e.effect_status),
+                isConfirmedMutation({
+                  tool: e.tool,
+                  error: e.error,
+                  effectStatus: e.effect_status,
+                  mutationPaths: e.mutation_paths,
+                }),
             )
             .map((e) => e.target)
             .filter(Boolean);
@@ -2868,7 +2902,12 @@ export class ChatEngine {
             toolCalls: projected.toolCalls,
             results: projected.results,
             patchAttempted: turnSlice.some(
-              (t) => isConfirmedDirectMutation(t.tool, t.error, t.effect_status),
+              (t) => isConfirmedMutation({
+                tool: t.tool,
+                error: t.error,
+                effectStatus: t.effect_status,
+                mutationPaths: t.mutation_paths,
+              }),
             ),
             patchFailed: turnSlice.some(
               (t) => t.tool === 'str_replace' && t.error != null && t.error !== '',
@@ -3772,6 +3811,9 @@ export class ChatEngine {
         : this.terminatingLimiter === 'stall'
           ? 'BLOCKED_POLICY'
           : undefined;
+    // Preserve an unknown terminal cause when no classifier or limiter proves
+    // one. Durable validation accepts this explicit absence; guessing would
+    // make the model-visible outcome less truthful.
     const outcome = classifyFailureText(error) ?? limiterOutcome;
     if (outcome === 'BUDGET_EXHAUSTED') this.budgetExceeded = true;
     const runAllowance = this.assembleRunAllowance('failed');
@@ -4045,6 +4087,9 @@ export class ChatEngine {
       ...(preparation.executionProfile !== undefined
         ? { executionProfile: preparation.executionProfile }
         : {}),
+      ...(preparation.runtimeMode !== undefined
+        ? { runtimeMode: preparation.runtimeMode }
+        : {}),
     };
     if (preparation.intentPlanUserMessage !== undefined) {
       this.options.intentPlanUserMessage = preparation.intentPlanUserMessage;
@@ -4126,6 +4171,8 @@ export class ChatEngine {
       resumeExisting: true,
     });
     engine.conversation = messages;
+    const threadLog = loadThreadEventLogFromDir(sessionDir);
+    if (threadLog) engine.restoreEventLog(threadLog);
     engine.restoreSessionEvents(sessionLog, { runDir: sessionDir });
     engine.clearVerifierEvidenceState();
     engine.cachedSystemPromptLegacy = null;
@@ -4466,6 +4513,14 @@ export class ChatEngine {
                 index: meta.index,
                 exit_code: clean ? 0 : 1,
                 ...(clean ? {} : { error: implResult.error || attribution }),
+                ...(implResult.changedFiles.length > 0
+                  ? {
+                      effect_status: 'confirmed_change' as const,
+                      mutation_paths: implResult.changedFiles.map((file) => file.path),
+                    }
+                  : clean
+                    ? { effect_status: 'confirmed_no_change' as const }
+                    : { effect_status: 'indeterminate' as const }),
               });
               callbacks?.onToolComplete?.(
                 toolId,
@@ -4531,6 +4586,14 @@ export class ChatEngine {
               index: meta.index,
               exit_code: clean ? 0 : 1,
               ...(clean ? {} : { error: mutResult.error || attribution }),
+              ...(mutResult.changedFiles.length > 0
+                ? {
+                    effect_status: 'confirmed_change' as const,
+                    mutation_paths: mutResult.changedFiles.map((file) => file.path),
+                  }
+                : clean
+                  ? { effect_status: 'confirmed_no_change' as const }
+                  : { effect_status: 'indeterminate' as const }),
             });
             callbacks?.onToolComplete?.(
               toolId,
@@ -5821,7 +5884,10 @@ export class ChatEngine {
   }
 
   /** H1 compaction: delegates to runChatEngineCompaction (atomic commit path). */
-  private async compactIfNeeded(callbacks?: ChatCallbacks): Promise<ContextCompactedInfo | null> {
+  private async compactIfNeeded(
+    callbacks?: ChatCallbacks,
+    forceCompaction = false,
+  ): Promise<ContextCompactedInfo | null> {
     const host: import('./compactionCommit.js').ChatEngineCompactionHost = {
       conversation: this.conversation,
       options: this.options,
@@ -5853,6 +5919,7 @@ export class ChatEngine {
       },
       reserveTokens: DEFAULT_COMPACTION_CONFIG.reserveTokens,
       textToolsReserve: 1024,
+      forceCompaction,
       resolveModel: resolveCompactionModelId,
       shouldCompactByTokens: parityShouldCompact,
       estimateTokens,
@@ -5861,6 +5928,9 @@ export class ChatEngine {
     const result = await runChatEngineCompaction(host);
     this.conversation = host.conversation;
     if (!result) return null;
+    if (this.lastLogicalRequestId !== null) {
+      this.pendingParentRequestId = this.lastLogicalRequestId;
+    }
     // A compaction changes which facts are retained by the model. Any prior
     // read injection may be absent from the new context even when file bytes
     // are unchanged, so force explicit reacquisition on the next request.
@@ -5878,6 +5948,17 @@ export class ChatEngine {
     }
     callbacks?.onContextCompacted?.(info);
     return info;
+  }
+
+  /** Rebuild one over-limit final request after a durable, bounded compaction. */
+  private async recoverPreparedRequestAdmission(
+    error: unknown,
+  ): Promise<ContextCompactedInfo | null> {
+    if (!(error instanceof PreparedRequestAdmissionError)) return null;
+    if (this.preparedAdmissionCompactionAttempts >= 1) return null;
+    this.preparedAdmissionCompactionAttempts += 1;
+    this.pendingParentRequestId = error.request.request_id;
+    return this.compactIfNeeded(undefined, true);
   }
 
   private compactConversation(): void {
@@ -6089,6 +6170,9 @@ export class ChatEngine {
         if (!this.parity.turnId) return;
         startedInvocation = event;
         retryCount = 0;
+        if (this.pendingParentRequestId === null && context.substitutionOrFallback && this.lastLogicalRequestId !== null) {
+          this.pendingParentRequestId = this.lastLogicalRequestId;
+        }
         const derivedExpectedPriorEventIds = this.parity.sessionEvents.events
           .filter(
             (prior) =>
@@ -6154,6 +6238,16 @@ export class ChatEngine {
           normalized_model_id: event.normalized_model_id,
           sent_model_id: event.sent_model_id,
           input_digest: event.input_digest,
+          ...(event.request_id !== undefined ? { request_id: event.request_id } : {}),
+          ...(event.attempt_id !== undefined ? { attempt_id: event.attempt_id } : {}),
+          ...(this.pendingParentRequestId !== null
+            ? { parent_request_id: this.pendingParentRequestId }
+            : {}),
+          body_digest: event.input_digest,
+          ...(event.input_bytes !== undefined ? { body_bytes: event.input_bytes } : {}),
+          ...(event.accounting_kind !== undefined ? { accounting_kind: event.accounting_kind } : {}),
+          ...(event.context_limit_tokens !== undefined ? { context_limit_tokens: event.context_limit_tokens } : {}),
+          ...(event.context_limit_source !== undefined ? { context_limit_source: event.context_limit_source } : {}),
           input_ref: join(this.engineRunDir, 'thread_events.json'),
           ...(event.input_message_count !== undefined
             ? { input_message_count: event.input_message_count }
@@ -6164,6 +6258,8 @@ export class ChatEngine {
           context_manifest: contextManifest,
           route_receipt: routeReceipt,
         });
+        this.lastLogicalRequestId = event.request_id ?? event.inference_id;
+        this.pendingParentRequestId = null;
         for (const capability of event.capability_bindings ?? []) {
           recordCapabilityBindingReceipt(this.parity.sessionEvents, {
             turn_id: this.parity.turnId,
@@ -6271,11 +6367,16 @@ export class ChatEngine {
       },
       onRetry: (event) => {
         retryCount += 1;
+        const retryRequestId = event.request_id ?? startedInvocation?.inference_id;
+        const retryBodyDigest = event.body_digest ?? startedInvocation?.input_digest;
         parityRecordProviderRetry(
           this.parity,
           {
             provider: event.provider,
             model: event.model,
+            ...(retryRequestId ? { requestId: retryRequestId } : {}),
+            ...(event.attempt_id !== undefined ? { attemptId: event.attempt_id } : {}),
+            ...(retryBodyDigest ? { bodyDigest: retryBodyDigest } : {}),
             attempt: event.attempt,
             reason: event.reason,
             backoffMs: event.backoff_ms,
@@ -6284,11 +6385,16 @@ export class ChatEngine {
         );
       },
       onRetrySettled: (event) => {
+        const retryRequestId = event.request_id ?? startedInvocation?.inference_id;
+        const retryBodyDigest = event.body_digest ?? startedInvocation?.input_digest;
         paritySettleProviderRetry(
           this.parity,
           {
             provider: event.provider,
             model: event.model,
+            ...(retryRequestId ? { requestId: retryRequestId } : {}),
+            ...(event.attempt_id !== undefined ? { attemptId: event.attempt_id } : {}),
+            ...(retryBodyDigest ? { bodyDigest: retryBodyDigest } : {}),
             attempt: event.attempt,
             outcome: event.outcome,
           },
@@ -6658,6 +6764,7 @@ export class ChatEngine {
       nativeTools,
       textTools,
       executionFirst: true,
+      runtimeMode: this.options.runtimeMode ?? 'unknown',
       ...(systemCtx ? { systemContext: systemCtx } : {}),
     });
     if (isReadOnlyChat()) {
@@ -7019,7 +7126,12 @@ export class ChatEngine {
     if (finalStatus === 'completed' && this.writeCount > 0) {
       try {
         const changed = this.toolCallLog
-          .filter((t) => isConfirmedDirectMutation(t.tool, t.error, t.effect_status) && t.target)
+          .filter((t) => isConfirmedMutation({
+            tool: t.tool,
+            error: t.error,
+            effectStatus: t.effect_status,
+            mutationPaths: t.mutation_paths,
+          }) && t.target)
           .map((t) => t.target)
           .filter((p, i, arr) => p && arr.indexOf(p) === i)
           .slice(0, 20);

@@ -3,7 +3,7 @@
  * Pure helpers; no I/O.
  */
 
-import { isConfirmedDirectMutation, isVerifierAttemptTool, type MutationEffectStatus } from './mutationTools.js';
+import { isConfirmedMutation, isVerifierAttemptTool, type MutationEffectStatus } from './mutationTools.js';
 import { getChatTaskTune, isStrictVerification, type ChatTaskClass, type VerificationPolicy } from '../config/chatTaskClass.js';
 import {
   buildGateRejectionMessage,
@@ -877,7 +877,12 @@ export function logHasSuccessfulWrite(
   hasSubAgentWrites: (log: GateToolLogEntry[]) => boolean,
 ): boolean {
   return (
-    toolCallLog.some((e) => isConfirmedDirectMutation(e.tool, e.error, e.effect_status)) ||
+    toolCallLog.some((e) => isConfirmedMutation({
+      tool: e.tool,
+      error: e.error,
+      effectStatus: e.effect_status,
+      mutationPaths: e.mutation_paths,
+    })) ||
     hasSubAgentWrites(toolCallLog)
   );
 }

@@ -49,13 +49,13 @@ export type CriticGateDecision = 'allow' | 'reject' | 'block';
 
 export const MAX_CRITIC_STRIKES = 2;
 
-/** Session has successful sub-agent mutations (detail: "N changed"). */
+/** Session has an explicitly confirmed sub-agent mutation effect. */
 export function hasSubAgentWrites(toolCallLog: CriticToolLogEntry[]): boolean {
   return toolCallLog.some(
     (e) =>
       e.tool === 'sub_agent' &&
       e.error !== 'blocked' &&
-      /[1-9]\d*\s+changed/.test(e.detail ?? ''),
+      e.effect_status === 'confirmed_change',
   );
 }
 
@@ -80,7 +80,7 @@ export function buildGateRejectionMessage(toolCallLog: CriticToolLogEntry[]): st
     mutationPaths: e.mutation_paths,
   })).length;
   const subAgentCount = toolCallLog.filter(
-    (e) => e.tool === 'sub_agent' && /[1-9]\d*\s+changed/.test(e.detail ?? ''),
+    (e) => e.tool === 'sub_agent' && e.effect_status === 'confirmed_change',
   ).length;
   const lastActions = toolCallLog.slice(-3).map((e) => e.tool).join(', ');
   if (writeCount + subAgentCount === 0) {

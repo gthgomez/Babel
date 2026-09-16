@@ -203,6 +203,7 @@ export async function executeChatTask(
         ...(operatorMode === 'hard_plan' ? { hardPlanMode: true } : {}),
         ...(planHandoff ? { planHandoff } : {}),
         ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
+        runtimeMode: useConversational ? 'tui' : 'headless',
       };
       ctx.chatEngine = await createChatEngineForSession(engineOptions, engineFactory);
     } else {
@@ -214,6 +215,7 @@ export async function executeChatTask(
         ...(ctx.state.model !== undefined ? { model: ctx.state.model } : {}),
         limits,
         ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
+        runtimeMode: useConversational ? 'tui' : 'headless',
       });
     }
 

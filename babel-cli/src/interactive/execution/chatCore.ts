@@ -17,6 +17,7 @@ import {
   type TaskIntent,
 } from '../../agent/chatEngine.js';
 import type { ChatExecutionProfile } from '../../agent/chatEngineServices.js';
+import type { ChatRuntimeMode } from '../../agent/chatToolDefinitions.js';
 import type { SessionUsageSummary } from '../../services/costTracker.js';
 import type { BlockedReport } from '../../schemas/agentContracts.js';
 import { ConversationalRenderer } from '../../ui/waterfall.js';
@@ -50,7 +51,7 @@ import {
   probePythonImport,
 } from '../../services/workspaceDepPreflight.js';
 import { resolveChatTaskClass, type ChatTaskClass } from '../../config/chatTaskClass.js';
-import { confirmedMutationPaths, isConfirmedDirectMutation } from '../../agent/mutationTools.js';
+import { confirmedMutationPaths, isConfirmedMutation } from '../../agent/mutationTools.js';
 import { isAuthoritativeVerifierCommand } from '../../agent/completionGatePolicy.js';
 import { computeToolCallAggregates } from '../../agent/toolCallExport.js';
 import {
@@ -588,6 +589,7 @@ export async function runChatEngineOnce(input: {
   onCancel?: () => void;
   taskIntent?: TaskIntent;
   executionProfile?: ChatExecutionProfile;
+  runtimeMode?: ChatRuntimeMode;
 }): Promise<ChatResult> {
   const factory = input.engineFactory ?? defaultEngineFactory;
   const preflightContext =
@@ -637,6 +639,7 @@ export async function runChatEngineOnce(input: {
       workspaceRoot: input.target.workspaceRoot ?? null,
       ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
       ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
+      ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
     });
 
   if (input.engine) {
@@ -649,6 +652,7 @@ export async function runChatEngineOnce(input: {
       limits,
       ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
       ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
+      ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
     });
   }
 
@@ -1002,7 +1006,12 @@ export function buildChatRunPayload(
 
   // A4: Patch reality snapshot (derived from toolCalls; harness fills git fields)
   const writeCountFromTools = result.toolCalls
-    ? result.toolCalls.filter(tc => isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status)).length
+    ? result.toolCalls.filter(tc => isConfirmedMutation({
+      tool: tc.tool,
+      error: tc.error,
+      effectStatus: tc.effect_status,
+      mutationPaths: tc.mutation_paths,
+    })).length
     : 0;
   const changedFiles = result.toolCalls && result.toolCalls.length > 0
     ? [...new Set(
@@ -1336,6 +1345,7 @@ export async function runCliChatTask(input: {
     ...(input.onStreamEvent ? { onStreamEvent: input.onStreamEvent } : {}),
     ...(input.engineFactory ? { engineFactory: input.engineFactory } : {}),
     ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
+    runtimeMode: useConversational ? 'tui' : 'headless',
   });
 
   if (outputFormat === 'text') {

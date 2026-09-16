@@ -188,7 +188,10 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
         gatherPreflight: noGitPreflight,
         engineFactory: () => engine,
       });
-      const deadline = Date.now() + 2000;
+      // Other real-process qualification suites may run in parallel with this
+      // in-process fixture. Give the async engine boundary enough room to
+      // start without changing the cancellation contract under test.
+      const deadline = Date.now() + 5000;
       while (!started() && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 5));
       }
@@ -248,7 +251,12 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
           status: 'completed',
           outcome: 'UNVERIFIED_PATCH',
           answer: 'edited',
-          toolCalls: [{ tool: 'str_replace', target: 'src/foo.ts' }],
+          toolCalls: [{
+            tool: 'str_replace',
+            target: 'src/foo.ts',
+            effect_status: 'confirmed_change',
+            mutation_paths: ['src/foo.ts'],
+          }],
         }),
       );
       await executeChatTask(ctx, 'edit', 'edit', target, undefined, {
@@ -264,7 +272,12 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
           status: 'completed',
           outcome: 'UNVERIFIED_PATCH',
           answer: 'tests red',
-          toolCalls: [{ tool: 'str_replace', target: 'src/foo.ts' }],
+          toolCalls: [{
+            tool: 'str_replace',
+            target: 'src/foo.ts',
+            effect_status: 'confirmed_change',
+            mutation_paths: ['src/foo.ts'],
+          }],
           verifierReceipt: { command: 'npm test', exit_code: 1, summary: 'fail' },
         }),
       );
@@ -403,6 +416,11 @@ describe('interactive process launch', () => {
       out += String(chunk);
     });
     const ready = await new Promise<boolean>((resolve) => {
+      const alreadyBuffered = stripAnsi(out);
+      if (/BABEL/.test(alreadyBuffered) && /CHAT/i.test(alreadyBuffered)) {
+        resolve(true);
+        return;
+      }
       const timer = setTimeout(() => resolve(false), 8000);
       const onData = () => {
         const text = stripAnsi(out);

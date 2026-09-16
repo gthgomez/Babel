@@ -469,7 +469,13 @@ describe('Completion gate — positive paths', () => {
   });
 
   test('gate allows after sub_agent with changed files + verifier', () => {
-    pushToolLog(engine, { tool: 'sub_agent', target: 'fix the thing', detail: '3 steps, 2 changed' });
+    pushToolLog(engine, {
+      tool: 'sub_agent',
+      target: 'fix the thing',
+      detail: '3 steps, 2 changed, attribution=child_success',
+      effect_status: 'confirmed_change',
+      mutation_paths: ['src/math.js', 'src/math.test.js'],
+    });
     pushToolLog(engine, { tool: 'test_run', target: 'npm test', exit_code: 0 });
     const turn: ChatTurn = { type: 'completion', answer: 'Sub-agent applied fix.' };
     assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'allow');
@@ -585,12 +591,22 @@ describe('Completion gate — positive paths', () => {
 
 describe('Gate helpers', () => {
   // hasSubAgentWrites lives in chatEngineCriticBudget (extracted for size ratchet)
-  test('hasSubAgentWrites detects "changed" in detail string', () => {
+  test('hasSubAgentWrites requires explicit confirmed effect evidence', () => {
     assert.equal(
       hasSubAgentWrites([
-        { tool: 'sub_agent', target: 'fix', detail: '5 steps, 3 changed' },
+        {
+          tool: 'sub_agent',
+          target: 'fix',
+          detail: '5 steps, 3 changed, attribution=child_success',
+          effect_status: 'confirmed_change',
+          mutation_paths: ['src/fix.ts'],
+        },
       ]),
       true,
+    );
+    assert.equal(
+      hasSubAgentWrites([{ tool: 'sub_agent', target: 'fix', detail: '5 steps, 3 changed' }]),
+      false,
     );
   });
 
@@ -621,7 +637,13 @@ describe('Gate helpers', () => {
       task: 'fix the bug',
       projectRoot: '/tmp/test-project',
     });
-    pushToolLog(engine, { tool: 'sub_agent', target: 'fix', detail: '2 changed' });
+    pushToolLog(engine, {
+      tool: 'sub_agent',
+      target: 'fix',
+      detail: '2 changed, attribution=child_success',
+      effect_status: 'confirmed_change',
+      mutation_paths: ['src/fix.ts'],
+    });
     assert.equal((engine as any).hasAnyWrites(), true);
   });
 

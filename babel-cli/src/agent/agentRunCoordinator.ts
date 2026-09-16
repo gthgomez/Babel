@@ -160,6 +160,7 @@ export class AgentRunCoordinator {
       const engine = new ChatEngine({
         task: spec.task,
         projectRoot: this.projectRoot,
+        runtimeMode: 'direct',
         ...(spec.instructions ? { appendSystemPrompt: spec.instructions } : {}),
         ...(spec.maxRounds !== undefined ? { maxTurns: spec.maxRounds } : {}),
         // Pass model through to route resolution

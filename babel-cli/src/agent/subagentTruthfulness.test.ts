@@ -145,7 +145,8 @@ describe('F6 attribution helpers', () => {
   it('parent progress helpers ignore 0 changed and failed attributions', () => {
     assert.equal(subagentCountsAsMutation('3 steps, 0 changed, attribution=child_noop'), false);
     assert.equal(subagentCountsAsMutation('failed: Round limit reached without finish, attribution=child_round_exhaustion'), false);
-    assert.equal(subagentCountsAsMutation('2 steps, 1 changed, attribution=child_success'), true);
+    assert.equal(subagentCountsAsMutation('2 steps, 1 changed, attribution=child_success'), false);
+    assert.equal(subagentCountsAsMutation('2 steps, 1 changed, attribution=child_success', 'confirmed_change'), true);
     assert.equal(hasSubAgentWrites([{ tool: 'sub_agent', target: 'x', detail: '3 steps, 0 changed' }]), false);
     assert.equal(subagentFinishedCleanly('child_success'), true);
     assert.equal(subagentFinishedCleanly('child_noop'), true);

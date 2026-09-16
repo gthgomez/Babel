@@ -389,8 +389,8 @@ test('DeepSeek retry callbacks settle and abort during backoff without another r
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
   let calls = 0;
-  const scheduled: unknown[] = [];
-  const settled: unknown[] = [];
+  const scheduled: any[] = [];
+  const settled: any[] = [];
   globalThis.fetch = (async () => {
     calls += 1;
     return new Response('temporary overload', { status: 500 });
@@ -406,12 +406,32 @@ test('DeepSeek retry callbacks settle and abort during backoff without another r
     (error: unknown) => error instanceof Error && error.name === 'AbortError',
   );
   assert.equal(calls, 1);
-  assert.deepEqual(scheduled, [{
-    provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2,
-    reason: 'server_error', backoff_ms: (scheduled[0] as any).backoff_ms,
-  }]);
+  assert.equal(scheduled.length, 1);
+  assert.deepEqual(
+    {
+      provider: scheduled[0].provider,
+      model: scheduled[0].model,
+      attempt: scheduled[0].attempt,
+      reason: scheduled[0].reason,
+      backoff_ms: scheduled[0].backoff_ms,
+    },
+    {
+      provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2,
+      reason: 'server_error', backoff_ms: scheduled[0].backoff_ms,
+    },
+  );
+  assert.match(scheduled[0].request_id, /^[0-9a-f-]{36}$/);
+  assert.match(scheduled[0].attempt_id, /^[0-9a-f-]{36}$/);
+  assert.match(scheduled[0].body_digest, /^[a-f0-9]{64}$/);
   assert.equal((scheduled[0] as any).backoff_ms >= 200, true);
-  assert.deepEqual(settled, [{ provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2, outcome: 'cancelled' }]);
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].provider, 'deepseek');
+  assert.equal(settled[0].model, 'deepseek-v4-flash');
+  assert.equal(settled[0].attempt, 2);
+  assert.equal(settled[0].outcome, 'cancelled');
+  assert.equal(settled[0].request_id, scheduled[0].request_id);
+  assert.equal(settled[0].attempt_id, scheduled[0].attempt_id);
+  assert.equal(settled[0].body_digest, scheduled[0].body_digest);
 });
 test('DeepSeek retry callbacks record normalized successful lifecycle', async () => {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
@@ -434,14 +454,28 @@ test('DeepSeek retry callbacks record normalized successful lifecycle', async ()
   assert.deepEqual(result, { ok: true });
   assert.equal(calls, 2);
   assert.equal(scheduled.length, 1);
-  assert.deepEqual({ ...scheduled[0], backoff_ms: 0 }, {
+  assert.deepEqual({
+    provider: scheduled[0].provider,
+    model: scheduled[0].model,
+    attempt: scheduled[0].attempt,
+    reason: scheduled[0].reason,
+    backoff_ms: 0,
+  }, {
     provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2,
     reason: 'rate_limit', backoff_ms: 0,
   });
+  assert.match(scheduled[0].request_id, /^[0-9a-f-]{36}$/);
+  assert.match(scheduled[0].attempt_id, /^[0-9a-f-]{36}$/);
+  assert.match(scheduled[0].body_digest, /^[a-f0-9]{64}$/);
   assert.equal(scheduled[0].backoff_ms >= 0, true);
-  assert.deepEqual(settled, [{
-    provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2, outcome: 'succeeded',
-  }]);
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].provider, 'deepseek');
+  assert.equal(settled[0].model, 'deepseek-v4-flash');
+  assert.equal(settled[0].attempt, 2);
+  assert.equal(settled[0].outcome, 'succeeded');
+  assert.equal(settled[0].request_id, scheduled[0].request_id);
+  assert.equal(settled[0].attempt_id, scheduled[0].attempt_id);
+  assert.equal(settled[0].body_digest, scheduled[0].body_digest);
 });
 test('DeepSeek settles each retry before scheduling the next failed attempt', async () => {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';

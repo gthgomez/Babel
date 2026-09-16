@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { computeToolsBeforeFirstWrite } from './firstMoveCard.js';
-import { isConfirmedDirectMutation, type MutationEffectStatus } from './mutationTools.js';
+import { isConfirmedMutation, type MutationEffectStatus } from './mutationTools.js';
 import {
   classifyEmptyPatchHonesty,
   detectEnvBlockedFromText,
@@ -223,15 +223,19 @@ export function sampleFromToolLog(input: {
     error?: string;
     detail?: string;
     effect_status?: MutationEffectStatus;
+    mutation_paths?: string[];
   }>;
   answer?: string;
   should_mutate?: boolean;
   task_label?: string;
   notes?: string;
 }): ImplementorMetricSample {
-  const write_count = input.toolCalls.filter((tc) =>
-    isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status),
-  ).length;
+  const write_count = input.toolCalls.filter((tc) => isConfirmedMutation({
+    tool: tc.tool,
+    error: tc.error,
+    effectStatus: tc.effect_status,
+    mutationPaths: tc.mutation_paths,
+  })).length;
   const tools_before_first_write = computeToolsBeforeFirstWrite(
     input.toolCalls.map((tc) => ({
       tool: tc.tool,
@@ -275,11 +279,15 @@ export function sampleFromHarnessPayload(
         error?: string;
         detail?: string;
         effect_status?: MutationEffectStatus;
+        mutation_paths?: string[];
       }>)
     : [];
-  const writeFromTools = toolCalls.filter((tc) =>
-    isConfirmedDirectMutation(tc.tool, tc.error, tc.effect_status),
-  ).length;
+  const writeFromTools = toolCalls.filter((tc) => isConfirmedMutation({
+    tool: tc.tool,
+    error: tc.error,
+    effectStatus: tc.effect_status,
+    mutationPaths: tc.mutation_paths,
+  })).length;
   const write_count =
     toolCalls.length > 0
       ? writeFromTools

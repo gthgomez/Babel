@@ -149,11 +149,11 @@ export function classifySubagentFailure(input: {
 }
 
 /** Parent progress: only a successful mutation counts. No-op / failure must not. */
-export function subagentCountsAsMutation(detail?: string | null): boolean {
-  if (!detail) return false;
-  if (/attribution=child_success\b/.test(detail)) return true;
-  if (/attribution=child_noop\b/.test(detail)) return false;
-  return /[1-9]\d*\s+changed/.test(detail);
+export function subagentCountsAsMutation(
+  detail?: string | null,
+  effectStatus?: import('../mutationTools.js').MutationEffectStatus,
+): boolean {
+  return effectStatus === 'confirmed_change' && /attribution=child_success\b/.test(detail ?? '');
 }
 
 export function subagentFinishedCleanly(attribution: SubagentAttribution): boolean {

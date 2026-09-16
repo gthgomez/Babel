@@ -311,7 +311,13 @@ describe('sub-agent mutation truthfulness (Astra Probe P11)', () => {
 
   test('positive changed counts are recognized as mutations', () => {
     const mutLog = [
-      { tool: 'sub_agent', target: 'sub1', detail: '5 steps, 2 changed' },
+      {
+        tool: 'sub_agent',
+        target: 'sub1',
+        detail: '5 steps, 2 changed, attribution=child_success',
+        effect_status: 'confirmed_change' as const,
+        mutation_paths: ['src/fix.ts'],
+      },
     ];
     assert.equal(hasSubAgentWrites(mutLog), true);
     assert.equal(currentTurnHasMutation(mutLog, 0), true);

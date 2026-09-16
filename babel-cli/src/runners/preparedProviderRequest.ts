@@ -29,6 +29,21 @@ export interface PreparedProviderRequest {
   readonly admission: PreparedRequestAdmission;
 }
 
+/** The final serialized request was over an authoritative context limit. */
+export class PreparedRequestAdmissionError extends Error {
+  readonly code = 'PREPARED_REQUEST_OVER_LIMIT' as const;
+  readonly request: PreparedProviderRequest;
+
+  constructor(request: PreparedProviderRequest) {
+    super(
+      `[provider request admission] final ${request.provider}/${request.sent_model_id} body exceeds ` +
+        `${request.context_limit_tokens} token context limit (${request.body_digest})`,
+    );
+    this.name = 'PreparedRequestAdmissionError';
+    this.request = request;
+  }
+}
+
 export interface PrepareProviderRequestInput {
   readonly body: string;
   readonly mode: PreparedProviderRequestMode;
@@ -130,8 +145,5 @@ export function assertPreparedProviderRequestAdmissible(
   request: PreparedProviderRequest,
 ): void {
   if (request.admission !== 'over_limit') return;
-  throw new Error(
-    `[provider request admission] final ${request.provider}/${request.sent_model_id} body exceeds ` +
-      `${request.context_limit_tokens} token context limit (${request.body_digest})`,
-  );
+  throw new PreparedRequestAdmissionError(request);
 }
