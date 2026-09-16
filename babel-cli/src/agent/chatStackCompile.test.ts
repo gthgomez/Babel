@@ -2,7 +2,10 @@
  * U1.4: Slim interactive stack — budget-aware compilation tests.
  */
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import {
   compileChatStack,
@@ -157,6 +160,48 @@ describe("compileChatStack budget behavior", () => {
     });
     assert.equal(stack.context_error, "mandatory_instruction_core_exceeds_prompt_budget");
     assert.equal(stack.system_context, "");
+  });
+
+  it("honors the declared UTF-16 budget without overflowing on emoji", () => {
+    const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-"));
+    try {
+      writeFileSync(join(root, "AGENTS.md"), "😀".repeat(7_000), "utf8");
+      const stack = compileChatStack({
+        projectRoot: root,
+        promptBudgetChars: 2_000,
+        includeDomainSkill: false,
+      });
+
+      assert.equal(stack.budget_unit, "utf16_code_units");
+      assert.ok(stack.system_context.length <= 2_000);
+      assert.ok(stack.content_disposition.every((item) => item.delivered_content_digest.length === 64));
+      assert.equal(stack.system_context.includes("\uD800"), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records full source identity separately from a pre-read-truncated fragment", () => {
+    const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-"));
+    try {
+      const prefix = "# instructions\n" + "x".repeat(12_500);
+      writeFileSync(join(root, "AGENTS.md"), prefix + "A", "utf8");
+      const first = compileChatStack({ projectRoot: root, includeDomainSkill: false });
+      const firstIdentity = first.selected_entries.find((entry) => entry.id === "identity:agents")!;
+
+      writeFileSync(join(root, "AGENTS.md"), prefix + "B", "utf8");
+      const second = compileChatStack({ projectRoot: root, includeDomainSkill: false });
+      const secondIdentity = second.selected_entries.find((entry) => entry.id === "identity:agents")!;
+
+      assert.equal(firstIdentity.source_truncated, true);
+      assert.equal(secondIdentity.source_truncated, true);
+      assert.notEqual(firstIdentity.source_digest, secondIdentity.source_digest);
+      assert.equal(firstIdentity.content_digest, secondIdentity.content_digest);
+      assert.equal(firstIdentity.source_length, secondIdentity.source_length);
+      assert.ok((firstIdentity.source_length ?? 0) > (firstIdentity.content_length ?? 0));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

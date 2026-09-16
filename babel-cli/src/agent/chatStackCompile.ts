@@ -23,14 +23,24 @@ export interface ChatStackEntry {
   path: string;
   /** Present when file was loaded. */
   contentPreview?: string;
-  /** Digest of the complete selected entry content before budget packing. */
+  /** Digest of the selected entry content before budget packing. */
   content_digest?: string;
+  /** UTF-16 code units in the selected entry content before budget packing. */
+  content_length?: number;
+  /** Digest of the complete source content before the pre-read cap. */
+  source_digest?: string;
+  /** UTF-16 code units in the complete source content before the pre-read cap. */
+  source_length?: number;
+  /** True when the source was capped before budget packing. */
+  source_truncated?: boolean;
 }
 
 export interface ChatStackContentDisposition {
   id: string;
   status: 'included' | 'truncated' | 'omitted';
   included_chars: number;
+  /** Digest of the exact fragment delivered for this entry, or the empty string when omitted. */
+  delivered_content_digest: string;
 }
 
 export interface ChatCompiledStack {
@@ -49,6 +59,8 @@ export interface ChatCompiledStack {
   deep_stages_excluded: true;
   /** Token-ish estimate (chars/4). */
   estimated_tokens: number;
+  /** The prompt budget is measured in JavaScript UTF-16 code units. */
+  budget_unit: 'utf16_code_units';
   project_root: string;
 }
 
@@ -103,21 +115,52 @@ const VERIFIER_SNIPPET = [
   '- "No discovered verifier" is not the same as verification passing.',
 ].join('\n');
 
-function tryRead(path: string, maxChars: number): string | null {
+interface ReadContent {
+  path: string;
+  content: string;
+  source_digest: string;
+  source_length: number;
+  source_truncated: boolean;
+}
+
+function truncateToUtf16Units(content: string, maxUnits: number): string {
+  if (maxUnits <= 0) return '';
+  if (content.length <= maxUnits) return content;
+
+  let usedUnits = 0;
+  let end = 0;
+  for (const codePoint of content) {
+    if (usedUnits + codePoint.length > maxUnits) break;
+    usedUnits += codePoint.length;
+    end += codePoint.length;
+  }
+  return content.slice(0, end);
+}
+
+function tryRead(path: string, maxChars: number): ReadContent | null {
   try {
     if (!existsSync(path)) return null;
     const raw = readFileSync(path, 'utf-8');
-    return raw.length > maxChars ? raw.slice(0, maxChars) + '\n/* truncated */' : raw;
+    const source_truncated = raw.length > maxChars;
+    return {
+      path,
+      content: source_truncated
+        ? truncateToUtf16Units(raw, maxChars) + '\n/* truncated */'
+        : raw,
+      source_digest: hashContent(raw),
+      source_length: raw.length,
+      source_truncated,
+    };
   } catch {
     return null;
   }
 }
 
-function firstExisting(root: string, names: string[]): { path: string; content: string } | null {
+function firstExisting(root: string, names: string[]): ReadContent | null {
   for (const name of names) {
     const p = resolve(root, name);
     const content = tryRead(p, 12_000);
-    if (content) return { path: p, content };
+    if (content) return content;
   }
   return null;
 }
@@ -193,14 +236,15 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
   const entries: ChatStackEntry[] = [];
   const sections: Array<{ entry: ChatStackEntry; content: string }> = [];
 
-  const push = (
-    entry: ChatStackEntry,
-    content: string,
-  ) => {
+  const push = (entry: ChatStackEntry, content: string, source?: ReadContent) => {
     entries.push({
       ...entry,
       contentPreview: content.slice(0, 200),
       content_digest: hashContent(content),
+      content_length: content.length,
+      source_digest: source?.source_digest ?? hashContent(content),
+      source_length: source?.source_length ?? content.length,
+      source_truncated: source?.source_truncated ?? false,
     });
     sections.push({ entry: entries[entries.length - 1]!, content });
   };
@@ -213,6 +257,7 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     push(
       { id: 'identity:agents', layer: 'identity', path: identity.path },
       identity.content,
+      identity,
     );
   } else {
     push(
@@ -229,6 +274,7 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     push(
       { id: 'project:context', layer: 'project', path: project.path },
       project.content,
+      project,
     );
   }
 
@@ -288,6 +334,7 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
         id: entry.id,
         status: 'omitted',
         included_chars: 0,
+        delivered_content_digest: hashContent(''),
       });
     }
   } else {
@@ -299,21 +346,41 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
         includedOptional.join('\n\n').length - separatorBefore;
       if (content.length <= available) {
         includedOptional.push(content);
-        content_disposition.push({ id: entry.id, status: 'included', included_chars: content.length });
+        content_disposition.push({
+          id: entry.id,
+          status: 'included',
+          included_chars: content.length,
+          delivered_content_digest: hashContent(content),
+        });
       } else if (available > 0) {
-        const partial = Array.from(content).slice(0, available).join('');
-        includedOptional.push(partial);
-        content_disposition.push({ id: entry.id, status: 'truncated', included_chars: partial.length });
+        const partial = truncateToUtf16Units(content, available);
+        if (partial.length > 0) includedOptional.push(partial);
+        content_disposition.push({
+          id: entry.id,
+          status: 'truncated',
+          included_chars: partial.length,
+          delivered_content_digest: hashContent(partial),
+        });
         break;
       } else {
-        content_disposition.push({ id: entry.id, status: 'omitted', included_chars: 0 });
+        content_disposition.push({
+          id: entry.id,
+          status: 'omitted',
+          included_chars: 0,
+          delivered_content_digest: hashContent(''),
+        });
         continue;
       }
     }
     const includedIds = new Set(content_disposition.map((item) => item.id));
     for (const { entry } of optionalSections) {
       if (!includedIds.has(entry.id)) {
-        content_disposition.push({ id: entry.id, status: 'omitted', included_chars: 0 });
+        content_disposition.push({
+          id: entry.id,
+          status: 'omitted',
+          included_chars: 0,
+          delivered_content_digest: hashContent(''),
+        });
       }
     }
     system_context = [...includedOptional, mandatoryText].filter(Boolean).join('\n\n');
@@ -323,6 +390,9 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
         status: 'included',
         included_chars:
           sections.find((section) => section.entry.id === entry.id)?.content.length ?? 0,
+        delivered_content_digest: hashContent(
+          sections.find((section) => section.entry.id === entry.id)?.content ?? '',
+        ),
       });
     }
   }
@@ -336,6 +406,7 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     ...(context_error ? { context_error } : {}),
     deep_stages_excluded: true,
     estimated_tokens: Math.ceil(system_context.length / 4),
+    budget_unit: 'utf16_code_units',
     project_root: projectRoot,
   };
 }

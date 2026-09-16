@@ -326,6 +326,9 @@ export function buildChatSystemPrompt(options: ChatSystemPromptOptions): string 
       '  3. Run npm test to verify',
       '  4. Report the fix',
     );
+    if (options.systemContext) {
+      sections.push('', '## Project Context', options.systemContext);
+    }
     return sections.join('\n');
   }
 
