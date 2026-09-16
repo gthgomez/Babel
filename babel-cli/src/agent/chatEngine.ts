@@ -5295,10 +5295,54 @@ export class ChatEngine {
           : `exit ${lastResult.exit_code}`
         : 'done';
 
+      const directMutationAction =
+        action.type === 'write_file' || action.type === 'apply_patch';
+      const toolError = result.policyBlocked
+        ? 'blocked'
+        : lastResult && lastResult.exit_code !== 0
+          ? lastResult.stderr || detail
+          : undefined;
+      const confirmedDirectMutation =
+        directMutationAction &&
+        !result.policyBlocked &&
+        lastResult !== undefined &&
+        isSuccessfulDirectMutation(tool, toolError, lastResult.exit_code) &&
+        (result.mutationPaths?.length ?? 0) > 0 &&
+        (result.mutationReceipt?.changedBytes ?? 1) > 0;
+
+      // A direct mutation may have reached the executor without a confirmed
+      // committed receipt (including a failed/partial effect). Refresh reads
+      // conservatively, but do not count or project it as a confirmed write.
+      if (directMutationAction && !result.policyBlocked && lastResult) {
+        const possiblePaths =
+          result.mutationPaths && result.mutationPaths.length > 0
+            ? result.mutationPaths
+            : [
+                action.type === 'write_file'
+                  ? action.path
+                  : primaryPatchPath(action.patch),
+              ];
+        for (const possiblePath of possiblePaths) {
+          const possibleKey = this.readCacheKey(possiblePath);
+          invalidateReadCacheForPath(this.readCache, possibleKey);
+          this.fullReadCounts.delete(possibleKey);
+        }
+        if (!confirmedDirectMutation) {
+          invalidateVerifierLedger(this as never, 'direct mutation effect not confirmed');
+        }
+      }
+
+      // Keep apply_patch's user-facing projection tied to the executor's
+      // actual path instead of the patch-text target summary.
+      const projectedTarget =
+        action.type === 'apply_patch' && result.mutationPaths?.[0]
+          ? result.mutationPaths[0]
+          : target;
+
       // Log tool call for structured result metadata
       this.toolCallLog.push({
         tool,
-        target,
+        target: projectedTarget,
         detail,
         index: meta.index,
         ...(lastResult
@@ -5308,7 +5352,7 @@ export class ChatEngine {
               stderr: lastResult.stderr,
             }
           : {}),
-        ...(result.policyBlocked ? { error: 'blocked' as const } : {}),
+        ...(toolError ? { error: toolError } : {}),
         ...(result.mutationPaths && result.mutationPaths.length > 0
           ? { mutation_paths: [...result.mutationPaths] }
           : {}),
@@ -5325,7 +5369,7 @@ export class ChatEngine {
           lastResult?.exit_code ?? 0,
         );
 
-        if (action.type === 'write_file' && !result.policyBlocked) {
+        if (action.type === 'write_file' && confirmedDirectMutation) {
           const diff = renderGitDiff(
             { tool: 'file_write', path: action.path, content: action.content },
             toolContext,
@@ -5333,7 +5377,6 @@ export class ChatEngine {
           const adds = (diff.match(/^\+[^+]/gm) ?? []).length;
           const dels = (diff.match(/^-[^-]/gm) ?? []).length;
           callbacks.onFileChanged?.(action.path, adds, dels, diff);
-          invalidateReadCacheForPath(this.readCache, this.readCacheKey(action.path));
           this.fullReadCounts.delete(this.readCacheKey(action.path));
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'mutation',
@@ -5347,15 +5390,10 @@ export class ChatEngine {
             action.path,
             action.content,
           );
-        } else if (action.type === 'apply_patch' && !result.policyBlocked) {
+        } else if (action.type === 'apply_patch' && confirmedDirectMutation) {
           const { adds, dels } = countPatchStats(action.patch);
           const path = primaryPatchPath(action.patch);
           callbacks.onFileChanged?.(path, adds, dels, action.patch);
-          // R8: Seed read cache after patch — hash the file on disk so
-          // subsequent reads hit the dedupe cache.
-          const pKey = this.readCacheKey(path);
-          invalidateReadCacheForPath(this.readCache, pKey);
-          this.fullReadCounts.delete(pKey);
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'mutation',
             path,

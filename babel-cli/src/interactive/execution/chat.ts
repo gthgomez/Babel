@@ -55,12 +55,18 @@ import { isSessionConsistencyFailureMessage } from '../../agent/sessionEventDiag
  * Only includes files touched by successful mutation tools.
  */
 function collectChangedFiles(result: {
-  toolCalls?: Array<{ tool: string; target: string; detail?: string; error?: string }>;
+  toolCalls?: Array<{
+    tool: string;
+    target: string;
+    detail?: string;
+    error?: string;
+    exit_code?: number;
+  }>;
 }): string[] {
   if (!result.toolCalls || result.toolCalls.length === 0) return [];
   const seen = new Set<string>();
   for (const tc of result.toolCalls) {
-    if (isSuccessfulDirectMutation(tc.tool, tc.error) && tc.target) {
+    if (isSuccessfulDirectMutation(tc.tool, tc.error, tc.exit_code) && tc.target) {
       seen.add(tc.target);
     }
   }
