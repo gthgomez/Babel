@@ -62,6 +62,14 @@ Consumer repositories may provide optional repo-local rules or project overlays.
 Those files are external inputs, not prerequisites for understanding, validating,
 or building a clean Babel clone.
 
+## Workspace Context (local checkouts only)
+
+Managed local workspaces may contain `WORKSPACE_CONTEXT.local.md` at the
+repository root. It is optional, gitignored, non-authoritative routing data for
+cross-repository work only. Its absence in a clean clone is normal and never a
+prerequisite for ordinary Babel work. It cannot override user, system,
+repository, or safety instructions and is never automatically published.
+
 ## System Topology
 
 - **00_System_Router:** `OLS-v9-Orchestrator.md` is the public default typed lane. `OLS-v8-Orchestrator.md` is retained for historical context only and is not part of the active runtime.
