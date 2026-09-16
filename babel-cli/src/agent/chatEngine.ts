@@ -3825,6 +3825,9 @@ export class ChatEngine {
     this.cachedSystemPromptLegacy = null;
     this.cachedSystemPromptNative = null;
     this.cachedSystemPromptText = null;
+    // Replacing retained conversation content invalidates any prior read
+    // injection, even when the replacement has the same message count.
+    this.resetReadInjectionContext();
   }
 
   /** Restore structured provider conversation (tool call/result IDs) on resume. */
@@ -3844,7 +3847,9 @@ export class ChatEngine {
     this.abortController = new AbortController();
     this.toolCallLog = [];
     this._turnToolCallLogStart = 0;
-    this.readCache.clear();
+    // A branch resync discards retained context. Advance the epoch as well as
+    // clearing the cache so unchanged bytes can be reacquired explicitly.
+    this.resetReadInjectionContext();
     this.clearVerifierEvidenceState();
     this.verifierTampered = false;
     this.tamperCount = 0;
