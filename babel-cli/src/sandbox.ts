@@ -69,6 +69,7 @@ import { getSafeEnv } from './utils/safeEnv.js';
 import { childEnvForSandbox, hardenGitHostEnvironment } from './authority/unprivilegedChildEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
 import {
+  buildWindowsCommandShellArgs,
   CommandArgvParseError,
   parseCommandArgv,
 } from './utils/commandArgv.js';
@@ -451,6 +452,9 @@ export function spawnCommandAsync(
         cwd: options.cwd,
         env: options.env,
         windowsHide: true,
+        ...(process.platform === 'win32' && basename(executable).toLowerCase() === 'cmd.exe'
+          ? { windowsVerbatimArguments: true }
+          : {}),
         // POSIX: new process group so terminateChildTree can SIGTERM -pid.
         detached: process.platform !== 'win32',
       }) as ChildProcessWithoutNullStreams;
@@ -1733,7 +1737,9 @@ export class SafeExecutor {
     }
     const isWin = process.platform === 'win32';
     const spawnCmd = isWin ? resolveWindowsCommandShell() : normalizedRawCmd;
-    const spawnArgs = isWin ? ['/c', normalizedRawCmd, ...argv.slice(1)] : argv.slice(1);
+    const spawnArgs = isWin
+      ? buildWindowsCommandShellArgs([normalizedRawCmd, ...argv.slice(1)])
+      : argv.slice(1);
 
     const benchmarkDockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim();
     const isolation = evaluateGovernedIsolation(
@@ -1879,6 +1885,9 @@ export class SafeExecutor {
         encoding: 'utf-8',
         maxBuffer: MAX_SHELL_OUTPUT_BYTES,
         env: prepared.env,
+        ...(process.platform === 'win32' && basename(prepared.executable).toLowerCase() === 'cmd.exe'
+          ? { windowsVerbatimArguments: true }
+          : {}),
       });
 
       if (!result.error) {

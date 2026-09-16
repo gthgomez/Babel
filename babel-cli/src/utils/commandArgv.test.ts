@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildWindowsCommandShellArgs,
   CommandArgvParseError,
   parseCommandArgv,
   quoteWindowsCommandArg,
@@ -53,4 +54,16 @@ test('Windows quoting round-trips trailing backslashes and embedded quotes', () 
     const command = `node ${quoteWindowsCommandArg(value)}`;
     assert.deepEqual(parseCommandArgv(command, 'win32'), ['node', value], value);
   }
+});
+
+test('Windows cmd invocation keeps the quoted command as one verbatim payload', () => {
+  assert.deepEqual(
+    buildWindowsCommandShellArgs(['C:\\Program Files\\nodejs\\node.exe', 'arg with spaces', '']),
+    [
+      '/d',
+      '/s',
+      '/c',
+      '""C:\\Program Files\\nodejs\\node.exe" "arg with spaces" """',
+    ],
+  );
 });
