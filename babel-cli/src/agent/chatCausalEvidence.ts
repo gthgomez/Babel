@@ -84,7 +84,8 @@ function nodeForEvent(event: SessionEvent): ChatCausalEvidenceNode {
 }
 
 /**
- * Build a compact causal view from existing durable session events.
+ * Build a compact causal view from a supplied session-event sequence.
+ * Callers must bind it to a verified durable source before treating it as durable evidence.
  * Missing evidence stays UNKNOWN; this function never upgrades absence into success.
  */
 export function buildChatCausalEvidence(events: readonly SessionEvent[]): ChatCausalEvidenceView {
@@ -94,36 +95,83 @@ export function buildChatCausalEvidence(events: readonly SessionEvent[]): ChatCa
   const unknowns: string[] = [];
   const inputs = new Map<string, SessionEvent & { kind: 'model_input_receipt' }>();
   const results = new Map<string, SessionEvent & { kind: 'model_result_delivery' }>();
-  const lifecycles = new Map<string, { proposed: boolean; started: boolean; terminal: boolean }>();
+  const lifecycles = new Map<string, {
+    proposed: boolean;
+    started: boolean;
+    terminal: boolean;
+    toolCallId: string;
+    toolName: string;
+  }>();
+
+  const attemptKey = (turnId: string | null, id: string): string =>
+    `${turnId ?? 'null'}:${id}`;
+
+  if (orderedEvents.length === 0) {
+    unknowns.push('session event evidence is empty');
+  }
 
   for (const event of orderedEvents) {
     if (event.kind === 'model_input_receipt') {
       if (!event.input_digest) contradictions.push(`model input ${event.inference_id} has no request digest`);
-      inputs.set(event.inference_id, event);
+      const key = attemptKey(event.turn_id, event.inference_id);
+      const prior = inputs.get(key);
+      if (prior) {
+        contradictions.push(
+          prior.input_digest === event.input_digest
+            ? `duplicate model input receipt for inference ${event.inference_id}`
+            : `conflicting model input digests for inference ${event.inference_id}`,
+        );
+      } else {
+        inputs.set(key, event);
+      }
     } else if (event.kind === 'model_result_delivery') {
-      if (!inputs.has(event.inference_id)) contradictions.push(`model result ${event.inference_id} has no input receipt`);
-      results.set(event.inference_id, event);
+      const key = attemptKey(event.turn_id, event.inference_id);
+      const input = inputs.get(key);
+      if (!input) {
+        contradictions.push(`model result ${event.inference_id} has no input receipt`);
+      } else if (input.provider !== event.provider || input.sent_model_id !== event.model) {
+        contradictions.push(`model result ${event.inference_id} identity does not match its input receipt`);
+      }
+      if (results.has(key)) {
+        contradictions.push(`duplicate model result delivery for inference ${event.inference_id}`);
+      } else {
+        results.set(key, event);
+      }
     } else if (
       event.kind === 'tool_proposed' || event.kind === 'tool_started' ||
       event.kind === 'tool_completed' || event.kind === 'tool_failed' || event.kind === 'tool_cancelled'
     ) {
-      const key = `${event.turn_id ?? 'null'}:${event.idempotency_key}`;
-      const state = lifecycles.get(key) ?? { proposed: false, started: false, terminal: false };
-      if (event.kind === 'tool_proposed') state.proposed = true;
+      const key = attemptKey(event.turn_id, event.idempotency_key);
+      const state = lifecycles.get(key) ?? {
+        proposed: false,
+        started: false,
+        terminal: false,
+        toolCallId: event.tool_call_id,
+        toolName: event.tool_name,
+      };
+      if (state.toolCallId !== event.tool_call_id || state.toolName !== event.tool_name) {
+        contradictions.push(`tool ${event.tool_call_id} has conflicting lifecycle identity for ${key}`);
+      }
+      if (event.kind === 'tool_proposed') {
+        if (state.proposed) contradictions.push(`duplicate tool proposal for ${event.tool_call_id}`);
+        state.proposed = true;
+      }
       if (event.kind === 'tool_started') {
         if (!state.proposed) contradictions.push(`tool ${event.tool_call_id} started without proposal`);
+        if (state.started) contradictions.push(`duplicate tool start for ${event.tool_call_id}`);
         state.started = true;
       }
       if (event.kind === 'tool_completed' || event.kind === 'tool_failed' || event.kind === 'tool_cancelled') {
         if (!state.proposed || !state.started) contradictions.push(`tool ${event.tool_call_id} terminated before start`);
+        if (state.terminal) contradictions.push(`duplicate tool terminal for ${event.tool_call_id}`);
         state.terminal = true;
       }
       lifecycles.set(key, state);
     }
   }
 
-  for (const [inferenceId] of inputs) {
-    if (!results.has(inferenceId)) unknowns.push(`model result missing for inference ${inferenceId}`);
+  for (const [key, input] of inputs) {
+    if (!results.has(key)) unknowns.push(`model result missing for inference ${input.inference_id}`);
   }
   for (const [key, state] of lifecycles) {
     if (!state.terminal) unknowns.push(`terminal tool evidence missing for ${key}`);

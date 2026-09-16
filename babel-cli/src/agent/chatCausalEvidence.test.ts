@@ -50,3 +50,97 @@ test('causal evidence preserves missing terminal evidence as incomplete', () => 
   assert.equal(view.readiness, 'incomplete');
   assert.match(view.unknowns.join('\n'), /terminal tool evidence missing/);
 });
+
+test('causal evidence treats empty event input as incomplete', () => {
+  const view = buildChatCausalEvidence([]);
+  assert.equal(view.readiness, 'incomplete');
+  assert.deepEqual(view.nodes, []);
+  assert.match(view.unknowns.join('\n'), /event evidence is empty/);
+});
+
+test('causal evidence rejects duplicate and conflicting model attempts', () => {
+  const input = {
+    ...base('model_input_receipt', 1),
+    kind: 'model_input_receipt',
+    inference_id: 'inference-1',
+    provider: 'deepseek',
+    requested_model_id: 'deepseek-chat',
+    normalized_model_id: 'deepseek-chat',
+    sent_model_id: 'deepseek-chat',
+    input_digest: 'digest-a',
+    input_ref: 'input-a.json',
+  } as SessionEvent;
+  const conflictingInput = {
+    ...input,
+    ...base('model_input_receipt', 2),
+    input_digest: 'digest-b',
+    input_ref: 'input-b.json',
+  } as SessionEvent;
+  const result = {
+    ...base('model_result_delivery', 3),
+    kind: 'model_result_delivery',
+    inference_id: 'inference-1',
+    provider: 'deepseek',
+    model: 'deepseek-chat',
+    status: 'delivered',
+  } as SessionEvent;
+  const duplicateResult = { ...result, ...base('model_result_delivery', 4) } as SessionEvent;
+  const view = buildChatCausalEvidence([input, conflictingInput, result, duplicateResult]);
+  assert.equal(view.readiness, 'contradictory');
+  assert.match(view.contradictions.join('\n'), /conflicting model input digests/);
+  assert.match(view.contradictions.join('\n'), /duplicate model result delivery/);
+});
+
+test('causal evidence rejects duplicate and conflicting tool terminals', () => {
+  const proposed = {
+    ...base('tool_proposed', 1),
+    kind: 'tool_proposed',
+    tool_call_id: 'call-1',
+    tool_name: 'file_write',
+    idempotency_key: 'attempt-1',
+  } as SessionEvent;
+  const started = { ...proposed, ...base('tool_started', 2), kind: 'tool_started' } as SessionEvent;
+  const failed = { ...proposed, ...base('tool_failed', 3), kind: 'tool_failed', exit_code: 1 } as SessionEvent;
+  const completed = { ...proposed, ...base('tool_completed', 4), kind: 'tool_completed', exit_code: 0 } as SessionEvent;
+  const conflicting = {
+    ...proposed,
+    ...base('tool_completed', 5),
+    kind: 'tool_completed',
+    tool_call_id: 'call-2',
+    exit_code: 0,
+  } as SessionEvent;
+  const view = buildChatCausalEvidence([proposed, started, failed, completed, conflicting]);
+  assert.equal(view.readiness, 'contradictory');
+  assert.match(view.contradictions.join('\n'), /duplicate tool terminal/);
+  assert.match(view.contradictions.join('\n'), /conflicting lifecycle identity/);
+});
+
+test('causal evidence keeps distinct model retry attempts separate', () => {
+  const input = (seq: number, inferenceId: string, digest: string): SessionEvent => ({
+    ...base('model_input_receipt', seq),
+    kind: 'model_input_receipt',
+    inference_id: inferenceId,
+    provider: 'deepseek',
+    requested_model_id: 'deepseek-chat',
+    normalized_model_id: 'deepseek-chat',
+    sent_model_id: 'deepseek-chat',
+    input_digest: digest,
+    input_ref: `${inferenceId}.json`,
+  } as SessionEvent);
+  const result = (seq: number, inferenceId: string, status: 'delivered' | 'failed'): SessionEvent => ({
+    ...base('model_result_delivery', seq),
+    kind: 'model_result_delivery',
+    inference_id: inferenceId,
+    provider: 'deepseek',
+    model: 'deepseek-chat',
+    status,
+  } as SessionEvent);
+  const view = buildChatCausalEvidence([
+    input(1, 'attempt-1', 'digest-a'),
+    result(2, 'attempt-1', 'failed'),
+    input(3, 'attempt-2', 'digest-b'),
+    result(4, 'attempt-2', 'delivered'),
+  ]);
+  assert.equal(view.readiness, 'ready', JSON.stringify(view));
+  assert.deepEqual(view.contradictions, []);
+});
