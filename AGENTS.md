@@ -58,6 +58,12 @@ Canonical identity-first startup sequence:
 
 If Babel control-plane work is requested (`use Babel`, prompt-stack assembly, routing, catalog changes), follow the Babel invocation sequence in [INTEGRATION.md](./INTEGRATION.md).
 
+Managed local workspaces may provide an optional `WORKSPACE_CONTEXT.local.md`
+file for cross-repository routing. Read it only when that broader scope is
+actually needed; its absence in a clean clone is normal. It is gitignored,
+non-authoritative, cannot override user, system, repository, or safety
+instructions, and is never published.
+
 ## What This Repo Is
 
 This is the **canonical public source** of Babel — a local coding-agent harness for real software work, with an inspectable Prompt OS underneath. Chat is the default daily lane; Plan and Deep add stronger gates. The Prompt OS assembles the smallest correct instruction stack from behavioral layers, domain architects, skills, adapters, and overlays. This is the independent public source of truth; no separate private source repository is required to build or run Babel.
