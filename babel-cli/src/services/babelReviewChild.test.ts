@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { babelReviewChildEnv, launchBabelReviewChild } from './babelReviewChild.js';
 import { resolveChatTaskClass } from '../config/chatTaskClass.js';
+import { resolvePolicyMode, resolveStallShadowMode } from '../agent/policyShadow.js';
 
 test('review child strips publication credentials, preload hooks and ambient overrides while enforcing read-only sandbox', () => {
   const env = babelReviewChildEnv({ source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'mimo-v2.5' }, {
@@ -26,6 +27,9 @@ test('review child strips publication credentials, preload hooks and ambient ove
   assert.equal(env['BABEL_CHAT_MAX_TURNS'], '24');
   assert.equal(env['BABEL_CHAT_STALL_TURNS'], '15');
   assert.equal(env['BABEL_CHAT_TASK_CLASS'], 'investigate');
+  assert.equal(env['BABEL_POLICY_MODE_STALL_KILL'], 'shadow');
+  assert.equal(resolvePolicyMode('stall_kill', 'investigate', env), 'shadow');
+  assert.equal(resolveStallShadowMode('investigate', env), true);
   assert.equal(
     resolveChatTaskClass({
       env,
@@ -43,6 +47,7 @@ test('repair children keep generous repair budget and respect parent overrides',
   assert.equal(env['BABEL_CHAT_MAX_TURNS'], '100');
   assert.equal(env['BABEL_CHAT_STALL_TURNS'], '5');
   assert.equal(env['BABEL_CHAT_TASK_CLASS'], 'investigate');
+  assert.equal(env['BABEL_POLICY_MODE_STALL_KILL'], undefined);
 
   const overridden = babelReviewChildEnv(
     { source: '/source', trustedRoot: '/trusted', output: '/state/out', runs: '/state/runs', model: 'deepseek-v4-flash', purpose: 'repair_proposal' },
@@ -50,6 +55,12 @@ test('repair children keep generous repair budget and respect parent overrides',
   );
   assert.equal(overridden['BABEL_CHAT_MAX_WALL_MS'], '5000000');
   assert.equal(overridden['BABEL_CHAT_MAX_TURNS'], '200');
+});
+
+test('normal investigate sessions keep enforce-mode stall policy outside trusted review children', () => {
+  const env = { BABEL_CHAT_TASK_CLASS: 'investigate' };
+  assert.equal(resolvePolicyMode('stall_kill', 'investigate', env), 'enforce');
+  assert.equal(resolveStallShadowMode('investigate', env), false);
 });
 
 test('review child forwards the documented non-secret credential helper override', () => {
