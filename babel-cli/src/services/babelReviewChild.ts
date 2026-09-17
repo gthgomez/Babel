@@ -4,6 +4,22 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { BABEL_OPENCODE_GO_HELPER_ENV } from '../runners/openCodeGoCredential.js';
 
+const MAX_REVIEW_CHILD_TIMEOUT_MS = 1_800_000;
+
+/**
+ * Allow the trusted controller to select a larger, still finite child
+ * process envelope when reviewing a large audit. Invalid or oversized values
+ * fall back to the purpose default; an ambient variable can never make the
+ * review unbounded.
+ */
+export function reviewChildProcessTimeoutMs(purpose: 'review' | 'repair_proposal' = 'review', parent: NodeJS.ProcessEnv = process.env): number {
+  const fallback = purpose === 'repair_proposal' ? 3_050_000 : 780_000;
+  const raw = parent['BABEL_REVIEW_CHILD_TIMEOUT_MS'];
+  if (!raw || !/^\d+$/.test(raw)) return fallback;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed >= 1_000 && parsed <= MAX_REVIEW_CHILD_TIMEOUT_MS ? parsed : fallback;
+}
+
 /** Construct a fresh child environment; never forward GitHub or ambient provider keys. */
 export function babelReviewChildEnv(input: { source: string; trustedRoot: string; output: string; runs: string; model: string; purpose?: 'review' | 'repair_proposal' }, parent: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -71,7 +87,7 @@ export async function launchBabelReviewChild(input: { source: string; trustedRoo
     // SIGTERM is cooperative on POSIX. Do not leave an unresponsive review
     // child holding the lease forever; Windows already terminates it directly.
     forceKillTimer = setTimeout(() => { if (!child.exitCode) child.kill('SIGKILL'); }, 2000);
-  }, input.timeoutMs ?? (input.purpose === 'repair_proposal' ? 3050000 : 780000));
+  }, input.timeoutMs ?? reviewChildProcessTimeoutMs(input.purpose, process.env));
   const code = await new Promise<number | null>((resolve, reject) => {
     child.once('error', reject); child.once('close', resolve);
   }).finally(() => { clearTimeout(timer); if (forceKillTimer) clearTimeout(forceKillTimer); input.onExit?.(); });
