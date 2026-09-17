@@ -45,16 +45,22 @@ test('run spinner suppresses broken stdout pipe errors', () => {
   assert.match(result.stdout, /BROKEN_PIPE_SMOKE_OK/);
 });
 
-test('babel-dusk resolves with exact truecolor and ANSI fallback values', () => {
+test('babel-dusk resolves with the North Star truecolor and ANSI fallback values', () => {
   const theme = resolveBuiltinTheme('babel-dusk');
 
   assert.deepEqual(theme.trueColor, babelDusk.trueColor);
   assert.deepEqual(theme.ansiFallback, babelDusk.ansiFallback);
-  assert.equal(theme.trueColor.background, '#0B0A16');
-  assert.equal(theme.trueColor.accent, '#D7AFFF');
-  assert.equal(theme.trueColor.success, '#87D787');
-  assert.equal(theme.ansiFallback.accent, 183);
-  assert.equal(theme.ansiFallback.success, 114);
+  assert.equal(theme.trueColor.background, '#020817');
+  assert.equal(theme.trueColor.panel, '#061126');
+  assert.equal(theme.trueColor.panelRaised, '#0A1C45');
+  assert.equal(theme.trueColor.border, '#173B85');
+  assert.equal(theme.trueColor.accent, '#2E6CFF');
+  assert.equal(theme.trueColor.accentHigh, '#5F8FFF');
+  assert.equal(theme.trueColor.textPrimary, '#D7DCFF');
+  assert.equal(theme.trueColor.textMuted, '#8B95C0');
+  assert.equal(theme.trueColor.success, '#43C57B');
+  assert.equal(theme.ansiFallback.accent, 33);
+  assert.equal(theme.ansiFallback.success, 78);
   assert.throws(() => resolveBuiltinTheme('graphite-cyan'), /Unknown Babel theme/);
   assert.match(previewBuiltinTheme('babel-dusk'), /babel-dusk/);
 });
@@ -89,8 +95,8 @@ test('babel-dusk ANSI fallback uses 256-color roles when color is forced', () =>
 
   assert.equal(result.status, 0, result.error?.message ?? result.stderr);
   const parsed = JSON.parse(result.stdout.trim()) as { rendered: string; stripped: string };
-  assert.match(parsed.rendered, /\u001B\[38;5;183mBabel/);
-  assert.match(parsed.rendered, /\u001B\[38;5;114mpassed/);
+  assert.match(parsed.rendered, /\u001B\[38;5;33mBabel/);
+  assert.match(parsed.rendered, /\u001B\[38;5;78mpassed/);
   assert.equal(parsed.stripped, 'Babel passed');
 });
 
