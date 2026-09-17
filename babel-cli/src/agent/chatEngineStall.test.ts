@@ -8,6 +8,8 @@ import { createStallDetector, updateStallState, isStalled, escalateStallInterven
 import type { StallIntervention } from './stallDetector.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge } from './chatPhaseNudge.js';
 import type { ChatPhase } from './chatPhaseNudge.js';
+import { babelReviewChildEnv } from '../services/babelReviewChild.js';
+import { resolveStallShadowMode } from './policyShadow.js';
 
 // ─── Stall Detector Tests ────────────────────────────────────────────────────
 
@@ -384,6 +386,36 @@ describe('getStallInterventionMessage', () => {
     const state = createStallDetector();
     assert.equal(state.interventionLevel, 0);
     assert.deepEqual(state.interventionHistory, []);
+  });
+
+  test('trusted review shadows the would-have-killed read-only stall intervention', () => {
+    const state = createStallDetector();
+    state.totalToolCalls = 10;
+    state.turnsSinceLastWrite = 9;
+    state.turnsSinceNewFileRead = 9;
+    state.lastReadTargets = ['src/a.ts', 'src/a.ts', 'src/a.ts'];
+    state.interventionHistory = ['nudge', 'restrict', 'force_status'];
+
+    const reviewEnv = babelReviewChildEnv({
+      source: '/source',
+      trustedRoot: '/trusted',
+      output: '/state/out',
+      runs: '/state/runs',
+      model: 'mimo-v2.5',
+    });
+    const shadowed = getStallInterventionMessage(
+      state,
+      3,
+      resolveStallShadowMode('investigate', reviewEnv),
+      true,
+    );
+    assert.ok(shadowed);
+    assert.equal(shadowed.level, 'nudge');
+    assert.match(shadowed.message, /Would have killed/);
+
+    const enforced = getStallInterventionMessage(state, 3, false, true);
+    assert.ok(enforced);
+    assert.equal(enforced.level, 'kill');
   });
 });
 
