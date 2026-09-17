@@ -56,7 +56,9 @@ function getForceColorLevel(): number | null {
   return Number.isFinite(parsed) ? parsed : 1;
 }
 
-export function supportsColor(stream: NodeJS.WriteStream = process.stdout): boolean {
+export function supportsColor(
+  stream: NodeJS.WriteStream = process.stdout,
+): boolean {
   const forceColorLevel = getForceColorLevel();
   if (forceColorLevel === 0) return false;
   if (process.env['NO_COLOR']) return false;
@@ -67,7 +69,9 @@ export function supportsColor(stream: NodeJS.WriteStream = process.stdout): bool
   return Boolean(stream?.isTTY);
 }
 
-export function supportsTrueColor(stream: NodeJS.WriteStream = process.stdout): boolean {
+export function supportsTrueColor(
+  stream: NodeJS.WriteStream = process.stdout,
+): boolean {
   const forceColorLevel = getForceColorLevel();
   if (!supportsColor(stream)) return false;
   if (forceColorLevel !== null) return forceColorLevel >= 2;
@@ -86,7 +90,8 @@ export function supportsTrueColor(stream: NodeJS.WriteStream = process.stdout): 
 
   // Unknown terminal — use COLORTERM and TERM heuristics
   const colorterm = (process.env['COLORTERM'] ?? '').toLowerCase();
-  if (colorterm.includes('truecolor') || colorterm.includes('24bit')) return true;
+  if (colorterm.includes('truecolor') || colorterm.includes('24bit'))
+    return true;
   // TERM-based detection for terminals advertising direct color
   const term = (process.env['TERM'] ?? '').toLowerCase();
   if (term.includes('xterm-direct')) return true;
@@ -150,8 +155,11 @@ export function accent(text: string): string {
 export function accentSecondary(text: string): string {
   return colorToken('accentSecondary', text);
 }
+export function accentHigh(text: string): string {
+  return colorToken('accentHigh', text);
+}
 export function accentBright(text: string): string {
-  return colorToken('accent', text, { bold: true });
+  return colorToken('accentHigh', text, { bold: true });
 }
 export function identityPrimary(text: string): string {
   return colorToken('identityPrimary', text);
@@ -176,6 +184,9 @@ export function info(text: string): string {
 }
 export function border(text: string): string {
   return colorToken('border', text);
+}
+export function focusedBorder(text: string): string {
+  return colorToken('borderFocused', text);
 }
 export function success(text: string): string {
   return colorToken('success', text, { bold: true });
@@ -211,7 +222,7 @@ export function syntaxFunction(text: string): string {
 // ── Background colors ─────────────────────────────────────────────
 
 // Apply a background color from the theme using the given token name
-function bgToken(tokenName: string, text: string): string {
+export function backgroundToken(tokenName: string, text: string): string {
   if (!HAS_COLOR) return text;
   const tokenHex = COLOR_TOKENS[tokenName];
   if (!tokenHex) return text;
@@ -223,26 +234,38 @@ function bgToken(tokenName: string, text: string): string {
   return wrapAnsi(text, '\x1b[7m', '\x1b[27m');
 }
 
+export function bgCanvas(text: string): string {
+  return backgroundToken('canvas', text);
+}
+export function bgSurface(text: string): string {
+  return backgroundToken('surface', text);
+}
 export function bgPrimary(text: string): string {
-  return bgToken('textPrimary', text); // use text color as bg for contrast
+  return backgroundToken('textPrimary', text); // compatibility: high-contrast button background
 }
 export function bgPanel(text: string): string {
-  return bgToken('panel', text);
+  return bgSurface(text);
 }
 export function bgPanelRaised(text: string): string {
-  return bgToken('panelRaised', text);
+  return backgroundToken('raised', text);
+}
+export function bgSelected(text: string): string {
+  return backgroundToken('selected', text);
+}
+export function meterTrack(text: string): string {
+  return colorToken('meterTrack', text);
 }
 export function bgAccent(text: string): string {
-  return bgToken('accent', text);
+  return backgroundToken('accent', text);
 }
 export function bgError(text: string): string {
-  return bgToken('error', text);
+  return backgroundToken('error', text);
 }
 export function bgSuccess(text: string): string {
-  return bgToken('success', text);
+  return backgroundToken('success', text);
 }
 export function bgWarning(text: string): string {
-  return bgToken('warning', text);
+  return backgroundToken('warning', text);
 }
 
 // Button styling for dialogs. Uses background color from theme, falls back
@@ -469,7 +492,11 @@ export class ThemeProvider {
    * @param opts - Optional bold/dim modifiers
    * @returns ANSI-styled text
    */
-  resolve(token: string, text: string, opts?: { bold?: boolean; dim?: boolean }): string {
+  resolve(
+    token: string,
+    text: string,
+    opts?: { bold?: boolean; dim?: boolean },
+  ): string {
     return colorToken(token, text, opts);
   }
 
@@ -484,7 +511,7 @@ export class ThemeProvider {
    * Resolve a token for background color.
    */
   bg(token: string, text: string): string {
-    return bgToken(token, text);
+    return backgroundToken(token, text);
   }
 
   /** Return the accent color for the active theme. */

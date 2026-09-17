@@ -13,10 +13,12 @@
 import { Component } from './component.js';
 import {
   accent,
+  accentHigh,
   bold,
   colorToken,
   dim,
   error,
+  backgroundToken,
   ghost,
   getEffectiveTerminalWidth,
   info,
@@ -28,35 +30,25 @@ import {
   warning,
   wrapText,
 } from './theme.js';
-import { COLOR_TOKENS } from './tokens.js';
 import type { KeyEvent } from './keyInput.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
-/** Parse a hex colour string to { r, g, b } components. */
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const h = hex.replace('#', '');
-  return {
-    r: Number.parseInt(h.slice(0, 2), 16),
-    g: Number.parseInt(h.slice(2, 4), 16),
-    b: Number.parseInt(h.slice(4, 6), 16),
-  };
-}
-
 /**
  * Wrap `text` in an ANSI background-colour sequence using the named theme
- * token.  The token is looked up in COLOR_TOKENS (from the active theme).
+ * token.  Terminal color capability and fallback behavior are centralized in
+ * theme.ts so primitives remain compatible with degraded terminals.
  */
 function applyBgColor(text: string, token: string): string {
-  const hex = COLOR_TOKENS[token];
-  if (!hex) return text;
-  const rgb = hexToRgb(hex);
-  return `\x1b[48;2;${rgb.r};${rgb.g};${rgb.b}m${text}\x1b[49m`;
+  return backgroundToken(token, text);
 }
 
 /** Normalise padding to a four-sided object. */
 function normalizePadding(
-  p: number | { top: number; right: number; bottom: number; left: number } | undefined,
+  p:
+    | number
+    | { top: number; right: number; bottom: number; left: number }
+    | undefined,
 ): { top: number; right: number; bottom: number; left: number } {
   if (p === undefined) return { top: 0, right: 0, bottom: 0, left: 0 };
   if (typeof p === 'number') return { top: p, right: p, bottom: p, left: p };
@@ -82,7 +74,10 @@ function colorBorderTitleLine(
   // Walk from left: colour border chars until we hit non-border content.
   const chars = [...line];
   let i = 0;
-  while (i < chars.length && (chars[i] === border.tl || chars[i] === border.h)) {
+  while (
+    i < chars.length &&
+    (chars[i] === border.tl || chars[i] === border.h)
+  ) {
     chars[i] = bc(chars[i]!);
     i++;
   }
@@ -120,6 +115,7 @@ const STYLE_APPLY: Record<string, (t: string) => string> = {
   muted,
   ghost,
   accent,
+  accentHigh,
   info,
   success,
   warning,
@@ -136,13 +132,19 @@ export interface BoxOptions {
   /** Content -- strings (rendered verbatim) and/or child Components. */
   children?: (Component | string)[];
   /** Padding inside the border.  Single number applies to all four sides. */
-  padding?: number | { top: number; right: number; bottom: number; left: number };
+  padding?:
+    | number
+    | { top: number; right: number; bottom: number; left: number };
   /** Border style.  Defaults to 'none' (no border). */
   border?: 'none' | 'single' | 'double' | 'rounded';
   /** Theme token name for border-foreground colour (e.g. 'border'). */
   borderColor?: string;
   /** Theme token name for background fill (e.g. 'background', 'panel'). */
   background?: string;
+  /** Use the semantic selected surface when no explicit background is set. */
+  selected?: boolean;
+  /** Use the semantic focused-border token when no explicit border color is set. */
+  focused?: boolean;
   /**
    * Optional title rendered inside the top border: `┌─ Title ──┐`.
    * Only applies when border is set.
@@ -183,10 +185,14 @@ export interface BoxOptions {
  */
 export class Box extends Component {
   private _children: (Component | string)[];
-  private _padding: number | { top: number; right: number; bottom: number; left: number };
+  private _padding:
+    | number
+    | { top: number; right: number; bottom: number; left: number };
   private _border: 'none' | 'single' | 'double' | 'rounded';
   private _borderColor: string | undefined;
   private _background: string | undefined;
+  private _selected: boolean;
+  private _focused: boolean;
   private _title: string | undefined;
   private _width: number | 'auto' | undefined;
   private _height: number | 'auto' | undefined;
@@ -204,6 +210,8 @@ export class Box extends Component {
     this._border = options.border ?? 'none';
     this._borderColor = options.borderColor;
     this._background = options.background;
+    this._selected = options.selected ?? false;
+    this._focused = options.focused ?? false;
     this._title = options.title;
     this._width = options.width;
     this._height = options.height;
@@ -257,7 +265,9 @@ export class Box extends Component {
 
     // 4. Natural content width (widest line's visual length)
     const maxContentW =
-      contentLines.length > 0 ? Math.max(...contentLines.map((l) => visibleLength(l))) : 0;
+      contentLines.length > 0
+        ? Math.max(...contentLines.map((l) => visibleLength(l)))
+        : 0;
 
     // 5. Determine outer width
     let outerW: number;
@@ -304,8 +314,10 @@ export class Box extends Component {
     } else {
       outerH = naturalInnerH + (hasBorder ? borderW : 0);
     }
-    if (this._minHeight !== undefined) outerH = Math.max(outerH, this._minHeight);
-    if (this._maxHeight !== undefined) outerH = Math.min(outerH, this._maxHeight);
+    if (this._minHeight !== undefined)
+      outerH = Math.max(outerH, this._minHeight);
+    if (this._maxHeight !== undefined)
+      outerH = Math.min(outerH, this._maxHeight);
     outerH = Math.max(outerH, 1);
 
     const innerAreaH = Math.max(1, outerH - borderW);
@@ -320,7 +332,10 @@ export class Box extends Component {
     let contentStartY: number;
     switch (this._verticalAlign) {
       case 'middle':
-        contentStartY = Math.max(0, Math.floor((innerAreaH - naturalContentH) / 2));
+        contentStartY = Math.max(
+          0,
+          Math.floor((innerAreaH - naturalContentH) / 2),
+        );
         break;
       case 'bottom':
         contentStartY = Math.max(0, innerAreaH - naturalContentH);
@@ -352,7 +367,9 @@ export class Box extends Component {
         // Leave at least 3 border chars on each side for padding: ┌─ ... ─┐
         const maxTitleInner = Math.max(0, innerW - 6);
         const displayed =
-          titleVisLen > maxTitleInner ? truncateText(titleText, maxTitleInner) : titleText;
+          titleVisLen > maxTitleInner
+            ? truncateText(titleText, maxTitleInner)
+            : titleText;
         const displayedLen = visibleLength(displayed);
         const leftDash = Math.max(1, Math.floor((innerW - displayedLen) / 2));
         const rightDash = Math.max(1, innerW - leftDash - displayedLen);
@@ -371,8 +388,10 @@ export class Box extends Component {
     }
 
     // 10. Apply border colour (only to the border characters themselves).
-    if (hasBorder && this._borderColor) {
-      const bc = (t: string) => colorToken(this._borderColor!, t);
+    const borderColorToken =
+      this._borderColor ?? (this._focused ? 'borderFocused' : undefined);
+    if (hasBorder && borderColorToken) {
+      const bc = (t: string) => colorToken(borderColorToken, t);
 
       for (let i = 0; i < resultLines.length; i++) {
         const line = resultLines[i]!;
@@ -380,7 +399,11 @@ export class Box extends Component {
           // Top border: may contain a title. Only colour the border runes
           // (corners + dashes), not the embedded title text.
           if (this._title) {
-            resultLines[i] = colorBorderTitleLine(line, border, this._borderColor);
+            resultLines[i] = colorBorderTitleLine(
+              line,
+              border,
+              borderColorToken,
+            );
           } else {
             resultLines[i] = bc(line);
           }
@@ -398,8 +421,12 @@ export class Box extends Component {
     }
 
     // 11. Apply background fill to every line (fills to outer width).
-    if (this._background) {
-      resultLines = resultLines.map((line) => applyBgColor(line, this._background!));
+    const backgroundTokenName =
+      this._background ?? (this._selected ? 'selected' : undefined);
+    if (backgroundTokenName) {
+      resultLines = resultLines.map((line) =>
+        applyBgColor(line, backgroundTokenName),
+      );
     }
 
     return resultLines.join('\n');
@@ -426,6 +453,7 @@ export interface TextOptions {
     | 'muted'
     | 'ghost'
     | 'accent'
+    | 'accentHigh'
     | 'success'
     | 'warning'
     | 'error'
@@ -472,7 +500,8 @@ export class Text extends Component {
 
   override render(): string {
     // 1. Resolve content (dynamic via function or static string).
-    const raw = typeof this._content === 'function' ? this._content() : this._content;
+    const raw =
+      typeof this._content === 'function' ? this._content() : this._content;
 
     // 2. Apply style.
     const styleFn = this._style ? STYLE_APPLY[this._style] : undefined;

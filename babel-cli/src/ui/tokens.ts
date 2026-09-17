@@ -6,7 +6,9 @@ export interface ThemeDefinition {
 }
 
 /** Extra presentation roles derived from core palette entries. */
-function presentationTrueColor(core: Record<string, string>): Record<string, string> {
+function presentationTrueColor(
+  core: Record<string, string>,
+): Record<string, string> {
   return {
     syntaxKeyword: core['accent'] ?? '',
     syntaxType: core['accentSecondary'] ?? '',
@@ -21,7 +23,9 @@ function presentationTrueColor(core: Record<string, string>): Record<string, str
   };
 }
 
-function presentationFallback(core: Record<string, number>): Record<string, number> {
+function presentationFallback(
+  core: Record<string, number>,
+): Record<string, number> {
   return {
     syntaxKeyword: core['accent'] ?? 183,
     syntaxType: core['accentSecondary'] ?? 147,
@@ -36,6 +40,42 @@ function presentationFallback(core: Record<string, number>): Record<string, numb
   };
 }
 
+/**
+ * Add stable semantic surface roles without making every built-in theme repeat
+ * compatibility aliases.  Existing renderers use `background`, `panel`, and
+ * `panelRaised`; the semantic names let newer renderers describe intent while
+ * preserving those public token names for alternate themes and integrations.
+ */
+function semanticTrueColor(
+  core: Record<string, string>,
+): Record<string, string> {
+  return {
+    canvas: core['background'] ?? '',
+    surface: core['panel'] ?? '',
+    raised: core['panelRaised'] ?? '',
+    selected: core['selected'] ?? core['panelRaised'] ?? '',
+    borderFocused:
+      core['borderFocused'] ?? core['accentActive'] ?? core['accent'] ?? '',
+    accentHigh: core['accentHigh'] ?? core['accent'] ?? '',
+    meterTrack: core['meterTrack'] ?? core['panelRaised'] ?? '',
+  };
+}
+
+function semanticFallback(
+  core: Record<string, number>,
+): Record<string, number> {
+  return {
+    canvas: core['background'] ?? 0,
+    surface: core['panel'] ?? 0,
+    raised: core['panelRaised'] ?? 0,
+    selected: core['selected'] ?? core['panelRaised'] ?? 0,
+    borderFocused:
+      core['borderFocused'] ?? core['accentActive'] ?? core['accent'] ?? 7,
+    accentHigh: core['accentHigh'] ?? core['accent'] ?? 7,
+    meterTrack: core['meterTrack'] ?? core['panelRaised'] ?? 8,
+  };
+}
+
 function defineTheme(
   name: string,
   mode: 'dark' | 'light',
@@ -45,8 +85,16 @@ function defineTheme(
   return {
     name,
     mode,
-    trueColor: { ...presentationTrueColor(trueColor), ...trueColor },
-    ansiFallback: { ...presentationFallback(ansiFallback), ...ansiFallback },
+    trueColor: {
+      ...presentationTrueColor(trueColor),
+      ...semanticTrueColor(trueColor),
+      ...trueColor,
+    },
+    ansiFallback: {
+      ...presentationFallback(ansiFallback),
+      ...semanticFallback(ansiFallback),
+      ...ansiFallback,
+    },
   };
 }
 
@@ -54,35 +102,41 @@ export const babelDusk: ThemeDefinition = defineTheme(
   'babel-dusk',
   'dark',
   {
-    background: '#0B0A16',
-    panel: '#151326',
-    panelRaised: '#1C1933',
-    border: '#5F5F87',
-    textPrimary: '#F2EFFF',
-    textMuted: '#AFAFD7',
-    textGhost: '#5F5F87',
-    accent: '#D7AFFF',
-    accentSecondary: '#AFAFFF',
-    accentActive: '#AF87FF',
-    accentStrong: '#AF5FD7',
-    info: '#87D7FF',
-    success: '#87D787',
-    warning: '#FFD75F',
-    error: '#FF5F87',
+    background: '#020817',
+    panel: '#061126',
+    panelRaised: '#0A1C45',
+    selected: '#0A1C45',
+    meterTrack: '#0A1C45',
+    border: '#173B85',
+    borderFocused: '#2E6CFF',
+    textPrimary: '#D7DCFF',
+    textMuted: '#8B95C0',
+    textGhost: '#50628F',
+    accent: '#2E6CFF',
+    accentSecondary: '#A7B7F2',
+    accentActive: '#2E6CFF',
+    accentHigh: '#5F8FFF',
+    accentStrong: '#5F8FFF',
+    info: '#83A8FF',
+    success: '#43C57B',
+    warning: '#E9B949',
+    error: '#F07178',
   },
   {
     textPrimary: 255,
     textMuted: 146,
     textGhost: 60,
-    border: 60,
-    accent: 183,
-    accentSecondary: 147,
-    accentActive: 141,
-    accentStrong: 134,
-    info: 117,
-    success: 114,
-    warning: 221,
-    error: 204,
+    border: 24,
+    borderFocused: 33,
+    accent: 33,
+    accentSecondary: 153,
+    accentActive: 33,
+    accentHigh: 75,
+    accentStrong: 75,
+    info: 111,
+    success: 78,
+    warning: 179,
+    error: 210,
   },
 );
 
@@ -284,7 +338,9 @@ export const BUILTIN_THEMES: Record<string, ThemeDefinition> = {
   [babelPrismNight.name]: babelPrismNight,
 };
 
-export function resolveBuiltinTheme(name: string = babelDusk.name): ThemeDefinition {
+export function resolveBuiltinTheme(
+  name: string = babelDusk.name,
+): ThemeDefinition {
   const theme = BUILTIN_THEMES[name];
   if (!theme) {
     throw new Error(
