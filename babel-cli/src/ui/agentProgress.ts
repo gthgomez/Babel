@@ -20,12 +20,13 @@
  */
 
 import { Component } from './component.js';
-import { Box, Text, Stack, Spacer } from './primitives.js';
+import { Box } from './primitives.js';
 import {
   dim,
   muted,
   ghost,
   accent,
+  accentHigh,
   accentSecondary,
   bold,
   primary,
@@ -35,10 +36,9 @@ import {
   info,
   identityPrimary,
   identitySecondary,
-  bgPanel,
-  bgAccent,
   getEffectiveTerminalWidth,
-  visibleLength,
+  meterTrack,
+  sectionLabel,
   truncate,
 } from './theme.js';
 import type { KeyEvent } from './keyInput.js';
@@ -69,7 +69,6 @@ export interface AgentInfo {
 // ─── Spinner ────────────────────────────────────────────────────────────────
 
 const SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
-const SPINNER_INTERVAL_MS = 200;
 
 // ─── AgentProgressPane ──────────────────────────────────────────────────────
 
@@ -106,7 +105,7 @@ export class AgentProgressPane extends Component {
     const indicator = this.statusIndicator(status ?? 'pending');
 
     // Agent name + optional sublabel
-    const nameLine = sublabel ? `${bold(name)} ${dim(`(${sublabel})`)}` : bold(name);
+    const nameLine = sublabel ? `${bold(accentHigh(name))} ${dim(`(${sublabel})`)}` : bold(accentHigh(name));
 
     // Task description (truncated)
     const taskDisplay = truncate(task, width - 8);
@@ -152,7 +151,7 @@ export class AgentProgressPane extends Component {
     const { name, status, cost } = this.info;
     const indicator = this.statusIndicator(status ?? 'pending');
     const costStr = cost !== undefined && cost > 0 ? ` ${dim(`$${cost.toFixed(3)}`)}` : '';
-    return `${indicator} ${name}${costStr}`;
+    return `${indicator} ${accentHigh(name)}${costStr}`;
   }
 }
 
@@ -169,6 +168,7 @@ export class AgentTeamOverview extends Component {
     this._box = new Box({
       border: 'single',
       borderColor: 'border',
+      background: 'surface',
       padding: { top: 0, right: 1, bottom: 0, left: 1 },
       children: [''],
     });
@@ -267,10 +267,10 @@ export class AgentTeamOverview extends Component {
     const doneCount = complete + failed;
     const progressPct = total > 0 ? doneCount / total : 0;
     const filled = Math.round(progressWidth * progressPct);
-    const progressBar = success('█'.repeat(filled)) + ghost('░'.repeat(progressWidth - filled));
+    const progressBar = success('█'.repeat(filled)) + meterTrack('░'.repeat(progressWidth - filled));
 
     // Header
-    const header = `${bold(this.headerText)}  ${dim(`(${total})`)}  ${progressBar}  ${progressPct > 0 ? dim(`${Math.round(progressPct * 100)}%`) : ''}`;
+    const header = `${sectionLabel(this.headerText.toUpperCase())}  ${dim(`(${total})`)}  ${progressBar}  ${progressPct > 0 ? accentHigh(`${Math.round(progressPct * 100)}%`) : ''}`;
 
     const lines: string[] = [header, dim(statusBar), ''];
 

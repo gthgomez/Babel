@@ -33,7 +33,7 @@
  * @module promptInput
  */
 
-import { dim, muted, ghost, getEffectiveTerminalWidth, visibleLength } from './theme.js';
+import { activeAccent, bgSelected, border, dim, muted, ghost, getEffectiveTerminalWidth, primary, sectionLabel, truncate, visibleLength } from './theme.js';
 import { InlineAutocomplete } from './inlineAutocomplete.js';
 import { installKeyHandler, type KeyEvent } from './keyInput.js';
 import {
@@ -1815,7 +1815,7 @@ export class PromptInput {
       (this.lines[this.cursorLine] ?? '').slice(0, this.cursorCol),
     );
     const show = this.cursorVisible || this.imeComposing;
-    buf.write(`\r\x1b[2K${prefix}${line}\r${prefix}${before}${show ? '\x1b[?25h' : '\x1b[?25l'}`);
+  buf.write(`\r\x1b[2K${activeAccent(prefix)}${primary(line)}\r${activeAccent(prefix)}${primary(before)}${show ? '\x1b[?25h' : '\x1b[?25l'}`);
   }
 
   /** Full render: write all lines and position cursor. */
@@ -1876,7 +1876,7 @@ export class PromptInput {
           ? dim(' Queued (Tab) · runs after current turn')
           : dim(' Queued');
         OutputBuffer.getInstance().write(
-          `\x1b[${headerRow};1H${header.slice(0, Math.min(header.length, this.termWidth - 1))}`,
+          `\x1b[${headerRow};1H${truncate(header, this.termWidth - 1)}`,
         );
       }
       const maxShow = Math.min(queuedMessages.length, 3);
@@ -1906,7 +1906,7 @@ export class PromptInput {
       const maxShow = Math.min(slashPopupItems.length, 5);
       const sepRow = startRow;
       if (sepRow <= rows) {
-        OutputBuffer.getInstance().write(`\x1b[${sepRow};1H${dim('─'.repeat(Math.min(this.termWidth, 40)))}`);
+        OutputBuffer.getInstance().write(`\x1b[${sepRow};1H${border('─'.repeat(Math.min(this.termWidth, 40)))}`);
       }
       for (let i = 0; i < maxShow; i++) {
         const r = sepRow + 1 + i;
@@ -1914,9 +1914,9 @@ export class PromptInput {
         const item = slashPopupItems[i];
         if (!item) break;
         const displayText = ` ${item.label.padEnd(12)} ${item.description}`;
-        const truncated = displayText.slice(0, Math.min(displayText.length, this.termWidth - 1));
+        const truncated = truncate(displayText, this.termWidth - 1);
         if (i === viewState.selectedIndex) {
-          OutputBuffer.getInstance().write(`\x1b[${r};1H\x1b[7m${truncated}\x1b[0m`);
+          OutputBuffer.getInstance().write(`\x1b[${r};1H${bgSelected(truncated)}`);
         } else {
           OutputBuffer.getInstance().write(`\x1b[${r};1H${dim(truncated)}`);
         }
@@ -1941,13 +1941,13 @@ export class PromptInput {
           const before = line.slice(0, selRange.start);
           const selected = line.slice(selRange.start, selRange.end);
           const after = line.slice(selRange.end);
-          const selectionHighlight = selected ? `\x1b[7m${selected}\x1b[0m` : '';
-          OutputBuffer.getInstance().write(prefix + before + selectionHighlight + after);
+          const selectionHighlight = selected ? bgSelected(primary(selected)) : '';
+          OutputBuffer.getInstance().write(activeAccent(prefix) + primary(before) + selectionHighlight + primary(after));
         } else {
-          OutputBuffer.getInstance().write(prefix + line);
+          OutputBuffer.getInstance().write(activeAccent(prefix) + primary(line));
         }
       } else {
-        OutputBuffer.getInstance().write(prefix + line);
+        OutputBuffer.getInstance().write(activeAccent(prefix) + primary(line));
       }
 
       // Ghost text (inline autocomplete)
@@ -1971,9 +1971,9 @@ export class PromptInput {
       const maxShow = Math.min(mentionPopupItems.length, 5);
 
       if (popupRow <= rows) {
-        const header = ` Files matching @${viewState.mentionQuery ?? ''}`;
+        const header = sectionLabel(` FILES MATCHING @${viewState.mentionQuery ?? ''}`);
         OutputBuffer.getInstance().write(
-          `\x1b[${popupRow};1H${dim(header.slice(0, Math.min(header.length, this.termWidth - 1)))}`,
+          `\x1b[${popupRow};1H${truncate(header, this.termWidth - 1)}`,
         );
 
         for (let i = 0; i < maxShow; i++) {
@@ -1983,9 +1983,9 @@ export class PromptInput {
           if (!item) break;
           const isSelected = i === viewState.selectedIndex;
           const displayText = ` ${item.label}${item.description ? `  ${ghost(item.description)}` : ''}`;
-          const truncated = displayText.slice(0, Math.min(displayText.length, this.termWidth - 1));
+          const truncated = truncate(displayText, this.termWidth - 1);
           if (isSelected) {
-            OutputBuffer.getInstance().write(`\x1b[${r};1H\x1b[7m${truncated}\x1b[0m`);
+            OutputBuffer.getInstance().write(`\x1b[${r};1H${bgSelected(truncated)}`);
           } else {
             OutputBuffer.getInstance().write(`\x1b[${r};1H${dim(truncated)}`);
           }
@@ -1998,7 +1998,7 @@ export class PromptInput {
       const popupRow = textStart + this.lines.length + mentionPopupHeight;
       if (popupRow <= rows) {
         const maxPopupLines = Math.min(completerItems.length, 5);
-        OutputBuffer.getInstance().write(`\x1b[${popupRow};1H${dim('─'.repeat(Math.min(this.termWidth, 40)))}`);
+        OutputBuffer.getInstance().write(`\x1b[${popupRow};1H${border('─'.repeat(Math.min(this.termWidth, 40)))}`);
         for (let i = 0; i < maxPopupLines; i++) {
           const r = popupRow + 1 + i;
           if (r > rows) break;
@@ -2007,8 +2007,8 @@ export class PromptInput {
           const entry = item.label;
           const highlighted =
             i === viewState.selectedIndex
-              ? `\x1b[7m ${entry.padEnd(Math.min(this.termWidth - 2, 38))} \x1b[0m`
-              : ` ${entry}`;
+              ? bgSelected(` ${primary(entry.padEnd(Math.min(this.termWidth - 2, 38)))} `)
+              : ` ${muted(entry)}`;
           OutputBuffer.getInstance().write(`\x1b[${r};1H${highlighted}`);
         }
         if (completerItems.length > maxPopupLines) {

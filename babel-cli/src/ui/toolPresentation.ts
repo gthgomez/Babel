@@ -11,6 +11,8 @@ import {
   error,
   warning,
   muted,
+  info,
+  primary,
   dim,
   bold,
   truncate,
@@ -129,12 +131,12 @@ function formatExpandedItem(item: ToolExecutionSummary, termWidth: number): stri
   }
 
   const errSuffix = cls.isFailure && item.error ? ` (${item.error})` : '';
-  const rawLine = `  ${icon} ${dim(item.tool)} ${item.target} — ${statusText}${errSuffix}`;
+  const rawLine = `  ${icon} ${dim(item.tool)} ${primary(item.target)} — ${statusText}${errSuffix}`;
   if (visibleLength(rawLine) > termWidth) {
     const staticLen = visibleLength(`  ${icon} ${dim(item.tool)}  — ${statusText}${errSuffix}`);
     const budget = Math.max(4, termWidth - staticLen);
     const truncatedTarget = truncate(item.target, budget);
-    const fittedLine = `  ${icon} ${dim(item.tool)} ${truncatedTarget} — ${statusText}${errSuffix}`;
+    const fittedLine = `  ${icon} ${dim(item.tool)} ${primary(truncatedTarget)} — ${statusText}${errSuffix}`;
     return visibleLength(fittedLine) > termWidth ? truncate(fittedLine, termWidth) : fittedLine;
   }
   return rawLine;
@@ -155,17 +157,17 @@ export function formatToolGroupSummary(
   switch (group.category) {
     case 'read':
       line = group.hasUnknowns
-        ? `  ${muted('○')} ${dim(`Read ${group.count} file${group.count > 1 ? 's' : ''} (unverified)`)}`
-        : `  ${muted('○')} ${dim(`Read ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
+        ? `  ${info('○')} ${dim(`Read ${group.count} file${group.count > 1 ? 's' : ''} (unverified)`)}`
+        : `  ${info('○')} ${dim(`Read ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
       break;
     case 'search':
       line = group.hasUnknowns
-        ? `  ${muted('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''}, unverified)`)}`
-        : `  ${muted('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''})`)}`;
+        ? `  ${info('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''}, unverified)`)}`
+        : `  ${info('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''})`)}`;
       break;
     case 'edit':
       line = group.hasUnknowns
-        ? `  ${muted('○')} ${dim(`Edited ${group.count} file${group.count > 1 ? 's' : ''} (unverified)`)}`
+        ? `  ${info('○')} ${dim(`Edited ${group.count} file${group.count > 1 ? 's' : ''} (unverified)`)}`
         : `  ${success('✔')} ${bold(`Edited ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
       break;
     case 'verifier':
@@ -175,13 +177,13 @@ export function formatToolGroupSummary(
       break;
     case 'command':
       line = group.hasUnknowns
-        ? `  ${muted('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''} (unverified)`)}`
-        : `  ${muted('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''}`)}`;
+        ? `  ${info('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''} (unverified)`)}`
+        : `  ${info('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''}`)}`;
       break;
     default:
       line = group.hasUnknowns
-        ? `  ${muted('○')} ${dim(`${group.items[0]?.tool ?? 'tool'} (${group.count}) (unverified)`)}`
-        : `  ${muted('○')} ${dim(`${group.items[0]?.tool ?? 'tool'} (${group.count})`)}`;
+        ? `  ${info('○')} ${dim(`${group.items[0]?.tool ?? 'tool'} (${group.count}) (unverified)`)}`
+        : `  ${info('○')} ${dim(`${group.items[0]?.tool ?? 'tool'} (${group.count})`)}`;
       break;
   }
 

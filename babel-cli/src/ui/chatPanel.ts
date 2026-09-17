@@ -1,5 +1,6 @@
 import {
-  accentBright,
+  activeAccent,
+  accentHigh,
   getTerminalWidth,
   muted,
   padRight,
@@ -29,14 +30,14 @@ function formatTurnBody(turn: ChatTurnRecord): string {
 }
 
 export function renderChatTurn(turn: ChatTurnRecord, options: { wrapWidth?: number } = {}): string {
-  const label = turn.role === 'user' ? 'You' : 'Babel';
+  const label = turn.role === 'user' ? activeAccent('YOU') : accentHigh('BABEL');
   const rawBody = formatTurnBody(turn);
   const body = renderMarkdown(rawBody);
   const width = Math.max(
     40,
     Math.min(options.wrapWidth ?? DEFAULT_WRAP_WIDTH, getTerminalWidth() - 8),
   );
-  const firstPrefix = `  ${accentBright(padRight(label, 7))}`;
+  const firstPrefix = `  ${padRight(label, 7)}`;
   const continuationPrefix = '         ';
 
   const lines = wrapPrefixedBlock(body, {

@@ -21,8 +21,7 @@
  */
 
 import { Component } from './component.js';
-import { Box, Text } from './primitives.js';
-import { dim, muted, accent, bold, success, error, ghost, primary } from './theme.js';
+import { dim, muted, accent, accentHigh, bold, success, warning, error, ghost, border } from './theme.js';
 import type { KeyEvent } from './keyInput.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -56,7 +55,7 @@ export class AgentTranscriptSection extends Component {
     super();
     this.agentId = options.agentId;
     this.agentName = options.agentName;
-    this.colorFn = options.colorFn ?? muted;
+    this.colorFn = options.colorFn ?? accentHigh;
     this.content = options.content ?? '';
     this.expanded = options.expanded ?? false;
     this.status = options.status ?? 'active';
@@ -108,7 +107,7 @@ export class AgentTranscriptSection extends Component {
 
   override render(): string {
     const colorFn = this.colorFn;
-    const prefix = colorFn(`[${this.agentName}]`);
+    const prefix = bold(colorFn(`[${this.agentName}]`));
 
     // Status badge
     const badge = this.statusBadge();
@@ -120,7 +119,7 @@ export class AgentTranscriptSection extends Component {
       // ── Collapsed: single summary line ─────────────────────────────
       const summary = this.content ? this.content.replace(/\n/g, ' ').slice(0, 80) : '(no output)';
       const truncated = summary.length >= 80 ? summary + '…' : summary;
-      return `${badge} ${prefix} ${dim(`(${lineCount} lines)`)} ${muted(ghost(truncated))}  ${dim('[↕ expand]')}`;
+      return `${badge} ${prefix} ${dim(`(${lineCount} lines)`)} ${muted(ghost(truncated))}  ${border('↕')} ${dim('expand')}`;
     }
 
     // ── Expanded: full content with header and footer ─────────────────
@@ -138,7 +137,7 @@ export class AgentTranscriptSection extends Component {
     }
 
     lines.push('');
-    lines.push(dim('─'.repeat(40)));
+    lines.push(border('─'.repeat(40)));
 
     return lines.join('\n');
   }
@@ -152,7 +151,7 @@ export class AgentTranscriptSection extends Component {
       case 'error':
         return error('✗');
       case 'blocked':
-        return muted('⏸');
+        return warning('⏸');
       default:
         return ghost('○');
     }

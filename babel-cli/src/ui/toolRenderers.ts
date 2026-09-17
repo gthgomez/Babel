@@ -18,6 +18,7 @@ import {
   dim,
   muted,
   ghost,
+  accent,
   primary,
   success,
   error as errColor,
@@ -186,7 +187,7 @@ export class ReadFileRenderer implements ToolRenderer {
 
   renderRunning(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
-    return `${dim('Reading')} ${primary(path)}${dim('...')}`;
+    return `${accent('›')} ${dim('Reading')} ${primary(path)}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -229,7 +230,7 @@ export class WriteFileRenderer implements ToolRenderer {
 
   renderRunning(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
-    return `${dim('Writing')} ${primary(path)}${dim('...')}`;
+    return `${accent('›')} ${dim('Writing')} ${primary(path)}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -272,7 +273,7 @@ export class BashRenderer implements ToolRenderer {
   renderRunning(context: ToolRenderContext): string {
     const cmd = extractCommand(context.toolInput);
     const display = cmd.length > 60 ? `${cmd.slice(0, 57)}...` : cmd;
-    return `${dim('Running')} ${muted('$')} ${primary(display)}${dim('...')}`;
+    return `${accent('›')} ${dim('Running')} ${muted('$')} ${primary(display)}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -330,7 +331,7 @@ export class GrepRenderer implements ToolRenderer {
 
   renderRunning(context: ToolRenderContext): string {
     const pattern = extractPattern(context.toolInput);
-    return `${dim('Searching for')} ${primary(pattern)}${dim('...')}`;
+    return `${accent('›')} ${dim('Searching for')} ${primary(pattern)}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -413,7 +414,7 @@ export class WebFetchRenderer implements ToolRenderer {
   renderRunning(context: ToolRenderContext): string {
     const url = extractUrl(context.toolInput);
     const display = url.length > 64 ? `${url.slice(0, 61)}...` : url;
-    return `${dim('Fetching')} ${primary(display)}${dim('...')}`;
+    return `${accent('›')} ${dim('Fetching')} ${primary(display)}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -495,7 +496,7 @@ export class WebSearchRenderer implements ToolRenderer {
 
   renderRunning(context: ToolRenderContext): string {
     const query = extractPattern(context.toolInput);
-    return `${dim('Searching for')} ${primary(`"${query}"`)}${dim('...')}`;
+    return `${accent('›')} ${dim('Searching for')} ${primary(`"${query}"`)}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -560,7 +561,7 @@ export class SubAgentRenderer implements ToolRenderer {
     const parts: string[] = [dim('Agent'), primary(agentName)];
     if (task) parts.push(dim(`— ${truncate(task, 60)}`));
     parts.push(dim('...'));
-    return parts.join(' ');
+    return `${accent('›')} ${parts.join(' ')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -633,7 +634,7 @@ export class GenericToolRenderer implements ToolRenderer {
 
   renderRunning(context: ToolRenderContext): string {
     const inputPreview = this.previewInput(context.toolInput);
-    return `${dim('Tool:')} ${primary(context.toolName)}${inputPreview ? ` ${dim(inputPreview)}` : ''}${dim('...')}`;
+    return `${accent('›')} ${dim('Tool:')} ${primary(context.toolName)}${inputPreview ? ` ${dim(inputPreview)}` : ''}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -716,7 +717,7 @@ export class ToolGroupRenderer {
       (t) => t.status === 'complete' || t.status === 'error',
     ).length;
     const statusIcon = this.statusIcon(status);
-    const header = `${ghost('│')} ${statusIcon} ${dim(`${completedCount}/${totalCount} parallel tools`)}`;
+    const header = `${info('│')} ${statusIcon} ${dim(`${completedCount}/${totalCount} parallel tools`)}`;
     lines.push(header);
 
     // Each tool rendered compactly
@@ -772,7 +773,7 @@ export class ToolGroupRenderer {
         return warning('⚠');
       case 'running':
       default:
-        return dim('○');
+        return accent('◐');
     }
   }
 
@@ -786,7 +787,7 @@ export class ToolGroupRenderer {
         return renderer.renderError(tool);
       case 'pending':
       default:
-        return dim(`⏳ ${tool.toolName}${tool.toolId ? ` [${tool.toolId}]` : ''}`);
+        return `${accent('○')} ${dim(`${tool.toolName}${tool.toolId ? ` [${tool.toolId}]` : ''}`)}`;
     }
   }
 }
