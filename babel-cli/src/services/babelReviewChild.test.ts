@@ -23,8 +23,8 @@ test('review child strips publication credentials, preload hooks and ambient ove
   assert.equal(env['BABEL_ALLOWED_TOOLS'], JSON.stringify(['file_read', 'directory_list', 'grep', 'glob']));
   assert.equal(env['BABEL_DISALLOWED_TOOLS'], JSON.stringify(['shell_exec', 'test_run', 'file_write', 'mcp_request', 'memory_query', 'memory_store', 'semantic_search']));
   // Bounded budget defaults prevent runaway costs while allowing parent overrides
-  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '720000');
-  assert.equal(env['BABEL_CHAT_MAX_TURNS'], '24');
+  assert.equal(env['BABEL_CHAT_MAX_WALL_MS'], '1200000');
+  assert.equal(env['BABEL_CHAT_MAX_TURNS'], '36');
   assert.equal(env['BABEL_CHAT_STALL_TURNS'], '15');
   assert.equal(env['BABEL_CHAT_TASK_CLASS'], 'investigate');
   assert.equal(env['BABEL_POLICY_MODE_STALL_KILL'], 'shadow');
@@ -79,12 +79,12 @@ test('review child forwards the documented non-secret credential helper override
 });
 
 test('controller process-timeout override remains finite and purpose-bounded', () => {
-  assert.equal(reviewChildProcessTimeoutMs('review', {}), 780000);
+  assert.equal(reviewChildProcessTimeoutMs('review', {}), 1260000);
   assert.equal(reviewChildProcessTimeoutMs('repair_proposal', {}), 3050000);
   assert.equal(reviewChildProcessTimeoutMs('review', { BABEL_REVIEW_CHILD_TIMEOUT_MS: '1260000' }), 1260000);
-  assert.equal(reviewChildProcessTimeoutMs('review', { BABEL_REVIEW_CHILD_TIMEOUT_MS: '0' }), 780000);
-  assert.equal(reviewChildProcessTimeoutMs('review', { BABEL_REVIEW_CHILD_TIMEOUT_MS: '1800001' }), 780000);
-  assert.equal(reviewChildProcessTimeoutMs('review', { BABEL_REVIEW_CHILD_TIMEOUT_MS: 'not-a-duration' }), 780000);
+  assert.equal(reviewChildProcessTimeoutMs('review', { BABEL_REVIEW_CHILD_TIMEOUT_MS: '0' }), 1260000);
+  assert.equal(reviewChildProcessTimeoutMs('review', { BABEL_REVIEW_CHILD_TIMEOUT_MS: '1800001' }), 1260000);
+  assert.equal(reviewChildProcessTimeoutMs('review', { BABEL_REVIEW_CHILD_TIMEOUT_MS: 'not-a-duration' }), 1260000);
 });
 
 function workerFixture() {
