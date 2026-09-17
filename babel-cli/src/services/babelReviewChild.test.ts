@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { babelReviewChildEnv, launchBabelReviewChild } from './babelReviewChild.js';
+import { babelReviewChildEnv, launchBabelReviewChild, reviewChildProcessTimeoutMs } from './babelReviewChild.js';
 import { resolveChatTaskClass } from '../config/chatTaskClass.js';
 import { resolvePolicyMode, resolveStallShadowMode } from '../agent/policyShadow.js';
 
@@ -76,6 +76,15 @@ test('review child forwards the documented non-secret credential helper override
     { PATH: '/bin' },
   );
   assert.equal(absent['BABEL_OPENCODE_GO_HELPER'], undefined);
+});
+
+test('controller process-timeout override remains finite and purpose-bounded', () => {
+  assert.equal(reviewChildProcessTimeoutMs('review', {}), 1260000);
+  assert.equal(reviewChildProcessTimeoutMs('repair_proposal', {}), 3050000);
+  assert.equal(reviewChildProcessTimeoutMs('review', { BABEL_REVIEW_CHILD_TIMEOUT_MS: '1260000' }), 1260000);
+  assert.equal(reviewChildProcessTimeoutMs('review', { BABEL_REVIEW_CHILD_TIMEOUT_MS: '0' }), 1260000);
+  assert.equal(reviewChildProcessTimeoutMs('review', { BABEL_REVIEW_CHILD_TIMEOUT_MS: '1800001' }), 1260000);
+  assert.equal(reviewChildProcessTimeoutMs('review', { BABEL_REVIEW_CHILD_TIMEOUT_MS: 'not-a-duration' }), 1260000);
 });
 
 function workerFixture() {
