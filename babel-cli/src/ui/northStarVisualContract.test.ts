@@ -198,7 +198,7 @@ test('existing bordered surface stays frame-stable at required viewport sizes', 
     // already covered by the display-width assertion above; omitting it here
     // also avoids the fixture scrolling after a bottom-right write.
     frame.split('\n').forEach((line, index) => {
-      terminal.write(`\x1b[${index + 1};1H${line.slice(0, -1)}`);
+      terminal.write(`\x1b[${index + 1};1H${stripAnsi(line).slice(0, -1)}`);
     });
     const screenshot = terminal.screenshotStripped();
     assert.equal(screenshot.rows, rows);

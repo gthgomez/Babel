@@ -13,7 +13,7 @@ test('renderChatTurn wraps long assistant answers instead of truncating', () => 
       answer: longAnswer,
     }),
   );
-  assert.match(rendered, /Babel/);
+  assert.match(rendered, /BABEL/);
   assert.match(rendered, /prompt operating system/);
   assert.doesNotMatch(rendered, /\.\.\./);
 });

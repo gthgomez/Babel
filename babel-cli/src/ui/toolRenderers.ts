@@ -24,9 +24,7 @@ import {
   error as errColor,
   warning,
   info,
-  bold,
   truncate,
-  indentBlock,
 } from './theme.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
