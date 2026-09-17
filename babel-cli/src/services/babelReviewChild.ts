@@ -34,10 +34,13 @@ export function babelReviewChildEnv(input: { source: string; trustedRoot: string
     // remain hard limits. Repair proposals retain the normal investigate
     // policy because this exception is scoped to final review children.
     ...(purpose === 'review' ? { BABEL_POLICY_MODE_STALL_KILL: 'shadow' } : {}),
-    // Bounded budget defaults prevent runaway costs while allowing parent overrides.
+    // Large trusted audits may need more than the original 24-turn / 12-minute
+    // envelope after stall heuristics are shadowed. Keep both limits finite and
+    // overridable by the controller, but give normal reviews room to finish a
+    // complete read-only pass and its bounded format repair.
     BABEL_CHAT_MAX_COST: parent['BABEL_CHAT_MAX_COST'] ?? 'unlimited',
-    BABEL_CHAT_MAX_WALL_MS: parent['BABEL_CHAT_MAX_WALL_MS'] ?? (purpose === 'repair_proposal' ? '3000000' : '720000'),
-    BABEL_CHAT_MAX_TURNS: parent['BABEL_CHAT_MAX_TURNS'] ?? (purpose === 'repair_proposal' ? '100' : '24'),
+    BABEL_CHAT_MAX_WALL_MS: parent['BABEL_CHAT_MAX_WALL_MS'] ?? (purpose === 'repair_proposal' ? '3000000' : '1200000'),
+    BABEL_CHAT_MAX_TURNS: parent['BABEL_CHAT_MAX_TURNS'] ?? (purpose === 'repair_proposal' ? '100' : '36'),
     BABEL_CHAT_STALL_TURNS: parent['BABEL_CHAT_STALL_TURNS'] ?? (purpose === 'repair_proposal' ? '5' : '15'),
     BABEL_ALLOWED_TOOLS: JSON.stringify(['file_read', 'directory_list', 'grep', 'glob']),
     BABEL_DISALLOWED_TOOLS: JSON.stringify(['shell_exec', 'test_run', 'file_write', 'mcp_request', 'memory_query', 'memory_store', 'semantic_search']),
@@ -71,7 +74,7 @@ export async function launchBabelReviewChild(input: { source: string; trustedRoo
     // SIGTERM is cooperative on POSIX. Do not leave an unresponsive review
     // child holding the lease forever; Windows already terminates it directly.
     forceKillTimer = setTimeout(() => { if (!child.exitCode) child.kill('SIGKILL'); }, 2000);
-  }, input.timeoutMs ?? (input.purpose === 'repair_proposal' ? 3050000 : 780000));
+  }, input.timeoutMs ?? (input.purpose === 'repair_proposal' ? 3050000 : 1260000));
   const code = await new Promise<number | null>((resolve, reject) => {
     child.once('error', reject); child.once('close', resolve);
   }).finally(() => { clearTimeout(timer); if (forceKillTimer) clearTimeout(forceKillTimer); input.onExit?.(); });
