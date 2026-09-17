@@ -5,7 +5,7 @@
  */
 
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
@@ -40,7 +40,11 @@ import {
   resolveChatModelPolicy,
   resolveFallbackModelId,
 } from './chatModelPolicy.js';
-import { globalCostTracker } from '../services/costTracker.js';
+import {
+  captureCostBaselineUsd,
+  costSpentSinceBaselineUsd,
+  globalCostTracker,
+} from '../services/costTracker.js';
 import type { SessionUsageSummary } from '../services/costTracker.js';
 import {
   proposeProjectMemoryWriteback,
@@ -204,6 +208,7 @@ import {
   parityRecordToolBatch,
   paritySettleProposeTools,
   paritySettleToolStarted,
+  paritySettleToolNotStarted,
   parityAuthorizeRecoveredOutcomeRetry,
   parityArbitrateCycle,
   parityShouldCompact,
@@ -264,6 +269,12 @@ import {
 } from './chatBackgroundShell.js';
 
 import { runReadOnlyAgentLoop } from './lanes/readOnlyAgentLoop.js';
+import {
+  deriveChildAllowance,
+  inheritedChildBudgetLimiter,
+  type ChildBudgetLimiter,
+  type InheritedChildAllowance,
+} from './childBudget.js';
 import {
   classifySubagentFailure,
   runMutationAgentLoop,
@@ -386,6 +397,48 @@ import { beginUserSubmission, type TurnRuntimeSnapshot } from './turnRuntime.js'
  *  'execute' = user wants code changes → gate active in headless mode
  *  'explain' = user wants information → gate bypassed */
 export type TaskIntent = 'execute' | 'explain';
+
+function isPersistedTurnRuntime(value: unknown): value is TurnRuntimeSnapshot {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  const numericKeys = [
+    'submissionIndex',
+    'writeCount',
+    'gateStrikes',
+    'criticStrikes',
+    'turnsWithoutWrite',
+    'consecutiveReadOnlyTools',
+    'consecutiveNonMutatingShells',
+    'toolsWithoutWrite',
+  ];
+  if (numericKeys.some((key) => typeof candidate[key] !== 'number' || !Number.isFinite(candidate[key]))) {
+    return false;
+  }
+  const booleanKeys = [
+    'midLoopCriticFired',
+    'budgetExceeded',
+    'budgetLastChanceDone',
+    'restrictToolsNextTurn',
+    'continuedTask',
+  ];
+  if (booleanKeys.some((key) => typeof candidate[key] !== 'boolean')) return false;
+  if (
+    typeof candidate.taskText !== 'string' ||
+    (candidate.taskIntent !== 'execute' && candidate.taskIntent !== 'explain') ||
+    typeof candidate.taskClass !== 'string' ||
+    typeof candidate.projectRoot !== 'string' ||
+    (candidate.stickyIntent !== null &&
+      candidate.stickyIntent !== 'execute' &&
+      candidate.stickyIntent !== 'explain') ||
+    (candidate.gatePolicy !== null &&
+      candidate.gatePolicy !== 'none' &&
+      candidate.gatePolicy !== 'required' &&
+      candidate.gatePolicy !== 'strict')
+  ) {
+    return false;
+  }
+  return true;
+}
 
 /** Options for a single user submission (W0.3 TurnRuntime). */
 export interface SubmitMessageOptions {
@@ -891,6 +944,12 @@ export class ChatEngine {
     ReturnType<typeof resolveNextTurnToolAccess>
   > = { taken: false };
   private _sessionStartTime = 0;
+  /** Global cost at the start of the active independent task. */
+  private taskCostBaselineUsd = 0;
+  /** Spend carried across a process/accounting epoch boundary. */
+  private taskCostCarryoverUsd = 0;
+  /** True only when a resumed run lacks durable scoped-accounting state. */
+  private taskCostScopeUnavailable = false;
   private stallState: StallState = createStallDetector();
   private cachedSystemPromptLegacy: string | null = null;
   private cachedSystemPromptNative: string | null = null;
@@ -996,6 +1055,147 @@ export class ChatEngine {
     return chatSessionDir(this.engineRunId);
   }
 
+  private readPersistedTaskBudget(runDir: string): {
+    baselineUsd: number;
+    spentUsd?: number;
+    globalCostAtPersistenceUsd?: number;
+    accountingEpoch?: string;
+    runtime?: TurnRuntimeSnapshot;
+  } | null {
+    for (const filename of ['task-budget.json', 'run-allowance.json']) {
+      const path = join(runDir, filename);
+      if (!existsSync(path)) continue;
+      try {
+        const value = JSON.parse(readFileSync(path, 'utf8')) as {
+          taskCostBaselineUsd?: unknown;
+          taskCostSpentUsd?: unknown;
+          globalCostAtPersistenceUsd?: unknown;
+          accountingEpoch?: unknown;
+          lastTurnRuntime?: unknown;
+        };
+        if (typeof value.taskCostBaselineUsd !== 'number' || !Number.isFinite(value.taskCostBaselineUsd)) {
+          continue;
+        }
+        return {
+          baselineUsd: value.taskCostBaselineUsd,
+          ...(typeof value.taskCostSpentUsd === 'number' && Number.isFinite(value.taskCostSpentUsd)
+            ? { spentUsd: value.taskCostSpentUsd }
+            : {}),
+          ...(typeof value.globalCostAtPersistenceUsd === 'number' &&
+          Number.isFinite(value.globalCostAtPersistenceUsd)
+            ? { globalCostAtPersistenceUsd: value.globalCostAtPersistenceUsd }
+            : {}),
+          ...(typeof value.accountingEpoch === 'string'
+            ? { accountingEpoch: value.accountingEpoch }
+            : {}),
+          ...(isPersistedTurnRuntime(value.lastTurnRuntime)
+            ? { runtime: value.lastTurnRuntime }
+            : {}),
+        };
+      } catch {
+        // Resume remains possible; an unreadable optional accounting sidecar
+        // must not turn global accounting into a guessed task allowance.
+      }
+    }
+    return null;
+  }
+
+  private persistTaskCostBaseline(): void {
+    if (this.taskCostScopeUnavailable) return;
+    try {
+      writeFileSync(
+        join(this.engineRunDir, 'task-budget.json'),
+        JSON.stringify({
+          schema_version: 1,
+          taskCostBaselineUsd: this.taskCostBaselineUsd,
+          taskCostSpentUsd: this.currentTaskCostUsd(),
+          globalCostAtPersistenceUsd: captureCostBaselineUsd(),
+          accountingEpoch: globalCostTracker.getAccountingEpoch(),
+          ...(this.lastTurnRuntime ? { lastTurnRuntime: this.lastTurnRuntime } : {}),
+        }),
+        'utf8',
+      );
+    } catch {
+      // Accounting sidecar is best effort; global usage remains authoritative.
+      this.taskCostScopeUnavailable = true;
+    }
+  }
+
+  private startIndependentTaskCostScope(): void {
+    this.taskCostCarryoverUsd = 0;
+    this.taskCostBaselineUsd = captureCostBaselineUsd();
+    this.persistTaskCostBaseline();
+  }
+
+  private currentTaskCostUsd(): number {
+    return this.taskCostCarryoverUsd + costSpentSinceBaselineUsd(this.taskCostBaselineUsd);
+  }
+
+  private restorePersistedTaskBudget(
+    persisted: ReturnType<ChatEngine['readPersistedTaskBudget']>,
+  ): void {
+    const currentGlobalCost = captureCostBaselineUsd();
+    this.taskCostScopeUnavailable = persisted === null || persisted.runtime === undefined;
+    this.taskCostCarryoverUsd = 0;
+    if (persisted === null) {
+      this.taskCostBaselineUsd = currentGlobalCost;
+      this.lastTurnRuntime = null;
+      return;
+    }
+    const newAccountingEpoch =
+      persisted.accountingEpoch !== undefined &&
+      persisted.accountingEpoch !== globalCostTracker.getAccountingEpoch();
+    if (newAccountingEpoch) {
+      // Current totals belong to a new process/session epoch. Keep only the
+      // durable task spend and begin a fresh delta for this resumed process.
+      this.taskCostCarryoverUsd = persisted.spentUsd ?? 0;
+      this.taskCostBaselineUsd = currentGlobalCost;
+    } else if (
+      persisted.spentUsd !== undefined &&
+      persisted.globalCostAtPersistenceUsd !== undefined &&
+      currentGlobalCost < persisted.globalCostAtPersistenceUsd
+    ) {
+      this.taskCostBaselineUsd = currentGlobalCost - persisted.spentUsd;
+    } else {
+      this.taskCostBaselineUsd = persisted.baselineUsd;
+    }
+    this.lastTurnRuntime = persisted.runtime ?? null;
+  }
+
+  private effectiveCostCapUsd(): number {
+    return this.criticRepairCostCapUsd == null
+      ? this.limits.maxCostUsd
+      : Math.min(this.limits.maxCostUsd, this.criticRepairCostCapUsd);
+  }
+
+  private effectiveWallCapMs(): number {
+    return this.postWriteRepairWallCapMs == null
+      ? this.limits.maxWallMs
+      : Math.min(this.limits.maxWallMs, this.postWriteRepairWallCapMs);
+  }
+
+  private deriveChildAllowance(maxRounds: number): InheritedChildAllowance {
+    const parentDeadlineAtMs =
+      this._sessionStartTime > 0
+        ? this._sessionStartTime + this.effectiveWallCapMs()
+        : null;
+    return deriveChildAllowance({
+      parentTaskBaselineUsd: this.taskCostBaselineUsd,
+      parentTaskCarryoverUsd: this.taskCostCarryoverUsd,
+      parentEffectiveCostCapUsd: this.effectiveCostCapUsd(),
+      parentDeadlineAtMs,
+      childMaxRounds: maxRounds,
+    });
+  }
+
+  private markChildBudgetExhausted(limiter: ChildBudgetLimiter, reason: string): void {
+    this.budgetExceeded = true;
+    this.budgetLastChanceDone = true;
+    this.terminatingLimiter = 'child_exhaustion';
+    this.terminalLimiterReason =
+      `Inherited child ${limiter} allowance exhausted: ${reason}`;
+  }
+
   constructor(options: ChatEngineOptions) {
     this.options = options;
     this.testWorkspaceRevisionHash = options.testWorkspaceRevisionHash;
@@ -1050,6 +1250,12 @@ export class ChatEngine {
       this.compactionManager = new CompactionManager();
     }
     mkdirSync(this.engineRunDir, { recursive: true });
+    const persistedTaskBudget = options.resumeExisting
+      ? this.readPersistedTaskBudget(this.engineRunDir)
+      : null;
+    if (options.resumeExisting) this.restorePersistedTaskBudget(persistedTaskBudget);
+    else this.taskCostBaselineUsd = captureCostBaselineUsd();
+    this.persistTaskCostBaseline();
 
     if (options.resumeExisting) {
       this.parity.liveAuthority = loadLiveSessionAuthorityStrict(this.engineRunDir);
@@ -1555,7 +1761,13 @@ export class ChatEngine {
   }
 
   private checkBudgets(): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {
-    const sessionCost = globalCostTracker.getSessionSummary().totalCostUSD;
+    if (this.taskCostScopeUnavailable) {
+      const reason = 'Cannot restore durable task cost scope for resumed run; refusing a fresh allowance.';
+      this.terminatingLimiter = 'cost';
+      this.terminalLimiterReason = reason;
+      return { ok: false, reason, limiter: 'cost' };
+    }
+    const taskCost = this.currentTaskCostUsd();
     // After first critic reject or post-write repair, use the tighter cost cap.
     const maxCostUsd =
       Number.isFinite(this.limits.maxCostUsd) && this.criticRepairCostCapUsd != null
@@ -1567,7 +1779,7 @@ export class ChatEngine {
         ? Math.min(this.limits.maxWallMs, this.postWriteRepairWallCapMs)
         : this.limits.maxWallMs;
     const result = checkCostWallBudgets({
-      totalCostUsd: sessionCost,
+      totalCostUsd: taskCost,
       maxCostUsd,
       sessionStartTime: this._sessionStartTime,
       maxWallMs,
@@ -1589,7 +1801,7 @@ export class ChatEngine {
    */
   private applyCriticRepairCostBudget(): void {
     if (this.criticRepairCostCapUsd != null) return;
-    const spent = globalCostTracker.getSessionSummary().totalCostUSD;
+    const spent = this.currentTaskCostUsd();
     const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
       spentUsd: spent,
       sessionMaxCostUsd: this.limits.maxCostUsd,
@@ -1633,7 +1845,7 @@ export class ChatEngine {
 
     // Also shrink cost if critic repair cap not already tighter.
     if (this.criticRepairCostCapUsd == null) {
-      const spent = globalCostTracker.getSessionSummary().totalCostUSD;
+      const spent = this.currentTaskCostUsd();
       const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
         spentUsd: spent,
         sessionMaxCostUsd: this.limits.maxCostUsd,
@@ -2078,6 +2290,19 @@ export class ChatEngine {
       }
 
       // Budget checks (P1): cost, wall-clock — honest receipts + last-chance critic
+      if (this.terminatingLimiter === 'child_exhaustion') {
+        const kill = await this.handleBudgetKill(
+          this.terminalLimiterReason ?? 'Inherited child allowance exhausted.',
+          { onThought: () => {} },
+          resolvedIntent,
+        );
+        yield this.streamDone(kill.answer, {
+          ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
+          ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
+          ...(kill.verifierTampered ? { verifierTampered: true as const } : {}),
+        });
+        return;
+      }
       const budget = this.checkBudgets();
       if (!budget.ok) {
         const kill = await this.handleBudgetKill(
@@ -3814,7 +4039,8 @@ export class ChatEngine {
       this.terminatingLimiter === 'turns' ||
       this.terminatingLimiter === 'wall' ||
       this.terminatingLimiter === 'cost' ||
-      this.terminatingLimiter === 'tokens'
+      this.terminatingLimiter === 'tokens' ||
+      this.terminatingLimiter === 'child_exhaustion'
         ? 'BUDGET_EXHAUSTED'
         : this.terminatingLimiter === 'stall'
           ? 'BLOCKED_POLICY'
@@ -3882,6 +4108,9 @@ export class ChatEngine {
     this.parity = createParityRuntime(runId);
     if (authority) this.parity.liveAuthority = authority;
     mkdirSync(this.engineRunDir, { recursive: true });
+    const persistedTaskBudget = this.readPersistedTaskBudget(this.engineRunDir);
+    this.restorePersistedTaskBudget(persistedTaskBudget);
+    this.persistTaskCostBaseline();
     if (authority) persistLiveSessionAuthority(this.engineRunDir, authority);
     this.failureBudgetTracker = createFailureBudgetTrackerFromContract(authority?.taskContract);
   }
@@ -3986,7 +4215,18 @@ export class ChatEngine {
     this.budgetLastChanceDone = runtime.budgetLastChanceDone;
     this.restrictToolsNextTurn = runtime.restrictToolsNextTurn;
 
-    if (!runtime.continuedTask) {
+    const continuationScopeUnavailable =
+      input.continueTask === true && !runtime.continuedTask && this.taskCostScopeUnavailable;
+    if (!runtime.continuedTask && !continuationScopeUnavailable) {
+      // A fresh submission starts a new enforcement scope. The global tracker
+      // is intentionally preserved for session/accounting views.
+      this.taskCostScopeUnavailable = false;
+      this.startIndependentTaskCostScope();
+      this.criticRepairCostCapUsd = null;
+      this.postWriteRepairWallCapMs = null;
+      this.postWriteRepairRestrict = false;
+      this.terminatingLimiter = null;
+      this.terminalLimiterReason = null;
       this.clearVerifierEvidenceState();
       // Plan handoff force-mutate elevation must not leak into an unrelated task.
       this.forceMutateTurnsOverride = null;
@@ -4032,7 +4272,16 @@ export class ChatEngine {
       this.clearSystemPromptCache();
     }
 
+    if (continuationScopeUnavailable) {
+      this.budgetExceeded = true;
+      this.budgetLastChanceDone = true;
+      this.terminatingLimiter = 'cost';
+      this.terminalLimiterReason =
+        'Cannot restore durable task cost scope for explicit continuation.';
+    }
+
     this.lastTurnRuntime = runtime;
+    this.persistTaskCostBaseline();
     this.policyEventLog.record({
       at_turn: this._turnIndex,
       kind: 'progress_policy',
@@ -4234,6 +4483,21 @@ export class ChatEngine {
     for (const batch of batches) {
       if (this._cancelled || this.abortController.signal.aborted || stopTerminal) break;
       if (batch.kind === 'parallel_reads') {
+        const containsSubAgent = batch.indices.some((index) => actions[index]?.type === 'sub_agent');
+        if (containsSubAgent) {
+          for (const index of batch.indices) {
+            if (this._cancelled || this.abortController.signal.aborted || stopTerminal) break;
+            const result = await this.executeOneAction(actions[index]!, toolContext, callbacks, {
+              index,
+              subAgentCounter: ++subAgentCounter,
+              idempotencyKey:
+                this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
+            });
+            allResults.push(result);
+            if (result.stop) stopTerminal = true;
+          }
+          continue;
+        }
         for (let c = 0; c < batch.indices.length; c += MAX_TOOL_CONCURRENCY) {
           if (this._cancelled || this.abortController.signal.aborted) break;
           const chunk = batch.indices.slice(c, c + MAX_TOOL_CONCURRENCY);
@@ -4259,7 +4523,7 @@ export class ChatEngine {
             `tool_call_${this._turnIndex}_${batch.index}`,
         });
         allResults.push(result);
-        if (isCircuitBreakerObservation(result.observation)) stopTerminal = true;
+        if (result.stop || isCircuitBreakerObservation(result.observation)) stopTerminal = true;
       }
     }
 
@@ -4299,6 +4563,49 @@ export class ChatEngine {
       },
       this.engineRunDir,
     );
+  }
+
+  private settleInheritedBudgetRejectedChild(
+    action: ChatToolAction,
+    meta: { index: number; idempotencyKey?: string },
+    callbacks: ChatCallbacks,
+    toolId: number,
+    subId: string,
+    reason: string,
+  ): { index: number; observation: string; stop: true } {
+    const idempotencyKey =
+      meta.idempotencyKey ??
+      this._streamNativeToolCallIds[meta.index] ??
+      `tool_call_${this._turnIndex}_${meta.index}`;
+    paritySettleToolNotStarted(
+      this.parity,
+      {
+        id: idempotencyKey,
+        name: chatActionToolName(action),
+        action_index: meta.index,
+        ...(this._activeToolBatchId ? { batch_id: this._activeToolBatchId } : {}),
+        target_summary: chatActionTarget(action),
+      },
+      this.engineRunDir,
+      reason,
+    );
+    const detail = `failed, attribution=child_round_exhaustion: ${reason}`;
+    this.toolCallLog.push({
+      tool: chatActionToolName(action),
+      target: chatActionTarget(action),
+      detail,
+      error: reason,
+      index: meta.index,
+      exit_code: 1,
+      effect_status: 'indeterminate',
+    });
+    callbacks.onToolComplete?.(toolId, detail, reason, 1);
+    callbacks.onSubAgentFailed?.({ id: subId, error: reason });
+    return {
+      index: meta.index,
+      observation: `### sub_agent ${subId}\nstatus: failed\nattribution: child_round_exhaustion\n${reason}`,
+      stop: true,
+    };
   }
 
   /** Block a fresh tool-call id from replaying an equivalent unknown external/non-idempotent effect. */
@@ -4353,7 +4660,7 @@ export class ChatEngine {
     toolContext: ToolContext,
     callbacks: ChatCallbacks,
     meta: { index: number; subAgentCounter: number; idempotencyKey?: string },
-  ): Promise<{ index: number; observation: string }> {
+  ): Promise<{ index: number; observation: string; stop?: boolean }> {
     const tool = chatActionToolName(action);
     const target = chatActionTarget(action);
     const toolId = callbacks.onToolStart?.(tool, target) ?? -1;
@@ -4463,6 +4770,26 @@ export class ChatEngine {
         this.abortController.signal.addEventListener('abort', onParentAbort, {
           once: true,
         });
+        const mutationAllowance = mutationEnabled
+          ? this.deriveChildAllowance(SUB_AGENT_MAX_ROUNDS)
+          : null;
+        if (mutationAllowance) {
+          const inheritedLimiter = inheritedChildBudgetLimiter(mutationAllowance);
+          if (inheritedLimiter) {
+            const reason = `child was not started: inherited ${inheritedLimiter} allowance already exhausted`;
+            this.markChildBudgetExhausted(inheritedLimiter, reason);
+            const rejected = this.settleInheritedBudgetRejectedChild(
+              action,
+              meta,
+              callbacks,
+              toolId,
+              subId,
+              reason,
+            );
+            this.abortController.signal.removeEventListener('abort', onParentAbort);
+            return rejected;
+          }
+        }
 
         // Subagent approval session cannot exceed parent permission ceiling
         const parentApproval = getChatApprovalSession();
@@ -4510,8 +4837,16 @@ export class ChatEngine {
                   toolContext: {
                     signal: childController.signal,
                   },
+                  ...(mutationAllowance ? { inheritedAllowance: mutationAllowance } : {}),
+                  onUsageRecorded: () => this.persistTaskCostBaseline(),
                 },
               );
+              if (implResult.inheritedBudgetExceeded && implResult.inheritedBudgetLimiter) {
+                this.markChildBudgetExhausted(
+                  implResult.inheritedBudgetLimiter,
+                  implResult.error ?? 'child inherited allowance exhausted',
+                );
+              }
               const attribution: SubagentAttribution = implResult.attribution;
               const clean = subagentFinishedCleanly(attribution);
               const details = clean
@@ -4559,7 +4894,11 @@ export class ChatEngine {
                 `changed_files: ${implResult.changedFiles.map((f) => f.path).join(', ') || 'none'}`,
                 implResult.summary,
               ].join('\n');
-              return { index: meta.index, observation: findings };
+              return {
+                index: meta.index,
+                observation: findings,
+                ...(implResult.inheritedBudgetExceeded ? { stop: true } : {}),
+              };
             }
 
             this.persistToolStartedAtExecutorDispatch(action, meta);
@@ -4579,6 +4918,8 @@ export class ChatEngine {
               maxRounds: SUB_AGENT_MAX_ROUNDS,
               abortSignal: childController.signal,
               runDir: join(this.engineRunDir, subId),
+              ...(mutationAllowance ? { inheritedAllowance: mutationAllowance } : {}),
+              onUsageRecorded: () => this.persistTaskCostBaseline(),
               ...((action as any).model || this.modelPolicy?.providerModelId
                 ? {
                     model: ((action as any).model ?? this.modelPolicy?.providerModelId) as string,
@@ -4604,8 +4945,14 @@ export class ChatEngine {
                   }
                 : clean
                   ? { effect_status: 'confirmed_no_change' as const }
-                  : { effect_status: 'indeterminate' as const }),
+                : { effect_status: 'indeterminate' as const }),
             });
+            if (mutResult.inheritedBudgetExceeded && mutResult.inheritedBudgetLimiter) {
+              this.markChildBudgetExhausted(
+                mutResult.inheritedBudgetLimiter,
+                mutResult.error ?? 'child inherited allowance exhausted',
+              );
+            }
             callbacks?.onToolComplete?.(
               toolId,
               details,
@@ -4628,7 +4975,11 @@ export class ChatEngine {
               `changed_files: ${mutResult.changedFiles.map((f) => f.path).join(', ') || 'none'}`,
               mutResult.summary,
             ].join('\n');
-            return { index: meta.index, observation: findings };
+            return {
+              index: meta.index,
+              observation: findings,
+              ...(mutResult.inheritedBudgetExceeded ? { stop: true } : {}),
+            };
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             const attribution = classifySubagentFailure({
@@ -4663,11 +5014,27 @@ export class ChatEngine {
           label: action.task.slice(0, 60),
         });
         try {
-          this.persistToolStartedAtExecutorDispatch(action, meta);
           const requestedRounds = (action as { max_rounds?: number }).max_rounds;
           const childRounds = Number.isFinite(requestedRounds)
             ? Math.min(20, Math.max(1, Math.trunc(requestedRounds as number)))
             : SUB_AGENT_MAX_ROUNDS;
+          const readAllowance = this.deriveChildAllowance(childRounds);
+          const readInheritedLimiter = inheritedChildBudgetLimiter(readAllowance);
+          if (readInheritedLimiter) {
+            const reason = `child was not started: inherited ${readInheritedLimiter} allowance already exhausted`;
+            this.markChildBudgetExhausted(readInheritedLimiter, reason);
+            const rejected = this.settleInheritedBudgetRejectedChild(
+              action,
+              meta,
+              callbacks,
+              toolId,
+              subId,
+              reason,
+            );
+            this.abortController.signal.removeEventListener('abort', onParentAbort);
+            return rejected;
+          }
+          this.persistToolStartedAtExecutorDispatch(action, meta);
           const extraInstructions = (action as { instructions?: string }).instructions;
           const subResult = await runReadOnlyAgentLoop({
             verb: 'ask',
@@ -4686,10 +5053,14 @@ export class ChatEngine {
             abortSignal: childController.signal,
             model:
               ((action as any).model as string | undefined) ?? this.modelPolicy?.providerModelId,
-            ...(extraInstructions ? { additionalInstructions: extraInstructions } : {}),
-          } as any);
+              ...(extraInstructions ? { additionalInstructions: extraInstructions } : {}),
+              inheritedAllowance: readAllowance,
+              onUsageRecorded: () => this.persistTaskCostBaseline(),
+            } as any);
           const attribution: SubagentAttribution = subResult.needsApproval || subResult.policyBlocked
             ? 'child_policy_block'
+            : subResult.inheritedBudgetExceeded
+              ? 'child_round_exhaustion'
             : subResult.providerError
               ? classifySubagentFailure({
                   success: false,
@@ -4747,7 +5118,17 @@ export class ChatEngine {
               error: subResult.blockedReason || attribution,
             });
           }
-          return { index: meta.index, observation: findings };
+          if (subResult.inheritedBudgetExceeded && subResult.inheritedBudgetLimiter) {
+            this.markChildBudgetExhausted(
+              subResult.inheritedBudgetLimiter,
+              subResult.blockedReason ?? 'child inherited allowance exhausted',
+            );
+          }
+          return {
+            index: meta.index,
+            observation: findings,
+            ...(subResult.inheritedBudgetExceeded ? { stop: true } : {}),
+          };
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           const attribution = classifySubagentFailure({
@@ -5904,6 +6285,10 @@ export class ChatEngine {
         metadata.prompt_cache_hit_tokens,
         metadata.prompt_cache_miss_tokens,
       );
+      // Checkpoint usage immediately after accounting so a crash before the
+      // enclosing turn result is persisted cannot mint a fresh continuation
+      // allowance on resume.
+      this.persistTaskCostBaseline();
 
       // Feed token history tracker
       const tokenTracker = getGlobalTokenTracker();
@@ -7006,6 +7391,8 @@ export class ChatEngine {
           : null,
       terminalReason: this.terminalLimiterReason,
       childLimits: { maxRounds: SUB_AGENT_MAX_ROUNDS },
+      taskCostBaselineUsd: this.taskCostBaselineUsd,
+      taskCostSpentUsd: this.currentTaskCostUsd(),
     });
     if (runAllowance.terminatingLimiter === 'none' || runAllowance.terminatingLimiter == null) {
       if (runAllowance.terminalClassification === 'success') {
@@ -7023,6 +7410,7 @@ export class ChatEngine {
     } catch {
       /* evidence write must not fail the turn */
     }
+    this.persistTaskCostBaseline();
     return runAllowance;
   }
 

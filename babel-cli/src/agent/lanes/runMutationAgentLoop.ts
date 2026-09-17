@@ -23,6 +23,11 @@ import { AgentActionsEnvelopeSchema, type AgentAction } from '../actions.js';
 import { executeActionWithPolicy, defaultToolExecutor, type ToolExecutor } from '../toolExecutor.js';
 import type { PermissionPreset } from '../policy.js';
 import type { ToolCallLog } from '../../schemas/agentContracts.js';
+import {
+  createChildBudgetController,
+  type ChildBudgetLimiter,
+  type InheritedChildAllowance,
+} from '../childBudget.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -67,6 +72,10 @@ export interface MutationAgentLoopInput {
   actionResolver?: (prompt: string) => Promise<AgentAction[]>;
   /** Optional wall-clock timeout for the child loop (child_timeout). */
   timeoutMs?: number;
+  /** Bounded allowance inherited from the parent delegation point. */
+  inheritedAllowance?: InheritedChildAllowance;
+  /** Parent callback for durable task-cost checkpointing. */
+  onUsageRecorded?: () => void;
 }
 
 export type SubagentAttribution =
@@ -104,6 +113,9 @@ export interface MutationAgentLoopResult {
   rollbackSummary: WorktreeRollbackSummary | null;
   /** Roll back all changes made by this agent */
   rollback(): Promise<WorktreeRollbackSummary>;
+  /** True when the child stopped at an inherited parent wall/cost boundary. */
+  inheritedBudgetExceeded?: boolean;
+  inheritedBudgetLimiter?: ChildBudgetLimiter;
 }
 
 export function classifySubagentFailure(input: {
@@ -115,6 +127,9 @@ export function classifySubagentFailure(input: {
   if (input.aborted) return 'child_cancellation';
   if (input.error) {
     const err = input.error.toLowerCase();
+    if (err.includes('inherited parent') && err.includes('budget')) {
+      return 'child_round_exhaustion';
+    }
     if (err.includes('abort') || err.includes('cancelled') || err.includes('canceled')) {
       return 'child_cancellation';
     }
@@ -342,6 +357,24 @@ export async function runMutationAgentLoop(
   }> = [];
   const toolCallLog: ToolCallLog[] = [];
   let priorObservations = '';
+  let roundForBudgetResult = 0;
+  const budgetController = createChildBudgetController(
+    input.inheritedAllowance,
+    input.abortSignal,
+  );
+  const effectiveAbortSignal = budgetController.signal;
+  const inheritedBudgetResult = (limiter: ChildBudgetLimiter): MutationAgentLoopResult => {
+    backgroundTaskRegistry.fail(taskId, `Inherited parent ${limiter} budget exhausted`);
+    budgetController.dispose();
+    return buildInheritedBudgetResult(
+      agentId,
+      limiter,
+      changedFiles,
+      toolCallLog,
+      safetyController,
+      roundForBudgetResult,
+    );
+  };
 
   // ─── Deterministic mock path ────────────────────────────────────────────
   const useMock =
@@ -349,11 +382,20 @@ export async function runMutationAgentLoop(
     process.env['BABEL_LITE_OFFLINE'] === '1';
 
   if (useMock) {
+    const inheritedLimiter = budgetController.limiter();
+    if (inheritedLimiter) return inheritedBudgetResult(inheritedLimiter);
     const mockActions = buildDeterministicMockActions(writeScope);
     let mockError: string | null = null;
     let mockSuccess = true;
 
     for (const action of mockActions) {
+      const inheritedLimiter = budgetController.limiter();
+      if (inheritedLimiter) return inheritedBudgetResult(inheritedLimiter);
+      if (effectiveAbortSignal.aborted) {
+        backgroundTaskRegistry.fail(taskId, 'Aborted');
+        budgetController.dispose();
+        return buildAbortedResult(agentId, null, changedFiles, toolCallLog, 0, safetyController);
+      }
       if (action.type === 'finish') {
         toolCallLog.push({
           step: toolCallLog.length + 1,
@@ -386,9 +428,19 @@ export async function runMutationAgentLoop(
       }
 
       // Execute via the tool executor
-      const execution = await executeActionWithPolicy(action, 'workspace_write', input.toolContext, {
-        executor,
-      });
+      let execution: Awaited<ReturnType<typeof executeActionWithPolicy>>;
+      try {
+        execution = await executeActionWithPolicy(action, 'workspace_write', {
+          ...input.toolContext,
+          signal: effectiveAbortSignal,
+        }, {
+          executor,
+        });
+      } catch (err) {
+        mockError = err instanceof Error ? err.message : String(err);
+        mockSuccess = false;
+        break;
+      }
       const lastResult = execution.results[execution.results.length - 1];
       if (!lastResult) continue;
 
@@ -406,6 +458,9 @@ export async function runMutationAgentLoop(
 
       toolCallLog.push(buildToolCallLogEntry(toolCallLog.length + 1, action, lastResult));
       priorObservations += '\n' + formatMutationObservation(action, lastResult);
+
+      const postActionLimiter = budgetController.limiter();
+      if (postActionLimiter) return inheritedBudgetResult(postActionLimiter);
     }
 
     const mockAttribution = classifySubagentFailure({
@@ -420,6 +475,7 @@ export async function runMutationAgentLoop(
       backgroundTaskRegistry.fail(taskId, mockError ?? 'Failed');
     }
 
+    budgetController.dispose();
     return {
       success: mockSuccess,
       attribution: mockAttribution,
@@ -450,9 +506,13 @@ export async function runMutationAgentLoop(
 
   try {
     while (round < maxRounds) {
+      roundForBudgetResult = round;
+      const inheritedLimiter = budgetController.limiter();
+      if (inheritedLimiter) return inheritedBudgetResult(inheritedLimiter);
       // Check cancellation
-      if (input.abortSignal?.aborted ?? false) {
+      if (effectiveAbortSignal.aborted) {
         backgroundTaskRegistry.fail(taskId, 'Aborted');
+        budgetController.dispose();
         return buildAbortedResult(agentId, error, changedFiles, toolCallLog, round, safetyController);
       }
       if (input.timeoutMs != null && Date.now() - startedAt >= input.timeoutMs) {
@@ -486,16 +546,22 @@ export async function runMutationAgentLoop(
               stage: 'executor',
               schemaName: 'AgentActionsEnvelopeSchema',
               maxCliAttempts: 2,
+              signal: effectiveAbortSignal,
+              budgetGuard: () => budgetController.limiter(),
+              ...(input.onUsageRecorded ? { onUsageRecorded: () => input.onUsageRecorded?.() } : {}),
               ...(input.model ? { model: input.model } : {}),
             });
-        const envelope = input.abortSignal
-          ? await Promise.race([resolvePromise, waitForAbort(input.abortSignal)])
+        const envelope = effectiveAbortSignal
+          ? await Promise.race([resolvePromise, waitForAbort(effectiveAbortSignal)])
           : await resolvePromise;
         actions = envelope.actions;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (input.abortSignal?.aborted || /abort/i.test(message)) {
+        const inheritedLimiter = budgetController.limiter();
+        if (inheritedLimiter) return inheritedBudgetResult(inheritedLimiter);
+        if (effectiveAbortSignal.aborted || /abort/i.test(message)) {
           backgroundTaskRegistry.fail(taskId, 'Aborted');
+          budgetController.dispose();
           return buildAbortedResult(agentId, message, changedFiles, toolCallLog, round, safetyController);
         }
         error = `Failed to resolve agent actions: ${message}`;
@@ -505,9 +571,12 @@ export async function runMutationAgentLoop(
 
       // Execute each action
       for (const action of actions) {
+        const inheritedLimiter = budgetController.limiter();
+        if (inheritedLimiter) return inheritedBudgetResult(inheritedLimiter);
         // Check cancellation between actions
-        if (input.abortSignal?.aborted ?? false) {
+        if (effectiveAbortSignal.aborted) {
           backgroundTaskRegistry.fail(taskId, 'Aborted');
+          budgetController.dispose();
           return buildAbortedResult(agentId, error, changedFiles, toolCallLog, round, safetyController);
         }
 
@@ -572,7 +641,10 @@ export async function runMutationAgentLoop(
         }
 
         // Execute the action through the policy gate
-        const execution = await executeActionWithPolicy(action, 'workspace_write', input.toolContext, {
+        const execution = await executeActionWithPolicy(action, 'workspace_write', {
+          ...input.toolContext,
+          signal: effectiveAbortSignal,
+        }, {
           executor,
         });
 
@@ -614,6 +686,9 @@ export async function runMutationAgentLoop(
         toolCallLog.push(buildToolCallLogEntry(toolCallLog.length + 1, action, lastResult));
         priorObservations +=
           '\n' + formatMutationObservation(action, lastResult);
+
+        const postActionLimiter = budgetController.limiter();
+        if (postActionLimiter) return inheritedBudgetResult(postActionLimiter);
       }
 
       // If we broke out of the inner loop with an error or terminal action, exit the outer loop
@@ -643,6 +718,8 @@ export async function runMutationAgentLoop(
       backgroundTaskRegistry.fail(taskId, error ?? 'Failed');
     }
   } catch (err) {
+    const inheritedLimiter = budgetController.limiter();
+    if (inheritedLimiter) return inheritedBudgetResult(inheritedLimiter);
     success = false;
     error = err instanceof Error ? err.message : String(err);
     backgroundTaskRegistry.fail(taskId, error);
@@ -659,7 +736,7 @@ export async function runMutationAgentLoop(
     success,
     error,
     changedFilesCount: changedFiles.length,
-    aborted: input.abortSignal?.aborted ?? false,
+    aborted: effectiveAbortSignal.aborted && budgetController.limiter() === null,
   });
 
   // Build the result
@@ -687,6 +764,8 @@ export async function runMutationAgentLoop(
       return createEmptyRollbackSummary('No safety controller — no rollback needed');
     },
   };
+
+  budgetController.dispose();
 
   return result;
 }
@@ -717,6 +796,39 @@ function buildAbortedResult(
         );
       }
       return createEmptyRollbackSummary('No safety controller — nothing to rollback');
+    },
+  };
+}
+
+function buildInheritedBudgetResult(
+  agentId: string,
+  limiter: ChildBudgetLimiter,
+  changedFiles: MutationAgentLoopResult['changedFiles'],
+  toolCallLog: ToolCallLog[],
+  safetyController: WorktreeSafetyController | null,
+  round: number,
+): MutationAgentLoopResult {
+  const reason = `Inherited parent ${limiter} budget exhausted`;
+  return {
+    success: false,
+    attribution: 'child_round_exhaustion',
+    summary: `Sub-agent ${agentId} stopped after ${round} round(s): ${reason}.`,
+    changedFiles,
+    toolCallLog,
+    stepsExecuted: toolCallLog.length,
+    error: reason,
+    // Confirmed effects are intentionally preserved. The parent decides
+    // whether reconciliation or rollback is appropriate after the boundary.
+    rollbackSummary: null,
+    inheritedBudgetExceeded: true,
+    inheritedBudgetLimiter: limiter,
+    rollback: async () => {
+      if (safetyController) {
+        return safetyController.rollbackTouchedFiles(
+          `Manual rollback for inherited-budget stop of sub-agent ${agentId}`,
+        );
+      }
+      return createEmptyRollbackSummary('No safety controller — no rollback needed');
     },
   };
 }

@@ -71,6 +71,7 @@ function normalizeText(value: string, root: string): string {
     .split(root).join('<ROOT>')
     .split(rootPosix).join('<ROOT>')
     .replace(/\\/g, '/')
+    .replace(/Runtime mode: (?:tui|headless|direct)\./g, 'Runtime mode: <MODE>.')
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, '<ID>')
     .replace(/\d{4}-\d{2}-\d{2}T[\d:.Z+-]+/g, '<TS>');
 }
@@ -202,6 +203,7 @@ describe('chat preparation parity (actual provider-bound request)', () => {
             target,
             systemContext,
             preflightContext,
+            runtimeMode: 'headless',
             useStreaming: true,
             engineFactory: (options) => {
               headlessEngine = new ChatEngine({ ...options, ...embed });
@@ -223,6 +225,7 @@ describe('chat preparation parity (actual provider-bound request)', () => {
             target,
             systemContext,
             preflightContext,
+            runtimeMode: 'tui',
             engine: reusedEngine,
             useStreaming: true,
             engineFactory: () => {
@@ -230,6 +233,21 @@ describe('chat preparation parity (actual provider-bound request)', () => {
             },
           }),
         'reused TUI Chat',
+      );
+      const tuiSecondTurn = await firstCapture(
+        () =>
+          runChatEngineOnce({
+            task,
+            target,
+            runtimeMode: 'tui',
+            engine: reusedEngine,
+            useStreaming: true,
+          }),
+        'reused second TUI turn',
+      );
+      assert.match(
+        tuiSecondTurn.messages.find((message) => message.role === 'system')?.content ?? '',
+        /Runtime mode: tui\./,
       );
 
       const intentClass = resolveChatTaskClass({ taskText: task, autoClassify: false });
@@ -252,6 +270,7 @@ describe('chat preparation parity (actual provider-bound request)', () => {
         maxTurns: limits.maxTurns,
         maxConversationMessages: limits.maxConversationMessages,
         maxEstimatedTokens: limits.maxEstimatedTokens,
+        runtimeMode: 'direct',
         ...embed,
       });
       const direct = await firstCapture(async () => {
@@ -264,6 +283,13 @@ describe('chat preparation parity (actual provider-bound request)', () => {
       const normTui = normalizeValue(tui, source);
       const normDirect = normalizeValue(direct, source);
 
+      const headlessSystemPrompt = headless.messages.find((message) => message.role === 'system')?.content ?? '';
+      const tuiSystemPrompt = tui.messages.find((message) => message.role === 'system')?.content ?? '';
+      const directSystemPrompt = direct.messages.find((message) => message.role === 'system')?.content ?? '';
+      assert.match(headlessSystemPrompt, /Runtime mode: headless\./);
+      assert.match(tuiSystemPrompt, /Runtime mode: tui\./);
+      assert.match(directSystemPrompt, /Runtime mode: direct\./);
+
       assert.deepEqual(
         normTui,
         normHeadless,
@@ -275,7 +301,7 @@ describe('chat preparation parity (actual provider-bound request)', () => {
         'direct ChatEngine provider POST must match fresh headless Chat',
       );
 
-      const systemPrompt = headless.messages.find((message) => message.role === 'system')?.content ?? '';
+      const systemPrompt = headlessSystemPrompt;
       assert.match(systemPrompt, /FROZEN_SESSION_IDENTITY/);
       if (chatStack.system_context.trim()) {
         assert.ok(

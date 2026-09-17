@@ -749,6 +749,7 @@ export async function runSameModelLlmFactorial(input: {
         model: 'DeepSeek',
         maxTurns: 3,
         executionProfile: variant === 'deep_profile' ? 'deep' : 'chat',
+        runtimeMode: 'direct',
       });
       const anyEngine = engine as unknown as {
         deliberationRunner: unknown;

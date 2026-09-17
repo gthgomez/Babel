@@ -9,9 +9,12 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { z } from 'zod';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -20,6 +23,9 @@ import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
 import type { ToolContext, ToolResult } from '../localTools.js';
+import { EvidenceBundle } from '../evidence.js';
+import { runWaterfallForSchemaFailureTest } from '../execute.js';
+import type { LlmRunner, RunnerInvocationMetadata } from '../runners/base.js';
 import type { AgentAction } from './actions.js';
 import { hasSubAgentWrites } from './chatEngineCriticBudget.js';
 import {
@@ -35,6 +41,8 @@ import {
   subagentFinishedCleanly,
   type SubagentAttribution,
 } from './lanes/runMutationAgentLoop.js';
+import { deriveChildAllowance, inheritedChildBudgetLimiter } from './childBudget.js';
+import { costSpentSinceBaselineUsd, globalCostTracker } from '../services/costTracker.js';
 
 const tempRoots: string[] = [];
 
@@ -81,7 +89,10 @@ function toolContext(root: string, id: string): ToolContext {
 
 type MockResults = Record<string, ToolResult>;
 
-function mockExecutor(results: MockResults): import('./toolExecutor.js').ToolExecutor {
+function mockExecutor(
+  results: MockResults,
+  onExecute?: (action: AgentAction) => void,
+): import('./toolExecutor.js').ToolExecutor {
   return {
     mapAction(action: AgentAction) {
       if (action.type === 'write_file') {
@@ -102,6 +113,7 @@ function mockExecutor(results: MockResults): import('./toolExecutor.js').ToolExe
       return [];
     },
     async execute(action: AgentAction) {
+      onExecute?.(action);
       if (action.type === 'finish' || action.type === 'ask_approval') {
         return { action, terminal: true, results: [] };
       }
@@ -322,6 +334,36 @@ describe('Canary F: Subagent Truthfulness', () => {
     assert.equal(result.attribution, 'child_cancellation');
   });
 
+  it('Scenario 5b-read: read-only cancellation skips later actions in the active batch', async () => {
+    const root = createGitRepo();
+    const controller = new AbortController();
+    let executorCalls = 0;
+    const resultPromise = runReadOnlyAgentLoop({
+      verb: 'ask',
+      task: 'Cancel after the first observation',
+      projectRoot: root,
+      toolContext: toolContext(root, 'child-read-cancel-active'),
+      executor: {
+        mapAction: () => [{ kind: 'execute' as const, request: { tool: 'file_read' as const, path: 'src/index.ts' } }],
+        async execute(action: AgentAction) {
+          executorCalls += 1;
+          await new Promise((resolve) => setTimeout(resolve, 90));
+          return { action, terminal: false, results: [{ exit_code: 0, stdout: 'observed', stderr: '' }] };
+        },
+      },
+      actionResolver: async () => [
+        { type: 'read_file', path: 'src/index.ts' },
+        { type: 'read_file', path: 'lib/util.ts' },
+      ],
+      abortSignal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 40);
+    const result = await resultPromise;
+    assert.equal(executorCalls, 1);
+    assert.equal(result.completed, false);
+    assert.match(result.blockedReason ?? '', /abort/i);
+  });
+
   it('Scenario 5c: child timeout is child_timeout', async () => {
     const root = createGitRepo();
     const result = await runMutationAgentLoop({
@@ -341,6 +383,240 @@ describe('Canary F: Subagent Truthfulness', () => {
     assert.equal(result.success, false);
     assert.equal(result.attribution, 'child_timeout');
     assert.match(result.error ?? '', /timed out/i);
+  });
+
+  it('D1: inherited wall allowance stops an active child before the parent deadline', async () => {
+    const root = createGitRepo();
+    const deadlineAtMs = Date.now() + 750;
+    const startedAt = Date.now();
+    const result = await runMutationAgentLoop({
+      agentId: 'child-inherited-wall',
+      task: 'wait past the parent deadline',
+      writeScope: ['src'],
+      projectRoot: root,
+      maxRounds: 4,
+      toolContext: toolContext(root, 'child-inherited-wall'),
+      inheritedAllowance: {
+        costBaselineUsd: 0,
+        remainingCostUsd: null,
+        deadlineAtMs,
+        maxRounds: 4,
+      },
+      actionResolver: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        return [{ type: 'finish', summary: 'too late', verification: [] }];
+      },
+    });
+    assert.ok(Date.now() - startedAt < 1_500, 'child must not receive a fresh long timeout');
+    assert.equal(result.success, false);
+    assert.equal(result.inheritedBudgetExceeded, true);
+    assert.equal(result.inheritedBudgetLimiter, 'wall');
+    assert.equal(result.attribution, 'child_round_exhaustion');
+  });
+
+  it('D1-setup: an already-expired worktree child does not create a worktree', async () => {
+    const root = createGitRepo();
+    const result = await runImplementWorktreeAgent(
+      {
+        id: 'child-expired-worktree',
+        task: 'Must not start setup',
+        writeScope: ['src'],
+      },
+      {
+        projectRoot: root,
+        useDeterministicMock: true,
+        inheritedAllowance: {
+          costBaselineUsd: 0,
+          remainingCostUsd: null,
+          deadlineAtMs: Date.now() - 1,
+          maxRounds: 4,
+        },
+      },
+    );
+    assert.equal(result.success, false);
+    assert.equal(result.attribution, 'child_round_exhaustion');
+    assert.equal(result.inheritedBudgetExceeded, true);
+    assert.equal(existsSync(join(root, '.babel', 'worktrees')), false);
+  });
+
+  it('D2: inherited cost allowance is checked before the next child model round', async () => {
+    const root = createGitRepo();
+    const previous = globalCostTracker.getSessionSummary();
+    globalCostTracker.resetSession();
+    const unitCost = globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+    globalCostTracker.resetSession();
+    let resolverCalls = 0;
+    try {
+      const result = await runMutationAgentLoop({
+        agentId: 'child-inherited-cost',
+        task: 'consume only the parent remainder',
+        writeScope: ['src'],
+        projectRoot: root,
+        maxRounds: 4,
+        toolContext: toolContext(root, 'child-inherited-cost'),
+        inheritedAllowance: {
+          costBaselineUsd: 0,
+          remainingCostUsd: unitCost,
+          deadlineAtMs: null,
+          maxRounds: 4,
+        },
+        executor: mockExecutor({}),
+        actionResolver: async () => {
+          resolverCalls += 1;
+          globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+          return [{ type: 'read_file', path: 'src/index.ts' }];
+        },
+      });
+      assert.equal(resolverCalls, 1);
+      assert.equal(result.success, false);
+      assert.equal(result.inheritedBudgetExceeded, true);
+      assert.equal(result.inheritedBudgetLimiter, 'cost');
+      assert.ok(globalCostTracker.getSessionSummary().totalCostUSD <= unitCost + 1e-12);
+    } finally {
+      globalCostTracker.resetSession();
+      globalCostTracker.restoreSessionCost({
+        totalCostUSD: previous.totalCostUSD,
+        totalInputTokens: previous.totalInputTokens,
+        totalOutputTokens: previous.totalOutputTokens,
+        totalTokens: previous.totalTokens,
+      });
+    }
+  });
+
+  it('D2-retry: inherited cost stops a provider retry after failed-attempt usage', async () => {
+    const root = createGitRepo();
+    const previous = globalCostTracker.getSessionSummary();
+    globalCostTracker.resetSession();
+    let attempts = 0;
+    let metadata: RunnerInvocationMetadata | null = null;
+    const runner: LlmRunner = {
+      async execute<T>(): Promise<T> {
+        attempts += 1;
+        metadata = {
+          provider: 'deepseek',
+          provider_model_id: 'deepseek-v4-flash',
+          latency_ms: 0,
+          prompt_tokens: 1_000,
+          completion_tokens: 2_000,
+          total_tokens: 3_000,
+          estimated_cost_usd: null,
+        };
+        if (attempts === 1) throw new Error('Zod validation failed');
+        return { ok: true } as T;
+      },
+      getLastInvocationMetadata: () => metadata,
+    };
+    try {
+      const evidence = new EvidenceBundle('child-retry-budget', root);
+      await assert.rejects(
+        () => runWaterfallForSchemaFailureTest({
+          prompt: 'return ok',
+          schema: z.object({ ok: z.literal(true) }),
+          stage: 'executor',
+          schemaName: 'AgentActionsEnvelopeSchema',
+          evidence,
+          maxAttempts: 2,
+          tiers: [{ name: 'fake-provider', runner }],
+          budgetGuard: () => costSpentSinceBaselineUsd(0) >= 0.0001 ? 'cost' : null,
+        }),
+        /Inherited parent cost budget exhausted/,
+      );
+      assert.equal(attempts, 1);
+      assert.ok(globalCostTracker.getSessionSummary().totalCostUSD > 0);
+    } finally {
+      globalCostTracker.resetSession();
+      globalCostTracker.restoreSessionCost({
+        totalCostUSD: previous.totalCostUSD,
+        totalInputTokens: previous.totalInputTokens,
+        totalOutputTokens: previous.totalOutputTokens,
+        totalTokens: previous.totalTokens,
+      });
+    }
+  });
+
+  it('D4: a confirmed mutation remains represented when inherited cost expires', async () => {
+    const root = createGitRepo();
+    const previous = globalCostTracker.getSessionSummary();
+    globalCostTracker.resetSession();
+    const unitCost = globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+    globalCostTracker.resetSession();
+    let round = 0;
+    try {
+      const result = await runMutationAgentLoop({
+        agentId: 'child-effect-before-budget',
+        task: 'write once, then exhaust the inherited budget',
+        writeScope: ['src'],
+        projectRoot: root,
+        maxRounds: 4,
+        toolContext: toolContext(root, 'child-effect-before-budget'),
+        inheritedAllowance: {
+          costBaselineUsd: 0,
+          remainingCostUsd: unitCost,
+          deadlineAtMs: null,
+          maxRounds: 4,
+        },
+        executor: mockExecutor({}, (action) => {
+          if (action.type === 'write_file') {
+            writeFileSync(join(root, action.path), action.content, 'utf8');
+          }
+        }),
+        actionResolver: async () => {
+          round += 1;
+          if (round === 1) {
+            return [{ type: 'write_file', path: 'src/confirmed.ts', content: 'export const confirmed = true;\n' }];
+          }
+          globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+          return [{ type: 'read_file', path: 'src/index.ts' }];
+        },
+      });
+      assert.equal(result.success, false);
+      assert.equal(result.attribution, 'child_round_exhaustion');
+      assert.equal(result.inheritedBudgetExceeded, true);
+      assert.ok(result.changedFiles.some((file) => file.path === 'src/confirmed.ts'));
+      assert.equal(readFileSync(join(root, 'src', 'confirmed.ts'), 'utf8'), 'export const confirmed = true;\n');
+      assert.equal(result.rollbackSummary, null);
+    } finally {
+      globalCostTracker.resetSession();
+      globalCostTracker.restoreSessionCost({
+        totalCostUSD: previous.totalCostUSD,
+        totalInputTokens: previous.totalInputTokens,
+        totalOutputTokens: previous.totalOutputTokens,
+        totalTokens: previous.totalTokens,
+      });
+    }
+  });
+
+  it('D5: repeated child derivation cannot mint a fresh parent allowance', () => {
+    const previous = globalCostTracker.getSessionSummary();
+    globalCostTracker.resetSession();
+    try {
+      const unitCost = globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+      globalCostTracker.resetSession();
+      const first = deriveChildAllowance({
+        parentTaskBaselineUsd: 0,
+        parentEffectiveCostCapUsd: unitCost,
+        parentDeadlineAtMs: null,
+        childMaxRounds: 4,
+      });
+      assert.equal(first.remainingCostUsd, unitCost);
+      globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+      const second = deriveChildAllowance({
+        parentTaskBaselineUsd: 0,
+        parentEffectiveCostCapUsd: unitCost,
+        parentDeadlineAtMs: null,
+        childMaxRounds: 4,
+      });
+      assert.equal(second.remainingCostUsd, 0);
+      assert.equal(inheritedChildBudgetLimiter(second), 'cost');
+    } finally {
+      globalCostTracker.resetSession();
+      globalCostTracker.restoreSessionCost({
+        totalCostUSD: previous.totalCostUSD,
+        totalInputTokens: previous.totalInputTokens,
+        totalOutputTokens: previous.totalOutputTokens,
+        totalTokens: previous.totalTokens,
+      });
+    }
   });
 
   it('Scenario 6: two roots isolate; overlapping scopes policy-blocked', async () => {

@@ -38,8 +38,24 @@ import {
 import type { SessionLoopStepPayload } from '../sessionLoop.js';
 import type { SmallFixProvider } from '../../services/smallFix.js';
 import type { LiteToolStreamSink } from '../../ui/liteToolStream.js';
+import {
+  createChildBudgetController,
+  type ChildBudgetLimiter,
+  type InheritedChildAllowance,
+} from '../childBudget.js';
 
 export const DEFAULT_READ_ONLY_LOOP_MAX_ROUNDS = 8;
+
+function waitForAbort(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    const fail = () => reject(new Error('Aborted by user or parent'));
+    if (signal.aborted) {
+      fail();
+      return;
+    }
+    signal.addEventListener('abort', fail, { once: true });
+  });
+}
 
 export interface ReadOnlyAgentLoopInput {
   verb: Extract<LiteSessionVerb, 'ask' | 'plan' | 'report' | 'fix'>;
@@ -62,6 +78,10 @@ export interface ReadOnlyAgentLoopInput {
   actionResolver?: (prompt: string, round: number) => Promise<AgentAction[]>;
   /** Extra instructions from the advertised sub_agent contract. */
   additionalInstructions?: string;
+  /** Bounded allowance inherited from the parent delegation point. */
+  inheritedAllowance?: InheritedChildAllowance;
+  /** Parent callback for durable task-cost checkpointing. */
+  onUsageRecorded?: () => void;
 }
 
 export interface ReadOnlyAgentLoopResult {
@@ -81,6 +101,9 @@ export interface ReadOnlyAgentLoopResult {
   needsApproval?: boolean;
   /** Original provider/transport error when the loop degraded on a live turn. */
   providerError?: string | null;
+  /** True when the child stopped at an inherited parent wall/cost boundary. */
+  inheritedBudgetExceeded?: boolean;
+  inheritedBudgetLimiter?: ChildBudgetLimiter;
 }
 
 function agentActionToolName(action: AgentAction): string {
@@ -257,11 +280,14 @@ async function executeActionBatch(
   steps: SmallFixLoopStep[],
   startIndex: number,
   toolStream?: LiteToolStreamSink,
+  signal?: AbortSignal,
+  budgetLimiter?: () => ChildBudgetLimiter | null,
 ): Promise<{
   terminal: boolean;
   policyBlocked: boolean;
   blockedReason: string | null;
   needsApproval: boolean;
+  inheritedBudgetLimiter?: ChildBudgetLimiter;
 }> {
   let policyBlocked = false;
   let blockedReason: string | null = null;
@@ -270,6 +296,24 @@ async function executeActionBatch(
     const action = actions[index];
     if (!action) {
       continue;
+    }
+    if (signal?.aborted) {
+      return {
+        terminal: true,
+        policyBlocked: false,
+        blockedReason: 'Aborted by user or parent',
+        needsApproval: false,
+      };
+    }
+    const inheritedLimiter = budgetLimiter?.();
+    if (inheritedLimiter) {
+      return {
+        terminal: true,
+        policyBlocked: false,
+        blockedReason: null,
+        needsApproval: false,
+        inheritedBudgetLimiter: inheritedLimiter,
+      };
     }
     if (isTerminalAgentAction(action)) {
       if (action.type === 'ask_approval') {
@@ -300,7 +344,12 @@ async function executeActionBatch(
     const toolName = agentActionToolName(action);
     const toolTarget = agentActionTarget(action);
     toolStream?.emit({ tool: toolName, target: toolTarget, status: 'running', phase: 'discover' });
-    const execution = await executeActionWithPolicy(action, preset, toolContext, { executor });
+    const execution = await executeActionWithPolicy(
+      action,
+      preset,
+      { ...toolContext, ...(signal ? { signal } : {}) },
+      { executor },
+    );
     const toolResult = execution.results[execution.results.length - 1];
     toolStream?.emit({
       tool: toolName,
@@ -337,6 +386,24 @@ async function executeActionBatch(
       });
       return { terminal: true, policyBlocked: true, blockedReason, needsApproval: false };
     }
+    const postActionLimiter = budgetLimiter?.();
+    if (postActionLimiter) {
+      return {
+        terminal: true,
+        policyBlocked: false,
+        blockedReason: null,
+        needsApproval: false,
+        inheritedBudgetLimiter: postActionLimiter,
+      };
+    }
+    if (signal?.aborted) {
+      return {
+        terminal: true,
+        policyBlocked: false,
+        blockedReason: 'Aborted by user or parent',
+        needsApproval: false,
+      };
+    }
   }
 
   return { terminal: false, policyBlocked, blockedReason, needsApproval: false };
@@ -347,6 +414,8 @@ async function resolveLiveActionTurn(
   evidence: EvidenceBundle | undefined,
   model?: string,
   abortSignal?: AbortSignal,
+  budgetGuard?: () => ChildBudgetLimiter | null,
+  onUsageRecorded?: () => void,
 ): Promise<AgentAction[]> {
   const envelope = await runWithPrimaryOnlyFallback(prompt, AgentActionsEnvelopeSchema, {
     ...(evidence !== undefined ? { evidence } : {}),
@@ -355,6 +424,8 @@ async function resolveLiveActionTurn(
     maxCliAttempts: 2,
     ...(model ? { model } : {}),
     ...(abortSignal ? { signal: abortSignal } : {}),
+    ...(budgetGuard ? { budgetGuard } : {}),
+    ...(onUsageRecorded ? { onUsageRecorded } : {}),
   });
   return envelope.actions;
 }
@@ -379,6 +450,12 @@ export async function runReadOnlyAgentLoop(
     ...input.toolContext,
     projectRoot: input.projectRoot,
   };
+  const budgetController = createChildBudgetController(
+    input.inheritedAllowance,
+    input.abortSignal,
+  );
+  const effectiveAbortSignal = budgetController.signal;
+  let inheritedBudgetLimiter: ChildBudgetLimiter | undefined;
   // Semantic indexing creates/updates SQLite state. Read-only discovery may
   // query an already-open index, but must never warm or rebuild one.
   process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] = '1';
@@ -386,6 +463,25 @@ export async function runReadOnlyAgentLoop(
   try {
     return await runWithProjectRoot(input.projectRoot, async () => {
     if (useDeterministicMock) {
+    inheritedBudgetLimiter = budgetController.limiter() ?? undefined;
+    if (inheritedBudgetLimiter) {
+      return {
+        steps,
+        sessionLoopSteps: buildSessionLoopSteps(steps),
+        toolCallLog: [],
+        observations: `Inherited parent ${inheritedBudgetLimiter} budget exhausted`,
+        stepsExecuted: 0,
+        degraded: true,
+        policyBlocked: false,
+        blockedReason: `Inherited parent ${inheritedBudgetLimiter} budget exhausted`,
+        completed: false,
+        roundExhausted: false,
+        needsApproval: false,
+        providerError: null,
+        inheritedBudgetExceeded: true,
+        inheritedBudgetLimiter,
+      };
+    }
     const mockActions = buildDeterministicMockActions(anchorPaths, input.verb);
     const batch = await executeActionBatch(
       mockActions,
@@ -395,7 +491,10 @@ export async function runReadOnlyAgentLoop(
       steps,
       0,
       input.toolStream,
+      effectiveAbortSignal,
+      () => budgetController.limiter(),
     );
+    inheritedBudgetLimiter = batch.inheritedBudgetLimiter;
     const toolCallLog = buildToolCallLogFromSteps(steps);
     const mockResult = {
       steps,
@@ -403,13 +502,22 @@ export async function runReadOnlyAgentLoop(
       toolCallLog,
       observations: formatReadOnlyObservations(steps, input.toolContext.runDir),
       stepsExecuted: toolCallLog.length,
-      degraded: anchorPaths.length === 0,
+      degraded: anchorPaths.length === 0 || effectiveAbortSignal.aborted,
       policyBlocked: batch.policyBlocked,
-      blockedReason: batch.blockedReason,
-      completed: true,
+      blockedReason: effectiveAbortSignal.aborted
+        ? 'Aborted by user or parent'
+        : batch.blockedReason,
+      completed: !effectiveAbortSignal.aborted,
       roundExhausted: false,
       needsApproval: batch.needsApproval,
       providerError: null,
+      ...(inheritedBudgetLimiter
+        ? {
+            inheritedBudgetExceeded: true,
+            inheritedBudgetLimiter,
+            completed: false,
+          }
+        : {}),
     };
     return mockResult;
     }
@@ -432,7 +540,28 @@ export async function runReadOnlyAgentLoop(
     steps,
     0,
     input.toolStream,
+    effectiveAbortSignal,
+    () => budgetController.limiter(),
   );
+  inheritedBudgetLimiter = warmupBatch.inheritedBudgetLimiter;
+  if (inheritedBudgetLimiter) {
+    return {
+      steps,
+      sessionLoopSteps: buildSessionLoopSteps(steps),
+      toolCallLog: buildToolCallLogFromSteps(steps),
+      observations: formatReadOnlyObservations(steps, input.toolContext.runDir),
+      stepsExecuted: buildToolCallLogFromSteps(steps).length,
+      degraded: true,
+      policyBlocked: false,
+      blockedReason: `Inherited parent ${inheritedBudgetLimiter} budget exhausted`,
+      completed: false,
+      roundExhausted: false,
+      needsApproval: false,
+      providerError: null,
+      inheritedBudgetExceeded: true,
+      inheritedBudgetLimiter,
+    };
+  }
   priorObservations = formatReadOnlyObservations(steps, input.toolContext.runDir);
   policyBlocked = warmupBatch.policyBlocked;
   blockedReason = warmupBatch.blockedReason;
@@ -445,10 +574,12 @@ export async function runReadOnlyAgentLoop(
       toolCallLog,
       observations: priorObservations,
       stepsExecuted: toolCallLog.length,
-      degraded: anchorPaths.length === 0,
+      degraded: anchorPaths.length === 0 || effectiveAbortSignal.aborted,
       policyBlocked,
-      blockedReason,
-      completed: true,
+      blockedReason: effectiveAbortSignal.aborted
+        ? 'Aborted by user or parent'
+        : blockedReason,
+      completed: !effectiveAbortSignal.aborted,
       roundExhausted: false,
       needsApproval,
       providerError: null,
@@ -457,7 +588,11 @@ export async function runReadOnlyAgentLoop(
   }
 
   while (round < maxRounds) {
-    if (input.abortSignal?.aborted) {
+    inheritedBudgetLimiter = budgetController.limiter() ?? undefined;
+    if (inheritedBudgetLimiter) {
+      break;
+    }
+    if (effectiveAbortSignal.aborted) {
       degraded = true;
       blockedReason = blockedReason ?? 'Aborted by user or parent';
       break;
@@ -478,19 +613,26 @@ export async function runReadOnlyAgentLoop(
           : {}),
       });
       if (input.actionResolver) {
-        actions = await input.actionResolver(prompt, round);
+        const resolved = input.actionResolver(prompt, round);
+        actions = await Promise.race([resolved, waitForAbort(effectiveAbortSignal)]);
       } else {
         actions = await resolveLiveActionTurn(
           prompt,
           input.evidence,
           input.model,
-          input.abortSignal,
+          effectiveAbortSignal,
+          () => budgetController.limiter(),
+          input.onUsageRecorded,
         );
       }
     } catch (err) {
       degraded = true;
       const message = err instanceof Error ? err.message : String(err);
-      if (input.abortSignal?.aborted || /abort/i.test(message)) {
+      inheritedBudgetLimiter = budgetController.limiter() ?? undefined;
+      if (inheritedBudgetLimiter) {
+        break;
+      }
+      if (effectiveAbortSignal.aborted || /abort/i.test(message)) {
         blockedReason = blockedReason ?? 'Aborted by user or parent';
       } else {
         providerError = message;
@@ -507,25 +649,39 @@ export async function runReadOnlyAgentLoop(
       steps,
       steps.length,
       input.toolStream,
+      effectiveAbortSignal,
+      () => budgetController.limiter(),
     );
+    inheritedBudgetLimiter = batch.inheritedBudgetLimiter;
     priorObservations = formatReadOnlyObservations(steps, input.toolContext.runDir);
     policyBlocked = batch.policyBlocked;
     blockedReason = batch.blockedReason;
     needsApproval = batch.needsApproval;
     if (batch.terminal) {
+      if (inheritedBudgetLimiter) break;
+      if (effectiveAbortSignal.aborted) {
+        degraded = true;
+        blockedReason = blockedReason ?? 'Aborted by user or parent';
+        break;
+      }
       terminalReached = true;
       break;
     }
   }
 
   const roundExhausted =
-    !terminalReached && !policyBlocked && !providerError && round >= maxRounds;
+    !inheritedBudgetLimiter && !terminalReached && !policyBlocked && !providerError && round >= maxRounds;
   if (roundExhausted) {
     degraded = true;
     priorObservations += '\n[Discovery incomplete: round limit reached without finish]';
   }
 
-  if (steps.length === 0 && !providerError && !input.abortSignal?.aborted) {
+  if (
+    steps.length === 0 &&
+    !providerError &&
+    !inheritedBudgetLimiter &&
+    !effectiveAbortSignal.aborted
+  ) {
     degraded = true;
     steps.push({
       phase: 'observe',
@@ -570,10 +726,19 @@ export async function runReadOnlyAgentLoop(
     roundExhausted,
     needsApproval,
     providerError,
+    ...(inheritedBudgetLimiter
+      ? {
+          inheritedBudgetExceeded: true,
+          inheritedBudgetLimiter,
+          completed: false,
+          roundExhausted: false,
+        }
+      : {}),
   };
     return loopResult;
     });
   } finally {
+    budgetController.dispose();
     if (previousNoIndexWrites === undefined) {
       delete process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'];
     } else {

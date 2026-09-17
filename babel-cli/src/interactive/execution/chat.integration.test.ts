@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { describe, test } from 'node:test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import type { ChatEngineOptions, ChatEvent, ChatResult } from '../../agent/chatEngine.js';
-import type { ChatEngine } from '../../agent/chatEngine.js';
+import { ChatEngine, type ChatEngineOptions, type ChatEvent, type ChatResult } from '../../agent/chatEngine.js';
 import { BabelRepl } from '../BabelRepl.js';
 import type { ReplContext } from '../context.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { executeChatTask } from './chat.js';
+import { OpenCodeGoApiRunner } from '../../runners/openCodeGoApi.js';
+import { babelReviewModelPolicy } from '../../services/babelChatReview.js';
 
 const EMPTY_USAGE = globalCostTracker.getSessionSummary();
 
@@ -114,6 +118,17 @@ function withEnvUnset<T>(key: string, fn: () => Promise<T> | T): Promise<T> {
 
 const noGitPreflight = async () => undefined;
 
+function sseCompletion(text: string): Response {
+  return new Response(
+    `data: ${JSON.stringify({
+      model: 'mimo-v2.5',
+      choices: [{ delta: { content: text }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    })}\n\ndata: [DONE]\n\n`,
+    { status: 200 },
+  );
+}
+
 const testDeps = {
   gatherPreflight: noGitPreflight,
 };
@@ -215,6 +230,77 @@ test('executeChatTask creates new engine when ctx.chatEngine is undefined', asyn
       assert.equal(ctx.chatEngine, created[0]);
     });
   });
+});
+
+test('executeChatTask forwards the truthful runtime mode into provider-bound prompts', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-chat-entry-mode-'));
+  const runsDir = join(root, 'runs');
+  mkdirSync(runsDir);
+  const originalFetch = globalThis.fetch;
+  const originalCi = process.env['CI'];
+  const originalNoColor = process.env['NO_COLOR'];
+  const originalProfile = process.env['BABEL_EXECUTION_PROFILE'];
+  const originalReadOnly = process.env['BABEL_READ_ONLY'];
+  const stdout = process.stdout as { isTTY?: boolean };
+  const originalIsTTY = stdout.isTTY;
+  const prompts: string[] = [];
+  const factoryModes: string[] = [];
+  const ctx = makeReplContext();
+  const target = makeTarget(root);
+
+  delete process.env['CI'];
+  delete process.env['NO_COLOR'];
+  process.env['BABEL_EXECUTION_PROFILE'] = 'read_only_audit';
+  process.env['BABEL_READ_ONLY'] = 'true';
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    prompts.push(body.messages.find((message) => message.role === 'system')?.content ?? '');
+    return sseCompletion('entry mode fixture');
+  };
+
+  const run = async (isTTY: boolean) => {
+    stdout.isTTY = isTTY;
+    await executeChatTask(ctx, 'inspect runtime mode', 'inspect runtime mode', target, undefined, {
+      ...testDeps,
+      engineFactory: (options) => {
+        factoryModes.push(options.runtimeMode ?? 'missing');
+        return new ChatEngine({
+          ...options,
+          providerRunner: new OpenCodeGoApiRunner(
+            'mimo-v2.5',
+            {},
+            { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' },
+          ),
+          providerPolicy: babelReviewModelPolicy('mimo-v2.5', root),
+        });
+      },
+    });
+  };
+
+  try {
+    await run(false);
+    await run(true);
+    assert.deepEqual(factoryModes, ['headless'], 'the second TUI turn must reuse the engine');
+    assert.equal(prompts.length, 2);
+    assert.match(prompts[0] ?? '', /Runtime mode: headless\./);
+    assert.match(prompts[1] ?? '', /Runtime mode: tui\./);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalIsTTY === undefined) delete stdout.isTTY;
+    else stdout.isTTY = originalIsTTY;
+    for (const [key, value] of [
+      ['CI', originalCi],
+      ['NO_COLOR', originalNoColor],
+      ['BABEL_EXECUTION_PROFILE', originalProfile],
+      ['BABEL_READ_ONLY', originalReadOnly],
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('executeChatTask prints answer to stdout in non-TTY mode', async () => {

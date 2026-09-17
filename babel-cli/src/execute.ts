@@ -332,6 +332,27 @@ export interface RunOptions {
 
   /** Cancel an in-flight provider call. */
   signal?: AbortSignal;
+
+  /**
+   * Optional parent-owned admission guard for delegated provider attempts.
+   * A returned limiter stops retries before another provider invocation.
+   */
+  budgetGuard?: () => RunBudgetLimiter | null;
+
+  /** Checkpoint parent-owned task accounting after delegated usage is recorded. */
+  onUsageRecorded?: (metadata: RunnerInvocationMetadata) => void;
+}
+
+export type RunBudgetLimiter = 'wall' | 'cost';
+
+export class RunBudgetExceededError extends Error {
+  readonly limiter: RunBudgetLimiter;
+
+  constructor(limiter: RunBudgetLimiter) {
+    super(`Inherited parent ${limiter} budget exhausted`);
+    this.name = 'RunBudgetExceededError';
+    this.limiter = limiter;
+  }
 }
 
 export const RELIABILITY_REPAIR_PROOF_MARKER =
@@ -1464,6 +1485,24 @@ function sumAttemptMetric(
   return seen ? total : null;
 }
 
+function waitForWaterfallDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, delayMs));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      callback();
+    };
+    const onAbort = (): void => finish(() => reject(new Error('Aborted by user or parent')));
+    const timer = setTimeout(() => finish(resolve), delayMs);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 async function runWaterfall<T>(
   label: string,
   schemaName: string,
@@ -1477,6 +1516,8 @@ async function runWaterfall<T>(
   eventBus?: BabelEventBus,
   systemPrompt?: string,
   signal?: AbortSignal,
+  budgetGuard?: () => RunBudgetLimiter | null,
+  onUsageRecorded?: (metadata: RunnerInvocationMetadata) => void,
 ): Promise<WaterfallRunResult<T>> {
   const verboseFallbackLogs =
     process.env['BABEL_VERBOSE_WATERFALLS'] === 'true' || !evidence;
@@ -1521,9 +1562,34 @@ async function runWaterfall<T>(
     return remainingMs;
   };
 
+  const ensureBudgetAvailable = (): void => {
+    const limiter = budgetGuard?.();
+    if (limiter) throw new RunBudgetExceededError(limiter);
+    if (signal?.aborted) throw new Error('Aborted by user or parent');
+  };
+  const recordRunnerUsage = (runner: LlmRunner): RunnerInvocationMetadata | null => {
+    const metadata = getRunnerInvocationMetadata(runner);
+    if (
+      metadata?.provider_model_id &&
+      metadata.prompt_tokens !== null &&
+      metadata.completion_tokens !== null
+    ) {
+      globalCostTracker.trackUsage(
+        metadata.provider_model_id,
+        metadata.prompt_tokens,
+        metadata.completion_tokens,
+        metadata.prompt_cache_hit_tokens,
+        metadata.prompt_cache_miss_tokens,
+      );
+      onUsageRecorded?.(metadata);
+    }
+    return metadata;
+  };
+
   for (let tier = 0; tier < waterfall.length; tier++) {
     const spec = waterfall[tier]!;
     const next = waterfall[tier + 1];
+    ensureBudgetAvailable();
     // Soft-landing: check deadline before starting a new tier, but allow
     // in-flight requests to complete naturally instead of raceWithTimeout.
     ensureTimeRemaining(`starting tier ${spec.name}`);
@@ -1572,6 +1638,7 @@ async function runWaterfall<T>(
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
+        ensureBudgetAvailable();
         const remainingMs = ensureTimeRemaining(
           `running tier ${spec.name} attempt ${attempt}`,
         );
@@ -1613,21 +1680,8 @@ async function runWaterfall<T>(
           systemPrompt,
           signal,
         );
-        const invocationMetadata = getRunnerInvocationMetadata(runner);
-
-        if (
-          invocationMetadata?.provider_model_id &&
-          invocationMetadata.prompt_tokens !== null &&
-          invocationMetadata.completion_tokens !== null
-        ) {
-          globalCostTracker.trackUsage(
-            invocationMetadata.provider_model_id,
-            invocationMetadata.prompt_tokens,
-            invocationMetadata.completion_tokens,
-            invocationMetadata.prompt_cache_hit_tokens,
-            invocationMetadata.prompt_cache_miss_tokens,
-          );
-        }
+        const invocationMetadata = recordRunnerUsage(runner);
+        ensureBudgetAvailable();
 
         const recoveryEntry = appendSchemaFailureRecoveryIfNeeded({
           evidence,
@@ -1710,12 +1764,16 @@ async function runWaterfall<T>(
         if (err instanceof JitDenialError) {
           throw err;
         }
+        if (err instanceof RunBudgetExceededError) {
+          throw err;
+        }
         lastError = err instanceof Error ? err : new Error(String(err));
         if (isAggregateWaterfallTimeoutError(lastError)) {
           throw lastError;
         }
-        const invocationMetadata = getRunnerInvocationMetadata(runner);
+        const invocationMetadata = recordRunnerUsage(runner);
         lastFailureMetadata = invocationMetadata;
+        ensureBudgetAvailable();
         let schemaFailureEntryId: string | null = null;
         let schemaRetryPrompt: string | null = null;
         if (isStructuredOutputFailure(lastError)) {
@@ -1791,7 +1849,7 @@ async function runWaterfall<T>(
                 `  Reason: ${lastError.message.slice(0, 160)}`,
             );
           }
-          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          await waitForWaterfallDelay(backoffMs, signal);
           continue;
         }
 
@@ -1819,7 +1877,7 @@ async function runWaterfall<T>(
                 `  Reason: ${lastError.message.slice(0, 160)}`,
             );
           }
-          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          await waitForWaterfallDelay(backoffMs, signal);
         } else {
           cascadeFromTier = true;
         }
@@ -2134,6 +2192,8 @@ export async function runWithFallback<T>(
     options.eventBus,
     options.systemPrompt,
     options.signal,
+    options.budgetGuard,
+    options.onUsageRecorded,
   );
 
   // Record to evidence bundle for 05_waterfall_telemetry.json.
@@ -2220,6 +2280,7 @@ export async function runWaterfallForSchemaFailureTest<T>(input: {
   evidence: EvidenceBundle;
   maxAttempts?: number;
   tiers: Array<{ name: string; runner: LlmRunner }>;
+  budgetGuard?: () => RunBudgetLimiter | null;
 }): Promise<T> {
   const waterfall = input.tiers.map(
     (tier, index): TierSpec => ({
@@ -2238,6 +2299,12 @@ export async function runWaterfallForSchemaFailureTest<T>(input: {
     input.maxAttempts ?? 2,
     resolveAggregateWaterfallTimeoutMs(),
     input.evidence,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    input.budgetGuard,
+    undefined,
   );
   input.evidence.appendWaterfallLog({
     ...waterfallResult.outcome,

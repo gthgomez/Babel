@@ -321,6 +321,7 @@ export async function runLiveControllerGoldenEpisode(input: {
       projectRoot: input.workspace_path,
       model: 'deepseek-v4-flash',
       maxTurns: 6,
+      runtimeMode: 'direct',
     });
     const anyEngine = engine as unknown as {
       deliberationRunner: unknown;

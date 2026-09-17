@@ -349,6 +349,58 @@ export function paritySettleToolStarted(
   return true;
 }
 
+/** Close a proposed child that was denied before crossing the dispatch boundary. */
+export function paritySettleToolNotStarted(
+  rt: ParityRuntime,
+  tool: {
+    id: string;
+    name: string;
+    action_index?: number;
+    batch_id?: string;
+    target_summary?: string;
+  },
+  runDir?: string,
+  reason = 'inherited_budget_exhausted_before_dispatch',
+): boolean {
+  if (!rt.turnId || completedToolIdempotencyKeys(rt.sessionEvents).has(tool.id)) return false;
+  const alreadyProposed = rt.sessionEvents.events.some(
+    (event) =>
+      (event.kind === 'tool_proposed' || event.kind === 'tool_started') &&
+      event.idempotency_key === tool.id,
+  );
+  if (!alreadyProposed) {
+    recordToolProposed(rt.sessionEvents, {
+      turn_id: rt.turnId,
+      tool_call_id: tool.id,
+      tool_name: tool.name,
+      idempotency_key: tool.id,
+      effect_class: classifyToolEffect(tool.name),
+      ...(tool.action_index !== undefined ? { action_index: tool.action_index } : {}),
+      ...(tool.batch_id !== undefined ? { batch_id: tool.batch_id } : {}),
+      ...(tool.target_summary !== undefined ? { target_summary: tool.target_summary } : {}),
+    });
+  }
+  const alreadyStarted = rt.sessionEvents.events.some(
+    (event) => event.kind === 'tool_started' && event.idempotency_key === tool.id,
+  );
+  if (alreadyStarted) return false;
+  recordToolTerminal(rt.sessionEvents, {
+    turn_id: rt.turnId,
+    tool_call_id: tool.id,
+    tool_name: tool.name,
+    idempotency_key: tool.id,
+    cancelled: true,
+    reason,
+    recovery_state: 'TOOL_NOT_STARTED',
+    effect_class: classifyToolEffect(tool.name),
+    ...(tool.action_index !== undefined ? { action_index: tool.action_index } : {}),
+    ...(tool.batch_id !== undefined ? { batch_id: tool.batch_id } : {}),
+    ...(tool.target_summary !== undefined ? { target_summary: tool.target_summary } : {}),
+  });
+  if (runDir) flushSessionEventsRequired(rt, runDir, 'settle-not-started');
+  return true;
+}
+
 /** Persist an explicit, operator-auditable authorization for one recovered unknown effect. */
 export function parityAuthorizeRecoveredOutcomeRetry(
   rt: ParityRuntime,
