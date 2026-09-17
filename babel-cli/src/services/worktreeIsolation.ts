@@ -29,6 +29,10 @@ export interface WorktreeCreateOptions {
   baseRef?: string;
   /** Detach HEAD (no branch). Default: false */
   detach?: boolean;
+  /** Optional inherited child deadline for the synchronous Git operation. */
+  deadlineAtMs?: number;
+  /** Optional parent cancellation signal checked before and after setup. */
+  abortSignal?: AbortSignal;
 }
 
 const WORKTREE_PREFIX = 'babel-worktree-';
@@ -40,6 +44,7 @@ function resolveProjectRoot(options?: WorktreeCreateOptions): string {
 // ─── Worktree operations ───────────────────────────────────────────────────
 
 export function createWorktree(name: string, options?: WorktreeCreateOptions): WorktreeInfo {
+  if (options?.abortSignal?.aborted) throw new Error('Worktree creation cancelled by parent');
   const projectRoot = resolveProjectRoot(options);
   const workspaceRoot = join(projectRoot, '.babel', 'worktrees', name);
   const branch = options?.branch ?? `${WORKTREE_PREFIX}${name}`;
@@ -66,8 +71,14 @@ export function createWorktree(name: string, options?: WorktreeCreateOptions): W
   const result = spawnSync('git', args, {
     cwd: projectRoot,
     encoding: 'utf-8',
+    ...(options?.deadlineAtMs !== undefined
+      ? { timeout: Math.max(0, options.deadlineAtMs - Date.now()) }
+      : {}),
   });
 
+  if (result.error) {
+    throw new Error(`git worktree add failed: ${result.error.message}`);
+  }
   if (result.status !== 0) {
     const errMsg = (result.stderr || result.stdout || '').trim();
     throw new Error(`git worktree add failed: ${errMsg}`);

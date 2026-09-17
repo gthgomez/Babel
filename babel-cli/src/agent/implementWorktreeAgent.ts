@@ -34,6 +34,11 @@ import {
   type MutationAgentLoopResult,
   type SubagentAttribution,
 } from './lanes/runMutationAgentLoop.js';
+import {
+  createChildBudgetController,
+  type ChildBudgetLimiter,
+  type InheritedChildAllowance,
+} from './childBudget.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,6 +70,10 @@ export interface ImplementWorktreeAgentOptions {
   useDeterministicMock?: boolean;
   /** Partial tool context; runDir/agentId filled by the runner. */
   toolContext?: Partial<ToolContext>;
+  /** Bounded allowance inherited from the parent delegation point. */
+  inheritedAllowance?: InheritedChildAllowance;
+  /** Parent callback for durable task-cost checkpointing. */
+  onUsageRecorded?: () => void;
 }
 
 export interface ImplementWorktreeAgentResult {
@@ -83,6 +92,8 @@ export interface ImplementWorktreeAgentResult {
   error: string | null;
   mutation: MutationAgentLoopResult;
   diagnostics: Array<{ code: string; message: string }>;
+  inheritedBudgetExceeded?: boolean;
+  inheritedBudgetLimiter?: ChildBudgetLimiter;
 }
 
 export interface WriteScopeValidation {
@@ -236,11 +247,19 @@ function filterParentStatusLines(porcelain: string): string {
     .join('\n');
 }
 
-function gitPorcelainStatus(projectRoot: string): string {
+function gitPorcelainStatus(
+  projectRoot: string,
+  control?: { deadlineAtMs?: number; abortSignal?: AbortSignal },
+): string {
+  if (control?.abortSignal?.aborted) return '[parent-cancelled]';
   const result = spawnSync('git', ['status', '--porcelain'], {
     cwd: projectRoot,
     encoding: 'utf-8',
+    ...(control?.deadlineAtMs !== undefined
+      ? { timeout: Math.max(0, control.deadlineAtMs - Date.now()) }
+      : {}),
   });
+  if (result.error) return `[git-status-error] ${result.error.message}`;
   if (result.status !== 0) {
     return (result.stderr || result.stdout || '').trim();
   }
@@ -266,6 +285,21 @@ export async function runImplementWorktreeAgent(
   options: ImplementWorktreeAgentOptions,
 ): Promise<ImplementWorktreeAgentResult> {
   const projectRoot = resolve(options.projectRoot);
+  const setupBudgetController = createChildBudgetController(
+    options.inheritedAllowance,
+    options.abortSignal,
+  );
+  const setupLimiter = setupBudgetController.limiter();
+  if (options.abortSignal?.aborted || setupLimiter) {
+    const result = emptyInheritedWorktreeResult(
+      spec,
+      projectRoot,
+      options.abortSignal?.aborted ? 'child_cancellation' : 'child_round_exhaustion',
+      setupLimiter,
+    );
+    setupBudgetController.dispose();
+    return result;
+  }
   const scopeValidation = validateImplementWriteScope(spec.writeScope, projectRoot);
   const diagnostics = scopeValidation.diagnostics.map((d) => ({
     code: d.code,
@@ -273,6 +307,7 @@ export async function runImplementWorktreeAgent(
   }));
 
   if (!scopeValidation.ok) {
+    setupBudgetController.dispose();
     const emptyWorktree: WorktreeInfo = {
       name: '',
       path: projectRoot,
@@ -301,7 +336,14 @@ export async function runImplementWorktreeAgent(
     };
   }
 
-  const parentStatusBefore = gitPorcelainStatus(projectRoot);
+  const worktreeControl = {
+    ...(options.inheritedAllowance?.deadlineAtMs !== null &&
+    options.inheritedAllowance?.deadlineAtMs !== undefined
+      ? { deadlineAtMs: options.inheritedAllowance.deadlineAtMs }
+      : {}),
+    ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+  };
+  const parentStatusBefore = gitPorcelainStatus(projectRoot, worktreeControl);
   const name = worktreeNameForAgent(spec.id);
   let worktree: WorktreeInfo;
   try {
@@ -309,8 +351,46 @@ export async function runImplementWorktreeAgent(
       projectRoot,
       detach: true,
       baseRef: options.baseRef ?? 'HEAD',
+      ...(options.inheritedAllowance?.deadlineAtMs !== null &&
+      options.inheritedAllowance?.deadlineAtMs !== undefined
+        ? { deadlineAtMs: options.inheritedAllowance.deadlineAtMs }
+        : {}),
+      ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
     });
+    const afterSetupLimiter = setupBudgetController.limiter();
+    setupBudgetController.dispose();
+    if (options.abortSignal?.aborted || afterSetupLimiter) {
+      try {
+        removeWorktree(name, { projectRoot, force: true });
+      } catch {
+        // Preserve the inherited terminal result; cleanup diagnostics belong to
+        // normal mutation completion, not an already-expired child.
+      }
+      return emptyInheritedWorktreeResult(
+        spec,
+        projectRoot,
+        options.abortSignal?.aborted ? 'child_cancellation' : 'child_round_exhaustion',
+        afterSetupLimiter,
+      );
+    }
   } catch (err) {
+    const inheritedLimiter = setupBudgetController.limiter();
+    if (options.abortSignal?.aborted || inheritedLimiter) {
+      setupBudgetController.dispose();
+      try {
+        removeWorktree(name, { projectRoot, force: true });
+      } catch {
+        // Preserve the inherited terminal result if timed-out setup left no
+        // registered worktree to remove.
+      }
+      return emptyInheritedWorktreeResult(
+        spec,
+        projectRoot,
+        options.abortSignal?.aborted ? 'child_cancellation' : 'child_round_exhaustion',
+        inheritedLimiter,
+      );
+    }
+    setupBudgetController.dispose();
     const message = err instanceof Error ? err.message : String(err);
     diagnostics.push({ code: 'worktree_create_failed', message });
     const failedMutation = emptyMutationResult(`Worktree create failed: ${message}`);
@@ -329,7 +409,7 @@ export async function runImplementWorktreeAgent(
       },
       parentTreeClean: true,
       parentStatusBefore,
-      parentStatusAfter: gitPorcelainStatus(projectRoot),
+      parentStatusAfter: gitPorcelainStatus(projectRoot, worktreeControl),
       changedFiles: [],
       stepsExecuted: 0,
       error: failedMutation.error,
@@ -368,6 +448,10 @@ export async function runImplementWorktreeAgent(
           : {}),
         ...(spec.model ? { model: spec.model } : {}),
         runDir,
+        ...(options.inheritedAllowance
+          ? { inheritedAllowance: options.inheritedAllowance }
+          : {}),
+        ...(options.onUsageRecorded ? { onUsageRecorded: options.onUsageRecorded } : {}),
       }),
     );
   } catch (err) {
@@ -376,7 +460,10 @@ export async function runImplementWorktreeAgent(
     mutation = emptyMutationResult(message);
   }
 
-  const parentStatusAfter = gitPorcelainStatus(projectRoot);
+  const parentStatusAfter =
+    options.abortSignal?.aborted || mutation.inheritedBudgetExceeded
+      ? parentStatusBefore
+      : gitPorcelainStatus(projectRoot, worktreeControl);
   const parentTreeClean = parentStatusBefore === parentStatusAfter;
   if (!parentTreeClean) {
     diagnostics.push({
@@ -396,7 +483,11 @@ export async function runImplementWorktreeAgent(
     }
   }
 
-  if (options.cleanupWorktree) {
+  if (
+    options.cleanupWorktree &&
+    !options.abortSignal?.aborted &&
+    !mutation.inheritedBudgetExceeded
+  ) {
     try {
       removeWorktree(name, { projectRoot, force: true });
     } catch (err) {
@@ -448,6 +539,14 @@ export async function runImplementWorktreeAgent(
     error: success ? null : (mutation.error ?? diagnostics.map((d) => d.message).join('; ')),
     mutation,
     diagnostics,
+    ...(mutation.inheritedBudgetExceeded
+      ? {
+          inheritedBudgetExceeded: true,
+          ...(mutation.inheritedBudgetLimiter
+            ? { inheritedBudgetLimiter: mutation.inheritedBudgetLimiter }
+            : {}),
+        }
+      : {}),
   };
 }
 
@@ -524,6 +623,52 @@ function emptyMutationResult(error: string): MutationAgentLoopResult {
       changed_files_after_rollback: [],
       next_recommended_operator_action: 'No action needed.',
     }),
+  };
+}
+
+function emptyInheritedWorktreeResult(
+  spec: ImplementWorktreeAgentSpec,
+  projectRoot: string,
+  attribution: 'child_round_exhaustion' | 'child_cancellation',
+  limiter: ChildBudgetLimiter | null,
+): ImplementWorktreeAgentResult {
+  const error = limiter
+    ? `Inherited parent ${limiter} budget exhausted`
+    : 'Aborted by user or parent';
+  const mutation = {
+    ...emptyMutationResult(error),
+    attribution,
+    ...(limiter
+      ? { inheritedBudgetExceeded: true, inheritedBudgetLimiter: limiter }
+      : {}),
+  };
+  return {
+    agentId: spec.id,
+    success: false,
+    attribution,
+    summary: error,
+    writeScope: spec.writeScope,
+    worktree: {
+      name: '',
+      path: projectRoot,
+      branch: 'none',
+      detached: true,
+      active: false,
+    },
+    parentTreeClean: true,
+    parentStatusBefore: '',
+    parentStatusAfter: '',
+    changedFiles: [],
+    stepsExecuted: 0,
+    error,
+    mutation,
+    diagnostics: [{
+      code: limiter ? 'inherited_budget_exhausted' : 'aborted',
+      message: error,
+    }],
+    ...(limiter
+      ? { inheritedBudgetExceeded: true, inheritedBudgetLimiter: limiter }
+      : {}),
   };
 }
 

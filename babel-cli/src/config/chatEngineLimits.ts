@@ -165,6 +165,10 @@ export interface ChatEngineRunAllowanceReport {
   terminatingLimiter: ChatRunLimiter | null;
   terminalClassification: ChatTerminalClassification | null;
   terminalReason: string | null;
+  /** Scoped accounting baseline for the active task, when supplied by ChatEngine. */
+  taskCostBaselineUsd?: number;
+  /** Scoped spend derived from the active task baseline, when supplied. */
+  taskCostSpentUsd?: number;
 }
 
 export function createRunAllowanceReport(
@@ -176,6 +180,8 @@ export function createRunAllowanceReport(
     terminalClassification?: ChatTerminalClassification | null;
     terminalReason?: string | null;
     childLimits?: ChatEngineChildLimits;
+    taskCostBaselineUsd?: number;
+    taskCostSpentUsd?: number;
   },
 ): ChatEngineRunAllowanceReport {
   const declaredWallMs = limits.wallBudget?.requestedMs ?? limits.maxWallMs;
@@ -209,6 +215,12 @@ export function createRunAllowanceReport(
     terminatingLimiter: state?.terminatingLimiter ?? null,
     terminalClassification: state?.terminalClassification ?? null,
     terminalReason: state?.terminalReason ?? null,
+    ...(state?.taskCostBaselineUsd !== undefined
+      ? { taskCostBaselineUsd: state.taskCostBaselineUsd }
+      : {}),
+    ...(state?.taskCostSpentUsd !== undefined
+      ? { taskCostSpentUsd: state.taskCostSpentUsd }
+      : {}),
   };
 }
 

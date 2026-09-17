@@ -20,7 +20,9 @@ import { nativeTurnFromStream, ProviderOutputTruncatedError } from './chatNative
 import { runReadOnlyAgentLoop } from './lanes/readOnlyAgentLoop.js';
 import { defaultToolExecutor } from './toolExecutor.js';
 import { runWithProjectRoot } from '../localTools.js';
-import type { ToolStreamEvent } from '../runners/base.js';
+import type { RunnerInvocationMetadata, ToolStreamEvent } from '../runners/base.js';
+import { globalCostTracker } from '../services/costTracker.js';
+import { chatSessionDir } from '../cli/runsLayout.js';
 
 function installMockRunner(
   engine: ChatEngine,
@@ -168,6 +170,153 @@ describe('PR185 residual Chat runtime repairs', () => {
     assert.equal(after.costBudget?.explicitCostCeiling, false);
     assert.equal(shouldShrinkCostForPostWriteRepair(after, 0), true);
     assert.notEqual(after.maxCostUsd, 100);
+  });
+
+  it('scopes cost enforcement to fresh tasks and preserves an explicit continuation across resume', () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), 'babel-astra-cost-runs-'));
+    const previousRuns = process.env['BABEL_RUNS_DIR'];
+    const previousTotals = globalCostTracker.getSessionSummary();
+    process.env['BABEL_RUNS_DIR'] = runsRoot;
+    globalCostTracker.resetSession();
+    globalCostTracker.restoreSessionCost({
+      totalCostUSD: 2.6,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalTokens: 0,
+    });
+
+    try {
+      const engine = new ChatEngine({
+        task: 'fresh scoped task',
+        projectRoot,
+        model: 'deepseek-v4-flash',
+        maxCostUsd: 0.01,
+      });
+      const first = engine.applyUserSubmission({ userInput: 'fresh scoped task' });
+      const state = engine as unknown as {
+        taskCostBaselineUsd: number;
+        currentTaskCostUsd: () => number;
+        checkBudgets: () => { ok: boolean; limiter?: string };
+      };
+      assert.equal(state.taskCostBaselineUsd, 2.6);
+      assert.equal(state.currentTaskCostUsd(), 0);
+      assert.equal(state.checkBudgets().ok, true);
+
+      globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+      assert.ok(state.currentTaskCostUsd() > 0);
+      assert.equal(state.checkBudgets().ok, true);
+      globalCostTracker.trackUsage('deepseek-v4-flash', 100_000, 0);
+      assert.equal(state.checkBudgets().ok, false);
+      assert.equal(state.checkBudgets().limiter, 'cost');
+
+      const second = engine.applyUserSubmission({ userInput: 'independent scoped task' });
+      assert.equal(second.continuedTask, false);
+      assert.ok(state.taskCostBaselineUsd > 2.6);
+      assert.equal(state.currentTaskCostUsd(), 0);
+      assert.equal(state.checkBudgets().ok, true);
+      const freshBaseline = state.taskCostBaselineUsd;
+      globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 0);
+
+      const runId = engine.getEngineRunId();
+      const resumed = new ChatEngine({
+        task: 'resume scoped task',
+        projectRoot,
+        runId,
+        resumeExisting: true,
+        model: 'deepseek-v4-flash',
+        maxCostUsd: 0.01,
+      });
+      const continued = resumed.applyUserSubmission({
+        userInput: 'continue the independent scoped task',
+        continueTask: true,
+      });
+      const resumedState = resumed as unknown as {
+        taskCostBaselineUsd: number;
+        currentTaskCostUsd: () => number;
+      };
+      assert.equal(continued.continuedTask, true);
+      assert.equal(resumedState.taskCostBaselineUsd, freshBaseline);
+      assert.ok(resumedState.currentTaskCostUsd() > 0);
+    } finally {
+      globalCostTracker.resetSession();
+      globalCostTracker.restoreSessionCost({
+        totalCostUSD: previousTotals.totalCostUSD,
+        totalInputTokens: previousTotals.totalInputTokens,
+        totalOutputTokens: previousTotals.totalOutputTokens,
+        totalTokens: previousTotals.totalTokens,
+      });
+      if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
+      else process.env['BABEL_RUNS_DIR'] = previousRuns;
+      rmSync(runsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('checkpoints provider usage before turn finalization so restart cannot mint continuation budget', () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), 'babel-astra-restart-runs-'));
+    const previousRuns = process.env['BABEL_RUNS_DIR'];
+    const previousTotals = globalCostTracker.getSessionSummary();
+    process.env['BABEL_RUNS_DIR'] = runsRoot;
+    globalCostTracker.resetSession();
+    try {
+      const engine = new ChatEngine({
+        task: 'restart-safe scoped task',
+        projectRoot,
+        model: 'deepseek-v4-flash',
+        maxCostUsd: 0.01,
+      });
+      engine.applyUserSubmission({ userInput: 'restart-safe scoped task' });
+      const metadata: RunnerInvocationMetadata = {
+        provider: 'deepseek',
+        provider_model_id: 'deepseek-v4-flash',
+        latency_ms: 0,
+        prompt_tokens: 100_000,
+        completion_tokens: 0,
+        total_tokens: 100_000,
+        estimated_cost_usd: null,
+      };
+      const state = engine as unknown as {
+        trackRunnerUsage: (runner: { getLastInvocationMetadata: () => RunnerInvocationMetadata }) => void;
+        currentTaskCostUsd: () => number;
+      };
+      state.trackRunnerUsage({ getLastInvocationMetadata: () => metadata });
+      const spentBeforeRestart = state.currentTaskCostUsd();
+      assert.ok(spentBeforeRestart > 0);
+
+      const budgetPath = join(chatSessionDir(engine.getEngineRunId()), 'task-budget.json');
+      const persistedBudget = JSON.parse(readFileSync(budgetPath, 'utf8')) as Record<string, unknown>;
+      writeFileSync(budgetPath, JSON.stringify({ ...persistedBudget, accountingEpoch: 'restarted-process' }));
+      globalCostTracker.resetSession();
+      globalCostTracker.trackUsage('deepseek-v4-flash', 100_000, 0);
+      const resumed = new ChatEngine({
+        task: 'restart-safe scoped task',
+        projectRoot,
+        model: 'deepseek-v4-flash',
+        maxCostUsd: 0.02,
+      });
+      resumed.assignRunId(engine.getEngineRunId());
+      const resumedState = resumed as unknown as {
+        currentTaskCostUsd: () => number;
+        checkBudgets: () => { ok: boolean; limiter?: string };
+      };
+      const continued = resumed.applyUserSubmission({
+        userInput: 'continue after restart',
+        continueTask: true,
+      });
+      assert.equal(continued.continuedTask, true);
+      assert.ok(Math.abs(resumedState.currentTaskCostUsd() - spentBeforeRestart) < 1e-9);
+      assert.equal(resumedState.checkBudgets().ok, true);
+    } finally {
+      globalCostTracker.resetSession();
+      globalCostTracker.restoreSessionCost({
+        totalCostUSD: previousTotals.totalCostUSD,
+        totalInputTokens: previousTotals.totalInputTokens,
+        totalOutputTokens: previousTotals.totalOutputTokens,
+        totalTokens: previousTotals.totalTokens,
+      });
+      if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
+      else process.env['BABEL_RUNS_DIR'] = previousRuns;
+      rmSync(runsRoot, { recursive: true, force: true });
+    }
   });
 
   it('unlimited prepared cost does not clamp to 100 on re-resolution', () => {

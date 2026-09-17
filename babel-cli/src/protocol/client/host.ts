@@ -87,6 +87,7 @@ function defaultEngineFactory(descriptor: SessionDescriptor): ChatEngine {
   const engine = new ChatEngine({
     task: descriptor.task ?? `Session ${descriptor.threadId}`,
     projectRoot: descriptor.projectRoot,
+    runtimeMode: 'direct',
     ...(descriptor.model !== 'default' ? { model: descriptor.model } : {}),
     ...(descriptor.provider !== 'default' ? { provider: descriptor.provider } : {}),
     executionProfile: modeExecutionProfile(descriptor.mode),

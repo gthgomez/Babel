@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
@@ -36,6 +37,23 @@ export function usageDelta(
   };
 }
 
+/** Capture the current global total as the start of an independent task. */
+export function captureCostBaselineUsd(): number {
+  return globalCostTracker.getSessionSummary().totalCostUSD;
+}
+
+/**
+ * Return spend attributable to a task that started at `baselineUsd`.
+ * Global tracker totals remain the accounting truth; this delta is the
+ * enforcement truth for one task/run and is never negative after restore.
+ */
+export function costSpentSinceBaselineUsd(baselineUsd: number): number {
+  return Math.max(
+    0,
+    globalCostTracker.getSessionSummary().totalCostUSD - baselineUsd,
+  );
+}
+
 export interface SessionUsageSummary {
   totalCostUSD: number;
   totalInputTokens: number;
@@ -58,6 +76,7 @@ const PRICING: Record<string, { input: number; output: number }> = {
 };
 
 export class CostTracker {
+  private readonly accountingEpoch = randomUUID();
   private sessionUsage: Record<string, ModelUsage> = {};
   private sessionTotalCost = 0;
   private projectStatsPath: string;
@@ -110,6 +129,11 @@ export class CostTracker {
   public resetSession(): void {
     this.sessionUsage = {};
     this.sessionTotalCost = 0;
+  }
+
+  /** Identifies the in-process accounting epoch for durable task scoping. */
+  public getAccountingEpoch(): string {
+    return this.accountingEpoch;
   }
 
   /** Restore cost state from a saved session (resume). */

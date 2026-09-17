@@ -235,6 +235,7 @@ export async function runBabelLiveCase(input: BabelHarnessCase): Promise<Control
     model: 'DeepSeek',
     maxTurns: 8,
     executionProfile: 'chat',
+    runtimeMode: 'direct',
   });
   const privateEngine = engine as unknown as Record<string, unknown>;
   privateEngine['deliberationRunner'] = observer;

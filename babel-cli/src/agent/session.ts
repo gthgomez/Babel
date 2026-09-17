@@ -471,6 +471,7 @@ export class AgentSession {
       ...(this.options.workspaceRoot !== undefined && this.options.workspaceRoot !== null
         ? { workspaceRoot: this.options.workspaceRoot }
         : {}),
+      runtimeMode: 'direct',
     });
 
     const callbacks: ChatCallbacks = {

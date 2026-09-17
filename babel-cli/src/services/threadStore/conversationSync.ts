@@ -92,7 +92,7 @@ export function createEngineFromThreadCells(
   options: ChatEngineOptions,
   records: HistoryCellRecord[],
 ): ChatEngine {
-  const engine = new ChatEngine(options);
+  const engine = new ChatEngine({ ...options, runtimeMode: options.runtimeMode ?? 'direct' });
   engine.assignRunId(threadId);
   applyCellsToChatEngine(engine, records);
   return engine;
@@ -107,7 +107,7 @@ export function createEngineFromEventLog(
   log: ThreadEventLog,
   systemPrompt?: string,
 ): ChatEngine {
-  const engine = new ChatEngine(options);
+  const engine = new ChatEngine({ ...options, runtimeMode: options.runtimeMode ?? 'direct' });
   engine.assignRunId(log.thread_id);
   applyEventLogToChatEngine(engine, log, {
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),

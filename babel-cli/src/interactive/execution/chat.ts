@@ -205,6 +205,7 @@ export async function executeChatTask(
       engine: ctx.chatEngine,
       engineFactory,
       convRenderer,
+      runtimeMode: useConversational ? 'tui' : 'headless',
 
       ...(preflightContext ? { preflightContext } : {}),
       onCancel: () => ctx.chatEngine!.abortTurn(),

@@ -68,6 +68,7 @@ export async function resumeChatSession(
       projectRoot: target.targetRoot,
       ...(ctx.state.model !== undefined ? { model: ctx.state.model } : {}),
       workspaceRoot: target.workspaceRoot ?? null,
+      runtimeMode: 'tui' as const,
     };
 
     // Prefer durable thread event log (preserves tool call/result IDs)
