@@ -1,4 +1,7 @@
 import {
+  accentHigh,
+  muted,
+  primary,
   getEffectiveTerminalWidth,
   visibleLength,
   truncate,
@@ -307,22 +310,25 @@ export function renderStatusBar(state: StatusBarState): string {
     hasCriticalRateLimit: rateAttention === 'critical',
   });
 
-  const leftParts: string[] = [state.model];
-  if (policy.showMode) leftParts.push(state.mode);
+  const leftParts: string[] = [primary(state.model)];
+  if (policy.showMode) leftParts.push(accentHigh(state.mode));
   if (policy.showBranch && state.gitBranch) {
-    leftParts.push(`${state.gitBranch}${state.gitDirty ? '*' : ''}`);
+    leftParts.push(muted(`${state.gitBranch}${state.gitDirty ? '*' : ''}`));
   }
   const left = leftParts.join(' · ');
 
   const rightParts: StatusBarRightPart[] = [];
   if (policy.showSessionTokens) {
-    rightParts.push({ slot: 'sessionTokens', text: `${state.totalTokens.toLocaleString()} tok` });
+    rightParts.push({
+      slot: 'sessionTokens',
+      text: muted(`${state.totalTokens.toLocaleString()} tok`),
+    });
   }
   if (policy.showCost) {
-    rightParts.push({ slot: 'cost', text: `$${state.totalCost.toFixed(4)}` });
+    rightParts.push({ slot: 'cost', text: muted(`$${state.totalCost.toFixed(4)}`) });
   }
   if (policy.showTurn) {
-    rightParts.push({ slot: 'turn', text: `turn ${state.turnCount}` });
+    rightParts.push({ slot: 'turn', text: muted(`turn ${state.turnCount}`) });
   }
   if (policy.showRateLimit) {
     const rl = renderCompactRateLimit(rateState);

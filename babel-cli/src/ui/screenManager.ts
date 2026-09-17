@@ -14,7 +14,17 @@
  * synchronized update support and unified error handling.
  */
 
-import { muted, dim, accent, getTerminalWidth, truncate, wrapText, headerBg } from './theme.js';
+import {
+  accentHigh,
+  border,
+  dim,
+  headerBg,
+  muted,
+  primary,
+  truncate,
+  visibleLength,
+  wrapText,
+} from './theme.js';
 import { FrameScheduler } from './frameScheduler.js';
 import { renderCompactTokenBar, getContextLimit } from './tokenBar.js';
 import { ScrollbackBuffer } from './scrollback.js';
@@ -204,9 +214,9 @@ export class ScreenManager {
   /** Draw the top bar — model · mode · project only. */
   drawTopBar(): void {
     if (this.layout.mode === 'linear') return;
-    const left = `${this.state.model || 'auto'} · ${this.state.mode} · ${this.state.project || 'Workspace'}`;
+    const left = `${primary(this.state.model || 'auto')} · ${accentHigh(this.state.mode)} · ${muted(this.state.project || 'Workspace')}`;
     const truncatedLeft = truncate(left, this.cols - 2);
-    const rightPad = ' '.repeat(Math.max(0, this.cols - truncatedLeft.length - 2));
+    const rightPad = ' '.repeat(Math.max(0, this.cols - visibleLength(truncatedLeft) - 2));
 
     const buf = OutputBuffer.getInstance();
     const useSync = OutputBuffer.supportsSyncUpdate();
@@ -215,7 +225,7 @@ export class ScreenManager {
       buf.write('\x1b[s');
       buf.write(`\x1b[${this.layout.titleRow};1H${headerBg(` ${truncatedLeft}${rightPad} `)}`);
       if (this.layout.borderRow > 0) {
-        buf.write(`\x1b[${this.layout.borderRow};1H${dim('─'.repeat(this.cols))}`);
+        buf.write(`\x1b[${this.layout.borderRow};1H${border('─'.repeat(this.cols))}`);
       }
       buf.write('\x1b[u');
     } finally {

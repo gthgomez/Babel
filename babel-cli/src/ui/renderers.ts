@@ -11,6 +11,7 @@ import { renderProgressLabel, type ProgressLabelOptions } from './progress.js';
 import { renderBadge } from './badges.js';
 import {
   accentBright,
+  border,
   muted,
   primary,
   warning,
@@ -436,8 +437,9 @@ export function renderOperatorHeader(state: Record<string, unknown>): string {
       : '';
 
   const width = getEffectiveTerminalWidth();
-  // Lighter separator: dimmed dotted rule — less visual weight than solid ─
-  const separator = dim('╌'.repeat(width));
+  // Keep the header rule in the shared border role so alternate themes can
+  // control its contrast without adding renderer-local color values.
+  const separator = border('─'.repeat(width));
 
   return [
     '',

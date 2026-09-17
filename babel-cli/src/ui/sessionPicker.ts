@@ -15,7 +15,16 @@
 
 import process from 'node:process';
 import { parseKeypress, type KeyEvent } from './keyInput.js';
-import { headerBg, accentBright, muted, primary, dim } from './theme.js';
+import {
+  accentBright,
+  bgSelected,
+  focusedBorder,
+  headerBg,
+  muted,
+  padRight,
+  primary,
+  dim,
+} from './theme.js';
 import { OutputBuffer } from './outputBuffer.js';
 import { withPausedStdin, drainStdinResiduals } from './inputCoordinator.js';
 import { shouldAvoidAltScreen } from './a11y.js';
@@ -304,11 +313,14 @@ export class SessionPicker {
     for (let i = start; i < end; i++) {
       const s = this.filtered[i]!;
       const selected = i === this.selectedIdx;
-      const marker = selected ? accentBright('›') : ' ';
-      const id = primary(s.id.slice(0, 28).padEnd(28));
+      const marker = selected ? focusedBorder('›') : muted('·');
+      const id = selected
+        ? accentBright(s.id.slice(0, 28).padEnd(28))
+        : primary(s.id.slice(0, 28).padEnd(28));
       const meta = muted(`${s.turnCount} msgs`);
       const preview = dim(s.preview.slice(0, width - 40));
-      lines.push(`${marker} ${id} ${meta}  ${preview}`);
+      const row = `${marker} ${id} ${meta}  ${preview}`;
+      lines.push(selected ? bgSelected(padRight(row, width)) : row);
     }
 
     if (this.filtered.length === 0) {
