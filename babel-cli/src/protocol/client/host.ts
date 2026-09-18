@@ -6,6 +6,15 @@
 import { ChatEngine } from '../../agent/chatEngine.js';
 import type { BabelMode, SessionDescriptor } from '../../executor/contracts.js';
 import {
+  buildPreparedTurn,
+  resolveModeCapability,
+  type RestoreReport,
+} from '../../executor/modeAdapters.js';
+import {
+  hydrateEngineFromRestore,
+  inspectSessionRestoreState,
+} from '../../services/threadStore/sessionHydration.js';
+import {
   allocateThreadId,
   ensureThread,
   loadSessionDescriptor,
@@ -76,6 +85,8 @@ export interface ProtocolHostState {
   remoteSurface: boolean;
   approvalBroker: RemoteApprovalBroker;
   verificationByThread: Map<string, VerificationEvidence>;
+  /** Durable-state restore outcome recorded at thread.resume time. */
+  restoreReports: Map<string, RestoreReport>;
 }
 
 export function createProtocolHostState(options: {
@@ -97,6 +108,7 @@ export function createProtocolHostState(options: {
     remoteSurface: options.remoteSurface === true,
     approvalBroker: new RemoteApprovalBroker(),
     verificationByThread: new Map(),
+    restoreReports: new Map(),
   };
 }
 
@@ -105,14 +117,15 @@ function modeExecutionProfile(mode: BabelMode): 'chat' | 'plan' | 'deep' {
 }
 
 function defaultEngineFactory(descriptor: SessionDescriptor): ChatEngine {
+  const prepared = buildPreparedTurn(descriptor);
   const engine = new ChatEngine({
-    task: descriptor.task ?? `Session ${descriptor.threadId}`,
-    projectRoot: descriptor.projectRoot,
+    task: prepared.task,
+    projectRoot: prepared.projectRoot,
     runtimeMode: 'direct',
-    ...(descriptor.model !== 'default' ? { model: descriptor.model } : {}),
-    ...(descriptor.provider !== 'default' ? { provider: descriptor.provider } : {}),
-    executionProfile: modeExecutionProfile(descriptor.mode),
-    hardPlanMode: descriptor.mode === 'plan',
+    ...(prepared.model !== 'default' ? { model: prepared.model } : {}),
+    ...(prepared.provider !== 'default' ? { provider: prepared.provider } : {}),
+    executionProfile: modeExecutionProfile(prepared.mode),
+    hardPlanMode: prepared.mode === 'plan',
   });
   engine.assignRunId(descriptor.threadId);
   return engine;
@@ -139,9 +152,34 @@ function materializeEngine(state: ProtocolHostState, descriptor: SessionDescript
   const existing = state.engines.get(descriptor.threadId);
   if (existing) return existing;
   const engine = state.engineFactory(descriptor);
+  const report = state.restoreReports.get(descriptor.threadId);
+  if (report?.resumable && report.source !== 'none') {
+    if (!engineSupportsHydration(engine)) {
+      throw new Error(
+        `Cannot restore thread ${descriptor.threadId}: engine does not support conversation hydration`,
+      );
+    }
+    // Hydrate before publishing so a failed restore cannot leave a poisoned
+    // empty engine cached for the next submit.
+    hydrateEngineFromRestore(engine, report);
+  }
   state.engines.set(descriptor.threadId, engine);
   state.descriptors.set(descriptor.threadId, descriptor);
   return engine;
+}
+
+/** Hydration needs the ChatEngine conversation surface; tests may inject stubs. */
+function engineSupportsHydration(engine: ChatEngine): boolean {
+  const candidate = engine as unknown as {
+    restoreEventLog?: unknown;
+    replaceConversation?: unknown;
+    getConversation?: unknown;
+  };
+  return (
+    typeof candidate.restoreEventLog === 'function' &&
+    typeof candidate.replaceConversation === 'function' &&
+    typeof candidate.getConversation === 'function'
+  );
 }
 
 /**
@@ -220,7 +258,8 @@ export async function handleProtocolRequest(
         if (!threadStoreExists(threadId)) {
           return errorResponse(id, BabelProtocolErrorCode.THREAD_NOT_FOUND, `Thread not found: ${threadId}`);
         }
-        const descriptor = loadSessionDescriptor(threadId) ?? {
+        const loadedDescriptor = loadSessionDescriptor(threadId);
+        const descriptor = loadedDescriptor ?? {
           schemaVersion: 1,
           threadId,
           projectRoot: params.project_root ?? process.cwd(),
@@ -235,12 +274,23 @@ export async function handleProtocolRequest(
         if (params.project_root && params.project_root !== descriptor.projectRoot) {
           return errorResponse(id, BabelProtocolErrorCode.PROJECT_ROOT_MISMATCH, `Project root mismatch for thread: ${threadId}`);
         }
-        writeSessionDescriptor(descriptor);
+        // Never cement a synthesized descriptor: only persist a real one.
+        if (loadedDescriptor) writeSessionDescriptor(descriptor);
         state.descriptors.set(threadId, descriptor);
-        const cells = loadThreadCells(threadId);
+        const resumeCapability = resolveModeCapability(descriptor.mode);
+        const inspected = inspectSessionRestoreState(threadId, descriptor.mode);
+        const report: RestoreReport = resumeCapability.resume
+          ? inspected
+          : {
+              ...inspected,
+              resumable: false,
+              ...(resumeCapability.reason !== undefined ? { reason: resumeCapability.reason } : {}),
+            };
+        state.restoreReports.set(threadId, report);
         const result: ThreadResumeResult = {
           thread_id: threadId,
-          turn_count: cells.length > 0 ? (cells[cells.length - 1]?.turn_id ?? 0) : 0,
+          turn_count: report.turnCount,
+          restore: report,
         };
         return { jsonrpc: '2.0', id, result };
       }
@@ -257,6 +307,40 @@ export async function handleProtocolRequest(
             id,
             BabelProtocolErrorCode.THREAD_NOT_FOUND,
             `Thread not found: ${params.thread_id}`,
+          );
+        }
+        const descriptor = state.descriptors.get(params.thread_id) ?? loadSessionDescriptor(params.thread_id);
+        const registeredEngine = state.engines.get(params.thread_id);
+        if (!descriptor && !registeredEngine) {
+          return errorResponse(
+            id,
+            BabelProtocolErrorCode.MODE_UNSUPPORTED,
+            `Cannot determine mode for thread ${params.thread_id}: no session descriptor or registered runtime`,
+          );
+        }
+        if (descriptor) {
+          const capability = resolveModeCapability(descriptor.mode);
+          if (!capability.submission) {
+            return errorResponse(
+              id,
+              BabelProtocolErrorCode.MODE_UNSUPPORTED,
+              capability.reason ?? `Mode ${descriptor.mode} is not supported on this surface`,
+            );
+          }
+        }
+        // Ordinary submission is self-sufficient: when no live runtime is
+        // registered, inspect durable state before admitting so a cold host
+        // hydrates (or refuses) instead of silently running on empty history.
+        let restoreReport = state.restoreReports.get(params.thread_id);
+        if (!restoreReport && !registeredEngine) {
+          restoreReport = inspectSessionRestoreState(params.thread_id, descriptor?.mode ?? 'chat');
+          state.restoreReports.set(params.thread_id, restoreReport);
+        }
+        if (restoreReport && !restoreReport.resumable && !registeredEngine) {
+          return errorResponse(
+            id,
+            BabelProtocolErrorCode.THREAD_NOT_RESUMABLE,
+            restoreReport.reason ?? `Thread ${params.thread_id} has state that cannot be restored`,
           );
         }
         const integrity = hashUserMessage(params.message);
@@ -293,8 +377,18 @@ export async function handleProtocolRequest(
         state.activeTurns.set(params.thread_id, launch);
         state.lastMessageIntegrity.set(`${params.thread_id}:${turnId}`, integrity);
 
-        const descriptor = state.descriptors.get(params.thread_id) ?? loadSessionDescriptor(params.thread_id);
-        const engine = descriptor ? materializeEngine(state, descriptor) : state.engines.get(params.thread_id);
+        let engine: ChatEngine | undefined;
+        try {
+          engine = descriptor ? materializeEngine(state, descriptor) : state.engines.get(params.thread_id);
+        } catch (err) {
+          launch.settled = true;
+          releaseLaunchOwnership(state, params.thread_id, launch);
+          return errorResponse(
+            id,
+            BabelProtocolErrorCode.INTERNAL_ERROR,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
         if (!engine) {
           launch.settled = true;
           releaseLaunchOwnership(state, params.thread_id, launch);
