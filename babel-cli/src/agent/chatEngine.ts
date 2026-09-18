@@ -5,7 +5,7 @@
  */
 
 import { join } from 'node:path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
@@ -42,7 +42,6 @@ import {
 } from './chatModelPolicy.js';
 import {
   captureCostBaselineUsd,
-  costSpentSinceBaselineUsd,
   globalCostTracker,
 } from '../services/costTracker.js';
 import type { SessionUsageSummary } from '../services/costTracker.js';
@@ -265,7 +264,7 @@ import {
   type RuntimeInvariantMode,
 } from './runtimeInvariants.js';
 import { validateProviderMessageProtocol } from '../runners/providerMessages.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { buildContextManifest, type ContextDeliveryMode } from './contextManifest.js';
 import { buildModelRouteReceipt, hashRouteReference, type ModelRouteStage } from './modelRouteReceipt.js';
 import {
@@ -443,6 +442,143 @@ function isPersistedTurnRuntime(value: unknown): value is TurnRuntimeSnapshot {
     return false;
   }
   return true;
+}
+
+export type ChatAllowanceCostCap =
+  | { kind: 'finite'; usd: number }
+  | { kind: 'unlimited' };
+
+export interface ChatAllowanceGrant {
+  grantId: string;
+  provenance: string;
+  costCapUsd: number;
+  wallCapMs: number;
+  turnCap: number;
+}
+
+export interface ChatTaskAllowanceSnapshot {
+  schemaVersion: 2;
+  taskOwnerId: string;
+  accountingEpoch: string;
+  grant: {
+    grantId: string;
+    provenance: string;
+    costCap: ChatAllowanceCostCap;
+    wallCapMs: number;
+    turnCap: number;
+  };
+  consumed: {
+    costUsd: number;
+    activeWallMs: number;
+    turns: number;
+  };
+  repair: {
+    criticRepairCostCapUsd: number | null;
+    postWriteRepairWallCapMs: number | null;
+    postWriteRepairRestrict: boolean;
+  };
+  accountedChargeIds: string[];
+  activeExecution: boolean;
+  taskCostBaselineUsd: number;
+  lastTurnRuntime?: TurnRuntimeSnapshot;
+}
+
+function allowanceCostCap(costCapUsd: number): ChatAllowanceCostCap {
+  return Number.isFinite(costCapUsd)
+    ? { kind: 'finite', usd: costCapUsd }
+    : { kind: 'unlimited' };
+}
+
+function allowanceCostCapUsd(costCap: ChatAllowanceCostCap): number {
+  return costCap.kind === 'finite' ? costCap.usd : Infinity;
+}
+
+function isNonNegativeFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function parseTaskAllowance(value: unknown): ChatTaskAllowanceSnapshot | null {
+  if (value === null || typeof value !== 'object') return null;
+  const candidate = value as Record<string, unknown>;
+  if (candidate['schemaVersion'] !== 2) return null;
+  if (
+    typeof candidate['taskOwnerId'] !== 'string' ||
+    candidate['taskOwnerId'].length === 0 ||
+    typeof candidate['accountingEpoch'] !== 'string'
+  ) return null;
+  const grant = candidate['grant'];
+  const consumed = candidate['consumed'];
+  const repair = candidate['repair'];
+  if (
+    grant === null || typeof grant !== 'object' ||
+    consumed === null || typeof consumed !== 'object' ||
+    repair === null || typeof repair !== 'object'
+  ) return null;
+  const grantRecord = grant as Record<string, unknown>;
+  const consumedRecord = consumed as Record<string, unknown>;
+  const repairRecord = repair as Record<string, unknown>;
+  const rawCostCap = grantRecord['costCap'];
+  if (rawCostCap === null || typeof rawCostCap !== 'object') return null;
+  const costCapRecord = rawCostCap as Record<string, unknown>;
+  const costCap: ChatAllowanceCostCap | null =
+    costCapRecord['kind'] === 'unlimited'
+      ? { kind: 'unlimited' }
+      : costCapRecord['kind'] === 'finite' && isNonNegativeFinite(costCapRecord['usd'])
+        ? { kind: 'finite', usd: costCapRecord['usd'] }
+        : null;
+  if (
+    costCap === null ||
+    typeof grantRecord['grantId'] !== 'string' ||
+    grantRecord['grantId'].length === 0 ||
+    typeof grantRecord['provenance'] !== 'string' ||
+    grantRecord['provenance'].length === 0 ||
+    !isNonNegativeFinite(grantRecord['wallCapMs']) ||
+    !Number.isInteger(grantRecord['turnCap']) ||
+    (grantRecord['turnCap'] as number) < 1 ||
+    !isNonNegativeFinite(consumedRecord['costUsd']) ||
+    !isNonNegativeFinite(consumedRecord['activeWallMs']) ||
+    !Number.isInteger(consumedRecord['turns']) ||
+    (consumedRecord['turns'] as number) < 0 ||
+    (repairRecord['criticRepairCostCapUsd'] !== null &&
+      !isNonNegativeFinite(repairRecord['criticRepairCostCapUsd'])) ||
+    (repairRecord['postWriteRepairWallCapMs'] !== null &&
+      !isNonNegativeFinite(repairRecord['postWriteRepairWallCapMs'])) ||
+    typeof repairRecord['postWriteRepairRestrict'] !== 'boolean' ||
+    !Array.isArray(candidate['accountedChargeIds']) ||
+    !(candidate['accountedChargeIds'] as unknown[]).every((id) => typeof id === 'string') ||
+    typeof candidate['activeExecution'] !== 'boolean' ||
+    !isNonNegativeFinite(candidate['taskCostBaselineUsd'])
+  ) return null;
+  const parsed: ChatTaskAllowanceSnapshot = {
+    schemaVersion: 2,
+    taskOwnerId: candidate['taskOwnerId'],
+    accountingEpoch: candidate['accountingEpoch'],
+    grant: {
+      grantId: grantRecord['grantId'],
+      provenance: grantRecord['provenance'],
+      costCap,
+      wallCapMs: grantRecord['wallCapMs'],
+      turnCap: grantRecord['turnCap'] as number,
+    },
+    consumed: {
+      costUsd: consumedRecord['costUsd'],
+      activeWallMs: consumedRecord['activeWallMs'],
+      turns: consumedRecord['turns'] as number,
+    },
+    repair: {
+      criticRepairCostCapUsd: repairRecord['criticRepairCostCapUsd'] as number | null,
+      postWriteRepairWallCapMs: repairRecord['postWriteRepairWallCapMs'] as number | null,
+      postWriteRepairRestrict: repairRecord['postWriteRepairRestrict'],
+    },
+    accountedChargeIds: [...candidate['accountedChargeIds'] as string[]],
+    // A crashed active marker is cleared on restore; downtime is not execution.
+    activeExecution: false,
+    taskCostBaselineUsd: candidate['taskCostBaselineUsd'],
+    ...(isPersistedTurnRuntime(candidate['lastTurnRuntime'])
+      ? { lastTurnRuntime: candidate['lastTurnRuntime'] }
+      : {}),
+  };
+  return parsed;
 }
 
 /** Options for a single user submission (W0.3 TurnRuntime). */
@@ -973,11 +1109,15 @@ export class ChatEngine {
     ReturnType<typeof resolveNextTurnToolAccess>
   > = { taken: false };
   private _sessionStartTime = 0;
-  /** Global cost at the start of the active independent task. */
+  /** Legacy observable baseline; enforcement uses task-indexed accounting. */
   private taskCostBaselineUsd = 0;
-  /** Spend carried across a process/accounting epoch boundary. */
-  private taskCostCarryoverUsd = 0;
-  /** True only when a resumed run lacks durable scoped-accounting state. */
+  /** Durable allowance for the current immutable task owner. */
+  private taskAllowance: ChatTaskAllowanceSnapshot | null = null;
+  /** Monotonic checkpoint for active execution wall time. */
+  private activeExecutionCheckpointMs: number | null = null;
+  /** Stable logical provider request identity consumed by trackRunnerUsage. */
+  private pendingUsageChargeId: string | null = null;
+  /** True when a resumed run lacks valid durable scoped-accounting state. */
   private taskCostScopeUnavailable = false;
   private stallState: StallState = createStallDetector();
   private cachedSystemPromptLegacy: string | null = null;
@@ -1084,111 +1224,191 @@ export class ChatEngine {
     return chatSessionDir(this.engineRunId);
   }
 
-  private readPersistedTaskBudget(runDir: string): {
-    baselineUsd: number;
-    spentUsd?: number;
-    globalCostAtPersistenceUsd?: number;
-    accountingEpoch?: string;
-    runtime?: TurnRuntimeSnapshot;
-  } | null {
-    for (const filename of ['task-budget.json', 'run-allowance.json']) {
-      const path = join(runDir, filename);
-      if (!existsSync(path)) continue;
-      try {
-        const value = JSON.parse(readFileSync(path, 'utf8')) as {
-          taskCostBaselineUsd?: unknown;
-          taskCostSpentUsd?: unknown;
-          globalCostAtPersistenceUsd?: unknown;
-          accountingEpoch?: unknown;
-          lastTurnRuntime?: unknown;
-        };
-        if (typeof value.taskCostBaselineUsd !== 'number' || !Number.isFinite(value.taskCostBaselineUsd)) {
-          continue;
-        }
-        return {
-          baselineUsd: value.taskCostBaselineUsd,
-          ...(typeof value.taskCostSpentUsd === 'number' && Number.isFinite(value.taskCostSpentUsd)
-            ? { spentUsd: value.taskCostSpentUsd }
-            : {}),
-          ...(typeof value.globalCostAtPersistenceUsd === 'number' &&
-          Number.isFinite(value.globalCostAtPersistenceUsd)
-            ? { globalCostAtPersistenceUsd: value.globalCostAtPersistenceUsd }
-            : {}),
-          ...(typeof value.accountingEpoch === 'string'
-            ? { accountingEpoch: value.accountingEpoch }
-            : {}),
-          ...(isPersistedTurnRuntime(value.lastTurnRuntime)
-            ? { runtime: value.lastTurnRuntime }
-            : {}),
-        };
-      } catch {
-        // Resume remains possible; an unreadable optional accounting sidecar
-        // must not turn global accounting into a guessed task allowance.
-      }
+  private readPersistedTaskBudget(runDir: string): ChatTaskAllowanceSnapshot | null {
+    const path = join(runDir, 'task-budget.json');
+    if (!existsSync(path)) return null;
+    try {
+      return parseTaskAllowance(JSON.parse(readFileSync(path, 'utf8')));
+    } catch {
+      return null;
     }
-    return null;
   }
 
-  private persistTaskCostBaseline(): void {
-    if (this.taskCostScopeUnavailable) return;
+  private checkpointActiveWall(nowMs = Date.now()): void {
+    if (!this.taskAllowance || this.activeExecutionCheckpointMs === null) return;
+    this.taskAllowance.consumed.activeWallMs += Math.max(
+      0,
+      nowMs - this.activeExecutionCheckpointMs,
+    );
+    this.activeExecutionCheckpointMs = nowMs;
+  }
+
+  private persistTaskAllowance(): void {
+    if (this.taskCostScopeUnavailable || !this.taskAllowance) return;
     try {
-      writeFileSync(
-        join(this.engineRunDir, 'task-budget.json'),
-        JSON.stringify({
-          schema_version: 1,
-          taskCostBaselineUsd: this.taskCostBaselineUsd,
-          taskCostSpentUsd: this.currentTaskCostUsd(),
-          globalCostAtPersistenceUsd: captureCostBaselineUsd(),
-          accountingEpoch: globalCostTracker.getAccountingEpoch(),
-          ...(this.lastTurnRuntime ? { lastTurnRuntime: this.lastTurnRuntime } : {}),
-        }),
-        'utf8',
+      this.checkpointActiveWall();
+      this.taskAllowance.accountingEpoch = globalCostTracker.getAccountingEpoch();
+      this.taskAllowance.consumed.costUsd = this.currentTaskCostUsd();
+      this.taskAllowance.accountedChargeIds = globalCostTracker.getTaskChargeIds(
+        this.taskAllowance.taskOwnerId,
       );
+      this.taskAllowance.activeExecution = this.activeExecutionCheckpointMs !== null;
+      this.taskAllowance.repair = {
+        criticRepairCostCapUsd: this.criticRepairCostCapUsd,
+        postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
+        postWriteRepairRestrict: this.postWriteRepairRestrict,
+      };
+      if (this.lastTurnRuntime) this.taskAllowance.lastTurnRuntime = this.lastTurnRuntime;
+      const path = join(this.engineRunDir, 'task-budget.json');
+      const tmpPath = `${path}.tmp-${process.pid}`;
+      writeFileSync(tmpPath, JSON.stringify(this.taskAllowance), 'utf8');
+      renameSync(tmpPath, path);
     } catch {
-      // Accounting sidecar is best effort; global usage remains authoritative.
+      // A missing durable write removes our authority to continue spending.
       this.taskCostScopeUnavailable = true;
     }
   }
 
+  /** Compatibility wrapper retained for existing checkpoint call sites. */
+  private persistTaskCostBaseline(): void {
+    this.persistTaskAllowance();
+  }
+
+  private createTaskAllowance(): ChatTaskAllowanceSnapshot {
+    return {
+      schemaVersion: 2,
+      taskOwnerId: randomUUID(),
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      grant: {
+        grantId: randomUUID(),
+        provenance: 'chat-engine-initial',
+        costCap: allowanceCostCap(this.limits.maxCostUsd),
+        wallCapMs: this.limits.maxWallMs,
+        turnCap: this.limits.maxTurns,
+      },
+      consumed: { costUsd: 0, activeWallMs: 0, turns: 0 },
+      repair: {
+        criticRepairCostCapUsd: null,
+        postWriteRepairWallCapMs: null,
+        postWriteRepairRestrict: false,
+      },
+      accountedChargeIds: [],
+      activeExecution: false,
+      taskCostBaselineUsd: captureCostBaselineUsd(),
+    };
+  }
+
   private startIndependentTaskCostScope(): void {
-    this.taskCostCarryoverUsd = 0;
-    this.taskCostBaselineUsd = captureCostBaselineUsd();
-    this.persistTaskCostBaseline();
+    this.taskCostScopeUnavailable = false;
+    this.taskAllowance = this.createTaskAllowance();
+    this.taskCostBaselineUsd = this.taskAllowance.taskCostBaselineUsd;
+    this.activeExecutionCheckpointMs = null;
+    this.persistTaskAllowance();
   }
 
   private currentTaskCostUsd(): number {
-    return this.taskCostCarryoverUsd + costSpentSinceBaselineUsd(this.taskCostBaselineUsd);
+    if (!this.taskAllowance) return 0;
+    return globalCostTracker.getTaskSummary(this.taskAllowance.taskOwnerId).totalCostUSD;
   }
 
-  private restorePersistedTaskBudget(
-    persisted: ReturnType<ChatEngine['readPersistedTaskBudget']>,
-  ): void {
-    const currentGlobalCost = captureCostBaselineUsd();
-    this.taskCostScopeUnavailable = persisted === null || persisted.runtime === undefined;
-    this.taskCostCarryoverUsd = 0;
-    if (persisted === null) {
-      this.taskCostBaselineUsd = currentGlobalCost;
+  private currentTaskActiveWallMs(nowMs = Date.now()): number {
+    if (!this.taskAllowance) return 0;
+    return this.taskAllowance.consumed.activeWallMs +
+      (this.activeExecutionCheckpointMs === null
+        ? 0
+        : Math.max(0, nowMs - this.activeExecutionCheckpointMs));
+  }
+
+  private restorePersistedTaskBudget(persisted: ChatTaskAllowanceSnapshot | null): void {
+    this.taskCostScopeUnavailable = persisted === null || persisted.lastTurnRuntime === undefined;
+    this.activeExecutionCheckpointMs = null;
+    if (!persisted) {
+      this.taskAllowance = null;
+      this.taskCostBaselineUsd = captureCostBaselineUsd();
       this.lastTurnRuntime = null;
       return;
     }
-    const newAccountingEpoch =
-      persisted.accountingEpoch !== undefined &&
-      persisted.accountingEpoch !== globalCostTracker.getAccountingEpoch();
-    if (newAccountingEpoch) {
-      // Current totals belong to a new process/session epoch. Keep only the
-      // durable task spend and begin a fresh delta for this resumed process.
-      this.taskCostCarryoverUsd = persisted.spentUsd ?? 0;
-      this.taskCostBaselineUsd = currentGlobalCost;
-    } else if (
-      persisted.spentUsd !== undefined &&
-      persisted.globalCostAtPersistenceUsd !== undefined &&
-      currentGlobalCost < persisted.globalCostAtPersistenceUsd
-    ) {
-      this.taskCostBaselineUsd = currentGlobalCost - persisted.spentUsd;
-    } else {
-      this.taskCostBaselineUsd = persisted.baselineUsd;
+    this.taskAllowance = persisted;
+    this.taskCostBaselineUsd = persisted.taskCostBaselineUsd;
+    this.lastTurnRuntime = persisted.lastTurnRuntime ?? null;
+    this.criticRepairCostCapUsd = persisted.repair.criticRepairCostCapUsd;
+    this.postWriteRepairWallCapMs = persisted.repair.postWriteRepairWallCapMs;
+    this.postWriteRepairRestrict = persisted.repair.postWriteRepairRestrict;
+    globalCostTracker.restoreTaskUsage(persisted.taskOwnerId, {
+      totalCostUSD: persisted.consumed.costUsd,
+      chargeIds: persisted.accountedChargeIds,
+    });
+    this.limits = {
+      ...this.limits,
+      maxCostUsd: allowanceCostCapUsd(persisted.grant.costCap),
+      maxWallMs: persisted.grant.wallCapMs,
+      maxTurns: persisted.grant.turnCap,
+    };
+  }
+
+  public getTaskAllowanceSnapshot(): ChatTaskAllowanceSnapshot | null {
+    if (!this.taskAllowance) return null;
+    return structuredClone({
+      ...this.taskAllowance,
+      consumed: {
+        ...this.taskAllowance.consumed,
+        costUsd: this.currentTaskCostUsd(),
+        activeWallMs: this.currentTaskActiveWallMs(),
+      },
+      activeExecution: this.activeExecutionCheckpointMs !== null,
+    });
+  }
+
+  /** Explicitly replace the current grant. No other path may increase caps. */
+  public renewAllowance(grant: ChatAllowanceGrant): void {
+    if (this.taskCostScopeUnavailable || !this.taskAllowance) {
+      throw new Error('Cannot renew allowance without a valid durable task scope');
     }
-    this.lastTurnRuntime = persisted.runtime ?? null;
+    if (!grant.grantId || !grant.provenance) {
+      throw new Error('Allowance renewal requires grant identity and provenance');
+    }
+    const currentCostCap = allowanceCostCapUsd(this.taskAllowance.grant.costCap);
+    const doesNotDecrease =
+      grant.costCapUsd >= currentCostCap &&
+      grant.wallCapMs >= this.taskAllowance.grant.wallCapMs &&
+      grant.turnCap >= this.taskAllowance.grant.turnCap;
+    const increases =
+      grant.costCapUsd > currentCostCap ||
+      grant.wallCapMs > this.taskAllowance.grant.wallCapMs ||
+      grant.turnCap > this.taskAllowance.grant.turnCap;
+    if (!doesNotDecrease || !increases) {
+      throw new Error('Allowance renewal must increase at least one cap without decreasing another');
+    }
+    this.taskAllowance.grant = {
+      grantId: grant.grantId,
+      provenance: grant.provenance,
+      costCap: allowanceCostCap(grant.costCapUsd),
+      wallCapMs: grant.wallCapMs,
+      turnCap: grant.turnCap,
+    };
+    this.limits.maxCostUsd = grant.costCapUsd;
+    this.limits.maxWallMs = grant.wallCapMs;
+    this.limits.maxTurns = grant.turnCap;
+    this.persistTaskAllowance();
+  }
+
+  private beginActiveExecution(): void {
+    if (this.activeExecutionCheckpointMs !== null) return;
+    this.activeExecutionCheckpointMs = Date.now();
+    this.persistTaskAllowance();
+  }
+
+  private pauseActiveExecution(): void {
+    if (this.activeExecutionCheckpointMs === null) return;
+    this.checkpointActiveWall();
+    this.activeExecutionCheckpointMs = null;
+    this.persistTaskAllowance();
+  }
+
+  private consumeTaskTurn(): void {
+    if (!this.taskAllowance) return;
+    this.taskAllowance.consumed.turns += 1;
+    this.persistTaskAllowance();
   }
 
   private effectiveCostCapUsd(): number {
@@ -1204,13 +1424,14 @@ export class ChatEngine {
   }
 
   private deriveChildAllowance(maxRounds: number): InheritedChildAllowance {
+    if (!this.taskAllowance) {
+      throw new Error('Cannot delegate without a durable task allowance');
+    }
     const parentDeadlineAtMs =
-      this._sessionStartTime > 0
-        ? this._sessionStartTime + this.effectiveWallCapMs()
-        : null;
+      Date.now() + Math.max(0, this.effectiveWallCapMs() - this.currentTaskActiveWallMs());
     return deriveChildAllowance({
+      parentTaskOwnerId: this.taskAllowance.taskOwnerId,
       parentTaskBaselineUsd: this.taskCostBaselineUsd,
-      parentTaskCarryoverUsd: this.taskCostCarryoverUsd,
       parentEffectiveCostCapUsd: this.effectiveCostCapUsd(),
       parentDeadlineAtMs,
       childMaxRounds: maxRounds,
@@ -1283,7 +1504,10 @@ export class ChatEngine {
       ? this.readPersistedTaskBudget(this.engineRunDir)
       : null;
     if (options.resumeExisting) this.restorePersistedTaskBudget(persistedTaskBudget);
-    else this.taskCostBaselineUsd = captureCostBaselineUsd();
+    else {
+      this.taskAllowance = this.createTaskAllowance();
+      this.taskCostBaselineUsd = this.taskAllowance.taskCostBaselineUsd;
+    }
     this.persistTaskCostBaseline();
 
     if (options.resumeExisting) {
@@ -1790,27 +2014,37 @@ export class ChatEngine {
   }
 
   private checkBudgets(): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {
-    if (this.taskCostScopeUnavailable) {
+    if (this.taskCostScopeUnavailable || !this.taskAllowance) {
       const reason = 'Cannot restore durable task cost scope for resumed run; refusing a fresh allowance.';
       this.terminatingLimiter = 'cost';
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: 'cost' };
     }
+    if (this.taskAllowance.consumed.turns >= this.taskAllowance.grant.turnCap) {
+      const reason =
+        `Task turn allowance exhausted (${this.taskAllowance.consumed.turns} of ` +
+        `${this.taskAllowance.grant.turnCap}).`;
+      this.terminatingLimiter = 'turns';
+      this.terminalLimiterReason = reason;
+      return { ok: false, reason, limiter: 'turns' };
+    }
     const taskCost = this.currentTaskCostUsd();
+    const taskWallMs = this.currentTaskActiveWallMs();
     // After first critic reject or post-write repair, use the tighter cost cap.
+    const grantedCostCapUsd = allowanceCostCapUsd(this.taskAllowance.grant.costCap);
     const maxCostUsd =
-      Number.isFinite(this.limits.maxCostUsd) && this.criticRepairCostCapUsd != null
-        ? Math.min(this.limits.maxCostUsd, this.criticRepairCostCapUsd)
-        : this.limits.maxCostUsd;
+      Number.isFinite(grantedCostCapUsd) && this.criticRepairCostCapUsd != null
+        ? Math.min(grantedCostCapUsd, this.criticRepairCostCapUsd)
+        : grantedCostCapUsd;
     // After first write: absolute wall cap from session start (repair window).
     const maxWallMs =
       this.postWriteRepairWallCapMs != null
-        ? Math.min(this.limits.maxWallMs, this.postWriteRepairWallCapMs)
-        : this.limits.maxWallMs;
+        ? Math.min(this.taskAllowance.grant.wallCapMs, this.postWriteRepairWallCapMs)
+        : this.taskAllowance.grant.wallCapMs;
     const result = checkCostWallBudgets({
       totalCostUsd: taskCost,
       maxCostUsd,
-      sessionStartTime: this._sessionStartTime,
+      sessionStartTime: Date.now() - taskWallMs,
       maxWallMs,
       declaredCostUsd: this.limits.costBudget?.requestedCostUsd ?? this.limits.maxCostUsd,
       declaredWallMs: this.limits.wallBudget?.requestedMs ?? this.limits.maxWallMs,
@@ -1848,6 +2082,7 @@ export class ChatEngine {
         `repair_window=${repairWindowUsd.toFixed(3)} cap=${capUsd.toFixed(3)} ` +
         `session_max=${this.limits.maxCostUsd.toFixed(2)}`,
     });
+    this.persistTaskAllowance();
   }
 
   /**
@@ -1860,7 +2095,7 @@ export class ChatEngine {
     // Only for execute-style classes that must verify (not pure investigate).
     if (this.taskClass === 'investigate') return;
 
-    const elapsedMs = this._sessionStartTime > 0 ? Date.now() - this._sessionStartTime : 0;
+    const elapsedMs = this.currentTaskActiveWallMs();
     // An explicitly authorized long-task run keeps its full wall: the
     // anti-thrash repair window would otherwise kill it minutes after the
     // first write. Hard wall, stall, turn and cost budgets still apply.
@@ -1908,6 +2143,7 @@ export class ChatEngine {
         `repair_window_ms=${repairWindowMs} cap_ms=${capMs} ` +
         `session_max_ms=${this.limits.maxWallMs} tools=act_or_verify`,
     });
+    this.persistTaskAllowance();
   }
 
   /** Whether the next model turn should use restricted mutate/verify tools. */
@@ -2329,8 +2565,13 @@ export class ChatEngine {
       this.conversation.unshift({ role: 'system', content: systemContent });
     }
 
-    const maxTurns = this.limits.maxTurns;
+    const maxTurns = Math.max(
+      0,
+      (this.taskAllowance?.grant.turnCap ?? this.limits.maxTurns) -
+        (this.taskAllowance?.consumed.turns ?? 0),
+    );
     this._sessionStartTime = Date.now();
+    this.beginActiveExecution();
 
     let _turnSpan: Span | null = null;
 
@@ -2387,6 +2628,7 @@ export class ChatEngine {
         });
         return;
       }
+      this.consumeTaskTurn();
 
       resetOneShotSnapshot(this.logicalTurnToolPolicy);
 
@@ -3742,7 +3984,9 @@ export class ChatEngine {
     // maxTurns exceeded
     this.terminatingLimiter = this.terminatingLimiter ?? 'turns';
     this.terminalLimiterReason =
-      this.terminalLimiterReason ?? `Turn limit reached (${maxTurns} of ${maxTurns}).`;
+      this.terminalLimiterReason ??
+      `Turn limit reached (${this.taskAllowance?.consumed.turns ?? maxTurns} of ` +
+        `${this.taskAllowance?.grant.turnCap ?? maxTurns}).`;
     const maxTurnAnswer = await this.synthesizeAnswer(allToolObservations, {
       onAnswerChunk: (_chunk) => {},
     }).catch(() => '');
@@ -4312,7 +4556,6 @@ export class ChatEngine {
       // A fresh submission starts a new enforcement scope. The global tracker
       // is intentionally preserved for session/accounting views.
       this.taskCostScopeUnavailable = false;
-      this.startIndependentTaskCostScope();
       this.criticRepairCostCapUsd = null;
       this.postWriteRepairWallCapMs = null;
       this.postWriteRepairRestrict = false;
@@ -4356,6 +4599,7 @@ export class ChatEngine {
           mutateModel: LIVE_OPENROUTER_MODEL_ID,
         };
       }
+      this.startIndependentTaskCostScope();
       // Playbook / todo gate re-evaluate for the new task text.
       this.activePlaybook = selectPlaybookForChatTask(runtime.taskText) ?? null;
       this.requireTodoBeforeMutate = shouldRequireTodoPlan(runtime.taskText, this.activePlaybook);
@@ -6375,7 +6619,14 @@ export class ChatEngine {
         metadata.completion_tokens,
         metadata.prompt_cache_hit_tokens,
         metadata.prompt_cache_miss_tokens,
+        this.taskAllowance
+          ? {
+              taskOwnerId: this.taskAllowance.taskOwnerId,
+              chargeId: this.pendingUsageChargeId ?? randomUUID(),
+            }
+          : undefined,
       );
+      this.pendingUsageChargeId = null;
       // Checkpoint usage immediately after accounting so a crash before the
       // enclosing turn result is persisted cannot mint a fresh continuation
       // allowance on resume.
@@ -6695,6 +6946,7 @@ export class ChatEngine {
       onInvocationStarted: (event) => {
         if (!this.parity.turnId) return;
         startedInvocation = event;
+        this.pendingUsageChargeId = event.request_id ?? event.inference_id;
         retryCount = 0;
         const recordedParentRequestId = event.parent_request_id ?? parentRequestId;
         const derivedExpectedPriorEventIds = this.parity.sessionEvents.events
@@ -7608,6 +7860,7 @@ export class ChatEngine {
       status: finalStatus,
     });
 
+    this.pauseActiveExecution();
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
     finalizeParityTurnSync(this.parity, this.engineRunDir, terminal.outcome, terminal.status);
 

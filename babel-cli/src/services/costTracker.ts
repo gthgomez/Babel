@@ -66,6 +66,16 @@ export interface SessionUsageSummary {
   modelBreakdown: Record<string, ModelUsage>;
 }
 
+/** Stable task attribution for one provider-billed usage charge. */
+export interface UsageAttribution {
+  /** Immutable owner of the task that initiated this provider boundary. */
+  taskOwnerId: string;
+  /** Stable provider request/attempt identity used for idempotent replay. */
+  chargeId: string;
+  /** Optional delegating task. Child usage is charged to this owner once. */
+  parentTaskOwnerId?: string;
+}
+
 const PRICING: Record<string, { input: number; output: number }> = {
   ...Object.fromEntries(
     Object.values(MODEL_PRICING_REGISTRY).map((entry) => [
@@ -79,6 +89,10 @@ export class CostTracker {
   private readonly accountingEpoch = randomUUID();
   private sessionUsage: Record<string, ModelUsage> = {};
   private sessionTotalCost = 0;
+  private taskUsage = new Map<string, Record<string, ModelUsage>>();
+  private taskTotalCost = new Map<string, number>();
+  private taskChargeIds = new Map<string, Set<string>>();
+  private recordedChargeIds = new Set<string>();
   private projectStatsPath: string;
 
   constructor(projectRoot?: string) {
@@ -93,6 +107,7 @@ export class CostTracker {
     outputTokens: number,
     cacheHitTokens?: number | null,
     cacheMissTokens?: number | null,
+    attribution?: UsageAttribution,
   ): number {
     const pricingEntry = getModelPricingByModelId(modelId);
     const estimate = estimateProviderUsageCost({
@@ -105,6 +120,10 @@ export class CostTracker {
     const cost =
       estimate.estimatedCostUsd ??
       (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output;
+
+    if (attribution && this.recordedChargeIds.has(attribution.chargeId)) {
+      return 0;
+    }
 
     if (!this.sessionUsage[modelId]) {
       this.sessionUsage[modelId] = { inputTokens: 0, outputTokens: 0, costUSD: 0 };
@@ -123,12 +142,65 @@ export class CostTracker {
     }
     this.sessionTotalCost += cost;
 
+    if (attribution) {
+      this.recordedChargeIds.add(attribution.chargeId);
+      const owners = new Set([
+        attribution.taskOwnerId,
+        ...(attribution.parentTaskOwnerId ? [attribution.parentTaskOwnerId] : []),
+      ]);
+      for (const ownerId of owners) {
+        this.recordTaskUsage(
+          ownerId,
+          attribution.chargeId,
+          modelId,
+          inputTokens,
+          outputTokens,
+          cost,
+          cacheHitTokens,
+          cacheMissTokens,
+        );
+      }
+    }
+
     return cost;
+  }
+
+  private recordTaskUsage(
+    taskOwnerId: string,
+    chargeId: string,
+    modelId: string,
+    inputTokens: number,
+    outputTokens: number,
+    costUSD: number,
+    cacheHitTokens?: number | null,
+    cacheMissTokens?: number | null,
+  ): void {
+    const usage = this.taskUsage.get(taskOwnerId) ?? {};
+    const model = usage[modelId] ?? { inputTokens: 0, outputTokens: 0, costUSD: 0 };
+    model.inputTokens += inputTokens;
+    model.outputTokens += outputTokens;
+    model.costUSD += costUSD;
+    if (cacheHitTokens != null) {
+      model.promptCacheHitTokens = (model.promptCacheHitTokens ?? 0) + cacheHitTokens;
+    }
+    if (cacheMissTokens != null) {
+      model.promptCacheMissTokens = (model.promptCacheMissTokens ?? 0) + cacheMissTokens;
+    }
+    usage[modelId] = model;
+    this.taskUsage.set(taskOwnerId, usage);
+    this.taskTotalCost.set(taskOwnerId, (this.taskTotalCost.get(taskOwnerId) ?? 0) + costUSD);
+    const charges = this.taskChargeIds.get(taskOwnerId) ?? new Set<string>();
+    charges.add(chargeId);
+    this.taskChargeIds.set(taskOwnerId, charges);
   }
 
   public resetSession(): void {
     this.sessionUsage = {};
     this.sessionTotalCost = 0;
+    this.taskUsage.clear();
+    this.taskTotalCost.clear();
+    this.taskChargeIds.clear();
+    this.recordedChargeIds.clear();
   }
 
   /** Identifies the in-process accounting epoch for durable task scoping. */
@@ -194,6 +266,77 @@ export class CostTracker {
       summary.totalCacheMissTokens = totalCacheMissTokens;
     }
     return summary;
+  }
+
+  /** Return usage attributed to one immutable task owner. */
+  public getTaskSummary(taskOwnerId: string): SessionUsageSummary {
+    const modelBreakdown = Object.fromEntries(
+      Object.entries(this.taskUsage.get(taskOwnerId) ?? {}).map(([modelId, usage]) => [
+        modelId,
+        { ...usage },
+      ]),
+    );
+    const totalInputTokens = Object.values(modelBreakdown).reduce(
+      (sum, usage) => sum + usage.inputTokens,
+      0,
+    );
+    const totalOutputTokens = Object.values(modelBreakdown).reduce(
+      (sum, usage) => sum + usage.outputTokens,
+      0,
+    );
+    const totalCacheHitTokens = Object.values(modelBreakdown).reduce(
+      (sum, usage) => sum + (usage.promptCacheHitTokens ?? 0),
+      0,
+    );
+    const totalCacheMissTokens = Object.values(modelBreakdown).reduce(
+      (sum, usage) => sum + (usage.promptCacheMissTokens ?? 0),
+      0,
+    );
+    return {
+      totalCostUSD: this.taskTotalCost.get(taskOwnerId) ?? 0,
+      totalInputTokens,
+      totalOutputTokens,
+      totalTokens: totalInputTokens + totalOutputTokens,
+      modelBreakdown,
+      ...(totalCacheHitTokens > 0 ? { totalCacheHitTokens } : {}),
+      ...(totalCacheMissTokens > 0 ? { totalCacheMissTokens } : {}),
+    };
+  }
+
+  /** Stable charge identities already applied to one task owner. */
+  public getTaskChargeIds(taskOwnerId: string): string[] {
+    return [...(this.taskChargeIds.get(taskOwnerId) ?? new Set<string>())];
+  }
+
+  /**
+   * Seed durable task spend after cold resume without adding it to this
+   * process's global aggregate. Existing in-process task usage wins.
+   */
+  public restoreTaskUsage(
+    taskOwnerId: string,
+    input: { totalCostUSD: number; chargeIds: readonly string[] },
+  ): void {
+    if (!this.taskTotalCost.has(taskOwnerId)) {
+      this.taskTotalCost.set(taskOwnerId, input.totalCostUSD);
+      this.taskUsage.set(
+        taskOwnerId,
+        input.totalCostUSD > 0
+          ? {
+              __restored__: {
+                inputTokens: 0,
+                outputTokens: 0,
+                costUSD: input.totalCostUSD,
+              },
+            }
+          : {},
+      );
+    }
+    const charges = this.taskChargeIds.get(taskOwnerId) ?? new Set<string>();
+    for (const chargeId of input.chargeIds) {
+      charges.add(chargeId);
+      this.recordedChargeIds.add(chargeId);
+    }
+    this.taskChargeIds.set(taskOwnerId, charges);
   }
 
   public saveToProjectStats(sessionId: string) {
