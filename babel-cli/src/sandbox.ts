@@ -33,6 +33,7 @@ import {
   type ChildProcessWithoutNullStreams,
   type SpawnSyncReturns,
 } from 'node:child_process';
+import { terminateChildTree as terminateChildTreeShared } from './processTree.js';
 import {
   mkdirSync,
   readFileSync,
@@ -352,52 +353,7 @@ function appendCappedChunk(
  * POSIX: SIGTERM process group (detached spawn), then SIGKILL fallback.
  */
 export function terminateChildTree(child: ChildProcessWithoutNullStreams): void {
-  if (process.platform === 'win32' && child.pid) {
-    const windowsRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows';
-    const taskkillPath = resolve(windowsRoot, 'System32', 'taskkill.exe');
-    try {
-      // spawnSync so abort settles without waiting on async taskkill close.
-      spawnSync(taskkillPath, ['/pid', String(child.pid), '/T', '/F'], {
-        windowsHide: true,
-        stdio: 'ignore',
-        env: getSafeEnv(),
-        timeout: 1_500,
-      });
-    } catch {
-      // Fall through to direct child termination.
-    }
-    try {
-      child.kill();
-    } catch {
-      // Best effort: the child may already have exited.
-    }
-    return;
-  }
-
-  if (process.platform !== 'win32' && child.pid) {
-    try {
-      process.kill(-child.pid, 'SIGTERM');
-    } catch {
-      // Fall through when the process group has already exited.
-    }
-    try {
-      process.kill(-child.pid, 'SIGKILL');
-    } catch {
-      // Group may already be gone after SIGTERM.
-    }
-    try {
-      child.kill('SIGKILL');
-    } catch {
-      // Best effort.
-    }
-    return;
-  }
-
-  try {
-    child.kill();
-  } catch {
-    // Best effort: the child may already have exited.
-  }
+  terminateChildTreeShared(child);
 }
 
 /**
