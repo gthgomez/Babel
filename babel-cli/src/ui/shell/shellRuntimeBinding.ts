@@ -117,10 +117,7 @@ export class ShellRuntimeBinding {
         this.transcript.onAnswerChunk(turn.answer);
       }
       this.transcript.finishTurn();
-      this.store.settleTurn(this.transcript.getAllRecords(), this.store.epoch);
-      this.currentTurnId = undefined;
-      this.currentUserRecord = undefined;
-      this.toolIds.clear();
+      this.settleTurn();
     } else if (turn.answer) {
       this.store.observePersistedRecord(
         createAssistantMessageCell(turn.answer, {
@@ -135,6 +132,14 @@ export class ShellRuntimeBinding {
 
   onChatEvent(event: ChatEvent): void {
     if (this.currentTurnId === undefined) return;
+    if (this.store.turnId !== this.currentTurnId) {
+      this.currentTurnId = undefined;
+      this.currentUserRecord = undefined;
+      this.toolIds.clear();
+      this.toolIdQueue.length = 0;
+      this.activity = 'idle';
+      return;
+    }
     const epoch = this.store.epoch;
     switch (event.type) {
       case 'thinking':
@@ -215,6 +220,31 @@ export class ShellRuntimeBinding {
       turnId: this.store.turnId,
       epoch: this.store.epoch,
     };
+  }
+
+  /** Settle the active presentation turn and clear its transient identity. */
+  settleTurn(outcome?: string): void {
+    if (this.currentTurnId === undefined) return;
+    if (this.store.turnId !== this.currentTurnId) {
+      // A session epoch change invalidates the old live segment. Do not let a
+      // late completion settle records into the replacement session.
+      this.currentTurnId = undefined;
+      this.currentUserRecord = undefined;
+      this.toolIds.clear();
+      this.toolIdQueue.length = 0;
+      this.activity = 'idle';
+      return;
+    }
+    this.transcript.finishTurn();
+    const settled = this.store.settleTurn(this.transcript.getAllRecords(), this.store.epoch);
+    if (!settled) return;
+    this.currentTurnId = undefined;
+    this.currentUserRecord = undefined;
+    this.toolIds.clear();
+    this.toolIdQueue.length = 0;
+    this.activity = 'idle';
+    this.lastOutcome = outcome ?? this.lastOutcome ?? 'completed';
+    this.syncViewport();
   }
 
   private syncViewport(): void {

@@ -181,7 +181,10 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     }
 
     if (input === '.editor') {
-      const edited = await openEditor({ rl: ctx.rl });
+      const runEditor = () => openEditor({ rl: ctx.rl });
+      const edited = ctx.withExclusiveTerminal
+        ? await ctx.withExclusiveTerminal('external-editor', runEditor)
+        : await runEditor();
       if (edited) {
         saveHistory((ctx.rl as ReadlineWithHistory).history);
         await executeTaskAndDrainQueue(ctx, deps, edited.trim());
@@ -209,8 +212,8 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     saveHistory((ctx.rl as ReadlineWithHistory).history);
 
     if (input.startsWith('/')) {
-      if (ctx.shellHost) {
-        await ctx.shellHost.withExclusiveTerminal('command', () => handleCommand(ctx, input));
+      if (ctx.withExclusiveTerminal) {
+        await ctx.withExclusiveTerminal('command', () => handleCommand(ctx, input));
       } else {
         await handleCommand(ctx, input);
       }

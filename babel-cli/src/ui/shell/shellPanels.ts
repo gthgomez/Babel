@@ -1,5 +1,7 @@
 import type { PromptView } from '../promptView.js'
 import type { ShellFrameInput, ShellLayout, ShellRule, ShellSurface } from './shellTypes.js'
+import type { ShellFocus } from './shellInputRouter.js'
+import type { ShellPresentation } from './shellPresentation.js'
 
 export interface ShellPanelSnapshot {
   mode: string
@@ -13,6 +15,7 @@ export interface ShellPanelSnapshot {
   context?: readonly string[]
   status?: readonly string[]
   prompt?: PromptView
+  presentation?: ShellPresentation
 }
 
 function boundedRows(rows: readonly string[] | undefined, height: number): readonly string[] {
@@ -32,15 +35,19 @@ function headerRows(snapshot: ShellPanelSnapshot): readonly string[] {
   ]
 }
 
+function focusLabel(snapshot: ShellPanelSnapshot, focus: ShellFocus, label: string): string {
+  return snapshot.presentation?.focus === focus ? `› ${label}` : `  ${label}`
+}
+
 function leftRows(snapshot: ShellPanelSnapshot): readonly string[] {
   return [
-    'SESSIONS',
+    focusLabel(snapshot, 'sessions', 'SESSIONS'),
     ...(snapshot.sessions ?? ['No saved conversations']),
     '',
-    'PROJECT',
+    focusLabel(snapshot, 'project', 'PROJECT'),
     ...(snapshot.projectRows ?? [snapshot.project]),
     '',
-    'QUICK ACTIONS',
+    focusLabel(snapshot, 'actions', 'QUICK ACTIONS'),
     ...(snapshot.actions ?? ['New conversation', 'Resume', 'Git status', 'Diff', 'Retarget', 'Command palette']),
   ]
 }
@@ -50,7 +57,7 @@ function rightRows(snapshot: ShellPanelSnapshot): readonly string[] {
     '[◎]  BABEL',
     'Run. Verify. Understand.',
     '',
-    'MODE',
+    focusLabel(snapshot, 'inspector', 'MODE'),
     `● ${snapshot.mode}`,
     '',
     'MODEL',
@@ -67,6 +74,11 @@ function rightRows(snapshot: ShellPanelSnapshot): readonly string[] {
   ]
 }
 
+function conversationRows(snapshot: ShellPanelSnapshot): readonly string[] {
+  if (snapshot.presentation?.focus !== 'conversation') return snapshot.conversation
+  return [focusLabel(snapshot, 'conversation', 'CONVERSATION'), ...snapshot.conversation]
+}
+
 /** Build pure shell surfaces from an immutable runtime projection. */
 export function buildShellFrameInput(
   layout: ShellLayout,
@@ -77,9 +89,13 @@ export function buildShellFrameInput(
     if (item) surfaces.push(item)
   }
   add(surface('header', layout.header, headerRows(snapshot)))
-  add(surface('left', layout.left, leftRows(snapshot)))
-  add(surface('conversation', layout.conversation, snapshot.conversation))
-  add(surface('right', layout.right, rightRows(snapshot)))
+  if (snapshot.presentation?.leftDrawerOpen !== false) {
+    add(surface('left', layout.left, leftRows(snapshot)))
+  }
+  add(surface('conversation', layout.conversation, conversationRows(snapshot)))
+  if (snapshot.presentation?.rightDrawerOpen !== false) {
+    add(surface('right', layout.right, rightRows(snapshot)))
+  }
   if (layout.composer && snapshot.prompt) {
     add(surface('composer', layout.composer, snapshot.prompt.rows))
     if (snapshot.prompt.popup) {
@@ -126,10 +142,12 @@ export function buildShellFrameInput(
       ? {
           row: layout.composer.y + snapshot.prompt.cursor.row,
           col: layout.composer.x + snapshot.prompt.cursor.col,
-          visible: snapshot.prompt.cursor.visible,
+          visible: snapshot.presentation === undefined || snapshot.presentation.focus === 'composer'
+            ? snapshot.prompt.cursor.visible
+            : false,
         }
       : null,
-    cacheKey: `${snapshot.mode}:${snapshot.model}:${snapshot.project}:${snapshot.conversation.length}`,
+    cacheKey: `${snapshot.mode}:${snapshot.model}:${snapshot.project}:${snapshot.conversation.length}:${snapshot.presentation?.focus ?? 'composer'}:${snapshot.presentation?.leftDrawerOpen ?? true}:${snapshot.presentation?.rightDrawerOpen ?? true}`,
   }
 }
 

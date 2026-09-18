@@ -55,6 +55,7 @@ import { createShellHost, type ShellHost } from '../ui/shell/shellHost.js';
 import { selectShellHost } from '../ui/shell/selectShellHost.js';
 import { routeShellInput, type ShellInputState } from '../ui/shell/shellInputRouter.js';
 import { ShellRuntimeBinding } from '../ui/shell/shellRuntimeBinding.js';
+import { projectShellPresentation } from '../ui/shell/shellPresentation.js';
 
 // ─── REPL Class ───────────────────────────────────────────────────────────────
 
@@ -101,6 +102,7 @@ export class BabelRepl {
     source: 'provider_prompt_tokens' | 'estimated' | 'unknown';
   } | null;
   private shellKeyCleanup: (() => void) | null = null;
+  private legacyKeypressHandler: ((str: string, key: rl.Key) => void) | null = null;
   private shellInputState: ShellInputState = {
     focus: 'composer',
     leftDrawerOpen: true,
@@ -133,14 +135,18 @@ export class BabelRepl {
     registerReadlineInterface(this.rl);
 
     // Ctrl+R reverse history search
-    process.stdin.on('keypress', (_str: string, key: rl.Key) => {
+    this.legacyKeypressHandler = (_str: string, key: rl.Key) => {
+      // The hosted shell has the sole live key-routing path. This listener is
+      // retained only for legacy readline mode and must never double-deliver.
+      if (this.shellHost) return;
       if ((key.name ?? '') === 'r' && key.ctrl) {
-        void this.handleReverseSearch();
+        void this.handleReverseSearch().catch(() => {});
       }
       if ((key.name ?? '') === 'p' && key.ctrl) {
         void this.openCommandPalette().catch(() => {});
       }
-    });
+    };
+    process.stdin.on('keypress', this.legacyKeypressHandler);
 
     // Start focus tracking so the render loop throttles when the terminal
     // Window loses focus. Keypress events are emitted by readline
@@ -287,6 +293,8 @@ export class BabelRepl {
         height: 3,
       };
       const prompt = adapter.getView(promptRect);
+      const presentation = projectShellPresentation(layout, this.shellInputState);
+      this.shellInputState = presentation.inputState;
       const conversation = this.shellRuntime
         ? this.shellRuntime.getVisibleRows(
             Math.max(1, layout.conversationText?.width ?? layout.center?.width ?? 1),
@@ -311,6 +319,7 @@ export class BabelRepl {
           `Last outcome: ${runtime?.lastOutcome ?? this.state.lastRunUserStatus ?? 'unknown'}`,
         ],
         ...(prompt ? { prompt } : {}),
+        presentation,
       });
     };
 
@@ -329,10 +338,15 @@ export class BabelRepl {
     });
     this.shellHost = host;
     this.shellKeyCleanup = installKeyHandler(process.stdin, (event: KeyEvent) => {
+      const layout = planShellLayout(OutputBuffer.getTerminalSize());
+      this.shellInputState = projectShellPresentation(layout, this.shellInputState).inputState;
       const routed = routeShellInput(event, this.shellInputState);
       this.shellInputState = routed.state;
       if (routed.action === 'open-palette') {
         void this.openCommandPalette().catch(() => {});
+      }
+      if (routed.action === 'open-reverse-search') {
+        void this.handleReverseSearch().catch(() => {});
       }
       if (routed.action === 'focus-changed' || routed.action === 'close-overlay') {
         host?.invalidate(routed.action);
@@ -478,10 +492,12 @@ export class BabelRepl {
       setInputText?: (text: string) => void;
     };
     const seed = adapter.getInputText?.() ?? '';
-    const edited = await openEditor({
-      rl: this.rl,
-      ...(seed ? { seed } : {}),
-    });
+    const edited = await this.withExclusiveTerminal('external-editor', () =>
+      openEditor({
+        rl: this.rl,
+        ...(seed ? { seed } : {}),
+      }),
+    );
     if (edited != null) {
       adapter.setInputText?.(edited);
     }
@@ -525,7 +541,7 @@ export class BabelRepl {
   // ── Command Palette ──────────────────────────────────────────────────────
 
   private async openCommandPalette(): Promise<void> {
-    await CommandPalette.show(this);
+    await this.withExclusiveTerminal('command-palette', () => CommandPalette.show(this));
     this.printIdleHeader();
   }
 
@@ -533,10 +549,33 @@ export class BabelRepl {
 
   private async handleReverseSearch(): Promise<void> {
     const history = (this.rl as ReadlineWithHistory).history;
-    await reverseHistorySearch(this.rl, history);
+    await this.withExclusiveTerminal('reverse-history', () =>
+      reverseHistorySearch(this.rl, history),
+    );
+  }
+
+  settleShellTurn(outcome?: string): void {
+    this.shellRuntime?.settleTurn(outcome);
+  }
+
+  async withExclusiveTerminal<T>(reason: string, work: () => Promise<T>): Promise<T> {
+    if (!this.shellHost) return work();
+    const adapter = this.rl as unknown as PromptInputAdapter;
+    return this.shellHost.withExclusiveTerminal(reason, async () => {
+      const resumeInput = adapter.suspendInput?.();
+      try {
+        return await work();
+      } finally {
+        resumeInput?.();
+      }
+    });
   }
 
   exit(): void {
+    if (this.legacyKeypressHandler) {
+      process.stdin.off('keypress', this.legacyKeypressHandler);
+      this.legacyKeypressHandler = null;
+    }
     this.shellKeyCleanup?.();
     this.shellKeyCleanup = null;
     this.shellHost?.dispose();

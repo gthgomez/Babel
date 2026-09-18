@@ -84,6 +84,32 @@ test('exclusive terminal leases suspend painting and redraw after nested return'
   assert.equal(host.mounted, true)
 })
 
+test('exclusive terminal leases release input ownership and schedule a full redraw after throw', async () => {
+  const requests: string[] = []
+  const host = createShellHost({
+    frameRenderer: createShellFrameRenderer(makeOutput()),
+    frameSource: makeFrame,
+    scheduler: {
+      register: (_id, _callback) => () => {},
+      request: (id) => requests.push(id),
+    },
+  })
+  host.mount()
+
+  await assert.rejects(
+    host.withExclusiveTerminal('editor', async () => {
+      assert.equal(host.exclusiveDepth, 1)
+      assert.equal(shellInputLeaseActive(), true)
+      throw new Error('editor failed')
+    }),
+    /editor failed/,
+  )
+
+  assert.equal(host.exclusiveDepth, 0)
+  assert.equal(shellInputLeaseActive(), false)
+  assert.equal(requests.at(-1), host.componentId)
+})
+
 test('disposal is idempotent and prevents later scheduled paints', () => {
   const callbacks = new Map<string, () => void>()
   const output = makeOutput()

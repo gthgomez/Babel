@@ -39,6 +39,7 @@ export async function executeTask(
   const resolveIdentity = deps?.loadSessionIdentity ?? loadSessionIdentity;
   try {
     const explicitDailyCommand = parseInteractiveDailyCommand(input);
+    const emptyExplicitTask = /^(?:bl|babel)\s*$/i.test(input.trim());
     // Phase 4A: Deprecation warning for `bl` prefix in REPL (CLI already blocks it)
     if (explicitDailyCommand?.prefix === 'bl') {
       console.warn(
@@ -66,7 +67,6 @@ export async function executeTask(
       target_root: target.targetRoot,
       workspace_root: target.workspaceRoot,
     });
-    ctx.beginShellTurn?.(userTurn.turn_id, input);
     // Load session identity once per project root (AGENTS.md, CLAUDE.md,
     // ENGINEERING.md, PROJECT_CONTEXT.md + cached repo map). This gives the
     // agent immediate awareness of who it is, where it is, and how to work.
@@ -86,37 +86,46 @@ export async function executeTask(
       handleAmbiguousConfirmation(ctx, input, target);
       return;
     }
-    if (!resolvedTask) {
+    if (!resolvedTask || emptyExplicitTask) {
       console.log(
         primary('\n  Please include task text after `babel`. Try: babel "describe the task"\n'),
       );
       ctx.state.lastRunUserStatus = 'blocked';
       return;
     }
-    if (lane === 'deep') {
-      await executeGovernedTask(ctx, input, resolvedTask, target, 'deep');
-      return;
-    }
-    // Plan mode: run plan pipeline and show interactive review
-    if (ctx.state.mode === 'plan') {
-      await executePlanTask(ctx, input, effectiveTask, target);
-      return;
-    }
-    // Chat mode: direct streaming ChatEngine — no waterfall, no pipeline, no Zod.
-    // Use 'babel deep' or /mode deep to access the full governed pipeline.
-    if (ctx.state.mode === 'chat' || ctx.state.mode === 'chat-headless') {
-      if (ctx.state.mode === 'chat-headless') {
-        process.env['BABEL_HEADLESS'] = '1';
-      }
-      if (explicitDailyCommand?.verb === 'deep') {
+    ctx.beginShellTurn?.(userTurn.turn_id, input);
+    let executionFailed = false;
+    try {
+      if (lane === 'deep') {
         await executeGovernedTask(ctx, input, resolvedTask, target, 'deep');
         return;
       }
-      await executeChatTask(ctx, input, effectiveTask, target, systemContext);
-      return;
+      // Plan mode: run plan pipeline and show interactive review
+      if (ctx.state.mode === 'plan') {
+        await executePlanTask(ctx, input, effectiveTask, target);
+        return;
+      }
+      // Chat mode: direct streaming ChatEngine — no waterfall, no pipeline, no Zod.
+      // Use 'babel deep' or /mode deep to access the full governed pipeline.
+      if (ctx.state.mode === 'chat' || ctx.state.mode === 'chat-headless') {
+        if (ctx.state.mode === 'chat-headless') {
+          process.env['BABEL_HEADLESS'] = '1';
+        }
+        if (explicitDailyCommand?.verb === 'deep') {
+          await executeGovernedTask(ctx, input, resolvedTask, target, 'deep');
+          return;
+        }
+        await executeChatTask(ctx, input, effectiveTask, target, systemContext);
+        return;
+      }
+      // Legacy governed path (non-chat modes)
+      await executeGovernedTask(ctx, input, effectiveTask, target);
+    } catch (error) {
+      executionFailed = true;
+      throw error;
+    } finally {
+      ctx.settleShellTurn?.(executionFailed ? 'failed' : undefined);
     }
-    // Legacy governed path (non-chat modes)
-    await executeGovernedTask(ctx, input, effectiveTask, target);
   } finally {
     ctx.saveSessionState();
   }

@@ -13,6 +13,7 @@ export interface ShellInputResult {
   state: ShellInputState
   action?:
     | 'open-palette'
+    | 'open-reverse-search'
     | 'close-overlay'
     | 'focus-changed'
     | 'move-selection'
@@ -60,6 +61,9 @@ export function routeShellInput(event: KeyEvent, state: ShellInputState): ShellI
   }
   if (event.name === 'p' && event.ctrl) {
     return { handled: true, state, action: 'open-palette' }
+  }
+  if (event.name === 'r' && event.ctrl) {
+    return { handled: true, state, action: 'open-reverse-search' }
   }
   if (state.focus === 'composer') return { handled: false, state }
 

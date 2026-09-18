@@ -42,6 +42,7 @@ test('Escape closes open drawers and Ctrl+P opens the palette from the composer'
   assert.equal(closed.action, 'close-overlay')
   const palette = routeShellInput(key('p', { ctrl: true }), base)
   assert.equal(palette.action, 'open-palette')
+  assert.equal(routeShellInput(key('r', { ctrl: true }), base).action, 'open-reverse-search')
 })
 
 test('composer editing keys remain unhandled for PromptInput', () => {

@@ -97,6 +97,8 @@ export interface ReplContext {
   resolveSessionModel(): void;
   appendTurn(turn: Omit<InteractiveTurn, 'schema_version' | 'turn_id' | 'ts'>): InteractiveTurn;
   beginShellTurn?(turnId: number, input: string): void;
+  settleShellTurn?(outcome?: string): void;
+  withExclusiveTerminal?<T>(reason: string, work: () => Promise<T>): Promise<T>;
   resolveCurrentTarget(): AgentTargetContext;
   scheduleIndexWarmup(projectRoot: string): void;
   exit(): void;

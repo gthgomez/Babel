@@ -175,6 +175,7 @@ export class ShellConversationStore {
     const settled = mergeRecords(this.currentTurnRecords, records);
     this.committedRecords = mergeRecords(this.committedRecords, settled);
     this.currentTurnRecords = [];
+    this.activeTurnId = undefined;
     return true;
   }
 
