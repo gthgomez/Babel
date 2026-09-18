@@ -38,11 +38,19 @@ async function executeTaskAndDrainQueue(
   deps: ReplLoopDeps,
   input: string,
 ): Promise<void> {
-  await deps.executeTask(input);
+  if (ctx.shellHost) {
+    await ctx.shellHost.withExclusiveTerminal('task', () => deps.executeTask(input));
+  } else {
+    await deps.executeTask(input);
+  }
   while (!ctx.isRunning) {
     const next = dequeueComposerMessage();
     if (!next) break;
-    await deps.executeTask(next);
+    if (ctx.shellHost) {
+      await ctx.shellHost.withExclusiveTerminal('queued-task', () => deps.executeTask(next));
+    } else {
+      await deps.executeTask(next);
+    }
   }
 }
 
@@ -78,7 +86,7 @@ function setAdapterDraft(ctx: ReplContext, text: string): void {
 }
 
 export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise<void> {
-  printIdleHeader(ctx);
+  if (!ctx.shellHost) printIdleHeader(ctx);
   const coordinator = InputCoordinator.getInstance();
   let release: (() => void) | null = await coordinator.acquire('repl');
 
@@ -205,7 +213,11 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     saveHistory((ctx.rl as ReadlineWithHistory).history);
 
     if (input.startsWith('/')) {
-      await handleCommand(ctx, input);
+      if (ctx.shellHost) {
+        await ctx.shellHost.withExclusiveTerminal('command', () => handleCommand(ctx, input));
+      } else {
+        await handleCommand(ctx, input);
+      }
       release = await finishReplTurn(ctx, coordinator, release);
     } else {
       await executeTaskAndDrainQueue(ctx, deps, input);

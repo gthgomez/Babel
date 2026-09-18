@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { routeShellInput, type ShellInputState } from './shellInputRouter.js'
+import type { KeyEvent } from '../keyInput.js'
+
+function key(name: string, overrides: Partial<KeyEvent> = {}): KeyEvent {
+  return { name, ctrl: false, meta: false, shift: false, sequence: name, ...overrides }
+}
+
+const base: ShellInputState = { focus: 'composer', leftDrawerOpen: true, rightDrawerOpen: true }
+
+test('F6 cycles shell focus and Shift+F6 reverses it', () => {
+  const next = routeShellInput(key('f6'), base)
+  assert.equal(next.state.focus, 'sessions')
+  const previous = routeShellInput(key('f6', { shift: true }), next.state)
+  assert.equal(previous.state.focus, 'composer')
+  assert.equal(next.handled, true)
+})
+
+test('Escape closes open drawers and Ctrl+P opens the palette from the composer', () => {
+  const closed = routeShellInput(key('escape'), base)
+  assert.deepEqual(closed.state, { focus: 'composer', leftDrawerOpen: false, rightDrawerOpen: false })
+  assert.equal(closed.action, 'close-overlay')
+  const palette = routeShellInput(key('p', { ctrl: true }), base)
+  assert.equal(palette.action, 'open-palette')
+})
+
+test('composer editing keys remain unhandled for PromptInput', () => {
+  const result = routeShellInput(key('a'), base)
+  assert.equal(result.handled, false)
+  assert.deepEqual(result.state, base)
+})

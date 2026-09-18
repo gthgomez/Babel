@@ -47,6 +47,13 @@ import { reverseHistorySearch } from './commands/service.js';
 import { ChatEngine } from '../agent/chatEngine.js';
 import { VoiceStreamManager } from '../voice/voice-stream-manager.js';
 import type { PromptInputAdapter } from '../ui/promptInputAdapter.js';
+import { OutputBuffer } from '../ui/outputBuffer.js';
+import { installKeyHandler, type KeyEvent } from '../ui/keyInput.js';
+import { planShellLayout } from '../ui/shell/shellLayout.js';
+import { buildShellFrameInput } from '../ui/shell/shellPanels.js';
+import { createShellHost, type ShellHost } from '../ui/shell/shellHost.js';
+import { selectShellHost } from '../ui/shell/selectShellHost.js';
+import { routeShellInput, type ShellInputState } from '../ui/shell/shellInputRouter.js';
 
 // ─── REPL Class ───────────────────────────────────────────────────────────────
 
@@ -85,6 +92,13 @@ export class BabelRepl {
   chatEngine: ChatEngine | undefined = undefined;
   lastRoutingLabel: string | null = null;
   voiceManager: VoiceStreamManager | null = null;
+  shellHost: ShellHost | undefined;
+  private shellKeyCleanup: (() => void) | null = null;
+  private shellInputState: ShellInputState = {
+    focus: 'composer',
+    leftDrawerOpen: true,
+    rightDrawerOpen: true,
+  };
 
   constructor(initialState?: Partial<SessionState>) {
     // Load saved history before creating the input interface
@@ -181,6 +195,10 @@ export class BabelRepl {
       // isRunning alone is wrong here: during bootstrap/picker it is always false,
       // so Windows Terminal init resize events would inject the BABEL banner mid-picker.
       if (!this.isRunning && !SessionPicker.isActive()) {
+        if (this.shellHost) {
+          this.shellHost.invalidate('resize');
+          return;
+        }
         const now = Date.now();
         if (now - this.lastIdleHeaderResizeAt < 400) {
           return;
@@ -211,7 +229,77 @@ export class BabelRepl {
   public async start(): Promise<void> {
     await bootstrapReplSession(this, () => BabelRepl.loadSessionState());
     await maybeShowResumePicker(this);
+    this.startNorthStarShell();
     await runReplLoop(this, { executeTask: (input) => this.executeTask(input) });
+  }
+
+  private startNorthStarShell(): void {
+    const selection = selectShellHost();
+    if (selection.host !== 'north_star') return;
+
+    const adapter = this.rl as unknown as PromptInputAdapter;
+    if (
+      typeof adapter.setPresentationTarget !== 'function' ||
+      typeof adapter.getView !== 'function' ||
+      typeof adapter.processKey !== 'function'
+    ) {
+      return;
+    }
+
+    let host: ShellHost;
+    const frameSource = () => {
+      const dimensions = OutputBuffer.getTerminalSize();
+      const layout = planShellLayout(dimensions);
+      const promptRect = layout.composer ?? {
+        x: 0,
+        y: Math.max(0, layout.rows - 3),
+        width: layout.effectiveCols,
+        height: 3,
+      };
+      const prompt = adapter.getView(promptRect);
+      const conversation = this.turns
+        .slice(-12)
+        .flatMap((turn) => {
+          const prefix = turn.role === 'user' ? '› ' : '  ';
+          const text = turn.role === 'user' ? turn.input ?? turn.resolved_task ?? '' : turn.answer ?? turn.summary ?? '';
+          return text ? text.split('\n').map((line) => `${prefix}${line}`) : [];
+        });
+      return buildShellFrameInput(layout, {
+        mode: this.state.mode,
+        model: this.state.resolvedModelId ?? this.state.model ?? 'auto',
+        project: this.state.project ?? 'global',
+        conversation,
+        status: [this.state.lastRunUserStatus ?? (this.isRunning ? 'Running' : 'Ready')],
+        ...(prompt ? { prompt } : {}),
+      });
+    };
+
+    host = createShellHost({ frameSource, componentId: 'babel-north-star-shell' });
+    adapter.setPresentationTarget({
+      getRect: () => {
+        const layout = planShellLayout(OutputBuffer.getTerminalSize());
+        return layout.composer ?? {
+          x: 0,
+          y: Math.max(0, layout.rows - 3),
+          width: layout.effectiveCols,
+          height: 3,
+        };
+      },
+      invalidate: (reason) => host.invalidate(reason),
+    });
+    this.shellHost = host;
+    this.shellKeyCleanup = installKeyHandler(process.stdin, (event: KeyEvent) => {
+      const routed = routeShellInput(event, this.shellInputState);
+      this.shellInputState = routed.state;
+      if (routed.action === 'open-palette') {
+        void this.openCommandPalette().catch(() => {});
+      }
+      if (routed.action === 'focus-changed' || routed.action === 'close-overlay') {
+        host.invalidate(routed.action);
+      }
+      if (!routed.handled) adapter.processKey(event);
+    });
+    host.mount();
   }
 
   // ── Session Persistence ──────────────────────────────────────────────────
@@ -224,10 +312,18 @@ export class BabelRepl {
   }
 
   printIdleHeader(): void {
+    if (this.shellHost) {
+      this.shellHost.invalidate('idle-header');
+      return;
+    }
     renderIdleHeader(this);
   }
 
   renderTurnStatusBar(): void {
+    if (this.shellHost) {
+      this.shellHost.invalidate('status-bar');
+      return;
+    }
     renderReplStatusBar(this);
   }
 
@@ -381,6 +477,10 @@ export class BabelRepl {
   }
 
   exit(): void {
+    this.shellKeyCleanup?.();
+    this.shellKeyCleanup = null;
+    this.shellHost?.dispose();
+    this.shellHost = undefined;
     exitRepl();
   }
 }

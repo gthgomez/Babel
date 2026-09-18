@@ -13,6 +13,7 @@ import type { ScreenManager } from '../ui/screenManager.js';
 import type { AgentTargetContext } from '../services/targetResolver.js';
 import type { InteractiveTurn, SessionState } from './types.js';
 import type { ChatEngine } from '../agent/chatEngine.js';
+import type { ShellHost } from '../ui/shell/shellHost.js';
 
 export interface ReplContext {
   // ── I/O ──────────────────────────────────────────────────────────────────
@@ -68,6 +69,9 @@ export interface ReplContext {
    *  reuses this engine instead of creating a new one, continuing the prior
    *  conversation. Cleared on /clear or when a new engine is created. */
   chatEngine: ChatEngine | undefined;
+
+  /** Root-owned North Star presentation host when the gated UI4 path is active. */
+  shellHost: ShellHost | undefined;
 
   /** Last routing-status label for the status bar (e.g. "Flash·mutate").
    *  Set after each chat run from the last TurnRoutingReceipt. */
