@@ -197,15 +197,23 @@ describe('PR185 residual Chat runtime repairs', () => {
         taskCostBaselineUsd: number;
         currentTaskCostUsd: () => number;
         checkBudgets: () => { ok: boolean; limiter?: string };
+        getTaskAllowanceSnapshot: () => { taskOwnerId: string } | null;
       };
       assert.equal(state.taskCostBaselineUsd, 2.6);
       assert.equal(state.currentTaskCostUsd(), 0);
       assert.equal(state.checkBudgets().ok, true);
 
-      globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+      const firstOwner = state.getTaskAllowanceSnapshot()!.taskOwnerId;
+      globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000, null, null, {
+        taskOwnerId: firstOwner,
+        chargeId: 'astra-first-small',
+      });
       assert.ok(state.currentTaskCostUsd() > 0);
       assert.equal(state.checkBudgets().ok, true);
-      globalCostTracker.trackUsage('deepseek-v4-flash', 100_000, 0);
+      globalCostTracker.trackUsage('deepseek-v4-flash', 100_000, 0, null, null, {
+        taskOwnerId: firstOwner,
+        chargeId: 'astra-first-large',
+      });
       assert.equal(state.checkBudgets().ok, false);
       assert.equal(state.checkBudgets().limiter, 'cost');
 
@@ -215,7 +223,12 @@ describe('PR185 residual Chat runtime repairs', () => {
       assert.equal(state.currentTaskCostUsd(), 0);
       assert.equal(state.checkBudgets().ok, true);
       const freshBaseline = state.taskCostBaselineUsd;
-      globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 0);
+      const secondOwner = state.getTaskAllowanceSnapshot()!.taskOwnerId;
+      globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 0, null, null, {
+        taskOwnerId: secondOwner,
+        chargeId: 'astra-second-small',
+      });
+      (state as unknown as { persistTaskAllowance: () => void }).persistTaskAllowance();
 
       const runId = engine.getEngineRunId();
       const resumed = new ChatEngine({
@@ -297,6 +310,16 @@ describe('PR185 residual Chat runtime repairs', () => {
       const resumedState = resumed as unknown as {
         currentTaskCostUsd: () => number;
         checkBudgets: () => { ok: boolean; limiter?: string };
+        renewAllowance: (grant: {
+          grantId: string;
+          provenance: string;
+          costCapUsd: number;
+          wallCapMs: number;
+          turnCap: number;
+        }) => void;
+        getTaskAllowanceSnapshot: () => {
+          grant: { wallCapMs: number; turnCap: number };
+        } | null;
       };
       const continued = resumed.applyUserSubmission({
         userInput: 'continue after restart',
@@ -304,6 +327,15 @@ describe('PR185 residual Chat runtime repairs', () => {
       });
       assert.equal(continued.continuedTask, true);
       assert.ok(Math.abs(resumedState.currentTaskCostUsd() - spentBeforeRestart) < 1e-9);
+      assert.equal(resumedState.checkBudgets().ok, false);
+      const grant = resumedState.getTaskAllowanceSnapshot()!.grant;
+      resumedState.renewAllowance({
+        grantId: 'restart-renewal',
+        provenance: 'test:explicit-restart-renewal',
+        costCapUsd: 0.02,
+        wallCapMs: grant.wallCapMs,
+        turnCap: grant.turnCap,
+      });
       assert.equal(resumedState.checkBudgets().ok, true);
     } finally {
       globalCostTracker.resetSession();

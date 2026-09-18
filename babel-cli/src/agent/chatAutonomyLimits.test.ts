@@ -68,6 +68,10 @@ type BudgetHarness = {
   criticStrikes: number;
   _sessionStartTime: number;
   taskClass: string;
+  taskAllowance: {
+    taskOwnerId: string;
+    consumed: { activeWallMs: number };
+  } | null;
 };
 
 function harness(engine: ChatEngine): BudgetHarness {
@@ -368,11 +372,10 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
     const engine = makeEngine({ maxCostUsd: 3.0, maxWallMs: 60_000 });
     const h = harness(engine);
     globalCostTracker.resetSession();
-    globalCostTracker.restoreSessionCost({
+    assert.ok(h.taskAllowance);
+    globalCostTracker.restoreTaskUsage(h.taskAllowance.taskOwnerId, {
       totalCostUSD: 1.8,
-      totalInputTokens: 100,
-      totalOutputTokens: 50,
-      totalTokens: 150,
+      chargeIds: [],
     });
     h.criticRepairCostCapUsd = 1.5;
     h._sessionStartTime = Date.now();
@@ -387,7 +390,8 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
     const h = harness(engine);
     globalCostTracker.resetSession();
     h.postWriteRepairWallCapMs = 20_000;
-    h._sessionStartTime = Date.now() - 25_000;
+    assert.ok(h.taskAllowance);
+    h.taskAllowance.consumed.activeWallMs = 25_000;
     const budget = h.checkBudgets();
     assert.equal(budget.ok, false);
     assert.equal(budget.limiter, 'wall_repair');
@@ -398,11 +402,10 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
     const engine = makeEngine({ maxCostUsd: 10.0, maxWallMs: 600_000 });
     const h = harness(engine);
     globalCostTracker.resetSession();
-    globalCostTracker.restoreSessionCost({
+    assert.ok(h.taskAllowance);
+    globalCostTracker.restoreTaskUsage(h.taskAllowance.taskOwnerId, {
       totalCostUSD: 1.0,
-      totalInputTokens: 10,
-      totalOutputTokens: 10,
-      totalTokens: 20,
+      chargeIds: [],
     });
     h._sessionStartTime = Date.now() - 1_000;
     h.criticStrikes = 0;
@@ -416,11 +419,10 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
     const engine = makeEngine({ maxWallMs: 600_000 });
     const h = harness(engine);
     globalCostTracker.resetSession();
-    globalCostTracker.restoreSessionCost({
+    assert.ok(h.taskAllowance);
+    globalCostTracker.restoreTaskUsage(h.taskAllowance.taskOwnerId, {
       totalCostUSD: 1.0,
-      totalInputTokens: 10,
-      totalOutputTokens: 10,
-      totalTokens: 20,
+      chargeIds: [],
     });
     h.criticStrikes = 1;
     // Default engine may have task-class cost; force a non-explicit $2 cap.
