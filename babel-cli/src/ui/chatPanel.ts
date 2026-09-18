@@ -1,16 +1,17 @@
 import {
-  accentBright,
+  activeAccent,
+  accentHigh,
   getTerminalWidth,
   muted,
   padRight,
   primary,
   visibleLength,
-} from './theme.js';
-import { renderMarkdown } from './highlight.js';
-import { wrapPrefixedBlock } from './textLayout.js';
+} from "./theme.js";
+import { renderMarkdown } from "./highlight.js";
+import { wrapPrefixedBlock } from "./textLayout.js";
 
 export interface ChatTurnRecord {
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   input?: string;
   answer?: string;
   summary?: string;
@@ -22,34 +23,38 @@ const DEFAULT_MAX_TURNS = 24;
 const DEFAULT_WRAP_WIDTH = 96;
 
 function formatTurnBody(turn: ChatTurnRecord): string {
-  if (turn.role === 'user') {
-    return turn.input ?? turn.summary ?? '';
+  if (turn.role === "user") {
+    return turn.input ?? turn.summary ?? "";
   }
-  return turn.answer ?? turn.summary ?? '';
+  return turn.answer ?? turn.summary ?? "";
 }
 
-export function renderChatTurn(turn: ChatTurnRecord, options: { wrapWidth?: number } = {}): string {
-  const label = turn.role === 'user' ? 'You' : 'Babel';
+export function renderChatTurn(
+  turn: ChatTurnRecord,
+  options: { wrapWidth?: number } = {},
+): string {
+  const label =
+    turn.role === "user" ? activeAccent("YOU") : accentHigh("BABEL");
   const rawBody = formatTurnBody(turn);
   const body = renderMarkdown(rawBody);
   const width = Math.max(
     40,
     Math.min(options.wrapWidth ?? DEFAULT_WRAP_WIDTH, getTerminalWidth() - 8),
   );
-  const firstPrefix = `  ${accentBright(padRight(label, 7))}`;
-  const continuationPrefix = '         ';
+  const firstPrefix = `  ${padRight(label, 7)}`;
+  const continuationPrefix = "         ";
 
   const lines = wrapPrefixedBlock(body, {
     firstPrefix,
     continuationPrefix,
     width,
-    longTokenPolicy: 'hard-wrap',
+    longTokenPolicy: "hard-wrap",
   });
 
   if (lines.length === 0 || (lines.length === 1 && lines[0] === firstPrefix)) {
-    return `${firstPrefix}${muted('(empty turn)')}`;
+    return `${firstPrefix}${muted("(empty turn)")}`;
   }
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 export function renderChatTranscript(
@@ -62,19 +67,22 @@ export function renderChatTranscript(
   } = {},
 ): string {
   if (turns.length === 0) {
-    return muted('\n  No chat turns recorded yet.\n');
+    return muted("\n  No chat turns recorded yet.\n");
   }
   const maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
   const visible = turns.slice(-maxTurns);
   const blocks = [
-    primary(`\n  ${options.title ?? 'Chat Transcript'}:`),
+    primary(`\n  ${options.title ?? "Chat Transcript"}:`),
     ...visible.map((turn) =>
-      renderChatTurn(turn, options.wrapWidth !== undefined ? { wrapWidth: options.wrapWidth } : {}),
+      renderChatTurn(
+        turn,
+        options.wrapWidth !== undefined ? { wrapWidth: options.wrapWidth } : {},
+      ),
     ),
   ];
   if (options.transcriptPath) {
     blocks.push(muted(`\n  Transcript: ${options.transcriptPath}`));
   }
-  blocks.push('');
-  return blocks.join('\n');
+  blocks.push("");
+  return blocks.join("\n");
 }

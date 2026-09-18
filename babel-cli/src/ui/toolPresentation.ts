@@ -11,18 +11,23 @@ import {
   error,
   warning,
   muted,
+  info,
+  primary,
   dim,
   bold,
   truncate,
   visibleLength,
   getEffectiveTerminalWidth,
-} from './theme.js';
+} from "./theme.js";
 import {
   classifyToolPresentation,
   type ToolPresentationStatus,
-} from './toolPresentationClassify.js';
+} from "./toolPresentationClassify.js";
 
-export { isKnownFailureDetail, classifyToolPresentation } from './toolPresentationClassify.js';
+export {
+  isKnownFailureDetail,
+  classifyToolPresentation,
+} from "./toolPresentationClassify.js";
 
 export interface ToolExecutionSummary {
   tool: string;
@@ -35,7 +40,7 @@ export interface ToolExecutionSummary {
 }
 
 export interface CollapsedToolGroup {
-  category: 'read' | 'search' | 'edit' | 'command' | 'verifier' | 'other';
+  category: "read" | "search" | "edit" | "command" | "verifier" | "other";
   count: number;
   items: ToolExecutionSummary[];
   hasErrors: boolean;
@@ -58,25 +63,44 @@ export function groupToolExecutions(
   const groups: CollapsedToolGroup[] = [];
 
   for (const exec of executions) {
-    let category: CollapsedToolGroup['category'] = 'other';
+    let category: CollapsedToolGroup["category"] = "other";
     const t = exec.tool.toLowerCase();
 
-    if (t.includes('read') || t.includes('view') || t.includes('cat') || t.includes('head')) {
-      category = 'read';
-    } else if (t.includes('search') || t.includes('grep') || t.includes('find') || t.includes('list')) {
-      category = 'search';
-    } else if (t.includes('write') || t.includes('replace') || t.includes('patch') || t.includes('edit')) {
-      category = 'edit';
-    } else if (t.includes('test') || t.includes('verify')) {
-      category = 'verifier';
-    } else if (t.includes('command') || t.includes('exec') || t.includes('shell')) {
-      category = 'command';
+    if (
+      t.includes("read") ||
+      t.includes("view") ||
+      t.includes("cat") ||
+      t.includes("head")
+    ) {
+      category = "read";
+    } else if (
+      t.includes("search") ||
+      t.includes("grep") ||
+      t.includes("find") ||
+      t.includes("list")
+    ) {
+      category = "search";
+    } else if (
+      t.includes("write") ||
+      t.includes("replace") ||
+      t.includes("patch") ||
+      t.includes("edit")
+    ) {
+      category = "edit";
+    } else if (t.includes("test") || t.includes("verify")) {
+      category = "verifier";
+    } else if (
+      t.includes("command") ||
+      t.includes("exec") ||
+      t.includes("shell")
+    ) {
+      category = "command";
     }
 
     const cls = classifySummary(exec);
     const isErr = cls.isFailure;
-    const isBlocked = cls.isBlocked || cls.availability === 'unavailable';
-    const isUnk = cls.status === 'unknown' && !isBlocked;
+    const isBlocked = cls.isBlocked || cls.availability === "unavailable";
+    const isUnk = cls.status === "unknown" && !isBlocked;
 
     const lastGroup = groups.at(-1);
     if (
@@ -105,37 +129,45 @@ export function groupToolExecutions(
   return groups;
 }
 
-function formatExpandedItem(item: ToolExecutionSummary, termWidth: number): string {
+function formatExpandedItem(
+  item: ToolExecutionSummary,
+  termWidth: number,
+): string {
   const cls = classifySummary(item);
   let icon: string;
   let statusText: string;
 
   if (cls.isBlocked) {
-    const reason = item.detail && item.detail !== 'blocked' ? item.detail : 'blocked';
-    icon = warning('⏸');
+    const reason =
+      item.detail && item.detail !== "blocked" ? item.detail : "blocked";
+    icon = warning("⏸");
     statusText = warning(reason);
-  } else if (cls.availability === 'unavailable') {
-    icon = warning('⏸');
-    statusText = warning(item.detail ?? 'unavailable');
+  } else if (cls.availability === "unavailable") {
+    icon = warning("⏸");
+    statusText = warning(item.detail ?? "unavailable");
   } else if (cls.isFailure) {
-    icon = error('✖');
+    icon = error("✖");
     statusText = error(`failed (exit ${item.exitCode ?? 1})`);
   } else if (cls.isSuccess) {
-    icon = success('✔');
-    statusText = muted('ok');
+    icon = success("✔");
+    statusText = muted("ok");
   } else {
-    icon = muted('○');
-    statusText = muted('unverified');
+    icon = muted("○");
+    statusText = muted("unverified");
   }
 
-  const errSuffix = cls.isFailure && item.error ? ` (${item.error})` : '';
-  const rawLine = `  ${icon} ${dim(item.tool)} ${item.target} — ${statusText}${errSuffix}`;
+  const errSuffix = cls.isFailure && item.error ? ` (${item.error})` : "";
+  const rawLine = `  ${icon} ${dim(item.tool)} ${primary(item.target)} — ${statusText}${errSuffix}`;
   if (visibleLength(rawLine) > termWidth) {
-    const staticLen = visibleLength(`  ${icon} ${dim(item.tool)}  — ${statusText}${errSuffix}`);
+    const staticLen = visibleLength(
+      `  ${icon} ${dim(item.tool)}  — ${statusText}${errSuffix}`,
+    );
     const budget = Math.max(4, termWidth - staticLen);
     const truncatedTarget = truncate(item.target, budget);
-    const fittedLine = `  ${icon} ${dim(item.tool)} ${truncatedTarget} — ${statusText}${errSuffix}`;
-    return visibleLength(fittedLine) > termWidth ? truncate(fittedLine, termWidth) : fittedLine;
+    const fittedLine = `  ${icon} ${dim(item.tool)} ${primary(truncatedTarget)} — ${statusText}${errSuffix}`;
+    return visibleLength(fittedLine) > termWidth
+      ? truncate(fittedLine, termWidth)
+      : fittedLine;
   }
   return rawLine;
 }
@@ -148,40 +180,42 @@ export function formatToolGroupSummary(
   const termWidth = width ?? getEffectiveTerminalWidth();
 
   if (verbose || group.hasErrors || group.hasBlocked) {
-    return group.items.map((item) => formatExpandedItem(item, termWidth)).join('\n');
+    return group.items
+      .map((item) => formatExpandedItem(item, termWidth))
+      .join("\n");
   }
 
-  let line = '';
+  let line = "";
   switch (group.category) {
-    case 'read':
+    case "read":
       line = group.hasUnknowns
-        ? `  ${muted('○')} ${dim(`Read ${group.count} file${group.count > 1 ? 's' : ''} (unverified)`)}`
-        : `  ${muted('○')} ${dim(`Read ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
+        ? `  ${info("○")} ${dim(`Read ${group.count} file${group.count > 1 ? "s" : ""} (unverified)`)}`
+        : `  ${info("○")} ${dim(`Read ${group.count} file${group.count > 1 ? "s" : ""}`)}`;
       break;
-    case 'search':
+    case "search":
       line = group.hasUnknowns
-        ? `  ${muted('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''}, unverified)`)}`
-        : `  ${muted('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''})`)}`;
+        ? `  ${info("○")} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? "s" : ""}, unverified)`)}`
+        : `  ${info("○")} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? "s" : ""})`)}`;
       break;
-    case 'edit':
+    case "edit":
       line = group.hasUnknowns
-        ? `  ${muted('○')} ${dim(`Edited ${group.count} file${group.count > 1 ? 's' : ''} (unverified)`)}`
-        : `  ${success('✔')} ${bold(`Edited ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
+        ? `  ${info("○")} ${dim(`Edited ${group.count} file${group.count > 1 ? "s" : ""} (unverified)`)}`
+        : `  ${success("✔")} ${bold(`Edited ${group.count} file${group.count > 1 ? "s" : ""}`)}`;
       break;
-    case 'verifier':
+    case "verifier":
       line = group.hasUnknowns
-        ? `  ${muted('○')} ${dim('Ran verifier (unverified)')}`
-        : `  ${success('✔')} ${success('Ran tests & verifiers (exit 0)')}`;
+        ? `  ${muted("○")} ${dim("Ran verifier (unverified)")}`
+        : `  ${success("✔")} ${success("Ran tests & verifiers (exit 0)")}`;
       break;
-    case 'command':
+    case "command":
       line = group.hasUnknowns
-        ? `  ${muted('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''} (unverified)`)}`
-        : `  ${muted('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''}`)}`;
+        ? `  ${info("○")} ${dim(`Executed ${group.count} command${group.count > 1 ? "s" : ""} (unverified)`)}`
+        : `  ${info("○")} ${dim(`Executed ${group.count} command${group.count > 1 ? "s" : ""}`)}`;
       break;
     default:
       line = group.hasUnknowns
-        ? `  ${muted('○')} ${dim(`${group.items[0]?.tool ?? 'tool'} (${group.count}) (unverified)`)}`
-        : `  ${muted('○')} ${dim(`${group.items[0]?.tool ?? 'tool'} (${group.count})`)}`;
+        ? `  ${info("○")} ${dim(`${group.items[0]?.tool ?? "tool"} (${group.count}) (unverified)`)}`
+        : `  ${info("○")} ${dim(`${group.items[0]?.tool ?? "tool"} (${group.count})`)}`;
       break;
   }
 
@@ -196,7 +230,9 @@ export function renderToolExecutionTrail(
   verbose = false,
   width?: number,
 ): string {
-  if (executions.length === 0) return '';
+  if (executions.length === 0) return "";
   const groups = groupToolExecutions(executions);
-  return groups.map((g) => formatToolGroupSummary(g, verbose, width)).join('\n');
+  return groups
+    .map((g) => formatToolGroupSummary(g, verbose, width))
+    .join("\n");
 }

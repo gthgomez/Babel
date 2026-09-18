@@ -18,15 +18,14 @@ import {
   dim,
   muted,
   ghost,
+  accent,
   primary,
   success,
   error as errColor,
   warning,
   info,
-  bold,
   truncate,
-  indentBlock,
-} from './theme.js';
+} from "./theme.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -34,7 +33,7 @@ export interface ToolRenderContext {
   toolId: string;
   toolName: string;
   toolInput: Record<string, unknown>;
-  status: 'pending' | 'running' | 'complete' | 'error';
+  status: "pending" | "running" | "complete" | "error";
   result?: string;
   error?: string;
   durationMs?: number;
@@ -60,59 +59,62 @@ export interface ToolRenderer {
 /** Extract a human-readable file path from toolInput. */
 function extractPath(input: Record<string, unknown>): string {
   const path =
-    typeof input.path === 'string'
+    typeof input.path === "string"
       ? input.path
-      : typeof input['filePath'] === 'string'
-        ? input['filePath']
-        : typeof input['target'] === 'string'
-          ? input['target']
-          : '';
-  return path || '(unknown)';
+      : typeof input["filePath"] === "string"
+        ? input["filePath"]
+        : typeof input["target"] === "string"
+          ? input["target"]
+          : "";
+  return path || "(unknown)";
 }
 
 /** Extract a human-readable command from toolInput. */
 function extractCommand(input: Record<string, unknown>): string {
-  return typeof input.command === 'string'
+  return typeof input.command === "string"
     ? input.command
-    : typeof input['cmd'] === 'string'
-      ? input['cmd']
-      : typeof input['script'] === 'string'
-        ? input['script']
-        : '(unknown)';
+    : typeof input["cmd"] === "string"
+      ? input["cmd"]
+      : typeof input["script"] === "string"
+        ? input["script"]
+        : "(unknown)";
 }
 
 /** Extract a search pattern from toolInput. */
 function extractPattern(input: Record<string, unknown>): string {
-  return typeof input.pattern === 'string'
+  return typeof input.pattern === "string"
     ? input.pattern
-    : typeof input['query'] === 'string'
-      ? input['query']
-      : typeof input['q'] === 'string'
-        ? input['q']
-        : '(unknown)';
+    : typeof input["query"] === "string"
+      ? input["query"]
+      : typeof input["q"] === "string"
+        ? input["q"]
+        : "(unknown)";
 }
 
 /** Extract a URL from toolInput. */
 function extractUrl(input: Record<string, unknown>): string {
-  return typeof input.url === 'string'
+  return typeof input.url === "string"
     ? input.url
-    : typeof input['uri'] === 'string'
-      ? input['uri']
-      : typeof input['href'] === 'string'
-        ? input['href']
-        : '(unknown)';
+    : typeof input["uri"] === "string"
+      ? input["uri"]
+      : typeof input["href"] === "string"
+        ? input["href"]
+        : "(unknown)";
 }
 
 /** Return a compact one-line summary of a result string. */
-function summarizeResult(result: string | undefined, maxLen: number = 80): string {
-  if (!result) return '';
-  const cleaned = result.replace(/\s+/g, ' ').trim();
+function summarizeResult(
+  result: string | undefined,
+  maxLen: number = 80,
+): string {
+  if (!result) return "";
+  const cleaned = result.replace(/\s+/g, " ").trim();
   return truncate(cleaned, maxLen);
 }
 
 /** Format a duration in milliseconds to a human-readable string. */
 function formatDuration(ms: number | undefined): string {
-  if (ms === undefined || ms < 0) return '';
+  if (ms === undefined || ms < 0) return "";
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
@@ -120,12 +122,15 @@ function formatDuration(ms: number | undefined): string {
 
 /** Extract line count from toolInput or result. */
 function extractLineCount(context: ToolRenderContext): number | null {
-  if (typeof context.toolInput.lineCount === 'number') return context.toolInput.lineCount;
-  if (typeof context.toolInput['lines'] === 'number') return context.toolInput['lines'];
-  if (context.result && typeof context.result === 'string') {
-    const lines = context.result.split('\n');
+  if (typeof context.toolInput.lineCount === "number")
+    return context.toolInput.lineCount;
+  if (typeof context.toolInput["lines"] === "number")
+    return context.toolInput["lines"];
+  if (context.result && typeof context.result === "string") {
+    const lines = context.result.split("\n");
     // Filter out trailing empty line from result strings that end with \n
-    const nonEmpty = lines[lines.length - 1] === '' ? lines.slice(0, -1) : lines;
+    const nonEmpty =
+      lines[lines.length - 1] === "" ? lines.slice(0, -1) : lines;
     return nonEmpty.length;
   }
   return null;
@@ -143,16 +148,16 @@ function extractDiffInfo(
   input: Record<string, unknown>,
 ): { additions: number; deletions: number } | null {
   const additions =
-    typeof input.additions === 'number'
+    typeof input.additions === "number"
       ? input.additions
-      : typeof input['added'] === 'number'
-        ? input['added']
+      : typeof input["added"] === "number"
+        ? input["added"]
         : undefined;
   const deletions =
-    typeof input.deletions === 'number'
+    typeof input.deletions === "number"
       ? input.deletions
-      : typeof input['removed'] === 'number'
-        ? input['removed']
+      : typeof input["removed"] === "number"
+        ? input["removed"]
         : undefined;
   if (additions !== undefined || deletions !== undefined) {
     return { additions: additions ?? 0, deletions: deletions ?? 0 };
@@ -161,15 +166,18 @@ function extractDiffInfo(
 }
 
 /** Extract a content preview from toolInput. */
-function extractContentPreview(input: Record<string, unknown>, maxLines: number = 3): string[] {
+function extractContentPreview(
+  input: Record<string, unknown>,
+  maxLines: number = 3,
+): string[] {
   const content =
-    typeof input.content === 'string'
+    typeof input.content === "string"
       ? input.content
-      : typeof input['text'] === 'string'
-        ? input['text']
+      : typeof input["text"] === "string"
+        ? input["text"]
         : undefined;
   if (!content) return [];
-  const lines = content.split('\n');
+  const lines = content.split("\n");
   return lines.slice(0, maxLines);
 }
 
@@ -180,32 +188,38 @@ function extractContentPreview(input: Record<string, unknown>, maxLines: number 
  * Shows filename + line count + preview snippet on complete.
  */
 export class ReadFileRenderer implements ToolRenderer {
-  readonly toolName: string = 'Read';
+  readonly toolName: string = "Read";
   readonly showResult: boolean = true;
   readonly maxResultLines: number = 5;
 
   renderRunning(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
-    return `${dim('Reading')} ${primary(path)}${dim('...')}`;
+    return `${accent("›")} ${dim("Reading")} ${primary(path)}${dim("...")}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
     const lineCount =
-      extractLineCount(context) ?? extractResultLineCount(context.result) ?? null;
+      extractLineCount(context) ??
+      extractResultLineCount(context.result) ??
+      null;
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [success('Read'), primary(path)];
+    const parts: string[] = [success("Read"), primary(path)];
     if (lineCount !== null) parts.push(dim(`(${lineCount} lines)`));
     if (duration) parts.push(dim(duration));
-    let output = parts.join(' ');
+    let output = parts.join(" ");
 
     // Append a preview snippet from the result
     if (context.result && this.showResult) {
-      const previewLines = context.result.split('\n').slice(0, this.maxResultLines);
-      const preview = previewLines.map((line) => `  ${dim('|')} ${line}`).join('\n');
+      const previewLines = context.result
+        .split("\n")
+        .slice(0, this.maxResultLines);
+      const preview = previewLines
+        .map((line) => `  ${dim("|")} ${line}`)
+        .join("\n");
       output += `\n${preview}`;
-      if (previewLines.length < context.result.split('\n').length) {
-        output += `\n  ${dim('|')} ${dim(`… ${context.result.split('\n').length - this.maxResultLines} more lines`)}`;
+      if (previewLines.length < context.result.split("\n").length) {
+        output += `\n  ${dim("|")} ${dim(`… ${context.result.split("\n").length - this.maxResultLines} more lines`)}`;
       }
     }
     return output;
@@ -213,8 +227,8 @@ export class ReadFileRenderer implements ToolRenderer {
 
   renderError(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
-    const msg = context.error ?? 'unknown error';
-    return `${errColor('Failed')} ${primary(path)} ${dim(`— ${msg}`)}`;
+    const msg = context.error ?? "unknown error";
+    return `${errColor("Failed")} ${primary(path)} ${dim(`— ${msg}`)}`;
   }
 }
 
@@ -223,40 +237,44 @@ export class ReadFileRenderer implements ToolRenderer {
  * Shows filename + mini diff summary on complete.
  */
 export class WriteFileRenderer implements ToolRenderer {
-  readonly toolName: string = 'Write';
+  readonly toolName: string = "Write";
   readonly showResult: boolean = false;
   readonly maxResultLines: number = 3;
 
   renderRunning(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
-    return `${dim('Writing')} ${primary(path)}${dim('...')}`;
+    return `${accent("›")} ${dim("Writing")} ${primary(path)}${dim("...")}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
     const diff = extractDiffInfo(context.toolInput);
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [success('Written'), primary(path)];
+    const parts: string[] = [success("Written"), primary(path)];
     if (diff) {
-      const addStr = diff.additions > 0 ? `+${diff.additions}` : '';
-      const delStr = diff.deletions > 0 ? `−${diff.deletions}` : '';
-      if (addStr || delStr) parts.push(dim(`(${addStr}${addStr && delStr ? '/' : ''}${delStr})`));
+      const addStr = diff.additions > 0 ? `+${diff.additions}` : "";
+      const delStr = diff.deletions > 0 ? `−${diff.deletions}` : "";
+      if (addStr || delStr)
+        parts.push(dim(`(${addStr}${addStr && delStr ? "/" : ""}${delStr})`));
     }
     if (duration) parts.push(dim(duration));
-    let output = parts.join(' ');
+    let output = parts.join(" ");
 
     // Show a brief content preview if showResult is true (for small writes)
-    const previewLines = extractContentPreview(context.toolInput, this.maxResultLines);
+    const previewLines = extractContentPreview(
+      context.toolInput,
+      this.maxResultLines,
+    );
     if (previewLines.length > 0) {
-      output += `\n  ${dim('|')} ${previewLines.join(`\n  ${dim('|')} `)}`;
+      output += `\n  ${dim("|")} ${previewLines.join(`\n  ${dim("|")} `)}`;
     }
     return output;
   }
 
   renderError(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
-    const msg = context.error ?? 'unknown error';
-    return `${errColor('Failed')} ${primary(path)} ${dim(`— ${msg}`)}`;
+    const msg = context.error ?? "unknown error";
+    return `${errColor("Failed")} ${primary(path)} ${dim(`— ${msg}`)}`;
   }
 }
 
@@ -265,14 +283,14 @@ export class WriteFileRenderer implements ToolRenderer {
  * Shows command + exit code + output summary.
  */
 export class BashRenderer implements ToolRenderer {
-  readonly toolName: string = 'Bash';
+  readonly toolName: string = "Bash";
   readonly showResult: boolean = true;
   readonly maxResultLines: number = 3;
 
   renderRunning(context: ToolRenderContext): string {
     const cmd = extractCommand(context.toolInput);
     const display = cmd.length > 60 ? `${cmd.slice(0, 57)}...` : cmd;
-    return `${dim('Running')} ${muted('$')} ${primary(display)}${dim('...')}`;
+    return `${accent("›")} ${dim("Running")} ${muted("$")} ${primary(display)}${dim("...")}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -280,17 +298,19 @@ export class BashRenderer implements ToolRenderer {
     const display = truncate(cmd, 60);
     const exitCode = this.extractExitCode(context);
     const duration = formatDuration(context.durationMs);
-    const exitLabel = exitCode === 0 ? success('0') : warning(String(exitCode));
-    const parts: string[] = [muted('$'), primary(display), dim('→'), exitLabel];
+    const exitLabel = exitCode === 0 ? success("0") : warning(String(exitCode));
+    const parts: string[] = [muted("$"), primary(display), dim("→"), exitLabel];
     if (duration) parts.push(dim(duration));
-    let output = parts.join(' ');
+    let output = parts.join(" ");
 
     // Append output summary (truncated)
     if (context.result && this.showResult) {
-      const lines = context.result.split('\n').filter((l) => l.trim());
+      const lines = context.result.split("\n").filter((l) => l.trim());
       if (lines.length > 0) {
         const summaryLines = lines.slice(0, this.maxResultLines);
-        const preview = summaryLines.map((line) => `  ${ghost('|')} ${truncate(line, 100)}`).join('\n');
+        const preview = summaryLines
+          .map((line) => `  ${ghost("|")} ${truncate(line, 100)}`)
+          .join("\n");
         output += `\n${preview}`;
         if (lines.length > this.maxResultLines) {
           output += `\n  ${ghost(`… ${lines.length - this.maxResultLines} more lines`)}`;
@@ -304,17 +324,20 @@ export class BashRenderer implements ToolRenderer {
     const cmd = extractCommand(context.toolInput);
     const display = truncate(cmd, 60);
     const exitCode = this.extractExitCode(context);
-    const msg = context.error ?? 'unknown error';
-    const parts: string[] = [muted('$'), primary(display), errColor('✖')];
+    const msg = context.error ?? "unknown error";
+    const parts: string[] = [muted("$"), primary(display), errColor("✖")];
     if (exitCode !== null) parts.push(dim(`exit ${exitCode}`));
     parts.push(dim(`— ${msg}`));
-    return parts.join(' ');
+    return parts.join(" ");
   }
 
   private extractExitCode(context: ToolRenderContext): number | null {
-    if (context.toolInput.exitCode !== undefined) return Number(context.toolInput.exitCode);
-    if (context.toolInput['exit_code'] !== undefined) return Number(context.toolInput['exit_code']);
-    if (context.toolInput['code'] !== undefined) return Number(context.toolInput['code']);
+    if (context.toolInput.exitCode !== undefined)
+      return Number(context.toolInput.exitCode);
+    if (context.toolInput["exit_code"] !== undefined)
+      return Number(context.toolInput["exit_code"]);
+    if (context.toolInput["code"] !== undefined)
+      return Number(context.toolInput["code"]);
     return null;
   }
 }
@@ -324,13 +347,13 @@ export class BashRenderer implements ToolRenderer {
  * Shows pattern + match count + file list.
  */
 export class GrepRenderer implements ToolRenderer {
-  readonly toolName: string = 'Grep';
+  readonly toolName: string = "Grep";
   readonly showResult: boolean = true;
   readonly maxResultLines: number = 5;
 
   renderRunning(context: ToolRenderContext): string {
     const pattern = extractPattern(context.toolInput);
-    return `${dim('Searching for')} ${primary(pattern)}${dim('...')}`;
+    return `${accent("›")} ${dim("Searching for")} ${primary(pattern)}${dim("...")}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -338,26 +361,26 @@ export class GrepRenderer implements ToolRenderer {
     const matchCount = this.extractMatchCount(context);
     const fileCount = this.extractFileCount(context);
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [success('Found')];
+    const parts: string[] = [success("Found")];
 
     if (matchCount !== null) {
       parts.push(primary(String(matchCount)));
-      parts.push(dim(matchCount === 1 ? 'match' : 'matches'));
+      parts.push(dim(matchCount === 1 ? "match" : "matches"));
     }
     if (fileCount !== null) {
-      parts.push(dim(`in ${fileCount} ${fileCount === 1 ? 'file' : 'files'}`));
+      parts.push(dim(`in ${fileCount} ${fileCount === 1 ? "file" : "files"}`));
     }
     parts.push(dim(`for "${pattern}"`));
     if (duration) parts.push(dim(duration));
 
-    let output = parts.join(' ');
+    let output = parts.join(" ");
 
     // Extract file list from result
     if (context.result && this.showResult) {
       const files = this.extractFileList(context.result);
       if (files.length > 0) {
         const displayFiles = files.slice(0, this.maxResultLines);
-        output += `\n${displayFiles.map((f) => `  ${ghost('└')} ${dim(f)}`).join('\n')}`;
+        output += `\n${displayFiles.map((f) => `  ${ghost("└")} ${dim(f)}`).join("\n")}`;
         if (files.length > this.maxResultLines) {
           output += `\n  ${ghost(`… ${files.length - this.maxResultLines} more files`)}`;
         }
@@ -368,13 +391,15 @@ export class GrepRenderer implements ToolRenderer {
 
   renderError(context: ToolRenderContext): string {
     const pattern = extractPattern(context.toolInput);
-    const msg = context.error ?? 'unknown error';
-    return `${errColor('Search failed')} ${dim(`for "${pattern}" — ${msg}`)}`;
+    const msg = context.error ?? "unknown error";
+    return `${errColor("Search failed")} ${dim(`for "${pattern}" — ${msg}`)}`;
   }
 
   private extractMatchCount(context: ToolRenderContext): number | null {
-    if (typeof context.toolInput.matchCount === 'number') return context.toolInput.matchCount;
-    if (typeof context.toolInput['match_count'] === 'number') return context.toolInput['match_count'];
+    if (typeof context.toolInput.matchCount === "number")
+      return context.toolInput.matchCount;
+    if (typeof context.toolInput["match_count"] === "number")
+      return context.toolInput["match_count"];
     if (context.result) {
       const match = context.result.match(/(\d+)\s+matches?/);
       if (match) return Number.parseInt(match[1]!, 10);
@@ -383,8 +408,10 @@ export class GrepRenderer implements ToolRenderer {
   }
 
   private extractFileCount(context: ToolRenderContext): number | null {
-    if (typeof context.toolInput.fileCount === 'number') return context.toolInput.fileCount;
-    if (typeof context.toolInput['file_count'] === 'number') return context.toolInput['file_count'];
+    if (typeof context.toolInput.fileCount === "number")
+      return context.toolInput.fileCount;
+    if (typeof context.toolInput["file_count"] === "number")
+      return context.toolInput["file_count"];
     if (context.result) {
       const match = context.result.match(/in\s+(\d+)\s+files?/);
       if (match) return Number.parseInt(match[1]!, 10);
@@ -393,10 +420,16 @@ export class GrepRenderer implements ToolRenderer {
   }
 
   private extractFileList(result: string): string[] {
-    const lines = result.split('\n');
+    const lines = result.split("\n");
     return lines
       .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith('Search') && !l.startsWith('Found') && !l.includes('matches'))
+      .filter(
+        (l) =>
+          l.length > 0 &&
+          !l.startsWith("Search") &&
+          !l.startsWith("Found") &&
+          !l.includes("matches"),
+      )
       .slice(0, 20);
   }
 }
@@ -406,14 +439,14 @@ export class GrepRenderer implements ToolRenderer {
  * Shows URL + status code + content length.
  */
 export class WebFetchRenderer implements ToolRenderer {
-  readonly toolName: string = 'WebFetch';
+  readonly toolName: string = "WebFetch";
   readonly showResult: boolean = true;
   readonly maxResultLines: number = 3;
 
   renderRunning(context: ToolRenderContext): string {
     const url = extractUrl(context.toolInput);
     const display = url.length > 64 ? `${url.slice(0, 61)}...` : url;
-    return `${dim('Fetching')} ${primary(display)}${dim('...')}`;
+    return `${accent("›")} ${dim("Fetching")} ${primary(display)}${dim("...")}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -422,25 +455,30 @@ export class WebFetchRenderer implements ToolRenderer {
     const statusCode = this.extractStatusCode(context);
     const contentLength = this.extractContentLength(context);
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [success('Fetched'), primary(display)];
+    const parts: string[] = [success("Fetched"), primary(display)];
 
     if (statusCode !== null) {
-      const codeStr = statusCode >= 200 && statusCode < 300 ? success(String(statusCode)) : warning(String(statusCode));
-      parts.push(dim('→'), codeStr);
+      const codeStr =
+        statusCode >= 200 && statusCode < 300
+          ? success(String(statusCode))
+          : warning(String(statusCode));
+      parts.push(dim("→"), codeStr);
     }
     if (contentLength !== null) {
       parts.push(dim(`(${formatBytes(contentLength)})`));
     }
     if (duration) parts.push(dim(duration));
 
-    let output = parts.join(' ');
+    let output = parts.join(" ");
 
     // Show a snippet from the fetched content
     if (context.result && this.showResult) {
-      const lines = context.result.split('\n').filter((l) => l.trim());
+      const lines = context.result.split("\n").filter((l) => l.trim());
       if (lines.length > 0) {
         const snippet = lines.slice(0, this.maxResultLines);
-        const preview = snippet.map((line) => `  ${ghost('|')} ${truncate(line, 100)}`).join('\n');
+        const preview = snippet
+          .map((line) => `  ${ghost("|")} ${truncate(line, 100)}`)
+          .join("\n");
         output += `\n${preview}`;
         if (lines.length > this.maxResultLines) {
           output += `\n  ${ghost(`… ${lines.length - this.maxResultLines} more lines`)}`;
@@ -453,14 +491,17 @@ export class WebFetchRenderer implements ToolRenderer {
   renderError(context: ToolRenderContext): string {
     const url = extractUrl(context.toolInput);
     const display = truncate(url, 64);
-    const msg = context.error ?? 'unknown error';
-    return `${errColor('Failed to fetch')} ${primary(display)} ${dim(`— ${msg}`)}`;
+    const msg = context.error ?? "unknown error";
+    return `${errColor("Failed to fetch")} ${primary(display)} ${dim(`— ${msg}`)}`;
   }
 
   private extractStatusCode(context: ToolRenderContext): number | null {
-    if (typeof context.toolInput.statusCode === 'number') return context.toolInput.statusCode;
-    if (typeof context.toolInput['status_code'] === 'number') return context.toolInput['status_code'];
-    if (typeof context.toolInput['status'] === 'number') return context.toolInput['status'];
+    if (typeof context.toolInput.statusCode === "number")
+      return context.toolInput.statusCode;
+    if (typeof context.toolInput["status_code"] === "number")
+      return context.toolInput["status_code"];
+    if (typeof context.toolInput["status"] === "number")
+      return context.toolInput["status"];
     if (context.result) {
       const match = context.result.match(/status\s*:?\s*(\d{3})/i);
       if (match) return Number.parseInt(match[1]!, 10);
@@ -469,10 +510,14 @@ export class WebFetchRenderer implements ToolRenderer {
   }
 
   private extractContentLength(context: ToolRenderContext): number | null {
-    if (typeof context.toolInput.contentLength === 'number') return context.toolInput.contentLength;
-    if (typeof context.toolInput['content_length'] === 'number') return context.toolInput['content_length'];
-    if (typeof context.toolInput['size'] === 'number') return context.toolInput['size'];
-    if (typeof context.toolInput['bytes'] === 'number') return context.toolInput['bytes'];
+    if (typeof context.toolInput.contentLength === "number")
+      return context.toolInput.contentLength;
+    if (typeof context.toolInput["content_length"] === "number")
+      return context.toolInput["content_length"];
+    if (typeof context.toolInput["size"] === "number")
+      return context.toolInput["size"];
+    if (typeof context.toolInput["bytes"] === "number")
+      return context.toolInput["bytes"];
     if (context.result) return context.result.length;
     return null;
   }
@@ -489,36 +534,36 @@ function formatBytes(bytes: number): string {
  * Shows query + result count.
  */
 export class WebSearchRenderer implements ToolRenderer {
-  readonly toolName: string = 'WebSearch';
+  readonly toolName: string = "WebSearch";
   readonly showResult: boolean = true;
   readonly maxResultLines: number = 5;
 
   renderRunning(context: ToolRenderContext): string {
     const query = extractPattern(context.toolInput);
-    return `${dim('Searching for')} ${primary(`"${query}"`)}${dim('...')}`;
+    return `${accent("›")} ${dim("Searching for")} ${primary(`"${query}"`)}${dim("...")}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
     const query = extractPattern(context.toolInput);
     const resultCount = this.extractResultCount(context);
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [success('Found')];
+    const parts: string[] = [success("Found")];
 
     if (resultCount !== null) {
       parts.push(primary(String(resultCount)));
-      parts.push(dim(resultCount === 1 ? 'result' : 'results'));
+      parts.push(dim(resultCount === 1 ? "result" : "results"));
     }
     parts.push(dim(`for "${query}"`));
     if (duration) parts.push(dim(duration));
 
-    let output = parts.join(' ');
+    let output = parts.join(" ");
 
     // Show first result titles
     if (context.result && this.showResult) {
-      const lines = context.result.split('\n').filter((l) => l.trim());
+      const lines = context.result.split("\n").filter((l) => l.trim());
       const displayLines = lines.slice(0, this.maxResultLines);
       if (displayLines.length > 0) {
-        output += `\n${displayLines.map((l) => `  ${ghost('•')} ${truncate(l, 80)}`).join('\n')}`;
+        output += `\n${displayLines.map((l) => `  ${ghost("•")} ${truncate(l, 80)}`).join("\n")}`;
         if (lines.length > this.maxResultLines) {
           output += `\n  ${ghost(`… ${lines.length - this.maxResultLines} more results`)}`;
         }
@@ -529,14 +574,17 @@ export class WebSearchRenderer implements ToolRenderer {
 
   renderError(context: ToolRenderContext): string {
     const query = extractPattern(context.toolInput);
-    const msg = context.error ?? 'unknown error';
-    return `${errColor('Search failed')} ${dim(`for "${query}" — ${msg}`)}`;
+    const msg = context.error ?? "unknown error";
+    return `${errColor("Search failed")} ${dim(`for "${query}" — ${msg}`)}`;
   }
 
   private extractResultCount(context: ToolRenderContext): number | null {
-    if (typeof context.toolInput.resultCount === 'number') return context.toolInput.resultCount;
-    if (typeof context.toolInput['result_count'] === 'number') return context.toolInput['result_count'];
-    if (typeof context.toolInput['count'] === 'number') return context.toolInput['count'];
+    if (typeof context.toolInput.resultCount === "number")
+      return context.toolInput.resultCount;
+    if (typeof context.toolInput["result_count"] === "number")
+      return context.toolInput["result_count"];
+    if (typeof context.toolInput["count"] === "number")
+      return context.toolInput["count"];
     if (context.result) {
       const match = context.result.match(/(\d+)\s+results?/);
       if (match) return Number.parseInt(match[1]!, 10);
@@ -550,35 +598,39 @@ export class WebSearchRenderer implements ToolRenderer {
  * Shows agent name + task summary + progress.
  */
 export class SubAgentRenderer implements ToolRenderer {
-  readonly toolName: string = 'SubAgent';
+  readonly toolName: string = "SubAgent";
   readonly showResult: boolean = true;
   readonly maxResultLines: number = 5;
 
   renderRunning(context: ToolRenderContext): string {
     const agentName = this.extractAgentName(context);
     const task = this.extractTask(context);
-    const parts: string[] = [dim('Agent'), primary(agentName)];
+    const parts: string[] = [dim("Agent"), primary(agentName)];
     if (task) parts.push(dim(`— ${truncate(task, 60)}`));
-    parts.push(dim('...'));
-    return parts.join(' ');
+    parts.push(dim("..."));
+    return `${accent("›")} ${parts.join(" ")}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
     const agentName = this.extractAgentName(context);
     const task = this.extractTask(context);
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [success('Agent'), primary(agentName), success('✓')];
+    const parts: string[] = [
+      success("Agent"),
+      primary(agentName),
+      success("✓"),
+    ];
     if (task) parts.push(dim(truncate(task, 60)));
     if (duration) parts.push(dim(duration));
 
-    let output = parts.join(' ');
+    let output = parts.join(" ");
 
     // Show agent output summary
     if (context.result && this.showResult) {
-      const lines = context.result.split('\n').filter((l) => l.trim());
+      const lines = context.result.split("\n").filter((l) => l.trim());
       if (lines.length > 0) {
         const displayLines = lines.slice(0, this.maxResultLines);
-        output += `\n${displayLines.map((l) => `  ${ghost('|')} ${truncate(l, 90)}`).join('\n')}`;
+        output += `\n${displayLines.map((l) => `  ${ghost("|")} ${truncate(l, 90)}`).join("\n")}`;
         if (lines.length > this.maxResultLines) {
           output += `\n  ${ghost(`… ${lines.length - this.maxResultLines} more lines`)}`;
         }
@@ -590,34 +642,38 @@ export class SubAgentRenderer implements ToolRenderer {
   renderError(context: ToolRenderContext): string {
     const agentName = this.extractAgentName(context);
     const task = this.extractTask(context);
-    const msg = context.error ?? 'unknown error';
-    const parts: string[] = [errColor('Agent'), primary(agentName), errColor('✖')];
+    const msg = context.error ?? "unknown error";
+    const parts: string[] = [
+      errColor("Agent"),
+      primary(agentName),
+      errColor("✖"),
+    ];
     if (task) parts.push(dim(truncate(task, 60)));
     parts.push(dim(`— ${msg}`));
-    return parts.join(' ');
+    return parts.join(" ");
   }
 
   private extractAgentName(context: ToolRenderContext): string {
     return (
-      (typeof context.toolInput.agentName === 'string'
+      (typeof context.toolInput.agentName === "string"
         ? context.toolInput.agentName
-        : typeof context.toolInput['agent'] === 'string'
-          ? context.toolInput['agent']
-          : typeof context.toolInput['name'] === 'string'
-            ? context.toolInput['name']
+        : typeof context.toolInput["agent"] === "string"
+          ? context.toolInput["agent"]
+          : typeof context.toolInput["name"] === "string"
+            ? context.toolInput["name"]
             : undefined) ?? context.toolName
     );
   }
 
   private extractTask(context: ToolRenderContext): string {
     return (
-      (typeof context.toolInput.task === 'string'
+      (typeof context.toolInput.task === "string"
         ? context.toolInput.task
-        : typeof context.toolInput['objective'] === 'string'
-          ? context.toolInput['objective']
-          : typeof context.toolInput['description'] === 'string'
-            ? context.toolInput['description']
-            : undefined) ?? ''
+        : typeof context.toolInput["objective"] === "string"
+          ? context.toolInput["objective"]
+          : typeof context.toolInput["description"] === "string"
+            ? context.toolInput["description"]
+            : undefined) ?? ""
     );
   }
 }
@@ -627,21 +683,21 @@ export class SubAgentRenderer implements ToolRenderer {
  * Shows tool name + raw JSON input summary.
  */
 export class GenericToolRenderer implements ToolRenderer {
-  readonly toolName: string = '*';
+  readonly toolName: string = "*";
   readonly showResult: boolean = true;
   readonly maxResultLines: number = 3;
 
   renderRunning(context: ToolRenderContext): string {
     const inputPreview = this.previewInput(context.toolInput);
-    return `${dim('Tool:')} ${primary(context.toolName)}${inputPreview ? ` ${dim(inputPreview)}` : ''}${dim('...')}`;
+    return `${accent("›")} ${dim("Tool:")} ${primary(context.toolName)}${inputPreview ? ` ${dim(inputPreview)}` : ""}${dim("...")}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [primary(context.toolName), success('✓')];
+    const parts: string[] = [primary(context.toolName), success("✓")];
     if (duration) parts.push(dim(duration));
 
-    let output = parts.join(' ');
+    let output = parts.join(" ");
 
     if (context.result && this.showResult) {
       const summary = summarizeResult(context.result, 120);
@@ -653,22 +709,25 @@ export class GenericToolRenderer implements ToolRenderer {
   }
 
   renderError(context: ToolRenderContext): string {
-    const msg = context.error ?? 'unknown error';
-    return `${primary(context.toolName)} ${errColor('✖')} ${dim(`— ${msg}`)}`;
+    const msg = context.error ?? "unknown error";
+    return `${primary(context.toolName)} ${errColor("✖")} ${dim(`— ${msg}`)}`;
   }
 
-  private previewInput(input: Record<string, unknown>, maxLen: number = 40): string {
+  private previewInput(
+    input: Record<string, unknown>,
+    maxLen: number = 40,
+  ): string {
     const keys = Object.keys(input);
-    if (keys.length === 0) return '';
-    const preview = keys.slice(0, 3).join(', ');
-    const rest = keys.length > 3 ? `, +${keys.length - 3} more` : '';
+    if (keys.length === 0) return "";
+    const preview = keys.slice(0, 3).join(", ");
+    const rest = keys.length > 3 ? `, +${keys.length - 3} more` : "";
     return truncate(`${preview}${rest}`, maxLen);
   }
 }
 
 // ── ToolGroupRenderer ──────────────────────────────────────────────────────
 
-export type GroupStatus = 'running' | 'complete' | 'partial';
+export type GroupStatus = "running" | "complete" | "partial";
 
 export interface ToolGroupState {
   tools: ToolRenderContext[];
@@ -704,7 +763,7 @@ export class ToolGroupRenderer {
   /** Get the rendered group block */
   render(): string {
     const toolList = Array.from(this.tools.values());
-    if (toolList.length === 0) return '';
+    if (toolList.length === 0) return "";
 
     const status = this.getStatus();
     const registry = this.registry;
@@ -713,10 +772,10 @@ export class ToolGroupRenderer {
     // Group header
     const totalCount = toolList.length;
     const completedCount = toolList.filter(
-      (t) => t.status === 'complete' || t.status === 'error',
+      (t) => t.status === "complete" || t.status === "error",
     ).length;
     const statusIcon = this.statusIcon(status);
-    const header = `${ghost('│')} ${statusIcon} ${dim(`${completedCount}/${totalCount} parallel tools`)}`;
+    const header = `${info("│")} ${statusIcon} ${dim(`${completedCount}/${totalCount} parallel tools`)}`;
     lines.push(header);
 
     // Each tool rendered compactly
@@ -726,13 +785,13 @@ export class ToolGroupRenderer {
       lines.push(`  ${line}`);
     }
 
-    return lines.join('\n');
+    return lines.join("\n");
   }
 
   /** Whether any tools in the group are still running or pending */
   hasPending(): boolean {
     for (const tool of this.tools.values()) {
-      if (tool.status === 'pending' || tool.status === 'running') return true;
+      if (tool.status === "pending" || tool.status === "running") return true;
     }
     return false;
   }
@@ -756,37 +815,41 @@ export class ToolGroupRenderer {
 
   /** The current group status */
   getStatus(): GroupStatus {
-    if (this.finalized) return 'complete';
+    if (this.finalized) return "complete";
     for (const tool of this.tools.values()) {
-      if (tool.status === 'running' || tool.status === 'pending') return 'running';
+      if (tool.status === "running" || tool.status === "pending")
+        return "running";
     }
     // All tools have terminal status
-    return 'complete';
+    return "complete";
   }
 
   private statusIcon(status: GroupStatus): string {
     switch (status) {
-      case 'complete':
-        return success('✓');
-      case 'partial':
-        return warning('⚠');
-      case 'running':
+      case "complete":
+        return success("✓");
+      case "partial":
+        return warning("⚠");
+      case "running":
       default:
-        return dim('○');
+        return accent("◐");
     }
   }
 
-  private renderToolCompact(tool: ToolRenderContext, renderer: ToolRenderer): string {
+  private renderToolCompact(
+    tool: ToolRenderContext,
+    renderer: ToolRenderer,
+  ): string {
     switch (tool.status) {
-      case 'running':
+      case "running":
         return renderer.renderRunning(tool);
-      case 'complete':
+      case "complete":
         return renderer.renderComplete(tool);
-      case 'error':
+      case "error":
         return renderer.renderError(tool);
-      case 'pending':
+      case "pending":
       default:
-        return dim(`⏳ ${tool.toolName}${tool.toolId ? ` [${tool.toolId}]` : ''}`);
+        return `${accent("○")} ${dim(`${tool.toolName}${tool.toolId ? ` [${tool.toolId}]` : ""}`)}`;
     }
   }
 }
@@ -806,7 +869,7 @@ export class ToolRendererRegistry {
   register(renderer: ToolRenderer): void {
     const key = renderer.toolName.toLowerCase();
     this.renderers.set(key, renderer);
-    if (key === '*') {
+    if (key === "*") {
       this.generic = renderer;
     }
   }
@@ -841,7 +904,7 @@ export class ToolRendererRegistry {
     // 2. Prefix match — check if the normalized toolName starts with or
     //    contains a registered key (e.g., "file_read" contains "read")
     for (const [key, renderer] of this.renderers) {
-      if (key === '*') continue;
+      if (key === "*") continue;
       if (normalized.includes(key) || key.includes(normalized)) return renderer;
     }
 
@@ -856,13 +919,13 @@ export class ToolRendererRegistry {
   private resolveAlias(normalized: string): ToolRenderer | undefined {
     // Map of common tool name variants to canonical keys
     const aliasMap: Record<string, string[]> = {
-      read: ['file_read', 'read_file', 'read'],
-      write: ['file_write', 'write_file', 'edit_file', 'write'],
-      bash: ['shell_exec', 'shell', 'bash', 'run', 'exec', 'execute'],
-      grep: ['grep_search', 'search', 'find', 'grep'],
-      webfetch: ['web_fetch', 'fetch_url', 'fetch', 'http_get', 'http'],
-      websearch: ['web_search', 'search_web', 'search'],
-      subagent: ['agent', 'sub_agent', 'spawn_agent', 'delegate'],
+      read: ["file_read", "read_file", "read"],
+      write: ["file_write", "write_file", "edit_file", "write"],
+      bash: ["shell_exec", "shell", "bash", "run", "exec", "execute"],
+      grep: ["grep_search", "search", "find", "grep"],
+      webfetch: ["web_fetch", "fetch_url", "fetch", "http_get", "http"],
+      websearch: ["web_search", "search_web", "search"],
+      subagent: ["agent", "sub_agent", "spawn_agent", "delegate"],
     };
 
     for (const [canonicalKey, aliases] of Object.entries(aliasMap)) {
@@ -876,7 +939,7 @@ export class ToolRendererRegistry {
 
   private getGenericFallback(): ToolRenderer {
     const generic = new GenericToolRenderer();
-    this.renderers.set('*', generic);
+    this.renderers.set("*", generic);
     this.generic = generic;
     return generic;
   }

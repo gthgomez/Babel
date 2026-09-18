@@ -1,9 +1,14 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 
-import { BabelEventBus } from '../pipeline.js';
-import { babelDusk, babelPrismNight, previewBuiltinTheme, resolveBuiltinTheme } from './tokens.js';
+import { BabelEventBus } from "../pipeline.js";
+import {
+  babelDusk,
+  babelPrismNight,
+  previewBuiltinTheme,
+  resolveBuiltinTheme,
+} from "./tokens.js";
 import {
   AppendOnlyRenderer,
   ConversationalRenderer,
@@ -12,15 +17,15 @@ import {
   NoopRenderer,
   TtyHudRenderer,
   WaterfallRenderer,
-} from './waterfall.js';
-import { stripAnsi } from './theme.js';
-import { SpinnerRenderer } from './spinner.js';
-import { OutputBuffer } from './outputBuffer.js';
-import { FrameScheduler } from './frameScheduler.js';
-import { resetTerminalProbe } from './terminalProbe.js';
-import { withEnv } from './testUtils.js';
+} from "./waterfall.js";
+import { stripAnsi } from "./theme.js";
+import { SpinnerRenderer } from "./spinner.js";
+import { OutputBuffer } from "./outputBuffer.js";
+import { FrameScheduler } from "./frameScheduler.js";
+import { resetTerminalProbe } from "./terminalProbe.js";
+import { withEnv } from "./testUtils.js";
 
-test('run spinner suppresses broken stdout pipe errors', () => {
+test("run spinner suppresses broken stdout pipe errors", () => {
   const script = `
     import { SpinnerRenderer } from './src/ui/spinner.js';
     const spinner = new SpinnerRenderer({ interval: 80, stream: process.stdout });
@@ -35,77 +40,97 @@ test('run spinner suppresses broken stdout pipe errors', () => {
       console.log('BROKEN_PIPE_SMOKE_OK');
     }, 120);
   `;
-  const result = spawnSync(process.execPath, ['--import', 'tsx', '-e', script], {
-    cwd: process.cwd(),
-    encoding: 'utf8',
-    timeout: 15_000,
-  });
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "-e", script],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 15_000,
+    },
+  );
 
   assert.equal(result.status, 0, result.error?.message ?? result.stderr);
   assert.match(result.stdout, /BROKEN_PIPE_SMOKE_OK/);
 });
 
-test('babel-dusk resolves with exact truecolor and ANSI fallback values', () => {
-  const theme = resolveBuiltinTheme('babel-dusk');
+test("babel-dusk resolves with the North Star truecolor and ANSI fallback values", () => {
+  const theme = resolveBuiltinTheme("babel-dusk");
 
   assert.deepEqual(theme.trueColor, babelDusk.trueColor);
   assert.deepEqual(theme.ansiFallback, babelDusk.ansiFallback);
-  assert.equal(theme.trueColor.background, '#0B0A16');
-  assert.equal(theme.trueColor.accent, '#D7AFFF');
-  assert.equal(theme.trueColor.success, '#87D787');
-  assert.equal(theme.ansiFallback.accent, 183);
-  assert.equal(theme.ansiFallback.success, 114);
-  assert.throws(() => resolveBuiltinTheme('graphite-cyan'), /Unknown Babel theme/);
-  assert.match(previewBuiltinTheme('babel-dusk'), /babel-dusk/);
+  assert.equal(theme.trueColor.background, "#020817");
+  assert.equal(theme.trueColor.panel, "#061126");
+  assert.equal(theme.trueColor.panelRaised, "#0A1C45");
+  assert.equal(theme.trueColor.border, "#173B85");
+  assert.equal(theme.trueColor.accent, "#2E6CFF");
+  assert.equal(theme.trueColor.accentHigh, "#5F8FFF");
+  assert.equal(theme.trueColor.textPrimary, "#D7DCFF");
+  assert.equal(theme.trueColor.textMuted, "#8B95C0");
+  assert.equal(theme.trueColor.success, "#43C57B");
+  assert.equal(theme.ansiFallback.accent, 33);
+  assert.equal(theme.ansiFallback.success, 78);
+  assert.throws(
+    () => resolveBuiltinTheme("graphite-cyan"),
+    /Unknown Babel theme/,
+  );
+  assert.match(previewBuiltinTheme("babel-dusk"), /babel-dusk/);
 });
 
-test('babel-prism-night is selectable and does not replace the dusk default name', () => {
-  const theme = resolveBuiltinTheme('babel-prism-night');
-  assert.equal(theme.name, 'babel-prism-night');
-  assert.equal(theme.trueColor.accent, '#7C8CFF');
-  assert.equal(theme.trueColor.activityTool, '#55C2E6');
-  assert.equal(theme.trueColor.activityModel, '#A78BFA');
-  assert.equal(theme.trueColor.syntaxKeyword, '#7C8CFF');
+test("babel-prism-night is selectable and does not replace the dusk default name", () => {
+  const theme = resolveBuiltinTheme("babel-prism-night");
+  assert.equal(theme.name, "babel-prism-night");
+  assert.equal(theme.trueColor.accent, "#7C8CFF");
+  assert.equal(theme.trueColor.activityTool, "#55C2E6");
+  assert.equal(theme.trueColor.activityModel, "#A78BFA");
+  assert.equal(theme.trueColor.syntaxKeyword, "#7C8CFF");
   assert.notEqual(babelPrismNight.name, babelDusk.name);
-  assert.match(previewBuiltinTheme('babel-prism-night'), /babel-prism-night/);
+  assert.match(previewBuiltinTheme("babel-prism-night"), /babel-prism-night/);
 });
 
-test('babel-dusk ANSI fallback uses 256-color roles when color is forced', () => {
+test("babel-dusk ANSI fallback uses 256-color roles when color is forced", () => {
   const script = `
     import { accent, success, stripAnsi } from './src/ui/theme.js';
     const rendered = accent('Babel') + ' ' + success('passed');
     console.log(JSON.stringify({ rendered, stripped: stripAnsi(rendered) }));
   `;
-  const result = spawnSync(process.execPath, ['--import', 'tsx', '-e', script], {
-    cwd: process.cwd(),
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      FORCE_COLOR: '1',
-      NO_COLOR: '',
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "-e", script],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FORCE_COLOR: "1",
+        NO_COLOR: "",
+      },
+      timeout: 15_000,
     },
-    timeout: 15_000,
-  });
+  );
 
   assert.equal(result.status, 0, result.error?.message ?? result.stderr);
-  const parsed = JSON.parse(result.stdout.trim()) as { rendered: string; stripped: string };
-  assert.match(parsed.rendered, /\u001B\[38;5;183mBabel/);
-  assert.match(parsed.rendered, /\u001B\[38;5;114mpassed/);
-  assert.equal(parsed.stripped, 'Babel passed');
+  const parsed = JSON.parse(result.stdout.trim()) as {
+    rendered: string;
+    stripped: string;
+  };
+  assert.match(parsed.rendered, /\u001B\[38;5;33mBabel/);
+  assert.match(parsed.rendered, /\u001B\[38;5;78mpassed/);
+  assert.equal(parsed.stripped, "Babel passed");
 });
 
-test('live run renderer selection avoids animated HUD for non-TTY, NO_COLOR, and CI', () => {
+test("live run renderer selection avoids animated HUD for non-TTY, NO_COLOR, and CI", () => {
   const bus = new BabelEventBus();
-  const nonTty = createLiveRunRenderer(bus, { task: 'fix test' }, {
+  const nonTty = createLiveRunRenderer(bus, { task: "fix test" }, {
     isTTY: false,
   } as typeof process.stdout);
   assert.ok(nonTty instanceof AppendOnlyRenderer);
   nonTty.stop();
 
   const previousNoColor = process.env.NO_COLOR;
-  process.env.NO_COLOR = '1';
+  process.env.NO_COLOR = "1";
   try {
-    const renderer = createLiveRunRenderer(bus, { task: 'fix test' }, {
+    const renderer = createLiveRunRenderer(bus, { task: "fix test" }, {
       isTTY: true,
     } as typeof process.stdout);
     assert.ok(renderer instanceof AppendOnlyRenderer);
@@ -119,9 +144,9 @@ test('live run renderer selection avoids animated HUD for non-TTY, NO_COLOR, and
   }
 
   const previousCi = process.env.CI;
-  process.env.CI = '1';
+  process.env.CI = "1";
   try {
-    const renderer = createLiveRunRenderer(bus, { task: 'fix test' }, {
+    const renderer = createLiveRunRenderer(bus, { task: "fix test" }, {
       isTTY: true,
     } as typeof process.stdout);
     assert.ok(renderer instanceof AppendOnlyRenderer);
@@ -138,7 +163,7 @@ test('live run renderer selection avoids animated HUD for non-TTY, NO_COLOR, and
   const previousNoColorForHud = process.env.NO_COLOR;
   delete process.env.CI;
   delete process.env.NO_COLOR;
-  const hud = createLiveRunRenderer(bus, { task: 'fix test' }, {
+  const hud = createLiveRunRenderer(bus, { task: "fix test" }, {
     isTTY: true,
   } as typeof process.stdout);
   try {
@@ -159,7 +184,7 @@ test('live run renderer selection avoids animated HUD for non-TTY, NO_COLOR, and
   }
 });
 
-test('append-only renderer emits safe progress lines from event bus', () => {
+test("append-only renderer emits safe progress lines from event bus", () => {
   const bus = new BabelEventBus();
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
@@ -168,22 +193,24 @@ test('append-only renderer emits safe progress lines from event bus', () => {
     return true;
   }) as typeof process.stdout.write;
   try {
-    const renderer = new AppendOnlyRenderer(bus, { task: 'fix failing parser test' });
+    const renderer = new AppendOnlyRenderer(bus, {
+      task: "fix failing parser test",
+    });
     renderer.start();
     bus.stage(2);
-    bus.logLine('Running npm test');
+    bus.logLine("Running npm test");
     renderer.stop();
   } finally {
     process.stdout.write = originalWrite;
   }
 
-  const output = stripAnsi(writes.join(''));
+  const output = stripAnsi(writes.join(""));
   assert.match(output, /\[00:00\] Babel started: fix failing parser test/);
   assert.match(output, /\[00:00\] Planning/);
   assert.match(output, /\[00:00\] Running check/);
 });
 
-test('append-only renderer records prompt pause and resume truthfully', () => {
+test("append-only renderer records prompt pause and resume truthfully", () => {
   const bus = new BabelEventBus();
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
@@ -192,25 +219,25 @@ test('append-only renderer records prompt pause and resume truthfully', () => {
     return true;
   }) as typeof process.stdout.write;
   try {
-    const renderer = new AppendOnlyRenderer(bus, { task: 'inspect repo' });
+    const renderer = new AppendOnlyRenderer(bus, { task: "inspect repo" });
     renderer.start();
-    bus.promptPause('Waiting for plan approval');
+    bus.promptPause("Waiting for plan approval");
     bus.promptResume();
     renderer.stop();
   } finally {
     process.stdout.write = originalWrite;
   }
 
-  const output = stripAnsi(writes.join(''));
+  const output = stripAnsi(writes.join(""));
   assert.match(output, /Waiting for plan approval/);
   assert.match(output, /Resuming work/);
 });
 
-test('tty HUD pause restores prompt state and suppresses repaint until resumed', () => {
+test("tty HUD pause restores prompt state and suppresses repaint until resumed", () => {
   const bus = new BabelEventBus();
-  const renderer = new TtyHudRenderer(bus, { task: 'inspect repo' });
+  const renderer = new TtyHudRenderer(bus, { task: "inspect repo" });
   try {
-    renderer.pauseForPrompt('Waiting for plan approval');
+    renderer.pauseForPrompt("Waiting for plan approval");
     assert.equal((renderer as unknown as { paused: boolean }).paused, true);
     renderer.resume();
     assert.equal((renderer as unknown as { paused: boolean }).paused, false);
@@ -219,7 +246,7 @@ test('tty HUD pause restores prompt state and suppresses repaint until resumed',
   }
 });
 
-test('append-only renderer hides internal pipeline language in default human output', () => {
+test("append-only renderer hides internal pipeline language in default human output", () => {
   const bus = new BabelEventBus();
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
@@ -228,24 +255,26 @@ test('append-only renderer hides internal pipeline language in default human out
     return true;
   }) as typeof process.stdout.write;
   try {
-    const renderer = new AppendOnlyRenderer(bus, { task: 'what is the repo about?' });
+    const renderer = new AppendOnlyRenderer(bus, {
+      task: "what is the repo about?",
+    });
     renderer.start();
-    bus.logLine('Stage 1 / 4  —  Orchestrator');
-    bus.logLine('Stage 2 / 4  —  SWE Agent');
-    bus.logLine('Stage 3 / 4  —  QA Reviewer');
-    bus.logLine('[babel:qa] QA: PASS');
-    bus.logLine('[babel:executor] Executor turn 1/20');
-    bus.logLine('CLI Executor selected provider_model_id deepseek-chat');
-    bus.logLine('QA: PASS  (confidence: 5/5)');
+    bus.logLine("Stage 1 / 4  —  Orchestrator");
+    bus.logLine("Stage 2 / 4  —  SWE Agent");
+    bus.logLine("Stage 3 / 4  —  QA Reviewer");
+    bus.logLine("[babel:qa] QA: PASS");
+    bus.logLine("[babel:executor] Executor turn 1/20");
+    bus.logLine("CLI Executor selected provider_model_id deepseek-chat");
+    bus.logLine("QA: PASS  (confidence: 5/5)");
     bus.logLine('v9 stack telemetry: {"pipeline_mode":"verified"}');
-    bus.logLine('Model:    deepseek');
-    bus.logLine('Review cancelled. Pipeline halted.');
+    bus.logLine("Model:    deepseek");
+    bus.logLine("Review cancelled. Pipeline halted.");
     renderer.stop();
   } finally {
     process.stdout.write = originalWrite;
   }
 
-  const output = stripAnsi(writes.join(''));
+  const output = stripAnsi(writes.join(""));
   assert.match(output, /Analyzing request/);
   assert.match(output, /Planning/);
   assert.match(output, /Reviewing/);
@@ -262,7 +291,7 @@ test('append-only renderer hides internal pipeline language in default human out
   );
 });
 
-test('append-only transcript records stripped audit output without duplicate activity', () => {
+test("append-only transcript records stripped audit output without duplicate activity", () => {
   const bus = new BabelEventBus();
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
@@ -273,23 +302,23 @@ test('append-only transcript records stripped audit output without duplicate act
   let renderer: AppendOnlyRenderer | null = null;
   try {
     renderer = new AppendOnlyRenderer(bus, {
-      task: 'inspect repo',
-      project: 'example_game_suite',
-      projectRoot: '/tmp/example_game_suite',
+      task: "inspect repo",
+      project: "example_game_suite",
+      projectRoot: "/tmp/example_game_suite",
     });
     renderer.start();
     bus.stage(2);
-    bus.logLine('Action steps: Prepared plan');
-    bus.logLine('Prepared plan');
-    bus.logLine('Reviewing plan');
-    bus.logLine('Stage 3 / 4  —  QA Reviewer');
+    bus.logLine("Action steps: Prepared plan");
+    bus.logLine("Prepared plan");
+    bus.logLine("Reviewing plan");
+    bus.logLine("Stage 3 / 4  —  QA Reviewer");
     bus.stage(2);
     renderer.stop();
   } finally {
     process.stdout.write = originalWrite;
   }
 
-  const transcript = stripAnsi(renderer?.getTranscript() ?? '');
+  const transcript = stripAnsi(renderer?.getTranscript() ?? "");
   assert.match(transcript, /Babel started: inspect repo/);
   assert.match(transcript, /Target: example_game_suite/);
   assert.match(transcript, /Target root: \/tmp\/example_game_suite/);
@@ -302,7 +331,7 @@ test('append-only transcript records stripped audit output without duplicate act
 // Additional coverage: error states, edge cases, NoopRenderer
 // ═══════════════════════════════════════════════════════════════════════════════
 
-test('NoopRenderer does not emit any output', () => {
+test("NoopRenderer does not emit any output", () => {
   const bus = new BabelEventBus();
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
@@ -314,26 +343,26 @@ test('NoopRenderer does not emit any output', () => {
     const renderer = new NoopRenderer();
     renderer.start();
     bus.stage(2);
-    bus.logLine('should not appear');
+    bus.logLine("should not appear");
     renderer.stop();
   } finally {
     process.stdout.write = originalWrite;
   }
   // NoopRenderer must not write anything
-  assert.equal(writes.length, 0, 'NoopRenderer should produce zero output');
+  assert.equal(writes.length, 0, "NoopRenderer should produce zero output");
 });
 
-test('getActiveRenderer returns null or a renderer instance after usage', () => {
+test("getActiveRenderer returns null or a renderer instance after usage", () => {
   // After previous tests, a renderer may have been set or cleaned up.
   // We verify the function is callable and returns something reasonable.
   const active = getActiveRenderer();
   assert.ok(
-    active === null || typeof active === 'object',
-    'getActiveRenderer should return null or a renderer instance',
+    active === null || typeof active === "object",
+    "getActiveRenderer should return null or a renderer instance",
   );
 });
 
-test('AppendOnlyRenderer handles log events with no task gracefully', () => {
+test("AppendOnlyRenderer handles log events with no task gracefully", () => {
   const bus = new BabelEventBus();
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
@@ -342,19 +371,19 @@ test('AppendOnlyRenderer handles log events with no task gracefully', () => {
     return true;
   }) as typeof process.stdout.write;
   try {
-    const renderer = new AppendOnlyRenderer(bus, { task: '' });
+    const renderer = new AppendOnlyRenderer(bus, { task: "" });
     renderer.start();
-    bus.logLine('doing work without a task name');
+    bus.logLine("doing work without a task name");
     renderer.stop();
   } finally {
     process.stdout.write = originalWrite;
   }
-  const output = stripAnsi(writes.join(''));
+  const output = stripAnsi(writes.join(""));
   // Should still emit something without crashing
-  assert.ok(output.length > 0, 'Should produce output even with empty task');
+  assert.ok(output.length > 0, "Should produce output even with empty task");
 });
 
-test('AppendOnlyRenderer handles special characters in project name', () => {
+test("AppendOnlyRenderer handles special characters in project name", () => {
   const bus = new BabelEventBus();
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
@@ -365,20 +394,20 @@ test('AppendOnlyRenderer handles special characters in project name', () => {
   try {
     const renderer = new AppendOnlyRenderer(bus, {
       task: 'fix: escaping & < > " quotes',
-      project: 'Project_With_Underscores & Special/Chars',
+      project: "Project_With_Underscores & Special/Chars",
     });
     renderer.start();
     renderer.stop();
   } finally {
     process.stdout.write = originalWrite;
   }
-  const output = stripAnsi(writes.join(''));
+  const output = stripAnsi(writes.join(""));
   assert.match(output, /fix: escaping/);
   assert.match(output, /Project_With_Underscores/);
   // Should not crash on special characters
 });
 
-test('AppendOnlyRenderer handles error-like log lines', () => {
+test("AppendOnlyRenderer handles error-like log lines", () => {
   const bus = new BabelEventBus();
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
@@ -387,25 +416,27 @@ test('AppendOnlyRenderer handles error-like log lines', () => {
     return true;
   }) as typeof process.stdout.write;
   try {
-    const renderer = new AppendOnlyRenderer(bus, { task: 'error handling test' });
+    const renderer = new AppendOnlyRenderer(bus, {
+      task: "error handling test",
+    });
     renderer.start();
-    bus.logLine('Error: something went wrong');
-    bus.logLine('[FAIL] test assertion failed');
-    bus.logLine('WARN: deprecation notice');
-    bus.logLine('FATAL: out of memory');
-    bus.logLine('status: EXECUTION_HALTED');
-    bus.logLine('halt_tag: STEP_VERIFICATION_FAIL');
+    bus.logLine("Error: something went wrong");
+    bus.logLine("[FAIL] test assertion failed");
+    bus.logLine("WARN: deprecation notice");
+    bus.logLine("FATAL: out of memory");
+    bus.logLine("status: EXECUTION_HALTED");
+    bus.logLine("halt_tag: STEP_VERIFICATION_FAIL");
     renderer.stop();
   } finally {
     process.stdout.write = originalWrite;
   }
-  const output = stripAnsi(writes.join(''));
+  const output = stripAnsi(writes.join(""));
   // Error-like lines should flow through without crashing the renderer
   assert.match(output, /something went wrong/);
   assert.match(output, /EXECUTION_HALTED/);
 });
 
-test('AppendOnlyRenderer suppresses duplicate consecutive log lines', () => {
+test("AppendOnlyRenderer suppresses duplicate consecutive log lines", () => {
   const bus = new BabelEventBus();
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
@@ -415,32 +446,32 @@ test('AppendOnlyRenderer suppresses duplicate consecutive log lines', () => {
   }) as typeof process.stdout.write;
   let renderer: AppendOnlyRenderer | null = null;
   try {
-    renderer = new AppendOnlyRenderer(bus, { task: 'dedup test' });
+    renderer = new AppendOnlyRenderer(bus, { task: "dedup test" });
     renderer.start();
-    bus.logLine('Building project');
-    bus.logLine('Building project');
-    bus.logLine('Building project');
+    bus.logLine("Building project");
+    bus.logLine("Building project");
+    bus.logLine("Building project");
     bus.stage(3);
-    bus.logLine('Running tests');
-    bus.logLine('Running tests');
+    bus.logLine("Running tests");
+    bus.logLine("Running tests");
     renderer.stop();
   } finally {
     process.stdout.write = originalWrite;
   }
-  const transcript = stripAnsi(renderer?.getTranscript() ?? '');
+  const transcript = stripAnsi(renderer?.getTranscript() ?? "");
   // "Building project" should appear only once
   assert.equal(
     (transcript.match(/Building project/g) ?? []).length,
     1,
-    'Duplicate consecutive log lines should be suppressed',
+    "Duplicate consecutive log lines should be suppressed",
   );
   // "Running tests" should appear only once
   assert.equal((transcript.match(/Running tests/g) ?? []).length, 1);
 });
 
-test('AppendOnlyRenderer records very long task names without truncation crash', () => {
+test("AppendOnlyRenderer records very long task names without truncation crash", () => {
   const bus = new BabelEventBus();
-  const longTask = 'Fix '.repeat(200) + 'the bug';
+  const longTask = "Fix ".repeat(200) + "the bug";
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
   process.stdout.write = ((chunk: unknown) => {
@@ -454,22 +485,24 @@ test('AppendOnlyRenderer records very long task names without truncation crash',
   } finally {
     process.stdout.write = originalWrite;
   }
-  const output = stripAnsi(writes.join(''));
-  assert.ok(output.length > 0, 'Should handle very long task names');
+  const output = stripAnsi(writes.join(""));
+  assert.ok(output.length > 0, "Should handle very long task names");
   // The task name should be present (possibly truncated by the renderer)
   assert.match(output, /Fix Fix/);
 });
 
-test('TtyHudRenderer pause prevents timer-based renders', () => {
+test("TtyHudRenderer pause prevents timer-based renders", () => {
   const bus = new BabelEventBus();
-  const renderer = new TtyHudRenderer(bus, { task: 'pause render test' });
+  const renderer = new TtyHudRenderer(bus, { task: "pause render test" });
   try {
-    renderer.pauseForPrompt('Approve this change?');
+    renderer.pauseForPrompt("Approve this change?");
     // pauseForPrompt sets this.paused = true
     assert.equal((renderer as unknown as { paused: boolean }).paused, true);
 
     // Simulate a timer tick — should not throw when paused
-    (renderer as unknown as { updateWaitingState: () => void }).updateWaitingState();
+    (
+      renderer as unknown as { updateWaitingState: () => void }
+    ).updateWaitingState();
 
     renderer.resume();
     assert.equal((renderer as unknown as { paused: boolean }).paused, false);
@@ -478,7 +511,7 @@ test('TtyHudRenderer pause prevents timer-based renders', () => {
   }
 });
 
-test('AppendOnlyRenderer records runtime events without duplication', () => {
+test("AppendOnlyRenderer records runtime events without duplication", () => {
   const bus = new BabelEventBus();
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
@@ -487,21 +520,29 @@ test('AppendOnlyRenderer records runtime events without duplication', () => {
     return true;
   }) as typeof process.stdout.write;
   try {
-    const renderer = new AppendOnlyRenderer(bus, { task: 'runtime event test' });
+    const renderer = new AppendOnlyRenderer(bus, {
+      task: "runtime event test",
+    });
     renderer.start();
-    bus.emit('runtime_event', { event_type: 'verification.decision', passed: true });
-    bus.emit('runtime_event', { event_type: 'tool.pre-exec', tool: 'shell_exec' });
-    bus.emit('runtime_event', { event_type: 'completion.guard', passed: true });
+    bus.emit("runtime_event", {
+      event_type: "verification.decision",
+      passed: true,
+    });
+    bus.emit("runtime_event", {
+      event_type: "tool.pre-exec",
+      tool: "shell_exec",
+    });
+    bus.emit("runtime_event", { event_type: "completion.guard", passed: true });
     renderer.stop();
   } finally {
     process.stdout.write = originalWrite;
   }
-  const output = stripAnsi(writes.join(''));
+  const output = stripAnsi(writes.join(""));
   // Should emit something for each event type
   assert.ok(output.length > 0);
 });
 
-test('AppendOnlyRenderer handles very long log lines without crashing', () => {
+test("AppendOnlyRenderer handles very long log lines without crashing", () => {
   const bus = new BabelEventBus();
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
@@ -510,36 +551,39 @@ test('AppendOnlyRenderer handles very long log lines without crashing', () => {
     return true;
   }) as typeof process.stdout.write;
   try {
-    const renderer = new AppendOnlyRenderer(bus, { task: 'long line test' });
+    const renderer = new AppendOnlyRenderer(bus, { task: "long line test" });
     renderer.start();
     // Simulate a very long compiler output line
     // normalizeActivityLine truncates at terminal width, so the full line won't appear
-    bus.logLine('Compiled context: ' + 'x'.repeat(5000));
+    bus.logLine("Compiled context: " + "x".repeat(5000));
     renderer.stop();
   } finally {
     process.stdout.write = originalWrite;
   }
-  const output = stripAnsi(writes.join(''));
+  const output = stripAnsi(writes.join(""));
   // The renderer should not crash and should produce some output
-  assert.ok(output.length > 0, 'Should handle very long log lines without crashing');
+  assert.ok(
+    output.length > 0,
+    "Should handle very long log lines without crashing",
+  );
 });
 
-test('createLiveRunRenderer returns AppendOnlyRenderer when stream is not TTY', () => {
+test("createLiveRunRenderer returns AppendOnlyRenderer when stream is not TTY", () => {
   const bus = new BabelEventBus();
-  const renderer = createLiveRunRenderer(bus, { task: 'non-tty test' }, {
+  const renderer = createLiveRunRenderer(bus, { task: "non-tty test" }, {
     isTTY: false,
   } as typeof process.stdout);
   try {
     assert.ok(
       renderer instanceof AppendOnlyRenderer,
-      'Non-TTY stream should get AppendOnlyRenderer',
+      "Non-TTY stream should get AppendOnlyRenderer",
     );
   } finally {
     renderer.stop();
   }
 });
 
-test('createLiveRunRenderer handles missing context fields', () => {
+test("createLiveRunRenderer handles missing context fields", () => {
   const bus = new BabelEventBus();
   const renderer = createLiveRunRenderer(
     bus,
@@ -549,7 +593,7 @@ test('createLiveRunRenderer handles missing context fields', () => {
   try {
     assert.ok(
       renderer instanceof AppendOnlyRenderer,
-      'Empty context should not crash renderer creation',
+      "Empty context should not crash renderer creation",
     );
   } finally {
     renderer.stop();
@@ -560,7 +604,7 @@ test('createLiveRunRenderer handles missing context fields', () => {
 // Spinner cursor restoration on render exception
 // ═══════════════════════════════════════════════════════════════════════════════
 
-test('spinner restores cursor on render exception', () => {
+test("spinner restores cursor on render exception", () => {
   const writes: string[] = [];
   const originalStderrWrite = process.stderr.write;
   process.stderr.write = ((chunk: unknown) => {
@@ -571,10 +615,12 @@ test('spinner restores cursor on render exception', () => {
   try {
     const spinner = new SpinnerRenderer({
       stream: process.stderr,
-      format: () => { throw new Error('simulated error'); },
+      format: () => {
+        throw new Error("simulated error");
+      },
       interval: 50,
     });
-    spinner.setText('test');
+    spinner.setText("test");
 
     // start() calls render() synchronously; the format function throws
     try {
@@ -583,7 +629,7 @@ test('spinner restores cursor on render exception', () => {
       // Expected — the format function throws on first render
     }
 
-    const allOutput = writes.join('');
+    const allOutput = writes.join("");
     // Cursor hide was emitted by start()
     assert.match(allOutput, /\x1b\[\?25l/);
     // Cursor show must be emitted by the error handler in render()
@@ -599,7 +645,7 @@ test('spinner restores cursor on render exception', () => {
 // Event bus listener cleanup
 // ═══════════════════════════════════════════════════════════════════════════════
 
-test('WaterfallRenderer unregisters event bus listeners after create/stop cycles', () => {
+test("WaterfallRenderer unregisters event bus listeners after create/stop cycles", () => {
   const bus = new BabelEventBus();
 
   for (let i = 0; i < 3; i++) {
@@ -609,16 +655,16 @@ test('WaterfallRenderer unregisters event bus listeners after create/stop cycles
   }
 
   // After all stop() calls, no event bus listeners should remain
-  assert.equal(bus.listenerCount('assistant_thought'), 0);
-  assert.equal(bus.listenerCount('stage'), 0);
-  assert.equal(bus.listenerCount('agent_id'), 0);
-  assert.equal(bus.listenerCount('log'), 0);
-  assert.equal(bus.listenerCount('runtime_event'), 0);
-  assert.equal(bus.listenerCount('prompt_pause'), 0);
-  assert.equal(bus.listenerCount('prompt_resume'), 0);
+  assert.equal(bus.listenerCount("assistant_thought"), 0);
+  assert.equal(bus.listenerCount("stage"), 0);
+  assert.equal(bus.listenerCount("agent_id"), 0);
+  assert.equal(bus.listenerCount("log"), 0);
+  assert.equal(bus.listenerCount("runtime_event"), 0);
+  assert.equal(bus.listenerCount("prompt_pause"), 0);
+  assert.equal(bus.listenerCount("prompt_resume"), 0);
 });
 
-test('AppendOnlyRenderer unregisters event bus listeners after create/stop cycles', () => {
+test("AppendOnlyRenderer unregisters event bus listeners after create/stop cycles", () => {
   const bus = new BabelEventBus();
 
   for (let i = 0; i < 3; i++) {
@@ -627,19 +673,19 @@ test('AppendOnlyRenderer unregisters event bus listeners after create/stop cycle
     renderer.stop();
   }
 
-  assert.equal(bus.listenerCount('stage'), 0);
-  assert.equal(bus.listenerCount('log'), 0);
-  assert.equal(bus.listenerCount('runtime_event'), 0);
-  assert.equal(bus.listenerCount('assistant_thought'), 0);
-  assert.equal(bus.listenerCount('prompt_pause'), 0);
-  assert.equal(bus.listenerCount('prompt_resume'), 0);
+  assert.equal(bus.listenerCount("stage"), 0);
+  assert.equal(bus.listenerCount("log"), 0);
+  assert.equal(bus.listenerCount("runtime_event"), 0);
+  assert.equal(bus.listenerCount("assistant_thought"), 0);
+  assert.equal(bus.listenerCount("prompt_pause"), 0);
+  assert.equal(bus.listenerCount("prompt_resume"), 0);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // safeStdoutWrite DEC 2026 synchronized update frames
 // ═══════════════════════════════════════════════════════════════════════════════
 
-test('safeStdoutWrite wraps streaming writes inside DEC 2026 frames', () => {
+test("safeStdoutWrite wraps streaming writes inside DEC 2026 frames", () => {
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
   process.stdout.write = ((chunk: unknown) => {
@@ -649,16 +695,16 @@ test('safeStdoutWrite wraps streaming writes inside DEC 2026 frames', () => {
 
   try {
     withEnv(
-      { TERM_PROGRAM: 'wezterm', WT_SESSION: '1', BABEL_WINTERM_SYNC: '1' },
+      { TERM_PROGRAM: "wezterm", WT_SESSION: "1", BABEL_WINTERM_SYNC: "1" },
       () => {
         OutputBuffer.resetInstance();
         const bus = new BabelEventBus();
-        const renderer = new AppendOnlyRenderer(bus, { task: 'frame test' });
+        const renderer = new AppendOnlyRenderer(bus, { task: "frame test" });
         renderer.start();
-        renderer.write('streaming chunk');
+        renderer.write("streaming chunk");
         renderer.stop();
 
-        const all = writes.join('');
+        const all = writes.join("");
         // DEC_2026_BEGIN = \x1b[?2026h, DEC_2026_END = \x1b[?2026l
         assert.match(all, /\x1b\[\?2026h/);
         assert.match(all, /\x1b\[\?2026l/);

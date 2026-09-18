@@ -20,10 +20,20 @@
  * @module agentTranscript
  */
 
-import { Component } from './component.js';
-import { Box, Text } from './primitives.js';
-import { dim, muted, accent, bold, success, error, ghost, primary } from './theme.js';
-import type { KeyEvent } from './keyInput.js';
+import { Component } from "./component.js";
+import {
+  dim,
+  muted,
+  accent,
+  accentHigh,
+  bold,
+  success,
+  warning,
+  error,
+  ghost,
+  border,
+} from "./theme.js";
+import type { KeyEvent } from "./keyInput.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -39,7 +49,7 @@ export interface AgentTranscriptOptions {
   /** Whether this section starts expanded */
   expanded?: boolean;
   /** Status badge to show */
-  status?: 'active' | 'complete' | 'error' | 'blocked';
+  status?: "active" | "complete" | "error" | "blocked";
 }
 
 // ─── AgentTranscriptSection ─────────────────────────────────────────────────
@@ -50,16 +60,16 @@ export class AgentTranscriptSection extends Component {
   private colorFn: (text: string) => string;
   private content: string;
   private expanded: boolean;
-  private status: 'active' | 'complete' | 'error' | 'blocked';
+  private status: "active" | "complete" | "error" | "blocked";
 
   constructor(options: AgentTranscriptOptions) {
     super();
     this.agentId = options.agentId;
     this.agentName = options.agentName;
-    this.colorFn = options.colorFn ?? muted;
-    this.content = options.content ?? '';
+    this.colorFn = options.colorFn ?? accentHigh;
+    this.content = options.content ?? "";
     this.expanded = options.expanded ?? false;
-    this.status = options.status ?? 'active';
+    this.status = options.status ?? "active";
   }
 
   /** Append content to this agent's output. */
@@ -70,7 +80,7 @@ export class AgentTranscriptSection extends Component {
   }
 
   /** Set the status badge. */
-  setStatus(status: 'active' | 'complete' | 'error' | 'blocked'): void {
+  setStatus(status: "active" | "complete" | "error" | "blocked"): void {
     this.status = status;
     this.markDirty();
   }
@@ -99,7 +109,7 @@ export class AgentTranscriptSection extends Component {
 
   override handleKey(event: KeyEvent): boolean {
     // Enter or Space toggles expand/collapse
-    if (event.name === 'enter' || event.name === 'space') {
+    if (event.name === "enter" || event.name === "space") {
       this.toggle();
       return true;
     }
@@ -108,53 +118,57 @@ export class AgentTranscriptSection extends Component {
 
   override render(): string {
     const colorFn = this.colorFn;
-    const prefix = colorFn(`[${this.agentName}]`);
+    const prefix = bold(colorFn(`[${this.agentName}]`));
 
     // Status badge
     const badge = this.statusBadge();
 
     // Line count
-    const lineCount = this.content ? this.content.split('\n').length : 0;
+    const lineCount = this.content ? this.content.split("\n").length : 0;
 
     if (!this.expanded) {
       // ── Collapsed: single summary line ─────────────────────────────
-      const summary = this.content ? this.content.replace(/\n/g, ' ').slice(0, 80) : '(no output)';
-      const truncated = summary.length >= 80 ? summary + '…' : summary;
-      return `${badge} ${prefix} ${dim(`(${lineCount} lines)`)} ${muted(ghost(truncated))}  ${dim('[↕ expand]')}`;
+      const summary = this.content
+        ? this.content.replace(/\n/g, " ").slice(0, 80)
+        : "(no output)";
+      const truncated = summary.length >= 80 ? summary + "…" : summary;
+      return `${badge} ${prefix} ${dim(`(${lineCount} lines)`)} ${muted(ghost(truncated))}  ${border("↕")} ${dim("expand")}`;
     }
 
     // ── Expanded: full content with header and footer ─────────────────
     const lines: string[] = [];
-    lines.push(`${badge} ${prefix} ${dim(`(${lineCount} lines)`)} ${dim('[↕ collapse]')}`);
-    lines.push('');
+    lines.push(
+      `${badge} ${prefix} ${dim(`(${lineCount} lines)`)} ${dim("[↕ collapse]")}`,
+    );
+    lines.push("");
 
     if (this.content) {
       // Indent each line of content
-      for (const line of this.content.split('\n')) {
+      for (const line of this.content.split("\n")) {
         lines.push(`  ${line}`);
       }
     } else {
-      lines.push(`  ${ghost('(no output yet)')}`);
+      lines.push(`  ${ghost("(no output yet)")}`);
     }
 
-    lines.push('');
-    lines.push(dim('─'.repeat(40)));
+    lines.push("");
+    lines.push(border("─".repeat(40)));
 
-    return lines.join('\n');
+    return lines.join("\n");
   }
 
   private statusBadge(): string {
     switch (this.status) {
-      case 'active':
-        return accent('●');
-      case 'complete':
-        return success('✓');
-      case 'error':
-        return error('✗');
-      case 'blocked':
-        return muted('⏸');
+      case "active":
+        return accent("●");
+      case "complete":
+        return success("✓");
+      case "error":
+        return error("✗");
+      case "blocked":
+        return warning("⏸");
       default:
-        return ghost('○');
+        return ghost("○");
     }
   }
 }
@@ -187,17 +201,17 @@ export class AgentTranscript extends Component {
 
   /** Render all sections in insertion order. */
   override render(): string {
-    if (this.sections.size === 0) return '';
+    if (this.sections.size === 0) return "";
 
     const lines: string[] = [];
     let first = true;
     for (const section of this.sections.values()) {
-      if (!first) lines.push('');
+      if (!first) lines.push("");
       lines.push(section.render());
       first = false;
     }
 
-    return lines.join('\n');
+    return lines.join("\n");
   }
 
   override handleKey(_event: KeyEvent): boolean {

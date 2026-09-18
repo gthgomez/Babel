@@ -14,18 +14,35 @@
  * synchronized update support and unified error handling.
  */
 
-import { muted, dim, accent, getTerminalWidth, truncate, wrapText, headerBg } from './theme.js';
-import { FrameScheduler } from './frameScheduler.js';
-import { renderCompactTokenBar, getContextLimit } from './tokenBar.js';
-import { ScrollbackBuffer } from './scrollback.js';
-import { OutputBuffer } from './outputBuffer.js';
-import { getObservedTerminalSize } from './observe/terminalTransport.js';
-import { shouldAvoidAltScreen } from './a11y.js';
-import { getGlobalRateLimitState, renderCompactRateLimit } from './rateLimitWidget.js';
-import { renderUnseenDividerPill } from './unseenDivider.js';
-import { PaneManager } from './paneManager.js';
-import type { HistoryCellViewport } from './historyCells/viewport.js';
-import { computeScreenLayout, type ScreenLayout, type ScreenMode } from './screenLayout.js';
+import {
+  accentHigh,
+  border,
+  dim,
+  headerBg,
+  muted,
+  primary,
+  truncate,
+  visibleLength,
+  wrapText,
+} from "./theme.js";
+import { FrameScheduler } from "./frameScheduler.js";
+import { renderCompactTokenBar, getContextLimit } from "./tokenBar.js";
+import { ScrollbackBuffer } from "./scrollback.js";
+import { OutputBuffer } from "./outputBuffer.js";
+import { getObservedTerminalSize } from "./observe/terminalTransport.js";
+import { shouldAvoidAltScreen } from "./a11y.js";
+import {
+  getGlobalRateLimitState,
+  renderCompactRateLimit,
+} from "./rateLimitWidget.js";
+import { renderUnseenDividerPill } from "./unseenDivider.js";
+import { PaneManager } from "./paneManager.js";
+import type { HistoryCellViewport } from "./historyCells/viewport.js";
+import {
+  computeScreenLayout,
+  type ScreenLayout,
+  type ScreenMode,
+} from "./screenLayout.js";
 
 export interface ScreenState {
   model: string;
@@ -65,7 +82,7 @@ export class ScreenManager {
   private cellViewport: HistoryCellViewport | null = null;
 
   /** Default status line format string. */
-  static readonly DEFAULT_STATUS_FORMAT = '{elapsed} · {cost} · {tokens}';
+  static readonly DEFAULT_STATUS_FORMAT = "{elapsed} · {cost} · {tokens}";
 
   constructor(initialState: ScreenState, statusFormat?: string) {
     this.state = { ...initialState };
@@ -79,7 +96,9 @@ export class ScreenManager {
     this.inputRow = this.layout.inputRow;
     this.buffer = new ScrollbackBuffer(10000, 10 * 1024 * 1024); // 10K lines, 10 MB
     this.statusFormat =
-      statusFormat ?? process.env['BABEL_STATUS_FORMAT'] ?? ScreenManager.DEFAULT_STATUS_FORMAT;
+      statusFormat ??
+      process.env["BABEL_STATUS_FORMAT"] ??
+      ScreenManager.DEFAULT_STATUS_FORMAT;
   }
 
   /** Current screen layout calculation. */
@@ -151,7 +170,7 @@ export class ScreenManager {
   /** Initialize the layout. Call once at session start. */
   setup(): void {
     this.refreshDimensions();
-    if (this.layout.mode === 'linear') {
+    if (this.layout.mode === "linear") {
       return;
     }
     if (!shouldAvoidAltScreen()) {
@@ -171,7 +190,7 @@ export class ScreenManager {
       const buf = OutputBuffer.getInstance();
       buf.resetScrollRegion();
       buf.moveCursor(this.rows, 1);
-      buf.write('\n');
+      buf.write("\n");
     }
   }
 
@@ -187,10 +206,10 @@ export class ScreenManager {
     // Split into individual lines and store in scrollback buffer for reflow.
     // text.split('\n') is safe for ANSI escape sequences because control
     // sequences never contain newline characters per ECMA-48.
-    const lines = text.split('\n');
+    const lines = text.split("\n");
     for (const line of lines) {
       // Strip carriage returns that may be present in terminal output
-      this.buffer.push(line.replace(/\r/g, ''));
+      this.buffer.push(line.replace(/\r/g, ""));
     }
   }
 
@@ -203,21 +222,27 @@ export class ScreenManager {
 
   /** Draw the top bar — model · mode · project only. */
   drawTopBar(): void {
-    if (this.layout.mode === 'linear') return;
-    const left = `${this.state.model || 'auto'} · ${this.state.mode} · ${this.state.project || 'Workspace'}`;
+    if (this.layout.mode === "linear") return;
+    const left = `${primary(this.state.model || "auto")} · ${accentHigh(this.state.mode)} · ${muted(this.state.project || "Workspace")}`;
     const truncatedLeft = truncate(left, this.cols - 2);
-    const rightPad = ' '.repeat(Math.max(0, this.cols - truncatedLeft.length - 2));
+    const rightPad = " ".repeat(
+      Math.max(0, this.cols - visibleLength(truncatedLeft) - 2),
+    );
 
     const buf = OutputBuffer.getInstance();
     const useSync = OutputBuffer.supportsSyncUpdate();
     if (useSync) buf.beginFrame();
     try {
-      buf.write('\x1b[s');
-      buf.write(`\x1b[${this.layout.titleRow};1H${headerBg(` ${truncatedLeft}${rightPad} `)}`);
+      buf.write("\x1b[s");
+      buf.write(
+        `\x1b[${this.layout.titleRow};1H${headerBg(` ${truncatedLeft}${rightPad} `)}`,
+      );
       if (this.layout.borderRow > 0) {
-        buf.write(`\x1b[${this.layout.borderRow};1H${dim('─'.repeat(this.cols))}`);
+        buf.write(
+          `\x1b[${this.layout.borderRow};1H${border("─".repeat(this.cols))}`,
+        );
       }
-      buf.write('\x1b[u');
+      buf.write("\x1b[u");
     } finally {
       if (useSync) buf.endFrame();
     }
@@ -225,7 +250,7 @@ export class ScreenManager {
 
   /** Draw the bottom stats line (time · cost · tokens). */
   drawBottomStats(): void {
-    if (this.layout.mode === 'linear') return;
+    if (this.layout.mode === "linear") return;
     const buf = OutputBuffer.getInstance();
     const useSync = OutputBuffer.supportsSyncUpdate();
     if (useSync) buf.beginFrame();
@@ -240,10 +265,14 @@ export class ScreenManager {
     }
   }
 
-  private drawBottomStatsInternal(elapsed: string, costDollars: number, tokens: number): void {
-    if (this.layout.mode === 'linear') return;
-    const costStr = costDollars > 0 ? `$${costDollars.toFixed(4)}` : '$0.0000';
-    const tokStr = tokens > 0 ? formatTokenCount(tokens) : '0 tok';
+  private drawBottomStatsInternal(
+    elapsed: string,
+    costDollars: number,
+    tokens: number,
+  ): void {
+    if (this.layout.mode === "linear") return;
+    const costStr = costDollars > 0 ? `$${costDollars.toFixed(4)}` : "$0.0000";
+    const tokStr = tokens > 0 ? formatTokenCount(tokens) : "0 tok";
 
     // Build main status line from format string
     let line = `  ${this.interpolateFormat(elapsed, costStr, tokStr)}`;
@@ -251,11 +280,11 @@ export class ScreenManager {
     // Scroll position indicator — prepend when scrolled above viewport
     if (this.scrollOffset > 0) {
       const indicator = muted(` ↑ ${this.scrollOffset} lines above `);
-      line = indicator + ' · ' + line;
+      line = indicator + " · " + line;
     }
 
     // Token context bar — show when model context limit is known
-    let tokenBarStr = '';
+    let tokenBarStr = "";
     if (this.state.modelId && tokens > 0) {
       const limit = getContextLimit(this.state.modelId);
       const barWidth = Math.min(14, Math.floor(this.cols / 6));
@@ -266,8 +295,12 @@ export class ScreenManager {
     const rlWidget = renderCompactRateLimit(getGlobalRateLimitState());
 
     const buf = OutputBuffer.getInstance();
-    buf.write('\x1b[s');
-    buf.writeLine(this.statsRow, 1, `${line}${tokenBarStr}${rlWidget ? `  ${rlWidget}` : ''}`);
+    buf.write("\x1b[s");
+    buf.writeLine(
+      this.statsRow,
+      1,
+      `${line}${tokenBarStr}${rlWidget ? `  ${rlWidget}` : ""}`,
+    );
     // Clear the input prompt line (it will be redrawn by the REPL)
     buf.write(`\x1b[${this.inputRow};1H\x1b[K`);
 
@@ -275,18 +308,23 @@ export class ScreenManager {
     // new content arrived while the user was scrolled up.
     if (this.scrollOffset > 0) {
       const unseenCount =
-        this.cellViewport?.getScrollInfo().unseenSinceLastView ?? this._unseenLineCount;
+        this.cellViewport?.getScrollInfo().unseenSinceLastView ??
+        this._unseenLineCount;
       const unseen = renderUnseenDividerPill(unseenCount);
       if (unseen) {
         // Render the pill just above the stats line (contentBottom row)
         buf.writeLine(this.contentBottom, 1, unseen);
       } else {
         // Fall back to the old "more lines" indicator when no unseen count
-        buf.writeLine(this.contentTop, 1, dim('↑ ' + this.scrollOffset + ' more lines ↑'));
+        buf.writeLine(
+          this.contentTop,
+          1,
+          dim("↑ " + this.scrollOffset + " more lines ↑"),
+        );
       }
     }
 
-    buf.write('\x1b[u');
+    buf.write("\x1b[u");
   }
 
   /** Start live updates of the bottom stats during execution. */
@@ -298,9 +336,9 @@ export class ScreenManager {
 
     const scheduler = FrameScheduler.getInstance();
     this.unregisterStats = scheduler.scheduleComponent(
-      'screen-stats',
+      "screen-stats",
       () => {
-        if (this.layout.mode === 'linear') return;
+        if (this.layout.mode === "linear") return;
         this.liveElapsedMs = Date.now() - this.liveStartTime;
         this.drawBottomStatsInternal(
           formatElapsedShort(this.liveElapsedMs),
@@ -308,15 +346,18 @@ export class ScreenManager {
           this.liveTokens,
         );
       },
-      { priority: 15, intervalMs: 250, label: 'screen-stats' },
+      { priority: 15, intervalMs: 250, label: "screen-stats" },
     );
-    scheduler.setComponentPermanentDirty('screen-stats', true);
+    scheduler.setComponentPermanentDirty("screen-stats", true);
   }
 
   /** Stop live updates. */
   stopStatusUpdates(): void {
     if (this.unregisterStats) {
-      FrameScheduler.getInstance().setComponentPermanentDirty('screen-stats', false);
+      FrameScheduler.getInstance().setComponentPermanentDirty(
+        "screen-stats",
+        false,
+      );
       this.unregisterStats();
       this.unregisterStats = null;
     }
@@ -325,8 +366,11 @@ export class ScreenManager {
   /** Set ANSI scroll region to content area only. No-op in a11y mode. */
   private setScrollRegion(): void {
     if (shouldAvoidAltScreen()) return;
-    if (this.layout.mode === 'normal' && this.layout.contentRowCount > 0) {
-      OutputBuffer.getInstance().setScrollRegion(this.contentTop, this.contentBottom);
+    if (this.layout.mode === "normal" && this.layout.contentRowCount > 0) {
+      OutputBuffer.getInstance().setScrollRegion(
+        this.contentTop,
+        this.contentBottom,
+      );
     }
   }
 
@@ -342,11 +386,15 @@ export class ScreenManager {
     this.statsRow = this.layout.statsRow;
     this.inputRow = this.layout.inputRow;
 
-    if (!shouldAvoidAltScreen() && prevMode === 'normal' && this.layout.mode !== 'normal') {
+    if (
+      !shouldAvoidAltScreen() &&
+      prevMode === "normal" &&
+      this.layout.mode !== "normal"
+    ) {
       OutputBuffer.getInstance().resetScrollRegion();
     }
 
-    if (this.layout.mode !== 'linear') {
+    if (this.layout.mode !== "linear") {
       this.reflowContent();
       this.setScrollRegion();
       this.drawTopBar();
@@ -378,7 +426,7 @@ export class ScreenManager {
 
     const padded: string[] = [];
     for (let i = 0; i < contentHeight; i++) {
-      padded.push(visibleLines[i] ?? '');
+      padded.push(visibleLines[i] ?? "");
     }
 
     const buf = OutputBuffer.getInstance();
@@ -387,7 +435,7 @@ export class ScreenManager {
     try {
       for (let i = 0; i < contentHeight; i++) {
         const row = this.contentTop + i;
-        const line = padded[i] ?? '';
+        const line = padded[i] ?? "";
         if (line !== this._lastWrittenLines.get(row)) {
           buf.writeLine(row, 1, line);
           this._lastWrittenLines.set(row, line);
@@ -400,7 +448,8 @@ export class ScreenManager {
 
   /** Re-wrap only the visible content at the new terminal width — O(viewport) not O(N). */
   private reflowContent(): void {
-    if (Date.now() - this.lastReflowTime < ScreenManager.REFLOW_DEBOUNCE_MS) return;
+    if (Date.now() - this.lastReflowTime < ScreenManager.REFLOW_DEBOUNCE_MS)
+      return;
     this.lastReflowTime = Date.now();
     this.renderContentArea();
   }
@@ -447,11 +496,15 @@ export class ScreenManager {
    * Text between tokens is preserved verbatim and styled with muted().
    * Token values are styled with dim() for numeric/identity fields.
    */
-  private interpolateFormat(elapsed: string, costStr: string, tokStr: string): string {
+  private interpolateFormat(
+    elapsed: string,
+    costStr: string,
+    tokStr: string,
+  ): string {
     const tokens: Record<string, string> = {
-      model: this.state.model || 'auto',
-      mode: this.state.mode || 'chat',
-      project: this.state.project || 'Workspace',
+      model: this.state.model || "auto",
+      mode: this.state.mode || "chat",
+      project: this.state.project || "Workspace",
       elapsed,
       cost: costStr,
       tokens: tokStr,
@@ -459,10 +512,10 @@ export class ScreenManager {
     };
 
     // Split format string into literal segments and token placeholders
-    let result = '';
+    let result = "";
     let remaining = this.statusFormat;
     while (remaining.length > 0) {
-      const open = remaining.indexOf('{');
+      const open = remaining.indexOf("{");
       if (open === -1) {
         // No more tokens — remainder is literal text
         result += muted(remaining);
@@ -474,7 +527,7 @@ export class ScreenManager {
         result += muted(remaining.slice(0, open));
       }
 
-      const close = remaining.indexOf('}', open);
+      const close = remaining.indexOf("}", open);
       if (close === -1) {
         // Malformed: no closing brace — treat rest as literal
         result += muted(remaining.slice(open));
@@ -498,11 +551,11 @@ export class ScreenManager {
 }
 
 function formatElapsedShort(ms: number): string {
-  if (ms < 1000) return '0:00';
+  if (ms < 1000) return "0:00";
   const totalSeconds = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 function formatTokenCount(n: number): string {

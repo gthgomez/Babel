@@ -1,17 +1,17 @@
-import * as path from 'node:path';
-import { COLOR_TOKENS, FALLBACK_FG } from './tokens.js';
+import * as path from "node:path";
+import { COLOR_TOKENS, FALLBACK_FG } from "./tokens.js";
 import {
   measureDisplayWidth,
   truncateDisplay,
   wrapDisplayLines,
-} from './textLayout.js';
+} from "./textLayout.js";
 import {
   isWindowsTerminal,
   isLegacyWindowsConsole,
   detectTerminalIdentity,
   getIdentityTrueColor,
-} from './terminalProbe.js';
-import { peekInjectedTerminalSize } from './observe/terminalTransport.js';
+} from "./terminalProbe.js";
+import { peekInjectedTerminalSize } from "./observe/terminalTransport.js";
 
 // ── Color parse cache ──────────────────────────────────────────────────────
 // Same hex colors are parsed repeatedly per frame (every toneToAnsi call).
@@ -23,7 +23,7 @@ const RGB_CACHE_MAX = 128;
 export function parseRgb(hex: string): { r: number; g: number; b: number } {
   const cached = rgbCache.get(hex);
   if (cached) return cached;
-  const normalized = hex.replace('#', '');
+  const normalized = hex.replace("#", "");
   const result = {
     r: Number.parseInt(normalized.slice(0, 2), 16),
     g: Number.parseInt(normalized.slice(2, 4), 16),
@@ -48,18 +48,20 @@ function wrapAnsi(text: string, open: string, close: string): string {
 }
 
 function getForceColorLevel(): number | null {
-  const raw = process.env['FORCE_COLOR'];
+  const raw = process.env["FORCE_COLOR"];
   if (raw === undefined) return null;
-  if (raw === '' || raw === 'true') return 1;
-  if (raw === 'false') return 0;
+  if (raw === "" || raw === "true") return 1;
+  if (raw === "false") return 0;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) ? parsed : 1;
 }
 
-export function supportsColor(stream: NodeJS.WriteStream = process.stdout): boolean {
+export function supportsColor(
+  stream: NodeJS.WriteStream = process.stdout,
+): boolean {
   const forceColorLevel = getForceColorLevel();
   if (forceColorLevel === 0) return false;
-  if (process.env['NO_COLOR']) return false;
+  if (process.env["NO_COLOR"]) return false;
   if (forceColorLevel !== null) return forceColorLevel > 0;
   // Legacy Windows cmd.exe often reports isTTY=true but has poor ANSI support.
   // Still return true since Windows 10+ has basic ANSI, just not true color.
@@ -67,7 +69,9 @@ export function supportsColor(stream: NodeJS.WriteStream = process.stdout): bool
   return Boolean(stream?.isTTY);
 }
 
-export function supportsTrueColor(stream: NodeJS.WriteStream = process.stdout): boolean {
+export function supportsTrueColor(
+  stream: NodeJS.WriteStream = process.stdout,
+): boolean {
   const forceColorLevel = getForceColorLevel();
   if (!supportsColor(stream)) return false;
   if (forceColorLevel !== null) return forceColorLevel >= 2;
@@ -80,16 +84,17 @@ export function supportsTrueColor(stream: NodeJS.WriteStream = process.stdout): 
   // terminals with known-defective true color from being overridden by
   // COLORTERM=truecolor advertisements.
   const identity = detectTerminalIdentity();
-  if (identity !== 'unknown') {
+  if (identity !== "unknown") {
     return getIdentityTrueColor();
   }
 
   // Unknown terminal — use COLORTERM and TERM heuristics
-  const colorterm = (process.env['COLORTERM'] ?? '').toLowerCase();
-  if (colorterm.includes('truecolor') || colorterm.includes('24bit')) return true;
+  const colorterm = (process.env["COLORTERM"] ?? "").toLowerCase();
+  if (colorterm.includes("truecolor") || colorterm.includes("24bit"))
+    return true;
   // TERM-based detection for terminals advertising direct color
-  const term = (process.env['TERM'] ?? '').toLowerCase();
-  if (term.includes('xterm-direct')) return true;
+  const term = (process.env["TERM"] ?? "").toLowerCase();
+  if (term.includes("xterm-direct")) return true;
   return false;
 }
 
@@ -106,18 +111,18 @@ function toneToAnsi(tokenName: string, text: string): string {
   }
   if (HAS_TRUE) {
     const rgb = parseRgb(tokenHex);
-    return wrapAnsi(text, `[38;2;${rgb.r};${rgb.g};${rgb.b}m`, '[39m');
+    return wrapAnsi(text, `[38;2;${rgb.r};${rgb.g};${rgb.b}m`, "[39m");
   }
   const fallback = FALLBACK_FG[tokenName] ?? 255;
-  return wrapAnsi(text, `[38;5;${fallback}m`, '[39m');
+  return wrapAnsi(text, `[38;5;${fallback}m`, "[39m");
 }
 
 export function bold(text: string): string {
-  return HAS_COLOR ? wrapAnsi(text, '[1m', '[22m') : text;
+  return HAS_COLOR ? wrapAnsi(text, "[1m", "[22m") : text;
 }
 
 export function dim(text: string): string {
-  return HAS_COLOR ? wrapAnsi(text, '[2m', '[22m') : text;
+  return HAS_COLOR ? wrapAnsi(text, "[2m", "[22m") : text;
 }
 
 export function colorToken(
@@ -136,113 +141,143 @@ export function colorToken(
 }
 
 export function primary(text: string): string {
-  return colorToken('textPrimary', text);
+  return colorToken("textPrimary", text);
 }
 export function muted(text: string): string {
-  return colorToken('textMuted', text);
+  return colorToken("textMuted", text);
 }
 export function ghost(text: string): string {
-  return colorToken('textGhost', text);
+  return colorToken("textGhost", text);
 }
 export function accent(text: string): string {
-  return colorToken('accent', text);
+  return colorToken("accent", text);
 }
 export function accentSecondary(text: string): string {
-  return colorToken('accentSecondary', text);
+  return colorToken("accentSecondary", text);
+}
+export function accentHigh(text: string): string {
+  return colorToken("accentHigh", text);
 }
 export function accentBright(text: string): string {
-  return colorToken('accent', text, { bold: true });
+  return colorToken("accentHigh", text, { bold: true });
 }
 export function identityPrimary(text: string): string {
-  return colorToken('identityPrimary', text);
+  return colorToken("identityPrimary", text);
 }
 export function identitySecondary(text: string): string {
-  return colorToken('identitySecondary', text);
+  return colorToken("identitySecondary", text);
 }
 export function accentBlue(text: string): string {
-  return colorToken('info', text);
+  return colorToken("info", text);
 }
 export function sectionLabel(text: string): string {
-  return colorToken('accentSecondary', text, { bold: true });
+  return colorToken("accentSecondary", text, { bold: true });
 }
 export function activeAccent(text: string): string {
-  return colorToken('accentActive', text, { bold: true });
+  return colorToken("accentActive", text, { bold: true });
 }
 export function commandAccent(text: string): string {
-  return colorToken('accentStrong', text, { bold: true });
+  return colorToken("accentStrong", text, { bold: true });
 }
 export function info(text: string): string {
-  return colorToken('info', text);
+  return colorToken("info", text);
 }
 export function border(text: string): string {
-  return colorToken('border', text);
+  return colorToken("border", text);
+}
+export function focusedBorder(text: string): string {
+  return colorToken("borderFocused", text);
 }
 export function success(text: string): string {
-  return colorToken('success', text, { bold: true });
+  return colorToken("success", text, { bold: true });
 }
 export function warning(text: string): string {
-  return colorToken('warning', text, { bold: true });
+  return colorToken("warning", text, { bold: true });
 }
 export function error(text: string): string {
-  return colorToken('error', text, { bold: true });
+  return colorToken("error", text, { bold: true });
 }
 
 // ── Syntax highlighting tokens ────────────────────────────────────
 
 export function syntaxKeyword(text: string): string {
-  return colorToken('syntaxKeyword', text);
+  return colorToken("syntaxKeyword", text);
 }
 export function syntaxType(text: string): string {
-  return colorToken('syntaxType', text);
+  return colorToken("syntaxType", text);
 }
 export function syntaxString(text: string): string {
-  return colorToken('syntaxString', text);
+  return colorToken("syntaxString", text);
 }
 export function syntaxNumber(text: string): string {
-  return colorToken('syntaxNumber', text);
+  return colorToken("syntaxNumber", text);
 }
 export function syntaxComment(text: string): string {
-  return colorToken('syntaxComment', text);
+  return colorToken("syntaxComment", text);
 }
 export function syntaxFunction(text: string): string {
-  return colorToken('syntaxFunction', text);
+  return colorToken("syntaxFunction", text);
 }
 
 // ── Background colors ─────────────────────────────────────────────
 
+function fallbackBackgroundIndex(tokenName: string): number {
+  const aliases: Record<string, string> = {
+    background: "canvas",
+    panel: "surface",
+    panelRaised: "raised",
+  };
+  return FALLBACK_FG[tokenName] ?? FALLBACK_FG[aliases[tokenName] ?? ""] ?? 0;
+}
+
 // Apply a background color from the theme using the given token name
-function bgToken(tokenName: string, text: string): string {
+export function backgroundToken(tokenName: string, text: string): string {
   if (!HAS_COLOR) return text;
   const tokenHex = COLOR_TOKENS[tokenName];
   if (!tokenHex) return text;
   if (HAS_TRUE) {
     const rgb = parseRgb(tokenHex);
-    return wrapAnsi(text, `\x1b[48;2;${rgb.r};${rgb.g};${rgb.b}m`, '\x1b[49m');
+    return wrapAnsi(text, `\x1b[48;2;${rgb.r};${rgb.g};${rgb.b}m`, "\x1b[49m");
   }
-  // No reliable 256-color background fallback — use reverse video as approximation
-  return wrapAnsi(text, '\x1b[7m', '\x1b[27m');
+  // Use an actual ANSI background in degraded mode. Reverse video swaps every
+  // nested foreground token into a background, producing colored patches in
+  // selected/header surfaces when styled text is composed inside them.
+  const fallback = fallbackBackgroundIndex(tokenName);
+  return wrapAnsi(text, `\x1b[48;5;${fallback}m`, "\x1b[49m");
 }
 
+export function bgCanvas(text: string): string {
+  return backgroundToken("canvas", text);
+}
+export function bgSurface(text: string): string {
+  return backgroundToken("surface", text);
+}
 export function bgPrimary(text: string): string {
-  return bgToken('textPrimary', text); // use text color as bg for contrast
+  return backgroundToken("textPrimary", text); // compatibility: high-contrast button background
 }
 export function bgPanel(text: string): string {
-  return bgToken('panel', text);
+  return bgSurface(text);
 }
 export function bgPanelRaised(text: string): string {
-  return bgToken('panelRaised', text);
+  return backgroundToken("raised", text);
+}
+export function bgSelected(text: string): string {
+  return backgroundToken("selected", text);
+}
+export function meterTrack(text: string): string {
+  return colorToken("meterTrack", text);
 }
 export function bgAccent(text: string): string {
-  return bgToken('accent', text);
+  return backgroundToken("accent", text);
 }
 export function bgError(text: string): string {
-  return bgToken('error', text);
+  return backgroundToken("error", text);
 }
 export function bgSuccess(text: string): string {
-  return bgToken('success', text);
+  return backgroundToken("success", text);
 }
 export function bgWarning(text: string): string {
-  return bgToken('warning', text);
+  return backgroundToken("warning", text);
 }
 
 // Button styling for dialogs. Uses background color from theme, falls back
@@ -250,7 +285,7 @@ export function bgWarning(text: string): string {
 export function buttonFocused(text: string, danger: boolean = false): string {
   if (!HAS_COLOR) return `[ ${text} ]`;
   if (HAS_TRUE) {
-    const bg = danger ? COLOR_TOKENS['error']! : COLOR_TOKENS['accent']!;
+    const bg = danger ? COLOR_TOKENS["error"]! : COLOR_TOKENS["accent"]!;
     const rgb = parseRgb(bg);
     return `\x1b[48;2;${rgb.r};${rgb.g};${rgb.b}m\x1b[97m ${text} \x1b[0m`;
   }
@@ -266,13 +301,15 @@ export function buttonNormal(text: string): string {
 export function headerBg(text: string): string {
   if (!HAS_COLOR) return text;
   if (HAS_TRUE) {
-    const bg = COLOR_TOKENS['panel']!;
-    const fg = COLOR_TOKENS['textPrimary']!;
+    const bg = COLOR_TOKENS["panel"]!;
+    const fg = COLOR_TOKENS["textPrimary"]!;
     const bgRgb = parseRgb(bg);
     const fgRgb = parseRgb(fg);
     return `\x1b[48;2;${bgRgb.r};${bgRgb.g};${bgRgb.b}m\x1b[38;2;${fgRgb.r};${fgRgb.g};${fgRgb.b}m${text}\x1b[0m`;
   }
-  return `\x1b[7m${text}\x1b[27m`;
+  const fallbackBg = fallbackBackgroundIndex("panel");
+  const fallbackFg = FALLBACK_FG["textPrimary"] ?? 255;
+  return `\x1b[48;5;${fallbackBg}m\x1b[38;5;${fallbackFg}m${text}\x1b[0m`;
 }
 
 // ── ANSI strip / visible-length caches ─────────────────────────────────────
@@ -286,7 +323,7 @@ const STRIP_CACHE_MAX = 256;
 export function stripAnsi(text: string): string {
   const cached = stripAnsiCache.get(text);
   if (cached !== undefined) return cached;
-  const result = text.replace(/\x1b\[[0-9;]*m/g, '');
+  const result = text.replace(/\x1b\[[0-9;]*m/g, "");
   if (stripAnsiCache.size >= STRIP_CACHE_MAX) {
     const firstKey = stripAnsiCache.keys().next().value;
     if (firstKey !== undefined) stripAnsiCache.delete(firstKey);
@@ -318,21 +355,21 @@ export function clearStringCaches(): void {
 /** Known model display names — maps internal IDs to human-readable labels. */
 const MODEL_DISPLAY_NAMES: Record<string, string> = {
   // Qwen family
-  qwen3: 'Qwen 3',
-  'qwen3-32b': 'Qwen 3 32B',
+  qwen3: "Qwen 3",
+  "qwen3-32b": "Qwen 3 32B",
   // DeepSeek family
-  'deepseek-v4-flash': 'DeepSeek V4 Flash',
-  'deepseek-v4-pro': 'DeepSeek V4 Pro',
-  'deepseek-v4': 'DeepSeek V4',
-  'deepseek-v3': 'DeepSeek V3',
+  "deepseek-v4-flash": "DeepSeek V4 Flash",
+  "deepseek-v4-pro": "DeepSeek V4 Pro",
+  "deepseek-v4": "DeepSeek V4",
+  "deepseek-v3": "DeepSeek V3",
   // Claude family
-  'claude-sonnet-4-6': 'Claude Sonnet 4.6',
-  'claude-sonnet-4-5': 'Claude Sonnet 4.5',
-  'claude-opus-4-8': 'Claude Opus 4.8',
-  'claude-opus-4-7': 'Claude Opus 4.7',
-  'claude-opus-4-6': 'Claude Opus 4.6',
-  'claude-haiku-4-5': 'Claude Haiku 4.5',
-  'claude-fable-5': 'Claude Fable 5',
+  "claude-sonnet-4-6": "Claude Sonnet 4.6",
+  "claude-sonnet-4-5": "Claude Sonnet 4.5",
+  "claude-opus-4-8": "Claude Opus 4.8",
+  "claude-opus-4-7": "Claude Opus 4.7",
+  "claude-opus-4-6": "Claude Opus 4.6",
+  "claude-haiku-4-5": "Claude Haiku 4.5",
+  "claude-fable-5": "Claude Fable 5",
 };
 
 /**
@@ -344,9 +381,9 @@ export function humanizeModelId(modelId: string): string {
   if (MODEL_DISPLAY_NAMES[modelId]) return MODEL_DISPLAY_NAMES[modelId]!;
   // Fallback: convert kebab-case to Title Case
   return modelId
-    .split('-')
+    .split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
+    .join(" ");
 }
 
 export function getTerminalWidth(
@@ -356,7 +393,7 @@ export function getTerminalWidth(
   const injected = peekInjectedTerminalSize();
   if (injected && injected.cols > 0) return injected.cols;
   const width = stream?.columns;
-  if (typeof width === 'number' && Number.isFinite(width) && width > 0) {
+  if (typeof width === "number" && Number.isFinite(width) && width > 0) {
     return width;
   }
   return fallback;
@@ -387,7 +424,7 @@ export function truncate(text: string, maxWidth: number): string {
 }
 
 export function wrapText(text: string, maxWidth: number): string[] {
-  return wrapDisplayLines(text, maxWidth, { longTokenPolicy: 'hard-wrap' });
+  return wrapDisplayLines(text, maxWidth, { longTokenPolicy: "hard-wrap" });
 }
 
 /**
@@ -399,38 +436,38 @@ export function wrapText(text: string, maxWidth: number): string[] {
  * and any text that may contain clickable URLs.
  */
 export function urlAwareWrap(text: string, maxWidth: number): string[] {
-  return wrapDisplayLines(text, maxWidth, { longTokenPolicy: 'overflow' });
+  return wrapDisplayLines(text, maxWidth, { longTokenPolicy: "overflow" });
 }
 
 export function formatOverflow(
   text: string,
   maxWidth: number,
-  mode: string = 'truncate',
+  mode: string = "truncate",
 ): string[] {
-  const normalizedMode = String(mode ?? 'truncate').toLowerCase();
-  if (normalizedMode === 'full') {
+  const normalizedMode = String(mode ?? "truncate").toLowerCase();
+  if (normalizedMode === "full") {
     // Preserve original styling — do not strip ANSI.
-    return [String(text ?? '')];
+    return [String(text ?? "")];
   }
-  if (normalizedMode === 'wrap') {
+  if (normalizedMode === "wrap") {
     return wrapText(text, maxWidth);
   }
-  return [truncate(String(text ?? ''), maxWidth)];
+  return [truncate(String(text ?? ""), maxWidth)];
 }
 
 export function padRight(text: string, width: number): string {
   const deficit = Math.max(0, width - visibleLength(text));
-  return `${text}${' '.repeat(deficit)}`;
+  return `${text}${" ".repeat(deficit)}`;
 }
 
-export function indentBlock(text: string, prefix: string = '  '): string {
+export function indentBlock(text: string, prefix: string = "  "): string {
   return text
-    .split('\n')
+    .split("\n")
     .map((line) => `${prefix}${line}`)
-    .join('\n');
+    .join("\n");
 }
 
-export function renderRule(width: number = 18, char: string = '─'): string {
+export function renderRule(width: number = 18, char: string = "─"): string {
   return muted(char.repeat(Math.max(0, width)));
 }
 
@@ -469,7 +506,11 @@ export class ThemeProvider {
    * @param opts - Optional bold/dim modifiers
    * @returns ANSI-styled text
    */
-  resolve(token: string, text: string, opts?: { bold?: boolean; dim?: boolean }): string {
+  resolve(
+    token: string,
+    text: string,
+    opts?: { bold?: boolean; dim?: boolean },
+  ): string {
     return colorToken(token, text, opts);
   }
 
@@ -484,12 +525,12 @@ export class ThemeProvider {
    * Resolve a token for background color.
    */
   bg(token: string, text: string): string {
-    return bgToken(token, text);
+    return backgroundToken(token, text);
   }
 
   /** Return the accent color for the active theme. */
   getAccent(): string {
-    return accent(''); // Just returns an empty string; use resolve() instead
+    return accent(""); // Just returns an empty string; use resolve() instead
   }
 }
 
@@ -503,9 +544,9 @@ export class ThemeProvider {
  */
 export function hyperlinkFile(filePath: string, display?: string): string {
   if (!HAS_COLOR) return display ?? filePath;
-  if (!filePath) return display ?? '';
+  if (!filePath) return display ?? "";
   const absolutePath = path.resolve(filePath);
-  const link = absolutePath.replace(/\\/g, '/');
+  const link = absolutePath.replace(/\\/g, "/");
   const label = display ?? filePath;
   return `\x1b]8;;file://${link}\x1b\\${label}\x1b]8;;\x1b\\`;
 }

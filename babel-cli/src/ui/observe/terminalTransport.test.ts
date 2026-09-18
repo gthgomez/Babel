@@ -1,12 +1,12 @@
-import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
-import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { ScreenManager } from '../screenManager.js'
-import { OutputBuffer } from '../outputBuffer.js'
-import { getTerminalWidth } from '../theme.js'
+import { ScreenManager } from "../screenManager.js";
+import { OutputBuffer } from "../outputBuffer.js";
+import { getTerminalWidth } from "../theme.js";
 import {
   DEFAULT_PROFILE,
   createTerminalTransport,
@@ -15,320 +15,408 @@ import {
   peekInjectedTerminalSize,
   setObservedTerminalSize,
   uninstallTerminalTransport,
-} from './terminalTransport.js'
+} from "./terminalTransport.js";
 import {
   persistTuiFrame,
   loadLatestTuiFrame,
   appendTerminalVisibleEvent,
   loadTerminalVisibleEvents,
   replayVisibleEvents,
-} from './tuiSessionStore.js'
-import { formatInspectTui } from './inspectTui.js'
-import { reduceObservationSemantic } from './observationSemantic.js'
-import type { SessionEvent } from '../../agent/sessionEvents.js'
+} from "./tuiSessionStore.js";
+import { formatInspectTui } from "./inspectTui.js";
+import { reduceObservationSemantic } from "./observationSemantic.js";
+import type { SessionEvent } from "../../agent/sessionEvents.js";
 
 const PINNED = {
   ...DEFAULT_PROFILE,
   geometry: { cols: 20, rows: 8 },
   pinGeometry: true,
-}
+};
 
 async function withFakeStreamWrites<T>(
-  run: (calls: { stdout: unknown[][]; stderr: unknown[][] }) => T | PromiseLike<T>,
+  run: (calls: {
+    stdout: unknown[][];
+    stderr: unknown[][];
+  }) => T | PromiseLike<T>,
 ): Promise<T> {
-  const originalStdoutWrite = process.stdout.write
-  const originalStderrWrite = process.stderr.write
-  const calls = { stdout: [] as unknown[][], stderr: [] as unknown[][] }
+  const originalStdoutWrite = process.stdout.write;
+  const originalStderrWrite = process.stderr.write;
+  const calls = { stdout: [] as unknown[][], stderr: [] as unknown[][] };
 
   process.stdout.write = ((...args: unknown[]) => {
-    calls.stdout.push(args)
-    const callback = typeof args[1] === 'function' ? args[1] : args[2]
-    if (typeof callback === 'function') callback()
-    return false
-  }) as typeof process.stdout.write
+    calls.stdout.push(args);
+    const callback = typeof args[1] === "function" ? args[1] : args[2];
+    if (typeof callback === "function") callback();
+    return false;
+  }) as typeof process.stdout.write;
   process.stderr.write = ((...args: unknown[]) => {
-    calls.stderr.push(args)
-    const callback = typeof args[1] === 'function' ? args[1] : args[2]
-    if (typeof callback === 'function') callback()
-    return true
-  }) as typeof process.stderr.write
+    calls.stderr.push(args);
+    const callback = typeof args[1] === "function" ? args[1] : args[2];
+    if (typeof callback === "function") callback();
+    return true;
+  }) as typeof process.stderr.write;
 
   try {
-    return await run(calls)
+    return await run(calls);
   } finally {
-    process.stdout.write = originalStdoutWrite
-    process.stderr.write = originalStderrWrite
+    process.stdout.write = originalStdoutWrite;
+    process.stderr.write = originalStderrWrite;
   }
 }
 
-describe('TerminalTransport', () => {
-  it('forwards stdout/stderr writes unchanged and observes both streams after success', async () => {
+describe("TerminalTransport", () => {
+  it("forwards stdout/stderr writes unchanged and observes both streams after success", async () => {
     await withFakeStreamWrites(async (calls) => {
-      const transport = installTerminalTransport(PINNED, 'tui-test-write-contract')
-      let chunkCount = 0
-      let flushCount = 0
-      let stdoutCallbackCount = 0
-      let stderrCallbackCount = 0
+      const transport = installTerminalTransport(
+        PINNED,
+        "tui-test-write-contract",
+      );
+      let chunkCount = 0;
+      let flushCount = 0;
+      let stdoutCallbackCount = 0;
+      let stderrCallbackCount = 0;
       const stdoutCallback = () => {
-        stdoutCallbackCount += 1
-      }
+        stdoutCallbackCount += 1;
+      };
       const stderrCallback = () => {
-        stderrCallbackCount += 1
-      }
-      const buffer = Buffer.from('stderr-bytes')
+        stderrCallbackCount += 1;
+      };
+      const buffer = Buffer.from("stderr-bytes");
 
       try {
         transport.onChunk((event) => {
-          chunkCount += 1
-          assert.equal(event.kind, 'visible')
-        })
+          chunkCount += 1;
+          assert.equal(event.kind, "visible");
+        });
         transport.onFlush(() => {
-          flushCount += 1
-        })
+          flushCount += 1;
+        });
 
-        const stdoutResult = process.stdout.write('stdout-bytes', 'utf8', stdoutCallback)
-        const stderrResult = process.stderr.write(buffer, stderrCallback)
+        const stdoutResult = process.stdout.write(
+          "stdout-bytes",
+          "utf8",
+          stdoutCallback,
+        );
+        const stderrResult = process.stderr.write(buffer, stderrCallback);
 
-        assert.equal(stdoutResult, false)
-        assert.equal(stderrResult, true)
-        assert.equal(stdoutCallbackCount, 1)
-        assert.equal(stderrCallbackCount, 1)
-        assert.equal(calls.stdout.length, 1)
-        assert.equal(calls.stderr.length, 1)
-        assert.deepEqual(calls.stdout[0]?.slice(0, 2), ['stdout-bytes', 'utf8'])
-        assert.equal(calls.stdout[0]?.[2], stdoutCallback)
-        assert.equal(calls.stderr[0]?.[0], buffer)
-        assert.equal(calls.stderr[0]?.[1], stderrCallback)
-        assert.equal(chunkCount, 2)
-        assert.equal(flushCount, 2)
+        assert.equal(stdoutResult, false);
+        assert.equal(stderrResult, true);
+        assert.equal(stdoutCallbackCount, 1);
+        assert.equal(stderrCallbackCount, 1);
+        assert.equal(calls.stdout.length, 1);
+        assert.equal(calls.stderr.length, 1);
+        assert.deepEqual(calls.stdout[0]?.slice(0, 2), [
+          "stdout-bytes",
+          "utf8",
+        ]);
+        assert.equal(calls.stdout[0]?.[2], stdoutCallback);
+        assert.equal(calls.stderr[0]?.[0], buffer);
+        assert.equal(calls.stderr[0]?.[1], stderrCallback);
+        assert.equal(chunkCount, 2);
+        assert.equal(flushCount, 2);
         assert.deepEqual(
-          transport.drainVisibleLog().map((event) => [event.stream, event.bytes]),
+          transport
+            .drainVisibleLog()
+            .map((event) => [event.stream, event.bytes]),
           [
-            ['stdout', 'stdout-bytes'],
-            ['stderr', 'stderr-bytes'],
+            ["stdout", "stdout-bytes"],
+            ["stderr", "stderr-bytes"],
           ],
-        )
+        );
       } finally {
-        uninstallTerminalTransport()
+        uninstallTerminalTransport();
       }
-    })
-  })
+    });
+  });
 
-  it('keeps the original stdout write and return value when chunk persistence throws', async () => {
+  it("keeps the original stdout write and return value when chunk persistence throws", async () => {
     await withFakeStreamWrites(async (calls) => {
-      const transport = installTerminalTransport(PINNED, 'tui-test-sync-failure')
-      let persistenceCalls = 0
+      const transport = installTerminalTransport(
+        PINNED,
+        "tui-test-sync-failure",
+      );
+      let persistenceCalls = 0;
       try {
         transport.onChunk(() => {
-          persistenceCalls += 1
-          assert.equal(calls.stdout.length, 1, 'original write must precede observation')
-          throw new Error('simulated persistence failure')
-        })
+          persistenceCalls += 1;
+          assert.equal(
+            calls.stdout.length,
+            1,
+            "original write must precede observation",
+          );
+          throw new Error("simulated persistence failure");
+        });
 
-        const result = process.stdout.write('still-visible')
-        process.stdout.write('still-visible-again')
+        const result = process.stdout.write("still-visible");
+        process.stdout.write("still-visible-again");
 
-        assert.equal(result, false)
-        assert.equal(calls.stdout.length, 2)
-        assert.equal(calls.stdout[0]?.[0], 'still-visible')
-        assert.equal(calls.stdout[1]?.[0], 'still-visible-again')
-        assert.equal(persistenceCalls, 1)
+        assert.equal(result, false);
+        assert.equal(calls.stdout.length, 2);
+        assert.equal(calls.stdout[0]?.[0], "still-visible");
+        assert.equal(calls.stdout[1]?.[0], "still-visible-again");
+        assert.equal(persistenceCalls, 1);
       } finally {
-        uninstallTerminalTransport()
+        uninstallTerminalTransport();
       }
-    })
-  })
+    });
+  });
 
-  it('keeps terminal output alive when frame persistence rejects asynchronously', async () => {
+  it("keeps terminal output alive when frame persistence rejects asynchronously", async () => {
     await withFakeStreamWrites(async (calls) => {
-      const transport = installTerminalTransport(PINNED, 'tui-test-async-failure')
+      const transport = installTerminalTransport(
+        PINNED,
+        "tui-test-async-failure",
+      );
       try {
         transport.onFlush(async () => {
-          await Promise.resolve()
-          throw new Error('simulated async persistence failure')
-        })
+          await Promise.resolve();
+          throw new Error("simulated async persistence failure");
+        });
 
-        const result = process.stdout.write(Buffer.from('async-visible'))
-        await Promise.resolve()
-        await Promise.resolve()
-        process.stdout.write('after-async-failure')
+        const result = process.stdout.write(Buffer.from("async-visible"));
+        await Promise.resolve();
+        await Promise.resolve();
+        process.stdout.write("after-async-failure");
 
-        assert.equal(result, false)
-        assert.equal(calls.stdout.length, 2)
-        assert.equal(calls.stdout[0]?.[0] instanceof Buffer, true)
-        assert.equal((calls.stdout[0]?.[0] as Buffer).toString(), 'async-visible')
-        assert.equal(calls.stdout[1]?.[0], 'after-async-failure')
+        assert.equal(result, false);
+        assert.equal(calls.stdout.length, 2);
+        assert.equal(calls.stdout[0]?.[0] instanceof Buffer, true);
+        assert.equal(
+          (calls.stdout[0]?.[0] as Buffer).toString(),
+          "async-visible",
+        );
+        assert.equal(calls.stdout[1]?.[0], "after-async-failure");
       } finally {
-        uninstallTerminalTransport()
+        uninstallTerminalTransport();
       }
-    })
-  })
+    });
+  });
 
-  it('keeps terminal output alive when retention cleanup throws', async () => {
+  it("keeps terminal output alive when retention cleanup throws", async () => {
     await withFakeStreamWrites(async (calls) => {
-      const transport = installTerminalTransport(PINNED, 'tui-test-retention-failure')
+      const transport = installTerminalTransport(
+        PINNED,
+        "tui-test-retention-failure",
+      );
       try {
         transport.onFlush(() => {
-          throw new Error('simulated retention cleanup failure')
-        })
+          throw new Error("simulated retention cleanup failure");
+        });
 
-        const result = process.stdout.write('visible-before-cleanup-failure')
-        process.stdout.write('visible-after-cleanup-failure')
+        const result = process.stdout.write("visible-before-cleanup-failure");
+        process.stdout.write("visible-after-cleanup-failure");
 
-        assert.equal(result, false)
-        assert.equal(calls.stdout.length, 2)
-        assert.equal(calls.stdout[0]?.[0], 'visible-before-cleanup-failure')
-        assert.equal(calls.stdout[1]?.[0], 'visible-after-cleanup-failure')
+        assert.equal(result, false);
+        assert.equal(calls.stdout.length, 2);
+        assert.equal(calls.stdout[0]?.[0], "visible-before-cleanup-failure");
+        assert.equal(calls.stdout[1]?.[0], "visible-after-cleanup-failure");
       } finally {
-        uninstallTerminalTransport()
+        uninstallTerminalTransport();
       }
-    })
-  })
+    });
+  });
 
-  it('does X when Y: visible CSI 2A/2K mutates the cell grid not stripAnsi concatenation', () => {
-    const transport = createTerminalTransport(PINNED, 'tui-test-vt')
+  it("does X when Y: visible CSI 2A/2K mutates the cell grid not stripAnsi concatenation", () => {
+    const transport = createTerminalTransport(PINNED, "tui-test-vt");
     try {
-      transport.ingestVisible('Hello\nWorld\n')
-      transport.ingestVisible('\x1b[2A')
-      transport.ingestVisible('\x1b[2K')
-      transport.ingestVisible('Goodbye')
-      const snap = transport.getGrid().snapshot()
-      assert.equal(snap.lines[0], 'Goodbye')
-      assert.notEqual(snap.lines.join(''), 'HelloWorldGoodbye')
+      transport.ingestVisible("Hello\nWorld\n");
+      transport.ingestVisible("\x1b[2A");
+      transport.ingestVisible("\x1b[2K");
+      transport.ingestVisible("Goodbye");
+      const snap = transport.getGrid().snapshot();
+      assert.equal(snap.lines[0], "Goodbye");
+      assert.notEqual(snap.lines.join(""), "HelloWorldGoodbye");
     } finally {
-      setObservedTerminalSize(null)
+      setObservedTerminalSize(null);
     }
-  })
+  });
 
-  it('does X when Y: intent is recorded while buffering withholds visible cells', () => {
-    const transport = installTerminalTransport(PINNED, 'tui-test-buf')
+  it("does X when Y: intent is recorded while buffering withholds visible cells", () => {
+    const transport = installTerminalTransport(PINNED, "tui-test-buf");
     try {
-      transport.noteIntent('SECRET')
-      transport.startBuffering()
-      process.stdout.write('SECRET')
-      const during = transport.getGrid().snapshot()
-      assert.equal(during.lines.every((l) => !l.includes('SECRET')), true)
-      const flushed = transport.stopBuffering()
-      assert.equal(flushed, 'SECRET')
-      process.stdout.write(flushed)
-      const after = transport.getGrid().snapshot()
-      assert.equal(after.lines[0]?.includes('SECRET'), true)
-      const intent = transport.drainIntentLog()
-      const visible = transport.drainVisibleLog()
-      assert.ok(intent.some((e) => e.kind === 'intent' && e.bytes === 'SECRET'))
-      assert.ok(visible.some((e) => e.kind === 'visible' && e.bytes === 'SECRET'))
+      transport.noteIntent("SECRET");
+      transport.startBuffering();
+      process.stdout.write("SECRET");
+      const during = transport.getGrid().snapshot();
+      assert.equal(
+        during.lines.every((l) => !l.includes("SECRET")),
+        true,
+      );
+      const flushed = transport.stopBuffering();
+      assert.equal(flushed, "SECRET");
+      process.stdout.write(flushed);
+      const after = transport.getGrid().snapshot();
+      assert.equal(after.lines[0]?.includes("SECRET"), true);
+      const intent = transport.drainIntentLog();
+      const visible = transport.drainVisibleLog();
+      assert.ok(
+        intent.some((e) => e.kind === "intent" && e.bytes === "SECRET"),
+      );
+      assert.ok(
+        visible.some((e) => e.kind === "visible" && e.bytes === "SECRET"),
+      );
     } finally {
-      uninstallTerminalTransport()
+      uninstallTerminalTransport();
     }
-  })
+  });
 
-  it('does X when Y: injected geometry is used by ScreenManager, OutputBuffer, and getTerminalWidth', () => {
+  it("does X when Y: injected geometry is used by ScreenManager, OutputBuffer, and getTerminalWidth", () => {
     const transport = createTerminalTransport(
-      { ...DEFAULT_PROFILE, geometry: { cols: 120, rows: 40 }, pinGeometry: true },
-      'tui-test-geo',
-    )
+      {
+        ...DEFAULT_PROFILE,
+        geometry: { cols: 120, rows: 40 },
+        pinGeometry: true,
+      },
+      "tui-test-geo",
+    );
     try {
-      assert.deepEqual(peekInjectedTerminalSize(), { cols: 120, rows: 40 })
-      assert.deepEqual(getObservedTerminalSize(), { cols: 120, rows: 40 })
-      assert.equal(getTerminalWidth(), 120)
-      assert.deepEqual(OutputBuffer.getTerminalSize(), { cols: 120, rows: 40 })
+      assert.deepEqual(peekInjectedTerminalSize(), { cols: 120, rows: 40 });
+      assert.deepEqual(getObservedTerminalSize(), { cols: 120, rows: 40 });
+      assert.equal(getTerminalWidth(), 120);
+      assert.deepEqual(OutputBuffer.getTerminalSize(), { cols: 120, rows: 40 });
       const sm = new ScreenManager({
-        model: 'm',
-        mode: 'chat',
-        project: 'p',
+        model: "m",
+        mode: "chat",
+        project: "p",
         totalTokens: 0,
         totalCost: 0,
         turnCount: 0,
-      })
-      assert.ok(sm)
-      assert.equal(transport.getGrid().getGeometry().cols, 120)
+      });
+      assert.ok(sm);
+      assert.equal(transport.getGrid().getGeometry().cols, 120);
     } finally {
-      setObservedTerminalSize(null)
+      setObservedTerminalSize(null);
     }
-  })
-})
+  });
+});
 
-describe('tuiSessionStore + inspect tui', () => {
-  it('does X when Y: latest.txt is the cell grid and inspect omits CSI', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'tui-obs-'))
-    const transport = createTerminalTransport(PINNED, 'tui-test-persist')
+describe("tuiSessionStore + inspect tui", () => {
+  it("does X when Y: latest.txt is the cell grid and inspect omits CSI", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tui-obs-"));
+    const transport = createTerminalTransport(PINNED, "tui-test-persist");
     try {
-      transport.ingestVisible('Hello\n')
-      transport.ingestVisible('\x1b[1A')
-      transport.ingestVisible('\x1b[2K')
-      transport.ingestVisible('Visible')
-      const { snap, marks } = transport.observeManual()
-      persistTuiFrame(dir, snap, marks, null)
-      const bundle = loadLatestTuiFrame(dir)
-      assert.ok(bundle)
-      assert.equal(bundle!.screen.lines[0], 'Visible')
-      const txt = readFileSync(join(dir, 'latest.txt'), 'utf8')
-      assert.equal(txt.includes('\x1b'), false)
-      assert.match(txt, /Visible/)
-      const rendered = formatInspectTui(dir, 'screen')
-      assert.equal(rendered.includes('\x1b['), false)
-      assert.match(rendered, /Visible/)
+      transport.ingestVisible("Hello\n");
+      transport.ingestVisible("\x1b[1A");
+      transport.ingestVisible("\x1b[2K");
+      transport.ingestVisible("Visible");
+      const { snap, marks } = transport.observeManual();
+      persistTuiFrame(dir, snap, marks, null);
+      const bundle = loadLatestTuiFrame(dir);
+      assert.ok(bundle);
+      assert.equal(bundle!.screen.lines[0], "Visible");
+      assert.equal(bundle!.screen.textHash, snap.textHash);
+      assert.equal(bundle!.screen.visualHash, snap.visualHash);
+      assert.deepEqual(bundle!.screen.styleRuns, snap.styleRuns);
+      const txt = readFileSync(join(dir, "latest.txt"), "utf8");
+      assert.equal(txt.includes("\x1b"), false);
+      assert.match(txt, /Visible/);
+      const rendered = formatInspectTui(dir, "screen");
+      assert.equal(rendered.includes("\x1b["), false);
+      assert.match(rendered, /Visible/);
+      assert.match(rendered, new RegExp(`VISUAL_HASH ${snap.visualHash}`));
+      assert.match(rendered, /STYLE_RUNS \d+/);
     } finally {
-      setObservedTerminalSize(null)
+      setObservedTerminalSize(null);
     }
-  })
+  });
 
-  it('does X when Y: torn latest.json pointer is refused', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'tui-obs-torn-'))
-    const transport = createTerminalTransport(PINNED, 'tui-test-torn')
+  it("keeps schema-1 frames readable when style evidence fields are absent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tui-obs-legacy-"));
+    const transport = createTerminalTransport(PINNED, "tui-test-legacy");
     try {
-      transport.ingestVisible('A')
-      const { snap, marks } = transport.observeManual()
-      persistTuiFrame(dir, snap, marks, null)
-      const pointerPath = join(dir, 'latest.json')
-      const pointer = JSON.parse(readFileSync(pointerPath, 'utf8')) as { frameId: number; frame: string }
-      pointer.frameId = pointer.frameId + 99
-      writeFileSync(pointerPath, `${JSON.stringify(pointer, null, 2)}\n`)
-      assert.equal(loadLatestTuiFrame(dir), null)
-    } finally {
-      setObservedTerminalSize(null)
-    }
-  })
+      transport.ingestVisible("Legacy frame");
+      const { snap, marks } = transport.observeManual();
+      persistTuiFrame(dir, snap, marks, null);
 
-  it('does X when Y: a session-events run without renderer bytes is semantic-only not a fake screen', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'tui-sem-'))
+      const pointer = JSON.parse(
+        readFileSync(join(dir, "latest.json"), "utf8"),
+      ) as {
+        frame: string;
+      };
+      const framePath = join(dir, pointer.frame);
+      const legacyFrame = JSON.parse(readFileSync(framePath, "utf8")) as {
+        schemaVersion: number;
+        screen: Record<string, unknown>;
+      };
+      assert.equal(legacyFrame.schemaVersion, 1);
+      delete legacyFrame.screen["textHash"];
+      delete legacyFrame.screen["visualHash"];
+      delete legacyFrame.screen["styleRuns"];
+      writeFileSync(framePath, `${JSON.stringify(legacyFrame, null, 2)}\n`);
+
+      const loaded = loadLatestTuiFrame(dir);
+      assert.ok(loaded);
+      assert.equal(loaded!.screen.textHash, undefined);
+      assert.equal(loaded!.screen.visualHash, undefined);
+      assert.equal(loaded!.screen.styleRuns, undefined);
+      const rendered = formatInspectTui(dir, "screen");
+      assert.match(rendered, /VISUAL_HASH unavailable\(legacy-frame\)/);
+      assert.match(rendered, new RegExp(`TEXT_HASH ${snap.hash}`));
+      assert.match(rendered, /STYLE_RUNS 0/);
+    } finally {
+      setObservedTerminalSize(null);
+    }
+  });
+
+  it("does X when Y: torn latest.json pointer is refused", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tui-obs-torn-"));
+    const transport = createTerminalTransport(PINNED, "tui-test-torn");
+    try {
+      transport.ingestVisible("A");
+      const { snap, marks } = transport.observeManual();
+      persistTuiFrame(dir, snap, marks, null);
+      const pointerPath = join(dir, "latest.json");
+      const pointer = JSON.parse(readFileSync(pointerPath, "utf8")) as {
+        frameId: number;
+        frame: string;
+      };
+      pointer.frameId = pointer.frameId + 99;
+      writeFileSync(pointerPath, `${JSON.stringify(pointer, null, 2)}\n`);
+      assert.equal(loadLatestTuiFrame(dir), null);
+    } finally {
+      setObservedTerminalSize(null);
+    }
+  });
+
+  it("does X when Y: a session-events run without renderer bytes is semantic-only not a fake screen", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tui-sem-"));
     const events: SessionEvent[] = [
       {
         schema_version: 1,
-        session_id: 's',
-        event_id: 'e1',
+        session_id: "s",
+        event_id: "e1",
         ts: new Date().toISOString(),
-        kind: 'user_submitted',
-        turn_id: 't1',
+        kind: "user_submitted",
+        turn_id: "t1",
         seq: 1,
-        task_preview: 'x',
+        task_preview: "x",
       } as SessionEvent,
-    ]
-    const semantic = reduceObservationSemantic(events)
-    assert.equal(semantic.terminalStatus, 'in_progress')
-    assert.equal(existsSync(join(dir, 'latest.json')), false)
-    const out = formatInspectTui(dir, 'screen')
-    assert.match(out, /SCREEN unavailable|No TUI observation/)
-    assert.equal(out.includes('FRAME'), false)
-  })
+    ];
+    const semantic = reduceObservationSemantic(events);
+    assert.equal(semantic.terminalStatus, "in_progress");
+    assert.equal(existsSync(join(dir, "latest.json")), false);
+    const out = formatInspectTui(dir, "screen");
+    assert.match(out, /SCREEN unavailable|No TUI observation/);
+    assert.equal(out.includes("FRAME"), false);
+  });
 
-  it('does X when Y: same-geometry replay of terminal-events.jsonl reproduces the cell hash', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'tui-replay-'))
-    const transport = createTerminalTransport(PINNED, 'tui-test-replay')
+  it("does X when Y: same-geometry replay of terminal-events.jsonl reproduces the cell hash", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tui-replay-"));
+    const transport = createTerminalTransport(PINNED, "tui-test-replay");
     try {
-      transport.onChunk((ev) => appendTerminalVisibleEvent(dir, ev))
-      transport.ingestVisible('Hello\nWorld\n')
-      transport.ingestVisible('\x1b[2A')
-      transport.ingestVisible('\x1b[2K')
-      transport.ingestVisible('Goodbye')
-      const live = transport.getGrid().snapshot()
-      const events = loadTerminalVisibleEvents(dir)
-      assert.ok(events.length >= 4)
-      const replayed = replayVisibleEvents(events, 20, 8)
-      assert.equal(replayed.hash, live.hash)
-      assert.equal(replayed.lines[0], 'Goodbye')
+      transport.onChunk((ev) => appendTerminalVisibleEvent(dir, ev));
+      transport.ingestVisible("Hello\nWorld\n");
+      transport.ingestVisible("\x1b[2A");
+      transport.ingestVisible("\x1b[2K");
+      transport.ingestVisible("Goodbye");
+      const live = transport.getGrid().snapshot();
+      const events = loadTerminalVisibleEvents(dir);
+      assert.ok(events.length >= 4);
+      const replayed = replayVisibleEvents(events, 20, 8);
+      assert.equal(replayed.hash, live.hash);
+      assert.equal(replayed.lines[0], "Goodbye");
     } finally {
-      setObservedTerminalSize(null)
+      setObservedTerminalSize(null);
     }
-  })
-})
+  });
+});

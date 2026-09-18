@@ -10,13 +10,15 @@
 
 // ─── Imports ──────────────────────────────────────────────────────────────
 
-import { Component } from './component.js';
+import { Component } from "./component.js";
 import {
   accent,
+  accentHigh,
   bold,
   colorToken,
   dim,
   error,
+  backgroundToken,
   ghost,
   getEffectiveTerminalWidth,
   info,
@@ -27,46 +29,36 @@ import {
   visibleLength,
   warning,
   wrapText,
-} from './theme.js';
-import { COLOR_TOKENS } from './tokens.js';
-import type { KeyEvent } from './keyInput.js';
+} from "./theme.js";
+import type { KeyEvent } from "./keyInput.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
-/** Parse a hex colour string to { r, g, b } components. */
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const h = hex.replace('#', '');
-  return {
-    r: Number.parseInt(h.slice(0, 2), 16),
-    g: Number.parseInt(h.slice(2, 4), 16),
-    b: Number.parseInt(h.slice(4, 6), 16),
-  };
-}
-
 /**
  * Wrap `text` in an ANSI background-colour sequence using the named theme
- * token.  The token is looked up in COLOR_TOKENS (from the active theme).
+ * token.  Terminal color capability and fallback behavior are centralized in
+ * theme.ts so primitives remain compatible with degraded terminals.
  */
 function applyBgColor(text: string, token: string): string {
-  const hex = COLOR_TOKENS[token];
-  if (!hex) return text;
-  const rgb = hexToRgb(hex);
-  return `\x1b[48;2;${rgb.r};${rgb.g};${rgb.b}m${text}\x1b[49m`;
+  return backgroundToken(token, text);
 }
 
 /** Normalise padding to a four-sided object. */
 function normalizePadding(
-  p: number | { top: number; right: number; bottom: number; left: number } | undefined,
+  p:
+    | number
+    | { top: number; right: number; bottom: number; left: number }
+    | undefined,
 ): { top: number; right: number; bottom: number; left: number } {
   if (p === undefined) return { top: 0, right: 0, bottom: 0, left: 0 };
-  if (typeof p === 'number') return { top: p, right: p, bottom: p, left: p };
+  if (typeof p === "number") return { top: p, right: p, bottom: p, left: p };
   return p;
 }
 
 /** Approximate terminal height from stdout, falling back to 24 rows. */
 function getTerminalHeight(): number {
   const rows = process.stdout.rows;
-  return typeof rows === 'number' && rows > 0 ? rows : 24;
+  return typeof rows === "number" && rows > 0 ? rows : 24;
 }
 
 /**
@@ -82,7 +74,10 @@ function colorBorderTitleLine(
   // Walk from left: colour border chars until we hit non-border content.
   const chars = [...line];
   let i = 0;
-  while (i < chars.length && (chars[i] === border.tl || chars[i] === border.h)) {
+  while (
+    i < chars.length &&
+    (chars[i] === border.tl || chars[i] === border.h)
+  ) {
     chars[i] = bc(chars[i]!);
     i++;
   }
@@ -92,7 +87,7 @@ function colorBorderTitleLine(
     chars[j] = bc(chars[j]!);
     j--;
   }
-  return chars.join('');
+  return chars.join("");
 }
 
 // ─── Border character sets ─────────────────────────────────────────────────
@@ -108,9 +103,9 @@ interface BorderSet {
 
 const BORDER_SETS: Record<string, BorderSet | null> = {
   none: null,
-  single: { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' },
-  double: { tl: '╔', tr: '╗', bl: '╚', br: '╝', h: '═', v: '║' },
-  rounded: { tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '─', v: '│' },
+  single: { tl: "┌", tr: "┐", bl: "└", br: "┘", h: "─", v: "│" },
+  double: { tl: "╔", tr: "╗", bl: "╚", br: "╝", h: "═", v: "║" },
+  rounded: { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" },
 };
 
 // ─── Style-application map ────────────────────────────────────────────────
@@ -120,6 +115,7 @@ const STYLE_APPLY: Record<string, (t: string) => string> = {
   muted,
   ghost,
   accent,
+  accentHigh,
   info,
   success,
   warning,
@@ -136,13 +132,19 @@ export interface BoxOptions {
   /** Content -- strings (rendered verbatim) and/or child Components. */
   children?: (Component | string)[];
   /** Padding inside the border.  Single number applies to all four sides. */
-  padding?: number | { top: number; right: number; bottom: number; left: number };
+  padding?:
+    | number
+    | { top: number; right: number; bottom: number; left: number };
   /** Border style.  Defaults to 'none' (no border). */
-  border?: 'none' | 'single' | 'double' | 'rounded';
+  border?: "none" | "single" | "double" | "rounded";
   /** Theme token name for border-foreground colour (e.g. 'border'). */
   borderColor?: string;
   /** Theme token name for background fill (e.g. 'background', 'panel'). */
   background?: string;
+  /** Use the semantic selected surface when no explicit background is set. */
+  selected?: boolean;
+  /** Use the semantic focused-border token when no explicit border color is set. */
+  focused?: boolean;
   /**
    * Optional title rendered inside the top border: `┌─ Title ──┐`.
    * Only applies when border is set.
@@ -154,14 +156,14 @@ export interface BoxOptions {
    * - 'auto'    : fill terminal width
    * - undefined : natural (content-width + padding + border)
    */
-  width?: number | 'auto';
+  width?: number | "auto";
   /**
    * Height constraint.
    * - number    : exact row count
    * - 'auto'    : fill terminal height
    * - undefined : natural (content + padding + border)
    */
-  height?: number | 'auto';
+  height?: number | "auto";
   /** Minimum width (overrides natural width). */
   minWidth?: number;
   /** Maximum width (clamps 'auto' or natural). */
@@ -171,9 +173,9 @@ export interface BoxOptions {
   /** Maximum height (clamps 'auto' or natural). */
   maxHeight?: number;
   /** Horizontal alignment of content inside the box. */
-  align?: 'left' | 'center' | 'right';
+  align?: "left" | "center" | "right";
   /** Vertical alignment of content inside the box. */
-  verticalAlign?: 'top' | 'middle' | 'bottom';
+  verticalAlign?: "top" | "middle" | "bottom";
 }
 
 /**
@@ -183,27 +185,33 @@ export interface BoxOptions {
  */
 export class Box extends Component {
   private _children: (Component | string)[];
-  private _padding: number | { top: number; right: number; bottom: number; left: number };
-  private _border: 'none' | 'single' | 'double' | 'rounded';
+  private _padding:
+    | number
+    | { top: number; right: number; bottom: number; left: number };
+  private _border: "none" | "single" | "double" | "rounded";
   private _borderColor: string | undefined;
   private _background: string | undefined;
+  private _selected: boolean;
+  private _focused: boolean;
   private _title: string | undefined;
-  private _width: number | 'auto' | undefined;
-  private _height: number | 'auto' | undefined;
+  private _width: number | "auto" | undefined;
+  private _height: number | "auto" | undefined;
   private _minWidth: number | undefined;
   private _maxWidth: number | undefined;
   private _minHeight: number | undefined;
   private _maxHeight: number | undefined;
-  private _align: 'left' | 'center' | 'right';
-  private _verticalAlign: 'top' | 'middle' | 'bottom';
+  private _align: "left" | "center" | "right";
+  private _verticalAlign: "top" | "middle" | "bottom";
 
   constructor(options: BoxOptions = {}) {
     super();
     this._children = options.children ?? [];
     this._padding = options.padding ?? 0;
-    this._border = options.border ?? 'none';
+    this._border = options.border ?? "none";
     this._borderColor = options.borderColor;
     this._background = options.background;
+    this._selected = options.selected ?? false;
+    this._focused = options.focused ?? false;
     this._title = options.title;
     this._width = options.width;
     this._height = options.height;
@@ -211,8 +219,8 @@ export class Box extends Component {
     this._maxWidth = options.maxWidth;
     this._minHeight = options.minHeight;
     this._maxHeight = options.maxHeight;
-    this._align = options.align ?? 'left';
-    this._verticalAlign = options.verticalAlign ?? 'top';
+    this._align = options.align ?? "left";
+    this._verticalAlign = options.verticalAlign ?? "top";
 
     // Register Component children with the base class so they participate in
     // mount/unmount/focus lifecycle.
@@ -247,23 +255,25 @@ export class Box extends Component {
     // 3. Render every child to flat content lines
     const contentLines: string[] = [];
     for (const child of this._children) {
-      if (typeof child === 'string') {
-        if (child) contentLines.push(...child.split('\n'));
+      if (typeof child === "string") {
+        if (child) contentLines.push(...child.split("\n"));
       } else {
         const rendered = child.render();
-        if (rendered) contentLines.push(...rendered.split('\n'));
+        if (rendered) contentLines.push(...rendered.split("\n"));
       }
     }
 
     // 4. Natural content width (widest line's visual length)
     const maxContentW =
-      contentLines.length > 0 ? Math.max(...contentLines.map((l) => visibleLength(l))) : 0;
+      contentLines.length > 0
+        ? Math.max(...contentLines.map((l) => visibleLength(l)))
+        : 0;
 
     // 5. Determine outer width
     let outerW: number;
-    if (this._width === 'auto') {
+    if (this._width === "auto") {
       outerW = getEffectiveTerminalWidth();
-    } else if (typeof this._width === 'number') {
+    } else if (typeof this._width === "number") {
       outerW = this._width;
     } else {
       outerW = maxContentW + pad.left + pad.right + borderW;
@@ -281,14 +291,14 @@ export class Box extends Component {
 
       const deficit = innerW - len;
       switch (this._align) {
-        case 'center': {
+        case "center": {
           const left = Math.floor(deficit / 2);
-          return ' '.repeat(left) + line + ' '.repeat(deficit - left);
+          return " ".repeat(left) + line + " ".repeat(deficit - left);
         }
-        case 'right':
-          return ' '.repeat(deficit) + line;
+        case "right":
+          return " ".repeat(deficit) + line;
         default:
-          return line + ' '.repeat(deficit);
+          return line + " ".repeat(deficit);
       }
     });
 
@@ -297,32 +307,37 @@ export class Box extends Component {
     const naturalInnerH = naturalContentH + pad.top + pad.bottom;
 
     let outerH: number;
-    if (this._height === 'auto') {
+    if (this._height === "auto") {
       outerH = getTerminalHeight();
-    } else if (typeof this._height === 'number') {
+    } else if (typeof this._height === "number") {
       outerH = this._height;
     } else {
       outerH = naturalInnerH + (hasBorder ? borderW : 0);
     }
-    if (this._minHeight !== undefined) outerH = Math.max(outerH, this._minHeight);
-    if (this._maxHeight !== undefined) outerH = Math.min(outerH, this._maxHeight);
+    if (this._minHeight !== undefined)
+      outerH = Math.max(outerH, this._minHeight);
+    if (this._maxHeight !== undefined)
+      outerH = Math.min(outerH, this._maxHeight);
     outerH = Math.max(outerH, 1);
 
     const innerAreaH = Math.max(1, outerH - borderW);
 
     // 8. Build the inner area (empty lines), place content with vertical
     //    alignment and padding.
-    const emptyLine = ' '.repeat(innerW);
+    const emptyLine = " ".repeat(innerW);
     const innerBox: string[] = new Array(innerAreaH).fill(emptyLine);
 
     // Compute start Y so content is positioned according to verticalAlign,
     // then offset by top padding.
     let contentStartY: number;
     switch (this._verticalAlign) {
-      case 'middle':
-        contentStartY = Math.max(0, Math.floor((innerAreaH - naturalContentH) / 2));
+      case "middle":
+        contentStartY = Math.max(
+          0,
+          Math.floor((innerAreaH - naturalContentH) / 2),
+        );
         break;
-      case 'bottom':
+      case "bottom":
         contentStartY = Math.max(0, innerAreaH - naturalContentH);
         break;
       default:
@@ -352,7 +367,9 @@ export class Box extends Component {
         // Leave at least 3 border chars on each side for padding: ┌─ ... ─┐
         const maxTitleInner = Math.max(0, innerW - 6);
         const displayed =
-          titleVisLen > maxTitleInner ? truncateText(titleText, maxTitleInner) : titleText;
+          titleVisLen > maxTitleInner
+            ? truncateText(titleText, maxTitleInner)
+            : titleText;
         const displayedLen = visibleLength(displayed);
         const leftDash = Math.max(1, Math.floor((innerW - displayedLen) / 2));
         const rightDash = Math.max(1, innerW - leftDash - displayedLen);
@@ -371,8 +388,10 @@ export class Box extends Component {
     }
 
     // 10. Apply border colour (only to the border characters themselves).
-    if (hasBorder && this._borderColor) {
-      const bc = (t: string) => colorToken(this._borderColor!, t);
+    const borderColorToken =
+      this._borderColor ?? (this._focused ? "borderFocused" : undefined);
+    if (hasBorder && borderColorToken) {
+      const bc = (t: string) => colorToken(borderColorToken, t);
 
       for (let i = 0; i < resultLines.length; i++) {
         const line = resultLines[i]!;
@@ -380,7 +399,11 @@ export class Box extends Component {
           // Top border: may contain a title. Only colour the border runes
           // (corners + dashes), not the embedded title text.
           if (this._title) {
-            resultLines[i] = colorBorderTitleLine(line, border, this._borderColor);
+            resultLines[i] = colorBorderTitleLine(
+              line,
+              border,
+              borderColorToken,
+            );
           } else {
             resultLines[i] = bc(line);
           }
@@ -398,11 +421,15 @@ export class Box extends Component {
     }
 
     // 11. Apply background fill to every line (fills to outer width).
-    if (this._background) {
-      resultLines = resultLines.map((line) => applyBgColor(line, this._background!));
+    const backgroundTokenName =
+      this._background ?? (this._selected ? "selected" : undefined);
+    if (backgroundTokenName) {
+      resultLines = resultLines.map((line) =>
+        applyBgColor(line, backgroundTokenName),
+      );
     }
 
-    return resultLines.join('\n');
+    return resultLines.join("\n");
   }
 }
 
@@ -422,18 +449,19 @@ export interface TextOptions {
    * exported from theme.ts.
    */
   style?:
-    | 'primary'
-    | 'muted'
-    | 'ghost'
-    | 'accent'
-    | 'success'
-    | 'warning'
-    | 'error'
-    | 'info'
-    | 'bold'
-    | 'dim';
+    | "primary"
+    | "muted"
+    | "ghost"
+    | "accent"
+    | "accentHigh"
+    | "success"
+    | "warning"
+    | "error"
+    | "info"
+    | "bold"
+    | "dim";
   /** Horizontal alignment (only applies to single-line rendering). */
-  align?: 'left' | 'center' | 'right';
+  align?: "left" | "center" | "right";
 }
 
 /**
@@ -451,7 +479,7 @@ export class Text extends Component {
   private _wrap: boolean;
   private _truncate: boolean;
   private _style: string | undefined;
-  private _align: 'left' | 'center' | 'right';
+  private _align: "left" | "center" | "right";
 
   constructor(options: TextOptions) {
     super();
@@ -459,7 +487,7 @@ export class Text extends Component {
     this._wrap = options.wrap ?? false;
     this._truncate = options.truncate ?? false;
     this._style = options.style;
-    this._align = options.align ?? 'left';
+    this._align = options.align ?? "left";
   }
 
   override handleKey(_event: KeyEvent): boolean {
@@ -472,7 +500,8 @@ export class Text extends Component {
 
   override render(): string {
     // 1. Resolve content (dynamic via function or static string).
-    const raw = typeof this._content === 'function' ? this._content() : this._content;
+    const raw =
+      typeof this._content === "function" ? this._content() : this._content;
 
     // 2. Apply style.
     const styleFn = this._style ? STYLE_APPLY[this._style] : undefined;
@@ -485,7 +514,7 @@ export class Text extends Component {
     if (this._wrap) {
       const lines = wrapText(styled, maxW);
       // Re-join; alignment doesn't make sense for multiline wrapped output.
-      return lines.join('\n');
+      return lines.join("\n");
     }
 
     // 5. Apply truncation (single-line).
@@ -494,16 +523,16 @@ export class Text extends Component {
     }
 
     // 6. Alignment (only for single-line content with room to spare).
-    if (this._align !== 'left') {
+    if (this._align !== "left") {
       const len = visibleLength(styled);
       if (len < maxW) {
         const deficit = maxW - len;
-        if (this._align === 'center') {
+        if (this._align === "center") {
           const left = Math.floor(deficit / 2);
-          return ' '.repeat(left) + styled + ' '.repeat(deficit - left);
+          return " ".repeat(left) + styled + " ".repeat(deficit - left);
         }
-        if (this._align === 'right') {
-          return ' '.repeat(deficit) + styled;
+        if (this._align === "right") {
+          return " ".repeat(deficit) + styled;
         }
       }
     }
@@ -527,7 +556,7 @@ export interface StackOptions {
    * tree layout pass (deferred feature). With natural height (the default,
    * since Stack has no height constraint) all modes behave as 'start'.
    */
-  distribute?: 'start' | 'center' | 'end' | 'stretch';
+  distribute?: "start" | "center" | "end" | "stretch";
 }
 
 /**
@@ -540,12 +569,12 @@ export interface StackOptions {
  */
 export class Stack extends Component {
   private _gap: number;
-  private _distribute: 'start' | 'center' | 'end' | 'stretch';
+  private _distribute: "start" | "center" | "end" | "stretch";
 
   constructor(options: StackOptions = {}) {
     super();
     this._gap = options.gap ?? 0;
-    this._distribute = options.distribute ?? 'start';
+    this._distribute = options.distribute ?? "start";
 
     if (options.children) {
       for (const child of options.children) {
@@ -564,7 +593,7 @@ export class Stack extends Component {
 
   override render(): string {
     const childCount = this.children.length;
-    if (childCount === 0) return '';
+    if (childCount === 0) return "";
 
     const outputLines: string[] = [];
 
@@ -572,17 +601,17 @@ export class Stack extends Component {
       // Gap lines between children.
       if (i > 0) {
         for (let g = 0; g < this._gap; g++) {
-          outputLines.push('');
+          outputLines.push("");
         }
       }
 
       const rendered = this.children[i]!.render();
       if (rendered) {
-        outputLines.push(...rendered.split('\n'));
+        outputLines.push(...rendered.split("\n"));
       }
     }
 
-    return outputLines.join('\n');
+    return outputLines.join("\n");
   }
 }
 
@@ -625,8 +654,8 @@ export class Spacer extends Component {
     const cols = this._width > 0 ? this._width : getEffectiveTerminalWidth();
     const lines: string[] = [];
     for (let i = 0; i < this._height; i++) {
-      lines.push(' '.repeat(cols));
+      lines.push(" ".repeat(cols));
     }
-    return lines.join('\n');
+    return lines.join("\n");
   }
 }

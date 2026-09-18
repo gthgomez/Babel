@@ -1,19 +1,22 @@
 import {
+  accentHigh,
+  muted,
+  primary,
   getEffectiveTerminalWidth,
   visibleLength,
   truncate,
   stripAnsi,
   bgPanel,
-} from './theme.js';
-import { renderCompactTokenBar, getContextLimit } from './tokenBar.js';
-import { renderBackgroundTaskFooter } from './backgroundTaskProgress.js';
+} from "./theme.js";
+import { renderCompactTokenBar, getContextLimit } from "./tokenBar.js";
+import { renderBackgroundTaskFooter } from "./backgroundTaskProgress.js";
 import {
   classifyRateLimit,
   getGlobalRateLimitState,
   RateLimitTier,
   renderCompactRateLimit,
-} from './rateLimitWidget.js';
-import type { BackgroundTaskState } from './backgroundTaskProgress.js';
+} from "./rateLimitWidget.js";
+import type { BackgroundTaskState } from "./backgroundTaskProgress.js";
 
 /**
  * State object for the status bar displayed between REPL turns.
@@ -28,11 +31,19 @@ export interface StatusBarState {
   /** Active project label (e.g. "my-project" or "global") */
   project: string;
   /** Active context telemetry from latest provider invocation */
-  activeContext?: {
-    tokens: number;
-    modelId: string;
-    source: 'policy' | 'provider' | 'provider_prompt_tokens' | 'estimated' | 'unknown';
-  } | null | undefined;
+  activeContext?:
+    | {
+        tokens: number;
+        modelId: string;
+        source:
+          | "policy"
+          | "provider"
+          | "provider_prompt_tokens"
+          | "estimated"
+          | "unknown";
+      }
+    | null
+    | undefined;
   /** Active input context tokens from latest turn (for context window meter) */
   activeContextTokens?: number | undefined;
   /** Total tokens consumed in this session */
@@ -54,10 +65,12 @@ export interface StatusBarState {
   /** Whether the working tree has uncommitted changes. Shown as * suffix. */
   gitDirty?: boolean | undefined;
   /** Knowledge graph state for compact indicator in the status bar. */
-  knowledgeGraph?: {
-    status: 'empty' | 'indexing' | 'ready' | 'stale';
-    nodeCount: number | undefined;
-  } | undefined;
+  knowledgeGraph?:
+    | {
+        status: "empty" | "indexing" | "ready" | "stale";
+        nodeCount: number | undefined;
+      }
+    | undefined;
   /**
    * Compact routing-status label for the REPL status bar.
    * Set from the last turn routing receipt to show model tier + phase.
@@ -80,18 +93,18 @@ export function classifyStatusWidth(width: number): StatusWidthBand {
 
 export function isDefaultStatusMode(mode: string): boolean {
   const normalized = mode.trim().toLowerCase();
-  return normalized === '' || normalized === 'default' || normalized === 'chat';
+  return normalized === "" || normalized === "default" || normalized === "chat";
 }
 
-export type RateLimitAttentionLevel = 'none' | 'warning' | 'critical';
+export type RateLimitAttentionLevel = "none" | "warning" | "critical";
 
 export type StatusBarRightSlot =
-  | 'sessionTokens'
-  | 'cost'
-  | 'turn'
-  | 'rateLimit'
-  | 'bgTasks'
-  | 'context';
+  | "sessionTokens"
+  | "cost"
+  | "turn"
+  | "rateLimit"
+  | "bgTasks"
+  | "context";
 
 export interface StatusBarRightPart {
   slot: StatusBarRightSlot;
@@ -128,16 +141,19 @@ export const ATTENTION_PREEMPTION = {
    * `rateLimit` is skipped while attention is live. Context is last, never mid-string clipped.
    */
   displaceInOrder: [
-    'turn',
-    'sessionTokens',
-    'cost',
-    'bgTasks',
-    'rateLimit',
+    "turn",
+    "sessionTokens",
+    "cost",
+    "bgTasks",
+    "rateLimit",
   ] as const satisfies readonly StatusBarRightSlot[],
 } as const;
 
-export function isRateLimitAttention(remaining: number, limit: number): boolean {
-  return classifyRateLimitAttention(remaining, limit) !== 'none';
+export function isRateLimitAttention(
+  remaining: number,
+  limit: number,
+): boolean {
+  return classifyRateLimitAttention(remaining, limit) !== "none";
 }
 
 /**
@@ -148,32 +164,43 @@ export function classifyRateLimitAttention(
   remaining: number,
   limit: number,
 ): RateLimitAttentionLevel {
-  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return 'none';
+  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0)
+    return "none";
   const { tier } = classifyRateLimit(remaining, limit);
-  if (tier === RateLimitTier.Exhausted || tier === RateLimitTier.Critical) return 'critical';
-  if (tier === RateLimitTier.Warning) return 'warning';
-  return 'none';
+  if (tier === RateLimitTier.Exhausted || tier === RateLimitTier.Critical)
+    return "critical";
+  if (tier === RateLimitTier.Warning) return "warning";
+  return "none";
 }
 
 function joinRightParts(parts: readonly StatusBarRightPart[]): string {
   return parts
     .map((part) => part.text)
     .filter((text) => text.length > 0)
-    .join('  ');
+    .join("  ");
 }
 
-function rightClusterFits(parts: readonly StatusBarRightPart[], maxWidth: number): boolean {
+function rightClusterFits(
+  parts: readonly StatusBarRightPart[],
+  maxWidth: number,
+): boolean {
   return visibleLength(joinRightParts(parts)) <= maxWidth;
 }
 
-function dropRightSlot(parts: StatusBarRightPart[], slot: StatusBarRightSlot): void {
+function dropRightSlot(
+  parts: StatusBarRightPart[],
+  slot: StatusBarRightSlot,
+): void {
   const idx = parts.findIndex((part) => part.slot === slot);
   if (idx >= 0) parts.splice(idx, 1);
 }
 
-function isProtectedRightSlot(slot: StatusBarRightSlot, protectRateLimit: boolean): boolean {
-  if (slot === 'context') return true;
-  return slot === 'rateLimit' && protectRateLimit;
+function isProtectedRightSlot(
+  slot: StatusBarRightSlot,
+  protectRateLimit: boolean,
+): boolean {
+  if (slot === "context") return true;
+  return slot === "rateLimit" && protectRateLimit;
 }
 
 /**
@@ -205,7 +232,7 @@ export function applyAttentionPreemption(
       kept.splice(i, 1);
     }
   }
-  if (!rightClusterFits(kept, maxWidth)) dropRightSlot(kept, 'context');
+  if (!rightClusterFits(kept, maxWidth)) dropRightSlot(kept, "context");
   return joinRightParts(kept);
 }
 
@@ -247,15 +274,18 @@ export function planStatusBarFields(
   },
 ): StatusBarFieldPolicy {
   const band = classifyStatusWidth(width);
-  const attentionActive = Boolean(input.hasActiveRateLimit || input.hasCriticalRateLimit);
+  const attentionActive = Boolean(
+    input.hasActiveRateLimit || input.hasCriticalRateLimit,
+  );
   const rateLimitMinBand = input.hasCriticalRateLimit
     ? ATTENTION_PREEMPTION.criticalRateLimitMinBand
     : ATTENTION_PREEMPTION.warningRateLimitMinBand;
   return {
     band,
-    showMode: !isDefaultStatusMode(input.mode)
-      && band >= 80
-      && !(attentionActive && band < ATTENTION_PREEMPTION.modeYieldsBelowBand),
+    showMode:
+      !isDefaultStatusMode(input.mode) &&
+      band >= 80 &&
+      !(attentionActive && band < ATTENTION_PREEMPTION.modeYieldsBelowBand),
     showCost: band >= 100,
     showSessionTokens: band >= 120,
     showBranch: input.hasBranch && band >= 120,
@@ -263,21 +293,28 @@ export function planStatusBarFields(
     showKg: false,
     showRouting: false,
     showRateLimit: attentionActive && band >= rateLimitMinBand,
-    showBgTasks: input.hasBgTasks
-      && band >= 80
-      && !(attentionActive && band < ATTENTION_PREEMPTION.bgTasksYieldBelowBand),
+    showBgTasks:
+      input.hasBgTasks &&
+      band >= 80 &&
+      !(attentionActive && band < ATTENTION_PREEMPTION.bgTasksYieldBelowBand),
     showContext: !(
-      input.hasCriticalRateLimit && band < ATTENTION_PREEMPTION.contextYieldsBelowBand
+      input.hasCriticalRateLimit &&
+      band < ATTENTION_PREEMPTION.contextYieldsBelowBand
     ),
   };
 }
 
-function renderActiveContextMeter(state: StatusBarState, width: number): string {
-  if (state.showTokenBar === false) return '';
-  const activeTokens = state.activeContext ? state.activeContext.tokens : state.activeContextTokens;
+function renderActiveContextMeter(
+  state: StatusBarState,
+  width: number,
+): string {
+  if (state.showTokenBar === false) return "";
+  const activeTokens = state.activeContext
+    ? state.activeContext.tokens
+    : state.activeContextTokens;
   const hasActiveContext = activeTokens !== undefined && activeTokens !== null;
   const targetModelId = state.activeContext?.modelId ?? state.modelId;
-  if (!targetModelId) return '';
+  if (!targetModelId) return "";
   const limit = getContextLimit(targetModelId);
   const barWidth = Math.min(12, Math.floor(width / 8));
   return renderCompactTokenBar(
@@ -294,53 +331,70 @@ function renderActiveContextMeter(state: StatusBarState, width: number): string 
 export function renderStatusBar(state: StatusBarState): string {
   const width = state.width ?? getEffectiveTerminalWidth();
   const rateState = getGlobalRateLimitState();
-  const hasBranch = Boolean(state.gitBranch && state.gitBranch !== 'HEAD');
-  const hasBgTasks = Boolean(state.backgroundTasks && state.backgroundTasks.length > 0);
+  const hasBranch = Boolean(state.gitBranch && state.gitBranch !== "HEAD");
+  const hasBgTasks = Boolean(
+    state.backgroundTasks && state.backgroundTasks.length > 0,
+  );
   const rateAttention = rateState
     ? classifyRateLimitAttention(rateState.remaining, rateState.limit)
-    : 'none';
+    : "none";
   const policy = planStatusBarFields(width, {
     mode: state.mode,
     hasBranch,
     hasBgTasks,
-    hasActiveRateLimit: rateAttention !== 'none',
-    hasCriticalRateLimit: rateAttention === 'critical',
+    hasActiveRateLimit: rateAttention !== "none",
+    hasCriticalRateLimit: rateAttention === "critical",
   });
 
-  const leftParts: string[] = [state.model];
-  if (policy.showMode) leftParts.push(state.mode);
+  const leftParts: string[] = [primary(state.model)];
+  if (policy.showMode) leftParts.push(accentHigh(state.mode));
   if (policy.showBranch && state.gitBranch) {
-    leftParts.push(`${state.gitBranch}${state.gitDirty ? '*' : ''}`);
+    leftParts.push(muted(`${state.gitBranch}${state.gitDirty ? "*" : ""}`));
   }
-  const left = leftParts.join(' · ');
+  const left = leftParts.join(" · ");
 
   const rightParts: StatusBarRightPart[] = [];
   if (policy.showSessionTokens) {
-    rightParts.push({ slot: 'sessionTokens', text: `${state.totalTokens.toLocaleString()} tok` });
+    rightParts.push({
+      slot: "sessionTokens",
+      text: muted(`${state.totalTokens.toLocaleString()} tok`),
+    });
   }
   if (policy.showCost) {
-    rightParts.push({ slot: 'cost', text: `$${state.totalCost.toFixed(4)}` });
+    rightParts.push({
+      slot: "cost",
+      text: muted(`$${state.totalCost.toFixed(4)}`),
+    });
   }
   if (policy.showTurn) {
-    rightParts.push({ slot: 'turn', text: `turn ${state.turnCount}` });
+    rightParts.push({ slot: "turn", text: muted(`turn ${state.turnCount}`) });
   }
   if (policy.showRateLimit) {
     const rl = renderCompactRateLimit(rateState);
-    if (rl) rightParts.push({ slot: 'rateLimit', text: rl });
+    if (rl) rightParts.push({ slot: "rateLimit", text: rl });
   }
   if (policy.showBgTasks && state.backgroundTasks) {
     const footerWidth = Math.max(10, Math.floor(width / 4));
     const bg = renderBackgroundTaskFooter(state.backgroundTasks, footerWidth);
-    if (bg) rightParts.push({ slot: 'bgTasks', text: bg });
+    if (bg) rightParts.push({ slot: "bgTasks", text: bg });
   }
-  const contextMeter = policy.showContext ? renderActiveContextMeter(state, width) : '';
-  if (contextMeter) rightParts.push({ slot: 'context', text: contextMeter });
+  const contextMeter = policy.showContext
+    ? renderActiveContextMeter(state, width)
+    : "";
+  if (contextMeter) rightParts.push({ slot: "context", text: contextMeter });
 
   const minSpacing = 2;
   const minLeft = 4;
-  const protectRateLimit = rateAttention !== 'none';
-  const preferredMaxRight = Math.max(8, width - visibleLength(left) - minSpacing);
-  let right = applyAttentionPreemption(rightParts, preferredMaxRight, protectRateLimit);
+  const protectRateLimit = rateAttention !== "none";
+  const preferredMaxRight = Math.max(
+    8,
+    width - visibleLength(left) - minSpacing,
+  );
+  let right = applyAttentionPreemption(
+    rightParts,
+    preferredMaxRight,
+    protectRateLimit,
+  );
   if (visibleLength(left) + visibleLength(right) + minSpacing > width) {
     right = applyAttentionPreemption(
       rightParts,
@@ -355,13 +409,13 @@ export function renderStatusBar(state: StatusBarState): string {
 
   if (leftLen + rightLen + minSpacing <= width) {
     const padding = width - leftLen - rightLen;
-    line = left + ' '.repeat(padding) + right;
+    line = left + " ".repeat(padding) + right;
   } else {
     const maxLeftLen = Math.max(4, width - rightLen - minSpacing);
     const truncatedLeft = truncate(stripAnsi(left), maxLeftLen);
     const truncatedLen = visibleLength(truncatedLeft);
     const padding = Math.max(minSpacing, width - truncatedLen - rightLen);
-    line = truncatedLeft + ' '.repeat(padding) + right;
+    line = truncatedLeft + " ".repeat(padding) + right;
   }
 
   let lineVisLen = visibleLength(line);
@@ -370,6 +424,6 @@ export function renderStatusBar(state: StatusBarState): string {
     lineVisLen = visibleLength(line);
   }
 
-  const fillSpaces = ' '.repeat(Math.max(0, width - lineVisLen));
+  const fillSpaces = " ".repeat(Math.max(0, width - lineVisLen));
   return `${bgPanel(`${line}${fillSpaces}`)}\n`;
 }
