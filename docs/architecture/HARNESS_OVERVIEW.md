@@ -271,7 +271,7 @@ Use these when planning reliability work; do not paper over them in marketing cl
 2. **Verifier independence** — revision bind + honesty scope live; clean-room IndependentVerifier is env **or** high-assurance profile default — **not** everyday `safe_repo` Chat finalize.
 3. **Required-command scope is live** in pipeline + Chat honesty; residual is product UX (discoverability of full-suite requirements).
 4. **Evidence multi-stream** — Chat and pipeline both produce validated `episode-events.jsonl` alongside EvidenceBundle/session evidence; EvidenceBundle remains authoritative on degradation; cross-mode replay is incomplete.
-5. **`ModeController` interface** exists; production chat is still ChatEngine + `kernel.decide`, not a full adapter implementation for every mode.
+5. **Runtime coordinator** — `runtime/coordinator.ts` selects one mode adapter per turn and now dispatches both CLI chat and protocol `turn.submit` through the same facade (P03). Deep is still explicitly unsupported until its V9 adapter is wired; durable command admission/ownership is P05.
 6. **Chat revision binding + evidence-graph proof are live**.
 7. **Doc history**: Lite `AgentSession` vs ChatEngine, and Full RO proof vs pipeline deep mutation — always check this overview + code over older Lite wording.
 

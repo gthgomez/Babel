@@ -213,3 +213,21 @@ Mode capability is resolved by `resolveModeCapability` in `src/executor/modeAdap
 `PreparedTurn`/`RestoreReport` are the P02 contracts. Read-only `history.lookup` remains
 available for unsupported or non-resumable threads. No existing response shape or status
 name changes.
+
+### Amendment — P03 in-process runtime coordinator (2026-09-18)
+
+The protocol host dispatches `turn.submit` through the shared in-process runtime
+coordinator (`src/runtime/coordinator.ts`) when a durable session descriptor is
+present. The coordinator selects exactly one mode adapter per turn
+(`src/runtime/adapters/{chat,plan,deep}.ts`), reuses the P02 `PreparedTurn`, and
+enforces single-owner settlement: cancellation is a request, and a stale
+finalizer cannot release a successor's ownership (the P01 protocol contract).
+Renderer-independent submission is shared with the CLI chat path
+(`src/interactive/execution/chatCore.ts`).
+
+No wire method, response shape, status name or terminal outcome changes. The
+protocol host retains its `ActiveLaunch` ownership/cancellation authority; the
+coordinator adds controller dispatch only. The pre-P03 direct adapter remains
+selectable through `BABEL_RUNTIME_COORDINATOR=legacy` for trace comparison; the
+default is the coordinator. Deep remains explicitly unsupported on this surface
+until its adapter invokes the real V9 pipeline.
