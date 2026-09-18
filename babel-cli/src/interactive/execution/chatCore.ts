@@ -39,7 +39,14 @@ import {
   prepareHeadlessTurn,
   prepareRendererTurn,
   type ProtocolTurnSession,
-} from './chatTransport.js';
+} from './chatTransport.js'
+import type { BabelMode, SessionDescriptor } from '../../executor/contracts.js'
+import { buildPreparedTurn } from '../../executor/modeAdapters.js'
+import {
+  createRuntimeCoordinator,
+  isRuntimeCoordinatorEnabled,
+} from '../../runtime/coordinator.js'
+import type { RuntimeCoordinator, RuntimeExecution } from '../../runtime/contracts.js';
 import type { TurnPersistence } from './turnPersistence.js';
 import { buildAskResultPayload } from '../../cli/structuredOutput.js';
 import { runGitCommandAsync } from '../../utils/gitExec.js';
@@ -335,7 +342,7 @@ function evidenceFields(input: {
  * Consume the streaming ChatEvent generator and dispatch each event to sinks.
  */
 export async function consumeChatStream(
-  stream: AsyncGenerator<ChatEvent, void, undefined>,
+  stream: AsyncIterable<ChatEvent>,
   convRenderer: ConversationalRenderer | null,
   onStreamEvent?: (event: ChatStreamEvent) => void,
   protocolSession?: ProtocolTurnSession | null,
@@ -602,6 +609,10 @@ export async function runChatEngineOnce(input: {
   taskIntent?: TaskIntent;
   executionProfile?: ChatExecutionProfile;
   runtimeMode?: ChatRuntimeMode;
+  /** P03: product mode for runtime-coordinator dispatch. Defaults to chat. */
+  mode?: BabelMode;
+  /** P03: inject the shared runtime coordinator (surfaces / deterministic tests). */
+  coordinator?: RuntimeCoordinator;
 }): Promise<ChatResult> {
   const factory = input.engineFactory ?? defaultEngineFactory;
   const preflightContext =
@@ -722,54 +733,90 @@ export async function runChatEngineOnce(input: {
     (convRenderer !== null ? isChatStreamingEnabled() : true);
   const resolvedIntent = input.taskIntent ?? ChatEngine.classifyChatTaskIntent(input.task);
 
-  let result: ChatResult;
-  if (useStreaming) {
-    result = await consumeChatStream(
-      engine.submitMessageStream(input.task, resolvedIntent),
-      convRenderer,
-      input.onStreamEvent,
-      protocolSession,
-    );
-  } else {
-    result = await engine.submitMessage(
-      input.task,
-      buildChatCallbacks(convRenderer, input.onStreamEvent, protocolSession),
-      resolvedIntent,
-    );
-    if (result.status === 'completed') {
-      protocolSession?.emitChatEvent({
-        type: 'done',
-        answer: result.answer,
-        usage: result.usage,
-        status: result.status,
-        ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
-      });
-    } else if (result.status === 'failed') {
-      protocolSession?.emitChatEvent({
-        type: 'failed',
-        error: result.answer,
-        status: result.status,
-        ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
-      });
-    } else if (result.status === 'cancelled') {
-      protocolSession?.emitChatEvent({
-        type: 'cancelled',
-        status: result.status,
-        outcome: 'CANCELLED',
-      });
-    } else {
-      protocolSession?.emitChatEvent({
-        type: 'done',
-        answer: result.answer,
-        usage: result.usage,
-        status: result.status,
-        ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
-      });
-    }
+  // P03: dispatch the controller through the shared runtime facade. For chat the
+  // adapter is a pure delegation; the coordinator contributes controller
+  // ownership while keeping UI/renderer state out of the runtime boundary.
+  const coordinator = input.coordinator ?? createRuntimeCoordinator();
+  let execution: RuntimeExecution | null = null;
+  if (isRuntimeCoordinatorEnabled()) {
+    const descriptor: SessionDescriptor = {
+      schemaVersion: 1,
+      threadId: threadId ?? '',
+      projectRoot: input.target.targetRoot,
+      mode: input.mode ?? 'chat',
+      provider: 'default',
+      model: input.model ?? 'default',
+      policyProfile: 'safe_repo',
+      createdAt: new Date().toISOString(),
+      kernelVersion: 'executor-kernel-v1',
+      contractVersion: 'executor-contract-v1',
+    };
+    execution = coordinator.beginTurn({
+      prepared: buildPreparedTurn(descriptor),
+      threadId: threadId ?? '',
+      turnId: protocolSession?.turnId !== undefined ? String(protocolSession.turnId) : '0',
+      task: input.task,
+      intent: resolvedIntent,
+      subject: engine,
+    });
   }
 
-  persistTurnAssistantCells(turnPersistence, convRenderer);
-  finalizeProtocolTurn(protocolSession);
+  let result: ChatResult;
+  try {
+    if (useStreaming) {
+      const stream =
+        execution !== null
+          ? coordinator.submit(execution)
+          : engine.submitMessageStream(input.task, resolvedIntent);
+      result = await consumeChatStream(
+        stream,
+        convRenderer,
+        input.onStreamEvent,
+        protocolSession,
+      );
+    } else {
+      result = await engine.submitMessage(
+        input.task,
+        buildChatCallbacks(convRenderer, input.onStreamEvent, protocolSession),
+        resolvedIntent,
+      );
+      if (result.status === 'completed') {
+        protocolSession?.emitChatEvent({
+          type: 'done',
+          answer: result.answer,
+          usage: result.usage,
+          status: result.status,
+          ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+        });
+      } else if (result.status === 'failed') {
+        protocolSession?.emitChatEvent({
+          type: 'failed',
+          error: result.answer,
+          status: result.status,
+          ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+        });
+      } else if (result.status === 'cancelled') {
+        protocolSession?.emitChatEvent({
+          type: 'cancelled',
+          status: result.status,
+          outcome: 'CANCELLED',
+        });
+      } else {
+        protocolSession?.emitChatEvent({
+          type: 'done',
+          answer: result.answer,
+          usage: result.usage,
+          status: result.status,
+          ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+        });
+      }
+    }
+
+    persistTurnAssistantCells(turnPersistence, convRenderer);
+    finalizeProtocolTurn(protocolSession);
+  } finally {
+    if (execution !== null) coordinator.settle(execution);
+  }
 
   // C1: Persist intent plan to run_dir/intent_plan.json after the run
   if (intentPlan && result.runDir) {

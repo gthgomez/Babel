@@ -3,13 +3,18 @@
  * D2 stub; future babel-app-server will reuse these handlers.
  */
 
-import { ChatEngine } from '../../agent/chatEngine.js';
+import { ChatEngine, type ChatEvent } from '../../agent/chatEngine.js';
 import type { BabelMode, SessionDescriptor } from '../../executor/contracts.js';
 import {
   buildPreparedTurn,
   resolveModeCapability,
   type RestoreReport,
 } from '../../executor/modeAdapters.js';
+import {
+  createRuntimeCoordinator,
+  isRuntimeCoordinatorEnabled,
+} from '../../runtime/coordinator.js';
+import type { RuntimeCoordinator, RuntimeExecution } from '../../runtime/contracts.js';
 import {
   hydrateEngineFromRestore,
   inspectSessionRestoreState,
@@ -87,6 +92,8 @@ export interface ProtocolHostState {
   verificationByThread: Map<string, VerificationEvidence>;
   /** Durable-state restore outcome recorded at thread.resume time. */
   restoreReports: Map<string, RestoreReport>;
+  /** P03: shared lifecycle facade that owns controller dispatch per turn. */
+  coordinator: RuntimeCoordinator;
 }
 
 export function createProtocolHostState(options: {
@@ -94,6 +101,7 @@ export function createProtocolHostState(options: {
   executeWithoutNotifications?: boolean;
   projectRootGuard?: (projectRoot: string) => string;
   remoteSurface?: boolean;
+  coordinator?: RuntimeCoordinator;
 } = {}): ProtocolHostState {
   return {
     engines: new Map(),
@@ -109,6 +117,7 @@ export function createProtocolHostState(options: {
     approvalBroker: new RemoteApprovalBroker(),
     verificationByThread: new Map(),
     restoreReports: new Map(),
+    coordinator: options.coordinator ?? createRuntimeCoordinator(),
   };
 }
 
@@ -399,11 +408,9 @@ export async function handleProtocolRequest(
           launch.scheduled = true;
           const launchTurn = async () => {
             let seq = 0;
-            try {
-              // Hash immediately before the engine call — ChatEngine boundary.
-              const engineBoundary = hashUserMessage(params.message);
-              state.lastMessageIntegrity.set(`${params.thread_id}:${turnId}`, engineBoundary);
-              for await (const event of engine.submitMessageStream(params.message)) {
+            let runtimeExecution: RuntimeExecution | null = null;
+            const emitEvents = async (events: AsyncIterable<ChatEvent>): Promise<void> => {
+              for await (const event of events) {
                 const mapped = mapChatEventToTurnStreamEvent(event);
                 if (!mapped) continue;
                 try {
@@ -421,6 +428,26 @@ export async function handleProtocolRequest(
                   /* client disconnected */
                 }
               }
+            };
+            try {
+              // Hash immediately before the engine call — ChatEngine boundary.
+              const engineBoundary = hashUserMessage(params.message);
+              state.lastMessageIntegrity.set(`${params.thread_id}:${turnId}`, engineBoundary);
+              // P03: dispatch through the shared runtime facade when a durable
+              // descriptor exists. The pre-P03 direct adapter remains selectable
+              // via the compatibility switch for trace comparison.
+              if (isRuntimeCoordinatorEnabled() && descriptor != null) {
+                runtimeExecution = state.coordinator.beginTurn({
+                  prepared: buildPreparedTurn(descriptor),
+                  threadId: params.thread_id,
+                  turnId: String(turnId),
+                  task: params.message,
+                  subject: engine,
+                });
+                await emitEvents(state.coordinator.submit(runtimeExecution));
+              } else {
+                await emitEvents(engine.submitMessageStream(params.message));
+              }
             } catch (err: any) {
                try {
                  onNotification?.({
@@ -435,6 +462,7 @@ export async function handleProtocolRequest(
                  });
                } catch { /* ignore */ }
             } finally {
+              if (runtimeExecution !== null) state.coordinator.settle(runtimeExecution);
               launch.settled = true;
               releaseLaunchOwnership(state, params.thread_id, launch);
               try {

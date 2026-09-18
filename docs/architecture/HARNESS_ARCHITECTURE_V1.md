@@ -8,7 +8,7 @@ Licensed under the Apache License, Version 2.0
 status: CANONICAL
 architecture_version: harness-v1
 authority: normative
-last_verified: 2026-08-05
+last_verified: 2026-09-18
 change_policy: ADR and conformance-test updates required
 ```
 
@@ -125,11 +125,11 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | | |
 |--|--|
 | **Purpose** | Select mode/controller and risk posture |
-| **Current** | CLI mode + liteFullRouter + ChatEngine / plan / pipeline controllers |
+| **Current** | CLI mode + liteFullRouter + ChatEngine / plan / pipeline controllers, dispatched through the in-process runtime coordinator |
 | **Owner** | Mode router + controller for that mode |
-| **Sources** | `cli/constants.ts`, `services/liteFullRouter.ts`, `agent/chatEngine.ts`, `pipeline.ts` |
-| **Maturity** | **IMPLEMENTED** (three controllers) |
-| **Gaps** | Full `ModeController.submit` adapters partial |
+| **Sources** | `cli/constants.ts`, `services/liteFullRouter.ts`, `agent/chatEngine.ts`, `pipeline.ts`, `runtime/coordinator.ts`, `runtime/adapters/{chat,plan,deep}.ts` |
+| **Maturity** | **IMPLEMENTED** (three controllers); one runtime coordinator facade **IMPLEMENTED** (P03 — CLI and protocol dispatch through the same facade; Deep rejects explicitly) |
+| **Gaps** | Deep adapter does not yet invoke the V9 pipeline; durable command admission/ownership is P05 |
 | **Target** | Controllers behind one interface without collapsing policies |
 
 ### 4. Typed Capability Broker
@@ -255,6 +255,8 @@ Orchestrator → SWE plan → QA PASS|REJECT → (deep only) runExecutorLoop
 ```
 
 Shared infrastructure MUST NOT imply identical controller behavior. Controllers MAY differ in orchestration; they MUST share the executor contract boundary for shared execution semantics (invariants 3–4).
+
+The in-process **runtime coordinator** (`runtime/coordinator.ts`, P03) selects exactly one mode adapter per turn for both CLI and protocol surfaces. It owns dispatch and turn ownership only; completion, verifier authority, mode policy, Prompt OS compilation and evidence remain with their existing owners.
 
 ---
 
@@ -448,16 +450,17 @@ Do not create a second active implementation backlog for these gaps.
 | 3 | `babel-cli/src/evidence/chatRevisionBinding.ts` |
 | 4 | `babel-cli/src/executor/kernel.ts` |
 | 5 | `babel-cli/src/executor/contracts.ts` |
-| 6 | `babel-cli/src/interactive/execution/chatCore.ts` |
-| 7 | `babel-cli/src/agent/chatEngineObservability.ts` |
-| 8 | `babel-cli/src/pipeline.ts` |
-| 9 | `babel-cli/src/pipeline/executorLoop.ts` |
-| 10 | `babel-cli/src/sandbox.ts` |
-| 11 | `babel-cli/src/config/executionProfiles.ts` |
-| 12 | `babel-cli/src/services/worktreeSafety.ts` |
-| 13 | `babel-cli/src/services/requiredVerifierContract.ts` / `verifierIdentity.ts` / `evidence/episodeStream.ts` / `evidence/independentVerifier.ts` |
-| 14 | `babel-cli/src/schemas/agentContracts.ts` |
-| 15 | `babel-cli/src/config/chatEngineLimits.ts` |
+| 6 | `babel-cli/src/runtime/coordinator.ts` / `runtime/contracts.ts` / `runtime/adapters/{chat,plan,deep}.ts` |
+| 7 | `babel-cli/src/interactive/execution/chatCore.ts` |
+| 8 | `babel-cli/src/agent/chatEngineObservability.ts` |
+| 9 | `babel-cli/src/pipeline.ts` |
+| 10 | `babel-cli/src/pipeline/executorLoop.ts` |
+| 11 | `babel-cli/src/sandbox.ts` |
+| 12 | `babel-cli/src/config/executionProfiles.ts` |
+| 13 | `babel-cli/src/services/worktreeSafety.ts` |
+| 14 | `babel-cli/src/services/requiredVerifierContract.ts` / `verifierIdentity.ts` / `evidence/episodeStream.ts` / `evidence/independentVerifier.ts` |
+| 15 | `babel-cli/src/schemas/agentContracts.ts` |
+| 16 | `babel-cli/src/config/chatEngineLimits.ts` |
 
 ---
 
