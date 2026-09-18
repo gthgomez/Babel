@@ -325,6 +325,9 @@ function cloneJsonSafe(
   if (type !== 'object') return { ok: false };
   if (depth >= MAX_JSON_DEPTH) return { ok: false };
   const object = value as object;
+  // Any repeated reference (shared or cyclic) is not JSON-representable as a
+  // tree. Rejecting it prevents DAG expansion/retention amplification and is
+  // conservative: the caller's data cannot be projected as canonical JSON.
   if (path.has(object)) return { ok: false };
   path.add(object);
   try {
@@ -348,8 +351,6 @@ function cloneJsonSafe(
     return { ok: true, value: out };
   } catch {
     return { ok: false };
-  } finally {
-    path.delete(object);
   }
 }
 
@@ -440,7 +441,7 @@ function classifyInput(input: unknown): Classified {
     typeof read.timestamp === 'string' &&
     typeof read.producer === 'string' &&
     Number.isInteger(read.sequence) &&
-    typeof read.cursorStream === 'string' &&
+    read.cursorStream === 'runtime-facts' &&
     Number.isInteger(read.cursorSequence);
 
   if (!schemaKnown || !typeKnown) {
@@ -581,7 +582,7 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
   for (const group of groupList) {
     if (group.length > MAX_TIE_GROUP) {
       state.degradedReasons.push('tie_group_exceeded');
-      break;
+      continue;
     }
     const members: Classified[] = [];
     let groupNodes = 0;
@@ -633,6 +634,12 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
   const orderedKnown = dedupeByFactId(known, state);
   const orderedOptional = dedupeByFactId(optional, state);
   for (const fact of orderedOptional) state.unknownOptionalFactIds.push(fact.id);
+  // A known and an unknown-optional fact sharing an id+sequence is still a
+  // duplicate; flag it rather than letting both survive silently.
+  const knownIds = new Set(orderedKnown.map((fact) => fact.id));
+  for (const fact of orderedOptional) {
+    if (knownIds.has(fact.id)) state.degradedReasons.push('conflicting_duplicate_fact');
+  }
 
   const open = new Set<string>();
   const completed = new Set<string>();
