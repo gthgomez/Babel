@@ -354,24 +354,49 @@ export function redactRuntimeFact(fact: RuntimeFactV1): RuntimeFactV1 {
   }
 }
 
-/** Order two cursors; total for hostile/null input. */
+/** Order two cursors; total for hostile/stateful/null input, each field read once. */
 export function compareFactCursors(a: EventCursor, b: EventCursor): number {
-  const aStream = a && typeof a.stream === 'string' ? a.stream : '';
-  const bStream = b && typeof b.stream === 'string' ? b.stream : '';
+  let aStreamRaw: unknown;
+  let bStreamRaw: unknown;
+  let aSeqRaw: unknown;
+  let bSeqRaw: unknown;
+  try {
+    aStreamRaw = a ? (a as { stream?: unknown }).stream : undefined;
+    bStreamRaw = b ? (b as { stream?: unknown }).stream : undefined;
+    aSeqRaw = a ? (a as { sequence?: unknown }).sequence : undefined;
+    bSeqRaw = b ? (b as { sequence?: unknown }).sequence : undefined;
+  } catch {
+    return 0;
+  }
+  const aStream = typeof aStreamRaw === 'string' ? aStreamRaw : '';
+  const bStream = typeof bStreamRaw === 'string' ? bStreamRaw : '';
   if (aStream !== bStream) return aStream < bStream ? -1 : 1;
-  const aSeq = a && typeof a.sequence === 'number' ? a.sequence : 0;
-  const bSeq = b && typeof b.sequence === 'number' ? b.sequence : 0;
+  const aSeq = typeof aSeqRaw === 'number' ? aSeqRaw : 0;
+  const bSeq = typeof bSeqRaw === 'number' ? bSeqRaw : 0;
   if (aSeq === bSeq) return 0;
   return aSeq < bSeq ? -1 : 1;
 }
 
-/** Whether `later` is strictly newer than `earlier` within the same stream. Total. */
+/** Whether `later` is strictly newer than `earlier`; total, each field read once. */
 export function isFactAfter(later: EventCursor, earlier: EventCursor): boolean {
-  const laterStream = later && typeof later.stream === 'string' ? later.stream : '';
-  const earlierStream = earlier && typeof earlier.stream === 'string' ? earlier.stream : '';
-  const laterSeq = later && typeof later.sequence === 'number' ? later.sequence : Number.NaN;
-  const earlierSeq = earlier && typeof earlier.sequence === 'number' ? earlier.sequence : Number.NaN;
-  return laterStream === earlierStream && laterSeq > earlierSeq;
+  let laterStreamRaw: unknown;
+  let earlierStreamRaw: unknown;
+  let laterSeqRaw: unknown;
+  let earlierSeqRaw: unknown;
+  try {
+    laterStreamRaw = later ? (later as { stream?: unknown }).stream : undefined;
+    earlierStreamRaw = earlier ? (earlier as { stream?: unknown }).stream : undefined;
+    laterSeqRaw = later ? (later as { sequence?: unknown }).sequence : undefined;
+    earlierSeqRaw = earlier ? (earlier as { sequence?: unknown }).sequence : undefined;
+  } catch {
+    return false;
+  }
+  return (
+    laterStreamRaw === earlierStreamRaw &&
+    typeof laterSeqRaw === 'number' &&
+    typeof earlierSeqRaw === 'number' &&
+    laterSeqRaw > earlierSeqRaw
+  );
 }
 
 // ─── Ephemeral stream envelope ──────────────────────────────────────────────
@@ -394,7 +419,13 @@ export function makeEphemeralEvent<T>(input: {
   sequence: number;
   payload: T;
 }): EphemeralStreamEnvelope<T> {
-  return { kind: 'ephemeral', ...input };
+  try {
+    // `kind` is set last so a caller-supplied `kind` cannot make an ephemeral
+    // envelope claim durability.
+    return { ...input, kind: 'ephemeral' };
+  } catch {
+    return { kind: 'ephemeral', threadId: '', turnId: '', sequence: 0, payload: undefined as unknown as T };
+  }
 }
 
 // ─── Bounded fact bus ───────────────────────────────────────────────────────
@@ -418,7 +449,12 @@ export interface FactBus {
  * facts instead of holding the process alive; `dropped()` is observable.
  */
 export function createFactBus(options: { maxQueue?: number } | null = {}): FactBus {
-  const requested = options?.maxQueue;
+  let requested: unknown;
+  try {
+    requested = options?.maxQueue;
+  } catch {
+    requested = undefined;
+  }
   const maxQueue =
     typeof requested === 'number' && Number.isFinite(requested)
       ? Math.max(1, Math.floor(requested))

@@ -18,6 +18,7 @@ import {
   redactRuntimeFact,
   RUNTIME_FACT_SCHEMA_VERSION,
   validateRuntimeFact,
+  type EventCursor,
   type RuntimeFactV1,
 } from './events.js';
 
@@ -184,6 +185,51 @@ test('P04: fact bus tolerates null options and a faulty subscriber', () => {
   for (let i = 0; i < 3; i += 1) bus.publish(fact({ id: `f${i}`, sequence: i }));
   assert.doesNotThrow(() => sub.drain());
   assert.deepEqual(seen, ['f0', 'f2']);
+});
+
+test('P04: cursor helpers are total and single-read for hostile input', () => {
+  const hostile = {
+    get stream(): never {
+      throw new Error('hostile');
+    },
+  } as unknown as EventCursor;
+  assert.doesNotThrow(() => compareFactCursors(hostile, hostile));
+  assert.doesNotThrow(() => isFactAfter(hostile, hostile));
+  const { proxy, revoke } = Proxy.revocable({}, {});
+  revoke();
+  assert.doesNotThrow(() => compareFactCursors(proxy as never, proxy as never));
+  assert.doesNotThrow(() => isFactAfter(proxy as never, proxy as never));
+
+  let reads = 0;
+  const stateful = {
+    stream: 'runtime-facts',
+    get sequence(): number {
+      reads += 1;
+      return 1;
+    },
+  } as unknown as EventCursor;
+  assert.equal(compareFactCursors(stateful, stateful), 0);
+  assert.ok(reads <= 2, `each cursor field read once, got ${reads}`);
+});
+
+test('P04: ephemeral envelope kind cannot be overridden', () => {
+  const event = makeEphemeralEvent({
+    threadId: 't',
+    turnId: 'u',
+    sequence: 0,
+    payload: { x: 1 },
+    kind: 'durable',
+  } as never);
+  assert.equal(event.kind, 'ephemeral');
+});
+
+test('P04: createFactBus tolerates hostile options', () => {
+  const hostile = {
+    get maxQueue(): never {
+      throw new Error('boom');
+    },
+  };
+  assert.doesNotThrow(() => createFactBus(hostile as never));
 });
 
 test('P04: fact cursor is its own address space', () => {

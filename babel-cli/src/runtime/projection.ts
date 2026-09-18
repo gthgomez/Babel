@@ -503,6 +503,9 @@ function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort(codeUnitCompare);
 }
 
+/** Bound the number of facts consumed so an endless iterable cannot run forever. */
+const MAX_FACTS = 100_000;
+
 /**
  * Pure reduction over facts. Validation runs at this boundary; duplicates
  * collapse by fact id (conflicting content degrades), reordering is normalized
@@ -513,9 +516,15 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
   const known: RuntimeFactV1[] = [];
   const optional: RuntimeFactV1[] = [];
   let sawUnknownAuthority = false;
+  let factCount = 0;
 
   try {
     for (const input of facts) {
+      factCount += 1;
+      if (factCount > MAX_FACTS) {
+        state.degradedReasons.push('fact_count_exceeded');
+        break;
+      }
       let classified: Classified;
       try {
         classified = classifyInput(input);

@@ -609,6 +609,20 @@ test('P04: an observation completion cannot replace an authoritative one', () =>
   assert.equal(proj.outcome?.authoritative, true);
 });
 
+test('P04: projectTask bounds the number of facts consumed', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  let produced = 0;
+  function* endless(): Generator<RuntimeFactV1> {
+    while (true) {
+      produced += 1;
+      yield { ...template, id: `f${produced}`, sequence: produced } as RuntimeFactV1;
+    }
+  }
+  const proj = projectTask(endless());
+  assert.ok(proj.degradedReasons.includes('fact_count_exceeded'));
+  assert.ok(produced <= 100_001, `stopped after ${produced} facts`);
+});
+
 test('P04: a stateful authority getter cannot make the projection order-dependent', () => {
   const make = (finalOutcome: string): RuntimeFactV1 => {
     let reads = 0;
