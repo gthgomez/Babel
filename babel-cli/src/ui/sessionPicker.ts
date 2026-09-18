@@ -27,6 +27,7 @@ import {
 } from "./theme.js";
 import { OutputBuffer } from "./outputBuffer.js";
 import { withExclusiveTerminalSurface, drainStdinResiduals } from "./inputCoordinator.js";
+import { notifyShellSurfaceReleased } from "./shell/shellInputRouter.js";
 import { shouldAvoidAltScreen } from "./a11y.js";
 import { fuzzyScore } from "../utils/fuzzy.js";
 import type { ChatSessionInfo } from "../services/chatSessionIndex.js";
@@ -130,6 +131,7 @@ export class SessionPicker {
       return result;
     } finally {
       SessionPicker.activeCount -= 1;
+      notifyShellSurfaceReleased();
     }
   }
 

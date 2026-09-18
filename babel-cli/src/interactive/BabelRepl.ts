@@ -60,11 +60,17 @@ import { selectShellHost } from '../ui/shell/selectShellHost.js';
 import {
   routeShellInput,
   shellInputLeaseActive,
+  onShellSurfaceRelease,
+  notifyShellSurfaceReleased,
   type ShellInputState,
 } from '../ui/shell/shellInputRouter.js';
 import { ShellRuntimeBinding } from '../ui/shell/shellRuntimeBinding.js';
 import { projectShellPresentation } from '../ui/shell/shellPresentation.js';
 import { getActiveRenderer } from '../ui/waterfall.js';
+import {
+  isRendererPresentationSuspended,
+  onRendererPresentationResume,
+} from '../ui/rendererFence.js';
 
 // ─── REPL Class ───────────────────────────────────────────────────────────────
 
@@ -116,6 +122,9 @@ export class BabelRepl {
   private legacyKeypressHandler: ((str: string, key: rl.Key) => void) | null = null;
   private shellExclusiveRunnerCleanup: (() => void) | null = null;
   private legacyExclusiveDepth = 0;
+  private pendingResponsiveResize: { rows: number; cols: number } | null = null;
+  private unregisterResponsiveLeaseRelease: (() => void) | null = null;
+  private unregisterResponsiveRendererResume: (() => void) | null = null;
   private shellInputState: ShellInputState = {
     focus: 'composer',
     leftDrawerOpen: true,
@@ -224,7 +233,10 @@ export class BabelRepl {
         shellInputLeaseActive();
       // A resize may arrive while a picker/editor/pager/approval owns stdin.
       // Defer host transitions until that lease has released.
-      if (foreignSurfaceActive) return;
+      if (foreignSurfaceActive) {
+        this.deferResponsiveResize(rows, cols);
+        return;
+      }
       if (this.shellHost && resizedLayout.mode === 'linear') {
         this.leaveNorthStarShell();
         const activeRenderer = getActiveRenderer() as unknown as {
@@ -268,6 +280,9 @@ export class BabelRepl {
         );
         this.printIdleHeader();
       }
+    });
+    this.unregisterResponsiveLeaseRelease = onShellSurfaceRelease(() => {
+      this.replayResponsiveResize();
     });
   }
 
@@ -637,6 +652,7 @@ export class BabelRepl {
         return await withExclusiveStdin(work, this.rl);
       } finally {
         this.legacyExclusiveDepth = Math.max(0, this.legacyExclusiveDepth - 1);
+        notifyShellSurfaceReleased();
       }
     }
     const adapter = this.rl as unknown as PromptInputAdapter;
@@ -648,6 +664,54 @@ export class BabelRepl {
         resumeInput?.();
       }
     });
+  }
+
+  private deferResponsiveResize(rows: number, cols: number): void {
+    this.pendingResponsiveResize = { rows, cols };
+    if (!this.unregisterResponsiveRendererResume && isRendererPresentationSuspended()) {
+      this.unregisterResponsiveRendererResume = onRendererPresentationResume(() => {
+        this.unregisterResponsiveRendererResume = null;
+        this.replayResponsiveResize();
+      });
+    }
+  }
+
+  private replayResponsiveResize(): void {
+    const pending = this.pendingResponsiveResize;
+    if (!pending) return;
+    if (
+      SessionPicker.isActive() ||
+      this.legacyExclusiveDepth > 0 ||
+      shellInputLeaseActive() ||
+      isRendererPresentationSuspended()
+    ) {
+      return;
+    }
+
+    this.pendingResponsiveResize = null;
+    this.unregisterResponsiveLeaseRelease?.();
+    this.unregisterResponsiveLeaseRelease = null;
+    this.unregisterResponsiveRendererResume?.();
+    this.unregisterResponsiveRendererResume = null;
+
+    const resizedLayout = planShellLayout({ cols: pending.cols, rows: pending.rows });
+    if (this.shellHost && resizedLayout.mode === 'linear') {
+      this.leaveNorthStarShell();
+      const activeRenderer = getActiveRenderer() as unknown as {
+        isRawModeActive?: () => boolean;
+      } | null;
+      if (!this.isRunning || !activeRenderer?.isRawModeActive?.()) {
+        try {
+          this.rl.prompt();
+        } catch {
+          // The terminal may be tearing down.
+        }
+      }
+      return;
+    }
+    if (!this.shellHost && resizedLayout.mode !== 'linear') {
+      this.startNorthStarShell();
+    }
   }
 
   exit(): void {

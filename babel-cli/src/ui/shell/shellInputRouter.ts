@@ -29,6 +29,7 @@ function nextFocus(state: ShellInputState, direction: 1 | -1): ShellFocus {
 }
 
 let activeLeaseCount = 0
+const shellSurfaceReleaseListeners = new Set<() => void>()
 
 /** Acquire one temporary input owner; the returned release is idempotent. */
 export function acquireShellInputLease(): () => void {
@@ -38,6 +39,9 @@ export function acquireShellInputLease(): () => void {
     if (released) return
     released = true
     activeLeaseCount = Math.max(0, activeLeaseCount - 1)
+    if (activeLeaseCount === 0) {
+      for (const listener of shellSurfaceReleaseListeners) listener()
+    }
   }
 }
 
@@ -48,6 +52,17 @@ export function releaseShellInputLease(release?: () => void): void {
 
 export function shellInputLeaseActive(): boolean {
   return activeLeaseCount > 0
+}
+
+/** Observe the point after the outermost foreign shell lease releases. */
+export function onShellSurfaceRelease(listener: () => void): () => void {
+  shellSurfaceReleaseListeners.add(listener)
+  return () => shellSurfaceReleaseListeners.delete(listener)
+}
+
+/** Notify observers after surfaces whose lease is managed elsewhere close. */
+export function notifyShellSurfaceReleased(): void {
+  for (const listener of shellSurfaceReleaseListeners) listener()
 }
 
 /** Route shell navigation keys without stealing composer editing bindings. */

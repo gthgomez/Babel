@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   acquireShellInputLease,
+  onShellSurfaceRelease,
   releaseShellInputLease,
   routeShellInput,
   type ShellInputState,
@@ -49,4 +50,16 @@ test('composer editing keys remain unhandled for PromptInput', () => {
   const result = routeShellInput(key('a'), base)
   assert.equal(result.handled, false)
   assert.deepEqual(result.state, base)
+})
+
+test('notifies responsive hosts after the outermost shell lease releases', () => {
+  let releases = 0
+  const unregister = onShellSurfaceRelease(() => { releases += 1 })
+  const outer = acquireShellInputLease()
+  const inner = acquireShellInputLease()
+  inner()
+  assert.equal(releases, 0)
+  outer()
+  assert.equal(releases, 1)
+  unregister()
 })
