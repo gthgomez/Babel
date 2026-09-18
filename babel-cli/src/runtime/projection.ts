@@ -415,7 +415,7 @@ function snapshotFact(read: EnvelopeRead, payload: FactPayload): RuntimeFactV1 {
 }
 
 /** Classify one untrusted input. May throw only on hostile accessors; callers guard. */
-function classifyInput(input: unknown, totalBudget: CloneBudget): Classified {
+function classifyInput(input: unknown): Classified {
   if (!isRecord(input)) {
     return { kind: 'invalid', reason: 'fact_not_object', authority: 'authoritative' };
   }
@@ -454,7 +454,7 @@ function classifyInput(input: unknown, totalBudget: CloneBudget): Classified {
       return { kind: 'invalid', reason: 'invalid_optional_fact', authority, ...withId };
     }
     const budget: CloneBudget = { nodes: 0 };
-    const cloned = cloneJsonSafe(payloadRaw, new WeakSet(), 0, totalBudget, budget);
+    const cloned = cloneJsonSafe(payloadRaw, new WeakSet(), 0, budget, budget);
     if (!cloned.ok) {
       return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
     }
@@ -469,7 +469,7 @@ function classifyInput(input: unknown, totalBudget: CloneBudget): Classified {
     return { kind: 'invalid', reason: 'inaccessible_envelope', authority, ...withId };
   }
   const budget: CloneBudget = { nodes: 0 };
-  const cloned = cloneJsonSafe(payloadRaw, new WeakSet(), 0, totalBudget, budget);
+  const cloned = cloneJsonSafe(payloadRaw, new WeakSet(), 0, budget, budget);
   if (!cloned.ok) {
     return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
   }
@@ -513,88 +513,8 @@ function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort(codeUnitCompare);
 }
 
-/**
- * Streaming, guarded full-content hash over a raw payload, using the same caps
- * as cloneJsonSafe. Within the accepted domain this is injective, so it breaks
- * (sequence,id) ties by content. Payloads beyond the caps return 'oversized'
- * (and are rejected by classification anyway, deterministically).
- */
-function fullContentHash(value: unknown): string {
-  const hash = createHash('sha256');
-  const path = new WeakSet<object>();
-  let nodes = 0;
-  let overflow = false;
-  const visit = (current: unknown, depth: number): void => {
-    if (overflow) return;
-    nodes += 1;
-    if (nodes > MAX_JSON_NODES || depth > MAX_JSON_DEPTH) {
-      overflow = true;
-      return;
-    }
-    if (current === null) {
-      hash.update('n');
-      return;
-    }
-    if (typeof current === 'string') {
-      hash.update('s');
-      hash.update(current);
-      return;
-    }
-    if (typeof current === 'number') {
-      hash.update('d');
-      hash.update(String(current));
-      return;
-    }
-    if (typeof current === 'boolean') {
-      hash.update('b');
-      hash.update(String(current));
-      return;
-    }
-    if (typeof current !== 'object') {
-      hash.update('x');
-      hash.update(typeof current);
-      return;
-    }
-    if (path.has(current)) {
-      hash.update('cycle');
-      return;
-    }
-    path.add(current);
-    try {
-      if (Array.isArray(current)) {
-        hash.update('[');
-        for (let index = 0; index < current.length && !overflow; index += 1) {
-          visit(current[index], depth + 1);
-        }
-        hash.update(']');
-      } else {
-        const prototype = Object.getPrototypeOf(current);
-        if (prototype !== Object.prototype && prototype !== null) {
-          hash.update('exotic');
-        } else {
-          hash.update('{');
-          for (const key of Object.keys(current as object).sort()) {
-            if (overflow) break;
-            hash.update(key);
-            hash.update(':');
-            visit((current as Record<string, unknown>)[key], depth + 1);
-          }
-          hash.update('}');
-        }
-      }
-    } catch {
-      hash.update('err');
-    } finally {
-      path.delete(current);
-    }
-  };
-  try {
-    visit(value, 0);
-  } catch {
-    return 'error';
-  }
-  return overflow ? 'oversized' : hash.digest('hex');
-}
+/** Hard cap on the number of facts sharing one (sequence,id) key. */
+const MAX_TIE_GROUP = 32;
 
 /** Bound the number of facts consumed so an endless iterable cannot run forever. */
 const MAX_FACTS = 100_000;
@@ -610,10 +530,12 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
   const optional: RuntimeFactV1[] = [];
   let sawUnknownAuthority = false;
 
-  // Read a cheap deterministic key from each raw fact, then classify in that
-  // order under one shared budget. Acceptance therefore depends on content
-  // (sequence, id), never on the caller's input order.
-  const entries: Array<{ input: unknown; seq: number | null; id: string; preKey: string }> = [];
+  // Group raw facts by their deterministic (sequence, id) key, sort the groups
+  // by that key, then classify each group all-or-nothing under one cumulative
+  // node budget. Acceptance and truncation therefore depend only on content,
+  // never on the caller's input order; duplicates within a group resolve later
+  // by the injective content key.
+  const groups = new Map<string, Array<{ input: unknown; seq: number | null; id: string }>>();
   let factCount = 0;
   try {
     for (const input of facts) {
@@ -634,69 +556,77 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
       } catch {
         /* hostile accessor; defaults keep ordering deterministic */
       }
-      entries.push({ input, seq, id, preKey: '' });
+      const key = `${seq === null ? '~' : seq}\u0000${id}`;
+      const bucket = groups.get(key);
+      if (bucket) bucket.push({ input, seq, id });
+      else groups.set(key, [{ input, seq, id }]);
     }
   } catch {
     state.degradedReasons.push('fact_iteration_failed');
   }
 
-  // Only (sequence,id) ties need a content tiebreak; hashing every payload would
-  // be needless work. The hash is full (bounded by the same caps as cloning),
-  // so it is injective within the accepted domain.
-  const keyCounts = new Map<string, number>();
-  for (const entry of entries) {
-    const key = `${entry.seq === null ? '~' : entry.seq}\u0000${entry.id}`;
-    keyCounts.set(key, (keyCounts.get(key) ?? 0) + 1);
-  }
-  for (const entry of entries) {
-    const key = `${entry.seq === null ? '~' : entry.seq}\u0000${entry.id}`;
-    if ((keyCounts.get(key) ?? 0) > 1) {
-      try {
-        const payload = isRecord(entry.input) ? entry.input['payload'] : undefined;
-        entry.preKey = fullContentHash(payload);
-      } catch {
-        entry.preKey = 'error';
-      }
+  const groupList = [...groups.values()];
+  groupList.sort((a, b) => {
+    const left = a[0]!;
+    const right = b[0]!;
+    if (left.seq !== right.seq) {
+      if (left.seq === null) return 1;
+      if (right.seq === null) return -1;
+      return left.seq - right.seq;
     }
-  }
-
-  entries.sort((a, b) => {
-    if (a.seq !== b.seq) {
-      if (a.seq === null) return 1;
-      if (b.seq === null) return -1;
-      return a.seq - b.seq;
-    }
-    return codeUnitCompare(a.id, b.id) || codeUnitCompare(a.preKey, b.preKey);
+    return codeUnitCompare(left.id, right.id);
   });
 
-  const totalBudget: CloneBudget = { nodes: 0 };
-  for (const entry of entries) {
-    let classified: Classified;
-    try {
-      classified = classifyInput(entry.input, totalBudget);
-    } catch {
-      classified = { kind: 'invalid', reason: 'inaccessible_fact', authority: 'authoritative' };
+  let totalNodes = 0;
+  for (const group of groupList) {
+    if (group.length > MAX_TIE_GROUP) {
+      state.degradedReasons.push('tie_group_exceeded');
+      break;
     }
-    switch (classified.kind) {
-      case 'known':
-        known.push(classified.fact);
+    const members: Classified[] = [];
+    let groupNodes = 0;
+    let fits = true;
+    for (const entry of group) {
+      let classified: Classified;
+      try {
+        classified = classifyInput(entry.input);
+      } catch {
+        classified = { kind: 'invalid', reason: 'inaccessible_fact', authority: 'authoritative' };
+      }
+      members.push(classified);
+      if (classified.kind === 'known' || classified.kind === 'unknown_optional') {
+        groupNodes += classified.nodes;
+      }
+      if (totalNodes + groupNodes > MAX_TOTAL_JSON_NODES) {
+        fits = false;
+        state.degradedReasons.push('projection_budget_exceeded');
         break;
-      case 'unknown_authority':
-        sawUnknownAuthority = true;
-        state.degradedReasons.push('unknown_authoritative_fact');
-        if (classified.id !== undefined) state.unknownAuthorityFactIds.push(classified.id);
-        break;
-      case 'unknown_optional':
-        optional.push(classified.fact);
-        break;
-      case 'invalid':
-        state.degradedReasons.push(`invalid_fact:${classified.reason}`);
-        if (classified.authority === 'authoritative') {
+      }
+    }
+    if (!fits) break;
+    totalNodes += groupNodes;
+    for (const classified of members) {
+      switch (classified.kind) {
+        case 'known':
+          known.push(classified.fact);
+          break;
+        case 'unknown_authority':
           sawUnknownAuthority = true;
           state.degradedReasons.push('unknown_authoritative_fact');
           if (classified.id !== undefined) state.unknownAuthorityFactIds.push(classified.id);
-        }
-        break;
+          break;
+        case 'unknown_optional':
+          optional.push(classified.fact);
+          break;
+        case 'invalid':
+          state.degradedReasons.push(`invalid_fact:${classified.reason}`);
+          if (classified.authority === 'authoritative') {
+            sawUnknownAuthority = true;
+            state.degradedReasons.push('unknown_authoritative_fact');
+            if (classified.id !== undefined) state.unknownAuthorityFactIds.push(classified.id);
+          }
+          break;
+      }
     }
   }
 
