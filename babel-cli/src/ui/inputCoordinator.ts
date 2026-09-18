@@ -9,6 +9,7 @@ import { OutputBuffer } from './outputBuffer.js';
 import { getTerminalTransport } from './observe/terminalTransport.js';
 import { DEC_2026_END } from './terminalEscapeSequences.js';
 import { acquireShellInputLease } from './shell/shellInputRouter.js';
+import { suspendActiveRendererForExclusiveSurface } from './rendererFence.js';
 import {
   initialInputArbiterState,
   reduceInputArbiter,
@@ -246,8 +247,13 @@ export async function withExclusiveStdin<T>(
   fn: () => Promise<T>,
   rl: Interface | null = registeredReadline,
 ): Promise<T> {
+  const releaseRendererFence = suspendActiveRendererForExclusiveSurface();
   if (!rl) {
-    return fn();
+    try {
+      return await fn();
+    } finally {
+      releaseRendererFence();
+    }
   }
 
   stdinCoordinatorPauseForRun(rl);
@@ -258,6 +264,7 @@ export async function withExclusiveStdin<T>(
     return await fn();
   } finally {
     restoreInput();
+    releaseRendererFence();
     releaseShellLease();
     stdinCoordinatorResumeAfterRun(rl);
   }

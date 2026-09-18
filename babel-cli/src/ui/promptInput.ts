@@ -1976,7 +1976,8 @@ export class PromptInput {
     // Keep the hosted composer live while a turn is already running so the
     // user can type a follow-up and Tab-queue it. Idle submissions still
     // release the editor exactly as before.
-    const keepActiveForQueue = this.config.isTaskRunning?.() === true;
+    const keepActiveForQueue =
+      this.presentationTarget !== null || this.config.isTaskRunning?.() === true;
     if (keepActiveForQueue) {
       this.clear();
       this.render();

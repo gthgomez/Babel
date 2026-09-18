@@ -794,7 +794,7 @@ describe('PromptInput', () => {
   describe('queue-while-busy (C2)', () => {
     it('keeps the hosted composer active after a running-turn submission', () => {
       const queued: string[] = [];
-      let running = true;
+      let running = false;
       const input = createTestInput({
         isTaskRunning: () => running,
         onSubmit: () => {},
@@ -803,12 +803,17 @@ describe('PromptInput', () => {
           return true;
         },
       });
+      input.setPresentationTarget({
+        getRect: () => ({ x: 0, y: 0, width: 24, height: 3 }),
+        invalidate: () => {},
+      });
 
       type(input, 'first follow up');
       input.handleKey(key('enter'));
       assert.equal(input.getState().active, true);
       assert.equal(input.getState().text, '');
 
+      running = true;
       type(input, 'second follow up');
       input.handleKey(key('tab'));
       assert.deepEqual(queued, ['second follow up']);

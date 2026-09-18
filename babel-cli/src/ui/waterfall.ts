@@ -67,6 +67,10 @@ import {
 } from './toolPresentation.js';
 import { renderSubAgentOverlay, type SubAgentOverlayEntry } from './subAgentOverlay.js';
 import { recordLiveActivity } from './liveActivity.js';
+import {
+  isRendererPresentationSuspended,
+  registerRendererFenceTarget,
+} from './rendererFence.js';
 
 const SPINNER_FRAMES: readonly string[] = ['◐', '◓', '◑', '◒'];
 const FRAME_INTERVAL_MS = 200; // 5 FPS spinner tick
@@ -82,8 +86,6 @@ const FRAME_INTERVAL_MS = 200; // 5 FPS spinner tick
  * (e.g., from a render() method), the frame is silently merged into the
  * outer frame by OutputBuffer.
  */
-let rendererPresentationSuspendedDepth = 0;
-
 function safeStdoutWrite(text: string): boolean {
   const buf = OutputBuffer.getInstance();
   if (!buf.canWrite) return false;
@@ -91,7 +93,7 @@ function safeStdoutWrite(text: string): boolean {
   // palettes) own the terminal while they are active. Runtime event handlers
   // may continue updating renderer state, but their direct presentation must
   // not race the exclusive surface's output.
-  if (rendererPresentationSuspendedDepth > 0) return true;
+  if (isRendererPresentationSuspended()) return true;
   const openedFrame = !buf.inFrame && buf.syncUpdateSupported;
   if (openedFrame) buf.beginFrame();
   try {
@@ -126,10 +128,6 @@ export function getActiveRenderer(): BaseRenderer | null {
  * Apply the shared exclusive-terminal fence to the currently active run
  * renderer. The returned release is idempotent and supports nested callers.
  */
-export function suspendActiveRendererForExclusiveSurface(): () => void {
-  return activeRendererInstance?.suspendForExclusiveSurface() ?? (() => {});
-}
-
 // ── Interfaces ───────────────────────────────────────────────────────────────
 
 interface EventBus {
@@ -175,9 +173,11 @@ class BaseRenderer {
   protected _onBrokenPipe: () => void;
   private exclusiveSurfaceDepth = 0;
   private exclusiveSurfaceRawModeWasActive = false;
+  private unregisterRendererFence: (() => void) | null = null;
 
   constructor() {
     activeRendererInstance = this;
+    this.unregisterRendererFence = registerRendererFenceTarget(this);
     this.outputBroken = false;
     this._onBrokenPipe = () => {}; // no-op, overridden by subclasses
     this.removeStdoutErrorGuard = installStdoutErrorGuard(() => {
@@ -210,7 +210,6 @@ class BaseRenderer {
   suspendForExclusiveSurface(): () => void {
     this.exclusiveSurfaceDepth += 1;
     if (this.exclusiveSurfaceDepth === 1) {
-      rendererPresentationSuspendedDepth += 1;
       this.pauseTicks();
       this.exclusiveSurfaceRawModeWasActive = this.isRawModeActive();
       if (this.exclusiveSurfaceRawModeWasActive) this.disableRawMode();
@@ -223,7 +222,6 @@ class BaseRenderer {
       this.exclusiveSurfaceDepth = Math.max(0, this.exclusiveSurfaceDepth - 1);
       if (this.exclusiveSurfaceDepth !== 0) return;
 
-      rendererPresentationSuspendedDepth = Math.max(0, rendererPresentationSuspendedDepth - 1);
       this.resumeTicks();
       if (this.exclusiveSurfaceRawModeWasActive) this.enableRawMode();
       this.exclusiveSurfaceRawModeWasActive = false;
@@ -236,6 +234,9 @@ class BaseRenderer {
 
   destroy(): void {
     this.removeStdoutErrorGuard?.();
+    this.unregisterRendererFence?.();
+    this.unregisterRendererFence = null;
+    if (activeRendererInstance === this) activeRendererInstance = null;
   }
 
   // note: the _pausedTicks field below is read by overrides in subclasses
@@ -1801,6 +1802,13 @@ export class ConversationalRenderer extends BaseRenderer {
 
   override isRawModeActive(): boolean {
     return this._rawMode.isActive;
+  }
+
+  override resumeTicks(): void {
+    super.resumeTicks();
+    if (this._twoRegion?.isHardwareMode) {
+      this._twoRegion.replaceStreamingContent(this._mdAccumulator.getRenderedText());
+    }
   }
 
   setScrollback(buffer: ScrollbackBuffer): void {

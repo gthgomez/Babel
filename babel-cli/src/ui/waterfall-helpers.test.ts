@@ -7,8 +7,8 @@ import {
   AppendOnlyRenderer,
   WaterfallRenderer,
   ConversationalRenderer,
-  suspendActiveRendererForExclusiveSurface,
 } from './waterfall.js';
+import { suspendActiveRendererForExclusiveSurface } from './rendererFence.js';
 
 // Direct imports of exported helper functions (no more reference duplicates).
 import {

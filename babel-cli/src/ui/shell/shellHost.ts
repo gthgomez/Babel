@@ -1,6 +1,6 @@
 import { FrameScheduler } from '../frameScheduler.js'
 import { OutputBuffer } from '../outputBuffer.js'
-import { suspendActiveRendererForExclusiveSurface } from '../waterfall.js'
+import { suspendActiveRendererForExclusiveSurface } from '../rendererFence.js'
 import { createShellFrameRenderer, type ShellFrameRenderer } from './shellFrameRenderer.js'
 import { acquireShellInputLease } from './shellInputRouter.js'
 import type { ShellFrameInput, ShellOutputPort } from './shellTypes.js'

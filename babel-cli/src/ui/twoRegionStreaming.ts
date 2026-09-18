@@ -36,6 +36,7 @@
  */
 
 import { OutputBuffer } from './outputBuffer.js';
+import { isRendererPresentationSuspended } from './rendererFence.js';
 import { probeTerminalCapabilities } from './terminalProbe.js';
 import { wrapText } from './theme.js';
 
@@ -178,6 +179,9 @@ export class TwoRegionStreaming {
    * lines already written to scrollback (that caused full-answer reprints).
    */
   private _syncOverflowAndRender(): void {
+    // Keep the logical line buffer current while a foreign surface owns the
+    // terminal. Repaint/graduation resumes from this state after release.
+    if (isRendererPresentationSuspended()) return;
     const targetGraduated = Math.max(0, this.lines.length - this.streamingRows);
 
     // Grow graduation monotonically — never re-write already graduated lines.
@@ -210,6 +214,7 @@ export class TwoRegionStreaming {
 
     if (this.fallbackMode) {
       // Fallback: write directly — caller handles cursor-up positioning.
+      if (isRendererPresentationSuspended()) return;
       this.buf.write(text);
       return;
     }
