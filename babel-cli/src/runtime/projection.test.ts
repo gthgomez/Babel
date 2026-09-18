@@ -293,3 +293,64 @@ test('P04: adapter is total for non-semantic kinds', () => {
     [],
   );
 });
+
+test('P04: distinct unknown-authority facts are order-independent', () => {
+  const facts = sessionLogToFacts(corpus());
+  const ua = (id: string, sequence: number): RuntimeFactV1 =>
+    ({
+      ...facts[0]!,
+      id,
+      sequence,
+      cursor: { stream: 'runtime-facts', sequence },
+      schemaVersion: 2,
+      authority: 'authoritative',
+      payload: { type: 'future.authority' },
+    }) as unknown as RuntimeFactV1;
+  const forward = projectTask([...facts, ua('ua1', 10), ua('ua2', 11)]);
+  const reverse = projectTask([...facts, ua('ua2', 11), ua('ua1', 10)]);
+  assert.deepEqual(forward, reverse);
+  assert.deepEqual(forward.unknownAuthorityFactIds, ['ua1', 'ua2']);
+});
+
+test('P04: duplicate id with differing envelope authority is deterministic', () => {
+  const facts = sessionLogToFacts(corpus());
+  const completion = facts.find((f) => f.payload.type === 'completion.decided')!;
+  const authoritative: RuntimeFactV1 = { ...completion, authority: 'authoritative' };
+  const observation: RuntimeFactV1 = { ...completion, authority: 'observation' };
+  const forward = projectTask([authoritative, observation]);
+  const reverse = projectTask([observation, authoritative]);
+  assert.deepEqual(forward, reverse);
+  assert.equal(forward.outcome?.authoritative, true, 'order-first (authoritative) wins deterministically');
+  assert.ok(forward.degradedReasons.includes('conflicting_duplicate_fact'));
+});
+
+test('P04: non-serializable payload degrades without throwing', () => {
+  const base = sessionLogToFacts(corpus())[0]!;
+  const payload: Record<string, unknown> = {
+    type: 'completion.decided',
+    decision: {
+      requestedOutcome: 'x',
+      finalOutcome: 'VERIFIED_COMPLETE',
+      allowed: true,
+      reason: 'r',
+      evidenceRefs: [],
+      policyVersion: 'v1',
+    },
+  };
+  payload['self'] = payload; // cyclic payload
+  const cyclic = { ...base, id: 'cyclic', payload } as unknown as RuntimeFactV1;
+  const proj = projectTask([cyclic]);
+  assert.equal(proj.outcome, null);
+  assert.equal(proj.degraded, true);
+  assert.ok(proj.degradedReasons.some((reason) => reason.includes('unserializable_payload')));
+});
+
+test('P04: an observation run.settled terminal does not regress', () => {
+  const proj = projectTaskFromSessionEvents([
+    ev(1, { kind: 'user_submitted', task_preview: 'do it' }),
+    ev(2, { kind: 'turn_ended', outcome: 'CANCELLED', status: 'cancelled' }),
+    ev(3, { kind: 'verifier_attempt', command_preview: 'npm test', authoritative: true, exit_code: 0 }),
+  ]);
+  assert.equal(proj.phase, 'terminal');
+  assert.equal(proj.outcome?.authoritative, false);
+});

@@ -7,10 +7,14 @@
  * whose envelope authority is `authoritative` may set an authoritative outcome;
  * `run.settled`/`turn_ended` stay observations.
  *
- * Determinism: facts are normalized by cursor sequence and id before reducing,
- * so duplicate/reordered input yields the same projection. Unknown
- * authority-bearing schema fails closed and demotes every authority claim
- * (outcome and verifier), not only the outcome.
+ * Determinism: facts are normalized by a total order over the whole envelope
+ * (sequence, id, authority, identity, payload) before reducing, so any input
+ * ordering of duplicates/reordered facts yields a deep-equal projection,
+ * including the degraded/unknown id arrays.
+ *
+ * Fail closed: unknown authority-bearing schema or a novel/absent authority
+ * token degrades the projection and demotes every authority claim (outcome and
+ * verifier). Malformed or non-serializable payloads degrade instead of throwing.
  *
  * View/UI projection remains separate. This module must not import `ui/` or
  * `interactive/` (enforced by `dependencyBoundary.test.ts`).
@@ -100,6 +104,69 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/**
+ * JSON serialization that cannot throw. `null` means the value is not a safe
+ * canonical fact payload (cyclic, BigInt, function, throwing `toJSON`, ...).
+ */
+function stableSerialize(value: unknown): string | null {
+  let malformed = false;
+  try {
+    const seen = new WeakSet<object>();
+    const json = JSON.stringify(value, (_key, entry) => {
+      if (typeof entry === 'bigint' || typeof entry === 'function') {
+        malformed = true;
+        return '[unserializable]';
+      }
+      if (typeof entry === 'object' && entry !== null) {
+        if (seen.has(entry)) {
+          malformed = true;
+          return '[circular]';
+        }
+        seen.add(entry);
+      }
+      return entry;
+    });
+    if (typeof json !== 'string' || malformed) return null;
+    return json;
+  } catch {
+    return null;
+  }
+}
+
+function codeUnitCompare(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+/**
+ * Total order key over the whole fact envelope plus payload. Two facts share a
+ * key only when every compared field is identical, so dedupe/order are
+ * independent of input order.
+ */
+function factOrderKey(fact: RuntimeFactV1): string {
+  return [
+    fact.sequence,
+    fact.id,
+    fact.authority,
+    fact.producer,
+    fact.threadId,
+    fact.taskId,
+    fact.turnId,
+    fact.runId,
+    fact.causationId,
+    fact.timestamp,
+    fact.cursor.stream,
+    fact.cursor.sequence,
+    stableSerialize(fact.payload) ?? '[unserializable]',
+  ].join('\u0000');
+}
+
+function orderedCompare(a: RuntimeFactV1, b: RuntimeFactV1): number {
+  const bySequence = a.sequence - b.sequence;
+  if (bySequence !== 0) return bySequence;
+  return codeUnitCompare(factOrderKey(a), factOrderKey(b));
+}
+
 function emptyProjection(): TaskProjection {
   return {
     schemaVersion: RUNTIME_FACT_PROJECTION_VERSION,
@@ -123,24 +190,6 @@ function emptyProjection(): TaskProjection {
   };
 }
 
-function codeUnitCompare(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
-}
-
-function payloadKey(fact: RuntimeFactV1): string {
-  return JSON.stringify(fact.payload);
-}
-
-/** Total order over facts independent of input order. */
-function orderedCompare(a: RuntimeFactV1, b: RuntimeFactV1): number {
-  return (
-    a.sequence - b.sequence ||
-    codeUnitCompare(a.id, b.id) ||
-    codeUnitCompare(payloadKey(a), payloadKey(b))
-  );
-}
-
 type Classified =
   | { kind: 'known'; fact: RuntimeFactV1 }
   | { kind: 'unknown_authority'; id?: string }
@@ -151,44 +200,70 @@ function classifyInput(input: unknown): Classified {
   if (!isRecord(input)) {
     return { kind: 'invalid', reason: 'fact_not_object', authority: 'authoritative' };
   }
-  const authority: FactAuthority =
-    input['authority'] === 'authoritative' ? 'authoritative' : 'observation';
+  const authorityRaw = input['authority'];
+  const authorityKnown = authorityRaw === 'authoritative' || authorityRaw === 'observation';
+  // A novel/absent authority token is treated as authority-bearing (fail closed).
+  const authority: FactAuthority = authorityRaw === 'observation' ? 'observation' : 'authoritative';
   const id = typeof input['id'] === 'string' ? input['id'] : undefined;
+  const withId = id !== undefined ? { id } : {};
   const schemaKnown = input['schemaVersion'] === RUNTIME_FACT_SCHEMA_VERSION;
   const payload = input['payload'];
   const type = isRecord(payload) && typeof payload['type'] === 'string' ? payload['type'] : undefined;
   const typeKnown = type !== undefined && KNOWN_FACT_TYPES.has(type as never);
 
   if (!schemaKnown || !typeKnown) {
-    if (authority === 'authoritative') {
-      return { kind: 'unknown_authority', ...(id !== undefined ? { id } : {}) };
+    if (!authorityKnown || authority === 'authoritative') {
+      return { kind: 'unknown_authority', ...withId };
     }
-    if (id !== undefined) {
-      return { kind: 'unknown_optional', fact: input as unknown as RuntimeFactV1 };
+    if (!isRecord(payload)) {
+      return { kind: 'invalid', reason: 'invalid_payload', authority, ...withId };
     }
-    return {
-      kind: 'invalid',
-      reason: typeKnown ? 'invalid_fact_identity' : 'unknown_fact_type',
-      authority,
-    };
+    if (stableSerialize(payload) === null) {
+      return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
+    }
+    return { kind: 'unknown_optional', fact: input as unknown as RuntimeFactV1 };
   }
 
   const validation = validateRuntimeFact(input);
   if (!validation.ok) {
-    return {
-      kind: 'invalid',
-      reason: validation.reason,
-      authority,
-      ...(id !== undefined ? { id } : {}),
-    };
+    return { kind: 'invalid', reason: validation.reason, authority, ...withId };
+  }
+  if (stableSerialize(validation.fact.payload) === null) {
+    return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
   }
   return { kind: 'known', fact: validation.fact };
 }
 
 /**
+ * Collapse facts by id in a stable order. A later fact with the same id but a
+ * different full envelope is corruption: it degrades the projection and is
+ * dropped deterministically (the order-first fact wins).
+ */
+function dedupeByFactId(facts: RuntimeFactV1[], state: TaskProjection): RuntimeFactV1[] {
+  const byId = new Map<string, RuntimeFactV1>();
+  const keyById = new Map<string, string>();
+  for (const fact of [...facts].sort(orderedCompare)) {
+    const key = factOrderKey(fact);
+    const prior = keyById.get(fact.id);
+    if (prior === undefined) {
+      byId.set(fact.id, fact);
+      keyById.set(fact.id, key);
+    } else if (prior !== key) {
+      state.degraded = true;
+      state.degradedReasons.push('conflicting_duplicate_fact');
+    }
+  }
+  return [...byId.values()];
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values)].sort(codeUnitCompare);
+}
+
+/**
  * Pure reduction over facts. Validation runs at this boundary; duplicates
  * collapse by fact id (conflicting content degrades), reordering is normalized
- * by a total order, gaps degrade, and unknown authority schema fails closed.
+ * by a total order, gaps degrade, and unknown authority fails closed.
  */
 export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
   const state = emptyProjection();
@@ -202,7 +277,6 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
         known.push(classified.fact);
         break;
       case 'unknown_authority':
-        state.degraded = true;
         state.degradedReasons.push('unknown_authoritative_fact');
         if (classified.id !== undefined) state.unknownAuthorityFactIds.push(classified.id);
         break;
@@ -210,7 +284,6 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
         optional.push(classified.fact);
         break;
       case 'invalid':
-        state.degraded = true;
         state.degradedReasons.push(`invalid_fact:${classified.reason}`);
         if (classified.authority === 'authoritative') {
           state.degradedReasons.push('unknown_authoritative_fact');
@@ -232,12 +305,10 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
 
   for (const fact of orderedKnown) {
     if (previousSequence !== null && fact.sequence > previousSequence + 1) {
-      state.degraded = true;
       state.degradedReasons.push('sequence_gap');
     }
     previousSequence = Math.max(previousSequence ?? fact.sequence, fact.sequence);
 
-    state.evidenceFactIds.push(fact.id);
     if (state.lastCursor === null || compareFactCursors(fact.cursor, state.lastCursor) > 0) {
       state.lastCursor = fact.cursor;
     }
@@ -268,7 +339,8 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
         state.execution.state = 'settled';
         // Observation only: never overwrite an authoritative completion.
         if (state.outcome === null || !state.outcome.authoritative) {
-          setPhase('terminal');
+          terminalObserved = true;
+          state.phase = 'terminal';
           state.outcome = {
             outcome: (payload.status as TerminalOutcome | 'PLAN_COMPLETE' | 'UNKNOWN') ?? 'UNKNOWN',
             status: payload.status,
@@ -307,7 +379,6 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
         state.compactionCount += 1;
         break;
       case 'context.degraded':
-        state.degraded = true;
         state.degradedReasons.push(`context_degraded:${payload.reason}`);
         break;
       case 'verification.recorded':
@@ -317,8 +388,8 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
         state.verifier.lastReceiptId = payload.receiptId;
         break;
       case 'completion.decided':
-        state.phase = 'terminal';
         terminalObserved = true;
+        state.phase = 'terminal';
         state.execution.state = 'settled';
         state.outcome = {
           outcome: payload.decision.finalOutcome as TerminalOutcome | 'PLAN_COMPLETE' | 'UNKNOWN',
@@ -334,10 +405,17 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
     }
   }
 
-  // Evidence chain includes preserved unknown optional facts, in the same
-  // deterministic order as known facts.
-  const evidence = [...orderedKnown, ...orderedOptional].sort(orderedCompare);
-  state.evidenceFactIds = evidence.map((fact) => fact.id);
+  // Evidence chain: merged known + preserved unknown-optional, deduped by id in
+  // the same deterministic order as the reduction.
+  const evidenceIds: string[] = [];
+  const seenEvidence = new Set<string>();
+  for (const fact of [...orderedKnown, ...orderedOptional].sort(orderedCompare)) {
+    if (!seenEvidence.has(fact.id)) {
+      seenEvidence.add(fact.id);
+      evidenceIds.push(fact.id);
+    }
+  }
+  state.evidenceFactIds = evidenceIds;
 
   // Unsettled operations become interruptions, never successes (H2/H11).
   for (const key of open) {
@@ -359,29 +437,11 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
     state.verifier = { ...state.verifier, authoritative: false };
   }
 
-  state.degradedReasons = [...new Set(state.degradedReasons)];
-  state.unknownAuthorityFactIds = [...new Set(state.unknownAuthorityFactIds)];
+  state.degraded = state.degradedReasons.length > 0;
+  state.degradedReasons = uniqueSorted(state.degradedReasons);
+  state.unknownAuthorityFactIds = uniqueSorted(state.unknownAuthorityFactIds);
+  state.unknownOptionalFactIds = uniqueSorted(state.unknownOptionalFactIds);
   return state;
-}
-
-/**
- * Collapse facts by id in a stable order. A later fact with the same id but a
- * different payload is corruption: it degrades the projection and is dropped.
- */
-function dedupeByFactId(facts: RuntimeFactV1[], state: TaskProjection): RuntimeFactV1[] {
-  const byId = new Map<string, RuntimeFactV1>();
-  const payloadById = new Map<string, string>();
-  for (const fact of [...facts].sort(orderedCompare)) {
-    const prior = payloadById.get(fact.id);
-    if (prior === undefined) {
-      byId.set(fact.id, fact);
-      payloadById.set(fact.id, payloadKey(fact));
-    } else if (prior !== payloadKey(fact)) {
-      state.degraded = true;
-      state.degradedReasons.push('conflicting_duplicate_fact');
-    }
-  }
-  return [...byId.values()];
 }
 
 /** Convenience: adapt durable session events and project them in one step. */
