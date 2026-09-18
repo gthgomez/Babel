@@ -381,6 +381,22 @@ test('P04: hostile envelope accessors do not throw and fail closed', () => {
   assert.ok(proj.degradedReasons.some((reason) => reason.includes('inaccessible_fact')));
 });
 
+test('P04: unknown optional fact with hostile envelope getter does not throw', () => {
+  const facts = sessionLogToFacts(corpus());
+  const hostile = {
+    schemaVersion: 2,
+    id: 'hostile-opt',
+    authority: 'observation',
+    payload: { type: 'future.optional' },
+    get threadId(): never {
+      throw new Error('boom');
+    },
+  } as unknown as RuntimeFactV1;
+  const proj = projectTask([...facts, hostile]);
+  assert.ok(proj.degradedReasons.some((reason) => reason.includes('inaccessible_envelope')));
+  assert.equal(proj.outcome?.authoritative, true, 'an observation invalid must not demote authority');
+});
+
 test('P04: JSON-collapsing duplicate pair is order-independent', () => {
   const template = sessionLogToFacts(corpus())[0]!;
   const a = {

@@ -188,26 +188,54 @@ function canonicalize(value: unknown, path: WeakSet<object>): CanonicalResult {
 
 /** SHA-256 over the canonical encoding of the whole envelope+payload. */
 function contentKey(fact: RuntimeFactV1): string {
-  const canonical = canonicalize(
-    [
-      fact.sequence,
-      fact.id,
-      fact.authority,
-      fact.producer,
-      fact.threadId,
-      fact.taskId,
-      fact.turnId,
-      fact.runId,
-      fact.causationId,
-      fact.timestamp,
-      fact.cursor.stream,
-      fact.cursor.sequence,
-      fact.payload,
-    ],
-    new WeakSet(),
-  );
-  const encoded = canonical.ok ? JSON.stringify(canonical.value) : `malformed:${fact.id}`;
-  return createHash('sha256').update(encoded).digest('hex');
+  try {
+    const canonical = canonicalize(
+      [
+        fact.sequence,
+        fact.id,
+        fact.authority,
+        fact.producer,
+        fact.threadId,
+        fact.taskId,
+        fact.turnId,
+        fact.runId,
+        fact.causationId,
+        fact.timestamp,
+        fact.cursor.stream,
+        fact.cursor.sequence,
+        fact.payload,
+      ],
+      new WeakSet(),
+    );
+    const encoded = canonical.ok ? JSON.stringify(canonical.value) : 'malformed';
+    return createHash('sha256').update(encoded).digest('hex');
+  } catch {
+    // Only reachable for a fact whose envelope accessors throw after
+    // classification; such facts are rejected earlier, so this is a guard.
+    return 'inaccessible';
+  }
+}
+
+/** Read every envelope field once so a hostile accessor fails classification. */
+function hasAccessibleEnvelope(input: Record<string, unknown>): boolean {
+  try {
+    const cursor = input['cursor'];
+    return (
+      typeof input['threadId'] === 'string' &&
+      typeof input['taskId'] === 'string' &&
+      typeof input['turnId'] === 'string' &&
+      typeof input['runId'] === 'string' &&
+      typeof input['causationId'] === 'string' &&
+      typeof input['timestamp'] === 'string' &&
+      typeof input['producer'] === 'string' &&
+      typeof input['sequence'] === 'number' &&
+      isRecord(cursor) &&
+      typeof cursor['stream'] === 'string' &&
+      typeof cursor['sequence'] === 'number'
+    );
+  } catch {
+    return false;
+  }
 }
 
 function orderedCompare(a: RuntimeFactV1, b: RuntimeFactV1): number {
@@ -265,8 +293,14 @@ function classifyInput(input: unknown): Classified {
     if (!authorityKnown || authority === 'authoritative') {
       return { kind: 'unknown_authority', ...withId };
     }
-    if (!isRecord(payload) || id === undefined || !canonicalize(payload, new WeakSet()).ok) {
+    if (!hasAccessibleEnvelope(input)) {
+      return { kind: 'invalid', reason: 'inaccessible_envelope', authority, ...withId };
+    }
+    if (!isRecord(payload) || id === undefined) {
       return { kind: 'invalid', reason: 'invalid_optional_fact', authority, ...withId };
+    }
+    if (!canonicalize(payload, new WeakSet()).ok) {
+      return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
     }
     return { kind: 'unknown_optional', fact: input as unknown as RuntimeFactV1 };
   }
