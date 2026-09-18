@@ -59,13 +59,14 @@ export async function executeTask(
             source: 'current_repo' as const,
           }
         : currentTarget;
-    ctx.appendTurn({
+    const userTurn = ctx.appendTurn({
       role: 'user',
       input,
       resolved_task: resolvedTask,
       target_root: target.targetRoot,
       workspace_root: target.workspaceRoot,
     });
+    ctx.beginShellTurn?.(userTurn.turn_id, input);
     // Load session identity once per project root (AGENTS.md, CLAUDE.md,
     // ENGINEERING.md, PROJECT_CONTEXT.md + cached repo map). This gives the
     // agent immediate awareness of who it is, where it is, and how to work.

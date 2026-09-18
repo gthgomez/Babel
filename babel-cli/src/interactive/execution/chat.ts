@@ -209,6 +209,7 @@ export async function executeChatTask(
 
       ...(preflightContext ? { preflightContext } : {}),
       onCancel: () => ctx.chatEngine!.abortTurn(),
+      ...(ctx.shellRuntime ? { onChatEvent: (event) => ctx.shellRuntime?.onChatEvent(event) } : {}),
     });
 
     // U1.3: Surface last routing receipt label on status bar (model tier + phase)

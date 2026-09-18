@@ -54,6 +54,7 @@ import { buildShellFrameInput } from '../ui/shell/shellPanels.js';
 import { createShellHost, type ShellHost } from '../ui/shell/shellHost.js';
 import { selectShellHost } from '../ui/shell/selectShellHost.js';
 import { routeShellInput, type ShellInputState } from '../ui/shell/shellInputRouter.js';
+import { ShellRuntimeBinding } from '../ui/shell/shellRuntimeBinding.js';
 
 // ─── REPL Class ───────────────────────────────────────────────────────────────
 
@@ -93,6 +94,12 @@ export class BabelRepl {
   lastRoutingLabel: string | null = null;
   voiceManager: VoiceStreamManager | null = null;
   shellHost: ShellHost | undefined;
+  shellRuntime: ShellRuntimeBinding | undefined;
+  activeContext?: {
+    tokens: number;
+    modelId: string;
+    source: 'provider_prompt_tokens' | 'estimated' | 'unknown';
+  } | null;
   private shellKeyCleanup: (() => void) | null = null;
   private shellInputState: ShellInputState = {
     focus: 'composer',
@@ -191,6 +198,20 @@ export class BabelRepl {
       const rows = process.stdout.rows || 24;
       const cols = process.stdout.columns || 80;
       PaneManager.instance.onTerminalResize(rows, cols);
+      const resizedLayout = planShellLayout({ cols, rows });
+      if (this.shellHost && resizedLayout.mode === 'linear') {
+        this.leaveNorthStarShell();
+        try {
+          this.rl.prompt();
+        } catch {
+          // The terminal may be tearing down; preserve the original resize path.
+        }
+        return;
+      }
+      if (!this.shellHost && resizedLayout.mode !== 'linear') {
+        this.startNorthStarShell();
+        if (this.shellHost) return;
+      }
       // Skip idle header while a task is running OR the resume picker owns the TTY.
       // isRunning alone is wrong here: during bootstrap/picker it is always false,
       // so Windows Terminal init resize events would inject the BABEL banner mid-picker.
@@ -246,7 +267,16 @@ export class BabelRepl {
       return;
     }
 
-    let host: ShellHost;
+    let host: ShellHost | undefined;
+    const threadId = this.chatEngine?.getEngineRunId();
+    this.shellRuntime = new ShellRuntimeBinding({
+      ...(threadId !== undefined ? { threadId } : {}),
+      width: Math.max(1, OutputBuffer.getTerminalSize().cols),
+      onChange: () => {
+        host?.invalidate('runtime-event');
+      },
+    });
+    this.shellRuntime.hydrateTurns(this.turns, threadId);
     const frameSource = () => {
       const dimensions = OutputBuffer.getTerminalSize();
       const layout = planShellLayout(dimensions);
@@ -257,19 +287,29 @@ export class BabelRepl {
         height: 3,
       };
       const prompt = adapter.getView(promptRect);
-      const conversation = this.turns
-        .slice(-12)
-        .flatMap((turn) => {
-          const prefix = turn.role === 'user' ? '› ' : '  ';
-          const text = turn.role === 'user' ? turn.input ?? turn.resolved_task ?? '' : turn.answer ?? turn.summary ?? '';
-          return text ? text.split('\n').map((line) => `${prefix}${line}`) : [];
-        });
+      const conversation = this.shellRuntime
+        ? this.shellRuntime.getVisibleRows(
+            Math.max(1, layout.conversationText?.width ?? layout.center?.width ?? 1),
+            Math.max(0, layout.conversationText?.height ?? layout.conversation?.height ?? 0),
+          )
+        : [];
+      const runtime = this.shellRuntime?.getSnapshot();
       return buildShellFrameInput(layout, {
         mode: this.state.mode,
         model: this.state.resolvedModelId ?? this.state.model ?? 'auto',
         project: this.state.project ?? 'global',
         conversation,
-        status: [this.state.lastRunUserStatus ?? (this.isRunning ? 'Running' : 'Ready')],
+        sessions: [runtime?.threadId ? `● ${runtime.threadId}` : 'Not loaded'],
+        projectRows: [this.resolveCurrentTarget().targetRoot],
+        context: [
+          this.activeContext
+            ? `${this.activeContext.tokens} tokens · ${this.activeContext.source}`
+            : 'Unknown until request resolution',
+        ],
+        status: [
+          `Activity: ${runtime?.activity ?? (this.isRunning ? 'running' : 'idle')}`,
+          `Last outcome: ${runtime?.lastOutcome ?? this.state.lastRunUserStatus ?? 'unknown'}`,
+        ],
         ...(prompt ? { prompt } : {}),
       });
     };
@@ -285,7 +325,7 @@ export class BabelRepl {
           height: 3,
         };
       },
-      invalidate: (reason) => host.invalidate(reason),
+      invalidate: (reason) => host?.invalidate(reason),
     });
     this.shellHost = host;
     this.shellKeyCleanup = installKeyHandler(process.stdin, (event: KeyEvent) => {
@@ -295,11 +335,23 @@ export class BabelRepl {
         void this.openCommandPalette().catch(() => {});
       }
       if (routed.action === 'focus-changed' || routed.action === 'close-overlay') {
-        host.invalidate(routed.action);
+        host?.invalidate(routed.action);
       }
-      if (!routed.handled) adapter.processKey(event);
+      if (!routed.handled && routed.state.focus === 'composer') adapter.processKey(event);
     });
     host.mount();
+  }
+
+  private leaveNorthStarShell(): void {
+    const adapter = this.rl as unknown as PromptInputAdapter & {
+      setPresentationTarget?: (target: null) => void;
+    };
+    adapter.setPresentationTarget?.(null);
+    this.shellKeyCleanup?.();
+    this.shellKeyCleanup = null;
+    this.shellHost?.dispose();
+    this.shellHost = undefined;
+    this.shellRuntime = undefined;
   }
 
   // ── Session Persistence ──────────────────────────────────────────────────
@@ -336,7 +388,15 @@ export class BabelRepl {
   // ── Turn tracking ────────────────────────────────────────────────────────
 
   appendTurn(turn: Omit<InteractiveTurn, 'schema_version' | 'turn_id' | 'ts'>): InteractiveTurn {
-    return Turn.appendTurn(this, turn);
+    const record = Turn.appendTurn(this, turn);
+    if (record.role === 'assistant') {
+      this.shellRuntime?.observeInteractiveTurn(record);
+    }
+    return record;
+  }
+
+  beginShellTurn(turnId: number, input: string): void {
+    this.shellRuntime?.beginTurn(turnId, input, this.chatEngine?.getEngineRunId());
   }
 
   // ── Test-only wrappers (accessed via Object.create(BabelRepl.prototype) in interactive.test.ts) ──
@@ -481,6 +541,7 @@ export class BabelRepl {
     this.shellKeyCleanup = null;
     this.shellHost?.dispose();
     this.shellHost = undefined;
+    this.shellRuntime = undefined;
     exitRepl();
   }
 }

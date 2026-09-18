@@ -2,7 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { selectShellHost } from './selectShellHost.js'
 
-const supported = { isTTY: true, term: 'xterm', cursorAddressing: true }
+const supported = {
+  isTTY: true,
+  isCi: false,
+  isHeadless: false,
+  a11y: false,
+  term: 'xterm',
+  cursorAddressing: true,
+}
 
 test('keeps the legacy host until UI4 evidence qualifies the default', () => {
   assert.deepEqual(selectShellHost(supported), { host: 'legacy', reason: 'legacy-default' })

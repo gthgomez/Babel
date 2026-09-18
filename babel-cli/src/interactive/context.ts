@@ -14,6 +14,7 @@ import type { AgentTargetContext } from '../services/targetResolver.js';
 import type { InteractiveTurn, SessionState } from './types.js';
 import type { ChatEngine } from '../agent/chatEngine.js';
 import type { ShellHost } from '../ui/shell/shellHost.js';
+import type { ShellRuntimeBinding } from '../ui/shell/shellRuntimeBinding.js';
 
 export interface ReplContext {
   // ── I/O ──────────────────────────────────────────────────────────────────
@@ -72,6 +73,8 @@ export interface ReplContext {
 
   /** Root-owned North Star presentation host when the gated UI4 path is active. */
   shellHost: ShellHost | undefined;
+  /** Optional presentation-only binding for the gated hosted shell. */
+  shellRuntime?: ShellRuntimeBinding | undefined;
 
   /** Last routing-status label for the status bar (e.g. "Flash·mutate").
    *  Set after each chat run from the last TurnRoutingReceipt. */
@@ -93,6 +96,7 @@ export interface ReplContext {
   saveSessionState(): void;
   resolveSessionModel(): void;
   appendTurn(turn: Omit<InteractiveTurn, 'schema_version' | 'turn_id' | 'ts'>): InteractiveTurn;
+  beginShellTurn?(turnId: number, input: string): void;
   resolveCurrentTarget(): AgentTargetContext;
   scheduleIndexWarmup(projectRoot: string): void;
   exit(): void;

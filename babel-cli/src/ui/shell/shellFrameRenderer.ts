@@ -145,7 +145,7 @@ function composeRow(frame: ShellFrameInput, row: number): string {
     if (row >= placement.y && row < placement.y + placement.height) {
       placements.push({
         ...placement,
-        cells: () => displayCells(rule.char, placement.width, frame.background),
+        cells: () => fillCells(rule.char, placement.width),
       })
     }
   }
@@ -220,6 +220,9 @@ export function createShellFrameRenderer(output: ShellOutputPort): ShellFrameRen
         if (cursor) {
           const position = cursorPosition(cursor)
           output.moveCursor(position.row, position.col)
+        }
+        if (output.setCursorVisibility) {
+          output.setCursorVisibility(cursor?.visible ?? false)
         }
       } catch (error: unknown) {
         primaryError = error

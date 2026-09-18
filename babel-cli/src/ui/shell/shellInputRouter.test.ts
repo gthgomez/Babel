@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { routeShellInput, type ShellInputState } from './shellInputRouter.js'
+import {
+  acquireShellInputLease,
+  releaseShellInputLease,
+  routeShellInput,
+  type ShellInputState,
+} from './shellInputRouter.js'
 import type { KeyEvent } from '../keyInput.js'
 
 function key(name: string, overrides: Partial<KeyEvent> = {}): KeyEvent {
@@ -15,6 +20,20 @@ test('F6 cycles shell focus and Shift+F6 reverses it', () => {
   const previous = routeShellInput(key('f6', { shift: true }), next.state)
   assert.equal(previous.state.focus, 'composer')
   assert.equal(next.handled, true)
+})
+
+test('F6 skips surfaces that are unavailable at the current dimensions', () => {
+  const state: ShellInputState = {
+    ...base,
+    focus: 'composer',
+    availableSurfaces: ['composer', 'conversation'],
+  }
+
+  assert.equal(routeShellInput(key('f6'), state).state.focus, 'conversation')
+  assert.equal(
+    routeShellInput(key('f6', { shift: true }), state).state.focus,
+    'conversation',
+  )
 })
 
 test('Escape closes open drawers and Ctrl+P opens the palette from the composer', () => {

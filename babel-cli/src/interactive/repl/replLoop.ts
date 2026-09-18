@@ -38,19 +38,15 @@ async function executeTaskAndDrainQueue(
   deps: ReplLoopDeps,
   input: string,
 ): Promise<void> {
-  if (ctx.shellHost) {
-    await ctx.shellHost.withExclusiveTerminal('task', () => deps.executeTask(input));
-  } else {
-    await deps.executeTask(input);
-  }
+  // Ordinary Chat/Plan/Deep work stays hosted in the root shell. Exclusive
+  // terminal ownership is reserved for intentional foreign surfaces such as
+  // the pager or external editor; wrapping the whole task would hide the
+  // very activity the shell is responsible for presenting.
+  await deps.executeTask(input);
   while (!ctx.isRunning) {
     const next = dequeueComposerMessage();
     if (!next) break;
-    if (ctx.shellHost) {
-      await ctx.shellHost.withExclusiveTerminal('queued-task', () => deps.executeTask(next));
-    } else {
-      await deps.executeTask(next);
-    }
+    await deps.executeTask(next);
   }
 }
 

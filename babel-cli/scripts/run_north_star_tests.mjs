@@ -17,6 +17,9 @@ const required = [
   'src/ui/promptInput.test.ts',
   'src/ui/promptInputAdapter.test.ts',
   'src/ui/historyCells/viewport.test.ts',
+  'src/ui/historyCells/transcript.test.ts',
+  'src/ui/shell/shellRuntimeBinding.test.ts',
+  'src/interactive/execution/chatEventDispatch.test.ts',
 ]
 
 const missing = required.filter((file) => !existsSync(join(packageRoot, file)))

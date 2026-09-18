@@ -16,6 +16,7 @@ type Call =
   | { kind: 'end' }
   | { kind: 'write'; text: string }
   | { kind: 'cursor'; row: number; col: number }
+  | { kind: 'visibility'; visible: boolean }
 
 function createOutput(options: { throwOnWrite?: boolean } = {}): {
   output: ShellOutputPort
@@ -32,6 +33,7 @@ function createOutput(options: { throwOnWrite?: boolean } = {}): {
         if (options.throwOnWrite) throw new Error('output failed')
       },
       moveCursor: (row, col) => calls.push({ kind: 'cursor', row, col }),
+      setCursorVisibility: (visible) => calls.push({ kind: 'visibility', visible }),
     },
   }
 }
@@ -146,6 +148,30 @@ describe('ShellFrameRenderer', () => {
     }
     assert.deepEqual(calls[cursorIndex], { kind: 'cursor', row: 2, col: 5 })
     assert.ok(cursorIndex > lastWriteIndex)
+  })
+
+  it('draws horizontal rules with the requested one-column glyph', () => {
+    const { output, calls } = createOutput()
+    const renderer = newRenderer(output)
+
+    renderer.render({
+      ...frame([]),
+      rules: [{ orientation: 'horizontal', position: 1, start: 2, end: 8, char: '─' }],
+    })
+
+    assert.deepEqual(writes(calls), ['....................', '..──────............', '....................'])
+  })
+
+  it('emits cursor visibility even when the frame content is unchanged', () => {
+    const { output, calls } = createOutput()
+    const renderer = newRenderer(output)
+    const input = frame([], { row: 0, col: 0, visible: false })
+
+    renderer.render(input)
+    calls.length = 0
+    renderer.render({ ...input, cursor: { row: 0, col: 0, visible: true } })
+
+    assert.deepEqual(calls.filter((call) => call.kind === 'visibility'), [{ kind: 'visibility', visible: true }])
   })
 
   it('releases the frame and retries the full frame after output failure', () => {

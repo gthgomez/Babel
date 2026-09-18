@@ -1,6 +1,7 @@
 import { FrameScheduler } from '../frameScheduler.js'
 import { OutputBuffer } from '../outputBuffer.js'
 import { createShellFrameRenderer, type ShellFrameRenderer } from './shellFrameRenderer.js'
+import { acquireShellInputLease } from './shellInputRouter.js'
 import type { ShellFrameInput, ShellOutputPort } from './shellTypes.js'
 
 export interface ShellHostScheduler {
@@ -34,6 +35,10 @@ function defaultOutput(): ShellOutputPort {
     endFrame: () => output.endFrame(),
     write: (text) => output.write(text),
     moveCursor: (row, col) => output.moveCursor(row, col),
+    setCursorVisibility: (visible) => {
+      if (visible) output.showCursor()
+      else output.hideCursor()
+    },
   }
 }
 
@@ -104,9 +109,11 @@ export function createShellHost(options: ShellHostOptions): ShellHost {
     async withExclusiveTerminal<T>(_reason: string, work: () => Promise<T>): Promise<T> {
       if (disposed) throw new Error('North Star shell host is disposed')
       exclusiveDepth += 1
+      const releaseInputLease = acquireShellInputLease()
       try {
         return await work()
       } finally {
+        releaseInputLease()
         exclusiveDepth -= 1
         if (exclusiveDepth === 0 && mounted && !disposed) {
           frameRenderer.invalidate('exclusive-return')

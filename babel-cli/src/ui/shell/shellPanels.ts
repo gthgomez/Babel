@@ -82,9 +82,33 @@ export function buildShellFrameInput(
   add(surface('right', layout.right, rightRows(snapshot)))
   if (layout.composer && snapshot.prompt) {
     add(surface('composer', layout.composer, snapshot.prompt.rows))
+    if (snapshot.prompt.popup) {
+      const popupRect = {
+        x: layout.composer.x + snapshot.prompt.popup.rect.x,
+        y: layout.composer.y + snapshot.prompt.popup.rect.y,
+        width: Math.min(
+          snapshot.prompt.popup.rect.width,
+          Math.max(0, layout.composer.width - snapshot.prompt.popup.rect.x),
+        ),
+        height: Math.min(
+          snapshot.prompt.popup.rect.height,
+          Math.max(0, layout.composer.height - snapshot.prompt.popup.rect.y),
+        ),
+      }
+      if (popupRect.width > 0 && popupRect.height > 0) {
+        add(surface('composer-popup', popupRect, snapshot.prompt.popup.rows))
+      }
+    }
   }
   const footerRows = [`  BABEL  ${snapshot.project}`, '  Escape closes panels  ·  F6 changes focus']
-  add(surface('footer', layout.footer, footerRows))
+  if (layout.footer) {
+    const footerContent = {
+      ...layout.footer,
+      y: layout.footer.y + 1,
+      height: Math.max(0, layout.footer.height - 1),
+    }
+    add(surface('footer', footerContent, footerRows))
+  }
 
   const rules: ShellRule[] = []
   if (layout.header) rules.push({ orientation: 'horizontal', position: layout.header.y + layout.header.height - 1, char: '─' })

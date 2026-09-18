@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createShellFrameRenderer } from './shellFrameRenderer.js'
 import { createShellHost } from './shellHost.js'
+import { shellInputLeaseActive } from './shellInputRouter.js'
 import type { ShellFrameInput, ShellOutputPort } from './shellTypes.js'
 
 function makeOutput(): ShellOutputPort & { events: string[] } {
@@ -67,14 +68,18 @@ test('exclusive terminal leases suspend painting and redraw after nested return'
 
   host.mount()
   await host.withExclusiveTerminal('pager', async () => {
+    assert.equal(shellInputLeaseActive(), true)
     callbacks.get(host.componentId)?.()
     await host.withExclusiveTerminal('editor', async () => {
+      assert.equal(shellInputLeaseActive(), true)
       callbacks.get(host.componentId)?.()
     })
+    assert.equal(shellInputLeaseActive(), true)
     callbacks.get(host.componentId)?.()
   })
   callbacks.get(host.componentId)?.()
 
+  assert.equal(shellInputLeaseActive(), false)
   assert.equal(output.events.filter((event) => event === 'begin').length, 1)
   assert.equal(host.mounted, true)
 })

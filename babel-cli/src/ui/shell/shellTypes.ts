@@ -73,4 +73,5 @@ export interface ShellOutputPort {
   readonly endFrame: () => void
   readonly write: (text: string) => void
   readonly moveCursor: (row: number, col: number) => void
+  readonly setCursorVisibility?: (visible: boolean) => void
 }
