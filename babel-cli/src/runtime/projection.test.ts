@@ -513,3 +513,25 @@ test('P04: a stateful throwing getter cannot escape projectTask', () => {
   ) as unknown as RuntimeFactV1;
   assert.doesNotThrow(() => projectTask([fact]));
 });
+
+test('P04: deeply nested payloads degrade deterministically instead of colliding', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const deep = (depth: number): unknown => {
+    let cursor: unknown = 'x';
+    for (let i = 0; i < depth; i += 1) cursor = { v: cursor };
+    return cursor;
+  };
+  const mk = (marker: string) =>
+    ({
+      ...template,
+      id: 'dup',
+      sequence: 7,
+      payload: { type: 'run.settled', status: { marker, deep: deep(5000) } },
+    }) as unknown as RuntimeFactV1;
+  const a = mk('A');
+  const b = mk('B');
+  const forward = projectTask([a, b]);
+  const reverse = projectTask([b, a]);
+  assert.equal(forward.degraded, true);
+  assert.deepEqual(forward, reverse);
+});

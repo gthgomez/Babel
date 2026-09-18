@@ -217,8 +217,11 @@ function contentKey(fact: RuntimeFactV1): string {
     return createHash('sha256').update(encoded).digest('hex');
   } catch {
     // Only reachable for a fact whose envelope accessors throw after
-    // classification; such facts are rejected earlier, so this is a guard.
-    return 'inaccessible';
+    // classification; such facts are rejected earlier, so this is a guard that
+    // still distinguishes by identity to avoid a collision.
+    return createHash('sha256')
+      .update(`inaccessible:${fact.id}:${fact.sequence}:${fact.timestamp}`)
+      .digest('hex');
   }
 }
 
@@ -291,16 +294,19 @@ type Classified =
 
 type CloneResult = { ok: true; value: unknown } | { ok: false };
 
+/** Bound payload nesting so canonicalization/JSON hashing cannot overflow. */
+const MAX_JSON_DEPTH = 64;
+
 /**
  * Deep-copy a value into fresh plain JSON data, reading each property once and
  * rejecting anything that is not a JSON value (boxed primitives, class
  * instances, Date/Map/Set/RegExp/Error, functions, symbols, bigint, undefined,
- * NaN/Infinity, cycles). This is what makes the projection total and the
- * canonical encoding injective: downstream code only ever touches snapshots,
- * never the caller's object, and plain objects/arrays cannot collide with
- * exotic values.
+ * NaN/Infinity, cycles, and nesting beyond MAX_JSON_DEPTH). This is what makes
+ * the projection total and the canonical encoding injective: downstream code
+ * only ever touches snapshots, never the caller's object, and plain
+ * objects/arrays cannot collide with exotic values.
  */
-function cloneJsonSafe(value: unknown, path: WeakSet<object>): CloneResult {
+function cloneJsonSafe(value: unknown, path: WeakSet<object>, depth = 0): CloneResult {
   if (value === null) return { ok: true, value: null };
   const type = typeof value;
   if (type === 'string' || type === 'boolean') return { ok: true, value };
@@ -309,6 +315,7 @@ function cloneJsonSafe(value: unknown, path: WeakSet<object>): CloneResult {
     return { ok: true, value };
   }
   if (type !== 'object') return { ok: false };
+  if (depth >= MAX_JSON_DEPTH) return { ok: false };
   const object = value as object;
   if (path.has(object)) return { ok: false };
   path.add(object);
@@ -316,7 +323,7 @@ function cloneJsonSafe(value: unknown, path: WeakSet<object>): CloneResult {
     if (Array.isArray(object)) {
       const out: unknown[] = [];
       for (const entry of object) {
-        const cloned = cloneJsonSafe(entry, path);
+        const cloned = cloneJsonSafe(entry, path, depth + 1);
         if (!cloned.ok) return { ok: false };
         out.push(cloned.value);
       }
@@ -326,7 +333,7 @@ function cloneJsonSafe(value: unknown, path: WeakSet<object>): CloneResult {
     if (prototype !== Object.prototype && prototype !== null) return { ok: false };
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(object)) {
-      const cloned = cloneJsonSafe((object as Record<string, unknown>)[key], path);
+      const cloned = cloneJsonSafe((object as Record<string, unknown>)[key], path, depth + 1);
       if (!cloned.ok) return { ok: false };
       out[key] = cloned.value;
     }

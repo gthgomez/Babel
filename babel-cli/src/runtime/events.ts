@@ -191,7 +191,7 @@ export function validateRuntimeFact(input: unknown): FactValidation {
     return { ok: false, reason: 'fact_not_object', authority: 'authoritative' };
   }
   const authorityRaw = input['authority'];
-  const authority: FactAuthority = authorityRaw === 'authoritative' ? 'authoritative' : 'observation';
+  const authority: FactAuthority = authorityRaw === 'observation' ? 'observation' : 'authoritative';
   const id = typeof input['id'] === 'string' ? input['id'] : undefined;
   const fail = (reason: string): InvalidFact => ({
     ok: false,

@@ -78,6 +78,12 @@ test('P04: malformed facts are rejected', () => {
   assert.equal(validateRuntimeFact(fact({ payload: {} })).ok, false);
 });
 
+test('P04: a novel authority token is reported authority-bearing', () => {
+  const result = validateRuntimeFact(fact({ authority: 'superuser' }));
+  assert.equal(result.ok, false);
+  assert.equal(result.ok === false && result.authority, 'authoritative');
+});
+
 test('P04: redaction removes credential keys and caps long strings', () => {
   const long = 'x'.repeat(800);
   const redacted = redactRuntimeFact(
