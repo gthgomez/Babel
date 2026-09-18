@@ -5,7 +5,13 @@
 
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 
-type ChatStatus = 'completed' | 'failed' | 'cancelled' | 'blocked' | 'budget_exhausted';
+export type ChatStatus = 'completed' | 'failed' | 'cancelled' | 'blocked' | 'budget_exhausted';
+
+export interface ChatTerminalProjection {
+  status: ChatStatus;
+  /** Omitted when the terminal cause is genuinely unknown. */
+  outcome?: TerminalOutcome;
+}
 
 const INFRA_CODE_RE =
   /\b(?:ENOSPC|EROFS|EIO|EBUSY|EMFILE|ENFILE|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH)\b/i;
@@ -56,30 +62,50 @@ export function classifyFailureText(error: string): TerminalOutcome | undefined 
   return undefined;
 }
 
-export function statusForOutcome(outcome: TerminalOutcome): ChatStatus {
-  if (outcome === 'CANCELLED') return 'cancelled';
-  if (outcome === 'BUDGET_EXHAUSTED') return 'budget_exhausted';
+/**
+ * Canonical Chat terminal projection. A known TerminalOutcome is authoritative
+ * over any legacy status supplied by an adapter; an unknown outcome stays
+ * unknown and preserves only the observed status.
+ */
+export function projectChatTerminal(input: {
+  outcome?: TerminalOutcome;
+  status?: ChatStatus;
+}): ChatTerminalProjection {
+  const outcome = input.outcome;
+  if (outcome === undefined) {
+    return { status: input.status ?? 'failed' };
+  }
+  if (outcome === 'CANCELLED') return { status: 'cancelled', outcome };
+  if (outcome === 'BUDGET_EXHAUSTED') return { status: 'budget_exhausted', outcome };
   if (
     outcome === 'BLOCKED_POLICY' ||
     outcome === 'BLOCKED_EXTERNAL' ||
     outcome === 'INVALID_TASK' ||
     outcome === 'NEEDS_HUMAN_DECISION'
   ) {
-    return 'blocked';
+    return { status: 'blocked', outcome };
   }
-  if (outcome === 'VERIFIED_COMPLETE' || outcome === 'UNVERIFIED_PATCH' || outcome === 'NO_CHANGE_REQUIRED') {
-    return 'completed';
+  if (
+    outcome === 'VERIFIED_COMPLETE' ||
+    outcome === 'UNVERIFIED_PATCH' ||
+    outcome === 'NO_CHANGE_REQUIRED'
+  ) {
+    return { status: 'completed', outcome };
   }
-  return 'failed';
+  return { status: 'failed', outcome };
 }
 
-/** Resolve a failed-event outcome without treating engine AGENT_FAILURE as proof. */
+export function statusForOutcome(outcome: TerminalOutcome): ChatStatus {
+  return projectChatTerminal({ outcome }).status;
+}
+
+/** Preserve an authoritative failed-event outcome, otherwise classify its text conservatively. */
 export function resolveFailedEventOutcome(
   error: string,
   explicit?: TerminalOutcome,
 ): TerminalOutcome | undefined {
+  if (explicit) return explicit;
   const fromText = classifyFailureText(error);
   if (fromText) return fromText;
-  if (explicit && explicit !== 'AGENT_FAILURE') return explicit;
   return undefined;
 }

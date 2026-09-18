@@ -55,6 +55,7 @@ import {
   buildPromptFingerprint,
   type PromptFingerprint,
 } from './promptFingerprint.js';
+import { projectChatTerminal, type ChatStatus } from './chatFailureClassification.js';
 
 export type { PromptFingerprint };
 export { buildPromptFingerprint };
@@ -114,6 +115,7 @@ export async function maybeRequestTurnSummary(
 }
 
 export type ToolCallLogEntry = {
+  toolCallId?: string;
   tool: string;
   target: string;
   detail?: string;
@@ -129,6 +131,7 @@ export type ToolCallLogEntry = {
 
 /** Payload shape shared with ChatEvent done/failed (exactOptionalPropertyTypes-safe). */
 export type ExportedToolCall = {
+  toolCallId?: string;
   tool: string;
   target: string;
   detail?: string;
@@ -144,6 +147,7 @@ export type ExportedToolCall = {
 
 export type StreamDoneEvent = {
   type: 'done';
+  status: ChatStatus;
   answer: string;
   usage: SessionUsageSummary;
   toolCalls: ExportedToolCall[];
@@ -169,6 +173,7 @@ export type StreamDoneEvent = {
 
 export type StreamFailedEvent = {
   type: 'failed';
+  status: ChatStatus;
   error: string;
   toolCalls: ExportedToolCall[];
   runDir?: string;
@@ -239,6 +244,7 @@ export function exportToolCallsWithTurns(
       target: entry.target,
       index: entry.index,
     };
+    if (entry.toolCallId !== undefined) out.toolCallId = entry.toolCallId;
     if (entry.detail !== undefined) out.detail = entry.detail;
     if (entry.error !== undefined) out.error = entry.error;
     if (entry.exit_code !== undefined) out.exit_code = entry.exit_code;
@@ -265,6 +271,7 @@ export function buildStreamDone(
   answer: string,
   extra?: {
     outcome: TerminalOutcome;
+    status?: ChatStatus;
     planOutcome?: 'PLAN_COMPLETE';
     budgetExceeded?: boolean;
     blockedReport?: BlockedReport | null;
@@ -278,8 +285,13 @@ export function buildStreamDone(
   if (!extra?.outcome) {
     throw new Error('buildStreamDone requires an authoritative TerminalOutcome (P0-D)');
   }
+  const terminal = projectChatTerminal({
+    outcome: extra.outcome,
+    ...(extra.status !== undefined ? { status: extra.status } : {}),
+  });
   const event: StreamDoneEvent = {
     type: 'done',
+    status: terminal.status,
     answer,
     usage: globalCostTracker.getSessionSummary(),
     toolCalls: exportToolCalls(h.toolCallLog, h.logIndexToTurn),
@@ -309,12 +321,18 @@ export function buildStreamFailed(
   extra?: {
     turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
     outcome?: TerminalOutcome;
+    status?: ChatStatus;
     costBudget?: ChatEngineLimits['costBudget'];
     runAllowance?: ChatEngineRunAllowanceReport;
   },
 ): StreamFailedEvent {
+  const terminal = projectChatTerminal({
+    ...(extra?.outcome !== undefined ? { outcome: extra.outcome } : {}),
+    status: extra?.status ?? 'failed',
+  });
   const event: StreamFailedEvent = {
     type: 'failed',
+    status: terminal.status,
     error,
     toolCalls: exportToolCalls(h.toolCallLog),
   };

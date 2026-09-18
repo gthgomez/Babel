@@ -100,6 +100,21 @@ describe('terminalResultFromDoneEvent (P0-D lossless)', () => {
     assert.equal(result.outcome, 'VERIFIED_COMPLETE');
     assert.equal(result.status, 'completed');
   });
+
+  test('authoritative AGENT_FAILURE overrides a mismatched completed status', () => {
+    const result = terminalResultFromDoneEvent(
+      'agent failed after producing a partial answer',
+      EMPTY_USAGE,
+      undefined,
+      undefined,
+      null,
+      null,
+      { outcome: 'AGENT_FAILURE' },
+    );
+
+    assert.equal(result.outcome, 'AGENT_FAILURE');
+    assert.equal(result.status, 'failed');
+  });
 });
 
 describe('dispatchChatEvent cancelled telemetry threading', () => {
@@ -148,5 +163,16 @@ describe('dispatchChatEvent cancelled telemetry threading', () => {
     assert.ok(result);
     assert.equal(result.status, 'cancelled');
     assert.equal(result.turnTelemetry, undefined);
+  });
+
+  test('failed event preserves authoritative AGENT_FAILURE', () => {
+    const result = dispatchChatEvent(
+      { type: 'failed', error: 'agent invariant failed', outcome: 'AGENT_FAILURE' },
+      {},
+    );
+
+    assert.ok(result);
+    assert.equal(result.outcome, 'AGENT_FAILURE');
+    assert.equal(result.status, 'failed');
   });
 });

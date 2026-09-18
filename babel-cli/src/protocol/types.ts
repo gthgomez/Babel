@@ -7,6 +7,9 @@
 
 import type { HistoryCellRecord } from '../ui/historyCells/types.js';
 import type { BabelMode } from '../executor/contracts.js';
+import type { MutationEffectStatus } from '../agent/mutationTools.js';
+import type { ChatStatus } from '../agent/chatFailureClassification.js';
+import type { TerminalOutcome } from '../schemas/agentContracts.js';
 
 /** Wire protocol version — bump on breaking catalog changes. */
 export const BABEL_PROTOCOL_VERSION = '1.0.0' as const;
@@ -96,8 +99,18 @@ export interface TurnUsageSummary {
 export type TurnStreamEvent =
   | { type: 'thinking' }
   | { type: 'answer_chunk'; text: string }
-  | { type: 'tool_start'; tool: string; target: string }
-  | { type: 'tool_complete'; tool: string; target: string; detail?: string }
+  | { type: 'tool_start'; toolCallId?: string; tool: string; target: string }
+  | {
+      type: 'tool_complete' | 'tool_failed';
+      toolCallId?: string;
+      tool: string;
+      target: string;
+      detail?: string;
+      error?: string;
+      exitCode?: number;
+      effect_status?: MutationEffectStatus;
+      mutation_paths?: string[];
+    }
   | { type: 'thought'; text: string }
   | { type: 'sub_agent_start'; id: string; label: string; model?: string }
   | { type: 'sub_agent_complete'; id: string; summary: string; tokens?: number }
@@ -109,9 +122,9 @@ export type TurnStreamEvent =
       deletions: number;
       content?: string;
     }
-  | { type: 'done'; answer: string; usage: TurnUsageSummary }
-  | { type: 'failed'; error: string }
-  | { type: 'cancelled' }
+  | { type: 'done'; answer: string; usage: TurnUsageSummary; status?: ChatStatus; outcome?: TerminalOutcome }
+  | { type: 'failed'; error: string; status?: ChatStatus; outcome?: TerminalOutcome }
+  | { type: 'cancelled'; status?: 'cancelled'; outcome?: 'CANCELLED' }
   | {
       type: 'progress_recovery';
       intervention: import('../agent/progressController.js').ProgressInterventionLevel;
