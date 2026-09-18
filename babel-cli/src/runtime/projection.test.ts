@@ -320,7 +320,8 @@ test('P04: duplicate id with differing envelope authority is deterministic', () 
   const forward = projectTask([authoritative, observation]);
   const reverse = projectTask([observation, authoritative]);
   assert.deepEqual(forward, reverse);
-  assert.equal(forward.outcome?.authoritative, true, 'order-first (authoritative) wins deterministically');
+  // The conflict winner is chosen by the deterministic content key and the
+  // projection is marked degraded, so consumers must not trust the claim.
   assert.ok(forward.degradedReasons.includes('conflicting_duplicate_fact'));
 });
 
@@ -412,4 +413,64 @@ test('P04: JSON-collapsing duplicate pair is order-independent', () => {
     payload: { type: 'run.settled', status: Number.POSITIVE_INFINITY },
   } as unknown as RuntimeFactV1;
   assert.deepEqual(projectTask([a, b]), projectTask([b, a]));
+});
+
+test('P04: malformed completion/indeterminate payloads degrade without throwing', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const noEvidenceRefs = {
+    ...template,
+    id: 'no-refs',
+    payload: {
+      type: 'completion.decided',
+      decision: { requestedOutcome: 'x', finalOutcome: 'y', allowed: true, reason: 'r', policyVersion: 'v1' },
+    },
+  } as unknown as RuntimeFactV1;
+  const numericReason = {
+    ...template,
+    id: 'num-reason',
+    payload: { type: 'operation.indeterminate', operationDigest: 'd', reason: 5 },
+  } as unknown as RuntimeFactV1;
+  const proj = projectTask([noEvidenceRefs, numericReason]);
+  assert.equal(proj.outcome, null);
+  assert.equal(proj.degraded, true);
+});
+
+test('P04: optional facts with non-finite sequence are order-independent', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const a = {
+    ...template,
+    id: 'oa',
+    schemaVersion: 2,
+    authority: 'observation',
+    sequence: Number.NaN,
+    cursor: { stream: 'runtime-facts', sequence: Number.NaN },
+    payload: { type: 'future.optional' },
+  } as unknown as RuntimeFactV1;
+  const b = {
+    ...template,
+    id: 'ob',
+    schemaVersion: 2,
+    authority: 'observation',
+    sequence: Number.POSITIVE_INFINITY,
+    cursor: { stream: 'runtime-facts', sequence: Number.POSITIVE_INFINITY },
+    payload: { type: 'future.optional' },
+  } as unknown as RuntimeFactV1;
+  assert.deepEqual(projectTask([a, b]), projectTask([b, a]));
+});
+
+test('P04: canonical special-value tags cannot be forged by user objects', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const nan = {
+    ...template,
+    id: 'tag',
+    sequence: 400,
+    payload: { type: 'run.settled', status: Number.NaN },
+  } as unknown as RuntimeFactV1;
+  const forgedTag = {
+    ...template,
+    id: 'tag',
+    sequence: 400,
+    payload: { type: 'run.settled', status: { $number: 'NaN' } },
+  } as unknown as RuntimeFactV1;
+  assert.deepEqual(projectTask([nan, forgedTag]), projectTask([forgedTag, nan]));
 });

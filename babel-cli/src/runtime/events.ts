@@ -239,9 +239,16 @@ export function validateRuntimeFact(input: unknown): FactValidation {
     if (
       !isRecord(decision) ||
       typeof decision['finalOutcome'] !== 'string' ||
-      typeof decision['allowed'] !== 'boolean'
+      typeof decision['allowed'] !== 'boolean' ||
+      !Array.isArray(decision['evidenceRefs']) ||
+      (decision['reason'] !== undefined && typeof decision['reason'] !== 'string')
     ) {
       return fail('invalid_completion_decision');
+    }
+  }
+  if (type === 'operation.indeterminate' || type === 'context.degraded') {
+    if (typeof payload['reason'] !== 'string') {
+      return fail(`invalid_${type}_reason`);
     }
   }
   return { ok: true, fact: input as unknown as RuntimeFactV1 };

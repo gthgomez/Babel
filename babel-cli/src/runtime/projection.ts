@@ -117,31 +117,35 @@ type Canonical = unknown;
 type CanonicalResult = { ok: true; value: Canonical } | { ok: false };
 
 /**
- * Injective canonical encoding. Distinguishes values JSON collapses or cannot
+ * Injective canonical encoding. Every value becomes a tagged array so a plain
+ * user object/array can never reproduce a special-value tag: strings are
+ * `['str', v]`, numbers `['num', v]`, NaN `['num','NaN']`, user objects
+ * `['obj', entries]`, etc. Distinguishes values JSON collapses or cannot
  * represent (NaN, ±Infinity, -0, undefined, BigInt, Map/Set/Date) and rejects
  * functions, symbols, true cycles and inaccessible objects. `path` is a
  * recursion stack, so a shared non-cyclic reference is valid.
  */
 function canonicalize(value: unknown, path: WeakSet<object>): CanonicalResult {
-  if (value === null) return { ok: true, value: null };
+  if (value === null) return { ok: true, value: ['null'] };
   const type = typeof value;
-  if (type === 'string' || type === 'boolean') return { ok: true, value };
+  if (type === 'string') return { ok: true, value: ['str', value] };
+  if (type === 'boolean') return { ok: true, value: ['bool', value] };
   if (type === 'number') {
-    if (Number.isNaN(value)) return { ok: true, value: { $number: 'NaN' } };
-    if (value === Infinity) return { ok: true, value: { $number: 'Infinity' } };
-    if (value === -Infinity) return { ok: true, value: { $number: '-Infinity' } };
-    if (Object.is(value, -0)) return { ok: true, value: { $number: '-0' } };
-    return { ok: true, value };
+    if (Number.isNaN(value)) return { ok: true, value: ['num', 'NaN'] };
+    if (value === Infinity) return { ok: true, value: ['num', 'Infinity'] };
+    if (value === -Infinity) return { ok: true, value: ['num', '-Infinity'] };
+    if (Object.is(value, -0)) return { ok: true, value: ['num', '-0'] };
+    return { ok: true, value: ['num', value] };
   }
-  if (type === 'undefined') return { ok: true, value: { $undefined: true } };
-  if (type === 'bigint') return { ok: true, value: { $bigint: (value as bigint).toString() } };
+  if (type === 'undefined') return { ok: true, value: ['undef'] };
+  if (type === 'bigint') return { ok: true, value: ['bigint', (value as bigint).toString()] };
   if (type === 'function' || type === 'symbol') return { ok: false };
 
   const object = value as object;
   if (path.has(object)) return { ok: false };
   path.add(object);
   try {
-    if (object instanceof Date) return { ok: true, value: { $date: object.toISOString() } };
+    if (object instanceof Date) return { ok: true, value: ['date', object.toISOString()] };
     if (object instanceof Map) {
       const entries: unknown[] = [];
       for (const [key, entry] of object.entries()) {
@@ -151,7 +155,7 @@ function canonicalize(value: unknown, path: WeakSet<object>): CanonicalResult {
         if (!canonicalValue.ok) return { ok: false };
         entries.push([canonicalKey.value, canonicalValue.value]);
       }
-      return { ok: true, value: { $map: entries } };
+      return { ok: true, value: ['map', entries] };
     }
     if (object instanceof Set) {
       const entries: unknown[] = [];
@@ -160,7 +164,7 @@ function canonicalize(value: unknown, path: WeakSet<object>): CanonicalResult {
         if (!canonical.ok) return { ok: false };
         entries.push(canonical.value);
       }
-      return { ok: true, value: { $set: entries } };
+      return { ok: true, value: ['set', entries] };
     }
     if (Array.isArray(object)) {
       const entries: unknown[] = [];
@@ -169,16 +173,16 @@ function canonicalize(value: unknown, path: WeakSet<object>): CanonicalResult {
         if (!canonical.ok) return { ok: false };
         entries.push(canonical.value);
       }
-      return { ok: true, value: entries };
+      return { ok: true, value: ['arr', entries] };
     }
     const record = object as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
+    const entries: unknown[] = [];
     for (const key of Object.keys(record).sort(codeUnitCompare)) {
       const canonical = canonicalize(record[key], path);
       if (!canonical.ok) return { ok: false };
-      out[key] = canonical.value;
+      entries.push([key, canonical.value]);
     }
-    return { ok: true, value: out };
+    return { ok: true, value: ['obj', entries] };
   } catch {
     return { ok: false };
   } finally {
@@ -228,18 +232,28 @@ function hasAccessibleEnvelope(input: Record<string, unknown>): boolean {
       typeof input['causationId'] === 'string' &&
       typeof input['timestamp'] === 'string' &&
       typeof input['producer'] === 'string' &&
-      typeof input['sequence'] === 'number' &&
+      Number.isInteger(input['sequence']) &&
       isRecord(cursor) &&
       typeof cursor['stream'] === 'string' &&
-      typeof cursor['sequence'] === 'number'
+      Number.isInteger(cursor['sequence'])
     );
   } catch {
     return false;
   }
 }
 
+function compareSequences(a: number, b: number): number {
+  if (Number.isFinite(a) && Number.isFinite(b)) {
+    if (a === b) return 0;
+    return a < b ? -1 : 1;
+  }
+  // Non-finite sequences (or non-numbers) order by their canonical string so
+  // the comparator is a total order and never returns NaN.
+  return codeUnitCompare(String(a), String(b));
+}
+
 function orderedCompare(a: RuntimeFactV1, b: RuntimeFactV1): number {
-  const bySequence = a.sequence - b.sequence;
+  const bySequence = compareSequences(a.sequence, b.sequence);
   if (bySequence !== 0) return bySequence;
   return codeUnitCompare(contentKey(a), contentKey(b));
 }
@@ -396,6 +410,7 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
   let terminalObserved = false;
 
   for (const fact of orderedKnown) {
+    try {
     if (previousSequence !== null && fact.sequence > previousSequence + 1) {
       state.degradedReasons.push('sequence_gap');
     }
@@ -461,7 +476,7 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
         const key = payload.operationId ?? payload.operationDigest;
         open.delete(key);
         interrupted.add(key);
-        if (payload.reason.startsWith('mutation_')) {
+        if (typeof payload.reason === 'string' && payload.reason.startsWith('mutation_')) {
           state.mutation = { lastOperationId: key, lastStatus: payload.reason };
         }
         break;
@@ -487,13 +502,23 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
           outcome: payload.decision.finalOutcome as TerminalOutcome | 'PLAN_COMPLETE' | 'UNKNOWN',
           status: payload.decision.allowed ? 'allowed' : 'denied',
           reason: payload.decision.reason,
-          evidenceRefs: [...payload.decision.evidenceRefs],
+          evidenceRefs: Array.isArray(payload.decision.evidenceRefs)
+            ? [...payload.decision.evidenceRefs]
+            : [],
           authoritative: assertAuthority,
         };
         break;
       case 'permission.decided':
         state.permissionDecisionCount += 1;
         break;
+    }
+    } catch {
+      // A fact that throws mid-reduction is corrupt, not fatal to the reducer.
+      state.degradedReasons.push('invalid_fact:projection_error');
+      if (fact.authority === 'authoritative') {
+        sawUnknownAuthority = true;
+        state.degradedReasons.push('unknown_authoritative_fact');
+      }
     }
   }
 
