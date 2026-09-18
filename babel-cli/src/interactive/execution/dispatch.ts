@@ -94,6 +94,7 @@ export async function executeTask(
       return;
     }
     ctx.beginShellTurn?.(userTurn.turn_id, input);
+    const shellTurnEpoch = ctx.shellRuntime?.store.epoch;
     let executionFailed = false;
     try {
       if (lane === 'deep') {
@@ -124,7 +125,7 @@ export async function executeTask(
       executionFailed = true;
       throw error;
     } finally {
-      ctx.settleShellTurn?.(executionFailed ? 'failed' : undefined);
+      ctx.settleShellTurn?.(executionFailed ? 'failed' : undefined, shellTurnEpoch);
     }
   } finally {
     ctx.saveSessionState();

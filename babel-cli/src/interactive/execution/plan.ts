@@ -27,6 +27,12 @@ export async function executePlanTask(
   task: string,
   target: AgentTargetContext,
 ): Promise<void> {
+  const withExclusiveTerminal = <T>(
+    reason: string,
+    work: () => Promise<T>,
+  ): Promise<T> =>
+    ctx.withExclusiveTerminal ? ctx.withExclusiveTerminal(reason, work) : work();
+
   ctx.isRunning = true;
   stdinCoordinatorPauseForRun(ctx.rl);
   const bus = new BabelEventBus();
@@ -62,7 +68,10 @@ export async function executePlanTask(
       runDir: result.runDir,
     };
 
-    const decision: PlanDecision | null = await renderInteractivePlan(displayPlan);
+    const decision: PlanDecision | null = await withExclusiveTerminal(
+      'plan-review',
+      () => renderInteractivePlan(displayPlan),
+    );
 
     if (decision === 'approve') {
       // Promote to Deep: re-run with same task + plan handoff
@@ -97,7 +106,9 @@ export async function executePlanTask(
       console.log(`\n${human}\n`);
     } else if (decision === 'edit') {
       process.stdout.write(primary('\n  Opening editor to refine the task prompt…\n'));
-      const edited = await openEditor({ rl: ctx.rl });
+      const edited = await withExclusiveTerminal('external-editor', () =>
+        openEditor({ rl: ctx.rl }),
+      );
       if (edited) {
         // Re-plan with edited prompt
         process.stdout.write(muted('  Re-planning with edited prompt…\n'));
@@ -120,10 +131,13 @@ export async function executePlanTask(
     console.error(accentBright(`\n  Plan failed: ${error.message ?? String(error)}\n`));
     if (process.stdout.isTTY && !process.env['CI']) {
       try {
-        await alert({
-          title: 'Planning Failed',
-          message: error.message ?? String(error),
-        });
+        const showAlert = () =>
+          alert({
+            title: 'Planning Failed',
+            message: error.message ?? String(error),
+          });
+        if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('error-alert', showAlert);
+        else await showAlert();
         (error as any)[Symbol.for('babel.error.alerted')] = true;
       } catch {
         // alert() itself failed — already logged via console.error above

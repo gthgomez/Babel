@@ -20,6 +20,28 @@ import {
 /** Optional SIGINT consumer. Return true to keep the process alive. */
 let processSigintHook: (() => boolean) | null = null;
 
+type ExclusiveTerminalRunner = <T>(reason: string, work: () => Promise<T>) => Promise<T>;
+let exclusiveTerminalRunner: ExclusiveTerminalRunner | null = null;
+
+/** Register the hosted shell's exclusive-terminal boundary for foreign UIs. */
+export function registerExclusiveTerminalRunner(
+  runner: ExclusiveTerminalRunner | null,
+): () => void {
+  exclusiveTerminalRunner = runner;
+  return () => {
+    if (exclusiveTerminalRunner === runner) exclusiveTerminalRunner = null;
+  };
+}
+
+/** Route dialogs and approval surfaces through the hosted shell when present. */
+export async function withExclusiveTerminalSurface<T>(
+  reason: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  if (exclusiveTerminalRunner) return exclusiveTerminalRunner(reason, work);
+  return withExclusiveStdin(work);
+}
+
 export function setProcessSigintHook(hook: (() => boolean) | null): void {
   processSigintHook = hook;
 }
@@ -163,20 +185,22 @@ export function stdinCoordinatorResumeAfterRun(rl: Interface = registeredReadlin
  * Expects the parent session to have paused readline already.
  */
 export async function withRawStdinPrompt<T>(fn: () => Promise<T>): Promise<T> {
-  const stdin = process.stdin;
-  const wasRaw = stdin.isTTY ? stdin.isRaw : false;
-  try {
-    if (stdin.isTTY) {
-      stdin.setRawMode(true);
-      stdin.resume();
+  return withExclusiveTerminalSurface('raw-stdin-prompt', async () => {
+    const stdin = process.stdin;
+    const wasRaw = stdin.isTTY ? stdin.isRaw : false;
+    try {
+      if (stdin.isTTY) {
+        stdin.setRawMode(true);
+        stdin.resume();
+      }
+      return await fn();
+    } finally {
+      if (stdin.isTTY) {
+        stdin.setRawMode(wasRaw);
+        stdin.pause();
+      }
     }
-    return await fn();
-  } finally {
-    if (stdin.isTTY) {
-      stdin.setRawMode(wasRaw);
-      stdin.pause();
-    }
-  }
+  });
 }
 
 export function stdinCoordinatorRunDepth(): number {
@@ -516,9 +540,9 @@ export async function promptPermissionDialog(action: PermissionAction): Promise<
   if (!config) {
     // Fallback to raw keypress for unsupported action types
     const question = `\n[JIT APPROVAL] Allow action type "${action.type}"? [y/N]: `;
-    return captureRawKeypress(question);
+    return withExclusiveTerminalSurface('approval-dialog', () => captureRawKeypress(question));
   }
-  return PermissionDialog.show(config);
+  return withExclusiveTerminalSurface('approval-dialog', () => PermissionDialog.show(config));
 }
 
 export class InputCoordinator {

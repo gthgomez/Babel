@@ -93,7 +93,11 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
 import { Writable } from 'node:stream';
-import { InputCoordinator, captureRawKeypress } from './ui/inputCoordinator.js';
+import {
+  InputCoordinator,
+  captureRawKeypress,
+  withExclusiveTerminalSurface,
+} from './ui/inputCoordinator.js';
 import { getActiveRenderer } from './ui/waterfall.js';
 import { ConfirmDialog } from './ui/dialog.js';
 import { isRunningInDaemon } from './daemon/client.js';
@@ -1598,7 +1602,9 @@ export async function promptUserJit(question: string): Promise<boolean> {
     renderer?.pauseTicks();
     coordinator.startBuffering();
     try {
-      return await captureRawKeypress(question);
+      return await withExclusiveTerminalSurface('approval-dialog', () =>
+        captureRawKeypress(question),
+      );
     } finally {
       const flushed = coordinator.stopBuffering();
       if (flushed) {

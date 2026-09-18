@@ -332,10 +332,13 @@ export async function executeGovernedTask(
     console.error(`\n${human}\n`);
     if (process.stdout.isTTY && !process.env['CI']) {
       try {
-        await alert({
-          title: 'Task Execution Failed',
-          message: caughtError.message ?? String(caughtError),
-        });
+        const showAlert = () =>
+          alert({
+            title: 'Task Execution Failed',
+            message: caughtError.message ?? String(caughtError),
+          });
+        if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('error-alert', showAlert);
+        else await showAlert();
         (caughtError as any)[Symbol.for('babel.error.alerted')] = true;
       } catch {
         // alert() itself failed (e.g. terminal disconnect) — already logged above

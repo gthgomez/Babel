@@ -127,7 +127,11 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       await handleTheme(ctx, args);
       break;
     case 'palette':
-      await CommandPalette.show(ctx);
+      if (ctx.withExclusiveTerminal) {
+        await ctx.withExclusiveTerminal('command-palette', () => CommandPalette.show(ctx));
+      } else {
+        await CommandPalette.show(ctx);
+      }
       break;
 
     // ── Help ─────────────────────────────────────────────────────────

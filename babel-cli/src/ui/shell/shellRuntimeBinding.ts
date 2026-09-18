@@ -35,6 +35,7 @@ export class ShellRuntimeBinding {
 
   private readonly transcript = new HistoryTranscript();
   private currentTurnId: number | undefined;
+  private currentTurnEpoch: number | undefined;
   private currentUserRecord: HistoryCellRecord | undefined;
   private readonly toolIds = new Map<string, number>();
   private readonly toolIdQueue: number[] = [];
@@ -75,6 +76,7 @@ export class ShellRuntimeBinding {
       }
     }
     this.currentTurnId = undefined;
+    this.currentTurnEpoch = undefined;
     this.currentUserRecord = undefined;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
@@ -90,9 +92,10 @@ export class ShellRuntimeBinding {
       this.store.startSession(threadId, this.store.getRecords());
     }
     const epoch = this.store.epoch;
-    this.store.beginTurn(turnId, epoch);
+    if (!this.store.beginTurn(turnId, epoch)) return;
     this.transcript.beginTurn({ turn_id: turnId, ...(threadId ? { thread_id: threadId } : {}) });
     this.currentTurnId = turnId;
+    this.currentTurnEpoch = epoch;
     this.currentUserRecord = createUserMessageCell(input, {
       cell_id: stableCellId(turnId, 'user'),
       turn_id: turnId,
@@ -113,31 +116,32 @@ export class ShellRuntimeBinding {
     }
 
     if (this.currentTurnId !== undefined) {
+      if (this.currentTurnEpoch !== this.store.epoch) {
+        this.clearActiveTurn();
+        return;
+      }
+      if (turn.turn_id !== this.currentTurnId) return;
       if (this.transcript.getAnswerText().length === 0 && turn.answer) {
         this.transcript.onAnswerChunk(turn.answer);
       }
       this.transcript.finishTurn();
       this.settleTurn();
     } else if (turn.answer) {
-      this.store.observePersistedRecord(
-        createAssistantMessageCell(turn.answer, {
-          cell_id: stableCellId(turn.turn_id, 'assistant'),
-          turn_id: turn.turn_id,
-        }).toRecord(),
-      );
+      // An assistant record without a matching active shell turn has no safe
+      // epoch provenance. Hydration and the active-turn path already cover
+      // legitimate records; ignoring this path prevents stale late events
+      // from crossing a session boundary.
+      return;
     }
     this.activity = 'idle';
     this.syncViewport();
   }
 
-  onChatEvent(event: ChatEvent): void {
+  onChatEvent(event: ChatEvent, sourceEpoch = this.store.epoch): void {
     if (this.currentTurnId === undefined) return;
-    if (this.store.turnId !== this.currentTurnId) {
-      this.currentTurnId = undefined;
-      this.currentUserRecord = undefined;
-      this.toolIds.clear();
-      this.toolIdQueue.length = 0;
-      this.activity = 'idle';
+    if (sourceEpoch !== this.currentTurnEpoch) return;
+    if (this.store.epoch !== this.currentTurnEpoch || this.store.turnId !== this.currentTurnId) {
+      this.clearActiveTurn();
       return;
     }
     const epoch = this.store.epoch;
@@ -223,28 +227,35 @@ export class ShellRuntimeBinding {
   }
 
   /** Settle the active presentation turn and clear its transient identity. */
-  settleTurn(outcome?: string): void {
+  settleTurn(outcome?: string, sourceEpoch = this.store.epoch): void {
     if (this.currentTurnId === undefined) return;
-    if (this.store.turnId !== this.currentTurnId) {
+    if (sourceEpoch !== this.currentTurnEpoch) return;
+    if (this.store.epoch !== this.currentTurnEpoch || this.store.turnId !== this.currentTurnId) {
       // A session epoch change invalidates the old live segment. Do not let a
       // late completion settle records into the replacement session.
-      this.currentTurnId = undefined;
-      this.currentUserRecord = undefined;
-      this.toolIds.clear();
-      this.toolIdQueue.length = 0;
-      this.activity = 'idle';
+      this.clearActiveTurn();
       return;
     }
     this.transcript.finishTurn();
     const settled = this.store.settleTurn(this.transcript.getAllRecords(), this.store.epoch);
     if (!settled) return;
     this.currentTurnId = undefined;
+    this.currentTurnEpoch = undefined;
     this.currentUserRecord = undefined;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
     this.activity = 'idle';
     this.lastOutcome = outcome ?? this.lastOutcome ?? 'completed';
     this.syncViewport();
+  }
+
+  private clearActiveTurn(): void {
+    this.currentTurnId = undefined;
+    this.currentTurnEpoch = undefined;
+    this.currentUserRecord = undefined;
+    this.toolIds.clear();
+    this.toolIdQueue.length = 0;
+    this.activity = 'idle';
   }
 
   private syncViewport(): void {

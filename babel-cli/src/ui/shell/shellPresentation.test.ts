@@ -102,6 +102,7 @@ test('focus changes and Escape change the rendered frame and close both drawers'
     closedFrame.surfaces.map((surface) => surface.id),
     ['header', 'conversation', 'composer', 'footer'],
   )
+  assert.equal(closedFrame.rules?.some((rule) => rule.orientation === 'vertical'), false)
 })
 
 test('non-composer focus blocks composer keys after projection', () => {

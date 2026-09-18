@@ -129,8 +129,12 @@ export function buildShellFrameInput(
   const rules: ShellRule[] = []
   if (layout.header) rules.push({ orientation: 'horizontal', position: layout.header.y + layout.header.height - 1, char: '─' })
   if (layout.footer) rules.push({ orientation: 'horizontal', position: layout.footer.y, char: '─' })
-  if (layout.left) rules.push({ orientation: 'vertical', position: layout.left.x + layout.left.width, start: layout.left.y, end: layout.left.y + layout.left.height, char: '│' })
-  if (layout.right) rules.push({ orientation: 'vertical', position: layout.right.x - 1, start: layout.right.y, end: layout.right.y + layout.right.height, char: '│' })
+  if (layout.left && snapshot.presentation?.leftDrawerOpen !== false) {
+    rules.push({ orientation: 'vertical', position: layout.left.x + layout.left.width, start: layout.left.y, end: layout.left.y + layout.left.height, char: '│' })
+  }
+  if (layout.right && snapshot.presentation?.rightDrawerOpen !== false) {
+    rules.push({ orientation: 'vertical', position: layout.right.x - 1, start: layout.right.y, end: layout.right.y + layout.right.height, char: '│' })
+  }
 
   return {
     cols: layout.effectiveCols,

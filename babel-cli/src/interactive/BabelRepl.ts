@@ -7,7 +7,11 @@ interface ReadlineWithHistory extends readline.Interface {
   history: string[];
 }
 import { dim } from '../ui/theme.js';
-import { registerReadlineInterface } from '../ui/inputCoordinator.js';
+import {
+  registerReadlineInterface,
+  registerExclusiveTerminalRunner,
+  withExclusiveStdin,
+} from '../ui/inputCoordinator.js';
 import { FocusTracker } from '../ui/focusTracker.js';
 import { loadHistory } from '../services/history.js';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
@@ -103,6 +107,8 @@ export class BabelRepl {
   } | null;
   private shellKeyCleanup: (() => void) | null = null;
   private legacyKeypressHandler: ((str: string, key: rl.Key) => void) | null = null;
+  private shellExclusiveRunnerCleanup: (() => void) | null = null;
+  private legacyExclusiveDepth = 0;
   private shellInputState: ShellInputState = {
     focus: 'composer',
     leftDrawerOpen: true,
@@ -138,7 +144,7 @@ export class BabelRepl {
     this.legacyKeypressHandler = (_str: string, key: rl.Key) => {
       // The hosted shell has the sole live key-routing path. This listener is
       // retained only for legacy readline mode and must never double-deliver.
-      if (this.shellHost) return;
+      if (this.shellHost || this.legacyExclusiveDepth > 0) return;
       if ((key.name ?? '') === 'r' && key.ctrl) {
         void this.handleReverseSearch().catch(() => {});
       }
@@ -337,6 +343,9 @@ export class BabelRepl {
       invalidate: (reason) => host?.invalidate(reason),
     });
     this.shellHost = host;
+    this.shellExclusiveRunnerCleanup = registerExclusiveTerminalRunner((reason, work) =>
+      this.withExclusiveTerminal(reason, work),
+    );
     this.shellKeyCleanup = installKeyHandler(process.stdin, (event: KeyEvent) => {
       const layout = planShellLayout(OutputBuffer.getTerminalSize());
       this.shellInputState = projectShellPresentation(layout, this.shellInputState).inputState;
@@ -365,6 +374,8 @@ export class BabelRepl {
     this.shellKeyCleanup = null;
     this.shellHost?.dispose();
     this.shellHost = undefined;
+    this.shellExclusiveRunnerCleanup?.();
+    this.shellExclusiveRunnerCleanup = null;
     this.shellRuntime = undefined;
   }
 
@@ -460,10 +471,12 @@ export class BabelRepl {
       const message = err instanceof Error ? err.message : String(err);
       if (process.stdout.isTTY && !process.env['CI']) {
         try {
-          await alert({
-            title: 'Execution Error',
-            message: `A fatal error occurred during execution:\n\n${message}`,
-          });
+          await this.withExclusiveTerminal('error-alert', () =>
+            alert({
+              title: 'Execution Error',
+              message: `A fatal error occurred during execution:\n\n${message}`,
+            }),
+          );
         } catch {
           // alert() itself failed — fall back to console
           console.error(`\nExecution Error: ${message}\n`);
@@ -554,12 +567,19 @@ export class BabelRepl {
     );
   }
 
-  settleShellTurn(outcome?: string): void {
-    this.shellRuntime?.settleTurn(outcome);
+  settleShellTurn(outcome?: string, sourceEpoch?: number): void {
+    this.shellRuntime?.settleTurn(outcome, sourceEpoch);
   }
 
   async withExclusiveTerminal<T>(reason: string, work: () => Promise<T>): Promise<T> {
-    if (!this.shellHost) return work();
+    if (!this.shellHost) {
+      this.legacyExclusiveDepth += 1;
+      try {
+        return await withExclusiveStdin(work, this.rl);
+      } finally {
+        this.legacyExclusiveDepth = Math.max(0, this.legacyExclusiveDepth - 1);
+      }
+    }
     const adapter = this.rl as unknown as PromptInputAdapter;
     return this.shellHost.withExclusiveTerminal(reason, async () => {
       const resumeInput = adapter.suspendInput?.();
@@ -580,6 +600,8 @@ export class BabelRepl {
     this.shellKeyCleanup = null;
     this.shellHost?.dispose();
     this.shellHost = undefined;
+    this.shellExclusiveRunnerCleanup?.();
+    this.shellExclusiveRunnerCleanup = null;
     this.shellRuntime = undefined;
     exitRepl();
   }

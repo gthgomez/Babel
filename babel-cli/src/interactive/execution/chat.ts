@@ -195,6 +195,7 @@ export async function executeChatTask(
       ctx.chatEngine = await createChatEngineForSession(engineOptions, engineFactory);
     }
 
+    const shellEpoch = ctx.shellRuntime?.store.epoch;
     const result = await runChatEngineOnce({
       task,
       target,
@@ -209,7 +210,9 @@ export async function executeChatTask(
 
       ...(preflightContext ? { preflightContext } : {}),
       onCancel: () => ctx.chatEngine!.abortTurn(),
-      ...(ctx.shellRuntime ? { onChatEvent: (event) => ctx.shellRuntime?.onChatEvent(event) } : {}),
+      ...(ctx.shellRuntime
+        ? { onChatEvent: (event) => ctx.shellRuntime?.onChatEvent(event, shellEpoch) }
+        : {}),
     });
 
     // U1.3: Surface last routing receipt label on status bar (model tier + phase)
@@ -535,10 +538,13 @@ export async function executeChatTask(
     });
     if (process.stdout.isTTY && !process.env['CI']) {
       try {
-        await alert({
-          title: 'Chat Failed',
-          message: err.message ?? String(err),
-        });
+        const showAlert = () =>
+          alert({
+            title: 'Chat Failed',
+            message: err.message ?? String(err),
+          });
+        if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('error-alert', showAlert);
+        else await showAlert();
         (err as any)[Symbol.for('babel.error.alerted')] = true;
       } catch (alertErr) {
         console.error('[chat] alert display failed:', (alertErr as Error)?.message ?? alertErr);
