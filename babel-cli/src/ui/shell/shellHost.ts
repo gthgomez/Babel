@@ -1,5 +1,6 @@
 import { FrameScheduler } from '../frameScheduler.js'
 import { OutputBuffer } from '../outputBuffer.js'
+import { suspendActiveRendererForExclusiveSurface } from '../waterfall.js'
 import { createShellFrameRenderer, type ShellFrameRenderer } from './shellFrameRenderer.js'
 import { acquireShellInputLease } from './shellInputRouter.js'
 import type { ShellFrameInput, ShellOutputPort } from './shellTypes.js'
@@ -110,11 +111,13 @@ export function createShellHost(options: ShellHostOptions): ShellHost {
       if (disposed) throw new Error('North Star shell host is disposed')
       exclusiveDepth += 1
       const releaseInputLease = acquireShellInputLease()
+      const releaseRendererFence = suspendActiveRendererForExclusiveSurface()
       try {
         return await work()
       } finally {
         releaseInputLease()
         exclusiveDepth -= 1
+        releaseRendererFence()
         if (exclusiveDepth === 0 && mounted && !disposed) {
           frameRenderer.invalidate('exclusive-return')
           dirty = true

@@ -792,6 +792,30 @@ describe('PromptInput', () => {
   });
 
   describe('queue-while-busy (C2)', () => {
+    it('keeps the hosted composer active after a running-turn submission', () => {
+      const queued: string[] = [];
+      let running = true;
+      const input = createTestInput({
+        isTaskRunning: () => running,
+        onSubmit: () => {},
+        onQueue: (text) => {
+          queued.push(text);
+          return true;
+        },
+      });
+
+      type(input, 'first follow up');
+      input.handleKey(key('enter'));
+      assert.equal(input.getState().active, true);
+      assert.equal(input.getState().text, '');
+
+      type(input, 'second follow up');
+      input.handleKey(key('tab'));
+      assert.deepEqual(queued, ['second follow up']);
+
+      running = false;
+    });
+
     it('Tab queues draft when task is running', () => {
       const queued: string[] = [];
       const input = createTestInput({

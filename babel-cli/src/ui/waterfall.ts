@@ -82,9 +82,16 @@ const FRAME_INTERVAL_MS = 200; // 5 FPS spinner tick
  * (e.g., from a render() method), the frame is silently merged into the
  * outer frame by OutputBuffer.
  */
+let rendererPresentationSuspendedDepth = 0;
+
 function safeStdoutWrite(text: string): boolean {
   const buf = OutputBuffer.getInstance();
   if (!buf.canWrite) return false;
+  // Foreign terminal surfaces (approval dialogs, editors, pagers, and
+  // palettes) own the terminal while they are active. Runtime event handlers
+  // may continue updating renderer state, but their direct presentation must
+  // not race the exclusive surface's output.
+  if (rendererPresentationSuspendedDepth > 0) return true;
   const openedFrame = !buf.inFrame && buf.syncUpdateSupported;
   if (openedFrame) buf.beginFrame();
   try {
@@ -113,6 +120,14 @@ let activeRendererInstance: BaseRenderer | null = null;
 
 export function getActiveRenderer(): BaseRenderer | null {
   return activeRendererInstance;
+}
+
+/**
+ * Apply the shared exclusive-terminal fence to the currently active run
+ * renderer. The returned release is idempotent and supports nested callers.
+ */
+export function suspendActiveRendererForExclusiveSurface(): () => void {
+  return activeRendererInstance?.suspendForExclusiveSurface() ?? (() => {});
 }
 
 // ── Interfaces ───────────────────────────────────────────────────────────────
@@ -158,6 +173,8 @@ class BaseRenderer {
   protected outputBroken: boolean;
   private removeStdoutErrorGuard: (() => void) | undefined;
   protected _onBrokenPipe: () => void;
+  private exclusiveSurfaceDepth = 0;
+  private exclusiveSurfaceRawModeWasActive = false;
 
   constructor() {
     activeRendererInstance = this;
@@ -180,6 +197,42 @@ class BaseRenderer {
   resumeTicks(): void {
     this._pausedTicks = false;
   }
+
+  /** Whether this renderer currently owns a raw-mode input handler. */
+  isRawModeActive(): boolean {
+    return false;
+  }
+
+  /**
+   * Suspend renderer presentation and raw input while a foreign terminal
+   * surface owns the TTY. Nested leases are balanced at this boundary.
+   */
+  suspendForExclusiveSurface(): () => void {
+    this.exclusiveSurfaceDepth += 1;
+    if (this.exclusiveSurfaceDepth === 1) {
+      rendererPresentationSuspendedDepth += 1;
+      this.pauseTicks();
+      this.exclusiveSurfaceRawModeWasActive = this.isRawModeActive();
+      if (this.exclusiveSurfaceRawModeWasActive) this.disableRawMode();
+    }
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.exclusiveSurfaceDepth = Math.max(0, this.exclusiveSurfaceDepth - 1);
+      if (this.exclusiveSurfaceDepth !== 0) return;
+
+      rendererPresentationSuspendedDepth = Math.max(0, rendererPresentationSuspendedDepth - 1);
+      this.resumeTicks();
+      if (this.exclusiveSurfaceRawModeWasActive) this.enableRawMode();
+      this.exclusiveSurfaceRawModeWasActive = false;
+    };
+  }
+
+  // Concrete renderers with terminal input override these hooks.
+  enableRawMode(): void {}
+  disableRawMode(): void {}
 
   destroy(): void {
     this.removeStdoutErrorGuard?.();
@@ -374,7 +427,7 @@ export class WaterfallRenderer extends BaseRenderer {
     this._eventBusHandles.push({ event: 'prompt_resume', listener: onPromptResume });
   }
 
-  enableRawMode(): void {
+  override enableRawMode(): void {
     if (this._rawMode.isActive) return;
     this._rawMode.enable((event) => {
       const action = KeybindingManager.getInstance().matchStack(['governed'], event);
@@ -424,7 +477,11 @@ export class WaterfallRenderer extends BaseRenderer {
     });
   }
 
-  disableRawMode(): void {
+  override isRawModeActive(): boolean {
+    return this._rawMode.isActive;
+  }
+
+  override disableRawMode(): void {
     this._rawMode.disable();
   }
 
@@ -1620,7 +1677,7 @@ export class ConversationalRenderer extends BaseRenderer {
     return this._liveness.snapshot(this.startTime);
   }
 
-  enableRawMode(): void {
+  override enableRawMode(): void {
     if (this._rawMode.isActive) return;
     this._rawMode.enable((event) => {
       const action = KeybindingManager.getInstance().matchStack(['chat'], event);
@@ -1742,6 +1799,10 @@ export class ConversationalRenderer extends BaseRenderer {
     });
   }
 
+  override isRawModeActive(): boolean {
+    return this._rawMode.isActive;
+  }
+
   setScrollback(buffer: ScrollbackBuffer): void {
     this.scrollback = buffer;
   }
@@ -1838,7 +1899,7 @@ export class ConversationalRenderer extends BaseRenderer {
     }
   }
 
-  disableRawMode(): void {
+  override disableRawMode(): void {
     this._rawMode.disable();
   }
 
