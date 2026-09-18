@@ -303,6 +303,11 @@ export class BabelRepl {
   }
 
   private startNorthStarShell(): void {
+    // Startup resume-picker release notifications can replay a resize before
+    // start() reaches its normal host initialization call. Treat promotion as
+    // idempotent so that path cannot install a second stdin handler or replace
+    // the cleanup handles for the already-mounted host.
+    if (this.shellHost) return;
     const selection = selectShellHost();
     if (selection.host !== 'north_star') return;
 

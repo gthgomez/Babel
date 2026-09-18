@@ -194,6 +194,19 @@ test('interactive assistant records use the accepted shell-turn epoch', () => {
   }
 });
 
+test('North Star promotion is idempotent after startup resize replay mounts the host', () => {
+  const host = {};
+  const repl = Object.create(BabelRepl.prototype) as {
+    shellHost: object;
+    startNorthStarShell: () => void;
+  };
+  repl.shellHost = host;
+
+  repl.startNorthStarShell();
+
+  assert.equal(repl.shellHost, host);
+});
+
 test('interactive follow-up prompts are resolved with previous assistant context', () => {
   const repl = Object.create(BabelRepl.prototype) as {
     lastAssistantAnswer: string | null;
