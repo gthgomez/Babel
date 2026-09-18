@@ -57,7 +57,11 @@ import { planShellLayout } from '../ui/shell/shellLayout.js';
 import { buildShellFrameInput } from '../ui/shell/shellPanels.js';
 import { createShellHost, type ShellHost } from '../ui/shell/shellHost.js';
 import { selectShellHost } from '../ui/shell/selectShellHost.js';
-import { routeShellInput, type ShellInputState } from '../ui/shell/shellInputRouter.js';
+import {
+  routeShellInput,
+  shellInputLeaseActive,
+  type ShellInputState,
+} from '../ui/shell/shellInputRouter.js';
 import { ShellRuntimeBinding } from '../ui/shell/shellRuntimeBinding.js';
 import { projectShellPresentation } from '../ui/shell/shellPresentation.js';
 
@@ -144,7 +148,7 @@ export class BabelRepl {
     this.legacyKeypressHandler = (_str: string, key: rl.Key) => {
       // The hosted shell has the sole live key-routing path. This listener is
       // retained only for legacy readline mode and must never double-deliver.
-      if (this.shellHost || this.legacyExclusiveDepth > 0) return;
+      if (this.shellHost || this.legacyExclusiveDepth > 0 || shellInputLeaseActive()) return;
       if ((key.name ?? '') === 'r' && key.ctrl) {
         void this.handleReverseSearch().catch(() => {});
       }
@@ -412,10 +416,17 @@ export class BabelRepl {
 
   // ── Turn tracking ────────────────────────────────────────────────────────
 
-  appendTurn(turn: Omit<InteractiveTurn, 'schema_version' | 'turn_id' | 'ts'>): InteractiveTurn {
+  appendTurn(
+    turn: Omit<InteractiveTurn, 'schema_version' | 'turn_id' | 'ts'>,
+    shellOutcome?: string,
+  ): InteractiveTurn {
     const record = Turn.appendTurn(this, turn);
     if (record.role === 'assistant') {
-      this.shellRuntime?.observeInteractiveTurn(record);
+      this.shellRuntime?.observeInteractiveTurn(
+        record,
+        shellOutcome,
+        this.shellRuntime.store.epoch,
+      );
     }
     return record;
   }

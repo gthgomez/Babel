@@ -26,7 +26,7 @@ import {
   dim,
 } from "./theme.js";
 import { OutputBuffer } from "./outputBuffer.js";
-import { withPausedStdin, drainStdinResiduals } from "./inputCoordinator.js";
+import { withExclusiveTerminalSurface, drainStdinResiduals } from "./inputCoordinator.js";
 import { shouldAvoidAltScreen } from "./a11y.js";
 import { fuzzyScore } from "../utils/fuzzy.js";
 import type { ChatSessionInfo } from "../services/chatSessionIndex.js";
@@ -118,7 +118,7 @@ export class SessionPicker {
     SessionPicker.activeCount += 1;
     try {
       // Pause REPL readline for the entire picker lifetime (plain or interactive).
-      const result = await withPausedStdin(async () => {
+      const result = await withExclusiveTerminalSurface("session-picker", async () => {
         if (wantInteractivePicker()) {
           const picker = new SessionPicker(sessions);
           return picker.run();

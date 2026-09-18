@@ -102,7 +102,7 @@ export async function executePlanTask(
         changed_files: (payload as any).changed_files ?? [],
         verification: 'not required - plan-then-execute',
         next: ctx.lastAssistantNext,
-      });
+      }, String(deepResult.status ?? 'completed'));
       console.log(`\n${human}\n`);
     } else if (decision === 'edit') {
       process.stdout.write(primary('\n  Opening editor to refine the task prompt…\n'));
@@ -120,14 +120,16 @@ export async function executePlanTask(
     } else {
       // Rejected or cancelled
       ctx.state.lastRunUserStatus = 'blocked';
+      ctx.settleShellTurn?.('blocked');
       console.log(
         muted(
           '\n  Plan rejected. Refine your task and try again, or switch to /mode deep for governed execution.\n',
         ),
       );
     }
-  } catch (error: any) {
-    ctx.state.lastRunUserStatus = 'failed';
+    } catch (error: any) {
+      ctx.state.lastRunUserStatus = 'failed';
+      ctx.settleShellTurn?.('failed');
     console.error(accentBright(`\n  Plan failed: ${error.message ?? String(error)}\n`));
     if (process.stdout.isTTY && !process.env['CI']) {
       try {

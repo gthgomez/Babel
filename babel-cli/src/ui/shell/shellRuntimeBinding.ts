@@ -109,23 +109,24 @@ export class ShellRuntimeBinding {
     this.syncViewport();
   }
 
-  observeInteractiveTurn(turn: InteractiveTurn): void {
+  observeInteractiveTurn(
+    turn: InteractiveTurn,
+    outcome?: string,
+    sourceEpoch = this.store.epoch,
+  ): void {
     if (turn.role === 'user') {
       this.beginTurn(turn.turn_id, turn.input ?? turn.resolved_task ?? '');
       return;
     }
 
     if (this.currentTurnId !== undefined) {
-      if (this.currentTurnEpoch !== this.store.epoch) {
-        this.clearActiveTurn();
-        return;
-      }
+      if (sourceEpoch !== this.currentTurnEpoch || this.currentTurnEpoch !== this.store.epoch) return;
       if (turn.turn_id !== this.currentTurnId) return;
       if (this.transcript.getAnswerText().length === 0 && turn.answer) {
         this.transcript.onAnswerChunk(turn.answer);
       }
       this.transcript.finishTurn();
-      this.settleTurn();
+      this.settleTurn(outcome, sourceEpoch);
     } else if (turn.answer) {
       // An assistant record without a matching active shell turn has no safe
       // epoch provenance. Hydration and the active-turn path already cover

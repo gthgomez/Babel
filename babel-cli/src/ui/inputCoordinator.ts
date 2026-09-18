@@ -8,6 +8,7 @@ import { PermissionDialog } from './dialog.js';
 import { OutputBuffer } from './outputBuffer.js';
 import { getTerminalTransport } from './observe/terminalTransport.js';
 import { DEC_2026_END } from './terminalEscapeSequences.js';
+import { acquireShellInputLease } from './shell/shellInputRouter.js';
 import {
   initialInputArbiterState,
   reduceInputArbiter,
@@ -250,12 +251,14 @@ export async function withExclusiveStdin<T>(
   }
 
   stdinCoordinatorPauseForRun(rl);
+  const releaseShellLease = acquireShellInputLease();
   let restoreInput = (): void => {};
   try {
     restoreInput = suspendReadlineInput(rl);
     return await fn();
   } finally {
     restoreInput();
+    releaseShellLease();
     stdinCoordinatorResumeAfterRun(rl);
   }
 }

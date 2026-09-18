@@ -95,7 +95,10 @@ export interface ReplContext {
   renderTurnStatusBar(): void;
   saveSessionState(): void;
   resolveSessionModel(): void;
-  appendTurn(turn: Omit<InteractiveTurn, 'schema_version' | 'turn_id' | 'ts'>): InteractiveTurn;
+  appendTurn(
+    turn: Omit<InteractiveTurn, 'schema_version' | 'turn_id' | 'ts'>,
+    shellOutcome?: string,
+  ): InteractiveTurn;
   beginShellTurn?(turnId: number, input: string): void;
   settleShellTurn?(outcome?: string, sourceEpoch?: number): void;
   withExclusiveTerminal?<T>(reason: string, work: () => Promise<T>): Promise<T>;

@@ -242,7 +242,7 @@ export async function executeGovernedTask(
         changed_files: changedFiles,
         verification,
         next: ctx.lastAssistantNext,
-      });
+      }, String(result.status ?? 'completed'));
       // Compact cost footer only (no structured output dump)
       const convSessionCost = globalCostTracker.getSessionSummary();
       const costLine =
@@ -328,7 +328,7 @@ export async function executeGovernedTask(
       changed_files: [],
       verification: 'failed',
       next: ctx.lastAssistantNext,
-    });
+    }, 'failed');
     console.error(`\n${human}\n`);
     if (process.stdout.isTTY && !process.env['CI']) {
       try {

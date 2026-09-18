@@ -466,7 +466,7 @@ export async function executeChatTask(
         : 'not_run',
       next: ctx.lastAssistantNext,
       ...(result.turnTelemetry !== undefined ? { turn_telemetry: result.turnTelemetry } : {}),
-    });
+    }, result.outcome ?? result.status);
     // updateConversationMemory remaps TerminalOutcome onto legacy AskAnswer
     // statuses (CANCELLED → NEEDS_MORE_CONTEXT). Restore the operator-facing
     // status so cancel cannot masquerade as a generic failure.
@@ -535,7 +535,7 @@ export async function executeChatTask(
       changed_files: [],
       verification: 'failed',
       next: null,
-    });
+    }, 'failed');
     if (process.stdout.isTTY && !process.env['CI']) {
       try {
         const showAlert = () =>

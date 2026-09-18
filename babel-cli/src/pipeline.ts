@@ -51,7 +51,7 @@ import {
   JitDenialError,
   PolicyBlockedDuplicateError,
 } from './ui/incrementalToolDetector.js';
-import { InputCoordinator } from './ui/inputCoordinator.js';
+import { InputCoordinator, withExclusiveTerminalSurface } from './ui/inputCoordinator.js';
 import { getActiveRenderer } from './ui/waterfall.js';
 import { resolveMode, type ValidMode } from './cli/constants.js';
 import {
@@ -907,11 +907,13 @@ async function runPipelineViaDaemon(
                   if (jitRunDir !== undefined) toolContext.runDir = jitRunDir;
                   const diff = renderGitDiff(req, toolContext);
                   if (isInteractive) {
-                    approved = await ConfirmDialog.show({
-                      title: 'Confirm File Write',
-                      message: `Do you want to allow writing changes to:\n  ${req.path}\n\n${diff || '(No differences detected or empty file)'}`,
-                      danger: false,
-                    });
+                    approved = await withExclusiveTerminalSurface('approval-dialog', () =>
+                      ConfirmDialog.show({
+                        title: 'Confirm File Write',
+                        message: `Do you want to allow writing changes to:\n  ${req.path}\n\n${diff || '(No differences detected or empty file)'}`,
+                        danger: false,
+                      }),
+                    );
                   } else {
                     let card = `\nProposed changes to ${req.path}:\n`;
                     if (diff) card += diff;
@@ -935,22 +937,26 @@ async function runPipelineViaDaemon(
                     : `Command:   ${req.command}\n  Directory: ${req.working_directory ?? process.cwd()}`;
                   
                   if (isInteractive) {
-                    approved = await ConfirmDialog.show({
-                      title: `Confirm ${req.tool}`,
-                      message: `Proposed dangerous tool execution:\n\n  ${detail}`,
-                      danger: true,
-                    });
+                    approved = await withExclusiveTerminalSurface('approval-dialog', () =>
+                      ConfirmDialog.show({
+                        title: `Confirm ${req.tool}`,
+                        message: `Proposed dangerous tool execution:\n\n  ${detail}`,
+                        danger: true,
+                      }),
+                    );
                   } else {
                     process.stdout.write(`\n${detail}\n`);
                     approved = await promptUserJit(`Allow this? [y/N]: `);
                   }
                 } else {
                   if (isInteractive) {
-                    approved = await ConfirmDialog.show({
-                      title: `Confirm Tool: ${req.tool}`,
-                      message: `Proposed tool execution of "${req.tool}" with arguments:\n\n${JSON.stringify(req, null, 2)}`,
-                      danger: true,
-                    });
+                    approved = await withExclusiveTerminalSurface('approval-dialog', () =>
+                      ConfirmDialog.show({
+                        title: `Confirm Tool: ${req.tool}`,
+                        message: `Proposed tool execution of "${req.tool}" with arguments:\n\n${JSON.stringify(req, null, 2)}`,
+                        danger: true,
+                      }),
+                    );
                   } else {
                     process.stdout.write(`\nProposed tool execution of "${req.tool}" with arguments:\n${JSON.stringify(req, null, 2)}\n`);
                     approved = await promptUserJit(`Allow this tool? [y/N]: `);
