@@ -394,8 +394,8 @@ test('P04: unknown optional fact with hostile envelope getter does not throw', (
     },
   } as unknown as RuntimeFactV1;
   const proj = projectTask([...facts, hostile]);
-  assert.ok(proj.degradedReasons.some((reason) => reason.includes('inaccessible_envelope')));
-  assert.equal(proj.outcome?.authoritative, true, 'an observation invalid must not demote authority');
+  assert.ok(proj.degradedReasons.some((reason) => reason.includes('inaccessible_fact')));
+  assert.equal(proj.outcome?.authoritative, false, 'inaccessible facts fail closed');
 });
 
 test('P04: JSON-collapsing duplicate pair is order-independent', () => {
@@ -566,4 +566,47 @@ test('P04: shared-reference payload amplification is rejected', () => {
   const proj = projectTask([fact]);
   assert.equal(proj.degraded, true);
   assert.ok(proj.degradedReasons.some((reason) => reason.includes('unserializable_payload')));
+});
+
+test('P04: a stateful authority getter cannot make the projection order-dependent', () => {
+  const make = (finalOutcome: string): RuntimeFactV1 => {
+    let reads = 0;
+    const fact: Record<string, unknown> = {
+      schemaVersion: 1,
+      id: 'SAME',
+      cursor: { stream: 'runtime-facts', sequence: 7 },
+      threadId: 't',
+      taskId: 'k',
+      turnId: 'u',
+      runId: 'r',
+      sequence: 7,
+      causationId: 'c',
+      producer: 'legacy_adapter',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      payload: {
+        type: 'completion.decided',
+        decision: {
+          requestedOutcome: 'x',
+          finalOutcome,
+          allowed: true,
+          reason: 'r',
+          evidenceRefs: [],
+          policyVersion: 'v1',
+        },
+      },
+    };
+    Object.defineProperty(fact, 'authority', {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads += 1;
+        return reads >= 3 ? function evil() {} : 'authoritative';
+      },
+    });
+    return fact as unknown as RuntimeFactV1;
+  };
+  const forward = projectTask([make('OUTCOME_A'), make('OUTCOME_B')]);
+  const reverse = projectTask([make('OUTCOME_B'), make('OUTCOME_A')]);
+  assert.deepEqual(forward, reverse);
+  assert.equal(forward.degraded, true);
 });

@@ -213,9 +213,18 @@ function contentKey(fact: RuntimeFactV1): string {
       ],
       new WeakSet(),
     );
-    const encoded = canonical.ok
-      ? JSON.stringify(canonical.value)
-      : `malformed:${fact.id}:${fact.sequence}:${fact.timestamp}`;
+    let encoded: string;
+    if (canonical.ok) {
+      encoded = JSON.stringify(canonical.value);
+    } else {
+      let payloadText = 'unserializable';
+      try {
+        payloadText = JSON.stringify(fact.payload) ?? 'unserializable';
+      } catch {
+        /* keep sentinel */
+      }
+      encoded = `malformed:${fact.id}:${fact.sequence}:${fact.timestamp}:${payloadText}`;
+    }
     return createHash('sha256').update(encoded).digest('hex');
   } catch {
     // Only reachable for a fact whose envelope accessors throw after
@@ -224,28 +233,6 @@ function contentKey(fact: RuntimeFactV1): string {
     return createHash('sha256')
       .update(`inaccessible:${fact.id}:${fact.sequence}:${fact.timestamp}`)
       .digest('hex');
-  }
-}
-
-/** Read every envelope field once so a hostile accessor fails classification. */
-function hasAccessibleEnvelope(input: Record<string, unknown>): boolean {
-  try {
-    const cursor = input['cursor'];
-    return (
-      typeof input['threadId'] === 'string' &&
-      typeof input['taskId'] === 'string' &&
-      typeof input['turnId'] === 'string' &&
-      typeof input['runId'] === 'string' &&
-      typeof input['causationId'] === 'string' &&
-      typeof input['timestamp'] === 'string' &&
-      typeof input['producer'] === 'string' &&
-      Number.isInteger(input['sequence']) &&
-      isRecord(cursor) &&
-      typeof cursor['stream'] === 'string' &&
-      Number.isInteger(cursor['sequence'])
-    );
-  } catch {
-    return false;
   }
 }
 
@@ -362,25 +349,63 @@ function cloneJsonSafe(
   }
 }
 
-/** Build a plain fact snapshot; every field is read exactly once here. */
-function snapshotFact(
-  input: Record<string, unknown>,
-  payload: FactPayload,
-): RuntimeFactV1 {
-  const cursor = input['cursor'] as Record<string, unknown>;
+interface EnvelopeRead {
+  authorityRaw: unknown;
+  idRaw: unknown;
+  schemaVersion: unknown;
+  payloadRaw: unknown;
+  cursorStream: unknown;
+  cursorSequence: unknown;
+  sequence: unknown;
+  threadId: unknown;
+  taskId: unknown;
+  turnId: unknown;
+  runId: unknown;
+  causationId: unknown;
+  producer: unknown;
+  timestamp: unknown;
+}
+
+/**
+ * Read every envelope field exactly once. A hostile accessor throws here (the
+ * caller guards), and no field is ever re-read, so a stateful getter cannot
+ * hand validation one value and the snapshot another.
+ */
+function readEnvelope(input: Record<string, unknown>): EnvelopeRead {
+  const cursorRaw = input['cursor'];
+  return {
+    authorityRaw: input['authority'],
+    idRaw: input['id'],
+    schemaVersion: input['schemaVersion'],
+    payloadRaw: input['payload'],
+    cursorStream: isRecord(cursorRaw) ? cursorRaw['stream'] : undefined,
+    cursorSequence: isRecord(cursorRaw) ? cursorRaw['sequence'] : undefined,
+    sequence: input['sequence'],
+    threadId: input['threadId'],
+    taskId: input['taskId'],
+    turnId: input['turnId'],
+    runId: input['runId'],
+    causationId: input['causationId'],
+    producer: input['producer'],
+    timestamp: input['timestamp'],
+  };
+}
+
+/** Build a plain fact snapshot from values already read exactly once. */
+function snapshotFact(read: EnvelopeRead, payload: FactPayload): RuntimeFactV1 {
   return {
     schemaVersion: RUNTIME_FACT_SCHEMA_VERSION,
-    id: input['id'] as string,
-    cursor: { stream: 'runtime-facts', sequence: cursor['sequence'] as number },
-    threadId: input['threadId'] as string,
-    taskId: input['taskId'] as string,
-    turnId: input['turnId'] as string,
-    runId: input['runId'] as string,
-    sequence: input['sequence'] as number,
-    causationId: input['causationId'] as string,
-    producer: input['producer'] as RuntimeFactProducer,
-    authority: input['authority'] as FactAuthority,
-    timestamp: input['timestamp'] as string,
+    id: read.idRaw as string,
+    cursor: { stream: 'runtime-facts', sequence: read.cursorSequence as number },
+    threadId: read.threadId as string,
+    taskId: read.taskId as string,
+    turnId: read.turnId as string,
+    runId: read.runId as string,
+    sequence: read.sequence as number,
+    causationId: read.causationId as string,
+    producer: read.producer as RuntimeFactProducer,
+    authority: read.authorityRaw as FactAuthority,
+    timestamp: read.timestamp as string,
     payload,
   };
 }
@@ -390,46 +415,62 @@ function classifyInput(input: unknown): Classified {
   if (!isRecord(input)) {
     return { kind: 'invalid', reason: 'fact_not_object', authority: 'authoritative' };
   }
-  const authorityRaw = input['authority'];
+  const read = readEnvelope(input);
+  const authorityRaw = read.authorityRaw;
   const authorityKnown = authorityRaw === 'authoritative' || authorityRaw === 'observation';
   // A novel/absent authority token is treated as authority-bearing (fail closed).
   const authority: FactAuthority = authorityRaw === 'observation' ? 'observation' : 'authoritative';
-  const id = typeof input['id'] === 'string' ? input['id'] : undefined;
+  const id = typeof read.idRaw === 'string' ? read.idRaw : undefined;
   const withId = id !== undefined ? { id } : {};
-  const schemaKnown = input['schemaVersion'] === RUNTIME_FACT_SCHEMA_VERSION;
-  const payload = input['payload'];
-  const type = isRecord(payload) && typeof payload['type'] === 'string' ? payload['type'] : undefined;
+  const schemaKnown = read.schemaVersion === RUNTIME_FACT_SCHEMA_VERSION;
+  const payloadRaw = read.payloadRaw;
+  const type = isRecord(payloadRaw) && typeof payloadRaw['type'] === 'string' ? payloadRaw['type'] : undefined;
   const typeKnown = type !== undefined && KNOWN_FACT_TYPES.has(type as never);
+
+  const envelopeAccessible =
+    typeof read.threadId === 'string' &&
+    typeof read.taskId === 'string' &&
+    typeof read.turnId === 'string' &&
+    typeof read.runId === 'string' &&
+    typeof read.causationId === 'string' &&
+    typeof read.timestamp === 'string' &&
+    typeof read.producer === 'string' &&
+    Number.isInteger(read.sequence) &&
+    typeof read.cursorStream === 'string' &&
+    Number.isInteger(read.cursorSequence);
 
   if (!schemaKnown || !typeKnown) {
     if (!authorityKnown || authority === 'authoritative') {
       return { kind: 'unknown_authority', ...withId };
     }
-    if (!hasAccessibleEnvelope(input)) {
+    if (!envelopeAccessible) {
       return { kind: 'invalid', reason: 'inaccessible_envelope', authority, ...withId };
     }
-    if (!isRecord(payload) || id === undefined) {
+    if (!isRecord(payloadRaw) || id === undefined) {
       return { kind: 'invalid', reason: 'invalid_optional_fact', authority, ...withId };
     }
-    const cloned = cloneJsonSafe(payload, new WeakSet());
+    const cloned = cloneJsonSafe(payloadRaw, new WeakSet());
     if (!cloned.ok) {
       return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
     }
-    return {
-      kind: 'unknown_optional',
-      fact: snapshotFact(input, cloned.value as FactPayload),
-    };
+    return { kind: 'unknown_optional', fact: snapshotFact(read, cloned.value as FactPayload) };
   }
 
-  const validation = validateRuntimeFact(input);
-  if (!validation.ok) {
-    return { kind: 'invalid', reason: validation.reason, authority, ...withId };
+  if (!envelopeAccessible) {
+    return { kind: 'invalid', reason: 'inaccessible_envelope', authority, ...withId };
   }
-  const cloned = cloneJsonSafe(validation.fact.payload, new WeakSet());
+  const cloned = cloneJsonSafe(payloadRaw, new WeakSet());
   if (!cloned.ok) {
     return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
   }
-  return { kind: 'known', fact: snapshotFact(input, cloned.value as FactPayload) };
+  // Validate the snapshot (plain data) rather than the caller's object, so a
+  // stateful getter cannot pass validation and then mutate the snapshot.
+  const snapshot = snapshotFact(read, cloned.value as FactPayload);
+  const validation = validateRuntimeFact(snapshot);
+  if (!validation.ok) {
+    return { kind: 'invalid', reason: validation.reason, authority, ...withId };
+  }
+  return { kind: 'known', fact: snapshot };
 }
 
 /**

@@ -346,7 +346,11 @@ export interface FactBus {
  * facts instead of holding the process alive; `dropped()` is observable.
  */
 export function createFactBus(options: { maxQueue?: number } = {}): FactBus {
-  const maxQueue = Math.max(1, options.maxQueue ?? 256);
+  const requested = options.maxQueue;
+  const maxQueue =
+    typeof requested === 'number' && Number.isFinite(requested)
+      ? Math.max(1, Math.floor(requested))
+      : 256;
   interface Entry {
     handler: (fact: RuntimeFactV1) => void;
     queue: RuntimeFactV1[];

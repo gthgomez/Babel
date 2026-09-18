@@ -148,3 +148,12 @@ test('P04: bounded subscriber queue drops the oldest and reports it', () => {
   sub.close();
   assert.equal(bus.subscriberCount(), 0);
 });
+
+test('P04: fact bus stays bounded for a non-finite maxQueue', () => {
+  const bus = createFactBus({ maxQueue: Number.NaN });
+  const sub = bus.subscribe(() => undefined);
+  for (let i = 0; i < 1000; i += 1) {
+    bus.publish(fact({ id: `f${i}`, sequence: i }));
+  }
+  assert.equal(sub.queued(), 256);
+});
