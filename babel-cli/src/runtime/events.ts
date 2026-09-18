@@ -186,6 +186,57 @@ const REQUIRED_PAYLOAD_FIELDS: Record<string, readonly string[]> = {
  * Validate an untrusted fact at ingress. Unknown authority-bearing schema is
  * rejected fail-closed; unknown observation schema may be preserved by callers.
  */
+/** Type-check a known payload's fields; returns a reason when malformed. */
+function payloadTypeError(type: string, payload: Record<string, unknown>): string | null {
+  const isString = (value: unknown): boolean => typeof value === 'string';
+  const optionalString = (value: unknown): boolean => value === undefined || isString(value);
+  switch (type) {
+    case 'turn.admitted':
+      return isString(payload['commandId']) ? null : 'invalid_commandId';
+    case 'run.started':
+      return typeof payload['ownerGeneration'] === 'number' ? null : 'invalid_ownerGeneration';
+    case 'run.cancel_requested':
+      return optionalString(payload['commandId']) ? null : 'invalid_commandId';
+    case 'run.settled':
+      return isString(payload['status']) ? null : 'invalid_status';
+    case 'operation.prepared':
+      return isString(payload['operationDigest']) &&
+        optionalString(payload['operationId']) &&
+        optionalString(payload['toolName']) &&
+        optionalString(payload['effectClass'])
+        ? null
+        : 'invalid_operation_prepared';
+    case 'operation.settled':
+      return isString(payload['receiptId']) &&
+        optionalString(payload['operationId']) &&
+        optionalString(payload['status'])
+        ? null
+        : 'invalid_operation_settled';
+    case 'operation.indeterminate':
+      return isString(payload['operationDigest']) &&
+        isString(payload['reason']) &&
+        optionalString(payload['operationId'])
+        ? null
+        : 'invalid_operation_indeterminate';
+    case 'context.committed':
+      return isString(payload['checkpointId']) ? null : 'invalid_checkpointId';
+    case 'context.degraded':
+      return isString(payload['reason']) ? null : 'invalid_reason';
+    case 'verification.recorded':
+      return isString(payload['receiptId']) && typeof payload['authoritative'] === 'boolean'
+        ? null
+        : 'invalid_verification_recorded';
+    case 'permission.decided':
+      return payload['decision'] === 'allow' ||
+        payload['decision'] === 'ask' ||
+        payload['decision'] === 'deny'
+        ? null
+        : 'invalid_permission_decision';
+    default:
+      return null;
+  }
+}
+
 /** Total ingress validator: hostile or revoked input fails closed, never throws. */
 export function validateRuntimeFact(input: unknown): FactValidation {
   try {
@@ -264,6 +315,8 @@ function validateRuntimeFactInner(input: unknown): FactValidation {
   if (type === 'verification.recorded' && typeof payload['authoritative'] !== 'boolean') {
     return fail('invalid_verification_authoritative');
   }
+  const typeError = payloadTypeError(type, payload);
+  if (typeError) return fail(typeError);
   return { ok: true, fact: input as unknown as RuntimeFactV1 };
 }
 
@@ -444,6 +497,9 @@ export interface FactBus {
   subscriberCount(): number;
 }
 
+/** Hard ceiling on a subscriber queue regardless of caller configuration. */
+const MAX_FACT_QUEUE = 10_000;
+
 /**
  * Bounded in-memory observation bus. Slow subscribers drop the oldest queued
  * facts instead of holding the process alive; `dropped()` is observable.
@@ -457,7 +513,7 @@ export function createFactBus(options: { maxQueue?: number } | null = {}): FactB
   }
   const maxQueue =
     typeof requested === 'number' && Number.isFinite(requested)
-      ? Math.max(1, Math.floor(requested))
+      ? Math.min(MAX_FACT_QUEUE, Math.max(1, Math.floor(requested)))
       : 256;
   interface Entry {
     handler: (fact: RuntimeFactV1) => void;

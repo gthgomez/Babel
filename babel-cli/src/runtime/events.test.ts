@@ -232,6 +232,23 @@ test('P04: createFactBus tolerates hostile options', () => {
   assert.doesNotThrow(() => createFactBus(hostile as never));
 });
 
+test('P04: fact bus clamps a huge maxQueue', () => {
+  const bus = createFactBus({ maxQueue: 1_000_000 });
+  const sub = bus.subscribe(() => undefined);
+  for (let i = 0; i < 10_050; i += 1) {
+    bus.publish(fact({ id: `f${i}`, sequence: i }));
+  }
+  assert.equal(sub.queued(), 10_000);
+});
+
+test('P04: validator rejects non-string payload fields', () => {
+  const result = validateRuntimeFact(
+    fact({ payload: { type: 'operation.prepared', operationDigest: 123 } }),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.ok === false ? result.reason : '', /invalid_operation_prepared/);
+});
+
 test('P04: fact cursor is its own address space', () => {
   const a = { stream: 'runtime-facts' as const, sequence: 1 };
   const b = { stream: 'runtime-facts' as const, sequence: 2 };

@@ -321,6 +321,18 @@ test('P04: legacy adapters are total for malformed and hostile events', () => {
   assert.doesNotThrow(() => sessionLogToFacts(hostile() as unknown as SessionEvent[]));
 });
 
+test('P04: legacy adapters bound endless event iterables', () => {
+  function* endless(): Generator<SessionEvent> {
+    while (true) {
+      yield ev(1, { kind: 'turn_ended', outcome: 'CANCELLED', status: 'cancelled' });
+    }
+  }
+  const started = Date.now();
+  const facts = sessionLogToFacts(endless() as unknown as SessionEvent[]);
+  assert.ok(facts.length <= 100_000, `bounded, got ${facts.length}`);
+  assert.ok(Date.now() - started < 5000);
+});
+
 test('P04: distinct unknown-authority facts are order-independent', () => {
   const facts = sessionLogToFacts(corpus());
   const ua = (id: string, sequence: number): RuntimeFactV1 =>

@@ -36,6 +36,9 @@ export interface LegacyFactContext {
 
 const DEFAULT_PRODUCER: RuntimeFactProducer = 'legacy_adapter';
 
+/** Bound adapter input so an endless event iterable cannot run forever. */
+const MAX_LEGACY_EVENTS = 100_000;
+
 function cursorFor(sequence: number): EventCursor {
   return { stream: 'runtime-facts', sequence };
 }
@@ -245,15 +248,16 @@ export function sessionEventToFacts(
     const runId = context.runId ?? event.session_id;
     const taskId = context.taskId ?? '';
     const producer = context.producer ?? DEFAULT_PRODUCER;
+    const seq = event.seq;
     return payloads.map((payload, index) => ({
       schemaVersion: RUNTIME_FACT_SCHEMA_VERSION,
       id: payloads.length > 1 ? `${event.event_id}:${index}` : event.event_id,
-      cursor: cursorFor(event.seq),
+      cursor: cursorFor(seq),
       threadId,
       taskId,
       turnId: event.turn_id ?? '',
       runId,
-      sequence: event.seq,
+      sequence: seq,
       causationId: event.event_id,
       producer,
       authority: authorityFor(payload.type, payload),
@@ -272,8 +276,11 @@ export function sessionLogToFacts(
 ): RuntimeFactV1[] {
   const facts: RuntimeFactV1[] = [];
   let sequence = 0;
+  let eventsSeen = 0;
   try {
     for (const event of events) {
+      eventsSeen += 1;
+      if (eventsSeen > MAX_LEGACY_EVENTS) break;
       for (const fact of sessionEventToFacts(event, context)) {
         // The fact stream owns its own contiguous sequence; the source session
         // sequence is not the fact cursor. Source identity stays on causationId.
