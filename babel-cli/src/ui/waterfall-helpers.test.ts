@@ -72,6 +72,23 @@ it('hosted conversational renderer leaves stdin ownership to the shell root', ()
   }
 });
 
+it('conversational renderer transfers raw input ownership across a host transition', () => {
+  const renderer = new ConversationalRenderer({ isTTY: true, ownsInput: true });
+  let disabled = 0;
+  let enabled = 0;
+  (renderer as any).disableRawMode = () => { disabled += 1; };
+  (renderer as any).enableRawMode = () => { enabled += 1; };
+  try {
+    renderer.setInputOwnership(false);
+    assert.equal(disabled, 1);
+    assert.equal(renderer.isRawModeActive(), false);
+    renderer.setInputOwnership(true);
+    assert.equal(enabled, 1);
+  } finally {
+    renderer.stop();
+  }
+});
+
 // ── Direct tests ─────────────────────────────────────────────────────────────
 // All tests now exercise the real exported functions directly.
 

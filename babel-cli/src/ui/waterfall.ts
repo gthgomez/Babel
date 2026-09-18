@@ -203,6 +203,9 @@ class BaseRenderer {
     return false;
   }
 
+  /** Transfer raw-input ownership when the host changes responsively. */
+  setInputOwnership(_ownsInput: boolean): void {}
+
   /**
    * Suspend renderer presentation and raw input while a foreign terminal
    * surface owns the TTY. Nested leases are balanced at this boundary.
@@ -1332,7 +1335,7 @@ export class ConversationalRenderer extends BaseRenderer {
   private taskLabel: string | undefined;
   private readonly _rawMode: RawModeManager;
   /** Hosted North Star shells own stdin; legacy renderers retain raw input. */
-  private readonly ownsInput: boolean;
+  private ownsInput: boolean;
 
   private _pendingToolCallLines: number;
   private _store: StateStore<TuiState, TuiMutation> | undefined;
@@ -1808,6 +1811,21 @@ export class ConversationalRenderer extends BaseRenderer {
 
   override isRawModeActive(): boolean {
     return this._rawMode.isActive;
+  }
+
+  override setInputOwnership(ownsInput: boolean): void {
+    if (this.ownsInput === ownsInput) return;
+    this.ownsInput = ownsInput;
+    if (!ownsInput) {
+      this.disableRawMode();
+      return;
+    }
+    // A renderer can outlive the shell host across a responsive transition.
+    // Reclaim raw input only while its turn is still live; idle PromptInput
+    // remains the sole legacy owner.
+    if (this.isTTY && this._state !== 'done' && this._state !== 'failed') {
+      this.enableRawMode();
+    }
   }
 
   override resumeTicks(): void {

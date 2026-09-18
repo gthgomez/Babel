@@ -64,6 +64,7 @@ import {
 } from '../ui/shell/shellInputRouter.js';
 import { ShellRuntimeBinding } from '../ui/shell/shellRuntimeBinding.js';
 import { projectShellPresentation } from '../ui/shell/shellPresentation.js';
+import { getActiveRenderer } from '../ui/waterfall.js';
 
 // ─── REPL Class ───────────────────────────────────────────────────────────────
 
@@ -285,6 +286,14 @@ export class BabelRepl {
       return;
     }
 
+    // A resize can promote a running legacy turn into North Star after Chat
+    // already installed ConversationalRenderer raw input. Transfer ownership
+    // before the hosted prompt is activated so the shell has one stdin path.
+    const activeRenderer = getActiveRenderer() as unknown as {
+      setInputOwnership?: (ownsInput: boolean) => void;
+    } | null;
+    activeRenderer?.setInputOwnership?.(false);
+
     let host: ShellHost | undefined;
     const threadId = this.chatEngine?.getEngineRunId();
     this.shellRuntime = new ShellRuntimeBinding({
@@ -369,12 +378,31 @@ export class BabelRepl {
       if (!routed.handled && routed.state.focus === 'composer') adapter.processKey(event);
     });
     host.mount();
+    // Responsive promotion may happen while the legacy prompt is inactive
+    // because the current renderer owns raw input. Re-activate the hosted
+    // editor without installing another stdin reader.
+    adapter.prompt();
   }
 
   private leaveNorthStarShell(): void {
     const adapter = this.rl as unknown as PromptInputAdapter & {
       setPresentationTarget?: (target: null) => void;
     };
+    const activeRenderer = getActiveRenderer() as unknown as {
+      setInputOwnership?: (ownsInput: boolean) => void;
+      isRawModeActive?: () => boolean;
+    } | null;
+    const promptInput = adapter.getPromptInput?.();
+    const rendererWillOwnInput = Boolean(
+      activeRenderer?.setInputOwnership &&
+      (this.isRunning || activeRenderer.isRawModeActive?.()),
+    );
+    // setPresentationTarget(null) restores PromptInput's standalone reader.
+    // During a running responsive demotion that reader must stay inactive until
+    // renderer ownership is restored, otherwise both receive the same bytes.
+    if (rendererWillOwnInput && promptInput?.getState().active) {
+      promptInput.deactivate();
+    }
     adapter.setPresentationTarget?.(null);
     this.shellKeyCleanup?.();
     this.shellKeyCleanup = null;
@@ -384,6 +412,7 @@ export class BabelRepl {
     this.shellExclusiveRunnerCleanup = null;
     this.shellRuntime = undefined;
     this.activeShellTurnEpoch = undefined;
+    if (rendererWillOwnInput) activeRenderer?.setInputOwnership?.(true);
   }
 
   // ── Session Persistence ──────────────────────────────────────────────────
