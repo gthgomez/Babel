@@ -14,5 +14,7 @@ export {
   formatTurnEventNotification,
   handleProtocolRequest,
   parseProtocolRequest,
+  releaseLaunchOwnership,
+  type ActiveLaunch,
   type ProtocolHostState,
 } from './host.js';

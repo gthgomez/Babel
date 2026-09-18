@@ -40,9 +40,27 @@ import {
   type VerificationEvidence,
 } from '../../bridge/verificationMap.js';
 
+/**
+ * Ownership record for one in-flight protocol launch.
+ *
+ * `generation` is a per-thread monotonically increasing identity. A launch may
+ * release ownership only while this exact record still owns the thread, so an
+ * obsolete finalizer can never clear a successor's ownership.
+ */
+export interface ActiveLaunch {
+  turnId: number;
+  generation: number;
+  /** Cancellation has been requested; the launch may still be settling. */
+  cancelRequested: boolean;
+  /** The launch reached a terminal path and may release ownership. */
+  settled: boolean;
+}
+
 export interface ProtocolHostState {
   engines: Map<string, ChatEngine>;
-  activeTurns: Map<string, number>;
+  activeTurns: Map<string, ActiveLaunch>;
+  /** Per-thread monotonic generation counter for active launches. */
+  launchCounters: Map<string, number>;
   descriptors: Map<string, SessionDescriptor>;
   engineFactory: (descriptor: SessionDescriptor) => ChatEngine;
   executeWithoutNotifications: boolean;
@@ -67,6 +85,7 @@ export function createProtocolHostState(options: {
   return {
     engines: new Map(),
     activeTurns: new Map(),
+    launchCounters: new Map(),
     descriptors: new Map(),
     engineFactory: options.engineFactory ?? defaultEngineFactory,
     executeWithoutNotifications: options.executeWithoutNotifications ?? false,
@@ -121,6 +140,26 @@ function materializeEngine(state: ProtocolHostState, descriptor: SessionDescript
   state.engines.set(descriptor.threadId, engine);
   state.descriptors.set(descriptor.threadId, descriptor);
   return engine;
+}
+
+/**
+ * Release ownership only if `launch` is still the current owner of `threadId`.
+ *
+ * This is the guard that makes cancellation safe: a launch whose generation has
+ * been superseded cannot delete the successor's active-turn record. Returns
+ * true when this call actually released ownership.
+ */
+export function releaseLaunchOwnership(
+  state: ProtocolHostState,
+  threadId: string,
+  launch: ActiveLaunch,
+): boolean {
+  const current = state.activeTurns.get(threadId);
+  if (!current || current.generation !== launch.generation) {
+    return false;
+  }
+  state.activeTurns.delete(threadId);
+  return true;
 }
 
 function errorResponse(id: string | number | null, code: number, message: string): JsonRpcResponse {
@@ -235,13 +274,21 @@ export async function handleProtocolRequest(
           );
         }
         const turnId = resolveNextTurnId(params.thread_id);
-        state.activeTurns.set(params.thread_id, turnId);
+        const generation = (state.launchCounters.get(params.thread_id) ?? 0) + 1;
+        state.launchCounters.set(params.thread_id, generation);
+        const launch: ActiveLaunch = {
+          turnId,
+          generation,
+          cancelRequested: false,
+          settled: false,
+        };
+        state.activeTurns.set(params.thread_id, launch);
         state.lastMessageIntegrity.set(`${params.thread_id}:${turnId}`, integrity);
 
         const descriptor = state.descriptors.get(params.thread_id) ?? loadSessionDescriptor(params.thread_id);
         const engine = descriptor ? materializeEngine(state, descriptor) : state.engines.get(params.thread_id);
         if (!engine) {
-          state.activeTurns.delete(params.thread_id);
+          releaseLaunchOwnership(state, params.thread_id, launch);
           return errorResponse(id, BabelProtocolErrorCode.INTERNAL_ERROR, `Unable to materialize thread runtime: ${params.thread_id}`);
         }
 
@@ -284,7 +331,8 @@ export async function handleProtocolRequest(
                  });
                } catch { /* ignore */ }
             } finally {
-              state.activeTurns.delete(params.thread_id);
+              launch.settled = true;
+              releaseLaunchOwnership(state, params.thread_id, launch);
               try {
                 onNotification?.({
                   jsonrpc: '2.0',
@@ -345,15 +393,25 @@ export async function handleProtocolRequest(
             `No turn in progress for thread: ${params.thread_id}`,
           );
         }
-        engine.cancel();
-        const turnId = state.activeTurns.get(params.thread_id) ?? null;
-        if (turnId !== null) {
-          state.approvalBroker.cancelTurn(params.thread_id, String(turnId));
+        const launch = state.activeTurns.get(params.thread_id);
+        if (!launch) {
+          return errorResponse(
+            id,
+            BabelProtocolErrorCode.TURN_NOT_IN_PROGRESS,
+            `No turn in progress for thread: ${params.thread_id}`,
+          );
         }
-        state.activeTurns.delete(params.thread_id);
+        // Cancellation is a request. Ownership is released only when the launch
+        // actually settles, so a successor cannot overlap this execution and a
+        // stale finalizer cannot clear the next owner.
+        if (!launch.cancelRequested) {
+          launch.cancelRequested = true;
+          engine.cancel();
+          state.approvalBroker.cancelTurn(params.thread_id, String(launch.turnId));
+        }
         const result: TurnCancelResult = {
           thread_id: params.thread_id,
-          turn_id: turnId,
+          turn_id: launch.turnId,
           cancelled: true,
         };
         return { jsonrpc: '2.0', id, result };
