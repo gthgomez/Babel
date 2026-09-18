@@ -13,6 +13,7 @@ import { projectLiveSession } from '../agent/liveSession.js';
 import { createSessionEventLog, type SessionEvent } from '../agent/sessionEvents.js';
 import {
   sessionEventPayloads,
+  sessionEventToFacts,
   sessionLogToFacts,
 } from './legacyEventAdapters.js';
 import { projectTask, projectTaskFromSessionEvents } from './projection.js';
@@ -292,6 +293,32 @@ test('P04: adapter is total for non-semantic kinds', () => {
     sessionEventPayloads(ev(2, { kind: 'model_invocation_phase', inference_id: 'i', provider: 'p', model: 'm', phase: 'request_dispatched' })),
     [],
   );
+});
+
+test('P04: legacy adapters are total for malformed and hostile events', () => {
+  const malformed = {
+    schema_version: 1,
+    event_id: 'e',
+    session_id: 's',
+    turn_id: 't',
+    seq: 1,
+    ts: 'x',
+    kind: 'provider_failure_receipt',
+  } as unknown as SessionEvent;
+  assert.doesNotThrow(() => sessionEventPayloads(malformed));
+  assert.deepEqual(sessionEventPayloads(malformed), []);
+  assert.doesNotThrow(() =>
+    sessionEventToFacts({
+      get kind(): never {
+        throw new Error('boom');
+      },
+    } as unknown as SessionEvent),
+  );
+  function* hostile(): Generator<SessionEvent> {
+    yield corpus()[0]!;
+    throw new Error('iter boom');
+  }
+  assert.doesNotThrow(() => sessionLogToFacts(hostile() as unknown as SessionEvent[]));
 });
 
 test('P04: distinct unknown-authority facts are order-independent', () => {

@@ -66,6 +66,7 @@ export function sessionEventPayloads(
   event: SessionEvent,
   context: LegacyFactContext = {},
 ): FactPayload[] {
+  try {
   switch (event.kind) {
     case 'user_submitted':
       return [{ type: 'turn.admitted', commandId: event.event_id }];
@@ -227,6 +228,10 @@ export function sessionEventPayloads(
       // readers stay authoritative for them.
       return [];
   }
+  } catch {
+    // A type-violating or hostile event yields no facts rather than throwing.
+    return [];
+  }
 }
 
 /** Adapter identity for one fact derived from one legacy event. */
@@ -234,26 +239,30 @@ export function sessionEventToFacts(
   event: SessionEvent,
   context: LegacyFactContext = {},
 ): RuntimeFactV1[] {
-  const payloads = sessionEventPayloads(event, context);
-  const threadId = context.threadId ?? event.session_id;
-  const runId = context.runId ?? event.session_id;
-  const taskId = context.taskId ?? '';
-  const producer = context.producer ?? DEFAULT_PRODUCER;
-  return payloads.map((payload, index) => ({
-    schemaVersion: RUNTIME_FACT_SCHEMA_VERSION,
-    id: payloads.length > 1 ? `${event.event_id}:${index}` : event.event_id,
-    cursor: cursorFor(event.seq),
-    threadId,
-    taskId,
-    turnId: event.turn_id ?? '',
-    runId,
-    sequence: event.seq,
-    causationId: event.event_id,
-    producer,
-    authority: authorityFor(payload.type, payload),
-    timestamp: event.ts,
-    payload,
-  }));
+  try {
+    const payloads = sessionEventPayloads(event, context);
+    const threadId = context.threadId ?? event.session_id;
+    const runId = context.runId ?? event.session_id;
+    const taskId = context.taskId ?? '';
+    const producer = context.producer ?? DEFAULT_PRODUCER;
+    return payloads.map((payload, index) => ({
+      schemaVersion: RUNTIME_FACT_SCHEMA_VERSION,
+      id: payloads.length > 1 ? `${event.event_id}:${index}` : event.event_id,
+      cursor: cursorFor(event.seq),
+      threadId,
+      taskId,
+      turnId: event.turn_id ?? '',
+      runId,
+      sequence: event.seq,
+      causationId: event.event_id,
+      producer,
+      authority: authorityFor(payload.type, payload),
+      timestamp: event.ts,
+      payload,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 /** Map an ordered session log to shadow facts. Pure and side-effect free. */
@@ -263,14 +272,18 @@ export function sessionLogToFacts(
 ): RuntimeFactV1[] {
   const facts: RuntimeFactV1[] = [];
   let sequence = 0;
-  for (const event of events) {
-    for (const fact of sessionEventToFacts(event, context)) {
-      // The fact stream owns its own contiguous sequence; the source session
-      // sequence is not the fact cursor. Source identity stays on causationId.
-      const cursor: EventCursor = { stream: 'runtime-facts', sequence };
-      facts.push({ ...fact, sequence, cursor });
-      sequence += 1;
+  try {
+    for (const event of events) {
+      for (const fact of sessionEventToFacts(event, context)) {
+        // The fact stream owns its own contiguous sequence; the source session
+        // sequence is not the fact cursor. Source identity stays on causationId.
+        const cursor: EventCursor = { stream: 'runtime-facts', sequence };
+        facts.push({ ...fact, sequence, cursor });
+        sequence += 1;
+      }
     }
+  } catch {
+    // A hostile/unterminating iterable yields the facts gathered so far.
   }
   return facts;
 }
