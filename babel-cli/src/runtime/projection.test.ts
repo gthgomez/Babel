@@ -354,3 +354,46 @@ test('P04: an observation run.settled terminal does not regress', () => {
   assert.equal(proj.phase, 'terminal');
   assert.equal(proj.outcome?.authoritative, false);
 });
+
+test('P04: id-less unknown authority fact still demotes every authority claim', () => {
+  const facts = sessionLogToFacts(corpus());
+  const idless = {
+    ...facts[0]!,
+    schemaVersion: 2,
+    authority: 'authoritative',
+    payload: { type: 'future.authority' },
+  } as unknown as RuntimeFactV1;
+  delete (idless as { id?: string }).id;
+  const proj = projectTask([...facts, idless]);
+  assert.equal(proj.outcome?.authoritative, false, 'demotion must not depend on the id list');
+  assert.equal(proj.verifier.authoritative, false);
+});
+
+test('P04: hostile envelope accessors do not throw and fail closed', () => {
+  const facts = sessionLogToFacts(corpus());
+  const hostile = {
+    get authority(): never {
+      throw new Error('boom');
+    },
+  } as unknown as RuntimeFactV1;
+  const proj = projectTask([...facts, hostile]);
+  assert.equal(proj.outcome?.authoritative, false);
+  assert.ok(proj.degradedReasons.some((reason) => reason.includes('inaccessible_fact')));
+});
+
+test('P04: JSON-collapsing duplicate pair is order-independent', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const a = {
+    ...template,
+    id: 'n',
+    sequence: 400,
+    payload: { type: 'run.settled', status: Number.NaN },
+  } as unknown as RuntimeFactV1;
+  const b = {
+    ...template,
+    id: 'n',
+    sequence: 400,
+    payload: { type: 'run.settled', status: Number.POSITIVE_INFINITY },
+  } as unknown as RuntimeFactV1;
+  assert.deepEqual(projectTask([a, b]), projectTask([b, a]));
+});

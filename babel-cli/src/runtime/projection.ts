@@ -7,18 +7,22 @@
  * whose envelope authority is `authoritative` may set an authoritative outcome;
  * `run.settled`/`turn_ended` stay observations.
  *
- * Determinism: facts are normalized by a total order over the whole envelope
- * (sequence, id, authority, identity, payload) before reducing, so any input
- * ordering of duplicates/reordered facts yields a deep-equal projection,
- * including the degraded/unknown id arrays.
+ * Determinism: facts are normalized by an injective content key (SHA-256 over a
+ * canonical encoding that distinguishes NaN/Infinity/-0/undefined) and ordered
+ * by (sequence, contentKey), so any input ordering of duplicates/reordered
+ * facts yields a deep-equal projection, including every reported array.
  *
- * Fail closed: unknown authority-bearing schema or a novel/absent authority
- * token degrades the projection and demotes every authority claim (outcome and
- * verifier). Malformed or non-serializable payloads degrade instead of throwing.
+ * Fail closed: an unknown-authority-bearing fact — including one with no id, a
+ * novel authority token, or a non-object entry — sets a boolean that demotes
+ * BOTH `outcome.authoritative` and `verifier.authoritative`. Malformed or
+ * non-serializable payloads, hostile getters, and revoked proxies degrade
+ * instead of throwing; `projectTask` is total.
  *
  * View/UI projection remains separate. This module must not import `ui/` or
  * `interactive/` (enforced by `dependencyBoundary.test.ts`).
  */
+
+import { createHash } from 'node:crypto';
 
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import type { SessionEvent } from '../agent/sessionEvents.js';
@@ -104,67 +108,112 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-/**
- * JSON serialization that cannot throw. `null` means the value is not a safe
- * canonical fact payload (cyclic, BigInt, function, throwing `toJSON`, ...).
- */
-function stableSerialize(value: unknown): string | null {
-  let malformed = false;
-  try {
-    const seen = new WeakSet<object>();
-    const json = JSON.stringify(value, (_key, entry) => {
-      if (typeof entry === 'bigint' || typeof entry === 'function') {
-        malformed = true;
-        return '[unserializable]';
-      }
-      if (typeof entry === 'object' && entry !== null) {
-        if (seen.has(entry)) {
-          malformed = true;
-          return '[circular]';
-        }
-        seen.add(entry);
-      }
-      return entry;
-    });
-    if (typeof json !== 'string' || malformed) return null;
-    return json;
-  } catch {
-    return null;
-  }
-}
-
 function codeUnitCompare(a: string, b: string): number {
   if (a === b) return 0;
   return a < b ? -1 : 1;
 }
 
+type Canonical = unknown;
+type CanonicalResult = { ok: true; value: Canonical } | { ok: false };
+
 /**
- * Total order key over the whole fact envelope plus payload. Two facts share a
- * key only when every compared field is identical, so dedupe/order are
- * independent of input order.
+ * Injective canonical encoding. Distinguishes values JSON collapses or cannot
+ * represent (NaN, ±Infinity, -0, undefined, BigInt, Map/Set/Date) and rejects
+ * functions, symbols, true cycles and inaccessible objects. `path` is a
+ * recursion stack, so a shared non-cyclic reference is valid.
  */
-function factOrderKey(fact: RuntimeFactV1): string {
-  return [
-    fact.sequence,
-    fact.id,
-    fact.authority,
-    fact.producer,
-    fact.threadId,
-    fact.taskId,
-    fact.turnId,
-    fact.runId,
-    fact.causationId,
-    fact.timestamp,
-    fact.cursor.stream,
-    fact.cursor.sequence,
-    stableSerialize(fact.payload) ?? '[unserializable]',
-  ].join('\u0000');
+function canonicalize(value: unknown, path: WeakSet<object>): CanonicalResult {
+  if (value === null) return { ok: true, value: null };
+  const type = typeof value;
+  if (type === 'string' || type === 'boolean') return { ok: true, value };
+  if (type === 'number') {
+    if (Number.isNaN(value)) return { ok: true, value: { $number: 'NaN' } };
+    if (value === Infinity) return { ok: true, value: { $number: 'Infinity' } };
+    if (value === -Infinity) return { ok: true, value: { $number: '-Infinity' } };
+    if (Object.is(value, -0)) return { ok: true, value: { $number: '-0' } };
+    return { ok: true, value };
+  }
+  if (type === 'undefined') return { ok: true, value: { $undefined: true } };
+  if (type === 'bigint') return { ok: true, value: { $bigint: (value as bigint).toString() } };
+  if (type === 'function' || type === 'symbol') return { ok: false };
+
+  const object = value as object;
+  if (path.has(object)) return { ok: false };
+  path.add(object);
+  try {
+    if (object instanceof Date) return { ok: true, value: { $date: object.toISOString() } };
+    if (object instanceof Map) {
+      const entries: unknown[] = [];
+      for (const [key, entry] of object.entries()) {
+        const canonicalKey = canonicalize(key, path);
+        if (!canonicalKey.ok) return { ok: false };
+        const canonicalValue = canonicalize(entry, path);
+        if (!canonicalValue.ok) return { ok: false };
+        entries.push([canonicalKey.value, canonicalValue.value]);
+      }
+      return { ok: true, value: { $map: entries } };
+    }
+    if (object instanceof Set) {
+      const entries: unknown[] = [];
+      for (const entry of object.values()) {
+        const canonical = canonicalize(entry, path);
+        if (!canonical.ok) return { ok: false };
+        entries.push(canonical.value);
+      }
+      return { ok: true, value: { $set: entries } };
+    }
+    if (Array.isArray(object)) {
+      const entries: unknown[] = [];
+      for (const entry of object) {
+        const canonical = canonicalize(entry, path);
+        if (!canonical.ok) return { ok: false };
+        entries.push(canonical.value);
+      }
+      return { ok: true, value: entries };
+    }
+    const record = object as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort(codeUnitCompare)) {
+      const canonical = canonicalize(record[key], path);
+      if (!canonical.ok) return { ok: false };
+      out[key] = canonical.value;
+    }
+    return { ok: true, value: out };
+  } catch {
+    return { ok: false };
+  } finally {
+    path.delete(object);
+  }
+}
+
+/** SHA-256 over the canonical encoding of the whole envelope+payload. */
+function contentKey(fact: RuntimeFactV1): string {
+  const canonical = canonicalize(
+    [
+      fact.sequence,
+      fact.id,
+      fact.authority,
+      fact.producer,
+      fact.threadId,
+      fact.taskId,
+      fact.turnId,
+      fact.runId,
+      fact.causationId,
+      fact.timestamp,
+      fact.cursor.stream,
+      fact.cursor.sequence,
+      fact.payload,
+    ],
+    new WeakSet(),
+  );
+  const encoded = canonical.ok ? JSON.stringify(canonical.value) : `malformed:${fact.id}`;
+  return createHash('sha256').update(encoded).digest('hex');
 }
 
 function orderedCompare(a: RuntimeFactV1, b: RuntimeFactV1): number {
   const bySequence = a.sequence - b.sequence;
   if (bySequence !== 0) return bySequence;
-  return codeUnitCompare(factOrderKey(a), factOrderKey(b));
+  return codeUnitCompare(contentKey(a), contentKey(b));
 }
 
 function emptyProjection(): TaskProjection {
@@ -196,6 +245,7 @@ type Classified =
   | { kind: 'unknown_optional'; fact: RuntimeFactV1 }
   | { kind: 'invalid'; id?: string; reason: string; authority: FactAuthority };
 
+/** Classify one untrusted input. May throw only on hostile accessors; callers guard. */
 function classifyInput(input: unknown): Classified {
   if (!isRecord(input)) {
     return { kind: 'invalid', reason: 'fact_not_object', authority: 'authoritative' };
@@ -215,11 +265,8 @@ function classifyInput(input: unknown): Classified {
     if (!authorityKnown || authority === 'authoritative') {
       return { kind: 'unknown_authority', ...withId };
     }
-    if (!isRecord(payload)) {
-      return { kind: 'invalid', reason: 'invalid_payload', authority, ...withId };
-    }
-    if (stableSerialize(payload) === null) {
-      return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
+    if (!isRecord(payload) || id === undefined || !canonicalize(payload, new WeakSet()).ok) {
+      return { kind: 'invalid', reason: 'invalid_optional_fact', authority, ...withId };
     }
     return { kind: 'unknown_optional', fact: input as unknown as RuntimeFactV1 };
   }
@@ -228,28 +275,27 @@ function classifyInput(input: unknown): Classified {
   if (!validation.ok) {
     return { kind: 'invalid', reason: validation.reason, authority, ...withId };
   }
-  if (stableSerialize(validation.fact.payload) === null) {
+  if (!canonicalize(validation.fact.payload, new WeakSet()).ok) {
     return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
   }
   return { kind: 'known', fact: validation.fact };
 }
 
 /**
- * Collapse facts by id in a stable order. A later fact with the same id but a
- * different full envelope is corruption: it degrades the projection and is
- * dropped deterministically (the order-first fact wins).
+ * Collapse facts by id in a stable order. A fact with the same id but a
+ * different content key is corruption: it degrades and is dropped
+ * deterministically (the order-first fact wins).
  */
 function dedupeByFactId(facts: RuntimeFactV1[], state: TaskProjection): RuntimeFactV1[] {
   const byId = new Map<string, RuntimeFactV1>();
   const keyById = new Map<string, string>();
   for (const fact of [...facts].sort(orderedCompare)) {
-    const key = factOrderKey(fact);
+    const key = contentKey(fact);
     const prior = keyById.get(fact.id);
     if (prior === undefined) {
       byId.set(fact.id, fact);
       keyById.set(fact.id, key);
     } else if (prior !== key) {
-      state.degraded = true;
       state.degradedReasons.push('conflicting_duplicate_fact');
     }
   }
@@ -263,34 +309,46 @@ function uniqueSorted(values: string[]): string[] {
 /**
  * Pure reduction over facts. Validation runs at this boundary; duplicates
  * collapse by fact id (conflicting content degrades), reordering is normalized
- * by a total order, gaps degrade, and unknown authority fails closed.
+ * by an injective total order, gaps degrade, and unknown authority fails closed.
  */
 export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
   const state = emptyProjection();
   const known: RuntimeFactV1[] = [];
   const optional: RuntimeFactV1[] = [];
+  let sawUnknownAuthority = false;
 
-  for (const input of facts) {
-    const classified = classifyInput(input);
-    switch (classified.kind) {
-      case 'known':
-        known.push(classified.fact);
-        break;
-      case 'unknown_authority':
-        state.degradedReasons.push('unknown_authoritative_fact');
-        if (classified.id !== undefined) state.unknownAuthorityFactIds.push(classified.id);
-        break;
-      case 'unknown_optional':
-        optional.push(classified.fact);
-        break;
-      case 'invalid':
-        state.degradedReasons.push(`invalid_fact:${classified.reason}`);
-        if (classified.authority === 'authoritative') {
+  try {
+    for (const input of facts) {
+      let classified: Classified;
+      try {
+        classified = classifyInput(input);
+      } catch {
+        classified = { kind: 'invalid', reason: 'inaccessible_fact', authority: 'authoritative' };
+      }
+      switch (classified.kind) {
+        case 'known':
+          known.push(classified.fact);
+          break;
+        case 'unknown_authority':
+          sawUnknownAuthority = true;
           state.degradedReasons.push('unknown_authoritative_fact');
           if (classified.id !== undefined) state.unknownAuthorityFactIds.push(classified.id);
-        }
-        break;
+          break;
+        case 'unknown_optional':
+          optional.push(classified.fact);
+          break;
+        case 'invalid':
+          state.degradedReasons.push(`invalid_fact:${classified.reason}`);
+          if (classified.authority === 'authoritative') {
+            sawUnknownAuthority = true;
+            state.degradedReasons.push('unknown_authoritative_fact');
+            if (classified.id !== undefined) state.unknownAuthorityFactIds.push(classified.id);
+          }
+          break;
+      }
     }
+  } catch {
+    state.degradedReasons.push('fact_iteration_failed');
   }
 
   const orderedKnown = dedupeByFactId(known, state);
@@ -405,8 +463,6 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
     }
   }
 
-  // Evidence chain: merged known + preserved unknown-optional, deduped by id in
-  // the same deterministic order as the reduction.
   const evidenceIds: string[] = [];
   const seenEvidence = new Set<string>();
   for (const fact of [...orderedKnown, ...orderedOptional].sort(orderedCompare)) {
@@ -430,9 +486,9 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
 
   if (terminalObserved) state.phase = 'terminal';
 
-  // Unknown authority-bearing schema prevents any authority claim, including
-  // the verifier badge, not only the outcome.
-  if (state.unknownAuthorityFactIds.length > 0) {
+  // An unknown/novel/absent authority signal prevents ANY authority claim,
+  // including the verifier badge — driven by a boolean, never by the id list.
+  if (sawUnknownAuthority) {
     if (state.outcome) state.outcome = { ...state.outcome, authoritative: false };
     state.verifier = { ...state.verifier, authoritative: false };
   }
