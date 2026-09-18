@@ -213,7 +213,9 @@ function contentKey(fact: RuntimeFactV1): string {
       ],
       new WeakSet(),
     );
-    const encoded = canonical.ok ? JSON.stringify(canonical.value) : 'malformed';
+    const encoded = canonical.ok
+      ? JSON.stringify(canonical.value)
+      : `malformed:${fact.id}:${fact.sequence}:${fact.timestamp}`;
     return createHash('sha256').update(encoded).digest('hex');
   } catch {
     // Only reachable for a fact whose envelope accessors throw after
@@ -296,17 +298,32 @@ type CloneResult = { ok: true; value: unknown } | { ok: false };
 
 /** Bound payload nesting so canonicalization/JSON hashing cannot overflow. */
 const MAX_JSON_DEPTH = 64;
+/** Bound total cloned nodes so shared-reference DAGs cannot amplify to OOM. */
+const MAX_JSON_NODES = 100_000;
+
+interface CloneBudget {
+  nodes: number;
+}
 
 /**
  * Deep-copy a value into fresh plain JSON data, reading each property once and
  * rejecting anything that is not a JSON value (boxed primitives, class
  * instances, Date/Map/Set/RegExp/Error, functions, symbols, bigint, undefined,
- * NaN/Infinity, cycles, and nesting beyond MAX_JSON_DEPTH). This is what makes
- * the projection total and the canonical encoding injective: downstream code
- * only ever touches snapshots, never the caller's object, and plain
- * objects/arrays cannot collide with exotic values.
+ * NaN/Infinity, cycles, nesting beyond MAX_JSON_DEPTH, or more than
+ * MAX_JSON_NODES total). Output objects have a null prototype so an own
+ * `__proto__` key stays an own key instead of mutating the prototype. This is
+ * what makes the projection total and the canonical encoding injective:
+ * downstream code only ever touches snapshots, never the caller's object, and
+ * plain objects/arrays cannot collide with exotic values.
  */
-function cloneJsonSafe(value: unknown, path: WeakSet<object>, depth = 0): CloneResult {
+function cloneJsonSafe(
+  value: unknown,
+  path: WeakSet<object>,
+  depth = 0,
+  budget: CloneBudget = { nodes: 0 },
+): CloneResult {
+  budget.nodes += 1;
+  if (budget.nodes > MAX_JSON_NODES) return { ok: false };
   if (value === null) return { ok: true, value: null };
   const type = typeof value;
   if (type === 'string' || type === 'boolean') return { ok: true, value };
@@ -323,7 +340,7 @@ function cloneJsonSafe(value: unknown, path: WeakSet<object>, depth = 0): CloneR
     if (Array.isArray(object)) {
       const out: unknown[] = [];
       for (const entry of object) {
-        const cloned = cloneJsonSafe(entry, path, depth + 1);
+        const cloned = cloneJsonSafe(entry, path, depth + 1, budget);
         if (!cloned.ok) return { ok: false };
         out.push(cloned.value);
       }
@@ -331,9 +348,9 @@ function cloneJsonSafe(value: unknown, path: WeakSet<object>, depth = 0): CloneR
     }
     const prototype = Object.getPrototypeOf(object);
     if (prototype !== Object.prototype && prototype !== null) return { ok: false };
-    const out: Record<string, unknown> = {};
+    const out = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(object)) {
-      const cloned = cloneJsonSafe((object as Record<string, unknown>)[key], path, depth + 1);
+      const cloned = cloneJsonSafe((object as Record<string, unknown>)[key], path, depth + 1, budget);
       if (!cloned.ok) return { ok: false };
       out[key] = cloned.value;
     }

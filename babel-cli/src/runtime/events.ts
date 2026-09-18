@@ -274,7 +274,7 @@ function redactValue(value: unknown, depth = 0): unknown {
     // Past the depth budget we cannot safety-scan keys, so redact wholesale
     // rather than returning a nested object that may hold a credential.
     if (depth >= MAX_REDACT_DEPTH) return '[redacted:depth]';
-    const out: Record<string, unknown> = {};
+    const out = Object.create(null) as Record<string, unknown>;
     for (const [key, entry] of Object.entries(value)) {
       out[key] = SECRET_KEY_PATTERN.test(key) ? '[redacted]' : redactValue(entry, depth + 1);
     }

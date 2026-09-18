@@ -535,3 +535,35 @@ test('P04: deeply nested payloads degrade deterministically instead of colliding
   assert.equal(forward.degraded, true);
   assert.deepEqual(forward, reverse);
 });
+
+test('P04: own __proto__ payload keys cannot merge distinct facts', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const mk = (operationId: string) =>
+    ({
+      ...template,
+      id: 'dup',
+      sequence: 7,
+      payload: JSON.parse(
+        `{"type":"operation.settled","receiptId":"r","__proto__":{"operationId":"${operationId}"}}`,
+      ),
+    }) as unknown as RuntimeFactV1;
+  const forward = projectTask([mk('OP_A'), mk('OP_B')]);
+  const reverse = projectTask([mk('OP_B'), mk('OP_A')]);
+  assert.deepEqual(forward, reverse);
+  assert.equal(forward.degraded, true);
+});
+
+test('P04: shared-reference payload amplification is rejected', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const shared: { v: string } = { v: 'x' };
+  let node: unknown = shared;
+  for (let i = 0; i < 30; i += 1) node = { a: node, b: node };
+  const fact = {
+    ...template,
+    id: 'dag',
+    payload: { type: 'run.settled', status: node },
+  } as unknown as RuntimeFactV1;
+  const proj = projectTask([fact]);
+  assert.equal(proj.degraded, true);
+  assert.ok(proj.degradedReasons.some((reason) => reason.includes('unserializable_payload')));
+});
