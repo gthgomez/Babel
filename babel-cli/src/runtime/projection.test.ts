@@ -607,6 +607,29 @@ test('P04: shared-reference payload amplification is rejected', () => {
   assert.ok(proj.degradedReasons.some((reason) => reason.includes('unserializable_payload')));
 });
 
+test('P04: a shared DAG reused across many facts is bounded', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const shared: { v: string } = { v: 'x' };
+  let node: unknown = shared;
+  for (let i = 0; i < 15; i += 1) node = { a: node, b: node };
+  const facts: RuntimeFactV1[] = [];
+  for (let i = 0; i < 400; i += 1) {
+    facts.push({
+      ...template,
+      id: `dag-${i}`,
+      schemaVersion: 2,
+      authority: 'observation',
+      sequence: i,
+      cursor: { stream: 'runtime-facts', sequence: i },
+      payload: { type: 'future.optional', node },
+    } as unknown as RuntimeFactV1);
+  }
+  const started = Date.now();
+  const proj = projectTask(facts);
+  assert.ok(Date.now() - started < 5000, 'cross-fact DAG must be bounded');
+  assert.equal(proj.degraded, true);
+});
+
 test('P04: an observation completion cannot replace an authoritative one', () => {
   const template = sessionLogToFacts(corpus())[0]!;
   const authoritative = {

@@ -80,7 +80,7 @@ export function sessionEventPayloads(
         {
           type: 'operation.prepared',
           operationDigest: event.body_digest ?? event.input_digest,
-          operationId: event.request_id ?? event.inference_id,
+          operationId: event.inference_id,
           toolName: 'model_inference',
         },
       ];

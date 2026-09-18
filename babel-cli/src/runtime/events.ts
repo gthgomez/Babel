@@ -302,7 +302,9 @@ function validateRuntimeFactInner(input: unknown): FactValidation {
       typeof decision['allowed'] !== 'boolean' ||
       !Array.isArray(decision['evidenceRefs']) ||
       !decision['evidenceRefs'].every((entry) => typeof entry === 'string') ||
-      typeof decision['reason'] !== 'string'
+      typeof decision['reason'] !== 'string' ||
+      typeof decision['requestedOutcome'] !== 'string' ||
+      typeof decision['policyVersion'] !== 'string'
     ) {
       return fail('invalid_completion_decision');
     }

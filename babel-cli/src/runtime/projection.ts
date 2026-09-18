@@ -285,8 +285,9 @@ type CloneResult = { ok: true; value: unknown } | { ok: false };
 
 /** Bound payload nesting so canonicalization/JSON hashing cannot overflow. */
 const MAX_JSON_DEPTH = 64;
-/** Bound total cloned nodes so shared-reference DAGs cannot amplify to OOM. */
-const MAX_JSON_NODES = 100_000;
+/** Bound total cloned nodes for the whole projectTask call, so neither a single
+ * shared-reference DAG nor many facts sharing one can amplify to OOM. */
+const MAX_JSON_NODES = 2_000_000;
 
 interface CloneBudget {
   nodes: number;
@@ -411,7 +412,7 @@ function snapshotFact(read: EnvelopeRead, payload: FactPayload): RuntimeFactV1 {
 }
 
 /** Classify one untrusted input. May throw only on hostile accessors; callers guard. */
-function classifyInput(input: unknown): Classified {
+function classifyInput(input: unknown, jsonBudget: CloneBudget): Classified {
   if (!isRecord(input)) {
     return { kind: 'invalid', reason: 'fact_not_object', authority: 'authoritative' };
   }
@@ -449,7 +450,7 @@ function classifyInput(input: unknown): Classified {
     if (!isRecord(payloadRaw) || id === undefined) {
       return { kind: 'invalid', reason: 'invalid_optional_fact', authority, ...withId };
     }
-    const cloned = cloneJsonSafe(payloadRaw, new WeakSet());
+    const cloned = cloneJsonSafe(payloadRaw, new WeakSet(), 0, jsonBudget);
     if (!cloned.ok) {
       return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
     }
@@ -459,7 +460,7 @@ function classifyInput(input: unknown): Classified {
   if (!envelopeAccessible) {
     return { kind: 'invalid', reason: 'inaccessible_envelope', authority, ...withId };
   }
-  const cloned = cloneJsonSafe(payloadRaw, new WeakSet());
+  const cloned = cloneJsonSafe(payloadRaw, new WeakSet(), 0, jsonBudget);
   if (!cloned.ok) {
     return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
   }
@@ -517,6 +518,7 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
   const optional: RuntimeFactV1[] = [];
   let sawUnknownAuthority = false;
   let factCount = 0;
+  const jsonBudget: CloneBudget = { nodes: 0 };
 
   try {
     for (const input of facts) {
@@ -527,7 +529,7 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
       }
       let classified: Classified;
       try {
-        classified = classifyInput(input);
+        classified = classifyInput(input, jsonBudget);
       } catch {
         classified = { kind: 'invalid', reason: 'inaccessible_fact', authority: 'authoritative' };
       }
