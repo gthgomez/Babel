@@ -146,6 +146,46 @@ test('P04: redactRuntimeFact is total and bounded for hostile/DAG input', () => 
   assert.doesNotThrow(() => redactRuntimeFact(fact({ payload: proxy })));
 });
 
+test('P04: redaction output is bounded for a wide sparse array', () => {
+  const sparse: unknown[] = [];
+  sparse.length = 5_000_000;
+  const redacted = redactRuntimeFact(
+    fact({ payload: { type: 'permission.decided', decision: 'allow', arr: sparse } }),
+  );
+  const arr = (redacted.payload as unknown as Record<string, unknown>)['arr'];
+  assert.ok(Array.isArray(arr));
+  assert.ok(arr.length <= 100_002, `bounded output, got ${arr.length}`);
+});
+
+test('P04: validateRuntimeFact and cursor helpers are total for hostile input', () => {
+  const { proxy, revoke } = Proxy.revocable({}, {});
+  revoke();
+  assert.doesNotThrow(() => validateRuntimeFact(proxy));
+  assert.equal(validateRuntimeFact(proxy).ok, false);
+  assert.doesNotThrow(() =>
+    validateRuntimeFact({
+      get authority(): never {
+        throw new Error('boom');
+      },
+    }),
+  );
+  assert.doesNotThrow(() => compareFactCursors(null as never, null as never));
+  assert.doesNotThrow(() => isFactAfter(null as never, null as never));
+});
+
+test('P04: fact bus tolerates null options and a faulty subscriber', () => {
+  assert.doesNotThrow(() => createFactBus(null));
+  const bus = createFactBus({ maxQueue: 10 });
+  const seen: string[] = [];
+  const sub = bus.subscribe((f) => {
+    if (f.id === 'f1') throw new Error('handler boom');
+    seen.push(f.id);
+  });
+  for (let i = 0; i < 3; i += 1) bus.publish(fact({ id: `f${i}`, sequence: i }));
+  assert.doesNotThrow(() => sub.drain());
+  assert.deepEqual(seen, ['f0', 'f2']);
+});
+
 test('P04: fact cursor is its own address space', () => {
   const a = { stream: 'runtime-facts' as const, sequence: 1 };
   const b = { stream: 'runtime-facts' as const, sequence: 2 };

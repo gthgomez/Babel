@@ -568,6 +568,47 @@ test('P04: shared-reference payload amplification is rejected', () => {
   assert.ok(proj.degradedReasons.some((reason) => reason.includes('unserializable_payload')));
 });
 
+test('P04: an observation completion cannot replace an authoritative one', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const authoritative = {
+    ...template,
+    id: 'a',
+    sequence: 10,
+    authority: 'authoritative',
+    payload: {
+      type: 'completion.decided',
+      decision: {
+        requestedOutcome: 'x',
+        finalOutcome: 'VERIFIED_COMPLETE',
+        allowed: true,
+        reason: 'ok',
+        evidenceRefs: [],
+        policyVersion: 'v1',
+      },
+    },
+  } as unknown as RuntimeFactV1;
+  const observation = {
+    ...template,
+    id: 'b',
+    sequence: 20,
+    authority: 'observation',
+    payload: {
+      type: 'completion.decided',
+      decision: {
+        requestedOutcome: 'x',
+        finalOutcome: 'OBS',
+        allowed: true,
+        reason: 'obs',
+        evidenceRefs: [],
+        policyVersion: 'v1',
+      },
+    },
+  } as unknown as RuntimeFactV1;
+  const proj = projectTask([authoritative, observation]);
+  assert.equal(proj.outcome?.outcome, 'VERIFIED_COMPLETE');
+  assert.equal(proj.outcome?.authoritative, true);
+});
+
 test('P04: a stateful authority getter cannot make the projection order-dependent', () => {
   const make = (finalOutcome: string): RuntimeFactV1 => {
     let reads = 0;

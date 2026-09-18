@@ -643,7 +643,12 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
         state.verifier.authoritative = assertAuthority && payload.authoritative;
         state.verifier.lastReceiptId = payload.receiptId;
         break;
-      case 'completion.decided':
+      case 'completion.decided': {
+        // Authority is monotonic: a later observation-authority completion may
+        // not replace an already authoritative one.
+        if (state.outcome?.authoritative === true && !assertAuthority) {
+          break;
+        }
         terminalObserved = true;
         state.phase = 'terminal';
         state.execution.state = 'settled';
@@ -657,6 +662,7 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
           authoritative: assertAuthority,
         };
         break;
+      }
       case 'permission.decided':
         state.permissionDecisionCount += 1;
         break;

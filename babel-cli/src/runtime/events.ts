@@ -186,7 +186,16 @@ const REQUIRED_PAYLOAD_FIELDS: Record<string, readonly string[]> = {
  * Validate an untrusted fact at ingress. Unknown authority-bearing schema is
  * rejected fail-closed; unknown observation schema may be preserved by callers.
  */
+/** Total ingress validator: hostile or revoked input fails closed, never throws. */
 export function validateRuntimeFact(input: unknown): FactValidation {
+  try {
+    return validateRuntimeFactInner(input);
+  } catch {
+    return { ok: false, reason: 'inaccessible_fact', authority: 'authoritative' };
+  }
+}
+
+function validateRuntimeFactInner(input: unknown): FactValidation {
   if (!isRecord(input)) {
     return { ok: false, reason: 'fact_not_object', authority: 'authoritative' };
   }
@@ -289,12 +298,20 @@ function redactValue(
       const out: unknown[] = [];
       const length = object.length;
       for (let index = 0; index < length; index += 1) {
+        if (budget.nodes > MAX_REDACT_NODES) {
+          out.push('[redacted:limit]');
+          break;
+        }
         out.push(redactValue(object[index], path, budget, depth + 1));
       }
       return out;
     }
     const out = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(object)) {
+      if (budget.nodes > MAX_REDACT_NODES) {
+        out['[redacted]'] = '[redacted:limit]';
+        break;
+      }
       let entry: unknown;
       try {
         entry = (object as Record<string, unknown>)[key];
@@ -337,15 +354,24 @@ export function redactRuntimeFact(fact: RuntimeFactV1): RuntimeFactV1 {
   }
 }
 
-/** Order two cursors; negative when `a` precedes `b`. */
+/** Order two cursors; total for hostile/null input. */
 export function compareFactCursors(a: EventCursor, b: EventCursor): number {
-  if (a.stream !== b.stream) return a.stream < b.stream ? -1 : 1;
-  return a.sequence - b.sequence;
+  const aStream = a && typeof a.stream === 'string' ? a.stream : '';
+  const bStream = b && typeof b.stream === 'string' ? b.stream : '';
+  if (aStream !== bStream) return aStream < bStream ? -1 : 1;
+  const aSeq = a && typeof a.sequence === 'number' ? a.sequence : 0;
+  const bSeq = b && typeof b.sequence === 'number' ? b.sequence : 0;
+  if (aSeq === bSeq) return 0;
+  return aSeq < bSeq ? -1 : 1;
 }
 
-/** Whether `later` is strictly newer than `earlier` within the same stream. */
+/** Whether `later` is strictly newer than `earlier` within the same stream. Total. */
 export function isFactAfter(later: EventCursor, earlier: EventCursor): boolean {
-  return later.stream === earlier.stream && later.sequence > earlier.sequence;
+  const laterStream = later && typeof later.stream === 'string' ? later.stream : '';
+  const earlierStream = earlier && typeof earlier.stream === 'string' ? earlier.stream : '';
+  const laterSeq = later && typeof later.sequence === 'number' ? later.sequence : Number.NaN;
+  const earlierSeq = earlier && typeof earlier.sequence === 'number' ? earlier.sequence : Number.NaN;
+  return laterStream === earlierStream && laterSeq > earlierSeq;
 }
 
 // ─── Ephemeral stream envelope ──────────────────────────────────────────────
@@ -391,8 +417,8 @@ export interface FactBus {
  * Bounded in-memory observation bus. Slow subscribers drop the oldest queued
  * facts instead of holding the process alive; `dropped()` is observable.
  */
-export function createFactBus(options: { maxQueue?: number } = {}): FactBus {
-  const requested = options.maxQueue;
+export function createFactBus(options: { maxQueue?: number } | null = {}): FactBus {
+  const requested = options?.maxQueue;
   const maxQueue =
     typeof requested === 'number' && Number.isFinite(requested)
       ? Math.max(1, Math.floor(requested))
@@ -417,7 +443,13 @@ export function createFactBus(options: { maxQueue?: number } = {}): FactBus {
           if (!entry.open) return;
           const pending = entry.queue;
           entry.queue = [];
-          for (const fact of pending) entry.handler(fact);
+          for (const fact of pending) {
+            try {
+              entry.handler(fact);
+            } catch {
+              /* isolate a faulty subscriber; keep delivering the batch */
+            }
+          }
         },
         queued: () => entry.queue.length,
         dropped: () => entry.dropped,
