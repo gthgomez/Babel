@@ -18,6 +18,7 @@ import {
 } from './legacyEventAdapters.js';
 import { projectTask, projectTaskFromSessionEvents } from './projection.js';
 import type { RuntimeFactV1 } from './events.js';
+import { validateRuntimeFact } from './events.js';
 
 function ev(seq: number, fields: Record<string, unknown>): SessionEvent {
   return {
@@ -628,6 +629,80 @@ test('P04: a shared DAG reused across many facts is bounded', () => {
   const proj = projectTask(facts);
   assert.ok(Date.now() - started < 5000, 'cross-fact DAG must be bounded');
   assert.equal(proj.degraded, true);
+});
+
+test('P04: oversized optional facts are rejected deterministically', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const big = Array.from({ length: 200_000 }, (_, i) => `v${i}`);
+  const mk = (id: string) =>
+    ({
+      ...template,
+      id,
+      schemaVersion: 2,
+      authority: 'observation',
+      sequence: 1,
+      cursor: { stream: 'runtime-facts', sequence: 1 },
+      payload: { type: 'future.optional', big },
+    }) as unknown as RuntimeFactV1;
+  const forward = projectTask([mk('a'), mk('b')]);
+  const reverse = projectTask([mk('b'), mk('a')]);
+  assert.deepEqual(forward, reverse);
+  assert.equal(forward.degraded, true);
+});
+
+test('P04: endless evidence_refs cannot hang adapters or the validator', () => {
+  function* endlessRefs(): Generator<string> {
+    while (true) yield 'r';
+  }
+  const event = ev(1, {
+    kind: 'completion_decision',
+    requested_outcome: 'x',
+    final_outcome: 'y',
+    allowed: true,
+    reason: 'r',
+    evidence_refs: endlessRefs(),
+    policy_version: 'v1',
+  });
+  const started = Date.now();
+  const facts = sessionEventToFacts(event);
+  assert.ok(Date.now() - started < 5000, 'adapter must bound evidence refs');
+  const decision = (facts[0]!.payload as unknown as { decision: { evidenceRefs: string[] } }).decision;
+  assert.equal(decision.evidenceRefs.length, 10_000);
+
+  const arr = ['a', 'b'];
+  Object.defineProperty(arr, 'every', {
+    value() {
+      while (true) {
+        /* hostile override must be ignored */
+      }
+    },
+  });
+  const hostile = {
+    schemaVersion: 1,
+    id: 'h',
+    cursor: { stream: 'runtime-facts', sequence: 1 },
+    threadId: 't',
+    taskId: 't',
+    turnId: 't',
+    runId: 'r',
+    sequence: 1,
+    causationId: 'c',
+    producer: 'legacy_adapter',
+    authority: 'authoritative',
+    timestamp: 'x',
+    payload: {
+      type: 'completion.decided',
+      decision: {
+        requestedOutcome: 'x',
+        finalOutcome: 'y',
+        allowed: true,
+        reason: 'r',
+        evidenceRefs: arr,
+        policyVersion: 'v1',
+      },
+    },
+  };
+  assert.doesNotThrow(() => validateRuntimeFact(hostile));
 });
 
 test('P04: an observation completion cannot replace an authoritative one', () => {

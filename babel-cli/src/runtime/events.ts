@@ -186,6 +186,18 @@ const REQUIRED_PAYLOAD_FIELDS: Record<string, readonly string[]> = {
  * Validate an untrusted fact at ingress. Unknown authority-bearing schema is
  * rejected fail-closed; unknown observation schema may be preserved by callers.
  */
+/** Bound evidence reference arrays so a hostile/endless array cannot run forever. */
+const MAX_EVIDENCE_REFS = 10_000;
+
+function isBoundedStringArray(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  if (value.length > MAX_EVIDENCE_REFS) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (typeof value[index] !== 'string') return false;
+  }
+  return true;
+}
+
 /** Type-check a known payload's fields; returns a reason when malformed. */
 function payloadTypeError(type: string, payload: Record<string, unknown>): string | null {
   const isString = (value: unknown): boolean => typeof value === 'string';
@@ -300,8 +312,7 @@ function validateRuntimeFactInner(input: unknown): FactValidation {
       !isRecord(decision) ||
       typeof decision['finalOutcome'] !== 'string' ||
       typeof decision['allowed'] !== 'boolean' ||
-      !Array.isArray(decision['evidenceRefs']) ||
-      !decision['evidenceRefs'].every((entry) => typeof entry === 'string') ||
+      !isBoundedStringArray(decision['evidenceRefs']) ||
       typeof decision['reason'] !== 'string' ||
       typeof decision['requestedOutcome'] !== 'string' ||
       typeof decision['policyVersion'] !== 'string'

@@ -276,18 +276,19 @@ function emptyProjection(): TaskProjection {
 }
 
 type Classified =
-  | { kind: 'known'; fact: RuntimeFactV1 }
+  | { kind: 'known'; fact: RuntimeFactV1; nodes: number }
   | { kind: 'unknown_authority'; id?: string }
-  | { kind: 'unknown_optional'; fact: RuntimeFactV1 }
+  | { kind: 'unknown_optional'; fact: RuntimeFactV1; nodes: number }
   | { kind: 'invalid'; id?: string; reason: string; authority: FactAuthority };
 
 type CloneResult = { ok: true; value: unknown } | { ok: false };
 
 /** Bound payload nesting so canonicalization/JSON hashing cannot overflow. */
 const MAX_JSON_DEPTH = 64;
-/** Bound total cloned nodes for the whole projectTask call, so neither a single
- * shared-reference DAG nor many facts sharing one can amplify to OOM. */
-const MAX_JSON_NODES = 2_000_000;
+/** Per-fact clone budget: acceptance is content-deterministic, never order-based. */
+const MAX_JSON_NODES = 100_000;
+/** Deterministic cumulative budget applied over the sorted fact order. */
+const MAX_TOTAL_JSON_NODES = 2_000_000;
 
 interface CloneBudget {
   nodes: number;
@@ -308,10 +309,12 @@ function cloneJsonSafe(
   value: unknown,
   path: WeakSet<object>,
   depth = 0,
-  budget: CloneBudget = { nodes: 0 },
+  total: CloneBudget = { nodes: 0 },
+  local: CloneBudget = { nodes: 0 },
 ): CloneResult {
-  budget.nodes += 1;
-  if (budget.nodes > MAX_JSON_NODES) return { ok: false };
+  total.nodes += 1;
+  local.nodes += 1;
+  if (local.nodes > MAX_JSON_NODES || total.nodes > MAX_TOTAL_JSON_NODES) return { ok: false };
   if (value === null) return { ok: true, value: null };
   const type = typeof value;
   if (type === 'string' || type === 'boolean') return { ok: true, value };
@@ -328,7 +331,7 @@ function cloneJsonSafe(
     if (Array.isArray(object)) {
       const out: unknown[] = [];
       for (const entry of object) {
-        const cloned = cloneJsonSafe(entry, path, depth + 1, budget);
+        const cloned = cloneJsonSafe(entry, path, depth + 1, total, local);
         if (!cloned.ok) return { ok: false };
         out.push(cloned.value);
       }
@@ -338,7 +341,7 @@ function cloneJsonSafe(
     if (prototype !== Object.prototype && prototype !== null) return { ok: false };
     const out = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(object)) {
-      const cloned = cloneJsonSafe((object as Record<string, unknown>)[key], path, depth + 1, budget);
+      const cloned = cloneJsonSafe((object as Record<string, unknown>)[key], path, depth + 1, total, local);
       if (!cloned.ok) return { ok: false };
       out[key] = cloned.value;
     }
@@ -412,7 +415,7 @@ function snapshotFact(read: EnvelopeRead, payload: FactPayload): RuntimeFactV1 {
 }
 
 /** Classify one untrusted input. May throw only on hostile accessors; callers guard. */
-function classifyInput(input: unknown, jsonBudget: CloneBudget): Classified {
+function classifyInput(input: unknown, totalBudget: CloneBudget): Classified {
   if (!isRecord(input)) {
     return { kind: 'invalid', reason: 'fact_not_object', authority: 'authoritative' };
   }
@@ -450,17 +453,23 @@ function classifyInput(input: unknown, jsonBudget: CloneBudget): Classified {
     if (!isRecord(payloadRaw) || id === undefined) {
       return { kind: 'invalid', reason: 'invalid_optional_fact', authority, ...withId };
     }
-    const cloned = cloneJsonSafe(payloadRaw, new WeakSet(), 0, jsonBudget);
+    const budget: CloneBudget = { nodes: 0 };
+    const cloned = cloneJsonSafe(payloadRaw, new WeakSet(), 0, totalBudget, budget);
     if (!cloned.ok) {
       return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
     }
-    return { kind: 'unknown_optional', fact: snapshotFact(read, cloned.value as FactPayload) };
+    return {
+      kind: 'unknown_optional',
+      fact: snapshotFact(read, cloned.value as FactPayload),
+      nodes: budget.nodes,
+    };
   }
 
   if (!envelopeAccessible) {
     return { kind: 'invalid', reason: 'inaccessible_envelope', authority, ...withId };
   }
-  const cloned = cloneJsonSafe(payloadRaw, new WeakSet(), 0, jsonBudget);
+  const budget: CloneBudget = { nodes: 0 };
+  const cloned = cloneJsonSafe(payloadRaw, new WeakSet(), 0, totalBudget, budget);
   if (!cloned.ok) {
     return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
   }
@@ -471,7 +480,7 @@ function classifyInput(input: unknown, jsonBudget: CloneBudget): Classified {
   if (!validation.ok) {
     return { kind: 'invalid', reason: validation.reason, authority, ...withId };
   }
-  return { kind: 'known', fact: snapshot };
+  return { kind: 'known', fact: snapshot, nodes: budget.nodes };
 }
 
 /**
@@ -517,9 +526,12 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
   const known: RuntimeFactV1[] = [];
   const optional: RuntimeFactV1[] = [];
   let sawUnknownAuthority = false;
-  let factCount = 0;
-  const jsonBudget: CloneBudget = { nodes: 0 };
 
+  // Read a cheap deterministic key from each raw fact, then classify in that
+  // order under one shared budget. Acceptance therefore depends on content
+  // (sequence, id), never on the caller's input order.
+  const entries: Array<{ input: unknown; seq: number | null; id: string }> = [];
+  let factCount = 0;
   try {
     for (const input of facts) {
       factCount += 1;
@@ -527,36 +539,62 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
         state.degradedReasons.push('fact_count_exceeded');
         break;
       }
-      let classified: Classified;
+      let seq: number | null = null;
+      let id = '';
       try {
-        classified = classifyInput(input, jsonBudget);
+        if (isRecord(input)) {
+          const rawSeq = input['sequence'];
+          if (typeof rawSeq === 'number' && Number.isFinite(rawSeq)) seq = rawSeq;
+          const rawId = input['id'];
+          if (typeof rawId === 'string') id = rawId;
+        }
       } catch {
-        classified = { kind: 'invalid', reason: 'inaccessible_fact', authority: 'authoritative' };
+        /* hostile accessor; defaults keep ordering deterministic */
       }
-      switch (classified.kind) {
-        case 'known':
-          known.push(classified.fact);
-          break;
-        case 'unknown_authority':
-          sawUnknownAuthority = true;
-          state.degradedReasons.push('unknown_authoritative_fact');
-          if (classified.id !== undefined) state.unknownAuthorityFactIds.push(classified.id);
-          break;
-        case 'unknown_optional':
-          optional.push(classified.fact);
-          break;
-        case 'invalid':
-          state.degradedReasons.push(`invalid_fact:${classified.reason}`);
-          if (classified.authority === 'authoritative') {
-            sawUnknownAuthority = true;
-            state.degradedReasons.push('unknown_authoritative_fact');
-            if (classified.id !== undefined) state.unknownAuthorityFactIds.push(classified.id);
-          }
-          break;
-      }
+      entries.push({ input, seq, id });
     }
   } catch {
     state.degradedReasons.push('fact_iteration_failed');
+  }
+
+  entries.sort((a, b) => {
+    if (a.seq !== b.seq) {
+      if (a.seq === null) return 1;
+      if (b.seq === null) return -1;
+      return a.seq - b.seq;
+    }
+    return codeUnitCompare(a.id, b.id);
+  });
+
+  const totalBudget: CloneBudget = { nodes: 0 };
+  for (const entry of entries) {
+    let classified: Classified;
+    try {
+      classified = classifyInput(entry.input, totalBudget);
+    } catch {
+      classified = { kind: 'invalid', reason: 'inaccessible_fact', authority: 'authoritative' };
+    }
+    switch (classified.kind) {
+      case 'known':
+        known.push(classified.fact);
+        break;
+      case 'unknown_authority':
+        sawUnknownAuthority = true;
+        state.degradedReasons.push('unknown_authoritative_fact');
+        if (classified.id !== undefined) state.unknownAuthorityFactIds.push(classified.id);
+        break;
+      case 'unknown_optional':
+        optional.push(classified.fact);
+        break;
+      case 'invalid':
+        state.degradedReasons.push(`invalid_fact:${classified.reason}`);
+        if (classified.authority === 'authoritative') {
+          sawUnknownAuthority = true;
+          state.degradedReasons.push('unknown_authoritative_fact');
+          if (classified.id !== undefined) state.unknownAuthorityFactIds.push(classified.id);
+        }
+        break;
+    }
   }
 
   const orderedKnown = dedupeByFactId(known, state);

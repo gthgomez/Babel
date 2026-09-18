@@ -38,6 +38,17 @@ const DEFAULT_PRODUCER: RuntimeFactProducer = 'legacy_adapter';
 
 /** Bound adapter input so an endless event iterable cannot run forever. */
 const MAX_LEGACY_EVENTS = 100_000;
+/** Bound evidence reference arrays so an endless iterable cannot run forever. */
+const MAX_EVIDENCE_REFS = 10_000;
+
+function boundedEvidenceRefs(refs: Iterable<unknown>): string[] {
+  const out: string[] = [];
+  for (const ref of refs) {
+    out.push(typeof ref === 'string' ? ref : String(ref));
+    if (out.length >= MAX_EVIDENCE_REFS) break;
+  }
+  return out;
+}
 
 function cursorFor(sequence: number): EventCursor {
   return { stream: 'runtime-facts', sequence };
@@ -209,7 +220,7 @@ export function sessionEventPayloads(
             finalOutcome: event.final_outcome,
             allowed: event.allowed,
             reason: event.reason,
-            evidenceRefs: [...event.evidence_refs],
+            evidenceRefs: boundedEvidenceRefs(event.evidence_refs),
             policyVersion: event.policy_version,
           },
         },
