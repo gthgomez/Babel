@@ -513,66 +513,87 @@ function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort(codeUnitCompare);
 }
 
-/** Bound the cheap pre-key traversal so sorting stays inexpensive. */
-const MAX_PREKEY_NODES = 4_000;
-
 /**
- * Bounded, guarded content pre-key over the raw payload. Used only to order
- * facts deterministically before classification, so budget truncation follows
- * content rather than input order. Never throws; bounded in work.
+ * Streaming, guarded full-content hash over a raw payload, using the same caps
+ * as cloneJsonSafe. Within the accepted domain this is injective, so it breaks
+ * (sequence,id) ties by content. Payloads beyond the caps return 'oversized'
+ * (and are rejected by classification anyway, deterministically).
  */
-function payloadPreKey(value: unknown): string {
-  const parts: string[] = [];
+function fullContentHash(value: unknown): string {
+  const hash = createHash('sha256');
+  const path = new WeakSet<object>();
   let nodes = 0;
+  let overflow = false;
   const visit = (current: unknown, depth: number): void => {
-    if (nodes >= MAX_PREKEY_NODES) return;
+    if (overflow) return;
     nodes += 1;
+    if (nodes > MAX_JSON_NODES || depth > MAX_JSON_DEPTH) {
+      overflow = true;
+      return;
+    }
     if (current === null) {
-      parts.push('n');
+      hash.update('n');
       return;
     }
     if (typeof current === 'string') {
-      parts.push(`s${current.slice(0, 64)}`);
+      hash.update('s');
+      hash.update(current);
       return;
     }
-    if (typeof current === 'number' || typeof current === 'boolean') {
-      parts.push(`${typeof current === 'number' ? 'd' : 'b'}${String(current)}`);
+    if (typeof current === 'number') {
+      hash.update('d');
+      hash.update(String(current));
+      return;
+    }
+    if (typeof current === 'boolean') {
+      hash.update('b');
+      hash.update(String(current));
       return;
     }
     if (typeof current !== 'object') {
-      parts.push(`x${typeof current}`);
+      hash.update('x');
+      hash.update(typeof current);
       return;
     }
-    if (depth > 8) {
-      parts.push('depth');
+    if (path.has(current)) {
+      hash.update('cycle');
       return;
     }
-    if (Array.isArray(current)) {
-      parts.push('[');
-      for (let index = 0; index < current.length && nodes < MAX_PREKEY_NODES; index += 1) {
-        visit(current[index], depth + 1);
-      }
-      parts.push(']');
-      return;
-    }
+    path.add(current);
     try {
-      parts.push('{');
-      for (const key of Object.keys(current as object).sort()) {
-        if (nodes >= MAX_PREKEY_NODES) break;
-        parts.push(key);
-        visit((current as Record<string, unknown>)[key], depth + 1);
+      if (Array.isArray(current)) {
+        hash.update('[');
+        for (let index = 0; index < current.length && !overflow; index += 1) {
+          visit(current[index], depth + 1);
+        }
+        hash.update(']');
+      } else {
+        const prototype = Object.getPrototypeOf(current);
+        if (prototype !== Object.prototype && prototype !== null) {
+          hash.update('exotic');
+        } else {
+          hash.update('{');
+          for (const key of Object.keys(current as object).sort()) {
+            if (overflow) break;
+            hash.update(key);
+            hash.update(':');
+            visit((current as Record<string, unknown>)[key], depth + 1);
+          }
+          hash.update('}');
+        }
       }
-      parts.push('}');
     } catch {
-      parts.push('err');
+      hash.update('err');
+    } finally {
+      path.delete(current);
     }
   };
   try {
     visit(value, 0);
   } catch {
-    /* hostile payload: empty pre-key is still deterministic */
+    return 'error';
   }
-  return parts.join('\u0001');
+  return overflow ? 'oversized' : hash.digest('hex');
 }
 
 /** Bound the number of facts consumed so an endless iterable cannot run forever. */
@@ -603,22 +624,40 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
       }
       let seq: number | null = null;
       let id = '';
-      let preKey = '';
       try {
         if (isRecord(input)) {
           const rawSeq = input['sequence'];
           if (typeof rawSeq === 'number' && Number.isFinite(rawSeq)) seq = rawSeq;
           const rawId = input['id'];
           if (typeof rawId === 'string') id = rawId;
-          preKey = payloadPreKey(input['payload']);
         }
       } catch {
         /* hostile accessor; defaults keep ordering deterministic */
       }
-      entries.push({ input, seq, id, preKey });
+      entries.push({ input, seq, id, preKey: '' });
     }
   } catch {
     state.degradedReasons.push('fact_iteration_failed');
+  }
+
+  // Only (sequence,id) ties need a content tiebreak; hashing every payload would
+  // be needless work. The hash is full (bounded by the same caps as cloning),
+  // so it is injective within the accepted domain.
+  const keyCounts = new Map<string, number>();
+  for (const entry of entries) {
+    const key = `${entry.seq === null ? '~' : entry.seq}\u0000${entry.id}`;
+    keyCounts.set(key, (keyCounts.get(key) ?? 0) + 1);
+  }
+  for (const entry of entries) {
+    const key = `${entry.seq === null ? '~' : entry.seq}\u0000${entry.id}`;
+    if ((keyCounts.get(key) ?? 0) > 1) {
+      try {
+        const payload = isRecord(entry.input) ? entry.input['payload'] : undefined;
+        entry.preKey = fullContentHash(payload);
+      } catch {
+        entry.preKey = 'error';
+      }
+    }
   }
 
   entries.sort((a, b) => {
