@@ -303,6 +303,6 @@ test('degraded 256-color fallback uses semantic roles and preserves reset bounda
   assert.equal(parsed.plain, 'accent|focus|success|row');
   assert.match(parsed.rendered, /\u001B\[38;5;33maccent\u001B\[39m/);
   assert.match(parsed.rendered, /\u001B\[38;5;78m/);
-  assert.match(parsed.rendered, /\u001B\[7mrow\u001B\[27m/);
+  assert.match(parsed.rendered, /\u001B\[48;5;\d+mrow\u001B\[49m/);
   assert.doesNotMatch(parsed.rendered, /#[0-9A-F]{6}/i);
 });

@@ -37,7 +37,10 @@ export interface TuiFrameBundle {
     cursorRow: number
     cursorVisible: boolean
     hash: string
+    textHash: string
+    visualHash: string
     changedRows: number[]
+    styleRuns: GridSnapshot['styleRuns']
   }
   semantic: ObservationSemanticState | null
   artifacts: TuiObservationArtifact[]
@@ -93,7 +96,10 @@ export function persistTuiFrame(
       cursorRow: snap.cursorRow,
       cursorVisible: snap.cursorVisible,
       hash: snap.hash,
+      textHash: snap.textHash,
+      visualHash: snap.visualHash,
       changedRows: snap.changedRows,
+      styleRuns: snap.styleRuns,
     },
     semantic,
     artifacts: [{ kind: 'cell_grid', path: txtRel, hash: screenHash }],

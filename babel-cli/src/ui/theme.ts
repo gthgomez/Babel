@@ -221,6 +221,21 @@ export function syntaxFunction(text: string): string {
 
 // ── Background colors ─────────────────────────────────────────────
 
+const FALLBACK_BG: Record<string, number> = {
+  canvas: 0,
+  background: 0,
+  surface: 17,
+  panel: 17,
+  raised: 24,
+  panelRaised: 24,
+  selected: 24,
+  meterTrack: 24,
+}
+
+function fallbackBackgroundIndex(tokenName: string): number {
+  return FALLBACK_BG[tokenName] ?? FALLBACK_FG[tokenName] ?? 0;
+}
+
 // Apply a background color from the theme using the given token name
 export function backgroundToken(tokenName: string, text: string): string {
   if (!HAS_COLOR) return text;
@@ -230,8 +245,11 @@ export function backgroundToken(tokenName: string, text: string): string {
     const rgb = parseRgb(tokenHex);
     return wrapAnsi(text, `\x1b[48;2;${rgb.r};${rgb.g};${rgb.b}m`, '\x1b[49m');
   }
-  // No reliable 256-color background fallback — use reverse video as approximation
-  return wrapAnsi(text, '\x1b[7m', '\x1b[27m');
+  // Use an actual ANSI background in degraded mode. Reverse video swaps every
+  // nested foreground token into a background, producing colored patches in
+  // selected/header surfaces when styled text is composed inside them.
+  const fallback = fallbackBackgroundIndex(tokenName);
+  return wrapAnsi(text, `\x1b[48;5;${fallback}m`, '\x1b[49m');
 }
 
 export function bgCanvas(text: string): string {
@@ -295,7 +313,9 @@ export function headerBg(text: string): string {
     const fgRgb = parseRgb(fg);
     return `\x1b[48;2;${bgRgb.r};${bgRgb.g};${bgRgb.b}m\x1b[38;2;${fgRgb.r};${fgRgb.g};${fgRgb.b}m${text}\x1b[0m`;
   }
-  return `\x1b[7m${text}\x1b[27m`;
+  const fallbackBg = fallbackBackgroundIndex('panel');
+  const fallbackFg = FALLBACK_FG['textPrimary'] ?? 255;
+  return `\x1b[48;5;${fallbackBg}m\x1b[38;5;${fallbackFg}m${text}\x1b[0m`;
 }
 
 // ── ANSI strip / visible-length caches ─────────────────────────────────────

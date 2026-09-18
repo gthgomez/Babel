@@ -262,12 +262,17 @@ describe('tuiSessionStore + inspect tui', () => {
       const bundle = loadLatestTuiFrame(dir)
       assert.ok(bundle)
       assert.equal(bundle!.screen.lines[0], 'Visible')
+      assert.equal(bundle!.screen.textHash, snap.textHash)
+      assert.equal(bundle!.screen.visualHash, snap.visualHash)
+      assert.deepEqual(bundle!.screen.styleRuns, snap.styleRuns)
       const txt = readFileSync(join(dir, 'latest.txt'), 'utf8')
       assert.equal(txt.includes('\x1b'), false)
       assert.match(txt, /Visible/)
       const rendered = formatInspectTui(dir, 'screen')
       assert.equal(rendered.includes('\x1b['), false)
       assert.match(rendered, /Visible/)
+      assert.match(rendered, new RegExp(`VISUAL_HASH ${snap.visualHash}`))
+      assert.match(rendered, /STYLE_RUNS \d+/)
     } finally {
       setObservedTerminalSize(null)
     }

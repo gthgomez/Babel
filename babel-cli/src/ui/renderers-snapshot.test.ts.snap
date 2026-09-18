@@ -11,7 +11,7 @@
   "compact bar 100 tok": "[                  0%]",
   "compact bar 195k tok": "[██████████████▋  98%]",
   "status bar basic": "DeepSeek V4 Flash                                              [▏            2%]\n",
-  "status bar basic raw": "\u001b[7m\u001b[38;5;255mDeepSeek V4 Flash\u001b[39m                                              [\u001b[38;5;146m▏         \u001b[39m   2%]\u001b[27m\n",
+  "status bar basic raw": "\u001b[48;5;17m\u001b[38;5;255mDeepSeek V4 Flash\u001b[39m                                              [\u001b[38;5;146m▏         \u001b[39m   2%]\u001b[49m\n",
   "status bar no cost": "Claude Sonnet 4.6                                                               \n",
   "status bar w40": "deepseek-v4-flash                       \n",
   "status bar w60": "deepseek-v4-flash                                           \n",

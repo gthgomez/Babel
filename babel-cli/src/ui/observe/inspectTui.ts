@@ -110,7 +110,23 @@ function formatScreen(bundle: TuiFrameBundle): string {
   const { watermarks, screen } = bundle
   const header = `FRAME ${watermarks.frameId}  SIZE ${watermarks.geometry.cols}x${watermarks.geometry.rows}  CURSOR ${screen.cursorRow},${screen.cursorCol}`
   const body = screen.lines.map((line, i) => `${String(i).padStart(2, ' ')}|${sanitizePlain(line)}`).join('\n')
-  return `${header}\n${body}\n`
+  const style = `VISUAL_HASH ${screen.visualHash}  TEXT_HASH ${screen.textHash}  STYLE_RUNS ${screen.styleRuns.length}`
+  const runs = screen.styleRuns
+    .map((run) => `${run.row}:${run.startCol}-${run.endCol} ${formatAttr(run.attr)}`)
+    .join('\n')
+  return `${header}\n${style}\n${body}\nSTYLE_RUNS\n${runs}\n`
+}
+
+function formatAttr(attr: TuiFrameBundle['screen']['styleRuns'][number]['attr']): string {
+  const color = (value: typeof attr.fg): string => {
+    if (value.kind === 'default') return 'default'
+    if (value.kind === 'indexed') return `ansi:${value.index}`
+    return `rgb:${value.r},${value.g},${value.b}`
+  }
+  const flags = [attr.bold && 'bold', attr.dim && 'dim', attr.italic && 'italic', attr.inverse && 'inverse']
+    .filter(Boolean)
+    .join(',') || '-'
+  return `fg=${color(attr.fg)} bg=${color(attr.bg)} flags=${flags}`
 }
 
 function formatSemanticState(s: ObservationSemanticState, frameId: number | string): string {
