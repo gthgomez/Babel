@@ -21,6 +21,10 @@ import { openEditor } from '../openEditor.js';
 import { updateConversationMemory } from '../turns.js';
 import { alert } from '../../ui/dialog.js';
 
+export function planDecisionShellOutcome(decision: PlanDecision | null): string {
+  return decision === null ? 'cancelled' : 'blocked';
+}
+
 export async function executePlanTask(
   ctx: ReplContext,
   input: string,
@@ -122,7 +126,7 @@ export async function executePlanTask(
     } else {
       // Rejected or cancelled
       ctx.state.lastRunUserStatus = 'blocked';
-      ctx.settleShellTurn?.('blocked', shellTurnEpoch);
+      ctx.settleShellTurn?.(planDecisionShellOutcome(decision), shellTurnEpoch);
       console.log(
         muted(
           '\n  Plan rejected. Refine your task and try again, or switch to /mode deep for governed execution.\n',

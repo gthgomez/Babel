@@ -976,14 +976,16 @@ async function runPipelineViaDaemon(
             (async () => {
               let approved = false;
               try {
-                approved = await confirmCost({
-                  title: 'Model Cost Threshold Exceeded',
-                  message: `Approximate per-run cost $${estimatedCost.toFixed(4)} meets or exceeds warning threshold $${threshold.toFixed(2)}.`,
-                  estimatedCost,
-                  tokenCount,
-                  threshold,
-                  model,
-                });
+                approved = await withExclusiveTerminalSurface('cost-approval-dialog', () =>
+                  confirmCost({
+                    title: 'Model Cost Threshold Exceeded',
+                    message: `Approximate per-run cost $${estimatedCost.toFixed(4)} meets or exceeds warning threshold $${threshold.toFixed(2)}.`,
+                    estimatedCost,
+                    tokenCount,
+                    threshold,
+                    model,
+                  }),
+                );
               } catch {
                 approved = false;
               }
