@@ -125,6 +125,7 @@ export class BabelRepl {
   private pendingResponsiveResize: { rows: number; cols: number } | null = null;
   private unregisterResponsiveLeaseRelease: (() => void) | null = null;
   private unregisterResponsiveRendererResume: (() => void) | null = null;
+  private startupHydrationComplete = false;
   private shellInputState: ShellInputState = {
     focus: 'composer',
     leftDrawerOpen: true,
@@ -298,7 +299,9 @@ export class BabelRepl {
   public async start(): Promise<void> {
     await bootstrapReplSession(this, () => BabelRepl.loadSessionState());
     await maybeShowResumePicker(this);
+    this.startupHydrationComplete = true;
     this.startNorthStarShell();
+    this.replayResponsiveResize();
     await runReplLoop(this, { executeTask: (input) => this.executeTask(input) });
   }
 
@@ -684,6 +687,7 @@ export class BabelRepl {
   private replayResponsiveResize(): void {
     const pending = this.pendingResponsiveResize;
     if (!pending) return;
+    if (!this.startupHydrationComplete) return;
     if (
       SessionPicker.isActive() ||
       this.legacyExclusiveDepth > 0 ||

@@ -207,6 +207,20 @@ test('North Star promotion is idempotent after startup resize replay mounts the 
   assert.equal(repl.shellHost, host);
 });
 
+test('startup responsive replay waits until session hydration completes', () => {
+  const repl = Object.create(BabelRepl.prototype) as {
+    pendingResponsiveResize: { rows: number; cols: number } | null;
+    startupHydrationComplete: boolean;
+    replayResponsiveResize: () => void;
+  };
+  repl.pendingResponsiveResize = { rows: 45, cols: 160 };
+  repl.startupHydrationComplete = false;
+
+  repl.replayResponsiveResize();
+
+  assert.deepEqual(repl.pendingResponsiveResize, { rows: 45, cols: 160 });
+});
+
 test('interactive follow-up prompts are resolved with previous assistant context', () => {
   const repl = Object.create(BabelRepl.prototype) as {
     lastAssistantAnswer: string | null;
