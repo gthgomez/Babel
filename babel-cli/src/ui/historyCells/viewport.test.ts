@@ -124,3 +124,61 @@ test('HistoryCellViewport: search finds matches after warm index', () => {
   assert.ok(matches.length >= 2);
   assert.ok(matches.some((match) => match.cellId !== undefined));
 });
+
+test('HistoryCellViewport: reuses unchanged measurements when only the tail changes', () => {
+  const viewport = new HistoryCellViewport(80);
+  const committed = Array.from({ length: 10_000 }, (_, index) =>
+    createUserMessageCell(`cell ${index}`, { cell_id: `cell-${index}` }),
+  );
+  viewport.setCells(committed);
+
+  viewport.resetOperationCounts();
+  viewport.setCells([
+    ...committed,
+    createAssistantMessageCell('live answer', {
+      cell_id: 'live-answer',
+      lifecycle: 'active',
+      revision: 1,
+    }),
+  ]);
+
+  const counts = viewport.getOperationCounts();
+  assert.ok(counts.cellsMeasured <= 1, `remeasured ${counts.cellsMeasured} cells`);
+});
+
+test('HistoryCellViewport: indexed visible lookup visits only the visible neighborhood', () => {
+  const viewport = new HistoryCellViewport(80);
+  viewport.setCells(
+    Array.from({ length: 10_000 }, (_, index) =>
+      createUserMessageCell(`cell ${index}`, { cell_id: `cell-${index}` }),
+    ),
+  );
+
+  viewport.resetOperationCounts();
+  const visible = viewport.getVisibleRows(4);
+  const counts = viewport.getOperationCounts();
+
+  assert.equal(visible.length, 4);
+  assert.ok(
+    counts.visibleEntriesVisited <= 8,
+    `visited ${counts.visibleEntriesVisited} entries`,
+  );
+  assert.ok(counts.visibleLookupSteps <= 20);
+});
+
+test('HistoryCellViewport: preserves a scrolled cell anchor while tail content grows', () => {
+  const viewport = new HistoryCellViewport(80);
+  const cells = Array.from({ length: 20 }, (_, index) =>
+    createUserMessageCell(`cell ${index}`, { cell_id: `cell-${index}` }),
+  );
+  viewport.setCells(cells);
+  viewport.setScrollOffset(5);
+  const before = stripAnsi(viewport.getVisibleRows(3).join('\n'));
+
+  viewport.setCells([
+    ...cells,
+    createAssistantMessageCell('new tail', { cell_id: 'new-tail' }),
+  ]);
+
+  assert.equal(stripAnsi(viewport.getVisibleRows(3).join('\n')), before);
+});
