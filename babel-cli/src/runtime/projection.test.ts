@@ -631,6 +631,38 @@ test('P04: a shared DAG reused across many facts is bounded', () => {
   assert.equal(proj.degraded, true);
 });
 
+test('P04: tied (sequence,id) facts stay order-independent under budget pressure', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const shared: { v: string } = { v: 'x' };
+  let dag: unknown = shared;
+  for (let i = 0; i < 15; i += 1) dag = { a: dag, b: dag };
+  const fillers: RuntimeFactV1[] = [];
+  for (let i = 0; i < 32; i += 1) {
+    fillers.push({
+      ...template,
+      id: `filler-${i}`,
+      schemaVersion: 2,
+      authority: 'observation',
+      sequence: i + 1,
+      cursor: { stream: 'runtime-facts', sequence: i + 1 },
+      payload: { type: 'future.optional', dag },
+    } as unknown as RuntimeFactV1);
+  }
+  const mk = (status: string) =>
+    ({
+      ...template,
+      id: 'tie',
+      schemaVersion: 2,
+      authority: 'observation',
+      sequence: 1000,
+      cursor: { stream: 'runtime-facts', sequence: 1000 },
+      payload: { type: 'future.optional', status },
+    }) as unknown as RuntimeFactV1;
+  const forward = projectTask([...fillers, mk('A'), mk('B')]);
+  const reverse = projectTask([...fillers, mk('B'), mk('A')]);
+  assert.deepEqual(forward, reverse);
+});
+
 test('P04: oversized optional facts are rejected deterministically', () => {
   const template = sessionLogToFacts(corpus())[0]!;
   const big = Array.from({ length: 200_000 }, (_, i) => `v${i}`);

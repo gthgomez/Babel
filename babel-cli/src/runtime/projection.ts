@@ -513,6 +513,68 @@ function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort(codeUnitCompare);
 }
 
+/** Bound the cheap pre-key traversal so sorting stays inexpensive. */
+const MAX_PREKEY_NODES = 4_000;
+
+/**
+ * Bounded, guarded content pre-key over the raw payload. Used only to order
+ * facts deterministically before classification, so budget truncation follows
+ * content rather than input order. Never throws; bounded in work.
+ */
+function payloadPreKey(value: unknown): string {
+  const parts: string[] = [];
+  let nodes = 0;
+  const visit = (current: unknown, depth: number): void => {
+    if (nodes >= MAX_PREKEY_NODES) return;
+    nodes += 1;
+    if (current === null) {
+      parts.push('n');
+      return;
+    }
+    if (typeof current === 'string') {
+      parts.push(`s${current.slice(0, 64)}`);
+      return;
+    }
+    if (typeof current === 'number' || typeof current === 'boolean') {
+      parts.push(`${typeof current === 'number' ? 'd' : 'b'}${String(current)}`);
+      return;
+    }
+    if (typeof current !== 'object') {
+      parts.push(`x${typeof current}`);
+      return;
+    }
+    if (depth > 8) {
+      parts.push('depth');
+      return;
+    }
+    if (Array.isArray(current)) {
+      parts.push('[');
+      for (let index = 0; index < current.length && nodes < MAX_PREKEY_NODES; index += 1) {
+        visit(current[index], depth + 1);
+      }
+      parts.push(']');
+      return;
+    }
+    try {
+      parts.push('{');
+      for (const key of Object.keys(current as object).sort()) {
+        if (nodes >= MAX_PREKEY_NODES) break;
+        parts.push(key);
+        visit((current as Record<string, unknown>)[key], depth + 1);
+      }
+      parts.push('}');
+    } catch {
+      parts.push('err');
+    }
+  };
+  try {
+    visit(value, 0);
+  } catch {
+    /* hostile payload: empty pre-key is still deterministic */
+  }
+  return parts.join('\u0001');
+}
+
 /** Bound the number of facts consumed so an endless iterable cannot run forever. */
 const MAX_FACTS = 100_000;
 
@@ -530,7 +592,7 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
   // Read a cheap deterministic key from each raw fact, then classify in that
   // order under one shared budget. Acceptance therefore depends on content
   // (sequence, id), never on the caller's input order.
-  const entries: Array<{ input: unknown; seq: number | null; id: string }> = [];
+  const entries: Array<{ input: unknown; seq: number | null; id: string; preKey: string }> = [];
   let factCount = 0;
   try {
     for (const input of facts) {
@@ -541,17 +603,19 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
       }
       let seq: number | null = null;
       let id = '';
+      let preKey = '';
       try {
         if (isRecord(input)) {
           const rawSeq = input['sequence'];
           if (typeof rawSeq === 'number' && Number.isFinite(rawSeq)) seq = rawSeq;
           const rawId = input['id'];
           if (typeof rawId === 'string') id = rawId;
+          preKey = payloadPreKey(input['payload']);
         }
       } catch {
         /* hostile accessor; defaults keep ordering deterministic */
       }
-      entries.push({ input, seq, id });
+      entries.push({ input, seq, id, preKey });
     }
   } catch {
     state.degradedReasons.push('fact_iteration_failed');
@@ -563,7 +627,7 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
       if (b.seq === null) return -1;
       return a.seq - b.seq;
     }
-    return codeUnitCompare(a.id, b.id);
+    return codeUnitCompare(a.id, b.id) || codeUnitCompare(a.preKey, b.preKey);
   });
 
   const totalBudget: CloneBudget = { nodes: 0 };
