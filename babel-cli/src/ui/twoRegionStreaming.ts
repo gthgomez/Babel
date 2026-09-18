@@ -36,7 +36,10 @@
  */
 
 import { OutputBuffer } from './outputBuffer.js';
-import { isRendererPresentationSuspended } from './rendererFence.js';
+import {
+  isRendererPresentationSuspended,
+  onRendererPresentationResume,
+} from './rendererFence.js';
 import { probeTerminalCapabilities } from './terminalProbe.js';
 import { wrapText } from './theme.js';
 
@@ -78,6 +81,10 @@ export class TwoRegionStreaming {
    * or the prefix is re-printed on every markdown rewrite.
    */
   private graduatedCount = 0;
+  /** Terminal mutations deferred while a foreign surface owns presentation. */
+  private presentationDirty = false;
+  private unregisterPresentationResume: (() => void) | null = null;
+  private deferredOperations: Array<'commit' | 'begin' | 'teardown'> = [];
 
   constructor() {
     this.buf = OutputBuffer.getInstance();
@@ -124,10 +131,16 @@ export class TwoRegionStreaming {
     // regions aren't supported
     if (!this.useHardwareScroll || terminalHeight < MIN_TERMINAL_HEIGHT) {
       this.fallbackMode = true;
+      if (isRendererPresentationSuspended()) this.deferPresentationReconcile();
       return;
     }
 
     this.fallbackMode = false;
+
+    if (isRendererPresentationSuspended()) {
+      this.deferPresentationReconcile();
+      return;
+    }
 
     // Set scroll region to the scrollback area (rows 1 to streamingTop-1).
     // Content written above the streaming area will scroll naturally within
@@ -181,7 +194,10 @@ export class TwoRegionStreaming {
   private _syncOverflowAndRender(): void {
     // Keep the logical line buffer current while a foreign surface owns the
     // terminal. Repaint/graduation resumes from this state after release.
-    if (isRendererPresentationSuspended()) return;
+    if (isRendererPresentationSuspended()) {
+      this.deferPresentationReconcile();
+      return;
+    }
     const targetGraduated = Math.max(0, this.lines.length - this.streamingRows);
 
     // Grow graduation monotonically — never re-write already graduated lines.
@@ -214,7 +230,10 @@ export class TwoRegionStreaming {
 
     if (this.fallbackMode) {
       // Fallback: write directly — caller handles cursor-up positioning.
-      if (isRendererPresentationSuspended()) return;
+      if (isRendererPresentationSuspended()) {
+        this.deferPresentationReconcile();
+        return;
+      }
       this.buf.write(text);
       return;
     }
@@ -234,6 +253,18 @@ export class TwoRegionStreaming {
    * then write the not-yet-graduated lines once.
    */
   commitStreaming(): void {
+    if (!this._isActive) return;
+
+    if (isRendererPresentationSuspended()) {
+      this.deferredOperations.push('commit');
+      this.deferPresentationReconcile();
+      return;
+    }
+
+    this._commitNow();
+  }
+
+  private _commitNow(): void {
     if (!this._isActive) return;
 
     if (!this.fallbackMode) {
@@ -266,6 +297,18 @@ export class TwoRegionStreaming {
    * append onto the previous message's cells.
    */
   beginNewStreamingMessage(): void {
+    if (!this._isActive) return;
+
+    if (isRendererPresentationSuspended()) {
+      this.deferredOperations.push('begin');
+      this.deferPresentationReconcile();
+      return;
+    }
+
+    this._beginNewStreamingMessageNow();
+  }
+
+  private _beginNewStreamingMessageNow(): void {
     if (!this._isActive) return;
 
     if (this.fallbackMode) {
@@ -305,12 +348,16 @@ export class TwoRegionStreaming {
     this.streamingRows = Math.max(4, Math.min(this.streamingRows, Math.floor(newHeight / 3)));
     this.streamingTop = newHeight - this.streamingRows + 1;
     this.streamingBottom = newHeight;
+    // Decide the logical mode before checking the fence. The terminal update
+    // may be deferred, but the replay must use the latest dimensions.
+    this.fallbackMode = !this.useHardwareScroll || newHeight < MIN_TERMINAL_HEIGHT;
 
-    if (this.fallbackMode) return;
+    if (isRendererPresentationSuspended()) {
+      this.deferPresentationReconcile();
+      return;
+    }
 
-    if (newHeight < MIN_TERMINAL_HEIGHT) {
-      // Terminal too small — fall back
-      this.fallbackMode = true;
+    if (this.fallbackMode) {
       this.buf.resetScrollRegion();
       return;
     }
@@ -362,6 +409,18 @@ export class TwoRegionStreaming {
   teardown(): void {
     if (!this._isActive) return;
 
+    if (isRendererPresentationSuspended()) {
+      this.deferredOperations.push('teardown');
+      this.deferPresentationReconcile();
+      return;
+    }
+
+    this._teardownNow();
+  }
+
+  private _teardownNow(): void {
+    if (!this._isActive) return;
+
     if (!this.fallbackMode) {
       // Wipe smeared streaming cells before dropping DECSTBM so a cancel
       // review card is not painted over leftover greeting wallpaper.
@@ -373,6 +432,50 @@ export class TwoRegionStreaming {
     this.graduatedCount = 0;
     this._isActive = false;
     this.fallbackMode = false;
+  }
+
+  /**
+   * Replay terminal work that arrived while a pager/editor/overlay owned the
+   * terminal. The logical line state is updated immediately; only terminal
+   * mutation is deferred. This method is also called by the renderer's fence
+   * release callback so teardown still resets DECSTBM if the renderer stopped
+   * while the foreign surface was open.
+   */
+  reconcileAfterExclusiveSurface(): void {
+    if (isRendererPresentationSuspended()) return;
+    if (!this.presentationDirty && this.deferredOperations.length === 0) return;
+    this.presentationDirty = false;
+    this.unregisterPresentationResume?.();
+    this.unregisterPresentationResume = null;
+
+    if (this._isActive) {
+      // Re-establish the complete layout from current logical dimensions. A
+      // full repaint is deliberate: it removes stale rows from the old
+      // geometry without replaying any terminal writes while fenced.
+      this.buf.resetScrollRegion();
+      if (!this.fallbackMode) {
+        if (this.streamingTop > 1) {
+          this.buf.setScrollRegion(1, this.streamingTop - 1);
+        }
+        this.buf.moveCursor(this.streamingTop, 1);
+        this._renderStreamingArea();
+      }
+    }
+
+    const operations = this.deferredOperations.splice(0);
+    for (const operation of operations) {
+      switch (operation) {
+        case 'commit':
+          this._commitNow();
+          break;
+        case 'begin':
+          this._beginNewStreamingMessageNow();
+          break;
+        case 'teardown':
+          this._teardownNow();
+          break;
+      }
+    }
   }
 
   // ── State queries ───────────────────────────────────────────────────────────
@@ -412,6 +515,10 @@ export class TwoRegionStreaming {
    * hardware scroll region handle the scrolling.
    */
   private _writeToScrollback(line: string): void {
+    if (isRendererPresentationSuspended()) {
+      this.deferPresentationReconcile();
+      return;
+    }
     // Save cursor, move to the bottom of the scrollback region, write the
     // line (which triggers hardware scroll within the scrollback region),
     // restore cursor.
@@ -428,6 +535,10 @@ export class TwoRegionStreaming {
 
   /** Clear every row of the hardware streaming window. */
   private _clearStreamingRows(): void {
+    if (isRendererPresentationSuspended()) {
+      this.deferPresentationReconcile();
+      return;
+    }
     if (this.streamingTop <= 0 || this.streamingRows <= 0) return;
     this.buf.beginFrame();
     try {
@@ -447,6 +558,10 @@ export class TwoRegionStreaming {
    * next writeLine (the two-column wallpaper on Windows Terminal).
    */
   private _renderStreamingArea(): void {
+    if (isRendererPresentationSuspended()) {
+      this.deferPresentationReconcile();
+      return;
+    }
     const startRow = this.streamingTop;
     const availableRows = this.streamingRows;
     const width = this.terminalWidth > 0 ? this.terminalWidth : (process.stdout.columns ?? 80);
@@ -471,5 +586,14 @@ export class TwoRegionStreaming {
     } finally {
       this.buf.endFrame();
     }
+  }
+
+  private deferPresentationReconcile(): void {
+    this.presentationDirty = true;
+    if (this.unregisterPresentationResume) return;
+    this.unregisterPresentationResume = onRendererPresentationResume(() => {
+      this.unregisterPresentationResume = null;
+      this.reconcileAfterExclusiveSurface();
+    });
   }
 }

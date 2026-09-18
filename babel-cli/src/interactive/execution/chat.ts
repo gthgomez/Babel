@@ -107,9 +107,9 @@ export async function executeChatTask(
 ): Promise<void> {
   ctx.isRunning = true;
   notifyRunStarted();
-  // Slice 2: do not re-activate PromptInput during the turn. A live composer
-  // shares stdin with ConversationalRenderer and turns one Ctrl+C into
-  // cancel + process-exit on ConPTY (raw 0x03 plus SIGINT).
+  // Hosted North Star keeps the composer mounted for queueing, but the
+  // renderer must not install a second stdin owner. Legacy Chat continues to
+  // use the renderer-owned raw input path below.
   // Per-turn usage scope: capture the full session summary before the run so
   // turn-scoped cost AND tokens are both derived as deltas of the same source.
   const preRunUsage = globalCostTracker.getSessionSummary();
@@ -122,7 +122,12 @@ export async function executeChatTask(
   const useConversational =
     process.stdout.isTTY && !process.env['CI'] && !process.env['NO_COLOR'];
   const convRenderer = useConversational
-    ? new ConversationalRenderer({ verboseMode: Boolean(ctx.verboseMode) })
+    ? new ConversationalRenderer({
+        verboseMode: Boolean(ctx.verboseMode),
+        // Hosted North Star owns stdin through its shell root. The legacy
+        // renderer remains self-owned for non-hosted Chat execution.
+        ownsInput: !ctx.shellHost,
+      })
     : null;
 
   // U1.2: surface active coding profile when non-default/specialized or in verbose mode
@@ -581,7 +586,7 @@ export async function executeChatTask(
     ctx.isRunning = false;
     notifyRunEnded();
     const typedDuringRun = takeStreamingDraft();
-    if (typedDuringRun) {
+    if (typedDuringRun && !ctx.shellHost) {
       const adapter = ctx.rl as unknown as {
         getInputText?: () => string;
         setInputText?: (text: string) => void;

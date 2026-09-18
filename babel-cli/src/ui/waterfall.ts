@@ -1331,6 +1331,8 @@ export class ConversationalRenderer extends BaseRenderer {
   private screenManager: ScreenManager | undefined;
   private taskLabel: string | undefined;
   private readonly _rawMode: RawModeManager;
+  /** Hosted North Star shells own stdin; legacy renderers retain raw input. */
+  private readonly ownsInput: boolean;
 
   private _pendingToolCallLines: number;
   private _store: StateStore<TuiState, TuiMutation> | undefined;
@@ -1373,13 +1375,16 @@ export class ConversationalRenderer extends BaseRenderer {
       isTTY,
       stateStore,
       verboseMode,
+      ownsInput = true,
     }: {
       isTTY?: boolean;
       stateStore?: StateStore<TuiState, TuiMutation> | undefined;
       verboseMode?: boolean;
+      ownsInput?: boolean;
     } = { isTTY: process.stdout.isTTY },
   ) {
     super();
+    this.ownsInput = ownsInput;
     this.verboseMode = verboseMode ?? false;
     this._store = stateStore ?? createTuiStore();
     // Note: do NOT call setState — the store is already initialized with defaults
@@ -1679,6 +1684,7 @@ export class ConversationalRenderer extends BaseRenderer {
   }
 
   override enableRawMode(): void {
+    if (!this.ownsInput) return;
     if (this._rawMode.isActive) return;
     this._rawMode.enable((event) => {
       const action = KeybindingManager.getInstance().matchStack(['chat'], event);
@@ -1806,6 +1812,7 @@ export class ConversationalRenderer extends BaseRenderer {
 
   override resumeTicks(): void {
     super.resumeTicks();
+    this._twoRegion?.reconcileAfterExclusiveSurface();
     if (this._twoRegion?.isHardwareMode) {
       this._twoRegion.replaceStreamingContent(this._mdAccumulator.getRenderedText());
     }

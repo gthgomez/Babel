@@ -62,6 +62,16 @@ it('exclusive surface fences active renderer output and raw input, then restores
   }
 });
 
+it('hosted conversational renderer leaves stdin ownership to the shell root', () => {
+  const renderer = new ConversationalRenderer({ isTTY: true, ownsInput: false });
+  try {
+    renderer.enableRawMode();
+    assert.equal(renderer.isRawModeActive(), false);
+  } finally {
+    renderer.stop();
+  }
+});
+
 // ── Direct tests ─────────────────────────────────────────────────────────────
 // All tests now exercise the real exported functions directly.
 
