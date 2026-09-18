@@ -261,34 +261,80 @@ export function validateRuntimeFact(input: unknown): FactValidation {
 const SECRET_KEY_PATTERN = /(pass(word)?|secret|token|api[_-]?key|authorization|credential|private[_-]?key)/i;
 const MAX_STRING_CHARS = 512;
 const MAX_REDACT_DEPTH = 12;
+const MAX_REDACT_NODES = 100_000;
 
-function redactValue(value: unknown, depth = 0): unknown {
+/**
+ * Redact a value without throwing and without unbounded work. Cycle-aware,
+ * node-bounded, and guarded against hostile accessors, so a shared-reference
+ * DAG cannot amplify and a throwing/revoked object cannot escape.
+ */
+function redactValue(
+  value: unknown,
+  path: WeakSet<object> = new WeakSet(),
+  budget: { nodes: number } = { nodes: 0 },
+  depth = 0,
+): unknown {
+  budget.nodes += 1;
+  if (budget.nodes > MAX_REDACT_NODES) return '[redacted:limit]';
   if (typeof value === 'string') {
     return value.length > MAX_STRING_CHARS ? `${value.slice(0, MAX_STRING_CHARS)}…[truncated]` : value;
   }
-  if (Array.isArray(value)) {
-    if (depth >= MAX_REDACT_DEPTH) return '[redacted:depth]';
-    return value.map((entry) => redactValue(entry, depth + 1));
-  }
-  if (isRecord(value)) {
-    // Past the depth budget we cannot safety-scan keys, so redact wholesale
-    // rather than returning a nested object that may hold a credential.
-    if (depth >= MAX_REDACT_DEPTH) return '[redacted:depth]';
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= MAX_REDACT_DEPTH) return '[redacted:depth]';
+  const object = value as object;
+  if (path.has(object)) return '[redacted:circular]';
+  path.add(object);
+  try {
+    if (Array.isArray(object)) {
+      const out: unknown[] = [];
+      const length = object.length;
+      for (let index = 0; index < length; index += 1) {
+        out.push(redactValue(object[index], path, budget, depth + 1));
+      }
+      return out;
+    }
     const out = Object.create(null) as Record<string, unknown>;
-    for (const [key, entry] of Object.entries(value)) {
-      out[key] = SECRET_KEY_PATTERN.test(key) ? '[redacted]' : redactValue(entry, depth + 1);
+    for (const key of Object.keys(object)) {
+      let entry: unknown;
+      try {
+        entry = (object as Record<string, unknown>)[key];
+      } catch {
+        entry = '[redacted:error]';
+      }
+      out[key] = SECRET_KEY_PATTERN.test(key) ? '[redacted]' : redactValue(entry, path, budget, depth + 1);
     }
     return out;
+  } catch {
+    return '[redacted:error]';
+  } finally {
+    path.delete(object);
   }
-  return value;
 }
 
-/** Redact a fact for persistence or publication. Never weakens authority. */
+/** Fail-closed placeholder returned if a fact envelope itself is inaccessible. */
+const REDACTION_FAILURE_FACT: RuntimeFactV1 = {
+  schemaVersion: RUNTIME_FACT_SCHEMA_VERSION,
+  id: 'redaction-failed',
+  cursor: { stream: 'runtime-facts', sequence: -1 },
+  threadId: '',
+  taskId: '',
+  turnId: '',
+  runId: '',
+  sequence: -1,
+  causationId: 'redaction-failed',
+  producer: 'legacy_adapter',
+  authority: 'observation',
+  timestamp: '1970-01-01T00:00:00.000Z',
+  payload: { type: 'context.degraded', reason: 'redaction_failed' },
+};
+
+/** Redact a fact for persistence or publication. Never weakens authority; never throws. */
 export function redactRuntimeFact(fact: RuntimeFactV1): RuntimeFactV1 {
-  return {
-    ...fact,
-    payload: redactValue(fact.payload) as FactPayload,
-  };
+  try {
+    return { ...fact, payload: redactValue(fact.payload) as FactPayload };
+  } catch {
+    return REDACTION_FAILURE_FACT;
+  }
 }
 
 /** Order two cursors; negative when `a` precedes `b`. */

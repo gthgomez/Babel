@@ -116,6 +116,36 @@ test('P04: redaction does not leak nested secrets past the depth budget', () => 
   );
 });
 
+test('P04: redactRuntimeFact is total and bounded for hostile/DAG input', () => {
+  let node: unknown = { token: 'secret' };
+  for (let i = 0; i < 12; i += 1) {
+    const next: Record<string, unknown> = {};
+    for (let k = 0; k < 5; k += 1) next[`k${k}`] = node;
+    node = next;
+  }
+  const started = Date.now();
+  const redacted = redactRuntimeFact(
+    fact({ payload: { type: 'permission.decided', decision: 'allow', nested: node } }),
+  );
+  assert.ok(Date.now() - started < 5000, 'shared-reference redaction must be bounded');
+  assert.ok(!JSON.stringify(redacted).includes('secret'));
+
+  const hostile = fact({
+    payload: {
+      type: 'permission.decided',
+      decision: 'allow',
+      get boom(): never {
+        throw new Error('boom');
+      },
+    },
+  });
+  assert.doesNotThrow(() => redactRuntimeFact(hostile));
+
+  const { proxy, revoke } = Proxy.revocable({}, {});
+  revoke();
+  assert.doesNotThrow(() => redactRuntimeFact(fact({ payload: proxy })));
+});
+
 test('P04: fact cursor is its own address space', () => {
   const a = { stream: 'runtime-facts' as const, sequence: 1 };
   const b = { stream: 'runtime-facts' as const, sequence: 2 };
