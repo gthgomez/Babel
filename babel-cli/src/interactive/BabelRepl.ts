@@ -218,12 +218,26 @@ export class BabelRepl {
       const cols = process.stdout.columns || 80;
       PaneManager.instance.onTerminalResize(rows, cols);
       const resizedLayout = planShellLayout({ cols, rows });
+      const foreignSurfaceActive =
+        SessionPicker.isActive() ||
+        this.legacyExclusiveDepth > 0 ||
+        shellInputLeaseActive();
+      // A resize may arrive while a picker/editor/pager/approval owns stdin.
+      // Defer host transitions until that lease has released.
+      if (foreignSurfaceActive) return;
       if (this.shellHost && resizedLayout.mode === 'linear') {
         this.leaveNorthStarShell();
-        try {
-          this.rl.prompt();
-        } catch {
-          // The terminal may be tearing down; preserve the original resize path.
+        const activeRenderer = getActiveRenderer() as unknown as {
+          isRawModeActive?: () => boolean;
+        } | null;
+        // While a turn is running, the demoted renderer is the only legacy
+        // stdin owner. Prompting here would install a second key handler.
+        if (!this.isRunning || !activeRenderer?.isRawModeActive?.()) {
+          try {
+            this.rl.prompt();
+          } catch {
+            // The terminal may be tearing down; preserve the original resize path.
+          }
         }
         return;
       }
