@@ -12,6 +12,15 @@ import { join } from 'node:path';
 
 import type { ChatEngine } from '../../agent/chatEngine.js';
 import { SESSION_EVENTS_FILENAME } from '../../agent/sessionEvents.js';
+import {
+  THREAD_EVENT_LOG_FILENAME,
+  createThreadEventLog,
+  endTurn,
+  recordAssistantToolCalls,
+  recordToolResult,
+  serializeThreadEventLog,
+  startTurn,
+} from '../../agent/threadEventLog.js';
 import { chatSessionDir } from '../../cli/runsLayout.js';
 import { appendTurnCells } from '../../services/threadStore/index.js';
 import { HISTORY_CELL_SCHEMA_VERSION } from '../../ui/historyCells/types.js';
@@ -251,6 +260,156 @@ test('P02: a fresh thread reports no source and remains submittable', async () =
       host,
     );
     assert.ok('result' in submitted);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P02: cold submission without resume hydrates the durable event log', async () => {
+  const fixture = withTempRunsDir();
+  try {
+    const creator = createProtocolHostState();
+    const threadId = await createThread(creator, fixture.root);
+
+    const log = createThreadEventLog(threadId);
+    const first = startTurn(log, {
+      task: 'remember the sentinel',
+      model: 'm',
+      provider: 'p',
+      projectRoot: fixture.root,
+      policyPreset: 'safe_repo',
+    });
+    recordAssistantToolCalls(log, first, '', [
+      { id: 'call-1', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+    ] as unknown as Parameters<typeof recordAssistantToolCalls>[3]);
+    recordToolResult(log, first, {
+      tool_call_id: 'call-1',
+      tool_name: 'read_file',
+      content: 'tool-sentinel',
+    });
+    endTurn(log, first, undefined, 'ok');
+    const second = startTurn(log, {
+      task: 'second turn',
+      model: 'm',
+      provider: 'p',
+      projectRoot: fixture.root,
+      policyPreset: 'safe_repo',
+    });
+    endTurn(log, second, undefined, 'ok');
+    mkdirSync(chatSessionDir(threadId), { recursive: true });
+    writeFileSync(join(chatSessionDir(threadId), THREAD_EVENT_LOG_FILENAME), serializeThreadEventLog(log));
+
+    const inspector = createProtocolHostState();
+    const resumed = await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 2, method: 'thread.resume', params: { thread_id: threadId } },
+      inspector,
+    );
+    const restore = (resumed as { result: { restore?: { source: string; turnCount: number } } }).result.restore;
+    assert.equal(restore?.source, 'thread_event_log');
+    assert.equal(restore?.turnCount, 2, 'event-log threads must not report turn count 0');
+
+    // A fresh host that never called thread.resume still hydrates on submit.
+    const engine = new RecordingEngine();
+    const freshHost = createProtocolHostState({
+      engineFactory: () => engine as unknown as ChatEngine,
+      executeWithoutNotifications: true,
+    });
+    const submitted = await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 3, method: 'turn.submit', params: { thread_id: threadId, message: 'what was the sentinel?' } },
+      freshHost,
+    );
+    assert.ok('result' in submitted);
+    const text = engine.conversation.map((m) => m.content).join('\n');
+    assert.ok(text.includes('remember the sentinel'), 'cold submit must hydrate stored history');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P02: cold submission without resume refuses unrecoverable state', async () => {
+  const fixture = withTempRunsDir();
+  try {
+    const creator = createProtocolHostState();
+    const threadId = await createThread(creator, fixture.root);
+    const sessionDir = chatSessionDir(threadId);
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, SESSION_EVENTS_FILENAME), '{ broken');
+
+    const host = createProtocolHostState({ executeWithoutNotifications: true });
+    // No thread.resume call: submission must inspect and refuse on its own.
+    const submitted = await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 2, method: 'turn.submit', params: { thread_id: threadId, message: 'x' } },
+      host,
+    );
+    assert.ok('error' in submitted);
+    assert.equal(
+      (submitted as { error: { code: number } }).error.code,
+      BabelProtocolErrorCode.THREAD_NOT_RESUMABLE,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P02: deep resume reports non-resumable rather than success', async () => {
+  const fixture = withTempRunsDir();
+  try {
+    const creator = createProtocolHostState();
+    const threadId = await createThread(creator, fixture.root, 'deep');
+    const resumed = await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 2, method: 'thread.resume', params: { thread_id: threadId } },
+      creator,
+    );
+    const restore = (resumed as { result: { restore?: { resumable: boolean } } }).result.restore;
+    assert.equal(restore?.resumable, false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P02: failed hydration does not leave a poisoned engine cache', async () => {
+  const fixture = withTempRunsDir();
+  try {
+    const creator = createProtocolHostState();
+    const threadId = await createThread(creator, fixture.root);
+
+    const log = createThreadEventLog(threadId);
+    const turn = startTurn(log, {
+      task: 'remember the sentinel',
+      model: 'm',
+      provider: 'p',
+      projectRoot: fixture.root,
+      policyPreset: 'safe_repo',
+    });
+    endTurn(log, turn, undefined, 'ok');
+    const sessionDir = chatSessionDir(threadId);
+    mkdirSync(sessionDir, { recursive: true });
+    const logPath = join(sessionDir, THREAD_EVENT_LOG_FILENAME);
+    writeFileSync(logPath, serializeThreadEventLog(log));
+
+    const engine = new RecordingEngine();
+    const host = createProtocolHostState({
+      engineFactory: () => engine as unknown as ChatEngine,
+      executeWithoutNotifications: true,
+    });
+    // Establish the report, then corrupt the declared source before execution.
+    await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 2, method: 'thread.resume', params: { thread_id: threadId } },
+      host,
+    );
+    writeFileSync(logPath, '{ corrupted');
+
+    const first = await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 3, method: 'turn.submit', params: { thread_id: threadId, message: 'a' } },
+      host,
+    );
+    const second = await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 4, method: 'turn.submit', params: { thread_id: threadId, message: 'b' } },
+      host,
+    );
+    assert.ok('error' in first);
+    assert.ok('error' in second, 'a failed hydration must not be cached as a runnable empty engine');
+    assert.equal(engine.executions, 0);
   } finally {
     fixture.cleanup();
   }

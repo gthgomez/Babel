@@ -152,12 +152,19 @@ function materializeEngine(state: ProtocolHostState, descriptor: SessionDescript
   const existing = state.engines.get(descriptor.threadId);
   if (existing) return existing;
   const engine = state.engineFactory(descriptor);
-  state.engines.set(descriptor.threadId, engine);
-  state.descriptors.set(descriptor.threadId, descriptor);
   const report = state.restoreReports.get(descriptor.threadId);
-  if (report?.resumable && report.source !== 'none' && engineSupportsHydration(engine)) {
+  if (report?.resumable && report.source !== 'none') {
+    if (!engineSupportsHydration(engine)) {
+      throw new Error(
+        `Cannot restore thread ${descriptor.threadId}: engine does not support conversation hydration`,
+      );
+    }
+    // Hydrate before publishing so a failed restore cannot leave a poisoned
+    // empty engine cached for the next submit.
     hydrateEngineFromRestore(engine, report);
   }
+  state.engines.set(descriptor.threadId, engine);
+  state.descriptors.set(descriptor.threadId, descriptor);
   return engine;
 }
 
@@ -251,7 +258,8 @@ export async function handleProtocolRequest(
         if (!threadStoreExists(threadId)) {
           return errorResponse(id, BabelProtocolErrorCode.THREAD_NOT_FOUND, `Thread not found: ${threadId}`);
         }
-        const descriptor = loadSessionDescriptor(threadId) ?? {
+        const loadedDescriptor = loadSessionDescriptor(threadId);
+        const descriptor = loadedDescriptor ?? {
           schemaVersion: 1,
           threadId,
           projectRoot: params.project_root ?? process.cwd(),
@@ -266,9 +274,18 @@ export async function handleProtocolRequest(
         if (params.project_root && params.project_root !== descriptor.projectRoot) {
           return errorResponse(id, BabelProtocolErrorCode.PROJECT_ROOT_MISMATCH, `Project root mismatch for thread: ${threadId}`);
         }
-        writeSessionDescriptor(descriptor);
+        // Never cement a synthesized descriptor: only persist a real one.
+        if (loadedDescriptor) writeSessionDescriptor(descriptor);
         state.descriptors.set(threadId, descriptor);
-        const report = inspectSessionRestoreState(threadId, descriptor.mode);
+        const resumeCapability = resolveModeCapability(descriptor.mode);
+        const inspected = inspectSessionRestoreState(threadId, descriptor.mode);
+        const report: RestoreReport = resumeCapability.resume
+          ? inspected
+          : {
+              ...inspected,
+              resumable: false,
+              ...(resumeCapability.reason !== undefined ? { reason: resumeCapability.reason } : {}),
+            };
         state.restoreReports.set(threadId, report);
         const result: ThreadResumeResult = {
           thread_id: threadId,
@@ -293,20 +310,37 @@ export async function handleProtocolRequest(
           );
         }
         const descriptor = state.descriptors.get(params.thread_id) ?? loadSessionDescriptor(params.thread_id);
-        const capability = resolveModeCapability(descriptor?.mode ?? 'chat');
-        if (!capability.submission) {
+        const registeredEngine = state.engines.get(params.thread_id);
+        if (!descriptor && !registeredEngine) {
           return errorResponse(
             id,
             BabelProtocolErrorCode.MODE_UNSUPPORTED,
-            capability.reason ?? `Mode ${descriptor?.mode ?? 'unknown'} is not supported on this surface`,
+            `Cannot determine mode for thread ${params.thread_id}: no session descriptor or registered runtime`,
           );
         }
-        const priorRestore = state.restoreReports.get(params.thread_id);
-        if (priorRestore && !priorRestore.resumable) {
+        if (descriptor) {
+          const capability = resolveModeCapability(descriptor.mode);
+          if (!capability.submission) {
+            return errorResponse(
+              id,
+              BabelProtocolErrorCode.MODE_UNSUPPORTED,
+              capability.reason ?? `Mode ${descriptor.mode} is not supported on this surface`,
+            );
+          }
+        }
+        // Ordinary submission is self-sufficient: when no live runtime is
+        // registered, inspect durable state before admitting so a cold host
+        // hydrates (or refuses) instead of silently running on empty history.
+        let restoreReport = state.restoreReports.get(params.thread_id);
+        if (!restoreReport && !registeredEngine) {
+          restoreReport = inspectSessionRestoreState(params.thread_id, descriptor?.mode ?? 'chat');
+          state.restoreReports.set(params.thread_id, restoreReport);
+        }
+        if (restoreReport && !restoreReport.resumable) {
           return errorResponse(
             id,
             BabelProtocolErrorCode.THREAD_NOT_RESUMABLE,
-            priorRestore.reason ?? `Thread ${params.thread_id} has state that cannot be restored`,
+            restoreReport.reason ?? `Thread ${params.thread_id} has state that cannot be restored`,
           );
         }
         const integrity = hashUserMessage(params.message);
