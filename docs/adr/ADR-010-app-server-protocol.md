@@ -191,3 +191,25 @@ not a second catalog.
   every method and notification in this catalog. **Open.**
 - Loopback HTTP/WS gateway for the same catalog (`babel remote serve`): **Partial**
   (see `docs/architecture/babel-remote/`). Not a D2 transport exit.
+
+### Amendment — P02 preparation/resume and mode capability (2026-09-18)
+
+`thread.resume` now returns an additive `restore` field (`RestoreReport`) naming the
+durable source used (`thread_event_log`, `history_cells`, or `none`), the turn count,
+whether execution may resume, and precisely what could not be reconstructed. On resume
+the host hydrates the engine through the shared
+`services/threadStore/sessionHydration.ts` seam (typed thread events first, then history
+cells) so a resumed thread never runs on empty history.
+
+Two additive error codes are defined in `BabelProtocolErrorCode`:
+
+- `MODE_UNSUPPORTED` (-32006) — the requested mode has no controller wired to this
+  surface. `deep` is explicitly unsupported here until its adapter invokes the V9
+  pipeline; it is never silently executed as a Chat engine carrying a `deep` profile.
+- `THREAD_NOT_RESUMABLE` (-32007) — durable state exists but could not be restored;
+  execution is refused instead of running on empty history.
+
+Mode capability is resolved by `resolveModeCapability` in `src/executor/modeAdapters.ts`;
+`PreparedTurn`/`RestoreReport` are the P02 contracts. Read-only `history.lookup` remains
+available for unsupported or non-resumable threads. No existing response shape or status
+name changes.

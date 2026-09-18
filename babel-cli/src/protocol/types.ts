@@ -7,6 +7,7 @@
 
 import type { HistoryCellRecord } from '../ui/historyCells/types.js';
 import type { BabelMode } from '../executor/contracts.js';
+import type { RestoreReport } from '../executor/modeAdapters.js';
 import type { MutationEffectStatus } from '../agent/mutationTools.js';
 import type { ChatStatus } from '../agent/chatFailureClassification.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
@@ -74,6 +75,10 @@ export enum BabelProtocolErrorCode {
   THREAD_EXISTS = -32003,
   PROJECT_ROOT_MISMATCH = -32004,
   CELL_NOT_FOUND = -32005,
+  /** Requested mode has no controller wired to this surface (e.g. deep). */
+  MODE_UNSUPPORTED = -32006,
+  /** Durable state could not be restored; executing would run on empty history. */
+  THREAD_NOT_RESUMABLE = -32007,
 }
 
 /** Token/cost summary on turn completion — mirrors `SessionUsageSummary`. */
@@ -200,6 +205,11 @@ export interface ThreadResumeResult {
   thread_id: ThreadId;
   /** Highest committed turn index, or 0 for an empty thread. */
   turn_count: number;
+  /**
+   * What durable state was found and whether execution can resume from it.
+   * Additive: older clients ignore it and keep read-only history access.
+   */
+  restore?: RestoreReport;
 }
 
 export interface TurnSubmitResult {
