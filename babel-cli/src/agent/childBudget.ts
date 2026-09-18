@@ -7,14 +7,20 @@
  * snapshot allowance and may further restrict itself by max rounds.
  */
 
+import { randomUUID } from 'node:crypto';
 import {
   captureCostBaselineUsd,
   costSpentSinceBaselineUsd,
+  globalCostTracker,
 } from '../services/costTracker.js';
 
 export type ChildBudgetLimiter = 'wall' | 'cost';
 
 export interface InheritedChildAllowance {
+  /** Immutable child owner for provider usage emitted by this delegation. */
+  taskOwnerId?: string;
+  /** Parent owner charged once for each child provider charge. */
+  parentTaskOwnerId?: string;
   /** Global cost at the instant delegation was created. */
   costBaselineUsd: number;
   /** Maximum additional global cost available to this child; null = unlimited. */
@@ -26,6 +32,7 @@ export interface InheritedChildAllowance {
 }
 
 export function deriveChildAllowance(input: {
+  parentTaskOwnerId?: string;
   parentTaskBaselineUsd: number;
   parentTaskCarryoverUsd?: number;
   parentEffectiveCostCapUsd: number;
@@ -36,8 +43,9 @@ export function deriveChildAllowance(input: {
 }): InheritedChildAllowance {
   const nowMs = input.nowMs ?? Date.now();
   const globalCost = captureCostBaselineUsd();
-  const parentSpentUsd =
-    (input.parentTaskCarryoverUsd ?? 0) + costSpentSinceBaselineUsd(input.parentTaskBaselineUsd);
+  const parentSpentUsd = input.parentTaskOwnerId
+    ? globalCostTracker.getTaskSummary(input.parentTaskOwnerId).totalCostUSD
+    : (input.parentTaskCarryoverUsd ?? 0) + costSpentSinceBaselineUsd(input.parentTaskBaselineUsd);
   const remainingCostUsd = Number.isFinite(input.parentEffectiveCostCapUsd)
     ? Math.max(0, input.parentEffectiveCostCapUsd - parentSpentUsd)
     : null;
@@ -53,6 +61,9 @@ export function deriveChildAllowance(input: {
         : Math.min(input.parentDeadlineAtMs, childDeadline);
 
   return {
+    ...(input.parentTaskOwnerId
+      ? { taskOwnerId: randomUUID(), parentTaskOwnerId: input.parentTaskOwnerId }
+      : {}),
     costBaselineUsd: globalCost,
     remainingCostUsd,
     deadlineAtMs,
@@ -70,7 +81,9 @@ export function inheritedChildBudgetLimiter(
   }
   if (
     allowance.remainingCostUsd !== null &&
-    costSpentSinceBaselineUsd(allowance.costBaselineUsd) >= allowance.remainingCostUsd
+    (allowance.taskOwnerId
+      ? globalCostTracker.getTaskSummary(allowance.taskOwnerId).totalCostUSD
+      : costSpentSinceBaselineUsd(allowance.costBaselineUsd)) >= allowance.remainingCostUsd
   ) {
     return 'cost';
   }

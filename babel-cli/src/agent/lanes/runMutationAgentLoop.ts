@@ -549,6 +549,15 @@ export async function runMutationAgentLoop(
               signal: effectiveAbortSignal,
               budgetGuard: () => budgetController.limiter(),
               ...(input.onUsageRecorded ? { onUsageRecorded: () => input.onUsageRecorded?.() } : {}),
+              ...(input.inheritedAllowance?.taskOwnerId &&
+              input.inheritedAllowance.parentTaskOwnerId
+                ? {
+                    usageAttribution: {
+                      taskOwnerId: input.inheritedAllowance.taskOwnerId,
+                      parentTaskOwnerId: input.inheritedAllowance.parentTaskOwnerId,
+                    },
+                  }
+                : {}),
               ...(input.model ? { model: input.model } : {}),
             });
         const envelope = effectiveAbortSignal

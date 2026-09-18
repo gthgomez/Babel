@@ -80,7 +80,11 @@ import {
   type ResolvedModelPolicyEntry,
 } from './modelPolicy.js';
 import { loadModelPolicyConfig } from './modelPolicy.js';
-import { globalCostTracker } from './services/costTracker.js';
+import { randomUUID } from 'node:crypto';
+import {
+  globalCostTracker,
+  type UsageAttribution,
+} from './services/costTracker.js';
 import type { CostPrecision } from './services/modelPricingRegistry.js';
 import {
   appendSchemaFailureEntry,
@@ -341,6 +345,9 @@ export interface RunOptions {
 
   /** Checkpoint parent-owned task accounting after delegated usage is recorded. */
   onUsageRecorded?: (metadata: RunnerInvocationMetadata) => void;
+
+  /** Immutable child/parent ownership for delegated provider usage. */
+  usageAttribution?: Pick<UsageAttribution, 'taskOwnerId' | 'parentTaskOwnerId'>;
 }
 
 export type RunBudgetLimiter = 'wall' | 'cost';
@@ -1518,6 +1525,7 @@ async function runWaterfall<T>(
   signal?: AbortSignal,
   budgetGuard?: () => RunBudgetLimiter | null,
   onUsageRecorded?: (metadata: RunnerInvocationMetadata) => void,
+  usageAttribution?: Pick<UsageAttribution, 'taskOwnerId' | 'parentTaskOwnerId'>,
 ): Promise<WaterfallRunResult<T>> {
   const verboseFallbackLogs =
     process.env['BABEL_VERBOSE_WATERFALLS'] === 'true' || !evidence;
@@ -1529,6 +1537,7 @@ async function runWaterfall<T>(
   const pendingSchemaFailureEntryIds: string[] = [];
   const pendingSchemaFailureEntries: SchemaFailureLedgerEntry[] = [];
   let lastFailureMetadata: RunnerInvocationMetadata | null = null;
+  let usageAttempt = 0;
 
   // Dynamic deadline: starts at startedAtMs + aggregateTimeoutMs, but can be
   // extended when the runner is actively producing output (onChunk fires).
@@ -1580,6 +1589,12 @@ async function runWaterfall<T>(
         metadata.completion_tokens,
         metadata.prompt_cache_hit_tokens,
         metadata.prompt_cache_miss_tokens,
+        usageAttribution
+          ? {
+              ...usageAttribution,
+              chargeId: `${usageAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}`,
+            }
+          : undefined,
       );
       onUsageRecorded?.(metadata);
     }
@@ -2194,6 +2209,7 @@ export async function runWithFallback<T>(
     options.signal,
     options.budgetGuard,
     options.onUsageRecorded,
+    options.usageAttribution,
   );
 
   // Record to evidence bundle for 05_waterfall_telemetry.json.
