@@ -1405,6 +1405,11 @@ export class ChatEngine {
     this.persistTaskAllowance();
   }
 
+  /** Settle the active task interval before exposing any terminal truth. */
+  private settleActiveExecutionForTerminal(): void {
+    this.pauseActiveExecution();
+  }
+
   private consumeTaskTurn(): void {
     if (!this.taskAllowance) return;
     this.taskAllowance.consumed.turns += 1;
@@ -4072,6 +4077,7 @@ export class ChatEngine {
    */
   abortTurn(): void {
     this._cancelled = true;
+    this.settleActiveExecutionForTerminal();
     this.abortController.abort();
     try {
       // Scoped to this engine's jobs; the tree kill itself is deferred
@@ -4263,6 +4269,7 @@ export class ChatEngine {
       criticReceipt?: DiffCriticVerdict | null;
     },
   ) {
+    this.settleActiveExecutionForTerminal();
     const hasMutation = this.hasAnyWrites();
     let requestedOutcome = computeTerminalOutcome({
       readOnly: isReadOnlyChat(),
@@ -4358,6 +4365,7 @@ export class ChatEngine {
   }
 
   private streamFailed(error: string) {
+    this.settleActiveExecutionForTerminal();
     const providerOutputLimit = isProviderOutputLimitText(error);
     if (providerOutputLimit && this.terminatingLimiter == null) {
       this.terminatingLimiter = 'tokens';
@@ -4409,6 +4417,7 @@ export class ChatEngine {
    * already ran — internally inconsistent cost/token reporting.
    */
   private streamCancelled(): ChatEvent {
+    this.settleActiveExecutionForTerminal();
     const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
       turnId: String(this.parity.turnId ?? this._turnIndex),
       taskClass: this.taskClass,
@@ -7860,7 +7869,7 @@ export class ChatEngine {
       status: finalStatus,
     });
 
-    this.pauseActiveExecution();
+    this.settleActiveExecutionForTerminal();
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
     finalizeParityTurnSync(this.parity, this.engineRunDir, terminal.outcome, terminal.status);
 
