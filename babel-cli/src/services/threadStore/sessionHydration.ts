@@ -114,6 +114,10 @@ export function hydrateEngineFromRestore(engine: ChatEngine, report: RestoreRepo
   }
 
   if (report.source === 'history_cells') {
-    applyCellsToChatEngine(engine, loadThreadCells(report.threadId));
+    const cells = loadThreadCells(report.threadId);
+    if (cells.length === 0) {
+      throw new Error(`History cells for ${report.threadId} are no longer available`);
+    }
+    applyCellsToChatEngine(engine, cells);
   }
 }

@@ -22,7 +22,7 @@ import {
   startTurn,
 } from '../../agent/threadEventLog.js';
 import { chatSessionDir } from '../../cli/runsLayout.js';
-import { appendTurnCells } from '../../services/threadStore/index.js';
+import { appendTurnCells, replaceThreadRecords } from '../../services/threadStore/index.js';
 import { HISTORY_CELL_SCHEMA_VERSION } from '../../ui/historyCells/types.js';
 import type { HistoryCellRecord } from '../../ui/historyCells/types.js';
 import { BabelProtocolErrorCode } from '../types.js';
@@ -409,6 +409,41 @@ test('P02: failed hydration does not leave a poisoned engine cache', async () =>
     );
     assert.ok('error' in first);
     assert.ok('error' in second, 'a failed hydration must not be cached as a runnable empty engine');
+    assert.equal(engine.executions, 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P02: vanished history cells fail closed instead of running empty', async () => {
+  const fixture = withTempRunsDir();
+  try {
+    const creator = createProtocolHostState();
+    const threadId = await createThread(creator, fixture.root);
+    appendTurnCells(threadId, 1, [cell(threadId, 1, 'user_message', 'remember the sentinel', 'u1')]);
+
+    const engine = new RecordingEngine();
+    const host = createProtocolHostState({
+      engineFactory: () => engine as unknown as ChatEngine,
+      executeWithoutNotifications: true,
+    });
+    const resumed = await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 2, method: 'thread.resume', params: { thread_id: threadId } },
+      host,
+    );
+    assert.equal(
+      (resumed as { result: { restore?: { source: string } } }).result.restore?.source,
+      'history_cells',
+    );
+
+    // The declared source disappears before the first materialization.
+    replaceThreadRecords(threadId, []);
+
+    const submitted = await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 3, method: 'turn.submit', params: { thread_id: threadId, message: 'x' } },
+      host,
+    );
+    assert.ok('error' in submitted, 'vanished cells must not silently run on empty history');
     assert.equal(engine.executions, 0);
   } finally {
     fixture.cleanup();

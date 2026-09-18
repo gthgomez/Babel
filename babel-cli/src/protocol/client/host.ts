@@ -336,7 +336,7 @@ export async function handleProtocolRequest(
           restoreReport = inspectSessionRestoreState(params.thread_id, descriptor?.mode ?? 'chat');
           state.restoreReports.set(params.thread_id, restoreReport);
         }
-        if (restoreReport && !restoreReport.resumable) {
+        if (restoreReport && !restoreReport.resumable && !registeredEngine) {
           return errorResponse(
             id,
             BabelProtocolErrorCode.THREAD_NOT_RESUMABLE,
