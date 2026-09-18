@@ -1989,14 +1989,18 @@ export async function _runBabelPipelineInternal(
           });
         });
       } else {
-        proceed = await confirmCost({
-          title: 'Model Cost Threshold Exceeded',
-          message: `Approximate per-run cost $${modelPolicy.approximateCostPerRunUsd.toFixed(4)} meets or exceeds warning threshold $${costWarnThreshold.toFixed(2)}.`,
-          estimatedCost: modelPolicy.approximateCostPerRunUsd,
-          tokenCount: (modelPolicy.approximateInputTokens ?? 0) + (modelPolicy.approximateOutputTokens ?? 0),
-          threshold: costWarnThreshold,
-          model: modelPolicy.resolvedBackendKey,
-        });
+        const estimatedCost = modelPolicy.approximateCostPerRunUsd;
+        const tokenCount = (modelPolicy.approximateInputTokens ?? 0) + (modelPolicy.approximateOutputTokens ?? 0);
+        proceed = await withExclusiveTerminalSurface('cost-approval-dialog', () =>
+          confirmCost({
+            title: 'Model Cost Threshold Exceeded',
+            message: `Approximate per-run cost $${estimatedCost.toFixed(4)} meets or exceeds warning threshold $${costWarnThreshold.toFixed(2)}.`,
+            estimatedCost,
+            tokenCount,
+            threshold: costWarnThreshold,
+            model: modelPolicy.resolvedBackendKey,
+          }),
+        );
       }
       if (!proceed) {
         throw new Error('Operation cancelled: Estimated cost meets or exceeds budget threshold.');

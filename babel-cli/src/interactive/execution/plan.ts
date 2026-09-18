@@ -40,6 +40,7 @@ export async function executePlanTask(
   ctx.lastTargetRoot = target.targetRoot;
   ctx.lastWorkspaceRoot = target.workspaceRoot;
   ctx.state.lastRunTargetRoot = target.targetRoot;
+  const shellTurnEpoch = ctx.shellRuntime?.store.epoch;
 
   try {
     process.stdout.write(primary(`\n  Planning: ${task.slice(0, 80)}\n`));
@@ -115,12 +116,13 @@ export async function executePlanTask(
         await executePlanTask(ctx, input, edited.trim(), target);
       } else {
         ctx.state.lastRunUserStatus = 'blocked';
+        ctx.settleShellTurn?.('cancelled', shellTurnEpoch);
         console.log(muted('\n  Plan cancelled — editor returned empty.\n'));
       }
     } else {
       // Rejected or cancelled
       ctx.state.lastRunUserStatus = 'blocked';
-      ctx.settleShellTurn?.('blocked');
+      ctx.settleShellTurn?.('blocked', shellTurnEpoch);
       console.log(
         muted(
           '\n  Plan rejected. Refine your task and try again, or switch to /mode deep for governed execution.\n',
@@ -129,7 +131,7 @@ export async function executePlanTask(
     }
     } catch (error: any) {
       ctx.state.lastRunUserStatus = 'failed';
-      ctx.settleShellTurn?.('failed');
+      ctx.settleShellTurn?.('failed', shellTurnEpoch);
     console.error(accentBright(`\n  Plan failed: ${error.message ?? String(error)}\n`));
     if (process.stdout.isTTY && !process.env['CI']) {
       try {

@@ -41,6 +41,17 @@ describe('ShellRuntimeBinding', () => {
     assert.equal(binding.getSnapshot().activity, 'idle');
   });
 
+  it('retains an explicit cancellation outcome when settling a turn', () => {
+    const binding = new ShellRuntimeBinding({ width: 80 });
+    binding.beginTurn(8, 'cancel this task');
+    binding.settleTurn('cancelled');
+
+    const snapshot = binding.getSnapshot();
+    assert.equal(snapshot.turnId, undefined);
+    assert.equal(snapshot.activity, 'idle');
+    assert.equal(snapshot.lastOutcome, 'cancelled');
+  });
+
   it('rejects late records from an older session epoch', () => {
     const binding = new ShellRuntimeBinding();
     const oldEpoch = binding.store.epoch;

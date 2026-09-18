@@ -104,6 +104,8 @@ export class BabelRepl {
   voiceManager: VoiceStreamManager | null = null;
   shellHost: ShellHost | undefined;
   shellRuntime: ShellRuntimeBinding | undefined;
+  /** Epoch captured when the current executable shell turn was accepted. */
+  private activeShellTurnEpoch: number | undefined;
   activeContext?: {
     tokens: number;
     modelId: string;
@@ -381,6 +383,7 @@ export class BabelRepl {
     this.shellExclusiveRunnerCleanup?.();
     this.shellExclusiveRunnerCleanup = null;
     this.shellRuntime = undefined;
+    this.activeShellTurnEpoch = undefined;
   }
 
   // ── Session Persistence ──────────────────────────────────────────────────
@@ -425,7 +428,7 @@ export class BabelRepl {
       this.shellRuntime?.observeInteractiveTurn(
         record,
         shellOutcome,
-        this.shellRuntime.store.epoch,
+        this.activeShellTurnEpoch ?? this.shellRuntime.store.epoch,
       );
     }
     return record;
@@ -433,6 +436,7 @@ export class BabelRepl {
 
   beginShellTurn(turnId: number, input: string): void {
     this.shellRuntime?.beginTurn(turnId, input, this.chatEngine?.getEngineRunId());
+    this.activeShellTurnEpoch = this.shellRuntime?.store.epoch;
   }
 
   // ── Test-only wrappers (accessed via Object.create(BabelRepl.prototype) in interactive.test.ts) ──
@@ -580,6 +584,7 @@ export class BabelRepl {
 
   settleShellTurn(outcome?: string, sourceEpoch?: number): void {
     this.shellRuntime?.settleTurn(outcome, sourceEpoch);
+    if (this.shellRuntime?.store.turnId === undefined) this.activeShellTurnEpoch = undefined;
   }
 
   async withExclusiveTerminal<T>(reason: string, work: () => Promise<T>): Promise<T> {
@@ -614,6 +619,7 @@ export class BabelRepl {
     this.shellExclusiveRunnerCleanup?.();
     this.shellExclusiveRunnerCleanup = null;
     this.shellRuntime = undefined;
+    this.activeShellTurnEpoch = undefined;
     exitRepl();
   }
 }
