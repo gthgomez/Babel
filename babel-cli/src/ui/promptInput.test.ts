@@ -901,3 +901,66 @@ describe('cursor restoration', () => {
     }
   });
 });
+
+describe('hosted prompt presentation', () => {
+  it('returns a local view without writing terminal output', () => {
+    const input = createTestInput({
+      getQueuedMessages: () => ['queued follow-up'],
+    });
+    input.setText('hello\nworld');
+
+    const writes: string[] = [];
+    const originalWrite = process.stdout.write;
+    process.stdout.write = ((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const view = input.getView({ x: 7, y: 9, width: 24, height: 8 });
+      assert.deepEqual(view.cursor, { row: 3, col: 7, visible: true });
+      assert.equal(view.rows.some((row: string) => row.includes('queued follow-up')), true);
+      assert.equal(view.rows.some((row: string) => row.includes('hello')), true);
+      assert.equal(view.rows.some((row: string) => row.includes('world')), true);
+      assert.equal(writes.length, 0);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  it('routes hosted keys through the existing editor state machine', () => {
+    const invalidations: string[] = [];
+    const input = new PromptInput({ onSubmit: () => {} }) as any;
+    input.setPresentationTarget({
+      getRect: () => ({ x: 0, y: 0, width: 24, height: 5 }),
+      invalidate: (reason: string) => invalidations.push(reason),
+    });
+    input.activate();
+
+    input.processKey({
+      name: 'h',
+      ctrl: false,
+      meta: false,
+      shift: false,
+      sequence: 'h',
+    });
+
+    assert.equal(input.getState().text, 'h');
+    assert.ok(invalidations.length > 0);
+    input.deactivate();
+  });
+
+  it('uses the hosted target rectangle when no rectangle is passed', () => {
+    const input = new PromptInput({ onSubmit: () => {} }) as any;
+    input.setPresentationTarget({
+      getRect: () => ({ x: 3, y: 4, width: 18, height: 4 }),
+      invalidate: () => {},
+    });
+    input.activate();
+
+    const view = input.getView();
+    assert.equal(view.rows.length <= 4, true);
+    assert.equal(view.cursor.col <= 17, true);
+    input.deactivate();
+  });
+});
