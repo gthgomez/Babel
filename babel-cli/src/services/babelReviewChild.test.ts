@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { babelReviewChildEnv, launchBabelReviewChild, reviewChildProcessTimeoutMs } from './babelReviewChild.js';
+import {
+  createReviewAuthoritySupervisor,
+  followReviewAuthorityLifetime,
+  type ReviewAuthorityCandidate,
+  type ReviewTaskAllowance,
+} from './reviewSupervisor.js';
 import { resolveChatTaskClass } from '../config/chatTaskClass.js';
 import { resolvePolicyMode, resolveStallShadowMode } from '../agent/policyShadow.js';
 
@@ -129,4 +135,137 @@ test('timeout force-kills an unresponsive actual worker before clearing its leas
   assert.equal(result.timedOut, true);
   assert.equal(result.artifact?.['pid'], trackedPid);
   assert.ok(clearedAfterExit);
+});
+
+const authorityCandidate: ReviewAuthorityCandidate = {
+  repository: 'gthgomez/Babel',
+  prNumber: 201,
+  baseSha: 'a'.repeat(40),
+  headSha: 'b'.repeat(40),
+  candidateDigest: 'c'.repeat(64),
+};
+
+const authorityAllowance: ReviewTaskAllowance = {
+  allowanceId: 'allowance-review-child',
+  taskId: 'task-review-child',
+  executionId: 'execution-review-child',
+  startedAt: '2026-09-18T05:00:00.000Z',
+  elapsedLimitMs: 50,
+  evidenceLineage: ['candidate-collected'],
+};
+
+function authorityFixture(root: string, expiresInMs = 5_000) {
+  const now = Date.now();
+  return createReviewAuthoritySupervisor({
+    statePath: join(root, 'authority.json'),
+    candidate: authorityCandidate,
+    allowance: authorityAllowance,
+    issuedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + expiresInMs).toISOString(),
+  });
+}
+
+async function waitForJson(path: string, timeoutMs = 5_000): Promise<Record<string, unknown>> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (existsSync(path)) {
+      try {
+        return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+      } catch {
+        // Atomicity is not required for the fixture's first write; retry partial reads.
+      }
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+  }
+  throw new Error(`Timed out waiting for ${path}`);
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+async function waitUntilDead(pid: number, timeoutMs = 5_000): Promise<boolean> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!isAlive(pid)) return true;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  return !isAlive(pid);
+}
+
+test('follow-authority host lifetime survives the former finite timeout without a huge timer', async () => {
+  const fixture = workerFixture();
+  const authority = authorityFixture(fixture.source);
+  writeFileSync(fixture.worker, `import { writeFileSync } from 'node:fs';
+await new Promise(resolve => setTimeout(resolve, 180));
+writeFileSync(process.env.BABEL_REVIEW_OUTPUT!, JSON.stringify({ completed: true }));
+`);
+  const started = Date.now();
+  const result = await launchBabelReviewChild({
+    ...fixture,
+    hostLifetime: followReviewAuthorityLifetime({ pollIntervalMs: 20, cleanupTimeoutMs: 1_000 }),
+    authority: authority.monitor,
+    candidate: authorityCandidate,
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.artifact?.['completed'], true);
+  assert.ok(Date.now() - started >= 150, 'worker must outlive the former 50ms task allowance');
+  assert.equal(result.terminalCause, 'worker_exit');
+});
+
+test('controller authority loss aborts and contains a real descendant process tree', async () => {
+  const fixture = workerFixture();
+  const authority = authorityFixture(fixture.source);
+  const marker = join(fixture.source, 'late-descendant-write.txt');
+  const grandchild = join(fixture.source, 'review-grandchild.cjs');
+  writeFileSync(grandchild, `const { writeFileSync } = require('node:fs');
+setTimeout(() => writeFileSync(${JSON.stringify(marker)}, 'escaped'), 1200);
+setInterval(() => {}, 100);
+`);
+  writeFileSync(fixture.worker, `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, [${JSON.stringify(grandchild)}], { stdio: 'ignore', windowsHide: true });
+writeFileSync(process.env.BABEL_REVIEW_OUTPUT!, JSON.stringify({ pid: process.pid, grandchildPid: child.pid }));
+setInterval(() => {}, 100);
+`);
+
+  let grandchildPid = 0;
+  try {
+    const running = launchBabelReviewChild({
+      ...fixture,
+      // Legacy fallback keeps the pre-implementation RED run bounded. The
+      // typed follow-authority lifetime takes precedence once implemented.
+      timeoutMs: 2_000,
+      hostLifetime: followReviewAuthorityLifetime({ pollIntervalMs: 20, cleanupTimeoutMs: 2_000 }),
+      authority: authority.monitor,
+      candidate: authorityCandidate,
+    });
+    const started = await waitForJson(fixture.output);
+    grandchildPid = Number(started['grandchildPid']);
+    assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0);
+
+    authority.controller.stop('controller_lost');
+    const result = await running;
+    assert.equal(result.terminalCause, 'controller_lost');
+    assert.equal(result.timedOut, false);
+    assert.ok(await waitUntilDead(grandchildPid), 'descendant must be dead before cleanup completes');
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_400));
+    assert.equal(existsSync(marker), false, 'descendant must not escape authority-loss cleanup');
+    if (process.platform === 'win32') {
+      assert.equal(result.containment, 'windows_job_object', result.containmentError);
+    }
+    else assert.equal(result.containment, 'posix_process_group');
+    assert.equal(authority.monitor.snapshot().terminalCause, 'controller_lost');
+  } finally {
+    if (grandchildPid > 0 && isAlive(grandchildPid)) {
+      try { process.kill(grandchildPid, 'SIGKILL'); } catch { /* already exited */ }
+    }
+    rmSync(fixture.source, { recursive: true, force: true });
+  }
 });
