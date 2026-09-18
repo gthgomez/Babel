@@ -33,37 +33,49 @@
  * @module promptInput
  */
 
-import { activeAccent, bgSelected, border, dim, muted, ghost, getEffectiveTerminalWidth, primary, sectionLabel, truncate, visibleLength } from './theme.js';
-import { InlineAutocomplete } from './inlineAutocomplete.js';
-import { installKeyHandler, type KeyEvent } from './keyInput.js';
+import {
+  activeAccent,
+  bgSelected,
+  border,
+  dim,
+  muted,
+  ghost,
+  getEffectiveTerminalWidth,
+  primary,
+  sectionLabel,
+  truncate,
+  visibleLength,
+} from "./theme.js";
+import { InlineAutocomplete } from "./inlineAutocomplete.js";
+import { installKeyHandler, type KeyEvent } from "./keyInput.js";
 import {
   computeImeCursorPos,
   cupSequence,
   shouldParkImeCursor,
-} from './imeCursor.js';
-import { FrameScheduler } from './frameScheduler.js';
-import { OutputBuffer } from './outputBuffer.js';
-import { isWindowsTerminal } from './terminalProbe.js';
-import { fuzzyScore } from '../utils/fuzzy.js';
-import { searchFilesGlob, type MentionResult } from './mentionPopup.js';
-import { type SearchHit } from '../services/indexer.js';
-import path from 'node:path';
-import { PasteBurst } from './pasteBurst.js';
+} from "./imeCursor.js";
+import { FrameScheduler } from "./frameScheduler.js";
+import { OutputBuffer } from "./outputBuffer.js";
+import { isWindowsTerminal } from "./terminalProbe.js";
+import { fuzzyScore } from "../utils/fuzzy.js";
+import { searchFilesGlob, type MentionResult } from "./mentionPopup.js";
+import { type SearchHit } from "../services/indexer.js";
+import path from "node:path";
+import { PasteBurst } from "./pasteBurst.js";
 import {
   TypeaheadEngine,
   type TypeaheadViewState,
   type TypeaheadAcceptResult,
   type TypeaheadContext,
   filterSlashCommands,
-} from './typeaheadEngine.js';
-import { ComposerHistory } from './composerHistory.js';
-import { PastePlaceholderStore } from './pastePlaceholders.js';
+} from "./typeaheadEngine.js";
+import { ComposerHistory } from "./composerHistory.js";
+import { PastePlaceholderStore } from "./pastePlaceholders.js";
 import {
   matchesHotkey,
   parseHotkeyString,
   DEFAULT_VOICE_HOTKEY,
-} from '../voice/voice-keybinding.js';
-import { handleNormalModeKey as dispatchNormalModeKey } from './promptInputNormalMode.js';
+} from "../voice/voice-keybinding.js";
+import { handleNormalModeKey as dispatchNormalModeKey } from "./promptInputNormalMode.js";
 
 // ── Escape hatch ────────────────────────────────────────────────────────────────
 
@@ -72,10 +84,10 @@ import { handleNormalModeKey as dispatchNormalModeKey } from './promptInputNorma
  * Writes still flow through OutputBuffer.write() (a11y sanitization, broken-pipe
  * detection) but without DEC 2026 beginFrame/endFrame delimiters.
  */
-const BABEL_PROMPT_BUFFERED = process.env['BABEL_PROMPT_BUFFERED'] !== '0';
+const BABEL_PROMPT_BUFFERED = process.env["BABEL_PROMPT_BUFFERED"] !== "0";
 
-const voiceHotkey = process.env['BABEL_VOICE_HOTKEY']
-  ? parseHotkeyString(process.env['BABEL_VOICE_HOTKEY'])
+const voiceHotkey = process.env["BABEL_VOICE_HOTKEY"]
+  ? parseHotkeyString(process.env["BABEL_VOICE_HOTKEY"])
   : DEFAULT_VOICE_HOTKEY;
 
 // ── Types ───────────────────────────────────────────────────────────────────────
@@ -133,7 +145,7 @@ export interface PromptInputState {
   /** Whether input is active */
   active: boolean;
   /** Current mode */
-  mode: 'insert' | 'normal' | 'visual';
+  mode: "insert" | "normal" | "visual";
   /** Whether history browsing is active */
   browsingHistory: boolean;
   /** Whether undo is available */
@@ -148,34 +160,46 @@ export interface PromptInputState {
 
 // ── Constants ───────────────────────────────────────────────────────────────────
 
-const DEFAULT_PROMPT = '› ';
-const DEFAULT_CONTINUATION = '· ';
+const DEFAULT_PROMPT = "› ";
+const DEFAULT_CONTINUATION = "· ";
 const DEFAULT_HISTORY_SIZE = 200;
 const CURSOR_BLINK_MS = 530; // Standard terminal cursor blink
 const WORD_BOUNDARY_REGEX = /\b\w/;
 
 // ── Slash commands ──────────────────────────────────────────────────────────────
 
-const BUILTIN_SLASH_COMMANDS: Array<{ name: string; description: string; group: string }> = [
-  { name: '/help', description: 'Show help', group: 'General' },
-  { name: '/theme', description: 'Change color theme', group: 'UI' },
-  { name: '/model', description: 'Switch AI model', group: 'Session' },
-  { name: '/mode', description: 'Switch execution mode (chat/deep/plan)', group: 'Session' },
-  { name: '/project', description: 'Set project context', group: 'Session' },
-  { name: '/clear', description: 'Clear conversation', group: 'Session' },
-  { name: '/compact', description: 'Toggle compact mode', group: 'UI' },
-  { name: '/diff', description: 'Show working diff', group: 'Git' },
-  { name: '/review', description: 'Code review current changes', group: 'Git' },
-  { name: '/scrollback', description: 'Open scrollback pager', group: 'UI' },
-  { name: '/doctor', description: 'Check environment setup', group: 'General' },
-  { name: '/resume', description: 'Resume previous session', group: 'Session' },
-  { name: '/workflow', description: 'Run a DAG workflow from a JSON definition', group: 'Session' },
-  { name: '/init', description: 'Initialize project config', group: 'Project' },
-  { name: '/status', description: 'Show session status', group: 'Session' },
-  { name: '/vim', description: 'Toggle vim mode', group: 'UI' },
-  { name: '/mcp', description: 'Manage MCP servers', group: 'Tools' },
-  { name: '/exit', description: 'Exit Babel', group: 'Session' },
-  { name: '/keymap', description: 'Rebind keyboard shortcuts', group: 'UI' },
+const BUILTIN_SLASH_COMMANDS: Array<{
+  name: string;
+  description: string;
+  group: string;
+}> = [
+  { name: "/help", description: "Show help", group: "General" },
+  { name: "/theme", description: "Change color theme", group: "UI" },
+  { name: "/model", description: "Switch AI model", group: "Session" },
+  {
+    name: "/mode",
+    description: "Switch execution mode (chat/deep/plan)",
+    group: "Session",
+  },
+  { name: "/project", description: "Set project context", group: "Session" },
+  { name: "/clear", description: "Clear conversation", group: "Session" },
+  { name: "/compact", description: "Toggle compact mode", group: "UI" },
+  { name: "/diff", description: "Show working diff", group: "Git" },
+  { name: "/review", description: "Code review current changes", group: "Git" },
+  { name: "/scrollback", description: "Open scrollback pager", group: "UI" },
+  { name: "/doctor", description: "Check environment setup", group: "General" },
+  { name: "/resume", description: "Resume previous session", group: "Session" },
+  {
+    name: "/workflow",
+    description: "Run a DAG workflow from a JSON definition",
+    group: "Session",
+  },
+  { name: "/init", description: "Initialize project config", group: "Project" },
+  { name: "/status", description: "Show session status", group: "Session" },
+  { name: "/vim", description: "Toggle vim mode", group: "UI" },
+  { name: "/mcp", description: "Manage MCP servers", group: "Tools" },
+  { name: "/exit", description: "Exit Babel", group: "Session" },
+  { name: "/keymap", description: "Rebind keyboard shortcuts", group: "UI" },
 ];
 
 // ── ANSI injection guard ───────────────────────────────────────────────────────
@@ -189,7 +213,7 @@ const BUILTIN_SLASH_COMMANDS: Array<{ name: string; description: string; group: 
  */
 function sanitizeUserText(text: string): string {
   if (!text) return text;
-  return text.replace(/\x1b/g, '');
+  return text.replace(/\x1b/g, "");
 }
 
 // ── PromptInput ─────────────────────────────────────────────────────────────────
@@ -217,7 +241,7 @@ export class PromptInput {
   private submitListeners: Array<(text: string) => void> = [];
 
   // Text buffer
-  private lines: string[] = [''];
+  private lines: string[] = [""];
   private cursorLine = 0;
   private cursorCol = 0;
 
@@ -229,19 +253,30 @@ export class PromptInput {
 
   // State
   private active = false;
-  private mode: 'insert' | 'normal' | 'visual' = 'insert';
-  private killBuffer: string = '';
+  private mode: "insert" | "normal" | "visual" = "insert";
+  private killBuffer: string = "";
   private visualStart: { line: number; col: number } | null = null;
-  private visualMode: 'char' | 'line' | null = null;
+  private visualMode: "char" | "line" | null = null;
   private marks: Map<string, { line: number; col: number }> = new Map();
-  private lastChange: { type: string; text?: string; shift?: boolean } | null = null;
+  private lastChange: { type: string; text?: string; shift?: boolean } | null =
+    null;
   private insertEntryType: string | null = null;
-  private insertSessionText: string = '';
+  private insertSessionText: string = "";
   private vimPending: string | null = null;
-  private vimOpPending: { type: string; [k: string]: unknown } = { type: 'none' };
+  private vimOpPending: { type: string; [k: string]: unknown } = {
+    type: "none",
+  };
   private imeComposing = false;
-  private undoStack: Array<{ lines: string[]; cursorLine: number; cursorCol: number }> = [];
-  private redoStack: Array<{ lines: string[]; cursorLine: number; cursorCol: number }> = [];
+  private undoStack: Array<{
+    lines: string[];
+    cursorLine: number;
+    cursorCol: number;
+  }> = [];
+  private redoStack: Array<{
+    lines: string[];
+    cursorLine: number;
+    cursorCol: number;
+  }> = [];
   private readonly maxUndoStack = 100;
 
   // Rendering
@@ -300,7 +335,9 @@ export class PromptInput {
     });
 
     // Seed history into composerHistory and backward-compat field
-    const initialHistory = [...this.config.history].slice(-this.config.historySize);
+    const initialHistory = [...this.config.history].slice(
+      -this.config.historySize,
+    );
     this.composerHistory.setPersistentEntries(initialHistory);
     this.history = [...initialHistory];
     // Seed inline autocomplete history from initial history entries
@@ -310,13 +347,16 @@ export class PromptInput {
     this.termWidth = getEffectiveTerminalWidth(this.config.minWidth, 200);
     this.promptLen = visibleLength(this.config.prompt);
     this.continuationLen = visibleLength(this.config.continuationPrompt);
-    this.maxInputHeight = Math.max(3, Math.floor((process.stdout.rows || 24) * 0.4)); // Max 40% of screen
+    this.maxInputHeight = Math.max(
+      3,
+      Math.floor((process.stdout.rows || 24) * 0.4),
+    ); // Max 40% of screen
 
     this.historyFile =
       config.historyFile ??
       path.join(
-        process.env.HOME || process.env.USERPROFILE || '/tmp',
-        '.babel_prompt_history.json',
+        process.env.HOME || process.env.USERPROFILE || "/tmp",
+        ".babel_prompt_history.json",
       );
   }
 
@@ -334,18 +374,21 @@ export class PromptInput {
     // Paste burst flush tick
     const scheduler = FrameScheduler.getInstance();
     this.unregisterPasteFlush = scheduler.scheduleComponent(
-      'paste-flush',
+      "paste-flush",
       () => {
         const now = Date.now();
         const flushResult = this.pasteBurst.flushIfDue(now);
-        if (flushResult.type === 'paste') {
+        if (flushResult.type === "paste") {
           this.handlePasteText(flushResult.text);
           this.render();
-        } else if (flushResult.type === 'typed') {
+        } else if (flushResult.type === "typed") {
           // The held single char can now be inserted
           this.snapshot();
-          const line = this.lines[this.cursorLine] ?? '';
-          this.lines[this.cursorLine] = line.slice(0, this.cursorCol) + flushResult.char + line.slice(this.cursorCol);
+          const line = this.lines[this.cursorLine] ?? "";
+          this.lines[this.cursorLine] =
+            line.slice(0, this.cursorCol) +
+            flushResult.char +
+            line.slice(this.cursorCol);
           this.cursorCol++;
           this.refreshAutocomplete();
           this.checkMentionTrigger();
@@ -355,15 +398,15 @@ export class PromptInput {
       {
         intervalMs: 5,
         priority: 25,
-        label: 'paste-flush',
+        label: "paste-flush",
       },
     );
-    scheduler.setComponentPermanentDirty('paste-flush', true);
+    scheduler.setComponentPermanentDirty("paste-flush", true);
 
     // Start cursor blink via FrameScheduler (per-component scheduling)
     this.blinkKeepAlive = scheduler.keepAlive();
     this.unregisterCursorBlink = scheduler.scheduleComponent(
-      'cursor-blink',
+      "cursor-blink",
       () => {
         this.cursorVisible = !this.cursorVisible;
         this.renderCursor();
@@ -371,10 +414,10 @@ export class PromptInput {
       {
         intervalMs: CURSOR_BLINK_MS,
         priority: 20,
-        label: 'cursor-blink',
+        label: "cursor-blink",
       },
     );
-    scheduler.setComponentPermanentDirty('cursor-blink', true);
+    scheduler.setComponentPermanentDirty("cursor-blink", true);
 
     // Install key handler
     this.cleanupKeyHandler = installKeyHandler(process.stdin, (event) => {
@@ -393,14 +436,20 @@ export class PromptInput {
 
     // Stop paste flush tick
     if (this.unregisterPasteFlush) {
-      FrameScheduler.getInstance().setComponentPermanentDirty('paste-flush', false);
+      FrameScheduler.getInstance().setComponentPermanentDirty(
+        "paste-flush",
+        false,
+      );
       this.unregisterPasteFlush();
       this.unregisterPasteFlush = null;
     }
 
     // Stop cursor blink
     if (this.unregisterCursorBlink) {
-      FrameScheduler.getInstance().setComponentPermanentDirty('cursor-blink', false);
+      FrameScheduler.getInstance().setComponentPermanentDirty(
+        "cursor-blink",
+        false,
+      );
       this.unregisterCursorBlink();
       this.unregisterCursorBlink = null;
     }
@@ -416,14 +465,14 @@ export class PromptInput {
     }
 
     // Show cursor and move to next line
-    OutputBuffer.getInstance().write('\x1b[?25h');
-    OutputBuffer.getInstance().write('\n');
+    OutputBuffer.getInstance().write("\x1b[?25h");
+    OutputBuffer.getInstance().write("\n");
   }
 
   /** Get current input state. */
   getState(): PromptInputState {
     return {
-      text: this.lines.join('\n'),
+      text: this.lines.join("\n"),
       lines: [...this.lines],
       cursorLine: this.cursorLine,
       cursorCol: this.cursorCol,
@@ -439,8 +488,8 @@ export class PromptInput {
 
   /** Set the text buffer (e.g., for restoring a draft). */
   setText(text: string): void {
-    this.lines = text.split('\n');
-    if (this.lines.length === 0) this.lines = [''];
+    this.lines = text.split("\n");
+    if (this.lines.length === 0) this.lines = [""];
     this.cursorLine = this.lines.length - 1;
     this.cursorCol = this.lines[this.cursorLine]?.length ?? 0;
     this.typeahead.dismiss();
@@ -487,12 +536,12 @@ export class PromptInput {
   async loadHistory(): Promise<void> {
     if (this.historyLoaded) return;
     try {
-      const { readFile } = await import('node:fs/promises');
-      const data = await readFile(this.historyFile, 'utf-8');
+      const { readFile } = await import("node:fs/promises");
+      const data = await readFile(this.historyFile, "utf-8");
       const entries: string[] = JSON.parse(data);
       if (Array.isArray(entries)) {
         for (const entry of entries) {
-          if (typeof entry === 'string' && entry.trim()) {
+          if (typeof entry === "string" && entry.trim()) {
             this.addHistory(entry);
           }
         }
@@ -506,9 +555,13 @@ export class PromptInput {
   /** Save history to disk (keeps last 500 entries). */
   async saveHistory(): Promise<void> {
     try {
-      const { writeFile } = await import('node:fs/promises');
+      const { writeFile } = await import("node:fs/promises");
       const entries = this.getHistory().slice(-500);
-      await writeFile(this.historyFile, JSON.stringify(entries, null, 2), 'utf-8');
+      await writeFile(
+        this.historyFile,
+        JSON.stringify(entries, null, 2),
+        "utf-8",
+      );
     } catch {
       // Silently fail — don't break the TUI for history persistence issues
     }
@@ -517,8 +570,8 @@ export class PromptInput {
   /** Enable or disable vim mode dynamically. */
   setVimMode(enabled: boolean): void {
     this.config.vimMode = enabled;
-    if (!enabled && (this.mode === 'normal' || this.mode === 'visual')) {
-      this.mode = 'insert';
+    if (!enabled && (this.mode === "normal" || this.mode === "visual")) {
+      this.mode = "insert";
       this.visualStart = null;
       this.visualMode = null;
       if (this.active) this.render();
@@ -551,7 +604,11 @@ export class PromptInput {
 
   private handleKey(event: KeyEvent): void {
     if (!this.active) return;
-    if (event.name === 'ignored' || event.name === 'focusin' || event.name === 'focusout') {
+    if (
+      event.name === "ignored" ||
+      event.name === "focusin" ||
+      event.name === "focusout"
+    ) {
       return;
     }
 
@@ -562,12 +619,12 @@ export class PromptInput {
     }
 
     // Ctrl+C — host (onInterrupt) owns idle/running policy when provided.
-    if (event.name === 'c' && event.ctrl) {
+    if (event.name === "c" && event.ctrl) {
       if (this.config.onInterrupt) {
         this.config.onInterrupt();
         return;
       }
-      if (this.lines.length === 1 && this.lines[0] === '') {
+      if (this.lines.length === 1 && this.lines[0] === "") {
         this.deactivate();
         this.config.onCancel?.();
       } else {
@@ -578,13 +635,13 @@ export class PromptInput {
     }
 
     // Ctrl+P → command palette (must not insert "p")
-    if (event.name === 'p' && event.ctrl) {
+    if (event.name === "p" && event.ctrl) {
       this.config.onCommandPalette?.();
       return;
     }
 
     // Ctrl+G → external editor ($EDITOR)
-    if (event.name === 'g' && event.ctrl) {
+    if (event.name === "g" && event.ctrl) {
       void this.config.onExternalEditor?.();
       return;
     }
@@ -594,7 +651,7 @@ export class PromptInput {
 
     if (this.typeahead.hasPopup()) {
       // Escape dismisses any popup
-      if (event.name === 'escape') {
+      if (event.name === "escape") {
         this.typeahead.dismiss();
         this.syncBackwardCompatPopupFields();
         this.render();
@@ -602,8 +659,11 @@ export class PromptInput {
       }
 
       // Tab accepts any popup (if mention has results, or slash/completer)
-      if (event.name === 'tab') {
-        if (this.typeahead.isMentionActive() && !this.typeahead.mentionHasResults()) {
+      if (event.name === "tab") {
+        if (
+          this.typeahead.isMentionActive() &&
+          !this.typeahead.mentionHasResults()
+        ) {
           // Don't accept mention without results — let it fall through
         } else {
           const result = this.typeahead.accept();
@@ -617,9 +677,12 @@ export class PromptInput {
       }
 
       // Enter accepts mention or completer (not slash)
-      if (event.name === 'enter' && this.typeahead.getMode() !== 'slash') {
-        if (this.typeahead.getMode() === 'completer' ||
-            (this.typeahead.isMentionActive() && this.typeahead.mentionHasResults())) {
+      if (event.name === "enter" && this.typeahead.getMode() !== "slash") {
+        if (
+          this.typeahead.getMode() === "completer" ||
+          (this.typeahead.isMentionActive() &&
+            this.typeahead.mentionHasResults())
+        ) {
           const result = this.typeahead.accept();
           if (result) {
             this.applyTypeaheadResult(result);
@@ -631,8 +694,8 @@ export class PromptInput {
       }
 
       // Up/Down navigate popup
-      if (event.name === 'up' || event.name === 'down') {
-        this.typeahead.moveSelection(event.name === 'up' ? -1 : 1);
+      if (event.name === "up" || event.name === "down") {
+        this.typeahead.moveSelection(event.name === "up" ? -1 : 1);
         this.syncBackwardCompatPopupFields();
         this.render();
         return;
@@ -640,18 +703,18 @@ export class PromptInput {
     }
 
     // Escape (non-popup)
-    if (event.name === 'escape') {
-      if (this.mode === 'visual') {
+    if (event.name === "escape") {
+      if (this.mode === "visual") {
         this.clearVisualSelection();
         this.render();
-      } else if (this.mode === 'normal') {
-        this.mode = 'insert';
+      } else if (this.mode === "normal") {
+        this.mode = "insert";
         this.render();
       } else if (this.config.vimMode) {
         this.storeInsertChange();
-        this.mode = 'normal';
+        this.mode = "normal";
         this.render();
-      } else if (this.lines.length === 1 && this.lines[0] === '') {
+      } else if (this.lines.length === 1 && this.lines[0] === "") {
         this.deactivate();
         this.config.onCancel?.();
       } else {
@@ -662,7 +725,7 @@ export class PromptInput {
     }
 
     // Tab (non-popup): queue, autocomplete, tab completion
-    if (event.name === 'tab') {
+    if (event.name === "tab") {
       if (this.shouldQueueOnTab()) {
         this.queueSubmit();
         return;
@@ -680,23 +743,27 @@ export class PromptInput {
     }
 
     // Paste event (C5)
-    if (event.name === 'paste') {
+    if (event.name === "paste") {
       this.handlePasteText(event.sequence);
       return;
     }
 
     // Enter (non-popup): submit / insert newline
-    if (event.name === 'enter') {
+    if (event.name === "enter") {
       // Paste burst Enter suppression (C1)
       const now = Date.now();
-      if (this.pasteBurst.newlineShouldInsertInsteadOfSubmit(now) && !event.ctrl) {
+      if (
+        this.pasteBurst.newlineShouldInsertInsteadOfSubmit(now) &&
+        !event.ctrl
+      ) {
         this.insertNewline();
         this.render();
         return;
       }
 
       const isLastLine = this.cursorLine === this.lines.length - 1;
-      const cursorAtEnd = this.cursorCol >= (this.lines[this.cursorLine]?.length ?? 0);
+      const cursorAtEnd =
+        this.cursorCol >= (this.lines[this.cursorLine]?.length ?? 0);
       const isExplicitSubmit = event.ctrl;
 
       if (isLastLine && cursorAtEnd && !isExplicitSubmit) {
@@ -710,25 +777,25 @@ export class PromptInput {
     }
 
     // History navigation (C4) — Up/Down when no popup is active
-    if (event.name === 'up') {
+    if (event.name === "up") {
       this.ac.dismiss();
       this.historyBack();
       return;
     }
-    if (event.name === 'down') {
+    if (event.name === "down") {
       this.ac.dismiss();
       this.historyForward();
       return;
     }
 
     // Normal mode keys
-    if (this.mode === 'normal') {
+    if (this.mode === "normal") {
       this.handleNormalModeKey(event);
       return;
     }
 
     // Visual mode keys
-    if (this.mode === 'visual') {
+    if (this.mode === "visual") {
       this.handleVisualModeKey(event);
       return;
     }
@@ -736,30 +803,30 @@ export class PromptInput {
     // ── Insert mode text navigation ────────────────────────────────────────
 
     // Ctrl+A → line start
-    if (event.name === 'a' && event.ctrl) {
+    if (event.name === "a" && event.ctrl) {
       this.cursorCol = 0;
       this.render();
       return;
     }
 
     // Ctrl+E → line end
-    if (event.name === 'e' && event.ctrl) {
+    if (event.name === "e" && event.ctrl) {
       this.cursorCol = this.lines[this.cursorLine]?.length ?? 0;
       this.render();
       return;
     }
 
     // Ctrl+K → kill to end of line
-    if (event.name === 'k' && event.ctrl) {
-      const line = this.lines[this.cursorLine] ?? '';
+    if (event.name === "k" && event.ctrl) {
+      const line = this.lines[this.cursorLine] ?? "";
       this.lines[this.cursorLine] = line.slice(0, this.cursorCol);
       this.render();
       return;
     }
 
     // Ctrl+U → kill to start of line
-    if (event.name === 'u' && event.ctrl) {
-      const line = this.lines[this.cursorLine] ?? '';
+    if (event.name === "u" && event.ctrl) {
+      const line = this.lines[this.cursorLine] ?? "";
       this.lines[this.cursorLine] = line.slice(this.cursorCol);
       this.cursorCol = 0;
       this.render();
@@ -767,56 +834,59 @@ export class PromptInput {
     }
 
     // Ctrl+W → delete word backward
-    if (event.name === 'w' && event.ctrl) {
+    if (event.name === "w" && event.ctrl) {
       this.deleteWordBackward();
       this.render();
       return;
     }
 
     // Ctrl+Z → undo
-    if ((event.name === 'suspend' && event.ctrl) || (event.name === 'z' && event.ctrl)) {
+    if (
+      (event.name === "suspend" && event.ctrl) ||
+      (event.name === "z" && event.ctrl)
+    ) {
       this.undo();
       this.render();
       return;
     }
 
     // Ctrl+Y → redo
-    if (event.name === 'y' && event.ctrl) {
+    if (event.name === "y" && event.ctrl) {
       this.redo();
       this.render();
       return;
     }
 
     // Home → line start
-    if (event.name === 'home') {
+    if (event.name === "home") {
       this.cursorCol = 0;
       this.render();
       return;
     }
 
     // End → line end
-    if (event.name === 'end') {
+    if (event.name === "end") {
       this.cursorCol = this.lines[this.cursorLine]?.length ?? 0;
       this.render();
       return;
     }
 
     // Ctrl+Left → word left
-    if (event.name === 'left' && event.ctrl) {
+    if (event.name === "left" && event.ctrl) {
       this.moveWordLeft();
       this.render();
       return;
     }
 
     // Ctrl+Right → word right
-    if (event.name === 'right' && event.ctrl) {
+    if (event.name === "right" && event.ctrl) {
       this.moveWordRight();
       this.render();
       return;
     }
 
     // Left arrow
-    if (event.name === 'left') {
+    if (event.name === "left") {
       if (this.cursorCol > 0) {
         this.cursorCol--;
       } else if (this.cursorLine > 0) {
@@ -829,7 +899,7 @@ export class PromptInput {
     }
 
     // Right arrow
-    if (event.name === 'right') {
+    if (event.name === "right") {
       const currentLineLen = this.lines[this.cursorLine]?.length ?? 0;
       if (this.cursorCol < currentLineLen) {
         this.cursorCol++;
@@ -849,31 +919,35 @@ export class PromptInput {
     }
 
     // Backspace
-    if (event.name === 'backspace') {
+    if (event.name === "backspace") {
       this.backspace();
-      if (this.insertEntryType) this.insertSessionText = this.insertSessionText.slice(0, -1);
+      if (this.insertEntryType)
+        this.insertSessionText = this.insertSessionText.slice(0, -1);
       this.checkMentionTrigger();
       this.render();
       return;
     }
 
     // Delete
-    if (event.name === 'delete') {
+    if (event.name === "delete") {
       this.deleteForward();
       this.render();
       return;
     }
 
     // PageUp / PageDown → jump to first/last line
-    if (event.name === 'pageup') {
+    if (event.name === "pageup") {
       this.cursorLine = 0;
       this.cursorCol = Math.min(this.cursorCol, this.lines[0]?.length ?? 0);
       this.render();
       return;
     }
-    if (event.name === 'pagedown') {
+    if (event.name === "pagedown") {
       this.cursorLine = this.lines.length - 1;
-      this.cursorCol = Math.min(this.cursorCol, this.lines[this.cursorLine]?.length ?? 0);
+      this.cursorCol = Math.min(
+        this.cursorCol,
+        this.lines[this.cursorLine]?.length ?? 0,
+      );
       this.render();
       return;
     }
@@ -881,31 +955,39 @@ export class PromptInput {
     // ── Printable characters (with PasteBurst C1) ──────────────────────────
     if (event.sequence.length === 1 && !event.ctrl && !event.meta) {
       const char = event.sequence;
-      if (char >= ' ' || char === '\t') {
+      if (char >= " " || char === "\t") {
         const now = Date.now();
         const decision = this.pasteBurst.onPlainCharNoHold(now);
 
         if (decision) {
           switch (decision.type) {
-            case 'bufferAppend':
+            case "bufferAppend":
               // Char is being buffered by PasteBurst; don't insert individually
               this.pasteBurst.appendCharToBuffer(char, now);
               return;
-            case 'beginBuffer': {
+            case "beginBuffer": {
               // Retro-capture: undo the last N chars from current line
               if (decision.retroChars > 0) {
-                const line = this.lines[this.cursorLine] ?? '';
+                const line = this.lines[this.cursorLine] ?? "";
                 const lineChars = [...line];
-                const charsToCapture = Math.min(decision.retroChars, lineChars.length);
+                const charsToCapture = Math.min(
+                  decision.retroChars,
+                  lineChars.length,
+                );
                 const retroStart = Math.max(0, this.cursorCol - charsToCapture);
-                const grabbed = lineChars.slice(retroStart, this.cursorCol).join('');
+                const grabbed = lineChars
+                  .slice(retroStart, this.cursorCol)
+                  .join("");
                 // Stricter pastey check: require newline (multi-line paste) or >=16 chars
                 // Single spaces in normal typing should NOT trigger retro-capture.
-                const looksPastey = grabbed.includes('\n') || [...grabbed].length >= 16;
+                const looksPastey =
+                  grabbed.includes("\n") || [...grabbed].length >= 16;
                 if (looksPastey) {
                   // Looks pastey — retro-capture and start buffering
-                  this.lines[this.cursorLine] = lineChars.slice(0, retroStart).join('');
-                  this.cursorCol = (this.lines[this.cursorLine] ?? '').length;
+                  this.lines[this.cursorLine] = lineChars
+                    .slice(0, retroStart)
+                    .join("");
+                  this.cursorCol = (this.lines[this.cursorLine] ?? "").length;
                   this.pasteBurst.beginWithRetroGrabbed(grabbed, now);
                   this.pasteBurst.appendCharToBuffer(char, now);
                   return;
@@ -928,7 +1010,7 @@ export class PromptInput {
     }
 
     // Alt+Backspace → delete word backward (some terminals)
-    if (event.name === 'backspace' && event.meta) {
+    if (event.name === "backspace" && event.meta) {
       this.deleteWordBackward();
       this.render();
       return;
@@ -944,79 +1026,86 @@ export class PromptInput {
   /** Handle keys while in visual mode. */
   private handleVisualModeKey(event: KeyEvent): void {
     switch (event.name) {
-      case 'escape':
+      case "escape":
         this.clearVisualSelection();
         this.render();
         return;
-      case 'h':
+      case "h":
         if (this.cursorCol > 0) this.cursorCol--;
         this.render();
         return;
-      case 'l':
-        if (this.cursorCol < (this.lines[this.cursorLine]?.length ?? 0)) this.cursorCol++;
+      case "l":
+        if (this.cursorCol < (this.lines[this.cursorLine]?.length ?? 0))
+          this.cursorCol++;
         this.render();
         return;
-      case 'k':
+      case "k":
         if (this.cursorLine > 0) {
           this.cursorLine--;
-          this.cursorCol = Math.min(this.cursorCol, this.lines[this.cursorLine]?.length ?? 0);
+          this.cursorCol = Math.min(
+            this.cursorCol,
+            this.lines[this.cursorLine]?.length ?? 0,
+          );
         }
         this.render();
         return;
-      case 'j':
+      case "j":
         if (this.cursorLine < this.lines.length - 1) {
           this.cursorLine++;
-          this.cursorCol = Math.min(this.cursorCol, this.lines[this.cursorLine]?.length ?? 0);
+          this.cursorCol = Math.min(
+            this.cursorCol,
+            this.lines[this.cursorLine]?.length ?? 0,
+          );
         }
         this.render();
         return;
-      case 'w':
+      case "w":
         this.moveWordRight();
         this.render();
         return;
-      case 'b':
+      case "b":
         this.moveWordLeft();
         this.render();
         return;
-      case 'e':
+      case "e":
         this.moveToWordEnd();
         this.render();
         return;
-      case '0':
+      case "0":
         this.cursorCol = 0;
         this.render();
         return;
-      case '$':
+      case "$":
         this.cursorCol = this.lines[this.cursorLine]?.length ?? 0;
         this.render();
         return;
-      case 'd':
+      case "d":
         this.snapshot();
         this.visualDelete();
         this.clearVisualSelection();
-        this.lastChange = { type: 'dd' };
+        this.lastChange = { type: "dd" };
         this.render();
         return;
-      case 'y':
+      case "y":
         this.visualYank();
         this.clearVisualSelection();
         this.render();
         return;
-      case 'c':
+      case "c":
         this.snapshot();
         this.visualDelete();
         this.clearVisualSelection();
-        this.mode = 'insert';
-        this.insertEntryType = 'c';
-        this.insertSessionText = '';
+        this.mode = "insert";
+        this.insertEntryType = "c";
+        this.insertSessionText = "";
         this.render();
         return;
-      case 'x':
-      case 'X':
+      case "x":
+      case "X":
         this.snapshot();
         this.visualDelete();
         this.clearVisualSelection();
-        this.lastChange = { type: 'x' };
+        this.lastChange = { type: "x" };
         this.render();
         return;
     }
@@ -1026,7 +1115,7 @@ export class PromptInput {
   private clearVisualSelection(): void {
     this.visualStart = null;
     this.visualMode = null;
-    this.mode = 'normal';
+    this.mode = "normal";
   }
 
   /** Get normalized visual range with start <= end and exclusive endCol. */
@@ -1045,7 +1134,7 @@ export class PromptInput {
       };
     }
 
-    if (this.visualMode === 'line') {
+    if (this.visualMode === "line") {
       const startLine = Math.min(this.visualStart.line, this.cursorLine);
       const endLine = Math.max(this.visualStart.line, this.cursorLine);
       return { startLine, startCol: 0, endLine, endCol: Infinity };
@@ -1058,7 +1147,10 @@ export class PromptInput {
     let normStart: { line: number; col: number };
     let normEnd: { line: number; col: number };
 
-    if (start.line < end.line || (start.line === end.line && start.col <= end.col)) {
+    if (
+      start.line < end.line ||
+      (start.line === end.line && start.col <= end.col)
+    ) {
       normStart = start;
       normEnd = end;
     } else {
@@ -1070,19 +1162,26 @@ export class PromptInput {
     const endLineLen = this.lines[normEnd.line]?.length ?? 0;
     const endCol = normEnd.col < endLineLen ? normEnd.col + 1 : endLineLen;
 
-    return { startLine: normStart.line, startCol: normStart.col, endLine: normEnd.line, endCol };
+    return {
+      startLine: normStart.line,
+      startCol: normStart.col,
+      endLine: normEnd.line,
+      endCol,
+    };
   }
 
   /** Get the column range of visual selection for a given line, or null if not selected. */
-  private getSelectionColRange(line: number): { start: number; end: number } | null {
+  private getSelectionColRange(
+    line: number,
+  ): { start: number; end: number } | null {
     if (!this.visualStart) return null;
 
     const range = this.getNormalizedVisualRange();
 
     if (line < range.startLine || line > range.endLine) return null;
 
-    if (this.visualMode === 'line') {
-      return { start: 0, end: (this.lines[line] ?? '').length };
+    if (this.visualMode === "line") {
+      return { start: 0, end: (this.lines[line] ?? "").length };
     }
 
     // Character-wise
@@ -1090,12 +1189,12 @@ export class PromptInput {
       return { start: range.startCol, end: range.endCol };
     }
     if (line === range.startLine) {
-      return { start: range.startCol, end: (this.lines[line] ?? '').length };
+      return { start: range.startCol, end: (this.lines[line] ?? "").length };
     }
     if (line === range.endLine) {
       return { start: 0, end: range.endCol };
     }
-    return { start: 0, end: (this.lines[line] ?? '').length };
+    return { start: 0, end: (this.lines[line] ?? "").length };
   }
 
   /** Delete the visual selection into killBuffer. Caller must snapshot(). */
@@ -1104,23 +1203,24 @@ export class PromptInput {
 
     const range = this.getNormalizedVisualRange();
 
-    if (this.visualMode === 'line') {
+    if (this.visualMode === "line") {
       const yankedLines: string[] = [];
       for (let i = range.startLine; i <= range.endLine; i++) {
-        yankedLines.push(this.lines[i] ?? '');
+        yankedLines.push(this.lines[i] ?? "");
       }
-      this.killBuffer = yankedLines.join('\n') + '\n';
+      this.killBuffer = yankedLines.join("\n") + "\n";
 
       this.lines.splice(range.startLine, range.endLine - range.startLine + 1);
-      if (this.lines.length === 0) this.lines = [''];
+      if (this.lines.length === 0) this.lines = [""];
       this.cursorLine = Math.min(range.startLine, this.lines.length - 1);
       this.cursorCol = 0;
     } else {
-      const line = this.lines[range.startLine] ?? '';
+      const line = this.lines[range.startLine] ?? "";
 
       if (range.startLine === range.endLine) {
         this.killBuffer = line.slice(range.startCol, range.endCol);
-        this.lines[range.startLine] = line.slice(0, range.startCol) + line.slice(range.endCol);
+        this.lines[range.startLine] =
+          line.slice(0, range.startCol) + line.slice(range.endCol);
         this.cursorLine = range.startLine;
         this.cursorCol = range.startCol;
       } else {
@@ -1128,14 +1228,15 @@ export class PromptInput {
         yankedParts.push(line.slice(range.startCol));
 
         for (let i = range.startLine + 1; i < range.endLine; i++) {
-          yankedParts.push(this.lines[i] ?? '');
+          yankedParts.push(this.lines[i] ?? "");
         }
 
-        const lastLine = this.lines[range.endLine] ?? '';
+        const lastLine = this.lines[range.endLine] ?? "";
         yankedParts.push(lastLine.slice(0, range.endCol));
 
-        this.killBuffer = yankedParts.join('\n');
-        this.lines[range.startLine] = line.slice(0, range.startCol) + lastLine.slice(range.endCol);
+        this.killBuffer = yankedParts.join("\n");
+        this.lines[range.startLine] =
+          line.slice(0, range.startCol) + lastLine.slice(range.endCol);
 
         const deleteCount = range.endLine - range.startLine;
         this.lines.splice(range.startLine + 1, deleteCount);
@@ -1152,23 +1253,26 @@ export class PromptInput {
 
     const range = this.getNormalizedVisualRange();
 
-    if (this.visualMode === 'line') {
+    if (this.visualMode === "line") {
       const yankedLines: string[] = [];
       for (let i = range.startLine; i <= range.endLine; i++) {
-        yankedLines.push(this.lines[i] ?? '');
+        yankedLines.push(this.lines[i] ?? "");
       }
-      this.killBuffer = yankedLines.join('\n') + '\n';
+      this.killBuffer = yankedLines.join("\n") + "\n";
     } else {
       if (range.startLine === range.endLine) {
-        this.killBuffer = (this.lines[range.startLine] ?? '').slice(range.startCol, range.endCol);
+        this.killBuffer = (this.lines[range.startLine] ?? "").slice(
+          range.startCol,
+          range.endCol,
+        );
       } else {
         const parts: string[] = [];
-        parts.push((this.lines[range.startLine] ?? '').slice(range.startCol));
+        parts.push((this.lines[range.startLine] ?? "").slice(range.startCol));
         for (let i = range.startLine + 1; i < range.endLine; i++) {
-          parts.push(this.lines[i] ?? '');
+          parts.push(this.lines[i] ?? "");
         }
-        parts.push((this.lines[range.endLine] ?? '').slice(0, range.endCol));
-        this.killBuffer = parts.join('\n');
+        parts.push((this.lines[range.endLine] ?? "").slice(0, range.endCol));
+        this.killBuffer = parts.join("\n");
       }
     }
   }
@@ -1184,81 +1288,90 @@ export class PromptInput {
     const change = this.lastChange;
 
     switch (change.type) {
-      case 'i': {
-        const line = this.lines[this.cursorLine] ?? '';
+      case "i": {
+        const line = this.lines[this.cursorLine] ?? "";
         const pos = this.cursorCol;
-        this.lines[this.cursorLine] = line.slice(0, pos) + (change.text ?? '') + line.slice(pos);
-        this.cursorCol = pos + (change.text ?? '').length;
+        this.lines[this.cursorLine] =
+          line.slice(0, pos) + (change.text ?? "") + line.slice(pos);
+        this.cursorCol = pos + (change.text ?? "").length;
         break;
       }
-      case 'I': {
+      case "I": {
         this.cursorCol = 0;
-        const line = this.lines[this.cursorLine] ?? '';
-        this.lines[this.cursorLine] = (change.text ?? '') + line;
-        this.cursorCol = (change.text ?? '').length;
+        const line = this.lines[this.cursorLine] ?? "";
+        this.lines[this.cursorLine] = (change.text ?? "") + line;
+        this.cursorCol = (change.text ?? "").length;
         break;
       }
-      case 'a': {
-        const line = this.lines[this.cursorLine] ?? '';
+      case "a": {
+        const line = this.lines[this.cursorLine] ?? "";
         const pos = this.cursorCol;
-        this.lines[this.cursorLine] = line.slice(0, pos) + (change.text ?? '') + line.slice(pos);
-        this.cursorCol = pos + (change.text ?? '').length;
+        this.lines[this.cursorLine] =
+          line.slice(0, pos) + (change.text ?? "") + line.slice(pos);
+        this.cursorCol = pos + (change.text ?? "").length;
         break;
       }
-      case 'A': {
-        const line = this.lines[this.cursorLine] ?? '';
+      case "A": {
+        const line = this.lines[this.cursorLine] ?? "";
         const endPos = line.length;
-        this.lines[this.cursorLine] = line + (change.text ?? '');
-        this.cursorCol = endPos + (change.text ?? '').length;
+        this.lines[this.cursorLine] = line + (change.text ?? "");
+        this.cursorCol = endPos + (change.text ?? "").length;
         break;
       }
-      case 'o': {
-        this.lines.splice(this.cursorLine + 1, 0, change.text ?? '');
+      case "o": {
+        this.lines.splice(this.cursorLine + 1, 0, change.text ?? "");
         this.cursorLine++;
-        this.cursorCol = (change.text ?? '').length;
+        this.cursorCol = (change.text ?? "").length;
         break;
       }
-      case 'O': {
-        this.lines.splice(this.cursorLine, 0, change.text ?? '');
-        this.cursorCol = (change.text ?? '').length;
+      case "O": {
+        this.lines.splice(this.cursorLine, 0, change.text ?? "");
+        this.cursorCol = (change.text ?? "").length;
         break;
       }
-      case 'C': {
-        const cl = this.lines[this.cursorLine] ?? '';
+      case "C": {
+        const cl = this.lines[this.cursorLine] ?? "";
         this.killBuffer = cl.slice(this.cursorCol);
-        this.lines[this.cursorLine] = cl.slice(0, this.cursorCol) + (change.text ?? '');
-        this.cursorCol = this.cursorCol + (change.text ?? '').length;
+        this.lines[this.cursorLine] =
+          cl.slice(0, this.cursorCol) + (change.text ?? "");
+        this.cursorCol = this.cursorCol + (change.text ?? "").length;
         break;
       }
-      case 'dd': {
-        this.killBuffer = this.lines[this.cursorLine] ?? '';
+      case "dd": {
+        this.killBuffer = this.lines[this.cursorLine] ?? "";
         if (this.lines.length > 1) {
           this.lines.splice(this.cursorLine, 1);
-          if (this.cursorLine >= this.lines.length) this.cursorLine = this.lines.length - 1;
-          this.cursorCol = Math.min(this.cursorCol, this.lines[this.cursorLine]?.length ?? 0);
+          if (this.cursorLine >= this.lines.length)
+            this.cursorLine = this.lines.length - 1;
+          this.cursorCol = Math.min(
+            this.cursorCol,
+            this.lines[this.cursorLine]?.length ?? 0,
+          );
         } else {
-          this.lines[0] = '';
+          this.lines[0] = "";
           this.cursorCol = 0;
         }
         break;
       }
-      case 'D': {
-        const dl = this.lines[this.cursorLine] ?? '';
+      case "D": {
+        const dl = this.lines[this.cursorLine] ?? "";
         this.killBuffer = dl.slice(this.cursorCol);
         this.lines[this.cursorLine] = dl.slice(0, this.cursorCol);
         break;
       }
-      case 'x': {
-        this.killBuffer = this.lines[this.cursorLine]?.[this.cursorCol] ?? '';
+      case "x": {
+        this.killBuffer = this.lines[this.cursorLine]?.[this.cursorCol] ?? "";
         this.deleteForward();
         break;
       }
-      case 'p': {
+      case "p": {
         if (this.killBuffer) {
           if (change.shift) {
-            const pl = this.lines[this.cursorLine] ?? '';
+            const pl = this.lines[this.cursorLine] ?? "";
             this.lines[this.cursorLine] =
-              pl.slice(0, this.cursorCol) + this.killBuffer + pl.slice(this.cursorCol);
+              pl.slice(0, this.cursorCol) +
+              this.killBuffer +
+              pl.slice(this.cursorCol);
             this.cursorCol += this.killBuffer.length;
           } else {
             this.insertText(this.killBuffer);
@@ -1271,10 +1384,13 @@ export class PromptInput {
 
   /** Save the current insert session as the lastChange for dot-repeat. */
   private storeInsertChange(): void {
-    if (this.insertEntryType && this.mode === 'insert') {
-      this.lastChange = { type: this.insertEntryType, text: this.insertSessionText };
+    if (this.insertEntryType && this.mode === "insert") {
+      this.lastChange = {
+        type: this.insertEntryType,
+        text: this.insertSessionText,
+      };
       this.insertEntryType = null;
-      this.insertSessionText = '';
+      this.insertSessionText = "";
     }
   }
 
@@ -1283,12 +1399,12 @@ export class PromptInput {
   /** Sync backward-compat fields from TypeaheadEngine state. */
   private syncBackwardCompatPopupFields(): void {
     const vs = this.typeahead.getViewState();
-    if (vs.mode === 'completer') {
+    if (vs.mode === "completer") {
       this.completionPopup = vs.items.map((i) => i.label);
     } else {
       this.completionPopup = null;
     }
-    if (vs.mode === 'slash') {
+    if (vs.mode === "slash") {
       this.slashSelected = vs.selectedIndex;
     } else {
       this.slashSelected = 0;
@@ -1298,10 +1414,13 @@ export class PromptInput {
   /** Apply a TypeaheadEngine accept result to the text buffer. */
   private applyTypeaheadResult(result: TypeaheadAcceptResult): void {
     switch (result.mode) {
-      case 'slash':
-      case 'mention': {
-        const line = this.lines[result.line] ?? '';
-        this.lines[result.line] = line.slice(0, result.startCol) + result.insertText + line.slice(result.endCol);
+      case "slash":
+      case "mention": {
+        const line = this.lines[result.line] ?? "";
+        this.lines[result.line] =
+          line.slice(0, result.startCol) +
+          result.insertText +
+          line.slice(result.endCol);
         this.cursorLine = result.line;
         this.cursorCol = result.startCol + result.insertText.length;
         this.typeahead.dismiss();
@@ -1309,7 +1428,7 @@ export class PromptInput {
         this.slashSelected = 0;
         break;
       }
-      case 'completer': {
+      case "completer": {
         // Completer replaces the current word
         this.applyCompletionText(result.insertText);
         this.typeahead.clearCompleterPopup();
@@ -1322,7 +1441,7 @@ export class PromptInput {
 
   /** Handle a paste event (C5 — paste placeholder collapsing). */
   private handlePasteText(pasted: string): void {
-    const bufferText = this.lines.join('\n');
+    const bufferText = this.lines.join("\n");
     const { insertText } = this.pasteStore.integratePaste(pasted, bufferText);
     this.insertText(insertText);
     this.refreshAutocomplete();
@@ -1344,43 +1463,48 @@ export class PromptInput {
 
   /** Refresh the inline autocomplete suggestion based on current cursor position. */
   private refreshAutocomplete(): void {
-    this.ac.suggest(this.lines[this.cursorLine] ?? '', this.lines.join('\n'), this.cursorCol);
+    this.ac.suggest(
+      this.lines[this.cursorLine] ?? "",
+      this.lines.join("\n"),
+      this.cursorCol,
+    );
   }
 
   private insertChar(char: string): void {
     this.snapshot();
-    const line = this.lines[this.cursorLine] ?? '';
-    this.lines[this.cursorLine] = line.slice(0, this.cursorCol) + char + line.slice(this.cursorCol);
+    const line = this.lines[this.cursorLine] ?? "";
+    this.lines[this.cursorLine] =
+      line.slice(0, this.cursorCol) + char + line.slice(this.cursorCol);
     this.cursorCol++;
     this.refreshAutocomplete();
   }
 
   private insertText(text: string): void {
     this.snapshot();
-    const lines = text.split('\n');
+    const lines = text.split("\n");
     if (lines.length === 1) {
-      const line = this.lines[this.cursorLine] ?? '';
+      const line = this.lines[this.cursorLine] ?? "";
       this.lines[this.cursorLine] =
         line.slice(0, this.cursorCol) + lines[0] + line.slice(this.cursorCol);
-      this.cursorCol += (lines[0] ?? '').length;
+      this.cursorCol += (lines[0] ?? "").length;
     } else {
       // Multi-line paste
-      const currentLine = this.lines[this.cursorLine] ?? '';
+      const currentLine = this.lines[this.cursorLine] ?? "";
       const before = currentLine.slice(0, this.cursorCol);
       const after = currentLine.slice(this.cursorCol);
 
       // First line: before + first pasted line
-      this.lines[this.cursorLine] = before + (lines[0] ?? '');
+      this.lines[this.cursorLine] = before + (lines[0] ?? "");
 
       // Middle lines
       for (let i = 1; i < lines.length - 1; i++) {
         this.cursorLine++;
-        this.lines.splice(this.cursorLine, 0, lines[i] ?? '');
+        this.lines.splice(this.cursorLine, 0, lines[i] ?? "");
       }
 
       // Last line: last pasted line + after
       this.cursorLine++;
-      const lastPasted = lines[lines.length - 1] ?? '';
+      const lastPasted = lines[lines.length - 1] ?? "";
       this.lines.splice(this.cursorLine, 0, lastPasted + after);
       this.cursorCol = lastPasted.length;
     }
@@ -1389,7 +1513,7 @@ export class PromptInput {
 
   private insertNewline(): void {
     this.snapshot();
-    const line = this.lines[this.cursorLine] ?? '';
+    const line = this.lines[this.cursorLine] ?? "";
     const before = line.slice(0, this.cursorCol);
     const after = line.slice(this.cursorCol);
 
@@ -1403,14 +1527,16 @@ export class PromptInput {
   private backspace(): void {
     this.snapshot();
     if (this.cursorCol > 0) {
-      const line = this.lines[this.cursorLine] ?? '';
-      this.lines[this.cursorLine] = line.slice(0, this.cursorCol - 1) + line.slice(this.cursorCol);
+      const line = this.lines[this.cursorLine] ?? "";
+      this.lines[this.cursorLine] =
+        line.slice(0, this.cursorCol - 1) + line.slice(this.cursorCol);
       this.cursorCol--;
     } else if (this.cursorLine > 0) {
       // Merge with previous line
       const prevLen = this.lines[this.cursorLine - 1]?.length ?? 0;
       this.lines[this.cursorLine - 1] =
-        (this.lines[this.cursorLine - 1] ?? '') + (this.lines[this.cursorLine] ?? '');
+        (this.lines[this.cursorLine - 1] ?? "") +
+        (this.lines[this.cursorLine] ?? "");
       this.lines.splice(this.cursorLine, 1);
       this.cursorLine--;
       this.cursorCol = prevLen;
@@ -1420,12 +1546,14 @@ export class PromptInput {
 
   private deleteForward(): void {
     this.snapshot();
-    const line = this.lines[this.cursorLine] ?? '';
+    const line = this.lines[this.cursorLine] ?? "";
     if (this.cursorCol < line.length) {
-      this.lines[this.cursorLine] = line.slice(0, this.cursorCol) + line.slice(this.cursorCol + 1);
+      this.lines[this.cursorLine] =
+        line.slice(0, this.cursorCol) + line.slice(this.cursorCol + 1);
     } else if (this.cursorLine < this.lines.length - 1) {
       // Merge with next line
-      this.lines[this.cursorLine] = line + (this.lines[this.cursorLine + 1] ?? '');
+      this.lines[this.cursorLine] =
+        line + (this.lines[this.cursorLine + 1] ?? "");
       this.lines.splice(this.cursorLine + 1, 1);
     }
     this.refreshAutocomplete();
@@ -1433,21 +1561,22 @@ export class PromptInput {
 
   private deleteWordBackward(): void {
     this.snapshot();
-    const line = this.lines[this.cursorLine] ?? '';
+    const line = this.lines[this.cursorLine] ?? "";
     // Find the start of the word before cursor
     let i = this.cursorCol - 1;
     // Skip whitespace
-    while (i >= 0 && line[i] === ' ') i--;
+    while (i >= 0 && line[i] === " ") i--;
     // Skip word characters
-    while (i >= 0 && line[i] !== ' ') i--;
+    while (i >= 0 && line[i] !== " ") i--;
     const start = i + 1;
-    this.lines[this.cursorLine] = line.slice(0, start) + line.slice(this.cursorCol);
+    this.lines[this.cursorLine] =
+      line.slice(0, start) + line.slice(this.cursorCol);
     this.cursorCol = start;
     this.refreshAutocomplete();
   }
 
   private moveWordLeft(): void {
-    const line = this.lines[this.cursorLine] ?? '';
+    const line = this.lines[this.cursorLine] ?? "";
     if (this.cursorCol === 0) {
       if (this.cursorLine > 0) {
         this.cursorLine--;
@@ -1457,15 +1586,15 @@ export class PromptInput {
     }
     let i = this.cursorCol - 1;
     // Skip whitespace
-    while (i > 0 && line[i] === ' ') i--;
+    while (i > 0 && line[i] === " ") i--;
     // Skip word characters
-    while (i > 0 && line[i] !== ' ') i--;
-    if (line[i] === ' ') i++;
+    while (i > 0 && line[i] !== " ") i--;
+    if (line[i] === " ") i++;
     this.cursorCol = i;
   }
 
   private moveWordRight(): void {
-    const line = this.lines[this.cursorLine] ?? '';
+    const line = this.lines[this.cursorLine] ?? "";
     if (this.cursorCol >= line.length) {
       if (this.cursorLine < this.lines.length - 1) {
         this.cursorLine++;
@@ -1475,15 +1604,15 @@ export class PromptInput {
     }
     let i = this.cursorCol;
     // Skip word characters
-    while (i < line.length && line[i] !== ' ') i++;
+    while (i < line.length && line[i] !== " ") i++;
     // Skip whitespace
-    while (i < line.length && line[i] === ' ') i++;
+    while (i < line.length && line[i] === " ") i++;
     this.cursorCol = i;
   }
 
   /** Move cursor to end of current/next word (vim `e`). */
   private moveToWordEnd(): void {
-    const line = this.lines[this.cursorLine] ?? '';
+    const line = this.lines[this.cursorLine] ?? "";
     if (this.cursorCol >= line.length) {
       if (this.cursorLine < this.lines.length - 1) {
         this.cursorLine++;
@@ -1494,7 +1623,7 @@ export class PromptInput {
     }
     let i = this.cursorCol;
     // Skip whitespace
-    while (i < line.length && line[i] === ' ') i++;
+    while (i < line.length && line[i] === " ") i++;
     if (i >= line.length) {
       if (this.cursorLine < this.lines.length - 1) {
         this.cursorLine++;
@@ -1504,13 +1633,13 @@ export class PromptInput {
       return;
     }
     // Move to end of current word
-    while (i < line.length - 1 && line[i + 1] !== ' ') i++;
+    while (i < line.length - 1 && line[i + 1] !== " ") i++;
     this.cursorCol = i;
   }
 
   private clear(): void {
     this.snapshot();
-    this.lines = [''];
+    this.lines = [""];
     this.cursorLine = 0;
     this.cursorCol = 0;
     this.historyIndex = -1;
@@ -1524,9 +1653,9 @@ export class PromptInput {
     this.pasteBurst.clearAfterExplicitPaste();
     this.visualStart = null;
     this.visualMode = null;
-    if (this.mode === 'visual') this.mode = 'normal';
+    if (this.mode === "visual") this.mode = "normal";
     this.insertEntryType = null;
-    this.insertSessionText = '';
+    this.insertSessionText = "";
   }
 
   // ── Undo / Redo ─────────────────────────────────────────────────────────────
@@ -1568,7 +1697,7 @@ export class PromptInput {
     if (this.composerHistory.totalEntries() === 0) return;
 
     if (!this.browsingHistory) {
-      this.savedDraft = this.lines.join('\n');
+      this.savedDraft = this.lines.join("\n");
       this.browsingHistory = true;
     }
 
@@ -1584,7 +1713,7 @@ export class PromptInput {
     if (!this.browsingHistory) return;
 
     const result = this.composerHistory.navigateNewer();
-    if (result === 'past_newest') {
+    if (result === "past_newest") {
       this.browsingHistory = false;
       this.historyIndex = -1;
       if (this.savedDraft !== null) {
@@ -1611,7 +1740,7 @@ export class PromptInput {
 
     if (completions.length === 1) {
       // Single match: apply it directly
-      this.applyCompletionText(completions[0] ?? '');
+      this.applyCompletionText(completions[0] ?? "");
       this.completionPopup = null;
       this.typeahead.setCompleterPopup(null);
       this.render();
@@ -1649,24 +1778,25 @@ export class PromptInput {
   }
 
   private applyCompletionText(text: string): void {
-    const line = this.lines[this.cursorLine] ?? '';
+    const line = this.lines[this.cursorLine] ?? "";
     const currentWord = this.getCurrentWord();
     const wordStart = this.cursorCol - currentWord.length;
-    this.lines[this.cursorLine] = line.slice(0, wordStart) + text + line.slice(this.cursorCol);
+    this.lines[this.cursorLine] =
+      line.slice(0, wordStart) + text + line.slice(this.cursorCol);
     this.cursorCol = wordStart + text.length;
     this.refreshAutocomplete();
   }
 
   private getCurrentWord(): string {
-    const line = this.lines[this.cursorLine] ?? '';
+    const line = this.lines[this.cursorLine] ?? "";
     // Find the word boundaries around cursor
     let start = this.cursorCol;
-    while (start > 0 && line[start - 1] !== ' ') start--;
+    while (start > 0 && line[start - 1] !== " ") start--;
     return line.slice(start, this.cursorCol);
   }
 
   private getCurrentFullLine(): string {
-    return this.lines.join('\n');
+    return this.lines.join("\n");
   }
 
   // ── Submit ──────────────────────────────────────────────────────────────────
@@ -1674,15 +1804,15 @@ export class PromptInput {
   /** True when Tab should enqueue the current draft instead of completing (C2). */
   private shouldQueueOnTab(): boolean {
     if (!this.config.isTaskRunning?.()) return false;
-    const text = this.lines.join('\n').trim();
+    const text = this.lines.join("\n").trim();
     if (!text) return false;
-    if (text.startsWith('/')) return false;
+    if (text.startsWith("/")) return false;
     return !!this.config.onQueue;
   }
 
   /** Queue current draft for post-turn execution; keep composer active (C2). */
   private queueSubmit(): void {
-    const text = this.lines.join('\n').trim();
+    const text = this.lines.join("\n").trim();
     if (!text || !this.config.onQueue) return;
 
     const queued = this.config.onQueue(text);
@@ -1694,7 +1824,7 @@ export class PromptInput {
   }
 
   private submit(): void {
-    const rawText = this.lines.join('\n');
+    const rawText = this.lines.join("\n");
     // Expand paste placeholders before submit (C5)
     const expanded = this.pasteStore.expand(rawText);
     const text = expanded.trim();
@@ -1732,8 +1862,12 @@ export class PromptInput {
   }
 
   /** Get filtered slash commands (backward-compat, used by tests). */
-  private getFilteredSlashCommands(): Array<{ name: string; description: string; group: string }> {
-    return filterSlashCommands(this.lines[0] ?? '');
+  private getFilteredSlashCommands(): Array<{
+    name: string;
+    description: string;
+    group: string;
+  }> {
+    return filterSlashCommands(this.lines[0] ?? "");
   }
 
   // ── @mention Popup (C3) ───────────────────────────────────────────────────────
@@ -1763,14 +1897,14 @@ export class PromptInput {
    */
   private async startMentionSearch(query: string): Promise<void> {
     try {
-      const { globalIndexer } = await import('../services/indexer.js');
+      const { globalIndexer } = await import("../services/indexer.js");
       const hits: SearchHit[] = globalIndexer.search(query, 20);
 
       if (hits.length > 0) {
         const results: MentionResult[] = hits.map((r) => ({
-          type: 'file' as const,
+          type: "file" as const,
           label: r.id,
-          description: r.snippet ?? '',
+          description: r.snippet ?? "",
           insertText: r.id,
           score: r.score,
         }));
@@ -1793,8 +1927,11 @@ export class PromptInput {
       if (this.active) this.render();
       return;
     }
-    const projectRoot = process.env['BABEL_PROJECT_ROOT'] || process.cwd();
-    const results = searchFilesGlob(query, projectRoot, { maxResults: 20, maxDepth: 10 });
+    const projectRoot = process.env["BABEL_PROJECT_ROOT"] || process.cwd();
+    const results = searchFilesGlob(query, projectRoot, {
+      maxResults: 20,
+      maxDepth: 10,
+    });
     this.typeahead.setMentionResults(results);
     if (this.active) this.render();
   }
@@ -1803,19 +1940,23 @@ export class PromptInput {
 
   /** ConPTY cannot dock with CUP / SCO save-restore — stay on the current line. */
   private useLinearComposer(): boolean {
-    return isWindowsTerminal() && process.env['BABEL_PROMPT_CUP'] !== '1';
+    return isWindowsTerminal() && process.env["BABEL_PROMPT_CUP"] !== "1";
   }
 
   /** Single-line \r + erase + prompt. No absolute positioning. */
   private renderLinear(): void {
     const buf = OutputBuffer.getInstance();
     const prefix = this.config.prompt;
-    const line = sanitizeUserText(this.lines[this.cursorLine] ?? this.lines[0] ?? '');
+    const line = sanitizeUserText(
+      this.lines[this.cursorLine] ?? this.lines[0] ?? "",
+    );
     const before = sanitizeUserText(
-      (this.lines[this.cursorLine] ?? '').slice(0, this.cursorCol),
+      (this.lines[this.cursorLine] ?? "").slice(0, this.cursorCol),
     );
     const show = this.cursorVisible || this.imeComposing;
-  buf.write(`\r\x1b[2K${activeAccent(prefix)}${primary(line)}\r${activeAccent(prefix)}${primary(before)}${show ? '\x1b[?25h' : '\x1b[?25l'}`);
+    buf.write(
+      `\r\x1b[2K${activeAccent(prefix)}${primary(line)}\r${activeAccent(prefix)}${primary(before)}${show ? "\x1b[?25h" : "\x1b[?25l"}`,
+    );
   }
 
   /** Full render: write all lines and position cursor. */
@@ -1830,218 +1971,255 @@ export class PromptInput {
     let cursorRestored = false;
     if (BABEL_PROMPT_BUFFERED) buf.beginFrame();
     try {
+      const viewState = this.typeahead.getViewState();
+      const queuedMessages = this.config.getQueuedMessages?.() ?? [];
+      const queuedLines =
+        queuedMessages.length > 0 ? Math.min(queuedMessages.length, 3) + 1 : 0;
 
-    const viewState = this.typeahead.getViewState();
-    const queuedMessages = this.config.getQueuedMessages?.() ?? [];
-    const queuedLines = queuedMessages.length > 0 ? Math.min(queuedMessages.length, 3) + 1 : 0;
+      // Popup heights from TypeaheadEngine view state
+      const slashPopupItems = viewState.mode === "slash" ? viewState.items : [];
+      const slashPopupLines =
+        slashPopupItems.length > 0
+          ? Math.min(slashPopupItems.length, 5) + 1 // +1 for separator
+          : 0;
+      const mentionPopupItems =
+        viewState.mode === "mention" ? viewState.items : [];
+      const mentionPopupHeight =
+        mentionPopupItems.length > 0
+          ? Math.min(mentionPopupItems.length, 5) + 1 // +1 for header
+          : 0;
+      const completerItems =
+        viewState.mode === "completer" ? viewState.items : [];
+      const completerPopupHeight =
+        completerItems.length > 0
+          ? Math.min(completerItems.length, 5) + 1 // +1 for separator
+          : 0;
 
-    // Popup heights from TypeaheadEngine view state
-    const slashPopupItems = viewState.mode === 'slash' ? viewState.items : [];
-    const slashPopupLines = slashPopupItems.length > 0
-      ? Math.min(slashPopupItems.length, 5) + 1 // +1 for separator
-      : 0;
-    const mentionPopupItems = viewState.mode === 'mention' ? viewState.items : [];
-    const mentionPopupHeight = mentionPopupItems.length > 0
-      ? Math.min(mentionPopupItems.length, 5) + 1 // +1 for header
-      : 0;
-    const completerItems = viewState.mode === 'completer' ? viewState.items : [];
-    const completerPopupHeight = completerItems.length > 0
-      ? Math.min(completerItems.length, 5) + 1 // +1 for separator
-      : 0;
+      const inputHeight = Math.min(
+        this.lines.length + completerPopupHeight + mentionPopupHeight,
+        this.maxInputHeight + completerPopupHeight + mentionPopupHeight,
+      );
+      const totalHeight = inputHeight + slashPopupLines + queuedLines;
+      const rows = process.stdout.rows || 24;
+      const startRow = Math.max(1, rows - totalHeight);
 
-    const inputHeight = Math.min(
-      this.lines.length + completerPopupHeight + mentionPopupHeight,
-      this.maxInputHeight + completerPopupHeight + mentionPopupHeight,
-    );
-    const totalHeight = inputHeight + slashPopupLines + queuedLines;
-    const rows = process.stdout.rows || 24;
-    const startRow = Math.max(1, rows - totalHeight);
+      // Hide cursor during render
+      OutputBuffer.getInstance().write("\x1b[?25l");
 
-    // Hide cursor during render
-    OutputBuffer.getInstance().write('\x1b[?25l');
+      // Save cursor, move to start row
+      OutputBuffer.getInstance().write("\x1b[s");
 
-    // Save cursor, move to start row
-    OutputBuffer.getInstance().write('\x1b[s');
-
-    // Clear from startRow to bottom
-    for (let r = startRow; r <= rows; r++) {
-      OutputBuffer.getInstance().write(`\x1b[${r};1H\x1b[K`);
-    }
-
-    // Queued follow-ups (C2) — dim preview above prompt
-    if (queuedLines > 0) {
-      const headerRow = startRow;
-      if (headerRow <= rows) {
-        const header = this.config.isTaskRunning?.()
-          ? dim(' Queued (Tab) · runs after current turn')
-          : dim(' Queued');
-        OutputBuffer.getInstance().write(
-          `\x1b[${headerRow};1H${truncate(header, this.termWidth - 1)}`,
-        );
+      // Clear from startRow to bottom
+      for (let r = startRow; r <= rows; r++) {
+        OutputBuffer.getInstance().write(`\x1b[${r};1H\x1b[K`);
       }
-      const maxShow = Math.min(queuedMessages.length, 3);
-      for (let i = 0; i < maxShow; i++) {
-        const r = startRow + 1 + i;
-        if (r > rows) break;
-        const preview = sanitizeUserText(queuedMessages[i] ?? '');
-        const oneLine = preview.replace(/\s+/g, ' ').trim();
-        const truncated =
-          oneLine.length > this.termWidth - 4 ? oneLine.slice(0, this.termWidth - 7) + '...' : oneLine;
-        OutputBuffer.getInstance().write(`\x1b[${r};1H${dim(` ↳ ${truncated}`)}`);
-      }
-      if (queuedMessages.length > maxShow) {
-        const r = startRow + 1 + maxShow;
-        if (r <= rows) {
+
+      // Queued follow-ups (C2) — dim preview above prompt
+      if (queuedLines > 0) {
+        const headerRow = startRow;
+        if (headerRow <= rows) {
+          const header = this.config.isTaskRunning?.()
+            ? dim(" Queued (Tab) · runs after current turn")
+            : dim(" Queued");
           OutputBuffer.getInstance().write(
-            `\x1b[${r};1H${ghost(`   +${queuedMessages.length - maxShow} more queued`)}`,
+            `\x1b[${headerRow};1H${truncate(header, this.termWidth - 1)}`,
           );
         }
-      }
-    }
-
-    const textStartBase = startRow + queuedLines;
-
-    // Render slash command popup above prompt area (C3)
-    if (viewState.mode === 'slash' && slashPopupItems.length > 0) {
-      const maxShow = Math.min(slashPopupItems.length, 5);
-      const sepRow = startRow;
-      if (sepRow <= rows) {
-        OutputBuffer.getInstance().write(`\x1b[${sepRow};1H${border('─'.repeat(Math.min(this.termWidth, 40)))}`);
-      }
-      for (let i = 0; i < maxShow; i++) {
-        const r = sepRow + 1 + i;
-        if (r > rows) break;
-        const item = slashPopupItems[i];
-        if (!item) break;
-        const displayText = ` ${item.label.padEnd(12)} ${item.description}`;
-        const truncated = truncate(displayText, this.termWidth - 1);
-        if (i === viewState.selectedIndex) {
-          OutputBuffer.getInstance().write(`\x1b[${r};1H${bgSelected(truncated)}`);
-        } else {
-          OutputBuffer.getInstance().write(`\x1b[${r};1H${dim(truncated)}`);
-        }
-      }
-    }
-
-    const textStart = textStartBase + slashPopupLines;
-
-    // Render each line of the text buffer
-    for (let i = 0; i < this.lines.length; i++) {
-      const row = textStart + i;
-      if (row > rows) break; // Can't render beyond screen
-
-      const prefix = i === 0 ? this.config.prompt : this.config.continuationPrompt;
-      const line = sanitizeUserText(this.lines[i] ?? '');
-
-      OutputBuffer.getInstance().write(`\x1b[${row};1H`);
-
-      if (this.visualStart) {
-        const selRange = this.getSelectionColRange(i);
-        if (selRange) {
-          const before = line.slice(0, selRange.start);
-          const selected = line.slice(selRange.start, selRange.end);
-          const after = line.slice(selRange.end);
-          const selectionHighlight = selected ? bgSelected(primary(selected)) : '';
-          OutputBuffer.getInstance().write(activeAccent(prefix) + primary(before) + selectionHighlight + primary(after));
-        } else {
-          OutputBuffer.getInstance().write(activeAccent(prefix) + primary(line));
-        }
-      } else {
-        OutputBuffer.getInstance().write(activeAccent(prefix) + primary(line));
-      }
-
-      // Ghost text (inline autocomplete)
-      if (i === this.cursorLine) {
-        const suffix = sanitizeUserText(this.ac.getGhostText() ?? '');
-        if (suffix) {
-          OutputBuffer.getInstance().write(ghost(suffix));
-        }
-      }
-
-      // Show line continuation marker if line exceeds terminal width
-      if (visibleLength(prefix + line) > this.termWidth) {
-        // Truncated display — we'd need horizontal scrolling for full editing
-        // For now, just show what fits
-      }
-    }
-
-    // Render @mention popup below the input (C3)
-    if (viewState.mode === 'mention' && mentionPopupItems.length > 0) {
-      const popupRow = textStart + this.lines.length;
-      const maxShow = Math.min(mentionPopupItems.length, 5);
-
-      if (popupRow <= rows) {
-        const header = sectionLabel(` FILES MATCHING @${viewState.mentionQuery ?? ''}`);
-        OutputBuffer.getInstance().write(
-          `\x1b[${popupRow};1H${truncate(header, this.termWidth - 1)}`,
-        );
-
+        const maxShow = Math.min(queuedMessages.length, 3);
         for (let i = 0; i < maxShow; i++) {
-          const r = popupRow + 1 + i;
+          const r = startRow + 1 + i;
           if (r > rows) break;
-          const item = mentionPopupItems[i];
+          const preview = sanitizeUserText(queuedMessages[i] ?? "");
+          const oneLine = preview.replace(/\s+/g, " ").trim();
+          const truncated =
+            oneLine.length > this.termWidth - 4
+              ? oneLine.slice(0, this.termWidth - 7) + "..."
+              : oneLine;
+          OutputBuffer.getInstance().write(
+            `\x1b[${r};1H${dim(` ↳ ${truncated}`)}`,
+          );
+        }
+        if (queuedMessages.length > maxShow) {
+          const r = startRow + 1 + maxShow;
+          if (r <= rows) {
+            OutputBuffer.getInstance().write(
+              `\x1b[${r};1H${ghost(`   +${queuedMessages.length - maxShow} more queued`)}`,
+            );
+          }
+        }
+      }
+
+      const textStartBase = startRow + queuedLines;
+
+      // Render slash command popup above prompt area (C3)
+      if (viewState.mode === "slash" && slashPopupItems.length > 0) {
+        const maxShow = Math.min(slashPopupItems.length, 5);
+        const sepRow = startRow;
+        if (sepRow <= rows) {
+          OutputBuffer.getInstance().write(
+            `\x1b[${sepRow};1H${border("─".repeat(Math.min(this.termWidth, 40)))}`,
+          );
+        }
+        for (let i = 0; i < maxShow; i++) {
+          const r = sepRow + 1 + i;
+          if (r > rows) break;
+          const item = slashPopupItems[i];
           if (!item) break;
-          const isSelected = i === viewState.selectedIndex;
-          const displayText = ` ${item.label}${item.description ? `  ${ghost(item.description)}` : ''}`;
+          const displayText = ` ${item.label.padEnd(12)} ${item.description}`;
           const truncated = truncate(displayText, this.termWidth - 1);
-          if (isSelected) {
-            OutputBuffer.getInstance().write(`\x1b[${r};1H${bgSelected(truncated)}`);
+          if (i === viewState.selectedIndex) {
+            OutputBuffer.getInstance().write(
+              `\x1b[${r};1H${bgSelected(truncated)}`,
+            );
           } else {
             OutputBuffer.getInstance().write(`\x1b[${r};1H${dim(truncated)}`);
           }
         }
       }
-    }
 
-    // Render completion popup below the input (C3)
-    if (viewState.mode === 'completer' && completerItems.length > 0) {
-      const popupRow = textStart + this.lines.length + mentionPopupHeight;
-      if (popupRow <= rows) {
-        const maxPopupLines = Math.min(completerItems.length, 5);
-        OutputBuffer.getInstance().write(`\x1b[${popupRow};1H${border('─'.repeat(Math.min(this.termWidth, 40)))}`);
-        for (let i = 0; i < maxPopupLines; i++) {
-          const r = popupRow + 1 + i;
-          if (r > rows) break;
-          const item = completerItems[i];
-          if (!item) break;
-          const entry = item.label;
-          const highlighted =
-            i === viewState.selectedIndex
-              ? bgSelected(` ${primary(entry.padEnd(Math.min(this.termWidth - 2, 38)))} `)
-              : ` ${muted(entry)}`;
-          OutputBuffer.getInstance().write(`\x1b[${r};1H${highlighted}`);
-        }
-        if (completerItems.length > maxPopupLines) {
-          const r = popupRow + 1 + maxPopupLines;
-          if (r <= rows) {
+      const textStart = textStartBase + slashPopupLines;
+
+      // Render each line of the text buffer
+      for (let i = 0; i < this.lines.length; i++) {
+        const row = textStart + i;
+        if (row > rows) break; // Can't render beyond screen
+
+        const prefix =
+          i === 0 ? this.config.prompt : this.config.continuationPrompt;
+        const line = sanitizeUserText(this.lines[i] ?? "");
+
+        OutputBuffer.getInstance().write(`\x1b[${row};1H`);
+
+        if (this.visualStart) {
+          const selRange = this.getSelectionColRange(i);
+          if (selRange) {
+            const before = line.slice(0, selRange.start);
+            const selected = line.slice(selRange.start, selRange.end);
+            const after = line.slice(selRange.end);
+            const selectionHighlight = selected
+              ? bgSelected(primary(selected))
+              : "";
             OutputBuffer.getInstance().write(
-              `\x1b[${r};1H${ghost(`  ... ${completerItems.length - maxPopupLines} more`)}`,
+              activeAccent(prefix) +
+                primary(before) +
+                selectionHighlight +
+                primary(after),
             );
+          } else {
+            OutputBuffer.getInstance().write(
+              activeAccent(prefix) + primary(line),
+            );
+          }
+        } else {
+          OutputBuffer.getInstance().write(
+            activeAccent(prefix) + primary(line),
+          );
+        }
+
+        // Ghost text (inline autocomplete)
+        if (i === this.cursorLine) {
+          const suffix = sanitizeUserText(this.ac.getGhostText() ?? "");
+          if (suffix) {
+            OutputBuffer.getInstance().write(ghost(suffix));
+          }
+        }
+
+        // Show line continuation marker if line exceeds terminal width
+        if (visibleLength(prefix + line) > this.termWidth) {
+          // Truncated display — we'd need horizontal scrolling for full editing
+          // For now, just show what fits
+        }
+      }
+
+      // Render @mention popup below the input (C3)
+      if (viewState.mode === "mention" && mentionPopupItems.length > 0) {
+        const popupRow = textStart + this.lines.length;
+        const maxShow = Math.min(mentionPopupItems.length, 5);
+
+        if (popupRow <= rows) {
+          const header = sectionLabel(
+            ` FILES MATCHING @${viewState.mentionQuery ?? ""}`,
+          );
+          OutputBuffer.getInstance().write(
+            `\x1b[${popupRow};1H${truncate(header, this.termWidth - 1)}`,
+          );
+
+          for (let i = 0; i < maxShow; i++) {
+            const r = popupRow + 1 + i;
+            if (r > rows) break;
+            const item = mentionPopupItems[i];
+            if (!item) break;
+            const isSelected = i === viewState.selectedIndex;
+            const displayText = ` ${item.label}${item.description ? `  ${ghost(item.description)}` : ""}`;
+            const truncated = truncate(displayText, this.termWidth - 1);
+            if (isSelected) {
+              OutputBuffer.getInstance().write(
+                `\x1b[${r};1H${bgSelected(truncated)}`,
+              );
+            } else {
+              OutputBuffer.getInstance().write(`\x1b[${r};1H${dim(truncated)}`);
+            }
           }
         }
       }
-    }
 
-    // Show vim mode indicator (right-aligned, dimmed)
-    if (this.mode === 'normal') {
-      const indicator = '-- NORMAL --';
-      const indicatorCol = Math.max(1, this.termWidth - indicator.length + 1);
-      OutputBuffer.getInstance().write(`\x1b[1;${indicatorCol}H${dim(indicator)}`);
-    } else if (this.mode === 'visual') {
-      const vtype = this.visualMode === 'line' ? 'LINE' : 'VISUAL';
-      const indicator = `-- ${vtype} --`;
-      const indicatorCol = Math.max(1, this.termWidth - indicator.length + 1);
-      OutputBuffer.getInstance().write(`\x1b[1;${indicatorCol}H${dim(indicator)}`);
-    }
+      // Render completion popup below the input (C3)
+      if (viewState.mode === "completer" && completerItems.length > 0) {
+        const popupRow = textStart + this.lines.length + mentionPopupHeight;
+        if (popupRow <= rows) {
+          const maxPopupLines = Math.min(completerItems.length, 5);
+          OutputBuffer.getInstance().write(
+            `\x1b[${popupRow};1H${border("─".repeat(Math.min(this.termWidth, 40)))}`,
+          );
+          for (let i = 0; i < maxPopupLines; i++) {
+            const r = popupRow + 1 + i;
+            if (r > rows) break;
+            const item = completerItems[i];
+            if (!item) break;
+            const entry = item.label;
+            const highlighted =
+              i === viewState.selectedIndex
+                ? bgSelected(
+                    ` ${primary(entry.padEnd(Math.min(this.termWidth - 2, 38)))} `,
+                  )
+                : ` ${muted(entry)}`;
+            OutputBuffer.getInstance().write(`\x1b[${r};1H${highlighted}`);
+          }
+          if (completerItems.length > maxPopupLines) {
+            const r = popupRow + 1 + maxPopupLines;
+            if (r <= rows) {
+              OutputBuffer.getInstance().write(
+                `\x1b[${r};1H${ghost(`  ... ${completerItems.length - maxPopupLines} more`)}`,
+              );
+            }
+          }
+        }
+      }
 
-    // Position cursor
-    this.renderCursor();
-    cursorRestored = true;
+      // Show vim mode indicator (right-aligned, dimmed)
+      if (this.mode === "normal") {
+        const indicator = "-- NORMAL --";
+        const indicatorCol = Math.max(1, this.termWidth - indicator.length + 1);
+        OutputBuffer.getInstance().write(
+          `\x1b[1;${indicatorCol}H${dim(indicator)}`,
+        );
+      } else if (this.mode === "visual") {
+        const vtype = this.visualMode === "line" ? "LINE" : "VISUAL";
+        const indicator = `-- ${vtype} --`;
+        const indicatorCol = Math.max(1, this.termWidth - indicator.length + 1);
+        OutputBuffer.getInstance().write(
+          `\x1b[1;${indicatorCol}H${dim(indicator)}`,
+        );
+      }
 
-    // Restore saved position (actually we overwrite with cursor position, so skip restore)
+      // Position cursor
+      this.renderCursor();
+      cursorRestored = true;
+
+      // Restore saved position (actually we overwrite with cursor position, so skip restore)
     } finally {
       if (!cursorRestored) {
-        buf.write('\x1b[?25h');
+        buf.write("\x1b[?25h");
       }
       if (BABEL_PROMPT_BUFFERED) buf.endFrame();
     }
@@ -2059,43 +2237,55 @@ export class PromptInput {
     let cursorRestored = false;
     if (BABEL_PROMPT_BUFFERED) buf.beginFrame();
     try {
+      const viewState = this.typeahead.getViewState();
+      const rows = process.stdout.rows || 24;
+      const queuedMessages = this.config.getQueuedMessages?.() ?? [];
+      const queuedLines =
+        queuedMessages.length > 0 ? Math.min(queuedMessages.length, 3) + 1 : 0;
+      const slashPopupItems = viewState.mode === "slash" ? viewState.items : [];
+      const slashPopupLines =
+        slashPopupItems.length > 0
+          ? Math.min(slashPopupItems.length, 5) + 1
+          : 0;
+      const mentionPopupItems =
+        viewState.mode === "mention" ? viewState.items : [];
+      const mentionPopupHeight =
+        mentionPopupItems.length > 0
+          ? Math.min(mentionPopupItems.length, 5) + 1
+          : 0;
+      const completerItems =
+        viewState.mode === "completer" ? viewState.items : [];
+      const completerPopupHeight =
+        completerItems.length > 0 ? Math.min(completerItems.length, 5) + 1 : 0;
+      const inputHeight = Math.min(
+        this.lines.length + completerPopupHeight + mentionPopupHeight,
+        this.maxInputHeight + completerPopupHeight + mentionPopupHeight,
+      );
+      const startRow = Math.max(
+        1,
+        rows - inputHeight - slashPopupLines - queuedLines,
+      );
 
-    const viewState = this.typeahead.getViewState();
-    const rows = process.stdout.rows || 24;
-    const queuedMessages = this.config.getQueuedMessages?.() ?? [];
-    const queuedLines = queuedMessages.length > 0 ? Math.min(queuedMessages.length, 3) + 1 : 0;
-    const slashPopupItems = viewState.mode === 'slash' ? viewState.items : [];
-    const slashPopupLines = slashPopupItems.length > 0
-      ? Math.min(slashPopupItems.length, 5) + 1
-      : 0;
-    const mentionPopupItems = viewState.mode === 'mention' ? viewState.items : [];
-    const mentionPopupHeight = mentionPopupItems.length > 0
-      ? Math.min(mentionPopupItems.length, 5) + 1
-      : 0;
-    const completerItems = viewState.mode === 'completer' ? viewState.items : [];
-    const completerPopupHeight = completerItems.length > 0
-      ? Math.min(completerItems.length, 5) + 1
-      : 0;
-    const inputHeight = Math.min(
-      this.lines.length + completerPopupHeight + mentionPopupHeight,
-      this.maxInputHeight + completerPopupHeight + mentionPopupHeight,
-    );
-    const startRow = Math.max(1, rows - inputHeight - slashPopupLines - queuedLines);
-
-    // G6 — CJK-aware caret parking (textStart = startRow + queued + slash)
-    const { row: finalRow, col: finalCol } = computeImeCursorPos({
-      startRow, queuedLines, slashPopupLines,
-      cursorLine: this.cursorLine, cursorCol: this.cursorCol,
-      prompt: this.config.prompt, continuationPrompt: this.config.continuationPrompt,
-      termRows: rows, termCols: this.termWidth,
-    });
-    const show = this.cursorVisible || shouldParkImeCursor(this.imeComposing);
-    buf.write(`${cupSequence({ row: finalRow, col: finalCol })}${show ? '\x1b[?25h' : '\x1b[?25l'}`);
-    cursorRestored = true;
-
+      // G6 — CJK-aware caret parking (textStart = startRow + queued + slash)
+      const { row: finalRow, col: finalCol } = computeImeCursorPos({
+        startRow,
+        queuedLines,
+        slashPopupLines,
+        cursorLine: this.cursorLine,
+        cursorCol: this.cursorCol,
+        prompt: this.config.prompt,
+        continuationPrompt: this.config.continuationPrompt,
+        termRows: rows,
+        termCols: this.termWidth,
+      });
+      const show = this.cursorVisible || shouldParkImeCursor(this.imeComposing);
+      buf.write(
+        `${cupSequence({ row: finalRow, col: finalCol })}${show ? "\x1b[?25h" : "\x1b[?25l"}`,
+      );
+      cursorRestored = true;
     } finally {
       if (!cursorRestored) {
-        buf.write('\x1b[?25h');
+        buf.write("\x1b[?25h");
       }
       if (BABEL_PROMPT_BUFFERED) buf.endFrame();
     }
@@ -2105,14 +2295,14 @@ export class PromptInput {
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
 function findCommonPrefix(strings: string[]): string {
-  if (strings.length === 0) return '';
-  let prefix = strings[0] ?? '';
+  if (strings.length === 0) return "";
+  let prefix = strings[0] ?? "";
   for (let i = 1; i < strings.length; i++) {
-    const s = strings[i] ?? '';
+    const s = strings[i] ?? "";
     let j = 0;
     while (j < prefix.length && j < s.length && prefix[j] === s[j]) j++;
     prefix = prefix.slice(0, j);
-    if (prefix === '') break;
+    if (prefix === "") break;
   }
   return prefix;
 }

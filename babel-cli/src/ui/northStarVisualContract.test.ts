@@ -5,9 +5,9 @@
  * it does not create screenshot-only product state or assert a new renderer.
  */
 
-import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import test from "node:test";
 
 import {
   babelDawn,
@@ -18,7 +18,7 @@ import {
   babelPrismNight,
   BUILTIN_THEMES,
   resolveBuiltinTheme,
-} from './tokens.js';
+} from "./tokens.js";
 import {
   error,
   focusedBorder,
@@ -26,12 +26,12 @@ import {
   stripAnsi,
   success,
   warning,
-} from './theme.js';
-import { Box, Text } from './primitives.js';
-import { computeScreenLayout } from './screenLayout.js';
-import { measureDisplayWidth, wrapPrefixedBlock } from './textLayout.js';
-import { scanTerminalTokens } from './terminalSequenceScanner.js';
-import { VtTestBackend } from './vtTestBackend.js';
+} from "./theme.js";
+import { Box, Text } from "./primitives.js";
+import { computeScreenLayout } from "./screenLayout.js";
+import { measureDisplayWidth, wrapPrefixedBlock } from "./textLayout.js";
+import { scanTerminalTokens } from "./terminalSequenceScanner.js";
+import { VtTestBackend } from "./vtTestBackend.js";
 
 const VIEWPORTS = [
   { cols: 80, rows: 24 },
@@ -41,35 +41,35 @@ const VIEWPORTS = [
 ] as const;
 
 const semanticTrueColorRoles = [
-  'canvas',
-  'surface',
-  'raised',
-  'selected',
-  'border',
-  'borderFocused',
-  'accent',
-  'accentHigh',
-  'textPrimary',
-  'textMuted',
-  'success',
-  'warning',
-  'error',
+  "canvas",
+  "surface",
+  "raised",
+  "selected",
+  "border",
+  "borderFocused",
+  "accent",
+  "accentHigh",
+  "textPrimary",
+  "textMuted",
+  "success",
+  "warning",
+  "error",
 ] as const;
 
 const semanticFallbackRoles = [
-  'canvas',
-  'surface',
-  'raised',
-  'selected',
-  'border',
-  'borderFocused',
-  'accent',
-  'accentHigh',
-  'textPrimary',
-  'textMuted',
-  'success',
-  'warning',
-  'error',
+  "canvas",
+  "surface",
+  "raised",
+  "selected",
+  "border",
+  "borderFocused",
+  "accent",
+  "accentHigh",
+  "textPrimary",
+  "textMuted",
+  "success",
+  "warning",
+  "error",
 ] as const;
 
 function assertClosedTerminalStyles(line: string): void {
@@ -79,9 +79,9 @@ function assertClosedTerminalStyles(line: string): void {
   let attributeOpen = false;
 
   for (const token of tokens) {
-    if (token.type === 'osc8_open') hyperlinkOpen = true;
-    if (token.type === 'osc8_close') hyperlinkOpen = false;
-    if (token.type !== 'sgr') continue;
+    if (token.type === "osc8_open") hyperlinkOpen = true;
+    if (token.type === "osc8_close") hyperlinkOpen = false;
+    if (token.type !== "sgr") continue;
 
     const params = token.params ?? [];
     if (params.includes(0)) {
@@ -90,7 +90,12 @@ function assertClosedTerminalStyles(line: string): void {
     } else if (params.includes(39)) {
       foregroundOpen = false;
     } else if (
-      params.some((param) => param >= 30 || (param >= 90 && param <= 107))
+      params.some(
+        (param) =>
+          (param >= 30 && param <= 37) ||
+          (param >= 90 && param <= 97) ||
+          param === 38,
+      )
     ) {
       foregroundOpen = true;
     }
@@ -115,29 +120,30 @@ function assertClosedTerminalStyles(line: string): void {
   );
 }
 
-test('North Star dusk palette exposes centralized semantic roles', () => {
+test("North Star dusk palette exposes centralized semantic roles", () => {
   assert.equal(babelDusk.trueColor.canvas, babelDusk.trueColor.background);
   assert.equal(babelDusk.trueColor.surface, babelDusk.trueColor.panel);
   assert.equal(babelDusk.trueColor.raised, babelDusk.trueColor.panelRaised);
-  assert.equal(babelDusk.trueColor.selected, '#0A1C45');
-  assert.equal(babelDusk.trueColor.borderFocused, '#2E6CFF');
-  assert.equal(babelDusk.trueColor.accentHigh, '#5F8FFF');
-  assert.equal(babelDusk.trueColor.success, '#43C57B');
+  assert.equal(babelDusk.trueColor.selected, "#0A1C45");
+  assert.equal(babelDusk.trueColor.borderFocused, "#2E6CFF");
+  assert.equal(babelDusk.trueColor.accentHigh, "#5F8FFF");
+  assert.equal(babelDusk.trueColor.success, "#43C57B");
   assert.equal(babelDusk.ansiFallback.borderFocused, 33);
   assert.equal(babelDusk.ansiFallback.accentHigh, 75);
-  // Backgrounds use reverse video in degraded terminals; the neutral track
-  // fallback remains a foreground token and is intentionally conservative.
-  assert.equal(babelDusk.ansiFallback.meterTrack, 8);
+  assert.equal(
+    babelDusk.ansiFallback.meterTrack,
+    babelDusk.ansiFallback.raised,
+  );
 
   for (const role of semanticTrueColorRoles) {
-    assert.match(babelDusk.trueColor[role] ?? '', /^#[0-9A-F]{6}$/i, role);
+    assert.match(babelDusk.trueColor[role] ?? "", /^#[0-9A-F]{6}$/i, role);
   }
   for (const role of semanticFallbackRoles) {
-    assert.equal(typeof babelDusk.ansiFallback[role], 'number', role);
+    assert.equal(typeof babelDusk.ansiFallback[role], "number", role);
   }
 });
 
-test('all built-in alternate themes remain selectable and semantically complete', () => {
+test("all built-in alternate themes remain selectable and semantically complete", () => {
   const themes = [
     babelDusk,
     babelDawn,
@@ -160,27 +166,27 @@ test('all built-in alternate themes remain selectable and semantically complete'
   }
 });
 
-test('existing bordered surface stays frame-stable at required viewport sizes', () => {
+test("existing bordered surface stays frame-stable at required viewport sizes", () => {
   const content = new Text({
-    content: 'Long existing content remains clipped within the frame: 你好 😀',
-    style: 'primary',
+    content: "Long existing content remains clipped within the frame: 你好 😀",
+    style: "primary",
   });
 
   for (const { cols, rows } of VIEWPORTS) {
     const frame = new Box({
       children: [content],
-      border: 'single',
-      borderColor: 'border',
-      background: 'surface',
+      border: "single",
+      borderColor: "border",
+      background: "surface",
       focused: true,
-      title: 'CHAT',
+      title: "CHAT",
       width: cols,
       height: rows,
       // Keep the exact outer-frame contract exercised here. The existing
       // padding path has separate legacy sizing behavior.
       padding: 0,
     }).render();
-    const lines = frame.split('\n');
+    const lines = frame.split("\n");
 
     assert.equal(lines.length, rows, `${cols}x${rows} row drift`);
     for (const line of lines) {
@@ -197,7 +203,7 @@ test('existing bordered surface stays frame-stable at required viewport sizes', 
     // write followed by LF as an additional autowrap. The final cell is
     // already covered by the display-width assertion above; omitting it here
     // also avoids the fixture scrolling after a bottom-right write.
-    frame.split('\n').forEach((line, index) => {
+    frame.split("\n").forEach((line, index) => {
       terminal.write(`\x1b[${index + 1};1H${stripAnsi(line).slice(0, -1)}`);
     });
     const screenshot = terminal.screenshotStripped();
@@ -208,23 +214,23 @@ test('existing bordered surface stays frame-stable at required viewport sizes', 
       rows,
       `${cols}x${rows} screen row drift`,
     );
-    assert.equal(screenshot.lines[0]!.charAt(0), '┌');
-    assert.equal(screenshot.lines.at(-1)!.charAt(0), '└');
+    assert.equal(screenshot.lines[0]!.charAt(0), "┌");
+    assert.equal(screenshot.lines.at(-1)!.charAt(0), "└");
   }
 });
 
-test('long ANSI and Unicode content wraps within every required viewport width', () => {
+test("long ANSI and Unicode content wraps within every required viewport width", () => {
   const body =
-    'Investigate the long-running task, preserve focus, and report the result: 你好 😀 🔥 café ' +
-    'without overflowing the terminal frame.';
+    "Investigate the long-running task, preserve focus, and report the result: 你好 😀 🔥 café " +
+    "without overflowing the terminal frame.";
   const styledBody = success(body);
 
   for (const { cols } of VIEWPORTS) {
     const lines = wrapPrefixedBlock(styledBody, {
-      firstPrefix: '  > ',
-      continuationPrefix: '    ',
+      firstPrefix: "  > ",
+      continuationPrefix: "    ",
       width: cols,
-      longTokenPolicy: 'hard-wrap',
+      longTokenPolicy: "hard-wrap",
     });
 
     const bodyWidth = measureDisplayWidth(styledBody);
@@ -239,20 +245,20 @@ test('long ANSI and Unicode content wraps within every required viewport width',
       assert.equal(
         line,
         line.trimEnd(),
-        'wrapped lines must not drift with trailing spaces',
+        "wrapped lines must not drift with trailing spaces",
       );
       assertClosedTerminalStyles(line);
     }
-    assert.match(stripAnsi(lines.join('\n')), /你好 😀 🔥 café/);
+    assert.match(stripAnsi(lines.join("\n")), /你好 😀 🔥 café/);
   }
 });
 
-test('focus and execution states remain distinguishable without relying on color', () => {
-  const focused = stripAnsi(focusedBorder('focused composer'));
-  const running = stripAnsi(warning('◐ running'));
-  const passed = stripAnsi(success('✔ success'));
-  const failed = stripAnsi(error('✖ error'));
-  const metadata = stripAnsi(muted('secondary metadata'));
+test("focus and execution states remain distinguishable without relying on color", () => {
+  const focused = stripAnsi(focusedBorder("focused composer"));
+  const running = stripAnsi(warning("◐ running"));
+  const passed = stripAnsi(success("✔ success"));
+  const failed = stripAnsi(error("✖ error"));
+  const metadata = stripAnsi(muted("secondary metadata"));
 
   assert.notEqual(focused, metadata);
   assert.notEqual(running, passed);
@@ -262,10 +268,10 @@ test('focus and execution states remain distinguishable without relying on color
   assert.match(failed, /error/);
 });
 
-test('screen geometry remains aligned and degrades only for constrained heights', () => {
+test("screen geometry remains aligned and degrades only for constrained heights", () => {
   for (const { cols, rows } of VIEWPORTS) {
     const layout = computeScreenLayout(rows, cols);
-    assert.equal(layout.mode, 'normal');
+    assert.equal(layout.mode, "normal");
     assert.equal(layout.rows, rows);
     assert.equal(layout.cols, cols);
     assert.equal(layout.contentTop, 3);
@@ -274,11 +280,11 @@ test('screen geometry remains aligned and degrades only for constrained heights'
     assert.equal(layout.contentRowCount, rows - 4);
   }
 
-  assert.equal(computeScreenLayout(4, 80).mode, 'compact');
-  assert.equal(computeScreenLayout(3, 80).mode, 'linear');
+  assert.equal(computeScreenLayout(4, 80).mode, "compact");
+  assert.equal(computeScreenLayout(3, 80).mode, "linear");
 });
 
-test('degraded 256-color fallback uses semantic roles and preserves reset boundaries', () => {
+test("degraded 256-color fallback uses semantic roles and preserves reset boundaries", () => {
   const script = `
     import { accent, bgSelected, focusedBorder, stripAnsi, success } from './src/ui/theme.js';
     const rendered = [accent('accent'), focusedBorder('focus'), success('success'), bgSelected('row')].join('|');
@@ -286,11 +292,11 @@ test('degraded 256-color fallback uses semantic roles and preserves reset bounda
   `;
   const result = spawnSync(
     process.execPath,
-    ['--import', 'tsx', '--input-type=module', '-e', script],
+    ["--import", "tsx", "--input-type=module", "-e", script],
     {
       cwd: process.cwd(),
-      encoding: 'utf8',
-      env: { ...process.env, FORCE_COLOR: '1', NO_COLOR: '' },
+      encoding: "utf8",
+      env: { ...process.env, FORCE_COLOR: "1", NO_COLOR: "" },
       timeout: 15_000,
     },
   );
@@ -300,9 +306,75 @@ test('degraded 256-color fallback uses semantic roles and preserves reset bounda
     rendered: string;
     plain: string;
   };
-  assert.equal(parsed.plain, 'accent|focus|success|row');
+  assert.equal(parsed.plain, "accent|focus|success|row");
   assert.match(parsed.rendered, /\u001B\[38;5;33maccent\u001B\[39m/);
   assert.match(parsed.rendered, /\u001B\[38;5;78m/);
   assert.match(parsed.rendered, /\u001B\[48;5;\d+mrow\u001B\[49m/);
   assert.doesNotMatch(parsed.rendered, /#[0-9A-F]{6}/i);
+});
+
+test("degraded surfaces follow the active Dusk, Dawn, and HC themes", () => {
+  const script = `
+    import { accent, bgSelected, headerBg } from './src/ui/theme.js';
+    import { setActiveTheme } from './src/ui/tokens.js';
+    import { createVirtualCellGrid } from './src/ui/observe/virtualCellGrid.js';
+    const result = {};
+    for (const name of ['babel-dusk', 'babel-dawn', 'babel-hc']) {
+      setActiveTheme(name);
+      const grid = createVirtualCellGrid(80, 2);
+      grid.apply(headerBg('HEADER') + bgSelected(accent('SELECTED')));
+      result[name] = grid.snapshot().styleRuns;
+    }
+    process.stdout.write(JSON.stringify(result));
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", script],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, FORCE_COLOR: "1", NO_COLOR: "" },
+      timeout: 15_000,
+    },
+  );
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+  const observed = JSON.parse(result.stdout.trim()) as Record<
+    string,
+    Array<{
+      attr: {
+        fg: { kind: string; index?: number };
+        bg: { kind: string; index?: number };
+        inverse: boolean;
+      };
+    }>
+  >;
+  for (const name of ["babel-dusk", "babel-dawn", "babel-hc"]) {
+    const theme = resolveBuiltinTheme(name);
+    const runs = observed[name] ?? [];
+    assert.ok(runs.length > 0, `${name} should produce style runs`);
+    assert.ok(
+      runs.every((run) => !run.attr.inverse),
+      `${name} used inverse video`,
+    );
+    assert.ok(
+      runs.some(
+        (run) =>
+          run.attr.bg.kind === "indexed" &&
+          run.attr.bg.index === theme.ansiFallback.surface,
+      ),
+      `${name} header did not use its active surface fallback`,
+    );
+    assert.ok(
+      runs.some(
+        (run) =>
+          run.attr.bg.kind === "indexed" &&
+          run.attr.bg.index === theme.ansiFallback.selected,
+      ),
+      `${name} selection did not use its active selected fallback`,
+    );
+    assert.ok(
+      runs.some((run) => run.attr.fg.kind === "indexed"),
+      `${name} did not retain indexed foreground evidence`,
+    );
+  }
 });

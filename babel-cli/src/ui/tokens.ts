@@ -1,6 +1,6 @@
 export interface ThemeDefinition {
   name: string;
-  mode: 'dark' | 'light';
+  mode: "dark" | "light";
   trueColor: Record<string, string>;
   ansiFallback: Record<string, number>;
 }
@@ -10,16 +10,16 @@ function presentationTrueColor(
   core: Record<string, string>,
 ): Record<string, string> {
   return {
-    syntaxKeyword: core['accent'] ?? '',
-    syntaxType: core['accentSecondary'] ?? '',
-    syntaxString: core['accentStrong'] ?? '',
-    syntaxNumber: core['accentSecondary'] ?? '',
-    syntaxComment: core['textGhost'] ?? '',
-    syntaxFunction: core['textPrimary'] ?? '',
-    identityPrimary: core['accent'] ?? '',
-    identitySecondary: core['accentSecondary'] ?? '',
-    activityTool: core['info'] ?? '',
-    activityModel: core['accentSecondary'] ?? '',
+    syntaxKeyword: core["accent"] ?? "",
+    syntaxType: core["accentSecondary"] ?? "",
+    syntaxString: core["accentStrong"] ?? "",
+    syntaxNumber: core["accentSecondary"] ?? "",
+    syntaxComment: core["textGhost"] ?? "",
+    syntaxFunction: core["textPrimary"] ?? "",
+    identityPrimary: core["accent"] ?? "",
+    identitySecondary: core["accentSecondary"] ?? "",
+    activityTool: core["info"] ?? "",
+    activityModel: core["accentSecondary"] ?? "",
   };
 }
 
@@ -27,16 +27,16 @@ function presentationFallback(
   core: Record<string, number>,
 ): Record<string, number> {
   return {
-    syntaxKeyword: core['accent'] ?? 183,
-    syntaxType: core['accentSecondary'] ?? 147,
-    syntaxString: core['accentStrong'] ?? 134,
-    syntaxNumber: core['accentSecondary'] ?? 147,
-    syntaxComment: core['textGhost'] ?? 60,
-    syntaxFunction: core['textPrimary'] ?? 255,
-    identityPrimary: core['accent'] ?? 183,
-    identitySecondary: core['accentSecondary'] ?? 147,
-    activityTool: core['info'] ?? 117,
-    activityModel: core['accentSecondary'] ?? 147,
+    syntaxKeyword: core["accent"] ?? 183,
+    syntaxType: core["accentSecondary"] ?? 147,
+    syntaxString: core["accentStrong"] ?? 134,
+    syntaxNumber: core["accentSecondary"] ?? 147,
+    syntaxComment: core["textGhost"] ?? 60,
+    syntaxFunction: core["textPrimary"] ?? 255,
+    identityPrimary: core["accent"] ?? 183,
+    identitySecondary: core["accentSecondary"] ?? 147,
+    activityTool: core["info"] ?? 117,
+    activityModel: core["accentSecondary"] ?? 147,
   };
 }
 
@@ -50,35 +50,49 @@ function semanticTrueColor(
   core: Record<string, string>,
 ): Record<string, string> {
   return {
-    canvas: core['background'] ?? '',
-    surface: core['panel'] ?? '',
-    raised: core['panelRaised'] ?? '',
-    selected: core['selected'] ?? core['panelRaised'] ?? '',
+    canvas: core["background"] ?? "",
+    surface: core["panel"] ?? "",
+    raised: core["panelRaised"] ?? "",
+    selected: core["selected"] ?? core["panelRaised"] ?? "",
     borderFocused:
-      core['borderFocused'] ?? core['accentActive'] ?? core['accent'] ?? '',
-    accentHigh: core['accentHigh'] ?? core['accent'] ?? '',
-    meterTrack: core['meterTrack'] ?? core['panelRaised'] ?? '',
+      core["borderFocused"] ?? core["accentActive"] ?? core["accent"] ?? "",
+    accentHigh: core["accentHigh"] ?? core["accent"] ?? "",
+    meterTrack: core["meterTrack"] ?? core["panelRaised"] ?? "",
   };
 }
 
 function semanticFallback(
   core: Record<string, number>,
 ): Record<string, number> {
+  const derived = (fallbackRole: string): number => {
+    const explicitRoles = [
+      fallbackRole,
+      fallbackRole === "canvas" ? "background" : undefined,
+      fallbackRole === "surface" ? "panel" : undefined,
+      fallbackRole === "raised" ? "panelRaised" : undefined,
+    ].filter((role): role is string => role !== undefined);
+    for (const role of explicitRoles) {
+      const explicit = core[role];
+      if (explicit !== undefined) return explicit;
+    }
+    return 0;
+  };
+
   return {
-    canvas: core['background'] ?? 0,
-    surface: core['panel'] ?? 0,
-    raised: core['panelRaised'] ?? 0,
-    selected: core['selected'] ?? core['panelRaised'] ?? 0,
+    canvas: derived("canvas"),
+    surface: derived("surface"),
+    raised: derived("raised"),
+    selected: derived("selected"),
     borderFocused:
-      core['borderFocused'] ?? core['accentActive'] ?? core['accent'] ?? 7,
-    accentHigh: core['accentHigh'] ?? core['accent'] ?? 7,
-    meterTrack: core['meterTrack'] ?? core['panelRaised'] ?? 8,
+      core["borderFocused"] ?? core["accentActive"] ?? core["accent"] ?? 7,
+    accentHigh: core["accentHigh"] ?? core["accent"] ?? 7,
+    meterTrack: derived("meterTrack"),
   };
 }
 
 function defineTheme(
   name: string,
-  mode: 'dark' | 'light',
+  mode: "dark" | "light",
   trueColor: Record<string, string>,
   ansiFallback: Record<string, number>,
 ): ThemeDefinition {
@@ -99,30 +113,35 @@ function defineTheme(
 }
 
 export const babelDusk: ThemeDefinition = defineTheme(
-  'babel-dusk',
-  'dark',
+  "babel-dusk",
+  "dark",
   {
-    background: '#020817',
-    panel: '#061126',
-    panelRaised: '#0A1C45',
-    selected: '#0A1C45',
-    meterTrack: '#0A1C45',
-    border: '#173B85',
-    borderFocused: '#2E6CFF',
-    textPrimary: '#D7DCFF',
-    textMuted: '#8B95C0',
-    textGhost: '#50628F',
-    accent: '#2E6CFF',
-    accentSecondary: '#A7B7F2',
-    accentActive: '#2E6CFF',
-    accentHigh: '#5F8FFF',
-    accentStrong: '#5F8FFF',
-    info: '#83A8FF',
-    success: '#43C57B',
-    warning: '#E9B949',
-    error: '#F07178',
+    background: "#020817",
+    panel: "#061126",
+    panelRaised: "#0A1C45",
+    selected: "#0A1C45",
+    meterTrack: "#0A1C45",
+    border: "#173B85",
+    borderFocused: "#2E6CFF",
+    textPrimary: "#D7DCFF",
+    textMuted: "#8B95C0",
+    textGhost: "#50628F",
+    accent: "#2E6CFF",
+    accentSecondary: "#A7B7F2",
+    accentActive: "#2E6CFF",
+    accentHigh: "#5F8FFF",
+    accentStrong: "#5F8FFF",
+    info: "#83A8FF",
+    success: "#43C57B",
+    warning: "#E9B949",
+    error: "#F07178",
   },
   {
+    background: 0,
+    panel: 17,
+    panelRaised: 24,
+    selected: 24,
+    meterTrack: 24,
     textPrimary: 255,
     textMuted: 146,
     textGhost: 60,
@@ -141,26 +160,31 @@ export const babelDusk: ThemeDefinition = defineTheme(
 );
 
 export const babelDawn: ThemeDefinition = defineTheme(
-  'babel-dawn',
-  'light',
+  "babel-dawn",
+  "light",
   {
-    background: '#F5F3FF',
-    panel: '#EDEAFA',
-    panelRaised: '#E4E0F5',
-    border: '#AFAFD7',
-    textPrimary: '#1A1530',
-    textMuted: '#5F5F87',
-    textGhost: '#AFAFD7',
-    accent: '#7B4FBF',
-    accentSecondary: '#6B5FCF',
-    accentActive: '#5F3FAF',
-    accentStrong: '#AF2F8F',
-    info: '#2F6FAF',
-    success: '#2F7F4F',
-    warning: '#AF8F2F',
-    error: '#CF3F5F',
+    background: "#F5F3FF",
+    panel: "#EDEAFA",
+    panelRaised: "#E4E0F5",
+    border: "#AFAFD7",
+    textPrimary: "#1A1530",
+    textMuted: "#5F5F87",
+    textGhost: "#AFAFD7",
+    accent: "#7B4FBF",
+    accentSecondary: "#6B5FCF",
+    accentActive: "#5F3FAF",
+    accentStrong: "#AF2F8F",
+    info: "#2F6FAF",
+    success: "#2F7F4F",
+    warning: "#AF8F2F",
+    error: "#CF3F5F",
   },
   {
+    background: 15,
+    panel: 255,
+    panelRaised: 254,
+    selected: 254,
+    meterTrack: 254,
     textPrimary: 0,
     textMuted: 8,
     textGhost: 7,
@@ -177,26 +201,31 @@ export const babelDawn: ThemeDefinition = defineTheme(
 );
 
 export const babelDuskDaltonized: ThemeDefinition = defineTheme(
-  'babel-dusk-daltonized',
-  'dark',
+  "babel-dusk-daltonized",
+  "dark",
   {
-    background: '#0B0A16',
-    panel: '#151326',
-    panelRaised: '#1C1933',
-    border: '#5F5F87',
-    textPrimary: '#F2EFFF',
-    textMuted: '#AFAFD7',
-    textGhost: '#5F5F87',
-    accent: '#D7AFFF',
-    accentSecondary: '#AFAFFF',
-    accentActive: '#AF87FF',
-    accentStrong: '#AF5FD7',
-    info: '#87D7FF',
-    success: '#87AFFF',
-    warning: '#FFD75F',
-    error: '#FF875F',
+    background: "#0B0A16",
+    panel: "#151326",
+    panelRaised: "#1C1933",
+    border: "#5F5F87",
+    textPrimary: "#F2EFFF",
+    textMuted: "#AFAFD7",
+    textGhost: "#5F5F87",
+    accent: "#D7AFFF",
+    accentSecondary: "#AFAFFF",
+    accentActive: "#AF87FF",
+    accentStrong: "#AF5FD7",
+    info: "#87D7FF",
+    success: "#87AFFF",
+    warning: "#FFD75F",
+    error: "#FF875F",
   },
   {
+    background: 0,
+    panel: 234,
+    panelRaised: 235,
+    selected: 235,
+    meterTrack: 235,
     textPrimary: 255,
     textMuted: 146,
     textGhost: 60,
@@ -213,26 +242,31 @@ export const babelDuskDaltonized: ThemeDefinition = defineTheme(
 );
 
 export const babelDawnDaltonized: ThemeDefinition = defineTheme(
-  'babel-dawn-daltonized',
-  'light',
+  "babel-dawn-daltonized",
+  "light",
   {
-    background: '#F5F3FF',
-    panel: '#EDEAFA',
-    panelRaised: '#E4E0F5',
-    border: '#AFAFD7',
-    textPrimary: '#1A1530',
-    textMuted: '#5F5F87',
-    textGhost: '#AFAFD7',
-    accent: '#7B4FBF',
-    accentSecondary: '#6B5FCF',
-    accentActive: '#5F3FAF',
-    accentStrong: '#AF2F8F',
-    info: '#2F6FAF',
-    success: '#3F7FCF',
-    warning: '#AF8F2F',
-    error: '#BF6F3F',
+    background: "#F5F3FF",
+    panel: "#EDEAFA",
+    panelRaised: "#E4E0F5",
+    border: "#AFAFD7",
+    textPrimary: "#1A1530",
+    textMuted: "#5F5F87",
+    textGhost: "#AFAFD7",
+    accent: "#7B4FBF",
+    accentSecondary: "#6B5FCF",
+    accentActive: "#5F3FAF",
+    accentStrong: "#AF2F8F",
+    info: "#2F6FAF",
+    success: "#3F7FCF",
+    warning: "#AF8F2F",
+    error: "#BF6F3F",
   },
   {
+    background: 15,
+    panel: 255,
+    panelRaised: 254,
+    selected: 254,
+    meterTrack: 254,
     textPrimary: 0,
     textMuted: 8,
     textGhost: 7,
@@ -254,26 +288,31 @@ export const babelDawnDaltonized: ThemeDefinition = defineTheme(
  * legibility. Accent colors are selected for ≥7:1 contrast (AAA level).
  */
 export const babelHc: ThemeDefinition = defineTheme(
-  'babel-hc',
-  'dark',
+  "babel-hc",
+  "dark",
   {
-    background: '#0A0A0A',
-    panel: '#141414',
-    panelRaised: '#1E1E1E',
-    border: '#C0C0C0',
-    textPrimary: '#FFFFFF',
-    textMuted: '#D0D0D0',
-    textGhost: '#A0A0A0',
-    accent: '#87CEFF',
-    accentSecondary: '#B0B0FF',
-    accentActive: '#9FC5FF',
-    accentStrong: '#FFB0D0',
-    info: '#87D7FF',
-    success: '#7FFF7F',
-    warning: '#FFFF60',
-    error: '#FF7070',
+    background: "#0A0A0A",
+    panel: "#141414",
+    panelRaised: "#1E1E1E",
+    border: "#C0C0C0",
+    textPrimary: "#FFFFFF",
+    textMuted: "#D0D0D0",
+    textGhost: "#A0A0A0",
+    accent: "#87CEFF",
+    accentSecondary: "#B0B0FF",
+    accentActive: "#9FC5FF",
+    accentStrong: "#FFB0D0",
+    info: "#87D7FF",
+    success: "#7FFF7F",
+    warning: "#FFFF60",
+    error: "#FF7070",
   },
   {
+    background: 0,
+    panel: 233,
+    panelRaised: 234,
+    selected: 234,
+    meterTrack: 234,
     textPrimary: 15,
     textMuted: 7,
     textGhost: 8,
@@ -294,26 +333,31 @@ export const babelHc: ThemeDefinition = defineTheme(
  * Hue choices here are theme-local, not architecture-wide invariants.
  */
 export const babelPrismNight: ThemeDefinition = defineTheme(
-  'babel-prism-night',
-  'dark',
+  "babel-prism-night",
+  "dark",
   {
-    background: '#0B0D12',
-    panel: '#12151D',
-    panelRaised: '#191D28',
-    border: '#303747',
-    textPrimary: '#E6EAF2',
-    textMuted: '#7D899F',
-    textGhost: '#626C7D',
-    accent: '#7C8CFF',
-    accentSecondary: '#A78BFA',
-    accentActive: '#7C8CFF',
-    accentStrong: '#7C8CFF',
-    info: '#55C2E6',
-    success: '#58C99B',
-    warning: '#E8B55B',
-    error: '#ED6A72',
+    background: "#0B0D12",
+    panel: "#12151D",
+    panelRaised: "#191D28",
+    border: "#303747",
+    textPrimary: "#E6EAF2",
+    textMuted: "#7D899F",
+    textGhost: "#626C7D",
+    accent: "#7C8CFF",
+    accentSecondary: "#A78BFA",
+    accentActive: "#7C8CFF",
+    accentStrong: "#7C8CFF",
+    info: "#55C2E6",
+    success: "#58C99B",
+    warning: "#E8B55B",
+    error: "#ED6A72",
   },
   {
+    background: 0,
+    panel: 233,
+    panelRaised: 234,
+    selected: 234,
+    meterTrack: 234,
     textPrimary: 255,
     textMuted: 246,
     textGhost: 243,
@@ -344,7 +388,7 @@ export function resolveBuiltinTheme(
   const theme = BUILTIN_THEMES[name];
   if (!theme) {
     throw new Error(
-      `Unknown Babel theme "${name}". Valid themes: ${Object.keys(BUILTIN_THEMES).join(', ')}`,
+      `Unknown Babel theme "${name}". Valid themes: ${Object.keys(BUILTIN_THEMES).join(", ")}`,
     );
   }
   return theme;
@@ -361,10 +405,10 @@ export function previewBuiltinTheme(name: string = babelDusk.name): string {
     `path: ${theme.trueColor.info} / ${theme.ansiFallback.info}`,
     `passed: ${theme.trueColor.success} / ${theme.ansiFallback.success}`,
     `failed: ${theme.trueColor.error} / ${theme.ansiFallback.error}`,
-  ].join('\n');
+  ].join("\n");
 }
 
-let _activeThemeName: string = process.env['BABEL_THEME'] || babelDusk.name;
+let _activeThemeName: string = process.env["BABEL_THEME"] || babelDusk.name;
 let _activeTheme: ThemeDefinition = resolveBuiltinTheme(_activeThemeName);
 
 export function getActiveTheme(): ThemeDefinition {
@@ -405,23 +449,23 @@ export const FALLBACK_FG: Record<string, number | undefined> = {
 };
 
 export const BADGE_TONES: Record<string, string> = {
-  PASS: 'success',
-  ACTIVE: 'accentActive',
-  PENDING: 'textMuted',
-  READY: 'accentActive',
-  FAIL: 'error',
-  BLOCKED: 'warning',
-  VERIFIED: 'success',
-  DIRECT: 'textMuted',
-  AUTONOMOUS: 'accentActive',
+  PASS: "success",
+  ACTIVE: "accentActive",
+  PENDING: "textMuted",
+  READY: "accentActive",
+  FAIL: "error",
+  BLOCKED: "warning",
+  VERIFIED: "success",
+  DIRECT: "textMuted",
+  AUTONOMOUS: "accentActive",
 };
 
 export const STAGE_STATE_SYMBOLS: Record<string, string> = {
-  PASS: '●',
-  ACTIVE: '◐',
-  PENDING: '○',
-  FAIL: '✕',
-  BLOCKED: '■',
+  PASS: "●",
+  ACTIVE: "◐",
+  PENDING: "○",
+  FAIL: "✕",
+  BLOCKED: "■",
 };
 
-export const PIPELINE_STAGES: string[] = ['Analyze', 'Plan', 'Review', 'Apply'];
+export const PIPELINE_STAGES: string[] = ["Analyze", "Plan", "Review", "Apply"];

@@ -1,15 +1,15 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import test from "node:test";
 
-import { renderChatTranscript, renderChatTurn } from './chatPanel.js';
-import { stripAnsi } from './theme.js';
+import { renderChatTranscript, renderChatTurn } from "./chatPanel.js";
+import { stripAnsi } from "./theme.js";
 
-test('renderChatTurn wraps long assistant answers instead of truncating', () => {
+test("renderChatTurn wraps long assistant answers instead of truncating", () => {
   const longAnswer =
-    'This repository is a prompt operating system that assembles instruction stacks for agent workflows and keeps governance visible during daily CLI use.';
+    "This repository is a prompt operating system that assembles instruction stacks for agent workflows and keeps governance visible during daily CLI use.";
   const rendered = stripAnsi(
     renderChatTurn({
-      role: 'assistant',
+      role: "assistant",
       answer: longAnswer,
     }),
   );
@@ -18,15 +18,15 @@ test('renderChatTurn wraps long assistant answers instead of truncating', () => 
   assert.doesNotMatch(rendered, /\.\.\./);
 });
 
-test('renderChatTranscript shows recent turns with transcript path', () => {
+test("renderChatTranscript shows recent turns with transcript path", () => {
   const rendered = stripAnsi(
     renderChatTranscript(
       [
-        { role: 'user', input: 'what is this repo?' },
-        { role: 'assistant', answer: 'A prompt operating system.' },
+        { role: "user", input: "what is this repo?" },
+        { role: "assistant", answer: "A prompt operating system." },
       ],
       {
-        transcriptPath: 'C:/runs/interactive-sessions/demo/transcript.jsonl',
+        transcriptPath: "C:/runs/interactive-sessions/demo/transcript.jsonl",
         maxTurns: 12,
       },
     ),
