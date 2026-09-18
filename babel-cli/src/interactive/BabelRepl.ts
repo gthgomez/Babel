@@ -7,7 +7,11 @@ interface ReadlineWithHistory extends readline.Interface {
   history: string[];
 }
 import { dim } from '../ui/theme.js';
-import { registerReadlineInterface } from '../ui/inputCoordinator.js';
+import {
+  registerReadlineInterface,
+  registerExclusiveTerminalRunner,
+  withExclusiveStdin,
+} from '../ui/inputCoordinator.js';
 import { FocusTracker } from '../ui/focusTracker.js';
 import { loadHistory } from '../services/history.js';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
@@ -47,6 +51,26 @@ import { reverseHistorySearch } from './commands/service.js';
 import { ChatEngine } from '../agent/chatEngine.js';
 import { VoiceStreamManager } from '../voice/voice-stream-manager.js';
 import type { PromptInputAdapter } from '../ui/promptInputAdapter.js';
+import { OutputBuffer } from '../ui/outputBuffer.js';
+import { installKeyHandler, type KeyEvent } from '../ui/keyInput.js';
+import { planShellLayout } from '../ui/shell/shellLayout.js';
+import { buildShellFrameInput } from '../ui/shell/shellPanels.js';
+import { createShellHost, type ShellHost } from '../ui/shell/shellHost.js';
+import { selectShellHost } from '../ui/shell/selectShellHost.js';
+import {
+  routeShellInput,
+  shellInputLeaseActive,
+  onShellSurfaceRelease,
+  notifyShellSurfaceReleased,
+  type ShellInputState,
+} from '../ui/shell/shellInputRouter.js';
+import { ShellRuntimeBinding } from '../ui/shell/shellRuntimeBinding.js';
+import { projectShellPresentation } from '../ui/shell/shellPresentation.js';
+import { getActiveRenderer } from '../ui/waterfall.js';
+import {
+  isRendererPresentationSuspended,
+  onRendererPresentationResume,
+} from '../ui/rendererFence.js';
 
 // ─── REPL Class ───────────────────────────────────────────────────────────────
 
@@ -85,6 +109,28 @@ export class BabelRepl {
   chatEngine: ChatEngine | undefined = undefined;
   lastRoutingLabel: string | null = null;
   voiceManager: VoiceStreamManager | null = null;
+  shellHost: ShellHost | undefined;
+  shellRuntime: ShellRuntimeBinding | undefined;
+  /** Epoch captured when the current executable shell turn was accepted. */
+  private activeShellTurnEpoch: number | undefined;
+  activeContext?: {
+    tokens: number;
+    modelId: string;
+    source: 'provider_prompt_tokens' | 'estimated' | 'unknown';
+  } | null;
+  private shellKeyCleanup: (() => void) | null = null;
+  private legacyKeypressHandler: ((str: string, key: rl.Key) => void) | null = null;
+  private shellExclusiveRunnerCleanup: (() => void) | null = null;
+  private legacyExclusiveDepth = 0;
+  private pendingResponsiveResize: { rows: number; cols: number } | null = null;
+  private unregisterResponsiveLeaseRelease: (() => void) | null = null;
+  private unregisterResponsiveRendererResume: (() => void) | null = null;
+  private startupHydrationComplete = false;
+  private shellInputState: ShellInputState = {
+    focus: 'composer',
+    leftDrawerOpen: true,
+    rightDrawerOpen: true,
+  };
 
   constructor(initialState?: Partial<SessionState>) {
     // Load saved history before creating the input interface
@@ -112,14 +158,18 @@ export class BabelRepl {
     registerReadlineInterface(this.rl);
 
     // Ctrl+R reverse history search
-    process.stdin.on('keypress', (_str: string, key: rl.Key) => {
+    this.legacyKeypressHandler = (_str: string, key: rl.Key) => {
+      // The hosted shell has the sole live key-routing path. This listener is
+      // retained only for legacy readline mode and must never double-deliver.
+      if (this.shellHost || this.legacyExclusiveDepth > 0 || shellInputLeaseActive()) return;
       if ((key.name ?? '') === 'r' && key.ctrl) {
-        void this.handleReverseSearch();
+        void this.handleReverseSearch().catch(() => {});
       }
       if ((key.name ?? '') === 'p' && key.ctrl) {
         void this.openCommandPalette().catch(() => {});
       }
-    });
+    };
+    process.stdin.on('keypress', this.legacyKeypressHandler);
 
     // Start focus tracking so the render loop throttles when the terminal
     // Window loses focus. Keypress events are emitted by readline
@@ -177,10 +227,45 @@ export class BabelRepl {
       const rows = process.stdout.rows || 24;
       const cols = process.stdout.columns || 80;
       PaneManager.instance.onTerminalResize(rows, cols);
+      const resizedLayout = planShellLayout({ cols, rows });
+      const foreignSurfaceActive =
+        SessionPicker.isActive() ||
+        this.legacyExclusiveDepth > 0 ||
+        shellInputLeaseActive();
+      // A resize may arrive while a picker/editor/pager/approval owns stdin.
+      // Defer host transitions until that lease has released.
+      if (foreignSurfaceActive) {
+        this.deferResponsiveResize(rows, cols);
+        return;
+      }
+      if (this.shellHost && resizedLayout.mode === 'linear') {
+        this.leaveNorthStarShell();
+        const activeRenderer = getActiveRenderer() as unknown as {
+          isRawModeActive?: () => boolean;
+        } | null;
+        // While a turn is running, the demoted renderer is the only legacy
+        // stdin owner. Prompting here would install a second key handler.
+        if (!this.isRunning || !activeRenderer?.isRawModeActive?.()) {
+          try {
+            this.rl.prompt();
+          } catch {
+            // The terminal may be tearing down; preserve the original resize path.
+          }
+        }
+        return;
+      }
+      if (!this.shellHost && resizedLayout.mode !== 'linear') {
+        this.startNorthStarShell();
+        if (this.shellHost) return;
+      }
       // Skip idle header while a task is running OR the resume picker owns the TTY.
       // isRunning alone is wrong here: during bootstrap/picker it is always false,
       // so Windows Terminal init resize events would inject the BABEL banner mid-picker.
       if (!this.isRunning && !SessionPicker.isActive()) {
+        if (this.shellHost) {
+          this.shellHost.invalidate('resize');
+          return;
+        }
         const now = Date.now();
         if (now - this.lastIdleHeaderResizeAt < 400) {
           return;
@@ -197,6 +282,9 @@ export class BabelRepl {
         this.printIdleHeader();
       }
     });
+    this.unregisterResponsiveLeaseRelease = onShellSurfaceRelease(() => {
+      this.replayResponsiveResize();
+    });
   }
 
   /**
@@ -211,7 +299,157 @@ export class BabelRepl {
   public async start(): Promise<void> {
     await bootstrapReplSession(this, () => BabelRepl.loadSessionState());
     await maybeShowResumePicker(this);
+    this.startupHydrationComplete = true;
+    this.startNorthStarShell();
+    this.replayResponsiveResize();
     await runReplLoop(this, { executeTask: (input) => this.executeTask(input) });
+  }
+
+  private startNorthStarShell(): void {
+    // Startup resume-picker release notifications can replay a resize before
+    // start() reaches its normal host initialization call. Treat promotion as
+    // idempotent so that path cannot install a second stdin handler or replace
+    // the cleanup handles for the already-mounted host.
+    if (this.shellHost) return;
+    const selection = selectShellHost();
+    if (selection.host !== 'north_star') return;
+
+    const adapter = this.rl as unknown as PromptInputAdapter;
+    if (
+      typeof adapter.setPresentationTarget !== 'function' ||
+      typeof adapter.getView !== 'function' ||
+      typeof adapter.processKey !== 'function'
+    ) {
+      return;
+    }
+
+    // A resize can promote a running legacy turn into North Star after Chat
+    // already installed ConversationalRenderer raw input. Transfer ownership
+    // before the hosted prompt is activated so the shell has one stdin path.
+    const activeRenderer = getActiveRenderer() as unknown as {
+      setInputOwnership?: (ownsInput: boolean) => void;
+    } | null;
+    activeRenderer?.setInputOwnership?.(false);
+
+    let host: ShellHost | undefined;
+    const threadId = this.chatEngine?.getEngineRunId();
+    this.shellRuntime = new ShellRuntimeBinding({
+      ...(threadId !== undefined ? { threadId } : {}),
+      width: Math.max(1, OutputBuffer.getTerminalSize().cols),
+      onChange: () => {
+        host?.invalidate('runtime-event');
+      },
+    });
+    this.shellRuntime.hydrateTurns(this.turns, threadId);
+    const frameSource = () => {
+      const dimensions = OutputBuffer.getTerminalSize();
+      const layout = planShellLayout(dimensions);
+      const promptRect = layout.composer ?? {
+        x: 0,
+        y: Math.max(0, layout.rows - 3),
+        width: layout.effectiveCols,
+        height: 3,
+      };
+      const prompt = adapter.getView(promptRect);
+      const presentation = projectShellPresentation(layout, this.shellInputState);
+      this.shellInputState = presentation.inputState;
+      const conversation = this.shellRuntime
+        ? this.shellRuntime.getVisibleRows(
+            Math.max(1, layout.conversationText?.width ?? layout.center?.width ?? 1),
+            Math.max(0, layout.conversationText?.height ?? layout.conversation?.height ?? 0),
+          )
+        : [];
+      const runtime = this.shellRuntime?.getSnapshot();
+      return buildShellFrameInput(layout, {
+        mode: this.state.mode,
+        model: this.state.resolvedModelId ?? this.state.model ?? 'auto',
+        project: this.state.project ?? 'global',
+        conversation,
+        sessions: [runtime?.threadId ? `● ${runtime.threadId}` : 'Not loaded'],
+        projectRows: [this.resolveCurrentTarget().targetRoot],
+        context: [
+          this.activeContext
+            ? `${this.activeContext.tokens} tokens · ${this.activeContext.source}`
+            : 'Unknown until request resolution',
+        ],
+        status: [
+          `Activity: ${runtime?.activity ?? (this.isRunning ? 'running' : 'idle')}`,
+          `Last outcome: ${runtime?.lastOutcome ?? this.state.lastRunUserStatus ?? 'unknown'}`,
+        ],
+        ...(prompt ? { prompt } : {}),
+        presentation,
+      });
+    };
+
+    host = createShellHost({ frameSource, componentId: 'babel-north-star-shell' });
+    adapter.setPresentationTarget({
+      getRect: () => {
+        const layout = planShellLayout(OutputBuffer.getTerminalSize());
+        return layout.composer ?? {
+          x: 0,
+          y: Math.max(0, layout.rows - 3),
+          width: layout.effectiveCols,
+          height: 3,
+        };
+      },
+      invalidate: (reason) => host?.invalidate(reason),
+    });
+    this.shellHost = host;
+    this.shellExclusiveRunnerCleanup = registerExclusiveTerminalRunner((reason, work) =>
+      this.withExclusiveTerminal(reason, work),
+    );
+    this.shellKeyCleanup = installKeyHandler(process.stdin, (event: KeyEvent) => {
+      const layout = planShellLayout(OutputBuffer.getTerminalSize());
+      this.shellInputState = projectShellPresentation(layout, this.shellInputState).inputState;
+      const routed = routeShellInput(event, this.shellInputState);
+      this.shellInputState = routed.state;
+      if (routed.action === 'open-palette') {
+        void this.openCommandPalette().catch(() => {});
+      }
+      if (routed.action === 'open-reverse-search') {
+        void this.handleReverseSearch().catch(() => {});
+      }
+      if (routed.action === 'focus-changed' || routed.action === 'close-overlay') {
+        host?.invalidate(routed.action);
+      }
+      if (!routed.handled && routed.state.focus === 'composer') adapter.processKey(event);
+    });
+    host.mount();
+    // Responsive promotion may happen while the legacy prompt is inactive
+    // because the current renderer owns raw input. Re-activate the hosted
+    // editor without installing another stdin reader.
+    adapter.prompt();
+  }
+
+  private leaveNorthStarShell(): void {
+    const adapter = this.rl as unknown as PromptInputAdapter & {
+      setPresentationTarget?: (target: null) => void;
+    };
+    const activeRenderer = getActiveRenderer() as unknown as {
+      setInputOwnership?: (ownsInput: boolean) => void;
+      isRawModeActive?: () => boolean;
+    } | null;
+    const promptInput = adapter.getPromptInput?.();
+    const rendererWillOwnInput = Boolean(
+      activeRenderer?.setInputOwnership &&
+      (this.isRunning || activeRenderer.isRawModeActive?.()),
+    );
+    // setPresentationTarget(null) restores PromptInput's standalone reader.
+    // During a running responsive demotion that reader must stay inactive until
+    // renderer ownership is restored, otherwise both receive the same bytes.
+    if (rendererWillOwnInput && promptInput?.getState().active) {
+      promptInput.deactivate();
+    }
+    adapter.setPresentationTarget?.(null);
+    this.shellKeyCleanup?.();
+    this.shellKeyCleanup = null;
+    this.shellHost?.dispose();
+    this.shellHost = undefined;
+    this.shellExclusiveRunnerCleanup?.();
+    this.shellExclusiveRunnerCleanup = null;
+    this.shellRuntime = undefined;
+    this.activeShellTurnEpoch = undefined;
+    if (rendererWillOwnInput) activeRenderer?.setInputOwnership?.(true);
   }
 
   // ── Session Persistence ──────────────────────────────────────────────────
@@ -224,10 +462,18 @@ export class BabelRepl {
   }
 
   printIdleHeader(): void {
+    if (this.shellHost) {
+      this.shellHost.invalidate('idle-header');
+      return;
+    }
     renderIdleHeader(this);
   }
 
   renderTurnStatusBar(): void {
+    if (this.shellHost) {
+      this.shellHost.invalidate('status-bar');
+      return;
+    }
     renderReplStatusBar(this);
   }
 
@@ -239,8 +485,24 @@ export class BabelRepl {
 
   // ── Turn tracking ────────────────────────────────────────────────────────
 
-  appendTurn(turn: Omit<InteractiveTurn, 'schema_version' | 'turn_id' | 'ts'>): InteractiveTurn {
-    return Turn.appendTurn(this, turn);
+  appendTurn(
+    turn: Omit<InteractiveTurn, 'schema_version' | 'turn_id' | 'ts'>,
+    shellOutcome?: string,
+  ): InteractiveTurn {
+    const record = Turn.appendTurn(this, turn);
+    if (record.role === 'assistant') {
+      this.shellRuntime?.observeInteractiveTurn(
+        record,
+        shellOutcome,
+        this.activeShellTurnEpoch ?? this.shellRuntime.store.epoch,
+      );
+    }
+    return record;
+  }
+
+  beginShellTurn(turnId: number, input: string): void {
+    this.shellRuntime?.beginTurn(turnId, input, this.chatEngine?.getEngineRunId());
+    this.activeShellTurnEpoch = this.shellRuntime?.store.epoch;
   }
 
   // ── Test-only wrappers (accessed via Object.create(BabelRepl.prototype) in interactive.test.ts) ──
@@ -290,10 +552,12 @@ export class BabelRepl {
       const message = err instanceof Error ? err.message : String(err);
       if (process.stdout.isTTY && !process.env['CI']) {
         try {
-          await alert({
-            title: 'Execution Error',
-            message: `A fatal error occurred during execution:\n\n${message}`,
-          });
+          await this.withExclusiveTerminal('error-alert', () =>
+            alert({
+              title: 'Execution Error',
+              message: `A fatal error occurred during execution:\n\n${message}`,
+            }),
+          );
         } catch {
           // alert() itself failed — fall back to console
           console.error(`\nExecution Error: ${message}\n`);
@@ -322,10 +586,12 @@ export class BabelRepl {
       setInputText?: (text: string) => void;
     };
     const seed = adapter.getInputText?.() ?? '';
-    const edited = await openEditor({
-      rl: this.rl,
-      ...(seed ? { seed } : {}),
-    });
+    const edited = await this.withExclusiveTerminal('external-editor', () =>
+      openEditor({
+        rl: this.rl,
+        ...(seed ? { seed } : {}),
+      }),
+    );
     if (edited != null) {
       adapter.setInputText?.(edited);
     }
@@ -369,7 +635,7 @@ export class BabelRepl {
   // ── Command Palette ──────────────────────────────────────────────────────
 
   private async openCommandPalette(): Promise<void> {
-    await CommandPalette.show(this);
+    await this.withExclusiveTerminal('command-palette', () => CommandPalette.show(this));
     this.printIdleHeader();
   }
 
@@ -377,10 +643,99 @@ export class BabelRepl {
 
   private async handleReverseSearch(): Promise<void> {
     const history = (this.rl as ReadlineWithHistory).history;
-    await reverseHistorySearch(this.rl, history);
+    await this.withExclusiveTerminal('reverse-history', () =>
+      reverseHistorySearch(this.rl, history),
+    );
+  }
+
+  settleShellTurn(outcome?: string, sourceEpoch?: number): void {
+    this.shellRuntime?.settleTurn(outcome, sourceEpoch);
+    if (this.shellRuntime?.store.turnId === undefined) this.activeShellTurnEpoch = undefined;
+  }
+
+  async withExclusiveTerminal<T>(reason: string, work: () => Promise<T>): Promise<T> {
+    if (!this.shellHost) {
+      this.legacyExclusiveDepth += 1;
+      try {
+        return await withExclusiveStdin(work, this.rl);
+      } finally {
+        this.legacyExclusiveDepth = Math.max(0, this.legacyExclusiveDepth - 1);
+        notifyShellSurfaceReleased();
+      }
+    }
+    const adapter = this.rl as unknown as PromptInputAdapter;
+    return this.shellHost.withExclusiveTerminal(reason, async () => {
+      const resumeInput = adapter.suspendInput?.();
+      try {
+        return await work();
+      } finally {
+        resumeInput?.();
+      }
+    });
+  }
+
+  private deferResponsiveResize(rows: number, cols: number): void {
+    this.pendingResponsiveResize = { rows, cols };
+    if (!this.unregisterResponsiveRendererResume && isRendererPresentationSuspended()) {
+      this.unregisterResponsiveRendererResume = onRendererPresentationResume(() => {
+        this.unregisterResponsiveRendererResume = null;
+        this.replayResponsiveResize();
+      });
+    }
+  }
+
+  private replayResponsiveResize(): void {
+    const pending = this.pendingResponsiveResize;
+    if (!pending) return;
+    if (!this.startupHydrationComplete) return;
+    if (
+      SessionPicker.isActive() ||
+      this.legacyExclusiveDepth > 0 ||
+      shellInputLeaseActive() ||
+      isRendererPresentationSuspended()
+    ) {
+      return;
+    }
+
+    this.pendingResponsiveResize = null;
+    this.unregisterResponsiveLeaseRelease?.();
+    this.unregisterResponsiveLeaseRelease = null;
+    this.unregisterResponsiveRendererResume?.();
+    this.unregisterResponsiveRendererResume = null;
+
+    const resizedLayout = planShellLayout({ cols: pending.cols, rows: pending.rows });
+    if (this.shellHost && resizedLayout.mode === 'linear') {
+      this.leaveNorthStarShell();
+      const activeRenderer = getActiveRenderer() as unknown as {
+        isRawModeActive?: () => boolean;
+      } | null;
+      if (!this.isRunning || !activeRenderer?.isRawModeActive?.()) {
+        try {
+          this.rl.prompt();
+        } catch {
+          // The terminal may be tearing down.
+        }
+      }
+      return;
+    }
+    if (!this.shellHost && resizedLayout.mode !== 'linear') {
+      this.startNorthStarShell();
+    }
   }
 
   exit(): void {
+    if (this.legacyKeypressHandler) {
+      process.stdin.off('keypress', this.legacyKeypressHandler);
+      this.legacyKeypressHandler = null;
+    }
+    this.shellKeyCleanup?.();
+    this.shellKeyCleanup = null;
+    this.shellHost?.dispose();
+    this.shellHost = undefined;
+    this.shellExclusiveRunnerCleanup?.();
+    this.shellExclusiveRunnerCleanup = null;
+    this.shellRuntime = undefined;
+    this.activeShellTurnEpoch = undefined;
     exitRepl();
   }
 }

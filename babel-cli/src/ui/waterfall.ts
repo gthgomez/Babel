@@ -67,6 +67,10 @@ import {
 } from './toolPresentation.js';
 import { renderSubAgentOverlay, type SubAgentOverlayEntry } from './subAgentOverlay.js';
 import { recordLiveActivity } from './liveActivity.js';
+import {
+  isRendererPresentationSuspended,
+  registerRendererFenceTarget,
+} from './rendererFence.js';
 
 const SPINNER_FRAMES: readonly string[] = ['◐', '◓', '◑', '◒'];
 const FRAME_INTERVAL_MS = 200; // 5 FPS spinner tick
@@ -85,6 +89,11 @@ const FRAME_INTERVAL_MS = 200; // 5 FPS spinner tick
 function safeStdoutWrite(text: string): boolean {
   const buf = OutputBuffer.getInstance();
   if (!buf.canWrite) return false;
+  // Foreign terminal surfaces (approval dialogs, editors, pagers, and
+  // palettes) own the terminal while they are active. Runtime event handlers
+  // may continue updating renderer state, but their direct presentation must
+  // not race the exclusive surface's output.
+  if (isRendererPresentationSuspended()) return true;
   const openedFrame = !buf.inFrame && buf.syncUpdateSupported;
   if (openedFrame) buf.beginFrame();
   try {
@@ -115,6 +124,10 @@ export function getActiveRenderer(): BaseRenderer | null {
   return activeRendererInstance;
 }
 
+/**
+ * Apply the shared exclusive-terminal fence to the currently active run
+ * renderer. The returned release is idempotent and supports nested callers.
+ */
 // ── Interfaces ───────────────────────────────────────────────────────────────
 
 interface EventBus {
@@ -158,9 +171,13 @@ class BaseRenderer {
   protected outputBroken: boolean;
   private removeStdoutErrorGuard: (() => void) | undefined;
   protected _onBrokenPipe: () => void;
+  private exclusiveSurfaceDepth = 0;
+  private exclusiveSurfaceRawModeWasActive = false;
+  private unregisterRendererFence: (() => void) | null = null;
 
   constructor() {
     activeRendererInstance = this;
+    this.unregisterRendererFence = registerRendererFenceTarget(this);
     this.outputBroken = false;
     this._onBrokenPipe = () => {}; // no-op, overridden by subclasses
     this.removeStdoutErrorGuard = installStdoutErrorGuard(() => {
@@ -181,8 +198,48 @@ class BaseRenderer {
     this._pausedTicks = false;
   }
 
+  /** Whether this renderer currently owns a raw-mode input handler. */
+  isRawModeActive(): boolean {
+    return false;
+  }
+
+  /** Transfer raw-input ownership when the host changes responsively. */
+  setInputOwnership(_ownsInput: boolean): void {}
+
+  /**
+   * Suspend renderer presentation and raw input while a foreign terminal
+   * surface owns the TTY. Nested leases are balanced at this boundary.
+   */
+  suspendForExclusiveSurface(): () => void {
+    this.exclusiveSurfaceDepth += 1;
+    if (this.exclusiveSurfaceDepth === 1) {
+      this.pauseTicks();
+      this.exclusiveSurfaceRawModeWasActive = this.isRawModeActive();
+      if (this.exclusiveSurfaceRawModeWasActive) this.disableRawMode();
+    }
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.exclusiveSurfaceDepth = Math.max(0, this.exclusiveSurfaceDepth - 1);
+      if (this.exclusiveSurfaceDepth !== 0) return;
+
+      this.resumeTicks();
+      if (this.exclusiveSurfaceRawModeWasActive) this.enableRawMode();
+      this.exclusiveSurfaceRawModeWasActive = false;
+    };
+  }
+
+  // Concrete renderers with terminal input override these hooks.
+  enableRawMode(): void {}
+  disableRawMode(): void {}
+
   destroy(): void {
     this.removeStdoutErrorGuard?.();
+    this.unregisterRendererFence?.();
+    this.unregisterRendererFence = null;
+    if (activeRendererInstance === this) activeRendererInstance = null;
   }
 
   // note: the _pausedTicks field below is read by overrides in subclasses
@@ -374,7 +431,7 @@ export class WaterfallRenderer extends BaseRenderer {
     this._eventBusHandles.push({ event: 'prompt_resume', listener: onPromptResume });
   }
 
-  enableRawMode(): void {
+  override enableRawMode(): void {
     if (this._rawMode.isActive) return;
     this._rawMode.enable((event) => {
       const action = KeybindingManager.getInstance().matchStack(['governed'], event);
@@ -424,7 +481,11 @@ export class WaterfallRenderer extends BaseRenderer {
     });
   }
 
-  disableRawMode(): void {
+  override isRawModeActive(): boolean {
+    return this._rawMode.isActive;
+  }
+
+  override disableRawMode(): void {
     this._rawMode.disable();
   }
 
@@ -1273,6 +1334,8 @@ export class ConversationalRenderer extends BaseRenderer {
   private screenManager: ScreenManager | undefined;
   private taskLabel: string | undefined;
   private readonly _rawMode: RawModeManager;
+  /** Hosted North Star shells own stdin; legacy renderers retain raw input. */
+  private ownsInput: boolean;
 
   private _pendingToolCallLines: number;
   private _store: StateStore<TuiState, TuiMutation> | undefined;
@@ -1315,13 +1378,16 @@ export class ConversationalRenderer extends BaseRenderer {
       isTTY,
       stateStore,
       verboseMode,
+      ownsInput = true,
     }: {
       isTTY?: boolean;
       stateStore?: StateStore<TuiState, TuiMutation> | undefined;
       verboseMode?: boolean;
+      ownsInput?: boolean;
     } = { isTTY: process.stdout.isTTY },
   ) {
     super();
+    this.ownsInput = ownsInput;
     this.verboseMode = verboseMode ?? false;
     this._store = stateStore ?? createTuiStore();
     // Note: do NOT call setState — the store is already initialized with defaults
@@ -1620,7 +1686,8 @@ export class ConversationalRenderer extends BaseRenderer {
     return this._liveness.snapshot(this.startTime);
   }
 
-  enableRawMode(): void {
+  override enableRawMode(): void {
+    if (!this.ownsInput) return;
     if (this._rawMode.isActive) return;
     this._rawMode.enable((event) => {
       const action = KeybindingManager.getInstance().matchStack(['chat'], event);
@@ -1742,6 +1809,33 @@ export class ConversationalRenderer extends BaseRenderer {
     });
   }
 
+  override isRawModeActive(): boolean {
+    return this._rawMode.isActive;
+  }
+
+  override setInputOwnership(ownsInput: boolean): void {
+    if (this.ownsInput === ownsInput) return;
+    this.ownsInput = ownsInput;
+    if (!ownsInput) {
+      this.disableRawMode();
+      return;
+    }
+    // A renderer can outlive the shell host across a responsive transition.
+    // Reclaim raw input only while its turn is still live; idle PromptInput
+    // remains the sole legacy owner.
+    if (this.isTTY && this._state !== 'done' && this._state !== 'failed') {
+      this.enableRawMode();
+    }
+  }
+
+  override resumeTicks(): void {
+    super.resumeTicks();
+    this._twoRegion?.reconcileAfterExclusiveSurface();
+    if (this._twoRegion?.isHardwareMode) {
+      this._twoRegion.replaceStreamingContent(this._mdAccumulator.getRenderedText());
+    }
+  }
+
   setScrollback(buffer: ScrollbackBuffer): void {
     this.scrollback = buffer;
   }
@@ -1838,7 +1932,7 @@ export class ConversationalRenderer extends BaseRenderer {
     }
   }
 
-  disableRawMode(): void {
+  override disableRawMode(): void {
     this._rawMode.disable();
   }
 

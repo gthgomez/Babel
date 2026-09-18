@@ -22,6 +22,11 @@ function setDraft(ctx: ReplContext, text: string): void {
     adapter.setInputText(text);
     return;
   }
+  if (typeof adapter.line === 'string') {
+    adapter.line = text;
+    (adapter as { cursor?: number }).cursor = text.length;
+    return;
+  }
   if (adapter.write) {
     adapter.write(null, { ctrl: true, name: 'u' });
     adapter.write(text);
@@ -33,15 +38,15 @@ function setDraft(ctx: ReplContext, text: string): void {
 export async function handleDiffReview(ctx: ReplContext): Promise<void> {
   const draft = getDraft(ctx);
   const target = ctx.resolveCurrentTarget();
-  const result = await withExclusiveStdin(
-    () =>
-      openLastReviewDiff({
-        getComposerDraft: () => draft,
-        setComposerDraft: (text) => setDraft(ctx, text),
-        cwd: target.targetRoot,
-      }),
-    ctx.rl,
-  );
+  const runReview = () =>
+    openLastReviewDiff({
+      getComposerDraft: () => draft,
+      setComposerDraft: (text) => setDraft(ctx, text),
+      cwd: target.targetRoot,
+    });
+  const result = ctx.withExclusiveTerminal
+    ? await ctx.withExclusiveTerminal('diff-review', runReview)
+    : await withExclusiveStdin(runReview, ctx.rl);
   setDraft(ctx, result.restoredDraft);
 }
 
