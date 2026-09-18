@@ -500,6 +500,33 @@ export async function executeChatTask(
       console.log(`\n${review.body}\n`);
       ctx.state.lastRunUserStatus = 'cancelled';
       ctx.lastAssistantStatus = 'CANCELLED';
+      updateConversationMemory(
+        ctx,
+        {
+          status: 'CHAT_CANCELLED',
+          summary: 'Cancelled',
+          answer: 'Cancelled',
+          facts: [],
+          assumptions: [],
+          evidence: [],
+          next: [],
+          changed_files: [],
+          checks: [],
+          verification: { status: 'not_run', commands: [], skipped_reason: 'cancelled' },
+        },
+        task,
+      );
+      ctx.appendTurn({
+        role: 'assistant',
+        answer: 'Cancelled',
+        summary: 'Cancelled',
+        run_dir: null,
+        target_root: target.targetRoot,
+        workspace_root: target.workspaceRoot,
+        changed_files: [],
+        verification: 'not_run',
+        next: null,
+      }, 'cancelled');
       return;
     }
     const message = err?.message ?? String(err);
