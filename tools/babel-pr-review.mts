@@ -7,6 +7,8 @@ import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { collectBabelReviewSnapshot, assertReviewStateOutsideGit, secretRiskReviewPath, safeReviewPath } from '../babel-cli/src/services/babelReviewSnapshot.js'
 import { launchBabelReviewChild } from '../babel-cli/src/services/babelReviewChild.js'
+import { restoreBabelReviewLauncherAuthority } from '../babel-cli/src/services/babelReviewLauncherAuthority.js'
+import type { ReviewAuthorityCandidate } from '../babel-cli/src/services/reviewSupervisor.js'
 import { createHostReviewController } from '../babel-cli/src/services/hostReviewController.js'
 import type { HostReviewCandidate, HostReviewExecutionResult, HostReviewHandoffV2 } from '../babel-cli/src/services/hostReviewController.js'
 import { acquireBabelReviewLease, atomicReviewJson, babelReviewVersion, findPublishedBabelReview, publicBabelReviewHandoff, validateBabelReviewArtifact, validateBabelReviewCache } from '../babel-cli/src/services/babelReviewQueue.js'
@@ -80,6 +82,14 @@ const readPr = (number: number): Pr => {
   if (pr.number !== number || ![pr.headRefOid, pr.baseRefOid].every(v => /^[a-f0-9]{40}$/.test(v))) throw new Error('PR_IDENTITY_INVALID')
   return pr
 }
+type CandidateEnvelopeShape = Awaited<ReturnType<typeof collectCandidateEnvelope>>
+const reviewAuthorityCandidate = (candidate: CandidateEnvelopeShape, pr: Pr): ReviewAuthorityCandidate => ({
+  repository: candidate.repository,
+  ...(candidate.pr_number !== undefined ? { prNumber: candidate.pr_number } : {}),
+  baseSha: pr.baseRefOid,
+  headSha: pr.headRefOid,
+  candidateDigest: candidate.candidate_digest,
+})
 if (options.has('--all') === options.has('--pr')) throw new Error('SELECT_PR_OR_ALL')
 const prs: number[] = options.has('--all')
   ? (JSON.parse(gh(['pr', 'list', '--repo', repository, '--state', 'open', '--limit', '1000', '--json', 'number'])) as Array<{ number: number }>).map(p => p.number)
@@ -89,6 +99,9 @@ if (prs.some(p => !Number.isInteger(p) || p < 1)) throw new Error('INVALID_PR')
 for (const number of prs) {
   let jobDir: string | undefined
   let lease: ReturnType<typeof acquireBabelReviewLease> = null
+  let authorityRuntime: ReturnType<typeof restoreBabelReviewLauncherAuthority> = null
+  let authorityRenewalTimer: ReturnType<typeof setInterval> | undefined
+  let reviewCompleted = false
   try {
     const pr = readPr(number)
     if (pr.state !== 'OPEN') continue
@@ -110,6 +123,30 @@ for (const number of prs) {
     jobDir = assertReviewStateOutsideGit(join(state, 'jobs', key))
     lease = acquireBabelReviewLease(join(jobDir, 'running.lock'))
     if (!lease) { console.log(JSON.stringify({ pr: number, status: 'running_or_recovering', job: key })); continue }
+    const boundAuthorityCandidate = reviewAuthorityCandidate(candidateEnvelope, pr)
+    authorityRuntime = restoreBabelReviewLauncherAuthority({
+      jobDir,
+      taskId: candidate.task_id,
+      candidate: boundAuthorityCandidate,
+    })
+    const renewAuthorityFromLiveCandidate = () => {
+      if (!authorityRuntime) return
+      const live = readPr(number)
+      if (live.state !== 'OPEN') {
+        authorityRuntime.stop('candidate_changed')
+        throw new Error('REVIEW_AUTHORITY_CANDIDATE_CHANGED')
+      }
+      authorityRuntime.renew(reviewAuthorityCandidate(candidateEnvelope, live))
+    }
+    if (authorityRuntime) {
+      // The external checkpoint grants renewable host authority. The launcher
+      // may advance its fence but never constructs a task allowance.
+      renewAuthorityFromLiveCandidate()
+      authorityRenewalTimer = setInterval(() => {
+        try { renewAuthorityFromLiveCandidate() } catch { /* no renewal; worker stops on terminal authority or expiry */ }
+      }, authorityRuntime.renewalIntervalMs)
+      authorityRenewalTimer.unref?.()
+    }
     // MiMo is the independently bound fast default. Its snapshot remains
     // isolated from its execution and artifact identifiers.
     const settled = await Promise.allSettled(['mimo-v2.5'].map(async (model): Promise<HostReviewHandoffV2> => {
@@ -119,6 +156,7 @@ for (const number of prs) {
           const cached = validateBabelReviewCache(JSON.parse(readFileSync(cachedPath, 'utf8')), { candidate, model, round: key, version, sourceSha: trustedSha })
           const executionId = cached.reviews[0].execution_id
           if (!/^[a-f0-9-]{36}$/.test(executionId)) throw new Error('CACHED_EXECUTION_ID_INVALID')
+          if (authorityRuntime && executionId !== authorityRuntime.executionId) throw new Error('CACHED_EXECUTION_AUTHORITY_MISMATCH')
           const artifact = validateBabelReviewArtifact(JSON.parse(readFileSync(join(jobDir!, `${model}-${executionId}.json`), 'utf8')), { executionId, model, scope })
           if (artifact.verdict.verdict !== cached.reviews[0].verdict || JSON.stringify(artifact.verdict.findings) !== JSON.stringify(cached.reviews[0].findings) || JSON.stringify(artifact.verdict.blocking_findings) !== JSON.stringify(cached.reviews[0].blocking_findings)) throw new Error('CACHED_ARTIFACT_MISMATCH')
           return cached
@@ -132,11 +170,13 @@ for (const number of prs) {
       if (snapshot.numstatDigest !== candidate.diff_numstat_digest || JSON.stringify(snapshot.scope) !== JSON.stringify(scope)) throw new Error('SNAPSHOT_SCOPE_MISMATCH')
       const output = join(jobDir!, `${model}-${snapshot.id}.json`)
       let idIndex = 0
-      const controller = createHostReviewController({ controller_id: 'babel-chat-pr-review', create_id: () => idIndex++ === 0 ? key : snapshot.id, isolation_mode: 'readonly_sandbox', adapter: {
+      const controller = createHostReviewController({ controller_id: 'babel-chat-pr-review', create_id: () => idIndex++ === 0 ? key : (authorityRuntime?.executionId ?? snapshot.id), isolation_mode: 'readonly_sandbox', adapter: {
         async launch(request): Promise<HostReviewExecutionResult> {
           lease!.child(null, request.execution_id)
-          const run = await launchBabelReviewChild({ source: snapshot.root, trustedRoot, output, runs: join(jobDir!, 'runs'), model, worker: join(trustedRoot, 'tools/babel-chat-review-worker.mts'), tsx: join(trustedRoot, 'babel-cli/node_modules/tsx/dist/cli.mjs'), onSpawn: pid => lease!.child(pid, request.execution_id), onExit: () => lease!.childExited(request.execution_id) })
-          if (run.exitCode !== 0 || run.timedOut) throw new Error('BABEL_CHAT_REVIEW_FAILED')
+          const run = await launchBabelReviewChild({ source: snapshot.root, trustedRoot, output, runs: join(jobDir!, 'runs'), model, worker: join(trustedRoot, 'tools/babel-chat-review-worker.mts'), tsx: join(trustedRoot, 'babel-cli/node_modules/tsx/dist/cli.mjs'), onSpawn: pid => lease!.child(pid, request.execution_id), onExit: () => lease!.childExited(request.execution_id),
+            ...(authorityRuntime ? { hostLifetime: authorityRuntime.hostLifetime, authority: authorityRuntime.monitor, candidate: authorityRuntime.candidate } : {}),
+          })
+          if (run.exitCode !== 0 || run.timedOut || run.terminalCause !== 'worker_exit') throw new Error('BABEL_CHAT_REVIEW_FAILED')
           const artifact = validateBabelReviewArtifact(run.artifact, { executionId: request.execution_id, model, scope })
 
           const toolTraces = []
@@ -240,16 +280,28 @@ for (const number of prs) {
       const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${number}/comments?per_page=100`])) as unknown[][]
       publishedComment = findPublishedBabelReview(pages.flat(), owner.id, body)
       if (!publishedComment) {
+        const publicationPr = readPr(number)
+        if (publicationPr.state !== 'OPEN' || publicationPr.headRefOid !== pr.headRefOid || publicationPr.baseRefOid !== pr.baseRefOid) throw new Error('REVIEW_SUPERSEDED')
+        if (authorityRuntime) {
+          const publicationCandidate = reviewAuthorityCandidate(candidateEnvelope, publicationPr)
+          authorityRuntime.renew(publicationCandidate)
+          authorityRuntime.admitPublication(publicationCandidate)
+        }
         execFileSync('gitleaks', ['stdin', '--redact', '--no-banner'], { input: body, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
         publishedComment = String((JSON.parse(gh(['api', '--method', 'POST', `repos/${repository}/issues/${number}/comments`, '--input', '-'], JSON.stringify({ body }))) as { id: number }).id)
       }
     }
     atomicReviewJson(join(jobDir, 'completed.json'), { status: 'completed', published: publishedComment !== null, published_comment_id: publishedComment, harness_sha: trustedSha, version, head: pr.headRefOid, base: pr.baseRefOid, approvals: handoff.reviews.filter(r => r.verdict === 'APPROVE').length, telemetry: reviews.map(r => r.reviews[0].execution_id) })
+    reviewCompleted = true
     console.log(JSON.stringify({ pr: number, status: 'review_completed', published: publishedComment !== null, job: key, approvals: handoff.reviews.filter(r => r.verdict === 'APPROVE').length }))
   } catch (error) {
     const failure = error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : 'REVIEW_CONTROLLER_FAILURE'
     if (jobDir) atomicReviewJson(join(jobDir, 'failure.json'), { status: 'failed', failure, at: new Date().toISOString(), harness_sha: trustedSha })
     console.log(JSON.stringify({ pr: number, status: 'review_failed', failure }))
     process.exitCode = 1
-  } finally { lease?.release() }
+  } finally {
+    if (authorityRenewalTimer) clearInterval(authorityRenewalTimer)
+    authorityRuntime?.stop(reviewCompleted ? 'worker_exit' : 'host_abort')
+    lease?.release()
+  }
 }

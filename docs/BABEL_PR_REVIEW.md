@@ -198,6 +198,17 @@ supplies the current authorized objective; historical attachments are reference
 data, not a superseding mission. Keep state outside every Git worktree and away
 from candidate-readable paths. `--publish` refuses dirty trusted installations.
 
+The launcher retains its bounded finite process timeout unless the trusted task
+controller has already written a renewable authority checkpoint to
+`<state-dir>/jobs/<candidate-digest>/authority.json`. That checkpoint must bind
+the exact repository, PR, base/head SHAs, candidate digest, task ID, execution
+ID, fencing epoch, and externally owned allowance identity. The launcher only
+restores and renews that authority; it never derives an allowance from the task
+text, queue lease, timeout, or Chat budget. A missing checkpoint therefore keeps
+legacy finite behavior, while an invalid, expired, stale, terminal, mismatched,
+or symlinked checkpoint fails closed. Publication receives a final live PR check
+and fenced authority admission immediately before the mutation.
+
 The command is a queue sweep, not a background daemon. A separately configured
 host scheduler must invoke it repeatedly for continuous coverage. Scheduling is
 active only after that host installation and recurring job are verified; a
