@@ -34,6 +34,8 @@ import {
   validateRuntimeFact,
   type EventCursor,
   type FactAuthority,
+  type FactPayload,
+  type RuntimeFactProducer,
   type RuntimeFactV1,
 } from './events.js';
 import type { LegacyFactContext } from './legacyEventAdapters.js';
@@ -287,6 +289,78 @@ type Classified =
   | { kind: 'unknown_optional'; fact: RuntimeFactV1 }
   | { kind: 'invalid'; id?: string; reason: string; authority: FactAuthority };
 
+type CloneResult = { ok: true; value: unknown } | { ok: false };
+
+/**
+ * Deep-copy a value into fresh plain JSON data, reading each property once and
+ * rejecting anything that is not a JSON value (boxed primitives, class
+ * instances, Date/Map/Set/RegExp/Error, functions, symbols, bigint, undefined,
+ * NaN/Infinity, cycles). This is what makes the projection total and the
+ * canonical encoding injective: downstream code only ever touches snapshots,
+ * never the caller's object, and plain objects/arrays cannot collide with
+ * exotic values.
+ */
+function cloneJsonSafe(value: unknown, path: WeakSet<object>): CloneResult {
+  if (value === null) return { ok: true, value: null };
+  const type = typeof value;
+  if (type === 'string' || type === 'boolean') return { ok: true, value };
+  if (type === 'number') {
+    if (Number.isNaN(value) || value === Infinity || value === -Infinity) return { ok: false };
+    return { ok: true, value };
+  }
+  if (type !== 'object') return { ok: false };
+  const object = value as object;
+  if (path.has(object)) return { ok: false };
+  path.add(object);
+  try {
+    if (Array.isArray(object)) {
+      const out: unknown[] = [];
+      for (const entry of object) {
+        const cloned = cloneJsonSafe(entry, path);
+        if (!cloned.ok) return { ok: false };
+        out.push(cloned.value);
+      }
+      return { ok: true, value: out };
+    }
+    const prototype = Object.getPrototypeOf(object);
+    if (prototype !== Object.prototype && prototype !== null) return { ok: false };
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(object)) {
+      const cloned = cloneJsonSafe((object as Record<string, unknown>)[key], path);
+      if (!cloned.ok) return { ok: false };
+      out[key] = cloned.value;
+    }
+    return { ok: true, value: out };
+  } catch {
+    return { ok: false };
+  } finally {
+    path.delete(object);
+  }
+}
+
+/** Build a plain fact snapshot; every field is read exactly once here. */
+function snapshotFact(
+  input: Record<string, unknown>,
+  payload: FactPayload,
+): RuntimeFactV1 {
+  const cursor = input['cursor'] as Record<string, unknown>;
+  return {
+    schemaVersion: RUNTIME_FACT_SCHEMA_VERSION,
+    id: input['id'] as string,
+    cursor: { stream: 'runtime-facts', sequence: cursor['sequence'] as number },
+    threadId: input['threadId'] as string,
+    taskId: input['taskId'] as string,
+    turnId: input['turnId'] as string,
+    runId: input['runId'] as string,
+    sequence: input['sequence'] as number,
+    causationId: input['causationId'] as string,
+    producer: input['producer'] as RuntimeFactProducer,
+    authority: input['authority'] as FactAuthority,
+    timestamp: input['timestamp'] as string,
+    payload,
+  };
+}
+
 /** Classify one untrusted input. May throw only on hostile accessors; callers guard. */
 function classifyInput(input: unknown): Classified {
   if (!isRecord(input)) {
@@ -313,38 +387,48 @@ function classifyInput(input: unknown): Classified {
     if (!isRecord(payload) || id === undefined) {
       return { kind: 'invalid', reason: 'invalid_optional_fact', authority, ...withId };
     }
-    if (!canonicalize(payload, new WeakSet()).ok) {
+    const cloned = cloneJsonSafe(payload, new WeakSet());
+    if (!cloned.ok) {
       return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
     }
-    return { kind: 'unknown_optional', fact: input as unknown as RuntimeFactV1 };
+    return {
+      kind: 'unknown_optional',
+      fact: snapshotFact(input, cloned.value as FactPayload),
+    };
   }
 
   const validation = validateRuntimeFact(input);
   if (!validation.ok) {
     return { kind: 'invalid', reason: validation.reason, authority, ...withId };
   }
-  if (!canonicalize(validation.fact.payload, new WeakSet()).ok) {
+  const cloned = cloneJsonSafe(validation.fact.payload, new WeakSet());
+  if (!cloned.ok) {
     return { kind: 'invalid', reason: 'unserializable_payload', authority, ...withId };
   }
-  return { kind: 'known', fact: validation.fact };
+  return { kind: 'known', fact: snapshotFact(input, cloned.value as FactPayload) };
 }
 
 /**
  * Collapse facts by id in a stable order. A fact with the same id but a
  * different content key is corruption: it degrades and is dropped
- * deterministically (the order-first fact wins).
+ * deterministically (the order-first fact wins). Guarded so a corrupt snapshot
+ * can never throw.
  */
 function dedupeByFactId(facts: RuntimeFactV1[], state: TaskProjection): RuntimeFactV1[] {
   const byId = new Map<string, RuntimeFactV1>();
   const keyById = new Map<string, string>();
   for (const fact of [...facts].sort(orderedCompare)) {
-    const key = contentKey(fact);
-    const prior = keyById.get(fact.id);
-    if (prior === undefined) {
-      byId.set(fact.id, fact);
-      keyById.set(fact.id, key);
-    } else if (prior !== key) {
-      state.degradedReasons.push('conflicting_duplicate_fact');
+    try {
+      const key = contentKey(fact);
+      const prior = keyById.get(fact.id);
+      if (prior === undefined) {
+        byId.set(fact.id, fact);
+        keyById.set(fact.id, key);
+      } else if (prior !== key) {
+        state.degradedReasons.push('conflicting_duplicate_fact');
+      }
+    } catch {
+      state.degradedReasons.push('invalid_fact:dedupe_error');
     }
   }
   return [...byId.values()];
@@ -515,9 +599,13 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
     } catch {
       // A fact that throws mid-reduction is corrupt, not fatal to the reducer.
       state.degradedReasons.push('invalid_fact:projection_error');
-      if (fact.authority === 'authoritative') {
-        sawUnknownAuthority = true;
-        state.degradedReasons.push('unknown_authoritative_fact');
+      try {
+        if (fact.authority === 'authoritative') {
+          sawUnknownAuthority = true;
+          state.degradedReasons.push('unknown_authoritative_fact');
+        }
+      } catch {
+        /* snapshots are plain data; never let this escape if that ever changes */
       }
     }
   }

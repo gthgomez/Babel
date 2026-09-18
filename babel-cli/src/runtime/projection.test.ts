@@ -474,3 +474,42 @@ test('P04: canonical special-value tags cannot be forged by user objects', () =>
   } as unknown as RuntimeFactV1;
   assert.deepEqual(projectTask([nan, forgedTag]), projectTask([forgedTag, nan]));
 });
+
+test('P04: boxed primitives and class instances cannot collide with plain objects', () => {
+  class A {
+    a = 1;
+  }
+  class B {
+    a = 1;
+  }
+  const template = sessionLogToFacts(corpus())[0]!;
+  const mk = (status: unknown) =>
+    ({
+      ...template,
+      id: 'c',
+      sequence: 1,
+      payload: { type: 'run.settled', status },
+    }) as unknown as RuntimeFactV1;
+  const boxed = mk(new String('x'));
+  const plain = mk({ 0: 'x' });
+  const instanceA = mk(new A());
+  const instanceB = mk(new B());
+  assert.deepEqual(projectTask([boxed, plain]), projectTask([plain, boxed]));
+  assert.deepEqual(projectTask([instanceA, instanceB]), projectTask([instanceB, instanceA]));
+  assert.equal(projectTask([boxed, plain]).degraded, true);
+});
+
+test('P04: a stateful throwing getter cannot escape projectTask', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  let reads = 0;
+  const fact = new Proxy(
+    { ...template },
+    {
+      get(target, property, receiver) {
+        if (property === 'authority' && ++reads > 2) throw new Error('boom');
+        return Reflect.get(target, property, receiver);
+      },
+    },
+  ) as unknown as RuntimeFactV1;
+  assert.doesNotThrow(() => projectTask([fact]));
+});

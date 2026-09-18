@@ -241,7 +241,8 @@ export function validateRuntimeFact(input: unknown): FactValidation {
       typeof decision['finalOutcome'] !== 'string' ||
       typeof decision['allowed'] !== 'boolean' ||
       !Array.isArray(decision['evidenceRefs']) ||
-      (decision['reason'] !== undefined && typeof decision['reason'] !== 'string')
+      !decision['evidenceRefs'].every((entry) => typeof entry === 'string') ||
+      typeof decision['reason'] !== 'string'
     ) {
       return fail('invalid_completion_decision');
     }
@@ -250,6 +251,9 @@ export function validateRuntimeFact(input: unknown): FactValidation {
     if (typeof payload['reason'] !== 'string') {
       return fail(`invalid_${type}_reason`);
     }
+  }
+  if (type === 'verification.recorded' && typeof payload['authoritative'] !== 'boolean') {
+    return fail('invalid_verification_authoritative');
   }
   return { ok: true, fact: input as unknown as RuntimeFactV1 };
 }
