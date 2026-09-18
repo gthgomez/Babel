@@ -17,12 +17,14 @@ test('P01: an obsolete finalizer cannot clear a successor owner', () => {
     turnId: 1,
     generation: 1,
     cancelRequested: true,
+    scheduled: true,
     settled: true,
   };
   const successor: ActiveLaunch = {
     turnId: 2,
     generation: 2,
     cancelRequested: false,
+    scheduled: true,
     settled: false,
   };
   state.activeTurns.set('thread-x', successor);
@@ -35,8 +37,17 @@ test('P01: an obsolete finalizer cannot clear a successor owner', () => {
     'successor ownership must survive the obsolete finalizer',
   );
 
+  // An in-flight (unsettled) launch cannot be released even by its own owner.
+  assert.equal(
+    releaseLaunchOwnership(state, 'thread-x', successor),
+    false,
+    'an unsettled launch must not release ownership',
+  );
+  assert.equal(state.activeTurns.get('thread-x'), successor);
+
+  successor.settled = true;
   const releasedByOwner = releaseLaunchOwnership(state, 'thread-x', successor);
-  assert.equal(releasedByOwner, true, 'the actual owner releases its own launch');
+  assert.equal(releasedByOwner, true, 'the settled owner releases its own launch');
   assert.equal(state.activeTurns.has('thread-x'), false);
 });
 
@@ -46,6 +57,7 @@ test('P01: releasing an already-cleared launch is a no-op', () => {
     turnId: 1,
     generation: 1,
     cancelRequested: false,
+    scheduled: false,
     settled: true,
   };
   assert.equal(releaseLaunchOwnership(state, 'thread-x', launch), false);

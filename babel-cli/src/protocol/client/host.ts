@@ -52,6 +52,8 @@ export interface ActiveLaunch {
   generation: number;
   /** Cancellation has been requested; the launch may still be settling. */
   cancelRequested: boolean;
+  /** A host runner was actually scheduled for this launch. */
+  scheduled: boolean;
   /** The launch reached a terminal path and may release ownership. */
   settled: boolean;
 }
@@ -154,6 +156,11 @@ export function releaseLaunchOwnership(
   threadId: string,
   launch: ActiveLaunch,
 ): boolean {
+  // Only a settled launch may release ownership; an in-flight launch must not
+  // be released by anything other than its own terminal path.
+  if (!launch.settled) {
+    return false;
+  }
   const current = state.activeTurns.get(threadId);
   if (!current || current.generation !== launch.generation) {
     return false;
@@ -280,6 +287,7 @@ export async function handleProtocolRequest(
           turnId,
           generation,
           cancelRequested: false,
+          scheduled: false,
           settled: false,
         };
         state.activeTurns.set(params.thread_id, launch);
@@ -288,11 +296,13 @@ export async function handleProtocolRequest(
         const descriptor = state.descriptors.get(params.thread_id) ?? loadSessionDescriptor(params.thread_id);
         const engine = descriptor ? materializeEngine(state, descriptor) : state.engines.get(params.thread_id);
         if (!engine) {
+          launch.settled = true;
           releaseLaunchOwnership(state, params.thread_id, launch);
           return errorResponse(id, BabelProtocolErrorCode.INTERNAL_ERROR, `Unable to materialize thread runtime: ${params.thread_id}`);
         }
 
         if (onNotification || state.executeWithoutNotifications) {
+          launch.scheduled = true;
           const launchTurn = async () => {
             let seq = 0;
             try {
@@ -386,13 +396,6 @@ export async function handleProtocolRequest(
             `Thread not found: ${params.thread_id}`,
           );
         }
-        if (!state.activeTurns.has(params.thread_id)) {
-          return errorResponse(
-            id,
-            BabelProtocolErrorCode.TURN_NOT_IN_PROGRESS,
-            `No turn in progress for thread: ${params.thread_id}`,
-          );
-        }
         const launch = state.activeTurns.get(params.thread_id);
         if (!launch) {
           return errorResponse(
@@ -401,13 +404,19 @@ export async function handleProtocolRequest(
             `No turn in progress for thread: ${params.thread_id}`,
           );
         }
-        // Cancellation is a request. Ownership is released only when the launch
+        // Cancellation is a request. A scheduled launch keeps ownership until it
         // actually settles, so a successor cannot overlap this execution and a
-        // stale finalizer cannot clear the next owner.
+        // stale finalizer cannot clear the next owner. A launch admitted without
+        // a runner can never settle, so cancellation releases it here rather than
+        // wedging the thread.
         if (!launch.cancelRequested) {
-          launch.cancelRequested = true;
           engine.cancel();
           state.approvalBroker.cancelTurn(params.thread_id, String(launch.turnId));
+          launch.cancelRequested = true;
+        }
+        if (!launch.scheduled) {
+          launch.settled = true;
+          releaseLaunchOwnership(state, params.thread_id, launch);
         }
         const result: TurnCancelResult = {
           thread_id: params.thread_id,

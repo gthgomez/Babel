@@ -87,15 +87,12 @@ interface Harness {
   cleanup: () => void;
 }
 
-async function makeHarness(options: {
-  onNotification?: (notification: BabelProtocolServerNotification) => void;
-} = {}): Promise<Harness> {
+async function makeHarness(): Promise<Harness> {
   const fixture = withTempRunsDir();
   const engine = new DeferredEngine();
   const state = createProtocolHostState({
     engineFactory: () => engine as unknown as ChatEngine,
     executeWithoutNotifications: true,
-    ...(options.onNotification ? {} : {}),
   });
   const created = await handleProtocolRequest(
     {
@@ -105,7 +102,6 @@ async function makeHarness(options: {
       params: { project_root: fixture.root, task: 'lifecycle test' },
     },
     state,
-    options.onNotification,
   );
   assert.ok('result' in created, 'thread.create must succeed');
   const threadId = (created as { result: { thread_id: string } }).result.thread_id;
@@ -278,5 +274,50 @@ test('P01: cancelling a settling launch still cancels pending remote approvals',
     assert.equal(cancelCalls.length, 1, 'approval cancellation is idempotent');
   } finally {
     harness.cleanup();
+  }
+});
+
+test('P01: an admitted launch with no runner is released by cancel (no permanent wedge)', async () => {
+  const fixture = withTempRunsDir();
+  const engine = new DeferredEngine();
+  // No notification callback and no executeWithoutNotifications: the host admits
+  // the turn but schedules no runner, so it can never settle on its own.
+  const state = createProtocolHostState({
+    engineFactory: () => engine as unknown as ChatEngine,
+  });
+  try {
+    const created = await handleProtocolRequest(
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'thread.create',
+        params: { project_root: fixture.root, task: 'unscheduled' },
+      },
+      state,
+    );
+    const threadId = (created as { result: { thread_id: string } }).result.thread_id;
+
+    const first = await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 2, method: 'turn.submit', params: { thread_id: threadId, message: 'first' } },
+      state,
+    );
+    assert.equal('result' in first, true);
+    assert.equal(state.activeTurns.has(threadId), true);
+
+    const cancelled = await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 3, method: 'turn.cancel', params: { thread_id: threadId } },
+      state,
+    );
+    assert.equal((cancelled as { result: { cancelled: boolean } }).result.cancelled, true);
+    assert.equal(state.activeTurns.has(threadId), false, 'never-scheduled launch must be released');
+
+    const second = await handleProtocolRequest(
+      { jsonrpc: '2.0', id: 4, method: 'turn.submit', params: { thread_id: threadId, message: 'second' } },
+      state,
+    );
+    assert.equal('result' in second, true, 'thread must not be permanently wedged');
+    assert.equal(engine.executions, 0, 'no runner was ever scheduled');
+  } finally {
+    fixture.cleanup();
   }
 });
