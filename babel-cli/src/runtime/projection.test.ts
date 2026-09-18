@@ -178,6 +178,103 @@ test('P04: an unsettled operation is interrupted, never a success', () => {
   assert.equal(proj.outcome, null, 'no terminal fact means no terminal claim');
 });
 
+test('P04: unknown authority demotes the verifier badge as well as the outcome', () => {
+  const facts = sessionLogToFacts(corpus());
+  const unknownAuthority = {
+    ...facts[0]!,
+    id: 'future-authority-2',
+    sequence: 998,
+    cursor: { stream: 'runtime-facts', sequence: 998 },
+    schemaVersion: 2,
+    authority: 'authoritative',
+    payload: { type: 'future.authority' },
+  } as unknown as RuntimeFactV1;
+  const proj = projectTask([...facts, unknownAuthority]);
+  assert.equal(proj.outcome?.authoritative, false);
+  assert.equal(
+    proj.verifier.authoritative,
+    false,
+    'a client reading only the verifier badge must not claim verified state',
+  );
+});
+
+test('P04: reordering with unknown optional facts is deterministic', () => {
+  const facts = sessionLogToFacts(corpus());
+  const optional = {
+    ...facts[0]!,
+    id: 'future-optional-2',
+    sequence: 999,
+    cursor: { stream: 'runtime-facts', sequence: 999 },
+    schemaVersion: 2,
+    authority: 'observation',
+    payload: { type: 'future.optional' },
+  } as unknown as RuntimeFactV1;
+  const forward = projectTask([...facts, optional]);
+  const reverse = projectTask([optional, ...[...facts].reverse()]);
+  assert.deepEqual(forward, reverse);
+  assert.ok(forward.evidenceFactIds.includes('future-optional-2'));
+});
+
+test('P04: observation-authority completion.decided does not authorize', () => {
+  const facts = sessionLogToFacts(corpus());
+  const demoted = facts.map((fact) =>
+    fact.payload.type === 'completion.decided' && fact.authority === 'authoritative'
+      ? { ...fact, authority: 'observation' as const }
+      : fact,
+  );
+  const proj = projectTask(demoted);
+  assert.equal(proj.outcome?.outcome, 'VERIFIED_COMPLETE');
+  assert.equal(proj.outcome?.authoritative, false);
+  // The verifier receipt is independently authoritative; only the completion
+  // claim was demoted.
+  assert.equal(proj.verifier.authoritative, true);
+});
+
+test('P04: mutation prepare/rollback do not imply success', () => {
+  const rollback = projectTaskFromSessionEvents([
+    ev(1, { kind: 'mutation_batch', paths: ['src/a.ts'], batch_id: 'b9', status: 'rollback' }),
+  ]);
+  assert.ok(rollback.tools.interruptedOperationIds.includes('b9'));
+  assert.ok(!rollback.tools.completedOperationIds.includes('b9'));
+
+  const prepare = projectTaskFromSessionEvents([
+    ev(1, { kind: 'mutation_batch', paths: ['src/a.ts'], batch_id: 'b8', status: 'prepare' }),
+  ]);
+  assert.ok(prepare.tools.openOperationIds.includes('b8'));
+  assert.ok(!prepare.tools.completedOperationIds.includes('b8'));
+});
+
+test('P04: a terminal phase does not regress after a later observation', () => {
+  const proj = projectTaskFromSessionEvents([
+    ev(1, { kind: 'user_submitted', task_preview: 'do it' }),
+    ev(2, {
+      kind: 'completion_decision',
+      requested_outcome: 'UNVERIFIED_PATCH',
+      final_outcome: 'UNVERIFIED_PATCH',
+      allowed: true,
+      reason: 'done',
+      evidence_refs: [],
+      policy_version: 'v1',
+    }),
+    ev(3, { kind: 'verifier_attempt', command_preview: 'npm test', authoritative: true, exit_code: 0 }),
+  ]);
+  assert.equal(proj.phase, 'terminal');
+  assert.equal(proj.outcome?.authoritative, true);
+});
+
+test('P04: a malformed known fact degrades without throwing', () => {
+  const proj = projectTask([
+    {
+      ...sessionLogToFacts(corpus())[0]!,
+      id: 'broken',
+      payload: { type: 'completion.decided' },
+    } as unknown as RuntimeFactV1,
+  ]);
+  assert.equal(proj.outcome, null);
+  assert.equal(proj.degraded, true);
+  assert.ok(proj.degradedReasons.some((reason) => reason.startsWith('invalid_fact:')));
+});
+
 test('P04: non-authoritative verifier maps to observation authority', () => {
   const facts = sessionLogToFacts([
     ev(1, { kind: 'verifier_attempt', command_preview: 'echo hi', authoritative: false }),

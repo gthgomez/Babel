@@ -98,6 +98,18 @@ test('P04: redaction removes credential keys and caps long strings', () => {
   assert.match(String(payload['reason']), /truncated/);
 });
 
+test('P04: redaction does not leak nested secrets past the depth budget', () => {
+  let nested: Record<string, unknown> = { access_token: 'deep-secret' };
+  for (let i = 0; i < 8; i += 1) nested = { wrapper: nested };
+  const redacted = redactRuntimeFact(
+    fact({ payload: { type: 'permission.decided', decision: 'allow', nested } }),
+  );
+  assert.ok(
+    !JSON.stringify(redacted.payload).includes('deep-secret'),
+    'a nested credential must not survive redaction',
+  );
+});
+
 test('P04: fact cursor is its own address space', () => {
   const a = { stream: 'runtime-facts' as const, sequence: 1 };
   const b = { stream: 'runtime-facts' as const, sequence: 2 };

@@ -166,6 +166,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/** Required payload fields per fact type, used for ingress validation. */
+const REQUIRED_PAYLOAD_FIELDS: Record<string, readonly string[]> = {
+  'turn.admitted': ['commandId'],
+  'run.started': ['ownerGeneration'],
+  'run.cancel_requested': [],
+  'run.settled': ['status'],
+  'operation.prepared': ['operationDigest'],
+  'operation.settled': ['receiptId'],
+  'operation.indeterminate': ['operationDigest', 'reason'],
+  'context.committed': ['checkpointId'],
+  'context.degraded': ['reason'],
+  'verification.recorded': ['receiptId', 'authoritative'],
+  'completion.decided': ['decision'],
+  'permission.decided': ['decision'],
+};
+
 /**
  * Validate an untrusted fact at ingress. Unknown authority-bearing schema is
  * rejected fail-closed; unknown observation schema may be preserved by callers.
@@ -174,49 +190,79 @@ export function validateRuntimeFact(input: unknown): FactValidation {
   if (!isRecord(input)) {
     return { ok: false, reason: 'fact_not_object', authority: 'authoritative' };
   }
-  const schemaVersion = input['schemaVersion'];
-  const authority = input['authority'] === 'authoritative' ? 'authoritative' : 'observation';
+  const authorityRaw = input['authority'];
+  const authority: FactAuthority = authorityRaw === 'authoritative' ? 'authoritative' : 'observation';
   const id = typeof input['id'] === 'string' ? input['id'] : undefined;
-  if (schemaVersion !== RUNTIME_FACT_SCHEMA_VERSION) {
-    return {
-      ok: false,
-      reason: `unsupported_fact_schema:${String(schemaVersion)}`,
-      authority,
-      ...(id !== undefined ? { id } : {}),
-    };
+  const fail = (reason: string): InvalidFact => ({
+    ok: false,
+    reason,
+    authority,
+    ...(id !== undefined ? { id } : {}),
+  });
+
+  if (authorityRaw !== 'authoritative' && authorityRaw !== 'observation') {
+    return fail('invalid_authority');
   }
-  for (const field of ['id', 'threadId', 'taskId', 'turnId', 'runId', 'causationId', 'timestamp']) {
-    if (typeof input[field] !== 'string') {
-      return { ok: false, reason: `missing_${field}`, authority, ...(id !== undefined ? { id } : {}) };
-    }
+  if (input['schemaVersion'] !== RUNTIME_FACT_SCHEMA_VERSION) {
+    return fail(`unsupported_fact_schema:${String(input['schemaVersion'])}`);
+  }
+  for (const field of ['id', 'threadId', 'taskId', 'turnId', 'runId', 'causationId', 'timestamp', 'producer']) {
+    if (typeof input[field] !== 'string') return fail(`missing_${field}`);
   }
   if (typeof input['sequence'] !== 'number' || !Number.isInteger(input['sequence'])) {
-    return { ok: false, reason: 'invalid_sequence', authority, ...(id !== undefined ? { id } : {}) };
+    return fail('invalid_sequence');
+  }
+  const cursor = input['cursor'];
+  if (
+    !isRecord(cursor) ||
+    cursor['stream'] !== 'runtime-facts' ||
+    typeof cursor['sequence'] !== 'number' ||
+    !Number.isInteger(cursor['sequence'])
+  ) {
+    return fail('invalid_cursor');
   }
   const payload = input['payload'];
   if (!isRecord(payload) || typeof payload['type'] !== 'string') {
-    return { ok: false, reason: 'invalid_payload', authority, ...(id !== undefined ? { id } : {}) };
+    return fail('invalid_payload');
   }
-  if (!KNOWN_FACT_TYPES.has(payload['type'] as FactPayload['type'])) {
-    return {
-      ok: false,
-      reason: `unknown_fact_type:${String(payload['type'])}`,
-      authority,
-      ...(id !== undefined ? { id } : {}),
-    };
+  const type = payload['type'];
+  if (!KNOWN_FACT_TYPES.has(type as FactPayload['type'])) {
+    return fail(`unknown_fact_type:${type}`);
+  }
+  for (const field of REQUIRED_PAYLOAD_FIELDS[type] ?? []) {
+    if (payload[field] === undefined || payload[field] === null) {
+      return fail(`payload_missing_${field}`);
+    }
+  }
+  if (type === 'completion.decided') {
+    const decision = payload['decision'];
+    if (
+      !isRecord(decision) ||
+      typeof decision['finalOutcome'] !== 'string' ||
+      typeof decision['allowed'] !== 'boolean'
+    ) {
+      return fail('invalid_completion_decision');
+    }
   }
   return { ok: true, fact: input as unknown as RuntimeFactV1 };
 }
 
 const SECRET_KEY_PATTERN = /(pass(word)?|secret|token|api[_-]?key|authorization|credential|private[_-]?key)/i;
 const MAX_STRING_CHARS = 512;
+const MAX_REDACT_DEPTH = 12;
 
 function redactValue(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') {
     return value.length > MAX_STRING_CHARS ? `${value.slice(0, MAX_STRING_CHARS)}…[truncated]` : value;
   }
-  if (Array.isArray(value)) return value.map((entry) => redactValue(entry, depth + 1));
-  if (isRecord(value) && depth < 6) {
+  if (Array.isArray(value)) {
+    if (depth >= MAX_REDACT_DEPTH) return '[redacted:depth]';
+    return value.map((entry) => redactValue(entry, depth + 1));
+  }
+  if (isRecord(value)) {
+    // Past the depth budget we cannot safety-scan keys, so redact wholesale
+    // rather than returning a nested object that may hold a credential.
+    if (depth >= MAX_REDACT_DEPTH) return '[redacted:depth]';
     const out: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value)) {
       out[key] = SECRET_KEY_PATTERN.test(key) ? '[redacted]' : redactValue(entry, depth + 1);

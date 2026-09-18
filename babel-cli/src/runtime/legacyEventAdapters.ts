@@ -146,15 +146,48 @@ export function sessionEventPayloads(
       ];
     case 'recovery_reconciled':
       return [{ type: 'permission.decided', decision: 'allow', reason: 'recovery_reconciled' }];
-    case 'mutation_batch':
+    case 'mutation_batch': {
+      const operationId = event.batch_id ?? event.event_id;
+      if (event.status === 'prepare') {
+        return [
+          {
+            type: 'operation.prepared',
+            operationDigest: event.pre_hash ?? event.event_id,
+            operationId,
+            toolName: 'mutation_batch',
+          },
+        ];
+      }
+      if (event.status === 'rollback') {
+        return [
+          {
+            type: 'operation.indeterminate',
+            operationDigest: event.post_hash ?? event.pre_hash ?? event.event_id,
+            reason: 'mutation_rollback',
+            operationId,
+          },
+        ];
+      }
+      if (event.status === 'commit') {
+        return [
+          {
+            type: 'operation.settled',
+            receiptId: operationId,
+            operationId,
+            status: 'commit',
+          },
+        ];
+      }
+      // Unknown/absent mutation status must not be reported as a success.
       return [
         {
-          type: 'operation.settled',
-          receiptId: event.batch_id ?? event.event_id,
-          operationId: event.batch_id ?? event.event_id,
-          status: event.status ?? 'committed',
+          type: 'operation.indeterminate',
+          operationDigest: event.pre_hash ?? event.event_id,
+          reason: `mutation_status_${event.status ?? 'unknown'}`,
+          operationId,
         },
       ];
+    }
     case 'verifier_attempt':
       return [
         {
