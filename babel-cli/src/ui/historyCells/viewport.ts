@@ -19,6 +19,7 @@ import {
 export interface ViewportCellEntry {
   cellId: string;
   cacheKey: string;
+  contentKey: string;
   cell: HistoryCell;
   startRow: number;
   rows: string[];
@@ -34,6 +35,10 @@ export interface ViewportScrollInfo {
 
 export interface ViewportOperationCounts {
   cellsMeasured: number;
+  cellsCompared: number;
+  indexEntriesRebuilt: number;
+  cachedRevisionCount: number;
+  measurementCacheEvictions: number;
   visibleEntriesVisited: number;
   visibleLookupSteps: number;
   widthReflows: number;
@@ -43,6 +48,8 @@ interface ViewportAnchor {
   cellId: string;
   intraCellRow: number;
 }
+
+export const VIEWPORT_MEASUREMENT_CACHE_LIMIT = 512;
 
 export class HistoryCellViewport {
   private width: number;
@@ -58,12 +65,15 @@ export class HistoryCellViewport {
   private readonly measuredRows = new Map<string, string[]>();
   private readonly entryIndexByCellId = new Map<string, number>();
   private lastCommittedCells: readonly HistoryCell[] | null = null;
-  private lastCommittedLength = 0;
-  private lastCommittedTailKey: string | null = null;
+  private lastCommittedContentKeys: readonly string[] | null = null;
   private lastActiveCell: HistoryCell | null = null;
-  private lastActiveCacheKey: string | null = null;
+  private lastActiveContentKey: string | null = null;
   private operationCounts: ViewportOperationCounts = {
     cellsMeasured: 0,
+    cellsCompared: 0,
+    indexEntriesRebuilt: 0,
+    cachedRevisionCount: 0,
+    measurementCacheEvictions: 0,
     visibleEntriesVisited: 0,
     visibleLookupSteps: 0,
     widthReflows: 0,
@@ -98,14 +108,19 @@ export class HistoryCellViewport {
     this.rebuildFromCells(
       this.entries.map((entry) => entry.cell),
       anchor,
-      true,
+      {
+        forceReflow: true,
+        countNewRows: false,
+      },
     );
     this.clearSyncSource();
   }
 
   /** Replace viewport contents from an ordered cell list. */
   setCells(cells: HistoryCell[]): void {
-    this.rebuildFromCells(cells, this.captureAnchor());
+    this.rebuildFromCells(cells, this.captureAnchor(), {
+      resetViewport: this.shouldResetViewport(cells),
+    });
     this.clearSyncSource();
   }
 
@@ -113,52 +128,73 @@ export class HistoryCellViewport {
   syncFromTranscript(transcript: HistoryTranscript): void {
     const committed = transcript.getCommittedCells();
     const active = transcript.getActiveCell();
-    const activeCacheKey = active?.cacheKey() ?? null;
-    const committedTailKey = committed.at(-1)?.cacheKey() ?? null;
+    const committedContentKeys = committed.map((cell) =>
+      this.cellContentKey(cell),
+    );
+    const activeContentKey = active ? this.cellContentKey(active) : null;
     if (
       committed === this.lastCommittedCells &&
-      committed.length === this.lastCommittedLength &&
-      committedTailKey === this.lastCommittedTailKey &&
+      this.sameStringArray(
+        committedContentKeys,
+        this.lastCommittedContentKeys,
+      ) &&
       active === this.lastActiveCell &&
-      activeCacheKey === this.lastActiveCacheKey
+      activeContentKey === this.lastActiveContentKey
     ) {
       return;
     }
 
-    const wasAtBottom = this.scrollOffset === 0;
-    const prevTotal = this.totalRows;
     const cells = active ? [...committed, active] : committed;
-    this.rebuildFromCells(cells, this.captureAnchor());
+    this.rebuildFromCells(cells, this.captureAnchor(), {
+      resetViewport: this.shouldResetViewport(cells),
+    });
     this.lastCommittedCells = committed;
-    this.lastCommittedLength = committed.length;
-    this.lastCommittedTailKey = committedTailKey;
+    this.lastCommittedContentKeys = committedContentKeys;
     this.lastActiveCell = active;
-    this.lastActiveCacheKey = activeCacheKey;
-
-    if (!wasAtBottom && this.totalRows > prevTotal) {
-      this.unseenSinceLastView += this.totalRows - prevTotal;
-    }
+    this.lastActiveContentKey = activeContentKey;
   }
 
   private rebuildFromCells(
     cells: readonly HistoryCell[],
     anchor: ViewportAnchor | null = null,
-    forceReflow = false,
+    options: {
+      forceReflow?: boolean;
+      countNewRows?: boolean;
+      resetViewport?: boolean;
+    } = {},
   ): void {
     const previousEntries = this.entries;
-    let firstChanged = Math.min(previousEntries.length, cells.length);
+    const previousTotalRows = this.totalRows;
+    const wasAtBottom = this.scrollOffset === 0;
+    const forceReflow = options.forceReflow ?? false;
+    const countNewRows = options.countNewRows ?? true;
+    const resetViewport = options.resetViewport ?? false;
+    const contentKeys = cells.map((cell) => this.cellContentKey(cell));
+
+    let firstChanged = 0;
     if (!forceReflow) {
+      const comparableCount = Math.min(previousEntries.length, cells.length);
       while (
-        firstChanged > 0 &&
-        this.sameEntryCell(previousEntries[firstChanged - 1]!, cells[firstChanged - 1]!)
+        firstChanged < comparableCount &&
+        this.sameEntryCell(
+          previousEntries[firstChanged]!,
+          cells[firstChanged]!,
+          contentKeys[firstChanged]!,
+        )
       ) {
-        firstChanged -= 1;
+        firstChanged += 1;
       }
-    } else {
-      firstChanged = 0;
     }
 
-    if (!forceReflow && firstChanged === cells.length && cells.length === previousEntries.length) {
+    if (
+      !forceReflow &&
+      firstChanged === cells.length &&
+      cells.length === previousEntries.length
+    ) {
+      if (resetViewport) {
+        this.scrollOffset = 0;
+        this.unseenSinceLastView = 0;
+      }
       return;
     }
 
@@ -171,10 +207,11 @@ export class HistoryCellViewport {
 
     for (let index = firstChanged; index < cells.length; index += 1) {
       const cell = cells[index]!;
-      const rows = this.measureCell(cell);
+      const rows = this.measureCell(cell, contentKeys[index]!);
       entries.push({
         cellId: cell.record.cell_id,
         cacheKey: cell.cacheKey(),
+        contentKey: contentKeys[index]!,
         cell,
         startRow,
         rows,
@@ -188,49 +225,124 @@ export class HistoryCellViewport {
     for (let index = 0; index < entries.length; index += 1) {
       this.entryIndexByCellId.set(entries[index]!.cellId, index);
     }
+    this.operationCounts.indexEntriesRebuilt += entries.length;
     this.searchIndexVersion += 1;
 
-    if (this.scrollOffset === 0) {
+    if (resetViewport) {
+      this.scrollOffset = 0;
+      this.unseenSinceLastView = 0;
       return;
     }
     if (anchor) {
       const anchorIndex = this.entryIndexByCellId.get(anchor.cellId);
       if (anchorIndex !== undefined) {
         const anchorEntry = entries[anchorIndex]!;
-        const anchorRow = anchorEntry.startRow + anchor.intraCellRow;
+        const intraCellRow = Math.min(
+          Math.max(0, anchor.intraCellRow),
+          Math.max(0, anchorEntry.rows.length - 1),
+        );
+        const anchorRow = anchorEntry.startRow + intraCellRow;
         this.scrollOffset = Math.max(
-          1,
+          0,
           Math.min(
             this.maxScrollOffset,
             this.totalRows - this.lastViewportHeight - anchorRow,
           ),
         );
-        return;
+      } else {
+        this.scrollOffset = Math.min(this.scrollOffset, this.maxScrollOffset);
       }
+    } else {
+      this.scrollOffset = Math.min(this.scrollOffset, this.maxScrollOffset);
     }
-    this.scrollOffset = Math.min(this.scrollOffset, this.maxScrollOffset);
+
+    if (countNewRows && !wasAtBottom && this.scrollOffset > 0) {
+      this.unseenSinceLastView += Math.max(
+        0,
+        this.totalRows - previousTotalRows,
+      );
+    }
+    if (this.scrollOffset === 0) {
+      this.unseenSinceLastView = 0;
+    }
   }
 
-  private measureCell(cell: HistoryCell): string[] {
-    const cacheKey = `${this.width}:${cell.cacheKey()}`;
+  private measureCell(
+    cell: HistoryCell,
+    contentKey = this.cellContentKey(cell),
+  ): string[] {
+    const cacheKey = `${this.width}:${contentKey}`;
     const cached = this.measuredRows.get(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      this.measuredRows.delete(cacheKey);
+      this.measuredRows.set(cacheKey, cached);
+      return cached;
+    }
     const rows = flattenCellRows(cell, this.width);
     this.measuredRows.set(cacheKey, rows);
+    while (this.measuredRows.size > VIEWPORT_MEASUREMENT_CACHE_LIMIT) {
+      const oldestKey = this.measuredRows.keys().next().value as
+        | string
+        | undefined;
+      if (oldestKey === undefined) break;
+      this.measuredRows.delete(oldestKey);
+      this.operationCounts.measurementCacheEvictions += 1;
+    }
     this.operationCounts.cellsMeasured += 1;
     return rows;
   }
 
-  private sameEntryCell(entry: ViewportCellEntry, cell: HistoryCell): boolean {
-    return entry.cellId === cell.record.cell_id && entry.cacheKey === cell.cacheKey();
+  private sameEntryCell(
+    entry: ViewportCellEntry,
+    cell: HistoryCell,
+    contentKey: string,
+  ): boolean {
+    this.operationCounts.cellsCompared += 1;
+    return (
+      entry.cellId === cell.record.cell_id &&
+      entry.cacheKey === cell.cacheKey() &&
+      entry.contentKey === contentKey
+    );
+  }
+
+  private cellContentKey(cell: HistoryCell): string {
+    return `${cell.cacheKey()}:${JSON.stringify(cell.toRecord())}`;
+  }
+
+  private sameStringArray(
+    left: readonly string[],
+    right: readonly string[] | null,
+  ): boolean {
+    if (right === null || left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] !== right[index]) return false;
+    }
+    return true;
+  }
+
+  private shouldResetViewport(cells: readonly HistoryCell[]): boolean {
+    if (cells.length === 0) return this.entries.length > 0;
+    if (this.entries.length === 0) return false;
+
+    const sharesCellId = cells.some((cell) =>
+      this.entryIndexByCellId.has(cell.record.cell_id),
+    );
+    if (!sharesCellId) return true;
+
+    const previousThreadId = this.entries[0]?.cell.record.thread_id;
+    const nextThreadId = cells[0]?.record.thread_id;
+    return (
+      previousThreadId !== undefined &&
+      nextThreadId !== undefined &&
+      previousThreadId !== nextThreadId
+    );
   }
 
   private clearSyncSource(): void {
     this.lastCommittedCells = null;
-    this.lastCommittedLength = 0;
-    this.lastCommittedTailKey = null;
+    this.lastCommittedContentKeys = null;
     this.lastActiveCell = null;
-    this.lastActiveCacheKey = null;
+    this.lastActiveContentKey = null;
   }
 
   private captureAnchor(): ViewportAnchor | null {
@@ -298,7 +410,11 @@ export class HistoryCellViewport {
 
     const result: string[] = [];
     const firstEntry = this.findEntryIndexAtRow(startInclusive, true);
-    for (let entryIndex = firstEntry; entryIndex < this.entries.length; entryIndex += 1) {
+    for (
+      let entryIndex = firstEntry;
+      entryIndex < this.entries.length;
+      entryIndex += 1
+    ) {
       const entry = this.entries[entryIndex]!;
       this.operationCounts.visibleEntriesVisited += 1;
       const entryEnd = entry.startRow + entry.rows.length;
@@ -360,7 +476,10 @@ export class HistoryCellViewport {
    * Returns warm duration in ms (0 when cache is already current).
    */
   warmSearchIndex(): number {
-    if (this.searchIndexBuiltVersion === this.searchIndexVersion && this.searchIndex.isWarm) {
+    if (
+      this.searchIndexBuiltVersion === this.searchIndexVersion &&
+      this.searchIndex.isWarm
+    ) {
       return 0;
     }
     const ms = this.searchIndex.warmFromViewportEntries(this.entries);
@@ -397,6 +516,10 @@ export class HistoryCellViewport {
   resetOperationCounts(): void {
     this.operationCounts = {
       cellsMeasured: 0,
+      cellsCompared: 0,
+      indexEntriesRebuilt: 0,
+      cachedRevisionCount: this.measuredRows.size,
+      measurementCacheEvictions: 0,
       visibleEntriesVisited: 0,
       visibleLookupSteps: 0,
       widthReflows: 0,
@@ -405,6 +528,9 @@ export class HistoryCellViewport {
 
   /** Return a snapshot of viewport work performed since the last reset. */
   getOperationCounts(): ViewportOperationCounts {
-    return { ...this.operationCounts };
+    return {
+      ...this.operationCounts,
+      cachedRevisionCount: this.measuredRows.size,
+    };
   }
 }
