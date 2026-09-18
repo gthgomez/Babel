@@ -14,6 +14,7 @@ import type { VerifierReceipt } from '../../agent/completionGatePolicy.js';
 import type { SessionEvent } from '../../agent/sessionEvents.js';
 import { renderStatusBar, type StatusBarState } from '../../ui/statusBar.js';
 import { presentChatReview, type ReviewCard, type ReviewCardInput } from '../../ui/reviewCard.js';
+import { projectChatTerminal } from '../../agent/chatFailureClassification.js';
 
 export interface StatusBarProjection {
   model: string;
@@ -152,19 +153,23 @@ export function projectTurnViewState(
         break;
 
       case 'turn_terminal_resolved': {
+        const projectedTerminal = projectChatTerminal({
+          ...(ev.outcome !== undefined ? { outcome: ev.outcome } : {}),
+          status: ev.status,
+        });
         const isStronger =
           !isTerminal ||
-          ev.outcome === 'CANCELLED' ||
-          ev.outcome === 'VERIFIED_COMPLETE' ||
-          ev.outcome === 'BLOCKED_POLICY' ||
-          ev.outcome === 'BUDGET_EXHAUSTED' ||
-          ev.outcome === 'INFRA_FAILURE' ||
-          ev.outcome === 'AGENT_FAILURE' ||
-          (terminalOutcome === 'NO_CHANGE_REQUIRED' && ev.outcome !== 'NO_CHANGE_REQUIRED');
+          projectedTerminal.outcome === 'CANCELLED' ||
+          projectedTerminal.outcome === 'VERIFIED_COMPLETE' ||
+          projectedTerminal.outcome === 'BLOCKED_POLICY' ||
+          projectedTerminal.outcome === 'BUDGET_EXHAUSTED' ||
+          projectedTerminal.outcome === 'INFRA_FAILURE' ||
+          projectedTerminal.outcome === 'AGENT_FAILURE' ||
+          (terminalOutcome === 'NO_CHANGE_REQUIRED' && projectedTerminal.outcome !== 'NO_CHANGE_REQUIRED');
 
         if (isStronger) {
-          terminalOutcome = ev.outcome;
-          terminalStatus = ev.status;
+          terminalOutcome = projectedTerminal.outcome;
+          terminalStatus = projectedTerminal.status;
           isTerminal = true;
         }
         if (ev.finalAnswer) {

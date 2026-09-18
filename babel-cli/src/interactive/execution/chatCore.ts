@@ -357,6 +357,8 @@ export async function consumeChatStream(
   let doneRunAllowance: ChatResult['runAllowance'];
   let donePolicyEvents: ChatResult['policyEvents'];
   const toolIdQueue: number[] = [];
+  const toolIdsByCallId = new Map<string, number>();
+  let doneStatus: ChatResult['status'] | undefined;
   let receivedTerminalEvent = false;
 
   const snapshotEvidence = () =>
@@ -376,8 +378,9 @@ export async function consumeChatStream(
 
   try {
     for await (const event of stream) {
-      if (event.type === 'tool_complete') {
+      if (event.type === 'tool_complete' || event.type === 'tool_failed') {
         accumulatedToolCalls.push({
+          ...(event.toolCallId !== undefined ? { toolCallId: event.toolCallId } : {}),
           tool: event.tool,
           target: event.target,
           ...(event.detail !== undefined ? { detail: event.detail } : {}),
@@ -392,6 +395,7 @@ export async function consumeChatStream(
         ...(onStreamEvent ? { onStreamEvent } : {}),
         ...(protocolSession ? { protocolSession } : {}),
         toolIdQueue,
+        toolIdsByCallId,
       });
 
       if (terminalFromDispatch) {
@@ -427,6 +431,7 @@ export async function consumeChatStream(
         verifierTampered = event.verifierTampered ?? verifierTampered;
         turnRouting = event.turnRouting ?? turnRouting;
         doneOutcome = event.outcome;
+        doneStatus = event.status;
         doneBudgetExceeded = event.budgetExceeded === true;
         doneTurnTelemetry = event.turnTelemetry ?? doneTurnTelemetry;
         doneCostBudget = event.costBudget ?? doneCostBudget;
@@ -482,6 +487,7 @@ export async function consumeChatStream(
     ...(doneCostBudget ? { costBudget: doneCostBudget } : {}),
     ...(doneRunAllowance ? { runAllowance: doneRunAllowance } : {}),
     ...(donePolicyEvents ? { policyEvents: donePolicyEvents } : {}),
+    ...(doneStatus !== undefined ? { status: doneStatus } : {}),
   });
 }
 
@@ -513,7 +519,9 @@ function buildChatCallbacks(
     onToolComplete: (id: number, detail?: string, error?: string, exitCode?: number) => {
       const meta = toolMetadata.get(id);
       protocolSession?.emitChatEvent({
-        type: 'tool_complete',
+        type: error !== undefined || (exitCode !== undefined && exitCode !== 0)
+          ? 'tool_failed'
+          : 'tool_complete',
         tool: meta?.tool ?? 'tool',
         target: meta?.target ?? String(id),
         ...(detail !== undefined ? { detail } : {}),
@@ -733,11 +741,30 @@ export async function runChatEngineOnce(input: {
         type: 'done',
         answer: result.answer,
         usage: result.usage,
+        status: result.status,
+        ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
       });
     } else if (result.status === 'failed') {
-      protocolSession?.emitChatEvent({ type: 'failed', error: result.answer });
+      protocolSession?.emitChatEvent({
+        type: 'failed',
+        error: result.answer,
+        status: result.status,
+        ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+      });
     } else if (result.status === 'cancelled') {
-      protocolSession?.emitChatEvent({ type: 'cancelled' });
+      protocolSession?.emitChatEvent({
+        type: 'cancelled',
+        status: result.status,
+        outcome: 'CANCELLED',
+      });
+    } else {
+      protocolSession?.emitChatEvent({
+        type: 'done',
+        answer: result.answer,
+        usage: result.usage,
+        status: result.status,
+        ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+      });
     }
   }
 

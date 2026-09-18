@@ -20,6 +20,7 @@ export interface ChatEventDispatchSinks {
   onStreamEvent?: (event: ChatStreamEvent) => void;
   protocolSession?: ProtocolTurnSession | null;
   toolIdQueue?: number[];
+  toolIdsByCallId?: Map<string, number>;
 }
 
 import {
@@ -28,6 +29,7 @@ import {
   isEnvironmentErrorText,
   isInfrastructureErrorText,
   isPolicyErrorText,
+  projectChatTerminal,
   resolveFailedEventOutcome,
   statusForOutcome,
 } from '../../agent/chatFailureClassification.js';
@@ -38,6 +40,7 @@ export {
   isEnvironmentErrorText,
   isInfrastructureErrorText,
   isPolicyErrorText,
+  projectChatTerminal,
   resolveFailedEventOutcome,
   statusForOutcome,
 };
@@ -70,14 +73,19 @@ export function dispatchChatEvent(
       break;
     case 'tool_start': {
       const id = sinks.convRenderer?.onToolCallStart(event.tool, event.target) ?? -1;
-      sinks.toolIdQueue?.push(id);
+      if (event.toolCallId) sinks.toolIdsByCallId?.set(event.toolCallId, id);
+      else sinks.toolIdQueue?.push(id);
       break;
     }
-    case 'tool_complete': {
-      const id = sinks.toolIdQueue?.shift();
+    case 'tool_complete':
+    case 'tool_failed': {
+      const id = event.toolCallId
+        ? sinks.toolIdsByCallId?.get(event.toolCallId)
+        : sinks.toolIdQueue?.shift();
       if (id !== undefined && id >= 0) {
         sinks.convRenderer?.onToolCallComplete(id, event.detail, event.error, event.exitCode);
       }
+      if (event.toolCallId) sinks.toolIdsByCallId?.delete(event.toolCallId);
       break;
     }
     case 'sub_agent_start':
@@ -115,9 +123,13 @@ export function dispatchChatEvent(
       verifierReceipt?: ChatResult['verifierReceipt'];
       blockedReport?: ChatResult['blockedReport'];
     };
-    return {
-      status: outcome ? statusForOutcome(outcome) : 'failed',
+    const terminal = projectChatTerminal({
       ...(outcome !== undefined ? { outcome } : {}),
+      status: 'failed',
+    });
+    return {
+      status: terminal.status,
+      ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
       answer: event.error,
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
@@ -133,6 +145,7 @@ export function dispatchChatEvent(
   }
 
   if (event.type === 'cancelled') {
+    const terminal = projectChatTerminal({ outcome: event.outcome ?? 'CANCELLED' });
     const ev = event as {
       toolCalls?: ChatResult['toolCalls'];
       runDir?: string;
@@ -140,8 +153,8 @@ export function dispatchChatEvent(
       verifierReceipt?: ChatResult['verifierReceipt'];
     };
     return {
-      status: 'cancelled',
-      outcome: 'CANCELLED',
+      status: terminal.status,
+      outcome: terminal.outcome!,
       answer: 'Cancelled',
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
@@ -174,6 +187,7 @@ export function terminalResultFromDoneEvent(
     costBudget?: ChatResult['costBudget'];
     runAllowance?: ChatResult['runAllowance'];
     policyEvents?: ChatResult['policyEvents'];
+    status?: ChatResult['status'];
   },
 ): ChatResult {
   // Prefer the engine's authoritative TerminalOutcome. Only recompute when
@@ -188,15 +202,16 @@ export function terminalResultFromDoneEvent(
       blockedReport,
     });
 
-  const status: ChatResult['status'] = blockedReport
+  const observedStatus: ChatResult['status'] = opts?.status ?? (blockedReport
     ? 'blocked'
     : budgetExceeded
       ? 'budget_exhausted'
-      : 'completed';
+      : 'completed');
+  const terminal = projectChatTerminal({ outcome, status: observedStatus });
 
   return {
-    status,
-    outcome,
+    status: terminal.status,
+    ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
     answer,
     usage,
     conversation: [],

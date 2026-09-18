@@ -470,6 +470,40 @@ describe('PR-C: Canonical Turn View Projection', () => {
     assert.equal(view.reviewCard.title, 'Cancelled');
   });
 
+  test('authoritative AGENT_FAILURE overrides mismatched completed projection input', () => {
+    const view = projectTurnViewState([
+      {
+        type: 'turn_terminal_resolved',
+        timestamp: 1000,
+        outcome: 'AGENT_FAILURE',
+        status: 'completed',
+        finalAnswer: 'partial output before agent failure',
+      },
+    ]);
+
+    assert.equal(view.reviewCard.terminalOutcome, 'AGENT_FAILURE');
+    assert.equal(view.reviewCard.status, 'failed');
+    assert.equal(view.statusBar.statusLabel, 'failed');
+  });
+
+  test('durable terminal projection trusts outcome over mismatched status and preserves unknown', () => {
+    const failedLog = createSessionEventLog('durable-agent-failure');
+    recordTurnEnded(failedLog, {
+      turn_id: 'turn-1',
+      outcome: 'AGENT_FAILURE',
+      status: 'completed',
+    });
+    const failedView = projectTurnViewStateFromSessionEvents(failedLog.events);
+    assert.equal(failedView.reviewCard.terminalOutcome, 'AGENT_FAILURE');
+    assert.equal(failedView.reviewCard.status, 'failed');
+
+    const unknownLog = createSessionEventLog('durable-unknown');
+    recordTurnEnded(unknownLog, { turn_id: 'turn-2', status: 'failed' });
+    const unknownView = projectTurnViewStateFromSessionEvents(unknownLog.events);
+    assert.equal(unknownView.reviewCard.terminalOutcome, undefined);
+    assert.equal(unknownView.reviewCard.status, 'failed');
+  });
+
   test('unknown model fallback represents unknown truthfully without fabricating identity', () => {
     const events: CanonicalTurnEvent[] = [
       {

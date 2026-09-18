@@ -110,7 +110,12 @@ import {
   type ChatEngineRunAllowanceReport,
   type ChatRunLimiter,
 } from '../config/chatEngineLimits.js';
-import { classifyFailureText, isProviderOutputLimitText } from './chatFailureClassification.js';
+import {
+  classifyFailureText,
+  isProviderOutputLimitText,
+  projectChatTerminal,
+  type ChatStatus,
+} from './chatFailureClassification.js';
 import { nativeTurnFromStream, ProviderOutputTruncatedError } from './chatNativeTurn.js';
 import {
   resolveChatTaskClass,
@@ -706,9 +711,21 @@ export type StreamEvent =
 export type ChatEvent =
   | { type: 'thinking' }
   | { type: 'answer_chunk'; text: string }
-  | { type: 'tool_start'; tool: string; target: string }
+  | { type: 'tool_start'; toolCallId?: string; tool: string; target: string }
   | {
       type: 'tool_complete';
+      toolCallId?: string;
+      tool: string;
+      target: string;
+      detail?: string;
+      error?: string;
+      exitCode?: number;
+      effect_status?: MutationEffectStatus;
+      mutation_paths?: string[];
+    }
+  | {
+      type: 'tool_failed';
+      toolCallId?: string;
       tool: string;
       target: string;
       detail?: string;
@@ -739,11 +756,14 @@ export type ChatEvent =
       type: 'done';
       answer: string;
       usage: SessionUsageSummary;
+      /** Canonical legacy status derived from outcome when known. */
+      status?: ChatStatus;
       /** Authoritative terminal outcome from the engine (P0-D lossless). */
       outcome?: TerminalOutcome;
       planOutcome?: 'PLAN_COMPLETE';
       budgetExceeded?: boolean;
       toolCalls?: Array<{
+        toolCallId?: string;
         tool: string;
         target: string;
         detail?: string;
@@ -778,8 +798,10 @@ export type ChatEvent =
   | {
       type: 'failed';
       error: string;
+      status?: ChatStatus;
       /** Present when tools ran before failure (turn-limit / stall kill / etc.). */
       toolCalls?: Array<{
+        toolCallId?: string;
         tool: string;
         target: string;
         detail?: string;
@@ -794,7 +816,12 @@ export type ChatEvent =
       costBudget?: ChatEngineLimits['costBudget'];
       runAllowance?: ChatEngineRunAllowanceReport;
     }
-  | { type: 'cancelled'; turnTelemetry?: ChatTurnTelemetryRecord }
+  | {
+      type: 'cancelled';
+      status?: ChatStatus;
+      outcome?: 'CANCELLED';
+      turnTelemetry?: ChatTurnTelemetryRecord;
+    }
   | {
       type: 'progress_recovery';
       intervention: import('./progressController.js').ProgressInterventionLevel;
@@ -804,7 +831,7 @@ export type ChatEvent =
     };
 
 export interface ChatResult {
-  status: 'completed' | 'failed' | 'cancelled' | 'blocked' | 'budget_exhausted';
+  status: ChatStatus;
   /** Honest terminal outcome — semantically precise, never conflated.
    *  Optional for backward compatibility with test fixtures that omit it. */
   outcome?: TerminalOutcome;
@@ -814,6 +841,7 @@ export interface ChatResult {
   usage: SessionUsageSummary;
   conversation: ChatMessage[];
   toolCalls?: Array<{
+    toolCallId?: string;
     tool: string;
     target: string;
     detail?: string;
@@ -981,6 +1009,7 @@ export class ChatEngine {
     | OpenRouterApiRunner
     | null = null;
   private toolCallLog: Array<{
+    toolCallId?: string;
     tool: string;
     target: string;
     detail?: string;
@@ -2270,6 +2299,9 @@ export class ChatEngine {
       };
     }
 
+    const callbackToolIds = new Map<string, number>();
+    const legacyCallbackToolIds: number[] = [];
+
     let terminal: {
       kind: 'done' | 'failed' | 'cancelled';
       answer?: string;
@@ -2298,10 +2330,40 @@ export class ChatEngine {
             cb.onContextCompacted?.(event);
             break;
           case 'tool_start':
-            cb.onToolStart?.(event.tool, event.target);
+            {
+              const id = cb.onToolStart?.(event.tool, event.target) ?? -1;
+              if (event.toolCallId) callbackToolIds.set(event.toolCallId, id);
+              else legacyCallbackToolIds.push(id);
+            }
             break;
           case 'tool_complete':
-            cb.onToolComplete?.(-1, event.detail, event.error, event.exitCode);
+          case 'tool_failed': {
+            const id = event.toolCallId
+              ? callbackToolIds.get(event.toolCallId)
+              : legacyCallbackToolIds.shift();
+            cb.onToolComplete?.(id ?? -1, event.detail, event.error, event.exitCode);
+            if (event.toolCallId) callbackToolIds.delete(event.toolCallId);
+            break;
+          }
+          case 'file_changed':
+            cb.onFileChanged?.(event.path, event.additions, event.deletions, event.content);
+            break;
+          case 'sub_agent_start':
+            cb.onSubAgentStart?.({
+              id: event.id,
+              label: event.label,
+              ...(event.model !== undefined ? { model: event.model } : {}),
+            });
+            break;
+          case 'sub_agent_complete':
+            cb.onSubAgentComplete?.({
+              id: event.id,
+              summary: event.summary,
+              ...(event.tokens !== undefined ? { tokens: event.tokens } : {}),
+            });
+            break;
+          case 'sub_agent_failed':
+            cb.onSubAgentFailed?.({ id: event.id, error: event.error });
             break;
           case 'done':
             terminal = {
@@ -2372,18 +2434,24 @@ export class ChatEngine {
         failedOutcome,
       );
     }
-    if (terminal.blockedReport) {
-      return this.buildResult('blocked', cb, terminal.answer, terminal.blockedReport, terminal.outcome);
-    }
-    // Preserve budget_exhausted status from streamDone (do not collapse to completed).
     if (terminal.budgetExceeded || terminal.outcome === 'BUDGET_EXHAUSTED' || this.budgetExceeded) {
       this.budgetExceeded = true;
-      return this.buildResult('budget_exhausted', cb, terminal.answer, undefined, terminal.outcome);
     }
-    if (terminal.outcome === 'AGENT_FAILURE' || terminal.outcome === 'INFRA_FAILURE') {
-      return this.buildResult('failed', cb, terminal.answer, undefined, terminal.outcome);
-    }
-    return this.buildResult('completed', cb, terminal.answer, undefined, terminal.outcome);
+    const doneTerminal = projectChatTerminal({
+      ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
+      status: terminal.blockedReport
+        ? 'blocked'
+        : this.budgetExceeded
+          ? 'budget_exhausted'
+          : 'completed',
+    });
+    return this.buildResult(
+      doneTerminal.status,
+      cb,
+      terminal.answer,
+      terminal.blockedReport,
+      doneTerminal.outcome,
+    );
   }
 
   /** #1 Async generator: yields typed ChatEvents as the conversation progresses.
@@ -2712,9 +2780,11 @@ export class ChatEngine {
                 nativeToolCallIds.push(
                   canonicalizeToolCallId(event, turn, nativeActions.length - 1, seenToolCallIds),
                 );
+                const toolCallId = nativeToolCallIds.at(-1)!;
                 toolsAnnouncedInStream = true;
                 yield {
                   type: 'tool_start',
+                  toolCallId,
                   tool: event.name,
                   target: chatActionTarget(action),
                 };
@@ -2804,9 +2874,11 @@ export class ChatEngine {
                   nativeToolCallIds.push(
                     canonicalizeToolCallId(event, turn, nativeActions.length - 1, seenToolCallIds),
                   );
+                  const toolCallId = nativeToolCallIds.at(-1)!;
                   toolsAnnouncedInStream = true;
                   yield {
                     type: 'tool_start',
+                    toolCallId,
                     tool: event.name,
                     target: chatActionTarget(action),
                   };
@@ -3022,16 +3094,6 @@ export class ChatEngine {
           }
         }
 
-        if (!toolsAnnouncedInStream) {
-          for (const action of turnResult.actions) {
-            yield {
-              type: 'tool_start',
-              tool: chatActionToolName(action),
-              target: chatActionTarget(action),
-            };
-          }
-        }
-
         // Capture toolCallLog start index BEFORE execution so the
         // per-turn slice is correct even as the log grows across turns.
         this._turnToolCallLogStart = this.toolCallLog.length;
@@ -3045,6 +3107,16 @@ export class ChatEngine {
         });
         if (this._streamNativeToolCallIds.length === 0 && turnResult.actions.length > 0) {
           this._streamNativeToolCallIds = settleCallIds;
+        }
+        if (!toolsAnnouncedInStream) {
+          for (const [idx, action] of turnResult.actions.entries()) {
+            yield {
+              type: 'tool_start',
+              toolCallId: settleCallIds[idx]!,
+              tool: chatActionToolName(action),
+              target: chatActionTarget(action),
+            };
+          }
         }
         if (turnResult.actions.length > 0) {
           paritySettleProposeTools(
@@ -3157,11 +3229,16 @@ export class ChatEngine {
         // Yield tool complete events (slice from this turn's start, sorted by
         // original action index so tool_complete order matches tool_start order
         // even when read tools complete concurrently in a different order).
-        for (const tc of this.toolCallLog
+        for (const [settlementIndex, tc] of this.toolCallLog
           .slice(this._turnToolCallLogStart)
-          .sort((a, b) => a.index - b.index)) {
+          .sort((a, b) => a.index - b.index)
+          .entries()) {
+          tc.toolCallId = settleCallIds[settlementIndex]!;
           yield {
-            type: 'tool_complete',
+            type: tc.error || (tc.exit_code !== undefined && tc.exit_code !== 0)
+              ? 'tool_failed'
+              : 'tool_complete',
+            toolCallId: tc.toolCallId,
             tool: tc.tool,
             target: tc.target,
             ...(tc.detail ? { detail: tc.detail } : {}),
@@ -4243,11 +4320,19 @@ export class ChatEngine {
     });
     // Sync flush before process exit — required for campaign shadow scoreboard.
     persistPolicyEventsJsonl(this.engineRunDir, this.policyEventLog);
+    const terminal = projectChatTerminal({
+      outcome,
+      status: extra?.blockedReport
+        ? 'blocked'
+        : this.budgetExceeded
+          ? 'budget_exhausted'
+          : 'completed',
+    });
     finalizeParityTurnSync(
       this.parity,
       this.engineRunDir,
-      outcome,
-      extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
+      terminal.outcome,
+      terminal.status,
     );
     const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
       turnId: String(this.parity.turnId ?? this._turnIndex),
@@ -4257,11 +4342,10 @@ export class ChatEngine {
       cumulativeSessionTokens: globalCostTracker.getSessionSummary().totalTokens,
     });
     this.lastTurnTelemetry = finalizedTelemetry ?? null;
-    const runAllowance = this.assembleRunAllowance(
-      extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
-    );
+    const runAllowance = this.assembleRunAllowance(terminal.status);
     return buildStreamDone(this.obsHandles(), answer, {
-      outcome,
+      outcome: terminal.outcome!,
+      status: terminal.status,
       ...(decision.finalOutcome === 'PLAN_COMPLETE'
         ? { planOutcome: 'PLAN_COMPLETE' as const }
         : {}),
@@ -4294,8 +4378,12 @@ export class ChatEngine {
     // make the model-visible outcome less truthful.
     const outcome = classifyFailureText(error) ?? limiterOutcome;
     if (outcome === 'BUDGET_EXHAUSTED') this.budgetExceeded = true;
-    const runAllowance = this.assembleRunAllowance('failed');
-    finalizeParityTurnSync(this.parity, this.engineRunDir, outcome, 'failed');
+    const terminal = projectChatTerminal({
+      ...(outcome !== undefined ? { outcome } : {}),
+      status: 'failed',
+    });
+    const runAllowance = this.assembleRunAllowance(terminal.status);
+    finalizeParityTurnSync(this.parity, this.engineRunDir, terminal.outcome, terminal.status);
     const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
       turnId: String(this.parity.turnId ?? this._turnIndex),
       taskClass: this.taskClass,
@@ -4306,6 +4394,7 @@ export class ChatEngine {
     this.lastTurnTelemetry = finalizedTelemetry ?? null;
     return buildStreamFailed(this.obsHandles(), error, {
       ...(outcome !== undefined ? { outcome } : {}),
+      status: terminal.status,
       ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
       runAllowance,
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
@@ -4330,6 +4419,8 @@ export class ChatEngine {
     this.lastTurnTelemetry = finalizedTelemetry ?? null;
     return {
       type: 'cancelled',
+      status: 'cancelled',
+      outcome: 'CANCELLED',
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     };
   }
@@ -7764,15 +7855,20 @@ export class ChatEngine {
       terminalOutcome: authoritativeOutcome ?? 'unknown',
     });
 
-    // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
-    finalizeParityTurnSync(this.parity, this.engineRunDir, authoritativeOutcome, finalStatus);
+    const terminal = projectChatTerminal({
+      ...(authoritativeOutcome !== undefined ? { outcome: authoritativeOutcome } : {}),
+      status: finalStatus,
+    });
 
     this.pauseActiveExecution();
-    const runAllowance = this.assembleRunAllowance(finalStatus);
+    // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
+    finalizeParityTurnSync(this.parity, this.engineRunDir, terminal.outcome, terminal.status);
+
+    const runAllowance = this.assembleRunAllowance(terminal.status);
 
     const result: ChatResult = {
-      status: finalStatus,
-      ...(authoritativeOutcome !== undefined ? { outcome: authoritativeOutcome } : {}),
+      status: terminal.status,
+      ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
       ...(kernelDecision?.finalOutcome === 'PLAN_COMPLETE'
         ? { planOutcome: 'PLAN_COMPLETE' as const }
         : {}),
@@ -7812,7 +7908,7 @@ export class ChatEngine {
     // Event log disk flush is owned solely by finalizeParityTurn / checkpointParityEventLog
 
     // Propose BABEL.md learnings after successful runs with writes only.
-    if (finalStatus === 'completed' && this.writeCount > 0) {
+    if (terminal.status === 'completed' && this.writeCount > 0) {
       try {
         const changed = this.toolCallLog
           .flatMap((t) => confirmedMutationPaths({

@@ -19,7 +19,6 @@ import {
   resolveChatTaskClass,
   getChatTaskTune,
 } from '../../config/chatTaskClass.js';
-import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 import { confirmedMutationPaths, isConfirmedMutation } from '../../agent/mutationTools.js';
 import { hydrateResumedThreadToScreen } from '../../services/threadStore/index.js';
 import {
@@ -47,6 +46,7 @@ import { projectTurnViewState, renderProjectedReviewCard } from '../projection/t
 import { rememberReviewDiff } from '../../ui/diffReview.js';
 import { isOperatorAbortError } from '../../agent/operatorAbort.js';
 import { isSessionConsistencyFailureMessage } from '../../agent/sessionEventDiagnostics.js';
+import { projectChatTerminal } from '../../agent/chatFailureClassification.js';
 
 /**
  * Extract changed file paths from a ChatResult's tool-call log.
@@ -242,17 +242,10 @@ export async function executeChatTask(
     const turnUsage = usageDelta(preRunUsage, postRunUsage);
     const perRunCost = turnUsage.costUsd;
     const perRunTokens = turnUsage.tokens;
-    const resolvedOutcome: TerminalOutcome | undefined =
-      result.outcome ??
-      (result.status === 'completed'
-        ? 'NO_CHANGE_REQUIRED'
-        : result.status === 'cancelled'
-          ? 'CANCELLED'
-          : result.status === 'blocked'
-            ? 'BLOCKED_POLICY'
-            : result.status === 'budget_exhausted'
-              ? 'BUDGET_EXHAUSTED'
-              : undefined);
+    const terminal = projectChatTerminal({
+      ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+      status: result.status,
+    });
 
     const projectedState = projectTurnViewState([
       {
@@ -297,14 +290,8 @@ export async function executeChatTask(
       {
         type: 'turn_terminal_resolved',
         timestamp: Date.now(),
-        ...(resolvedOutcome !== undefined ? { outcome: resolvedOutcome } : {}),
-        status:
-          result.status === 'completed' ||
-          result.status === 'cancelled' ||
-          result.status === 'blocked' ||
-          result.status === 'budget_exhausted'
-            ? result.status
-            : 'failed',
+        ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
+        status: terminal.status,
         finalAnswer: result.answer ?? '',
       },
     ]);

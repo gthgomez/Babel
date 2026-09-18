@@ -5,6 +5,7 @@
  */
 
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import { projectChatTerminal, type ChatStatus } from './chatFailureClassification.js';
 import { classifyToolEffect } from '../executor/contracts.js';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { ProviderId } from '../runners/providerRegistry.js';
@@ -859,6 +860,16 @@ export function parityEndTurn(
   outcome: TerminalOutcome | undefined,
   status: string,
 ): void {
+  const terminal = projectChatTerminal({
+    ...(outcome !== undefined ? { outcome } : {}),
+    ...(status === 'completed' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'blocked' ||
+    status === 'budget_exhausted'
+      ? { status: status as ChatStatus }
+      : {}),
+  });
   // Idempotent: streamDone + buildResult both call this when submitMessage wraps stream.
   if (
     rt.turnId &&
@@ -868,14 +879,14 @@ export function parityEndTurn(
   ) {
     return;
   }
-  if (outcome !== undefined) {
+  if (terminal.outcome !== undefined) {
     let event: AgentLoopEvent;
-    switch (outcome) {
+    switch (terminal.outcome) {
       case 'CANCELLED':
         event = { type: 'cancel' };
         break;
       case 'BUDGET_EXHAUSTED':
-        event = { type: 'budget', exhausted: true, reason: status };
+        event = { type: 'budget', exhausted: true, reason: terminal.status };
         break;
       case 'VERIFIED_COMPLETE':
         event = { type: 'complete', verified: true };
@@ -884,21 +895,21 @@ export function parityEndTurn(
         event = { type: 'complete', verified: false };
         break;
       case 'BLOCKED_POLICY':
-        event = { type: 'blocked', kind: 'policy', reason: status };
+        event = { type: 'blocked', kind: 'policy', reason: terminal.status };
         break;
       case 'BLOCKED_EXTERNAL':
-        event = { type: 'blocked', kind: 'external', reason: status };
+        event = { type: 'blocked', kind: 'external', reason: terminal.status };
         break;
       case 'INFRA_FAILURE':
-        event = { type: 'infra_failure', reason: status };
+        event = { type: 'infra_failure', reason: terminal.status };
         break;
       default:
-        event = { type: 'agent_failure', reason: status };
+        event = { type: 'agent_failure', reason: terminal.status };
     }
     parityReduce(rt, event);
   }
   if (rt.turnId) {
-    endTurn(rt.eventLog, rt.turnId, outcome, status);
+    endTurn(rt.eventLog, rt.turnId, terminal.outcome, terminal.status);
     // W2 PR-E: only one turn_ended per turn_id in session log.
     const already = rt.sessionEvents.events.some(
       (e) => e.kind === 'turn_ended' && e.turn_id === rt.turnId,
@@ -906,8 +917,8 @@ export function parityEndTurn(
     if (!already) {
       recordTurnEnded(rt.sessionEvents, {
         turn_id: rt.turnId,
-        ...(outcome !== undefined ? { outcome } : {}),
-        status,
+        ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
+        status: terminal.status,
       });
     }
   }

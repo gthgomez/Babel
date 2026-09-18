@@ -8,6 +8,10 @@
 import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 import type { VerifierReceipt } from '../../agent/completionGatePolicy.js';
 import type { SessionEvent } from '../../agent/sessionEvents.js';
+import {
+  projectChatTerminal,
+  type ChatStatus,
+} from '../../agent/chatFailureClassification.js';
 
 export type CanonicalEventType =
   | 'turn_started'
@@ -152,25 +156,7 @@ export type CanonicalTurnEvent =
 export function mapOutcomeToStatus(
   outcome: TerminalOutcome,
 ): 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed' {
-  switch (outcome) {
-    case 'VERIFIED_COMPLETE':
-    case 'UNVERIFIED_PATCH':
-    case 'NO_CHANGE_REQUIRED':
-      return 'completed';
-    case 'CANCELLED':
-      return 'cancelled';
-    case 'BLOCKED_POLICY':
-    case 'BLOCKED_EXTERNAL':
-    case 'NEEDS_HUMAN_DECISION':
-      return 'blocked';
-    case 'BUDGET_EXHAUSTED':
-      return 'budget_exhausted';
-    case 'AGENT_FAILURE':
-    case 'INFRA_FAILURE':
-    case 'INVALID_TASK':
-    default:
-      return 'failed';
-  }
+  return projectChatTerminal({ outcome }).status;
 }
 
 export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): CanonicalTurnEvent | null {
@@ -244,36 +230,30 @@ export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): Canonical
       };
     case 'completion_decision': {
       const outcome = ev.final_outcome as TerminalOutcome;
+      const terminal = projectChatTerminal({ outcome });
       return {
         type: 'turn_terminal_resolved',
         timestamp: ts,
-        outcome,
-        status: mapOutcomeToStatus(outcome),
+        ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
+        status: terminal.status,
         finalAnswer: ev.reason,
       };
     }
     case 'turn_ended': {
       const outcome = (ev as { outcome?: TerminalOutcome }).outcome;
-      const status = (ev as { status?: 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed' }).status;
+      const status = (ev as { status?: ChatStatus }).status;
       if (!outcome && !status) {
         return null;
       }
-      const resolvedOutcome =
-        outcome ??
-        (status === 'cancelled'
-          ? 'CANCELLED'
-          : status === 'blocked'
-            ? 'BLOCKED_POLICY'
-            : status === 'budget_exhausted'
-              ? 'BUDGET_EXHAUSTED'
-              : status === 'completed'
-                ? 'NO_CHANGE_REQUIRED'
-                : undefined);
+      const terminal = projectChatTerminal({
+        ...(outcome !== undefined ? { outcome } : {}),
+        ...(status !== undefined ? { status } : {}),
+      });
       return {
         type: 'turn_terminal_resolved',
         timestamp: ts,
-        ...(resolvedOutcome !== undefined ? { outcome: resolvedOutcome } : {}),
-        status: status ?? (resolvedOutcome ? mapOutcomeToStatus(resolvedOutcome) : 'failed'),
+        ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
+        status: terminal.status,
         finalAnswer: '',
       };
     }

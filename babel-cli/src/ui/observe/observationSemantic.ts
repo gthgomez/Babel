@@ -240,6 +240,11 @@ function applyProjectionEvent(state: ProjectionAccumulator, ev: SessionEvent): v
       const rawOutcome = (ev as { outcome?: TerminalOutcome }).outcome
       const status = (ev as { status?: string }).status
       if (!rawOutcome && !status) break
+      // A status-only terminal record is legacy adapter data. Once an
+      // authoritative outcome has been observed, it must not downgrade the
+      // canonical projection (the full replay projector follows the same
+      // rule because its mapped event has no outcome).
+      if (!rawOutcome && state.isTerminal) break
       const outcome =
         rawOutcome ??
         (status === 'cancelled'
