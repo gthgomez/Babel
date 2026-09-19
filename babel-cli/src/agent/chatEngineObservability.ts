@@ -883,7 +883,10 @@ export function computeTerminalOutcome(input: {
       // the legacy prose heuristics rather than fabricate policy/external blame.
       const typedBlocked = blockedOutcomeFromReasonCode(input.blockedReport?.reason_code);
       if (typedBlocked) return typedBlocked;
-      if (input.blockedReport?.reason_code === 'unknown') return 'BLOCKED_EXTERNAL';
+      // An explicit `unknown` is a truthful "cause not established": do not
+      // fabricate external OR policy blame. A block with no established cause
+      // needs a human decision.
+      if (input.blockedReport?.reason_code === 'unknown') return 'NEEDS_HUMAN_DECISION';
       const reason = input.blockedReport?.reason ?? '';
       const missing = input.blockedReport?.missing ?? '';
       const envBlob = `${reason}\n${missing}`;

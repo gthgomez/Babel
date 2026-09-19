@@ -47,7 +47,7 @@ test('F4: typed external_dependency is not overridden by policy-looking prose', 
   );
 });
 
-test('F4: an explicit unknown reason does not fabricate a policy cause from prose', () => {
+test('F4: an explicit unknown reason fabricates neither policy nor external blame', () => {
   assert.equal(
     computeTerminalOutcome({
       finalStatus: 'blocked',
@@ -60,7 +60,7 @@ test('F4: an explicit unknown reason does not fabricate a policy cause from pros
         missing: 'policy',
       }),
     }),
-    'BLOCKED_EXTERNAL',
+    'NEEDS_HUMAN_DECISION',
   );
 });
 

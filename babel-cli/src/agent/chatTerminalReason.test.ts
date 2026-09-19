@@ -13,6 +13,7 @@ import {
   terminalReasonFromClassification,
   terminalReasonFromFailureText,
   terminalReasonFromOutcome,
+  terminalReasonFromVerifierFailure,
   terminalReasonGuidance,
 } from './chatTerminalReason.js';
 import { classifyFailureText } from './chatFailureClassification.js';
@@ -156,6 +157,52 @@ describe('D03 terminalReasonFromClassification', () => {
     assert.equal(terminalReasonFromClassification('success'), undefined);
     assert.equal(terminalReasonFromClassification('no_limit_triggered'), undefined);
     assert.equal(terminalReasonFromClassification(null), undefined);
+  });
+});
+
+describe('D03 terminalReasonFromVerifierFailure guard', () => {
+  const base = { hasMutation: true, outcome: 'UNVERIFIED_PATCH' as const };
+  const receipt = (fields: Record<string, unknown>) => ({ exit_code: 1, command: 'npm test', ...fields });
+
+  test('red current verifier after a mutation is verification_failed/verification', () => {
+    const reason = terminalReasonFromVerifierFailure({ ...base, receipt: receipt({}) });
+    assert.equal(reason?.code, 'verification_failed');
+    assert.equal(reason?.cause_class, 'verification');
+    assert.equal(reason?.detail, 'npm test');
+  });
+
+  test('no verifier is NOT verification_failed', () => {
+    assert.equal(terminalReasonFromVerifierFailure({ ...base, receipt: null }), undefined);
+    assert.equal(terminalReasonFromVerifierFailure({ ...base, receipt: undefined }), undefined);
+  });
+
+  test('a green verifier is NOT verification_failed', () => {
+    assert.equal(
+      terminalReasonFromVerifierFailure({ ...base, receipt: receipt({ exit_code: 0 }) }),
+      undefined,
+    );
+  });
+
+  test('a stale verifier is NOT verification_failed', () => {
+    assert.equal(
+      terminalReasonFromVerifierFailure({ ...base, receipt: receipt({ stale: true }) }),
+      undefined,
+    );
+  });
+
+  test('no mutation or a success/other outcome is NOT verification_failed', () => {
+    assert.equal(
+      terminalReasonFromVerifierFailure({ hasMutation: false, outcome: 'UNVERIFIED_PATCH', receipt: receipt({}) }),
+      undefined,
+    );
+    assert.equal(
+      terminalReasonFromVerifierFailure({ hasMutation: true, outcome: 'VERIFIED_COMPLETE', receipt: receipt({}) }),
+      undefined,
+    );
+    assert.equal(
+      terminalReasonFromVerifierFailure({ hasMutation: true, outcome: 'BUDGET_EXHAUSTED', receipt: receipt({}) }),
+      undefined,
+    );
   });
 });
 
