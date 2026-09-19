@@ -16,6 +16,8 @@ const required = [
   'src/ui/shell/shellNavigation.test.ts',
   'src/ui/shell/shellSources.test.ts',
   'src/ui/shell/shellInspector.test.ts',
+  'src/ui/shell/shellOperations.test.ts',
+  'src/ui/shell/shellKeyHandler.test.ts',
   'src/ui/shell/shellPanels.test.ts',
   'src/ui/promptInput.test.ts',
   'src/ui/promptInputAdapter.test.ts',

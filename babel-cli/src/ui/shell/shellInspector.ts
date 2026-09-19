@@ -117,6 +117,7 @@ export function buildShellInspectorView(
 /** Bounded, presentation-only buffer of canonical session events. */
 export class ShellInspectorStore {
   private events: SessionEvent[] = []
+  private activeSessionId: string | undefined
 
   constructor(private readonly maxEvents = 256) {}
 
@@ -125,6 +126,19 @@ export class ShellInspectorStore {
     if (this.events.length > this.maxEvents) {
       this.events.splice(0, this.events.length - this.maxEvents)
     }
+  }
+
+  /**
+   * Bind the inspector to the active session/thread. `undefined` means no
+   * session is established yet, in which case the view must show the explicit
+   * "no provider request" state rather than any buffered prior-session facts.
+   */
+  setActiveSession(sessionId: string | undefined): void {
+    this.activeSessionId = sessionId
+  }
+
+  getActiveSessionId(): string | undefined {
+    return this.activeSessionId
   }
 
   reset(): void {
@@ -147,6 +161,12 @@ export class ShellInspectorStore {
   }
 
   build(context: ShellInspectorContext): ShellInspectorView {
-    return buildShellInspectorView(this.events, context)
+    // Scope strictly to the active session so a prior session's request facts
+    // can never leak into the current inspector.
+    if (this.activeSessionId === undefined) {
+      return buildShellInspectorView([], context)
+    }
+    const scoped = this.events.filter((event) => event.session_id === this.activeSessionId)
+    return buildShellInspectorView(scoped, context)
   }
 }

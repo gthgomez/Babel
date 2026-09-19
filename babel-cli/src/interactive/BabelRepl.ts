@@ -360,6 +360,7 @@ export class BabelRepl {
       },
     });
     this.shellRuntime.hydrateTurns(this.turns, threadId);
+    this.shellInspector.setActiveSession(threadId);
     this.cachedTargetRoot = this.resolveCurrentTarget().targetRoot;
     this.shellSources.ensureProjectRoot(this.cachedTargetRoot);
     const frameSource = () => {
@@ -385,6 +386,9 @@ export class BabelRepl {
           )
         : [];
       const runtime = this.shellRuntime?.getSnapshot();
+      if (runtime?.threadId !== this.shellInspector.getActiveSessionId()) {
+        this.shellInspector.setActiveSession(runtime?.threadId);
+      }
       const sources = this.shellSources.snapshot();
       this.shellNavigator.setRows('sessions', sources.sessions);
       this.shellNavigator.setRows('project', sources.projectRows);
@@ -456,31 +460,7 @@ export class BabelRepl {
       this.withExclusiveTerminal(reason, work),
     );
     this.shellKeyCleanup = installKeyHandler(process.stdin, (event: KeyEvent) => {
-      const layout = planShellLayout(OutputBuffer.getTerminalSize());
-      this.shellInputState = projectShellPresentation(layout, this.shellInputState).inputState;
-      const routed = routeShellInput(event, this.shellInputState);
-      this.shellInputState = routed.state;
-      this.shellNavigator.setFocus(routed.state.focus);
-      if (routed.action === 'move-selection') {
-        // Cursor-only: never changes the active thread.
-        this.shellNavigator.move(routed.state.focus, event.name);
-        host?.invalidate('move-selection');
-        return;
-      }
-      if (routed.action === 'activate-selection') {
-        void this.activateShellSelection(routed.state.focus, host).catch(() => {});
-        return;
-      }
-      if (routed.action === 'open-palette') {
-        void this.openCommandPalette().catch(() => {});
-      }
-      if (routed.action === 'open-reverse-search') {
-        void this.handleReverseSearch().catch(() => {});
-      }
-      if (routed.action === 'focus-changed' || routed.action === 'close-overlay') {
-        host?.invalidate(routed.action);
-      }
-      if (!routed.handled && routed.state.focus === 'composer') adapter.processKey(event);
+      this.dispatchShellKey(event, host, adapter);
     });
     host.mount();
     // Responsive promotion may happen while the legacy prompt is inactive
@@ -524,6 +504,44 @@ export class BabelRepl {
     if (rendererWillOwnInput) activeRenderer?.setInputOwnership?.(true);
   }
 
+  /**
+   * Route one key through the hosted shell and apply the resulting action.
+   *
+   * Kept as an explicit method (rather than an inline closure) so the
+   * move/activate invariant is testable against this exact handler path.
+   */
+  private dispatchShellKey(
+    event: KeyEvent,
+    host: ShellHost | undefined,
+    adapter: PromptInputAdapter,
+    layout: ReturnType<typeof planShellLayout> = planShellLayout(OutputBuffer.getTerminalSize()),
+  ): void {
+    this.shellInputState = projectShellPresentation(layout, this.shellInputState).inputState;
+    const routed = routeShellInput(event, this.shellInputState);
+    this.shellInputState = routed.state;
+    this.shellNavigator.setFocus(routed.state.focus);
+    if (routed.action === 'move-selection') {
+      // Cursor-only: never changes the active thread.
+      this.shellNavigator.move(routed.state.focus, event.name);
+      host?.invalidate('move-selection');
+      return;
+    }
+    if (routed.action === 'activate-selection') {
+      void this.activateShellSelection(routed.state.focus, host).catch(() => {});
+      return;
+    }
+    if (routed.action === 'open-palette') {
+      void this.openCommandPalette().catch(() => {});
+    }
+    if (routed.action === 'open-reverse-search') {
+      void this.handleReverseSearch().catch(() => {});
+    }
+    if (routed.action === 'focus-changed' || routed.action === 'close-overlay') {
+      host?.invalidate(routed.action);
+    }
+    if (!routed.handled && routed.state.focus === 'composer') adapter.processKey(event);
+  }
+
   /** Display strings for one selectable surface, marking the selected row. */
   private shellRowStrings(surface: ShellFocus): string[] {
     const selection = this.shellNavigator.getSelection();
@@ -540,8 +558,11 @@ export class BabelRepl {
    * the active thread and the selected row are separate state.
    */
   private rebindShellRuntime(threadId: string | undefined): void {
-    if (!this.shellRuntime) return;
-    this.shellRuntime.hydrateTurns(this.turns, threadId);
+    if (this.shellRuntime) this.shellRuntime.hydrateTurns(this.turns, threadId);
+    // The inspector is request-scoped: on a session/target transition it must
+    // drop any buffered prior-session facts and scope to the new active session.
+    this.shellInspector.setActiveSession(threadId);
+    this.shellInspector.reset();
     this.shellHost?.invalidate('session-changed');
   }
 

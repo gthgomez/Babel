@@ -11,7 +11,6 @@ import {
   type ShellNavigationRow,
 } from './shellNavigation.js'
 import { runShellCommand, type ShellCommandOperations } from './shellOperations.js'
-import { ShellRuntimeBinding } from './shellRuntimeBinding.js'
 
 function key(name: string): KeyEvent {
   return { name, ctrl: false, meta: false, shift: false, sequence: name }
@@ -77,20 +76,6 @@ test('Enter on a session row dispatches resume for the selected id', async () =>
   const outcome = await runShellCommand(navigator.activate('sessions'), operations)
   assert.equal(outcome.handled, true)
   assert.deepEqual(calls, ['resume:s2'])
-})
-
-test('cursor moves never change the active-thread authority; only resume does', () => {
-  const runtime = new ShellRuntimeBinding({ threadId: 'thread-1' })
-  runtime.hydrateTurns([], 'thread-1')
-  const navigator = new ShellNavigator()
-  navigator.setRows('sessions', [row('s1'), row('s2')])
-
-  navigator.move('sessions', 'down')
-  navigator.move('sessions', 'up')
-  assert.equal(runtime.getSnapshot().threadId, 'thread-1')
-
-  runtime.hydrateTurns([], 's2')
-  assert.equal(runtime.getSnapshot().threadId, 's2')
 })
 
 test('Enter on an empty sessions panel is a safe no-op', async () => {

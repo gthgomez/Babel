@@ -14,12 +14,13 @@ function ev(
   kind: SessionEvent['kind'],
   turnId: string | null,
   extra: Record<string, unknown>,
+  sessionId = 'session-1',
 ): SessionEvent {
   seq += 1
   return {
     schema_version: 1,
     event_id: `e${seq}`,
-    session_id: 'session-1',
+    session_id: sessionId,
     turn_id: turnId,
     seq,
     ts: '2026-01-01T00:00:00.000Z',
@@ -97,9 +98,64 @@ test('renderTriState never converts unknown into a boolean claim', () => {
 
 test('ShellInspectorStore bounds buffered events', () => {
   const store = new ShellInspectorStore(2)
+  store.setActiveSession('session-1')
   store.observe(ev('tool_proposed', 't1', { tool_name: 'a', tool_call_id: '1', idempotency_key: '1' }))
   store.observe(ev('tool_proposed', 't1', { tool_name: 'b', tool_call_id: '2', idempotency_key: '2' }))
   store.observe(ev('tool_proposed', 't1', { tool_name: 'c', tool_call_id: '3', idempotency_key: '3' }))
   assert.equal(store.getEvents().length, 2)
   assert.deepEqual(store.build(context).tools[0], 'Proposed (observed): b, c')
+})
+
+test('inspector never shows a prior session request after a session transition', () => {
+  const store = new ShellInspectorStore()
+  store.setActiveSession('session-old')
+  store.observe(
+    ev('model_input_receipt', 't-old', {
+      inference_id: 'i-old',
+      provider: 'deepseek',
+      requested_model_id: 'old-requested',
+      normalized_model_id: 'old-normalized',
+      sent_model_id: 'old-sent',
+      input_digest: 'd',
+      input_ref: 'ref',
+      context_limit_tokens: 64000,
+      context_limit_source: 'provider',
+    }, 'session-old'),
+  )
+
+  // Transition to a genuinely new conversation: reset + no active session.
+  store.setActiveSession(undefined)
+  store.reset()
+  const fresh = store.build(context)
+  assert.ok(fresh.context.includes('No provider request yet.'))
+  assert.equal(
+    fresh.context.some((row) => row.includes('old-sent') || row.includes('64000')),
+    false,
+  )
+
+  // Scoping also filters even without an explicit reset.
+  store.setActiveSession('session-old')
+  store.observe(
+    ev(
+      'model_input_receipt',
+      't-other',
+      {
+        inference_id: 'i-other',
+        provider: 'deepseek',
+        requested_model_id: 'other-requested',
+        normalized_model_id: 'other-normalized',
+        sent_model_id: 'other-sent',
+        input_digest: 'd',
+        input_ref: 'ref',
+      },
+      'session-other',
+    ),
+  )
+  store.setActiveSession('session-new')
+  const scoped = store.build(context)
+  assert.ok(scoped.context.includes('No provider request yet.'))
+  assert.equal(
+    scoped.context.some((row) => row.includes('other-sent') || row.includes('old-sent')),
+    false,
+  )
 })
