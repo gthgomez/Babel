@@ -4929,6 +4929,27 @@ export class ChatEngine {
       this.terminatingLimiter = null;
       this.terminalLimiterReason = null;
       this.clearVerifierEvidenceState();
+      // R0 Scenario 8: a fresh submission must not inherit the previous task's
+      // in-memory mutation/tool-call ownership. hasAnyWrites() and
+      // currentTurnHasMutation() read toolCallLog, so leaving task A's confirmed
+      // write in place projects task B from task A's patch (UNVERIFIED_PATCH
+      // instead of NO_CHANGE_REQUIRED). This drops only in-memory task-local
+      // evidence; task A's physical on-disk changes remain visible, exactly as
+      // resyncTurnStateAfterBranch treats a discarded branch.
+      this.toolCallLog = [];
+      this._turnToolCallLogStart = 0;
+      this._logIndexToTurn.clear();
+      // Cancellation state belongs to the previous submission. submitMessageStream
+      // also clears it, but the direct applyUserSubmission seam must be
+      // self-consistent.
+      this._cancelled = false;
+      // A red verifier in task A must not keep reopening investigation tools, and
+      // a one-shot investigate soft nudge must not stay latched for task B.
+      this.lastVerifierFailed = false;
+      this.investigateSoftNudgeDone = false;
+      // Child delegation attempt identity and phase routing are task-local.
+      this.childAttempts.clear();
+      this._lastPhase = null;
       // Plan handoff force-mutate elevation must not leak into an unrelated task.
       this.forceMutateTurnsOverride = null;
       // P0-C: prior task exploration / stall state must not bias a new submission.

@@ -32,6 +32,7 @@ import { ChatEngine, type ChatEvent, type ChatResult } from './chatEngine.js';
 import type { ToolStreamEvent } from '../runners/base.js';
 import { chatSessionDir } from '../cli/runsLayout.js';
 import { inspectSessionEventLogFromDir, recordProgressRecovery, type SessionEvent } from './sessionEvents.js';
+import { computeTerminalOutcome } from './chatEngineObservability.js';
 import { DIRECT_MUTATION_TOOLS } from './mutationTools.js';
 import { globalCostTracker } from '../services/costTracker.js';
 import type { CompactionStrategy, ChatMessage } from './chatCompaction.js';
@@ -1450,38 +1451,41 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
     }
   });
 
-  test(
-    'Scenario 8 [KNOWN GAP] — a fresh submission must clear task-local mutation evidence',
-    {
-      todo:
-        'Production gap (no production edit allowed): applyUserSubmission resets writeCount but not ' +
-        'toolCallLog, so hasAnyWrites() still sees task A confirmed mutations and projects task B as ' +
-        'UNVERIFIED_PATCH instead of NO_CHANGE_REQUIRED.',
-    },
-    () => {
-      const engine = new ChatEngine({ task: 'A: mutate', projectRoot: process.cwd(), model: MODEL });
-      const internals = engine as unknown as {
-        toolCallLog: Array<Record<string, unknown>>;
-        hasAnyWrites(): boolean;
-      };
-      internals.toolCallLog.push({
-        tool: 'str_replace',
-        target: 'parser.ts',
-        index: 0,
-        exit_code: 0,
-        effect_status: 'confirmed_change',
-        mutation_paths: ['parser.ts'],
-      });
-      assert.equal(internals.hasAnyWrites(), true, 'fixture precondition: task A has a confirmed write');
-      engine.applyUserSubmission({ userInput: 'B: unrelated read-only inventory' });
-      assert.equal(engine.getWriteCount(), 0, 'task B write counter is reset');
-      assert.equal(
-        internals.hasAnyWrites(),
-        false,
-        'KNOWN GAP: stale task-A confirmed mutation still counts as a write for task B',
-      );
-    },
-  );
+  test('Scenario 8 — a fresh submission must clear task-local mutation evidence', () => {
+    const engine = new ChatEngine({ task: 'A: mutate', projectRoot: process.cwd(), model: MODEL });
+    const internals = engine as unknown as {
+      toolCallLog: Array<Record<string, unknown>>;
+      hasAnyWrites(): boolean;
+    };
+    internals.toolCallLog.push({
+      tool: 'str_replace',
+      target: 'parser.ts',
+      index: 0,
+      exit_code: 0,
+      effect_status: 'confirmed_change',
+      mutation_paths: ['parser.ts'],
+    });
+    assert.equal(internals.hasAnyWrites(), true, 'fixture precondition: task A has a confirmed write');
+    engine.applyUserSubmission({ userInput: 'B: unrelated read-only inventory' });
+    assert.equal(engine.getWriteCount(), 0, 'task B write counter is reset');
+    assert.equal(
+      internals.hasAnyWrites(),
+      false,
+      'task B does not inherit task A confirmed mutation as a write',
+    );
+    // User-visible consequence: a read-only task B with no writes of its own must
+    // project NO_CHANGE_REQUIRED, not task A's UNVERIFIED_PATCH.
+    assert.equal(
+      computeTerminalOutcome({
+        readOnly: true,
+        finalStatus: 'completed',
+        budgetExceeded: false,
+        hasAnyWrites: internals.hasAnyWrites(),
+      }),
+      'NO_CHANGE_REQUIRED',
+      'task B terminal projection is not derived from task A mutation evidence',
+    );
+  });
 
   test('Scenario 9 — provider failure after partial progress keeps the real cause', async () => {
     const fixture = makeFixture();
