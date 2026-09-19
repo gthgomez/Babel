@@ -42,6 +42,7 @@ import {
 } from './events.js';
 import type { LegacyFactContext } from './legacyEventAdapters.js';
 import { sessionLogToFacts } from './legacyEventAdapters.js';
+import { canonicalize, cloneJsonSafe, codeUnitCompare, type CloneBudget } from './canonical.js';
 
 export type ProjectionPhase =
   | 'idle'
@@ -110,88 +111,6 @@ export interface TaskProjection {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function codeUnitCompare(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
-}
-
-type Canonical = unknown;
-type CanonicalResult = { ok: true; value: Canonical } | { ok: false };
-
-/**
- * Injective canonical encoding. Every value becomes a tagged array so a plain
- * user object/array can never reproduce a special-value tag: strings are
- * `['str', v]`, numbers `['num', v]`, NaN `['num','NaN']`, user objects
- * `['obj', entries]`, etc. Distinguishes values JSON collapses or cannot
- * represent (NaN, ±Infinity, -0, undefined, BigInt, Map/Set/Date) and rejects
- * functions, symbols, true cycles and inaccessible objects. `path` is a
- * recursion stack, so a shared non-cyclic reference is valid.
- */
-function canonicalize(value: unknown, path: WeakSet<object>): CanonicalResult {
-  if (value === null) return { ok: true, value: ['null'] };
-  const type = typeof value;
-  if (type === 'string') return { ok: true, value: ['str', value] };
-  if (type === 'boolean') return { ok: true, value: ['bool', value] };
-  if (type === 'number') {
-    if (Number.isNaN(value)) return { ok: true, value: ['num', 'NaN'] };
-    if (value === Infinity) return { ok: true, value: ['num', 'Infinity'] };
-    if (value === -Infinity) return { ok: true, value: ['num', '-Infinity'] };
-    if (Object.is(value, -0)) return { ok: true, value: ['num', '-0'] };
-    return { ok: true, value: ['num', value] };
-  }
-  if (type === 'undefined') return { ok: true, value: ['undef'] };
-  if (type === 'bigint') return { ok: true, value: ['bigint', (value as bigint).toString()] };
-  if (type === 'function' || type === 'symbol') return { ok: false };
-
-  const object = value as object;
-  if (path.has(object)) return { ok: false };
-  path.add(object);
-  try {
-    if (object instanceof Date) return { ok: true, value: ['date', object.toISOString()] };
-    if (object instanceof Map) {
-      const entries: unknown[] = [];
-      for (const [key, entry] of object.entries()) {
-        const canonicalKey = canonicalize(key, path);
-        if (!canonicalKey.ok) return { ok: false };
-        const canonicalValue = canonicalize(entry, path);
-        if (!canonicalValue.ok) return { ok: false };
-        entries.push([canonicalKey.value, canonicalValue.value]);
-      }
-      return { ok: true, value: ['map', entries] };
-    }
-    if (object instanceof Set) {
-      const entries: unknown[] = [];
-      for (const entry of object.values()) {
-        const canonical = canonicalize(entry, path);
-        if (!canonical.ok) return { ok: false };
-        entries.push(canonical.value);
-      }
-      return { ok: true, value: ['set', entries] };
-    }
-    if (Array.isArray(object)) {
-      const entries: unknown[] = [];
-      for (const entry of object) {
-        const canonical = canonicalize(entry, path);
-        if (!canonical.ok) return { ok: false };
-        entries.push(canonical.value);
-      }
-      return { ok: true, value: ['arr', entries] };
-    }
-    const record = object as Record<string, unknown>;
-    const entries: unknown[] = [];
-    for (const key of Object.keys(record).sort(codeUnitCompare)) {
-      const canonical = canonicalize(record[key], path);
-      if (!canonical.ok) return { ok: false };
-      entries.push([key, canonical.value]);
-    }
-    return { ok: true, value: ['obj', entries] };
-  } catch {
-    return { ok: false };
-  } finally {
-    path.delete(object);
-  }
 }
 
 /** SHA-256 over the canonical encoding of the whole envelope+payload. */
@@ -288,100 +207,8 @@ type Classified =
   | { kind: 'unknown_optional'; fact: RuntimeFactV1; nodes: number }
   | { kind: 'invalid'; id?: string; reason: string; authority: FactAuthority };
 
-type CloneResult = { ok: true; value: unknown } | { ok: false };
-
-/** Bound payload nesting so canonicalization/JSON hashing cannot overflow. */
-const MAX_JSON_DEPTH = 64;
-/** Per-fact clone budget: acceptance is content-deterministic, never order-based. */
-const MAX_JSON_NODES = 100_000;
 /** Deterministic cumulative budget applied over the sorted fact order. */
 const MAX_TOTAL_JSON_NODES = 2_000_000;
-
-interface CloneBudget {
-  nodes: number;
-}
-
-/**
- * Deep-copy a value into fresh plain JSON data, reading each property once and
- * rejecting anything that is not a JSON value (boxed primitives, class
- * instances, Date/Map/Set/RegExp/Error, functions, symbols, bigint, undefined,
- * NaN/Infinity, cycles, nesting beyond MAX_JSON_DEPTH, or more than
- * MAX_JSON_NODES total). Output objects have a null prototype so an own
- * `__proto__` key stays an own key instead of mutating the prototype. This is
- * what makes the projection total and the canonical encoding injective:
- * downstream code only ever touches snapshots, never the caller's object, and
- * plain objects/arrays cannot collide with exotic values.
- */
-function cloneJsonSafe(
-  value: unknown,
-  path: WeakSet<object>,
-  depth = 0,
-  budget: CloneBudget = { nodes: 0 },
-): CloneResult {
-  budget.nodes += 1;
-  if (budget.nodes > MAX_JSON_NODES) return { ok: false };
-  if (value === null) return { ok: true, value: null };
-  const type = typeof value;
-  if (type === 'string' || type === 'boolean') return { ok: true, value };
-  if (type === 'number') {
-    if (Number.isNaN(value) || value === Infinity || value === -Infinity) return { ok: false };
-    return { ok: true, value };
-  }
-  if (type !== 'object') return { ok: false };
-  // Facts are plain JSON values. Reject any Proxy outright (native check, no
-  // trap invoked) so a stateful trap cannot influence ordering or content.
-  if (utilTypes.isProxy(value)) return { ok: false };
-  if (depth >= MAX_JSON_DEPTH) return { ok: false };
-  const object = value as object;
-  // Any repeated reference (shared or cyclic) is not JSON-representable as a
-  // tree. Rejecting it prevents DAG expansion/retention amplification and is
-  // conservative: the caller's data cannot be projected as canonical JSON.
-  if (path.has(object)) return { ok: false };
-  path.add(object);
-  try {
-    if (Array.isArray(object)) {
-      const out: unknown[] = [];
-      const length = object.length;
-      for (let index = 0; index < length; index += 1) {
-        // Read through the descriptor so an accessor element is rejected rather
-        // than invoked (a stateful getter must not make cloning order-dependent).
-        const descriptor = Object.getOwnPropertyDescriptor(object, String(index));
-        if (
-          descriptor === undefined ||
-          typeof descriptor.get === 'function' ||
-          typeof descriptor.set === 'function'
-        ) {
-          return { ok: false };
-        }
-        const cloned = cloneJsonSafe(descriptor.value, path, depth + 1, budget);
-        if (!cloned.ok) return { ok: false };
-        out.push(cloned.value);
-      }
-      return { ok: true, value: out };
-    }
-    const prototype = Object.getPrototypeOf(object);
-    if (prototype !== Object.prototype && prototype !== null) return { ok: false };
-    const out = Object.create(null) as Record<string, unknown>;
-    // Note: a hostile `ownKeys` trap can itself allocate an unbounded key array
-    // inside Object.keys; that JS-inherent case is a documented residual.
-    for (const key of Object.keys(object)) {
-      const descriptor = Object.getOwnPropertyDescriptor(object, key);
-      if (
-        descriptor === undefined ||
-        typeof descriptor.get === 'function' ||
-        typeof descriptor.set === 'function'
-      ) {
-        return { ok: false };
-      }
-      const cloned = cloneJsonSafe(descriptor.value, path, depth + 1, budget);
-      if (!cloned.ok) return { ok: false };
-      out[key] = cloned.value;
-    }
-    return { ok: true, value: out };
-  } catch {
-    return { ok: false };
-  }
-}
 
 interface EnvelopeRead {
   authorityRaw: unknown;
