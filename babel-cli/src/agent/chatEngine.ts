@@ -2584,6 +2584,14 @@ export class ChatEngine {
       runtime.effectiveOperation ?? runtime.taskShape?.operation ?? 'MUTATING';
     const isReadOnlyInspection = effectiveOperation === 'READ_ONLY';
 
+    // F1: finalization and loop-control must consume the same effective operation
+    // policy as gating/fuses/progress. The legacy text classifier can say
+    // `execute` for a READ_ONLY TaskShape (bare "how to fix …", fenced evidence
+    // with no directive), and such a submission must not be pressed to patch,
+    // gated as an execute task, or fed a mutation-oriented critic.
+    const effectiveExecutePolicy = resolvedIntent === 'execute' && !isReadOnlyInspection;
+    const effectiveIntent: TaskIntent = effectiveExecutePolicy ? 'execute' : 'explain';
+
     const authorityHalt = evaluateSubmitTaskAuthorityHalt(this.parity, userInput);
     if (authorityHalt) {
       yield authorityHalt;
@@ -2688,7 +2696,7 @@ export class ChatEngine {
         const kill = await this.handleBudgetKill(
           this.terminalLimiterReason ?? 'Inherited child allowance exhausted.',
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
         );
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
@@ -2702,7 +2710,7 @@ export class ChatEngine {
         const kill = await this.handleBudgetKill(
           budget.reason ?? 'Budget limit exceeded.',
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
         );
         // AC3: every stream terminal goes through streamDone (buildResult already
         // finalized; streamDone finalize is idempotent on turn_ended).
@@ -3145,7 +3153,7 @@ export class ChatEngine {
         const kill = await this.handleBudgetKill(
           this.terminalLimiterReason,
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
         );
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
@@ -3353,11 +3361,11 @@ export class ChatEngine {
 
         // Mid-loop heuristic critic (stream path)
         if (this.currentTurnHasMutation() || (this.hasAnyWrites() && this.lastVerifierReceipt)) {
-          this.maybeInjectMidLoopHeuristicCritic({ onThought: () => {} }, resolvedIntent);
+          this.maybeInjectMidLoopHeuristicCritic({ onThought: () => {} }, effectiveIntent);
         }
 
         const exploreFuses = this.applyExploreFuses(
-          resolvedIntent === 'execute',
+          effectiveExecutePolicy,
           isReadOnlyInspection,
         );
         for (const label of exploreFuses.labels) {
@@ -3586,7 +3594,7 @@ export class ChatEngine {
           .all()
           .some((e) => e.kind === 'zero_write_shadow');
         const zeroWriteDecision = evaluateZeroWriteWithShadow({
-          executeIntent: resolvedIntent === 'execute',
+          executeIntent: effectiveExecutePolicy,
           completedTurns: turn + 1,
           hasAnyWrites: this.hasAnyWrites(),
           taskClass: this.taskClass,
@@ -3897,7 +3905,7 @@ export class ChatEngine {
             extractToolEnvBlockedSignal(t, envDetectOpts) !== null,
           );
         const completionPref = evaluateCompletionPrefersPatch({
-          executeIntent: resolvedIntent === 'execute',
+          executeIntent: effectiveExecutePolicy,
           hasAnyWrites: completionHasWrites,
           envBlocked,
         });
@@ -3922,7 +3930,7 @@ export class ChatEngine {
         }
 
         // Execution gate: buffer streaming answer until gate check passes
-        const gateResult = this.evaluateCompletionGate(turnResult, resolvedIntent);
+        const gateResult = this.evaluateCompletionGate(turnResult, effectiveIntent);
         const hardGate = isBabelHeadlessEnv() || !process.stdout.isTTY;
 
         if (gateResult === 'reject') {
@@ -4013,7 +4021,7 @@ export class ChatEngine {
               /* thought emitted via yield below when we can */
             },
           },
-          resolvedIntent,
+          effectiveIntent,
         );
         if (this.lastCriticReceipt) {
           yield {
@@ -4118,10 +4126,10 @@ export class ChatEngine {
       return;
     }
 
-    if (resolvedIntent === 'execute') {
+    if (effectiveExecutePolicy) {
       const gateResult = this.evaluateCompletionGate(
         { type: 'completion', answer: '' },
-        resolvedIntent,
+        effectiveIntent,
       );
       if (gateResult === 'reject') {
         yield this.streamFailed(`Turn limit exceeded. ${this.buildRejectionMessage()}`);
@@ -4136,7 +4144,7 @@ export class ChatEngine {
             /* no-op on terminal stream path */
           },
         },
-        resolvedIntent,
+        effectiveIntent,
         { terminal: true },
       );
       if (this.lastCriticReceipt) {
@@ -4442,7 +4450,9 @@ export class ChatEngine {
         reason: decision.reason,
         evidenceRefs: decision.evidenceRefs,
         policyVersion: decision.policyVersion,
-        ...(terminalReason !== undefined ? { reasonCode: terminalReason.code } : {}),
+        ...(terminalReason !== undefined
+          ? { reasonCode: terminalReason.code, causeClass: terminalReason.cause_class }
+          : {}),
       });
     }
     // P0-E: attach shadow later-succeeded summary before export (idempotent with buildResult).
@@ -7904,6 +7914,7 @@ export class ChatEngine {
     evidenceRefs: string[];
     policyVersion: string;
     reasonCode?: TerminalReasonCode;
+    causeClass?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
   }): void {
     const turnId = String(this.parity.turnId ?? this._turnIndex);
     if (
@@ -8033,7 +8044,9 @@ export class ChatEngine {
         reason: kernelDecision.reason,
         evidenceRefs: kernelDecision.evidenceRefs,
         policyVersion: kernelDecision.policyVersion,
-        ...(terminalReason !== undefined ? { reasonCode: terminalReason.code } : {}),
+        ...(terminalReason !== undefined
+          ? { reasonCode: terminalReason.code, causeClass: terminalReason.cause_class }
+          : {}),
       });
     }
 

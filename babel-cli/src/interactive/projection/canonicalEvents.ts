@@ -241,6 +241,7 @@ export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): Canonical
         status: terminal.status,
         finalAnswer: ev.reason,
         ...(ev.reason_code !== undefined ? { reason_code: ev.reason_code } : {}),
+        ...(ev.cause_class !== undefined ? { cause_class: ev.cause_class } : {}),
       };
     }
     case 'turn_ended': {

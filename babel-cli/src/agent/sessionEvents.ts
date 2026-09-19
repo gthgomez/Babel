@@ -414,6 +414,8 @@ export type SessionEvent =
       policy_version: string;
       /** D03: structured reason code — `reason` stays free-text/diagnostic. */
       reason_code?: TerminalReasonCode;
+      /** D03: separate model-vs-harness cause axis; null = not established. */
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     })
   | (SessionEventBase & {
       kind: 'model_failover';
@@ -1632,6 +1634,7 @@ export function recordCompletionDecision(
     evidenceRefs: string[];
     policyVersion: string;
     reasonCode?: TerminalReasonCode;
+    causeClass?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -1644,6 +1647,7 @@ export function recordCompletionDecision(
     evidence_refs: [...input.evidenceRefs],
     policy_version: input.policyVersion,
     ...(input.reasonCode !== undefined ? { reason_code: input.reasonCode } : {}),
+    ...(input.causeClass !== undefined ? { cause_class: input.causeClass } : {}),
   });
 }
 

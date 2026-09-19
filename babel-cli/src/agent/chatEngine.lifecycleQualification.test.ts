@@ -388,7 +388,11 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
         },
       );
       const engine = makeEngine(fixture.project, runId, runner);
-      const events = await collectStream(engine.submitMessageStream('exercise the persistence boundary'));
+      // Mutation-intent fixture: the subject under test is the persistence
+      // boundary, not operation classification. A READ_ONLY-shaped prompt would
+      // (correctly) complete without patch pressure and never reach the
+      // persistence-failure terminal this test qualifies.
+      const events = await collectStream(engine.submitMessageStream('write the persistence boundary fixture'));
       assert.equal(sabotaged, true, 'the fixture must replace the opened event log at the real filesystem boundary');
       assert.ok(events.some((event) => event.type === 'tool_start'), `the injected runner must reach tool dispatch: ${JSON.stringify(events)}`);
       const terminal = events.find((event) => event.type === 'failed' || event.type === 'done');
@@ -599,7 +603,11 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
       });
       let compactions = 0;
       for (let i = 0; i < 10; i += 1) {
-        const events = await collectStream(engine.submitMessageStream(`long-session-turn-${i}`));
+        // Mutation-intent fixture: the subject under test is repeated
+        // compaction, and a READ_ONLY-shaped prompt would (correctly) complete
+        // on turn one without growing the conversation to the compaction
+        // threshold.
+        const events = await collectStream(engine.submitMessageStream(`update the lifecycle fixture turn ${i}`));
         compactions += events.filter((event) => event.type === 'context_compacted').length;
       }
       assert.ok(compactions >= 2, `expected repeated real-engine compaction, observed ${compactions}`);

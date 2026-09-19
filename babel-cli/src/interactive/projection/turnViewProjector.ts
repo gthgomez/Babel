@@ -174,6 +174,7 @@ export function projectTurnViewState(
           projectedTerminal.outcome === 'CANCELLED' ||
           projectedTerminal.outcome === 'VERIFIED_COMPLETE' ||
           projectedTerminal.outcome === 'BLOCKED_POLICY' ||
+          projectedTerminal.outcome === 'BLOCKED_EXTERNAL' ||
           projectedTerminal.outcome === 'BUDGET_EXHAUSTED' ||
           projectedTerminal.outcome === 'INFRA_FAILURE' ||
           projectedTerminal.outcome === 'AGENT_FAILURE' ||
