@@ -139,6 +139,9 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       assert.equal(outcome.ok, true);
       if (!outcome.ok) return;
       assert.equal(outcome.source, 'transcript');
+      // D04: no durable repo identity in this legacy fixture -> degraded, not a
+      // silent claim of verified physical identity, and not a hard failure.
+      assert.equal(outcome.degraded, true);
       assert.match(ctx.chatEngine?.getConversation().find((m) => m.role === 'user')?.content ?? '', /transcript-only hello/);
     } finally {
       fixture.cleanup();
