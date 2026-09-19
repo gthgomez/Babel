@@ -104,6 +104,8 @@ export interface ReadOnlyAgentLoopResult {
   /** True when the child stopped at an inherited parent wall/cost boundary. */
   inheritedBudgetExceeded?: boolean;
   inheritedBudgetLimiter?: ChildBudgetLimiter;
+  /** S02: rounds actually executed (live loop only; mock/warmup may omit). */
+  roundsExecuted?: number;
 }
 
 function agentActionToolName(action: AgentAction): string {
@@ -736,6 +738,7 @@ export async function runReadOnlyAgentLoop(
     roundExhausted,
     needsApproval,
     providerError,
+    roundsExecuted: round,
     ...(inheritedBudgetLimiter
       ? {
           inheritedBudgetExceeded: true,

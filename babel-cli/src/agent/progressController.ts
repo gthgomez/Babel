@@ -218,6 +218,9 @@ export class ProgressController {
    *
    * Deliberately preserves `capabilities`: capability health describes the
    * environment/provider, not the task, so it may survive a task boundary.
+   * Capability health is never blanked here; it changes only through
+   * recordSuccess/recordFailure, so recovery of a degraded capability requires a
+   * genuinely successful operation of that capability, not a new task boundary.
    * Prefer this over replacing the controller so environment health is not
    * silently blanked and recovery stays reachable.
    */

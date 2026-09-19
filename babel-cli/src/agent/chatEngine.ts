@@ -121,6 +121,7 @@ import {
   resolveChatTaskClass,
   getChatTaskTune,
   type ChatTaskClass,
+  type TaskOperation,
   type VerificationPolicy,
 } from '../config/chatTaskClass.js';
 import {
@@ -181,6 +182,16 @@ import {
   type ChatTurn,
   type ChatRuntimeMode,
 } from './chatToolDefinitions.js';
+import {
+  buildReadOnlyChildResult,
+  renderReadOnlyChildResultSection,
+} from './childConclusion.js';
+import {
+  CHILD_MUTATION_DEFAULT_ROUNDS,
+  CHILD_READ_DEFAULT_ROUNDS,
+  formatChildSpecReceipt,
+  resolveChildSpec,
+} from './childSpec.js';
 import { type ChatEngineServices, type ChatExecutionProfile } from './chatEngineServices.js';
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
 import {
@@ -280,6 +291,7 @@ import {
   type InheritedChildAllowance,
 } from './childBudget.js';
 import {
+  childBudgetAttribution,
   classifySubagentFailure,
   runMutationAgentLoop,
   subagentFinishedCleanly,
@@ -299,6 +311,10 @@ import {
 import type { StallState, StallIntervention } from './stallDetector.js';
 import type { ProgressController, ProgressSignal } from './progressController.js';
 import { classifyShellCapability } from './progressController.js';
+import {
+  progressSignalsFromReceipt,
+  type ProgressReceipt,
+} from './progressReceipt.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './chatPhaseNudge.js';
 import {
   assessMutationEffect,
@@ -898,9 +914,114 @@ export interface ChatResult {
 
 // ─── Constants ────────────────────────────────────────────────────────────
 
-const SUB_AGENT_MAX_ROUNDS = 4;
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
 const MAX_TOOL_CONCURRENCY = 6; // Prevent exhausting connection pools
+/**
+ * I1: text-tools cap for the bounded child section. The section is already
+ * bounded by childConclusion (2 KB conclusion + 0.5 KB error + 12 evidence
+ * refs), so this is comfortably above its worst case and keeps the provenance
+ * `authority` line and evidence tail visible on the text path.
+ */
+const SUB_AGENT_TEXT_MAX_CHARS = 6000;
+
+/**
+ * S03/#213 slice 2: stable child delegation id bound to the parent operation
+ * (run + turn + batch + action index + operation fingerprint), not a batch-local
+ * counter. Distinct batches -> distinct ids; same delegation -> same id.
+ */
+export function deriveChildDelegationId(input: {
+  parentRunId: string;
+  turnId: string;
+  batchId: string;
+  actionIndex: number;
+  fingerprint: string;
+}): string {
+  const digest = createHash('sha256')
+    .update(
+      [
+        input.parentRunId,
+        input.turnId,
+        input.batchId,
+        String(input.actionIndex),
+        input.fingerprint,
+      ].join('|'),
+    )
+    .digest('hex')
+    .slice(0, 12);
+  return `chat-sub-${digest}`;
+}
+
+/** S03/#213 slice 2: per-attempt evidence dir so a retry cannot overwrite it. */
+export function childAttemptDir(engineRunDir: string, subId: string, attempt: number): string {
+  return join(engineRunDir, subId, `attempt-${attempt}`);
+}
+
+/** S02: minimal shape of a text-tools log entry (see ChatEngine.toolCallLog). */
+export interface TextToolResultEntry {
+  tool: string;
+  target: string;
+  detail?: string;
+  error?: string;
+  exit_code?: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+/**
+ * S02/#212: text-tools rendering was rebuilt from `toolCallLog` and only
+ * surfaced read/grep/glob/list_dir/run_command stdout, so a read-only child
+ * conclusion never reached the model on the text path. Extracted pure so both
+ * delivery modes can be asserted directly.
+ */
+export function formatTextToolResults(entries: readonly TextToolResultEntry[]): string {
+  const parts: string[] = [];
+  for (const entry of entries) {
+    if (entry.error === 'blocked') {
+      parts.push(`[ERROR] ${entry.tool}:${entry.target} blocked`);
+      continue;
+    }
+    // S02/I1: sub_agent handoff (conclusion + status + evidence refs) before the
+    // generic exit-code branch, so failed/policy-denied children still surface
+    // their bounded result instead of a 500-char error slice. The child section
+    // is self-bounded by childConclusion (conclusion/error/evidence caps), so it
+    // gets a larger explicit cap than generic tool output — otherwise the
+    // provenance `authority` line and evidence tail would be truncated away.
+    if (entry.tool === 'sub_agent' && entry.stdout) {
+      const out =
+        entry.stdout.length > SUB_AGENT_TEXT_MAX_CHARS
+          ? entry.stdout.slice(0, SUB_AGENT_TEXT_MAX_CHARS) + '\n... [truncated]'
+          : entry.stdout;
+      parts.push(
+        `[RESULT] ${entry.tool}:${entry.target}\n${entry.detail ? entry.detail + '\n' : ''}${out}`,
+      );
+      continue;
+    }
+    if (entry.exit_code !== undefined && entry.exit_code !== 0) {
+      const err = (entry.stderr || entry.stdout || '').slice(0, 500);
+      parts.push(`[ERROR] ${entry.tool}:${entry.target} exit ${entry.exit_code}: ${err}`);
+      continue;
+    }
+    // Tools whose output content the model needs to ingest
+    if (entry.stdout && ['read_file', 'grep', 'glob', 'list_dir'].includes(entry.tool)) {
+      const truncated =
+        entry.stdout.length > 3000
+          ? entry.stdout.slice(0, 3000) + '\n... [truncated]'
+          : entry.stdout;
+      parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${truncated}`);
+      continue;
+    }
+    // run_command: include output
+    if (entry.tool === 'run_command' && entry.stdout) {
+      const out = entry.stdout.slice(0, 1000);
+      parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${out}`);
+      continue;
+    }
+    // Default: simple [OK] summary
+    const detail = entry.detail ? ` (${entry.detail})` : '';
+    parts.push(`[OK] ${entry.tool}:${entry.target}${detail}`);
+  }
+  return parts.join('\n\n');
+}
 
 // ─── Conversational-turn detection ────────────────────────────────────────
 // Pure greetings / acknowledgements / punctuation-only turns ('?', 'hello',
@@ -1024,6 +1145,11 @@ export class ChatEngine {
   }> = [];
   private lastVerifierReceipt: BoundChatVerifierReceipt | null = null;
   private executedVerifierLedger: BoundChatVerifierReceipt[] = [];
+  /**
+   * M1: fingerprint (tool + exit code + output hash) of the last verifier run
+   * this task. A repeated identical shell loop is not "verifier progress".
+   */
+  private lastVerifierSignalSignature: string | null = null;
   /** Index into toolCallLog at the start of the current turn's actions.
    *  Used to correctly slice per-turn entries even as the log grows across turns. */
   private _turnToolCallLogStart = 0;
@@ -1630,18 +1756,20 @@ export class ChatEngine {
     // the implementor zero-write refusal loop re-query them until maxTurns.
     if (isConversationalTurnText(task)) return 'explain';
 
-    // Explicit markdown fenced code blocks or diff/patch snippets → execute
-    if (/```(?:diff|patch|javascript|typescript|python|go|rust)\b/.test(task)) return 'execute';
-
-    // Explicit read-only / no-edit directives → explain
-    // MUST be checked before execute verb patterns so "fix this without editing
-    // files" routes to explain, not execute.
+    // Explicit read-only / no-edit directives → explain.
+    // MUST be checked before fenced code and execute verb patterns: evidence
+    // content (a pasted snippet, diff, or a path named "repair"/"write") is
+    // never mutation authority, and "fix this without editing files" routes to
+    // explain rather than execute.
     if (
-      /\b(without\s+(editing|modifying|changing|writing|touching)|read[- ]only|do\s+not\s+(edit|modify|change|write))\b/i.test(
+      /\b(without\s+(editing|modifying|changing|writing|touching)|read[- ]only|do\s+not\s+(edit|modify|change|write|delete|remove))\b/i.test(
         task,
       )
     )
       return 'explain';
+
+    // Explicit markdown fenced code blocks or diff/patch snippets → execute
+    if (/```(?:diff|patch|javascript|typescript|python|go|rust)\b/.test(task)) return 'execute';
 
     // Review/audit prompts are read-only even when their evidence contains
     // mutation-shaped words such as "repair" in a path or diff description.
@@ -1649,7 +1777,7 @@ export class ChatEngine {
     // fix it"). Keeping this before the generic mutation verbs prevents the
     // trusted reviewer from entering the coding zero-write recovery loop.
     if (
-      /\b(review|audit|analyze|diagnose|inspect|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and|then)\s+(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update|create|write|edit|modify|change|remove|delete|revert|rewrite|replace)\b)(?!.*\bfix\s+it\b)/i.test(
+      /\b(review|audit|analyze|diagnose|inspect|investigate|research|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and|then)\s+(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update|create|write|edit|modify|change|remove|delete|revert|rewrite|replace)\b)(?!.*\bfix\s+it\b)/i.test(
         task,
       )
     )
@@ -1958,7 +2086,10 @@ export class ChatEngine {
   }
 
   /** Force-mutate + read-thrash + cumulative exploration fuses (shared submit/stream). */
-  private applyExploreFuses(executeIntent: boolean): ExploreFuseResult {
+  private applyExploreFuses(
+    executeIntent: boolean,
+    readOnlyOperation: boolean,
+  ): ExploreFuseResult {
     const state = {
       turnsWithoutWrite: this.turnsWithoutWrite,
       consecutiveReadOnlyTools: this.consecutiveReadOnlyTools,
@@ -1972,6 +2103,7 @@ export class ChatEngine {
     };
     const out = applyExploreFusesPolicy({
       executeIntent,
+      readOnlyOperation,
       taskClass: this.taskClass,
       hasAnyWrites: this.hasAnyWrites(),
       state,
@@ -2000,6 +2132,12 @@ export class ChatEngine {
   private _streamNativeToolCallIds: string[] = [];
   /** Stable batch id for the in-flight tool cycle (propose → start → terminal). */
   private _activeToolBatchId: string | null = null;
+  /**
+   * S03/#213 slice 2: dispatch attempt per stable child delegation id. The
+   * first dispatch is attempt 1; re-dispatching the same delegation increments,
+   * so a retry never overwrites the original child's evidence directory.
+   */
+  private childAttempts = new Map<string, number>();
 
   /** Snapshot for Tier A observability helpers (keeps chatEngine thin). */
   private obsHandles(): ObservabilityHandles {
@@ -2199,11 +2337,14 @@ export class ChatEngine {
    *
    *  P0-E: stall_kill mode shadow|enforce|off (env ablation or task-class default).
    *  Shadow downgrades kill → nudge and logs stall_shadow_kill. */
-  private checkStallIntervention(): StallIntervention | null {
+  private checkStallIntervention(isReadOnlyInspection: boolean): StallIntervention | null {
     if (!resolveStallInterventionsEnabled(this.taskClass)) {
       return null;
     }
-    const isReadOnly = this.taskClass === 'quick_inspect' || this.taskClass === 'investigate';
+    // I4: consume the admitted effective-operation policy instead of
+    // re-deriving read-only from taskClass (which can be overridden by env /
+    // autonomy / plan handoff and disagree with isReadOnlyInspection).
+    const isReadOnly = isReadOnlyInspection;
     const stallShadow = resolveStallShadowMode(this.taskClass);
     const intervention = getStallInterventionMessage(
       this.stallState,
@@ -2480,8 +2621,33 @@ export class ChatEngine {
       ...(taskIntent !== undefined ? { taskIntent } : {}),
       ...(submitOpts?.continueTask !== undefined ? { continueTask: submitOpts.continueTask } : {}),
     });
+    // D01/S01/M2: one effective-operation policy for this accepted submission,
+    // resolved BEFORE any generated guidance is appended. TaskShape is
+    // authoritative (derived from the same classifier that sets taskClass), so
+    // read-only gating, preparation fuses, progress scoring, loop-control and
+    // finalization all consume this decision.
+    //
+    // There are still two *inputs* by design: `resolvedIntent` is the legacy
+    // text-intent classifier (`classifyChatTaskIntent`) and TaskShape is the
+    // operation classifier. Neither is a second authority: `effectiveOperation`
+    // (TaskShape) dominates, and `effectiveExecutePolicy` below ANDs the two so
+    // the legacy `execute` label can never re-add mutation pressure to a
+    // READ_ONLY shape. Zero-write is safe for the same reason — its
+    // `executeIntent` is `effectiveExecutePolicy`, so a read-only shape cannot
+    // reach the zero-write terminal even where a class tune left the threshold
+    // non-zero. Older hydrated snapshots without the field fall back to their
+    // persisted shape; unknown defaults to MUTATING (fail-safe: never silently
+    // loosens mutation pressure).
+    const effectiveOperation: TaskOperation =
+      runtime.effectiveOperation ?? runtime.taskShape?.operation ?? 'MUTATING';
+    const isReadOnlyInspection = effectiveOperation === 'READ_ONLY';
+
     this.conversation.push({ role: 'user', content: userInput });
-    if (this.options.intentPlanUserMessage)
+    // S01/#211: harness-generated repair guidance is only ever injected for an
+    // execute-like operation. A READ_ONLY submission never receives the
+    // generated edit mandate, and the injected text identifies itself as
+    // guidance rather than user authorization (see compileIntentPlanUserMessage).
+    if (this.options.intentPlanUserMessage && !isReadOnlyInspection)
       this.conversation.push({
         role: 'user',
         content: this.options.intentPlanUserMessage,
@@ -2503,6 +2669,14 @@ export class ChatEngine {
     let allToolObservations = '';
 
     const resolvedIntent = runtime.taskIntent;
+
+    // F1/C1: finalization and loop-control consume the same effective operation
+    // policy as gating/fuses/progress. The legacy text classifier can say
+    // `execute` for a READ_ONLY TaskShape (bare "how to fix …", fenced evidence
+    // with no directive), and such a submission must not be pressed to patch,
+    // gated as an execute task, or fed a mutation-oriented critic.
+    const effectiveExecutePolicy = resolvedIntent === 'execute' && !isReadOnlyInspection;
+    const effectiveIntent: TaskIntent = effectiveExecutePolicy ? 'execute' : 'explain';
 
     const authorityHalt = evaluateSubmitTaskAuthorityHalt(this.parity, userInput);
     if (authorityHalt) {
@@ -2537,7 +2711,7 @@ export class ChatEngine {
       submissionIndex: runtime.submissionIndex,
       continuedTask: runtime.continuedTask,
     });
-    if (this.options.intentPlanUserMessage && this.parity.turnId) {
+    if (this.options.intentPlanUserMessage && !isReadOnlyInspection && this.parity.turnId) {
       recordUserMessage(
         this.parity.eventLog,
         this.parity.turnId,
@@ -2608,7 +2782,7 @@ export class ChatEngine {
         const kill = await this.handleBudgetKill(
           this.terminalLimiterReason ?? 'Inherited child allowance exhausted.',
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
         );
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
@@ -2622,7 +2796,7 @@ export class ChatEngine {
         const kill = await this.handleBudgetKill(
           budget.reason ?? 'Budget limit exceeded.',
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
         );
         // AC3: every stream terminal goes through streamDone (buildResult already
         // finalized; streamDone finalize is idempotent on turn_ended).
@@ -3065,7 +3239,7 @@ export class ChatEngine {
         const kill = await this.handleBudgetKill(
           this.terminalLimiterReason,
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
         );
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
@@ -3273,10 +3447,13 @@ export class ChatEngine {
 
         // Mid-loop heuristic critic (stream path)
         if (this.currentTurnHasMutation() || (this.hasAnyWrites() && this.lastVerifierReceipt)) {
-          this.maybeInjectMidLoopHeuristicCritic({ onThought: () => {} }, resolvedIntent);
+          this.maybeInjectMidLoopHeuristicCritic({ onThought: () => {} }, effectiveIntent);
         }
 
-        const exploreFuses = this.applyExploreFuses(resolvedIntent === 'execute');
+        const exploreFuses = this.applyExploreFuses(
+          effectiveExecutePolicy,
+          isReadOnlyInspection,
+        );
         for (const label of exploreFuses.labels) {
           yield { type: 'thought', text: label };
         }
@@ -3284,48 +3461,6 @@ export class ChatEngine {
         // P2: Update stall detector and inject phase nudge if needed
         const turnCallsStr = this.toolCallLog.slice(this._turnToolCallLogStart);
         this.stallState = updateStallState(this.stallState, turnCallsStr, turn);
-
-        // W3 Phase 3 Progress and Recovery Controller
-        const signals: ProgressSignal[] = [];
-        if (
-          turnCallsStr.some(
-            (tc) =>
-              isConfirmedMutation({
-                tool: tc.tool,
-                error: tc.error,
-                effectStatus: tc.effect_status,
-                mutationPaths: tc.mutation_paths,
-              }) ||
-              (tc.tool === 'sub_agent' &&
-                tc.effect_status === 'confirmed_change'),
-          )
-        ) {
-          signals.push('production_mutation');
-        }
-
-        const isTextOnly = turnCallsStr.length === 0;
-        const pcResult = this.progressController.scoreTurn(signals, isTextOnly, this.gateStrikes);
-        recordProgressRecovery(
-          this.parity.sessionEvents,
-          String(this.parity.turnId ?? this._turnIndex),
-          {
-            intervention: pcResult.intervention,
-            score: pcResult.score,
-            signals,
-            reason: 'turn_scored',
-          },
-        );
-
-        if (pcResult.transitioned) {
-          this.currentTurnTelemetry?.recordPolicyIntervention();
-          yield {
-            type: 'progress_recovery',
-            intervention: pcResult.intervention,
-            source: 'progress_controller',
-            score: pcResult.score,
-            message: `Transitioned to ${pcResult.intervention}`,
-          };
-        }
 
         const streamPhase = classifyPhase(
           this.stallState,
@@ -3342,9 +3477,6 @@ export class ChatEngine {
           );
         }
         this._lastPhase = streamPhase;
-        const isReadOnlyInspection =
-          resolvedIntent !== 'execute' &&
-          (this.taskClass === 'quick_inspect' || this.taskClass === 'investigate');
         if (shouldNudge(this._lastPhase) && !isReadOnlyInspection) {
           const hintsStr = turnCallsStr
             .filter(
@@ -3401,7 +3533,7 @@ export class ChatEngine {
         }
 
         // R2: Escalating stall intervention — kill routed through parity arbiter
-        const stallIntervention = this.checkStallIntervention();
+        const stallIntervention = this.checkStallIntervention(isReadOnlyInspection);
         if (stallIntervention && stallIntervention.level !== 'kill') {
           recordPolicyEvent(
             this.policyEventLog,
@@ -3409,7 +3541,9 @@ export class ChatEngine {
             'stall_intervention',
             `level=${stallIntervention.level}`,
           );
-          if (stallIntervention.level === 'restrict_tools') {
+          // I4: never latch a mutate-only tool restriction onto a read-only
+          // operation; the read-only stall path concludes or synthesizes.
+          if (stallIntervention.level === 'restrict_tools' && !isReadOnlyInspection) {
             this.restrictToolsNextTurn = true;
           }
           this.conversation.push({
@@ -3450,8 +3584,9 @@ export class ChatEngine {
               ? createHash('sha256').update(content).digest('hex').slice(0, 16)
               : undefined,
         });
+        let cycleReceipt: ProgressReceipt | null = null;
         try {
-          parityRecordToolBatch(this.parity, {
+          cycleReceipt = parityRecordToolBatch(this.parity, {
             at_turn: turn,
             ...(turnResult.type === 'tool_calls' && turnResult.thinking
               ? { thinking: turnResult.thinking }
@@ -3469,9 +3604,9 @@ export class ChatEngine {
             patchFailed: turnSlice.some(
               (t) => t.tool === 'str_replace' && t.error != null && t.error !== '',
             ),
-            verifierChanged: turnSlice.some(
-              (t) => t.tool === 'run_command' || t.tool === 'test_run' || t.tool === 'shell_exec',
-            ),
+            verifierChanged: this.computeVerifierChanged(projected.results),
+            // Context epoch: advancing it makes necessary re-reads count again.
+            contextEpoch: this.readContextEpoch,
             // W2.2: propose+start already flushed before executeActions.
             settleAlreadyProposed: turnResult.actions.length > 0,
             // Do NOT pass every read as localizedPaths — re-reads use contentHash only.
@@ -3489,13 +3624,63 @@ export class ChatEngine {
         this._streamNativeToolCallIds = [];
         this._activeToolBatchId = null;
 
+        // D02: score the W3 progress/recovery controller from the same evidence
+        // set as the durable receipt (confirmed mutation + receipt read-novelty)
+        // instead of an empty mutation-only list. A read-only investigation with
+        // distinct reads therefore stays at "none" rather than emitting false
+        // restricted_tools / terminal_blocked labels.
+        const progressSignals: ProgressSignal[] = [];
+        if (
+          turnCallsStr.some(
+            (tc) =>
+              isConfirmedMutation({
+                tool: tc.tool,
+                error: tc.error,
+                effectStatus: tc.effect_status,
+                mutationPaths: tc.mutation_paths,
+              }) ||
+              (tc.tool === 'sub_agent' && tc.effect_status === 'confirmed_change'),
+          )
+        ) {
+          progressSignals.push('production_mutation');
+        }
+        for (const signal of progressSignalsFromReceipt(cycleReceipt)) {
+          if (!progressSignals.includes(signal)) progressSignals.push(signal);
+        }
+        const isTextOnly = turnCallsStr.length === 0;
+        const pcResult = this.progressController.scoreTurn(
+          progressSignals,
+          isTextOnly,
+          this.gateStrikes,
+        );
+        recordProgressRecovery(
+          this.parity.sessionEvents,
+          String(this.parity.turnId ?? this._turnIndex),
+          {
+            intervention: pcResult.intervention,
+            score: pcResult.score,
+            signals: progressSignals,
+            reason: 'turn_scored',
+          },
+        );
+        if (pcResult.transitioned) {
+          this.currentTurnTelemetry?.recordPolicyIntervention();
+          yield {
+            type: 'progress_recovery',
+            intervention: pcResult.intervention,
+            source: 'progress_controller',
+            score: pcResult.score,
+            message: `Transitioned to ${pcResult.intervention}`,
+          };
+        }
+
         // P0-E: zero-write shadow by default for coding classes (one-shot log);
         // enforce ablation is a real terminal via zeroWriteTerminalMessage.
         const alreadyHasZeroWriteShadow = this.policyEventLog
           .all()
           .some((e) => e.kind === 'zero_write_shadow');
         const zeroWriteDecision = evaluateZeroWriteWithShadow({
-          executeIntent: resolvedIntent === 'execute',
+          executeIntent: effectiveExecutePolicy,
           completedTurns: turn + 1,
           hasAnyWrites: this.hasAnyWrites(),
           taskClass: this.taskClass,
@@ -3569,10 +3754,14 @@ export class ChatEngine {
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
 
-          // Read-only inspection hard cap: synthesize gathered evidence into a final informational answer
+          // Read-only inspection terminal: synthesize gathered evidence into a
+          // bounded final informational answer instead of a generic capability
+          // block. Covers the read-only hard cap and the evidence-based
+          // no-progress terminal (never press a research task to mutate).
           if (
             (arb.policySource === 'investigate_hard_cap' ||
-              arb.policySource === 'read_only_hard_cap') &&
+              arb.policySource === 'read_only_hard_cap' ||
+              arb.policySource === 'progress_terminal') &&
             isReadOnlyInspection
           ) {
             let synthAnswer = '';
@@ -3787,7 +3976,7 @@ export class ChatEngine {
             extractToolEnvBlockedSignal(t, envDetectOpts) !== null,
           );
         const completionPref = evaluateCompletionPrefersPatch({
-          executeIntent: resolvedIntent === 'execute',
+          executeIntent: effectiveExecutePolicy,
           hasAnyWrites: completionHasWrites,
           envBlocked,
         });
@@ -3812,7 +4001,7 @@ export class ChatEngine {
         }
 
         // Execution gate: buffer streaming answer until gate check passes
-        const gateResult = this.evaluateCompletionGate(turnResult, resolvedIntent);
+        const gateResult = this.evaluateCompletionGate(turnResult, effectiveIntent);
         const hardGate = isBabelHeadlessEnv() || !process.stdout.isTTY;
 
         if (gateResult === 'reject') {
@@ -3903,7 +4092,7 @@ export class ChatEngine {
               /* thought emitted via yield below when we can */
             },
           },
-          resolvedIntent,
+          effectiveIntent,
         );
         if (this.lastCriticReceipt) {
           yield {
@@ -4008,10 +4197,10 @@ export class ChatEngine {
       return;
     }
 
-    if (resolvedIntent === 'execute') {
+    if (effectiveExecutePolicy) {
       const gateResult = this.evaluateCompletionGate(
         { type: 'completion', answer: '' },
-        resolvedIntent,
+        effectiveIntent,
       );
       if (gateResult === 'reject') {
         yield this.streamFailed(`Turn limit exceeded. ${this.buildRejectionMessage()}`);
@@ -4026,7 +4215,7 @@ export class ChatEngine {
             /* no-op on terminal stream path */
           },
         },
-        resolvedIntent,
+        effectiveIntent,
         { terminal: true },
       );
       if (this.lastCriticReceipt) {
@@ -4209,6 +4398,30 @@ export class ChatEngine {
     this.verifierReceiptCache.clear();
     this.platformUnusableVerifiers.clear();
     this.verifierDependencyHashes.clear();
+    this.lastVerifierSignalSignature = null;
+  }
+
+  /**
+   * M1: a verifier signal only counts as progress when the verifier's identity
+   * or observed output changed. Repeated identical shell loops must not reset
+   * the no-progress bound (D-T06) or add verifier score.
+   */
+  private computeVerifierChanged(
+    results: ReadonlyArray<{ tool_name: string; content?: string; exit_code?: number }>,
+  ): boolean {
+    const verifierTools = new Set(['run_command', 'test_run', 'shell_exec']);
+    const relevant = results.filter((r) => verifierTools.has(r.tool_name));
+    if (relevant.length === 0) return false;
+    const signature = relevant
+      .map(
+        (r) =>
+          `${r.tool_name}:${r.exit_code ?? ''}:` +
+          createHash('sha256').update(r.content ?? '').digest('hex').slice(0, 16),
+      )
+      .join('|');
+    const changed = signature !== this.lastVerifierSignalSignature;
+    this.lastVerifierSignalSignature = signature;
+    return changed;
   }
 
   private restorePersistedVerifierEvidence(log: SessionEventLog): void {
@@ -4564,6 +4777,16 @@ export class ChatEngine {
     if (!runtime.continuedTask && !continuationScopeUnavailable) {
       // A fresh submission starts a new enforcement scope. The global tracker
       // is intentionally preserved for session/accounting views.
+      //
+      // S06 cross-task integration: reset ONLY task-local progress punishment
+      // (level/score/strikes/streak/signals). Do not recreate the controller and
+      // do not blank environment/provider capability health: a DEGRADED
+      // capability persists across submissions and is recoverable only via
+      // recordSuccess on a genuinely successful operation. Recreating the
+      // controller here would silently revert DEGRADED capabilities to
+      // AVAILABLE and would also discard task-local punishment on explicit
+      // `continueTask`.
+      this.progressController.resetTaskLocal();
       this.taskCostScopeUnavailable = false;
       this.criticRepairCostCapUsd = null;
       this.postWriteRepairWallCapMs = null;
@@ -4811,7 +5034,6 @@ export class ChatEngine {
       sessionId: this.engineRunId,
       ...(this.parity.turnId ? { turnId: this.parity.turnId } : {}),
     };
-    let subAgentCounter = 0;
     // Order-preserving batches (only consecutive reads may parallelize).
     const batches = planToolBatches(
       orderChatToolActions(
@@ -4833,7 +5055,6 @@ export class ChatEngine {
             if (this._cancelled || this.abortController.signal.aborted || stopTerminal) break;
             const result = await this.executeOneAction(actions[index]!, toolContext, callbacks, {
               index,
-              subAgentCounter: ++subAgentCounter,
               idempotencyKey:
                 this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
             });
@@ -4850,7 +5071,6 @@ export class ChatEngine {
               chunk.map((index) =>
                 this.executeOneAction(actions[index]!, toolContext, callbacks, {
                   index,
-                  subAgentCounter: ++subAgentCounter,
                   idempotencyKey:
                     this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
                 }),
@@ -4861,7 +5081,6 @@ export class ChatEngine {
       } else {
         const result = await this.executeOneAction(actions[batch.index]!, toolContext, callbacks, {
           index: batch.index,
-          subAgentCounter: ++subAgentCounter,
           idempotencyKey:
             this._streamNativeToolCallIds[batch.index] ??
             `tool_call_${this._turnIndex}_${batch.index}`,
@@ -4916,7 +5135,10 @@ export class ChatEngine {
     toolId: number,
     subId: string,
     reason: string,
+    limiter?: ChildBudgetLimiter,
   ): { index: number; observation: string; stop: true } {
+    // S03/T04: a wall/cost rejection is not a round exhaustion.
+    const attribution = childBudgetAttribution(limiter);
     const idempotencyKey =
       meta.idempotencyKey ??
       this._streamNativeToolCallIds[meta.index] ??
@@ -4933,7 +5155,7 @@ export class ChatEngine {
       this.engineRunDir,
       reason,
     );
-    const detail = `failed, attribution=child_round_exhaustion: ${reason}`;
+    const detail = `failed, attribution=${attribution}: ${reason}`;
     this.toolCallLog.push({
       tool: chatActionToolName(action),
       target: chatActionTarget(action),
@@ -4947,12 +5169,32 @@ export class ChatEngine {
     callbacks.onSubAgentFailed?.({ id: subId, error: reason });
     return {
       index: meta.index,
-      observation: `### sub_agent ${subId}\nstatus: failed\nattribution: child_round_exhaustion\n${reason}`,
+      observation: `### sub_agent ${subId}\nstatus: failed\nattribution: ${attribution}\n${reason}`,
       stop: true,
     };
   }
 
   /** Block a fresh tool-call id from replaying an equivalent unknown external/non-idempotent effect. */
+  /**
+   * S03/#213 slice 2: bind child identity to the parent operation/delegation
+   * (parent run + turn + batch + action index + operation fingerprint), not a
+   * batch-local display counter that resets on every `executeActions` call.
+   * Two successive batches therefore get distinct ids; a re-dispatch of the
+   * same admitted delegation keeps its base id.
+   */
+  private childDelegationIdForAction(action: ChatToolAction, meta: { index: number }): string {
+    const turnId = String(this.parity.turnId ?? this._turnIndex);
+    const batchId =
+      this._activeToolBatchId ?? `batch_${this._turnIndex}_${this._turnToolCallLogStart}`;
+    return deriveChildDelegationId({
+      parentRunId: this.engineRunId,
+      turnId,
+      batchId,
+      actionIndex: meta.index,
+      fingerprint: operationFingerprint(chatActionToolName(action), action),
+    });
+  }
+
   private recoveredOperationDispatchAuthorization(action: ChatToolAction): {
     allowed: boolean;
     message?: string;
@@ -5003,7 +5245,7 @@ export class ChatEngine {
     action: ChatToolAction,
     toolContext: ToolContext,
     callbacks: ChatCallbacks,
-    meta: { index: number; subAgentCounter: number; idempotencyKey?: string },
+    meta: { index: number; idempotencyKey?: string },
   ): Promise<{ index: number; observation: string; stop?: boolean }> {
     const tool = chatActionToolName(action);
     const target = chatActionTarget(action);
@@ -5103,9 +5345,32 @@ export class ChatEngine {
       }
 
       if (action.type === 'sub_agent') {
-        const subId = `chat-sub-${meta.subAgentCounter}`;
-        const mutationEnabled = (action as any).mutation === true;
-        const writeScope: string[] = (action as any).write_scope ?? [];
+        // S03/#213 slice 2: stable delegation id + per-attempt evidence dir.
+        //
+        // M7 (open, disclosed): this makes retry *identity* stable and prevents
+        // the retry from overwriting attempt-1 evidence, but it does NOT yet
+        // replay a terminal idempotency key instead of re-running the child.
+        // The recon's full T05 dedupe gate remains unimplemented; the existing
+        // recovered-outcome authorization gate (above) still blocks unknown
+        // outcomes until reconciliation.
+        const subId = this.childDelegationIdForAction(action, meta);
+        const attempt = (this.childAttempts.get(subId) ?? 0) + 1;
+        this.childAttempts.set(subId, attempt);
+        const childRunDir = childAttemptDir(this.engineRunDir, subId, attempt);
+        // S03/#213 slice 1: resolve ONE effective child spec. Every declared
+        // option is honored, rejected, or clamped with a reason; the runtime
+        // receipts and the advertised schema both derive from these semantics.
+        const spec = resolveChildSpec({
+          mutation: (action as { mutation?: boolean }).mutation === true,
+          writeScope: (action as { write_scope?: string[] }).write_scope ?? [],
+          instructions: (action as { instructions?: string }).instructions ?? null,
+          model: (action as { model?: string }).model ?? null,
+          maxRounds: (action as { max_rounds?: number }).max_rounds ?? null,
+          parentModel: this.modelPolicy?.providerModelId ?? null,
+        });
+        const mutationEnabled = spec.mutation;
+        const writeScope = spec.writeScope;
+        const specReceipt = formatChildSpecReceipt(spec);
 
         // #11: Fork an isolated ToolContext with a child AbortController.
         // Cancelling the parent cascades; cancelling a sibling does not.
@@ -5115,7 +5380,7 @@ export class ChatEngine {
           once: true,
         });
         const mutationAllowance = mutationEnabled
-          ? this.deriveChildAllowance(SUB_AGENT_MAX_ROUNDS)
+          ? this.deriveChildAllowance(spec.effectiveRounds)
           : null;
         if (mutationAllowance) {
           const inheritedLimiter = inheritedChildBudgetLimiter(mutationAllowance);
@@ -5129,6 +5394,7 @@ export class ChatEngine {
               toolId,
               subId,
               reason,
+              inheritedLimiter,
             );
             this.abortController.signal.removeEventListener('abort', onParentAbort);
             return rejected;
@@ -5165,17 +5431,13 @@ export class ChatEngine {
                   id: subId,
                   task: action.task,
                   writeScope,
-                  maxRounds: SUB_AGENT_MAX_ROUNDS,
-                  ...(((action as any).model ?? this.modelPolicy?.providerModelId)
-                    ? {
-                        model: ((action as any).model ??
-                          this.modelPolicy?.providerModelId) as string,
-                      }
-                    : {}),
+                  maxRounds: spec.effectiveRounds,
+                  ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
+                  ...(spec.instructions ? { instructions: spec.instructions } : {}),
                 },
                 {
                   projectRoot: this.options.projectRoot,
-                  runDir: join(this.engineRunDir, subId),
+                  runDir: childRunDir,
                   abortSignal: childController.signal,
                   cleanupWorktree: false,
                   toolContext: {
@@ -5231,6 +5493,7 @@ export class ChatEngine {
                 `status: ${clean ? (attribution === 'child_noop' ? 'noop' : 'success') : 'failed'}`,
                 `attribution: ${attribution}`,
                 `isolation: git_worktree`,
+                `child_spec: ${specReceipt}`,
                 `worktree: ${implResult.worktree.path}`,
                 `write_scope: ${implResult.writeScope.join(', ') || '(none)'}`,
                 `parent_tree_clean: ${implResult.parentTreeClean}`,
@@ -5255,20 +5518,17 @@ export class ChatEngine {
               toolContext: {
                 agentId: subId,
                 runId: this.engineRunId,
-                runDir: join(this.engineRunDir, subId),
+                runDir: childRunDir,
                 babelRoot: process.env['BABEL_ROOT'] ?? process.cwd(),
                 signal: childController.signal,
               },
-              maxRounds: SUB_AGENT_MAX_ROUNDS,
+              maxRounds: spec.effectiveRounds,
               abortSignal: childController.signal,
-              runDir: join(this.engineRunDir, subId),
+              runDir: childRunDir,
               ...(mutationAllowance ? { inheritedAllowance: mutationAllowance } : {}),
               onUsageRecorded: () => this.persistTaskCostBaseline(),
-              ...((action as any).model || this.modelPolicy?.providerModelId
-                ? {
-                    model: ((action as any).model ?? this.modelPolicy?.providerModelId) as string,
-                  }
-                : {}),
+              ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
+              ...(spec.instructions ? { additionalInstructions: spec.instructions } : {}),
             });
             const attribution: SubagentAttribution = mutResult.attribution;
             const clean = subagentFinishedCleanly(attribution);
@@ -5315,6 +5575,7 @@ export class ChatEngine {
               `### sub_agent ${subId}: ${action.task}`,
               `status: ${clean ? (attribution === 'child_noop' ? 'noop' : 'success') : 'failed'}`,
               `attribution: ${attribution}`,
+              `child_spec: ${specReceipt}`,
               `steps: ${mutResult.stepsExecuted}`,
               `changed_files: ${mutResult.changedFiles.map((f) => f.path).join(', ') || 'none'}`,
               mutResult.summary,
@@ -5358,10 +5619,8 @@ export class ChatEngine {
           label: action.task.slice(0, 60),
         });
         try {
-          const requestedRounds = (action as { max_rounds?: number }).max_rounds;
-          const childRounds = Number.isFinite(requestedRounds)
-            ? Math.min(20, Math.max(1, Math.trunc(requestedRounds as number)))
-            : SUB_AGENT_MAX_ROUNDS;
+          // S03: use the one resolved spec (bounds/defaults live in childSpec).
+          const childRounds = spec.effectiveRounds;
           const readAllowance = this.deriveChildAllowance(childRounds);
           const readInheritedLimiter = inheritedChildBudgetLimiter(readAllowance);
           if (readInheritedLimiter) {
@@ -5374,12 +5633,12 @@ export class ChatEngine {
               toolId,
               subId,
               reason,
+              readInheritedLimiter,
             );
             this.abortController.signal.removeEventListener('abort', onParentAbort);
             return rejected;
           }
           this.persistToolStartedAtExecutorDispatch(action, meta);
-          const extraInstructions = (action as { instructions?: string }).instructions;
           const subResult = await runReadOnlyAgentLoop({
             verb: 'ask',
             task: action.task,
@@ -5388,23 +5647,22 @@ export class ChatEngine {
             toolContext: {
               agentId: subId,
               runId: this.engineRunId,
-              runDir: join(this.engineRunDir, subId),
+              runDir: childRunDir,
               babelRoot: process.env['BABEL_ROOT'] ?? process.cwd(),
               signal: childController.signal,
             },
             maxRounds: childRounds,
             preset: 'read_only',
             abortSignal: childController.signal,
-            model:
-              ((action as any).model as string | undefined) ?? this.modelPolicy?.providerModelId,
-              ...(extraInstructions ? { additionalInstructions: extraInstructions } : {}),
-              inheritedAllowance: readAllowance,
-              onUsageRecorded: () => this.persistTaskCostBaseline(),
-            } as any);
+            ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
+            ...(spec.instructions ? { additionalInstructions: spec.instructions } : {}),
+            inheritedAllowance: readAllowance,
+            onUsageRecorded: () => this.persistTaskCostBaseline(),
+          } as any);
           const attribution: SubagentAttribution = subResult.needsApproval || subResult.policyBlocked
             ? 'child_policy_block'
             : subResult.inheritedBudgetExceeded
-              ? 'child_round_exhaustion'
+              ? childBudgetAttribution(subResult.inheritedBudgetLimiter)
             : subResult.providerError
               ? classifySubagentFailure({
                   success: false,
@@ -5425,13 +5683,47 @@ export class ChatEngine {
                     });
           const clean = subagentFinishedCleanly(attribution);
           const details = `${subResult.stepsExecuted} steps, 0 changed, attribution=${attribution}`;
+          // S02/#212: one bounded child result (conclusion + structured status
+          // + evidence refs). Child-reported only; never completion authority.
+          const childResult = buildReadOnlyChildResult({
+            steps: subResult.steps,
+            toolCallLog: subResult.toolCallLog,
+            observations: subResult.observations,
+            stepsExecuted: subResult.stepsExecuted,
+            degraded: subResult.degraded,
+            completed: subResult.completed,
+            roundExhausted: subResult.roundExhausted,
+            policyBlocked: subResult.policyBlocked,
+            ...(subResult.needsApproval !== undefined
+              ? { needsApproval: subResult.needsApproval }
+              : {}),
+            ...(subResult.providerError !== undefined
+              ? { providerError: subResult.providerError }
+              : {}),
+            ...(subResult.inheritedBudgetExceeded !== undefined
+              ? { inheritedBudgetExceeded: subResult.inheritedBudgetExceeded }
+              : {}),
+            ...(subResult.blockedReason !== undefined
+              ? { blockedReason: subResult.blockedReason }
+              : {}),
+            ...(subResult.roundsExecuted !== undefined
+              ? { roundsExecuted: subResult.roundsExecuted }
+              : {}),
+            lane: 'ask',
+            childId: subId,
+            maxRounds: childRounds,
+            cancelled: childController.signal.aborted,
+          });
+          const childSection = renderReadOnlyChildResultSection(childResult);
           const findings = [
             formatSubAgentFindings(subId, action.task, {
               observations: subResult.observations,
               stepsExecuted: subResult.stepsExecuted,
               degraded: subResult.degraded,
+              childResult,
             }),
             `attribution: ${attribution}`,
+            `child_spec: ${specReceipt}`,
             `completed: ${subResult.completed}`,
             `round_exhausted: ${subResult.roundExhausted}`,
             ...(subResult.needsApproval ? ['needs_approval: true'] : []),
@@ -5444,6 +5736,12 @@ export class ChatEngine {
             index: meta.index,
             exit_code: clean ? 0 : 1,
             ...(clean ? {} : { error: subResult.blockedReason || attribution }),
+            // S02: the text-tools path surfaces the bounded handoff via stdout;
+            // `detail` stays untouched for gate/critic consumers. Note: this
+            // also makes recordTurnToolObservability capture the child section
+            // in observationTails (previously no tail existed for this row); it
+            // is diagnostic only and is not re-injected as authority.
+            stdout: childSection,
           });
           callbacks?.onToolComplete?.(
             toolId,
@@ -6464,43 +6762,7 @@ export class ChatEngine {
    * the next turn instead of a role:tool message it does not understand.
    */
   private buildTextToolResults(startIndex: number): string {
-    const entries = this.toolCallLog.slice(startIndex);
-    const parts: string[] = [];
-
-    for (const entry of entries) {
-      if (entry.error === 'blocked') {
-        parts.push(`[ERROR] ${entry.tool}:${entry.target} blocked`);
-        continue;
-      }
-      if (entry.exit_code !== undefined && entry.exit_code !== 0) {
-        const err = (entry.stderr || entry.stdout || '').slice(0, 500);
-        parts.push(`[ERROR] ${entry.tool}:${entry.target} exit ${entry.exit_code}: ${err}`);
-        continue;
-      }
-
-      // Tools whose output content the model needs to ingest
-      if (entry.stdout && ['read_file', 'grep', 'glob', 'list_dir'].includes(entry.tool)) {
-        const truncated =
-          entry.stdout.length > 3000
-            ? entry.stdout.slice(0, 3000) + '\n... [truncated]'
-            : entry.stdout;
-        parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${truncated}`);
-        continue;
-      }
-
-      // run_command: include output
-      if (entry.tool === 'run_command' && entry.stdout) {
-        const out = entry.stdout.slice(0, 1000);
-        parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${out}`);
-        continue;
-      }
-
-      // Default: simple [OK] summary
-      const detail = entry.detail ? ` (${entry.detail})` : '';
-      parts.push(`[OK] ${entry.tool}:${entry.target}${detail}`);
-    }
-
-    return parts.join('\n\n');
+    return formatTextToolResults(this.toolCallLog.slice(startIndex));
   }
 
   private async runPostEditStaticCheck(filePath: string): Promise<string | null> {
@@ -7742,7 +8004,13 @@ export class ChatEngine {
           ? 'cancelled'
           : null,
       terminalReason: this.terminalLimiterReason,
-      childLimits: { maxRounds: SUB_AGENT_MAX_ROUNDS },
+      // I3: coarse run-level child defaults; effective rounds are resolved at
+      // dispatch (read 4 / mutation 8, clamped 1-20).
+      childLimits: {
+        maxRounds: CHILD_READ_DEFAULT_ROUNDS,
+        readMaxRounds: CHILD_READ_DEFAULT_ROUNDS,
+        mutationMaxRounds: CHILD_MUTATION_DEFAULT_ROUNDS,
+      },
       taskCostBaselineUsd: this.taskCostBaselineUsd,
       taskCostSpentUsd: this.currentTaskCostUsd(),
     });

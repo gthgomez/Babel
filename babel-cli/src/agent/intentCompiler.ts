@@ -155,15 +155,21 @@ export function heuristicIntentPlan(task: string): IntentPlan {
  * Check whether the intent compiler should be skipped for this task.
  *
  * Skip when:
+ * - the resolved TaskShape operation is READ_ONLY (S01/#211: informational
+ *   requests must never receive generated edit/repair guidance)
  * - taskClass is 'investigate' (read-only, no intent to execute)
  * - Dataset provides explicit test paths (SWE harness — use dataset fields)
  * - Task text already contains FAIL_TO_PASS / PASS_TO_PASS (SWE harness)
  * - Task text has explicit pytest file paths (like SWE benchmark issues)
+ *
+ * `operation` comes from the same `analyzeTaskShape` machinery that resolves
+ * the task class, so there is no second classifier here.
  */
 export function shouldSkipIntentCompiler(
   task: string,
-  opts?: { hasDatasetTestPath?: boolean; taskClass?: string },
+  opts?: { hasDatasetTestPath?: boolean; taskClass?: string; operation?: string },
 ): boolean {
+  if (opts?.operation === 'READ_ONLY') return true;
   if (opts?.taskClass === 'investigate') return true;
   if (opts?.hasDatasetTestPath) return true;
 
@@ -206,6 +212,11 @@ export function compileIntentPlan(
     env?: NodeJS.ProcessEnv;
     hasDatasetTestPath?: boolean;
     taskClass?: string;
+    /**
+     * Resolved TaskShape operation for this submission. READ_ONLY suppresses
+     * the plan entirely (informational turn); MUTATING/HYBRID keeps it.
+     */
+    operation?: string;
   },
 ): IntentPlan | null {
   if (!isIntentCompilerEnabled(opts?.env)) return null;

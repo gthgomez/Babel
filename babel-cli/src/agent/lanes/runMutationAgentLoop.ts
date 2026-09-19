@@ -70,6 +70,8 @@ export interface MutationAgentLoopInput {
   useDeterministicMock?: boolean;
   /** Optional model-boundary resolver for deterministic integration tests. */
   actionResolver?: (prompt: string) => Promise<AgentAction[]>;
+  /** S03: extra instructions from the advertised sub_agent contract. */
+  additionalInstructions?: string;
   /** Optional wall-clock timeout for the child loop (child_timeout). */
   timeoutMs?: number;
   /** Bounded allowance inherited from the parent delegation point. */
@@ -83,10 +85,27 @@ export type SubagentAttribution =
   | 'child_noop'
   | 'child_timeout'
   | 'child_round_exhaustion'
+  /** S03/T04: inherited parent wall-clock allowance exhausted (not rounds). */
+  | 'child_wall_exhaustion'
+  /** S03/T04: inherited parent cost allowance exhausted (not rounds). */
+  | 'child_cost_exhaustion'
   | 'child_provider_failure'
   | 'child_policy_block'
   | 'child_environment_failure'
   | 'child_cancellation';
+
+/**
+ * S03/T04: an inherited budget stop is caused by the parent wall/cost limiter,
+ * not by the child's round count. Label it truthfully instead of collapsing to
+ * `child_round_exhaustion`.
+ */
+export function childBudgetAttribution(
+  limiter: ChildBudgetLimiter | undefined,
+): SubagentAttribution {
+  if (limiter === 'wall') return 'child_wall_exhaustion';
+  if (limiter === 'cost') return 'child_cost_exhaustion';
+  return 'child_round_exhaustion';
+}
 
 export interface MutationAgentLoopResult {
   /** Whether all steps completed successfully */
@@ -294,6 +313,7 @@ export function buildMutationAgentTurnPrompt(input: {
   priorObservations: string;
   writeScope: string[];
   workspaceRoot?: string;
+  additionalInstructions?: string;
 }): string {
   const sections: string[] = [
     '# Babel Mutation Sub-Agent Loop',
@@ -312,6 +332,9 @@ export function buildMutationAgentTurnPrompt(input: {
       : 'Write scope: (read-only — no mutation tools allowed)',
     '',
     `Task: ${input.task}`,
+    ...(input.additionalInstructions
+      ? ['', '# Additional Instructions', input.additionalInstructions]
+      : []),
     '',
     '# Prior Tool Observations',
     input.priorObservations.trim().length > 0 ? input.priorObservations : '(none yet)',
@@ -533,6 +556,9 @@ export async function runMutationAgentLoop(
         priorObservations,
         writeScope,
         ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
+        ...(input.additionalInstructions
+          ? { additionalInstructions: input.additionalInstructions }
+          : {}),
       });
 
       // Resolve agent actions from LLM (race abort so cancel during execution is noticed)
@@ -820,7 +846,8 @@ function buildInheritedBudgetResult(
   const reason = `Inherited parent ${limiter} budget exhausted`;
   return {
     success: false,
-    attribution: 'child_round_exhaustion',
+    // T04: a wall/cost stop is not round exhaustion.
+    attribution: childBudgetAttribution(limiter),
     summary: `Sub-agent ${agentId} stopped after ${round} round(s): ${reason}.`,
     changedFiles,
     toolCallLog,
