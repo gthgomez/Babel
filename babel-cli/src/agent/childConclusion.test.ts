@@ -96,7 +96,9 @@ describe('S02/#212 child conclusion handoff', () => {
     assert.match(findings, /completion: completed/);
     assert.match(findings, /authority: child_assertion_not_verified/);
     assert.match(findings, /file_read|read_file/);
-    assert.doesNotMatch(findings, /verified: true/);
+    // M1: success is rendered as `tool_ok`, never as verification of the child.
+    assert.match(findings, /tool_ok=true/);
+    assert.doesNotMatch(findings, /verified[=:] ?true/);
     assert.doesNotMatch(findings, /confirmed_change/);
     // raw observations still present (evidence preserved by reference)
     assert.match(findings, /SOURCE_EVIDENCE_S02/);
@@ -154,6 +156,7 @@ describe('S02/#212 child conclusion handoff', () => {
       [{ completed: false, cancelled: true, roundExhausted: true }, 'cancelled'],
       [{ completed: false, providerError: 'transport reset' }, 'provider_error'],
       [{ completed: false, inheritedBudgetExceeded: true }, 'budget_exhausted'],
+      [{ completed: false }, 'failed'],
     ];
     for (const [override, expected] of cases) {
       const result = buildReadOnlyChildResult(makeInput(override));
@@ -193,5 +196,10 @@ describe('S02/#212 child conclusion handoff', () => {
     assert.equal(manyResult.evidence.length, READONLY_CHILD_EVIDENCE_MAX_REFS);
     assert.equal(manyResult.evidenceTruncated, true);
     assert.match(renderReadOnlyChildResultSection(manyResult), /\[evidence list truncated/);
+
+    const longError = buildReadOnlyChildResult(
+      makeInput({ completed: false, providerError: 'e'.repeat(900) }),
+    );
+    assert.match(longError.error ?? '', /\[child error truncated: 400 chars omitted\]/);
   });
 });

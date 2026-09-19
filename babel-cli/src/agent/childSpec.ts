@@ -24,7 +24,7 @@ export type RoundsClampReason =
   | 'below_floor_1'
   | 'above_ceiling_20'
   | 'non_integer_truncated';
-export type InstructionsDisposition = 'forwarded' | 'absent' | 'unsupported';
+export type InstructionsDisposition = 'forwarded' | 'absent';
 export type ModelDisposition = 'override' | 'parent_default';
 
 export interface ResolveChildSpecInput {
@@ -55,7 +55,8 @@ function resolveRounds(
   mutation: boolean,
 ): Pick<EffectiveChildSpec, 'requestedRounds' | 'effectiveRounds' | 'roundsDisposition' | 'roundsClampReason'> {
   const fallback = mutation ? CHILD_MUTATION_DEFAULT_ROUNDS : CHILD_READ_DEFAULT_ROUNDS;
-  const requested = raw ?? null;
+  // A non-finite request (NaN/Infinity) is reported as "absent", never as NaN.
+  const requested = typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
   if (raw === undefined || raw === null || !Number.isFinite(raw)) {
     return {
       requestedRounds: requested,
@@ -110,15 +111,21 @@ export function resolveChildSpec(input: ResolveChildSpecInput): EffectiveChildSp
   };
 }
 
+/** Collapse control characters so a receipt line cannot be broken by input. */
+function receiptToken(value: string): string {
+  return value.replace(/[\r\n\t]+/g, ' ').slice(0, 200);
+}
+
 /**
  * Compact receipt string derived from the same resolved spec, for findings /
- * onSubAgentStart payloads. Never contains user/model-controlled newlines.
+ * onSubAgentStart payloads. Model-controlled text is collapsed so the receipt
+ * cannot inject a newline or extra observation line.
  */
 export function formatChildSpecReceipt(spec: EffectiveChildSpec): string {
   const clamp = spec.roundsClampReason ? `:${spec.roundsClampReason}` : '';
   return [
     `rounds=${spec.effectiveRounds}(${spec.roundsDisposition}${clamp})`,
-    `model=${spec.resolvedModel ?? 'parent'}(${spec.modelDisposition})`,
+    `model=${spec.resolvedModel ? receiptToken(spec.resolvedModel) : 'parent'}(${spec.modelDisposition})`,
     `instructions=${spec.instructionsDisposition}`,
     `write_scope=${spec.writeScope.length}`,
   ].join(' ');

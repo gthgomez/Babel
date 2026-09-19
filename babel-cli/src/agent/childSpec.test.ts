@@ -60,7 +60,10 @@ describe('S03/#213 T03 — requested vs effective child rounds', () => {
       assert.equal(spec.effectiveRounds, c.read[0]);
       assert.equal(spec.roundsDisposition, c.read[1]);
       assert.equal(spec.roundsClampReason, c.read[2]);
-      assert.equal(spec.requestedRounds, c.requested === undefined || c.requested === null ? null : c.requested);
+      assert.equal(
+        spec.requestedRounds,
+        typeof c.requested === 'number' && Number.isFinite(c.requested) ? c.requested : null,
+      );
     });
     test(`mutation max_rounds=${String(c.requested)} -> ${c.mutation[0]} (${c.mutation[1]})`, () => {
       const spec = resolveChildSpec({

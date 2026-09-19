@@ -320,8 +320,16 @@ describe('D01/D02 effective-operation policy', () => {
       );
       const freshController = (engine as unknown as { progressController: ProgressController })
         .progressController;
-      assert.notEqual(freshController, staleController, 'controller recreated per submission');
+      // S06 integration: the controller instance is preserved (capability health
+      // must survive), but its task-local punishment is reset. The streamed
+      // read turn may add its own localization progress, so assert the leaked
+      // punishment level is gone rather than a raw score of zero.
+      assert.equal(freshController, staleController, 'controller instance preserved across submissions');
       assert.equal(freshController.InterventionLevel, 'none');
+      assert.ok(
+        freshController.TotalScore < 20,
+        `stale task-local punishment must be cleared (score=${freshController.TotalScore})`,
+      );
       assert.equal(engine.getTurnRuntimeSnapshot()?.effectiveOperation, 'READ_ONLY');
     } finally {
       rmSync(root, { recursive: true, force: true });

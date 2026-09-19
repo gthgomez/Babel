@@ -29,6 +29,7 @@ import {
 import { runWithProjectRoot, type ToolContext } from '../localTools.js';
 import type { ToolExecutor } from './toolExecutor.js';
 import {
+  childBudgetAttribution,
   classifySubagentFailure,
   runMutationAgentLoop,
   type MutationAgentLoopResult,
@@ -296,7 +297,7 @@ export async function runImplementWorktreeAgent(
     const result = emptyInheritedWorktreeResult(
       spec,
       projectRoot,
-      options.abortSignal?.aborted ? 'child_cancellation' : 'child_round_exhaustion',
+      options.abortSignal?.aborted ? 'child_cancellation' : childBudgetAttribution(setupLimiter ?? undefined),
       setupLimiter,
     );
     setupBudgetController.dispose();
@@ -371,7 +372,7 @@ export async function runImplementWorktreeAgent(
       return emptyInheritedWorktreeResult(
         spec,
         projectRoot,
-        options.abortSignal?.aborted ? 'child_cancellation' : 'child_round_exhaustion',
+        options.abortSignal?.aborted ? 'child_cancellation' : childBudgetAttribution(afterSetupLimiter ?? undefined),
         afterSetupLimiter,
       );
     }
@@ -388,7 +389,7 @@ export async function runImplementWorktreeAgent(
       return emptyInheritedWorktreeResult(
         spec,
         projectRoot,
-        options.abortSignal?.aborted ? 'child_cancellation' : 'child_round_exhaustion',
+        options.abortSignal?.aborted ? 'child_cancellation' : childBudgetAttribution(inheritedLimiter ?? undefined),
         inheritedLimiter,
       );
     }
@@ -632,7 +633,7 @@ function emptyMutationResult(error: string): MutationAgentLoopResult {
 function emptyInheritedWorktreeResult(
   spec: ImplementWorktreeAgentSpec,
   projectRoot: string,
-  attribution: 'child_round_exhaustion' | 'child_cancellation',
+  attribution: SubagentAttribution,
   limiter: ChildBudgetLimiter | null,
 ): ImplementWorktreeAgentResult {
   const error = limiter

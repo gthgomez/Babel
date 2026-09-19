@@ -213,6 +213,22 @@ export class ProgressController {
     }
   }
 
+  /**
+   * S06 cross-task integration: clear only the *task-local* punishment state so
+   * a fresh submission starts clean, while environment/provider capability
+   * health (DEGRADED/UNAVAILABLE) survives. Capability health is never blanked
+   * here; it changes only through recordSuccess/recordFailure. Recovery of a
+   * degraded capability therefore requires a genuinely successful operation of
+   * that capability (the existing recordSuccess path), not a new task boundary.
+   */
+  public resetTaskLocal(): void {
+    this.level = 'none';
+    this.totalScore = 0;
+    this.strikes = 0;
+    this.noProgressStreak = 0;
+    this.lastSignals = [];
+  }
+
   public scoreTurn(
     signals: ProgressSignal[],
     textOnlyTurn: boolean,

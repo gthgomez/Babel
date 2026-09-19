@@ -186,7 +186,12 @@ import {
   buildReadOnlyChildResult,
   renderReadOnlyChildResultSection,
 } from './childConclusion.js';
-import { formatChildSpecReceipt, resolveChildSpec } from './childSpec.js';
+import {
+  CHILD_MUTATION_DEFAULT_ROUNDS,
+  CHILD_READ_DEFAULT_ROUNDS,
+  formatChildSpecReceipt,
+  resolveChildSpec,
+} from './childSpec.js';
 import { type ChatEngineServices, type ChatExecutionProfile } from './chatEngineServices.js';
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
 import {
@@ -909,9 +914,15 @@ export interface ChatResult {
 
 // ─── Constants ────────────────────────────────────────────────────────────
 
-const SUB_AGENT_MAX_ROUNDS = 4;
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
 const MAX_TOOL_CONCURRENCY = 6; // Prevent exhausting connection pools
+/**
+ * I1: text-tools cap for the bounded child section. The section is already
+ * bounded by childConclusion (2 KB conclusion + 0.5 KB error + 12 evidence
+ * refs), so this is comfortably above its worst case and keeps the provenance
+ * `authority` line and evidence tail visible on the text path.
+ */
+const SUB_AGENT_TEXT_MAX_CHARS = 6000;
 
 /**
  * S03/#213 slice 2: stable child delegation id bound to the parent operation
@@ -969,13 +980,16 @@ export function formatTextToolResults(entries: readonly TextToolResultEntry[]): 
       parts.push(`[ERROR] ${entry.tool}:${entry.target} blocked`);
       continue;
     }
-    // S02: sub_agent handoff (conclusion + status + evidence refs) before the
+    // S02/I1: sub_agent handoff (conclusion + status + evidence refs) before the
     // generic exit-code branch, so failed/policy-denied children still surface
-    // their bounded result instead of a 500-char error slice.
+    // their bounded result instead of a 500-char error slice. The child section
+    // is self-bounded by childConclusion (conclusion/error/evidence caps), so it
+    // gets a larger explicit cap than generic tool output — otherwise the
+    // provenance `authority` line and evidence tail would be truncated away.
     if (entry.tool === 'sub_agent' && entry.stdout) {
       const out =
-        entry.stdout.length > 2500
-          ? entry.stdout.slice(0, 2500) + '\n... [truncated]'
+        entry.stdout.length > SUB_AGENT_TEXT_MAX_CHARS
+          ? entry.stdout.slice(0, SUB_AGENT_TEXT_MAX_CHARS) + '\n... [truncated]'
           : entry.stdout;
       parts.push(
         `[RESULT] ${entry.tool}:${entry.target}\n${entry.detail ? entry.detail + '\n' : ''}${out}`,
@@ -4758,17 +4772,21 @@ export class ChatEngine {
     this.budgetLastChanceDone = runtime.budgetLastChanceDone;
     this.restrictToolsNextTurn = runtime.restrictToolsNextTurn;
 
-    // C1: W3 progress state is per admitted submission, matching the receipt
-    // ledger reset in parityOnUserTurn. Without this, a prior task's strikes
-    // leak into a later read-only submission and emit false
-    // restricted_tools/last_chance_repair labels.
-    this.progressController = this.services.progress.createController();
-
     const continuationScopeUnavailable =
       input.continueTask === true && !runtime.continuedTask && this.taskCostScopeUnavailable;
     if (!runtime.continuedTask && !continuationScopeUnavailable) {
       // A fresh submission starts a new enforcement scope. The global tracker
       // is intentionally preserved for session/accounting views.
+      //
+      // S06 cross-task integration: reset ONLY task-local progress punishment
+      // (level/score/strikes/streak/signals). Do not recreate the controller and
+      // do not blank environment/provider capability health: a DEGRADED
+      // capability persists across submissions and is recoverable only via
+      // recordSuccess on a genuinely successful operation. Recreating the
+      // controller here would silently revert DEGRADED capabilities to
+      // AVAILABLE and would also discard task-local punishment on explicit
+      // `continueTask`.
+      this.progressController.resetTaskLocal();
       this.taskCostScopeUnavailable = false;
       this.criticRepairCostCapUsd = null;
       this.postWriteRepairWallCapMs = null;
@@ -5164,7 +5182,7 @@ export class ChatEngine {
    * Two successive batches therefore get distinct ids; a re-dispatch of the
    * same admitted delegation keeps its base id.
    */
-  private deriveChildDelegationId(action: ChatToolAction, meta: { index: number }): string {
+  private childDelegationIdForAction(action: ChatToolAction, meta: { index: number }): string {
     const turnId = String(this.parity.turnId ?? this._turnIndex);
     const batchId =
       this._activeToolBatchId ?? `batch_${this._turnIndex}_${this._turnToolCallLogStart}`;
@@ -5328,7 +5346,14 @@ export class ChatEngine {
 
       if (action.type === 'sub_agent') {
         // S03/#213 slice 2: stable delegation id + per-attempt evidence dir.
-        const subId = this.deriveChildDelegationId(action, meta);
+        //
+        // M7 (open, disclosed): this makes retry *identity* stable and prevents
+        // the retry from overwriting attempt-1 evidence, but it does NOT yet
+        // replay a terminal idempotency key instead of re-running the child.
+        // The recon's full T05 dedupe gate remains unimplemented; the existing
+        // recovered-outcome authorization gate (above) still blocks unknown
+        // outcomes until reconciliation.
+        const subId = this.childDelegationIdForAction(action, meta);
         const attempt = (this.childAttempts.get(subId) ?? 0) + 1;
         this.childAttempts.set(subId, attempt);
         const childRunDir = childAttemptDir(this.engineRunDir, subId, attempt);
@@ -5712,7 +5737,10 @@ export class ChatEngine {
             exit_code: clean ? 0 : 1,
             ...(clean ? {} : { error: subResult.blockedReason || attribution }),
             // S02: the text-tools path surfaces the bounded handoff via stdout;
-            // `detail` stays untouched for gate/critic consumers.
+            // `detail` stays untouched for gate/critic consumers. Note: this
+            // also makes recordTurnToolObservability capture the child section
+            // in observationTails (previously no tail existed for this row); it
+            // is diagnostic only and is not re-injected as authority.
             stdout: childSection,
           });
           callbacks?.onToolComplete?.(
@@ -7976,7 +8004,13 @@ export class ChatEngine {
           ? 'cancelled'
           : null,
       terminalReason: this.terminalLimiterReason,
-      childLimits: { maxRounds: SUB_AGENT_MAX_ROUNDS },
+      // I3: coarse run-level child defaults; effective rounds are resolved at
+      // dispatch (read 4 / mutation 8, clamped 1-20).
+      childLimits: {
+        maxRounds: CHILD_READ_DEFAULT_ROUNDS,
+        readMaxRounds: CHILD_READ_DEFAULT_ROUNDS,
+        mutationMaxRounds: CHILD_MUTATION_DEFAULT_ROUNDS,
+      },
       taskCostBaselineUsd: this.taskCostBaselineUsd,
       taskCostSpentUsd: this.currentTaskCostUsd(),
     });

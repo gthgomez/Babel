@@ -156,7 +156,10 @@ export function buildReadOnlyChildResult(input: ReadOnlyChildResultInput): ReadO
   const rawError = input.providerError ?? input.blockedReason ?? undefined;
   const error =
     rawError && rawError.trim().length > 0
-      ? rawError.slice(0, READONLY_CHILD_ERROR_MAX_CHARS)
+      ? rawError.length > READONLY_CHILD_ERROR_MAX_CHARS
+        ? rawError.slice(0, READONLY_CHILD_ERROR_MAX_CHARS) +
+          `… [child error truncated: ${rawError.length - READONLY_CHILD_ERROR_MAX_CHARS} chars omitted]`
+        : rawError
       : undefined;
 
   return {
@@ -206,7 +209,9 @@ export function renderReadOnlyChildResultSection(result: ReadOnlyChildResult): s
     lines.push('(no evidence references)');
   } else {
     for (const ref of result.evidence) {
-      lines.push(`- ${ref.tool} ${ref.target} (exit ${ref.exitCode}, verified=${ref.verified})`);
+      // `tool_ok` describes the child tool call, not verification of the
+      // conclusion (which is never child-authoritative).
+      lines.push(`- ${ref.tool} ${ref.target} (exit ${ref.exitCode}, tool_ok=${ref.verified})`);
     }
   }
   if (result.evidenceTruncated) {

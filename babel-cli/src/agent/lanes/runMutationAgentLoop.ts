@@ -846,7 +846,8 @@ function buildInheritedBudgetResult(
   const reason = `Inherited parent ${limiter} budget exhausted`;
   return {
     success: false,
-    attribution: 'child_round_exhaustion',
+    // T04: a wall/cost stop is not round exhaustion.
+    attribution: childBudgetAttribution(limiter),
     summary: `Sub-agent ${agentId} stopped after ${round} round(s): ${reason}.`,
     changedFiles,
     toolCallLog,
