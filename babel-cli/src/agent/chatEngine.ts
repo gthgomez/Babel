@@ -2499,12 +2499,21 @@ export class ChatEngine {
       ...(taskIntent !== undefined ? { taskIntent } : {}),
       ...(submitOpts?.continueTask !== undefined ? { continueTask: submitOpts.continueTask } : {}),
     });
-    // D01/S01: one effective-operation policy for this accepted submission,
+    // D01/S01/M2: one effective-operation policy for this accepted submission,
     // resolved BEFORE any generated guidance is appended. TaskShape is
     // authoritative (derived from the same classifier that sets taskClass), so
-    // read-only gating, preparation fuses, progress scoring and finalization
-    // all consume this decision instead of re-deriving it from the text-intent
-    // classifier. Older hydrated snapshots without the field fall back to their
+    // read-only gating, preparation fuses, progress scoring, loop-control and
+    // finalization all consume this decision.
+    //
+    // There are still two *inputs* by design: `resolvedIntent` is the legacy
+    // text-intent classifier (`classifyChatTaskIntent`) and TaskShape is the
+    // operation classifier. Neither is a second authority: `effectiveOperation`
+    // (TaskShape) dominates, and `effectiveExecutePolicy` below ANDs the two so
+    // the legacy `execute` label can never re-add mutation pressure to a
+    // READ_ONLY shape. Zero-write is safe for the same reason — its
+    // `executeIntent` is `effectiveExecutePolicy`, so a read-only shape cannot
+    // reach the zero-write terminal even where a class tune left the threshold
+    // non-zero. Older hydrated snapshots without the field fall back to their
     // persisted shape; unknown defaults to MUTATING (fail-safe: never silently
     // loosens mutation pressure).
     const effectiveOperation: TaskOperation =
@@ -2538,6 +2547,14 @@ export class ChatEngine {
     let allToolObservations = '';
 
     const resolvedIntent = runtime.taskIntent;
+
+    // F1/C1: finalization and loop-control consume the same effective operation
+    // policy as gating/fuses/progress. The legacy text classifier can say
+    // `execute` for a READ_ONLY TaskShape (bare "how to fix …", fenced evidence
+    // with no directive), and such a submission must not be pressed to patch,
+    // gated as an execute task, or fed a mutation-oriented critic.
+    const effectiveExecutePolicy = resolvedIntent === 'execute' && !isReadOnlyInspection;
+    const effectiveIntent: TaskIntent = effectiveExecutePolicy ? 'execute' : 'explain';
 
     const authorityHalt = evaluateSubmitTaskAuthorityHalt(this.parity, userInput);
     if (authorityHalt) {
@@ -2643,7 +2660,7 @@ export class ChatEngine {
         const kill = await this.handleBudgetKill(
           this.terminalLimiterReason ?? 'Inherited child allowance exhausted.',
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
         );
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
@@ -2657,7 +2674,7 @@ export class ChatEngine {
         const kill = await this.handleBudgetKill(
           budget.reason ?? 'Budget limit exceeded.',
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
         );
         // AC3: every stream terminal goes through streamDone (buildResult already
         // finalized; streamDone finalize is idempotent on turn_ended).
@@ -3100,7 +3117,7 @@ export class ChatEngine {
         const kill = await this.handleBudgetKill(
           this.terminalLimiterReason,
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
         );
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
@@ -3308,11 +3325,11 @@ export class ChatEngine {
 
         // Mid-loop heuristic critic (stream path)
         if (this.currentTurnHasMutation() || (this.hasAnyWrites() && this.lastVerifierReceipt)) {
-          this.maybeInjectMidLoopHeuristicCritic({ onThought: () => {} }, resolvedIntent);
+          this.maybeInjectMidLoopHeuristicCritic({ onThought: () => {} }, effectiveIntent);
         }
 
         const exploreFuses = this.applyExploreFuses(
-          resolvedIntent === 'execute',
+          effectiveExecutePolicy,
           isReadOnlyInspection,
         );
         for (const label of exploreFuses.labels) {
@@ -3541,7 +3558,7 @@ export class ChatEngine {
           .all()
           .some((e) => e.kind === 'zero_write_shadow');
         const zeroWriteDecision = evaluateZeroWriteWithShadow({
-          executeIntent: resolvedIntent === 'execute',
+          executeIntent: effectiveExecutePolicy,
           completedTurns: turn + 1,
           hasAnyWrites: this.hasAnyWrites(),
           taskClass: this.taskClass,
@@ -3837,7 +3854,7 @@ export class ChatEngine {
             extractToolEnvBlockedSignal(t, envDetectOpts) !== null,
           );
         const completionPref = evaluateCompletionPrefersPatch({
-          executeIntent: resolvedIntent === 'execute',
+          executeIntent: effectiveExecutePolicy,
           hasAnyWrites: completionHasWrites,
           envBlocked,
         });
@@ -3862,7 +3879,7 @@ export class ChatEngine {
         }
 
         // Execution gate: buffer streaming answer until gate check passes
-        const gateResult = this.evaluateCompletionGate(turnResult, resolvedIntent);
+        const gateResult = this.evaluateCompletionGate(turnResult, effectiveIntent);
         const hardGate = isBabelHeadlessEnv() || !process.stdout.isTTY;
 
         if (gateResult === 'reject') {
@@ -3953,7 +3970,7 @@ export class ChatEngine {
               /* thought emitted via yield below when we can */
             },
           },
-          resolvedIntent,
+          effectiveIntent,
         );
         if (this.lastCriticReceipt) {
           yield {
@@ -4058,10 +4075,10 @@ export class ChatEngine {
       return;
     }
 
-    if (resolvedIntent === 'execute') {
+    if (effectiveExecutePolicy) {
       const gateResult = this.evaluateCompletionGate(
         { type: 'completion', answer: '' },
-        resolvedIntent,
+        effectiveIntent,
       );
       if (gateResult === 'reject') {
         yield this.streamFailed(`Turn limit exceeded. ${this.buildRejectionMessage()}`);
@@ -4076,7 +4093,7 @@ export class ChatEngine {
             /* no-op on terminal stream path */
           },
         },
-        resolvedIntent,
+        effectiveIntent,
         { terminal: true },
       );
       if (this.lastCriticReceipt) {

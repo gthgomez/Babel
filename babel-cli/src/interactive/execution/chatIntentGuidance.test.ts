@@ -138,6 +138,15 @@ const READ_ONLY_PROBES: ReadonlyArray<{ label: string; task: string }> = [
     task:
       'Without editing anything, explain what `repair.ts` and `write_file.ts` do:\n```ts\nexport function repair() { return 1 }\n```',
   },
+  // I1: fenced evidence containing mutation verbs is not mutation authority.
+  {
+    label: 'fenced snippet with mutation verb',
+    task: 'Here is a code snippet:\n```python\ndef fix():\n    return 1\n```\nWhat does it do?',
+  },
+  {
+    label: 'fenced diff with mutation verb',
+    task: 'Explain this diff:\n```diff\n+function update() { return 1 }\n```',
+  },
 ];
 
 after(() => {
@@ -200,12 +209,19 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
     );
   });
 
-  it('reused engine — a prior execute turn does not leak guidance into a read-only turn', async () => {
+  it('reused engine — a READ_ONLY turn records no new generated mandate', async () => {
     const target = makeTarget();
     const first: Capture[] = [];
     const second: Capture[] = [];
 
     const engine = makeEngine('Investigate the terminal interface and fix the rendering problem.', target.targetRoot);
+    const mandateRecords = (): number =>
+      engine
+        .getParityEventLog()
+        .events.filter(
+          (event) => event.kind === 'user_message' && event.content.includes('## Before You Start'),
+        ).length;
+
     installCapturingRunner(engine, first);
     await runChatEngineOnce({
       task: 'Investigate the terminal interface and fix the rendering problem.',
@@ -218,6 +234,8 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
       userContents(first[0]!).includes('## Before You Start'),
       'control: the execute turn must receive the repair guidance',
     );
+    const afterExecute = mandateRecords();
+    assert.equal(afterExecute, 1, 'control: the execute turn records exactly one guidance message');
 
     installCapturingRunner(engine, second);
     await runChatEngineOnce({
@@ -228,13 +246,14 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
       useStreaming: true,
     });
 
-    const secondText = userContents(second[0]!);
-    const priorMandates = (secondText.match(/## Before You Start/g) ?? []).length;
+    // M3: assert on the durable thread log (new records), not on a conversation
+    // count that includes the prior turn's retained history.
     assert.equal(
-      priorMandates,
-      1,
-      'the read-only turn must not append a second generated mandate to the same thread',
+      mandateRecords(),
+      afterExecute,
+      'the READ_ONLY turn must not record a new generated mandate',
     );
+    const secondText = userContents(second[0]!);
     assert.ok(
       !secondText.includes('STALE'),
       'no stale per-turn plan may survive into the read-only turn',
@@ -274,6 +293,37 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
       'harness guidance must identify itself as guidance, not user authorization',
     );
     assert.ok(enginePlan(engine!), 'execute task keeps the intent plan attached');
+  });
+
+  it('a mutation verb outside a fence still authorizes execute guidance', async () => {
+    const target = makeTarget();
+    const captures: Capture[] = [];
+    const task =
+      'implement this helper and run the tests:\n```ts\nfunction add(a: number, b: number) { return a + b }\n```';
+    let engine: ChatEngine | undefined;
+
+    assert.notEqual(
+      analyzeTaskShape(task).operation,
+      'READ_ONLY',
+      'control: an imperative outside the fence keeps mutation authority',
+    );
+
+    await runChatEngineOnce({
+      task,
+      target,
+      preflightContext: '',
+      useStreaming: true,
+      engineFactory: (options) => {
+        engine = makeEngine(task, target.targetRoot, options);
+        installCapturingRunner(engine, captures);
+        return engine;
+      },
+    });
+
+    const text = userContents(captures[0]!);
+    assert.match(text, /## Intent Plan/);
+    assert.match(text, /## Before You Start/);
+    assert.match(text, /str_replace/);
   });
 
   it('streaming and callback preparation agree on operation and prompts', async () => {

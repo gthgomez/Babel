@@ -18,7 +18,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { ChatEngine, type ChatEvent } from './chatEngine.js';
+import { ChatEngine, type ChatEvent, type ChatResult } from './chatEngine.js';
 import {
   analyzeTaskShape,
   classifyChatTaskClassFromText,
@@ -113,9 +113,13 @@ function installReadThenComplete(engine: ChatEngine, file: string): void {
   });
 }
 
-async function drain(engine: ChatEngine, prompt: string, captured: ChatEvent[]): Promise<void> {
+async function drain(
+  engine: ChatEngine,
+  prompt: string,
+  captured: ChatEvent[],
+): Promise<ChatResult> {
   const generator = engine.submitMessageStream(prompt);
-  await consumeChatStream(
+  return consumeChatStream(
     (async function* () {
       for await (const event of generator) {
         captured.push(event);
@@ -406,6 +410,80 @@ describe('D01/D02 effective-operation policy', () => {
     const mutatingStall = anyEngine.checkStallIntervention(false);
     assert.ok(mutatingStall, 'mutating stall still escalates');
     assert.match(mutatingStall!.message, /write|BLOCKED/i);
+  });
+
+  test('F1 finalization consumes the effective operation: bare how-to and fenced evidence are not pressed to patch', async () => {
+    const prompts = [
+      'how to fix the memory leak',
+      'tell me how to fix the memory leak',
+      'whether we should update the schema',
+      'review this code: ```typescript\nconst x = 1;\n```',
+    ];
+    for (const prompt of prompts) {
+      // The legacy text-intent classifier still says `execute`; TaskShape is
+      // authoritative and says READ_ONLY. Finalization must follow TaskShape.
+      assert.equal(
+        analyzeTaskShape(prompt).operation,
+        'READ_ONLY',
+        `shape READ_ONLY for "${prompt}"`,
+      );
+      assert.equal(
+        ChatEngine.classifyChatTaskIntent(prompt),
+        'execute',
+        `legacy intent execute for "${prompt}"`,
+      );
+      assert.equal(
+        runtimeFor(prompt).effectiveOperation,
+        'READ_ONLY',
+        `effective operation READ_ONLY for "${prompt}"`,
+      );
+
+      const root = mkdtempSync(join(tmpdir(), 'babel-op-fin-'));
+      try {
+        const engine = new ChatEngine({
+          task: prompt,
+          projectRoot: root,
+          model: MODEL,
+          maxTurns: 8,
+        });
+        // Text-only completion each turn: without effective-operation
+        // finalization this triggers "completion prefers patch" repeatedly and
+        // burns the turn budget.
+        installMockRunner(engine, {
+          executeWithToolsStream: async function* () {
+            yield { type: 'text_delta', text: 'Here is the explanation you asked for.' };
+            yield { type: 'done', finishReason: 'stop' };
+          },
+          execute: async () => ({
+            type: 'completion',
+            answer: 'Here is the explanation you asked for.',
+          }),
+          getLastInvocationMetadata: () => null,
+        });
+
+        const captured: ChatEvent[] = [];
+        const result: ChatResult = await drain(engine, prompt, captured);
+
+        const patchPressure = captured.filter(
+          (event) => event.type === 'thought' && /completion prefers patch/i.test(event.text),
+        );
+        assert.deepEqual(patchPressure, [], `no patch pressure for "${prompt}"`);
+
+        const enforced = captured.filter(
+          (event) =>
+            event.type === 'progress_recovery' && RESTRICTING_LABELS.has(event.intervention),
+        );
+        assert.deepEqual(enforced, [], `no enforced restriction for "${prompt}"`);
+
+        assert.notEqual(
+          result.outcome,
+          'BUDGET_EXHAUSTED',
+          `read-only prompt must not burn to budget exhaustion: "${prompt}"`,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
   });
 
   after(() => {

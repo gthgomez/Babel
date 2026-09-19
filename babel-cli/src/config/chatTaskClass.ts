@@ -335,6 +335,22 @@ function stripPathLikeTokens(text: string): string {
 }
 
 /**
+ * I1: fenced code / diff bodies are *evidence*, never mutation authority. A
+ * pasted snippet such as ```python def fix(): …``` must not turn an
+ * informational "what does it do?" into an execute task. Remove fenced blocks
+ * (closed or unterminated) before scanning for imperative mutation verbs; a
+ * mutation verb outside the fence ("implement this: ```…```") still counts.
+ */
+function stripFencedCodeBodies(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/~~~[\s\S]*?~~~/g, ' ')
+    // Unterminated fence: treat the rest as evidence.
+    .replace(/```[\s\S]*$/g, ' ')
+    .replace(/~~~[\s\S]*$/g, ' ');
+}
+
+/**
  * D-T02: informational frames ("how to fix …", "best way to refactor …",
  * "how should we delete …", "whether we should update …") describe a *topic*,
  * not an instruction to act. Remove the frame body before scanning for
@@ -366,9 +382,12 @@ export function analyzeTaskShape(taskText: string): TaskShape {
       t,
     );
 
-  // 2. Explicit mutation keywords, excluding evidence-shaped tokens:
-  // path-like names (D-T04) and informational "how to …" frames (D-T02).
-  const mutationScope = stripInformationalFrames(stripPathLikeTokens(t));
+  // 2. Explicit mutation keywords, excluding evidence-shaped content:
+  // fenced code/diff bodies (I1), path-like names (D-T04) and informational
+  // "how to …" frames (D-T02).
+  const mutationScope = stripInformationalFrames(
+    stripPathLikeTokens(stripFencedCodeBodies(t)),
+  );
   const hasMutation =
     /\b(clean\s*up\s+and\s+delete|fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename)\b/i.test(mutationScope) ||
     (!hasReadOnlyDirective && /\b(delete|remove|rm|drop|erase|unlink)\b/i.test(mutationScope));

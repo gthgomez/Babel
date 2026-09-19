@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { ChatEngine } from '../../agent/chatEngine.js';
 import { resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
-import { resolveChatTaskClass } from '../../config/chatTaskClass.js';
+import { analyzeTaskShape, resolveChatTaskClass } from '../../config/chatTaskClass.js';
 import { OpenCodeGoApiRunner } from '../../runners/openCodeGoApi.js';
 import { babelReviewModelPolicy } from '../../services/babelChatReview.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
@@ -260,7 +260,11 @@ describe('chat preparation parity (actual provider-bound request)', () => {
       const stackSystemContext = [systemContext, chatStack.system_context]
         .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
         .join('\n\n');
-      const intentPlanUserMessage = compileIntentPlanUserMessage(task, intentClass);
+      const intentPlanUserMessage = compileIntentPlanUserMessage(
+        task,
+        intentClass,
+        analyzeTaskShape(task).operation,
+      );
       const directEngine = new ChatEngine({
         task,
         projectRoot: source,
