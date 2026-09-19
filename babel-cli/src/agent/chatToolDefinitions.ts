@@ -127,10 +127,12 @@ export const ChatToolActionSchema = z.discriminatedUnion('type', [
     write_scope: z.array(z.string()).optional(),
     mutation: z.boolean().optional().default(false),
     /** Model backend key override (e.g. "deepseek-v4-pro", "scout").
-     *  When omitted, the sub-agent uses the cheapest enabled model. */
+     *  When omitted, the sub-agent uses the parent's provider model
+     *  (see childSpec.resolveChildSpec: modelDisposition 'parent_default'). */
     model: z.string().optional(),
-    /** Maximum conversation turns for this sub-agent (overrides default).
-     *  Read-only agents default to 4; mutation agents default to 8. */
+    /** Maximum conversation turns for this sub-agent.
+     *  Read-only defaults to 4, mutation defaults to 8; the effective value is
+     *  clamped to 1–20 by resolveChildSpec (childSpec.ts, the source of truth). */
     max_rounds: z.number().int().positive().optional(),
   }),
 ]);
@@ -486,7 +488,7 @@ export function buildChatSystemPrompt(options: ChatSystemPromptOptions): string 
     '| `await_command` | Wait for a background shell job. `task_id`: id from background `run_command`, optional `timeout_seconds`. |',
     '| `write_file` | Write or overwrite a file. `path`: absolute or project-relative path, `content`: complete file contents. This is the primary tool for making code changes — use it to apply fixes, create new files, or update existing ones. |',
     '| `apply_patch` | Apply a unified diff patch to modify files. `patch`: unified diff content. Use this when you have a specific diff to apply. |',
-    '| `sub_agent` | Optional delegation for an independently parallelizable investigation or mutation. `task`: what to do, `mutation` (optional): set to true for write access, `write_scope` (optional): paths the sub-agent can modify, `model` (optional): backend key override (e.g. "deepseek-v4-pro", "scout"), `max_rounds` (optional): turn limit. |',
+    '| `sub_agent` | Optional delegation for an investigation or mutation. Delegated children run sequentially in this release (see #214). `task`: what to do, `instructions` (optional): extra child instructions, `mutation` (optional): set to true for write access, `write_scope` (optional): paths the sub-agent can modify, `model` (optional): backend key override (e.g. "deepseek-v4-pro", "scout"), `max_rounds` (optional): turn limit clamped to 1-20 (read default 4, mutation default 8). |',
     '| `finish` | Signal completion (no more actions needed) |',
     '',
     '## Recommended Workflow',
@@ -504,7 +506,7 @@ export function buildChatSystemPrompt(options: ChatSystemPromptOptions): string 
     '## Safety Rules',
     '',
     '- Always read before you write — understand the code before changing it.',
-    '- Use `sub_agent` only when the question is independently parallelizable and delegation reduces total work.',
+    '- Use `sub_agent` only when the question is independently delegable and delegation reduces total work. Delegated children are scheduled sequentially in this release (see #214).',
     '- Be thorough: when investigating, read the relevant files, not just file names.',
     '- When modifying code, show the user what changed and why.',
     '- Never run destructive commands (rm -rf, force push, etc.).',
@@ -1201,12 +1203,12 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
       type: 'function',
       function: {
         name: 'sub_agent',
-        description: 'Spawn a sub-agent for parallel investigation or mutation. Set mutation to true for write access. Optional model override for per-agent model selection.',
+        description: 'Spawn a sub-agent for an investigation or mutation. Delegated children are scheduled sequentially in this release (see #214); set mutation to true for write access. Optional model override for per-agent model selection.',
         parameters: {
           type: 'object',
           properties: {
             task: { type: 'string', description: 'What the sub-agent should do' },
-            instructions: { type: 'string', description: 'Optional additional instructions' },
+            instructions: { type: 'string', description: 'Optional additional instructions forwarded to the child (read and mutation children).' },
             write_scope: {
               type: 'array',
               items: { type: 'string' },
@@ -1218,11 +1220,11 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
             },
             model: {
               type: 'string',
-              description: 'Model backend key override (e.g. "deepseek-v4-pro", "scout", "deepseek-v4-flash"). When omitted, uses the cheapest enabled model.',
+              description: 'Model backend key override (e.g. "deepseek-v4-pro", "scout", "deepseek-v4-flash"). When omitted, uses the parent\'s provider model.',
             },
             max_rounds: {
               type: 'number',
-              description: 'Maximum conversation turns for this sub-agent. Read-only defaults to 4, mutation defaults to 8.',
+              description: 'Maximum conversation turns for this sub-agent, clamped to 1-20. Read-only defaults to 4, mutation defaults to 8.',
             },
           },
           required: ['task'],

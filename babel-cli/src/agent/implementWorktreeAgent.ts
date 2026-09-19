@@ -54,6 +54,8 @@ export interface ImplementWorktreeAgentSpec {
   writeScope: string[];
   maxRounds?: number;
   model?: string;
+  /** S03: extra instructions from the advertised sub_agent contract. */
+  instructions?: string;
 }
 
 export interface ImplementWorktreeAgentOptions {
@@ -447,6 +449,7 @@ export async function runImplementWorktreeAgent(
           ? { useDeterministicMock: options.useDeterministicMock }
           : {}),
         ...(spec.model ? { model: spec.model } : {}),
+        ...(spec.instructions ? { additionalInstructions: spec.instructions } : {}),
         runDir,
         ...(options.inheritedAllowance
           ? { inheritedAllowance: options.inheritedAllowance }

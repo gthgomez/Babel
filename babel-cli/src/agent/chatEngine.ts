@@ -186,6 +186,7 @@ import {
   buildReadOnlyChildResult,
   renderReadOnlyChildResultSection,
 } from './childConclusion.js';
+import { formatChildSpecReceipt, resolveChildSpec } from './childSpec.js';
 import { type ChatEngineServices, type ChatExecutionProfile } from './chatEngineServices.js';
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
 import {
@@ -285,6 +286,7 @@ import {
   type InheritedChildAllowance,
 } from './childBudget.js';
 import {
+  childBudgetAttribution,
   classifySubagentFailure,
   runMutationAgentLoop,
   subagentFinishedCleanly,
@@ -910,6 +912,38 @@ export interface ChatResult {
 const SUB_AGENT_MAX_ROUNDS = 4;
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
 const MAX_TOOL_CONCURRENCY = 6; // Prevent exhausting connection pools
+
+/**
+ * S03/#213 slice 2: stable child delegation id bound to the parent operation
+ * (run + turn + batch + action index + operation fingerprint), not a batch-local
+ * counter. Distinct batches -> distinct ids; same delegation -> same id.
+ */
+export function deriveChildDelegationId(input: {
+  parentRunId: string;
+  turnId: string;
+  batchId: string;
+  actionIndex: number;
+  fingerprint: string;
+}): string {
+  const digest = createHash('sha256')
+    .update(
+      [
+        input.parentRunId,
+        input.turnId,
+        input.batchId,
+        String(input.actionIndex),
+        input.fingerprint,
+      ].join('|'),
+    )
+    .digest('hex')
+    .slice(0, 12);
+  return `chat-sub-${digest}`;
+}
+
+/** S03/#213 slice 2: per-attempt evidence dir so a retry cannot overwrite it. */
+export function childAttemptDir(engineRunDir: string, subId: string, attempt: number): string {
+  return join(engineRunDir, subId, `attempt-${attempt}`);
+}
 
 /** S02: minimal shape of a text-tools log entry (see ChatEngine.toolCallLog). */
 export interface TextToolResultEntry {
@@ -2084,6 +2118,12 @@ export class ChatEngine {
   private _streamNativeToolCallIds: string[] = [];
   /** Stable batch id for the in-flight tool cycle (propose → start → terminal). */
   private _activeToolBatchId: string | null = null;
+  /**
+   * S03/#213 slice 2: dispatch attempt per stable child delegation id. The
+   * first dispatch is attempt 1; re-dispatching the same delegation increments,
+   * so a retry never overwrites the original child's evidence directory.
+   */
+  private childAttempts = new Map<string, number>();
 
   /** Snapshot for Tier A observability helpers (keeps chatEngine thin). */
   private obsHandles(): ObservabilityHandles {
@@ -4976,7 +5016,6 @@ export class ChatEngine {
       sessionId: this.engineRunId,
       ...(this.parity.turnId ? { turnId: this.parity.turnId } : {}),
     };
-    let subAgentCounter = 0;
     // Order-preserving batches (only consecutive reads may parallelize).
     const batches = planToolBatches(
       orderChatToolActions(
@@ -4998,7 +5037,6 @@ export class ChatEngine {
             if (this._cancelled || this.abortController.signal.aborted || stopTerminal) break;
             const result = await this.executeOneAction(actions[index]!, toolContext, callbacks, {
               index,
-              subAgentCounter: ++subAgentCounter,
               idempotencyKey:
                 this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
             });
@@ -5015,7 +5053,6 @@ export class ChatEngine {
               chunk.map((index) =>
                 this.executeOneAction(actions[index]!, toolContext, callbacks, {
                   index,
-                  subAgentCounter: ++subAgentCounter,
                   idempotencyKey:
                     this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
                 }),
@@ -5026,7 +5063,6 @@ export class ChatEngine {
       } else {
         const result = await this.executeOneAction(actions[batch.index]!, toolContext, callbacks, {
           index: batch.index,
-          subAgentCounter: ++subAgentCounter,
           idempotencyKey:
             this._streamNativeToolCallIds[batch.index] ??
             `tool_call_${this._turnIndex}_${batch.index}`,
@@ -5081,7 +5117,10 @@ export class ChatEngine {
     toolId: number,
     subId: string,
     reason: string,
+    limiter?: ChildBudgetLimiter,
   ): { index: number; observation: string; stop: true } {
+    // S03/T04: a wall/cost rejection is not a round exhaustion.
+    const attribution = childBudgetAttribution(limiter);
     const idempotencyKey =
       meta.idempotencyKey ??
       this._streamNativeToolCallIds[meta.index] ??
@@ -5098,7 +5137,7 @@ export class ChatEngine {
       this.engineRunDir,
       reason,
     );
-    const detail = `failed, attribution=child_round_exhaustion: ${reason}`;
+    const detail = `failed, attribution=${attribution}: ${reason}`;
     this.toolCallLog.push({
       tool: chatActionToolName(action),
       target: chatActionTarget(action),
@@ -5112,12 +5151,32 @@ export class ChatEngine {
     callbacks.onSubAgentFailed?.({ id: subId, error: reason });
     return {
       index: meta.index,
-      observation: `### sub_agent ${subId}\nstatus: failed\nattribution: child_round_exhaustion\n${reason}`,
+      observation: `### sub_agent ${subId}\nstatus: failed\nattribution: ${attribution}\n${reason}`,
       stop: true,
     };
   }
 
   /** Block a fresh tool-call id from replaying an equivalent unknown external/non-idempotent effect. */
+  /**
+   * S03/#213 slice 2: bind child identity to the parent operation/delegation
+   * (parent run + turn + batch + action index + operation fingerprint), not a
+   * batch-local display counter that resets on every `executeActions` call.
+   * Two successive batches therefore get distinct ids; a re-dispatch of the
+   * same admitted delegation keeps its base id.
+   */
+  private deriveChildDelegationId(action: ChatToolAction, meta: { index: number }): string {
+    const turnId = String(this.parity.turnId ?? this._turnIndex);
+    const batchId =
+      this._activeToolBatchId ?? `batch_${this._turnIndex}_${this._turnToolCallLogStart}`;
+    return deriveChildDelegationId({
+      parentRunId: this.engineRunId,
+      turnId,
+      batchId,
+      actionIndex: meta.index,
+      fingerprint: operationFingerprint(chatActionToolName(action), action),
+    });
+  }
+
   private recoveredOperationDispatchAuthorization(action: ChatToolAction): {
     allowed: boolean;
     message?: string;
@@ -5168,7 +5227,7 @@ export class ChatEngine {
     action: ChatToolAction,
     toolContext: ToolContext,
     callbacks: ChatCallbacks,
-    meta: { index: number; subAgentCounter: number; idempotencyKey?: string },
+    meta: { index: number; idempotencyKey?: string },
   ): Promise<{ index: number; observation: string; stop?: boolean }> {
     const tool = chatActionToolName(action);
     const target = chatActionTarget(action);
@@ -5268,9 +5327,25 @@ export class ChatEngine {
       }
 
       if (action.type === 'sub_agent') {
-        const subId = `chat-sub-${meta.subAgentCounter}`;
-        const mutationEnabled = (action as any).mutation === true;
-        const writeScope: string[] = (action as any).write_scope ?? [];
+        // S03/#213 slice 2: stable delegation id + per-attempt evidence dir.
+        const subId = this.deriveChildDelegationId(action, meta);
+        const attempt = (this.childAttempts.get(subId) ?? 0) + 1;
+        this.childAttempts.set(subId, attempt);
+        const childRunDir = childAttemptDir(this.engineRunDir, subId, attempt);
+        // S03/#213 slice 1: resolve ONE effective child spec. Every declared
+        // option is honored, rejected, or clamped with a reason; the runtime
+        // receipts and the advertised schema both derive from these semantics.
+        const spec = resolveChildSpec({
+          mutation: (action as { mutation?: boolean }).mutation === true,
+          writeScope: (action as { write_scope?: string[] }).write_scope ?? [],
+          instructions: (action as { instructions?: string }).instructions ?? null,
+          model: (action as { model?: string }).model ?? null,
+          maxRounds: (action as { max_rounds?: number }).max_rounds ?? null,
+          parentModel: this.modelPolicy?.providerModelId ?? null,
+        });
+        const mutationEnabled = spec.mutation;
+        const writeScope = spec.writeScope;
+        const specReceipt = formatChildSpecReceipt(spec);
 
         // #11: Fork an isolated ToolContext with a child AbortController.
         // Cancelling the parent cascades; cancelling a sibling does not.
@@ -5280,7 +5355,7 @@ export class ChatEngine {
           once: true,
         });
         const mutationAllowance = mutationEnabled
-          ? this.deriveChildAllowance(SUB_AGENT_MAX_ROUNDS)
+          ? this.deriveChildAllowance(spec.effectiveRounds)
           : null;
         if (mutationAllowance) {
           const inheritedLimiter = inheritedChildBudgetLimiter(mutationAllowance);
@@ -5294,6 +5369,7 @@ export class ChatEngine {
               toolId,
               subId,
               reason,
+              inheritedLimiter,
             );
             this.abortController.signal.removeEventListener('abort', onParentAbort);
             return rejected;
@@ -5330,17 +5406,13 @@ export class ChatEngine {
                   id: subId,
                   task: action.task,
                   writeScope,
-                  maxRounds: SUB_AGENT_MAX_ROUNDS,
-                  ...(((action as any).model ?? this.modelPolicy?.providerModelId)
-                    ? {
-                        model: ((action as any).model ??
-                          this.modelPolicy?.providerModelId) as string,
-                      }
-                    : {}),
+                  maxRounds: spec.effectiveRounds,
+                  ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
+                  ...(spec.instructions ? { instructions: spec.instructions } : {}),
                 },
                 {
                   projectRoot: this.options.projectRoot,
-                  runDir: join(this.engineRunDir, subId),
+                  runDir: childRunDir,
                   abortSignal: childController.signal,
                   cleanupWorktree: false,
                   toolContext: {
@@ -5396,6 +5468,7 @@ export class ChatEngine {
                 `status: ${clean ? (attribution === 'child_noop' ? 'noop' : 'success') : 'failed'}`,
                 `attribution: ${attribution}`,
                 `isolation: git_worktree`,
+                `child_spec: ${specReceipt}`,
                 `worktree: ${implResult.worktree.path}`,
                 `write_scope: ${implResult.writeScope.join(', ') || '(none)'}`,
                 `parent_tree_clean: ${implResult.parentTreeClean}`,
@@ -5420,20 +5493,17 @@ export class ChatEngine {
               toolContext: {
                 agentId: subId,
                 runId: this.engineRunId,
-                runDir: join(this.engineRunDir, subId),
+                runDir: childRunDir,
                 babelRoot: process.env['BABEL_ROOT'] ?? process.cwd(),
                 signal: childController.signal,
               },
-              maxRounds: SUB_AGENT_MAX_ROUNDS,
+              maxRounds: spec.effectiveRounds,
               abortSignal: childController.signal,
-              runDir: join(this.engineRunDir, subId),
+              runDir: childRunDir,
               ...(mutationAllowance ? { inheritedAllowance: mutationAllowance } : {}),
               onUsageRecorded: () => this.persistTaskCostBaseline(),
-              ...((action as any).model || this.modelPolicy?.providerModelId
-                ? {
-                    model: ((action as any).model ?? this.modelPolicy?.providerModelId) as string,
-                  }
-                : {}),
+              ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
+              ...(spec.instructions ? { additionalInstructions: spec.instructions } : {}),
             });
             const attribution: SubagentAttribution = mutResult.attribution;
             const clean = subagentFinishedCleanly(attribution);
@@ -5480,6 +5550,7 @@ export class ChatEngine {
               `### sub_agent ${subId}: ${action.task}`,
               `status: ${clean ? (attribution === 'child_noop' ? 'noop' : 'success') : 'failed'}`,
               `attribution: ${attribution}`,
+              `child_spec: ${specReceipt}`,
               `steps: ${mutResult.stepsExecuted}`,
               `changed_files: ${mutResult.changedFiles.map((f) => f.path).join(', ') || 'none'}`,
               mutResult.summary,
@@ -5523,10 +5594,8 @@ export class ChatEngine {
           label: action.task.slice(0, 60),
         });
         try {
-          const requestedRounds = (action as { max_rounds?: number }).max_rounds;
-          const childRounds = Number.isFinite(requestedRounds)
-            ? Math.min(20, Math.max(1, Math.trunc(requestedRounds as number)))
-            : SUB_AGENT_MAX_ROUNDS;
+          // S03: use the one resolved spec (bounds/defaults live in childSpec).
+          const childRounds = spec.effectiveRounds;
           const readAllowance = this.deriveChildAllowance(childRounds);
           const readInheritedLimiter = inheritedChildBudgetLimiter(readAllowance);
           if (readInheritedLimiter) {
@@ -5539,12 +5608,12 @@ export class ChatEngine {
               toolId,
               subId,
               reason,
+              readInheritedLimiter,
             );
             this.abortController.signal.removeEventListener('abort', onParentAbort);
             return rejected;
           }
           this.persistToolStartedAtExecutorDispatch(action, meta);
-          const extraInstructions = (action as { instructions?: string }).instructions;
           const subResult = await runReadOnlyAgentLoop({
             verb: 'ask',
             task: action.task,
@@ -5553,23 +5622,22 @@ export class ChatEngine {
             toolContext: {
               agentId: subId,
               runId: this.engineRunId,
-              runDir: join(this.engineRunDir, subId),
+              runDir: childRunDir,
               babelRoot: process.env['BABEL_ROOT'] ?? process.cwd(),
               signal: childController.signal,
             },
             maxRounds: childRounds,
             preset: 'read_only',
             abortSignal: childController.signal,
-            model:
-              ((action as any).model as string | undefined) ?? this.modelPolicy?.providerModelId,
-              ...(extraInstructions ? { additionalInstructions: extraInstructions } : {}),
-              inheritedAllowance: readAllowance,
-              onUsageRecorded: () => this.persistTaskCostBaseline(),
-            } as any);
+            ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
+            ...(spec.instructions ? { additionalInstructions: spec.instructions } : {}),
+            inheritedAllowance: readAllowance,
+            onUsageRecorded: () => this.persistTaskCostBaseline(),
+          } as any);
           const attribution: SubagentAttribution = subResult.needsApproval || subResult.policyBlocked
             ? 'child_policy_block'
             : subResult.inheritedBudgetExceeded
-              ? 'child_round_exhaustion'
+              ? childBudgetAttribution(subResult.inheritedBudgetLimiter)
             : subResult.providerError
               ? classifySubagentFailure({
                   success: false,
@@ -5630,6 +5698,7 @@ export class ChatEngine {
               childResult,
             }),
             `attribution: ${attribution}`,
+            `child_spec: ${specReceipt}`,
             `completed: ${subResult.completed}`,
             `round_exhausted: ${subResult.roundExhausted}`,
             ...(subResult.needsApproval ? ['needs_approval: true'] : []),
