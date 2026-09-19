@@ -7,10 +7,10 @@
  * whose envelope authority is `authoritative` may set an authoritative outcome;
  * `run.settled`/`turn_ended` stay observations.
  *
- * Determinism: facts are normalized by an injective content key (SHA-256 over a
- * canonical encoding that distinguishes NaN/Infinity/-0/undefined) and ordered
- * by (sequence, contentKey), so any input ordering of duplicates/reordered
- * facts yields a deep-equal projection, including every reported array.
+ * Determinism: facts are ordered by (sequence, id) within the fact budget, so
+ * any input ordering of the admitted facts yields a deep-equal projection,
+ * including every reported array. Inputs beyond the resource bounds (MAX_FACTS /
+ * MAX_TOTAL_JSON_NODES) are excluded by a content-deterministic rule.
  *
  * Fail closed: an unknown-authority-bearing fact — including one with no id, a
  * novel authority token, or a non-object entry — sets a boolean that demotes
@@ -646,7 +646,9 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
       for (const entry of group) {
         try {
           const raw = isRecord(entry.input) ? entry.input['authority'] : undefined;
-          if (raw !== 'observation') {
+          // An inaccessible envelope is authority-bearing by the same rule the
+          // ≤MAX_TIE_GROUP path uses, so it must demote here too.
+          if (entry.hasAccessors || raw !== 'observation') {
             sawUnknownAuthority = true;
             state.degradedReasons.push('unknown_authoritative_fact');
             if (entry.id) state.unknownAuthorityFactIds.push(entry.id);

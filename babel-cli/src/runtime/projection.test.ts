@@ -884,6 +884,33 @@ test('P04: an over-large tie group still demotes authority', () => {
   assert.ok(proj.degradedReasons.includes('unknown_authoritative_fact'));
 });
 
+test('P04: an over-large tie group with an inaccessible member still demotes authority', () => {
+  const facts = sessionLogToFacts(corpus());
+  const group: RuntimeFactV1[] = [];
+  for (let i = 0; i < 33; i += 1) {
+    const fact: Record<string, unknown> = {
+      ...facts[0]!,
+      id: 'dup',
+      schemaVersion: 2,
+      authority: 'observation',
+      sequence: 500,
+      cursor: { stream: 'runtime-facts', sequence: 500 },
+      payload: { type: 'future.optional' },
+    };
+    // An accessor envelope makes the member inaccessible; it must still demote.
+    Object.defineProperty(fact, 'threadId', {
+      enumerable: true,
+      configurable: true,
+      get: () => 't',
+    });
+    group.push(fact as unknown as RuntimeFactV1);
+  }
+  const proj = projectTask([...facts, ...group]);
+  assert.equal(proj.outcome?.authoritative, false);
+  assert.ok(proj.degradedReasons.includes('tie_group_exceeded'));
+  assert.ok(proj.degradedReasons.includes('unknown_authoritative_fact'));
+});
+
 test('P04: a stateful authority getter cannot make the projection order-dependent', () => {
   const make = (finalOutcome: string): RuntimeFactV1 => {
     let reads = 0;
