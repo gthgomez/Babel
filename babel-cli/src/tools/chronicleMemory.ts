@@ -13,6 +13,7 @@ import {
   type ChronicleBackend,
   type ChronicleStore,
 } from './chronicleStore.js';
+import { isIndexWriteDenied } from '../agent/executionContext.js';
 
 const CHRONICLE_ROOT = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -181,7 +182,8 @@ export async function handleSemanticSearch(
 ): Promise<ToolResult> {
   try {
     const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
-    const readOnlyNoIndexWrites = process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] === '1';
+    // S04/#214: execution-scoped policy (env is only a startup/child-process seed).
+    const readOnlyNoIndexWrites = isIndexWriteDenied();
 
     if (readOnlyNoIndexWrites) {
       // A read-only lane may use an index that it opened and owns already,

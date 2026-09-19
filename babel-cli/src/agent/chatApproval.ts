@@ -35,6 +35,7 @@ import {
   operationDigestMatches,
 } from './approvalOperation.js';
 import { getRemoteSurface } from '../bridge/remoteApproval.js';
+import { getExecutionContext } from './executionContext.js';
 
 function asConversationalRenderer(
   renderer: ReturnType<typeof getActiveRenderer>,
@@ -45,13 +46,27 @@ function asConversationalRenderer(
   return renderer as ConversationalRenderer;
 }
 
-/** Process-wide approval session (REPL / chat). Subagents get derived ceilings. */
+/**
+ * Startup / REPL approval session. This is a *fallback* only: when an
+ * execution context is bound (S04/#214), the context's approval session is
+ * authoritative and the global is never read.
+ */
 let _approvalSession: ApprovalSessionState = createApprovalSession('chat-default');
-/** Current parity turn id for ApprovalRequest correlation with thread_events. */
+/** Startup turn id fallback. Execution context turn ids win when bound. */
 let _approvalTurnId: string | null = null;
 
+/** S04/#214: cross-scope mutation of the fallback is refused while bound. */
+function assertNoBoundExecutionContext(fn: string): void {
+  if (getExecutionContext()) {
+    throw new Error(
+      `S04/#214: ${fn} must not mutate global approval state inside a bound execution context; ` +
+        'derive/bind an execution context instead.',
+    );
+  }
+}
+
 export function getChatApprovalSession(): ApprovalSessionState {
-  return _approvalSession;
+  return getExecutionContext()?.approvalSession ?? _approvalSession;
 }
 
 export function resetChatApprovalSession(threadId = 'chat-default'): void {
@@ -59,17 +74,37 @@ export function resetChatApprovalSession(threadId = 'chat-default'): void {
   _approvalTurnId = null;
 }
 
+/**
+ * Compatibility adapter. Only mutates the startup fallback and is inert-refusing
+ * when an execution context is bound, so it cannot silently cross ownership.
+ */
 export function bindChatApprovalSession(session: ApprovalSessionState): void {
+  assertNoBoundExecutionContext('bindChatApprovalSession');
   _approvalSession = session;
 }
 
-/** Bind the active parity turn id so approvals join the event-log timeline. */
+/**
+ * Compatibility adapter for the startup turn id. Refuses while a context is
+ * bound (the owning context carries its own turn id); this fixes the
+ * never-restored global that two engines could overwrite.
+ */
 export function setChatApprovalTurnId(turnId: string | null): void {
+  assertNoBoundExecutionContext('setChatApprovalTurnId');
   _approvalTurnId = turnId;
 }
 
 function currentApprovalTurnId(): string {
-  return _approvalTurnId ?? `turn-${Date.now()}`;
+  return getExecutionContext()?.turnId ?? _approvalTurnId ?? `turn-${Date.now()}`;
+}
+
+function effectiveApprovalRoot(): string {
+  return (
+    getExecutionContext()?.root ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd()
+  );
+}
+
+function effectiveApprovalSession(): ApprovalSessionState {
+  return getExecutionContext()?.approvalSession ?? _approvalSession;
 }
 
 function commandForAction(action: AgentAction): string {
@@ -118,10 +153,14 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
     return false;
   }
 
-  const cwd = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+  // S04/#214: resolve the effective context ONCE so thread/turn/session/root
+  // stay consistent across the async approval window.
+  const session = effectiveApprovalSession();
+  const turnId = currentApprovalTurnId();
+  const cwd = effectiveApprovalRoot();
   const operation = approvalOperationFromAgentAction(action, {
-    thread_id: _approvalSession.thread_id,
-    turn_id: currentApprovalTurnId(),
+    thread_id: session.thread_id,
+    turn_id: turnId,
     cwd,
   });
   const operationDigest = digestApprovalOperation(operation);
@@ -129,8 +168,8 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
     ? `${capabilityForAction(action)}:${operation.target_path}:${operation.payload_sha256 ?? 'nopayload'}`
     : `${capabilityForAction(action)}:${operation.command ?? action.type}:${operation.payload_sha256 ?? 'nopayload'}`;
   const req = buildApprovalRequest({
-    thread_id: _approvalSession.thread_id,
-    turn_id: currentApprovalTurnId(),
+    thread_id: session.thread_id,
+    turn_id: turnId,
     command: commandForAction(action),
     cwd,
     capability: capabilityForAction(action),
@@ -143,14 +182,14 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
     operationDigestMatches(
       operationDigest,
       approvalOperationFromAgentAction(action, {
-        thread_id: _approvalSession.thread_id,
-        turn_id: currentApprovalTurnId(),
+        thread_id: session.thread_id,
+        turn_id: turnId,
         cwd,
       }),
     );
 
-  if (isPreApproved(_approvalSession, req) && liveStillMatches()) {
-    applyApprovalDecision(_approvalSession, req, 'allow_once');
+  if (isPreApproved(session, req) && liveStillMatches()) {
+    applyApprovalDecision(session, req, 'allow_once');
     return true;
   }
 
@@ -158,7 +197,7 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
   // establish benchmark authority. #90: live operation must still match
   // the digest bound to this approval.
   if (benchmarkAutoApproveEnabled() && liveStillMatches()) {
-    applyApprovalDecision(_approvalSession, req, 'allow_once');
+    applyApprovalDecision(session, req, 'allow_once');
     return true;
   }
 
@@ -167,10 +206,10 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
 
   if (headless) {
     if (!liveStillMatches()) {
-      applyApprovalDecision(_approvalSession, req, 'deny');
+      applyApprovalDecision(session, req, 'deny');
       return false;
     }
-    const res = resolveApprovalHeadless(_approvalSession, req);
+    const res = resolveApprovalHeadless(session, req);
     return res.decision !== 'deny';
   }
 
@@ -194,7 +233,7 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
       conv?.showApprovalPending(action.type, target);
       const allowed = await promptPermissionDialog(permissionAction);
       if (allowed && !liveStillMatches()) {
-        applyApprovalDecision(_approvalSession, req, 'deny');
+        applyApprovalDecision(session, req, 'deny');
         return false;
       }
       const decision: ApprovalDecision =
@@ -203,7 +242,7 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
           : allowed
             ? 'allow_once'
             : 'deny';
-      applyApprovalDecision(_approvalSession, req, decision);
+      applyApprovalDecision(session, req, decision);
       return allowed;
     } finally {
       conv?.clearApprovalPending();
@@ -247,16 +286,18 @@ export async function requestMcpApproval(action: ChatToolAction): Promise<boolea
     toolName: server,
     arguments: JSON.stringify(action, null, 2),
   };
-  const cwd = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+  const session = effectiveApprovalSession();
+  const turnId = currentApprovalTurnId();
+  const cwd = effectiveApprovalRoot();
   const operation = approvalOperationFromChatTool(action, {
-    thread_id: _approvalSession.thread_id,
-    turn_id: currentApprovalTurnId(),
+    thread_id: session.thread_id,
+    turn_id: turnId,
     cwd,
   });
   const operationDigest = digestApprovalOperation(operation);
   const req = buildApprovalRequest({
-    thread_id: _approvalSession.thread_id,
-    turn_id: currentApprovalTurnId(),
+    thread_id: session.thread_id,
+    turn_id: turnId,
     command: `mcp:${server}`,
     cwd,
     capability: 'mcp',
@@ -268,14 +309,14 @@ export async function requestMcpApproval(action: ChatToolAction): Promise<boolea
     operationDigestMatches(
       operationDigest,
       approvalOperationFromChatTool(action, {
-        thread_id: _approvalSession.thread_id,
-        turn_id: currentApprovalTurnId(),
+        thread_id: session.thread_id,
+        turn_id: turnId,
         cwd,
       }),
     );
-  if (isPreApproved(_approvalSession, req) && liveStillMatches()) return true;
+  if (isPreApproved(session, req) && liveStillMatches()) return true;
   if (isBabelHeadlessEnv() || !process.stdout.isTTY || process.env['CI'] === 'true') {
-    return resolveApprovalHeadless(_approvalSession, req).decision !== 'deny';
+    return resolveApprovalHeadless(session, req).decision !== 'deny';
   }
   const coordinator = InputCoordinator.getInstance();
   const conv = asConversationalRenderer(getActiveRenderer());
@@ -288,14 +329,10 @@ export async function requestMcpApproval(action: ChatToolAction): Promise<boolea
       conv?.showApprovalPending(action.type, server);
       const allowed = await promptPermissionDialog(permissionAction);
       if (allowed && !liveStillMatches()) {
-        applyApprovalDecision(_approvalSession, req, 'deny');
+        applyApprovalDecision(session, req, 'deny');
         return false;
       }
-      applyApprovalDecision(
-        _approvalSession,
-        req,
-        allowed ? 'allow_once' : 'deny',
-      );
+      applyApprovalDecision(session, req, allowed ? 'allow_once' : 'deny');
       return allowed;
     } finally {
       conv?.clearApprovalPending();

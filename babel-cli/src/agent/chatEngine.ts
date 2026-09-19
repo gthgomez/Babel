@@ -257,13 +257,15 @@ import {
 import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 import { captureSessionEventAppendFailure } from './sessionEventDiagnostics.js';
 import { buildRepoMapPreamble } from './repoMapPreamble.js';
-import {
-  bindChatApprovalSession,
-  getChatApprovalSession,
-  setChatApprovalTurnId,
-} from './chatApproval.js';
+import { getChatApprovalSession } from './chatApproval.js';
 import { remoteMcpFailClosedObservation, remoteMcpIsFailClosed } from '../bridge/remoteApproval.js';
 import { deriveSubagentApprovalSession } from './approvalRequests.js';
+import {
+  assertChildApprovalWithinParent,
+  enterWithExecutionContext,
+  getExecutionContext,
+  type ExecutionContext,
+} from './executionContext.js';
 import { clearBackgroundShellRegistry, killAllBackgroundShells } from './backgroundShell.js';
 import {
   createProviderProtocolInvariant,
@@ -2719,7 +2721,11 @@ export class ChatEngine {
         this.options.intentPlanUserMessage,
       );
     }
-    setChatApprovalTurnId(this.parity.turnId);
+    // S04/#214: bind the owning execution context for this turn (approval
+    // session + turn id + root) instead of a never-restored global turn id.
+    // ALS scopes are per async execution, so another engine's turn cannot
+    // overwrite this one.
+    enterWithExecutionContext(this.buildBaseExecutionContext());
 
     // R4: Fire-and-forget repo map generation, awaited before first LLM call
     const repoMapPromise =
@@ -4737,6 +4743,21 @@ export class ChatEngine {
   }
 
   /**
+   * S04/#214: this engine's execution context for the current turn. Approval
+   * session/turn/root come from engine state, never from another engine's
+   * ALS-bound scope.
+   */
+  private buildBaseExecutionContext(): ExecutionContext {
+    return {
+      threadId: this.parity.eventLog.thread_id ?? this.engineRunId,
+      turnId: this.parity.turnId,
+      root: this.options.projectRoot,
+      approvalSession: getChatApprovalSession(),
+      indexWritePolicy: 'allow',
+    };
+  }
+
+  /**
    * W0.3: open TurnRuntime for a user submission.
    * Isolates write/gate counters by default so a prior task's patch cannot
    * satisfy a later completion gate. Pass continueTask: true for explicit
@@ -5422,16 +5443,27 @@ export class ChatEngine {
           }
         }
 
-        // Subagent approval session cannot exceed parent permission ceiling
-        const parentApproval = getChatApprovalSession();
+        // S04/#214: derive the child session ONLY from the ALS-bound parent
+        // context and scope it with the async context. No global bind/restore,
+        // so cancellation/rejection/exception restore the owner automatically
+        // and a sibling scope can never be read.
+        const parentContext = getExecutionContext() ?? this.buildBaseExecutionContext();
+        const parentApproval = parentContext.approvalSession ?? getChatApprovalSession();
         const childCeiling = mutationEnabled
           ? (['shell', 'write', 'other'] as const)
           : (['other'] as const);
         const childApproval = deriveSubagentApprovalSession(parentApproval, subId, [
           ...childCeiling,
         ]);
-        const restoreApproval = () => bindChatApprovalSession(parentApproval);
-        bindChatApprovalSession(childApproval);
+        // Fail closed if a derived child would widen the parent lease.
+        assertChildApprovalWithinParent(childApproval, parentApproval);
+        const childContext: ExecutionContext = {
+          ...parentContext,
+          approvalSession: childApproval,
+          parentTrace: { threadId: parentContext.threadId, turnId: parentContext.turnId },
+        };
+        const restoreApproval = () => enterWithExecutionContext(parentContext);
+        enterWithExecutionContext(childContext);
 
         // Mutation sub-agent path (W2.1: git worktree + write_scope allowlist)
         if (mutationEnabled) {
