@@ -828,6 +828,62 @@ test('P04: projectTask bounds the number of facts consumed', () => {
   assert.ok(produced <= 100_001, `stopped after ${produced} facts`);
 });
 
+test('P04: a stateful sequence getter cannot make the projection order-dependent', () => {
+  const pair = (): [RuntimeFactV1, RuntimeFactV1] => {
+    let counter = 0;
+    const mk = (id: string, ownerGeneration: number): RuntimeFactV1 => {
+      const fact: Record<string, unknown> = {
+        schemaVersion: 1,
+        cursor: { stream: 'runtime-facts', sequence: 1 },
+        threadId: 't',
+        taskId: 'k',
+        turnId: 'u',
+        runId: 'r',
+        causationId: 'c',
+        producer: 'legacy_adapter',
+        authority: 'observation',
+        timestamp: 'x',
+        payload: { type: 'run.started', ownerGeneration },
+      };
+      Object.defineProperty(fact, 'id', {
+        enumerable: true,
+        configurable: true,
+        get: () => id,
+      });
+      Object.defineProperty(fact, 'sequence', {
+        enumerable: true,
+        configurable: true,
+        get: () => (counter += 1),
+      });
+      return fact as unknown as RuntimeFactV1;
+    };
+    return [mk('A', 111), mk('B', 222)];
+  };
+  const [a1, b1] = pair();
+  const [a2, b2] = pair();
+  assert.deepEqual(projectTask([a1, b1]), projectTask([b2, a2]));
+});
+
+test('P04: an over-large tie group still demotes authority', () => {
+  const facts = sessionLogToFacts(corpus());
+  const group: RuntimeFactV1[] = [];
+  for (let i = 0; i < 33; i += 1) {
+    group.push({
+      ...facts[0]!,
+      id: 'dup',
+      schemaVersion: 2,
+      authority: 'authoritative',
+      sequence: 500,
+      cursor: { stream: 'runtime-facts', sequence: 500 },
+      payload: { type: 'future.authority' },
+    } as unknown as RuntimeFactV1);
+  }
+  const proj = projectTask([...facts, ...group]);
+  assert.equal(proj.outcome?.authoritative, false);
+  assert.ok(proj.degradedReasons.includes('tie_group_exceeded'));
+  assert.ok(proj.degradedReasons.includes('unknown_authoritative_fact'));
+});
+
 test('P04: a stateful authority getter cannot make the projection order-dependent', () => {
   const make = (finalOutcome: string): RuntimeFactV1 => {
     let reads = 0;
