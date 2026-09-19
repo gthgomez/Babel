@@ -27,6 +27,8 @@ import {
 import { beginUserSubmission, type TurnRuntimeSnapshot } from './turnRuntime.js';
 import { applyExploreFuses } from './chatZeroWritePolicy.js';
 import { consumeChatStream } from '../interactive/execution/chatCore.js';
+import { ProgressController } from './progressController.js';
+import { createStallDetector } from './stallDetector.js';
 import type { ToolStreamEvent } from '../runners/base.js';
 
 const PROJECT_ROOT = join(tmpdir(), 'babel-op-policy');
@@ -38,6 +40,9 @@ const D_T03_PROMPT =
   'Investigate the Babel terminal interface and fix the rendering problem.';
 const D_T04_PROMPT =
   'Read-only: do not edit files. Review this code: ```typescript\nconst x = 1;\n```';
+const D_T04_PATH_PROMPT = 'review the repair.ts and write_file paths';
+const D_T04_PATH_DIRECTIVE_PROMPT =
+  'Read-only: do not edit files. Review the repair.ts and write_file paths';
 
 /** D-T02: equivalent read-only verbs, ordinary + modal phrasing. */
 const D_T02_PROMPTS: readonly string[] = [
@@ -50,6 +55,11 @@ const D_T02_PROMPTS: readonly string[] = [
   'please research the tests',
   'Please review the tests.',
   'Research the build pipeline.',
+  // I1: informational "how to <verb>" frames describe a topic, not an action.
+  'research how to implement OAuth',
+  'can you research the best way to refactor this?',
+  'investigate how to fix the memory leak',
+  'research how to delete files safely',
 ];
 
 function runtimeFor(
@@ -83,6 +93,40 @@ function installMockRunner(
   anyEngine.synthesisRunner = runner;
   anyEngine.shouldUseNativeTools = () => true;
 }
+
+/** One read of `file`, then a text completion. */
+function installReadThenComplete(engine: ChatEngine, file: string): void {
+  let call = 0;
+  installMockRunner(engine, {
+    executeWithToolsStream: async function* () {
+      call += 1;
+      if (call === 1) {
+        yield { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: file } };
+        yield { type: 'done', finishReason: 'tool_calls' };
+        return;
+      }
+      yield { type: 'text_delta', text: 'Investigation complete.' };
+      yield { type: 'done', finishReason: 'stop' };
+    },
+    execute: async () => ({ type: 'completion', answer: 'Investigation complete.' }),
+    getLastInvocationMetadata: () => null,
+  });
+}
+
+async function drain(engine: ChatEngine, prompt: string, captured: ChatEvent[]): Promise<void> {
+  const generator = engine.submitMessageStream(prompt);
+  await consumeChatStream(
+    (async function* () {
+      for await (const event of generator) {
+        captured.push(event);
+        yield event;
+      }
+    })(),
+    null,
+  );
+}
+
+const RESTRICTING_LABELS = new Set(['restricted_tools', 'last_chance_repair', 'terminal_blocked']);
 
 describe('D01/D02 effective-operation policy', () => {
   test('D-T01 exact prompt resolves to investigate/READ_ONLY with no mutation pressure', () => {
@@ -145,12 +189,14 @@ describe('D01/D02 effective-operation policy', () => {
 
   test('D-T03 investigate-and-fix keeps mutation intent', () => {
     const shape = analyzeTaskShape(D_T03_PROMPT);
-    assert.equal(shape.operation, 'MUTATING');
+    // Mixed investigate+fix is HYBRID (not READ_ONLY): mutation intent is
+    // preserved while the investigation is acknowledged.
+    assert.equal(shape.operation, 'HYBRID');
     assert.equal(classifyChatTaskClassFromText(D_T03_PROMPT), 'default');
     assert.equal(ChatEngine.classifyChatTaskIntent(D_T03_PROMPT), 'execute');
 
     const runtime = runtimeFor(D_T03_PROMPT);
-    assert.equal(runtime.effectiveOperation, 'MUTATING');
+    assert.equal(runtime.effectiveOperation, 'HYBRID');
 
     // No blanket investigate => read-only shortcut.
     const fuses = applyExploreFuses({
@@ -173,14 +219,24 @@ describe('D01/D02 effective-operation policy', () => {
     assert.ok(fuses.forceMutateMessage, 'mutation-shaped hybrid task keeps fuse pressure');
   });
 
-  test('D-T04 fenced code cannot overrule an explicit no-edit directive', () => {
+  test('D-T04 fenced code/repair paths cannot overrule an explicit no-edit directive', () => {
     const shape = analyzeTaskShape(D_T04_PROMPT);
     assert.equal(shape.operation, 'READ_ONLY');
     assert.equal(classifyChatTaskClassFromText(D_T04_PROMPT), 'investigate');
     assert.equal(ChatEngine.classifyChatTaskIntent(D_T04_PROMPT), 'explain');
+    assert.equal(runtimeFor(D_T04_PROMPT).effectiveOperation, 'READ_ONLY');
 
-    const runtime = runtimeFor(D_T04_PROMPT);
-    assert.equal(runtime.effectiveOperation, 'READ_ONLY');
+    // I2: a path named "repair.ts"/"write_file" is evidence, never mutation
+    // authority — with or without an explicit no-edit directive.
+    const pathShape = analyzeTaskShape(D_T04_PATH_PROMPT);
+    assert.equal(pathShape.operation, 'READ_ONLY');
+    assert.equal(classifyChatTaskClassFromText(D_T04_PATH_PROMPT), 'investigate');
+    assert.equal(ChatEngine.classifyChatTaskIntent(D_T04_PATH_PROMPT), 'explain');
+    assert.equal(runtimeFor(D_T04_PATH_PROMPT).effectiveOperation, 'READ_ONLY');
+
+    const directedShape = analyzeTaskShape(D_T04_PATH_DIRECTIVE_PROMPT);
+    assert.equal(directedShape.operation, 'READ_ONLY');
+    assert.equal(runtimeFor(D_T04_PATH_DIRECTIVE_PROMPT).effectiveOperation, 'READ_ONLY');
   });
 
   test('D-T08 fresh vs reused submissions and direct vs streamed callers agree', async () => {
@@ -209,38 +265,13 @@ describe('D01/D02 effective-operation policy', () => {
     try {
       writeFileSync(join(root, 'target.ts'), 'export const x = 1;\n', 'utf-8');
       const engine = new ChatEngine({ task: D_T01_PROMPT, projectRoot: root, model: MODEL });
-      let call = 0;
-      installMockRunner(engine, {
-        executeWithToolsStream: async function* () {
-          call += 1;
-          if (call === 1) {
-            yield {
-              type: 'tool_use',
-              id: 'r1',
-              name: 'read_file',
-              input: { path: 'target.ts' },
-            };
-            yield { type: 'done', finishReason: 'tool_calls' };
-            return;
-          }
-          yield { type: 'text_delta', text: 'Investigation complete.' };
-          yield { type: 'done', finishReason: 'stop' };
-        },
-        execute: async () => ({ type: 'completion', answer: 'Investigation complete.' }),
-        getLastInvocationMetadata: () => null,
-      });
+      // Reused engine: register a prior mutating submission first.
+      const prior = engine.applyUserSubmission({ userInput: 'fix the rendering bug' });
+      assert.equal(prior.effectiveOperation, 'MUTATING');
+      installReadThenComplete(engine, 'target.ts');
 
       const captured: ChatEvent[] = [];
-      const generator = engine.submitMessageStream(D_T01_PROMPT);
-      await consumeChatStream(
-        (async function* () {
-          for await (const event of generator) {
-            captured.push(event);
-            yield event;
-          }
-        })(),
-        null,
-      );
+      await drain(engine, D_T01_PROMPT, captured);
 
       const snapshot = engine.getTurnRuntimeSnapshot();
       assert.ok(snapshot, 'streamed run records a turn runtime');
@@ -257,6 +288,124 @@ describe('D01/D02 effective-operation policy', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test('C1 reused engine resets W3 progress state per submission', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-op-reused-'));
+    try {
+      writeFileSync(join(root, 'target.ts'), 'export const x = 1;\n', 'utf-8');
+      const engine = new ChatEngine({ task: 'fix the bug', projectRoot: root, model: MODEL });
+      const staleController = (engine as unknown as { progressController: ProgressController })
+        .progressController;
+      // Simulate a prior task that thrashed to terminal_blocked.
+      for (let i = 0; i < 4; i += 1) staleController.scoreTurn([], true, 0);
+      assert.equal(staleController.InterventionLevel, 'terminal_blocked');
+
+      installReadThenComplete(engine, 'target.ts');
+      const captured: ChatEvent[] = [];
+      await drain(engine, D_T01_PROMPT, captured);
+
+      const restricting = captured.filter(
+        (event) =>
+          event.type === 'progress_recovery' && RESTRICTING_LABELS.has(event.intervention),
+      );
+      assert.deepEqual(
+        restricting,
+        [],
+        'reused engine must not leak prior W3 strikes into a read-only submission',
+      );
+      const freshController = (engine as unknown as { progressController: ProgressController })
+        .progressController;
+      assert.notEqual(freshController, staleController, 'controller recreated per submission');
+      assert.equal(freshController.InterventionLevel, 'none');
+      assert.equal(engine.getTurnRuntimeSnapshot()?.effectiveOperation, 'READ_ONLY');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('M1 repeated identical verifier runs are not progress', () => {
+    const engine = new ChatEngine({ task: 'run the tests', projectRoot: PROJECT_ROOT, model: MODEL });
+    const anyEngine = engine as unknown as {
+      computeVerifierChanged: (
+        results: Array<{ tool_name: string; content?: string; exit_code?: number }>,
+      ) => boolean;
+    };
+    const run = { tool_name: 'run_command', content: 'FAIL 1 test', exit_code: 1 };
+    assert.equal(anyEngine.computeVerifierChanged([run]), true, 'first verifier run counts');
+    assert.equal(
+      anyEngine.computeVerifierChanged([{ ...run }]),
+      false,
+      'identical repeat is not progress',
+    );
+    assert.equal(
+      anyEngine.computeVerifierChanged([{ ...run, exit_code: 0 }]),
+      true,
+      'exit-code change counts',
+    );
+    assert.equal(
+      anyEngine.computeVerifierChanged([{ ...run, exit_code: 0 }]),
+      false,
+      'same verdict again is not progress',
+    );
+    assert.equal(
+      anyEngine.computeVerifierChanged([{ ...run, content: 'PASS', exit_code: 0 }]),
+      true,
+      'output change counts',
+    );
+    assert.equal(anyEngine.computeVerifierChanged([]), false, 'no verifier tool is not progress');
+  });
+
+  test('I3 bare continuation gestures carry the prior operation policy', () => {
+    const mutating = runtimeFor('fix the rendering bug');
+    assert.equal(mutating.effectiveOperation, 'MUTATING');
+    for (const gesture of ['continue', 'keep going', 'go on', 'do it', 'proceed', 'continue please']) {
+      const cont = runtimeFor(gesture, mutating);
+      assert.equal(cont.continuedTask, false, `counters isolate for "${gesture}"`);
+      assert.equal(cont.effectiveOperation, 'MUTATING', `mutation carries for "${gesture}"`);
+      assert.equal(cont.taskClass, 'default', `class carries for "${gesture}"`);
+    }
+
+    const readOnly = runtimeFor('inspect the tests');
+    assert.equal(readOnly.effectiveOperation, 'READ_ONLY');
+    const contReadOnly = runtimeFor('continue', readOnly);
+    assert.equal(contReadOnly.effectiveOperation, 'READ_ONLY');
+    assert.equal(contReadOnly.taskClass, 'investigate');
+
+    // Explicit operation text is classified on its own merits, not carried.
+    const explicit = runtimeFor('continue and fix the bug', mutating);
+    assert.notEqual(explicit.effectiveOperation, 'READ_ONLY');
+  });
+
+  test('I4 stall path consumes the effective operation, not taskClass', () => {
+    const engine = new ChatEngine({ task: D_T01_PROMPT, projectRoot: PROJECT_ROOT, model: MODEL });
+    // Simulate an env/autonomy task-class override that disagrees with the
+    // admitted operation policy.
+    (engine as unknown as { taskClass: string }).taskClass = 'default';
+    const stalledState = () => {
+      const state = createStallDetector();
+      state.totalToolCalls = 10;
+      state.turnsSinceLastWrite = 40;
+      state.turnsSinceNewFileRead = 40;
+      // isStalled requires the last three read targets to be identical.
+      state.lastReadTargets = ['a.ts', 'b.ts', 'c.ts', 'c.ts', 'c.ts'];
+      return state;
+    };
+    const anyEngine = engine as unknown as {
+      stallState: ReturnType<typeof createStallDetector>;
+      checkStallIntervention: (readOnly: boolean) => { level: string; message: string } | null;
+    };
+
+    anyEngine.stallState = stalledState();
+    const readOnlyStall = anyEngine.checkStallIntervention(true);
+    assert.ok(readOnlyStall, 'read-only stall still escalates');
+    assert.match(readOnlyStall!.message, /synthesize/i);
+    assert.doesNotMatch(readOnlyStall!.message, /write the necessary changes/i);
+
+    anyEngine.stallState = stalledState();
+    const mutatingStall = anyEngine.checkStallIntervention(false);
+    assert.ok(mutatingStall, 'mutating stall still escalates');
+    assert.match(mutatingStall!.message, /write|BLOCKED/i);
   });
 
   after(() => {
