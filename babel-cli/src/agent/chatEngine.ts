@@ -8084,12 +8084,49 @@ export class ChatEngine {
   }
 
   private buildVerifierBlockedReport(reason: string): BlockedReport {
+    // R0-A: a harness-origin block must carry REAL checked evidence, never an
+    // empty `checked` array (BlockedReportSchema requires >=1) and never a fake
+    // placeholder. Prefer the actual verifier attempt when one ran red; else the
+    // completion gate's own rejection is the evidence of record.
+    const receipt = this.lastVerifierReceipt;
+    const redReceipt =
+      receipt && receipt.exit_code !== 0 && receipt.stale !== true ? receipt : null;
+    if (redReceipt) {
+      const finding = (
+        redReceipt.summary && redReceipt.summary.trim() !== ''
+          ? redReceipt.summary
+          : `exit ${redReceipt.exit_code}`
+      ).slice(0, 500);
+      return {
+        schema_version: 1,
+        status: 'BLOCKED',
+        reason,
+        missing: 'A passing authoritative verifier for the current workspace revision.',
+        reason_code: 'verification_failed',
+        cause_class: 'verification',
+        checked: [
+          {
+            action: 'run_command',
+            target: redReceipt.command || 'verifier',
+            finding,
+          },
+        ],
+      };
+    }
     return {
       schema_version: 1,
       status: 'BLOCKED',
       reason,
-      missing: 'Verifier could not be satisfied after multiple attempts.',
-      checked: [],
+      missing: 'A completion that satisfies the artifact and verifier honesty gate.',
+      reason_code: 'recovery_exhausted',
+      cause_class: 'harness',
+      checked: [
+        {
+          action: 'completion_gate',
+          target: this.hasAnyWrites() ? 'verifier_honesty' : 'zero_successful_writes',
+          finding: reason.slice(0, 500),
+        },
+      ],
     };
   }
 

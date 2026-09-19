@@ -291,13 +291,46 @@ export function summarizeDroppedTurns(dropped: ChatMessage[]): string {
 export type BlockedToolLogEntry = {
   tool: string;
   target: string;
+  exit_code?: number;
+  error?: string;
   stdout?: string;
   stderr?: string;
 };
 
 /**
+ * Strong denial/absence language. Used even when stdout is present, because a
+ * successful-looking command can still surface an explicit denial. Deliberately
+ * narrower than generic "failed"/"error" so a green run's "0 failed" summary is
+ * not mistaken for a blocking condition.
+ */
+const STRONG_BLOCKING_SIGNAL_RE =
+  /\b(?:permission denied|access denied|forbidden|unauthorized|unsupported|not supported|not found|no such file|does not exist|doesn't exist|unavailable|not available|missing)\b/i;
+
+/**
+ * R0-A: a tool-log entry is evidence of an ACTUAL blocking condition only when
+ * it shows a real failure/denial/absence — never a successful inspection.
+ * Investigation activity (a read that worked) is not proof of a block.
+ */
+function isBlockingEvidence(entry: BlockedToolLogEntry): boolean {
+  if (entry.exit_code !== undefined && entry.exit_code !== 0) return true;
+  const error = entry.error?.trim() ?? '';
+  if (error !== '') return true;
+  const stdout = entry.stdout?.trim() ?? '';
+  const stderr = entry.stderr?.trim() ?? '';
+  // stderr with no stdout is a failure/denial channel.
+  if (stderr !== '' && stdout === '') return true;
+  // With successful stdout, only an explicit strong denial/absence signal counts.
+  return stdout !== '' && STRONG_BLOCKING_SIGNAL_RE.test(stderr);
+}
+
+/**
  * R1: Detect BLOCKED in model answer and build a structured report from the
  * tool log. Returns null when keyword missing or no investigate evidence.
+ *
+ * F4/R0-A: the report is synthesized from model prose, so it may only exist
+ * when the tool log independently proves a blocking condition. A successful
+ * read/grep plus a BLOCKED sentence yields null — the model's belief is not
+ * blocking authority.
  */
 export function detectAndBuildBlockedReport(
   answer: string,
@@ -328,23 +361,26 @@ export function detectAndBuildBlockedReport(
   const checked = toolCallLog
     .filter((tc): tc is typeof tc & { target: string } => {
       try {
-        return investigateTools.has(tc.tool) && !!tc.target;
+        return investigateTools.has(tc.tool) && !!tc.target && isBlockingEvidence(tc);
       } catch {
         return false;
       }
     })
     .slice(-15)
-    .map((tc) => ({
-      action: tc.tool,
-      target: tc.target!,
-      finding: tc.stdout
-        ? tc.stdout.length > 200
-          ? tc.stdout.slice(0, 200) + '…'
+    .map((tc) => {
+      // Only failure evidence reaches here; surface the failure text, not a
+      // possibly-stale stdout from a partial run.
+      const failureText = tc.error?.trim() || tc.stderr?.trim() || '';
+      const finding =
+        failureText !== ''
+          ? `Error: ${failureText.slice(0, 200)}`
           : tc.stdout
-        : tc.stderr
-          ? `Error: ${tc.stderr.slice(0, 200)}`
-          : 'Investigated — see tool call log for details.',
-    }));
+            ? tc.stdout.length > 200
+              ? tc.stdout.slice(0, 200) + '…'
+              : tc.stdout
+            : 'Investigated — see tool call log for details.';
+      return { action: tc.tool, target: tc.target!, finding };
+    });
 
   if (checked.length === 0) return null;
 

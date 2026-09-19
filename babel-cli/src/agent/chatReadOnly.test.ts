@@ -76,19 +76,36 @@ test('F4: legacy blocked text without a reason code keeps the prose fallback', (
   );
 });
 
-test('F4: model prose cannot synthesize a policy block report', () => {
+test('F4/R0-A: model prose cannot synthesize a policy block report', () => {
   // A stray uppercase word in prose is not a protocol declaration.
   assert.equal(
     detectAndBuildBlockedReport('The build is BLOCKED on I/O.', [
-      { tool: 'read_file', target: 'a.ts' },
+      { tool: 'read_file', target: 'a.ts', exit_code: 2, stderr: 'boom' },
     ]),
     null,
   );
-  // A protocol declaration is detected but stamped cause-unknown.
+  // A protocol declaration alone is not enough: a successful inspection is
+  // investigation activity, not proof of a blocking condition.
+  assert.equal(
+    detectAndBuildBlockedReport('BLOCKED: permission denied by policy', [
+      { tool: 'read_file', target: 'a.ts', exit_code: 0, stdout: 'contents' },
+    ]),
+    null,
+    'a successful read must not become evidence-backed blocking',
+  );
+  // Negative control: a genuine tool failure is evidence, and the model-declared
+  // block stays cause-unknown (no fabricated policy cause).
   const report = detectAndBuildBlockedReport('BLOCKED: permission denied by policy', [
-    { tool: 'read_file', target: 'a.ts' },
+    {
+      tool: 'read_file',
+      target: 'a.ts',
+      exit_code: 1,
+      stdout: '',
+      stderr: 'EACCES: permission denied',
+      error: 'permission denied',
+    },
   ]);
-  assert.ok(report, 'protocol declaration is detected');
+  assert.ok(report, 'protocol declaration plus real failure is detected');
   assert.equal(report.reason_code, 'unknown');
   assert.equal(report.cause_class, null);
 });

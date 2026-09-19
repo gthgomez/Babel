@@ -258,7 +258,7 @@ describe('streamed answers are not duplicated', () => {
     );
   });
 
-  test('BLOCKED-declared completions are emitted once', async () => {
+  test('BLOCKED-declared completions are emitted once without prose promotion', async () => {
     const state = { calls: 0 };
     const engine = new ChatEngine({
       task: 'check the service status',
@@ -269,7 +269,8 @@ describe('streamed answers are not duplicated', () => {
       engine,
       textOnlyRunner('BLOCKED: external service unreachable.', state),
     );
-    // Blocked-report detection requires prior investigate evidence.
+    // R0-A: a SUCCESSFUL inspection is investigation activity, not proof of a
+    // blocking condition. Model prose alone must not create a blocked terminal.
     (engine as unknown as { toolCallLog: unknown[] }).toolCallLog = [
       { tool: 'read_file', target: 'src/service.ts', index: 0, exit_code: 0, stdout: 'contents' },
     ];
@@ -283,7 +284,11 @@ describe('streamed answers are not duplicated', () => {
       | undefined;
 
     assert.ok(done, 'expected done event');
-    assert.ok(done.blockedReport, 'expected structured blocked report');
+    assert.equal(done.status, 'completed');
+    assert.equal(done.outcome, 'NO_CHANGE_REQUIRED');
+    assert.equal(done.blockedReport ?? null, null, 'successful reads cannot back a block');
+    assert.equal(done.reason_code, undefined);
+    assert.equal(done.cause_class, undefined);
     assert.equal(chunks.join(''), done.answer, 'answer text must appear exactly once');
     assert.equal(chunks.length, 1, `expected single emission, got ${chunks.length}`);
   });
@@ -481,17 +486,19 @@ describe('non-streaming path preserves generation boundaries', () => {
             yield { type: 'text_delta' as const, text: 'Generation A text.' };
             yield { type: 'done' as const, finishReason: 'stop' };
           } else if (state.calls === 2) {
+            // R0-A: a genuine tool failure (missing file) is real evidence of a
+            // blocking condition; a successful read would not be.
             yield {
               type: 'tool_use' as const,
               id: 't1',
               name: 'read_file',
-              input: { path: 'src/login.ts' },
+              input: { path: 'src/missing-login.ts' },
             };
             yield { type: 'done' as const, finishReason: 'tool_calls' };
           } else {
             yield {
               type: 'text_delta' as const,
-              text: 'BLOCKED: src/login.ts is missing the required login export.',
+              text: 'BLOCKED: src/missing-login.ts could not be read (file not found).',
             };
             yield { type: 'done' as const, finishReason: 'stop' };
           }
@@ -513,10 +520,14 @@ describe('non-streaming path preserves generation boundaries', () => {
         preflightContext: '',
       });
 
-      // A BLOCKED declaration backed by real investigate evidence must be an
-      // honest blocked terminal (exact, not a tolerant disjunction).
+      // A BLOCKED declaration backed by a REAL tool failure must be an honest
+      // blocked terminal (exact, not a tolerant disjunction).
       assert.equal(result.status, 'blocked', `unexpected status ${result.status}`);
+      assert.equal(result.outcome, 'NEEDS_HUMAN_DECISION');
+      assert.equal(result.reason_code, 'unknown');
+      assert.equal(result.cause_class, null);
       assert.ok(result.blockedReport, 'evidence-backed block carries a structured report');
+      assert.equal(result.blockedReport?.reason_code, 'unknown');
       assert.equal(state.calls, 3, `expected 3 provider rounds, got ${state.calls}`);
 
       // Real lifecycle first: stop() flushes the active generation-B cell.
@@ -575,12 +586,11 @@ describe('non-streaming path preserves generation boundaries', () => {
         preflightContext: '',
       });
       renderer.stop();
-      assert.notEqual(
-        result.status,
-        'blocked',
-        'model prose alone must not create a blocked terminal',
-      );
+      assert.equal(result.status, 'completed');
+      assert.equal(result.outcome, 'NO_CHANGE_REQUIRED');
       assert.equal(result.blockedReport ?? null, null, 'no fabricated blocked report');
+      assert.equal(result.reason_code, undefined);
+      assert.equal(result.cause_class, undefined);
     } finally {
       process.stdout.write = originalWrite;
     }
