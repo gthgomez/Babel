@@ -3580,18 +3580,22 @@ export class ChatEngine {
           const tamperAnswer = await this.synthesizeAnswer(allToolObservations, {
             onAnswerChunk: (_chunk: string) => {},
           }).catch(() => '');
-          const tamperBlocked = tamperAnswer
-            ? this.detectAndBuildBlockedReport(tamperAnswer)
-            : null;
-          const finalTamperAnswer = tamperBlocked
-            ? tamperAnswer
-            : `BLOCKED: Verifier integrity compromised — ${this.tamperCount} verifier dependency files were modified. The task cannot be completed honestly.`;
+          // R0/W7: the tamper violation is established by the harness
+          // (applyTamperEscalation at tamperCount >= 3), so the blocked report
+          // is harness-origin and typed. Model prose may supply the answer text
+          // but can no longer determine whether a block exists — a prose-only
+          // path could emit a false `completed` terminal.
+          const tamperBlocked = this.buildTamperBlockedReport();
+          const finalTamperAnswer =
+            tamperAnswer && /(?:^|\n)\s*BLOCKED\b/.test(tamperAnswer)
+              ? tamperAnswer
+              : `BLOCKED: Verifier integrity compromised — ${this.tamperCount} verifier dependency files were modified. The task cannot be completed honestly.`;
           this.conversation.push({
             role: 'assistant',
             content: finalTamperAnswer,
           });
           yield this.streamDone(finalTamperAnswer, {
-            blockedReport: tamperBlocked ?? null,
+            blockedReport: tamperBlocked,
             verifierTampered: true,
           });
           return;
@@ -3981,6 +3985,11 @@ export class ChatEngine {
             blockedReport: {
               schema_version: 1 as const,
               status: 'BLOCKED' as const,
+              // R0/W7: harness-origin budget condition. Typed so
+              // computeTerminalOutcome cannot fall through to the legacy prose
+              // regex and fabricate external blame.
+              reason_code: 'budget_exhausted' as const,
+              cause_class: 'harness' as const,
               reason: `Per-round token ceiling exceeded: ${this.apiTokenCount - this.apiTokenCountAtTurnStart} tokens with zero tool calls`,
               missing: 'Agent produced only text — no tool calls were made',
               checked: [
@@ -4023,6 +4032,10 @@ export class ChatEngine {
               blockedReport: {
                 schema_version: 1 as const,
                 status: 'BLOCKED' as const,
+                // R0/W7: harness-origin stall/recovery terminal. Typed so
+                // computeTerminalOutcome cannot fabricate external blame.
+                reason_code: 'recovery_exhausted' as const,
+                cause_class: 'harness' as const,
                 reason: 'Agent produced only text responses without tool calls or file changes',
                 missing: 'Unable to determine — no tool calls were made',
                 checked: [
@@ -8102,6 +8115,31 @@ export class ChatEngine {
       },
       this.stallState,
     );
+  }
+
+  /**
+   * R0/W7: harness-origin verifier-tamper block. The R9 tamper guard records
+   * each integrity violation and auto-blocks at tamperCount >= 3; that origin
+   * is trusted, so the report must never depend on the model's synthesized
+   * prose. A repeated integrity violation is a recovery-exhausted policy block
+   * with a harness cause.
+   */
+  private buildTamperBlockedReport(): BlockedReport {
+    return {
+      schema_version: 1,
+      status: 'BLOCKED',
+      reason_code: 'recovery_exhausted',
+      cause_class: 'harness',
+      reason: `Verifier integrity compromised — ${this.tamperCount} verifier dependency files were modified. The task cannot be completed honestly.`,
+      missing: 'An unmodified verifier dependency set for an independent verification.',
+      checked: [
+        {
+          action: 'verifier_integrity',
+          target: 'verifier_dependencies',
+          finding: `${this.tamperCount} verifier dependency modification(s) recorded by the R9 tamper guard`,
+        },
+      ],
+    };
   }
 
   private buildVerifierBlockedReport(reason: string): BlockedReport {
