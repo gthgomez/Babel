@@ -51,10 +51,30 @@ export function resolveModeCapability(mode: BabelMode): ModeCapability {
 export type RestoreSource = 'thread_event_log' | 'history_cells' | 'none';
 
 /**
+ * D04: physical repository identity established for a restore.
+ *
+ * - `verified`: the durable root and the current root resolve to the same
+ *   physical repository.
+ * - `mismatch`: a durable identity exists and provably points elsewhere; the
+ *   caller must fail closed before admitting an engine.
+ * - `unknown`: no durable identity was recorded, or neither root could be
+ *   resolved. Identity is unproven — a degraded resume, never `verified`.
+ */
+export interface RestoreRepoIdentity {
+  status: 'verified' | 'mismatch' | 'unknown';
+  /** Why identity is not verified (present iff `status !== 'verified'`). */
+  reason?: string;
+  /** Durable saved root, or null when none was recorded. */
+  savedRoot: string | null;
+}
+
+/**
  * Result of inspecting durable state before a resumed turn.
  *
  * `resumable:false` means the surface must refuse to execute rather than run on
  * an empty engine; `missing` names exactly what could not be reconstructed.
+ * `repoIdentity` is additive and records whether physical repository identity
+ * was proven for the restore.
  */
 export interface RestoreReport {
   threadId: string;
@@ -64,6 +84,7 @@ export interface RestoreReport {
   turnCount: number;
   missing: string[];
   reason?: string;
+  repoIdentity?: RestoreRepoIdentity;
 }
 
 /**
