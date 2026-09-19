@@ -57,7 +57,12 @@ import {
   formatWorkspaceDepUnreadyNote,
   probePythonImport,
 } from '../../services/workspaceDepPreflight.js';
-import { resolveChatTaskClass, type ChatTaskClass } from '../../config/chatTaskClass.js';
+import {
+  analyzeTaskShape,
+  resolveChatTaskClass,
+  type ChatTaskClass,
+  type TaskOperation,
+} from '../../config/chatTaskClass.js';
 import { confirmedMutationPaths, isConfirmedMutation } from '../../agent/mutationTools.js';
 import { isAuthoritativeVerifierCommand } from '../../agent/completionGatePolicy.js';
 import { computeToolCallAggregates } from '../../agent/toolCallExport.js';
@@ -108,9 +113,12 @@ export function compileChatStackForRun(input: {
   task: string;
   model?: string;
   babelRoot?: string;
+  /** Pre-resolved task class so preparation shares one contract. */
+  taskClass?: ChatTaskClass;
 }): ChatCompiledStack {
   // U1.4: Slim interactive stack — non-general_swe tasks get a lower budget.
-  const taskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true });
+  const taskClass =
+    input.taskClass ?? resolveChatTaskClass({ taskText: input.task, autoClassify: true });
   const budget = resolveStackBudgetForClass(taskClass);
   const stack = compileChatStack({
     projectRoot: input.projectRoot,
@@ -127,15 +135,31 @@ export function compileChatStackForRun(input: {
 }
 
 /**
+ * Explicit label for harness-generated planning guidance. It is injected as a
+ * user-role message (the provider protocol has no harness role), so the text
+ * must identify itself as guidance for the model and for any log reader. It is
+ * not user authorization and must never create mutation authority.
+ */
+export const HARNESS_GUIDANCE_LABEL =
+  '> Harness-generated planning guidance (not user authorization).';
+
+/**
  * Compile the intent-plan user message for execute tasks (heuristic, no LLM).
  * Matches the factory-path injection so reused TUI engines see the same text.
+ *
+ * S01/#211: the resolved TaskShape `operation` is authoritative. READ_ONLY
+ * submissions (greetings, explanations, read-only investigation, quoted code)
+ * get no generated edit/repair mandate at all; only execute-like operations
+ * (MUTATING/HYBRID) receive the plan + pre-loop repair template.
  */
 export function compileIntentPlanUserMessage(
   task: string,
   taskClass: ChatTaskClass,
+  operation?: string,
 ): string | undefined {
   const intentPlan = compileIntentPlan(task, {
     taskClass,
+    ...(operation !== undefined ? { operation } : {}),
   });
   if (!intentPlan) return undefined;
   let msg = formatIntentPlanUserMessage(intentPlan);
@@ -156,7 +180,7 @@ export function compileIntentPlanUserMessage(
         enforceMutateFirst: taskClass === 'general_swe',
       });
   }
-  return msg;
+  return `${HARNESS_GUIDANCE_LABEL}\n\n${msg}`;
 }
 
 export function applyEngineTurnPreparation(
@@ -618,18 +642,23 @@ export async function runChatEngineOnce(input: {
   const preflightContext =
     input.preflightContext ?? (await gatherChatPreflightContext(input.target.targetRoot));
 
-  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: false });
-  const limitsTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true });
+  // S01/#211: resolve the effective contract ONCE from the existing TaskShape
+  // machinery. Preparation, prompt compilation and limits all consume this
+  // resolution; there is no second (autoClassify:false) classifier.
+  const taskShape = analyzeTaskShape(input.task);
+  const effectiveOperation: TaskOperation = taskShape.operation;
+  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true });
   const limits = resolveChatEngineLimits(
     {},
     input.model,
-    { taskClass: limitsTaskClass, taskText: input.task },
+    { taskClass: resolvedTaskClass, taskText: input.task },
   );
 
   // Smallest compiled chat stack (identity / project / safety / provider / verifier)
   const chatStack = compileChatStackForRun({
     projectRoot: input.instructionRoot ?? input.target.targetRoot,
     task: input.task,
+    taskClass: resolvedTaskClass,
     ...(input.model !== undefined ? { model: input.model } : {}),
   });
   const stackSystemContext = [input.systemContext, chatStack.system_context]
@@ -639,10 +668,16 @@ export async function runChatEngineOnce(input: {
   // C1: Compile intent plan for execute tasks (heuristic, no LLM call).
   // Injects as a structured user message so the model sees expanded intent
   // before its first tool turn. Persisted to intent_plan.json after the run.
+  // READ_ONLY operations get no plan and no pre-loop repair template.
   const intentPlan = compileIntentPlan(input.task, {
     taskClass: resolvedTaskClass,
+    operation: effectiveOperation,
   });
-  const intentPlanUserMessage = compileIntentPlanUserMessage(input.task, resolvedTaskClass);
+  const intentPlanUserMessage = compileIntentPlanUserMessage(
+    input.task,
+    resolvedTaskClass,
+    effectiveOperation,
+  );
 
   const engine =
     input.engine ??

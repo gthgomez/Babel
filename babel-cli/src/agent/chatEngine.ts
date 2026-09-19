@@ -2499,8 +2499,24 @@ export class ChatEngine {
       ...(taskIntent !== undefined ? { taskIntent } : {}),
       ...(submitOpts?.continueTask !== undefined ? { continueTask: submitOpts.continueTask } : {}),
     });
+    // D01/S01: one effective-operation policy for this accepted submission,
+    // resolved BEFORE any generated guidance is appended. TaskShape is
+    // authoritative (derived from the same classifier that sets taskClass), so
+    // read-only gating, preparation fuses, progress scoring and finalization
+    // all consume this decision instead of re-deriving it from the text-intent
+    // classifier. Older hydrated snapshots without the field fall back to their
+    // persisted shape; unknown defaults to MUTATING (fail-safe: never silently
+    // loosens mutation pressure).
+    const effectiveOperation: TaskOperation =
+      runtime.effectiveOperation ?? runtime.taskShape?.operation ?? 'MUTATING';
+    const isReadOnlyInspection = effectiveOperation === 'READ_ONLY';
+
     this.conversation.push({ role: 'user', content: userInput });
-    if (this.options.intentPlanUserMessage)
+    // S01/#211: harness-generated repair guidance is only ever injected for an
+    // execute-like operation. A READ_ONLY submission never receives the
+    // generated edit mandate, and the injected text identifies itself as
+    // guidance rather than user authorization (see compileIntentPlanUserMessage).
+    if (this.options.intentPlanUserMessage && !isReadOnlyInspection)
       this.conversation.push({
         role: 'user',
         content: this.options.intentPlanUserMessage,
@@ -2522,17 +2538,6 @@ export class ChatEngine {
     let allToolObservations = '';
 
     const resolvedIntent = runtime.taskIntent;
-
-    // D01: one effective-operation policy for this accepted submission.
-    // TaskShape is authoritative (derived from the same classifier that sets
-    // taskClass), so read-only gating, preparation fuses, progress scoring and
-    // finalization all consume this decision instead of re-deriving it from the
-    // text-intent classifier. Older hydrated snapshots without the field fall
-    // back to their persisted shape; unknown defaults to MUTATING (fail-safe:
-    // never silently loosens mutation pressure).
-    const effectiveOperation: TaskOperation =
-      runtime.effectiveOperation ?? runtime.taskShape?.operation ?? 'MUTATING';
-    const isReadOnlyInspection = effectiveOperation === 'READ_ONLY';
 
     const authorityHalt = evaluateSubmitTaskAuthorityHalt(this.parity, userInput);
     if (authorityHalt) {
@@ -2567,7 +2572,7 @@ export class ChatEngine {
       submissionIndex: runtime.submissionIndex,
       continuedTask: runtime.continuedTask,
     });
-    if (this.options.intentPlanUserMessage && this.parity.turnId) {
+    if (this.options.intentPlanUserMessage && !isReadOnlyInspection && this.parity.turnId) {
       recordUserMessage(
         this.parity.eventLog,
         this.parity.turnId,

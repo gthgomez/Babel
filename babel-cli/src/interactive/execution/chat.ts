@@ -15,6 +15,7 @@ import { updateConversationMemory } from '../turns.js';
 import { alert } from '../../ui/dialog.js';
 import { resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
 import {
+  analyzeTaskShape,
   describeInteractiveCodingProfile,
   resolveChatTaskClass,
   getChatTaskTune,
@@ -156,8 +157,13 @@ export async function executeChatTask(
       taskClass: activeProfile,
       taskText: task,
     });
-    const intentTaskClass = resolveChatTaskClass({ taskText: task, autoClassify: false });
-    const intentPlanUserMessage = compileIntentPlanUserMessage(task, intentTaskClass);
+    // S01/#211: share the one resolved contract (activeProfile above was
+    // resolved with autoClassify:true); TaskShape operation gates the plan.
+    const intentPlanUserMessage = compileIntentPlanUserMessage(
+      task,
+      activeProfile,
+      analyzeTaskShape(task).operation,
+    );
 
     if (!ctx.chatEngine) {
       const operatorMode = normalizeChatOperatorMode(ctx.state.operatorMode) ?? 'default';

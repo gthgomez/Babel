@@ -250,7 +250,7 @@ describe('chat preparation parity (actual provider-bound request)', () => {
         /Runtime mode: tui\./,
       );
 
-      const intentClass = resolveChatTaskClass({ taskText: task, autoClassify: false });
+      const intentClass = resolveChatTaskClass({ taskText: task, autoClassify: true });
       const limitsClass = resolveChatTaskClass({ taskText: task, autoClassify: true });
       const limits = resolveChatEngineLimits({}, undefined, {
         taskClass: limitsClass,
