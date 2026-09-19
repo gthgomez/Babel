@@ -33,6 +33,8 @@ import { chatSessionDir } from '../cli/runsLayout.js';
 import { inspectSessionEventLogFromDir, type SessionEvent } from './sessionEvents.js';
 import { DIRECT_MUTATION_TOOLS } from './mutationTools.js';
 import { globalCostTracker } from '../services/costTracker.js';
+import type { CompactionStrategy, ChatMessage } from './chatCompaction.js';
+import { CompactionManager } from './chatCompaction.js';
 import {
   PARSER_ORACLE_CASES,
   evaluateParserModule,
@@ -196,16 +198,74 @@ function makeFixture(): Fixture {
   };
 }
 
+// ── Large-file fixture for read/cache/compaction scenarios ───────────────────
+
+const BIG_LINE_COUNT = 420;
+
+function bigFileContent(lines = BIG_LINE_COUNT): string {
+  return Array.from(
+    { length: lines },
+    (_, i) => `BIGROW_${String(i + 1).padStart(4, '0')} payload row ${i + 1}`,
+  ).join('\n');
+}
+
+function writeBigFile(fixture: Fixture, name = 'big.ts'): void {
+  writeFileSync(join(fixture.root, name), bigFileContent(), 'utf8');
+}
+
+/** Read production internals that have no public accessor but are real state. */
+interface EngineInternals {
+  consecutiveReadOnlyTools: number;
+  dedupeHitCount: number;
+  readContextEpoch: number;
+  conversation: ChatMessage[];
+  readCache: Map<string, { hash: string; requestKey: string }>;
+}
+
+function engineInternals(engine: ChatEngine): EngineInternals {
+  return engine as unknown as EngineInternals;
+}
+
+function conversationText(engine: ChatEngine): string {
+  return engineInternals(engine)
+    .conversation.map((m) => (typeof m.content === 'string' ? m.content : ''))
+    .join('\n');
+}
+
 // ── Scripted provider + loop driver ──────────────────────────────────────────
 
 type Script = Array<ToolStreamEvent[]>;
 
 interface ScriptedRunner {
-  executeWithToolsStream: () => AsyncGenerator<ToolStreamEvent, void, undefined>;
+  executeWithToolsStream: (
+    messages?: ProviderMessageLike[],
+    tools?: Array<{ function?: { name?: string } }>,
+    systemPrompt?: string,
+    signal?: AbortSignal,
+    toolChoice?: string,
+    callbacks?: unknown,
+  ) => AsyncGenerator<ToolStreamEvent, void, undefined>;
   execute: () => Promise<{ type: string; answer: string }>;
   executeRaw: () => Promise<string>;
   getLastInvocationMetadata: () => null;
   calls(): number;
+  requests(): ProviderRequestRecord[];
+}
+
+interface ProviderMessageLike {
+  role: string;
+  content: unknown;
+  name?: string;
+  tool_calls?: unknown;
+}
+
+/** One provider-bound native-tools request, captured before the script answers. */
+interface ProviderRequestRecord {
+  callIndex: number;
+  messages: ProviderMessageLike[];
+  systemPrompt: string | undefined;
+  toolNames: string[];
+  toolChoice: string | undefined;
 }
 
 interface LoopObservation {
@@ -227,6 +287,10 @@ interface LoopObservation {
   /** Structured terminal reason carried on the terminal event, if any. */
   reasonCode: string | undefined;
   reasonCauseClass: string | null | undefined;
+  /** Provider-bound native-tools requests, aligned with provider calls. */
+  providerRequests: ProviderRequestRecord[];
+  /** Live engine, for reading production internal state without a shadow path. */
+  engine: ChatEngine;
 }
 
 function makeRunner(
@@ -234,11 +298,25 @@ function makeRunner(
   onYield?: (event: ToolStreamEvent, call: number, engine: ChatEngine) => void,
 ): ScriptedRunner {
   let call = 0;
+  const requests: ProviderRequestRecord[] = [];
   return {
     calls: () => call,
-    async *executeWithToolsStream() {
+    requests: () => requests,
+    async *executeWithToolsStream(messages, tools, systemPrompt, _signal, toolChoice) {
       const index = call;
       call += 1;
+      requests.push({
+        callIndex: index,
+        messages: (messages ?? []).map((m) => ({
+          role: m.role,
+          content: m.content,
+          ...(m.name !== undefined ? { name: m.name } : {}),
+          ...(m.tool_calls !== undefined ? { tool_calls: m.tool_calls } : {}),
+        })),
+        systemPrompt,
+        toolNames: (tools ?? []).map((t) => t.function?.name ?? ''),
+        toolChoice,
+      });
       const events = script[index] ?? [
         { type: 'text_delta', text: 'No further action; concluding.' },
         { type: 'done', finishReason: 'stop' },
@@ -282,7 +360,13 @@ async function driveLoop(
   fixture: Fixture,
   task: string,
   script: Script,
-  options: { maxTurns?: number; onYield?: (e: ToolStreamEvent, c: number, eng: ChatEngine) => void } = {},
+  options: {
+    maxTurns?: number;
+    maxConversationMessages?: number;
+    maxEstimatedTokens?: number;
+    onYield?: (e: ToolStreamEvent, c: number, eng: ChatEngine) => void;
+    configureEngine?: (engine: ChatEngine) => void;
+  } = {},
 ): Promise<LoopObservation> {
   const runId = `s07-${Math.random().toString(36).slice(2, 10)}`;
   const engine = new ChatEngine({
@@ -291,10 +375,17 @@ async function driveLoop(
     runId,
     model: MODEL,
     maxTurns: options.maxTurns ?? 8,
+    ...(options.maxConversationMessages !== undefined
+      ? { maxConversationMessages: options.maxConversationMessages }
+      : {}),
+    ...(options.maxEstimatedTokens !== undefined
+      ? { maxEstimatedTokens: options.maxEstimatedTokens }
+      : {}),
   });
   currentEngine = engine;
   const runner = makeRunner(script, options.onYield);
   installRunner(engine, runner);
+  options.configureEngine?.(engine);
 
   const events: ChatEvent[] = [];
   for await (const event of engine.submitMessageStream(task)) {
@@ -364,6 +455,8 @@ async function driveLoop(
     reasonCode: (terminal as { reason_code?: string } | undefined)?.reason_code,
     reasonCauseClass:
       (terminal as { cause_class?: string | null } | undefined)?.cause_class ?? null,
+    providerRequests: runner.requests(),
+    engine,
   };
   emitTrace(task, observation, options.maxTurns ?? 8);
   return observation;
@@ -585,6 +678,226 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.equal(o.outcome, 'NO_CHANGE_REQUIRED', 'explicit no-edit success is not an unverified patch');
       assert.equal(o.durableCompletionOutcome, o.outcome, 'durable completion decision agrees with emitted outcome');
       assert.equal(o.status, 'completed');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('Scenario 5a — complementary reads: the targeted range after a bounded first window is useful and delivered', async () => {
+    const fixture = makeFixture();
+    try {
+      writeBigFile(fixture);
+      const task = 'Investigate big.ts and report its structure. Do not edit files.';
+      const o = await driveLoop(fixture, task, [
+        [
+          { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'big.ts' } },
+          { type: 'done', finishReason: 'tool_calls' },
+        ],
+        [
+          { type: 'tool_use', id: 'r2', name: 'read_range', input: { file_path: 'big.ts', start_line: 300, end_line: 400 } },
+          { type: 'done', finishReason: 'tool_calls' },
+        ],
+        [{ type: 'text_delta', text: 'Inspected the first window and the 300-400 range.' }, { type: 'done', finishReason: 'stop' }],
+      ]);
+
+      assert.equal(o.effectiveOperation, 'READ_ONLY');
+      assert.equal(o.writeToolCalls, 0, 'read-only investigation performs zero writes');
+
+      // The first provider request that follows the full read carries only the
+      // bounded first window and names what remains.
+      const afterFullRead = JSON.stringify(o.providerRequests[1]?.messages ?? []);
+      assert.match(afterFullRead, /BIGROW_0001/, 'first window content reaches the model');
+      assert.ok(!afterFullRead.includes('BIGROW_0300'), 'first window is bounded before line 300');
+      assert.match(afterFullRead, /lines after remain|read_range to inspect/i, 'remaining scope is named');
+
+      // The request after the targeted range carries the 300-400 content: the
+      // second read is useful and available, not blocked by the earlier read.
+      const afterTargetedRange = JSON.stringify(o.providerRequests[2]?.messages ?? []);
+      assert.match(afterTargetedRange, /BIGROW_0300/, 'targeted range 300-400 reaches the model');
+      assert.match(afterTargetedRange, /BIGROW_0400/, 'targeted range end reaches the model');
+      assert.ok(o.providerCalls <= 5, 'loop stays bounded');
+
+      // Distinct reads earn localization credit (useful progress).
+      const localizationTurns = o.sessionEvents.filter(
+        (e) => e.kind === 'progress_recovery' && e.signals.includes('new_localization'),
+      );
+      assert.ok(localizationTurns.length >= 2, 'each distinct read earns localization progress');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('Scenario 5b — an identical unchanged range re-read is served but earns no new progress credit', async () => {
+    const fixture = makeFixture();
+    try {
+      writeBigFile(fixture);
+      const task = 'Investigate big.ts. Do not edit files.';
+      const o = await driveLoop(fixture, task, [
+        [
+          { type: 'tool_use', id: 'r1', name: 'read_range', input: { file_path: 'big.ts', start_line: 100, end_line: 150 } },
+          { type: 'done', finishReason: 'tool_calls' },
+        ],
+        [
+          { type: 'tool_use', id: 'r2', name: 'read_range', input: { file_path: 'big.ts', start_line: 100, end_line: 150 } },
+          { type: 'done', finishReason: 'tool_calls' },
+        ],
+        [{ type: 'text_delta', text: 'Read lines 100-150.' }, { type: 'done', finishReason: 'stop' }],
+      ]);
+
+      // The second identical read is still served to the model (available)...
+      const afterSecondRead = JSON.stringify(o.providerRequests[2]?.messages ?? []);
+      assert.match(afterSecondRead, /BIGROW_0100/, 'identical re-read content remains available');
+
+      // ...but it does not earn a second localization/progress credit. Only the
+      // first read of the unchanged bytes is productive; the repeat is recorded
+      // as no-progress and does not reset the read-only streak.
+      const localizationTurns = o.sessionEvents.filter(
+        (e) => e.kind === 'progress_recovery' && e.signals.includes('new_localization'),
+      );
+      assert.equal(localizationTurns.length, 1, 'an unchanged re-read earns no new progress credit');
+
+      const internals = engineInternals(o.engine);
+      assert.ok(
+        internals.consecutiveReadOnlyTools >= 2,
+        'identical re-reads still count as reads (no unbounded credit reset)',
+      );
+      // The read-injection cache is bounded: one entry per identical request,
+      // not one credit per repeat.
+      const bigKeys = [...internals.readCache.keys()].filter((k) => k.includes('big.ts'));
+      assert.equal(bigKeys.length, 1, 'identical repeats collapse to one bounded cache entry');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('Scenario 5c — a targeted read after a failing verifier is not falsely punished as read thrash', async () => {
+    const fixture = makeFixture();
+    try {
+      const task = 'Investigate why parser_test fails and fix it.';
+      const o = await driveLoop(fixture, task, [
+        [{ type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'parser.ts' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        // Targeted re-inspection after the red verifier must be allowed.
+        [{ type: 'tool_use', id: 'r2', name: 'read_range', input: { file_path: 'parser.ts', start_line: 1, end_line: 6 } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'v2', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'text_delta', text: 'Applied the operator fix and re-ran the verifier.' }, { type: 'done', finishReason: 'stop' }],
+      ]);
+
+      // After the red verifier, the next turn reopens the full investigation
+      // toolset rather than punishing the targeted read as thrash.
+      const afterFailure = o.providerRequests[3];
+      assert.ok(afterFailure, 'provider request after the failing verifier was captured');
+      assert.ok(afterFailure.toolNames.includes('read_range'), 'read_range is available after a failure');
+      assert.ok(afterFailure.toolNames.includes('read_file'), 'read_file is available after a failure');
+      assert.ok(afterFailure.toolNames.includes('str_replace'), 'repair remains available after a failure');
+
+      const targetedRead = o.toolCalls.find((c) => c.tool === 'read_range');
+      assert.ok(targetedRead, 'the targeted read executed');
+      assert.equal(targetedRead?.error, undefined, 'the targeted read was not blocked');
+
+      assert.equal(o.outcome, 'VERIFIED_COMPLETE', 'the loop recovers and earns verified completion');
+      assert.ok(
+        !o.progressInterventions.includes('terminal_blocked'),
+        'a useful targeted read is not punished with a terminal read-thrash stop',
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('Scenario 6 — post-compaction reread: content leaves active context, then is reinjected into the final provider request', async () => {
+    const fixture = makeFixture();
+    try {
+      writeBigFile(fixture);
+      // Deterministic compaction strategy: drop the whole prior window and
+      // leave only a summary, exercising the real commit/capsule path (no
+      // network). This models an LLM summarize that discards raw observations.
+      let compactedOnce = false;
+      const deterministicCompaction: CompactionStrategy = {
+        name: 'llm-summarize',
+        canApply(messages) {
+          // Compact exactly once: only while the raw window is still present in
+          // active context. After compaction drops it, stop (no repeated cascade).
+          return (
+            !compactedOnce &&
+            messages.some((m) => typeof m.content === 'string' && m.content.includes('BIGROW_'))
+          );
+        },
+        async compact() {
+          compactedOnce = true;
+          return [
+            {
+              role: 'system',
+              name: 'compaction_summary',
+              content: '[deterministic compaction] earlier raw window dropped from active context',
+            },
+          ];
+        },
+      };
+
+      let preRereadConversation = '';
+      let compactionEvents = 0;
+      const task = 'Investigate big.ts. Do not edit files.';
+      const o = await driveLoop(
+        fixture,
+        task,
+        [
+          [
+            { type: 'tool_use', id: 'r1', name: 'read_range', input: { file_path: 'big.ts', start_line: 100, end_line: 150 } },
+            { type: 'done', finishReason: 'tool_calls' },
+          ],
+          [
+            { type: 'tool_use', id: 'r2', name: 'read_range', input: { file_path: 'big.ts', start_line: 100, end_line: 150 } },
+            { type: 'done', finishReason: 'tool_calls' },
+          ],
+          [{ type: 'text_delta', text: 'Re-read lines 100-150 after compaction.' }, { type: 'done', finishReason: 'stop' }],
+        ],
+        {
+          maxEstimatedTokens: 200,
+          configureEngine(engine) {
+            (engine as unknown as { compactionManager: unknown }).compactionManager = new CompactionManager([
+              deterministicCompaction,
+            ]);
+          },
+          onYield(event, call, engine) {
+            if (call === 1 && event.type === 'tool_use') {
+              // Turn 1 begins after compaction and before the re-read executes.
+              preRereadConversation = conversationText(engine);
+            }
+          },
+        },
+      );
+
+      for (const event of o.events) {
+        if (event.type === 'context_compacted') compactionEvents += 1;
+      }
+      assert.ok(compactionEvents >= 1, 'real compaction occurred in the loop, not just an epoch bump');
+      assert.ok(
+        o.sessionEvents.some((e) => e.kind === 'compaction_committed' || e.kind === 'compaction_created'),
+        'compaction was durably committed',
+      );
+
+      // The raw window is gone from the active conversation after compaction...
+      assert.ok(
+        !preRereadConversation.includes('BIGROW_0123'),
+        'raw window leaves active context through compaction',
+      );
+
+      const internals = engineInternals(o.engine);
+      assert.ok(internals.readContextEpoch >= 1, 'compaction started a new read-injection epoch');
+
+      // ...and re-reading 100-150 after compaction reinjects the content into
+      // the final provider-bound request. (P11 follow-up: the frozen head still
+      // carries the compaction summary in the system role; authority separation
+      // of model summary vs. harness working state is a later lane.)
+      const finalRequest = JSON.stringify(o.providerRequests[2]?.messages ?? []);
+      assert.match(finalRequest, /BIGROW_0100/, 'reinjected range start reaches the final request');
+      assert.match(finalRequest, /BIGROW_0150/, 'reinjected range end reaches the final request');
+      assert.ok(
+        !o.progressInterventions.includes('terminal_blocked'),
+        'post-compaction re-read is not treated as read thrash',
+      );
     } finally {
       fixture.cleanup();
     }
