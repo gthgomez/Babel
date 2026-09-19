@@ -43,6 +43,9 @@ import { classifyToolEffect } from '../executor/contracts.js';
 
 export const HARNESS_EVAL_VERSION = 1 as const;
 
+/** Schema version for the hardened paired-comparison report. */
+export const PAIRED_COMPARISON_SCHEMA_VERSION = 1 as const;
+
 export interface FixedEvalControls {
   task_set_id: string;
   model_snapshot: string;
@@ -70,20 +73,128 @@ export interface EvalTaskResult {
   agent_failure: boolean;
   human_intervention: boolean;
   clean_room_pass: boolean | null;
+  /**
+   * Optional model identity for this attempt. When present, paired arms must
+   * agree or the comparison is rejected as a model mismatch (H7 is a
+   * model-fixed comparison). Optional so historical/offline fixtures without
+   * the fact stay readable; it is validated whenever supplied.
+   */
+  model_snapshot?: string;
+  /**
+   * Optional environment digest for this attempt. Same contract as
+   * `model_snapshot`: validated whenever supplied.
+   */
+  environment_digest?: string;
 }
+
+/** Metrics eligible for paired comparison. */
+export type PairedMetric = keyof Pick<
+  EvalTaskResult,
+  'tokens' | 'duration_ms' | 'critical_fact_retention'
+>;
+
+/**
+ * Whether a numerical uncertainty value was actually estimated from repeated
+ * paired trials. A single pair can never yield zero uncertainty: it yields
+ * `insufficient_replicates` with `uncertainty: null`.
+ */
+export type PairedUncertaintyStatus =
+  | 'measured'
+  | 'insufficient_replicates'
+  | 'not_estimable';
+
+/**
+ * Explicit reasons a paired comparison is rejected or degraded. Missing data is
+ * never silently coerced to zero; duplicates and unpaired samples are reported
+ * rather than dropped or reused.
+ */
+export type PairedComparisonIssue =
+  | 'empty_population'
+  | 'duplicate_pair_key'
+  | 'ambiguous_pair_key'
+  | 'unpaired_baseline'
+  | 'unpaired_candidate'
+  | 'variant_mismatch'
+  | 'missing_metric'
+  | 'non_finite_metric'
+  | 'model_mismatch'
+  | 'environment_mismatch'
+  | 'controls_changed'
+  | 'controls_incomplete'
+  | 'missing_expected_task'
+  | 'missing_expected_trial';
 
 export interface PairedDelta {
   task_id: string;
   baseline_variant: string;
   candidate_variant: string;
   metric: string;
-  baseline_value: number;
-  candidate_value: number;
-  delta: number;
-  /** Simple uncertainty band (e.g. half-width of Wilson or bootstrap). */
-  uncertainty: number;
-  /** Number of repeated task-level pairs in this aggregate. */
-  n_pairs?: number;
+  /** Mean baseline metric, or null when the comparison is invalid. */
+  baseline_value: number | null;
+  /** Mean candidate metric, or null when the comparison is invalid. */
+  candidate_value: number | null;
+  /** Mean paired difference, or null when the comparison is invalid. */
+  delta: number | null;
+  /**
+   * Standard error over repeated paired trials. `null` (never a fabricated
+   * zero) when fewer than two valid pairs exist; see `uncertainty_status`.
+   */
+  uncertainty: number | null;
+  uncertainty_status: PairedUncertaintyStatus;
+  /** Number of matched pairs with a readable metric. */
+  n_pairs: number;
+  /** False when the comparison must not be used as promotion evidence. */
+  valid: boolean;
+  /** Explicit rejection/degradation reasons; empty only when `valid` is true. */
+  issues: PairedComparisonIssue[];
+}
+
+export interface EvalAttemptOutcomeCounts {
+  attempts: number;
+  verified_complete: number;
+  false_completion: number;
+  instruction_policy_violation: number;
+  infrastructure_failure: number;
+  agent_failure: number;
+  human_intervention: number;
+}
+
+export interface DroppedPairedSample {
+  arm: 'baseline' | 'candidate';
+  task_id: string;
+  variant: string;
+  trial_index: number | null;
+  reason: 'unpaired' | 'duplicate_pair_key' | 'ambiguous_pair_key' | 'variant_mismatch';
+  infrastructure_failure: boolean;
+  agent_failure: boolean;
+}
+
+export interface PairedComparisonReport {
+  schema_version: typeof PAIRED_COMPARISON_SCHEMA_VERSION;
+  metric: string;
+  deltas: PairedDelta[];
+  /** Samples present in one arm but unusable for pairing. */
+  dropped_samples: DroppedPairedSample[];
+  global_issues: PairedComparisonIssue[];
+  control_deviations: string[];
+  model_deviations: string[];
+  environment_deviations: string[];
+  coverage_complete: boolean;
+  valid: boolean;
+  /** Outcome mix per arm; failed/infra/timeout attempts are retained, not filtered. */
+  attempt_outcomes: {
+    baseline: EvalAttemptOutcomeCounts;
+    candidate: EvalAttemptOutcomeCounts;
+  };
+  /** Intention-to-test tokens including failed attempts, not only solved tasks. */
+  intention_to_test_tokens: { baseline: number; candidate: number };
+}
+
+export interface PairedComparisonOptions {
+  baseline_controls?: FixedEvalControls;
+  candidate_controls?: FixedEvalControls;
+  expected_task_ids?: readonly string[];
+  expected_trials_per_task?: number;
 }
 
 export interface FailureLedgerEntry {
@@ -193,52 +304,387 @@ export function computeCoreMetrics(results: readonly EvalTaskResult[]): HarnessC
 }
 
 /**
- * Pairwise task-level deltas with simple uncertainty (not best-run reporting).
+ * Identity keys. A "trial key" is unique per (task, variant, trial) within one
+ * arm; a "match key" pairs the two arms on (task, trial) regardless of variant
+ * so a candidate for one variant can never be reused for another.
+ */
+function pairedTrialKey(
+  taskId: string,
+  variant: string,
+  trialIndex: number | undefined,
+): string {
+  return `${taskId}\u0000${variant}\u0000${trialIndex ?? ''}`;
+}
+
+function pairedMatchKey(taskId: string, trialIndex: number | undefined): string {
+  return `${taskId}\u0000${trialIndex ?? ''}`;
+}
+
+interface PairedArmIndex {
+  readonly duplicateTrialKeys: ReadonlySet<string>;
+  readonly byMatchKey: ReadonlyMap<string, EvalTaskResult[]>;
+}
+
+function indexPairedArm(rows: readonly EvalTaskResult[]): PairedArmIndex {
+  const seenTrialKeys = new Set<string>();
+  const duplicateTrialKeys = new Set<string>();
+  const byMatchKey = new Map<string, EvalTaskResult[]>();
+  for (const row of rows) {
+    const trialKey = pairedTrialKey(row.task_id, row.variant, row.trial_index);
+    if (seenTrialKeys.has(trialKey)) duplicateTrialKeys.add(trialKey);
+    else seenTrialKeys.add(trialKey);
+    const matchKey = pairedMatchKey(row.task_id, row.trial_index);
+    const bucket = byMatchKey.get(matchKey);
+    if (bucket) bucket.push(row);
+    else byMatchKey.set(matchKey, [row]);
+  }
+  return { duplicateTrialKeys, byMatchKey };
+}
+
+function readPairedMetric(
+  row: EvalTaskResult,
+  metric: PairedMetric,
+): { value: number | null; issue: PairedComparisonIssue | null } {
+  const raw: unknown = row[metric];
+  if (raw === null || raw === undefined) return { value: null, issue: 'missing_metric' };
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return { value: null, issue: 'non_finite_metric' };
+  }
+  return { value: raw, issue: null };
+}
+
+function countAttemptOutcomes(rows: readonly EvalTaskResult[]): EvalAttemptOutcomeCounts {
+  return {
+    attempts: rows.length,
+    verified_complete: rows.filter((r) => r.verified_complete_no_policy_violation).length,
+    false_completion: rows.filter((r) => r.false_completion).length,
+    instruction_policy_violation: rows.filter((r) => r.instruction_policy_violation).length,
+    infrastructure_failure: rows.filter((r) => r.infrastructure_failure).length,
+    agent_failure: rows.filter((r) => r.agent_failure).length,
+    human_intervention: rows.filter((r) => r.human_intervention).length,
+  };
+}
+
+/**
+ * Total tokens as an intention-to-test cost. Failed and infrastructure-failed
+ * attempts are included; only non-finite values are excluded.
+ */
+function sumPairedTokens(rows: readonly EvalTaskResult[]): number {
+  return rows.reduce((sum, r) => (Number.isFinite(r.tokens) ? sum + r.tokens : sum), 0);
+}
+
+function distinctArmValues(
+  rows: readonly EvalTaskResult[],
+  field: 'model_snapshot' | 'environment_digest',
+): string[] {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const value: string | undefined = row[field];
+    if (typeof value === 'string' && value !== '') seen.add(value);
+  }
+  return [...seen].sort();
+}
+
+function meanOf(values: readonly number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function makeRejectedDelta(
+  taskId: string,
+  baseRows: readonly EvalTaskResult[],
+  candRows: readonly EvalTaskResult[],
+  metric: PairedMetric,
+  issues: PairedComparisonIssue[],
+): PairedDelta {
+  const baseVariants = [...new Set(baseRows.map((r) => r.variant))];
+  const candVariants = [...new Set(candRows.map((r) => r.variant))];
+  return {
+    task_id: taskId,
+    baseline_variant: baseVariants.length === 1 ? baseVariants[0]! : (baseRows[0]?.variant ?? ''),
+    candidate_variant: candVariants.length === 1 ? candVariants[0]! : (candRows[0]?.variant ?? ''),
+    metric,
+    baseline_value: null,
+    candidate_value: null,
+    delta: null,
+    uncertainty: null,
+    uncertainty_status: 'not_estimable',
+    n_pairs: 0,
+    valid: false,
+    issues: [...new Set(issues)],
+  };
+}
+
+function toDroppedSample(
+  row: EvalTaskResult,
+  arm: 'baseline' | 'candidate',
+  reason: DroppedPairedSample['reason'],
+): DroppedPairedSample {
+  return {
+    arm,
+    task_id: row.task_id,
+    variant: row.variant,
+    trial_index: row.trial_index ?? null,
+    reason,
+    infrastructure_failure: row.infrastructure_failure,
+    agent_failure: row.agent_failure,
+  };
+}
+
+/**
+ * Validate paired measurements and reject/report invalid comparisons.
+ *
+ * Never coerces a missing metric to 0, never reuses a candidate for a duplicate
+ * baseline key, never drops unpaired/duplicate samples silently, and never
+ * reports numerical zero uncertainty for a single or invalid comparison.
+ * Failed, infrastructure-failed and human-intervened attempts remain in the
+ * population and in intention-to-test token totals.
+ */
+export function evaluatePairedComparison(
+  baseline: readonly EvalTaskResult[],
+  candidate: readonly EvalTaskResult[],
+  metric: PairedMetric = 'tokens',
+  options: PairedComparisonOptions = {},
+): PairedComparisonReport {
+  const baselineIndex = indexPairedArm(baseline);
+  const candidateIndex = indexPairedArm(candidate);
+  const globalIssues: PairedComparisonIssue[] = [];
+  const controlDeviations: string[] = [];
+  const modelDeviations: string[] = [];
+  const environmentDeviations: string[] = [];
+
+  if (baseline.length === 0 && candidate.length === 0) {
+    globalIssues.push('empty_population');
+  }
+
+  const bControls = options.baseline_controls;
+  const cControls = options.candidate_controls;
+  if (bControls && cControls) {
+    const match = controlsMatch(bControls, cControls);
+    controlDeviations.push(...match.deviations);
+    if (!match.ok) globalIssues.push('controls_changed');
+  } else if (bControls || cControls) {
+    globalIssues.push('controls_incomplete');
+  }
+
+  for (const [field, deviations, issue] of [
+    ['model_snapshot', modelDeviations, 'model_mismatch'],
+    ['environment_digest', environmentDeviations, 'environment_mismatch'],
+  ] as const) {
+    const bValues = distinctArmValues(baseline, field);
+    const cValues = distinctArmValues(candidate, field);
+    if (bValues.length === 0 && cValues.length === 0) continue;
+    if (bValues.length > 1 || cValues.length > 1) {
+      deviations.push('multiple_values_within_arm');
+    } else if (bValues.length !== 1 || cValues.length !== 1 || bValues[0] !== cValues[0]) {
+      deviations.push(`baseline=${bValues[0] ?? '<missing>'},candidate=${cValues[0] ?? '<missing>'}`);
+    }
+    if (deviations.length > 0 && !globalIssues.includes(issue)) globalIssues.push(issue);
+  }
+
+  const expectedTaskIds = options.expected_task_ids;
+  const observedTaskIds = new Set([
+    ...baseline.map((r) => r.task_id),
+    ...candidate.map((r) => r.task_id),
+  ]);
+  if (expectedTaskIds && expectedTaskIds.length > 0) {
+    if (expectedTaskIds.some((id) => !observedTaskIds.has(id))) {
+      globalIssues.push('missing_expected_task');
+    }
+  }
+  const expectedTrials = options.expected_trials_per_task;
+  if (expectedTrials !== undefined) {
+    for (const taskId of observedTaskIds) {
+      const baseTrials = new Set(
+        baseline.filter((r) => r.task_id === taskId).map((r) => r.trial_index ?? null),
+      );
+      const candTrials = new Set(
+        candidate.filter((r) => r.task_id === taskId).map((r) => r.trial_index ?? null),
+      );
+      if (baseTrials.size < expectedTrials || candTrials.size < expectedTrials) {
+        if (!globalIssues.includes('missing_expected_trial')) {
+          globalIssues.push('missing_expected_trial');
+        }
+        break;
+      }
+    }
+  }
+
+  const globalInvalid = globalIssues.some(
+    (issue) =>
+      issue === 'controls_changed' ||
+      issue === 'controls_incomplete' ||
+      issue === 'model_mismatch' ||
+      issue === 'environment_mismatch' ||
+      issue === 'missing_expected_task' ||
+      issue === 'missing_expected_trial',
+  );
+
+  const deltas: PairedDelta[] = [];
+  const droppedSamples: DroppedPairedSample[] = [];
+  const taskIds = [...observedTaskIds].sort();
+
+  for (const taskId of taskIds) {
+    const baseRows = baseline.filter((r) => r.task_id === taskId);
+    const candRows = candidate.filter((r) => r.task_id === taskId);
+    const issues: PairedComparisonIssue[] = [];
+
+    const baseVariants = [...new Set(baseRows.map((r) => r.variant))];
+    const candVariants = [...new Set(candRows.map((r) => r.variant))];
+    if (baseVariants.length > 1 || candVariants.length > 1) issues.push('variant_mismatch');
+
+    const duplicate =
+      baseRows.some((r) =>
+        baselineIndex.duplicateTrialKeys.has(
+          pairedTrialKey(r.task_id, r.variant, r.trial_index),
+        ),
+      ) ||
+      candRows.some((r) =>
+        candidateIndex.duplicateTrialKeys.has(
+          pairedTrialKey(r.task_id, r.variant, r.trial_index),
+        ),
+      );
+    if (duplicate) issues.push('duplicate_pair_key');
+
+    const ambiguous =
+      baseRows.some(
+        (r) => (baselineIndex.byMatchKey.get(pairedMatchKey(r.task_id, r.trial_index))?.length ?? 0) > 1,
+      ) ||
+      candRows.some(
+        (r) => (candidateIndex.byMatchKey.get(pairedMatchKey(r.task_id, r.trial_index))?.length ?? 0) > 1,
+      );
+    if (ambiguous) issues.push('ambiguous_pair_key');
+
+    // Structural defects reject the whole task comparison: no candidate reuse,
+    // no partial aggregate. Every affected sample is explicitly reported.
+    if (issues.length > 0) {
+      const reason: DroppedPairedSample['reason'] = duplicate
+        ? 'duplicate_pair_key'
+        : ambiguous
+          ? 'ambiguous_pair_key'
+          : 'variant_mismatch';
+      for (const row of baseRows) droppedSamples.push(toDroppedSample(row, 'baseline', reason));
+      for (const row of candRows) droppedSamples.push(toDroppedSample(row, 'candidate', reason));
+      deltas.push(makeRejectedDelta(taskId, baseRows, candRows, metric, issues));
+      continue;
+    }
+
+    const matched: Array<{ base: EvalTaskResult; candidate: EvalTaskResult }> = [];
+    for (const base of baseRows) {
+      const bucket = candidateIndex.byMatchKey.get(pairedMatchKey(base.task_id, base.trial_index)) ?? [];
+      if (bucket.length === 0) {
+        droppedSamples.push(toDroppedSample(base, 'baseline', 'unpaired'));
+        if (!issues.includes('unpaired_baseline')) issues.push('unpaired_baseline');
+      } else {
+        matched.push({ base, candidate: bucket[0]! });
+      }
+    }
+    for (const cand of candRows) {
+      const bucket = baselineIndex.byMatchKey.get(pairedMatchKey(cand.task_id, cand.trial_index)) ?? [];
+      if (bucket.length === 0) {
+        droppedSamples.push(toDroppedSample(cand, 'candidate', 'unpaired'));
+        if (!issues.includes('unpaired_candidate')) issues.push('unpaired_candidate');
+      }
+    }
+
+    const baselineValues: number[] = [];
+    const candidateValues: number[] = [];
+    for (const { base, candidate: cand } of matched) {
+      const baseMetric = readPairedMetric(base, metric);
+      const candMetric = readPairedMetric(cand, metric);
+      for (const issue of [baseMetric.issue, candMetric.issue]) {
+        if (issue && !issues.includes(issue)) issues.push(issue);
+      }
+      if (baseMetric.value !== null && candMetric.value !== null) {
+        baselineValues.push(baseMetric.value);
+        candidateValues.push(candMetric.value);
+      }
+    }
+
+    const valid =
+      issues.length === 0 &&
+      !globalInvalid &&
+      matched.length > 0 &&
+      baselineValues.length === matched.length;
+
+    if (!valid) {
+      deltas.push(makeRejectedDelta(taskId, baseRows, candRows, metric, issues));
+      continue;
+    }
+
+    const pairedDiffs = baselineValues.map((value, index) => candidateValues[index]! - value);
+    const mean = meanOf(pairedDiffs);
+    let uncertainty: number | null = null;
+    let uncertaintyStatus: PairedUncertaintyStatus = 'insufficient_replicates';
+    if (pairedDiffs.length >= 2) {
+      const variance =
+        pairedDiffs.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+        (pairedDiffs.length - 1);
+      uncertainty = Math.sqrt(variance / pairedDiffs.length);
+      uncertaintyStatus = 'measured';
+    }
+
+    deltas.push({
+      task_id: taskId,
+      baseline_variant: baseVariants[0]!,
+      candidate_variant: candVariants[0]!,
+      metric,
+      baseline_value: meanOf(baselineValues),
+      candidate_value: meanOf(candidateValues),
+      delta: mean,
+      uncertainty,
+      uncertainty_status: uncertaintyStatus,
+      n_pairs: matched.length,
+      valid: true,
+      issues: [],
+    });
+  }
+
+  const coverageComplete =
+    droppedSamples.length === 0 &&
+    deltas.length > 0 &&
+    deltas.every((delta) => delta.valid) &&
+    !globalIssues.includes('missing_expected_task') &&
+    !globalIssues.includes('missing_expected_trial');
+
+  return {
+    schema_version: PAIRED_COMPARISON_SCHEMA_VERSION,
+    metric,
+    deltas,
+    dropped_samples: droppedSamples,
+    global_issues: [...new Set(globalIssues)],
+    control_deviations: [...new Set(controlDeviations)],
+    model_deviations: [...new Set(modelDeviations)],
+    environment_deviations: [...new Set(environmentDeviations)],
+    coverage_complete: coverageComplete,
+    valid:
+      globalIssues.length === 0 &&
+      deltas.length > 0 &&
+      deltas.every((delta) => delta.valid) &&
+      droppedSamples.length === 0,
+    attempt_outcomes: {
+      baseline: countAttemptOutcomes(baseline),
+      candidate: countAttemptOutcomes(candidate),
+    },
+    intention_to_test_tokens: {
+      baseline: sumPairedTokens(baseline),
+      candidate: sumPairedTokens(candidate),
+    },
+  };
+}
+
+/**
+ * Pairwise task-level deltas with validated inputs and honest uncertainty.
+ * Returns one entry per observed task (including explicit invalid entries).
+ * Use {@link evaluatePairedComparison} when dropped-sample and coverage
+ * reporting is required.
  */
 export function computePairedDeltas(
   baseline: readonly EvalTaskResult[],
   candidate: readonly EvalTaskResult[],
-  metric: keyof Pick<
-    EvalTaskResult,
-    'tokens' | 'duration_ms' | 'critical_fact_retention'
-  > = 'tokens',
+  metric: PairedMetric = 'tokens',
+  options: PairedComparisonOptions = {},
 ): PairedDelta[] {
-  const deltas: PairedDelta[] = [];
-  for (const taskId of [...new Set(baseline.map((result) => result.task_id))]) {
-    const pairs = baseline
-      .filter((result) => result.task_id === taskId)
-      .flatMap((base) => {
-        const candidateResult = candidate.find(
-          (result) => result.task_id === taskId && result.trial_index === base.trial_index,
-        )
-        return candidateResult ? [{ base, candidate: candidateResult }] : []
-      })
-    if (pairs.length === 0) continue
-    const baselineValues = pairs.map(({ base }) => Number(base[metric] ?? 0))
-    const candidateValues = pairs.map(({ candidate: result }) => Number(result[metric] ?? 0))
-    const pairedValues = pairs.map(
-      ({ base, candidate: result }) => Number(result[metric] ?? 0) - Number(base[metric] ?? 0),
-    )
-    const mean = pairedValues.reduce((sum, value) => sum + value, 0) / pairedValues.length;
-    const variance = pairedValues.length > 1
-      ? pairedValues.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (pairedValues.length - 1)
-      : 0;
-    // Standard error from repeated paired trials. A single trial explicitly has
-    // no measured uncertainty rather than a fabricated heuristic band.
-    const uncertainty = pairedValues.length > 1 ? Math.sqrt(variance / pairedValues.length) : 0;
-    deltas.push({
-      task_id: taskId,
-      baseline_variant: pairs[0]!.base.variant,
-      candidate_variant: pairs[0]!.candidate.variant,
-      metric,
-      baseline_value: baselineValues.reduce((sum, value) => sum + value, 0) / pairs.length,
-      candidate_value: candidateValues.reduce((sum, value) => sum + value, 0) / pairs.length,
-      delta: mean,
-      uncertainty,
-      n_pairs: pairs.length,
-    });
-  }
-  return deltas;
+  return evaluatePairedComparison(baseline, candidate, metric, options).deltas;
 }
 
 export function appendFailureLedger(
