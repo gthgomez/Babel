@@ -98,20 +98,55 @@ export function recordEffectTerminal(
   return record
 }
 
-/** Load complete ledger records and ignore only an incomplete final JSONL line. */
-export function loadEffectLedger(runDir: string): EffectLedgerRecord[] {
+/** Diagnostics from loading the JSONL ledger; makes silent line drops explicit. */
+export interface EffectLedgerLoadResult {
+  records: EffectLedgerRecord[]
+  /** Number of non-empty lines that could not be parsed as JSON. */
+  malformedLines: number
+  /** Malformed lines that are not the torn final line (genuine corruption). */
+  corruptLines: number
+  /** The final line is incomplete (no trailing newline) — the expected torn tail. */
+  tornFinalLine: boolean
+}
+
+/**
+ * Load complete ledger records and classify the lines that were dropped.
+ * A torn final line is expected after a crash; any other malformed line is
+ * reported as corruption so a caller never treats a damaged history as whole.
+ */
+export function loadEffectLedgerWithDiagnostics(runDir: string): EffectLedgerLoadResult {
   const path = ledgerPath(runDir)
-  if (!existsSync(path)) return []
-  return readFileSync(path, 'utf8')
-    .split('\n')
-    .filter((line) => line.trim().length > 0)
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as EffectLedgerRecord]
-      } catch {
-        return []
-      }
-    })
+  if (!existsSync(path)) {
+    return { records: [], malformedLines: 0, corruptLines: 0, tornFinalLine: false }
+  }
+  const content = readFileSync(path, 'utf8')
+  const endsWithNewline = content.endsWith('\n')
+  const rawLines = content.split('\n')
+  const records: EffectLedgerRecord[] = []
+  let malformedLines = 0
+  let corruptLines = 0
+  let tornFinalLine = false
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const line = rawLines[index]!
+    if (line.trim().length === 0) continue
+    try {
+      records.push(JSON.parse(line) as EffectLedgerRecord)
+    } catch {
+      malformedLines += 1
+      if (index === rawLines.length - 1 && !endsWithNewline) tornFinalLine = true
+      else corruptLines += 1
+    }
+  }
+  return { records, malformedLines, corruptLines, tornFinalLine }
+}
+
+/**
+ * Load complete ledger records, dropping every unparseable line (a torn final
+ * line is the expected crash tail; any other drop is corruption). Callers that
+ * must distinguish the two use `loadEffectLedgerWithDiagnostics`.
+ */
+export function loadEffectLedger(runDir: string): EffectLedgerRecord[] {
+  return loadEffectLedgerWithDiagnostics(runDir).records
 }
 
 /** Return effect intents that have no terminal record after a crash. */

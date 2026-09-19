@@ -141,12 +141,24 @@ export type RecoverDecision =
     }
   | { readonly kind: 'rejected'; readonly reasonCode: AdmissionReasonCode; readonly detail?: string };
 
+/** Read-only admission listing; `skippedCorruptRows` makes silent drops explicit. */
+export interface AdmissionListing {
+  readonly records: readonly AdmissionRecordV1[];
+  readonly skippedCorruptRows: number;
+}
+
 export interface AdmissionStore {
   readonly dbPath: string;
   admitCommand(input: AdmitCommandInput): AdmitDecision;
   settleAdmission(input: SettleAdmissionInput): SettleDecision;
   recoverAdmission(input: RecoverAdmissionInput): RecoverDecision;
   readAdmission(threadId: string, commandId: string): AdmissionRecordV1 | null;
+  /**
+   * Read-only: every admission for a thread, oldest first, plus the number of
+   * rows that failed shape validation. A corrupt row is never hidden: the caller
+   * must treat `skippedCorruptRows > 0` as an incomplete history.
+   */
+  listAdmissions(threadId: string): AdmissionListing;
   readOwner(threadId: string): OwnerRecordV1 | null;
   readOutbox(admissionId: string): OutboxRecordV1 | null;
   close(): void;
@@ -926,6 +938,20 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
     readAdmission(threadId, commandId): AdmissionRecordV1 | null {
       const row = readAdmissionRow(threadId, commandId);
       return row ? rowToAdmission(row) : null;
+    },
+
+    listAdmissions(threadId): AdmissionListing {
+      const rows = db
+        .prepare('SELECT * FROM admission WHERE thread_id = ? ORDER BY created_at ASC, admission_id ASC')
+        .all(threadId) as Array<Record<string, unknown>>;
+      const records: AdmissionRecordV1[] = [];
+      let skippedCorruptRows = 0;
+      for (const row of rows) {
+        const record = safeRowToAdmission(row);
+        if (record) records.push(record);
+        else skippedCorruptRows += 1;
+      }
+      return { records, skippedCorruptRows };
     },
 
     readOwner(threadId): OwnerRecordV1 | null {
