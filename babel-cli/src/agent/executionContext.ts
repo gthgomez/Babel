@@ -47,9 +47,44 @@ export function runWithExecutionContext<T>(ctx: ExecutionContext, fn: () => T): 
  * Bind a context for the remainder of the current async execution. Use only
  * where wrapping the awaited body is impractical; callers MUST restore the
  * owning context in a `finally`. Prefer `runWithExecutionContext`.
+ *
+ * This rebinds permanently within the current async execution, so it must never
+ * be used to open a production turn: use `scopeAsyncGenerator` for that.
  */
 export function enterWithExecutionContext(ctx: ExecutionContext): void {
   store.enterWith(ctx);
+}
+
+/** Restore a previously captured context (pair with `enterWithExecutionContext`). */
+export function restoreExecutionContext(prior: ExecutionContext | undefined): void {
+  store.enterWith(prior as ExecutionContext);
+}
+
+/**
+ * Scope an async generator so every `next`/`return`/`throw` step runs with the
+ * execution context produced by `contextFactory`, while the *consumer's* async
+ * context is left untouched.
+ *
+ * `AsyncLocalStorage.run` cannot span a generator's suspension points, but a
+ * generator body executes synchronously as part of each `next()` call, so
+ * wrapping each step is sufficient: the store is active for the body's work and
+ * unwinds automatically when the step returns. The factory is evaluated outside
+ * the run scope, so it reads the engine's own state rather than a previously
+ * bound context. This is what makes a completed turn leave no context behind.
+ */
+export function scopeAsyncGenerator<T>(
+  contextFactory: () => ExecutionContext,
+  source: AsyncGenerator<T, void, undefined>,
+): AsyncGenerator<T, void, undefined> {
+  const wrapper = {
+    [Symbol.asyncIterator]() {
+      return wrapper;
+    },
+    next: () => store.run(contextFactory(), () => source.next()),
+    return: (value?: void) => store.run(contextFactory(), () => source.return(value as void)),
+    throw: (err: unknown) => store.run(contextFactory(), () => source.throw(err)),
+  };
+  return wrapper as AsyncGenerator<T, void, undefined>;
 }
 
 export function getExecutionContext(): ExecutionContext | undefined {

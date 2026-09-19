@@ -877,8 +877,11 @@ export async function runChatEngineOnce(input: {
             estimated_tokens: chatStack.estimated_tokens,
             delivered_content_digest: chatStack.delivered_content_digest,
             content_disposition: chatStack.content_disposition,
-            // S06/#5: record the delivered session-identity fragments so this
-            // per-run artifact matches instruction-manifest.json.
+            // S06/#5, M2: the engine manifest may have been refreshed from a
+            // different instructionRoot than the run-level chatStack. Record
+            // the engine manifest's own hash so the two halves are
+            // attributable, and keep the disposition keyed to that manifest.
+            engine_manifest_hash: engine.getInstructionManifest()?.manifest_hash ?? null,
             instruction_disposition:
               engine
                 .getInstructionManifest()

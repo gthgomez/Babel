@@ -52,7 +52,12 @@ function asConversationalRenderer(
  * authoritative and the global is never read.
  */
 let _approvalSession: ApprovalSessionState = createApprovalSession('chat-default');
-/** Startup turn id fallback. Execution context turn ids win when bound. */
+/**
+ * Startup-only turn id. Production turns carry their turn id in the execution
+ * context (`currentApprovalTurnId` reads that first), so this is normally null.
+ * It is retained for the legacy unbound startup path and the compatibility
+ * adapter below.
+ */
 let _approvalTurnId: string | null = null;
 
 /** S04/#214: cross-scope mutation of the fallback is refused while bound. */
@@ -93,6 +98,11 @@ export function setChatApprovalTurnId(turnId: string | null): void {
   _approvalTurnId = turnId;
 }
 
+/**
+ * Turn id for the approval request. The execution context is authoritative;
+ * the startup fallback is used only on the unbound legacy path, where a
+ * timestamp turn id is the documented last resort.
+ */
 function currentApprovalTurnId(): string {
   return getExecutionContext()?.turnId ?? _approvalTurnId ?? `turn-${Date.now()}`;
 }

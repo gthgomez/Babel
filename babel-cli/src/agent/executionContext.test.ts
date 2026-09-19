@@ -283,7 +283,11 @@ describe('S04/#214 T5 — grants/revocation bind to the right turn and operation
       assert.equal(operationDigestMatches(digest1, otherTurn), false, 'turn must bind the digest');
     });
 
-    // A turn-1 allow_session does not pre-approve a different turn's request.
+    // I2: `allow_once` adds no grant by design, so it cannot demonstrate
+    // turn-scoping. Use a durable `allow_session` (which DOES add a grant) and
+    // assert the grant is scope-bound to the exact operation (path+payload),
+    // not a blanket path allow. The turn id participates only in the digest,
+    // which the first half of this test covers.
     const session = createApprovalSession('T');
     const req1 = buildApprovalRequest({
       thread_id: 'T',
@@ -295,29 +299,123 @@ describe('S04/#214 T5 — grants/revocation bind to the right turn and operation
       reason: 'r',
       operation_digest: digest1,
     });
-    applyApprovalDecision(session, req1, 'allow_once');
-    const req2 = buildApprovalRequest({
+    applyApprovalDecision(session, req1, 'allow_session');
+    assert.equal(isPreApproved(session, req1), true, 'allow_session grants the exact scope');
+
+    const sameScopeOtherPayload = buildApprovalRequest({
       thread_id: 'T',
       turn_id: 'turn-2',
       command: 'write src/x.ts',
       cwd: '/p',
       capability: 'write',
-      proposed_scope: 'write:src/x.ts:nopayload',
+      proposed_scope: 'write:src/x.ts:payload2',
       reason: 'r',
       operation_digest: digestApprovalOperation(
-        approvalOperationFromAgentAction(action, { thread_id: 'T', turn_id: 'turn-2', cwd: '/p' }),
+        approvalOperationFromAgentAction(
+          { type: 'write_file', path: 'src/x.ts', content: 'different' },
+          { thread_id: 'T', turn_id: 'turn-2', cwd: '/p' },
+        ),
       ),
     });
-    assert.equal(isPreApproved(session, req2), false, 'allow_once must not leak across turns');
+    assert.equal(
+      isPreApproved(session, sameScopeOtherPayload),
+      false,
+      'a session grant is payload-scoped, not a blanket path allow',
+    );
+
+    // A child derived from the parent inherits the in-ceiling grant under its
+    // own thread id, so a sibling scope cannot read the parent grant directly.
+    const child = deriveSubagentApprovalSession(session, 'child-T', ['write']);
+    assert.equal(child.thread_id, 'child-T');
+    assert.ok(child.sessionAllows.has('write::write:src/x.ts:nopayload'));
   });
 
   test('headless approval inside a context uses that context turn, not a global', async () => {
     const action = { type: 'write_file' as const, path: 'a.ts', content: 'x' };
+    let observedTurn: string | null = null;
+    const session = createApprovalSession('CTX');
     const allowed = await runWithExecutionContext(
-      ctx({ threadId: 'CTX', turnId: 'ctx-turn', root: '/ctx' }),
-      () => requestChatActionApproval(action),
+      ctx({ threadId: 'CTX', turnId: 'ctx-turn', root: '/ctx', approvalSession: session }),
+      async () => {
+        observedTurn = getExecutionContext()?.turnId ?? null;
+        return requestChatActionApproval(action);
+      },
     );
     assert.equal(allowed, false, 'no grant exists in the context session');
+    assert.equal(observedTurn, 'ctx-turn', 'the request must run under the context turn');
+    assert.equal(session.history.at(-1)?.decision, 'deny');
+    assert.equal(session.history.at(-1)?.request_id !== undefined, true);
+  });
+});
+
+describe('S04/#214 C1/I1 — production turn binding is scoped and unwound', () => {
+  test('no execution context survives a completed turn and a second turn is not seeded by the first', async () => {
+    const { ChatEngine } = await import('./chatEngine.js');
+    const root = mkdtempSync(join(tmpdir(), 'babel-turn-scope-'));
+    const install = (engine: InstanceType<typeof ChatEngine>, label: string) => {
+      const runner = {
+        executeWithToolsStream: async function* () {
+          yield { type: 'text_delta', text: `${label} done.` };
+          yield { type: 'done', finishReason: 'stop' };
+        },
+        execute: async () => ({ type: 'completion', answer: `${label} done.` }),
+        getLastInvocationMetadata: () => null,
+      };
+      const anyEngine = engine as unknown as {
+        deliberationRunner: unknown;
+        synthesisRunner: unknown;
+        shouldUseNativeTools: () => boolean;
+      };
+      anyEngine.deliberationRunner = runner;
+      anyEngine.synthesisRunner = runner;
+      anyEngine.shouldUseNativeTools = () => true;
+    };
+
+    try {
+      resetChatApprovalSession('fallback-before');
+      const engine = new ChatEngine({ task: 'first turn', projectRoot: root });
+      install(engine, 'turn1');
+      await engine.submitMessage('first turn', {});
+
+      assert.equal(
+        getExecutionContext(),
+        undefined,
+        'no execution context may survive a completed turn (C1)',
+      );
+
+      // A reset must not be masked by a leaked turn context.
+      resetChatApprovalSession('fallback-after-reset');
+      assert.equal(getChatApprovalSession().thread_id, 'fallback-after-reset');
+
+      // A second engine turn must derive from the (reset) fallback, not from a
+      // leaked prior turn's approval session.
+      const engine2 = new ChatEngine({ task: 'second turn', projectRoot: root });
+      let sessionDuringTurn: string | undefined;
+      const anyEngine2 = engine2 as unknown as {
+        deliberationRunner: unknown;
+        synthesisRunner: unknown;
+        shouldUseNativeTools: () => boolean;
+      };
+      const runner = {
+        executeWithToolsStream: async function* () {
+          sessionDuringTurn = getChatApprovalSession().thread_id;
+          yield { type: 'text_delta', text: 'turn2 done.' };
+          yield { type: 'done', finishReason: 'stop' };
+        },
+        execute: async () => ({ type: 'completion', answer: 'turn2 done.' }),
+        getLastInvocationMetadata: () => null,
+      };
+      anyEngine2.deliberationRunner = runner;
+      anyEngine2.synthesisRunner = runner;
+      anyEngine2.shouldUseNativeTools = () => true;
+      await engine2.submitMessage('second turn', {});
+
+      assert.equal(sessionDuringTurn, 'fallback-after-reset');
+      assert.equal(getExecutionContext(), undefined, 'second turn must also unwind');
+    } finally {
+      resetChatApprovalSession();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

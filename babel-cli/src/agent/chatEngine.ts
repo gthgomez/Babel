@@ -264,6 +264,7 @@ import {
   assertChildApprovalWithinParent,
   enterWithExecutionContext,
   getExecutionContext,
+  scopeAsyncGenerator,
   type ExecutionContext,
 } from './executionContext.js';
 import { clearBackgroundShellRegistry, killAllBackgroundShells } from './backgroundShell.js';
@@ -2605,8 +2606,23 @@ export class ChatEngine {
 
   /** #1 Async generator: yields typed ChatEvents as the conversation progresses.
    *  Callers use `for await (const event of engine.submitMessageStream(...))`.
-   *  Uses executeRawStream() for true chunk-by-chunk streaming. */
-  async *submitMessageStream(
+   *  Uses executeRawStream() for true chunk-by-chunk streaming.
+   *
+   *  S04/#214 C1: every step runs inside this turn's execution context, and the
+   *  context is scoped per step (`scopeAsyncGenerator`), so no execution context
+   *  survives a completed turn. */
+  submitMessageStream(
+    userInput: string,
+    taskIntent?: TaskIntent,
+    submitOpts?: SubmitMessageOptions,
+  ): AsyncGenerator<ChatEvent, void, undefined> {
+    return scopeAsyncGenerator(
+      () => this.buildBaseExecutionContext(),
+      this.submitMessageStreamBody(userInput, taskIntent, submitOpts),
+    );
+  }
+
+  private async *submitMessageStreamBody(
     userInput: string,
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
@@ -2721,11 +2737,9 @@ export class ChatEngine {
         this.options.intentPlanUserMessage,
       );
     }
-    // S04/#214: bind the owning execution context for this turn (approval
-    // session + turn id + root) instead of a never-restored global turn id.
-    // ALS scopes are per async execution, so another engine's turn cannot
-    // overwrite this one.
-    enterWithExecutionContext(this.buildBaseExecutionContext());
+    // S04/#214 C1: the turn's execution context is scoped per step by
+    // `submitMessageStream` (scopeAsyncGenerator), so no context survives the
+    // turn and no global turn id has to be set or restored here.
 
     // R4: Fire-and-forget repo map generation, awaited before first LLM call
     const repoMapPromise =
@@ -5002,10 +5016,21 @@ export class ChatEngine {
           executionProfile: this.executionProfile,
           engineRunDir: this.engineRunDir,
         });
-      } catch {
+      } catch (err) {
         // Manifest refresh is best-effort telemetry: a failure must not fail
         // the turn (some test doubles run applyTurnPreparation without an
-        // established authority).
+        // established authority). Record it so a persistent failure is visible.
+        try {
+          this.policyEventLog.record({
+            at_turn: this._turnIndex,
+            kind: 'progress_policy',
+            detail: `instruction_manifest_refresh_failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          });
+        } catch {
+          /* telemetry must not fail the turn */
+        }
       }
     }
   }
@@ -5467,11 +5492,13 @@ export class ChatEngine {
 
         // Mutation sub-agent path (W2.1: git worktree + write_scope allowlist)
         if (mutationEnabled) {
-          callbacks.onSubAgentStart?.({
-            id: subId,
-            label: action.task.slice(0, 60),
-          });
           try {
+            // M3: the start callback runs inside the try so a throwing callback
+            // cannot leak the child context past the finally restore.
+            callbacks.onSubAgentStart?.({
+              id: subId,
+              label: action.task.slice(0, 60),
+            });
             // Prefer implement-worktree isolation when write_scope is declared.
             // Empty write_scope still routes through the legacy in-tree loop so
             // read-only mutation attempts get the existing "no write scope" error.
@@ -5667,11 +5694,12 @@ export class ChatEngine {
         }
 
         // Read-only sub-agent path (existing)
-        callbacks.onSubAgentStart?.({
-          id: subId,
-          label: action.task.slice(0, 60),
-        });
         try {
+          // M3: start callback inside the try so a throw cannot leak the child context.
+          callbacks.onSubAgentStart?.({
+            id: subId,
+            label: action.task.slice(0, 60),
+          });
           // S03: use the one resolved spec (bounds/defaults live in childSpec).
           const childRounds = spec.effectiveRounds;
           const readAllowance = this.deriveChildAllowance(childRounds);

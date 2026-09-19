@@ -28,11 +28,18 @@ function findSiblingExamplesSync(
   limit: number,
 ): string[] {
   const results: string[] = [];
+  // M1: this reader is synchronous (the manifest is built in a constructor and
+  // in applyTurnPreparation), so it cannot yield. Bound the directory scan
+  // instead of scanning an unbounded workspace synchronously on every turn.
+  const MAX_DIRS_SCANNED = 200;
+  let dirsScanned = 0;
   try {
     if (!fs.existsSync(searchRoot)) return results;
     const entries = fs.readdirSync(searchRoot, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
+      if (dirsScanned >= MAX_DIRS_SCANNED) break;
+      dirsScanned += 1;
       const dirPath = path.join(searchRoot, entry.name);
       if (path.resolve(dirPath) === path.resolve(ownRoot)) continue;
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
@@ -331,6 +338,11 @@ export function loadProjectSessionIdentityDispositionSync(
   };
 }
 
+/**
+ * Async facade kept for callers that prefer a promise and for the byte-identity
+ * guard in `instructionDisposition.test.ts`. It delegates to the single sync
+ * reader; it is not a second implementation.
+ */
 export async function loadProjectSessionIdentityWithDisposition(
   projectRoot: string,
   workspaceRoot?: string | null,
