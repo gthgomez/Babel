@@ -425,6 +425,12 @@ describe('D01/D02 effective-operation policy', () => {
       'how to fix the memory leak',
       'tell me how to fix the memory leak',
       'whether we should update the schema',
+      // Bare problem statements (from the D03 lane's F1 ruling) must also stay
+      // read-only; a mutation verb is required to earn execute pressure.
+      'the login page is broken',
+      'it crashes on startup',
+      'users cannot log in',
+      'the build is failing',
       'review this code: ```typescript\nconst x = 1;\n```',
     ];
     for (const prompt of prompts) {

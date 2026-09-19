@@ -67,7 +67,11 @@ import {
 import { detectEnvBlockedFromText, extractToolEnvBlockedSignal, evaluateCompletionPrefersPatch } from './implementorPolicy.js';
 import { evaluatePhaseToolGate } from './phaseToolPolicy.js';
 import { extractJson } from '../utils/extractJson.js';
-import type { BlockedReport, TerminalOutcome } from '../schemas/agentContracts.js';
+import type {
+  BlockedReport,
+  TerminalOutcome,
+  TerminalReasonCode,
+} from '../schemas/agentContracts.js';
 import {
   CompactionManager,
   DEFAULT_COMPACTION_CONFIG,
@@ -332,11 +336,18 @@ import type { DiffCriticVerdict } from './diffCritic.js';
 import { evaluateTokenExplosionAfterTurn } from './budgetKillPolicy.js';
 import {
   applyExploreFuses as applyExploreFusesPolicy,
+  attachTerminalReason,
   buildPolicyTerminalBlockedReport,
   resolveInvestigateHardCapObserveOnly,
   type ExploreFuseResult,
 } from './chatZeroWritePolicy.js';
 import { PolicyEventLog, type PolicyEvent } from './policyEventLog.js';
+import {
+  terminalReasonFromClassification,
+  terminalReasonFromFailureText,
+  terminalReasonFromOutcome,
+  type TerminalReason,
+} from './chatTerminalReason.js';
 import {
   evaluateZeroWriteWithShadow,
   recordPolicyShadowSessionOutcome,
@@ -814,6 +825,9 @@ export type ChatEvent =
       turnTelemetry?: ChatTurnTelemetryRecord;
       costBudget?: ChatEngineLimits['costBudget'];
       runAllowance?: ChatEngineRunAllowanceReport;
+      /** D03: structured terminal reason code (additive; outcome unchanged). */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     }
   | {
       type: 'failed';
@@ -835,12 +849,18 @@ export type ChatEvent =
       turnTelemetry?: ChatTurnTelemetryRecord;
       costBudget?: ChatEngineLimits['costBudget'];
       runAllowance?: ChatEngineRunAllowanceReport;
+      /** D03: structured terminal reason code. */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     }
   | {
       type: 'cancelled';
       status?: ChatStatus;
       outcome?: 'CANCELLED';
       turnTelemetry?: ChatTurnTelemetryRecord;
+      /** D03: cancelled is a structured terminal reason too. */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     }
   | {
       type: 'progress_recovery';
@@ -914,6 +934,10 @@ export interface ChatResult {
   costBudget?: ChatEngineLimits['costBudget'];
   /** Enumerable declared vs effective run allowance + terminating limiter. */
   runAllowance?: ChatEngineRunAllowanceReport;
+  /** D03: structured terminal reason code; survives engine → payload → clients. */
+  reason_code?: TerminalReasonCode;
+  /** D03: separate model-vs-harness cause axis; null = not established. */
+  cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────
@@ -2460,6 +2484,9 @@ export class ChatEngine {
       /** Authoritative outcome from streamDone (P0-D B4). */
       outcome?: TerminalOutcome;
       budgetExceeded?: boolean;
+      /** D03: structured reason from the terminal event. */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     } | null = null;
 
     try {
@@ -2522,6 +2549,8 @@ export class ChatEngine {
               blockedReport: event.blockedReport ?? null,
               ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
               ...(event.budgetExceeded ? { budgetExceeded: true } : {}),
+              ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+              ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
             };
             break;
           case 'failed':
@@ -2529,10 +2558,16 @@ export class ChatEngine {
               kind: 'failed',
               error: event.error,
               ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+              ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+              ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
             };
             break;
           case 'cancelled':
-            terminal = { kind: 'cancelled' };
+            terminal = {
+              kind: 'cancelled',
+              ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+              ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
+            };
             break;
           default:
             break;
@@ -2553,6 +2588,11 @@ export class ChatEngine {
         'Stream ended without a terminal event — possible internal error',
       );
     }
+    // D03: carry the terminal event's explicit reason into the sync result path.
+    const reasonFromTerminal: TerminalReason | undefined =
+      terminal.reason_code !== undefined
+        ? { code: terminal.reason_code, cause_class: terminal.cause_class ?? null }
+        : undefined;
     if (terminal.kind === 'cancelled') {
       return this.buildResult('cancelled', cb);
     }
@@ -2566,6 +2606,7 @@ export class ChatEngine {
           terminal.error ?? 'Stream failed',
           undefined,
           'BUDGET_EXHAUSTED',
+          reasonFromTerminal,
         );
       }
       if (
@@ -2574,7 +2615,14 @@ export class ChatEngine {
         failedOutcome === 'NEEDS_HUMAN_DECISION' ||
         failedOutcome === 'INVALID_TASK'
       ) {
-        return this.buildResult('blocked', cb, terminal.error ?? 'Stream failed', undefined, failedOutcome);
+        return this.buildResult(
+          'blocked',
+          cb,
+          terminal.error ?? 'Stream failed',
+          undefined,
+          failedOutcome,
+          reasonFromTerminal,
+        );
       }
       return this.buildResult(
         'failed',
@@ -2582,6 +2630,7 @@ export class ChatEngine {
         terminal.error ?? 'Stream failed',
         undefined,
         failedOutcome,
+        reasonFromTerminal,
       );
     }
     if (terminal.budgetExceeded || terminal.outcome === 'BUDGET_EXHAUSTED' || this.budgetExceeded) {
@@ -2601,6 +2650,7 @@ export class ChatEngine {
       terminal.answer,
       terminal.blockedReport,
       doneTerminal.outcome,
+      reasonFromTerminal,
     );
   }
 
@@ -3800,19 +3850,23 @@ export class ChatEngine {
               this.conversation.push({ role: 'assistant', content: failMsg });
               yield { type: 'answer_chunk', text: failMsg };
               yield this.streamDone(failMsg, {
-                blockedReport: {
-                  schema_version: 1,
-                  status: 'BLOCKED',
-                  reason: 'Answer synthesis unavailable',
-                  missing: 'LLM provider response for answer synthesis',
-                  checked: [
-                    {
-                      action: 'synthesize_answer',
-                      target: 'provider',
-                      finding: synthError?.message ?? 'Empty synthesis output',
-                    },
-                  ],
-                },
+                blockedReport: attachTerminalReason(
+                  {
+                    schema_version: 1,
+                    status: 'BLOCKED',
+                    reason: 'Answer synthesis unavailable',
+                    missing: 'LLM provider response for answer synthesis',
+                    checked: [
+                      {
+                        action: 'synthesize_answer',
+                        target: 'provider',
+                        finding: synthError?.message ?? 'Empty synthesis output',
+                      },
+                    ],
+                  },
+                  arb.terminalReason,
+                ),
+                ...(arb.terminalReason !== undefined ? { reason: arb.terminalReason } : {}),
               });
               return;
             }
@@ -3823,6 +3877,9 @@ export class ChatEngine {
             yield { type: 'answer_chunk', text: finalAnswer };
             yield this.streamDone(finalAnswer, {
               blockedReport: synthBlocked ?? null,
+              // D03: the arbiter reason survives even when the bounded synthesis
+              // produced an informational answer rather than a blocked report.
+              ...(arb.terminalReason !== undefined ? { reason: arb.terminalReason } : {}),
             });
             return;
           }
@@ -3838,7 +3895,13 @@ export class ChatEngine {
                 role: 'assistant',
                 content: killAnswer,
               });
-              yield this.streamDone(killAnswer, { blockedReport: killBlocked });
+              yield this.streamDone(killAnswer, {
+                blockedReport: killBlocked,
+                // D03: this branch runs inside the arbiter-terminal block, so the
+                // structured reason is known — do not let the reason degrade to
+                // the outcome fallback.
+                ...(arb.terminalReason !== undefined ? { reason: arb.terminalReason } : {}),
+              });
               return;
             }
           }
@@ -3850,7 +3913,9 @@ export class ChatEngine {
             blockedReport: buildPolicyTerminalBlockedReport(
               arb.policySource ?? 'progress_terminal',
               arb.terminalAnswer,
+              arb.terminalReason,
             ),
+            ...(arb.terminalReason !== undefined ? { reason: arb.terminalReason } : {}),
           });
           return;
         }
@@ -4515,6 +4580,8 @@ export class ChatEngine {
       blockedReport?: BlockedReport | null;
       verifierTampered?: boolean;
       criticReceipt?: DiffCriticVerdict | null;
+      /** D03: explicit structured reason from the arbiter. */
+      reason?: TerminalReason;
     },
   ) {
     this.settleActiveExecutionForTerminal();
@@ -4545,6 +4612,7 @@ export class ChatEngine {
     );
     const outcome =
       decision.finalOutcome === 'PLAN_COMPLETE' ? 'UNVERIFIED_PATCH' : decision.finalOutcome;
+    const terminalReason = this.resolveTerminalReason(outcome, extra?.blockedReport, extra?.reason);
     {
       this.recordCompletionDecisionOnce({
         requestedOutcome: decision.requestedOutcome,
@@ -4553,6 +4621,9 @@ export class ChatEngine {
         reason: decision.reason,
         evidenceRefs: decision.evidenceRefs,
         policyVersion: decision.policyVersion,
+        ...(terminalReason !== undefined
+          ? { reasonCode: terminalReason.code, causeClass: terminalReason.cause_class }
+          : {}),
       });
     }
     // P0-E: attach shadow later-succeeded summary before export (idempotent with buildResult).
@@ -4588,6 +4659,7 @@ export class ChatEngine {
       this.engineRunDir,
       terminal.outcome,
       terminal.status,
+      terminalReason,
     );
     const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
       turnId: String(this.parity.turnId ?? this._turnIndex),
@@ -4609,6 +4681,7 @@ export class ChatEngine {
       ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
       runAllowance,
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
+      ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
     });
   }
 
@@ -4634,12 +4707,20 @@ export class ChatEngine {
     // make the model-visible outcome less truthful.
     const outcome = classifyFailureText(error) ?? limiterOutcome;
     if (outcome === 'BUDGET_EXHAUSTED') this.budgetExceeded = true;
+    const terminalReason =
+      terminalReasonFromFailureText(error) ?? this.resolveTerminalReason(outcome);
     const terminal = projectChatTerminal({
       ...(outcome !== undefined ? { outcome } : {}),
       status: 'failed',
     });
     const runAllowance = this.assembleRunAllowance(terminal.status);
-    finalizeParityTurnSync(this.parity, this.engineRunDir, terminal.outcome, terminal.status);
+    finalizeParityTurnSync(
+      this.parity,
+      this.engineRunDir,
+      terminal.outcome,
+      terminal.status,
+      terminalReason,
+    );
     const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
       turnId: String(this.parity.turnId ?? this._turnIndex),
       taskClass: this.taskClass,
@@ -4654,6 +4735,7 @@ export class ChatEngine {
       ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
       runAllowance,
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
+      ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
     });
   }
 
@@ -4678,6 +4760,8 @@ export class ChatEngine {
       type: 'cancelled',
       status: 'cancelled',
       outcome: 'CANCELLED',
+      reason_code: 'cancelled',
+      cause_class: null,
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     };
   }
@@ -8090,6 +8174,32 @@ export class ChatEngine {
     return detectBlockedReportFromAnswer(answer, this.toolCallLog);
   }
 
+  /**
+   * D03: single resolution point for the structured terminal reason. Explicit
+   * arbiter reason wins; then a reason already on the blocked report; then the
+   * limiter classification; then the outcome fallback.
+   */
+  private resolveTerminalReason(
+    outcome: TerminalOutcome | undefined,
+    blockedReport?: BlockedReport | null,
+    explicit?: TerminalReason,
+  ): TerminalReason | undefined {
+    if (explicit) return explicit;
+    if (blockedReport?.reason_code !== undefined) {
+      return {
+        code: blockedReport.reason_code,
+        cause_class: blockedReport.cause_class ?? null,
+      };
+    }
+    return (
+      terminalReasonFromClassification(
+        this.terminatingLimiter
+          ? classifyTerminalLimiter(this.terminatingLimiter, this.terminalLimiterReason ?? undefined)
+          : null,
+      ) ?? terminalReasonFromOutcome(outcome)
+    );
+  }
+
   /** Persist exactly one authoritative completion decision for this turn. */
   private recordCompletionDecisionOnce(decision: {
     requestedOutcome: string;
@@ -8098,6 +8208,8 @@ export class ChatEngine {
     reason: string;
     evidenceRefs: string[];
     policyVersion: string;
+    reasonCode?: TerminalReasonCode;
+    causeClass?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
   }): void {
     const turnId = String(this.parity.turnId ?? this._turnIndex);
     if (
@@ -8156,6 +8268,7 @@ export class ChatEngine {
     answer?: string,
     blockedReport?: BlockedReport | null,
     knownOutcome?: TerminalOutcome,
+    knownReason?: TerminalReason,
   ): ChatResult {
     // R1: If the answer explicitly declares BLOCKED but no blockedReport was
     // provided (e.g., the detection ran in a code path that didn't provide it),
@@ -8216,6 +8329,14 @@ export class ChatEngine {
         : planCompletion
           ? 'UNVERIFIED_PATCH'
           : outcome;
+    const terminalReason =
+      finalStatus === 'cancelled'
+        ? ({ code: 'cancelled' as const, cause_class: null } satisfies TerminalReason)
+        : this.resolveTerminalReason(
+            authoritativeOutcome ?? outcome,
+            finalBlockedReport,
+            knownReason,
+          );
     if (kernelDecision) {
       this.recordCompletionDecisionOnce({
         requestedOutcome: kernelDecision.requestedOutcome,
@@ -8224,6 +8345,9 @@ export class ChatEngine {
         reason: kernelDecision.reason,
         evidenceRefs: kernelDecision.evidenceRefs,
         policyVersion: kernelDecision.policyVersion,
+        ...(terminalReason !== undefined
+          ? { reasonCode: terminalReason.code, causeClass: terminalReason.cause_class }
+          : {}),
       });
     }
 
@@ -8255,7 +8379,13 @@ export class ChatEngine {
 
     this.settleActiveExecutionForTerminal();
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
-    finalizeParityTurnSync(this.parity, this.engineRunDir, terminal.outcome, terminal.status);
+    finalizeParityTurnSync(
+      this.parity,
+      this.engineRunDir,
+      terminal.outcome,
+      terminal.status,
+      terminalReason,
+    );
 
     const runAllowance = this.assembleRunAllowance(terminal.status);
 
@@ -8289,6 +8419,9 @@ export class ChatEngine {
       ...(this.lastTurnTelemetry ? { turnTelemetry: this.lastTurnTelemetry } : {}),
       ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
       runAllowance,
+      ...(terminalReason !== undefined
+        ? { reason_code: terminalReason.code, cause_class: terminalReason.cause_class }
+        : {}),
       ...observabilityResultFields(this.obsHandles()),
     };
 

@@ -9,7 +9,7 @@ import {
   mapSessionEventsToCanonicalTurnEvents,
   type CanonicalTurnEvent,
 } from './canonicalEvents.js';
-import type { TerminalOutcome } from '../../schemas/agentContracts.js';
+import type { TerminalOutcome, TerminalReasonCode } from '../../schemas/agentContracts.js';
 import type { VerifierReceipt } from '../../agent/completionGatePolicy.js';
 import type { SessionEvent } from '../../agent/sessionEvents.js';
 import { renderStatusBar, type StatusBarState } from '../../ui/statusBar.js';
@@ -37,6 +37,9 @@ export interface ReviewCardProjection {
   changedFiles: readonly string[];
   hasMutations: boolean;
   showPatchActions: boolean;
+  /** D03: structured reason carried to the review card. */
+  reasonCode?: TerminalReasonCode | undefined;
+  causeClass?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null | undefined;
 }
 
 export interface TranscriptCellProjection {
@@ -80,6 +83,15 @@ export function projectTurnViewState(
   let terminalOutcome: TerminalOutcome | undefined = 'NO_CHANGE_REQUIRED';
   let terminalStatus: 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed' | 'in_progress' =
     'in_progress';
+  let terminalReasonCode: TerminalReasonCode | undefined;
+  let terminalCauseClass:
+    | 'model'
+    | 'provider'
+    | 'environment'
+    | 'harness'
+    | 'verification'
+    | null
+    | undefined;
   let isTerminal = false;
 
   const toolCalls: Array<{
@@ -162,6 +174,7 @@ export function projectTurnViewState(
           projectedTerminal.outcome === 'CANCELLED' ||
           projectedTerminal.outcome === 'VERIFIED_COMPLETE' ||
           projectedTerminal.outcome === 'BLOCKED_POLICY' ||
+          projectedTerminal.outcome === 'BLOCKED_EXTERNAL' ||
           projectedTerminal.outcome === 'BUDGET_EXHAUSTED' ||
           projectedTerminal.outcome === 'INFRA_FAILURE' ||
           projectedTerminal.outcome === 'AGENT_FAILURE' ||
@@ -171,6 +184,14 @@ export function projectTurnViewState(
           terminalOutcome = projectedTerminal.outcome;
           terminalStatus = projectedTerminal.status;
           isTerminal = true;
+        }
+        // D03: the latest terminal event that carries a reason wins (turn_ended
+        // is authoritative and follows completion_decision in the durable log).
+        if (isTerminal && ev.reason_code !== undefined) {
+          terminalReasonCode = ev.reason_code;
+        }
+        if (isTerminal && ev.cause_class !== undefined) {
+          terminalCauseClass = ev.cause_class;
         }
         if (ev.finalAnswer) {
           answerBuffer = ev.finalAnswer;
@@ -241,6 +262,8 @@ export function projectTurnViewState(
       changedFiles,
       hasMutations,
       showPatchActions: hasMutations && terminalOutcome !== 'CANCELLED',
+      ...(terminalReasonCode !== undefined ? { reasonCode: terminalReasonCode } : {}),
+      ...(terminalCauseClass !== undefined ? { causeClass: terminalCauseClass } : {}),
     },
     transcriptCell: {
       turnId,
@@ -301,6 +324,8 @@ export function renderProjectedReviewCard(
     status: proj.status,
     changedFiles: [...proj.changedFiles],
     mutated: proj.hasMutations,
+    ...(proj.reasonCode !== undefined ? { reasonCode: proj.reasonCode } : {}),
+    ...(proj.causeClass !== undefined ? { causeClass: proj.causeClass } : {}),
     verification: proj.verifierCommand
       ? {
           ran: true,

@@ -10,7 +10,7 @@ import type { BabelMode } from '../executor/contracts.js';
 import type { RestoreReport } from '../executor/modeAdapters.js';
 import type { MutationEffectStatus } from '../agent/mutationTools.js';
 import type { ChatStatus } from '../agent/chatFailureClassification.js';
-import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import type { TerminalOutcome, TerminalReasonCode } from '../schemas/agentContracts.js';
 
 /** Wire protocol version — bump on breaking catalog changes. */
 export const BABEL_PROTOCOL_VERSION = '1.0.0' as const;
@@ -127,8 +127,25 @@ export type TurnStreamEvent =
       deletions: number;
       content?: string;
     }
-  | { type: 'done'; answer: string; usage: TurnUsageSummary; status?: ChatStatus; outcome?: TerminalOutcome }
-  | { type: 'failed'; error: string; status?: ChatStatus; outcome?: TerminalOutcome }
+  | {
+      type: 'done';
+      answer: string;
+      usage: TurnUsageSummary;
+      status?: ChatStatus;
+      outcome?: TerminalOutcome;
+      /** D03: structured terminal reason code. */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
+    }
+  | {
+      type: 'failed';
+      error: string;
+      status?: ChatStatus;
+      outcome?: TerminalOutcome;
+      /** D03: structured terminal reason code. */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
+    }
   | { type: 'cancelled'; status?: 'cancelled'; outcome?: 'CANCELLED' }
   | {
       type: 'progress_recovery';

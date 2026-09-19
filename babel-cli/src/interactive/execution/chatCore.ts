@@ -387,6 +387,8 @@ export async function consumeChatStream(
   let doneCostBudget: ChatResult['costBudget'];
   let doneRunAllowance: ChatResult['runAllowance'];
   let donePolicyEvents: ChatResult['policyEvents'];
+  let doneReasonCode: ChatResult['reason_code'];
+  let doneCauseClass: ChatResult['cause_class'];
   const toolIdQueue: number[] = [];
   const toolIdsByCallId = new Map<string, number>();
   let doneStatus: ChatResult['status'] | undefined;
@@ -468,6 +470,8 @@ export async function consumeChatStream(
         doneCostBudget = event.costBudget ?? doneCostBudget;
         doneRunAllowance = event.runAllowance ?? doneRunAllowance;
         donePolicyEvents = event.policyEvents ?? donePolicyEvents;
+        doneReasonCode = event.reason_code ?? doneReasonCode;
+        doneCauseClass = event.cause_class ?? doneCauseClass;
         receivedTerminalEvent = true;
       }
 
@@ -479,6 +483,8 @@ export async function consumeChatStream(
           answer: 'Cancelled',
           usage: globalCostTracker.getSessionSummary(),
           conversation: [],
+          reason_code: event.reason_code ?? 'cancelled',
+          cause_class: event.cause_class ?? null,
           ...snapshotEvidence(),
           ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
         };
@@ -519,6 +525,8 @@ export async function consumeChatStream(
     ...(doneRunAllowance ? { runAllowance: doneRunAllowance } : {}),
     ...(donePolicyEvents ? { policyEvents: donePolicyEvents } : {}),
     ...(doneStatus !== undefined ? { status: doneStatus } : {}),
+    ...(doneReasonCode !== undefined ? { reason_code: doneReasonCode } : {}),
+    ...(doneCauseClass !== undefined ? { cause_class: doneCauseClass } : {}),
   });
 }
 
@@ -1049,6 +1057,13 @@ export function buildChatRunPayload(
   // Ensure terminal_outcome is always visible on the run payload when known.
   if (result.outcome !== undefined) {
     payload['terminal_outcome'] = result.outcome;
+  }
+  // D03: carry the structured terminal reason alongside the outcome.
+  if (result.reason_code !== undefined) {
+    payload['reason_code'] = result.reason_code;
+  }
+  if (result.cause_class !== undefined) {
+    payload['cause_class'] = result.cause_class;
   }
   payload['verification'] = result.verifierReceipt
     ? {

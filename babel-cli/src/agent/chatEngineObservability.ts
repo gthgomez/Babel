@@ -11,7 +11,7 @@ import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OllamaApiRunner } from '../runners/ollamaApi.js';
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { globalCostTracker, type SessionUsageSummary } from '../services/costTracker.js';
-import type { BlockedReport, TerminalOutcome } from '../schemas/agentContracts.js';
+import type { BlockedReport, TerminalOutcome, TerminalReasonCode } from '../schemas/agentContracts.js';
 import type {
   ChatEngineLimits,
   ChatEngineRunAllowanceReport,
@@ -169,6 +169,10 @@ export type StreamDoneEvent = {
   turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
   costBudget?: ChatEngineLimits['costBudget'];
   runAllowance?: ChatEngineRunAllowanceReport;
+  /** D03: structured terminal reason code (UI authority; prose stays diagnostic). */
+  reason_code?: TerminalReasonCode;
+  /** D03: separate model-vs-harness cause axis; null = not established. */
+  cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
 };
 
 export type StreamFailedEvent = {
@@ -182,6 +186,10 @@ export type StreamFailedEvent = {
   outcome?: TerminalOutcome;
   costBudget?: ChatEngineLimits['costBudget'];
   runAllowance?: ChatEngineRunAllowanceReport;
+  /** D03: structured terminal reason code. */
+  reason_code?: TerminalReasonCode;
+  /** D03: separate model-vs-harness cause axis; null = not established. */
+  cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
 };
 
 export interface ObservabilityHandles {
@@ -280,6 +288,8 @@ export function buildStreamDone(
     turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
     costBudget?: ChatEngineLimits['costBudget'];
     runAllowance?: ChatEngineRunAllowanceReport;
+    /** D03: structured terminal reason. */
+    reason?: import('./chatTerminalReason.js').TerminalReason;
   },
 ): StreamDoneEvent {
   if (!extra?.outcome) {
@@ -312,6 +322,10 @@ export function buildStreamDone(
   if (extra.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
   if (extra.costBudget) event.costBudget = extra.costBudget;
   if (extra.runAllowance) event.runAllowance = extra.runAllowance;
+  if (extra.reason) {
+    event.reason_code = extra.reason.code;
+    event.cause_class = extra.reason.cause_class;
+  }
   return event;
 }
 
@@ -324,6 +338,8 @@ export function buildStreamFailed(
     status?: ChatStatus;
     costBudget?: ChatEngineLimits['costBudget'];
     runAllowance?: ChatEngineRunAllowanceReport;
+    /** D03: structured terminal reason. */
+    reason?: import('./chatTerminalReason.js').TerminalReason;
   },
 ): StreamFailedEvent {
   const terminal = projectChatTerminal({
@@ -341,6 +357,10 @@ export function buildStreamFailed(
   if (extra?.outcome) event.outcome = extra.outcome;
   if (extra?.costBudget) event.costBudget = extra.costBudget;
   if (extra?.runAllowance) event.runAllowance = extra.runAllowance;
+  if (extra?.reason) {
+    event.reason_code = extra.reason.code;
+    event.cause_class = extra.reason.cause_class;
+  }
   return event;
 }
 
@@ -804,7 +824,10 @@ export function computeTerminalOutcome(input: {
   finalStatus: string;
   budgetExceeded: boolean;
   lastVerifierReceipt?: { exit_code: number; command?: string; summary?: string } | null | undefined;
-  blockedReport?: { reason: string; missing?: string } | null | undefined;
+  blockedReport?:
+    | { reason: string; missing?: string; reason_code?: TerminalReasonCode | undefined }
+    | null
+    | undefined;
   /** W1 C: production writes present — collect fail is failed-with-evidence, not pure env. */
   hasAnyWrites?: boolean;
 }): TerminalOutcome {
@@ -825,6 +848,15 @@ export function computeTerminalOutcome(input: {
         ? 'VERIFIED_COMPLETE'
         : 'UNVERIFIED_PATCH';
     case 'blocked': {
+      // D03: an explicit structured reason outranks the diagnostic prose. A
+      // recovery exhaustion / explicit policy denial is a policy block even
+      // when the free-text reason does not contain the legacy policy keywords.
+      if (
+        input.blockedReport?.reason_code === 'recovery_exhausted' ||
+        input.blockedReport?.reason_code === 'permission_denied'
+      ) {
+        return 'BLOCKED_POLICY';
+      }
       const reason = input.blockedReport?.reason ?? '';
       const missing = input.blockedReport?.missing ?? '';
       const envBlob = `${reason}\n${missing}`;

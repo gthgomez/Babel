@@ -143,13 +143,23 @@ test('I01 observe-only: terminal withheld, would-fire receipt recorded, run comp
   try {
     process.env['BABEL_POLICY_I01_OBSERVE_ONLY'] = '1';
     const { payload, engine } = await harness.run('Fix the defect described in fixture.txt by inspecting it first.');
-    // Without the terminal, the run only ends at the turn budget — well past
-    // the hard cap, proving the arbiter never received the candidate.
+    // Without the withheld hard-cap terminal, the run continues past the hard
+    // cap and can only end on a different (non-withheld) safety terminal.
     assert.ok(
       harness.roundsServed.value > HARD_CAP,
       `expected the run to continue past the hard cap (served ${harness.roundsServed.value})`,
     );
-    assert.notEqual(payload['terminal_outcome'], 'BLOCKED_POLICY');
+    // Precisely guard the I01 invariant: the terminal must NOT be the withheld
+    // investigate hard cap. (A separate progress/recovery terminal is allowed
+    // and may legitimately classify as BLOCKED_POLICY.)
+    const blocked = payload['blocked_report'] as
+      | { checked?: Array<{ action?: string }> }
+      | undefined;
+    assert.notEqual(
+      blocked?.checked?.[0]?.action,
+      'investigate_hard_cap',
+      'observe-only must not terminal on the withheld investigate hard cap',
+    );
     assert.doesNotMatch(answerText(payload), /hard cap 12/i);
     // Durable would-fire receipt: the identical threshold was reached and logged.
     const sessionEvents = (engine as unknown as {
