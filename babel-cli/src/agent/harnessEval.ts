@@ -117,12 +117,15 @@ export type PairedComparisonIssue =
   | 'variant_mismatch'
   | 'missing_metric'
   | 'non_finite_metric'
+  | 'non_finite_tokens'
+  | 'identity_incomplete'
   | 'model_mismatch'
   | 'environment_mismatch'
   | 'controls_changed'
   | 'controls_incomplete'
   | 'missing_expected_task'
-  | 'missing_expected_trial';
+  | 'missing_expected_trial'
+  | 'legacy_unvalidated';
 
 export interface PairedDelta {
   task_id: string;
@@ -164,7 +167,13 @@ export interface DroppedPairedSample {
   task_id: string;
   variant: string;
   trial_index: number | null;
-  reason: 'unpaired' | 'duplicate_pair_key' | 'ambiguous_pair_key' | 'variant_mismatch';
+  reason:
+    | 'unpaired'
+    | 'duplicate_pair_key'
+    | 'ambiguous_pair_key'
+    | 'variant_mismatch'
+    | 'missing_metric'
+    | 'non_finite_metric';
   infrastructure_failure: boolean;
   agent_failure: boolean;
 }
@@ -223,6 +232,12 @@ export interface HarnessEvalReport {
   controls: FixedEvalControls;
   results: EvalTaskResult[];
   paired_deltas: PairedDelta[];
+  /**
+   * Present on reports written after paired-comparison hardening. A report
+   * without it has legacy/unvalidated `paired_deltas`; `readEvalReport` marks
+   * those entries unusable rather than trusting a legacy numeric uncertainty.
+   */
+  paired_delta_schema_version?: typeof PAIRED_COMPARISON_SCHEMA_VERSION;
   failure_ledger: FailureLedgerEntry[];
   metrics: HarnessCoreMetrics;
   /** True only when experimental runs actually executed under fixed controls. */
@@ -344,7 +359,7 @@ function indexPairedArm(rows: readonly EvalTaskResult[]): PairedArmIndex {
 function readPairedMetric(
   row: EvalTaskResult,
   metric: PairedMetric,
-): { value: number | null; issue: PairedComparisonIssue | null } {
+): { value: number | null; issue: 'missing_metric' | 'non_finite_metric' | null } {
   const raw: unknown = row[metric];
   if (raw === null || raw === undefined) return { value: null, issue: 'missing_metric' };
   if (typeof raw !== 'number' || !Number.isFinite(raw)) {
@@ -367,22 +382,36 @@ function countAttemptOutcomes(rows: readonly EvalTaskResult[]): EvalAttemptOutco
 
 /**
  * Total tokens as an intention-to-test cost. Failed and infrastructure-failed
- * attempts are included; only non-finite values are excluded.
+ * attempts are included. Non-finite token counts are surfaced separately via
+ * the `non_finite_tokens` issue rather than silently zeroed.
  */
 function sumPairedTokens(rows: readonly EvalTaskResult[]): number {
   return rows.reduce((sum, r) => (Number.isFinite(r.tokens) ? sum + r.tokens : sum), 0);
 }
 
-function distinctArmValues(
+function hasNonFiniteTokens(rows: readonly EvalTaskResult[]): boolean {
+  return rows.some((r) => !Number.isFinite(r.tokens));
+}
+
+interface ArmIdentityValues {
+  /** Distinct non-empty identity values observed in the arm, sorted. */
+  readonly values: string[];
+  /** Rows with an absent/empty identity field. */
+  readonly missing: number;
+}
+
+function inspectArmValues(
   rows: readonly EvalTaskResult[],
   field: 'model_snapshot' | 'environment_digest',
-): string[] {
+): ArmIdentityValues {
   const seen = new Set<string>();
+  let missing = 0;
   for (const row of rows) {
     const value: string | undefined = row[field];
     if (typeof value === 'string' && value !== '') seen.add(value);
+    else missing += 1;
   }
-  return [...seen].sort();
+  return { values: [...seen].sort(), missing };
 }
 
 function meanOf(values: readonly number[]): number {
@@ -466,19 +495,41 @@ export function evaluatePairedComparison(
     globalIssues.push('controls_incomplete');
   }
 
+  if (hasNonFiniteTokens(baseline) || hasNonFiniteTokens(candidate)) {
+    globalIssues.push('non_finite_tokens');
+  }
+
   for (const [field, deviations, issue] of [
     ['model_snapshot', modelDeviations, 'model_mismatch'],
     ['environment_digest', environmentDeviations, 'environment_mismatch'],
   ] as const) {
-    const bValues = distinctArmValues(baseline, field);
-    const cValues = distinctArmValues(candidate, field);
-    if (bValues.length === 0 && cValues.length === 0) continue;
-    if (bValues.length > 1 || cValues.length > 1) {
-      deviations.push('multiple_values_within_arm');
-    } else if (bValues.length !== 1 || cValues.length !== 1 || bValues[0] !== cValues[0]) {
-      deviations.push(`baseline=${bValues[0] ?? '<missing>'},candidate=${cValues[0] ?? '<missing>'}`);
+    const b = inspectArmValues(baseline, field);
+    const c = inspectArmValues(candidate, field);
+    // An identity field absent from both arms stays compatible with historical
+    // fixtures; only supplied-but-inconsistent identity is rejected.
+    if (b.values.length === 0 && c.values.length === 0) continue;
+    const mixedPresence =
+      (b.values.length > 0 && b.missing > 0) || (c.values.length > 0 && c.missing > 0);
+    const multipleValues = b.values.length > 1 || c.values.length > 1;
+    const singleMatch =
+      b.values.length === 1 && c.values.length === 1 && b.values[0] === c.values[0];
+    if (mixedPresence) {
+      deviations.push(
+        `${field}=incomplete_identity (baseline_missing=${b.missing},candidate_missing=${c.missing})`,
+      );
+      if (!globalIssues.includes('identity_incomplete')) {
+        globalIssues.push('identity_incomplete');
+      }
+    } else if (multipleValues) {
+      deviations.push(`${field}=multiple_values_within_arm`);
+    } else if (!singleMatch) {
+      deviations.push(
+        `${field}: baseline=${b.values[0] ?? '<missing>'},candidate=${c.values[0] ?? '<missing>'}`,
+      );
     }
-    if (deviations.length > 0 && !globalIssues.includes(issue)) globalIssues.push(issue);
+    if ((mixedPresence || multipleValues || !singleMatch) && !globalIssues.includes(issue)) {
+      globalIssues.push(issue);
+    }
   }
 
   const expectedTaskIds = options.expected_task_ids;
@@ -513,6 +564,8 @@ export function evaluatePairedComparison(
     (issue) =>
       issue === 'controls_changed' ||
       issue === 'controls_incomplete' ||
+      issue === 'identity_incomplete' ||
+      issue === 'non_finite_tokens' ||
       issue === 'model_mismatch' ||
       issue === 'environment_mismatch' ||
       issue === 'missing_expected_task' ||
@@ -591,8 +644,13 @@ export function evaluatePairedComparison(
     for (const { base, candidate: cand } of matched) {
       const baseMetric = readPairedMetric(base, metric);
       const candMetric = readPairedMetric(cand, metric);
-      for (const issue of [baseMetric.issue, candMetric.issue]) {
-        if (issue && !issues.includes(issue)) issues.push(issue);
+      if (baseMetric.issue) {
+        if (!issues.includes(baseMetric.issue)) issues.push(baseMetric.issue);
+        droppedSamples.push(toDroppedSample(base, 'baseline', baseMetric.issue));
+      }
+      if (candMetric.issue) {
+        if (!issues.includes(candMetric.issue)) issues.push(candMetric.issue);
+        droppedSamples.push(toDroppedSample(cand, 'candidate', candMetric.issue));
       }
       if (baseMetric.value !== null && candMetric.value !== null) {
         baselineValues.push(baseMetric.value);
@@ -779,6 +837,7 @@ export function runLocalEvalSubstrateSmoke(controls: FixedEvalControls): Harness
     controls,
     results,
     paired_deltas: computePairedDeltas(baseline, candidate, 'tokens'),
+    paired_delta_schema_version: PAIRED_COMPARISON_SCHEMA_VERSION,
     failure_ledger: [],
     metrics: computeCoreMetrics(results),
     experimental_evidence: false,
@@ -954,6 +1013,7 @@ export function runOfflineHarnessFactorial(controls: FixedEvalControls): Harness
     },
     results,
     paired_deltas: computePairedDeltas([baseline], [candidate], 'tokens'),
+    paired_delta_schema_version: PAIRED_COMPARISON_SCHEMA_VERSION,
     failure_ledger: ledger,
     metrics: computeCoreMetrics(results),
     experimental_evidence: true,
@@ -1017,6 +1077,7 @@ export async function runSameModelLlmFactorial(input: {
       },
       results: [],
       paired_deltas: [],
+      paired_delta_schema_version: PAIRED_COMPARISON_SCHEMA_VERSION,
       failure_ledger: [],
       metrics: computeCoreMetrics([]),
       experimental_evidence: false,
@@ -1044,6 +1105,7 @@ export async function runSameModelLlmFactorial(input: {
       controls: input.controls,
       results: [],
       paired_deltas: [],
+      paired_delta_schema_version: PAIRED_COMPARISON_SCHEMA_VERSION,
       failure_ledger: [{
         entry_id: randomUUID(),
         episode_id: 'h7-control-preflight',
@@ -1354,6 +1416,7 @@ export async function runSameModelLlmFactorial(input: {
     },
     results,
     paired_deltas: paired,
+    paired_delta_schema_version: PAIRED_COMPARISON_SCHEMA_VERSION,
     failure_ledger: failureLedger,
     metrics: computeCoreMetrics(results),
     experimental_evidence: anyOk,
@@ -1385,8 +1448,47 @@ export function writeEvalReport(dir: string, report: HarnessEvalReport): string 
   return path;
 }
 
+/**
+ * Read a persisted eval report with an explicit schema guard.
+ *
+ * A report whose `paired_deltas` predates paired-comparison hardening has no
+ * `paired_delta_schema_version`; its entries are marked invalid/unvalidated
+ * rather than presented as evidence. In particular a legacy numeric
+ * `uncertainty: 0` can never be interpreted as a valid measured zero.
+ */
 export function readEvalReport(path: string): HarnessEvalReport {
-  return JSON.parse(readFileSync(path, 'utf-8')) as HarnessEvalReport;
+  const parsed = JSON.parse(readFileSync(path, 'utf-8')) as HarnessEvalReport;
+  if (parsed.schema_version !== HARNESS_EVAL_VERSION) {
+    throw new Error(
+      `readEvalReport: unsupported schema_version ${String(parsed.schema_version)} at ${path}; expected ${HARNESS_EVAL_VERSION}`,
+    );
+  }
+  if (parsed.paired_delta_schema_version !== PAIRED_COMPARISON_SCHEMA_VERSION) {
+    const legacyDeltas: PairedDelta[] = Array.isArray(parsed.paired_deltas)
+      ? parsed.paired_deltas
+      : [];
+    parsed.paired_deltas = legacyDeltas.map((delta) => ({
+      ...delta,
+      baseline_value: null,
+      candidate_value: null,
+      delta: null,
+      uncertainty: null,
+      uncertainty_status: 'not_estimable',
+      n_pairs: typeof delta.n_pairs === 'number' ? delta.n_pairs : 0,
+      valid: false,
+      issues: [
+        ...new Set<PairedComparisonIssue>([
+          ...(Array.isArray(delta.issues) ? delta.issues : []),
+          'legacy_unvalidated',
+        ]),
+      ],
+    }));
+    parsed.notes = [
+      ...(Array.isArray(parsed.notes) ? parsed.notes : []),
+      'paired_deltas legacy schema: marked invalid/unvalidated on read (uncertainty unknown)',
+    ];
+  }
+  return parsed;
 }
 
 /**

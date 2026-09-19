@@ -7,11 +7,16 @@
  */
 
 import * as assert from 'node:assert';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   computePairedDeltas,
   evaluatePairedComparison,
   environmentDigest,
+  readEvalReport,
+  HARNESS_EVAL_VERSION,
   type EvalTaskResult,
   type FixedEvalControls,
   type PairedMetric,
@@ -332,5 +337,143 @@ describe('T20 harnessEval input validity', () => {
     assert.strictEqual(delta.valid, false);
     assert.ok(delta.issues.includes('non_finite_metric'));
     assert.strictEqual(delta.delta, null);
+  });
+
+  it('mixed identity presence within an arm is rejected as incomplete', () => {
+    // Reviewer probe: baseline trial1 omits the model while baseline trial0 and
+    // both candidate trials supply it. Must not be declared a valid match.
+    const baseline = [
+      attempt({ task_id: 'id', variant: 'base', trial_index: 0, model_snapshot: 'm1' }),
+      attempt({ task_id: 'id', variant: 'base', trial_index: 1 }),
+    ];
+    const candidate = [
+      attempt({ task_id: 'id', variant: 'cand', trial_index: 0, model_snapshot: 'm1' }),
+      attempt({ task_id: 'id', variant: 'cand', trial_index: 1, model_snapshot: 'm1' }),
+    ];
+    const report = evaluatePairedComparison(baseline, candidate, 'tokens');
+    assert.ok(report.global_issues.includes('identity_incomplete'));
+    assert.ok(report.global_issues.includes('model_mismatch'));
+    assert.ok(report.model_deviations.some((value) => value.includes('incomplete_identity')));
+    assert.strictEqual(report.deltas[0]!.valid, false);
+    assert.strictEqual(report.deltas[0]!.delta, null);
+    assert.strictEqual(report.coverage_complete, false);
+    assert.strictEqual(report.valid, false);
+  });
+
+  it('multiple identity values within one arm are rejected', () => {
+    const baseline = [
+      attempt({ task_id: 'mv', variant: 'base', trial_index: 0, model_snapshot: 'm1' }),
+      attempt({ task_id: 'mv', variant: 'base', trial_index: 1, model_snapshot: 'm2' }),
+    ];
+    const candidate = [
+      attempt({ task_id: 'mv', variant: 'cand', trial_index: 0, model_snapshot: 'm1' }),
+      attempt({ task_id: 'mv', variant: 'cand', trial_index: 1, model_snapshot: 'm1' }),
+    ];
+    const report = evaluatePairedComparison(baseline, candidate, 'tokens');
+    assert.ok(report.model_deviations.some((value) => value.includes('multiple_values_within_arm')));
+    assert.ok(report.global_issues.includes('model_mismatch'));
+    assert.strictEqual(report.deltas[0]!.valid, false);
+  });
+
+  it('empty population is reported', () => {
+    const report = evaluatePairedComparison([], [], 'tokens');
+    assert.ok(report.global_issues.includes('empty_population'));
+    assert.strictEqual(report.deltas.length, 0);
+    assert.strictEqual(report.valid, false);
+  });
+
+  it('one-sided controls are reported as incomplete', () => {
+    const baseline = [attempt({ task_id: 'ci', variant: 'base' })];
+    const candidate = [attempt({ task_id: 'ci', variant: 'cand' })];
+    const report = evaluatePairedComparison(baseline, candidate, 'tokens', {
+      baseline_controls: controls,
+    });
+    assert.ok(report.global_issues.includes('controls_incomplete'));
+    assert.strictEqual(report.deltas[0]!.valid, false);
+    assert.strictEqual(report.valid, false);
+  });
+
+  it('partial-coverage missing metric rows are itemized in dropped_samples', () => {
+    const baseline = [
+      attempt({ task_id: 'pm', variant: 'base', trial_index: 0, tokens: 100 }),
+      attempt({ task_id: 'pm', variant: 'base', trial_index: 1, tokens: 100 }),
+    ];
+    const candidate = [
+      attempt({ task_id: 'pm', variant: 'cand', trial_index: 0, tokens: 80 }),
+      attempt({ task_id: 'pm', variant: 'cand', trial_index: 1, tokens: Number.NaN }),
+    ];
+    const report = evaluatePairedComparison(baseline, candidate, 'tokens');
+    assert.ok(report.deltas[0]!.issues.includes('non_finite_metric'));
+    assert.strictEqual(report.deltas[0]!.valid, false);
+    assert.ok(
+      report.dropped_samples.some(
+        (sample) =>
+          sample.reason === 'non_finite_metric' &&
+          sample.arm === 'candidate' &&
+          sample.trial_index === 1,
+      ),
+    );
+    assert.strictEqual(report.coverage_complete, false);
+  });
+
+  it('non-finite intention-to-test tokens are surfaced, not silently dropped', () => {
+    const baseline = [
+      attempt({ task_id: 'nt', variant: 'base', tokens: Number.POSITIVE_INFINITY }),
+    ];
+    const candidate = [attempt({ task_id: 'nt', variant: 'cand', tokens: 10 })];
+    const report = evaluatePairedComparison(baseline, candidate, 'duration_ms');
+    assert.ok(report.global_issues.includes('non_finite_tokens'));
+    assert.strictEqual(report.deltas[0]!.valid, false);
+  });
+
+  it('readEvalReport guards schema and marks legacy paired deltas invalid', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-h7-legacy-'));
+    try {
+      const path = join(dir, 'harness-eval-report.json');
+      const legacy = {
+        schema_version: HARNESS_EVAL_VERSION,
+        controls,
+        results: [],
+        paired_deltas: [
+          {
+            task_id: 'legacy',
+            baseline_variant: 'base',
+            candidate_variant: 'cand',
+            metric: 'tokens',
+            baseline_value: 100,
+            candidate_value: 100,
+            delta: 0,
+            uncertainty: 0,
+            n_pairs: 1,
+          },
+        ],
+        failure_ledger: [],
+        metrics: {},
+        experimental_evidence: false,
+        notes: [],
+      };
+      writeFileSync(path, JSON.stringify(legacy), 'utf-8');
+
+      // Control: on disk the legacy value is a numeric zero.
+      const raw = JSON.parse(readFileSync(path, 'utf-8')) as {
+        paired_deltas: Array<{ uncertainty: number }>;
+      };
+      assert.strictEqual(raw.paired_deltas[0]!.uncertainty, 0);
+
+      // Candidate: the guard refuses to surface that as measured zero.
+      const report = readEvalReport(path);
+      const delta = report.paired_deltas[0]!;
+      assert.strictEqual(delta.uncertainty, null);
+      assert.strictEqual(delta.uncertainty_status, 'not_estimable');
+      assert.strictEqual(delta.valid, false);
+      assert.ok(delta.issues.includes('legacy_unvalidated'));
+      assert.ok(report.notes.some((note) => /legacy schema/i.test(note)));
+
+      const badPath = join(dir, 'bad-schema.json');
+      writeFileSync(badPath, JSON.stringify({ ...legacy, schema_version: 99 }), 'utf-8');
+      assert.throws(() => readEvalReport(badPath), /unsupported schema_version/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
