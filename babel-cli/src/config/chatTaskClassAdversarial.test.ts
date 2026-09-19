@@ -253,6 +253,24 @@ const ADVERSARIAL_CORPUS: readonly AdversarialTestCase[] = [
     verificationApplicable: false,
     notes: 'S07: "without fixing" is a no-edit directive',
   },
+  {
+    prompt: 'never patch the parser, but implement the new flag',
+    expectedOperation: 'HYBRID',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'default',
+    mutationAllowed: true,
+    verificationApplicable: true,
+    notes: 'A negated directive must not veto a separate positive mutation instruction',
+  },
+  {
+    prompt: 'do not fix the parser, but add logging',
+    expectedOperation: 'HYBRID',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'default',
+    mutationAllowed: true,
+    verificationApplicable: true,
+    notes: 'Positive "add" survives the negated "do not fix"',
+  },
 ];
 
 describe('PR-A Certification: Adversarial Task-Classification Corpus', () => {

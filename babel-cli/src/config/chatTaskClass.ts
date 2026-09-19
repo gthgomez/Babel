@@ -367,6 +367,13 @@ function stripInformationalFrames(text: string): string {
 }
 
 /**
+ * Explicit no-editing directives. Shared so the same surface can both detect
+ * the directive and be stripped before a positive mutation verb is scanned.
+ */
+const READ_ONLY_DIRECTIVE_SOURCE =
+  '\\b(without (any )?(editing|modifying|changing|writing|fixing)|read-?only|(?:do\\s*not|don\'t|never)\\s+(?:edit|modify|change|write|delete|remove|fix|patch|repair|refactor|touch|alter)|dry-?run)\\b';
+
+/**
  * Lightweight multi-dimensional task-shape analysis.
  * Analyzes operation kind (READ_ONLY vs MUTATING vs HYBRID) and complexity (TRIVIAL vs BOUNDED vs OPEN_ENDED).
  */
@@ -377,20 +384,25 @@ export function analyzeTaskShape(taskText: string): TaskShape {
   }
 
   // 1. Explicit read-only constraints
-  const hasReadOnlyDirective =
-    /\b(without (any )?(editing|modifying|changing|writing|fixing)|read-?only|(?:do\s*not|don't|never)\s+(?:edit|modify|change|write|delete|remove|fix|patch|repair|refactor|touch|alter)|dry-?run)\b/i.test(
-      t,
-    );
+  const hasReadOnlyDirective = new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'i').test(t);
 
   // 2. Explicit mutation keywords, excluding evidence-shaped content:
   // fenced code/diff bodies (I1), path-like names (D-T04) and informational
-  // "how to …" frames (D-T02).
+  // "how to …" frames (D-T02). A *negated* directive ("do not fix") is not
+  // mutation authority either, so strip the directive phrases before scanning:
+  // only a positive mutation verb that survives the negation counts. This keeps
+  // "never patch X, but implement Y" mutating while "review; do not fix" stays
+  // read-only.
   const mutationScope = stripInformationalFrames(
     stripPathLikeTokens(stripFencedCodeBodies(t)),
   );
+  const positiveMutationScope = mutationScope.replace(
+    new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'),
+    ' ',
+  );
   const hasMutation =
-    /\b(clean\s*up\s+and\s+delete|fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename)\b/i.test(mutationScope) ||
-    (!hasReadOnlyDirective && /\b(delete|remove|rm|drop|erase|unlink)\b/i.test(mutationScope));
+    /\b(clean\s*up\s+and\s+delete|fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename)\b/i.test(positiveMutationScope) ||
+    (!hasReadOnlyDirective && /\b(delete|remove|rm|drop|erase|unlink)\b/i.test(positiveMutationScope));
 
   // 3. Exploratory keywords (find, scan, list, check, explain, analyze, review, compare)
   const hasExploratory =
@@ -403,7 +415,7 @@ export function analyzeTaskShape(taskText: string): TaskShape {
     );
 
   let operation: TaskOperation;
-  if (hasReadOnlyDirective && !hasSequencedMutationOverride) {
+  if (hasReadOnlyDirective && !hasSequencedMutationOverride && !hasMutation) {
     operation = 'READ_ONLY';
   } else if (hasMutation && (hasExploratory || hasReadOnlyDirective)) {
     operation = 'HYBRID';

@@ -393,3 +393,33 @@ test('a claimed removed count that disagrees with the expected set fails', () =>
     result.violations.some((violation) => /disagrees with expected set size/.test(violation)),
   );
 });
+
+test('a padded expected identity set (duplicate ids) cannot manufacture coverage', () => {
+  const fixture = buildRetentionOracleFixtureV1();
+  const padded: RetentionOracleInputV1 = {
+    ...fixture,
+    // 41 expected entries but only 40 unique identities: de-duplication would
+    // otherwise hide the padding behind an equal removed count.
+    expected_observation_ids: [
+      ...fixture.expected_observation_ids,
+      fixture.expected_observation_ids[0]!,
+    ],
+    removed_observation_count: fixture.expected_observation_ids.length + 1,
+  };
+  const result = evaluateRetentionOracle(padded);
+  assert.equal(result.status, 'fail');
+  assert.equal(result.coverage_complete, false);
+  assert.ok(
+    result.violations.some((violation) => /duplicate ids/.test(violation)),
+  );
+});
+
+test('an omitted expected identity set degrades explicitly instead of throwing', () => {
+  const fixture = buildRetentionOracleFixtureV1();
+  const malformed = { ...fixture } as Record<string, unknown>;
+  delete malformed['expected_observation_ids'];
+  const result = evaluateRetentionOracle(malformed as unknown as RetentionOracleInputV1);
+  assert.equal(result.status, 'fail');
+  assert.equal(result.coverage_complete, false);
+  assert.ok(result.violations.some((violation) => /identity set is required/.test(violation)));
+});

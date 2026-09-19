@@ -497,7 +497,18 @@ export function evaluateRetentionOracle(input: RetentionOracleInputV1): Retentio
   // Coverage is validated against the independently known expected identity
   // set. Internal validity of each supplied record is necessary but not
   // sufficient: an omitted, replaced or duplicated observation must fail.
-  const expectedIds = new Set(input.expected_observation_ids);
+  // The set is required at runtime too; a JS/`as any` caller that omits it must
+  // degrade to an explicit failure, never throw or silently pass.
+  const expectedList: readonly string[] = Array.isArray(input.expected_observation_ids)
+    ? input.expected_observation_ids
+    : [];
+  if (!Array.isArray(input.expected_observation_ids)) {
+    violations.push('expected observation identity set is required');
+  }
+  const expectedIds = new Set(expectedList);
+  if (expectedIds.size !== expectedList.length) {
+    violations.push('expected observation identity set contains duplicate ids');
+  }
   const receivedIds = new Set(input.observations.map((observation) => observation.observation_id));
   const missingExpectedIds = [...expectedIds].filter((id) => !receivedIds.has(id));
   const unexpectedObservationIds = [...receivedIds].filter((id) => !expectedIds.has(id));
@@ -511,12 +522,15 @@ export function evaluateRetentionOracle(input: RetentionOracleInputV1): Retentio
       `observation ids present that were not expected: ${unexpectedObservationIds.length}`,
     );
   }
-  if (input.removed_observation_count !== input.expected_observation_ids.length) {
+  if (input.removed_observation_count !== expectedList.length) {
     violations.push(
-      `removed observation count (${input.removed_observation_count}) disagrees with expected set size (${input.expected_observation_ids.length})`,
+      `removed observation count (${input.removed_observation_count}) disagrees with expected set size (${expectedList.length})`,
     );
   }
-  const coverageComplete = missingExpectedIds.length === 0 && unexpectedObservationIds.length === 0;
+  const coverageComplete =
+    missingExpectedIds.length === 0 &&
+    unexpectedObservationIds.length === 0 &&
+    expectedIds.size === expectedList.length;
 
   const aliased: string[] = [];
   let duplicatesDistinct = true;
