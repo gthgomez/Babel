@@ -111,8 +111,9 @@ describe('trivial text-only turns terminate normally', () => {
     assert.equal(events.some((e) => e.type === 'cancelled'), false);
     const done = doneEvents[0] as Extract<ChatEvent, { type: 'done' }>;
     assert.equal(done.answer, 'Sure — how can I help?');
-    // Kernel mapping for a clean completion without a verifier receipt.
-    assert.equal(done.outcome, 'UNVERIFIED_PATCH');
+    // D01: a zero-write conversational answer is an accepted read-only
+    // operation, so the honest terminal is informational, not an unverified patch.
+    assert.equal(done.outcome, 'NO_CHANGE_REQUIRED');
   });
 
   test('execute-intent pure-text loops terminate at the bounded threshold', async () => {

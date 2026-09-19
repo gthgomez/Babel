@@ -97,7 +97,11 @@ function assertCrossSurface(
   );
   assert.equal(
     exitCodeFromOutcome(result.outcome!),
-    result.outcome === 'VERIFIED_COMPLETE' || result.outcome === 'UNVERIFIED_PATCH' ? 0 : 1,
+    result.outcome === 'VERIFIED_COMPLETE' ||
+      result.outcome === 'UNVERIFIED_PATCH' ||
+      result.outcome === 'NO_CHANGE_REQUIRED'
+      ? 0
+      : 1,
     `${label}: exit code`,
   );
 
@@ -128,7 +132,7 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
     delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
   });
 
-  test('complete stream: ChatResult + disk + payload share UNVERIFIED_PATCH', async () => {
+  test('complete stream: a read-only success shares NO_CHANGE_REQUIRED across surfaces', async () => {
     // tools_then_complete: one read then stop — avoids execute-task text-loop / turn-limit
     // (pure text stop often auto-continues under zero-write gates).
     const engine = new ChatEngine({
@@ -165,9 +169,12 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
     const loaded = await waitForThreadEventLog(chatSessionDir(engine.getEngineRunId()));
     const diskOutcome = loaded.events.filter((e) => e.kind === 'turn_ended').at(-1)?.outcome;
 
-    assert.ok(
-      result.outcome === 'UNVERIFIED_PATCH' || result.outcome === 'VERIFIED_COMPLETE',
-      `expected complete-family outcome, got ${result.outcome}; answer=${result.answer?.slice(0, 120)}`,
+    // D01/S07: an accepted read-only operation with zero writes is an
+    // informational success, not an unverified patch.
+    assert.equal(
+      result.outcome,
+      'NO_CHANGE_REQUIRED',
+      `expected read-only informational success, got ${result.outcome}; answer=${result.answer?.slice(0, 120)}`,
     );
     assert.equal(result.status, 'completed');
     assertCrossSurface('complete', result, diskOutcome);

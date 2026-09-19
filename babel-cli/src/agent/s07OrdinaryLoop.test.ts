@@ -177,6 +177,8 @@ interface LoopObservation {
   answer: string;
   outcome: string | undefined;
   status: string;
+  /** Last durable completion_decision.final_outcome, or undefined when absent. */
+  durableCompletionOutcome: string | undefined;
 }
 
 function makeRunner(
@@ -292,6 +294,10 @@ async function driveLoop(
     .filter((e): e is Extract<ChatEvent, { type: 'progress_recovery' }> => e.type === 'progress_recovery')
     .map((e) => e.intervention);
   const snapshot = engine.getTurnRuntimeSnapshot();
+  const durableOutcomes = sessionEvents.filter(
+    (e): e is Extract<SessionEvent, { kind: 'completion_decision' }> =>
+      e.kind === 'completion_decision',
+  );
   const observation: LoopObservation = {
     result,
     events,
@@ -306,6 +312,7 @@ async function driveLoop(
     answer: result.answer,
     outcome: result.outcome,
     status: result.status,
+    durableCompletionOutcome: durableOutcomes.at(-1)?.final_outcome,
   };
   emitTrace(task, observation, options.maxTurns ?? 8);
   return observation;
@@ -332,6 +339,7 @@ function emitTrace(task: string, o: LoopObservation, maxTurns: number): void {
     recovery_actions: o.progressInterventions.filter((i) => i !== 'none'),
     terminal_reason: o.result.blockedReport?.reason ?? null,
     terminal_outcome: o.outcome ?? null,
+    durable_completion_outcome: o.durableCompletionOutcome ?? null,
     terminal_status: o.status,
     final_answer_present: o.answer.trim().length > 0,
     max_turns: maxTurns,
@@ -368,6 +376,8 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.ok(o.providerCalls <= 6, 'loop stays bounded');
       assert.ok(!o.progressInterventions.includes('terminal_blocked'), 'no false terminal recovery');
       assert.notEqual(o.outcome, 'BUDGET_EXHAUSTED', 'no false budget exhaustion');
+      assert.equal(o.outcome, 'NO_CHANGE_REQUIRED', 'read-only success is an informational terminal, not a patch');
+      assert.equal(o.durableCompletionOutcome, o.outcome, 'durable completion decision agrees with emitted outcome');
       assert.equal(o.status, 'completed');
     } finally {
       fixture.cleanup();
@@ -390,6 +400,8 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.ok(/not found|could not find|no definition|no matches/i.test(o.answer), `honest not-found answer: ${o.answer}`);
       assert.ok(/search/i.test(o.answer), 'reports the searched scope');
       assert.ok(!o.progressInterventions.includes('terminal_blocked'), 'a clean not-found is not a terminal stall');
+      assert.equal(o.outcome, 'NO_CHANGE_REQUIRED', 'a failed search is still a successful read-only report');
+      assert.equal(o.durableCompletionOutcome, o.outcome, 'durable completion decision agrees with emitted outcome');
     } finally {
       fixture.cleanup();
     }
@@ -413,6 +425,8 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.ok(o.mutationBatches >= 1, 'mutation is durably recorded');
       assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'a real mutation is not reported as no-change');
       assert.ok(!o.progressInterventions.includes('terminal_blocked'), 'no false recovery terminal');
+      assert.equal(o.outcome, 'VERIFIED_COMPLETE', 'an authoritative current verifier earns verified completion');
+      assert.equal(o.durableCompletionOutcome, o.outcome, 'durable completion decision agrees with emitted outcome');
       assert.equal(o.status, 'completed', `mutation loop completes honestly: ${o.answer}`);
     } finally {
       fixture.cleanup();
@@ -435,6 +449,8 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       );
       assert.deepEqual(patchPressure, [], 'no generated mutation mandate for a no-edit request');
       assert.ok(/defect|subtract/i.test(o.answer), 'produces useful synthesis');
+      assert.equal(o.outcome, 'NO_CHANGE_REQUIRED', 'explicit no-edit success is not an unverified patch');
+      assert.equal(o.durableCompletionOutcome, o.outcome, 'durable completion decision agrees with emitted outcome');
       assert.equal(o.status, 'completed');
     } finally {
       fixture.cleanup();

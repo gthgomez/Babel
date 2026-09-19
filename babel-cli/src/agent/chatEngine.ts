@@ -4459,6 +4459,20 @@ export class ChatEngine {
     };
   }
 
+  /**
+   * R0/D01: terminal read-only input must be the *accepted* operation for this
+   * submission, not an ambient mode inference. `effectiveOperation` is resolved
+   * once from TaskShape in `beginUserSubmission`; `isReadOnlyChat()` remains a
+   * sufficient explicit read-only signal (BABEL_READ_ONLY / read_only_audit).
+   *
+   * Unknown/missing accepted runtime falls back to explicit-only behavior so a
+   * legacy caller cannot be reinterpreted as "no change" merely by writing
+   * nothing. A mutating accepted operation still requires a real verifier.
+   */
+  private isAcceptedReadOnlyTerminal(): boolean {
+    return this.lastTurnRuntime?.effectiveOperation === 'READ_ONLY' || isReadOnlyChat();
+  }
+
   private decideCompletion(
     requestedOutcome: TerminalOutcome | 'PLAN_COMPLETE',
     hasMutation: boolean,
@@ -4506,7 +4520,7 @@ export class ChatEngine {
     this.settleActiveExecutionForTerminal();
     const hasMutation = this.hasAnyWrites();
     let requestedOutcome = computeTerminalOutcome({
-      readOnly: isReadOnlyChat(),
+      readOnly: this.isAcceptedReadOnlyTerminal(),
       finalStatus: extra?.blockedReport
         ? 'blocked'
         : this.budgetExceeded
@@ -8176,7 +8190,7 @@ export class ChatEngine {
         ? failedCause
         : (knownOutcome ??
           computeTerminalOutcome({
-            readOnly: isReadOnlyChat(),
+            readOnly: this.isAcceptedReadOnlyTerminal(),
             finalStatus,
             budgetExceeded: this.budgetExceeded,
             lastVerifierReceipt: this.lastVerifierReceipt,
