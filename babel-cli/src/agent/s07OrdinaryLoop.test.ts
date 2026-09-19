@@ -432,6 +432,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'a real mutation is not reported as no-change');
       assert.ok(!o.progressInterventions.includes('terminal_blocked'), 'no false recovery terminal');
       assert.equal(o.outcome, 'VERIFIED_COMPLETE', 'an authoritative current verifier earns verified completion');
+      assert.equal(o.reasonCode, undefined, 'a green verifier never claims verification_failed');
       assert.equal(o.durableCompletionOutcome, o.outcome, 'durable completion decision agrees with emitted outcome');
       assert.equal(o.status, 'completed', `mutation loop completes honestly: ${o.answer}`);
     } finally {

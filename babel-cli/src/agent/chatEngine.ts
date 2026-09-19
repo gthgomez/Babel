@@ -346,6 +346,7 @@ import {
   terminalReasonFromClassification,
   terminalReasonFromFailureText,
   terminalReasonFromOutcome,
+  terminalReasonFromVerifierFailure,
   type TerminalReason,
 } from './chatTerminalReason.js';
 import {
@@ -8211,15 +8212,11 @@ export class ChatEngine {
   private resolveVerificationFailureReason(
     outcome: TerminalOutcome | undefined,
   ): TerminalReason | undefined {
-    if (!this.hasAnyWrites()) return undefined;
-    if (outcome !== 'UNVERIFIED_PATCH' && outcome !== 'BLOCKED_POLICY') return undefined;
-    const receipt = this.lastVerifierReceipt;
-    if (!receipt || receipt.exit_code === 0 || receipt.stale === true) return undefined;
-    return {
-      code: 'verification_failed',
-      cause_class: 'verification',
-      detail: receipt.command,
-    };
+    return terminalReasonFromVerifierFailure({
+      hasMutation: this.hasAnyWrites(),
+      outcome,
+      receipt: this.lastVerifierReceipt,
+    });
   }
 
   /** Persist exactly one authoritative completion decision for this turn. */
@@ -8296,14 +8293,18 @@ export class ChatEngine {
     // provided (e.g., the detection ran in a code path that didn't provide it),
     // promote the status to 'blocked' and generate the report here.
     // F4: only a protocol-shaped declaration (`BLOCKED` at the start of a line)
-    // promotes status; a stray word in ordinary prose must not create a block.
-    const hasBlocked = !!(answer && /(?:^|\n)\s*BLOCKED\b/.test(answer));
+    // is even considered, and promotion to a blocked terminal requires an actual
+    // evidence-backed report (harness-provided, or synthesized only when real
+    // investigate tool calls exist). Model prose alone cannot create a block —
+    // this keeps the callback surface consistent with the streaming surface.
+    const declaredBlocked = !!(answer && /(?:^|\n)\s*BLOCKED\b/.test(answer));
+    const synthesizedReport =
+      declaredBlocked && !blockedReport ? this.detectAndBuildBlockedReport(answer ?? '') : null;
+    const finalBlockedReport = blockedReport ?? synthesizedReport;
     const finalStatus =
-      (status === 'completed' || status === 'failed') && hasBlocked ? ('blocked' as const) : status;
-    const finalBlockedReport =
-      finalStatus === 'blocked' && !blockedReport
-        ? this.detectAndBuildBlockedReport(answer ?? '')
-        : blockedReport;
+      (status === 'completed' || status === 'failed') && finalBlockedReport
+        ? ('blocked' as const)
+        : status;
 
     if (this.cachedSystemPromptNative)
       stashEngineFingerprint(

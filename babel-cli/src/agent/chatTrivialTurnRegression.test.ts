@@ -513,7 +513,10 @@ describe('non-streaming path preserves generation boundaries', () => {
         preflightContext: '',
       });
 
-      assert.ok(['completed', 'blocked'].includes(result.status), `unexpected status ${result.status}`);
+      // A BLOCKED declaration backed by real investigate evidence must be an
+      // honest blocked terminal (exact, not a tolerant disjunction).
+      assert.equal(result.status, 'blocked', `unexpected status ${result.status}`);
+      assert.ok(result.blockedReport, 'evidence-backed block carries a structured report');
       assert.equal(state.calls, 3, `expected 3 provider rounds, got ${state.calls}`);
 
       // Real lifecycle first: stop() flushes the active generation-B cell.
@@ -538,6 +541,46 @@ describe('non-streaming path preserves generation boundaries', () => {
         /Generation A text\.Generation/,
         'generations must not concatenate in non-stream mode either',
       );
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('F4: a BLOCKED declaration with no investigate evidence does not create a block', async () => {
+    const { ConversationalRenderer } = await import('../ui/waterfall.js');
+    const { runChatEngineOnce } = await import('../interactive/execution/chatCore.js');
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => true) as typeof process.stdout.write;
+    try {
+      const state = { calls: 0 };
+      const wsRoot = makeRoot();
+      const engine = new ChatEngine({
+        task: 'explain the parser behavior',
+        projectRoot: wsRoot,
+        maxTurns: 4,
+      });
+      stubNativeRunner(
+        engine,
+        textOnlyRunner('BLOCKED: cannot continue without more context.', state),
+      );
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+      const result = await runChatEngineOnce({
+        task: 'explain the parser behavior',
+        target: { targetRoot: wsRoot, workspaceRoot: null, project: null, source: 'cwd', cwd: wsRoot },
+        engine,
+        convRenderer: renderer,
+        useStreaming: false,
+        taskIntent: 'explain',
+        preflightContext: '',
+      });
+      renderer.stop();
+      assert.notEqual(
+        result.status,
+        'blocked',
+        'model prose alone must not create a blocked terminal',
+      );
+      assert.equal(result.blockedReport ?? null, null, 'no fabricated blocked report');
     } finally {
       process.stdout.write = originalWrite;
     }

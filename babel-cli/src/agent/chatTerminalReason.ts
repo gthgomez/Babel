@@ -205,6 +205,28 @@ export function terminalReasonFromOutcome(
   }
 }
 
+/**
+ * D03/S07: a mutation that ended without success while a *current*
+ * authoritative verifier receipt is red is a verification failure — distinct
+ * from "no verifier was run" (which stays unknown). Stale receipts and green
+ * receipts cannot establish this cause. Pure so every guard branch is testable.
+ */
+export function terminalReasonFromVerifierFailure(input: {
+  hasMutation: boolean;
+  outcome: TerminalOutcome | null | undefined;
+  receipt: { exit_code: number; stale?: boolean; command?: string } | null | undefined;
+}): TerminalReason | undefined {
+  if (!input.hasMutation) return undefined;
+  if (input.outcome !== 'UNVERIFIED_PATCH' && input.outcome !== 'BLOCKED_POLICY') return undefined;
+  const receipt = input.receipt;
+  if (!receipt || receipt.exit_code === 0 || receipt.stale === true) return undefined;
+  return {
+    code: 'verification_failed',
+    cause_class: 'verification',
+    ...(receipt.command !== undefined ? { detail: receipt.command } : {}),
+  };
+}
+
 /** Map a limiter classification (turns/wall/cost/tokens/child/stall) into a reason. */
 export function terminalReasonFromClassification(
   classification: ChatTerminalClassification | null | undefined,
