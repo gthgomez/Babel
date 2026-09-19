@@ -31,7 +31,7 @@ import { tmpdir } from 'node:os';
 import { ChatEngine, type ChatEvent, type ChatResult } from './chatEngine.js';
 import type { ToolStreamEvent } from '../runners/base.js';
 import { chatSessionDir } from '../cli/runsLayout.js';
-import { inspectSessionEventLogFromDir, type SessionEvent } from './sessionEvents.js';
+import { inspectSessionEventLogFromDir, recordProgressRecovery, type SessionEvent } from './sessionEvents.js';
 import { DIRECT_MUTATION_TOOLS } from './mutationTools.js';
 import { globalCostTracker } from '../services/costTracker.js';
 import type { CompactionStrategy, ChatMessage } from './chatCompaction.js';
@@ -479,6 +479,70 @@ function makeRunner(
 }
 
 let currentEngine: ChatEngine | undefined;
+
+/** Mutable-script runner for multi-submission scenarios (A then B on one engine). */
+interface MutableRunner extends ScriptedRunner {
+  setScript(script: Script): void;
+  onYield?: ((event: ToolStreamEvent, call: number, engine: ChatEngine) => void) | undefined;
+}
+
+function makeMutableRunner(): MutableRunner {
+  let script: Script = [];
+  let base = 0;
+  let call = 0;
+  const requests: ProviderRequestRecord[] = [];
+  const runner = {
+    calls: () => call,
+    requests: () => requests,
+    setScript(next: Script) {
+      script = next;
+      base = call;
+    },
+    async *executeWithToolsStream(
+      messages?: ProviderMessageLike[],
+      tools?: Array<{ function?: { name?: string } }>,
+      systemPrompt?: string,
+      _signal?: AbortSignal,
+      toolChoice?: string,
+    ): AsyncGenerator<ToolStreamEvent, void, undefined> {
+      const index = call;
+      call += 1;
+      requests.push({
+        callIndex: index,
+        messages: (messages ?? []).map((m) => ({
+          role: m.role,
+          content: m.content,
+          ...(m.name !== undefined ? { name: m.name } : {}),
+          ...(m.tool_calls !== undefined ? { tool_calls: m.tool_calls } : {}),
+        })),
+        systemPrompt,
+        toolNames: (tools ?? []).map((t) => t.function?.name ?? ''),
+        toolChoice,
+      });
+      const events = script[index - base] ?? [
+        { type: 'text_delta', text: 'No further action; concluding.' },
+        { type: 'done', finishReason: 'stop' },
+      ];
+      for (const event of events) {
+        yield event;
+        runner.onYield?.(event, index, currentEngine!);
+      }
+    },
+    async execute() {
+      return { type: 'completion', answer: 'scripted completion' };
+    },
+    async executeRaw() {
+      return 'scripted completion';
+    },
+    getLastInvocationMetadata() {
+      return null;
+    },
+    onYield: undefined as
+      | ((event: ToolStreamEvent, call: number, engine: ChatEngine) => void)
+      | undefined,
+  };
+  return runner;
+}
 
 function installRunner(engine: ChatEngine, runner: ScriptedRunner): void {
   const anyEngine = engine as unknown as {
@@ -1183,6 +1247,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       writeScope: ['src'],
       projectRoot: root,
       toolContext: { agentId: 's07-mut-escape', runId: 's07-mut-escape', runDir: root, babelRoot: root },
+      executor: mockChildExecutor({}) as never,
       actionResolver: async () => [
         { type: 'write_file', path: 'lib/out.ts', content: 'escaped\n' },
         { type: 'finish', summary: 'attempted escape', verification: [] },
@@ -1203,6 +1268,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       writeScope: ['src'],
       projectRoot: root,
       toolContext: { agentId: 's07-mut-scoped', runId: 's07-mut-scoped', runDir: root, babelRoot: root },
+      executor: mockChildExecutor({}) as never,
       actionResolver: async () => [
         { type: 'write_file', path: 'src/ok.ts', content: 'in scope\n' },
         { type: 'finish', summary: 'scoped write', verification: [] },
@@ -1244,6 +1310,179 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       true,
     );
   });
+
+  test('Scenario 8 — cancel then an unrelated task on the same engine does not inherit task-A authority', async () => {
+    const fixture = makeFixture();
+    const runId = `s07-s8-${Math.random().toString(36).slice(2, 10)}`;
+    const engine = new ChatEngine({
+      task: 'Investigate why parser_test fails and fix it.',
+      projectRoot: fixture.root,
+      runId,
+      model: MODEL,
+      maxTurns: 8,
+    });
+    currentEngine = engine;
+    const runner = makeMutableRunner();
+    installRunner(engine, runner);
+    try {
+      // ── Task A: read → mutate → red verifier → cancel mid-loop.
+      runner.setScript([
+        [{ type: 'tool_use', id: 'a-read', name: 'read_file', input: { path: 'parser.ts' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'a-write', name: 'str_replace', input: { file_path: 'parser.ts', old_str: '// Defect: subtracts instead of adding the operands.', new_str: '// investigated by task A' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'a-verify', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'a-late', name: 'read_file', input: { path: 'parser.ts' } }, { type: 'done', finishReason: 'tool_calls' }],
+      ]);
+      let requestedCancel = false;
+      runner.onYield = (event, call) => {
+        if (call === 3 && event.type === 'tool_use' && !requestedCancel) {
+          requestedCancel = true;
+          engine.cancel();
+        }
+      };
+      const aEvents: ChatEvent[] = [];
+      for await (const e of engine.submitMessageStream('Investigate why parser_test fails and fix it.')) {
+        aEvents.push(e);
+      }
+      const aTerminal = aEvents[aEvents.length - 1];
+      assert.ok(engine.getWriteCount() >= 1, 'task A accumulated mutation state before cancel');
+      const aReceipt = (engine as unknown as { lastVerifierReceipt: { exit_code: number } | null })
+        .lastVerifierReceipt;
+      assert.ok(aReceipt, 'task A recorded verifier authority before cancel');
+      assert.equal(aReceipt?.exit_code, 1, 'task A verifier was red');
+      assert.equal(aTerminal?.type, 'cancelled', `task A ends cancelled: ${JSON.stringify(aTerminal)}`);
+      // Historical physical effects must remain visible — A really changed the file.
+      assert.match(
+        readFileSync(join(fixture.root, 'parser.ts'), 'utf8'),
+        /investigated by task A/,
+        'task A physical mutation remains on disk',
+      );
+
+      // ── Task B: unrelated read-only task on the same live engine/session.
+      runner.setScript([
+        [{ type: 'tool_use', id: 'b-read', name: 'read_file', input: { path: 'hostile.md' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'text_delta', text: 'Repository inventory complete.' }, { type: 'done', finishReason: 'stop' }],
+      ]);
+      runner.onYield = undefined;
+      const bEvents: ChatEvent[] = [];
+      for await (const e of engine.submitMessageStream('Inventory the repository structure. Do not edit files.')) {
+        bEvents.push(e);
+      }
+      const bTerminal = bEvents[bEvents.length - 1];
+      assert.equal(bTerminal?.type, 'done', 'task B completes');
+      const snapshot = engine.getTurnRuntimeSnapshot();
+      assert.equal(snapshot?.effectiveOperation, 'READ_ONLY', 'task B resolves its own accepted operation');
+      assert.equal(snapshot?.continuedTask, false, 'task B is admitted as a fresh task');
+      assert.equal(engine.getWriteCount(), 0, 'task B does not inherit task A mutation state');
+      assert.equal(
+        (engine as unknown as { lastVerifierReceipt: unknown }).lastVerifierReceipt,
+        null,
+        'task B does not inherit task A verifier authority',
+      );
+      assert.equal(
+        (engine as unknown as { terminatingLimiter: string | null }).terminatingLimiter,
+        null,
+        'task B does not inherit task A terminal reason',
+      );
+      assert.equal(
+        (engine as unknown as { _cancelled: boolean })._cancelled,
+        false,
+        'task B does not inherit task A cancellation state',
+      );
+      assert.equal(
+        (engine as unknown as { progressController: { InterventionLevel: string } }).progressController
+          .InterventionLevel,
+        'none',
+        'task B does not inherit task A no-progress punishment',
+      );
+      const bDone = bTerminal as Extract<ChatEvent, { type: 'done' }>;
+      assert.ok(bDone.answer && bDone.answer.length > 0, 'task B produces its own answer');
+      assert.notEqual(bDone.outcome, 'VERIFIED_COMPLETE', 'task B claims no unearned verification');
+      assert.notEqual(bDone.outcome, undefined, 'task B has its own terminal outcome');
+      // Tool-call identity is task-local: B emits its own call id and the
+      // provider request stays protocol-valid (no duplicate/orphan ids).
+      const bRequests = runner.requests().filter((r) => r.callIndex >= 4);
+      const bRequestText = JSON.stringify(bRequests.map((r) => r.messages));
+      assert.ok(bRequestText.includes('b-read'), 'task B emits its own tool-call id');
+      let duplicateId = false;
+      for (const request of bRequests) {
+        const perRequest = new Set<string>();
+        for (const message of request.messages) {
+          const calls = (message as { tool_calls?: Array<{ id?: string }> }).tool_calls;
+          for (const call of calls ?? []) {
+            if (call.id && perRequest.has(call.id)) duplicateId = true;
+            if (call.id) perRequest.add(call.id);
+          }
+        }
+      }
+      assert.equal(duplicateId, false, 'task B provider request never duplicates a tool-call id');
+      assert.equal(
+        bEvents.filter((e) => e.type === 'cancelled').length,
+        0,
+        'task B is never spuriously cancelled by task A state',
+      );
+
+      // ── Late task-A event delivered after B begins cannot corrupt B ownership.
+      const runtime = engine.getParityRuntime();
+      const decisionsBefore = runtime.sessionEvents.events.filter(
+        (e) => e.kind === 'completion_decision',
+      ).length;
+      recordProgressRecovery(runtime.sessionEvents, 'task-a-late-turn', {
+        intervention: 'terminal_blocked',
+        score: 99,
+        signals: ['repeated_identical_action'],
+      });
+      const decisionsAfter = runtime.sessionEvents.events.filter(
+        (e) => e.kind === 'completion_decision',
+      );
+      assert.equal(decisionsAfter.length, decisionsBefore, 'a late A event mints no completion decision');
+      assert.equal(
+        engine.getTurnRuntimeSnapshot()?.effectiveOperation,
+        'READ_ONLY',
+        'task B ownership is unchanged by late task A events',
+      );
+      assert.equal(
+        (engine as unknown as { terminatingLimiter: string | null }).terminatingLimiter,
+        null,
+        'a late A event cannot install a terminal limiter on task B',
+      );
+    } finally {
+      currentEngine = undefined;
+      fixture.cleanup();
+    }
+  });
+
+  test(
+    'Scenario 8 [KNOWN GAP] — a fresh submission must clear task-local mutation evidence',
+    {
+      todo:
+        'Production gap (no production edit allowed): applyUserSubmission resets writeCount but not ' +
+        'toolCallLog, so hasAnyWrites() still sees task A confirmed mutations and projects task B as ' +
+        'UNVERIFIED_PATCH instead of NO_CHANGE_REQUIRED.',
+    },
+    () => {
+      const engine = new ChatEngine({ task: 'A: mutate', projectRoot: process.cwd(), model: MODEL });
+      const internals = engine as unknown as {
+        toolCallLog: Array<Record<string, unknown>>;
+        hasAnyWrites(): boolean;
+      };
+      internals.toolCallLog.push({
+        tool: 'str_replace',
+        target: 'parser.ts',
+        index: 0,
+        exit_code: 0,
+        effect_status: 'confirmed_change',
+        mutation_paths: ['parser.ts'],
+      });
+      assert.equal(internals.hasAnyWrites(), true, 'fixture precondition: task A has a confirmed write');
+      engine.applyUserSubmission({ userInput: 'B: unrelated read-only inventory' });
+      assert.equal(engine.getWriteCount(), 0, 'task B write counter is reset');
+      assert.equal(
+        internals.hasAnyWrites(),
+        false,
+        'KNOWN GAP: stale task-A confirmed mutation still counts as a write for task B',
+      );
+    },
+  );
 
   test('Scenario 9 — provider failure after partial progress keeps the real cause', async () => {
     const fixture = makeFixture();
