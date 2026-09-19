@@ -17,6 +17,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME_FILES = [
   'contracts.ts',
   'coordinator.ts',
+  'events.ts',
+  'projection.ts',
+  'legacyEventAdapters.ts',
   'adapters/chat.ts',
   'adapters/plan.ts',
   'adapters/deep.ts',

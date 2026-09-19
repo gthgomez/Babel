@@ -197,11 +197,11 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | | |
 |--|--|
 | **Purpose** | Append-only, versioned, replayable episode |
-| **Current** | Chat: `thread_events.json` + `session-events.jsonl` + **`episode-events.jsonl`** dual-write; pipeline: one validated `PipelineEpisodeSink` per primary/manual run alongside the authoritative EvidenceBundle |
+| **Current** | Chat: `thread_events.json` + `session-events.jsonl` + **`episode-events.jsonl`** dual-write; pipeline: one validated `PipelineEpisodeSink` per primary/manual run alongside the authoritative EvidenceBundle; P04 adds a **shadow** `RuntimeFactV1` contract + pure `TaskProjection` that reads existing stores |
 | **Owner** | Evidence managers per surface |
-| **Sources** | `sessionEvents.ts`, `threadEventLog.ts`, `evidence/episodeStream.ts`, `evidence.ts`, `executor/contracts.ts` |
-| **Maturity** | H6 replay consumers + **runtime controller golden** (`runLiveControllerGoldenEpisode` / `episodeReplay.ts`) **IMPLEMENTED**; Chat/pipeline producers, validation/quarantine, hash-linked resume remain baseline |
-| **Gaps** | Full TUI scrollback product UX residual; phase instrumentation and offline integration still require release-gate verification; EvidenceBundle remains authoritative when episode persistence degrades |
+| **Sources** | `sessionEvents.ts`, `threadEventLog.ts`, `evidence/episodeStream.ts`, `evidence.ts`, `executor/contracts.ts`, `runtime/events.ts`, `runtime/projection.ts`, `runtime/legacyEventAdapters.ts` |
+| **Maturity** | H6 replay consumers + **runtime controller golden** (`runLiveControllerGoldenEpisode` / `episodeReplay.ts`) **IMPLEMENTED**; Chat/pipeline producers, validation/quarantine, hash-linked resume remain baseline; P04 fact contract + pure projection **IMPLEMENTED as shadow** (existing readers remain authoritative) |
+| **Gaps** | Fact stream has no durable admission yet (P05); `TaskProjection` parity is proven on fixtures, not a persisted corpus; Full TUI scrollback product UX residual; EvidenceBundle remains authoritative when episode persistence degrades |
 | **Target** | Unified episode consumers and replay across Chat + pipeline |
 
 ### 10. Evaluation and Promotion System
@@ -451,16 +451,17 @@ Do not create a second active implementation backlog for these gaps.
 | 4 | `babel-cli/src/executor/kernel.ts` |
 | 5 | `babel-cli/src/executor/contracts.ts` |
 | 6 | `babel-cli/src/runtime/coordinator.ts` / `runtime/contracts.ts` / `runtime/adapters/{chat,plan,deep}.ts` |
-| 7 | `babel-cli/src/interactive/execution/chatCore.ts` |
-| 8 | `babel-cli/src/agent/chatEngineObservability.ts` |
-| 9 | `babel-cli/src/pipeline.ts` |
-| 10 | `babel-cli/src/pipeline/executorLoop.ts` |
-| 11 | `babel-cli/src/sandbox.ts` |
-| 12 | `babel-cli/src/config/executionProfiles.ts` |
-| 13 | `babel-cli/src/services/worktreeSafety.ts` |
-| 14 | `babel-cli/src/services/requiredVerifierContract.ts` / `verifierIdentity.ts` / `evidence/episodeStream.ts` / `evidence/independentVerifier.ts` |
-| 15 | `babel-cli/src/schemas/agentContracts.ts` |
-| 16 | `babel-cli/src/config/chatEngineLimits.ts` |
+| 7 | `babel-cli/src/runtime/events.ts` / `runtime/projection.ts` / `runtime/legacyEventAdapters.ts` |
+| 8 | `babel-cli/src/interactive/execution/chatCore.ts` |
+| 9 | `babel-cli/src/agent/chatEngineObservability.ts` |
+| 10 | `babel-cli/src/pipeline.ts` |
+| 11 | `babel-cli/src/pipeline/executorLoop.ts` |
+| 12 | `babel-cli/src/sandbox.ts` |
+| 13 | `babel-cli/src/config/executionProfiles.ts` |
+| 14 | `babel-cli/src/services/worktreeSafety.ts` |
+| 15 | `babel-cli/src/services/requiredVerifierContract.ts` / `verifierIdentity.ts` / `evidence/episodeStream.ts` / `evidence/independentVerifier.ts` |
+| 16 | `babel-cli/src/schemas/agentContracts.ts` |
+| 17 | `babel-cli/src/config/chatEngineLimits.ts` |
 
 ---
 
@@ -468,4 +469,4 @@ Do not create a second active implementation backlog for these gaps.
 
 - **SUPERSEDES**: prior informal “primary harness” claims in overview/mode docs.
 - **Version**: `harness-v1` — increment only with ADR + conformance updates.
-- **last_verified**: 2026-08-05 against live `babel-cli` sources (verifier authority/completion hardening, validated Chat + pipeline episode producers, quarantine/resume, offline integration boundary, and release-gate caveats).
+- **last_verified**: 2026-09-18 against live `babel-cli` sources (runtime coordinator extraction P03; shadow `RuntimeFactV1` contract + pure `TaskProjection` P04; verifier authority/completion hardening, validated Chat + pipeline episode producers, quarantine/resume, offline integration boundary, and release-gate caveats).
