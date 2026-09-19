@@ -191,8 +191,9 @@ const MAX_EVIDENCE_REFS = 10_000;
 
 function isBoundedStringArray(value: unknown): boolean {
   if (!Array.isArray(value)) return false;
-  if (value.length > MAX_EVIDENCE_REFS) return false;
-  for (let index = 0; index < value.length; index += 1) {
+  const length = value.length;
+  if (length > MAX_EVIDENCE_REFS) return false;
+  for (let index = 0; index < length; index += 1) {
     if (typeof value[index] !== 'string') return false;
   }
   return true;

@@ -9,8 +9,9 @@
  *
  * Determinism: facts are ordered by (sequence, id) within the fact budget, so
  * any input ordering of the admitted facts yields a deep-equal projection,
- * including every reported array. Inputs beyond the resource bounds (MAX_FACTS /
- * MAX_TOTAL_JSON_NODES) are excluded by a content-deterministic rule.
+ * including every reported array. The node budget is content-deterministic; the
+ * MAX_FACTS count cap applies to the consumed prefix (input-order dependent), so
+ * the guarantee covers the admitted set.
  *
  * Fail closed: an unknown-authority-bearing fact — including one with no id, a
  * novel authority token, or a non-object entry — sets a boolean that demotes
@@ -331,8 +332,19 @@ function cloneJsonSafe(
   try {
     if (Array.isArray(object)) {
       const out: unknown[] = [];
-      for (const entry of object) {
-        const cloned = cloneJsonSafe(entry, path, depth + 1, budget);
+      const length = object.length;
+      for (let index = 0; index < length; index += 1) {
+        // Read through the descriptor so an accessor element is rejected rather
+        // than invoked (a stateful getter must not make cloning order-dependent).
+        const descriptor = Object.getOwnPropertyDescriptor(object, String(index));
+        if (
+          descriptor === undefined ||
+          typeof descriptor.get === 'function' ||
+          typeof descriptor.set === 'function'
+        ) {
+          return { ok: false };
+        }
+        const cloned = cloneJsonSafe(descriptor.value, path, depth + 1, budget);
         if (!cloned.ok) return { ok: false };
         out.push(cloned.value);
       }
@@ -341,8 +353,18 @@ function cloneJsonSafe(
     const prototype = Object.getPrototypeOf(object);
     if (prototype !== Object.prototype && prototype !== null) return { ok: false };
     const out = Object.create(null) as Record<string, unknown>;
+    // Note: a hostile `ownKeys` trap can itself allocate an unbounded key array
+    // inside Object.keys; that JS-inherent case is a documented residual.
     for (const key of Object.keys(object)) {
-      const cloned = cloneJsonSafe((object as Record<string, unknown>)[key], path, depth + 1, budget);
+      const descriptor = Object.getOwnPropertyDescriptor(object, key);
+      if (
+        descriptor === undefined ||
+        typeof descriptor.get === 'function' ||
+        typeof descriptor.set === 'function'
+      ) {
+        return { ok: false };
+      }
+      const cloned = cloneJsonSafe(descriptor.value, path, depth + 1, budget);
       if (!cloned.ok) return { ok: false };
       out[key] = cloned.value;
     }

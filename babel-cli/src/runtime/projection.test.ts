@@ -911,6 +911,37 @@ test('P04: an over-large tie group with an inaccessible member still demotes aut
   assert.ok(proj.degradedReasons.includes('unknown_authoritative_fact'));
 });
 
+test('P04: a shared nested payload getter cannot make a tie group order-dependent', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const makePair = (): [RuntimeFactV1, RuntimeFactV1] => {
+    const nested: Record<string, unknown> = {};
+    let reads = 0;
+    Object.defineProperty(nested, 'x', {
+      enumerable: true,
+      configurable: true,
+      get: () => {
+        reads += 1;
+        if (reads >= 2) throw new Error('boom');
+        return 'ok';
+      },
+    });
+    const mk = (tag: string) =>
+      ({
+        ...template,
+        id: 'dup',
+        schemaVersion: 2,
+        authority: 'observation',
+        sequence: 5,
+        cursor: { stream: 'runtime-facts', sequence: 5 },
+        payload: { type: 'future.optional', tag, nested },
+      }) as unknown as RuntimeFactV1;
+    return [mk('a'), mk('b')];
+  };
+  const [a1, b1] = makePair();
+  const [a2, b2] = makePair();
+  assert.deepEqual(projectTask([a1, b1]), projectTask([b2, a2]));
+});
+
 test('P04: a stateful authority getter cannot make the projection order-dependent', () => {
   const make = (finalOutcome: string): RuntimeFactV1 => {
     let reads = 0;
