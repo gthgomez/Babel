@@ -23,7 +23,8 @@
 
 import assert from 'node:assert/strict';
 import { describe, test, before, after, afterEach } from 'node:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -35,6 +36,15 @@ import { DIRECT_MUTATION_TOOLS } from './mutationTools.js';
 import { globalCostTracker } from '../services/costTracker.js';
 import type { CompactionStrategy, ChatMessage } from './chatCompaction.js';
 import { CompactionManager } from './chatCompaction.js';
+import {
+  buildReadOnlyChildResult,
+  renderReadOnlyChildResultSection,
+} from './childConclusion.js';
+import { runReadOnlyAgentLoop } from './lanes/readOnlyAgentLoop.js';
+import { runMutationAgentLoop } from './lanes/runMutationAgentLoop.js';
+import { runImplementWorktreeAgent } from './implementWorktreeAgent.js';
+import type { AgentAction } from './actions.js';
+import type { ToolResult } from '../localTools.js';
 import {
   PARSER_ORACLE_CASES,
   evaluateParserModule,
@@ -230,6 +240,136 @@ function conversationText(engine: ChatEngine): string {
   return engineInternals(engine)
     .conversation.map((m) => (typeof m.content === 'string' ? m.content : ''))
     .join('\n');
+}
+
+// ── Scenario 7 child-lane fixture helpers ────────────────────────────────────
+
+function git(cwd: string, args: string[]): void {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${(result.stderr || result.stdout || '').trim()}`);
+  }
+}
+
+function createGitProject(): string {
+  const root = mkdtempSync(join(tmpdir(), 'babel-s07-child-'));
+  git(root, ['init']);
+  git(root, ['config', 'user.email', 'babel-test@example.com']);
+  git(root, ['config', 'user.name', 'Babel Test']);
+  mkdirSync(join(root, 'src'), { recursive: true });
+  mkdirSync(join(root, 'lib'), { recursive: true });
+  writeFileSync(join(root, 'src', 'main.ts'), 'export const n = 1;\n', 'utf-8');
+  writeFileSync(join(root, 'lib', 'util.ts'), 'export const util = 1;\n', 'utf-8');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'init']);
+  return root;
+}
+
+/** Minimal executor so `actionResolver` scripts can run without a provider. */
+function mockChildExecutor(
+  results: Record<string, ToolResult>,
+): {
+  mapAction(action: AgentAction): Array<{ kind: 'execute' | 'terminal'; request?: unknown }>;
+  execute(action: AgentAction): Promise<{ action: AgentAction; terminal: boolean; results: ToolResult[] }>;
+} {
+  const keyFor = (action: AgentAction): string =>
+    action.type === 'write_file'
+      ? `write:${action.path}`
+      : action.type === 'read_file'
+        ? `read:${action.path}`
+        : action.type === 'list_dir'
+          ? `list:${action.path}`
+          : action.type;
+  return {
+    mapAction(action) {
+      if (action.type === 'finish' || action.type === 'ask_approval') {
+        return [{ kind: 'terminal' as const }];
+      }
+      return [{ kind: 'execute' as const }];
+    },
+    async execute(action) {
+      if (action.type === 'finish' || action.type === 'ask_approval') {
+        return { action, terminal: true, results: [] };
+      }
+      return {
+        action,
+        terminal: false,
+        results: [results[keyFor(action)] ?? { exit_code: 0, stdout: '', stderr: '' }],
+      };
+    },
+  };
+}
+
+async function withoutAutonomyLease<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = process.env['BABEL_AUTONOMY_LEASE'];
+  delete process.env['BABEL_AUTONOMY_LEASE'];
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env['BABEL_AUTONOMY_LEASE'];
+    else process.env['BABEL_AUTONOMY_LEASE'] = prev;
+  }
+}
+
+async function dispatchReadOnlyChild(
+  root: string,
+  task: string,
+): Promise<{ observation: string; toolCallLog: Array<{ tool: string; detail?: string }> }> {
+  const engine = new ChatEngine({ task, projectRoot: root, model: MODEL });
+  const internals = engine as unknown as {
+    executeOneAction: (
+      action: unknown,
+      toolContext: unknown,
+      callbacks: unknown,
+      meta: unknown,
+    ) => Promise<{ index: number; observation: string }>;
+    abortController: AbortController;
+    toolCallLog: Array<{ tool: string; detail?: string }>;
+  };
+  const result = await internals.executeOneAction(
+    { type: 'sub_agent', task, mutation: false },
+    {
+      agentId: 's07-parent',
+      runId: 's07-parent',
+      runDir: root,
+      babelRoot: root,
+      projectRoot: root,
+      signal: internals.abortController.signal,
+    },
+    {},
+    { index: 0, idempotencyKey: 'call-0' },
+  );
+  return { observation: result.observation, toolCallLog: internals.toolCallLog };
+}
+
+function childResultInput(overrides: {
+  completed: boolean;
+  cancelled: boolean;
+  roundExhausted?: boolean;
+  providerError?: string | null;
+  inheritedBudgetExceeded?: boolean;
+  summary?: string;
+}) {
+  return {
+    steps: overrides.summary
+      ? ([{ phase: 'finish', action: { type: 'finish', summary: overrides.summary } }] as const)
+      : ([] as const),
+    toolCallLog: [] as const,
+    observations: '',
+    stepsExecuted: 1,
+    degraded: false,
+    completed: overrides.completed,
+    roundExhausted: overrides.roundExhausted ?? false,
+    policyBlocked: false,
+    ...(overrides.providerError !== undefined ? { providerError: overrides.providerError } : {}),
+    ...(overrides.inheritedBudgetExceeded !== undefined
+      ? { inheritedBudgetExceeded: overrides.inheritedBudgetExceeded }
+      : {}),
+    lane: 'ask',
+    childId: 's07-child',
+    maxRounds: 4,
+    cancelled: overrides.cancelled,
+  };
 }
 
 // ── Scripted provider + loop driver ──────────────────────────────────────────
@@ -901,6 +1041,208 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
     } finally {
       fixture.cleanup();
     }
+  });
+
+  test('Scenario 7a — a successful read-only child is child-reported evidence, never verified completion', async () => {
+    const root = createGitProject();
+    const prevOffline = process.env['BABEL_LITE_OFFLINE'];
+    process.env['BABEL_LITE_OFFLINE'] = '1';
+    try {
+      const { observation } = await withoutAutonomyLease(() =>
+        dispatchReadOnlyChild(root, 'Summarize the module'),
+      );
+      assert.match(observation, /Child conclusion \(child-reported; NOT verified\)/);
+      assert.match(observation, /authority: child_assertion_not_verified/);
+      assert.match(observation, /completion: completed/);
+      assert.doesNotMatch(observation, /confirmed_change/, 'a child assertion is not a confirmed change');
+
+      // Even a child that explicitly claims verified completion stays an
+      // unverified assertion at the parent boundary.
+      const claimed = buildReadOnlyChildResult(
+        childResultInput({
+          completed: true,
+          cancelled: false,
+          summary: 'VERIFIED_COMPLETE: all tests passed, task done',
+        }),
+      );
+      assert.equal(claimed.completion, 'completed');
+      assert.equal(claimed.provenance.authority, 'child_assertion_not_verified');
+      assert.notEqual(claimed.provenance.authority, 'verified_complete');
+      assert.match(renderReadOnlyChildResultSection(claimed), /NOT verified/);
+    } finally {
+      if (prevOffline === undefined) delete process.env['BABEL_LITE_OFFLINE'];
+      else process.env['BABEL_LITE_OFFLINE'] = prevOffline;
+      spawnSync('git', ['worktree', 'prune'], { cwd: root, encoding: 'utf-8' });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('Scenario 7b — child failure states are reported truthfully (provider error, round exhaustion, cancellation, budget)', async () => {
+    const root = createGitProject();
+    await withoutAutonomyLease(async () => {
+    const toolContext = { agentId: 's07-c', runId: 's07-c', runDir: root, babelRoot: root };
+    const toResult = (
+      result: Awaited<ReturnType<typeof runReadOnlyAgentLoop>>,
+      cancelled: boolean,
+    ) =>
+      buildReadOnlyChildResult({
+        steps: result.steps,
+        toolCallLog: result.toolCallLog,
+        observations: result.observations,
+        stepsExecuted: result.stepsExecuted,
+        degraded: result.degraded,
+        completed: result.completed,
+        roundExhausted: result.roundExhausted,
+        policyBlocked: result.policyBlocked,
+        ...(result.providerError !== undefined ? { providerError: result.providerError } : {}),
+        ...(result.inheritedBudgetExceeded !== undefined
+          ? { inheritedBudgetExceeded: result.inheritedBudgetExceeded }
+          : {}),
+        lane: 'ask',
+        childId: 's07-c',
+        maxRounds: result.roundsExecuted ?? 4,
+        cancelled,
+      });
+
+    // Provider failure: the resolver throws at the model boundary.
+    const failed = await runReadOnlyAgentLoop({
+      verb: 'ask',
+      task: 'fail at the provider',
+      projectRoot: root,
+      seedPaths: [],
+      toolContext,
+      maxRounds: 2,
+      actionResolver: async () => {
+        throw new Error('provider stream error: 503 Service Unavailable');
+      },
+    });
+    assert.equal(failed.completed, false);
+    assert.ok(failed.providerError, 'provider error is captured');
+    assert.equal(toResult(failed, false).completion, 'provider_error');
+
+    // Round exhaustion: never finishes within the round cap.
+    const exhausted = await runReadOnlyAgentLoop({
+      verb: 'ask',
+      task: 'never finish',
+      projectRoot: root,
+      seedPaths: [],
+      toolContext,
+      maxRounds: 1,
+      actionResolver: async () => [{ type: 'read_file', path: 'src/main.ts' }],
+    });
+    assert.equal(exhausted.roundExhausted, true);
+    assert.equal(toResult(exhausted, false).completion, 'partial');
+
+    // Cancellation: the parent signal is already aborted.
+    const controller = new AbortController();
+    controller.abort();
+    const cancelled = await runReadOnlyAgentLoop({
+      verb: 'ask',
+      task: 'cancelled child',
+      projectRoot: root,
+      seedPaths: [],
+      toolContext,
+      maxRounds: 2,
+      abortSignal: controller.signal,
+      actionResolver: async () => [{ type: 'read_file', path: 'src/main.ts' }],
+    });
+    assert.equal(cancelled.completed, false);
+    assert.equal(toResult(cancelled, controller.signal.aborted).completion, 'cancelled');
+
+    // Budget exhaustion: inherited wall deadline already passed.
+    const budgeted = await runReadOnlyAgentLoop({
+      verb: 'ask',
+      task: 'budget exhausted child',
+      projectRoot: root,
+      seedPaths: [],
+      toolContext,
+      maxRounds: 4,
+      useDeterministicMock: false,
+      inheritedAllowance: {
+        costBaselineUsd: 0,
+        remainingCostUsd: null,
+        deadlineAtMs: Date.now() - 1,
+        maxRounds: 4,
+      },
+      actionResolver: async () => [{ type: 'read_file', path: 'src/main.ts' }],
+    });
+    assert.equal(budgeted.inheritedBudgetExceeded, true);
+    assert.equal(toResult(budgeted, false).completion, 'budget_exhausted');
+    assert.match(renderReadOnlyChildResultSection(toResult(budgeted, false)), /NOT verified/);
+    });
+  });
+
+  test('Scenario 7c — a mutating child cannot escape write_scope', async () => {
+    const root = createGitProject();
+    await withoutAutonomyLease(async () => {
+    // In-tree mutation lane: an out-of-scope write is rejected as a policy
+    // block and never reaches the filesystem.
+    const escaped = await runMutationAgentLoop({
+      agentId: 's07-mut-escape',
+      task: 'Try to write outside the allowed scope',
+      writeScope: ['src'],
+      projectRoot: root,
+      toolContext: { agentId: 's07-mut-escape', runId: 's07-mut-escape', runDir: root, babelRoot: root },
+      actionResolver: async () => [
+        { type: 'write_file', path: 'lib/out.ts', content: 'escaped\n' },
+        { type: 'finish', summary: 'attempted escape', verification: [] },
+      ],
+    });
+    assert.equal(escaped.attribution, 'child_policy_block', 'out-of-scope write is a policy block');
+    assert.equal(
+      escaped.changedFiles.some((f) => f.path.includes('lib/out.ts')),
+      false,
+      'out-of-scope write is not recorded as a child change',
+    );
+    assert.equal(existsSync(join(root, 'lib', 'out.ts')), false, 'escape never reaches the filesystem');
+
+    // A write inside the declared scope is allowed.
+    const scoped = await runMutationAgentLoop({
+      agentId: 's07-mut-scoped',
+      task: 'Write inside the allowed scope',
+      writeScope: ['src'],
+      projectRoot: root,
+      toolContext: { agentId: 's07-mut-scoped', runId: 's07-mut-scoped', runDir: root, babelRoot: root },
+      actionResolver: async () => [
+        { type: 'write_file', path: 'src/ok.ts', content: 'in scope\n' },
+        { type: 'finish', summary: 'scoped write', verification: [] },
+      ],
+    });
+    assert.equal(
+      scoped.changedFiles.some((f) => f.path.includes('src/ok.ts')),
+      true,
+      'in-scope write is allowed',
+    );
+    assert.equal(scoped.attribution, 'child_success');
+
+    // The production worktree lane keeps the parent revision physically clean.
+    const impl = await runImplementWorktreeAgent(
+      { id: 's07-impl', task: 'Write a result under src', writeScope: ['src'], maxRounds: 3 },
+      { projectRoot: root, useDeterministicMock: true, cleanupWorktree: true },
+    );
+    assert.equal(impl.success, true, impl.summary);
+    assert.equal(impl.parentTreeClean, true, 'parent revision unchanged by the mutation child');
+    assert.ok(impl.changedFiles.every((f) => f.path.startsWith('src')), 'all child changes stay in scope');
+    spawnSync('git', ['worktree', 'prune'], { cwd: root, encoding: 'utf-8' });
+    });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('Scenario 7d — old child evidence cannot satisfy current parent progress/verification', async () => {
+    // A child attribution only counts as mutation progress when the engine
+    // observed a confirmed_change effect; a child's own summary never does.
+    assert.equal(
+      (await import('./chatEngineCriticBudget.js')).hasSubAgentWrites([
+        { tool: 'sub_agent', target: 's07-child', detail: '3 steps, 1 changed, attribution=child_success' },
+      ]),
+      false,
+    );
+    assert.equal(
+      (await import('./chatEngineCriticBudget.js')).hasSubAgentWrites([
+        { tool: 'sub_agent', target: 's07-child', detail: '3 steps, 1 changed', effect_status: 'confirmed_change' },
+      ]),
+      true,
+    );
   });
 
   test('Scenario 9 — provider failure after partial progress keeps the real cause', async () => {
