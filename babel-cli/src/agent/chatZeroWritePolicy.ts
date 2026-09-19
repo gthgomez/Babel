@@ -100,7 +100,7 @@ export function buildZeroWriteHardStopBlockedReport(answer: string): BlockedRepo
  * D03: attach the structured reason to a blocked report without changing the
  * existing prose fields. Absent reason ⇒ byte-identical legacy report.
  */
-function withTerminalReason(
+export function attachTerminalReason(
   report: BlockedReport,
   reason?: TerminalReason,
 ): BlockedReport {
@@ -122,7 +122,7 @@ export function buildPolicyTerminalBlockedReport(
   reason?: TerminalReason,
 ): BlockedReport {
   if (source === 'zero_write') {
-    return withTerminalReason(buildZeroWriteHardStopBlockedReport(answer), reason);
+    return attachTerminalReason(buildZeroWriteHardStopBlockedReport(answer), reason);
   }
   const isReadOnlyReport =
     source === 'read_only_hard_cap' ||
@@ -187,7 +187,7 @@ export function buildPolicyTerminalBlockedReport(
     missing: 'A viable recovery or mutation path',
     target: 'policy',
   };
-  return withTerminalReason(
+  return attachTerminalReason(
     {
       schema_version: 1,
       status: 'BLOCKED',

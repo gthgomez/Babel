@@ -390,4 +390,79 @@ test('executeChatTask sets lastRunUserStatus to failed on engine failure', async
     });
   });
 });
+
+// D03 (C1): the production TUI card renderer must receive the structured reason
+// from the ChatResult, not just the durable-session projection. Regression for
+// the original defect where recovery exhaustion printed
+// "Review the blocked capability".
+test('executeChatTask renders recovery-exhaustion guidance in the TUI card', async () => {
+  await withStdoutIsTTY(false, async () => {
+    await withEnvUnset('CI', async () => {
+      const ctx = makeReplContext();
+      const target = makeTarget();
+      const writes: string[] = [];
+      const originalLog = console.log;
+      console.log = ((line?: unknown) => {
+        writes.push(String(line ?? ''));
+      }) as typeof console.log;
+
+      const terminalResult: ChatResult = {
+        status: 'blocked',
+        outcome: 'BLOCKED_POLICY',
+        reason_code: 'recovery_exhausted',
+        cause_class: 'model',
+        answer: 'Repeated no-progress after recovery (8 cycles)',
+        usage: EMPTY_USAGE,
+        conversation: [],
+        blockedReport: {
+          schema_version: 1,
+          status: 'BLOCKED',
+          reason: 'Repeated no-progress after recovery',
+          missing: 'Semantic progress',
+          reason_code: 'recovery_exhausted',
+          cause_class: 'model',
+          checked: [{ action: 'progress_terminal', target: 'progress', finding: '8 cycles' }],
+        },
+      };
+
+      const mockEngine = {
+        submitMessage: async () => terminalResult,
+        submitMessageStream: async function* () {
+          yield {
+            type: 'done',
+            answer: terminalResult.answer,
+            usage: EMPTY_USAGE,
+            status: 'blocked',
+            outcome: 'BLOCKED_POLICY',
+            reason_code: 'recovery_exhausted',
+            cause_class: 'model',
+            blockedReport: terminalResult.blockedReport,
+          } as ChatEvent;
+        },
+        cancel: () => undefined,
+        abortTurn: () => undefined,
+      } as unknown as ChatEngine;
+
+      try {
+        await executeChatTask(
+          ctx,
+          'investigate the repo',
+          'investigate the repo',
+          target,
+          undefined,
+          { ...testDeps, engineFactory: () => mockEngine },
+        );
+      } finally {
+        console.log = originalLog;
+      }
+
+      const rendered = writes.join('\n');
+      assert.match(rendered, /No progress after recovery/);
+      assert.match(rendered, /Inspect diagnostics/);
+      assert.match(rendered, /Narrow scope/);
+      assert.doesNotMatch(rendered, /Review the blocked capability/);
+      assert.doesNotMatch(rendered, /Review permission/);
+    });
+  });
+});
 });

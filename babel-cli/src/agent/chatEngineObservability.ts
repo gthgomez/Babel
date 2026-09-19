@@ -824,7 +824,10 @@ export function computeTerminalOutcome(input: {
   finalStatus: string;
   budgetExceeded: boolean;
   lastVerifierReceipt?: { exit_code: number; command?: string; summary?: string } | null | undefined;
-  blockedReport?: { reason: string; missing?: string } | null | undefined;
+  blockedReport?:
+    | { reason: string; missing?: string; reason_code?: TerminalReasonCode | undefined }
+    | null
+    | undefined;
   /** W1 C: production writes present — collect fail is failed-with-evidence, not pure env. */
   hasAnyWrites?: boolean;
 }): TerminalOutcome {
@@ -845,6 +848,15 @@ export function computeTerminalOutcome(input: {
         ? 'VERIFIED_COMPLETE'
         : 'UNVERIFIED_PATCH';
     case 'blocked': {
+      // D03: an explicit structured reason outranks the diagnostic prose. A
+      // recovery exhaustion / explicit policy denial is a policy block even
+      // when the free-text reason does not contain the legacy policy keywords.
+      if (
+        input.blockedReport?.reason_code === 'recovery_exhausted' ||
+        input.blockedReport?.reason_code === 'permission_denied'
+      ) {
+        return 'BLOCKED_POLICY';
+      }
       const reason = input.blockedReport?.reason ?? '';
       const missing = input.blockedReport?.missing ?? '';
       const envBlob = `${reason}\n${missing}`;

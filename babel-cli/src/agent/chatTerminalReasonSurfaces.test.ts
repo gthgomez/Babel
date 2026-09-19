@@ -300,4 +300,79 @@ describe('D03 production engine: recovery exhaustion reaches every surface', () 
       delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
     }
   });
+
+  // D03 (I3): on the read-only synthesis-failure path the outcome, the persisted
+  // blocked report and the reason must agree. Previously the report had no
+  // reason_code and the outcome was BLOCKED_EXTERNAL while the reason said
+  // recovery_exhausted.
+  test('read-only synthesis failure reconciles outcome, report and reason', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'd03-readonly-'));
+    writeFileSync(join(projectRoot, 'hello.txt'), 'hello\n', 'utf-8');
+    process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
+    try {
+      const engine = new ChatEngine({
+        task: 'investigate hello.txt',
+        projectRoot,
+        model: 'deepseek-v4-flash',
+        maxTurns: 40,
+      });
+      const anyEngine = engine as unknown as {
+        deliberationRunner: unknown;
+        synthesisRunner: unknown;
+        shouldUseNativeTools: () => boolean;
+      };
+      // The synthesis runner has no executeRaw, so answer synthesis fails after
+      // the inspection bound terminals.
+      const runner = {
+        executeWithToolsStream:
+          async function* (): AsyncGenerator<ToolStreamEvent, void, undefined> {
+            yield {
+              type: 'tool_use',
+              id: `read_${Math.random()}`,
+              name: 'read_file',
+              input: { path: 'hello.txt' },
+            };
+            yield { type: 'done', finishReason: 'tool_calls' };
+          },
+        execute: async () => ({ type: 'completion', answer: 'x' }),
+        getLastInvocationMetadata: () => null,
+      };
+      anyEngine.deliberationRunner = runner;
+      anyEngine.synthesisRunner = runner;
+      anyEngine.shouldUseNativeTools = () => true;
+
+      const result = await consumeChatStream(
+        engine.submitMessageStream('investigate hello.txt'),
+        null,
+      );
+
+      assert.equal(result.reason_code, 'recovery_exhausted');
+      assert.equal(result.cause_class, 'model');
+      // The reason and the (now reason-aware) outcome agree: a recovery
+      // exhaustion is a policy block, not an external dependency.
+      assert.equal(result.outcome, 'BLOCKED_POLICY');
+      assert.equal(result.blockedReport?.reason_code, 'recovery_exhausted');
+
+      const log = loadSessionEventLogFromDir(chatSessionDir(engine.getEngineRunId()));
+      const ended = log?.events.filter((e) => e.kind === 'turn_ended').at(-1) as
+        | { outcome?: string; reason_code?: string }
+        | undefined;
+      assert.equal(ended?.outcome, 'BLOCKED_POLICY');
+      assert.equal(ended?.reason_code, 'recovery_exhausted');
+
+      const payload = buildChatRunPayload(result, {
+        task: 'investigate hello.txt',
+        projectRoot,
+      });
+      assert.equal(payload['terminal_outcome'], 'BLOCKED_POLICY');
+      assert.equal(payload['reason_code'], 'recovery_exhausted');
+      assert.equal(
+        (payload['blocked_report'] as { reason_code?: string } | undefined)?.reason_code,
+        'recovery_exhausted',
+      );
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+    }
+  });
 });

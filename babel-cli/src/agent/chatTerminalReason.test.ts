@@ -114,7 +114,10 @@ describe('D03 terminalReasonFromOutcome', () => {
     assert.equal(terminalReasonFromOutcome('CANCELLED')?.cause_class, null);
     assert.equal(terminalReasonFromOutcome('BUDGET_EXHAUSTED')?.code, 'budget_exhausted');
     assert.equal(terminalReasonFromOutcome('BLOCKED_EXTERNAL')?.code, 'external_dependency');
-    assert.equal(terminalReasonFromOutcome('BLOCKED_POLICY')?.code, 'permission_denied');
+    // BLOCKED_POLICY is broad; without an explicit source we must not assert a
+    // permission cause.
+    assert.equal(terminalReasonFromOutcome('BLOCKED_POLICY')?.code, 'unknown');
+    assert.equal(terminalReasonFromOutcome('BLOCKED_POLICY')?.cause_class, null);
     assert.equal(terminalReasonFromOutcome('INFRA_FAILURE')?.code, 'provider_failure');
     assert.equal(terminalReasonFromOutcome('INFRA_FAILURE')?.cause_class, 'provider');
     assert.equal(terminalReasonFromOutcome('AGENT_FAILURE')?.code, 'unknown');

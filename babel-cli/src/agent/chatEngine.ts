@@ -321,6 +321,7 @@ import type { DiffCriticVerdict } from './diffCritic.js';
 import { evaluateTokenExplosionAfterTurn } from './budgetKillPolicy.js';
 import {
   applyExploreFuses as applyExploreFusesPolicy,
+  attachTerminalReason,
   buildPolicyTerminalBlockedReport,
   resolveInvestigateHardCapObserveOnly,
   type ExploreFuseResult,
@@ -3684,19 +3685,22 @@ export class ChatEngine {
               this.conversation.push({ role: 'assistant', content: failMsg });
               yield { type: 'answer_chunk', text: failMsg };
               yield this.streamDone(failMsg, {
-                blockedReport: {
-                  schema_version: 1,
-                  status: 'BLOCKED',
-                  reason: 'Answer synthesis unavailable',
-                  missing: 'LLM provider response for answer synthesis',
-                  checked: [
-                    {
-                      action: 'synthesize_answer',
-                      target: 'provider',
-                      finding: synthError?.message ?? 'Empty synthesis output',
-                    },
-                  ],
-                },
+                blockedReport: attachTerminalReason(
+                  {
+                    schema_version: 1,
+                    status: 'BLOCKED',
+                    reason: 'Answer synthesis unavailable',
+                    missing: 'LLM provider response for answer synthesis',
+                    checked: [
+                      {
+                        action: 'synthesize_answer',
+                        target: 'provider',
+                        finding: synthError?.message ?? 'Empty synthesis output',
+                      },
+                    ],
+                  },
+                  arb.terminalReason,
+                ),
                 ...(arb.terminalReason !== undefined ? { reason: arb.terminalReason } : {}),
               });
               return;
@@ -3726,7 +3730,13 @@ export class ChatEngine {
                 role: 'assistant',
                 content: killAnswer,
               });
-              yield this.streamDone(killAnswer, { blockedReport: killBlocked });
+              yield this.streamDone(killAnswer, {
+                blockedReport: killBlocked,
+                // D03: this branch runs inside the arbiter-terminal block, so the
+                // structured reason is known — do not let the reason degrade to
+                // the outcome fallback.
+                ...(arb.terminalReason !== undefined ? { reason: arb.terminalReason } : {}),
+              });
               return;
             }
           }

@@ -164,7 +164,10 @@ export function terminalReasonFromOutcome(
     case 'BLOCKED_EXTERNAL':
       return { code: 'external_dependency', cause_class: 'environment' };
     case 'BLOCKED_POLICY':
-      return { code: 'permission_denied', cause_class: 'harness' };
+      // BLOCKED_POLICY is the broad bucket for zero_write / tamper / critic /
+      // gate / auto-continue / stall etc. Without an explicit source we cannot
+      // assert a permission cause — do not fabricate one.
+      return { code: 'unknown', cause_class: null };
     case 'INFRA_FAILURE':
       return { code: 'provider_failure', cause_class: 'provider' };
     case 'AGENT_FAILURE':
