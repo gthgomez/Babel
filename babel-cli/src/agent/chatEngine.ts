@@ -121,6 +121,7 @@ import {
   resolveChatTaskClass,
   getChatTaskTune,
   type ChatTaskClass,
+  type TaskOperation,
   type VerificationPolicy,
 } from '../config/chatTaskClass.js';
 import {
@@ -299,6 +300,10 @@ import {
 import type { StallState, StallIntervention } from './stallDetector.js';
 import type { ProgressController, ProgressSignal } from './progressController.js';
 import { classifyShellCapability } from './progressController.js';
+import {
+  progressSignalsFromReceipt,
+  type ProgressReceipt,
+} from './progressReceipt.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './chatPhaseNudge.js';
 import {
   assessMutationEffect,
@@ -1630,18 +1635,20 @@ export class ChatEngine {
     // the implementor zero-write refusal loop re-query them until maxTurns.
     if (isConversationalTurnText(task)) return 'explain';
 
-    // Explicit markdown fenced code blocks or diff/patch snippets → execute
-    if (/```(?:diff|patch|javascript|typescript|python|go|rust)\b/.test(task)) return 'execute';
-
-    // Explicit read-only / no-edit directives → explain
-    // MUST be checked before execute verb patterns so "fix this without editing
-    // files" routes to explain, not execute.
+    // Explicit read-only / no-edit directives → explain.
+    // MUST be checked before fenced code and execute verb patterns: evidence
+    // content (a pasted snippet, diff, or a path named "repair"/"write") is
+    // never mutation authority, and "fix this without editing files" routes to
+    // explain rather than execute.
     if (
-      /\b(without\s+(editing|modifying|changing|writing|touching)|read[- ]only|do\s+not\s+(edit|modify|change|write))\b/i.test(
+      /\b(without\s+(editing|modifying|changing|writing|touching)|read[- ]only|do\s+not\s+(edit|modify|change|write|delete|remove))\b/i.test(
         task,
       )
     )
       return 'explain';
+
+    // Explicit markdown fenced code blocks or diff/patch snippets → execute
+    if (/```(?:diff|patch|javascript|typescript|python|go|rust)\b/.test(task)) return 'execute';
 
     // Review/audit prompts are read-only even when their evidence contains
     // mutation-shaped words such as "repair" in a path or diff description.
@@ -1649,7 +1656,7 @@ export class ChatEngine {
     // fix it"). Keeping this before the generic mutation verbs prevents the
     // trusted reviewer from entering the coding zero-write recovery loop.
     if (
-      /\b(review|audit|analyze|diagnose|inspect|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and|then)\s+(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update|create|write|edit|modify|change|remove|delete|revert|rewrite|replace)\b)(?!.*\bfix\s+it\b)/i.test(
+      /\b(review|audit|analyze|diagnose|inspect|investigate|research|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and|then)\s+(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update|create|write|edit|modify|change|remove|delete|revert|rewrite|replace)\b)(?!.*\bfix\s+it\b)/i.test(
         task,
       )
     )
@@ -1958,7 +1965,10 @@ export class ChatEngine {
   }
 
   /** Force-mutate + read-thrash + cumulative exploration fuses (shared submit/stream). */
-  private applyExploreFuses(executeIntent: boolean): ExploreFuseResult {
+  private applyExploreFuses(
+    executeIntent: boolean,
+    readOnlyOperation: boolean,
+  ): ExploreFuseResult {
     const state = {
       turnsWithoutWrite: this.turnsWithoutWrite,
       consecutiveReadOnlyTools: this.consecutiveReadOnlyTools,
@@ -1972,6 +1982,7 @@ export class ChatEngine {
     };
     const out = applyExploreFusesPolicy({
       executeIntent,
+      readOnlyOperation,
       taskClass: this.taskClass,
       hasAnyWrites: this.hasAnyWrites(),
       state,
@@ -2503,6 +2514,17 @@ export class ChatEngine {
     let allToolObservations = '';
 
     const resolvedIntent = runtime.taskIntent;
+
+    // D01: one effective-operation policy for this accepted submission.
+    // TaskShape is authoritative (derived from the same classifier that sets
+    // taskClass), so read-only gating, preparation fuses, progress scoring and
+    // finalization all consume this decision instead of re-deriving it from the
+    // text-intent classifier. Older hydrated snapshots without the field fall
+    // back to their persisted shape; unknown defaults to MUTATING (fail-safe:
+    // never silently loosens mutation pressure).
+    const effectiveOperation: TaskOperation =
+      runtime.effectiveOperation ?? runtime.taskShape?.operation ?? 'MUTATING';
+    const isReadOnlyInspection = effectiveOperation === 'READ_ONLY';
 
     const authorityHalt = evaluateSubmitTaskAuthorityHalt(this.parity, userInput);
     if (authorityHalt) {
@@ -3276,7 +3298,10 @@ export class ChatEngine {
           this.maybeInjectMidLoopHeuristicCritic({ onThought: () => {} }, resolvedIntent);
         }
 
-        const exploreFuses = this.applyExploreFuses(resolvedIntent === 'execute');
+        const exploreFuses = this.applyExploreFuses(
+          resolvedIntent === 'execute',
+          isReadOnlyInspection,
+        );
         for (const label of exploreFuses.labels) {
           yield { type: 'thought', text: label };
         }
@@ -3284,48 +3309,6 @@ export class ChatEngine {
         // P2: Update stall detector and inject phase nudge if needed
         const turnCallsStr = this.toolCallLog.slice(this._turnToolCallLogStart);
         this.stallState = updateStallState(this.stallState, turnCallsStr, turn);
-
-        // W3 Phase 3 Progress and Recovery Controller
-        const signals: ProgressSignal[] = [];
-        if (
-          turnCallsStr.some(
-            (tc) =>
-              isConfirmedMutation({
-                tool: tc.tool,
-                error: tc.error,
-                effectStatus: tc.effect_status,
-                mutationPaths: tc.mutation_paths,
-              }) ||
-              (tc.tool === 'sub_agent' &&
-                tc.effect_status === 'confirmed_change'),
-          )
-        ) {
-          signals.push('production_mutation');
-        }
-
-        const isTextOnly = turnCallsStr.length === 0;
-        const pcResult = this.progressController.scoreTurn(signals, isTextOnly, this.gateStrikes);
-        recordProgressRecovery(
-          this.parity.sessionEvents,
-          String(this.parity.turnId ?? this._turnIndex),
-          {
-            intervention: pcResult.intervention,
-            score: pcResult.score,
-            signals,
-            reason: 'turn_scored',
-          },
-        );
-
-        if (pcResult.transitioned) {
-          this.currentTurnTelemetry?.recordPolicyIntervention();
-          yield {
-            type: 'progress_recovery',
-            intervention: pcResult.intervention,
-            source: 'progress_controller',
-            score: pcResult.score,
-            message: `Transitioned to ${pcResult.intervention}`,
-          };
-        }
 
         const streamPhase = classifyPhase(
           this.stallState,
@@ -3342,9 +3325,6 @@ export class ChatEngine {
           );
         }
         this._lastPhase = streamPhase;
-        const isReadOnlyInspection =
-          resolvedIntent !== 'execute' &&
-          (this.taskClass === 'quick_inspect' || this.taskClass === 'investigate');
         if (shouldNudge(this._lastPhase) && !isReadOnlyInspection) {
           const hintsStr = turnCallsStr
             .filter(
@@ -3450,8 +3430,9 @@ export class ChatEngine {
               ? createHash('sha256').update(content).digest('hex').slice(0, 16)
               : undefined,
         });
+        let cycleReceipt: ProgressReceipt | null = null;
         try {
-          parityRecordToolBatch(this.parity, {
+          cycleReceipt = parityRecordToolBatch(this.parity, {
             at_turn: turn,
             ...(turnResult.type === 'tool_calls' && turnResult.thinking
               ? { thinking: turnResult.thinking }
@@ -3472,6 +3453,8 @@ export class ChatEngine {
             verifierChanged: turnSlice.some(
               (t) => t.tool === 'run_command' || t.tool === 'test_run' || t.tool === 'shell_exec',
             ),
+            // Context epoch: advancing it makes necessary re-reads count again.
+            contextEpoch: this.readContextEpoch,
             // W2.2: propose+start already flushed before executeActions.
             settleAlreadyProposed: turnResult.actions.length > 0,
             // Do NOT pass every read as localizedPaths — re-reads use contentHash only.
@@ -3488,6 +3471,56 @@ export class ChatEngine {
         }
         this._streamNativeToolCallIds = [];
         this._activeToolBatchId = null;
+
+        // D02: score the W3 progress/recovery controller from the same evidence
+        // set as the durable receipt (confirmed mutation + receipt read-novelty)
+        // instead of an empty mutation-only list. A read-only investigation with
+        // distinct reads therefore stays at "none" rather than emitting false
+        // restricted_tools / terminal_blocked labels.
+        const progressSignals: ProgressSignal[] = [];
+        if (
+          turnCallsStr.some(
+            (tc) =>
+              isConfirmedMutation({
+                tool: tc.tool,
+                error: tc.error,
+                effectStatus: tc.effect_status,
+                mutationPaths: tc.mutation_paths,
+              }) ||
+              (tc.tool === 'sub_agent' && tc.effect_status === 'confirmed_change'),
+          )
+        ) {
+          progressSignals.push('production_mutation');
+        }
+        for (const signal of progressSignalsFromReceipt(cycleReceipt)) {
+          if (!progressSignals.includes(signal)) progressSignals.push(signal);
+        }
+        const isTextOnly = turnCallsStr.length === 0;
+        const pcResult = this.progressController.scoreTurn(
+          progressSignals,
+          isTextOnly,
+          this.gateStrikes,
+        );
+        recordProgressRecovery(
+          this.parity.sessionEvents,
+          String(this.parity.turnId ?? this._turnIndex),
+          {
+            intervention: pcResult.intervention,
+            score: pcResult.score,
+            signals: progressSignals,
+            reason: 'turn_scored',
+          },
+        );
+        if (pcResult.transitioned) {
+          this.currentTurnTelemetry?.recordPolicyIntervention();
+          yield {
+            type: 'progress_recovery',
+            intervention: pcResult.intervention,
+            source: 'progress_controller',
+            score: pcResult.score,
+            message: `Transitioned to ${pcResult.intervention}`,
+          };
+        }
 
         // P0-E: zero-write shadow by default for coding classes (one-shot log);
         // enforce ablation is a real terminal via zeroWriteTerminalMessage.
@@ -3569,10 +3602,14 @@ export class ChatEngine {
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
 
-          // Read-only inspection hard cap: synthesize gathered evidence into a final informational answer
+          // Read-only inspection terminal: synthesize gathered evidence into a
+          // bounded final informational answer instead of a generic capability
+          // block. Covers the read-only hard cap and the evidence-based
+          // no-progress terminal (never press a research task to mutate).
           if (
             (arb.policySource === 'investigate_hard_cap' ||
-              arb.policySource === 'read_only_hard_cap') &&
+              arb.policySource === 'read_only_hard_cap' ||
+              arb.policySource === 'progress_terminal') &&
             isReadOnlyInspection
           ) {
             let synthAnswer = '';
