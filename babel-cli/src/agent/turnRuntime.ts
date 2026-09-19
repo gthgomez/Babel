@@ -19,6 +19,7 @@ import {
   resolveChatTaskClass,
   analyzeTaskShape,
   type ChatTaskClass,
+  type TaskOperation,
   type VerificationPolicy,
   type TaskShape,
 } from '../config/chatTaskClass.js';
@@ -47,6 +48,13 @@ export interface TurnRuntimeSnapshot extends TurnRuntimeCounters {
   taskIntent: TurnTaskIntent;
   taskClass: ChatTaskClass;
   taskShape?: TaskShape;
+  /**
+   * D01: effective operation for this accepted submission, derived from the
+   * same TaskShape machinery that resolves taskClass. Read-only gating,
+   * preparation fuses, progress policy and finalization consume this one
+   * policy instead of re-deriving intent from a second classifier.
+   */
+  effectiveOperation?: TaskOperation;
   escalationReason?: string;
   gatePolicy: VerificationPolicy | null;
   /** Last sticky intent retained for explicit continuation. */
@@ -127,6 +135,12 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
     : emptyTurnCounters();
 
   const taskShape = analyzeTaskShape(input.userInput);
+  // Continue-task keeps the frozen operation from the prior submission;
+  // isolated submissions derive it fresh from the same TaskShape analysis.
+  const effectiveOperation: TaskOperation =
+    continueTask && prev?.effectiveOperation
+      ? prev.effectiveOperation
+      : taskShape.operation;
 
   return {
     submissionIndex,
@@ -134,6 +148,7 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
     taskIntent,
     taskClass,
     taskShape,
+    effectiveOperation,
     gatePolicy,
     stickyIntent: taskIntent,
     continuedTask: continueTask,
