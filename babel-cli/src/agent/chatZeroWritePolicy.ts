@@ -16,6 +16,7 @@ import {
 } from './budgetKillPolicy.js';
 import type { RestrictedToolMode } from './chatToolDefinitions.js';
 import type { BlockedReport } from '../schemas/agentContracts.js';
+import type { TerminalReason } from './chatTerminalReason.js';
 import { applyCumulativeExplorationEscalation } from './explorationFuse.js';
 import {
   buildReadThrashFuseMessage,
@@ -96,15 +97,32 @@ export function buildZeroWriteHardStopBlockedReport(answer: string): BlockedRepo
 }
 
 /**
+ * D03: attach the structured reason to a blocked report without changing the
+ * existing prose fields. Absent reason ⇒ byte-identical legacy report.
+ */
+function withTerminalReason(
+  report: BlockedReport,
+  reason?: TerminalReason,
+): BlockedReport {
+  if (!reason) return report;
+  return {
+    ...report,
+    reason_code: reason.code,
+    cause_class: reason.cause_class,
+  };
+}
+
+/**
  * BlockedReport for progress/stall/hard-ceiling terminals — not zero-write.
  * Use when parity arbiter wins with a non-zero_write terminal source.
  */
 export function buildPolicyTerminalBlockedReport(
   source: string,
   answer: string,
+  reason?: TerminalReason,
 ): BlockedReport {
   if (source === 'zero_write') {
-    return buildZeroWriteHardStopBlockedReport(answer);
+    return withTerminalReason(buildZeroWriteHardStopBlockedReport(answer), reason);
   }
   const isReadOnlyReport =
     source === 'read_only_hard_cap' ||
@@ -169,19 +187,22 @@ export function buildPolicyTerminalBlockedReport(
     missing: 'A viable recovery or mutation path',
     target: 'policy',
   };
-  return {
-    schema_version: 1,
-    status: 'BLOCKED',
-    reason: meta.reason,
-    missing: meta.missing,
-    checked: [
-      {
-        action: source,
-        target: meta.target,
-        finding: answer.slice(0, 240),
-      },
-    ],
-  };
+  return withTerminalReason(
+    {
+      schema_version: 1,
+      status: 'BLOCKED',
+      reason: meta.reason,
+      missing: meta.missing,
+      checked: [
+        {
+          action: source,
+          target: meta.target,
+          finding: answer.slice(0, 240),
+        },
+      ],
+    },
+    reason,
+  );
 }
 
 /** Force-mutate / thrash restriction: no shell until a patch exists. */

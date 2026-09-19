@@ -5,6 +5,7 @@
  */
 
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import { classifyPolicySource, type TerminalReason } from './chatTerminalReason.js';
 import { projectChatTerminal, type ChatStatus } from './chatFailureClassification.js';
 import { classifyToolEffect } from '../executor/contracts.js';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
@@ -258,10 +259,16 @@ export function parityReduce(rt: ParityRuntime, event: AgentLoopEvent): AgentLoo
   return rt.loop;
 }
 
-export function parityOnCancel(rt: ParityRuntime): void {
+export function parityOnCancel(rt: ParityRuntime, reason?: TerminalReason): void {
   parityReduce(rt, { type: 'cancel' });
   if (rt.turnId) {
-    endTurn(rt.eventLog, rt.turnId, 'CANCELLED', 'cancelled');
+    endTurn(
+      rt.eventLog,
+      rt.turnId,
+      'CANCELLED',
+      'cancelled',
+      reason ?? { code: 'cancelled', cause_class: null },
+    );
   }
 }
 
@@ -681,6 +688,8 @@ export function parityArbitrateCycle(input: {
   policyMessage: string | null;
   policySource: string | null;
   terminalAnswer: string | null;
+  /** D03: structured reason for the selected terminal (undefined for nudges). */
+  terminalReason?: TerminalReason;
 } {
   const candidates: PolicyCandidate[] = [];
   if (input.hardCeiling) {
@@ -841,11 +850,18 @@ export function parityArbitrateCycle(input: {
   }
 
   if (winner?.action === 'terminal') {
+    const lastReceipt = input.rt.progress.receipts.at(-1);
+    const terminalReason = classifyPolicySource(winner.source, {
+      ...(lastReceipt?.noProgressReason !== undefined
+        ? { noProgressReason: lastReceipt.noProgressReason }
+        : {}),
+    });
     return {
       intervention: progressIx,
       policyMessage: null,
       policySource: winner.source,
       terminalAnswer: winner.message,
+      ...(terminalReason !== undefined ? { terminalReason } : {}),
     };
   }
   if (progressIx.action === 'recover') {
@@ -865,6 +881,7 @@ export function parityEndTurn(
   rt: ParityRuntime,
   outcome: TerminalOutcome | undefined,
   status: string,
+  reason?: TerminalReason,
 ): void {
   const terminal = projectChatTerminal({
     ...(outcome !== undefined ? { outcome } : {}),
@@ -915,7 +932,7 @@ export function parityEndTurn(
     parityReduce(rt, event);
   }
   if (rt.turnId) {
-    endTurn(rt.eventLog, rt.turnId, terminal.outcome, terminal.status);
+    endTurn(rt.eventLog, rt.turnId, terminal.outcome, terminal.status, reason);
     // W2 PR-E: only one turn_ended per turn_id in session log.
     const already = rt.sessionEvents.events.some(
       (e) => e.kind === 'turn_ended' && e.turn_id === rt.turnId,
@@ -925,6 +942,7 @@ export function parityEndTurn(
         turn_id: rt.turnId,
         ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
         status: terminal.status,
+        ...(reason !== undefined ? { reason } : {}),
       });
     }
   }
@@ -940,8 +958,9 @@ export async function finalizeParityTurn(
   runDir: string,
   outcome: TerminalOutcome | undefined,
   status: string,
+  reason?: TerminalReason,
 ): Promise<void> {
-  parityEndTurn(rt, outcome, status);
+  parityEndTurn(rt, outcome, status, reason);
   parityPersistLiveSession(rt, runDir);
   await persistThreadEventLog(runDir, rt.eventLog);
   flushSessionEventsRequired(rt, runDir, `finalize:${outcome}`);
@@ -1037,8 +1056,9 @@ export function finalizeParityTurnSync(
   runDir: string,
   outcome: TerminalOutcome | undefined,
   status: string,
+  reason?: TerminalReason,
 ): void {
-  parityEndTurn(rt, outcome, status);
+  parityEndTurn(rt, outcome, status, reason);
   parityPersistLiveSession(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
@@ -1295,7 +1315,10 @@ export function finalizeParityCancel(rt: ParityRuntime, runDir: string): void {
   ) {
     parityOnCancel(rt);
   }
-  finalizeParityTurnSync(rt, runDir, 'CANCELLED', 'cancelled');
+  finalizeParityTurnSync(rt, runDir, 'CANCELLED', 'cancelled', {
+    code: 'cancelled',
+    cause_class: null,
+  });
 }
 
 export function parityProviderMessages(

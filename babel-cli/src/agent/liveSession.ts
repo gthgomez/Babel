@@ -68,6 +68,9 @@ export interface LiveSessionTerminalState {
   outcome: TerminalOutcome | string;
   status: string;
   reason?: string;
+  /** D03: structured reason survives projection into live-session.json. */
+  reason_code?: string;
+  cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
   evidence_refs: string[];
 }
 
@@ -310,6 +313,7 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
           status: e.allowed ? 'allowed' : 'denied',
           reason: e.reason,
           evidence_refs: [...e.evidence_refs],
+          ...(e.reason_code !== undefined ? { reason_code: e.reason_code } : {}),
         };
         break;
       case 'turn_ended':
@@ -318,6 +322,9 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
           outcome: e.outcome ?? 'unknown',
           status: e.status,
           evidence_refs: state.terminal?.evidence_refs ?? [],
+          ...(e.reason_code !== undefined ? { reason_code: e.reason_code } : {}),
+          ...(e.cause_class !== undefined ? { cause_class: e.cause_class } : {}),
+          ...(state.terminal?.reason !== undefined ? { reason: state.terminal.reason } : {}),
         };
         break;
       case 'progress_recovery':

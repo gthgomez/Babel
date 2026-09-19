@@ -108,6 +108,9 @@ export type ThreadEvent =
       /** Omitted when the cause is not established. */
       outcome?: TerminalOutcome;
       status: string;
+      /** D03: structured terminal reason survives thread-log persistence/replay. */
+      reason_code?: string;
+      cause_class?: string | null;
     })
   | (ThreadEventBase & {
       kind: 'repo_identity';
@@ -223,12 +226,16 @@ export function endTurn(
   turnId: string,
   outcome: TerminalOutcome | undefined,
   status: string,
+  reason?: { code: string; cause_class: string | null },
 ): void {
   appendThreadEvent(log, {
     kind: 'turn_ended',
     turn_id: turnId,
     ...(outcome !== undefined ? { outcome } : {}),
     status,
+    ...(reason !== undefined
+      ? { reason_code: reason.code, cause_class: reason.cause_class }
+      : {}),
   });
 }
 

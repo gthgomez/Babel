@@ -46,6 +46,30 @@ describe('reduceObservationSemantic', () => {
     assert.deepEqual(state.changedPaths.sort(), ['a.ts', 'b.ts'])
   })
 
+  it('D03: structured terminal reason reaches the observation projection', () => {
+    const state = reduceObservationSemantic([
+      ev({ kind: 'user_submitted', turn_id: 't1', task_preview: 'x' }),
+      ev({
+        kind: 'completion_decision',
+        requested_outcome: 'BLOCKED_POLICY',
+        final_outcome: 'BLOCKED_POLICY',
+        allowed: true,
+        reason: 'Repeated no-progress after recovery',
+        evidence_refs: [],
+        policy_version: 'test',
+        reason_code: 'recovery_exhausted',
+      }),
+      ev({
+        kind: 'turn_ended',
+        outcome: 'BLOCKED_POLICY',
+        status: 'blocked',
+        reason_code: 'recovery_exhausted',
+        cause_class: 'model',
+      }),
+    ])
+    assert.equal(state.projection?.reasonCode, 'recovery_exhausted')
+  })
+
   it('matches full replay semantics at every prefix', () => {
     const events: SessionEvent[] = [
       ev({ kind: 'user_submitted', turn_id: 't1', task_preview: 'x' }),

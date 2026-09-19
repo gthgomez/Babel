@@ -141,6 +141,8 @@ export function dispatchChatEvent(
       ...(ev.turnRouting !== undefined ? { turnRouting: ev.turnRouting } : {}),
       ...(ev.verifierReceipt !== undefined ? { verifierReceipt: ev.verifierReceipt } : {}),
       ...(ev.blockedReport !== undefined ? { blockedReport: ev.blockedReport } : {}),
+      ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+      ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
     };
   }
 
@@ -158,6 +160,8 @@ export function dispatchChatEvent(
       answer: 'Cancelled',
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
+      reason_code: event.reason_code ?? 'cancelled',
+      cause_class: event.cause_class ?? null,
       ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
       ...(ev.toolCalls !== undefined ? { toolCalls: ev.toolCalls } : {}),
       ...(ev.runDir !== undefined ? { runDir: ev.runDir } : {}),
@@ -188,6 +192,9 @@ export function terminalResultFromDoneEvent(
     runAllowance?: ChatResult['runAllowance'];
     policyEvents?: ChatResult['policyEvents'];
     status?: ChatResult['status'];
+    /** D03: structured terminal reason code. */
+    reason_code?: ChatResult['reason_code'];
+    cause_class?: ChatResult['cause_class'];
   },
 ): ChatResult {
   // Prefer the engine's authoritative TerminalOutcome. Only recompute when
@@ -227,5 +234,7 @@ export function terminalResultFromDoneEvent(
     ...(opts?.costBudget ? { costBudget: opts.costBudget } : {}),
     ...(opts?.runAllowance ? { runAllowance: opts.runAllowance } : {}),
     ...(opts?.policyEvents ? { policyEvents: opts.policyEvents } : {}),
+    ...(opts?.reason_code !== undefined ? { reason_code: opts.reason_code } : {}),
+    ...(opts?.cause_class !== undefined ? { cause_class: opts.cause_class } : {}),
   };
 }

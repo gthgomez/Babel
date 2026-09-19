@@ -12,6 +12,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import type { TerminalReason, TerminalReasonCode } from './chatTerminalReason.js';
 import { classifyToolEffect, type ToolEffectClass } from '../executor/contracts.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
 import {
@@ -411,6 +412,8 @@ export type SessionEvent =
       reason: string;
       evidence_refs: string[];
       policy_version: string;
+      /** D03: structured reason code — `reason` stays free-text/diagnostic. */
+      reason_code?: TerminalReasonCode;
     })
   | (SessionEventBase & {
       kind: 'model_failover';
@@ -454,6 +457,10 @@ export type SessionEvent =
       /** Omitted when the cause is not established. */
       outcome?: TerminalOutcome;
       status: string;
+      /** D03: structured terminal reason; survives persistence/replay. */
+      reason_code?: TerminalReasonCode;
+      /** D03: separate model-vs-harness cause axis; null = not established. */
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     })
   | (SessionEventBase & {
       kind: 'budget_snapshot';
@@ -1570,13 +1577,16 @@ export function recordVerifierAttempt(
 
 export function recordTurnEnded(
   log: SessionEventLog,
-  input: { turn_id: string; outcome?: TerminalOutcome; status: string },
+  input: { turn_id: string; outcome?: TerminalOutcome; status: string; reason?: TerminalReason },
 ): SessionEvent {
   return appendSessionEvent(log, {
     kind: 'turn_ended',
     turn_id: input.turn_id,
     ...(input.outcome !== undefined ? { outcome: input.outcome } : {}),
     status: input.status,
+    ...(input.reason !== undefined
+      ? { reason_code: input.reason.code, cause_class: input.reason.cause_class }
+      : {}),
   });
 }
 
@@ -1621,6 +1631,7 @@ export function recordCompletionDecision(
     reason: string;
     evidenceRefs: string[];
     policyVersion: string;
+    reasonCode?: TerminalReasonCode;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -1632,6 +1643,7 @@ export function recordCompletionDecision(
     reason: input.reason,
     evidence_refs: [...input.evidenceRefs],
     policy_version: input.policyVersion,
+    ...(input.reasonCode !== undefined ? { reason_code: input.reasonCode } : {}),
   });
 }
 

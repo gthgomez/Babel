@@ -26,6 +26,7 @@ import {
 } from './threadEventLog.js';
 import { chatSessionDir } from '../cli/runsLayout.js';
 import { parityOnUserTurn, parityRecordToolBatch } from './chatEngineParityBridge.js';
+import { loadLiveSessionSnapshot } from './liveSessionBridge.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import type { ToolStreamEvent } from '../runners/base.js';
 import { createEngineFromEventLog } from '../services/threadStore/conversationSync.js';
@@ -77,9 +78,17 @@ function assertCrossSurface(
   label: string,
   result: ChatResult,
   diskOutcome: TerminalOutcome | undefined,
+  diskReasonCode?: string | undefined,
 ): void {
   assert.ok(result.outcome, `${label}: ChatResult.outcome required`);
   assert.equal(result.outcome, diskOutcome, `${label}: ChatResult vs disk turn_ended`);
+  if (diskReasonCode !== undefined) {
+    assert.equal(
+      result.reason_code,
+      diskReasonCode,
+      `${label}: ChatResult.reason_code vs disk turn_ended.reason_code`,
+    );
+  }
 
   const payload = buildChatRunPayload(result, {
     task: label,
@@ -90,6 +99,18 @@ function assertCrossSurface(
     result.outcome,
     `${label}: payload.terminal_outcome`,
   );
+  if (result.reason_code !== undefined) {
+    assert.equal(
+      payload['reason_code'],
+      result.reason_code,
+      `${label}: payload.reason_code`,
+    );
+    assert.equal(
+      payload['cause_class'],
+      result.cause_class,
+      `${label}: payload.cause_class`,
+    );
+  }
   assert.equal(
     payload['user_status'],
     userFacingStatusFromOutcome(result.outcome!),
@@ -163,14 +184,18 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
       null,
     );
     const loaded = await waitForThreadEventLog(chatSessionDir(engine.getEngineRunId()));
-    const diskOutcome = loaded.events.filter((e) => e.kind === 'turn_ended').at(-1)?.outcome;
+    const ended = loaded.events.filter((e) => e.kind === 'turn_ended').at(-1);
+    const diskOutcome = ended?.outcome;
 
     assert.ok(
       result.outcome === 'UNVERIFIED_PATCH' || result.outcome === 'VERIFIED_COMPLETE',
       `expected complete-family outcome, got ${result.outcome}; answer=${result.answer?.slice(0, 120)}`,
     );
     assert.equal(result.status, 'completed');
-    assertCrossSurface('complete', result, diskOutcome);
+    // D03: success-family outcomes carry no failure reason.
+    assert.equal(result.reason_code, undefined);
+    assert.equal(ended?.reason_code, undefined);
+    assertCrossSurface('complete', result, diskOutcome, ended?.reason_code);
   });
 
   test('failed stream retains tool_result and INFRA_FAILURE across surfaces', async () => {
@@ -208,7 +233,18 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
     assert.equal(result.outcome, 'INFRA_FAILURE');
     assert.equal(result.status, 'failed');
     assert.ok(tools.length >= 1, 'prior tool_result must persist');
-    assertCrossSurface('failed', result, ended?.outcome);
+    assertCrossSurface('failed', result, ended?.outcome, ended?.reason_code);
+    // D03: provider transport failure is classified as provider_failure and
+    // survives persistence/replay.
+    assert.equal(result.reason_code, 'provider_failure');
+    assert.equal(result.cause_class, 'provider');
+    assert.equal(ended?.reason_code, 'provider_failure');
+    assert.equal(ended?.cause_class, 'provider');
+
+    // D03: the live-session projection (replay surface) carries the reason too.
+    const live = loadLiveSessionSnapshot(chatSessionDir(engine.getEngineRunId()));
+    assert.equal(live?.terminal?.reason_code, 'provider_failure');
+    assert.equal(live?.terminal?.cause_class, 'provider');
 
     const resumed = createEngineFromEventLog(
       { task: 'fail after tool', projectRoot, model: 'deepseek-v4-flash' },
@@ -262,6 +298,8 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
     const result: ChatResult = {
       status: 'cancelled',
       outcome: 'CANCELLED',
+      reason_code: 'cancelled',
+      cause_class: null,
       answer: 'Cancelled',
       usage: {
         totalCostUSD: 0,
@@ -272,7 +310,9 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
       },
       conversation: [],
     };
-    assertCrossSurface('cancel', result, ended?.outcome);
+    // D03: cancellation is a structured reason on disk too.
+    assert.equal(ended?.reason_code, 'cancelled');
+    assertCrossSurface('cancel', result, ended?.outcome, ended?.reason_code);
   });
 
   test('budget kill never collapses to completed; surfaces BUDGET_EXHAUSTED', async () => {
@@ -304,6 +344,9 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
     const diskOutcome = loaded.events.filter((e) => e.kind === 'turn_ended').at(-1)?.outcome;
     assert.equal(diskOutcome, 'BUDGET_EXHAUSTED');
     assertCrossSurface('budget', result, diskOutcome);
+    // D03: budget exhaustion is a structured reason across surfaces.
+    assert.equal(result.reason_code, 'budget_exhausted');
+    assert.equal(result.cause_class, 'harness');
   });
 
   test('submitMessage unexpected throw stays inconclusive on disk', async () => {
@@ -333,6 +376,9 @@ describe('P0-D B4 TerminalOutcome cross-surface goldens', () => {
     const ended = loaded.events.filter((e) => e.kind === 'turn_ended').at(-1);
     assert.equal(ended?.outcome, undefined);
     assert.equal(ended?.status, 'failed');
+    // D03: no fabricated reason when the cause is not established.
+    assert.equal(result.reason_code, undefined);
+    assert.equal(ended?.reason_code, undefined);
   });
 
   test('stream failed event and consumeChatStream share unknown cause', async () => {
