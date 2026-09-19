@@ -971,6 +971,42 @@ test('P04: a proxy with a stateful get trap cannot make a tie group order-depend
   assert.deepEqual(projectTask([a1, b1]), projectTask([b2, a2]));
 });
 
+test('P04: any Proxy fact is rejected deterministically (descriptor-trap variant)', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const makePair = (): [RuntimeFactV1, RuntimeFactV1] => {
+    const state = { n: 0 };
+    const base = (status: string): Record<string, unknown> => ({
+      ...template,
+      id: 'dup',
+      sequence: 5,
+      authority: 'observation',
+      cursor: { stream: 'runtime-facts', sequence: 5 },
+      payload: { type: 'run.settled', status },
+    });
+    const wrap = (target: Record<string, unknown>): RuntimeFactV1 =>
+      new Proxy(target, {
+        getOwnPropertyDescriptor(t, property) {
+          if (property === 'authority') {
+            state.n += 1;
+            return {
+              value: state.n === 1 ? 'observation' : 'authoritative',
+              writable: true,
+              enumerable: true,
+              configurable: true,
+            };
+          }
+          return Reflect.getOwnPropertyDescriptor(t, property);
+        },
+      }) as unknown as RuntimeFactV1;
+    return [wrap(base('A')), wrap(base('B'))];
+  };
+  const [a1, b1] = makePair();
+  const [a2, b2] = makePair();
+  const forward = projectTask([a1, b1]);
+  assert.deepEqual(forward, projectTask([b2, a2]));
+  assert.equal(forward.degraded, true);
+});
+
 test('P04: a stateful authority getter cannot make the projection order-dependent', () => {
   const make = (finalOutcome: string): RuntimeFactV1 => {
     let reads = 0;

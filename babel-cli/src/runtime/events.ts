@@ -15,6 +15,8 @@
  * Never executes tools, replays provider calls, or re-derives authority.
  */
 
+import { types as utilTypes } from 'node:util';
+
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 
 /** Version of the runtime-fact event schema. */
@@ -356,6 +358,7 @@ function redactValue(
     return value.length > MAX_STRING_CHARS ? `${value.slice(0, MAX_STRING_CHARS)}…[truncated]` : value;
   }
   if (value === null || typeof value !== 'object') return value;
+  if (utilTypes.isProxy(value)) return '[redacted]';
   if (depth >= MAX_REDACT_DEPTH) return '[redacted:depth]';
   const object = value as object;
   if (path.has(object)) return '[redacted:circular]';
@@ -396,7 +399,7 @@ function redactValue(
 }
 
 /** Fail-closed placeholder returned if a fact envelope itself is inaccessible. */
-const REDACTION_FAILURE_FACT: RuntimeFactV1 = {
+const REDACTION_FAILURE_FACT: RuntimeFactV1 = Object.freeze<RuntimeFactV1>({
   schemaVersion: RUNTIME_FACT_SCHEMA_VERSION,
   id: 'redaction-failed',
   cursor: { stream: 'runtime-facts', sequence: -1 },
@@ -410,7 +413,7 @@ const REDACTION_FAILURE_FACT: RuntimeFactV1 = {
   authority: 'observation',
   timestamp: '1970-01-01T00:00:00.000Z',
   payload: { type: 'context.degraded', reason: 'redaction_failed' },
-};
+});
 
 /** Redact a fact for persistence or publication. Never weakens authority; never throws. */
 export function redactRuntimeFact(fact: RuntimeFactV1): RuntimeFactV1 {

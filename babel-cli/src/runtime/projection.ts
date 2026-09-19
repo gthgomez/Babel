@@ -24,6 +24,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { types as utilTypes } from 'node:util';
 
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import type { SessionEvent } from '../agent/sessionEvents.js';
@@ -322,6 +323,9 @@ function cloneJsonSafe(
     return { ok: true, value };
   }
   if (type !== 'object') return { ok: false };
+  // Facts are plain JSON values. Reject any Proxy outright (native check, no
+  // trap invoked) so a stateful trap cannot influence ordering or content.
+  if (utilTypes.isProxy(value)) return { ok: false };
   if (depth >= MAX_JSON_DEPTH) return { ok: false };
   const object = value as object;
   // Any repeated reference (shared or cyclic) is not JSON-representable as a
@@ -414,6 +418,7 @@ function readDataField(input: Record<string, unknown>, key: string): { ok: boole
 function readEnvelopeFrom(
   input: Record<string, unknown>,
 ): { ok: boolean; read: EnvelopeRead | null } {
+  if (utilTypes.isProxy(input)) return { ok: false, read: null };
   const fields = [
     'authority',
     'id',
