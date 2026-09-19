@@ -62,10 +62,19 @@ import {
   shellInputLeaseActive,
   onShellSurfaceRelease,
   notifyShellSurfaceReleased,
+  type ShellFocus,
   type ShellInputState,
 } from '../ui/shell/shellInputRouter.js';
 import { ShellRuntimeBinding } from '../ui/shell/shellRuntimeBinding.js';
 import { projectShellPresentation } from '../ui/shell/shellPresentation.js';
+import { ShellNavigator } from '../ui/shell/shellNavigation.js';
+import { ShellSources } from '../ui/shell/shellSources.js';
+import { ShellInspectorStore } from '../ui/shell/shellInspector.js';
+import {
+  createShellCommandOperations,
+  runShellCommand,
+  type ShellCommandOperations,
+} from '../ui/shell/shellOperations.js';
 import { getActiveRenderer } from '../ui/waterfall.js';
 import {
   isRendererPresentationSuspended,
@@ -131,6 +140,16 @@ export class BabelRepl {
     leftDrawerOpen: true,
     rightDrawerOpen: true,
   };
+  /** Row cursor for the hosted shell; never the active-thread authority. */
+  private readonly shellNavigator = new ShellNavigator();
+  /** Cached real source projections (sessions/project/actions). */
+  private readonly shellSources = new ShellSources();
+  /** Request-scoped inspector built from canonical session events. */
+  private readonly shellInspector = new ShellInspectorStore();
+  private shellInspectorCleanup: (() => void) | null = null;
+  private shellCommandOperations: ShellCommandOperations | undefined;
+  /** Cached target root so the frame path never probes the filesystem (U02). */
+  private cachedTargetRoot: string | null = null;
 
   constructor(initialState?: Partial<SessionState>) {
     // Load saved history before creating the input interface
@@ -341,6 +360,8 @@ export class BabelRepl {
       },
     });
     this.shellRuntime.hydrateTurns(this.turns, threadId);
+    this.cachedTargetRoot = this.resolveCurrentTarget().targetRoot;
+    this.shellSources.ensureProjectRoot(this.cachedTargetRoot);
     const frameSource = () => {
       const dimensions = OutputBuffer.getTerminalSize();
       const layout = planShellLayout(dimensions);
@@ -351,7 +372,11 @@ export class BabelRepl {
         height: 3,
       };
       const prompt = adapter.getView(promptRect);
-      const presentation = projectShellPresentation(layout, this.shellInputState);
+      const presentation = projectShellPresentation(
+        layout,
+        this.shellInputState,
+        this.shellNavigator.getSelection(),
+      );
       this.shellInputState = presentation.inputState;
       const conversation = this.shellRuntime
         ? this.shellRuntime.getVisibleRows(
@@ -360,19 +385,40 @@ export class BabelRepl {
           )
         : [];
       const runtime = this.shellRuntime?.getSnapshot();
+      const sources = this.shellSources.snapshot();
+      this.shellNavigator.setRows('sessions', sources.sessions);
+      this.shellNavigator.setRows('project', sources.projectRows);
+      this.shellNavigator.setRows('actions', sources.actions);
+      const sessionRows = this.shellRowStrings('sessions');
+      const projectRows = this.shellRowStrings('project');
+      const actionRows = this.shellRowStrings('actions');
+      const inspector = this.shellInspector.build({
+        selectedModel: this.state.resolvedModelId ?? this.state.model ?? 'auto',
+        sessionTokens: this.activeContext
+          ? { tokens: this.activeContext.tokens, source: this.activeContext.source }
+          : null,
+      });
       return buildShellFrameInput(layout, {
         mode: this.state.mode,
         model: this.state.resolvedModelId ?? this.state.model ?? 'auto',
         project: this.state.project ?? 'global',
         conversation,
-        sessions: [runtime?.threadId ? `● ${runtime.threadId}` : 'Not loaded'],
-        projectRows: [this.resolveCurrentTarget().targetRoot],
-        context: [
-          this.activeContext
-            ? `${this.activeContext.tokens} tokens · ${this.activeContext.source}`
-            : 'Unknown until request resolution',
-        ],
+        ...(sessionRows.length > 0
+          ? { sessions: sessionRows }
+          : sources.sessionStatus === 'error'
+            ? { sessions: ['Session list unavailable'] }
+            : sources.sessionStatus === 'loading'
+              ? { sessions: ['Loading sessions…'] }
+              : {}),
+        projectRows:
+          projectRows.length > 0
+            ? projectRows
+            : [sources.projectRoot || this.cachedTargetRoot || 'unknown target'],
+        actions: actionRows,
+        tools: inspector.tools,
+        context: inspector.context,
         status: [
+          `Thread: ${runtime?.threadId ?? 'not loaded'}`,
           `Activity: ${runtime?.activity ?? (this.isRunning ? 'running' : 'idle')}`,
           `Last outcome: ${runtime?.lastOutcome ?? this.state.lastRunUserStatus ?? 'unknown'}`,
         ],
@@ -382,6 +428,17 @@ export class BabelRepl {
     };
 
     host = createShellHost({ frameSource, componentId: 'babel-north-star-shell' });
+    this.shellCommandOperations = createShellCommandOperations(this, {
+      invalidate: (reason) => host?.invalidate(reason),
+      onSessionChanged: (changedThreadId) => this.rebindShellRuntime(changedThreadId),
+    });
+    this.shellInspectorCleanup = this.shellInspector.attach(() =>
+      host?.invalidate('session-event'),
+    );
+    void this.shellSources
+      .refreshSessions()
+      .then(() => host?.invalidate('sessions-loaded'))
+      .catch(() => {});
     adapter.setPresentationTarget({
       getRect: () => {
         const layout = planShellLayout(OutputBuffer.getTerminalSize());
@@ -403,6 +460,17 @@ export class BabelRepl {
       this.shellInputState = projectShellPresentation(layout, this.shellInputState).inputState;
       const routed = routeShellInput(event, this.shellInputState);
       this.shellInputState = routed.state;
+      this.shellNavigator.setFocus(routed.state.focus);
+      if (routed.action === 'move-selection') {
+        // Cursor-only: never changes the active thread.
+        this.shellNavigator.move(routed.state.focus, event.name);
+        host?.invalidate('move-selection');
+        return;
+      }
+      if (routed.action === 'activate-selection') {
+        void this.activateShellSelection(routed.state.focus, host).catch(() => {});
+        return;
+      }
       if (routed.action === 'open-palette') {
         void this.openCommandPalette().catch(() => {});
       }
@@ -449,7 +517,59 @@ export class BabelRepl {
     this.shellExclusiveRunnerCleanup = null;
     this.shellRuntime = undefined;
     this.activeShellTurnEpoch = undefined;
+    this.shellInspectorCleanup?.();
+    this.shellInspectorCleanup = null;
+    this.shellCommandOperations = undefined;
+    this.cachedTargetRoot = null;
     if (rendererWillOwnInput) activeRenderer?.setInputOwnership?.(true);
+  }
+
+  /** Display strings for one selectable surface, marking the selected row. */
+  private shellRowStrings(surface: ShellFocus): string[] {
+    const selection = this.shellNavigator.getSelection();
+    return this.shellNavigator.getRows(surface).map((row, index) =>
+      selection.surface === surface && selection.index === index
+        ? `▸ ${row.label}`
+        : `  ${row.label}`,
+    );
+  }
+
+  /**
+   * Rebind the presentation runtime to a new active thread after a real
+   * session operation. The navigator's row cursor is intentionally untouched:
+   * the active thread and the selected row are separate state.
+   */
+  private rebindShellRuntime(threadId: string | undefined): void {
+    if (!this.shellRuntime) return;
+    this.shellRuntime.hydrateTurns(this.turns, threadId);
+    this.shellHost?.invalidate('session-changed');
+  }
+
+  /** Resolve and execute the selected row's real operation. */
+  private async activateShellSelection(
+    surface: ShellFocus,
+    host: ShellHost | undefined,
+  ): Promise<void> {
+    const command = this.shellNavigator.activate(surface);
+    const operations = this.shellCommandOperations;
+    if (command.kind === 'none' || !operations) {
+      host?.invalidate('activate-noop');
+      return;
+    }
+    await this.withExclusiveTerminal(`shell-${command.kind}`, () =>
+      runShellCommand(command, operations),
+    );
+    if (
+      command.kind === 'session.resume' ||
+      command.kind === 'session.new' ||
+      command.kind === 'target.set'
+    ) {
+      const root = this.targetOverrideRoot ?? this.resolveCurrentTarget().targetRoot;
+      this.cachedTargetRoot = root;
+      this.shellSources.ensureProjectRoot(root);
+      await this.shellSources.refreshSessions().catch(() => {});
+    }
+    host?.invalidate('shell-activation');
   }
 
   // ── Session Persistence ──────────────────────────────────────────────────
@@ -736,6 +856,10 @@ export class BabelRepl {
     this.shellExclusiveRunnerCleanup = null;
     this.shellRuntime = undefined;
     this.activeShellTurnEpoch = undefined;
+    this.shellInspectorCleanup?.();
+    this.shellInspectorCleanup = null;
+    this.shellCommandOperations = undefined;
+    this.cachedTargetRoot = null;
     exitRepl();
   }
 }

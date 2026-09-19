@@ -52,6 +52,15 @@ test('composer editing keys remain unhandled for PromptInput', () => {
   assert.deepEqual(result.state, base)
 })
 
+test('selection keys in a drawer surface route to real actions, not silent consumption', () => {
+  const drawer: ShellInputState = { ...base, focus: 'sessions' }
+  assert.equal(routeShellInput(key('down'), drawer).action, 'move-selection')
+  assert.equal(routeShellInput(key('pageup'), drawer).action, 'move-selection')
+  assert.equal(routeShellInput(key('enter'), drawer).action, 'activate-selection')
+  // Routing leaves the input state untouched; the navigation owner moves the cursor.
+  assert.deepEqual(routeShellInput(key('down'), drawer).state, drawer)
+})
+
 test('notifies responsive hosts after the outermost shell lease releases', () => {
   let releases = 0
   const unregister = onShellSurfaceRelease(() => { releases += 1 })

@@ -3,11 +3,20 @@ import type { ShellLayout } from './shellTypes.js'
 
 export interface ShellPresentation {
   readonly focus: ShellFocus
+  /** Surface that owns the row cursor; distinct from keyboard focus. */
   readonly selectedSurface: ShellFocus
+  /** Zero-based selected row within `selectedSurface`. */
+  readonly selectedIndex: number
   readonly leftDrawerOpen: boolean
   readonly rightDrawerOpen: boolean
   readonly availableSurfaces: readonly ShellFocus[]
   readonly inputState: ShellInputState
+}
+
+/** Row cursor supplied by the navigation owner. */
+export interface ShellSelectionProjection {
+  readonly surface: ShellFocus
+  readonly index: number
 }
 
 function getAvailableSurfaces(layout: ShellLayout, state: ShellInputState): ShellFocus[] {
@@ -18,10 +27,17 @@ function getAvailableSurfaces(layout: ShellLayout, state: ShellInputState): Shel
   return surfaces
 }
 
-/** Reconcile input ownership with the surfaces that the current layout can show. */
+/**
+ * Reconcile input ownership with the surfaces that the current layout can show.
+ *
+ * Focus (keyboard ownership) and selection (row cursor) are separate. When the
+ * selection's surface is not visible in this layout, the cursor falls back to
+ * the focused surface — never to the active thread.
+ */
 export function projectShellPresentation(
   layout: ShellLayout,
   state: ShellInputState,
+  selection?: ShellSelectionProjection,
 ): ShellPresentation {
   const availableSurfaces = getAvailableSurfaces(layout, state)
   const focus = availableSurfaces.includes(state.focus) ? state.focus : 'composer'
@@ -33,9 +49,12 @@ export function projectShellPresentation(
     rightDrawerOpen,
     availableSurfaces,
   }
+  const selectionSurface =
+    selection && availableSurfaces.includes(selection.surface) ? selection.surface : focus
   return {
     focus,
-    selectedSurface: focus,
+    selectedSurface: selectionSurface,
+    selectedIndex: selectionSurface === selection?.surface ? (selection?.index ?? 0) : 0,
     leftDrawerOpen,
     rightDrawerOpen,
     availableSurfaces,

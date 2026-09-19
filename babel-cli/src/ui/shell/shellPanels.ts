@@ -151,7 +151,22 @@ export function buildShellFrameInput(
             : false,
         }
       : null,
-    cacheKey: `${snapshot.mode}:${snapshot.model}:${snapshot.project}:${snapshot.conversation.length}:${snapshot.presentation?.focus ?? 'composer'}:${snapshot.presentation?.leftDrawerOpen ?? true}:${snapshot.presentation?.rightDrawerOpen ?? true}`,
+    cacheKey: [
+      snapshot.mode,
+      snapshot.model,
+      snapshot.project,
+      snapshot.conversation.length,
+      snapshot.presentation?.focus ?? 'composer',
+      snapshot.presentation?.selectedSurface ?? 'composer',
+      snapshot.presentation?.selectedIndex ?? 0,
+      snapshot.presentation?.leftDrawerOpen ?? true,
+      snapshot.presentation?.rightDrawerOpen ?? true,
+      snapshot.sessions?.length ?? 0,
+      snapshot.projectRows?.length ?? 0,
+      snapshot.actions?.length ?? 0,
+      snapshot.tools?.length ?? 0,
+      snapshot.context?.length ?? 0,
+    ].join(':'),
   }
 }
 
