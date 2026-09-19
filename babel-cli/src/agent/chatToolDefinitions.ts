@@ -35,6 +35,12 @@ import {
   compileObservation,
   formatCompiledObservation,
 } from './codingLoop/observationCompiler.js';
+// S02/#212: bounded read-only child conclusion handoff (W-CHAT-owned module;
+// coordinated with W-P11, which only adds new files).
+import {
+  renderReadOnlyChildResultSection,
+  type ReadOnlyChildResult,
+} from './childConclusion.js';
 
 // ─── Chat Tool Action Schema ──────────────────────────────────────────────
 
@@ -821,12 +827,20 @@ export function formatSubAgentFindings(
     observations: string;
     stepsExecuted: number;
     degraded: boolean;
+    /**
+     * S02/#212: bounded child conclusion + structured status + evidence refs.
+     * A child assertion; never completion/verifier authority.
+     */
+    childResult?: ReadOnlyChildResult;
   },
 ): string {
   const sections: string[] = [
     `### sub_agent ${agentId}: ${task}`,
     `steps: ${result.stepsExecuted}${result.degraded ? ' (degraded)' : ''}`,
   ];
+  if (result.childResult) {
+    sections.push(renderReadOnlyChildResultSection(result.childResult));
+  }
   if (result.observations) {
     sections.push(result.observations);
   } else {

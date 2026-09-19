@@ -182,6 +182,10 @@ import {
   type ChatTurn,
   type ChatRuntimeMode,
 } from './chatToolDefinitions.js';
+import {
+  buildReadOnlyChildResult,
+  renderReadOnlyChildResultSection,
+} from './childConclusion.js';
 import { type ChatEngineServices, type ChatExecutionProfile } from './chatEngineServices.js';
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
 import {
@@ -906,6 +910,70 @@ export interface ChatResult {
 const SUB_AGENT_MAX_ROUNDS = 4;
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
 const MAX_TOOL_CONCURRENCY = 6; // Prevent exhausting connection pools
+
+/** S02: minimal shape of a text-tools log entry (see ChatEngine.toolCallLog). */
+export interface TextToolResultEntry {
+  tool: string;
+  target: string;
+  detail?: string;
+  error?: string;
+  exit_code?: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+/**
+ * S02/#212: text-tools rendering was rebuilt from `toolCallLog` and only
+ * surfaced read/grep/glob/list_dir/run_command stdout, so a read-only child
+ * conclusion never reached the model on the text path. Extracted pure so both
+ * delivery modes can be asserted directly.
+ */
+export function formatTextToolResults(entries: readonly TextToolResultEntry[]): string {
+  const parts: string[] = [];
+  for (const entry of entries) {
+    if (entry.error === 'blocked') {
+      parts.push(`[ERROR] ${entry.tool}:${entry.target} blocked`);
+      continue;
+    }
+    // S02: sub_agent handoff (conclusion + status + evidence refs) before the
+    // generic exit-code branch, so failed/policy-denied children still surface
+    // their bounded result instead of a 500-char error slice.
+    if (entry.tool === 'sub_agent' && entry.stdout) {
+      const out =
+        entry.stdout.length > 2500
+          ? entry.stdout.slice(0, 2500) + '\n... [truncated]'
+          : entry.stdout;
+      parts.push(
+        `[RESULT] ${entry.tool}:${entry.target}\n${entry.detail ? entry.detail + '\n' : ''}${out}`,
+      );
+      continue;
+    }
+    if (entry.exit_code !== undefined && entry.exit_code !== 0) {
+      const err = (entry.stderr || entry.stdout || '').slice(0, 500);
+      parts.push(`[ERROR] ${entry.tool}:${entry.target} exit ${entry.exit_code}: ${err}`);
+      continue;
+    }
+    // Tools whose output content the model needs to ingest
+    if (entry.stdout && ['read_file', 'grep', 'glob', 'list_dir'].includes(entry.tool)) {
+      const truncated =
+        entry.stdout.length > 3000
+          ? entry.stdout.slice(0, 3000) + '\n... [truncated]'
+          : entry.stdout;
+      parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${truncated}`);
+      continue;
+    }
+    // run_command: include output
+    if (entry.tool === 'run_command' && entry.stdout) {
+      const out = entry.stdout.slice(0, 1000);
+      parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${out}`);
+      continue;
+    }
+    // Default: simple [OK] summary
+    const detail = entry.detail ? ` (${entry.detail})` : '';
+    parts.push(`[OK] ${entry.tool}:${entry.target}${detail}`);
+  }
+  return parts.join('\n\n');
+}
 
 // ─── Conversational-turn detection ────────────────────────────────────────
 // Pure greetings / acknowledgements / punctuation-only turns ('?', 'hello',
@@ -5522,11 +5590,44 @@ export class ChatEngine {
                     });
           const clean = subagentFinishedCleanly(attribution);
           const details = `${subResult.stepsExecuted} steps, 0 changed, attribution=${attribution}`;
+          // S02/#212: one bounded child result (conclusion + structured status
+          // + evidence refs). Child-reported only; never completion authority.
+          const childResult = buildReadOnlyChildResult({
+            steps: subResult.steps,
+            toolCallLog: subResult.toolCallLog,
+            observations: subResult.observations,
+            stepsExecuted: subResult.stepsExecuted,
+            degraded: subResult.degraded,
+            completed: subResult.completed,
+            roundExhausted: subResult.roundExhausted,
+            policyBlocked: subResult.policyBlocked,
+            ...(subResult.needsApproval !== undefined
+              ? { needsApproval: subResult.needsApproval }
+              : {}),
+            ...(subResult.providerError !== undefined
+              ? { providerError: subResult.providerError }
+              : {}),
+            ...(subResult.inheritedBudgetExceeded !== undefined
+              ? { inheritedBudgetExceeded: subResult.inheritedBudgetExceeded }
+              : {}),
+            ...(subResult.blockedReason !== undefined
+              ? { blockedReason: subResult.blockedReason }
+              : {}),
+            ...(subResult.roundsExecuted !== undefined
+              ? { roundsExecuted: subResult.roundsExecuted }
+              : {}),
+            lane: 'ask',
+            childId: subId,
+            maxRounds: childRounds,
+            cancelled: childController.signal.aborted,
+          });
+          const childSection = renderReadOnlyChildResultSection(childResult);
           const findings = [
             formatSubAgentFindings(subId, action.task, {
               observations: subResult.observations,
               stepsExecuted: subResult.stepsExecuted,
               degraded: subResult.degraded,
+              childResult,
             }),
             `attribution: ${attribution}`,
             `completed: ${subResult.completed}`,
@@ -5541,6 +5642,9 @@ export class ChatEngine {
             index: meta.index,
             exit_code: clean ? 0 : 1,
             ...(clean ? {} : { error: subResult.blockedReason || attribution }),
+            // S02: the text-tools path surfaces the bounded handoff via stdout;
+            // `detail` stays untouched for gate/critic consumers.
+            stdout: childSection,
           });
           callbacks?.onToolComplete?.(
             toolId,
@@ -6561,43 +6665,7 @@ export class ChatEngine {
    * the next turn instead of a role:tool message it does not understand.
    */
   private buildTextToolResults(startIndex: number): string {
-    const entries = this.toolCallLog.slice(startIndex);
-    const parts: string[] = [];
-
-    for (const entry of entries) {
-      if (entry.error === 'blocked') {
-        parts.push(`[ERROR] ${entry.tool}:${entry.target} blocked`);
-        continue;
-      }
-      if (entry.exit_code !== undefined && entry.exit_code !== 0) {
-        const err = (entry.stderr || entry.stdout || '').slice(0, 500);
-        parts.push(`[ERROR] ${entry.tool}:${entry.target} exit ${entry.exit_code}: ${err}`);
-        continue;
-      }
-
-      // Tools whose output content the model needs to ingest
-      if (entry.stdout && ['read_file', 'grep', 'glob', 'list_dir'].includes(entry.tool)) {
-        const truncated =
-          entry.stdout.length > 3000
-            ? entry.stdout.slice(0, 3000) + '\n... [truncated]'
-            : entry.stdout;
-        parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${truncated}`);
-        continue;
-      }
-
-      // run_command: include output
-      if (entry.tool === 'run_command' && entry.stdout) {
-        const out = entry.stdout.slice(0, 1000);
-        parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${out}`);
-        continue;
-      }
-
-      // Default: simple [OK] summary
-      const detail = entry.detail ? ` (${entry.detail})` : '';
-      parts.push(`[OK] ${entry.tool}:${entry.target}${detail}`);
-    }
-
-    return parts.join('\n\n');
+    return formatTextToolResults(this.toolCallLog.slice(startIndex));
   }
 
   private async runPostEditStaticCheck(filePath: string): Promise<string | null> {
