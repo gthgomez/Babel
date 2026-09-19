@@ -486,6 +486,104 @@ describe('D01/D02 effective-operation policy', () => {
     }
   });
 
+  // Controller-ratified F1 ruling: a bare problem statement with no explicit
+  // operation verb is read-only investigation and receives no mutation pressure.
+  // Explicit mutation wording (`fix …`) keeps execute policy. Only pressure /
+  // gating changes; permissions and tool access are untouched.
+  test('F1 ruling: bare problem statements are read-only; explicit mutation keeps execute pressure', async () => {
+    const readOnlyPrompts = [
+      'the login page is broken',
+      'it crashes on startup',
+      'users cannot log in',
+      'the build is failing',
+      'how to fix the memory leak',
+      'whether we should update the schema',
+    ];
+    for (const prompt of readOnlyPrompts) {
+      assert.equal(
+        analyzeTaskShape(prompt).operation,
+        'READ_ONLY',
+        `shape READ_ONLY for "${prompt}"`,
+      );
+      assert.equal(
+        runtimeFor(prompt).effectiveOperation,
+        'READ_ONLY',
+        `effective operation READ_ONLY for "${prompt}"`,
+      );
+
+      const root = mkdtempSync(join(tmpdir(), 'babel-op-bare-'));
+      try {
+        const engine = new ChatEngine({
+          task: prompt,
+          projectRoot: root,
+          model: MODEL,
+          maxTurns: 8,
+        });
+        installMockRunner(engine, {
+          executeWithToolsStream: async function* () {
+            yield { type: 'text_delta', text: 'Here is what I found.' };
+            yield { type: 'done', finishReason: 'stop' };
+          },
+          execute: async () => ({ type: 'completion', answer: 'Here is what I found.' }),
+          getLastInvocationMetadata: () => null,
+        });
+
+        const captured: ChatEvent[] = [];
+        const result = await drain(engine, prompt, captured);
+
+        assert.deepEqual(
+          captured.filter(
+            (event) => event.type === 'thought' && /completion prefers patch/i.test(event.text),
+          ),
+          [],
+          `no patch pressure for "${prompt}"`,
+        );
+        assert.notEqual(
+          result.outcome,
+          'BUDGET_EXHAUSTED',
+          `bare problem statement must not burn to budget exhaustion: "${prompt}"`,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+
+    // Explicit mutation wording still gets mutation/execute policy and therefore
+    // the implementor completion-prefers-patch pressure on a zero-write turn.
+    const mutating = 'fix the login page';
+    assert.equal(analyzeTaskShape(mutating).operation, 'MUTATING');
+    assert.equal(runtimeFor(mutating).effectiveOperation, 'MUTATING');
+
+    const root = mkdtempSync(join(tmpdir(), 'babel-op-mutating-'));
+    try {
+      const engine = new ChatEngine({
+        task: mutating,
+        projectRoot: root,
+        model: MODEL,
+        maxTurns: 8,
+      });
+      installMockRunner(engine, {
+        executeWithToolsStream: async function* () {
+          yield { type: 'text_delta', text: 'Thinking about the fix.' };
+          yield { type: 'done', finishReason: 'stop' };
+        },
+        execute: async () => ({ type: 'completion', answer: 'Thinking about the fix.' }),
+        getLastInvocationMetadata: () => null,
+      });
+
+      const captured: ChatEvent[] = [];
+      await drain(engine, mutating, captured);
+      assert.ok(
+        captured.some(
+          (event) => event.type === 'thought' && /completion prefers patch/i.test(event.text),
+        ),
+        'explicit mutation wording must keep execute completion-prefers-patch pressure',
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   after(() => {
     rmSync(PROJECT_ROOT, { recursive: true, force: true });
   });
