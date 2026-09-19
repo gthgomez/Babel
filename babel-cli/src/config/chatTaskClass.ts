@@ -386,8 +386,12 @@ const DESTRUCTIVE_VERB_SOURCE = 'delete|remove|rm|drop|erase|unlink';
 const READ_ONLY_VERB_SOURCE = `(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|change|touch|alter|clean)`;
 const READ_ONLY_VERB_GERUND_SOURCE =
   '(?:editing|modifying|changing|writing|deleting|removing|fixing|patching|repairing|refactoring|touching|altering|creating|updating|adding|replacing|renaming|implementing|applying|dropping|erasing|unlinking|cleaning)';
-const READ_ONLY_VERB_LIST = `${READ_ONLY_VERB_SOURCE}(?:\\s*(?:,|/|or|nor|and)\\s*${READ_ONLY_VERB_SOURCE})*`;
-const READ_ONLY_GERUND_LIST = `${READ_ONLY_VERB_GERUND_SOURCE}(?:\\s*(?:,|/|or|nor|and)\\s*${READ_ONLY_VERB_GERUND_SOURCE})*`;
+// Coordinates verb lists including the Oxford comma form (", or" / ", and"):
+// a serial-comma list must be consumed in full or its trailing verb survives
+// stripping and is misread as positive mutation authority.
+const COORD_SEPARATOR = '\\s*(?:,?\\s*(?:or|nor|and)|,|/)\\s*';
+const READ_ONLY_VERB_LIST = `${READ_ONLY_VERB_SOURCE}(?:${COORD_SEPARATOR}${READ_ONLY_VERB_SOURCE})*`;
+const READ_ONLY_GERUND_LIST = `${READ_ONLY_VERB_GERUND_SOURCE}(?:${COORD_SEPARATOR}${READ_ONLY_VERB_GERUND_SOURCE})*`;
 const READ_ONLY_DIRECTIVE_SOURCE = `\\b(without (any )?${READ_ONLY_GERUND_LIST}|read-?only|(?:do\\s*not|don't|never)\\s+${READ_ONLY_VERB_LIST}|dry-?run)\\b`;
 
 /**

@@ -375,3 +375,72 @@ describe('PR-A Certification: Adversarial Task-Classification Corpus', () => {
     });
   }
 });
+
+describe('S07 class regression: coordinated no-edit negations are stripped in full', () => {
+  // Every verb the negation surface and the positive-mutation scan can see,
+  // including the destructive group and the phrase-leading "clean".
+  const VERBS = [
+    'fix',
+    'implement',
+    'patch',
+    'repair',
+    'create',
+    'write',
+    'refactor',
+    'apply',
+    'modify',
+    'update',
+    'edit',
+    'add',
+    'replace',
+    'rename',
+    'delete',
+    'remove',
+    'rm',
+    'drop',
+    'erase',
+    'unlink',
+    'change',
+    'touch',
+    'alter',
+    'clean',
+  ];
+  const PREFIXES = ['do not', 'never', "don't"];
+  // Includes the Oxford-comma forms (", or" / ", and") that a single-token
+  // separator misses.
+  const SEPARATORS = [' or ', ' and ', ' nor ', ', ', ', or ', ', and ', '/'];
+
+  test('every prefix x verb x separator combination stays READ_ONLY', () => {
+    const failures: string[] = [];
+    for (const prefix of PREFIXES) {
+      for (const verb of VERBS) {
+        const shape = analyzeTaskShape(`${prefix} ${verb} the file`);
+        if (shape.operation !== 'READ_ONLY') {
+          failures.push(`${prefix} ${verb} the file -> ${shape.operation}`);
+        }
+      }
+      for (const separator of SEPARATORS) {
+        for (const first of VERBS) {
+          for (const second of VERBS) {
+            if (first === second) continue;
+            const prompt = `${prefix} ${first}${separator}${second} the file`;
+            const shape = analyzeTaskShape(prompt);
+            if (shape.operation !== 'READ_ONLY') {
+              failures.push(`${prompt} -> ${shape.operation}`);
+            }
+          }
+        }
+      }
+    }
+    assert.deepEqual(
+      failures.slice(0, 20),
+      [],
+      `${failures.length} coordinated no-edit prompts remained mutation-capable`,
+    );
+  });
+
+  test('the "clean up and delete" phrase is negatable as a whole', () => {
+    assert.equal(analyzeTaskShape('do not clean up and delete the logs').operation, 'READ_ONLY');
+    assert.equal(analyzeTaskShape('never clean up and delete the logs').operation, 'READ_ONLY');
+  });
+});
