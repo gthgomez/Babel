@@ -6702,28 +6702,42 @@ export class ChatEngine {
           if (isFatalWindowsProcessExit(lastResult.exit_code) && target) {
             this.platformUnusableVerifiers.add(target);
           }
-          const receipt = await captureAndRecordVerifierReceipt({
-            projectRoot: this.options.projectRoot,
-            command: target,
-            exitCode: lastResult.exit_code,
-            summary: formatVerifierReceiptSummary({
-              verifierId: target,
+          let receipt: Awaited<ReturnType<typeof captureAndRecordVerifierReceipt>> = null;
+          try {
+            receipt = await captureAndRecordVerifierReceipt({
+              projectRoot: this.options.projectRoot,
               command: target,
               exitCode: lastResult.exit_code,
-              stdout: lastResult.stdout,
-              stderr: lastResult.stderr,
-            }),
-            mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
-            sessionEvents: this.parity.sessionEvents,
-            turnId: String(this.parity.turnId ?? this._turnIndex),
-            ledger: this.executedVerifierLedger,
-            cache: this.verifierReceiptCache,
-            writeCount: this.writeCount,
-            toolCallId:
-              meta.idempotencyKey ??
-              this._streamNativeToolCallIds[meta.index] ??
-              `tool_call_${this._turnIndex}_${meta.index}`,
-          });
+              summary: formatVerifierReceiptSummary({
+                verifierId: target,
+                command: target,
+                exitCode: lastResult.exit_code,
+                stdout: lastResult.stdout,
+                stderr: lastResult.stderr,
+              }),
+              mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
+              sessionEvents: this.parity.sessionEvents,
+              turnId: String(this.parity.turnId ?? this._turnIndex),
+              ledger: this.executedVerifierLedger,
+              cache: this.verifierReceiptCache,
+              writeCount: this.writeCount,
+              toolCallId:
+                meta.idempotencyKey ??
+                this._streamNativeToolCallIds[meta.index] ??
+                `tool_call_${this._turnIndex}_${meta.index}`,
+            });
+          } catch (verifierErr) {
+            // A verifier-receipt capture failure must degrade to "no receipt",
+            // never fall through to the generic catch: that path records a
+            // second terminal for an already-settled tool call and corrupts the
+            // outbound tool protocol on the next provider request.
+            invalidateVerifierLedger(this as never, 'verifier receipt capture failed');
+            obsParts.push(
+              `### verifier_receipt_unavailable\n${
+                verifierErr instanceof Error ? verifierErr.message : String(verifierErr)
+              }`,
+            );
+          }
           if (receipt) {
             this.lastVerifierReceipt = receipt;
             const ingested = ingestVerifierResult({

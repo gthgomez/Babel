@@ -1,6 +1,8 @@
 /**
  * Verifier preparation and required-command resolution helper for ChatEngine.
  */
+import path from 'node:path';
+
 import {
   bindChatVerifierReceipt,
   toExecutorVerifierReceipt,
@@ -42,12 +44,18 @@ export async function captureChatVerifierReceipt(input: {
     authoritySource: 'built_in_runner',
   });
   if (!parsed || !isVerifierAuthoritySource(parsed.authoritySource)) return null;
+  // The revision binding requires repository-relative scope paths, but the
+  // governed mutation path reports absolute paths. Canonicalize here so a
+  // successful write + authoritative verifier can bind its revision instead
+  // of throwing and corrupting the loop.
+  const mutationPaths = toRepositoryRelativePaths(input.projectRoot, input.mutationPaths);
+  if (mutationPaths === null) return null;
   return bindChatVerifierReceipt({
     projectRoot: input.projectRoot,
     command: input.command,
     exit_code: input.exitCode,
     summary: input.summary,
-    mutationPaths: input.mutationPaths,
+    mutationPaths,
     structured: {
       verifierId: parsed.verifierId,
       authoritySource: parsed.authoritySource,
@@ -55,6 +63,33 @@ export async function captureChatVerifierReceipt(input: {
       args: parsed.args,
     },
   });
+}
+
+/**
+ * Normalize scope paths to a POSIX repository-relative form. Already-relative
+ * paths pass through. Returns null when any path escapes the project root, so
+ * the caller fails closed (no receipt) rather than minting a misleading scope.
+ */
+function toRepositoryRelativePaths(
+  projectRoot: string,
+  values: readonly string[],
+): string[] | null {
+  const root = path.resolve(projectRoot).replaceAll('\\', '/').replace(/\/+$/, '');
+  const out: string[] = [];
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const slash = value.replaceAll('\\', '/').trim();
+    if (!slash) continue;
+    if (!/^(?:[A-Za-z]:|\/)/.test(slash)) {
+      out.push(slash);
+      continue;
+    }
+    const absolute = path.resolve(value).replaceAll('\\', '/');
+    if (absolute === root) continue;
+    if (!absolute.startsWith(`${root}/`)) return null;
+    out.push(absolute.slice(root.length + 1));
+  }
+  return [...new Set(out)].sort();
 }
 
 /** Replace the latest ledger entry for a structural verifier identity. */
