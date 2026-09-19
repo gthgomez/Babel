@@ -18,6 +18,8 @@ import type { RuntimeCoordinator, RuntimeExecution } from '../../runtime/contrac
 import {
   hydrateEngineFromRestore,
   inspectSessionRestoreState,
+  inspectThreadRepoIdentityOnHydration,
+  RepoIdentityMismatchError,
 } from '../../services/threadStore/sessionHydration.js';
 import {
   allocateThreadId,
@@ -169,8 +171,12 @@ function materializeEngine(state: ProtocolHostState, descriptor: SessionDescript
       );
     }
     // Hydrate before publishing so a failed restore cannot leave a poisoned
-    // empty engine cached for the next submit.
-    hydrateEngineFromRestore(engine, report);
+    // empty engine cached for the next submit. D04: identity is enforced again
+    // at the seam so a materialization cannot bypass the host-level check.
+    hydrateEngineFromRestore(engine, report, {
+      currentRoot: descriptor.projectRoot,
+      fallbackSavedRoot: descriptor.projectRoot,
+    });
   }
   state.engines.set(descriptor.threadId, engine);
   state.descriptors.set(descriptor.threadId, descriptor);
@@ -222,6 +228,27 @@ function errorResponse(id: string | number | null, code: number, message: string
     id,
     error: { code, message },
   };
+}
+
+/**
+ * D04: fail-closed response for a provable physical repository mismatch.
+ *
+ * Mirrors the REPL seam's `repo_identity_mismatch` refusal so a moved or
+ * replaced repository cannot be resumed/admitted on the protocol surface.
+ */
+function repoIdentityMismatchResponse(
+  id: string | number | null,
+  threadId: string,
+  reason: string,
+  savedRoot: string | null,
+  currentRoot: string,
+): JsonRpcResponse {
+  return errorResponse(
+    id,
+    BabelProtocolErrorCode.PROJECT_ROOT_MISMATCH,
+    `repo_identity_mismatch: ${reason} ` +
+      `(thread: ${threadId}; saved repository root: ${savedRoot ?? 'unknown'}; current root: ${currentRoot})`,
+  );
 }
 
 export async function handleProtocolRequest(
@@ -280,14 +307,33 @@ export async function handleProtocolRequest(
           kernelVersion: 'executor-kernel-v1',
           contractVersion: 'executor-contract-v1',
         };
-        if (params.project_root && params.project_root !== descriptor.projectRoot) {
-          return errorResponse(id, BabelProtocolErrorCode.PROJECT_ROOT_MISMATCH, `Project root mismatch for thread: ${threadId}`);
+        // D04: validate physical repository identity BEFORE any restore state is
+        // declared resumable or an engine is admitted. The durable event log /
+        // session-events identity is authoritative; the descriptor root is only
+        // a fallback. Roots are never compared lexically.
+        const currentRoot = params.project_root ?? descriptor.projectRoot;
+        const identity = inspectThreadRepoIdentityOnHydration(
+          threadId,
+          currentRoot,
+          descriptor.projectRoot,
+        );
+        if (!identity.ok && identity.status === 'mismatch') {
+          return repoIdentityMismatchResponse(
+            id,
+            threadId,
+            identity.reason,
+            identity.savedRoot,
+            currentRoot,
+          );
         }
         // Never cement a synthesized descriptor: only persist a real one.
         if (loadedDescriptor) writeSessionDescriptor(descriptor);
         state.descriptors.set(threadId, descriptor);
         const resumeCapability = resolveModeCapability(descriptor.mode);
-        const inspected = inspectSessionRestoreState(threadId, descriptor.mode);
+        const inspected = inspectSessionRestoreState(threadId, descriptor.mode, {
+          currentRoot,
+          fallbackSavedRoot: descriptor.projectRoot,
+        });
         const report: RestoreReport = resumeCapability.resume
           ? inspected
           : {
@@ -336,13 +382,35 @@ export async function handleProtocolRequest(
               capability.reason ?? `Mode ${descriptor.mode} is not supported on this surface`,
             );
           }
+          // D04: identity is enforced before any cold restore is admitted. A
+          // live registered engine was already validated when it was admitted.
+          const identity = inspectThreadRepoIdentityOnHydration(
+            params.thread_id,
+            descriptor.projectRoot,
+            descriptor.projectRoot,
+          );
+          if (!identity.ok && identity.status === 'mismatch') {
+            return repoIdentityMismatchResponse(
+              id,
+              params.thread_id,
+              identity.reason,
+              identity.savedRoot,
+              descriptor.projectRoot,
+            );
+          }
         }
         // Ordinary submission is self-sufficient: when no live runtime is
         // registered, inspect durable state before admitting so a cold host
         // hydrates (or refuses) instead of silently running on empty history.
         let restoreReport = state.restoreReports.get(params.thread_id);
         if (!restoreReport && !registeredEngine) {
-          restoreReport = inspectSessionRestoreState(params.thread_id, descriptor?.mode ?? 'chat');
+          restoreReport = inspectSessionRestoreState(
+            params.thread_id,
+            descriptor?.mode ?? 'chat',
+            descriptor
+              ? { currentRoot: descriptor.projectRoot, fallbackSavedRoot: descriptor.projectRoot }
+              : undefined,
+          );
           state.restoreReports.set(params.thread_id, restoreReport);
         }
         if (restoreReport && !restoreReport.resumable && !registeredEngine) {
@@ -392,6 +460,13 @@ export async function handleProtocolRequest(
         } catch (err) {
           launch.settled = true;
           releaseLaunchOwnership(state, params.thread_id, launch);
+          if (err instanceof RepoIdentityMismatchError) {
+            return errorResponse(
+              id,
+              BabelProtocolErrorCode.PROJECT_ROOT_MISMATCH,
+              err.message,
+            );
+          }
           return errorResponse(
             id,
             BabelProtocolErrorCode.INTERNAL_ERROR,
