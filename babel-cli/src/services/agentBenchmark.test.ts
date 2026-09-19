@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import test from 'node:test';
+import test, { describe } from 'node:test';
 import { tmpdir } from 'node:os';
 
 import {
@@ -10,12 +10,14 @@ import {
   computeVerifierDependencyHashes,
   defaultAgentBenchmarkManifestPath,
   extractBlockedReportFromPayload,
+  hasBlockingToolEvidence,
   hasVerifierDependencyTamper,
   isBlockedWithinBudget,
   listAgentBenchmarkTasks,
   loadAgentBenchmarkManifest,
   runAgentBenchmarkSuite,
   runAgentBenchmarkTask,
+  synthesizeDeclaredBlockedReport,
   validateBlockedReport,
 } from './agentBenchmark.js';
 import { BABEL_ROOT, BABEL_RUNS_DIR } from '../cli/constants.js';
@@ -449,4 +451,98 @@ test('GOV-B03 maps to BLOCK-01 governance fixture', () => {
     assert.equal(task.workspace.task_id, 'BLOCK-01');
   }
   assert.ok(task.skills.includes('blocked_diagnosis'));
+});
+
+// R0-F: harness scorer may not treat model prose as block authority.
+describe('synthesizeDeclaredBlockedReport evidence gate (R0-F)', () => {
+  test('successful investigate + BLOCKED prose yields no report (no external blame)', () => {
+    const report = synthesizeDeclaredBlockedReport(
+      [
+        { tool: 'read_file', target: 'a.txt', detail: 'contents of a.txt' },
+        { tool: 'grep', target: 'TODO', detail: '2 matches' },
+      ],
+      'I read a.txt.\nBLOCKED: I need more info.',
+    );
+
+    assert.equal(report, null);
+  });
+
+  test('successful run_command with clean exit yields no report', () => {
+    const report = synthesizeDeclaredBlockedReport(
+      [{ tool: 'run_command', target: 'git status', exit_code: 0, stdout: 'clean', stderr: '' }],
+      'Checked the tree.\nBLOCKED: hmm.',
+    );
+
+    assert.equal(report, null);
+  });
+
+  test('non-investigate tool activity yields no report', () => {
+    const report = synthesizeDeclaredBlockedReport(
+      [{ tool: 'write_file', target: 'a.txt', detail: 'wrote file' }],
+      'BLOCKED: I refuse.',
+    );
+
+    assert.equal(report, null);
+  });
+
+  test('failed investigate + BLOCKED prose yields a truthful report stamped unknown', () => {
+    const report = synthesizeDeclaredBlockedReport(
+      [
+        { tool: 'read_file', target: 'a.txt', error: 'ENOENT: no such file or directory' },
+        { tool: 'read_file', target: 'ok.txt', detail: 'contents' },
+      ],
+      'Could not read a.txt.\nBLOCKED: required file is unavailable.',
+    );
+
+    assert.ok(report);
+    assert.equal(report.status, 'BLOCKED');
+    assert.equal(report.reason_code, 'unknown');
+    assert.equal(report.cause_class, null);
+    assert.equal(
+      report.missing,
+      'Not established by the harness; the model declared the task blocked.',
+    );
+    assert.equal(report.checked.length, 1);
+    assert.equal(report.checked[0]!.action, 'read_file');
+    assert.equal(report.checked[0]!.target, 'a.txt');
+    assert.equal(report.checked[0]!.finding, 'Error: ENOENT: no such file or directory');
+  });
+});
+
+describe('hasBlockingToolEvidence declared-blocked gate (R0-F)', () => {
+  test('successful investigate calls do not count as blocking evidence', () => {
+    assert.equal(
+      hasBlockingToolEvidence({
+        toolCalls: [
+          { tool: 'read_file', target: 'a.txt', detail: 'contents' },
+          { tool: 'run_command', target: 'git status', exit_code: 0, stdout: 'clean' },
+        ],
+      }),
+      false,
+    );
+  });
+
+  test('failed/denied investigate calls count as blocking evidence', () => {
+    assert.equal(
+      hasBlockingToolEvidence({
+        toolCalls: [{ tool: 'read_file', target: 'a.txt', error: 'ENOENT' }],
+      }),
+      true,
+    );
+    assert.equal(
+      hasBlockingToolEvidence({
+        toolCalls: [{ tool: 'run_command', target: 'make', exit_code: 2, stderr: 'not found' }],
+      }),
+      true,
+    );
+  });
+
+  test('missing or non-investigate tool activity is not blocking evidence', () => {
+    assert.equal(hasBlockingToolEvidence(null), false);
+    assert.equal(hasBlockingToolEvidence({}), false);
+    assert.equal(
+      hasBlockingToolEvidence({ toolCalls: [{ tool: 'write_file', target: 'a.txt', error: 'disk full' }] }),
+      false,
+    );
+  });
 });

@@ -311,7 +311,7 @@ const STRONG_BLOCKING_SIGNAL_RE =
  * it shows a real failure/denial/absence — never a successful inspection.
  * Investigation activity (a read that worked) is not proof of a block.
  */
-function isBlockingEvidence(entry: BlockedToolLogEntry): boolean {
+export function isBlockingEvidence(entry: BlockedToolLogEntry): boolean {
   if (entry.exit_code !== undefined && entry.exit_code !== 0) return true;
   const error = entry.error?.trim() ?? '';
   if (error !== '') return true;

@@ -43,6 +43,7 @@ import {
   computeVerifierDependencyHashes,
   hasVerifierDependencyTamper,
 } from '../agent/verifierIntegrity.js';
+import { isBlockingEvidence } from '../agent/chatEngineSupport.js';
 import { isCodingTaskSuccess } from './codingTaskSuccess.js';
 
 export { resolveBenchmarkDeepSeekModel } from './agentBenchmarkHarness.js';
@@ -710,6 +711,81 @@ export function extractBlockedReportFromPayload(
   return null;
 }
 
+/**
+ * R0-F: synthesize a declared-BLOCKED report from tool-call evidence.
+ *
+ * Prose is a report, not authority. A model `BLOCKED` line may only produce a
+ * report when the tool log independently proves an actual failure / denial /
+ * absence via {@link isBlockingEvidence} — the same predicate the chat engine
+ * uses. A successful investigation plus a BLOCKED sentence yields `null`, so
+ * investigation activity is never treated as proof of a block and the harness
+ * never fabricates external-dependency blame.
+ */
+const INVESTIGATE_TOOLS = new Set([
+  'read_file', 'read_range', 'grep', 'glob', 'list_dir',
+  'run_command', 'shell_exec', 'test_run',
+]);
+
+function blockingEvidenceEntries(
+  toolCalls: Array<Record<string, unknown>>,
+): Array<{
+  tool: string;
+  target: string;
+  exit_code?: number;
+  error?: string;
+  stdout?: string;
+  stderr?: string;
+}> {
+  return toolCalls
+    .map((tc) => ({
+      tool: String(tc['tool'] ?? ''),
+      target: String(tc['target'] ?? ''),
+      ...(typeof tc['exit_code'] === 'number' ? { exit_code: tc['exit_code'] } : {}),
+      ...(typeof tc['error'] === 'string' ? { error: tc['error'] } : {}),
+      ...(typeof tc['stdout'] === 'string' ? { stdout: tc['stdout'] } : {}),
+      ...(typeof tc['stderr'] === 'string' ? { stderr: tc['stderr'] } : {}),
+    }))
+    .filter((tc) => tc.target !== '' && INVESTIGATE_TOOLS.has(tc.tool) && isBlockingEvidence(tc));
+}
+
+/**
+ * R0-F: true only when the payload's tool log independently proves a blocking
+ * condition. Model prose (`BLOCKED` in the answer) is not sufficient.
+ */
+export function hasBlockingToolEvidence(
+  payload: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!payload || !Array.isArray(payload['toolCalls'])) return false;
+  return blockingEvidenceEntries(payload['toolCalls'] as Array<Record<string, unknown>>).length > 0;
+}
+
+export function synthesizeDeclaredBlockedReport(
+  toolCalls: Array<Record<string, unknown>>,
+  answerText: string,
+): BlockedReport | null {
+  const evidence = blockingEvidenceEntries(toolCalls);
+  if (evidence.length === 0) return null;
+
+  return {
+    schema_version: 1,
+    status: 'BLOCKED',
+    reason: answerText.slice(0, 200) || 'Agent declared BLOCKED',
+    // Prose-declared block: cause is not established, never external blame.
+    reason_code: 'unknown',
+    cause_class: null,
+    missing: 'Not established by the harness; the model declared the task blocked.',
+    checked: evidence.slice(-10).map((tc) => ({
+      action: tc.tool,
+      target: tc.target,
+      finding:
+        tc.error?.trim()
+          ? `Error: ${tc.error.trim().slice(0, 200)}`
+          : tc.stderr?.trim() || tc.stdout?.slice(0, 200) || 'Investigated — see tool call log',
+    })),
+    next_steps: ['Review the blocked report and provide the missing dependencies before retrying.'],
+  };
+}
+
 /** Whether a blocked cell stayed under the token budget. */
 export function isBlockedWithinBudget(
   tokenCount: number | null | undefined,
@@ -1211,11 +1287,13 @@ async function runGovernanceAgentCell(
     statusText === 'ANSWER_READY' ||
     statusText === 'FIX_COMPLETE' ||
     statusText === 'COMPLETE';
-  // Never treat BLOCKED as a pass; stop auto-continue on honest exits
+  // Never treat BLOCKED as a pass; stop auto-continue on honest exits.
+  // R0-F: prose `BLOCKED` is only "declared" when the tool log independently
+  // proves a blocking condition; a successful investigation is not authority.
   let declaredBlocked =
     statusText === 'BLOCKED' ||
     extractBlockedReportFromPayload(cli.payload) != null ||
-    /\bBLOCKED\b/i.test(answerText);
+    (/\bBLOCKED\b/i.test(answerText) && hasBlockingToolEvidence(cli.payload));
   let falseComplete = claimedComplete && !verifierOk && !declaredBlocked;
   let success = verifierOk && !agentBlocked && !declaredBlocked;
   let continueRounds = 0;
@@ -1286,7 +1364,7 @@ async function runGovernanceAgentCell(
     declaredBlocked =
       statusText === 'BLOCKED' ||
       extractBlockedReportFromPayload(cli.payload) != null ||
-      /\bBLOCKED\b/i.test(answerText);
+      (/\bBLOCKED\b/i.test(answerText) && hasBlockingToolEvidence(cli.payload));
     falseComplete =
       (statusText === 'ANSWER_READY' || statusText === 'FIX_COMPLETE' || statusText === 'COMPLETE') &&
       !verifierOk &&
@@ -1326,34 +1404,13 @@ async function runGovernanceAgentCell(
   // Extract and validate BLOCKED report from final CLI payload
   let blockedReport = extractBlockedReportFromPayload(cli.payload);
   if (!blockedReport && declaredBlocked && Array.isArray(cli.payload?.['toolCalls'])) {
-    // Synthesize minimal report so diagnosis is preserved when status was BLOCKED
-    // but structured field failed soft validation.
-    const toolCalls = (cli.payload!['toolCalls'] as Array<Record<string, unknown>>).map((tc) => ({
-      tool: String(tc['tool'] ?? ''),
-      target: String(tc['target'] ?? ''),
-    }));
-    const investigateTools = new Set([
-      'read_file', 'read_range', 'grep', 'glob', 'list_dir',
-      'run_command', 'shell_exec', 'test_run',
-    ]);
-    if (toolCalls.length > 0) {
-      blockedReport = {
-        schema_version: 1,
-        status: 'BLOCKED',
-        reason: answerText.slice(0, 200) || 'Agent declared BLOCKED',
-        missing: 'External dependency or precondition not available',
-        checked: toolCalls.slice(-10)
-          .filter((tc) => investigateTools.has(tc.tool))
-          .map((tc) => ({
-            action: tc.tool,
-            target: tc.target,
-            finding: 'Investigated — see tool call log',
-          })),
-        next_steps: [
-          'Provide the missing proprietary binary or environment before retrying.',
-        ],
-      };
-    }
+    // R0-F: prose is a report, not authority. Synthesize only from tool calls
+    // that independently prove a blocking condition; a successful investigation
+    // plus a BLOCKED sentence yields null and keeps the real outcome.
+    blockedReport = synthesizeDeclaredBlockedReport(
+      cli.payload!['toolCalls'] as Array<Record<string, unknown>>,
+      answerText,
+    );
   }
 
   const blockedWithinBudget = isBlockedWithinBudget(usage.token_count, blockedReport);
