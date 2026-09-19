@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { OwnerRecordV1 } from './admissionContracts.js';
+import { completeCompleteness, incompleteCompleteness } from './admissionContracts.js';
 import {
   buildRestoreReport,
   classifyOperation,
@@ -164,13 +165,14 @@ test('P06: recovered post-image completes without a fabricated receipt', () => {
   assert.equal(built.terminal, undefined);
 });
 
-test('P06: explicit terminal commit is the only authoritative completion', () => {
+test('P06: explicit terminal commit with complete evidence is authoritative', () => {
   const classification = classifyOperation(
     operation({
       effectClass: 'reconcilable_mutation',
       admissionState: 'settled',
       outboxState: 'committed',
       effectState: 'completed',
+      completeness: completeCompleteness(1),
     }),
   );
   assert.equal(classification.state, 'completed');
@@ -184,6 +186,7 @@ test('P06: explicit terminal commit is the only authoritative completion', () =>
         admissionState: 'settled',
         outboxState: 'committed',
         effectState: 'completed',
+        completeness: completeCompleteness(1),
       }),
     ],
     terminal: {
@@ -195,6 +198,54 @@ test('P06: explicit terminal commit is the only authoritative completion', () =>
   });
   assert.equal(built.terminal?.outcome, 'UNVERIFIED_PATCH');
   assert.equal(built.operatorActionRequired, false);
+});
+
+test('P06: C1 — an incomplete admission cannot claim authoritative terminal completion', () => {
+  const incomplete = incompleteCompleteness({
+    reasons: ['evidence_refs_truncated'],
+    admittedCount: 5,
+    droppedCount: 3,
+    evidenceRefsDropped: 2,
+    truncated: true,
+  });
+  const evidence = operation({
+    effectClass: 'reconcilable_mutation',
+    admissionState: 'settled',
+    outboxState: 'committed',
+    effectState: 'completed',
+    completeness: incomplete,
+  });
+
+  const classification = classifyOperation(evidence);
+  assert.equal(classification.state, 'indeterminate');
+  assert.equal(classification.action, 'operator_reconciliation_required');
+  assert.equal(classification.automaticRetryAllowed, false);
+  assert.deepEqual(classification.reasons, [RESTORE_REASONS.EVIDENCE_INCOMPLETE]);
+
+  const built = report({ operations: [evidence] });
+  assert.equal(built.operatorActionRequired, true);
+  assert.ok(built.degraded);
+  assert.ok(built.degradedReasons.includes(RESTORE_REASONS.EVIDENCE_INCOMPLETE));
+});
+
+test('P06 control: an incomplete admission must NOT be authoritative (unsafe assertion fails)', () => {
+  const evidence = operation({
+    effectClass: 'reconcilable_mutation',
+    admissionState: 'settled',
+    outboxState: 'committed',
+    effectState: 'completed',
+    completeness: incompleteCompleteness({
+      reasons: ['conflicting_duplicate_fact'],
+      admittedCount: 0,
+      droppedCount: 1,
+    }),
+  });
+  const classification = classifyOperation(evidence);
+  // CONTROL: the old (unsafe) behavior claimed `restore_terminal_committed`.
+  assert.throws(() => assert.deepEqual(classification.reasons, [RESTORE_REASONS.TERMINAL_COMMITTED]));
+  // CANDIDATE: it is downgraded and requires an operator.
+  assert.deepEqual(classification.reasons, [RESTORE_REASONS.EVIDENCE_INCOMPLETE]);
+  assert.equal(classification.action, 'operator_reconciliation_required');
 });
 
 test('P06: an aborted admission is terminal-not-executed, not a retry', () => {
@@ -296,6 +347,19 @@ test('P06: an exhausted budget blocks continuation', () => {
   });
   assert.equal(built.continuationBlocked, true);
   assert.equal(built.continuationBlockedReason, RESTORE_REASONS.BUDGET_EXHAUSTED);
+  assert.equal(built.operations[0]?.action, 'blocked_missing_budget');
+});
+
+test('P06: an entirely-unknown (all-null) budget blocks continuation', () => {
+  const built = report({
+    continuationRequested: true,
+    budget: { turnsRemaining: null, tokensRemaining: null, repairAttemptsRemaining: null, infraRetriesRemaining: null },
+    cursor: { journal: 'admission', position: 1 },
+    operations: [operation({ effectClass: 'idempotent', effectState: 'intent' })],
+  });
+  assert.equal(built.continuationBlocked, true);
+  assert.equal(built.continuationBlockedReason, RESTORE_REASONS.BUDGET_MISSING);
+  assert.ok(built.missingAuthorities.includes('task_budget'));
   assert.equal(built.operations[0]?.action, 'blocked_missing_budget');
 });
 

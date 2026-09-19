@@ -7,13 +7,14 @@
  * fresh store open, exactly what a restarted process sees.
  */
 import assert from 'node:assert/strict';
-import { appendFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 
 import { openAdmissionStore, type AdmissionStore, type AdmissionStoreOptions } from './admission.js';
-import type { CommandDigestInput } from './admissionContracts.js';
+import { incompleteCompleteness, type CommandDigestInput } from './admissionContracts.js';
 import { ADMISSION_FAULT_HOOK, type AdmissionFaultPoint } from './admissionTestHooks.js';
 import { recordEffectIntent } from '../executor/effectLedger.js';
 import { classifyInterruption, restoreFromCommittedState, type RestoreInput } from './recovery.js';
@@ -202,7 +203,7 @@ test('P06: crash after effect before receipt recognizes completion without fabri
   }
 });
 
-test('P06: crash during verifier does not fabricate verified completion', () => {
+test('P06: crash after effect before a verifier receipt does not fabricate verified completion', () => {
   const fixture = makeFixture();
   try {
     const store = openStore(fixture);
@@ -493,15 +494,15 @@ test('P06: TUI can attach read-only without owning the runtime', () => {
 
 test('P06: interruption classes are distinguished explicitly', () => {
   assert.equal(
-    classifyInterruption({ processStarted: true, ownerLeaseActive: false, hasUnfinishedEffect: true }),
+    classifyInterruption({ processStarted: true, hasUnfinishedEffect: true }),
     'process_restart',
   );
   assert.equal(
-    classifyInterruption({ processStarted: false, ownerLeaseActive: true, hasUnfinishedEffect: true }),
+    classifyInterruption({ processStarted: false, hasUnfinishedEffect: true }),
     'unfinished_tool_continuation',
   );
   assert.equal(
-    classifyInterruption({ processStarted: false, ownerLeaseActive: true, hasUnfinishedEffect: false }),
+    classifyInterruption({ processStarted: false, hasUnfinishedEffect: false }),
     'client_reconnect',
   );
 });
@@ -528,6 +529,237 @@ test('P06: an unavailable store fails closed and records the missing authority',
       });
       assert.equal(refused.settled, false);
       if (!refused.settled) assert.equal(refused.reasonCode, 'ADMISSION_UNAVAILABLE');
+    } finally {
+      session.close();
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P06: C1 — an incomplete admission is not authoritative even with a committed outbox', () => {
+  const fixture = makeFixture();
+  try {
+    const store = openStore(fixture);
+    store.admitCommand({
+      digestInput: commandInput(),
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      effectClass: 'reconcilable_mutation',
+      operationId: 'op-1',
+      preImageHashes: { 'a.txt': 'before' },
+      postImageHashes: { 'a.txt': 'after' },
+      completeness: incompleteCompleteness({
+        reasons: ['conflicting_duplicate_fact'],
+        admittedCount: 0,
+        droppedCount: 3,
+        truncated: true,
+      }),
+    });
+    const settled = store.settleAdmission({
+      threadId: 'thread-1',
+      commandId: 'cmd-1',
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      state: 'settled',
+      outbox: { state: 'committed', postImageHashes: { 'a.txt': 'after' } },
+    });
+    assert.equal(settled.settled, true);
+    store.close();
+
+    const session = restore(fixture, { currentImageHashes: { 'a.txt': 'after' } });
+    try {
+      const operation = session.report.operations[0]!;
+      assert.equal(operation.state, 'indeterminate');
+      assert.equal(operation.action, 'operator_reconciliation_required');
+      assert.deepEqual(operation.reasons, [RESTORE_REASONS.EVIDENCE_INCOMPLETE]);
+      assert.equal(session.report.operatorActionRequired, true);
+      assert.ok(session.report.degradedReasons.includes(RESTORE_REASONS.EVIDENCE_INCOMPLETE));
+    } finally {
+      session.close();
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P06: C1 control — the unsafe authoritative claim fails', () => {
+  const fixture = makeFixture();
+  try {
+    const store = openStore(fixture);
+    store.admitCommand({
+      digestInput: commandInput(),
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      effectClass: 'reconcilable_mutation',
+      operationId: 'op-1',
+      completeness: incompleteCompleteness({ reasons: ['probe'], admittedCount: 0, droppedCount: 1 }),
+    });
+    store.settleAdmission({
+      threadId: 'thread-1',
+      commandId: 'cmd-1',
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      state: 'settled',
+      outbox: { state: 'committed' },
+    });
+    store.close();
+
+    const session = restore(fixture);
+    try {
+      const operation = session.report.operations[0]!;
+      // CONTROL: the pre-fix report claimed `restore_terminal_committed`.
+      assert.throws(() => assert.deepEqual(operation.reasons, [RESTORE_REASONS.TERMINAL_COMMITTED]));
+      // CANDIDATE: it is downgraded to an operator action.
+      assert.deepEqual(operation.reasons, [RESTORE_REASONS.EVIDENCE_INCOMPLETE]);
+      assert.notEqual(operation.action, 'none_complete');
+    } finally {
+      session.close();
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P06: I1 — a corrupt middle effect-ledger line is detected by the orchestrator', () => {
+  const fixture = makeFixture();
+  try {
+    const first = recordEffectIntent({
+      runDir: fixture.runDir,
+      sessionId: 'session-1',
+      mutationBatchId: 'batch-1',
+      effectClass: 'read_only',
+      toolName: 'read_file',
+      targetPaths: ['a.txt'],
+      preImageHashes: { 'a.txt': 'before' },
+    });
+    const ledgerPath = join(fixture.runDir, 'effect-ledger.jsonl');
+    appendFileSync(ledgerPath, 'this is not json\n');
+    const second = recordEffectIntent({
+      runDir: fixture.runDir,
+      sessionId: 'session-1',
+      mutationBatchId: 'batch-2',
+      effectClass: 'read_only',
+      toolName: 'read_file',
+      targetPaths: ['b.txt'],
+      preImageHashes: { 'b.txt': 'before' },
+    });
+    assert.notEqual(first.operationId, second.operationId);
+
+    const session = restore(fixture);
+    try {
+      assert.equal(session.report.historyReadable, true);
+      assert.equal(session.report.degraded, true);
+      assert.equal(session.report.cursor.complete, false);
+      assert.ok(session.report.missingAuthorities.includes('history'));
+      assert.ok(
+        session.report.diagnostics.some((line) => line.startsWith('effect_ledger_corrupt_lines:')),
+      );
+      assert.equal(session.report.operations.length, 2);
+    } finally {
+      session.close();
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P06: I2 — a shape-invalid admission row makes the cursor incomplete', () => {
+  const fixture = makeFixture();
+  try {
+    const store = openStore(fixture);
+    store.admitCommand({
+      digestInput: commandInput(),
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      effectClass: 'read_only',
+      operationId: 'op-1',
+    });
+    store.close();
+
+    const db = new DatabaseSync(join(fixture.runDir, 'runtime-facts.sqlite'));
+    try {
+      db.prepare("UPDATE admission SET state = 'bogus' WHERE command_id = ?").run('cmd-1');
+    } finally {
+      db.close();
+    }
+
+    const session = restore(fixture);
+    try {
+      assert.equal(session.report.cursor.complete, false);
+      assert.equal(session.report.degraded, true);
+      assert.ok(session.report.missingAuthorities.includes('history'));
+      assert.ok(
+        session.report.diagnostics.some((line) => line.startsWith('admission_rows_skipped:')),
+      );
+    } finally {
+      session.close();
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P06: I3 — an admission and its effect-ledger record are not double-reported', () => {
+  const fixture = makeFixture();
+  try {
+    const store = openStore(fixture);
+    store.admitCommand({
+      digestInput: commandInput(),
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      effectClass: 'reconcilable_mutation',
+      operationId: 'op-shared',
+      preImageHashes: { 'a.txt': 'before' },
+    });
+    store.close();
+
+    const now = new Date().toISOString();
+    writeFileSync(
+      join(fixture.runDir, 'effect-ledger.jsonl'),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        operationId: 'op-shared',
+        sessionId: 'session-1',
+        turnId: null,
+        mutationBatchId: 'batch-1',
+        effectClass: 'reconcilable_mutation',
+        toolName: 'write_file',
+        targetPaths: ['a.txt'],
+        preImageHashes: { 'a.txt': 'before' },
+        status: 'intent',
+        createdAt: now,
+        updatedAt: now,
+      })}\n`,
+      'utf8',
+    );
+
+    const session = restore(fixture, { currentImageHashes: { 'a.txt': 'before' } });
+    try {
+      assert.equal(session.report.operations.length, 1);
+      assert.equal(session.report.operations[0]?.operationId, 'op-shared');
+    } finally {
+      session.close();
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P06: detection can derive the interruption class and override the assertion', () => {
+  const fixture = makeFixture();
+  try {
+    const session = restore(fixture, {
+      interruptionClass: 'client_reconnect',
+      detection: { processStarted: false, hasUnfinishedEffect: true },
+    });
+    try {
+      assert.equal(session.report.interruptionClass, 'unfinished_tool_continuation');
+      assert.ok(
+        session.report.diagnostics.some((line) =>
+          line.startsWith('interruption_class_overridden:'),
+        ),
+      );
     } finally {
       session.close();
     }

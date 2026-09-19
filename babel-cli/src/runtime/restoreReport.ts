@@ -20,10 +20,12 @@ import type {
   EffectLedgerStatus,
   EffectReconciliationDecision,
 } from '../executor/effectLedger.js';
-import type {
-  AdmissionState,
-  OutboxState,
-  OwnerRecordV1,
+import {
+  isAuthoritativeAdmission,
+  type AdmissionCompletenessV1,
+  type AdmissionState,
+  type OutboxState,
+  type OwnerRecordV1,
 } from './admissionContracts.js';
 
 /** Version of the restore-report contract (independent of the P05 journal schema). */
@@ -283,6 +285,12 @@ export interface RestoreOperationEvidence {
   readonly effectState?: 'none' | EffectLedgerStatus;
   /** Precomputed `effectLedger` decision, when the effect was interrupted. */
   readonly reconciliation?: EffectReconciliationDecision;
+  /**
+   * The admission's own evidence-completeness record. Terminal evidence may only
+   * claim authority when this is complete and untruncated
+   * (`isAuthoritativeAdmission`). Absent means unknown, not authoritative.
+   */
+  readonly completeness?: AdmissionCompletenessV1;
   /** Processes attributable to this operation that have not been settled. */
   readonly processTreeSettled?: boolean;
   readonly unknownReasons?: readonly string[];
@@ -313,12 +321,29 @@ export function classifyOperation(evidence: RestoreOperationEvidence): Operation
   const reconciledComplete = evidence.reconciliation === 'recovered_complete';
 
   if (admissionSettled || outboxCommitted || effectCompleted || reconciledComplete) {
-    const authoritative = admissionSettled && outboxCommitted;
+    const terminalEvidence = admissionSettled && outboxCommitted;
+    const completenessAuthoritative =
+      evidence.completeness !== undefined && isAuthoritativeAdmission(evidence.completeness);
+    if (terminalEvidence && !completenessAuthoritative) {
+      // A terminal record whose own completeness says the evidence was
+      // truncated/incomplete may never claim authority (`isAuthoritativeAdmission`).
+      return {
+        recoveryClass,
+        state: 'indeterminate',
+        action: 'operator_reconciliation_required',
+        automaticRetryAllowed: false,
+        reasons: [RESTORE_REASONS.EVIDENCE_INCOMPLETE],
+      };
+    }
+    const authoritative = terminalEvidence && completenessAuthoritative;
     const reasons: string[] = [
       authoritative
         ? RESTORE_REASONS.TERMINAL_COMMITTED
         : RESTORE_REASONS.EFFECT_APPLIED_WITHOUT_RECEIPT,
     ];
+    if (!authoritative && evidence.completeness !== undefined && !completenessAuthoritative) {
+      reasons.push(RESTORE_REASONS.EVIDENCE_INCOMPLETE);
+    }
     return {
       recoveryClass,
       state: 'completed',
@@ -559,6 +584,7 @@ function budgetBlocksContinuation(budget: RestoreBudgetEvidence | null): {
   blocked: boolean;
   reason?: string;
 } {
+  // Missing or entirely-unknown budget cannot authorize a continuation.
   if (!budget) return { blocked: true, reason: RESTORE_REASONS.BUDGET_MISSING };
   const remaining = [
     budget.turnsRemaining,
@@ -566,6 +592,7 @@ function budgetBlocksContinuation(budget: RestoreBudgetEvidence | null): {
     budget.repairAttemptsRemaining,
     budget.infraRetriesRemaining,
   ].filter((value): value is number => value !== null);
+  if (remaining.length === 0) return { blocked: true, reason: RESTORE_REASONS.BUDGET_MISSING };
   if (remaining.some((value) => value <= 0)) {
     return { blocked: true, reason: RESTORE_REASONS.BUDGET_EXHAUSTED };
   }
@@ -613,6 +640,7 @@ export function buildRestoreReport(input: BuildRestoreReportInput): RestoreRepor
   if (owner.staleRequester) degradedReasons.add(RESTORE_REASONS.STALE_OWNER);
 
   let anyExecutableBlocked = false;
+  let hasIncompleteEvidence = false;
   const operations: RestoreOperationReport[] = boundedOperations.map((rawEvidence) => {
     // A report-level process-tree observation applies to every operation unless
     // the evidence already carries a more specific value.
@@ -624,6 +652,9 @@ export function buildRestoreReport(input: BuildRestoreReportInput): RestoreRepor
     let action = classification.action;
     const reasons = [...classification.reasons];
     let automaticRetryAllowed = classification.automaticRetryAllowed;
+    if (reasons.includes(RESTORE_REASONS.EVIDENCE_INCOMPLETE)) {
+      hasIncompleteEvidence = true;
+    }
 
     if (isExecutableAction(action)) {
       if (historyBlocksExecution) {
@@ -672,8 +703,10 @@ export function buildRestoreReport(input: BuildRestoreReportInput): RestoreRepor
       operation.action === 'operator_reconciliation_required' ||
       operation.action === 'await_process_tree_settle' ||
       operation.action === 'blocked_missing_budget' ||
-      operation.action === 'blocked_missing_authority',
+      operation.action === 'blocked_missing_authority' ||
+      operation.action === 'history_only',
     ) || owner.staleRequester;
+  if (hasIncompleteEvidence) degradedReasons.add(RESTORE_REASONS.EVIDENCE_INCOMPLETE);
 
   const continuationBlocked =
     continuationRequested &&
