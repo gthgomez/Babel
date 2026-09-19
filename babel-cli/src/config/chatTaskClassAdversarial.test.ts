@@ -271,6 +271,42 @@ const ADVERSARIAL_CORPUS: readonly AdversarialTestCase[] = [
     verificationApplicable: true,
     notes: 'Positive "add" survives the negated "do not fix"',
   },
+  {
+    prompt: 'do not edit or modify files',
+    expectedOperation: 'READ_ONLY',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'investigate',
+    mutationAllowed: false,
+    verificationApplicable: false,
+    notes: 'One negation governs a coordinated verb list; both verbs are negated',
+  },
+  {
+    prompt: 'never patch or refactor the parser',
+    expectedOperation: 'READ_ONLY',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'investigate',
+    mutationAllowed: false,
+    verificationApplicable: false,
+    notes: 'Coordinated negation after "never"',
+  },
+  {
+    prompt: "don't change or update anything",
+    expectedOperation: 'READ_ONLY',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'investigate',
+    mutationAllowed: false,
+    verificationApplicable: false,
+    notes: 'Coordinated negation after "don\'t"',
+  },
+  {
+    prompt: 'Explain only — reply with the word PONG. Do not edit or modify files.',
+    expectedOperation: 'READ_ONLY',
+    expectedComplexity: 'OPEN_ENDED',
+    expectedTaskClass: 'investigate',
+    mutationAllowed: false,
+    verificationApplicable: false,
+    notes: 'In-repo harnessEval prompt: coordinated negation must stay read-only',
+  },
 ];
 
 describe('PR-A Certification: Adversarial Task-Classification Corpus', () => {

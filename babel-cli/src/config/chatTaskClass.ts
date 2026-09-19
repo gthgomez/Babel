@@ -369,9 +369,21 @@ function stripInformationalFrames(text: string): string {
 /**
  * Explicit no-editing directives. Shared so the same surface can both detect
  * the directive and be stripped before a positive mutation verb is scanned.
+ *
+ * A single negation can govern a coordinated verb list ("do not edit or modify
+ * files", "never patch, refactor or repair the parser"), so each alternative
+ * consumes the whole list. Otherwise the trailing verb would survive stripping
+ * and be misread as positive mutation authority.
  */
-const READ_ONLY_DIRECTIVE_SOURCE =
-  '\\b(without (any )?(editing|modifying|changing|writing|fixing)|read-?only|(?:do\\s*not|don\'t|never)\\s+(?:edit|modify|change|write|delete|remove|fix|patch|repair|refactor|touch|alter)|dry-?run)\\b';
+// Union of the no-edit verbs and the mutation verbs `hasMutation` recognises, so
+// a coordinated list is stripped in full regardless of which verb finishes it.
+const READ_ONLY_VERB_BASE =
+  '(?:edit|modify|change|write|delete|remove|fix|patch|repair|refactor|touch|alter|create|update|add|replace|rename|implement|apply)';
+const READ_ONLY_VERB_GERUND =
+  '(?:editing|modifying|changing|writing|deleting|removing|fixing|patching|repairing|refactoring|touching|altering|creating|updating|adding|replacing|renaming|implementing|applying)';
+const READ_ONLY_VERB_LIST = `${READ_ONLY_VERB_BASE}(?:\\s*(?:,|/|or|nor|and)\\s*${READ_ONLY_VERB_BASE})*`;
+const READ_ONLY_GERUND_LIST = `${READ_ONLY_VERB_GERUND}(?:\\s*(?:,|/|or|nor|and)\\s*${READ_ONLY_VERB_GERUND})*`;
+const READ_ONLY_DIRECTIVE_SOURCE = `\\b(without (any )?${READ_ONLY_GERUND_LIST}|read-?only|(?:do\\s*not|don't|never)\\s+${READ_ONLY_VERB_LIST}|dry-?run)\\b`;
 
 /**
  * Lightweight multi-dimensional task-shape analysis.
