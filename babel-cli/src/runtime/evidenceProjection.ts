@@ -32,6 +32,7 @@ import {
   coverageIsWholeWorkspace,
   coverageWarnings,
   unknownCoverageManifest,
+  validateCoverageManifest,
   type CoverageManifestV1,
 } from '../evidence/coverage.js';
 import type { ReceiptIndex, ReceiptLookupResult } from '../evidence/receiptIndex.js';
@@ -51,6 +52,10 @@ export type VerificationState =
   | 'available'
   | 'not_recorded'
   | 'stale'
+  /** A receipt with no revision binding cannot be freshness-checked. */
+  | 'unbound'
+  /** A required freshness re-check failed; freshness is unknown, not fresh. */
+  | 'freshness_unknown'
   | 'malformed'
   | 'wrong_contract'
   | 'untrusted_producer';
@@ -278,11 +283,18 @@ function resolveOracle(input: {
   let reason = 'oracle_not_compared';
   if (oracle && expected) {
     const mismatches: string[] = [];
+    // Oracle identity includes its kind; a different kind is a different oracle.
+    if (oracle.kind !== expected.kind) mismatches.push('kind');
     for (const key of ['contract_hash', 'verifier_id', 'command_hash'] as const) {
       const actual = oracle[key];
       const wanted = expected[key];
-      if (actual !== undefined && wanted !== undefined && actual !== wanted)
-        mismatches.push(key);
+      // A field declared on exactly one side is an unverifiable claim, not a match.
+      if (actual === undefined && wanted === undefined) continue;
+      if (actual === undefined || wanted === undefined) {
+        mismatches.push(`${key}_missing`);
+        continue;
+      }
+      if (actual !== wanted) mismatches.push(key);
     }
     if (mismatches.length > 0) {
       matchesExpected = false;
@@ -305,12 +317,22 @@ function resolveOracle(input: {
 function resolveStaleness(input: {
   receipt: VerificationReceiptInputV1;
   projectRoot?: string | undefined;
-}): { stale: boolean; reason: string | null; issue?: string } {
+}): {
+  stale: boolean;
+  reason: string | null;
+  /** True when the required re-check could not establish freshness. */
+  freshnessUnknown: boolean;
+  issue?: string;
+} {
   const receipt = input.receipt;
   if (receipt.stale === true)
-    return { stale: true, reason: receipt.stale_reason ?? 'declared stale' };
+    return {
+      stale: true,
+      reason: receipt.stale_reason ?? 'declared stale',
+      freshnessUnknown: false,
+    };
   if (!input.projectRoot || !receipt.bound_revision)
-    return { stale: false, reason: null };
+    return { stale: false, reason: null, freshnessUnknown: false };
   try {
     const result = RevisionManager.isReceiptStaleSync(
       {
@@ -326,12 +348,18 @@ function resolveStaleness(input: {
       input.projectRoot,
     );
     return result.stale
-      ? { stale: true, reason: result.reason ?? 'revision moved' }
-      : { stale: false, reason: null };
+      ? {
+          stale: true,
+          reason: result.reason ?? 'revision moved',
+          freshnessUnknown: false,
+        }
+      : { stale: false, reason: null, freshnessUnknown: false };
   } catch (error) {
+    // A failure to establish freshness is not freshness: fail closed.
     return {
       stale: false,
       reason: receipt.stale_reason ?? null,
+      freshnessUnknown: true,
       issue: `staleness_recheck_failed:${
         error instanceof Error ? error.message : String(error)
       }`,
@@ -403,6 +431,8 @@ function resolveVerification(input: {
   else if (!input.oracle.matches_expected) state = 'wrong_contract';
   else if (issues.includes('authority_claimed_by_untrusted_producer'))
     state = 'untrusted_producer';
+  else if (staleness.freshnessUnknown) state = 'freshness_unknown';
+  else if (!receipt.bound_revision) state = 'unbound';
   else if (staleness.stale) state = 'stale';
   else state = 'available';
 
@@ -520,14 +550,23 @@ export function projectCompletionExplanation(
   });
   const execution = resolveExecution(input.execution_receipt ?? null);
 
-  const manifest = input.coverage ?? unknownCoverageManifest();
+  const suppliedCoverage = input.coverage ?? null;
+  const coverageErrors = suppliedCoverage
+    ? validateCoverageManifest(suppliedCoverage)
+    : [];
+  const coverageInvalid = suppliedCoverage !== null && coverageErrors.length > 0;
+  const manifest = coverageInvalid
+    ? unknownCoverageManifest('coverage_invalid')
+    : (suppliedCoverage ?? unknownCoverageManifest());
   const coverageWarningsList = coverageWarnings(manifest);
   const coverageComplete = coverageIsWholeWorkspace(manifest);
-  const coverageReason = coverageComplete
-    ? 'whole_workspace_scope'
-    : manifest.scope.kind === 'unknown'
-      ? 'coverage_unknown'
-      : coverageWarningsList.join(',') || 'scoped_claim';
+  const coverageReason = coverageInvalid
+    ? 'coverage_invalid'
+    : coverageComplete
+      ? 'whole_workspace_scope'
+      : manifest.scope.kind === 'unknown'
+        ? 'coverage_unknown'
+        : coverageWarningsList.join(',') || 'scoped_claim';
 
   const outcomeAuthoritative = projectionOutcome?.authoritative === true;
   const source: ExplanationOutcomeSource = input.outcome_source
@@ -551,6 +590,10 @@ export function projectCompletionExplanation(
     decisionRef.allowed &&
     decisionRef.final_outcome === 'VERIFIED_COMPLETE';
   const verificationAvailable = verification.state === 'available';
+  const projectionDecisionMismatch =
+    projectionOutcome !== null &&
+    decisionRef.state === 'decided' &&
+    projectionOutcome.outcome !== decisionRef.final_outcome;
   const reasons: string[] = [];
   if (promotedByKernel && !outcomeAuthoritative)
     reasons.push('verified_decision_without_authoritative_projection');
@@ -558,17 +601,28 @@ export function projectCompletionExplanation(
     reasons.push(
       `verified_decision_without_available_receipt:${verification.state}`,
     );
+  if (promotedByKernel && !verification.authority)
+    reasons.push('verified_decision_without_authoritative_receipt');
+  if (promotedByKernel && verification.exit_code !== 0)
+    reasons.push('verified_decision_without_successful_receipt');
   if (promotedByKernel && verification.stale)
     reasons.push('verified_decision_with_stale_receipt');
+  if (projectionDecisionMismatch)
+    reasons.push('projection_outcome_mismatches_completion_decision');
   if (decisionRef.state === 'decided' && outcomeAuthoritative && !promotedByKernel)
     reasons.push('authoritative_projection_without_kernel_promotion');
+  if (coverageInvalid) reasons.push('coverage_invalid');
   reasons.sort();
 
   const effectiveVerified =
     promotedByKernel &&
     outcomeAuthoritative &&
     verificationAvailable &&
-    !verification.stale;
+    !verification.stale &&
+    verification.authority &&
+    verification.exit_code === 0 &&
+    !projectionDecisionMismatch &&
+    !coverageInvalid;
 
   const authority: CompletionExplanationV1['authority'] = {
     promoter: decisionRef.state === 'decided' ? 'executor_kernel' : 'none',
@@ -623,15 +677,36 @@ export function projectCompletionExplanationFromFacts(
   return projectCompletionExplanation({ ...input, projection: projectTask(facts) });
 }
 
+/** Terminal outcomes the compatibility adapter will pass through. */
+const KNOWN_TERMINAL_OUTCOMES: ReadonlySet<string> = new Set([
+  'VERIFIED_COMPLETE',
+  'UNVERIFIED_PATCH',
+  'BLOCKED_EXTERNAL',
+  'BLOCKED_POLICY',
+  'BUDGET_EXHAUSTED',
+  'CANCELLED',
+  'INFRA_FAILURE',
+  'AGENT_FAILURE',
+  'NO_CHANGE_REQUIRED',
+  'INVALID_TASK',
+  'NEEDS_HUMAN_DECISION',
+  'PLAN_COMPLETE',
+  'UNKNOWN',
+]);
+
 /**
  * Compatibility adapter (ADR-007): derive a `TerminalOutcome` from an
  * explanation without strengthening it. The value is only ever copied from the
- * P04 projection or the kernel decision.
+ * P04 projection or the kernel decision; an unrecognized value degrades to
+ * `UNKNOWN` rather than passing through an unchecked cast.
  */
 export function terminalOutcomeFromExplanation(
   explanation: CompletionExplanationV1,
 ): TerminalOutcome | 'PLAN_COMPLETE' | 'UNKNOWN' {
-  return explanation.outcome.value as TerminalOutcome | 'PLAN_COMPLETE' | 'UNKNOWN';
+  const value = explanation.outcome.value;
+  return KNOWN_TERMINAL_OUTCOMES.has(value)
+    ? (value as TerminalOutcome | 'PLAN_COMPLETE' | 'UNKNOWN')
+    : 'UNKNOWN';
 }
 
 export type CompletionExplanationReadResult = {

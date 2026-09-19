@@ -239,11 +239,13 @@ function finalizeCoverageManifest(
 
 /**
  * Coverage for evidence that predates coverage manifests. It is explicitly
- * unknown: it never acquires stronger authority retroactively.
+ * unknown: it never acquires stronger authority retroactively. The default
+ * capture timestamp is a fixed sentinel so the digest is stable across
+ * invocations for identical inputs.
  */
 export function unknownCoverageManifest(
   note = 'coverage_not_declared',
-  captured_at = Date.now(),
+  captured_at = 0,
 ): CoverageManifestV1 {
   return finalizeCoverageManifest({
     schema_version: COVERAGE_MANIFEST_SCHEMA_VERSION,
@@ -277,14 +279,17 @@ export function validateCoverageManifest(value: unknown): string[] {
 
 /**
  * True only for an explicit whole-repository claim: complete scope, no
- * exclusions, and a non-dirty baseline. Everything else stays visibly scoped.
+ * exclusions, and a baseline that is neither dirty nor has untracked files
+ * (ADR-004: a Git commit alone omits dirty/untracked content). Everything else
+ * stays visibly scoped.
  */
 export function coverageIsWholeWorkspace(manifest: CoverageManifestV1): boolean {
   return (
     manifest.completeness === 'complete' &&
     manifest.scope.kind === 'repository' &&
     manifest.exclusions.length === 0 &&
-    manifest.baseline.dirty === false
+    manifest.baseline.dirty === false &&
+    manifest.baseline.untracked.length === 0
   );
 }
 

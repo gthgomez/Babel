@@ -10,6 +10,11 @@
  * lookup survives a host restart. A missing file opens as an empty index; a
  * corrupt file opens as an *inconsistent* index whose lookups return explicit
  * `unavailable` instead of silently dropping receipts.
+ *
+ * Single-writer ownership: the index rewrites the whole document on `record`,
+ * so exactly one process/owner may write a given index directory. Lookups are
+ * read-only and never regenerate evidence; concurrent writers are
+ * last-writer-wins and are not supported.
  */
 
 import * as fs from 'node:fs';
