@@ -19,6 +19,7 @@ import {
   canMutateWithIdempotencyKey,
 } from './liveSessionBridge.js';
 import { paritySettleInterruptedOnResume } from './chatEngineParityBridge.js';
+import { loadProjectSessionIdentityDispositionSync } from '../interactive/identity.js';
 import { AUTHORITY_SESSION_FILENAME, establishAuthoritySession } from '../authority/sessionContext.js';
 import {
   evaluateSessionTaskGate,
@@ -30,6 +31,8 @@ import { join } from 'node:path';
 export interface LiveAuthorityOptionsSlice {
   projectRoot: string;
   task: string;
+  instructionRoot?: string;
+  workspaceRoot?: string | null;
   model?: string;
   maxTurns?: number;
   requiredVerifierCommands?: readonly string[] | null;
@@ -52,9 +55,19 @@ export function initLiveAuthorityOnEngine(input: {
       repoRoot: input.options.projectRoot,
       persistPath: join(input.engineRunDir, AUTHORITY_SESSION_FILENAME),
     });
+    // Delivered session identity is loaded from the same root that supplies
+    // identity to the request (instructionRoot wins for trusted review), so the
+    // manifest reports delivered files. Candidate-controlled target
+    // instructions are never read when a trusted instructionRoot is set.
+    const identityRoot = input.options.instructionRoot ?? input.options.projectRoot;
+    const identity = loadProjectSessionIdentityDispositionSync(
+      identityRoot,
+      input.options.instructionRoot ?? input.options.workspaceRoot ?? null,
+    );
     input.parity.liveAuthority = resolveLiveSessionAuthority({
       mode,
       projectRoot: input.options.projectRoot,
+      ...(input.options.instructionRoot ? { instructionRoot: input.options.instructionRoot } : {}),
       task: input.options.task,
       taskClass: input.taskClass,
       ...(input.options.model ? { modelId: input.options.model } : {}),
@@ -64,6 +77,7 @@ export function initLiveAuthorityOnEngine(input: {
       verifierRequirements: input.options.requiredVerifierCommands
         ? [...input.options.requiredVerifierCommands]
         : [],
+      systemContextFragments: identity.fragments,
     });
     persistLiveSessionAuthority(input.engineRunDir, input.parity.liveAuthority);
     refreshTaskAuthorityGate(input.parity, input.options.task);
