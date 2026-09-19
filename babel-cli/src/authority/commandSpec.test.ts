@@ -738,7 +738,6 @@ const HOST_PROCESS_SURFACE = new Set([
   'stages/runtimePreflight.ts',
   'stages/runtimeVerificationRunner.ts',
   'utils/gitExec.ts',
-  'agent/agentRunCoordinator.ts',
   'services/gitMutations.ts',
   'services/governanceBenchmark.ts',
   'services/knowledgeGraphIndexer.ts',
