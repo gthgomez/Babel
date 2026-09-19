@@ -221,7 +221,12 @@ describe('S03/#213 T05 — stable delegation identity and attempt isolation', ()
     assert.notEqual(first, retry);
     assert.match(first, /attempt-1$/);
     assert.match(retry, /attempt-2$/);
-    assert.ok(first.startsWith(`/runs/engine/${id}/`));
+    // Path *structure*, not a hard-coded separator: `join` is platform-native,
+    // so win32 yields `\runs\engine\<id>\attempt-N`. Normalize and assert the
+    // delegation id is the immediate parent dir (the attempt dirs cannot alias).
+    const normalized = (p: string): string => p.replace(/\\/g, '/');
+    assert.equal(normalized(first), `/runs/engine/${id}/attempt-1`);
+    assert.equal(normalized(retry), `/runs/engine/${id}/attempt-2`);
     // Same delegation id is retained across attempts (identity stable).
     assert.equal(id, deriveChildDelegationId(base));
   });

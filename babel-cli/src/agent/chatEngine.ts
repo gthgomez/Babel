@@ -262,8 +262,8 @@ import { remoteMcpFailClosedObservation, remoteMcpIsFailClosed } from '../bridge
 import { deriveSubagentApprovalSession } from './approvalRequests.js';
 import {
   assertChildApprovalWithinParent,
-  enterWithExecutionContext,
   getExecutionContext,
+  runWithExecutionContext,
   scopeAsyncGenerator,
   type ExecutionContext,
 } from './executionContext.js';
@@ -5487,14 +5487,20 @@ export class ChatEngine {
           approvalSession: childApproval,
           parentTrace: { threadId: parentContext.threadId, turnId: parentContext.turnId },
         };
-        const restoreApproval = () => enterWithExecutionContext(parentContext);
-        enterWithExecutionContext(childContext);
-
+        // R1: scope the entire child dispatch with the run-scoped helper. The
+        // AsyncLocalStorage binding starts at this call and unwinds when the
+        // awaited body settles, so a finished child can never leave its context
+        // visible to caller or sibling work. Never use `enterWith` here (it
+        // rebinds the ambient execution until a manual restore) and never
+        // manually restore ambient state.
+        return await runWithExecutionContext(
+          childContext,
+          async (): Promise<{ index: number; observation: string; stop?: boolean }> => {
         // Mutation sub-agent path (W2.1: git worktree + write_scope allowlist)
         if (mutationEnabled) {
           try {
-            // M3: the start callback runs inside the try so a throwing callback
-            // cannot leak the child context past the finally restore.
+            // M3: the start callback runs inside the run-scoped child context so
+            // a throwing callback unwinds with the scope and cannot leak.
             callbacks.onSubAgentStart?.({
               id: subId,
               label: action.task.slice(0, 60),
@@ -5688,14 +5694,14 @@ export class ChatEngine {
               observation: `### sub_agent ${subId}: ${action.task}\nattribution: ${attribution}\nError: ${errMsg}`,
             };
           } finally {
-            restoreApproval();
             this.abortController.signal.removeEventListener('abort', onParentAbort);
           }
         }
 
         // Read-only sub-agent path (existing)
         try {
-          // M3: start callback inside the try so a throw cannot leak the child context.
+          // M3: start callback inside the run-scoped child context so a throw
+          // unwinds with the scope and cannot leak.
           callbacks.onSubAgentStart?.({
             id: subId,
             label: action.task.slice(0, 60),
@@ -5875,9 +5881,10 @@ export class ChatEngine {
             observation: `### sub_agent ${subId}: ${action.task}\nattribution: ${attribution}\nError: ${errMsg}`,
           };
         } finally {
-          restoreApproval();
           this.abortController.signal.removeEventListener('abort', onParentAbort);
         }
+          },
+        );
       }
 
       if (isMcpChatAction(action)) {

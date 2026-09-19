@@ -455,3 +455,61 @@ describe('S04/#214 T6 — same-parent child serialization retained', () => {
     }
   });
 });
+
+describe('R1 — the production sub_agent seam leaves no child context bound', () => {
+  test('a finished child does not leak a synthesized context to the next submit', async () => {
+    process.env['BABEL_LITE_OFFLINE'] = '1';
+    const root = mkdtempSync(join(tmpdir(), 'babel-r1-scope-'));
+    const { ChatEngine } = await import('./chatEngine.js');
+    const engine = new ChatEngine({ task: 'r1 parent', projectRoot: root });
+    const internals = engine as unknown as {
+      executeActions: (
+        actions: Array<{ type: 'sub_agent'; task: string; mutation?: boolean }>,
+        callbacks: unknown,
+      ) => Promise<unknown>;
+    };
+    let contextDuringChild: ExecutionContext | undefined;
+    let approvalDuringChild: string | undefined;
+    try {
+      resetChatApprovalSession('r1-fallback');
+      assert.equal(getExecutionContext(), undefined, 'precondition: no ambient context');
+
+      await internals.executeActions([{ type: 'sub_agent', task: 'child one' }], {
+        onSubAgentStart: () => {
+          contextDuringChild = getExecutionContext();
+          approvalDuringChild = getEffectiveApprovalSession()?.thread_id;
+        },
+      });
+
+      // The child ran inside a derived, scoped context...
+      assert.ok(contextDuringChild, 'child must run inside a scoped execution context');
+      assert.ok(contextDuringChild!.parentTrace, 'child context is derived from its parent');
+      assert.notEqual(approvalDuringChild, undefined, 'child carries its own approval session');
+
+      // ...and once finished it must leave nothing bound. Previously the manual
+      // enterWith/manual-restore pair rebound a synthesized base context that
+      // survived into the caller's frame (and the next submit).
+      assert.equal(
+        getExecutionContext(),
+        undefined,
+        'R1: a finished child must not leave an execution context bound',
+      );
+      assert.equal(
+        getEffectiveApprovalSession(),
+        undefined,
+        'R1: no approval session may leak past the child',
+      );
+
+      // A second submission starts clean (no inherited child/limited context).
+      await internals.executeActions([{ type: 'sub_agent', task: 'child two' }], {
+        onSubAgentStart: () => {
+          assert.equal(getExecutionContext()?.parentTrace !== undefined, true);
+        },
+      });
+      assert.equal(getExecutionContext(), undefined, 'second child must also unwind');
+    } finally {
+      resetChatApprovalSession();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

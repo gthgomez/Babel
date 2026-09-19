@@ -378,7 +378,7 @@ export function analyzeTaskShape(taskText: string): TaskShape {
 
   // 1. Explicit read-only constraints
   const hasReadOnlyDirective =
-    /\b(without (any )?(editing|modifying|changing|writing)|read-?only|(?:do\s*not|don't)\s+(?:edit|modify|change|write|delete|remove)|dry-?run)\b/i.test(
+    /\b(without (any )?(editing|modifying|changing|writing|fixing)|read-?only|(?:do\s*not|don't|never)\s+(?:edit|modify|change|write|delete|remove|fix|patch|repair|refactor|touch|alter)|dry-?run)\b/i.test(
       t,
     );
 

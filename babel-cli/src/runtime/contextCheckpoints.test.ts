@@ -30,6 +30,8 @@ function completeSources(
       current_snapshot_revision: 'snapshot-current',
       capture_complete: true,
       coverage_ref: 'coverage-1',
+      capture_provenance: 'current_capture',
+      capture_epoch: 'capture-epoch-1',
     },
     receipts: [
       {
@@ -90,6 +92,8 @@ test('a relabelled verifier revision never counts as current workspace coverage'
         current_snapshot_revision: 'snapshot-historical',
         capture_complete: true,
         coverage_ref: 'coverage-1',
+        capture_provenance: 'verifier_relabel',
+        capture_epoch: 'capture-epoch-relabelled',
       },
     }),
   );
@@ -98,6 +102,75 @@ test('a relabelled verifier revision never counts as current workspace coverage'
   const row = population.rows.find((item) => item.id === 'workspace_snapshot');
   assert.equal(row?.present, false);
   assert.match(row?.gap ?? '', /relabelled/);
+});
+
+test('a fresh capture of the unchanged verifier revision is still current coverage', () => {
+  const population = mapCheckpointRequiredState(
+    completeSources({
+      workspace: {
+        current_snapshot_revision: 'snapshot-historical',
+        capture_complete: true,
+        coverage_ref: 'coverage-1',
+        capture_provenance: 'current_capture',
+        capture_epoch: 'capture-epoch-same-revision',
+      },
+    }),
+  );
+  assert.equal(population.status, 'populated');
+  assert.equal(population.workspace_revision_current, true);
+  assert.equal(population.workspace_matches_verifier_revision, true);
+  assert.equal(
+    population.errors.some((error) => error.startsWith('workspace_snapshot')),
+    false,
+  );
+  const row = population.rows.find((item) => item.id === 'workspace_snapshot');
+  assert.equal(row?.present, true);
+  assert.equal(row?.constraint_satisfied, true);
+  assert.ok(row?.value_refs.includes('matches_verifier_revision:true'));
+  assert.ok(row?.value_refs.includes('capture_epoch:capture-epoch-same-revision'));
+});
+
+test('a fresh capture of a changed revision reports no verifier match', () => {
+  const population = mapCheckpointRequiredState(completeSources());
+  assert.equal(population.status, 'populated');
+  assert.equal(population.workspace_revision_current, true);
+  assert.equal(population.workspace_matches_verifier_revision, false);
+});
+
+test('a revision with a null capture epoch is relabelled, not a fresh capture', () => {
+  const population = mapCheckpointRequiredState(
+    completeSources({
+      workspace: {
+        current_snapshot_revision: 'snapshot-current',
+        capture_complete: true,
+        coverage_ref: 'coverage-1',
+        capture_provenance: 'current_capture',
+        capture_epoch: null,
+      },
+    }),
+  );
+  assert.equal(population.status, 'blocked');
+  assert.equal(population.workspace_revision_current, false);
+  const row = population.rows.find((item) => item.id === 'workspace_snapshot');
+  assert.equal(row?.present, false);
+  assert.match(row?.gap ?? '', /relabelled/);
+});
+
+test('resume with a fresh unchanged-revision capture stays populated', () => {
+  const population = mapCheckpointRequiredState(
+    completeSources({
+      resumed: true,
+      workspace: {
+        current_snapshot_revision: 'snapshot-historical',
+        capture_complete: true,
+        coverage_ref: 'coverage-1',
+        capture_provenance: 'current_capture',
+        capture_epoch: 'capture-epoch-resumed',
+      },
+    }),
+  );
+  assert.equal(population.status, 'populated');
+  assert.equal(population.workspace_revision_current, true);
 });
 
 test('writes-only progress and legacy obs: strings are degraded, not success', () => {
@@ -239,4 +312,84 @@ test('retention oracle detects a pending operation silently becoming settled', (
     pending_operations: [{ handle_id: 'op-old', state: 'settled', was_pending: false }],
   };
   assert.equal(evaluateRetentionOracle(unrelated).status, 'pass');
+});
+
+test('retention oracle requires the complete expected identity set', () => {
+  const fixture = buildRetentionOracleFixtureV1();
+
+  const omitted: RetentionOracleInputV1 = {
+    ...fixture,
+    observations: fixture.observations.slice(0, 39),
+  };
+  const omittedResult = evaluateRetentionOracle(omitted);
+  assert.equal(omittedResult.status, 'fail');
+  assert.equal(omittedResult.coverage_complete, false);
+  assert.equal(omittedResult.missing_expected_ids.length, 1);
+  assert.deepEqual(omittedResult.unexpected_observation_ids, []);
+  assert.ok(
+    omittedResult.violations.some((violation) =>
+      /expected observations missing from retention set: 1/.test(violation),
+    ),
+  );
+
+  const replaced: RetentionOracleInputV1 = {
+    ...fixture,
+    observations: fixture.observations.map((observation, index) =>
+      index === 0 ? { ...observation, observation_id: `obs:${'f'.repeat(64)}` } : observation,
+    ),
+  };
+  const replacedResult = evaluateRetentionOracle(replaced);
+  assert.equal(replacedResult.status, 'fail');
+  assert.equal(replacedResult.coverage_complete, false);
+  assert.equal(replacedResult.missing_expected_ids.length, 1);
+  assert.equal(replacedResult.unexpected_observation_ids.length, 1);
+
+  const duplicated: RetentionOracleInputV1 = {
+    ...fixture,
+    observations: fixture.observations.map((observation, index) =>
+      index === 39
+        ? { ...observation, observation_id: fixture.observations[0]!.observation_id }
+        : observation,
+    ),
+  };
+  assert.equal(duplicated.observations.length, 40);
+  assert.equal(
+    new Set(duplicated.observations.map((observation) => observation.observation_id)).size,
+    39,
+  );
+  const duplicatedResult = evaluateRetentionOracle(duplicated);
+  assert.equal(duplicatedResult.status, 'fail');
+  assert.equal(duplicatedResult.coverage_complete, false);
+  assert.equal(duplicatedResult.missing_expected_ids.length, 1);
+});
+
+test('an expected observation that is missing stays unresolved and incomplete', () => {
+  const fixture = buildRetentionOracleFixtureV1();
+  const missing: RetentionOracleInputV1 = {
+    ...fixture,
+    observations: fixture.observations.map((observation, index) =>
+      index === 0 ? { ...observation, availability: 'missing' } : observation,
+    ),
+  };
+  const result = evaluateRetentionOracle(missing);
+  assert.equal(result.status, 'fail');
+  // The identity is still accounted for; only its payload is unresolvable.
+  assert.equal(result.coverage_complete, true);
+  assert.equal(result.missing_expected_ids.length, 0);
+  assert.deepEqual(result.unresolved_invocation_roots, [
+    fixture.observations[0]!.observation_id,
+  ]);
+});
+
+test('a claimed removed count that disagrees with the expected set fails', () => {
+  const fixture = buildRetentionOracleFixtureV1();
+  const mismatched: RetentionOracleInputV1 = {
+    ...fixture,
+    removed_observation_count: fixture.expected_observation_ids.length + 1,
+  };
+  const result = evaluateRetentionOracle(mismatched);
+  assert.equal(result.status, 'fail');
+  assert.ok(
+    result.violations.some((violation) => /disagrees with expected set size/.test(violation)),
+  );
 });

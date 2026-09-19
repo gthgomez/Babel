@@ -226,6 +226,33 @@ const ADVERSARIAL_CORPUS: readonly AdversarialTestCase[] = [
     verificationApplicable: false,
     notes: 'Prompt injection pattern routes to governance',
   },
+  {
+    prompt: 'Review and then explain; do not fix anything.',
+    expectedOperation: 'READ_ONLY',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'investigate',
+    mutationAllowed: false,
+    verificationApplicable: false,
+    notes: 'S07: "do not fix" is a no-edit directive; review+explain stays read-only',
+  },
+  {
+    prompt: "don't touch the code, only explain what it does",
+    expectedOperation: 'READ_ONLY',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'investigate',
+    mutationAllowed: false,
+    verificationApplicable: false,
+    notes: 'S07: "don\'t touch" is a no-edit directive',
+  },
+  {
+    prompt: 'explain this module without fixing anything',
+    expectedOperation: 'READ_ONLY',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'investigate',
+    mutationAllowed: false,
+    verificationApplicable: false,
+    notes: 'S07: "without fixing" is a no-edit directive',
+  },
 ];
 
 describe('PR-A Certification: Adversarial Task-Classification Corpus', () => {

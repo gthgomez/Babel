@@ -70,6 +70,14 @@ export interface LiveOperationalSourcesV1 {
     current_snapshot_revision: string | null;
     capture_complete: boolean;
     coverage_ref: string | null;
+    /**
+     * Distinguishes a fresh capture of the current workspace from a historical
+     * verifier revision that has merely been relabelled as current. Revision
+     * equality with the last verifier revision is not itself a freshness signal.
+     */
+    capture_provenance: 'current_capture' | 'verifier_relabel';
+    /** Opaque capture epoch; null invalidates freshness even with a revision. */
+    capture_epoch: string | null;
   } | null;
   receipts: ReadonlyArray<{
     receipt_id: string;
@@ -109,8 +117,16 @@ export interface CheckpointPopulationV1 {
   status: CheckpointPopulationStatusV1;
   rows: RequiredStateRowV1[];
   errors: string[];
-  /** True when current coverage is distinct from the last verifier revision. */
+  /**
+   * True when a fresh current workspace capture exists. This is independent of
+   * whether the captured revision happens to equal the last verifier revision.
+   */
   workspace_revision_current: boolean;
+  /**
+   * Informational only: the current workspace revision equals the latest
+   * verifier bound revision. Equality never substitutes for capture freshness.
+   */
+  workspace_matches_verifier_revision: boolean;
   installation_blocked_on: readonly string[];
   /**
    * Shadow population never authorizes installation: P06/P07 wiring plus an
@@ -181,31 +197,41 @@ export function mapCheckpointRequiredState(
     errors.push('current_step: writes=N is not sufficient');
   }
 
-  // current workspace snapshot/coverage — must be distinct from verifier hash.
+  // current workspace snapshot/coverage — a fresh current capture is required.
+  // Revision equality with the last verifier revision is informational, not a
+  // freshness signal: an unchanged workspace may still be freshly observed.
   const latestBoundRevision = [...sources.receipts]
     .map((receipt) => receipt.bound_revision)
     .filter((revision): revision is string => typeof revision === 'string' && revision.length > 0)
     .at(-1);
-  const currentRevision = sources.workspace?.current_snapshot_revision ?? null;
-  const workspaceDistinct =
-    currentRevision !== null && currentRevision !== latestBoundRevision;
-  if (
-    sources.workspace &&
+  const workspace = sources.workspace;
+  const currentRevision = workspace?.current_snapshot_revision ?? null;
+  const captureEpoch = workspace?.capture_epoch ?? null;
+  const workspaceCaptureFresh =
+    workspace !== null &&
+    workspace.capture_complete &&
     currentRevision !== null &&
-    sources.workspace.capture_complete &&
-    workspaceDistinct
-  ) {
+    workspace.capture_provenance === 'current_capture' &&
+    captureEpoch !== null;
+  const workspaceMatchesVerifierRevision =
+    currentRevision !== null && currentRevision === latestBoundRevision;
+  const workspaceRelabelled =
+    currentRevision !== null &&
+    (workspace?.capture_provenance === 'verifier_relabel' || workspace?.capture_epoch === null);
+  if (workspaceCaptureFresh && workspace && currentRevision !== null && captureEpoch !== null) {
     rows.push({
       id: 'workspace_snapshot',
       present: true,
       source: 'P08/P07_current_capture',
       value_refs: [
         `workspace_revision:${currentRevision}`,
-        ...(sources.workspace.coverage_ref ? [`coverage:${sources.workspace.coverage_ref}`] : []),
+        `capture_epoch:${captureEpoch}`,
+        ...(workspace.coverage_ref ? [`coverage:${workspace.coverage_ref}`] : []),
+        ...(workspaceMatchesVerifierRevision ? ['matches_verifier_revision:true'] : []),
       ],
       constraint_satisfied: true,
     });
-  } else if (currentRevision !== null && !workspaceDistinct) {
+  } else if (workspaceRelabelled) {
     rows.push({
       id: 'workspace_snapshot',
       present: false,
@@ -365,7 +391,8 @@ export function mapCheckpointRequiredState(
     status,
     rows,
     errors,
-    workspace_revision_current: workspaceDistinct,
+    workspace_revision_current: workspaceCaptureFresh,
+    workspace_matches_verifier_revision: workspaceMatchesVerifierRevision,
     installation_blocked_on: CONTEXT_CHECKPOINT_INSTALL_BLOCKED_ON,
     install_authorized: false,
   };
@@ -414,6 +441,11 @@ export interface RetentionOraclePendingOperationV1 {
 
 export interface RetentionOracleInputV1 {
   removed_observation_count: number;
+  /**
+   * Independently known expected observation identity set. Completeness is
+   * validated against this, never inferred from the supplied records alone.
+   */
+  expected_observation_ids: readonly string[];
   observations: readonly RetentionOracleObservationV1[];
   tool_cycles: readonly RetentionOracleToolCycleV1[];
   pending_operations: readonly RetentionOraclePendingOperationV1[];
@@ -430,6 +462,10 @@ export interface RetentionOracleResultV1 {
   native_cycles_paired: boolean;
   pending_preserved: boolean;
   silently_capped: boolean;
+  /** True when the received id set exactly matches the expected id set. */
+  coverage_complete: boolean;
+  missing_expected_ids: string[];
+  unexpected_observation_ids: string[];
   violations: string[];
 }
 
@@ -457,6 +493,30 @@ export function evaluateRetentionOracle(input: RetentionOracleInputV1): Retentio
     invocations.add(observation.invocation_id);
     byText.set(observation.text, invocations);
   }
+
+  // Coverage is validated against the independently known expected identity
+  // set. Internal validity of each supplied record is necessary but not
+  // sufficient: an omitted, replaced or duplicated observation must fail.
+  const expectedIds = new Set(input.expected_observation_ids);
+  const receivedIds = new Set(input.observations.map((observation) => observation.observation_id));
+  const missingExpectedIds = [...expectedIds].filter((id) => !receivedIds.has(id));
+  const unexpectedObservationIds = [...receivedIds].filter((id) => !expectedIds.has(id));
+  if (missingExpectedIds.length > 0) {
+    violations.push(
+      `expected observations missing from retention set: ${missingExpectedIds.length}`,
+    );
+  }
+  if (unexpectedObservationIds.length > 0) {
+    violations.push(
+      `observation ids present that were not expected: ${unexpectedObservationIds.length}`,
+    );
+  }
+  if (input.removed_observation_count !== input.expected_observation_ids.length) {
+    violations.push(
+      `removed observation count (${input.removed_observation_count}) disagrees with expected set size (${input.expected_observation_ids.length})`,
+    );
+  }
+  const coverageComplete = missingExpectedIds.length === 0 && unexpectedObservationIds.length === 0;
 
   const aliased: string[] = [];
   let duplicatesDistinct = true;
@@ -533,6 +593,9 @@ export function evaluateRetentionOracle(input: RetentionOracleInputV1): Retentio
     native_cycles_paired: cyclesPaired,
     pending_preserved: pendingPreserved,
     silently_capped: silentlyCapped,
+    coverage_complete: coverageComplete,
+    missing_expected_ids: missingExpectedIds,
+    unexpected_observation_ids: unexpectedObservationIds,
     violations,
   };
 }
@@ -556,6 +619,7 @@ export function buildRetentionOracleFixtureV1(): RetentionOracleInputV1 {
   }
   return {
     removed_observation_count: observations.length,
+    expected_observation_ids: observations.map((observation) => observation.observation_id),
     observations,
     tool_cycles: [
       {
