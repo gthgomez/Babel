@@ -20,6 +20,7 @@ const RUNTIME_FILES = [
   'events.ts',
   'canonical.ts',
   'projection.ts',
+  'evidenceProjection.ts',
   'legacyEventAdapters.ts',
   'admission.ts',
   'admissionContracts.ts',
