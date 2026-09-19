@@ -15,6 +15,7 @@ import {
   isInfrastructureErrorText,
   classifyFailureText,
 } from './chatEventDispatch.js';
+import { isLocalEnvironmentErrorText } from '../../agent/chatFailureClassification.js';
 
 const EMPTY_USAGE = globalCostTracker.getSessionSummary();
 
@@ -90,7 +91,7 @@ describe('chatTerminalTruth (terminal cause and evidence)', () => {
   });
 
   describe('exception classification matrix', () => {
-    it('classifies ENOSPC as INFRA_FAILURE and preserves tool history', async () => {
+    it('classifies local disk-full (ENOSPC) as BLOCKED_EXTERNAL, never provider blame, and preserves tool history', async () => {
       async function* enospcStream(): AsyncGenerator<ChatEvent, void, undefined> {
         yield { type: 'tool_start', tool: 'write_file', target: 'out.txt' };
         yield { type: 'tool_complete', tool: 'write_file', target: 'out.txt', error: 'ENOSPC' };
@@ -100,8 +101,10 @@ describe('chatTerminalTruth (terminal cause and evidence)', () => {
       }
 
       const result = await consumeChatStream(enospcStream(), null);
-      assert.equal(result.status, 'failed');
-      assert.equal(result.outcome, 'INFRA_FAILURE');
+      // A full local disk is an environment failure. Attributing it to the
+      // provider (INFRA_FAILURE) would invent false provider blame.
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.outcome, 'BLOCKED_EXTERNAL');
       assert.equal(result.toolCalls?.length, 1);
     });
 
@@ -168,13 +171,21 @@ describe('chatTerminalTruth (terminal cause and evidence)', () => {
       });
     });
 
-    it('detects disk and network codes as INFRA_FAILURE', () => {
-      for (const code of ['ENOSPC', 'EROFS', 'EIO', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND']) {
+    it('separates local environment codes from network codes', () => {
+      for (const code of ['ENOSPC', 'EROFS', 'EIO', 'EBUSY', 'EMFILE', 'ENFILE']) {
+        const err = Object.assign(new Error('Failed with ' + code), { code });
+        assert.deepEqual(
+          classifyChatStreamError(err),
+          { status: 'blocked', outcome: 'BLOCKED_EXTERNAL' },
+          'Local code ' + code + ' is an environment failure, not provider infra',
+        );
+      }
+      for (const code of ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'EHOSTUNREACH']) {
         const err = Object.assign(new Error('Failed with ' + code), { code });
         assert.deepEqual(
           classifyChatStreamError(err),
           { status: 'failed', outcome: 'INFRA_FAILURE' },
-          'Code ' + code + ' should map to INFRA_FAILURE',
+          'Network code ' + code + ' should map to INFRA_FAILURE',
         );
       }
     });
@@ -196,8 +207,12 @@ describe('chatTerminalTruth (terminal cause and evidence)', () => {
       assert.equal(isInfrastructureErrorText('finish_reason: length'), false);
     });
 
-    it('identifies disk, network, provider, and invariant error strings', () => {
-      assert.ok(isInfrastructureErrorText('ENOSPC: no space left on device'));
+    it('separates local environment errnos from network/provider/invariant errors', () => {
+      // Local machine failures are environment, not infrastructure/provider.
+      assert.equal(isInfrastructureErrorText('ENOSPC: no space left on device'), false);
+      assert.ok(isLocalEnvironmentErrorText('ENOSPC: no space left on device'));
+      assert.equal(isInfrastructureErrorText('EROFS: read-only file system'), false);
+      assert.ok(isLocalEnvironmentErrorText('EIO: i/o error'));
       assert.ok(isInfrastructureErrorText('fetch failed: socket hang up'));
       assert.ok(isInfrastructureErrorText('[deepSeekApi] stream closed before terminal [DONE] marker'));
       assert.ok(isInfrastructureErrorText('request timeout after 50ms'));
@@ -241,7 +256,7 @@ describe('chatTerminalTruth (terminal cause and evidence)', () => {
       cumulativeSessionTokens: 580,
     };
 
-    it('dispatchChatEvent preserves toolCalls, runDir, telemetry on failed event', () => {
+    it('dispatchChatEvent preserves toolCalls, runDir, telemetry on a local-environment block', () => {
       const failedEvent: ChatEvent = {
         type: 'failed',
         error: 'ENOSPC write error',
@@ -251,8 +266,9 @@ describe('chatTerminalTruth (terminal cause and evidence)', () => {
       };
       const result = dispatchChatEvent(failedEvent, {});
       assert.ok(result);
-      assert.equal(result.status, 'failed');
-      assert.equal(result.outcome, 'INFRA_FAILURE');
+      // Local disk failure: truthful external/environment terminal, never provider blame.
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.outcome, 'BLOCKED_EXTERNAL');
       assert.equal(result.runDir, '/tmp/runs/run-123');
       assert.equal(result.toolCalls?.length, 1);
       assert.equal(result.turnTelemetry?.turnId, 'turn-1');

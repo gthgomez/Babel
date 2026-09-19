@@ -15,6 +15,7 @@ import {
   terminalReasonFromOutcome,
   terminalReasonGuidance,
 } from './chatTerminalReason.js';
+import { classifyFailureText } from './chatFailureClassification.js';
 
 describe('D03 classifyPolicySource', () => {
   test('progress_terminal after recovery is recovery_exhausted', () => {
@@ -135,7 +136,10 @@ describe('D03 terminalReasonFromClassification', () => {
     assert.equal(terminalReasonFromClassification('limit_child')?.code, 'budget_exhausted');
     assert.equal(terminalReasonFromClassification('limit_stall')?.code, 'recovery_exhausted');
     assert.equal(terminalReasonFromClassification('model_failure')?.code, 'provider_failure');
-    assert.equal(terminalReasonFromClassification('policy_block')?.code, 'permission_denied');
+    // `policy_block` is the broad bucket (zero_write / tamper / critic / gate /
+    // stall / auto-continue). It must not fabricate a permission cause; only an
+    // explicit source may claim permission_denied.
+    assert.equal(terminalReasonFromClassification('policy_block')?.code, 'unknown');
     assert.equal(terminalReasonFromClassification('cancelled')?.code, 'cancelled');
     assert.equal(terminalReasonFromClassification('success'), undefined);
     assert.equal(terminalReasonFromClassification('no_limit_triggered'), undefined);
@@ -172,5 +176,60 @@ describe('D03 terminalReasonGuidance', () => {
     a.nextActions.push('mutated');
     const b = terminalReasonGuidance('provider_failure');
     assert.deepEqual(b.nextActions, ['Retry']);
+  });
+});
+
+describe('D03 origin attribution — local environment is not provider blame', () => {
+  // Local OS resource errnos: disk full, read-only fs, io error, fd exhaustion.
+  const LOCAL_ERRNOS = ['ENOSPC', 'EROFS', 'EIO', 'EMFILE', 'ENFILE', 'EBUSY'];
+  for (const code of LOCAL_ERRNOS) {
+    test(`${code} is a local environment failure, never provider_failure`, () => {
+      const text = `write failed: ${code}: cannot write workspace`;
+      const reason = terminalReasonFromFailureText(text);
+      assert.notEqual(reason?.code, 'provider_failure', `${code} must not be blamed on the provider`);
+      assert.equal(reason?.code, 'external_dependency');
+      assert.equal(reason?.cause_class, 'environment');
+      // The coarse outcome agrees with the typed reason (external, not infra).
+      assert.equal(classifyFailureText(text), 'BLOCKED_EXTERNAL');
+    });
+  }
+
+  const PROVIDER_TEXTS = [
+    'provider stream error',
+    'provider disconnected',
+    'malformed SSE frame',
+    'service unavailable',
+    '502 Bad Gateway',
+    '503 Service Unavailable',
+    '504 Gateway Timeout',
+    'provider startup idle',
+    'connection reset by peer',
+    'socket hang up',
+    '[deepSeekApi] provider hard failure 500',
+  ];
+  for (const text of PROVIDER_TEXTS) {
+    test(`real provider/network text stays provider_failure: ${text}`, () => {
+      const reason = terminalReasonFromFailureText(text);
+      assert.equal(reason?.code, 'provider_failure', text);
+      assert.equal(reason?.cause_class, 'provider', text);
+      assert.equal(classifyFailureText(text), 'INFRA_FAILURE', text);
+    });
+  }
+});
+
+describe('D03 generic policy text does not fabricate permission denial', () => {
+  test('generic policy text is unknown; only explicit denial is permission_denied', () => {
+    assert.equal(
+      terminalReasonFromFailureText('blocked_policy: zero-write hard stop')?.code,
+      'unknown',
+    );
+    assert.equal(
+      terminalReasonFromFailureText('policy intervention: stall')?.code,
+      'unknown',
+    );
+    assert.equal(
+      terminalReasonFromFailureText('permission denied by policy')?.code,
+      'permission_denied',
+    );
   });
 });

@@ -23,6 +23,10 @@ import type { BlockedReport } from '../../schemas/agentContracts.js';
 import { ConversationalRenderer } from '../../ui/waterfall.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import { isOperatorAbortError } from '../../agent/operatorAbort.js';
+import {
+  isInfrastructureErrorText,
+  isLocalEnvironmentErrorText,
+} from '../../agent/chatFailureClassification.js';
 import { BABEL_RUNS_DIR } from '../../cli/constants.js';
 import { getProtocolClient } from '../../protocol/client/index.js';
 import {
@@ -331,12 +335,13 @@ export function classifyChatStreamError(err: unknown): {
     err && typeof err === 'object' && 'name' in err
       ? String((err as { name?: unknown }).name)
       : '';
-  if (
-    /^(ENOSPC|EROFS|EIO|EBUSY|EMFILE|ENFILE|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH)$/i.test(
-      code,
-    ) ||
-    name === 'RuntimeInvariantViolationError'
-  ) {
+  // Local machine/environment errnos are external environment failures, not
+  // provider infrastructure. Use the shared classifier so this fallback cannot
+  // drift from `classifyFailureText`'s message-based mapping.
+  if (isLocalEnvironmentErrorText(code)) {
+    return { status: 'blocked', outcome: 'BLOCKED_EXTERNAL' };
+  }
+  if (isInfrastructureErrorText(code) || name === 'RuntimeInvariantViolationError') {
     return { status: 'failed', outcome: 'INFRA_FAILURE' };
   }
   return { status: 'failed' };

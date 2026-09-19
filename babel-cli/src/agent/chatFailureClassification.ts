@@ -13,14 +13,30 @@ export interface ChatTerminalProjection {
   outcome?: TerminalOutcome;
 }
 
-const INFRA_CODE_RE =
-  /\b(?:ENOSPC|EROFS|EIO|EBUSY|EMFILE|ENFILE|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH)\b/i;
+/** Local OS resource errnos: disk/fs/IO/fd exhaustion on this machine. */
+const LOCAL_ENV_CODE_RE = /\b(?:ENOSPC|EROFS|EIO|EBUSY|EMFILE|ENFILE)\b/i;
 
-/** Detect infrastructure/network/provider failure text without inventing agent blame. */
+/** Network/transport errnos: an external endpoint/transport is implicated. */
+const NETWORK_CODE_RE = /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH)\b/i;
+
+/**
+ * Local machine/environment failure (disk full, read-only filesystem, IO error,
+ * file-descriptor exhaustion). This is not provider blame and must never be
+ * classified as infrastructure/provider failure.
+ */
+export function isLocalEnvironmentErrorText(error: string): boolean {
+  if (!error) return false;
+  return LOCAL_ENV_CODE_RE.test(error);
+}
+
+/** Detect provider/network/transport failure text without inventing agent blame. */
 export function isInfrastructureErrorText(error: string): boolean {
   if (!error) return false;
+  // Local environment failures are attributed to the environment, never the
+  // provider, even though they share the "infrastructure" umbrella.
+  if (isLocalEnvironmentErrorText(error)) return false;
   return (
-    INFRA_CODE_RE.test(error) ||
+    NETWORK_CODE_RE.test(error) ||
     /runtime-invariant/i.test(error) ||
     /socket hang up|connection reset|fetch failed|undici|network (?:error|timeout)|broken pipe/i.test(error) ||
     /provider (?:startup|stream) idle|idle timeout|request deadline|request timeout|timeout exceeded/i.test(error) ||
@@ -57,6 +73,7 @@ export function classifyFailureText(error: string): TerminalOutcome | undefined 
   if (isProviderOutputLimitText(error)) return 'BUDGET_EXHAUSTED';
   if (isBudgetErrorText(error)) return 'BUDGET_EXHAUSTED';
   if (isPolicyErrorText(error)) return 'BLOCKED_POLICY';
+  if (isLocalEnvironmentErrorText(error)) return 'BLOCKED_EXTERNAL';
   if (isEnvironmentErrorText(error)) return 'BLOCKED_EXTERNAL';
   if (isInfrastructureErrorText(error)) return 'INFRA_FAILURE';
   return undefined;

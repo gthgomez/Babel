@@ -179,6 +179,9 @@ interface LoopObservation {
   status: string;
   /** Last durable completion_decision.final_outcome, or undefined when absent. */
   durableCompletionOutcome: string | undefined;
+  /** Structured terminal reason carried on the terminal event, if any. */
+  reasonCode: string | undefined;
+  reasonCauseClass: string | null | undefined;
 }
 
 function makeRunner(
@@ -313,6 +316,9 @@ async function driveLoop(
     outcome: result.outcome,
     status: result.status,
     durableCompletionOutcome: durableOutcomes.at(-1)?.final_outcome,
+    reasonCode: (terminal as { reason_code?: string } | undefined)?.reason_code,
+    reasonCauseClass:
+      (terminal as { cause_class?: string | null } | undefined)?.cause_class ?? null,
   };
   emitTrace(task, observation, options.maxTurns ?? 8);
   return observation;
@@ -463,21 +469,21 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       const task = 'Investigate why parser_test is failing.';
       const o = await driveLoop(fixture, task, [
         [{ type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'parser.ts' } }, { type: 'done', finishReason: 'tool_calls' }],
-        // Second provider call fails at the transport boundary.
-        [{ type: 'error', message: 'provider transport reset' }],
+        // Second provider call fails at the transport boundary with a real
+        // provider-origin error (must classify as infrastructure, not unknown).
+        [{ type: 'error', message: 'provider stream error: stream closed before terminal [DONE] marker' }],
       ]);
 
       const readCompleted = o.sessionEvents.some(
         (e) => e.kind === 'tool_completed' && e.tool_name === 'read_file',
       );
       assert.ok(readCompleted, 'the prior tool evidence is retained across the provider failure');
-      assert.notEqual(o.outcome, 'VERIFIED_COMPLETE', 'a provider failure never fabricates verified completion');
+      assert.equal(o.status, 'failed');
+      assert.equal(o.outcome, 'INFRA_FAILURE', 'a provider transport failure is infra, never unknown');
+      assert.equal(o.reasonCode, 'provider_failure', 'the exact provider cause is carried, not inferred from prose');
+      assert.equal(o.reasonCauseClass, 'provider');
       const blockedCapability = /blocked capability|capability (is )?(missing|denied)/i.test(o.answer);
       assert.equal(blockedCapability, false, 'no capability fiction for a provider failure');
-      assert.ok(
-        o.status === 'failed' || o.outcome === 'INFRA_FAILURE' || o.outcome === 'AGENT_FAILURE',
-        `failure stays an honest infra/model failure (status=${o.status} outcome=${o.outcome})`,
-      );
     } finally {
       fixture.cleanup();
     }

@@ -21,6 +21,7 @@ import {
   isBudgetErrorText,
   isEnvironmentErrorText,
   isInfrastructureErrorText,
+  isLocalEnvironmentErrorText,
   isPolicyErrorText,
   isProviderOutputLimitText,
 } from './chatFailureClassification.js';
@@ -136,8 +137,17 @@ export function terminalReasonFromFailureText(
   if (isProviderOutputLimitText(error) || isBudgetErrorText(error)) {
     return { code: 'budget_exhausted', cause_class: 'harness' };
   }
-  if (isPolicyErrorText(error)) {
+  // Only an explicit denial establishes a permission cause. A generic policy
+  // block may be zero-write / tamper / gate / stall / auto-continue and must
+  // not fabricate a missing permission.
+  if (/permission denied by policy|explicit_deny|circuit_breaker/i.test(error)) {
     return { code: 'permission_denied', cause_class: 'harness' };
+  }
+  if (isPolicyErrorText(error)) {
+    return { code: 'unknown', cause_class: null, detail: 'policy_block' };
+  }
+  if (isLocalEnvironmentErrorText(error)) {
+    return { code: 'external_dependency', cause_class: 'environment', detail: 'local_environment' };
   }
   if (isEnvironmentErrorText(error)) {
     return { code: 'external_dependency', cause_class: 'environment' };
@@ -198,7 +208,9 @@ export function terminalReasonFromClassification(
     case 'model_failure':
       return { code: 'provider_failure', cause_class: 'provider', detail: 'model_failure' };
     case 'policy_block':
-      return { code: 'permission_denied', cause_class: 'harness', detail: 'policy_block' };
+      // Broad policy bucket; the specific source is not established here, so
+      // do not assert a permission cause.
+      return { code: 'unknown', cause_class: null, detail: 'policy_block' };
     default:
       return undefined;
   }
