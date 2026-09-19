@@ -357,7 +357,9 @@ function redactValue(
   if (typeof value === 'string') {
     return value.length > MAX_STRING_CHARS ? `${value.slice(0, MAX_STRING_CHARS)}…[truncated]` : value;
   }
-  if (value === null || typeof value !== 'object') return value;
+  if (value === null || typeof value !== 'object') {
+    return utilTypes.isProxy(value) ? '[redacted]' : value;
+  }
   if (utilTypes.isProxy(value)) return '[redacted]';
   if (depth >= MAX_REDACT_DEPTH) return '[redacted:depth]';
   const object = value as object;

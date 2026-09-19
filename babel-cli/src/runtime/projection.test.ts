@@ -1007,6 +1007,74 @@ test('P04: any Proxy fact is rejected deterministically (descriptor-trap variant
   assert.equal(forward.degraded, true);
 });
 
+test('P04: a Proxy cursor is rejected deterministically', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const makePair = (): [RuntimeFactV1, RuntimeFactV1] => {
+    const state = { n: 0 };
+    const wrap = (status: string): RuntimeFactV1 => {
+      const fact = {
+        ...template,
+        id: 'dup',
+        sequence: 5,
+        authority: 'observation',
+        payload: { type: 'run.settled', status },
+      } as Record<string, unknown>;
+      fact['cursor'] = new Proxy(
+        { stream: 'runtime-facts', sequence: 5 },
+        {
+          getOwnPropertyDescriptor(target, property) {
+            if (property === 'stream') {
+              state.n += 1;
+              return {
+                value: state.n === 1 ? 'runtime-facts' : 'WRONG_STREAM',
+                writable: true,
+                enumerable: true,
+                configurable: true,
+              };
+            }
+            return Reflect.getOwnPropertyDescriptor(target, property);
+          },
+        },
+      );
+      return fact as unknown as RuntimeFactV1;
+    };
+    return [wrap('A'), wrap('B')];
+  };
+  const [a1, b1] = makePair();
+  const [a2, b2] = makePair();
+  assert.deepEqual(projectTask([a1, b1]), projectTask([b2, a2]));
+});
+
+test('P04: a budget-discarded group still demotes authority', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const big = Array.from({ length: 70_000 }, (_, i) => i);
+  const group: RuntimeFactV1[] = [];
+  for (let i = 0; i < 30; i += 1) {
+    group.push({
+      ...template,
+      id: 'dup',
+      schemaVersion: 2,
+      authority: 'observation',
+      sequence: 5,
+      cursor: { stream: 'runtime-facts', sequence: 5 },
+      payload: { type: 'future.optional', big },
+    } as unknown as RuntimeFactV1);
+  }
+  group.push({
+    ...template,
+    id: 'dup',
+    schemaVersion: 2,
+    authority: 'weird-token',
+    sequence: 5,
+    cursor: { stream: 'runtime-facts', sequence: 5 },
+    payload: { type: 'future.optional', marker: 'ua' },
+  } as unknown as RuntimeFactV1);
+  const proj = projectTask([...sessionLogToFacts(corpus()), ...group]);
+  assert.ok(proj.degradedReasons.includes('projection_budget_exceeded'));
+  assert.ok(proj.degradedReasons.includes('unknown_authoritative_fact'));
+  assert.notEqual(proj.outcome?.authoritative, true, 'no authoritative claim may survive');
+});
+
 test('P04: a stateful authority getter cannot make the projection order-dependent', () => {
   const make = (finalOutcome: string): RuntimeFactV1 => {
     let reads = 0;

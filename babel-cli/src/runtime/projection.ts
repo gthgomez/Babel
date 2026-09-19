@@ -441,6 +441,7 @@ function readEnvelopeFrom(
   }
   const cursorResult = readDataField(input, 'cursor');
   if (!cursorResult.ok || !isRecord(cursorResult.value)) return { ok: false, read: null };
+  if (utilTypes.isProxy(cursorResult.value)) return { ok: false, read: null };
   const streamResult = readDataField(cursorResult.value, 'stream');
   const sequenceResult = readDataField(cursorResult.value, 'sequence');
   if (!streamResult.ok || !sequenceResult.ok) return { ok: false, read: null };
@@ -497,9 +498,10 @@ function classifyInput(read: EnvelopeRead | null, accessible: boolean): Classifi
   const withId = id !== undefined ? { id } : {};
   const schemaKnown = read.schemaVersion === RUNTIME_FACT_SCHEMA_VERSION;
   const payloadRaw = read.payloadRaw;
-  const typeResult = isRecord(payloadRaw)
-    ? readDataField(payloadRaw, 'type')
-    : { ok: false, value: undefined };
+  const typeResult =
+    isRecord(payloadRaw) && !utilTypes.isProxy(payloadRaw)
+      ? readDataField(payloadRaw, 'type')
+      : { ok: false, value: undefined };
   const type = typeResult.ok && typeof typeResult.value === 'string' ? typeResult.value : undefined;
   const typeKnown = type !== undefined && KNOWN_FACT_TYPES.has(type as never);
 
@@ -654,22 +656,27 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
     return codeUnitCompare(left.id, right.id);
   });
 
+  const demoteGroupAuthority = (
+    group: Array<{ read: EnvelopeRead | null; id: string; accessible: boolean }>,
+  ): void => {
+    for (const entry of group) {
+      const raw = entry.read ? entry.read.authorityRaw : undefined;
+      // An inaccessible envelope is authority-bearing by the same rule the
+      // classified path uses, so it must demote here too.
+      if (!entry.accessible || raw !== 'observation') {
+        sawUnknownAuthority = true;
+        state.degradedReasons.push('unknown_authoritative_fact');
+        if (entry.id) state.unknownAuthorityFactIds.push(entry.id);
+      }
+    }
+  };
+
   let totalNodes = 0;
-  for (const group of groupList) {
+  for (let groupIndex = 0; groupIndex < groupList.length; groupIndex += 1) {
+    const group = groupList[groupIndex]!;
     if (group.length > MAX_TIE_GROUP) {
       state.degradedReasons.push('tie_group_exceeded');
-      // Fail closed even when the group is skipped: an authority-bearing member
-      // must still demote outcome and verifier claims.
-      for (const entry of group) {
-        const raw = entry.read ? entry.read.authorityRaw : undefined;
-        // An inaccessible envelope is authority-bearing by the same rule the
-        // ≤MAX_TIE_GROUP path uses, so it must demote here too.
-        if (!entry.accessible || raw !== 'observation') {
-          sawUnknownAuthority = true;
-          state.degradedReasons.push('unknown_authoritative_fact');
-          if (entry.id) state.unknownAuthorityFactIds.push(entry.id);
-        }
-      }
+      demoteGroupAuthority(group);
       continue;
     }
     const members: Classified[] = [];
@@ -692,7 +699,13 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
         break;
       }
     }
-    if (!fits) break;
+    if (!fits) {
+      // Fail closed for this and every subsequent group that will be excluded.
+      for (let rest = groupIndex; rest < groupList.length; rest += 1) {
+        demoteGroupAuthority(groupList[rest]!);
+      }
+      break;
+    }
     totalNodes += groupNodes;
     for (const classified of members) {
       switch (classified.kind) {
