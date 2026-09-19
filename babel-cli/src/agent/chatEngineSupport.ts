@@ -303,7 +303,9 @@ export function detectAndBuildBlockedReport(
   answer: string,
   toolCallLog: BlockedToolLogEntry[],
 ): BlockedReport | null {
-  if (!/\bBLOCKED\b/.test(answer)) return null;
+  // F4: only a protocol-shaped declaration (`BLOCKED` at the start of a line)
+  // counts; a stray word in prose must not synthesize a blocked report.
+  if (!/(?:^|\n)\s*BLOCKED\b/.test(answer)) return null;
 
   const reasonMatch = answer.match(/\bBLOCKED\b[:\s]+(.+?)(?:\.\s|\n|$)/);
   const reason = reasonMatch?.[1]?.trim() || 'Task is blocked and cannot be completed.';
@@ -349,6 +351,10 @@ export function detectAndBuildBlockedReport(
   return {
     schema_version: 1,
     status: 'BLOCKED' as const,
+    // Model-declared block: the harness has not established a cause, so this is
+    // explicitly `unknown` and cannot fabricate a policy/permission cause.
+    reason_code: 'unknown' as const,
+    cause_class: null,
     reason,
     missing,
     checked,

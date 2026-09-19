@@ -8295,7 +8295,9 @@ export class ChatEngine {
     // R1: If the answer explicitly declares BLOCKED but no blockedReport was
     // provided (e.g., the detection ran in a code path that didn't provide it),
     // promote the status to 'blocked' and generate the report here.
-    const hasBlocked = !!(answer && /\bBLOCKED\b/.test(answer));
+    // F4: only a protocol-shaped declaration (`BLOCKED` at the start of a line)
+    // promotes status; a stray word in ordinary prose must not create a block.
+    const hasBlocked = !!(answer && /(?:^|\n)\s*BLOCKED\b/.test(answer));
     const finalStatus =
       (status === 'completed' || status === 'failed') && hasBlocked ? ('blocked' as const) : status;
     const finalBlockedReport =

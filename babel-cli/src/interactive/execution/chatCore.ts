@@ -1354,9 +1354,16 @@ export function buildChatRunPayload(
   // BLOCKED: Surface blocked report when present
   if (result.blockedReport) {
     payload['blocked_report'] = result.blockedReport;
-  } else if (result.answer && /\bBLOCKED\b/i.test(result.answer) && Array.isArray(result.toolCalls)) {
-    // R1 fallback: detect BLOCKED in the answer text when the engine didn't
-    // produce a structured report (e.g., streaming path edge cases).
+  } else if (
+    result.answer &&
+    /(?:^|\n)\s*BLOCKED\b/.test(result.answer) &&
+    Array.isArray(result.toolCalls)
+  ) {
+    // R1 fallback: detect a protocol-shaped BLOCKED declaration in the answer
+    // text when the engine didn't produce a structured report (e.g., streaming
+    // path edge cases). F4: prose is a report, not authority — a stray word in
+    // ordinary prose must not create a block, and the synthesized report is
+    // stamped cause-`unknown` rather than asserting an external dependency.
     const investigateTools = new Set([
       'read_file',
       'read_range',
@@ -1379,8 +1386,10 @@ export function buildChatRunPayload(
       payload['blocked_report'] = {
         schema_version: 1,
         status: 'BLOCKED' as const,
+        reason_code: 'unknown' as const,
+        cause_class: null,
         reason: result.answer.slice(0, 200),
-        missing: 'External dependency not available in the execution environment',
+        missing: 'Not established by the harness; the model declared the task blocked.',
         checked,
         next_steps: ['Review the blocked report and provide the missing dependencies before retrying.'],
       };

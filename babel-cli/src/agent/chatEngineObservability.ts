@@ -818,6 +818,35 @@ export function isVerifierCollectErrorText(text: string | null | undefined): boo
 
 /** Pure function: map final session state to honest TerminalOutcome.
  *  Extracted from ChatEngine.buildResult to keep chatEngine.ts under size ratchet. */
+/**
+ * D03/F4: deterministic blocked outcome for a typed reason code. The typed
+ * reason is authoritative across every code; free-text prose may not override
+ * it. Returns undefined only when no typed reason exists (legacy reports) or
+ * the typed reason is `unknown`.
+ */
+function blockedOutcomeFromReasonCode(
+  code: TerminalReasonCode | undefined,
+): TerminalOutcome | undefined {
+  switch (code) {
+    case 'recovery_exhausted':
+    case 'permission_denied':
+    case 'unsupported_operation':
+      return 'BLOCKED_POLICY';
+    case 'external_dependency':
+      return 'BLOCKED_EXTERNAL';
+    case 'provider_failure':
+      return 'INFRA_FAILURE';
+    case 'verification_failed':
+      return 'AGENT_FAILURE';
+    case 'budget_exhausted':
+      return 'BUDGET_EXHAUSTED';
+    case 'cancelled':
+      return 'CANCELLED';
+    default:
+      return undefined;
+  }
+}
+
 export function computeTerminalOutcome(input: {
   /** Explicit read-only execution, not an inference from an empty patch. */
   readOnly?: boolean;
@@ -848,15 +877,13 @@ export function computeTerminalOutcome(input: {
         ? 'VERIFIED_COMPLETE'
         : 'UNVERIFIED_PATCH';
     case 'blocked': {
-      // D03: an explicit structured reason outranks the diagnostic prose. A
-      // recovery exhaustion / explicit policy denial is a policy block even
-      // when the free-text reason does not contain the legacy policy keywords.
-      if (
-        input.blockedReport?.reason_code === 'recovery_exhausted' ||
-        input.blockedReport?.reason_code === 'permission_denied'
-      ) {
-        return 'BLOCKED_POLICY';
-      }
+      // D03/F4: a typed reason is authoritative for the blocked outcome across
+      // every code — diagnostic prose may not override it. An explicit
+      // `unknown` means the harness did not establish a cause, so we also skip
+      // the legacy prose heuristics rather than fabricate policy/external blame.
+      const typedBlocked = blockedOutcomeFromReasonCode(input.blockedReport?.reason_code);
+      if (typedBlocked) return typedBlocked;
+      if (input.blockedReport?.reason_code === 'unknown') return 'BLOCKED_EXTERNAL';
       const reason = input.blockedReport?.reason ?? '';
       const missing = input.blockedReport?.missing ?? '';
       const envBlob = `${reason}\n${missing}`;
