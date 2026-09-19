@@ -430,51 +430,96 @@ function physicalRootIdentity(path: string): string | null {
   }
 }
 
-/** Lexical fallback used only when neither root can be resolved physically. */
-function lexicalRootIdentity(path: string): string {
-  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
-  return CASE_INSENSITIVE_FS ? normalized.toLowerCase() : normalized;
+/**
+ * D04 resume-identity outcome.
+ *
+ * - `verified`: the saved and current roots resolve to the same physical repo.
+ * - `mismatch`: a durable identity exists and provably points at a different
+ *   repository (or only one side resolves); callers must fail closed.
+ * - `unknown`: no durable identity was recorded, or neither root could be
+ *   resolved physically. Identity is NOT proven — never treat as verified.
+ */
+export type RepoIdentityResumeResult =
+  | { ok: true; status: 'verified' }
+  | { ok: false; status: 'mismatch'; reason: string; savedRoot: string }
+  | { ok: false; status: 'unknown'; reason: string; savedRoot: string | null };
+
+const IDENTITY_UNPROVEN_REASON =
+  'No durable repository identity was recorded for this session; physical repository identity is unproven and resume requires confirmation';
+const IDENTITY_CHANGED_REASON = 'Repository root changed since last turn; confirm before resume';
+const IDENTITY_UNRESOLVABLE_REASON =
+  'Repository root changed or could not be verified since last turn; physical identity cannot be established, so identity is not claimed (confirm before resume)';
+
+/** Last durable repository root recorded in the thread event log, or null. */
+export function resolveSavedRepoRootFromLog(log: ThreadEventLog | null): string | null {
+  if (!log) return null;
+  const last = [...log.events]
+    .reverse()
+    .find(
+      (e): e is Extract<ThreadEvent, { kind: 'repo_identity' | 'turn_started' }> =>
+        e.kind === 'repo_identity' || e.kind === 'turn_started',
+    );
+  return last ? last.projectRoot : null;
 }
 
 /**
- * Validate repository identity on resume. Returns ok or a required ask reason.
+ * Physical-identity check for a saved root against the current root.
  *
  * D04: compare physical identity, not case-folded strings. Two distinct
  * case-sensitive directories (`.../Repo` vs `.../repo`) are different
- * repositories. A missing/unresolvable root fails closed (confirmation
- * required) unless neither side can be resolved, in which case the historical
- * lexical comparison is preserved.
+ * repositories. A saved root that cannot be established is never assumed
+ * equal: one-sided resolution fails closed as a mismatch, and two-sided
+ * non-resolution returns `unknown` rather than falling back to lexical
+ * equality (which would falsely claim physical identity).
  */
-export function validateRepoIdentityOnResume(
-  log: ThreadEventLog,
+export function resolveRepoIdentityOnResume(
+  savedRoot: string | null,
   currentRoot: string,
-): { ok: true } | { ok: false; reason: string; savedRoot: string } {
-  const last = [...log.events]
-    .reverse()
-    .find((e) => e.kind === 'repo_identity' || e.kind === 'turn_started');
-  if (!last) return { ok: true };
-  const savedRoot =
-    last.kind === 'repo_identity'
-      ? last.projectRoot
-      : last.kind === 'turn_started'
-        ? last.projectRoot
-        : currentRoot;
+): RepoIdentityResumeResult {
+  if (savedRoot === null) {
+    return { ok: false, status: 'unknown', reason: IDENTITY_UNPROVEN_REASON, savedRoot: null };
+  }
   const savedIdentity = physicalRootIdentity(savedRoot);
   const currentIdentity = physicalRootIdentity(currentRoot);
-  const sameRoot =
-    savedIdentity !== null && currentIdentity !== null
-      ? savedIdentity === currentIdentity
-      : savedIdentity === null && currentIdentity === null
-        ? lexicalRootIdentity(savedRoot) === lexicalRootIdentity(currentRoot)
-        : false;
-  if (!sameRoot) {
+  if (savedIdentity !== null && currentIdentity !== null) {
+    if (savedIdentity === currentIdentity) return { ok: true, status: 'verified' };
     return {
       ok: false,
-      reason: 'Repository root changed since last turn; confirm before resume',
+      status: 'mismatch',
+      reason: IDENTITY_CHANGED_REASON,
       savedRoot,
     };
   }
-  return { ok: true };
+  if (savedIdentity === null && currentIdentity === null) {
+    return {
+      ok: false,
+      status: 'unknown',
+      reason: IDENTITY_UNRESOLVABLE_REASON,
+      savedRoot,
+    };
+  }
+  // Exactly one side resolved: identity cannot be established -> fail closed.
+  return {
+    ok: false,
+    status: 'mismatch',
+    reason: IDENTITY_CHANGED_REASON,
+    savedRoot,
+  };
+}
+
+/**
+ * Validate repository identity on resume. The saved root is read from the
+ * durable thread event log, falling back to a caller-supplied root (e.g.
+ * `session-events.jsonl` `user_submitted.project_root`) for cells-only or
+ * legacy transcript sessions whose event log is absent.
+ */
+export function validateRepoIdentityOnResume(
+  log: ThreadEventLog | null,
+  currentRoot: string,
+  fallbackSavedRoot: string | null = null,
+): RepoIdentityResumeResult {
+  const savedRoot = resolveSavedRepoRootFromLog(log) ?? fallbackSavedRoot;
+  return resolveRepoIdentityOnResume(savedRoot, currentRoot);
 }
 
 export function latestTurnSnapshot(log: ThreadEventLog): TurnSnapshot | null {
