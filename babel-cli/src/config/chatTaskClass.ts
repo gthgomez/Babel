@@ -323,6 +323,78 @@ export interface TaskShape {
 }
 
 /**
+ * D-T04: tokens that merely *look* like paths or filenames (`repair.ts`,
+ * `src/write_file.ts`, `write/path.txt`) are evidence, never mutation
+ * authority. Strip them before scanning for imperative mutation verbs so a
+ * path name cannot turn a read-only review into a mutation request.
+ */
+function stripPathLikeTokens(text: string): string {
+  return text
+    .replace(/\b[\w.-]*[\\/][\w.-]+/g, ' ')
+    .replace(/\b[\w-]+\.[a-z0-9]{1,8}\b/gi, ' ');
+}
+
+/**
+ * I1: fenced code / diff bodies are *evidence*, never mutation authority. A
+ * pasted snippet such as ```python def fix(): …``` must not turn an
+ * informational "what does it do?" into an execute task. Remove fenced blocks
+ * (closed or unterminated) before scanning for imperative mutation verbs; a
+ * mutation verb outside the fence ("implement this: ```…```") still counts.
+ */
+function stripFencedCodeBodies(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/~~~[\s\S]*?~~~/g, ' ')
+    // Unterminated fence: treat the rest as evidence.
+    .replace(/```[\s\S]*$/g, ' ')
+    .replace(/~~~[\s\S]*$/g, ' ');
+}
+
+/**
+ * D-T02: informational frames ("how to fix …", "best way to refactor …",
+ * "how should we delete …", "whether we should update …") describe a *topic*,
+ * not an instruction to act. Remove the frame body before scanning for
+ * imperative mutation verbs.
+ */
+function stripInformationalFrames(text: string): string {
+  // Consume the frame body up to sentence punctuation, but stop at a sequenced
+  // imperative ("and then fix …", "then delete …") so explicit follow-up
+  // actions keep their mutation intent.
+  return text.replace(
+    /\b(?:how\s+(?:to|do\s+(?:i|we|you)|can\s+(?:i|we|you)|should\s+(?:i|we|you))|best\s+way\s+to|ways?\s+to|whether\s+(?:i|we|you)\s+should)\b(?:(?!\b(?:and\s+then|then|afterwards)\b)[^.;!?])*/gi,
+    ' ',
+  );
+}
+
+/**
+ * Explicit no-editing directives. Shared so the same surface can both detect
+ * the directive and be stripped before a positive mutation verb is scanned.
+ *
+ * A single negation can govern a coordinated verb list ("do not edit or modify
+ * files", "never patch, refactor or repair the parser"), so each alternative
+ * consumes the whole list. Otherwise the trailing verb would survive stripping
+ * and be misread as positive mutation authority.
+ */
+// Single source of truth for mutation verbs so the negation surface and the
+// positive-mutation scan can never drift. `change|touch|alter|clean` have no
+// positive-scope verb of their own (a bare "change the config" is intentionally
+// not treated as mutation today), but a negation of them is still a no-edit
+// directive, and `clean` covers the "clean up and delete" phrase.
+const MUTATION_VERB_SOURCE =
+  'fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename';
+const DESTRUCTIVE_VERB_SOURCE = 'delete|remove|rm|drop|erase|unlink';
+const READ_ONLY_VERB_SOURCE = `(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|change|touch|alter|clean)`;
+const READ_ONLY_VERB_GERUND_SOURCE =
+  '(?:editing|modifying|changing|writing|deleting|removing|fixing|patching|repairing|refactoring|touching|altering|creating|updating|adding|replacing|renaming|implementing|applying|dropping|erasing|unlinking|cleaning)';
+// Coordinates verb lists including the Oxford comma form (", or" / ", and"):
+// a serial-comma list must be consumed in full or its trailing verb survives
+// stripping and is misread as positive mutation authority.
+const COORD_SEPARATOR = '\\s*(?:,?\\s*(?:or|nor|and)|,|/)\\s*';
+const READ_ONLY_VERB_LIST = `${READ_ONLY_VERB_SOURCE}(?:${COORD_SEPARATOR}${READ_ONLY_VERB_SOURCE})*`;
+const READ_ONLY_GERUND_LIST = `${READ_ONLY_VERB_GERUND_SOURCE}(?:${COORD_SEPARATOR}${READ_ONLY_VERB_GERUND_SOURCE})*`;
+const READ_ONLY_DIRECTIVE_SOURCE = `\\b(without (any )?${READ_ONLY_GERUND_LIST}|read-?only|(?:do\\s*not|don't|never)\\s+${READ_ONLY_VERB_LIST}|dry-?run)\\b`;
+
+/**
  * Lightweight multi-dimensional task-shape analysis.
  * Analyzes operation kind (READ_ONLY vs MUTATING vs HYBRID) and complexity (TRIVIAL vs BOUNDED vs OPEN_ENDED).
  */
@@ -333,19 +405,32 @@ export function analyzeTaskShape(taskText: string): TaskShape {
   }
 
   // 1. Explicit read-only constraints
-  const hasReadOnlyDirective =
-    /\b(without (any )?(editing|modifying|changing|writing)|read-?only|(?:do\s*not|don't)\s+(?:edit|modify|change|write|delete|remove)|dry-?run)\b/i.test(
-      t,
-    );
+  const hasReadOnlyDirective = new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'i').test(t);
 
-  // 2. Explicit mutation keywords across the entire prompt (multi-intent safety)
+  // 2. Explicit mutation keywords, excluding evidence-shaped content:
+  // fenced code/diff bodies (I1), path-like names (D-T04) and informational
+  // "how to …" frames (D-T02). A *negated* directive ("do not fix") is not
+  // mutation authority either, so strip the directive phrases before scanning:
+  // only a positive mutation verb that survives the negation counts. This keeps
+  // "never patch X, but implement Y" mutating while "review; do not fix" stays
+  // read-only.
+  const mutationScope = stripInformationalFrames(
+    stripPathLikeTokens(stripFencedCodeBodies(t)),
+  );
+  const positiveMutationScope = mutationScope.replace(
+    new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'),
+    ' ',
+  );
   const hasMutation =
-    /\b(clean\s*up\s+and\s+delete|fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename)\b/i.test(t) ||
-    (!hasReadOnlyDirective && /\b(delete|remove|rm|drop|erase|unlink)\b/i.test(t));
+    new RegExp(`\\b(clean\\s*up\\s+and\\s+delete|${MUTATION_VERB_SOURCE})\\b`, 'i').test(
+      positiveMutationScope,
+    ) ||
+    (!hasReadOnlyDirective &&
+      new RegExp(`\\b(?:${DESTRUCTIVE_VERB_SOURCE})\\b`, 'i').test(positiveMutationScope));
 
   // 3. Exploratory keywords (find, scan, list, check, explain, analyze, review, compare)
   const hasExploratory =
-    /\b(find|search|list|check|inspect|discover|locate|scan|show|inventory|explain|analyze|review|compare|diagnose)\b/i.test(t);
+    /\b(find|search|list|check|inspect|investigate|research|discover|locate|scan|show|inventory|explain|analyze|review|compare|diagnose)\b/i.test(t);
 
   // 4. Sequenced mutation override (e.g. "review without changing anything, then fix the issue")
   const hasSequencedMutationOverride =
@@ -354,7 +439,7 @@ export function analyzeTaskShape(taskText: string): TaskShape {
     );
 
   let operation: TaskOperation;
-  if (hasReadOnlyDirective && !hasSequencedMutationOverride) {
+  if (hasReadOnlyDirective && !hasSequencedMutationOverride && !hasMutation) {
     operation = 'READ_ONLY';
   } else if (hasMutation && (hasExploratory || hasReadOnlyDirective)) {
     operation = 'HYBRID';

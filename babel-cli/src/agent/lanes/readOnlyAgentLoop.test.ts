@@ -14,6 +14,15 @@ import {
 } from './readOnlyAgentLoop.js';
 import type { ToolExecutor } from '../toolExecutor.js';
 import { createLiteToolStreamSink } from '../../ui/liteToolStream.js';
+import { isIndexWriteDenied } from '../executionContext.js';
+
+function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 
 function mockExecutor(results: Record<string, ToolResult>): ToolExecutor {
   return {
@@ -84,9 +93,7 @@ describe('runReadOnlyAgentLoop', () => {
   it('keeps the read-only authority and restores process state after executor failure', async () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-readonly-loop-failure-'));
     const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
-    const previousNoIndexWrites = process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'];
     process.env['BABEL_PROJECT_ROOT'] = 'sentinel-project-root';
-    process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] = 'sentinel-index-policy';
     const throwingExecutor = mockExecutor({});
     throwingExecutor.execute = async () => {
       throw new Error('synthetic executor failure');
@@ -108,11 +115,67 @@ describe('runReadOnlyAgentLoop', () => {
     );
 
     assert.equal(process.env['BABEL_PROJECT_ROOT'], 'sentinel-project-root');
-    assert.equal(process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'], 'sentinel-index-policy');
     if (previousProjectRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
     else process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
-    if (previousNoIndexWrites === undefined) delete process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'];
-    else process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] = previousNoIndexWrites;
+  });
+
+  it('scopes the index-write deny policy per lane and unwinds it (I3)', async () => {
+    // Real overlapping lanes: lane A completes while lane B is still executing.
+    // B must still see deny after A finished, and nothing may leak once both
+    // finish. This fails if the scoped policy disappears early or leaks.
+    const root = mkdtempSync(join(tmpdir(), 'babel-readonly-overlap-'));
+    assert.equal(isIndexWriteDenied(), false, 'precondition: no deny policy outside a lane');
+
+    const aFinished = deferred();
+    const bStarted = deferred();
+    const seen: Record<string, boolean> = {};
+
+    const laneA = runReadOnlyAgentLoop({
+      verb: 'plan',
+      task: 'lane A',
+      projectRoot: root,
+      toolContext: { agentId: 'lane-A', runId: 'lane-A', babelRoot: root },
+      provider: 'mock',
+      useDeterministicMock: true,
+      executor: {
+        mapAction: mockExecutor({}).mapAction.bind(mockExecutor({})),
+        async execute(action, context) {
+          if (action.type === 'list_dir') seen['A-during'] = isIndexWriteDenied();
+          return mockExecutor({}).execute(action, context);
+        },
+      },
+    });
+
+    const laneB = runReadOnlyAgentLoop({
+      verb: 'plan',
+      task: 'lane B',
+      projectRoot: root,
+      toolContext: { agentId: 'lane-B', runId: 'lane-B', babelRoot: root },
+      provider: 'mock',
+      useDeterministicMock: true,
+      executor: {
+        mapAction: mockExecutor({}).mapAction.bind(mockExecutor({})),
+        async execute(action, context) {
+          if (action.type === 'list_dir') {
+            seen['B-during'] = isIndexWriteDenied();
+            bStarted.resolve();
+            await aFinished.promise; // A completes while B is still inside its lane
+            seen['B-after-A-finished'] = isIndexWriteDenied();
+          }
+          return mockExecutor({}).execute(action, context);
+        },
+      },
+    });
+
+    await bStarted.promise;
+    await laneA;
+    aFinished.resolve();
+    await laneB;
+
+    assert.equal(seen['A-during'], true, 'lane A must see deny while active');
+    assert.equal(seen['B-during'], true, 'lane B must see deny while active');
+    assert.equal(seen['B-after-A-finished'], true, 'lane B must still see deny after A finished');
+    assert.equal(isIndexWriteDenied(), false, 'deny must not leak after both lanes finish');
   });
 
   it('mock discovery reads PROJECT_CONTEXT and stack manifests when present', async () => {

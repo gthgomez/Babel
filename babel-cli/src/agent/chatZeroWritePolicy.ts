@@ -312,10 +312,18 @@ export function applyExploreFuses(input: {
   forceMutateTurnsOverride?: number;
   /** Injectable env for ablation tests (defaults to process.env). */
   env?: NodeJS.ProcessEnv;
+  /**
+   * D01: authoritative effective operation for the accepted submission.
+   * When true, mutation-pressure fuses are bypassed regardless of the legacy
+   * text-intent classifier — an explicit no-edit request or an equivalent
+   * read-only verb must not be pressed to mutate.
+   */
+  readOnlyOperation?: boolean;
 }): ExploreFuseResult {
   const isReadOnlyInspection =
-    !input.executeIntent &&
-    (input.taskClass === 'quick_inspect' || input.taskClass === 'investigate');
+    input.readOnlyOperation === true ||
+    (!input.executeIntent &&
+      (input.taskClass === 'quick_inspect' || input.taskClass === 'investigate'));
 
   if (!input.executeIntent && !isReadOnlyInspection) {
     return {

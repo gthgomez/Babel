@@ -49,6 +49,42 @@ export interface InstructionFragmentV1 {
   content_preview?: string;
   /** Advisory vs mechanically enforceable. */
   policy_class: 'mechanical' | 'verifier' | 'advisory';
+  /** sha256 of the full on-disk source, when the fragment came from a file. */
+  source_digest?: string;
+  /** sha256 of the exact fragment text delivered to the provider. */
+  delivered_content_digest?: string;
+  /** UTF-16 code units delivered for this fragment. */
+  included_chars?: number;
+}
+
+/** Where a delivered session-identity fragment came from. */
+export type IdentityInstructionTier =
+  | 'project'
+  | 'workspace'
+  | 'sibling'
+  | 'shipped_default'
+  | 'repo_map';
+
+/**
+ * A delivered session-identity instruction fragment (SOUL / AGENT_IDENTITY /
+ * AGENTS / CLAUDE / ENGINEERING / PROJECT_CONTEXT / repo map). Recorded in the
+ * instruction manifest so delivered identity files are auditable instead of
+ * only compiler-selected stack entries.
+ */
+export interface IdentityDeliveredFragment {
+  /** Stable fragment id (`session:soul`, `session:agents`, ...). */
+  id: string;
+  /** Resolved source path, or synthetic marker when content is synthesized. */
+  source: string;
+  tier: IdentityInstructionTier;
+  /** Exact text appended to systemContext for this fragment (title + body). */
+  delivered_content: string;
+  delivered_chars: number;
+  delivered_content_digest: string;
+  /** sha256 of the complete on-disk source when a single file was read. */
+  source_digest: string | null;
+  source_length: number | null;
+  truncated: boolean;
 }
 
 export interface InstructionManifestV1 {
@@ -82,6 +118,12 @@ export interface BuildInstructionManifestInput {
     selection_reason: string;
     plan_step_id?: string;
     policy_class?: InstructionFragmentV1['policy_class'];
+    /** sha256 of the full source file, when content is a truncated delivery. */
+    source_digest?: string;
+    /** sha256 of the delivered fragment text (defaults to sha256(content)). */
+    delivered_content_digest?: string;
+    /** UTF-16 code units delivered (defaults to content.length). */
+    included_chars?: number;
   }>;
   /** Optional path → content map for hashing disk paths. */
   pathContents?: ReadonlyMap<string, string> | Record<string, string>;
@@ -180,13 +222,18 @@ export function buildInstructionManifestV1(
       fragments.push({
         rule_id: r.rule_id,
         source: r.source,
-        source_hash: sha256(r.content),
+        // Authoritative source digest when known (a truncated delivery still
+        // names the full source); otherwise the delivered content is the source.
+        source_hash: r.source_digest ?? sha256(r.content),
         precedence: r.precedence,
         scope: r.scope ?? 'session',
         selection_reason: r.selection_reason,
         policy_class: r.policy_class ?? defaultPolicyClass(r.precedence),
         ...(r.plan_step_id ? { plan_step_id: r.plan_step_id } : {}),
         content_preview: r.content.slice(0, 200),
+        delivered_content_digest: r.delivered_content_digest ?? sha256(r.content),
+        included_chars: r.included_chars ?? r.content.length,
+        ...(r.source_digest ? { source_digest: r.source_digest } : {}),
       });
     }
   }

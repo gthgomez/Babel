@@ -139,7 +139,17 @@ export type ChatTerminalClassification =
   | 'cancelled';
 
 export interface ChatEngineChildLimits {
+  /**
+   * Legacy coarse cap. Kept for compatibility; read-only children now default
+   * to `readMaxRounds` and mutation children to `mutationMaxRounds`
+   * (see childSpec.resolveChildSpec). Per-child effective rounds are resolved at
+   * dispatch, so this run-level report is deliberately coarse.
+   */
   maxRounds: number;
+  /** S03/#213: effective read-only child default. */
+  readMaxRounds?: number;
+  /** S03/#213: effective mutation child default. */
+  mutationMaxRounds?: number;
   timeoutMs?: number;
 }
 

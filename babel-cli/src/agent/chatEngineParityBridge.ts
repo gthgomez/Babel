@@ -472,6 +472,8 @@ export function parityRecordToolBatch(
     patchFailed?: boolean;
     verifierChanged?: boolean;
     localizedPaths?: string[];
+    /** Read-injection context epoch; advancing it invalidates retained reads. */
+    contextEpoch?: number;
     /** When true, skip propose (already done via paritySettleProposeTools). */
     settleAlreadyProposed?: boolean;
   },
@@ -597,6 +599,7 @@ export function parityRecordToolBatch(
     ...(input.patchAttempted ? { patchAttempted: true } : {}),
     ...(input.patchFailed ? { patchFailed: true } : {}),
     ...(input.verifierChanged ? { verifierChanged: true } : {}),
+    ...(input.contextEpoch !== undefined ? { contextEpoch: input.contextEpoch } : {}),
     reads: input.results
       .filter(
         (r) =>
@@ -734,8 +737,11 @@ export function parityArbitrateCycle(input: {
         }
       : {}),
   });
-  // Skip progress thrash interventions when env, read-only inspection, or read-only hard cap active.
-  if (!input.envBlockedSignal?.trim() && !input.readOnlyHardCapTerminal?.trim() && !input.isReadOnlyInspection) {
+  // Evidence-based progress terminals/recovery still apply to read-only
+  // inspection: the receipt ledger is the task-appropriate evidence set, so
+  // genuine no-progress after recovery remains bounded. Only env blockers and
+  // an active read-only hard cap take precedence over this candidate.
+  if (!input.envBlockedSignal?.trim() && !input.readOnlyHardCapTerminal?.trim()) {
     if (progressIx.action === 'terminal') {
       candidates.push({
         source: 'progress_terminal',
