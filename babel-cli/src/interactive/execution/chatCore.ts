@@ -877,6 +877,12 @@ export async function runChatEngineOnce(input: {
             estimated_tokens: chatStack.estimated_tokens,
             delivered_content_digest: chatStack.delivered_content_digest,
             content_disposition: chatStack.content_disposition,
+            // S06/#5: record the delivered session-identity fragments so this
+            // per-run artifact matches instruction-manifest.json.
+            instruction_disposition:
+              engine
+                .getInstructionManifest()
+                ?.fragments.filter((fragment) => fragment.rule_id.startsWith('session:')) ?? [],
           },
           null,
           2,

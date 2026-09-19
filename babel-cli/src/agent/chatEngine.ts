@@ -79,6 +79,7 @@ import { PreparedRequestAdmissionError } from '../runners/preparedProviderReques
 import {
   initLiveAuthorityOnEngine,
   projectEngineLiveSession,
+  refreshEngineInstructionManifest,
   restoreEngineSessionEvents,
   engineCanMutateKey,
   evaluateSubmitTaskAuthorityHalt,
@@ -4966,6 +4967,26 @@ export class ChatEngine {
     // task's read dedupe suppress evidence in the new request.
     this.resetReadInjectionContext();
     this.clearSystemPromptCache();
+    // S06/#4: a reused engine replaced projectRoot/instructionRoot/systemContext
+    // above, so the manifest built at construction is stale. Recompute the
+    // delivered-instruction authority from the current options/roots (and the
+    // new turn's task class) so the persisted manifest reports what this turn
+    // actually delivered.
+    if (this.parity?.liveAuthority) {
+      try {
+        refreshEngineInstructionManifest({
+          parity: this.parity,
+          options: this.options,
+          taskClass: this.taskClass,
+          executionProfile: this.executionProfile,
+          engineRunDir: this.engineRunDir,
+        });
+      } catch {
+        // Manifest refresh is best-effort telemetry: a failure must not fail
+        // the turn (some test doubles run applyTurnPreparation without an
+        // established authority).
+      }
+    }
   }
 
   /**
