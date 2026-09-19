@@ -24,6 +24,8 @@ const RUNTIME_FILES = [
   'admission.ts',
   'admissionContracts.ts',
   'admissionTestHooks.ts',
+  'recovery.ts',
+  'restoreReport.ts',
   'adapters/chat.ts',
   'adapters/plan.ts',
   'adapters/deep.ts',

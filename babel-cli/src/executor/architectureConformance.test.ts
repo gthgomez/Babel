@@ -80,6 +80,27 @@ test("H3 chat, plan, deep receive fixed distinct mode policies", () => {
 
 // ── Proxy/runtime facade (P03) ─────────────────────────────────────────────
 
+// ── Recovery (P06) ─────────────────────────────────────────────────────────
+
+test("P06 recovery disables automatic resume and never auto-retries ambiguous effects", async () => {
+  const { buildRestoreReport } = await import("../runtime/restoreReport.js");
+  const report = buildRestoreReport({
+    threadId: "thread-1",
+    interruptionClass: "process_restart",
+    operations: [
+      {
+        operationId: "op-external",
+        effectClass: "external_side_effect",
+        effectState: "intent",
+        reconciliation: "manual_review",
+      },
+    ],
+  });
+  assert.equal(report.automaticResume, false);
+  assert.equal(report.operations[0]!.automaticRetryAllowed, false);
+  assert.equal(report.operations[0]!.action, "operator_reconciliation_required");
+});
+
 test("P03 runtime coordinator keeps controllers distinct behind one facade", () => {
   const coordinator = createRuntimeCoordinator();
   assert.equal(coordinator.capabilities("chat").controller, "chat_engine");
@@ -286,6 +307,8 @@ test("architecture source-map paths resolve", () => {
     "babel-cli/src/runtime/events.ts",
     "babel-cli/src/runtime/projection.ts",
     "babel-cli/src/runtime/legacyEventAdapters.ts",
+    "babel-cli/src/runtime/recovery.ts",
+    "babel-cli/src/runtime/restoreReport.ts",
     "babel-cli/src/runtime/adapters/chat.ts",
     "babel-cli/src/runtime/adapters/plan.ts",
     "babel-cli/src/runtime/adapters/deep.ts",

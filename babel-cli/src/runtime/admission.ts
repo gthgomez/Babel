@@ -147,6 +147,12 @@ export interface AdmissionStore {
   settleAdmission(input: SettleAdmissionInput): SettleDecision;
   recoverAdmission(input: RecoverAdmissionInput): RecoverDecision;
   readAdmission(threadId: string, commandId: string): AdmissionRecordV1 | null;
+  /**
+   * Read-only: every valid admission for a thread, oldest first. Shape-invalid
+   * rows are excluded (fail closed); a caller that expected more rows must treat
+   * the shortfall as possible truncation, never as absence of an effect.
+   */
+  listAdmissions(threadId: string): AdmissionRecordV1[];
   readOwner(threadId: string): OwnerRecordV1 | null;
   readOutbox(admissionId: string): OutboxRecordV1 | null;
   close(): void;
@@ -926,6 +932,18 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
     readAdmission(threadId, commandId): AdmissionRecordV1 | null {
       const row = readAdmissionRow(threadId, commandId);
       return row ? rowToAdmission(row) : null;
+    },
+
+    listAdmissions(threadId): AdmissionRecordV1[] {
+      const rows = db
+        .prepare('SELECT * FROM admission WHERE thread_id = ? ORDER BY created_at ASC, admission_id ASC')
+        .all(threadId) as Array<Record<string, unknown>>;
+      const out: AdmissionRecordV1[] = [];
+      for (const row of rows) {
+        const record = safeRowToAdmission(row);
+        if (record) out.push(record);
+      }
+      return out;
     },
 
     readOwner(threadId): OwnerRecordV1 | null {
