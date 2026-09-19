@@ -826,6 +826,19 @@ test('P04: projectTask bounds the number of facts consumed', () => {
   const proj = projectTask(endless());
   assert.ok(proj.degradedReasons.includes('fact_count_exceeded'));
   assert.ok(produced <= 100_001, `stopped after ${produced} facts`);
+  assert.notEqual(proj.outcome?.authoritative, true, 'a capped stream fails closed');
+});
+
+test('P04: a truncated fact stream fails closed', () => {
+  const facts = sessionLogToFacts(corpus());
+  const completion = facts.find((f) => f.payload.type === 'completion.decided')!;
+  function* truncated(): Generator<RuntimeFactV1> {
+    yield completion;
+    throw new Error('stream truncated');
+  }
+  const proj = projectTask(truncated());
+  assert.ok(proj.degradedReasons.includes('fact_iteration_failed'));
+  assert.notEqual(proj.outcome?.authoritative, true, 'a truncated stream fails closed');
 });
 
 test('P04: a stateful sequence getter cannot make the projection order-dependent', () => {

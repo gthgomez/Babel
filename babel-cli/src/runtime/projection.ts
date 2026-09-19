@@ -195,7 +195,11 @@ function canonicalize(value: unknown, path: WeakSet<object>): CanonicalResult {
 }
 
 /** SHA-256 over the canonical encoding of the whole envelope+payload. */
+const CONTENT_KEY_CACHE = new WeakMap<object, string>();
+
 function contentKey(fact: RuntimeFactV1): string {
+  const cached = CONTENT_KEY_CACHE.get(fact);
+  if (cached !== undefined) return cached;
   try {
     const canonical = canonicalize(
       [
@@ -227,14 +231,15 @@ function contentKey(fact: RuntimeFactV1): string {
       }
       encoded = `malformed:${fact.id}:${fact.sequence}:${fact.timestamp}:${payloadText}`;
     }
-    return createHash('sha256').update(encoded).digest('hex');
+    const key = createHash('sha256').update(encoded).digest('hex');
+    CONTENT_KEY_CACHE.set(fact, key);
+    return key;
   } catch {
-    // Only reachable for a fact whose envelope accessors throw after
-    // classification; such facts are rejected earlier, so this is a guard that
-    // still distinguishes by identity to avoid a collision.
-    return createHash('sha256')
+    const key = createHash('sha256')
       .update(`inaccessible:${fact.id}:${fact.sequence}:${fact.timestamp}`)
       .digest('hex');
+    CONTENT_KEY_CACHE.set(fact, key);
+    return key;
   }
 }
 
@@ -568,11 +573,12 @@ function dedupeByFactId(facts: RuntimeFactV1[], state: TaskProjection): RuntimeF
   const keyById = new Map<string, string>();
   for (const fact of [...facts].sort(orderedCompare)) {
     try {
+      const identity = `${fact.sequence}\u0000${fact.id}`;
       const key = contentKey(fact);
-      const prior = keyById.get(fact.id);
+      const prior = keyById.get(identity);
       if (prior === undefined) {
-        byId.set(fact.id, fact);
-        keyById.set(fact.id, key);
+        byId.set(identity, fact);
+        keyById.set(identity, key);
       } else if (prior !== key) {
         state.degradedReasons.push('conflicting_duplicate_fact');
       }
@@ -619,6 +625,8 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
       factCount += 1;
       if (factCount > MAX_FACTS) {
         state.degradedReasons.push('fact_count_exceeded');
+        // The unread tail cannot be shown free of authority claims: fail closed.
+        sawUnknownAuthority = true;
         break;
       }
       let read: EnvelopeRead | null = null;
@@ -642,6 +650,8 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
     }
   } catch {
     state.degradedReasons.push('fact_iteration_failed');
+    // A truncated/aborted stream may have withheld authority claims: fail closed.
+    sawUnknownAuthority = true;
   }
 
   const groupList = [...groups.values()];
@@ -653,7 +663,12 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
       if (right.seq === null) return -1;
       return left.seq - right.seq;
     }
-    return codeUnitCompare(left.id, right.id);
+    const byId = codeUnitCompare(left.id, right.id);
+    if (byId !== 0) return byId;
+    // Total order even when sequence/id tie (e.g. null-sequence inaccessible
+    // entries): accessible groups sort after inaccessible ones.
+    if (left.accessible !== right.accessible) return left.accessible ? 1 : -1;
+    return 0;
   });
 
   const demoteGroupAuthority = (
