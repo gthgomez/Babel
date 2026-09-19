@@ -43,11 +43,18 @@ const MAX_LEGACY_EVENTS = 100_000;
 /** Bound evidence reference arrays so an endless iterable cannot run forever. */
 const MAX_EVIDENCE_REFS = 10_000;
 
-function boundedEvidenceRefs(refs: Iterable<unknown>): string[] {
+/**
+ * Truncation is explicit: `onTruncated` fires so a capped list is never silent
+ * (previously this capped without signalling).
+ */
+function boundedEvidenceRefs(refs: Iterable<unknown>, onTruncated?: () => void): string[] {
   const out: string[] = [];
   for (const ref of refs) {
+    if (out.length >= MAX_EVIDENCE_REFS) {
+      onTruncated?.();
+      break;
+    }
     out.push(typeof ref === 'string' ? ref : String(ref));
-    if (out.length >= MAX_EVIDENCE_REFS) break;
   }
   return out;
 }
@@ -222,7 +229,7 @@ export function sessionEventPayloads(
             finalOutcome: event.final_outcome,
             allowed: event.allowed,
             reason: event.reason,
-            evidenceRefs: boundedEvidenceRefs(event.evidence_refs),
+            evidenceRefs: boundedEvidenceRefs(event.evidence_refs, context.onTruncated),
             policyVersion: event.policy_version,
           },
         },
