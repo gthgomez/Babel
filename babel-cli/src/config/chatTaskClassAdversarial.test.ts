@@ -307,6 +307,42 @@ const ADVERSARIAL_CORPUS: readonly AdversarialTestCase[] = [
     verificationApplicable: false,
     notes: 'In-repo harnessEval prompt: coordinated negation must stay read-only',
   },
+  {
+    prompt: 'do not drop or erase the table',
+    expectedOperation: 'READ_ONLY',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'investigate',
+    mutationAllowed: false,
+    verificationApplicable: false,
+    notes: 'Destructive verbs are negated too; they are mutation verbs in the same source set',
+  },
+  {
+    prompt: 'never erase or unlink the file',
+    expectedOperation: 'READ_ONLY',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'investigate',
+    mutationAllowed: false,
+    verificationApplicable: false,
+    notes: 'Coordinated negation of short destructive verbs',
+  },
+  {
+    prompt: 'do not clean up and delete the logs',
+    expectedOperation: 'READ_ONLY',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'investigate',
+    mutationAllowed: false,
+    verificationApplicable: false,
+    notes: 'The "clean up and delete" phrase must be covered by the negation',
+  },
+  {
+    prompt: 'clean up and delete unused folders',
+    expectedOperation: 'MUTATING',
+    expectedComplexity: 'BOUNDED',
+    expectedTaskClass: 'default',
+    mutationAllowed: true,
+    verificationApplicable: true,
+    notes: 'Control: the same phrase without negation is still mutation authority',
+  },
 ];
 
 describe('PR-A Certification: Adversarial Task-Classification Corpus', () => {

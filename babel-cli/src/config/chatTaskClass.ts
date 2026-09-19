@@ -375,14 +375,19 @@ function stripInformationalFrames(text: string): string {
  * consumes the whole list. Otherwise the trailing verb would survive stripping
  * and be misread as positive mutation authority.
  */
-// Union of the no-edit verbs and the mutation verbs `hasMutation` recognises, so
-// a coordinated list is stripped in full regardless of which verb finishes it.
-const READ_ONLY_VERB_BASE =
-  '(?:edit|modify|change|write|delete|remove|fix|patch|repair|refactor|touch|alter|create|update|add|replace|rename|implement|apply)';
-const READ_ONLY_VERB_GERUND =
-  '(?:editing|modifying|changing|writing|deleting|removing|fixing|patching|repairing|refactoring|touching|altering|creating|updating|adding|replacing|renaming|implementing|applying)';
-const READ_ONLY_VERB_LIST = `${READ_ONLY_VERB_BASE}(?:\\s*(?:,|/|or|nor|and)\\s*${READ_ONLY_VERB_BASE})*`;
-const READ_ONLY_GERUND_LIST = `${READ_ONLY_VERB_GERUND}(?:\\s*(?:,|/|or|nor|and)\\s*${READ_ONLY_VERB_GERUND})*`;
+// Single source of truth for mutation verbs so the negation surface and the
+// positive-mutation scan can never drift. `change|touch|alter|clean` have no
+// positive-scope verb of their own (a bare "change the config" is intentionally
+// not treated as mutation today), but a negation of them is still a no-edit
+// directive, and `clean` covers the "clean up and delete" phrase.
+const MUTATION_VERB_SOURCE =
+  'fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename';
+const DESTRUCTIVE_VERB_SOURCE = 'delete|remove|rm|drop|erase|unlink';
+const READ_ONLY_VERB_SOURCE = `(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|change|touch|alter|clean)`;
+const READ_ONLY_VERB_GERUND_SOURCE =
+  '(?:editing|modifying|changing|writing|deleting|removing|fixing|patching|repairing|refactoring|touching|altering|creating|updating|adding|replacing|renaming|implementing|applying|dropping|erasing|unlinking|cleaning)';
+const READ_ONLY_VERB_LIST = `${READ_ONLY_VERB_SOURCE}(?:\\s*(?:,|/|or|nor|and)\\s*${READ_ONLY_VERB_SOURCE})*`;
+const READ_ONLY_GERUND_LIST = `${READ_ONLY_VERB_GERUND_SOURCE}(?:\\s*(?:,|/|or|nor|and)\\s*${READ_ONLY_VERB_GERUND_SOURCE})*`;
 const READ_ONLY_DIRECTIVE_SOURCE = `\\b(without (any )?${READ_ONLY_GERUND_LIST}|read-?only|(?:do\\s*not|don't|never)\\s+${READ_ONLY_VERB_LIST}|dry-?run)\\b`;
 
 /**
@@ -413,8 +418,11 @@ export function analyzeTaskShape(taskText: string): TaskShape {
     ' ',
   );
   const hasMutation =
-    /\b(clean\s*up\s+and\s+delete|fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename)\b/i.test(positiveMutationScope) ||
-    (!hasReadOnlyDirective && /\b(delete|remove|rm|drop|erase|unlink)\b/i.test(positiveMutationScope));
+    new RegExp(`\\b(clean\\s*up\\s+and\\s+delete|${MUTATION_VERB_SOURCE})\\b`, 'i').test(
+      positiveMutationScope,
+    ) ||
+    (!hasReadOnlyDirective &&
+      new RegExp(`\\b(?:${DESTRUCTIVE_VERB_SOURCE})\\b`, 'i').test(positiveMutationScope));
 
   // 3. Exploratory keywords (find, scan, list, check, explain, analyze, review, compare)
   const hasExploratory =
