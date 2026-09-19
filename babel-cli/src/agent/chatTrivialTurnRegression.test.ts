@@ -118,7 +118,10 @@ describe('trivial text-only turns terminate normally', () => {
   test('execute-intent pure-text loops terminate at the bounded threshold', async () => {
     const state = { calls: 0 };
     const engine = new ChatEngine({
-      task: 'the login page is broken',
+      // Mutation-shaped fixture: the subject under test is the execute-intent
+      // text-only loop guard, so the prompt must resolve to an effective
+      // mutating operation (a bare problem statement is READ_ONLY-shaped).
+      task: 'fix the login page',
       projectRoot: makeRoot(),
       maxTurns: 12,
     });
@@ -127,7 +130,7 @@ describe('trivial text-only turns terminate normally', () => {
       textOnlyRunner('Understood, I am thinking about the approach.', state),
     );
 
-    const events = await collect(engine, 'the login page is broken', 'execute');
+    const events = await collect(engine, 'fix the login page', 'execute');
 
     assert.equal(events.some((e) => e.type === 'failed'), false);
     assert.ok(
@@ -331,13 +334,16 @@ describe('generation boundaries (thinking without tools) segment streams', () =>
   test('engine emits thinking between consecutive text-only generations', async () => {
     const state = { calls: 0 };
     const engine = new ChatEngine({
-      task: 'the login page is broken',
+      // Mutation-shaped fixture: this test exercises the execute-intent
+      // multi-generation loop, so the prompt must resolve to an effective
+      // mutating operation.
+      task: 'fix the login page',
       projectRoot: makeRoot(),
       maxTurns: 3,
     });
     stubNativeRunner(engine, textOnlyRunner('Still reasoning about the approach.', state));
 
-    const events = await collect(engine, 'the login page is broken', 'execute');
+    const events = await collect(engine, 'fix the login page', 'execute');
     const types = events.map((e) => e.type);
     let found = false;
     for (let i = 0; i < types.length && !found; i++) {

@@ -213,6 +213,25 @@ export class ProgressController {
     }
   }
 
+  /**
+   * Clear task-local recovery punishment for a fresh, non-continued submission.
+   *
+   * Deliberately preserves `capabilities`: capability health describes the
+   * environment/provider, not the task, so it may survive a task boundary.
+   * Capability health is never blanked here; it changes only through
+   * recordSuccess/recordFailure, so recovery of a degraded capability requires a
+   * genuinely successful operation of that capability, not a new task boundary.
+   * Prefer this over replacing the controller so environment health is not
+   * silently blanked and recovery stays reachable.
+   */
+  public resetTaskLocal(): void {
+    this.level = 'none';
+    this.totalScore = 0;
+    this.strikes = 0;
+    this.noProgressStreak = 0;
+    this.lastSignals = [];
+  }
+
   public scoreTurn(
     signals: ProgressSignal[],
     textOnlyTurn: boolean,

@@ -3,8 +3,15 @@ import { describe, it } from "node:test";
 
 import {
   buildChatSystemPrompt,
+  buildChatToolDefinitions,
   buildChatTurnPrompt,
 } from "./chatToolDefinitions.js";
+import {
+  CHILD_MUTATION_DEFAULT_ROUNDS,
+  CHILD_READ_DEFAULT_ROUNDS,
+  CHILD_ROUNDS_MAX,
+  CHILD_ROUNDS_MIN,
+} from "./childSpec.js";
 
 describe("buildChatSystemPrompt text delivery", () => {
   it("preserves mandatory system context exactly once in text-tools mode", () => {
@@ -83,5 +90,37 @@ describe("buildChatTurnPrompt delivery", () => {
 
     assert.equal(prompt.split(taskNonce).length - 1, 1);
     assert.match(prompt, /Use tools as needed, then answer the user\./);
+  });
+});
+
+describe("S03/#213 sub_agent declaration matches the effective resolver", () => {
+  it("advertises the same round defaults/bounds and honest sequential scheduling", () => {
+    const tools = buildChatToolDefinitions();
+    const subAgent = tools.find((tool) => tool.function.name === "sub_agent");
+    assert.ok(subAgent, "sub_agent tool must be declared");
+    const description = subAgent!.function.description ?? "";
+    assert.match(description, /sequentially/i, "must not advertise parallel children");
+    assert.doesNotMatch(description, /parallel investigation/i);
+
+    const params = subAgent!.function.parameters as {
+      properties: Record<string, { description?: string }>;
+    };
+    const rounds = params.properties["max_rounds"]?.description ?? "";
+    assert.ok(
+      rounds.includes(String(CHILD_READ_DEFAULT_ROUNDS)),
+      `read default ${CHILD_READ_DEFAULT_ROUNDS} must be advertised`,
+    );
+    assert.ok(
+      rounds.includes(String(CHILD_MUTATION_DEFAULT_ROUNDS)),
+      `mutation default ${CHILD_MUTATION_DEFAULT_ROUNDS} must be advertised`,
+    );
+    assert.ok(
+      rounds.includes(`${CHILD_ROUNDS_MIN}-${CHILD_ROUNDS_MAX}`),
+      "clamp bounds must be advertised",
+    );
+
+    const model = params.properties["model"]?.description ?? "";
+    assert.match(model, /parent/i, "omitted model must not claim the cheapest enabled model");
+    assert.doesNotMatch(model, /cheapest/i);
   });
 });

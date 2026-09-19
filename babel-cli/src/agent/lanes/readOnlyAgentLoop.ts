@@ -21,6 +21,11 @@ import type { ToolCallLog } from '../../schemas/agentContracts.js';
 import type { ToolContext, ToolResult } from '../../localTools.js';
 import { runWithProjectRoot } from '../../localTools.js';
 import {
+  getExecutionContext,
+  runWithExecutionContext,
+  type ExecutionContext,
+} from '../executionContext.js';
+import {
   compileObservation,
   formatCompiledObservation,
 } from '../codingLoop/observationCompiler.js';
@@ -104,6 +109,8 @@ export interface ReadOnlyAgentLoopResult {
   /** True when the child stopped at an inherited parent wall/cost boundary. */
   inheritedBudgetExceeded?: boolean;
   inheritedBudgetLimiter?: ChildBudgetLimiter;
+  /** S02: rounds actually executed (live loop only; mock/warmup may omit). */
+  roundsExecuted?: number;
 }
 
 function agentActionToolName(action: AgentAction): string {
@@ -454,7 +461,6 @@ export async function runReadOnlyAgentLoop(
     process.env['BABEL_LITE_OFFLINE'] === '1';
 
   const steps: SmallFixLoopStep[] = [];
-  const previousNoIndexWrites = process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'];
   const scopedToolContext: ToolContext = {
     ...input.toolContext,
     projectRoot: input.projectRoot,
@@ -465,12 +471,23 @@ export async function runReadOnlyAgentLoop(
   );
   const effectiveAbortSignal = budgetController.signal;
   let inheritedBudgetLimiter: ChildBudgetLimiter | undefined;
-  // Semantic indexing creates/updates SQLite state. Read-only discovery may
-  // query an already-open index, but must never warm or rebuild one.
-  process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] = '1';
+  // S04/#214: semantic indexing creates/updates SQLite state. Read-only
+  // discovery may query an already-open index, but must never warm or rebuild
+  // one. Carry the policy in the execution context instead of a process-wide
+  // env flag so overlapping read scopes cannot clear or leak it.
+  const parentCtx = getExecutionContext();
+  const readContext: ExecutionContext = parentCtx
+    ? { ...parentCtx, indexWritePolicy: 'deny' }
+    : {
+        threadId: input.toolContext.runId ?? 'read-only-child',
+        turnId: input.toolContext.turnId ?? null,
+        root: input.projectRoot,
+        indexWritePolicy: 'deny',
+      };
 
   try {
-    return await runWithProjectRoot(input.projectRoot, async () => {
+    return await runWithProjectRoot(input.projectRoot, () =>
+      runWithExecutionContext(readContext, async () => {
     if (useDeterministicMock) {
     inheritedBudgetLimiter = budgetController.limiter() ?? undefined;
     if (inheritedBudgetLimiter) {
@@ -736,6 +753,7 @@ export async function runReadOnlyAgentLoop(
     roundExhausted,
     needsApproval,
     providerError,
+    roundsExecuted: round,
     ...(inheritedBudgetLimiter
       ? {
           inheritedBudgetExceeded: true,
@@ -746,14 +764,12 @@ export async function runReadOnlyAgentLoop(
       : {}),
   };
     return loopResult;
-    });
+      }),
+    );
   } finally {
+    // The index-write policy is carried by the execution context and unwinds
+    // with the ALS scope; there is no process-wide env flag to restore.
     budgetController.dispose();
-    if (previousNoIndexWrites === undefined) {
-      delete process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'];
-    } else {
-      process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] = previousNoIndexWrites;
-    }
   }
 }
 
