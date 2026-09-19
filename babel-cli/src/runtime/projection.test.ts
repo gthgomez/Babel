@@ -1088,6 +1088,34 @@ test('P04: a budget-discarded group still demotes authority', () => {
   assert.notEqual(proj.outcome?.authoritative, true, 'no authoritative claim may survive');
 });
 
+test('P04: adapter truncation fails closed through projectTaskFromSessionEvents', () => {
+  const events = corpus();
+  const completion = events.find((event) => event.kind === 'completion_decision')!;
+  function* throwing(): Generator<SessionEvent> {
+    for (const event of events) yield event;
+    throw new Error('stream truncated');
+  }
+  const thrown = projectTaskFromSessionEvents(throwing() as unknown as SessionEvent[]);
+  assert.ok(thrown.degradedReasons.includes('legacy_adapter_truncated'));
+  assert.notEqual(thrown.outcome?.authoritative, true);
+
+  let produced = 0;
+  function* many(): Generator<SessionEvent> {
+    yield completion;
+    while (true) {
+      produced += 1;
+      yield ev(1000 + produced, {
+        kind: 'turn_ended',
+        outcome: 'CANCELLED',
+        status: 'cancelled',
+      });
+    }
+  }
+  const capped = projectTaskFromSessionEvents(many() as unknown as SessionEvent[]);
+  assert.ok(capped.degradedReasons.includes('legacy_adapter_truncated'));
+  assert.notEqual(capped.outcome?.authoritative, true, 'a capped adapter stream fails closed');
+});
+
 test('P04: a stateful authority getter cannot make the projection order-dependent', () => {
   const make = (finalOutcome: string): RuntimeFactV1 => {
     let reads = 0;

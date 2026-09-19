@@ -32,6 +32,8 @@ export interface LegacyFactContext {
   runId?: string;
   producer?: RuntimeFactProducer;
   ownerGeneration?: number;
+  /** Called when the adapter truncates input (cap reached or iterator threw). */
+  onTruncated?: () => void;
 }
 
 const DEFAULT_PRODUCER: RuntimeFactProducer = 'legacy_adapter';
@@ -291,7 +293,10 @@ export function sessionLogToFacts(
   try {
     for (const event of events) {
       eventsSeen += 1;
-      if (eventsSeen > MAX_LEGACY_EVENTS) break;
+      if (eventsSeen > MAX_LEGACY_EVENTS) {
+        context.onTruncated?.();
+        break;
+      }
       for (const fact of sessionEventToFacts(event, context)) {
         // The fact stream owns its own contiguous sequence; the source session
         // sequence is not the fact cursor. Source identity stays on causationId.
@@ -302,6 +307,7 @@ export function sessionLogToFacts(
     }
   } catch {
     // A hostile/unterminating iterable yields the facts gathered so far.
+    context.onTruncated?.();
   }
   return facts;
 }

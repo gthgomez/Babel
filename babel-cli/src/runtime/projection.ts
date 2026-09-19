@@ -930,5 +930,20 @@ export function projectTaskFromSessionEvents(
   events: readonly SessionEvent[],
   context: LegacyFactContext = {},
 ): TaskProjection {
-  return projectTask(sessionLogToFacts(events, context));
+  let truncated = false;
+  const facts = sessionLogToFacts(events, {
+    ...context,
+    onTruncated: () => {
+      truncated = true;
+    },
+  });
+  const projection = projectTask(facts);
+  if (!truncated) return projection;
+  // The adapter withheld part of the stream, so the tail may claim authority:
+  // fail closed exactly as the projection's own truncation paths do.
+  projection.degraded = true;
+  projection.degradedReasons = uniqueSorted([...projection.degradedReasons, 'legacy_adapter_truncated']);
+  if (projection.outcome) projection.outcome = { ...projection.outcome, authoritative: false };
+  projection.verifier = { ...projection.verifier, authoritative: false };
+  return projection;
 }
