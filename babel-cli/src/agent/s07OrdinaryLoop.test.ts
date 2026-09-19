@@ -48,7 +48,6 @@ import type { ToolResult } from '../localTools.js';
 import {
   PARSER_ORACLE_CASES,
   evaluateParserModule,
-  evaluateParserOracle,
   renderParserVerifierScript,
 } from './codingLoop/parserOracle.js';
 
