@@ -246,6 +246,8 @@ export function sessionEventPayloads(
   }
   } catch {
     // A type-violating or hostile event yields no facts rather than throwing.
+    // It may have claimed authority, so surface the loss as truncation.
+    context.onTruncated?.();
     return [];
   }
 }
@@ -278,6 +280,7 @@ export function sessionEventToFacts(
       payload,
     }));
   } catch {
+    context.onTruncated?.();
     return [];
   }
 }

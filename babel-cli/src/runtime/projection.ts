@@ -931,10 +931,12 @@ export function projectTaskFromSessionEvents(
   context: LegacyFactContext = {},
 ): TaskProjection {
   let truncated = false;
+  const callerOnTruncated = context.onTruncated;
   const facts = sessionLogToFacts(events, {
     ...context,
     onTruncated: () => {
       truncated = true;
+      callerOnTruncated?.();
     },
   });
   const projection = projectTask(facts);

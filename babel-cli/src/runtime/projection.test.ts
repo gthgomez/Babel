@@ -1116,6 +1116,24 @@ test('P04: adapter truncation fails closed through projectTaskFromSessionEvents'
   assert.notEqual(capped.outcome?.authoritative, true, 'a capped adapter stream fails closed');
 });
 
+test('P04: a malformed authority-claiming event fails closed through the adapter', () => {
+  const events = corpus();
+  const good = events.find((event) => event.kind === 'completion_decision')!;
+  const verifier = events.find((event) => event.kind === 'verifier_attempt')!;
+  const malformed = ev(8, {
+    kind: 'completion_decision',
+    requested_outcome: 'x',
+    final_outcome: 'UNVERIFIED_PATCH',
+    allowed: true,
+    reason: 'later claim',
+    policy_version: 'v1',
+  }); // evidence_refs absent -> inner iterator throw
+  const proj = projectTaskFromSessionEvents([good, malformed, verifier]);
+  assert.ok(proj.degradedReasons.includes('legacy_adapter_truncated'));
+  assert.notEqual(proj.outcome?.authoritative, true);
+  assert.equal(proj.verifier.authoritative, false);
+});
+
 test('P04: a stateful authority getter cannot make the projection order-dependent', () => {
   const make = (finalOutcome: string): RuntimeFactV1 => {
     let reads = 0;
