@@ -130,6 +130,13 @@ export type EffectReconciliationDecision =
   | 'workspace_conflict'
   | 'manual_review'
 
+/** Minimal effect identity required to reconcile an interrupted effect. */
+export interface ReconcilableEffect {
+  effectClass: ToolEffectClass
+  preImageHashes: Record<string, string>
+  postImageHashes?: Record<string, string>
+}
+
 /**
  * Decide what a restarted executor may do with an interrupted effect.
  *
@@ -139,7 +146,7 @@ export type EffectReconciliationDecision =
  * effects are never replayed automatically.
  */
 export function reconcileInterruptedEffect(
-  intent: EffectLedgerRecord,
+  intent: ReconcilableEffect,
   currentImageHashes: Record<string, string>,
 ): EffectReconciliationDecision {
   if (

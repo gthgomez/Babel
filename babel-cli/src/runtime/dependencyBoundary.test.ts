@@ -18,8 +18,11 @@ const RUNTIME_FILES = [
   'contracts.ts',
   'coordinator.ts',
   'events.ts',
+  'canonical.ts',
   'projection.ts',
   'legacyEventAdapters.ts',
+  'admission.ts',
+  'admissionContracts.ts',
   'adapters/chat.ts',
   'adapters/plan.ts',
   'adapters/deep.ts',
@@ -83,6 +86,17 @@ test('P03: runtime facade does not own completion/verifier/prompt authority', ()
           `${rel} must not import authority module "${specifier}"`,
         );
       }
+    }
+  }
+});
+
+test('P05: runtime admission never imports the permission-decision path', () => {
+  for (const rel of RUNTIME_FILES) {
+    for (const specifier of importSpecifiers(readRuntime(rel))) {
+      assert.ok(
+        !specifier.includes('/authority/'),
+        `${rel} must not import the permission-decision path "${specifier}"`,
+      );
     }
   }
 });
