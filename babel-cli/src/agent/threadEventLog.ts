@@ -7,8 +7,8 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { writeCheckpointFileSync } from '../utils/atomicCheckpointFile.js';
@@ -412,8 +412,38 @@ export function rebuildProviderMessagesFromEvents(
   return messages;
 }
 
+/** Windows filesystems are case-insensitive; POSIX is (normally) case-sensitive. */
+const CASE_INSENSITIVE_FS = process.platform === 'win32';
+
+/**
+ * Physical identity of a repository root, or `null` when it cannot be
+ * established (missing, dangling symlink, permission error, race).
+ */
+function physicalRootIdentity(path: string): string | null {
+  const resolved = resolve(path);
+  if (!existsSync(resolved)) return null;
+  try {
+    const real = realpathSync(resolved);
+    return CASE_INSENSITIVE_FS ? real.toLowerCase() : real;
+  } catch {
+    return null;
+  }
+}
+
+/** Lexical fallback used only when neither root can be resolved physically. */
+function lexicalRootIdentity(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  return CASE_INSENSITIVE_FS ? normalized.toLowerCase() : normalized;
+}
+
 /**
  * Validate repository identity on resume. Returns ok or a required ask reason.
+ *
+ * D04: compare physical identity, not case-folded strings. Two distinct
+ * case-sensitive directories (`.../Repo` vs `.../repo`) are different
+ * repositories. A missing/unresolvable root fails closed (confirmation
+ * required) unless neither side can be resolved, in which case the historical
+ * lexical comparison is preserved.
  */
 export function validateRepoIdentityOnResume(
   log: ThreadEventLog,
@@ -429,8 +459,15 @@ export function validateRepoIdentityOnResume(
       : last.kind === 'turn_started'
         ? last.projectRoot
         : currentRoot;
-  const normalize = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-  if (normalize(savedRoot) !== normalize(currentRoot)) {
+  const savedIdentity = physicalRootIdentity(savedRoot);
+  const currentIdentity = physicalRootIdentity(currentRoot);
+  const sameRoot =
+    savedIdentity !== null && currentIdentity !== null
+      ? savedIdentity === currentIdentity
+      : savedIdentity === null && currentIdentity === null
+        ? lexicalRootIdentity(savedRoot) === lexicalRootIdentity(currentRoot)
+        : false;
+  if (!sameRoot) {
     return {
       ok: false,
       reason: 'Repository root changed since last turn; confirm before resume',
