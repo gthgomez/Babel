@@ -1,7 +1,7 @@
 /**
  * S07 — Ordinary single-agent loop qualification.
  *
- * The existing S07 regression proves *prepared-request* semantics (one effective
+ * The existing S07 regression establishes *prepared-request* semantics (one effective
  * operation, no injected edit mandate). That is necessary but insufficient: it
  * never runs the loop. This suite drives the real ChatEngine loop with a
  * deterministic scripted provider against a real fixture repository and asserts

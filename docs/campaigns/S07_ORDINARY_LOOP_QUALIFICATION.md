@@ -6,7 +6,7 @@ Status: **candidate evidence**, on branch `test/s07-ordinary-loop-qualification`
 This document records the deterministic ordinary single-agent loop qualification
 that the prior S07 regression did not cover. The earlier S07 work proved
 *prepared-request* semantics (one effective operation, no injected edit mandate).
-This lane proves the **actual loop**: real `ChatEngine`, real tools, real
+This lane exercises the **actual loop**: real `ChatEngine`, real tools, real
 fixtures, deterministic scripted providers.
 
 ## What is exercised
