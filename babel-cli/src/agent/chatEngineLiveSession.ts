@@ -17,8 +17,10 @@ import {
   persistLiveSessionSnapshot,
   recoverCheckpointArtifacts,
   canMutateWithIdempotencyKey,
+  type LiveSessionAuthority,
 } from './liveSessionBridge.js';
 import { paritySettleInterruptedOnResume } from './chatEngineParityBridge.js';
+import { loadProjectSessionIdentityDispositionSync } from '../interactive/identity.js';
 import { AUTHORITY_SESSION_FILENAME, establishAuthoritySession } from '../authority/sessionContext.js';
 import {
   evaluateSessionTaskGate,
@@ -30,42 +32,85 @@ import { join } from 'node:path';
 export interface LiveAuthorityOptionsSlice {
   projectRoot: string;
   task: string;
+  instructionRoot?: string;
+  workspaceRoot?: string | null;
   model?: string;
   maxTurns?: number;
   requiredVerifierCommands?: readonly string[] | null;
 }
 
-export function initLiveAuthorityOnEngine(input: {
+export interface RefreshableAuthorityInput {
   parity: ParityRuntime;
   options: LiveAuthorityOptionsSlice;
   taskClass: string;
   executionProfile: string;
   engineRunDir: string;
-}): void {
-    const mode =
-      input.executionProfile === 'plan'
-        ? 'plan'
-        : input.executionProfile === 'deep'
-          ? 'deep'
-          : 'chat';
+}
+
+/**
+ * Rebuild the delivered-instruction authority (manifest + chat stack) from the
+ * engine's *current* options and roots, then persist it.
+ *
+ * `applyTurnPreparation` on a reused engine replaces `projectRoot` /
+ * `instructionRoot` / `systemContext` after construction, so a manifest built
+ * only in the constructor silently misreports what later turns actually
+ * delivered. Call this from the turn-preparation path (see the report: the call
+ * site lives in the reserved `chatEngine.ts`) to keep the manifest current.
+ *
+ * The frozen `taskContract` is intentionally preserved for the run; only the
+ * instruction manifest and its compiled stack are recomputed here. When no
+ * authority exists yet (construction) the full authority is returned.
+ */
+export function refreshEngineInstructionManifest(
+  input: RefreshableAuthorityInput,
+): LiveSessionAuthority {
+  const mode =
+    input.executionProfile === 'plan'
+      ? 'plan'
+      : input.executionProfile === 'deep'
+        ? 'deep'
+        : 'chat';
+  // Delivered session identity is loaded from the same root that supplies
+  // identity to the request (instructionRoot wins for trusted review), so the
+  // manifest reports delivered files. Candidate-controlled target instructions
+  // are never read when a trusted instructionRoot is set.
+  const identityRoot = input.options.instructionRoot ?? input.options.projectRoot;
+  const identity = loadProjectSessionIdentityDispositionSync(
+    identityRoot,
+    input.options.instructionRoot ?? input.options.workspaceRoot ?? null,
+  );
+  const resolved = resolveLiveSessionAuthority({
+    mode,
+    projectRoot: input.options.projectRoot,
+    ...(input.options.instructionRoot ? { instructionRoot: input.options.instructionRoot } : {}),
+    task: input.options.task,
+    taskClass: input.taskClass,
+    ...(input.options.model ? { modelId: input.options.model } : {}),
+    ...(input.options.maxTurns !== undefined ? { maxTurns: input.options.maxTurns } : {}),
+    verifierRequirements: input.options.requiredVerifierCommands
+      ? [...input.options.requiredVerifierCommands]
+      : [],
+    systemContextFragments: identity.fragments,
+  });
+  const current = input.parity.liveAuthority;
+  const authority: LiveSessionAuthority = current
+    ? {
+        ...current,
+        instructionManifest: resolved.instructionManifest,
+        ...(resolved.chatStack ? { chatStack: resolved.chatStack } : {}),
+      }
+    : resolved;
+  input.parity.liveAuthority = authority;
+  persistLiveSessionAuthority(input.engineRunDir, authority);
+  return authority;
+}
+
+export function initLiveAuthorityOnEngine(input: RefreshableAuthorityInput): void {
     input.parity.authoritySession = establishAuthoritySession({
       repoRoot: input.options.projectRoot,
       persistPath: join(input.engineRunDir, AUTHORITY_SESSION_FILENAME),
     });
-    input.parity.liveAuthority = resolveLiveSessionAuthority({
-      mode,
-      projectRoot: input.options.projectRoot,
-      task: input.options.task,
-      taskClass: input.taskClass,
-      ...(input.options.model ? { modelId: input.options.model } : {}),
-      ...(input.options.maxTurns !== undefined
-        ? { maxTurns: input.options.maxTurns }
-        : {}),
-      verifierRequirements: input.options.requiredVerifierCommands
-        ? [...input.options.requiredVerifierCommands]
-        : [],
-    });
-    persistLiveSessionAuthority(input.engineRunDir, input.parity.liveAuthority);
+    refreshEngineInstructionManifest(input);
     refreshTaskAuthorityGate(input.parity, input.options.task);
 }
 

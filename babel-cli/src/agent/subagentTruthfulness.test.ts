@@ -411,7 +411,8 @@ describe('Canary F: Subagent Truthfulness', () => {
     assert.equal(result.success, false);
     assert.equal(result.inheritedBudgetExceeded, true);
     assert.equal(result.inheritedBudgetLimiter, 'wall');
-    assert.equal(result.attribution, 'child_round_exhaustion');
+    // T04: a wall stop is not round exhaustion.
+    assert.equal(result.attribution, 'child_wall_exhaustion');
   });
 
   it('D1-setup: an already-expired worktree child does not create a worktree', async () => {
@@ -434,7 +435,8 @@ describe('Canary F: Subagent Truthfulness', () => {
       },
     );
     assert.equal(result.success, false);
-    assert.equal(result.attribution, 'child_round_exhaustion');
+    // T04: an expired wall allowance is a wall stop, not round exhaustion.
+    assert.equal(result.attribution, 'child_wall_exhaustion');
     assert.equal(result.inheritedBudgetExceeded, true);
     assert.equal(existsSync(join(root, '.babel', 'worktrees')), false);
   });
@@ -570,7 +572,8 @@ describe('Canary F: Subagent Truthfulness', () => {
         },
       });
       assert.equal(result.success, false);
-      assert.equal(result.attribution, 'child_round_exhaustion');
+      // T04: a cost stop is not round exhaustion.
+      assert.equal(result.attribution, 'child_cost_exhaustion');
       assert.equal(result.inheritedBudgetExceeded, true);
       assert.ok(result.changedFiles.some((file) => file.path === 'src/confirmed.ts'));
       assert.equal(readFileSync(join(root, 'src', 'confirmed.ts'), 'utf8'), 'export const confirmed = true;\n');
