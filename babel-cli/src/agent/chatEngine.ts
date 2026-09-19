@@ -1029,6 +1029,11 @@ export class ChatEngine {
   }> = [];
   private lastVerifierReceipt: BoundChatVerifierReceipt | null = null;
   private executedVerifierLedger: BoundChatVerifierReceipt[] = [];
+  /**
+   * M1: fingerprint (tool + exit code + output hash) of the last verifier run
+   * this task. A repeated identical shell loop is not "verifier progress".
+   */
+  private lastVerifierSignalSignature: string | null = null;
   /** Index into toolCallLog at the start of the current turn's actions.
    *  Used to correctly slice per-turn entries even as the log grows across turns. */
   private _turnToolCallLogStart = 0;
@@ -2210,11 +2215,14 @@ export class ChatEngine {
    *
    *  P0-E: stall_kill mode shadow|enforce|off (env ablation or task-class default).
    *  Shadow downgrades kill → nudge and logs stall_shadow_kill. */
-  private checkStallIntervention(): StallIntervention | null {
+  private checkStallIntervention(isReadOnlyInspection: boolean): StallIntervention | null {
     if (!resolveStallInterventionsEnabled(this.taskClass)) {
       return null;
     }
-    const isReadOnly = this.taskClass === 'quick_inspect' || this.taskClass === 'investigate';
+    // I4: consume the admitted effective-operation policy instead of
+    // re-deriving read-only from taskClass (which can be overridden by env /
+    // autonomy / plan handoff and disagree with isReadOnlyInspection).
+    const isReadOnly = isReadOnlyInspection;
     const stallShadow = resolveStallShadowMode(this.taskClass);
     const intervention = getStallInterventionMessage(
       this.stallState,
@@ -3381,7 +3389,7 @@ export class ChatEngine {
         }
 
         // R2: Escalating stall intervention — kill routed through parity arbiter
-        const stallIntervention = this.checkStallIntervention();
+        const stallIntervention = this.checkStallIntervention(isReadOnlyInspection);
         if (stallIntervention && stallIntervention.level !== 'kill') {
           recordPolicyEvent(
             this.policyEventLog,
@@ -3389,7 +3397,9 @@ export class ChatEngine {
             'stall_intervention',
             `level=${stallIntervention.level}`,
           );
-          if (stallIntervention.level === 'restrict_tools') {
+          // I4: never latch a mutate-only tool restriction onto a read-only
+          // operation; the read-only stall path concludes or synthesizes.
+          if (stallIntervention.level === 'restrict_tools' && !isReadOnlyInspection) {
             this.restrictToolsNextTurn = true;
           }
           this.conversation.push({
@@ -3450,9 +3460,7 @@ export class ChatEngine {
             patchFailed: turnSlice.some(
               (t) => t.tool === 'str_replace' && t.error != null && t.error !== '',
             ),
-            verifierChanged: turnSlice.some(
-              (t) => t.tool === 'run_command' || t.tool === 'test_run' || t.tool === 'shell_exec',
-            ),
+            verifierChanged: this.computeVerifierChanged(projected.results),
             // Context epoch: advancing it makes necessary re-reads count again.
             contextEpoch: this.readContextEpoch,
             // W2.2: propose+start already flushed before executeActions.
@@ -4246,6 +4254,30 @@ export class ChatEngine {
     this.verifierReceiptCache.clear();
     this.platformUnusableVerifiers.clear();
     this.verifierDependencyHashes.clear();
+    this.lastVerifierSignalSignature = null;
+  }
+
+  /**
+   * M1: a verifier signal only counts as progress when the verifier's identity
+   * or observed output changed. Repeated identical shell loops must not reset
+   * the no-progress bound (D-T06) or add verifier score.
+   */
+  private computeVerifierChanged(
+    results: ReadonlyArray<{ tool_name: string; content?: string; exit_code?: number }>,
+  ): boolean {
+    const verifierTools = new Set(['run_command', 'test_run', 'shell_exec']);
+    const relevant = results.filter((r) => verifierTools.has(r.tool_name));
+    if (relevant.length === 0) return false;
+    const signature = relevant
+      .map(
+        (r) =>
+          `${r.tool_name}:${r.exit_code ?? ''}:` +
+          createHash('sha256').update(r.content ?? '').digest('hex').slice(0, 16),
+      )
+      .join('|');
+    const changed = signature !== this.lastVerifierSignalSignature;
+    this.lastVerifierSignalSignature = signature;
+    return changed;
   }
 
   private restorePersistedVerifierEvidence(log: SessionEventLog): void {
@@ -4595,6 +4627,12 @@ export class ChatEngine {
     this.budgetExceeded = runtime.budgetExceeded;
     this.budgetLastChanceDone = runtime.budgetLastChanceDone;
     this.restrictToolsNextTurn = runtime.restrictToolsNextTurn;
+
+    // C1: W3 progress state is per admitted submission, matching the receipt
+    // ledger reset in parityOnUserTurn. Without this, a prior task's strikes
+    // leak into a later read-only submission and emit false
+    // restricted_tools/last_chance_repair labels.
+    this.progressController = this.services.progress.createController();
 
     const continuationScopeUnavailable =
       input.continueTask === true && !runtime.continuedTask && this.taskCostScopeUnavailable;
