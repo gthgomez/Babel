@@ -989,6 +989,10 @@ export const TerminalReasonCodeSchema = z.enum([
   'permission_denied',
   'external_dependency',
   'provider_failure',
+  /** A current authoritative verifier ran and failed after a mutation. */
+  'verification_failed',
+  /** The requested mode/operation/tool is not supported by this runtime. */
+  'unsupported_operation',
   'cancelled',
   'budget_exhausted',
   'unknown',

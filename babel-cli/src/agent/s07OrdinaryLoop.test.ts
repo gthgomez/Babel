@@ -489,6 +489,27 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
     }
   });
 
+  test('Scenario 10 — mutation with a failing authoritative verifier is UNVERIFIED_PATCH + verification_failed', async () => {
+    const fixture = makeFixture();
+    try {
+      const task = 'Investigate why parser_test fails and fix it.';
+      const o = await driveLoop(fixture, task, [
+        [{ type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'parser.ts' } }, { type: 'done', finishReason: 'tool_calls' }],
+        // A real write that does NOT satisfy the verifier (only the comment changes).
+        [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: '// Defect: subtracts instead of adding the operands.', new_str: '// investigated' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'text_delta', text: 'I changed the file, but verification is still red.' }, { type: 'done', finishReason: 'stop' }],
+      ]);
+
+      assert.ok(o.writeToolCalls >= 1, 'a real mutation occurred');
+      assert.equal(o.outcome, 'UNVERIFIED_PATCH', 'a red verifier cannot claim verified completion');
+      assert.equal(o.reasonCode, 'verification_failed', 'the exact verification cause is carried, not inferred');
+      assert.equal(o.reasonCauseClass, 'verification');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   test('trace sink is diagnostic only and never a second runtime authority', () => {
     assert.ok(TRACE_SINK.length >= 1, 'scenarios emit trace records');
     for (const record of TRACE_SINK) {

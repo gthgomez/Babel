@@ -62,6 +62,14 @@ const GUIDANCE: Record<TerminalReasonCode, TerminalReasonGuidance> = {
     message: 'Provider / infrastructure failure',
     nextActions: ['Retry'],
   },
+  verification_failed: {
+    message: 'Authoritative verification failed — the change did not pass its verifier',
+    nextActions: ['Inspect verifier output', 'Fix the failing check', 'Re-run verification'],
+  },
+  unsupported_operation: {
+    message: 'The requested mode or operation is not supported',
+    nextActions: ['Use a supported mode/operation'],
+  },
   cancelled: {
     message: 'Cancelled',
     nextActions: [],
@@ -136,6 +144,15 @@ export function terminalReasonFromFailureText(
   if (!error) return undefined;
   if (isProviderOutputLimitText(error) || isBudgetErrorText(error)) {
     return { code: 'budget_exhausted', cause_class: 'harness' };
+  }
+  // The kernel/adapters produce these themselves for a genuinely unsupported
+  // mode/operation — a harness-origin fact, not model prose.
+  if (
+    /cannot execute unsupported|unsupported (?:operation|tool request|tool|mode|action)|operation (?:is )?not supported|mode .*not supported/i.test(
+      error,
+    )
+  ) {
+    return { code: 'unsupported_operation', cause_class: 'harness' };
   }
   // Only an explicit denial establishes a permission cause. A generic policy
   // block may be zero-write / tamper / gate / stall / auto-continue and must

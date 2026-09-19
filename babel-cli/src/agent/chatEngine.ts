@@ -8191,6 +8191,8 @@ export class ChatEngine {
         cause_class: blockedReport.cause_class ?? null,
       };
     }
+    const verificationFailure = this.resolveVerificationFailureReason(outcome);
+    if (verificationFailure) return verificationFailure;
     return (
       terminalReasonFromClassification(
         this.terminatingLimiter
@@ -8198,6 +8200,26 @@ export class ChatEngine {
           : null,
       ) ?? terminalReasonFromOutcome(outcome)
     );
+  }
+
+  /**
+   * D03/S07: a mutation that ended without success while a *current*
+   * authoritative verifier receipt is red is a verification failure — distinct
+   * from "no verifier was run" (which stays unknown). Stale receipts cannot
+   * establish this cause.
+   */
+  private resolveVerificationFailureReason(
+    outcome: TerminalOutcome | undefined,
+  ): TerminalReason | undefined {
+    if (!this.hasAnyWrites()) return undefined;
+    if (outcome !== 'UNVERIFIED_PATCH' && outcome !== 'BLOCKED_POLICY') return undefined;
+    const receipt = this.lastVerifierReceipt;
+    if (!receipt || receipt.exit_code === 0 || receipt.stale === true) return undefined;
+    return {
+      code: 'verification_failed',
+      cause_class: 'verification',
+      detail: receipt.command,
+    };
   }
 
   /** Persist exactly one authoritative completion decision for this turn. */

@@ -107,6 +107,18 @@ describe('D03 terminalReasonFromFailureText', () => {
   test('unclassifiable text yields no reason (unknown stays unknown)', () => {
     assert.equal(terminalReasonFromFailureText('synthetic stream crash'), undefined);
   });
+
+  test('kernel/adaptor unsupported-operation text is unsupported_operation/harness', () => {
+    for (const text of [
+      'Kernel cannot execute unsupported tool request: teleport',
+      'unsupported operation: plan mutation without approval',
+      'mode protobuf is not supported on this surface',
+    ]) {
+      const reason = terminalReasonFromFailureText(text);
+      assert.equal(reason?.code, 'unsupported_operation', text);
+      assert.equal(reason?.cause_class, 'harness', text);
+    }
+  });
 });
 
 describe('D03 terminalReasonFromOutcome', () => {
@@ -169,6 +181,12 @@ describe('D03 terminalReasonGuidance', () => {
   test('unknown guidance does not fabricate a cause', () => {
     const g = terminalReasonGuidance('unknown');
     assert.match(g.message, /not established/i);
+  });
+
+  test('verification_failed and unsupported_operation guidance are truthful', () => {
+    assert.match(terminalReasonGuidance('verification_failed').message, /verification failed/i);
+    assert.ok(terminalReasonGuidance('verification_failed').nextActions.length > 0);
+    assert.match(terminalReasonGuidance('unsupported_operation').message, /not supported/i);
   });
 
   test('guidance arrays are defensive copies', () => {
