@@ -10,7 +10,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, afterEach } from 'node:test';
@@ -200,6 +200,9 @@ describe('#216 delivered-instruction disposition', () => {
       reloaded.instructionManifest.fragments.some((f) => f.rule_id === 'session:agents'),
       'delivered identity fragment survives resume/continuation',
     );
-    assert.ok(INSTRUCTION_MANIFEST_FILENAME.length > 0);
+    assert.ok(
+      existsSync(join(runDir, INSTRUCTION_MANIFEST_FILENAME)),
+      'manifest must be persisted under the canonical filename',
+    );
   });
 });

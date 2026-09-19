@@ -41,8 +41,8 @@ function driveToTerminalBlocked(engine: ChatEngine, turns = 12): void {
     'terminal_blocked',
     'fixture precondition: task A must reach terminal_blocked',
   );
-  // ProgressController.totalScore has no public getter; the level is the
-  // observable task-local punishment state.
+  // ProgressController exposes both `InterventionLevel` and `TotalScore`; the
+  // level is the task-local punishment state this fixture needs to assert.
 }
 
 test('#216 [REPRODUCTION] fresh submission must not inherit task-local recovery punishment', () => {
