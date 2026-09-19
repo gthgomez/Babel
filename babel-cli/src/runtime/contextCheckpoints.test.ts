@@ -121,6 +121,15 @@ test('writes-only progress and legacy obs: strings are degraded, not success', (
   assert.match(observations?.gap ?? '', /legacy obs:/);
 });
 
+test('a normal continuation with a preserved allowance stays populated', () => {
+  const population = mapCheckpointRequiredState(completeSources({ resumed: true }));
+  assert.equal(population.status, 'populated');
+  const budget = population.rows.find((item) => item.id === 'budget');
+  assert.equal(budget?.present, true);
+  assert.equal(budget?.constraint_satisfied, true);
+  assert.equal(budget?.gap, undefined);
+});
+
 test('a budget reset across resume degrades the capsule', () => {
   const population = mapCheckpointRequiredState(
     completeSources({
@@ -211,4 +220,23 @@ test('retention oracle fails aliased invocations, fabricated results and silent 
     ),
   };
   assert.equal(evaluateRetentionOracle(missing).status, 'fail');
+});
+
+test('retention oracle detects a pending operation silently becoming settled', () => {
+  const fixture = buildRetentionOracleFixtureV1();
+  const settled: RetentionOracleInputV1 = {
+    ...fixture,
+    pending_operations: [{ handle_id: 'op-pending-1', state: 'settled', was_pending: true }],
+  };
+  const result = evaluateRetentionOracle(settled);
+  assert.equal(result.status, 'fail');
+  assert.equal(result.pending_preserved, false);
+  assert.ok(result.violations.some((violation) => /silently settled/.test(violation)));
+
+  // An operation that was never pending is not a preservation violation.
+  const unrelated: RetentionOracleInputV1 = {
+    ...fixture,
+    pending_operations: [{ handle_id: 'op-old', state: 'settled', was_pending: false }],
+  };
+  assert.equal(evaluateRetentionOracle(unrelated).status, 'pass');
 });

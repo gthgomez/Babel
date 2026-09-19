@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -374,6 +374,56 @@ test('base64 representation returns declared binary bytes', () => {
     assert.equal(Buffer.from(page.content, 'base64').toString('hex'), '00ff1020');
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('recall rejects symlinked object files and symlinked ancestor directories', () => {
+  const root = tempRoot('recall-symlink');
+  const outside = tempRoot('recall-symlink-outside');
+  try {
+    const observation = capture(root, 'contained recall bytes');
+    const payload = observation.payloads[0]!;
+    const objectPath = join(root, payload.object_key);
+    const objectDir = dirname(objectPath);
+    const outsideFile = join(outside, 'copied.bin');
+    writeFileSync(outsideFile, 'contained recall bytes', 'utf8');
+
+    // 1) object file replaced by a symlink to an outside file.
+    unlinkSync(objectPath);
+    symlinkSync(outsideFile, objectPath);
+    const fileLink = resolveObservation(
+      observation.observation_id,
+      caller(observation.observation_id),
+      storage(root),
+    );
+    assert.equal(fileLink.status, 'unavailable');
+    if (fileLink.status === 'unavailable') assert.match(fileLink.reason, /symlink|reparse/);
+    const filePage = readObservationPage(
+      observation.observation_id,
+      null,
+      {},
+      caller(observation.observation_id),
+      storage(root),
+    );
+    assert.equal(filePage.status, 'unavailable');
+
+    // 2) object prefix directory replaced by a symlink to an outside directory
+    //    that contains a byte-identical object.
+    unlinkSync(objectPath);
+    rmSync(objectDir, { recursive: true, force: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, `${payload.sha256}.bin`), 'contained recall bytes', 'utf8');
+    symlinkSync(outside, objectDir);
+    const dirLink = resolveObservation(
+      observation.observation_id,
+      caller(observation.observation_id),
+      storage(root),
+    );
+    assert.equal(dirLink.status, 'unavailable');
+    if (dirLink.status === 'unavailable') assert.match(dirLink.reason, /symlink|reparse/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
 

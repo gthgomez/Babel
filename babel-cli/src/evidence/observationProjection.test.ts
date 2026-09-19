@@ -139,4 +139,12 @@ test('request fingerprint is stable for retries and changes with the snapshot', 
     options,
   );
   assert.notEqual(retry.request_fingerprint, aged.request_fingerprint);
+
+  // A budget change alters the projected selection and therefore the fingerprint.
+  const budgetChanged = projectObservations(
+    history,
+    snapshot({ observation_ref_set: [id('1')], budget_bytes: 1 }),
+    options,
+  );
+  assert.notEqual(retry.request_fingerprint, budgetChanged.request_fingerprint);
 });

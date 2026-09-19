@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { sanitizeSpillId } from '../agent/codingLoop/observationCompiler.js';
 import {
   OBSERVATION_CAPTURE_POLICY_DEFAULTS_V1,
   captureApprovedObservation,
@@ -20,6 +21,7 @@ import {
   createNodeObservationFs,
   deriveObservationId,
   listStoredPayloadObjects,
+  resolveObservation,
   type CaptureApprovedObservationInputV1,
   type ObservationInvocationV1,
   type ObservationStorageContextV1,
@@ -103,6 +105,142 @@ test('retrying the same invocation is identity-stable and idempotent', () => {
     assert.equal(first.observation.observation_id, second.observation.observation_id);
     assert.equal(deriveObservationId(input.invocation), first.observation.observation_id);
     assert.equal(listStoredPayloadObjects(storage(root)).length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('retry identity is stable under a real advancing clock', () => {
+  const root = tempRoot('retry-clock');
+  try {
+    let tick = 0;
+    const advancingClock = (): string =>
+      new Date(Date.UTC(2026, 8, 19, 0, 0, tick++)).toISOString();
+    const input = baseInput({
+      invocation: invocation({ operation_id: 'op-clock', attempt_id: 'attempt-1' }),
+    });
+    const first = captureApprovedObservation(input, {
+      storage_root: root,
+      clock: advancingClock,
+    });
+    const second = captureApprovedObservation(input, {
+      storage_root: root,
+      clock: advancingClock,
+    });
+    assert.equal(first.status, 'captured');
+    assert.equal(second.status, 'captured');
+    if (first.status !== 'captured' || second.status !== 'captured') return;
+    assert.equal(first.observation.observation_id, second.observation.observation_id);
+    // The retry keeps the original identity; it is not degraded for its timestamp.
+    assert.equal(second.observation.captured_at, first.observation.captured_at);
+    assert.equal(listStoredPayloadObjects({ storage_root: root, clock: advancingClock }).length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('re-capturing already-stored bytes is not blocked by a full budget', () => {
+  const root = tempRoot('dedupe-budget');
+  try {
+    const content = 'dedupe-under-pressure';
+    const byteLength = Buffer.byteLength(content, 'utf8');
+    const policy = { max_run_bytes: byteLength, max_total_bytes: byteLength };
+    const first = captureApprovedObservation(
+      baseInput({ sections: [{ channel: 'stdout', content }] }),
+      storage(root, { policy }),
+    );
+    assert.equal(first.status, 'captured');
+    // Budget is now exactly full for this run and total; a duplicate capture
+    // writes zero new bytes and must still succeed via dedupe.
+    const second = captureApprovedObservation(
+      baseInput({ sections: [{ channel: 'stdout', content }] }),
+      storage(root, { policy }),
+    );
+    assert.equal(second.status, 'captured');
+    if (second.status !== 'captured') return;
+    assert.deepEqual(second.duplicate_payloads.length, 1);
+    assert.equal(listStoredPayloadObjects(storage(root)).length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('control: legacy spill path aliases a/b and a_b; the store keeps them distinct', () => {
+  const controlDir = tempRoot('control-spill');
+  const storeDir = tempRoot('control-store');
+  try {
+    // Control path: the old sanitized filename aliases both ids and a second
+    // non-exclusive writeFileSync overwrites the first record.
+    assert.equal(sanitizeSpillId('a/b'), sanitizeSpillId('a_b'));
+    const legacyName = `tool-output-${sanitizeSpillId('call/a/b')}.log`;
+    const legacyPath = join(controlDir, legacyName);
+    writeFileSync(legacyPath, 'first-record');
+    writeFileSync(legacyPath, 'second-record');
+    assert.equal(readFileSync(legacyPath, 'utf8'), 'second-record');
+    assert.notEqual(sanitizeSpillId('call-1'), sanitizeSpillId('call-2'));
+
+    // Candidate path: invocation-derived ids do not alias and both remain
+    // retrievable with their original bytes.
+    const firstInput = baseInput({
+      invocation: invocation({ operation_id: 'a/b' }),
+      sections: [{ channel: 'stdout', content: 'first-record' }],
+    });
+    const secondInput = baseInput({
+      invocation: invocation({ operation_id: 'a_b' }),
+      sections: [{ channel: 'stdout', content: 'second-record' }],
+    });
+    const first = captureApprovedObservation(firstInput, storage(storeDir));
+    const second = captureApprovedObservation(secondInput, storage(storeDir));
+    assert.equal(first.status, 'captured');
+    assert.equal(second.status, 'captured');
+    if (first.status !== 'captured' || second.status !== 'captured') return;
+    assert.notEqual(first.observation.observation_id, second.observation.observation_id);
+    assert.equal(listStoredPayloadObjects(storage(storeDir)).length, 2);
+
+    const caller = {
+      principal_id: 'agent:main',
+      authorized_observation_ids: [
+        first.observation.observation_id,
+        second.observation.observation_id,
+      ],
+    };
+    const readFirst = resolveObservation(first.observation.observation_id, caller, storage(storeDir));
+    const readSecond = resolveObservation(second.observation.observation_id, caller, storage(storeDir));
+    assert.equal(readFirst.status, 'resolved');
+    assert.equal(readSecond.status, 'resolved');
+  } finally {
+    rmSync(controlDir, { recursive: true, force: true });
+    rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test('invalid invocation identity blocks capture', () => {
+  const root = tempRoot('invalid-invocation');
+  try {
+    const result = captureApprovedObservation(
+      baseInput({ invocation: invocation({ operation_id: '   ' }) }),
+      storage(root),
+    );
+    assert.equal(result.status, 'blocked');
+    if (result.status === 'blocked') assert.equal(result.policy, 'invalid_invocation');
+    assert.equal(listStoredPayloadObjects(storage(root)).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('credential denial on stdout is not archived either', () => {
+  const root = tempRoot('deny-stdout');
+  try {
+    const result = captureApprovedObservation(
+      baseInput({
+        sections: [{ channel: 'stdout', content: 'DENY_CREDENTIAL_READ .env contents' }],
+      }),
+      storage(root),
+    );
+    assert.equal(result.status, 'blocked');
+    if (result.status === 'blocked') assert.equal(result.policy, 'data_policy');
+    assert.equal(listStoredPayloadObjects(storage(root)).length, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

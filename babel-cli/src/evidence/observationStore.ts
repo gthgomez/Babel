@@ -50,7 +50,6 @@ import {
   openSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   statSync,
   unlinkSync,
   writeSync,
@@ -134,6 +133,13 @@ export interface ObservationPayloadV1 {
   object_key: string;
 }
 
+/**
+ * Caller contract: `operation_id` must be a stable, non-empty invocation id
+ * unique within its run. Batch-local/reused operation ids (R06) alias to one
+ * observation ref by design; callers that reuse them must also supply a
+ * distinct `turn_id` or `attempt_id`. This helper validates non-emptiness but
+ * cannot invent uniqueness the caller did not provide.
+ */
 export interface ObservationInvocationV1 {
   operation_id: string;
   task_id: string;
@@ -177,7 +183,6 @@ export interface ObservationStorageFsV1 {
   byteLength(path: string): number;
   listDirectory(path: string): readonly string[];
   unlink(path: string): void;
-  realpath(path: string): string;
 }
 
 function nodeErrorCode(error: unknown): string | undefined {
@@ -194,13 +199,14 @@ export function createNodeObservationFs(): ObservationStorageFsV1 {
       mkdirSync(path, { recursive: true, mode: 0o700 });
     },
     writeFileExclusive(path: string, bytes: Uint8Array, mode: number): void {
+      // No implicit fsync here: durability is driven explicitly by the
+      // configured mode (a `none` mode must not silently sync).
       const fd = openSync(path, 'wx', mode);
       try {
         let written = 0;
         while (written < bytes.byteLength) {
           written += writeSync(fd, bytes, written, bytes.byteLength - written);
         }
-        fsyncSync(fd);
       } finally {
         closeSync(fd);
       }
@@ -247,9 +253,6 @@ export function createNodeObservationFs(): ObservationStorageFsV1 {
     },
     unlink(path: string): void {
       unlinkSync(path);
-    },
-    realpath(path: string): string {
-      return realpathSync(path);
     },
   };
 }
@@ -326,7 +329,8 @@ export type ObservationBlockPolicyV1 =
   | 'data_policy'
   | 'storage_limit'
   | 'containment'
-  | 'unsupported_guarantee';
+  | 'unsupported_guarantee'
+  | 'invalid_invocation';
 
 export interface ObservationSectionInputV1 {
   channel: ObservationChannelV1;
@@ -654,11 +658,12 @@ function preparePayload(
   policy: CapturePolicyV1,
 ): PreparedPayloadV1 {
   const { bytes, representation, encoding } = sectionBytes(section);
-  const sha256 = sha256Hex(bytes);
+  const payloadId = derivePayloadId(bytes);
+  const sha256 = payloadId.slice('sha256:'.length);
   return {
     bytes,
     meta: {
-      payload_id: `sha256:${sha256}`,
+      payload_id: payloadId,
       sha256,
       byte_length: bytes.byteLength,
       representation,
@@ -671,6 +676,55 @@ function preparePayload(
       object_key: payloadObjectKey(sha256),
     },
   };
+}
+
+type ExistingObjectState =
+  | { status: 'present' }
+  | { status: 'missing' }
+  | { status: 'mismatch'; reason: string }
+  | { status: 'error'; reason: string };
+
+/**
+ * Inspect a content-addressed object before reuse. A symlink/reparse object is
+ * treated as a mismatch, never followed by stat/read. Returned reasons are
+ * safe to surface because the path is store-derived, not caller-supplied.
+ */
+function inspectExistingObject(
+  fs: ObservationStorageFsV1,
+  root: string,
+  meta: ObservationPayloadV1,
+): ExistingObjectState {
+  const objectPath = join(root, meta.object_key);
+  if (!fs.exists(objectPath)) return { status: 'missing' };
+  try {
+    if (fs.isSymbolicLink(objectPath)) {
+      return { status: 'mismatch', reason: `symlink/reparse object: ${meta.object_key}` };
+    }
+    if (!fs.isFile(objectPath)) {
+      return { status: 'mismatch', reason: `not a regular file: ${meta.object_key}` };
+    }
+    if (fs.byteLength(objectPath) !== meta.byte_length) {
+      return { status: 'mismatch', reason: `size mismatch: ${meta.object_key}` };
+    }
+    const existing = fs.readFile(objectPath);
+    if (sha256Hex(existing) !== meta.sha256) {
+      return { status: 'mismatch', reason: `hash mismatch: ${meta.object_key}` };
+    }
+    return { status: 'present' };
+  } catch (error) {
+    return { status: 'error', reason: `${nodeErrorCode(error) ?? 'UNKNOWN'}: ${meta.object_key}` };
+  }
+}
+
+/**
+ * Idempotency fingerprint for an observation ref. Deliberately excludes the
+ * capture timestamp so retrying the same invocation at a later wall-clock time
+ * is identity-stable and returns the existing ref as `captured`.
+ */
+function observationIdentityJson(observation: ObservationRefV1): string {
+  const copy: Record<string, unknown> = { ...observation };
+  delete copy['captured_at'];
+  return canonicalJson(copy);
 }
 
 function classifyStorageFailure(error: unknown): { code: string; storage_limit: boolean } {
@@ -731,13 +785,22 @@ export function captureApprovedObservation(
     throw error;
   }
 
+  if (
+    input.invocation.operation_id.trim().length === 0 ||
+    input.invocation.task_id.trim().length === 0 ||
+    input.invocation.run_id.trim().length === 0
+  ) {
+    return blocked(
+      'invocation identity requires non-empty operation_id, task_id and run_id',
+      'invalid_invocation',
+    );
+  }
+
   for (const section of input.sections) {
     const { bytes } = sectionBytes(section);
-    if (
-      section.channel === 'stderr' &&
-      typeof section.content === 'string' &&
-      isCredentialDeniedOutput(section.content)
-    ) {
+    // The denial detector is applied to every string section, not just stderr,
+    // so denied content cannot slip into model-readable storage via stdout.
+    if (typeof section.content === 'string' && isCredentialDeniedOutput(section.content)) {
       return blocked(
         'credential-denied output is never archived under an approved capture',
         'data_policy',
@@ -756,6 +819,7 @@ export function captureApprovedObservation(
 
   try {
     assertContainedPath(fs, root, join(root, 'refs'));
+    assertContainedPath(fs, root, join(root, 'objects'));
   } catch (error) {
     if (error instanceof ObservationContainmentError) {
       return blocked(error.message, 'containment');
@@ -763,9 +827,29 @@ export function captureApprovedObservation(
     throw error;
   }
 
-  // Conservative pre-write budget projection (dedupe is verified below).
+  // Inspect existing objects first: only genuinely new bytes count toward the
+  // budget, so re-capturing already-stored bytes is never blocked by dedupe.
+  const duplicatePayloads: string[] = [];
+  const newlyWrittenBytes = new Map<string, number>();
+  const toWrite: PreparedPayloadV1[] = [];
+  let candidateBytes = 0;
+  for (const item of prepared) {
+    const state = inspectExistingObject(fs, root, item.meta);
+    if (state.status === 'mismatch') {
+      return degraded(`existing payload object ${state.reason}`, retained, null);
+    }
+    if (state.status === 'error') {
+      return degraded(`payload integrity verification failed (${state.reason})`, retained, null);
+    }
+    if (state.status === 'present') {
+      duplicatePayloads.push(item.meta.payload_id);
+      continue;
+    }
+    candidateBytes += item.meta.byte_length;
+    toWrite.push(item);
+  }
+
   const usage = budget.usage(input.invocation.run_id);
-  const candidateBytes = prepared.reduce((sum, item) => sum + item.meta.byte_length, 0);
   if (usage.run_bytes + candidateBytes > policy.max_run_bytes) {
     return blocked(
       `run ${input.invocation.run_id} would exceed per-run write limit ${policy.max_run_bytes}`,
@@ -779,10 +863,7 @@ export function captureApprovedObservation(
     );
   }
 
-  const duplicatePayloads: string[] = [];
-  const newlyWrittenBytes = new Map<string, number>();
-
-  for (const item of prepared) {
+  for (const item of toWrite) {
     const objectPath = join(root, item.meta.object_key);
     try {
       ensureDirectory(fs, root, dirname(objectPath));
@@ -790,45 +871,22 @@ export function captureApprovedObservation(
       newlyWrittenBytes.set(item.meta.payload_id, item.meta.byte_length);
     } catch (error) {
       if (nodeErrorCode(error) === 'EEXIST') {
-        // Check existing object size/hash before reuse.
-        try {
-          if (!fs.isFile(objectPath)) {
-            return degraded(
-              `existing payload object is not a regular file: ${item.meta.object_key}`,
-              retained,
-              null,
-            );
-          }
-          if (fs.byteLength(objectPath) !== item.meta.byte_length) {
-            return degraded(
-              `existing payload object size mismatch: ${item.meta.object_key}`,
-              retained,
-              null,
-            );
-          }
-          const existing = fs.readFile(objectPath);
-          if (sha256Hex(existing) !== item.meta.sha256) {
-            return degraded(
-              `existing payload object hash mismatch: ${item.meta.object_key}`,
-              retained,
-              null,
-            );
-          }
+        // Lost a race: verify the object another writer created before reuse.
+        const state = inspectExistingObject(fs, root, item.meta);
+        if (state.status === 'present') {
           duplicatePayloads.push(item.meta.payload_id);
-        } catch (verifyError) {
-          const { code } = classifyStorageFailure(verifyError);
-          return degraded(
-            `payload integrity verification failed (${code}): ${item.meta.object_key}`,
-            retained,
-            null,
-          );
+          continue;
         }
-        continue;
+        return degraded(
+          `existing payload object was created concurrently and is unusable (${state.status === 'mismatch' || state.status === 'error' ? state.reason : 'unknown'})`,
+          retained,
+          null,
+        );
       }
-      const { code, storage_limit } = classifyStorageFailure(error);
       if (error instanceof ObservationContainmentError) {
         return blocked(error.message, 'containment');
       }
+      const { code, storage_limit } = classifyStorageFailure(error);
       return degraded(
         `payload write failed (${code})${storage_limit ? ' [storage limit]' : ''}: ${item.meta.object_key}`,
         retained,
@@ -865,9 +923,11 @@ export function captureApprovedObservation(
       try {
         const existingRaw = new TextDecoder().decode(fs.readFile(refPath));
         const existing = JSON.parse(existingRaw) as ObservationRefV1;
-        if (canonicalJson(existing) !== canonicalJson(observation)) {
+        // captured_at is excluded so a same-invocation retry at a later time is
+        // identity-stable and returns the existing ref as `captured`.
+        if (observationIdentityJson(existing) !== observationIdentityJson(observation)) {
           return degraded(
-            `invocation reference already exists with different content: ${observationId}`,
+            `invocation reference already exists with different identity: ${observationId}`,
             retained,
             null,
           );
@@ -1021,11 +1081,24 @@ function verifyPayloadIntegrity(
 ): { ok: true } | { ok: false; reason: string } {
   const fs = storage.fs ?? createNodeObservationFs();
   const objectPath = join(root, payload.object_key);
-  if (!fs.isFile(objectPath)) return { ok: false, reason: `payload object missing: ${payload.object_key}` };
-  if (fs.byteLength(objectPath) !== payload.byte_length) {
-    return { ok: false, reason: `payload object size mismatch: ${payload.object_key}` };
+  // Recall must reject symlink/reparse escapes exactly like capture does, not
+  // just check the `refs` directory.
+  try {
+    assertContainedPath(fs, root, objectPath);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
   try {
+    if (fs.isSymbolicLink(objectPath)) {
+      return { ok: false, reason: `payload object is a symlink/reparse point: ${payload.object_key}` };
+    }
+    if (!fs.isFile(objectPath)) return { ok: false, reason: `payload object missing: ${payload.object_key}` };
+    if (fs.byteLength(objectPath) !== payload.byte_length) {
+      return { ok: false, reason: `payload object size mismatch: ${payload.object_key}` };
+    }
     const bytes = fs.readFile(objectPath);
     if (sha256Hex(bytes) !== payload.sha256) {
       return { ok: false, reason: `payload object hash mismatch: ${payload.object_key}` };
@@ -1140,7 +1213,24 @@ export function readObservationPage(
 
   const fs = storage.fs ?? createNodeObservationFs();
   const root = assertAbsoluteRoot(storage.storage_root);
-  const bytes = fs.readFile(join(root, section.object_key));
+  let bytes: Uint8Array;
+  try {
+    const objectPath = join(root, section.object_key);
+    assertContainedPath(fs, root, objectPath);
+    if (fs.isSymbolicLink(objectPath)) {
+      return {
+        status: 'unavailable',
+        reason: `payload object is a symlink/reparse point: ${section.object_key}`,
+      };
+    }
+    bytes = fs.readFile(objectPath);
+  } catch (error) {
+    if (error instanceof ObservationCursorError) throw error;
+    return {
+      status: 'unavailable',
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
   const size = bytes.byteLength;
 
   if (requestedOffset < 0) {
@@ -1297,7 +1387,11 @@ export function projectObservations(
     policy_version: snapshot.policy_version,
     context_epoch: snapshot.context_epoch,
     logical_request_id: snapshot.logical_request_id,
+    budget_bytes: snapshot.budget_bytes,
     observation_ref_set: [...requested].sort(),
+    selected_observation_ids: selected.map((item) => item.observation_id),
+    omitted: omitted.map((item) => `${item.observation_id}:${item.reason}`),
+    unresolved: unresolved.map((item) => `${item.observation_id}:${item.reason}`),
     exposure_state: Object.fromEntries(
       Object.entries(snapshot.exposure_state).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
     ),

@@ -253,8 +253,10 @@ export function mapCheckpointRequiredState(
 
   // budget / cancellation ownership — never reset on resume/compaction.
   if (sources.budget && sources.budget.owner.length > 0) {
-    const reset =
-      sources.resumed === true || sources.budget.allowance_reset_on_resume === true;
+    // `resumed` only records that a resume happened; it is not itself a reset.
+    // Only the authoritative allowance signal marks a reset, so a normal
+    // continuation with a preserved allowance is not degraded (T12).
+    const reset = sources.budget.allowance_reset_on_resume === true;
     rows.push({
       id: 'budget',
       present: true,
@@ -399,11 +401,22 @@ export interface RetentionOracleToolCycleV1 {
   state: 'complete' | 'pending';
 }
 
+export interface RetentionOraclePendingOperationV1 {
+  handle_id: string;
+  state: 'pending' | 'settled' | 'indeterminate';
+  /**
+   * True when this operation was pending in the previous window. A pending
+   * operation that is no longer pending is a preservation violation; without
+   * this prior-state marker a silent settle is undetectable.
+   */
+  was_pending?: boolean;
+}
+
 export interface RetentionOracleInputV1 {
   removed_observation_count: number;
   observations: readonly RetentionOracleObservationV1[];
   tool_cycles: readonly RetentionOracleToolCycleV1[];
-  pending_operations: ReadonlyArray<{ handle_id: string; state: 'pending' | 'settled' | 'indeterminate' }>;
+  pending_operations: readonly RetentionOraclePendingOperationV1[];
   /** Historic decorative cap that must not silently bound exact recovery. */
   legacy_cap?: number;
 }
@@ -480,9 +493,19 @@ export function evaluateRetentionOracle(input: RetentionOracleInputV1): Retentio
     }
   }
 
-  const pendingPreserved = input.pending_operations.every(
-    (operation) => operation.state !== 'settled' || true,
+  // A pending operation must stay pending. Detect a silent settle by comparing
+  // against the previous window's pending state (`was_pending`).
+  const silentlySettled = input.pending_operations.filter(
+    (operation) => operation.was_pending === true && operation.state !== 'pending',
   );
+  const pendingPreserved = silentlySettled.length === 0;
+  if (!pendingPreserved) {
+    for (const operation of silentlySettled) {
+      violations.push(
+        `pending operation was silently settled (${operation.state}): ${operation.handle_id}`,
+      );
+    }
+  }
   if (input.pending_operations.some((operation) => operation.state === 'pending' && operation.handle_id.length === 0)) {
     violations.push('pending operation is missing a stable handle');
   }
@@ -548,7 +571,7 @@ export function buildRetentionOracleFixtureV1(): RetentionOracleInputV1 {
         state: 'pending',
       },
     ],
-    pending_operations: [{ handle_id: 'op-pending-1', state: 'pending' }],
+    pending_operations: [{ handle_id: 'op-pending-1', state: 'pending', was_pending: true }],
     legacy_cap: 32,
   };
 }
