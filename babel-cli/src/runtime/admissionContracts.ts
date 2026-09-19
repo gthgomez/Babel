@@ -35,8 +35,6 @@ export const ADMISSION_REASONS = {
   UNAVAILABLE: 'ADMISSION_UNAVAILABLE',
   /** Caller-supplied input failed validation. */
   INVALID_INPUT: 'ADMISSION_INVALID_INPUT',
-  /** An injected fault aborted a transaction (test seam; never production). */
-  FAULT_INJECTED: 'ADMISSION_FAULT_INJECTED',
 } as const;
 
 export type AdmissionReasonCode = (typeof ADMISSION_REASONS)[keyof typeof ADMISSION_REASONS];
@@ -122,6 +120,7 @@ export interface CommandDigestInput {
  */
 export function snapshotAdmissionInput(
   input: CommandDigestInput,
+  facts: unknown = null,
 ): { ok: true; snapshot: unknown; digest: string } | { ok: false } {
   let snapshot: unknown;
   try {
@@ -139,6 +138,7 @@ export function snapshotAdmissionInput(
         offeredToolSchemaVersion: input.offeredToolSchemaVersion,
         contextSnapshotId: input.contextSnapshotId,
         payload: input.payload,
+        facts,
       },
       new WeakSet(),
       0,
@@ -158,8 +158,8 @@ export function snapshotAdmissionInput(
  * SHA-256 over the injective canonical encoding of the semantic inputs, or
  * `null` when an input is not canonically encodable.
  */
-export function computeAdmissionDigest(input: CommandDigestInput): string | null {
-  const result = snapshotAdmissionInput(input);
+export function computeAdmissionDigest(input: CommandDigestInput, facts: unknown = null): string | null {
+  const result = snapshotAdmissionInput(input, facts);
   return result.ok ? result.digest : null;
 }
 
@@ -297,7 +297,7 @@ function truncateEvidenceRefs(
  * no incomplete evidence can claim authority.
  */
 export function boundAdmissionFacts(
-  input: Iterable<RuntimeFactV1>,
+  input: Iterable<unknown>,
   bounds: AdmissionFactBounds = DEFAULT_ADMISSION_FACT_BOUNDS,
 ): BoundedFactsResult {
   const reasons: string[] = [];

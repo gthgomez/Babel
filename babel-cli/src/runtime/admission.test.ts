@@ -7,7 +7,7 @@
  * explicit incomplete evidence, and fail-closed open behavior.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -16,6 +16,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   ADMISSION_REASONS,
   boundAdmissionFacts,
+  completeCompleteness,
   computeAdmissionDigest,
   DEFAULT_ADMISSION_FACT_BOUNDS,
   type BoundedFactsResult,
@@ -26,6 +27,7 @@ import {
   type AdmissionStore,
   type AdmissionStoreOptions,
 } from './admission.js';
+import { ADMISSION_FAULT_HOOK, type AdmissionFaultPoint } from './admissionTestHooks.js';
 import { RUNTIME_FACT_SCHEMA_VERSION, type RuntimeFactV1 } from './events.js';
 import { sessionLogToFacts } from './legacyEventAdapters.js';
 import type { SessionEvent } from '../agent/sessionEvents.js';
@@ -34,6 +36,13 @@ interface Fixture {
   readonly root: string;
   readonly runDir: string;
   cleanup(): void;
+}
+
+type TestStoreOptions = Partial<Omit<AdmissionStoreOptions, 'authorizedRoot' | 'runDir'>>;
+
+/** Register the test-only fault hook through its opaque symbol. */
+function faultHook(hook: (point: AdmissionFaultPoint) => void): TestStoreOptions {
+  return { [ADMISSION_FAULT_HOOK]: hook };
 }
 
 function makeFixture(): Fixture {
@@ -46,10 +55,7 @@ function makeFixture(): Fixture {
   };
 }
 
-function openStore(
-  fixture: Fixture,
-  options: Partial<Omit<AdmissionStoreOptions, 'authorizedRoot' | 'runDir'>> = {},
-): AdmissionStore {
+function openStore(fixture: Fixture, options: TestStoreOptions = {}): AdmissionStore {
   const result = openAdmissionStore({ authorizedRoot: fixture.root, runDir: fixture.runDir, ...options });
   if (!result.ok) {
     throw new Error(`open failed: ${result.reasonCode}: ${result.detail}`);
@@ -311,11 +317,9 @@ test('P05: a stale owner is fenced and cannot settle a successor', () => {
 test('P05: crash before admission commit leaves no row and a retry is fresh', () => {
   const fixture = makeFixture();
   try {
-    const crashing = openStore(fixture, {
-      faultInject: (point) => {
-        if (point === 'before_admission_commit') throw new Error('simulated crash before commit');
-      },
-    });
+    const crashing = openStore(fixture, faultHook((point) => {
+      if (point === 'before_admission_commit') throw new Error('simulated crash before commit');
+    }));
     assert.throws(
       () =>
         crashing.admitCommand({
@@ -349,11 +353,9 @@ test('P05: crash before admission commit leaves no row and a retry is fresh', ()
 test('P05: crash after admission commit is recoverable via the outbox intent', () => {
   const fixture = makeFixture();
   try {
-    const crashing = openStore(fixture, {
-      faultInject: (point) => {
-        if (point === 'after_admission_commit') throw new Error('simulated crash after commit');
-      },
-    });
+    const crashing = openStore(fixture, faultHook((point) => {
+      if (point === 'after_admission_commit') throw new Error('simulated crash after commit');
+    }));
     assert.throws(
       () =>
         crashing.admitCommand({
@@ -400,11 +402,9 @@ test('P05: crash after admission commit is recoverable via the outbox intent', (
 test('P05: crash after the effect but before the terminal commit is recovered_complete', () => {
   const fixture = makeFixture();
   try {
-    const crashing = openStore(fixture, {
-      faultInject: (point) => {
-        if (point === 'before_terminal_commit') throw new Error('simulated crash before terminal commit');
-      },
-    });
+    const crashing = openStore(fixture, faultHook((point) => {
+      if (point === 'before_terminal_commit') throw new Error('simulated crash before terminal commit');
+    }));
     const admitted = crashing.admitCommand({
       digestInput: commandInput(),
       ownerGeneration: 1,
@@ -581,16 +581,330 @@ test('P05: legacy adapter signals a capped evidence list instead of dropping sil
 
 // ─── Fail-closed open behavior + permissions ─────────────────────────────────
 
-test('P05: a run dir outside the authorized root is refused', () => {
+test('P05: a run dir outside the authorized root is refused with no side effect', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-admission-root-'));
   try {
     const outside = join(root, '..', `babel-admission-outside-${process.pid}`);
+    rmSync(outside, { recursive: true, force: true });
+
     const result = openAdmissionStore({ authorizedRoot: root, runDir: outside });
     assert.equal(result.ok, false);
     if (!result.ok) assert.equal(result.reasonCode, ADMISSION_REASONS.UNAVAILABLE);
-    rmSync(outside, { recursive: true, force: true });
+    assert.equal(existsSync(outside), false, 'no out-of-jail directory may be created');
   } finally {
     rmSync(root, { recursive: true, force: true });
+    rmSync(join(root, '..', `babel-admission-outside-${process.pid}`), { recursive: true, force: true });
+  }
+});
+
+test('P05: a symlinked intermediate that escapes the root is refused with no side effect', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-admission-root-'));
+  const outsideRoot = mkdtempSync(join(tmpdir(), 'babel-admission-outside-'));
+  try {
+    const link = join(root, 'escape');
+    symlinkSync(outsideRoot, link, 'dir');
+    const escapedRunDir = join(link, 'run-1');
+
+    const result = openAdmissionStore({ authorizedRoot: root, runDir: escapedRunDir });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.reasonCode, ADMISSION_REASONS.UNAVAILABLE);
+    assert.equal(existsSync(join(outsideRoot, 'run-1')), false, 'no directory may be created outside the jail');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+test('P05: a dangling symlinked DB file is refused with no write outside the jail', () => {
+  const fixture = makeFixture();
+  const outsideRoot = mkdtempSync(join(tmpdir(), 'babel-admission-outside-'));
+  try {
+    mkdirSync(fixture.runDir, { recursive: true, mode: 0o700 });
+    const target = join(outsideRoot, 'escaped.sqlite');
+    // Matches DB_FILENAME in admission.ts; the link target does not exist.
+    symlinkSync(target, join(fixture.runDir, 'runtime-facts.sqlite'));
+
+    const result = openAdmissionStore({ authorizedRoot: fixture.root, runDir: fixture.runDir });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.reasonCode, ADMISSION_REASONS.UNAVAILABLE);
+    assert.equal(existsSync(target), false, 'no DB may be created through an out-of-jail symlink');
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+    rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+// ─── Transaction-boundary enforcement of fact bounds ─────────────────────────
+
+test('P05: conflicting facts cannot be admitted as complete, even if the caller claims complete', () => {
+  const fixture = makeFixture();
+  try {
+    const store = openStore(fixture);
+    const conflictingA = fact({ id: 'dup', sequence: 5, payload: { type: 'run.started', ownerGeneration: 1 } });
+    const conflictingB = fact({ id: 'dup', sequence: 5, payload: { type: 'run.started', ownerGeneration: 2 } });
+    const decision = store.admitCommand({
+      digestInput: commandInput(),
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      effectClass: 'read_only',
+      operationId: 'op-1',
+      facts: [conflictingA, conflictingB],
+      completeness: completeCompleteness(2),
+    });
+    assert.equal(decision.kind, 'admitted');
+    if (decision.kind === 'admitted') {
+      assert.equal(decision.record.completeness.complete, false, 'bounded facts override a complete claim');
+      assert.ok(decision.record.completeness.reasons.includes('conflicting_duplicate_fact'));
+    }
+    const persisted = store.readAdmission('thread-1', 'cmd-1');
+    assert.equal(persisted?.completeness.complete, false, 'incomplete persisted at the transaction boundary');
+
+    // The same guarantee holds for facts embedded in the canonical payload.
+    const embedded = store.admitCommand({
+      digestInput: commandInput({
+        commandId: 'cmd-2',
+        payload: { command: 'write', facts: [conflictingA, conflictingB] },
+      }),
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      effectClass: 'read_only',
+      operationId: 'op-2',
+      completeness: completeCompleteness(2),
+    });
+    assert.equal(embedded.kind, 'admitted');
+    if (embedded.kind === 'admitted') {
+      assert.equal(embedded.record.completeness.complete, false);
+      assert.ok(embedded.record.completeness.reasons.includes('conflicting_duplicate_fact'));
+    }
+    store.close();
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P05: an in-flight duplicate is reported as pending, not replayed', () => {
+  const fixture = makeFixture();
+  try {
+    const store = openStore(fixture);
+    const first = store.admitCommand({
+      digestInput: commandInput(),
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      effectClass: 'read_only',
+      operationId: 'op-1',
+    });
+    assert.equal(first.kind, 'admitted');
+
+    const duplicate = store.admitCommand({
+      digestInput: commandInput(),
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      effectClass: 'read_only',
+      operationId: 'op-1',
+    });
+    assert.equal(duplicate.kind, 'pending');
+    if (duplicate.kind === 'pending') {
+      assert.equal(duplicate.record.state, 'claimed');
+      assert.equal('outcome' in duplicate.record, false);
+    }
+
+    store.settleAdmission({
+      threadId: 'thread-1',
+      commandId: 'cmd-1',
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      state: 'settled',
+      outcome: { finalOutcome: 'DONE', allowed: true },
+    });
+    const replay = store.admitCommand({
+      digestInput: commandInput(),
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      effectClass: 'read_only',
+      operationId: 'op-1',
+    });
+    assert.equal(replay.kind, 'replayed');
+    if (replay.kind === 'replayed') {
+      assert.deepEqual(replay.record.outcome, { finalOutcome: 'DONE', allowed: true });
+    }
+    store.close();
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P05: one owner generation may admit multiple commands', () => {
+  const fixture = makeFixture();
+  try {
+    const store = openStore(fixture);
+    const first = store.admitCommand({
+      digestInput: commandInput({ commandId: 'cmd-a' }),
+      ownerGeneration: 7,
+      ownerToken: 'token-7',
+      effectClass: 'read_only',
+      operationId: 'op-a',
+    });
+    const second = store.admitCommand({
+      digestInput: commandInput({ commandId: 'cmd-b' }),
+      ownerGeneration: 7,
+      ownerToken: 'token-7',
+      effectClass: 'read_only',
+      operationId: 'op-b',
+    });
+    assert.equal(first.kind, 'admitted');
+    assert.equal(second.kind, 'admitted', 'a second command in the same generation must be admitted');
+
+    // Both commands of the owner can settle.
+    assert.equal(
+      store.settleAdmission({
+        threadId: 'thread-1',
+        commandId: 'cmd-a',
+        ownerGeneration: 7,
+        ownerToken: 'token-7',
+        state: 'settled',
+        outcome: { ok: 'a' },
+      }).settled,
+      true,
+    );
+    assert.equal(
+      store.settleAdmission({
+        threadId: 'thread-1',
+        commandId: 'cmd-b',
+        ownerGeneration: 7,
+        ownerToken: 'token-7',
+        state: 'settled',
+        outcome: { ok: 'b' },
+      }).settled,
+      true,
+    );
+
+    // A superseding generation still fences the old owner.
+    const successor = store.admitCommand({
+      digestInput: commandInput({ commandId: 'cmd-c' }),
+      ownerGeneration: 8,
+      ownerToken: 'token-8',
+      effectClass: 'read_only',
+      operationId: 'op-c',
+    });
+    assert.equal(successor.kind, 'admitted');
+    const stale = store.settleAdmission({
+      threadId: 'thread-1',
+      commandId: 'cmd-a',
+      ownerGeneration: 7,
+      ownerToken: 'token-7',
+      state: 'settled',
+      outcome: { ok: 'a' },
+    });
+    assert.equal(stale.settled, false);
+    store.close();
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// ─── Corrupt-row fail-closed behavior ────────────────────────────────────────
+
+test('P05: a corrupt completeness row fails closed to incomplete', () => {
+  const fixture = makeFixture();
+  try {
+    const store = openStore(fixture);
+    const dbPath = store.dbPath;
+    store.admitCommand({
+      digestInput: commandInput(),
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      effectClass: 'read_only',
+      operationId: 'op-1',
+    });
+    store.close();
+
+    const raw = new DatabaseSync(dbPath);
+    raw.exec("UPDATE admission SET completeness_json = 'not json'");
+    raw.close();
+
+    const reopened = openStore(fixture);
+    const record = reopened.readAdmission('thread-1', 'cmd-1');
+    assert.equal(record?.completeness.complete, false);
+    assert.ok(record?.completeness.reasons.includes('corrupt_completeness'));
+    reopened.close();
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P05: a completeness row claiming complete while carrying drops fails closed', () => {
+  const fixture = makeFixture();
+  try {
+    const store = openStore(fixture);
+    const dbPath = store.dbPath;
+    store.admitCommand({
+      digestInput: commandInput(),
+      ownerGeneration: 1,
+      ownerToken: 'token-1',
+      effectClass: 'read_only',
+      operationId: 'op-1',
+    });
+    store.close();
+
+    const raw = new DatabaseSync(dbPath);
+    raw.exec(
+      `UPDATE admission SET completeness_json = '${JSON.stringify({
+        complete: true,
+        truncated: false,
+        reasons: [],
+        admittedCount: 1,
+        droppedCount: 3,
+        evidenceRefsDropped: 0,
+      })}'`,
+    );
+    raw.close();
+
+    const reopened = openStore(fixture);
+    const record = reopened.readAdmission('thread-1', 'cmd-1');
+    assert.equal(record?.completeness.complete, false);
+    assert.ok(record?.completeness.reasons.includes('inconsistent_completeness'));
+    reopened.close();
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P05: an unknown or failed outbox state recovers as manual_review, never complete', () => {
+  const fixture = makeFixture();
+  try {
+    for (const state of ['bogus', 'failed', 'indeterminate']) {
+      const store = openStore(fixture);
+      const dbPath = store.dbPath;
+      const commandId = `cmd-${state}`;
+      const admitted = store.admitCommand({
+        digestInput: commandInput({ commandId }),
+        ownerGeneration: 1,
+        ownerToken: 'token-1',
+        effectClass: 'reconcilable_mutation',
+        operationId: 'op-1',
+        preImageHashes: { 'a.txt': 'before' },
+      });
+      assert.equal(admitted.kind, 'admitted');
+      store.close();
+
+      const raw = new DatabaseSync(dbPath);
+      raw.exec(`UPDATE outbox SET state = '${state}'`);
+      raw.close();
+
+      const reopened = openStore(fixture);
+      const result = reopened.recoverAdmission({
+        threadId: 'thread-1',
+        commandId,
+        currentImageHashes: { 'a.txt': 'before' },
+      });
+      assert.equal(result.kind, 'recovered');
+      if (result.kind === 'recovered') {
+        assert.equal(result.decision, 'manual_review', `state ${state} must not be read as complete`);
+      }
+      reopened.close();
+    }
+  } finally {
+    fixture.cleanup();
   }
 });
 

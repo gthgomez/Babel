@@ -23,6 +23,7 @@ const RUNTIME_FILES = [
   'legacyEventAdapters.ts',
   'admission.ts',
   'admissionContracts.ts',
+  'admissionTestHooks.ts',
   'adapters/chat.ts',
   'adapters/plan.ts',
   'adapters/deep.ts',

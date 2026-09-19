@@ -8,13 +8,14 @@
  *
  * The store is a *record*, never an authority source. It never sits on the
  * permission-decision path: permission remains solely the authority PDP/wire
- * path, and an admission row is never consulted to allow an action. The DB
- * lives under a realpath-verified authorized root with owner-only permissions,
- * and any locked/corrupt/unreadable/future-schema DB fails closed with
+ * path, and an admission row is never consulted to allow an action. The run
+ * dir's containment is proven (via its deepest existing ancestor) *before* any
+ * directory or file is created or chmod'd, the DB is owner-only, and any
+ * locked/corrupt/unreadable/future-schema DB fails closed with
  * `ADMISSION_UNAVAILABLE` rather than silently degrading to "allow".
  *
- * Re-read rows are untrusted input and are re-validated through the same
- * contracts boundary before use.
+ * Re-read rows are untrusted input: each is shape-validated, and corrupt
+ * completeness defaults to incomplete rather than authoritative.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -22,11 +23,12 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   realpathSync,
 } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import type { ToolEffectClass } from '../executor/contracts.js';
@@ -38,27 +40,33 @@ import {
 import {
   ADMISSION_REASONS,
   ADMISSION_SCHEMA_VERSION,
+  boundAdmissionFacts,
   completeCompleteness,
+  DEFAULT_ADMISSION_FACT_BOUNDS,
+  incompleteCompleteness,
+  mergeCompleteness,
   snapshotAdmissionInput,
   type AdmissionCompletenessV1,
+  type AdmissionFactBounds,
   type AdmissionReasonCode,
   type AdmissionRecordV1,
   type AdmissionState,
+  type BoundedFactsResult,
   type CommandDigestInput,
   type OutboxRecordV1,
   type OutboxState,
   type OwnerRecordV1,
 } from './admissionContracts.js';
+import {
+  ADMISSION_FAULT_HOOK,
+  type AdmissionFaultInjectionOptions,
+} from './admissionTestHooks.js';
+
+export type { AdmissionFaultPoint } from './admissionTestHooks.js';
 
 const DB_FILENAME = 'runtime-facts.sqlite';
 
-/** Test-only transaction-boundary fault seam. Never set in production. */
-export type AdmissionFaultPoint =
-  | 'before_admission_commit'
-  | 'after_admission_commit'
-  | 'before_terminal_commit';
-
-export interface AdmissionStoreOptions {
+export interface AdmissionStoreOptions extends AdmissionFaultInjectionOptions {
   /** Authorized root; the run dir and DB file must resolve inside it. */
   readonly authorizedRoot: string;
   /** Run directory that will hold the durable admission database. */
@@ -66,8 +74,6 @@ export interface AdmissionStoreOptions {
   readonly now?: () => Date;
   readonly newId?: () => string;
   readonly busyTimeoutMs?: number;
-  /** Test-only: throw at a transaction boundary to simulate a crash. */
-  readonly faultInject?: (point: AdmissionFaultPoint) => void;
 }
 
 export interface AdmitCommandInput {
@@ -82,12 +88,23 @@ export interface AdmitCommandInput {
   readonly preImageHashes?: Record<string, string>;
   /** Intended post-image, used to detect an already-applied effect after a crash. */
   readonly postImageHashes?: Record<string, string>;
+  /**
+   * Facts to admit with this command. When supplied they are bounded/validated
+   * by `boundAdmissionFacts` inside the transaction, and the resulting
+   * completeness is merged with (and can only tighten) `completeness`, so a
+   * conflicting/over-cap fact set can never be admitted as `complete`.
+   */
+  readonly facts?: Iterable<unknown>;
+  readonly factBounds?: AdmissionFactBounds;
+  /** Caller-claimed completeness; never loosens a bounded-facts result. */
   readonly completeness?: AdmissionCompletenessV1;
 }
 
 export type AdmitDecision =
   | { readonly kind: 'admitted'; readonly record: AdmissionRecordV1; readonly outbox: OutboxRecordV1; readonly digest: string }
   | { readonly kind: 'replayed'; readonly record: AdmissionRecordV1; readonly digest: string }
+  /** Digest-matching duplicate whose admission is still in flight (no outcome yet). */
+  | { readonly kind: 'pending'; readonly record: AdmissionRecordV1; readonly digest: string }
   | { readonly kind: 'rejected'; readonly reasonCode: AdmissionReasonCode; readonly detail?: string };
 
 export interface SettleAdmissionInput {
@@ -150,6 +167,7 @@ const SCHEMA_SQL = `
     outcome_json TEXT,
     completeness_json TEXT NOT NULL,
     input_json TEXT NOT NULL,
+    quarantined_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(thread_id, command_id)
@@ -177,6 +195,57 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_outbox_admission ON outbox(admission_id);
 `;
 
+// ─── Row validation (untrusted re-read input) ───────────────────────────────
+
+/** Raised when a persisted row cannot be trusted; callers fail closed. */
+class AdmissionCorruptRowError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = 'AdmissionCorruptRowError';
+  }
+}
+
+const ADMISSION_STATES: ReadonlySet<string> = new Set(['claimed', 'settled', 'aborted', 'indeterminate']);
+const OUTBOX_STATES: ReadonlySet<string> = new Set(['intent', 'committed', 'failed', 'indeterminate']);
+const EFFECT_CLASSES: ReadonlySet<string> = new Set([
+  'read_only',
+  'idempotent',
+  'reconcilable_mutation',
+  'non_idempotent_local_effect',
+  'external_side_effect',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isAdmissionState(value: unknown): value is AdmissionState {
+  return typeof value === 'string' && ADMISSION_STATES.has(value);
+}
+
+function isOutboxState(value: unknown): value is OutboxState {
+  return typeof value === 'string' && OUTBOX_STATES.has(value);
+}
+
+function isEffectClass(value: unknown): value is ToolEffectClass {
+  return typeof value === 'string' && EFFECT_CLASSES.has(value);
+}
+
+function requireString(row: Record<string, unknown>, key: string): string {
+  const value = row[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new AdmissionCorruptRowError(`invalid_${key}`);
+  }
+  return value;
+}
+
+function requireInteger(row: Record<string, unknown>, key: string, min: number): number {
+  const raw = row[key];
+  const value = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isInteger(value) || value < min) throw new AdmissionCorruptRowError(`invalid_${key}`);
+  return value;
+}
+
 function isWithin(root: string, candidate: string): boolean {
   if (candidate === root) return true;
   const rel = relative(root, candidate);
@@ -185,6 +254,51 @@ function isWithin(root: string, candidate: string): boolean {
 
 function unavailable(detail: string): AdmissionOpenResult {
   return { ok: false, reasonCode: ADMISSION_REASONS.UNAVAILABLE, detail };
+}
+
+/**
+ * Resolve the run dir and prove containment inside `root` *before* creating or
+ * chmod-ing anything. The deepest existing ancestor is realpath'd and checked
+ * first, so a caller-supplied path (or symlinked component) that escapes the
+ * authorized root is rejected without any out-of-jail side effect. Only then is
+ * the remaining (non-existent) tail created under the verified ancestor.
+ */
+function resolveJailedRunDir(root: string, runDir: string): { ok: true; dir: string } | { ok: false; detail: string } {
+  const absolute = resolve(runDir);
+  let existing = absolute;
+  let guard = 0;
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) break;
+    existing = parent;
+    guard += 1;
+    if (guard > 10_000) return { ok: false, detail: 'run_dir_ancestor_walk_exceeded' };
+  }
+
+  let realExisting: string;
+  try {
+    realExisting = realpathSync(existing);
+  } catch (error) {
+    return { ok: false, detail: `run_dir_ancestor_unresolvable:${errorText(error)}` };
+  }
+  if (!isWithin(root, realExisting)) return { ok: false, detail: 'run_dir_outside_authorized_root' };
+
+  const tail = relative(existing, absolute);
+  if (tail.startsWith('..') || isAbsolute(tail)) {
+    return { ok: false, detail: 'run_dir_outside_authorized_root' };
+  }
+  const finalDir = resolve(realExisting, tail);
+  if (!isWithin(root, finalDir)) return { ok: false, detail: 'run_dir_outside_authorized_root' };
+
+  try {
+    mkdirSync(finalDir, { recursive: true, mode: 0o700 });
+    chmodSync(finalDir, 0o700);
+    const dir = realpathSync(finalDir);
+    if (!isWithin(root, dir)) return { ok: false, detail: 'run_dir_outside_authorized_root' };
+    return { ok: true, dir };
+  } catch (error) {
+    return { ok: false, detail: `run_dir_unresolvable:${errorText(error)}` };
+  }
 }
 
 type OpenDatabaseResult =
@@ -211,6 +325,12 @@ function openAdmissionDatabase(dbPath: string, busyTimeoutMs: number): OpenDatab
     database.exec('BEGIN IMMEDIATE');
     try {
       database.exec(SCHEMA_SQL);
+      // Additive column migration for DBs created before `quarantined_json`.
+      const columns = database.prepare('PRAGMA table_info(admission)').all() as Array<{ name?: unknown }>;
+      const columnNames = new Set(columns.map((column) => String(column['name'])));
+      if (!columnNames.has('quarantined_json')) {
+        database.exec('ALTER TABLE admission ADD COLUMN quarantined_json TEXT');
+      }
       database.exec(`PRAGMA user_version = ${ADMISSION_SCHEMA_VERSION}`);
       database.exec('COMMIT');
     } catch (error) {
@@ -235,61 +355,143 @@ function openAdmissionDatabase(dbPath: string, busyTimeoutMs: number): OpenDatab
   }
 }
 
-function parseJson<T>(text: unknown): T | undefined {
+function parseJson(text: unknown): unknown {
   if (typeof text !== 'string') return undefined;
   try {
-    return JSON.parse(text) as T;
+    return JSON.parse(text) as unknown;
   } catch {
     return undefined;
   }
 }
 
-function rowToAdmission(row: Record<string, unknown>): AdmissionRecordV1 {
-  const outcomeJson = row['outcome_json'];
-  const outcome = typeof outcomeJson === 'string' ? parseJson<unknown>(outcomeJson) : undefined;
-  const completeness =
-    parseJson<AdmissionCompletenessV1>(row['completeness_json']) ?? completeCompleteness(0);
+function corruptCompleteness(reason: string): AdmissionCompletenessV1 {
+  return incompleteCompleteness({ reasons: [reason], admittedCount: 0, droppedCount: 0 });
+}
+
+/**
+ * Validate a persisted completeness cell. A missing, unparseable, or internally
+ * inconsistent value (claims complete while carrying drops) fails closed to an
+ * explicit incomplete record.
+ */
+function parseCompletenessCell(value: unknown): AdmissionCompletenessV1 {
+  const parsed = parseJson(value);
+  if (!isRecord(parsed)) return corruptCompleteness('corrupt_completeness');
+  const { complete, truncated, reasons, admittedCount, droppedCount, evidenceRefsDropped } = parsed;
+  const countsValid =
+    typeof admittedCount === 'number' &&
+    Number.isInteger(admittedCount) &&
+    admittedCount >= 0 &&
+    typeof droppedCount === 'number' &&
+    Number.isInteger(droppedCount) &&
+    droppedCount >= 0 &&
+    typeof evidenceRefsDropped === 'number' &&
+    Number.isInteger(evidenceRefsDropped) &&
+    evidenceRefsDropped >= 0;
+  const reasonsValid = Array.isArray(reasons) && reasons.every((reason) => typeof reason === 'string');
+  if (typeof complete !== 'boolean' || typeof truncated !== 'boolean' || !countsValid || !reasonsValid) {
+    return corruptCompleteness('corrupt_completeness');
+  }
+  const normalized = [...new Set(reasons as string[])].sort();
+  if (complete && (truncated || droppedCount > 0 || evidenceRefsDropped > 0 || normalized.length > 0)) {
+    return incompleteCompleteness({
+      reasons: [...normalized, 'inconsistent_completeness'],
+      admittedCount,
+      droppedCount,
+      evidenceRefsDropped,
+      truncated: true,
+    });
+  }
   return {
-    admissionId: String(row['admission_id']),
-    threadId: String(row['thread_id']),
-    commandId: String(row['command_id']),
-    digest: String(row['digest']),
-    ownerGeneration: Number(row['owner_generation']),
-    state: String(row['state']) as AdmissionState,
-    ...(outcome !== undefined ? { outcome } : {}),
-    completeness,
-    createdAt: String(row['created_at']),
-    updatedAt: String(row['updated_at']),
+    complete,
+    truncated,
+    reasons: normalized,
+    admittedCount,
+    droppedCount,
+    evidenceRefsDropped,
+  };
+}
+
+function parseHashCell(value: unknown): Record<string, string> | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== 'string') throw new AdmissionCorruptRowError('invalid_hash_cell');
+  const parsed = parseJson(value);
+  if (!isRecord(parsed)) throw new AdmissionCorruptRowError('invalid_hash_json');
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(parsed)) {
+    if (typeof entry !== 'string') throw new AdmissionCorruptRowError('invalid_hash_entry');
+    out[key] = entry;
+  }
+  return out;
+}
+
+function rowToAdmission(row: Record<string, unknown>): AdmissionRecordV1 {
+  const state = row['state'];
+  if (!isAdmissionState(state)) throw new AdmissionCorruptRowError('invalid_admission_state');
+  const outcomeCell = row['outcome_json'];
+  let outcome: unknown;
+  let hasOutcome = false;
+  if (typeof outcomeCell === 'string') {
+    try {
+      outcome = JSON.parse(outcomeCell) as unknown;
+      hasOutcome = true;
+    } catch {
+      throw new AdmissionCorruptRowError('invalid_outcome_json');
+    }
+  } else if (outcomeCell !== null && outcomeCell !== undefined) {
+    throw new AdmissionCorruptRowError('invalid_outcome_cell');
+  }
+  return {
+    admissionId: requireString(row, 'admission_id'),
+    threadId: requireString(row, 'thread_id'),
+    commandId: requireString(row, 'command_id'),
+    digest: requireString(row, 'digest'),
+    ownerGeneration: requireInteger(row, 'owner_generation', 1),
+    state,
+    ...(hasOutcome ? { outcome } : {}),
+    completeness: parseCompletenessCell(row['completeness_json']),
+    createdAt: requireString(row, 'created_at'),
+    updatedAt: requireString(row, 'updated_at'),
   };
 }
 
 function rowToOwner(row: Record<string, unknown>): OwnerRecordV1 {
   return {
-    threadId: String(row['thread_id']),
-    generation: Number(row['generation']),
-    token: String(row['token']),
-    ...(row['lease_id'] !== null && row['lease_id'] !== undefined ? { leaseId: String(row['lease_id']) } : {}),
-    ...(row['baseline_id'] !== null && row['baseline_id'] !== undefined
-      ? { baselineId: String(row['baseline_id']) }
-      : {}),
-    ...(row['settled_at'] !== null && row['settled_at'] !== undefined ? { settledAt: String(row['settled_at']) } : {}),
+    threadId: requireString(row, 'thread_id'),
+    generation: requireInteger(row, 'generation', 1),
+    token: requireString(row, 'token'),
+    ...(typeof row['lease_id'] === 'string' ? { leaseId: row['lease_id'] } : {}),
+    ...(typeof row['baseline_id'] === 'string' ? { baselineId: row['baseline_id'] } : {}),
+    ...(typeof row['settled_at'] === 'string' ? { settledAt: row['settled_at'] } : {}),
   };
 }
 
 function rowToOutbox(row: Record<string, unknown>): OutboxRecordV1 {
-  const pre = parseJson<Record<string, string>>(row['pre_image_json']);
-  const post = parseJson<Record<string, string>>(row['post_image_json']);
+  const state = row['state'];
+  if (!isOutboxState(state)) throw new AdmissionCorruptRowError('invalid_outbox_state');
+  const effectClass = row['effect_class'];
+  if (!isEffectClass(effectClass)) throw new AdmissionCorruptRowError('invalid_effect_class');
+  const pre = parseHashCell(row['pre_image_json']);
+  const post = parseHashCell(row['post_image_json']);
   const error = row['error'];
   return {
-    outboxId: String(row['outbox_id']),
-    admissionId: String(row['admission_id']),
-    effectClass: String(row['effect_class']) as ToolEffectClass,
-    operationId: String(row['operation_id']),
-    state: String(row['state']) as OutboxState,
+    outboxId: requireString(row, 'outbox_id'),
+    admissionId: requireString(row, 'admission_id'),
+    effectClass,
+    operationId: requireString(row, 'operation_id'),
+    state,
     ...(pre !== undefined ? { preImageHashes: pre } : {}),
     ...(post !== undefined ? { postImageHashes: post } : {}),
     ...(typeof error === 'string' ? { error } : {}),
   };
+}
+
+function safeRowToAdmission(row: Record<string, unknown> | undefined): AdmissionRecordV1 | null {
+  if (!row) return null;
+  try {
+    return rowToAdmission(row);
+  } catch {
+    return null;
+  }
 }
 
 function serializeHashes(hashes: Record<string, string> | undefined): string | null {
@@ -299,30 +501,29 @@ function serializeHashes(hashes: Record<string, string> | undefined): string | n
 
 /** Open (creating if needed) the durable admission store for one run dir. */
 export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpenResult {
-  let resolved: { root: string; dir: string };
+  let root: string;
   try {
-    const root = realpathSync(options.authorizedRoot);
-    mkdirSync(options.runDir, { recursive: true, mode: 0o700 });
-    try {
-      chmodSync(options.runDir, 0o700);
-    } catch {
-      /* best effort; containment is the security boundary */
-    }
-    const dir = realpathSync(options.runDir);
-    if (!isWithin(root, dir)) return unavailable('run_dir_outside_authorized_root');
-    resolved = { root, dir };
+    root = realpathSync(options.authorizedRoot);
   } catch (error) {
-    return unavailable(`run_dir_unresolvable:${errorText(error)}`);
+    return unavailable(`authorized_root_unresolvable:${errorText(error)}`);
   }
 
-  const dbPath = join(resolved.dir, DB_FILENAME);
+  // Prove containment before creating/chmod-ing anything.
+  const jailed = resolveJailedRunDir(root, options.runDir);
+  if (!jailed.ok) return unavailable(jailed.detail);
+  const dir = jailed.dir;
+
+  const dbPath = join(dir, DB_FILENAME);
   try {
-    if (!existsSync(dbPath)) {
+    // `lstat` (not `exists`) so a dangling symlink counts as present: creating
+    // through it would write outside the jail before the realpath check.
+    const existing = lstatSync(dbPath, { throwIfNoEntry: false });
+    if (!existing) {
       const fd = openSync(dbPath, 'a', 0o600);
       closeSync(fd);
     }
     const realDb = realpathSync(dbPath);
-    if (!isWithin(resolved.root, realDb)) return unavailable('db_path_outside_authorized_root');
+    if (!isWithin(root, realDb)) return unavailable('db_path_outside_authorized_root');
     // Harden only after the path is proven inside the authorized root, so a
     // symlink cannot be used to chmod a file outside the jail.
     chmodSync(realDb, 0o600);
@@ -336,7 +537,7 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
 
   const now = options.now ?? (() => new Date());
   const newId = options.newId ?? (() => randomUUID());
-  const faultInject = options.faultInject;
+  const faultInject = options[ADMISSION_FAULT_HOOK];
 
   const readAdmissionRow = (threadId: string, commandId: string): Record<string, unknown> | undefined =>
     db.prepare('SELECT * FROM admission WHERE thread_id = ? AND command_id = ?').get(threadId, commandId) as
@@ -370,7 +571,36 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
           detail: 'owner generation/token must be a positive integer and non-empty string',
         };
       }
-      const snapshot = snapshotAdmissionInput(digestInput);
+
+      // Bound/validate any supplied facts *before* the transaction, then merge
+      // their completeness with the caller's claim; the result can only tighten.
+      // Facts may be supplied explicitly, or embedded in `payload.facts` (the
+      // recon's canonical "command + facts" layout), and both are bounded.
+      const payloadFactArray =
+        isRecord(digestInput.payload) && Array.isArray(digestInput.payload['facts'])
+          ? (digestInput.payload['facts'] as unknown[])
+          : undefined;
+      const factsInput = input.facts ?? payloadFactArray;
+      let bounded: BoundedFactsResult | null = null;
+      if (factsInput !== undefined) {
+        try {
+          bounded = boundAdmissionFacts(factsInput, input.factBounds ?? DEFAULT_ADMISSION_FACT_BOUNDS);
+        } catch {
+          return {
+            kind: 'rejected',
+            reasonCode: ADMISSION_REASONS.INVALID_INPUT,
+            detail: 'facts could not be bounded',
+          };
+        }
+      }
+      const completeness = mergeCompleteness(
+        input.completeness ?? completeCompleteness(0),
+        bounded ? bounded.completeness : completeCompleteness(0),
+      );
+      const quarantined = bounded ? bounded.quarantinedFactIds : [];
+      const factsSnapshot = bounded ? bounded.facts : null;
+
+      const snapshot = snapshotAdmissionInput(digestInput, factsSnapshot);
       if (!snapshot.ok) {
         return {
           kind: 'rejected',
@@ -382,17 +612,29 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
       const threadId = digestInput.threadId;
       const commandId = digestInput.commandId;
       const nowIso = now().toISOString();
-      const completeness = input.completeness ?? completeCompleteness(0);
 
       db.exec('BEGIN IMMEDIATE');
       let decision: AdmitDecision;
       try {
         const existing = readAdmissionRow(threadId, commandId);
         if (existing) {
-          const record = rowToAdmission(existing);
+          let record: AdmissionRecordV1;
+          try {
+            record = rowToAdmission(existing);
+          } catch {
+            db.exec('ROLLBACK');
+            return {
+              kind: 'rejected',
+              reasonCode: ADMISSION_REASONS.UNAVAILABLE,
+              detail: 'corrupt_admission_row',
+            };
+          }
           if (record.digest === digest) {
             db.exec('COMMIT');
-            return { kind: 'replayed', record, digest };
+            // An in-flight duplicate has no outcome yet; report it distinctly.
+            return record.state === 'claimed'
+              ? { kind: 'pending', record, digest }
+              : { kind: 'replayed', record, digest };
           }
           db.exec('ROLLBACK');
           return {
@@ -403,15 +645,32 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
         }
 
         const ownerRow = db.prepare('SELECT generation, token FROM owner WHERE thread_id = ?').get(threadId) as
-          | { generation: unknown; token: unknown }
+          | Record<string, unknown>
           | undefined;
-        if (ownerRow && input.ownerGeneration <= Number(ownerRow.generation)) {
-          db.exec('ROLLBACK');
-          return {
-            kind: 'rejected',
-            reasonCode: ADMISSION_REASONS.STALE_OWNER,
-            detail: `generation ${input.ownerGeneration} does not supersede ${String(ownerRow.generation)}`,
-          };
+        if (ownerRow) {
+          let ownerGeneration: number;
+          let ownerToken: string;
+          try {
+            ownerGeneration = requireInteger(ownerRow, 'generation', 1);
+            ownerToken = requireString(ownerRow, 'token');
+          } catch {
+            db.exec('ROLLBACK');
+            return { kind: 'rejected', reasonCode: ADMISSION_REASONS.UNAVAILABLE, detail: 'corrupt_owner_row' };
+          }
+          // A lower generation is genuinely superseded. An equal generation is
+          // the same owner and may admit further commands; a different token at
+          // the same generation is a conflicting owner and is fenced.
+          const superseded =
+            input.ownerGeneration < ownerGeneration ||
+            (input.ownerGeneration === ownerGeneration && input.ownerToken !== ownerToken);
+          if (superseded) {
+            db.exec('ROLLBACK');
+            return {
+              kind: 'rejected',
+              reasonCode: ADMISSION_REASONS.STALE_OWNER,
+              detail: `generation ${input.ownerGeneration} is superseded by ${ownerGeneration}`,
+            };
+          }
         }
 
         const admissionId = newId();
@@ -419,8 +678,8 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
         db.prepare(
           `INSERT INTO admission
              (admission_id, thread_id, command_id, digest, owner_generation, state, outcome_json,
-              completeness_json, input_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'claimed', NULL, ?, ?, ?, ?)`,
+              completeness_json, input_json, quarantined_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'claimed', NULL, ?, ?, ?, ?, ?)`,
         ).run(
           admissionId,
           threadId,
@@ -429,6 +688,7 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
           input.ownerGeneration,
           JSON.stringify(completeness),
           JSON.stringify(snapshot.snapshot),
+          quarantined.length > 0 ? JSON.stringify(quarantined) : null,
           nowIso,
           nowIso,
         );
@@ -514,13 +774,20 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
       db.exec('BEGIN IMMEDIATE');
       try {
         const ownerRow = db.prepare('SELECT generation, token FROM owner WHERE thread_id = ?').get(input.threadId) as
-          | { generation: unknown; token: unknown }
+          | Record<string, unknown>
           | undefined;
-        if (
-          !ownerRow ||
-          Number(ownerRow.generation) !== input.ownerGeneration ||
-          String(ownerRow.token) !== input.ownerToken
-        ) {
+        let ownerGeneration: number | null = null;
+        let ownerToken: string | null = null;
+        if (ownerRow) {
+          try {
+            ownerGeneration = requireInteger(ownerRow, 'generation', 1);
+            ownerToken = requireString(ownerRow, 'token');
+          } catch {
+            db.exec('ROLLBACK');
+            return { settled: false, reasonCode: ADMISSION_REASONS.UNAVAILABLE, detail: 'corrupt_owner_row' };
+          }
+        }
+        if (ownerGeneration !== input.ownerGeneration || ownerToken !== input.ownerToken) {
           db.exec('ROLLBACK');
           return {
             settled: false,
@@ -534,7 +801,13 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
           db.exec('ROLLBACK');
           return { settled: false, reasonCode: ADMISSION_REASONS.NOT_FOUND };
         }
-        const current = rowToAdmission(admissionRow);
+        let current: AdmissionRecordV1;
+        try {
+          current = rowToAdmission(admissionRow);
+        } catch {
+          db.exec('ROLLBACK');
+          return { settled: false, reasonCode: ADMISSION_REASONS.UNAVAILABLE, detail: 'corrupt_admission_row' };
+        }
         if (current.ownerGeneration !== input.ownerGeneration) {
           db.exec('ROLLBACK');
           return {
@@ -614,14 +887,30 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
     recoverAdmission(input): RecoverDecision {
       const row = readAdmissionRow(input.threadId, input.commandId);
       if (!row) return { kind: 'rejected', reasonCode: ADMISSION_REASONS.NOT_FOUND };
-      const record = rowToAdmission(row);
+      const record = safeRowToAdmission(row);
+      if (!record) {
+        return { kind: 'rejected', reasonCode: ADMISSION_REASONS.UNAVAILABLE, detail: 'corrupt_admission_row' };
+      }
       const outboxRow = readOutboxRow(record.admissionId);
       if (!outboxRow) {
         return { kind: 'recovered', record, outbox: null, decision: 'manual_review' };
       }
-      const outbox = rowToOutbox(outboxRow);
+      let outbox: OutboxRecordV1;
+      try {
+        outbox = rowToOutbox(outboxRow);
+      } catch {
+        // A corrupt/unrecognized outbox state must not be read as success.
+        return { kind: 'recovered', record, outbox: null, decision: 'manual_review' };
+      }
       if (outbox.state !== 'intent') {
-        return { kind: 'recovered', record, outbox, decision: 'recovered_complete' };
+        // Only an explicitly committed effect is recovered; any other terminal
+        // or unknown state requires manual review.
+        return {
+          kind: 'recovered',
+          record,
+          outbox,
+          decision: outbox.state === 'committed' ? 'recovered_complete' : 'manual_review',
+        };
       }
       const decision = reconcileInterruptedEffect(
         {
