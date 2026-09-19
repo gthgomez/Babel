@@ -942,6 +942,35 @@ test('P04: a shared nested payload getter cannot make a tie group order-dependen
   assert.deepEqual(projectTask([a1, b1]), projectTask([b2, a2]));
 });
 
+test('P04: a proxy with a stateful get trap cannot make a tie group order-dependent', () => {
+  const template = sessionLogToFacts(corpus())[0]!;
+  const makePair = (): [RuntimeFactV1, RuntimeFactV1] => {
+    const state = { n: 0 };
+    const base = (status: string): Record<string, unknown> => ({
+      ...template,
+      id: 'dup',
+      sequence: 5,
+      authority: 'observation',
+      cursor: { stream: 'runtime-facts', sequence: 5 },
+      payload: { type: 'run.settled', status },
+    });
+    const wrap = (target: Record<string, unknown>): RuntimeFactV1 =>
+      new Proxy(target, {
+        get(t, property, receiver) {
+          if (property === 'authority') {
+            state.n += 1;
+            return state.n === 1 ? 'observation' : 'authoritative';
+          }
+          return Reflect.get(t, property, receiver);
+        },
+      }) as unknown as RuntimeFactV1;
+    return [wrap(base('A')), wrap(base('B'))];
+  };
+  const [a1, b1] = makePair();
+  const [a2, b2] = makePair();
+  assert.deepEqual(projectTask([a1, b1]), projectTask([b2, a2]));
+});
+
 test('P04: a stateful authority getter cannot make the projection order-dependent', () => {
   const make = (finalOutcome: string): RuntimeFactV1 => {
     let reads = 0;

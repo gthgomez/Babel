@@ -391,74 +391,72 @@ interface EnvelopeRead {
   timestamp: unknown;
 }
 
+/** Read one own data property without invoking a `get` trap. */
+function readDataField(input: Record<string, unknown>, key: string): { ok: boolean; value: unknown } {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (descriptor === undefined) return { ok: false, value: undefined };
+    if (typeof descriptor.get === 'function' || typeof descriptor.set === 'function') {
+      return { ok: false, value: undefined };
+    }
+    return { ok: true, value: descriptor.value };
+  } catch {
+    return { ok: false, value: undefined };
+  }
+}
+
 /**
- * Read every envelope field exactly once. A hostile accessor throws here (the
- * caller guards), and no field is ever re-read, so a stateful getter cannot
- * hand validation one value and the snapshot another.
+ * Read every envelope and cursor field exactly once through property
+ * descriptors, bypassing `[[Get]]`. A Proxy whose `get` trap is stateful but
+ * whose `getOwnPropertyDescriptor` reports data therefore cannot make ordering
+ * depend on read order; a missing/accessor field fails closed.
  */
-/**
- * Whether any envelope field (or cursor field) is an accessor/missing rather
- * than an own data property. Facts are durable JSON, so a stateful getter is
- * not a valid fact and must fail closed instead of making ordering depend on
- * read order.
- */
-function envelopeHasAccessors(input: Record<string, unknown>): boolean {
+function readEnvelopeFrom(
+  input: Record<string, unknown>,
+): { ok: boolean; read: EnvelopeRead | null } {
   const fields = [
+    'authority',
     'id',
-    'sequence',
     'schemaVersion',
     'payload',
-    'cursor',
+    'sequence',
     'threadId',
     'taskId',
     'turnId',
     'runId',
     'causationId',
     'producer',
-    'authority',
     'timestamp',
-  ];
-  try {
-    for (const field of fields) {
-      const descriptor = Object.getOwnPropertyDescriptor(input, field);
-      if (descriptor === undefined) return true;
-      if (typeof descriptor.get === 'function' || typeof descriptor.set === 'function') return true;
-    }
-    const cursor = input['cursor'];
-    if (isRecord(cursor)) {
-      for (const field of ['stream', 'sequence']) {
-        const descriptor = Object.getOwnPropertyDescriptor(cursor, field);
-        if (descriptor === undefined) return true;
-        if (typeof descriptor.get === 'function' || typeof descriptor.set === 'function') return true;
-      }
-    }
-  } catch {
-    return true;
+  ] as const;
+  const values: Record<string, unknown> = {};
+  for (const field of fields) {
+    const result = readDataField(input, field);
+    if (!result.ok) return { ok: false, read: null };
+    values[field] = result.value;
   }
-  return false;
-}
-
-function readEnvelope(
-  input: Record<string, unknown>,
-  preSeq: number | null,
-  preId: string,
-): EnvelopeRead {
-  const cursorRaw = input['cursor'];
+  const cursorResult = readDataField(input, 'cursor');
+  if (!cursorResult.ok || !isRecord(cursorResult.value)) return { ok: false, read: null };
+  const streamResult = readDataField(cursorResult.value, 'stream');
+  const sequenceResult = readDataField(cursorResult.value, 'sequence');
+  if (!streamResult.ok || !sequenceResult.ok) return { ok: false, read: null };
   return {
-    authorityRaw: input['authority'],
-    idRaw: preId,
-    schemaVersion: input['schemaVersion'],
-    payloadRaw: input['payload'],
-    cursorStream: isRecord(cursorRaw) ? cursorRaw['stream'] : undefined,
-    cursorSequence: isRecord(cursorRaw) ? cursorRaw['sequence'] : undefined,
-    sequence: preSeq,
-    threadId: input['threadId'],
-    taskId: input['taskId'],
-    turnId: input['turnId'],
-    runId: input['runId'],
-    causationId: input['causationId'],
-    producer: input['producer'],
-    timestamp: input['timestamp'],
+    ok: true,
+    read: {
+      authorityRaw: values['authority'],
+      idRaw: values['id'],
+      schemaVersion: values['schemaVersion'],
+      payloadRaw: values['payload'],
+      cursorStream: streamResult.value,
+      cursorSequence: sequenceResult.value,
+      sequence: values['sequence'],
+      threadId: values['threadId'],
+      taskId: values['taskId'],
+      turnId: values['turnId'],
+      runId: values['runId'],
+      causationId: values['causationId'],
+      producer: values['producer'],
+      timestamp: values['timestamp'],
+    },
   };
 }
 
@@ -481,20 +479,11 @@ function snapshotFact(read: EnvelopeRead, payload: FactPayload): RuntimeFactV1 {
   };
 }
 
-/** Classify one untrusted input. May throw only on hostile accessors; callers guard. */
-function classifyInput(
-  input: unknown,
-  preSeq: number | null,
-  preId: string,
-  hasAccessors: boolean,
-): Classified {
-  if (!isRecord(input)) {
-    return { kind: 'invalid', reason: 'fact_not_object', authority: 'authoritative' };
-  }
-  if (hasAccessors) {
+/** Classify one untrusted input from its descriptor-read envelope. */
+function classifyInput(read: EnvelopeRead | null, accessible: boolean): Classified {
+  if (read === null || !accessible) {
     return { kind: 'invalid', reason: 'inaccessible_fact', authority: 'authoritative' };
   }
-  const read = readEnvelope(input, preSeq, preId);
   const authorityRaw = read.authorityRaw;
   const authorityKnown = authorityRaw === 'authoritative' || authorityRaw === 'observation';
   // A novel/absent authority token is treated as authority-bearing (fail closed).
@@ -503,7 +492,10 @@ function classifyInput(
   const withId = id !== undefined ? { id } : {};
   const schemaKnown = read.schemaVersion === RUNTIME_FACT_SCHEMA_VERSION;
   const payloadRaw = read.payloadRaw;
-  const type = isRecord(payloadRaw) && typeof payloadRaw['type'] === 'string' ? payloadRaw['type'] : undefined;
+  const typeResult = isRecord(payloadRaw)
+    ? readDataField(payloadRaw, 'type')
+    : { ok: false, value: undefined };
+  const type = typeResult.ok && typeof typeResult.value === 'string' ? typeResult.value : undefined;
   const typeKnown = type !== undefined && KNOWN_FACT_TYPES.has(type as never);
 
   const envelopeAccessible =
@@ -612,7 +604,7 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
   // by the injective content key.
   const groups = new Map<
     string,
-    Array<{ input: unknown; seq: number | null; id: string; hasAccessors: boolean }>
+    Array<{ read: EnvelopeRead | null; seq: number | null; id: string; accessible: boolean }>
   >();
   let factCount = 0;
   try {
@@ -622,26 +614,24 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
         state.degradedReasons.push('fact_count_exceeded');
         break;
       }
-      let seq: number | null = null;
-      let id = '';
-      let hasAccessors = false;
-      try {
-        if (isRecord(input)) {
-          hasAccessors = envelopeHasAccessors(input);
-          if (!hasAccessors) {
-            const rawSeq = input['sequence'];
-            if (typeof rawSeq === 'number' && Number.isFinite(rawSeq)) seq = rawSeq;
-            const rawId = input['id'];
-            if (typeof rawId === 'string') id = rawId;
-          }
+      let read: EnvelopeRead | null = null;
+      let accessible = false;
+      if (isRecord(input)) {
+        const result = readEnvelopeFrom(input);
+        if (result.ok && result.read) {
+          read = result.read;
+          accessible = true;
         }
-      } catch {
-        hasAccessors = true;
       }
-      const key = `${hasAccessors ? 'A' : seq === null ? '~' : seq}\u0000${id}`;
+      const seq =
+        accessible && typeof read!.sequence === 'number' && Number.isFinite(read!.sequence)
+          ? read!.sequence
+          : null;
+      const id = accessible && typeof read!.idRaw === 'string' ? read!.idRaw : '';
+      const key = `${accessible ? (seq === null ? '~' : seq) : 'A'}\u0000${id}`;
       const bucket = groups.get(key);
-      if (bucket) bucket.push({ input, seq, id, hasAccessors });
-      else groups.set(key, [{ input, seq, id, hasAccessors }]);
+      if (bucket) bucket.push({ read, seq, id, accessible });
+      else groups.set(key, [{ read, seq, id, accessible }]);
     }
   } catch {
     state.degradedReasons.push('fact_iteration_failed');
@@ -666,18 +656,13 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
       // Fail closed even when the group is skipped: an authority-bearing member
       // must still demote outcome and verifier claims.
       for (const entry of group) {
-        try {
-          const raw = isRecord(entry.input) ? entry.input['authority'] : undefined;
-          // An inaccessible envelope is authority-bearing by the same rule the
-          // ≤MAX_TIE_GROUP path uses, so it must demote here too.
-          if (entry.hasAccessors || raw !== 'observation') {
-            sawUnknownAuthority = true;
-            state.degradedReasons.push('unknown_authoritative_fact');
-            if (entry.id) state.unknownAuthorityFactIds.push(entry.id);
-          }
-        } catch {
+        const raw = entry.read ? entry.read.authorityRaw : undefined;
+        // An inaccessible envelope is authority-bearing by the same rule the
+        // ≤MAX_TIE_GROUP path uses, so it must demote here too.
+        if (!entry.accessible || raw !== 'observation') {
           sawUnknownAuthority = true;
           state.degradedReasons.push('unknown_authoritative_fact');
+          if (entry.id) state.unknownAuthorityFactIds.push(entry.id);
         }
       }
       continue;
@@ -688,7 +673,7 @@ export function projectTask(facts: Iterable<RuntimeFactV1>): TaskProjection {
     for (const entry of group) {
       let classified: Classified;
       try {
-        classified = classifyInput(entry.input, entry.seq, entry.id, entry.hasAccessors);
+        classified = classifyInput(entry.read, entry.accessible);
       } catch {
         classified = { kind: 'invalid', reason: 'inaccessible_fact', authority: 'authoritative' };
       }
