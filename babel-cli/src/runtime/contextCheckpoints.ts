@@ -1,14 +1,11 @@
 /**
- * contextCheckpoints.ts — A11c pure checkpoint-population skeleton.
+ * contextCheckpoints.ts — P11 context checkpoint preparation and fencing.
  *
- * Scope: pure mapping/validation plus a retention-oracle fixture. This module
- * deliberately does NOT install a checkpoint, mutate a control journal, switch
- * an active context window, call the live chat caller, or talk to any provider.
- *
- * Production population/installation remains blocked on P06 (admission and
- * request freeze) and P07 (revision/coverage capture). The mapping below names
- * the real operational source responsibilities from the P11 spec table so the
- * eventual adapter can be validated against this pure contract first (R05).
+ * Scope: pure mapping/validation plus a checkpoint port. This module does not
+ * own durable state: callers supply the existing atomic checkpoint transaction
+ * as the install port. It therefore cannot create a second store or journal,
+ * switch an active context window, call the live chat caller, or talk to a
+ * provider.
  *
  * Table rows and the "must not do" constraints they encode:
  *   accepted goal / acceptance clauses  → frozen task contract, never a summary
@@ -23,14 +20,37 @@
  *                                         pending, indeterminate is not replayed
  *   instructions / tools / model route  → compiled/prepared request identity,
  *                                         never stored preferences
- *   exact observations                  → authorized durable ref index; legacy
- *                                         `obs:` strings are descriptive only
+ *   exact observations                  → complete authorized durable ref
+ *                                         manifest; legacy `obs:` strings are
+ *                                         descriptive only
  */
 
-export const CONTEXT_CHECKPOINT_POPULATION_SCHEMA_VERSION = 1 as const;
+import { sha256Canonical } from '../acceptance/canonical.js';
+import type { ObservationRefV1 } from '../evidence/observationStore.js';
+import type { OwnerRecordV1 } from './admissionContracts.js';
 
-/** Production installation is blocked on these dependencies; shadow only. */
-export const CONTEXT_CHECKPOINT_INSTALL_BLOCKED_ON = ['P06', 'P07'] as const;
+export const CONTEXT_CHECKPOINT_POPULATION_SCHEMA_VERSION = 1 as const;
+export const CONTEXT_CHECKPOINT_SCHEMA_VERSION = 1 as const;
+
+/** P06/P07 are now consumed by the preparation contract, not blockers. */
+export const CONTEXT_CHECKPOINT_INSTALL_BLOCKED_ON = [] as const;
+
+export type ContextCheckpointOwnerV1 = Pick<OwnerRecordV1, 'threadId' | 'generation' | 'token'>;
+
+export type ContextCheckpointValidationReasonV1 =
+  | 'invalid_schema'
+  | 'invalid_checkpoint_id'
+  | 'invalid_thread_id'
+  | 'invalid_owner'
+  | 'generation_mismatch'
+  | 'owner_missing'
+  | 'stale_owner'
+  | 'population_incomplete'
+  | 'observation_manifest_incomplete'
+  | 'manifest_digest_mismatch'
+  | 'expected_thread_mismatch'
+  | 'requested_owner_mismatch'
+  | 'install_failed';
 
 export type CheckpointPopulationStatusV1 = 'populated' | 'degraded' | 'blocked';
 
@@ -108,6 +128,8 @@ export interface LiveOperationalSourcesV1 {
     payload_sha256: string;
     authorized: boolean;
   }>;
+  /** Full immutable observation refs; ids and payload hashes alone are not a manifest. */
+  observation_manifest?: ReadonlyArray<ObservationRefV1>;
   /** Legacy decorative refs; descriptive metadata only, never valid handles. */
   legacy_observation_refs: readonly string[];
 }
@@ -128,11 +150,88 @@ export interface CheckpointPopulationV1 {
    */
   workspace_matches_verifier_revision: boolean;
   installation_blocked_on: readonly string[];
+  /** Detached full observation refs retained by the prepared checkpoint. */
+  observation_manifest: readonly ObservationRefV1[];
   /**
-   * Shadow population never authorizes installation: P06/P07 wiring plus an
-   * atomic commit are required before this can ever be true.
+   * Population authorizes preparation only when every required row is present,
+   * constraint-safe, and the observation manifest is complete. Atomic commit
+   * remains the install port's responsibility.
    */
   install_authorized: boolean;
+}
+
+export interface ContextCheckpointV1 {
+  schema_version: typeof CONTEXT_CHECKPOINT_SCHEMA_VERSION;
+  checkpointId: string;
+  threadId: string;
+  generation: number;
+  owner: ContextCheckpointOwnerV1;
+  preparedAt: string;
+  population: CheckpointPopulationV1;
+  observation_manifest: readonly ObservationRefV1[];
+  observation_manifest_digest: string;
+}
+
+export interface ContextCheckpointPreparationInputV1 {
+  checkpointId: string;
+  owner: ContextCheckpointOwnerV1;
+  sources: LiveOperationalSourcesV1;
+  now?: () => string;
+}
+
+export type ContextCheckpointPreparationResultV1 =
+  | {
+      status: 'prepared';
+      checkpoint: ContextCheckpointV1;
+      population: CheckpointPopulationV1;
+    }
+  | {
+      status: 'blocked';
+      population: CheckpointPopulationV1;
+      reasons: ContextCheckpointValidationReasonV1[];
+    };
+
+export interface ContextCheckpointValidationInputV1 {
+  currentOwner?: ContextCheckpointOwnerV1 | null;
+  expectedThreadId?: string;
+}
+
+export interface ContextCheckpointValidationResultV1 {
+  status: 'valid' | 'blocked';
+  checkpoint: ContextCheckpointV1;
+  reasons: ContextCheckpointValidationReasonV1[];
+}
+
+export interface ContextCheckpointInstallInputV1 {
+  currentOwner: ContextCheckpointOwnerV1 | null;
+  /** Re-read the P05 owner immediately before the atomic commit when available. */
+  readCurrentOwner?: () => ContextCheckpointOwnerV1 | null;
+  /** Adapter for the existing atomic checkpoint transaction; no second journal. */
+  install: (
+    checkpoint: ContextCheckpointV1,
+    owner: ContextCheckpointOwnerV1,
+  ) => void | Promise<void>;
+}
+
+export type ContextCheckpointInstallResultV1 =
+  | { status: 'installed'; checkpointId: string }
+  | {
+      status: 'blocked';
+      checkpointId: string | null;
+      reasons: ContextCheckpointValidationReasonV1[];
+    };
+
+export interface ColdResumeValidationInputV1 {
+  checkpoint: ContextCheckpointV1;
+  currentOwner: ContextCheckpointOwnerV1 | null;
+  requestedOwner?: ContextCheckpointOwnerV1;
+}
+
+export interface ColdResumeValidationResultV1 {
+  status: 'ready' | 'blocked';
+  resumable: boolean;
+  checkpoint: ContextCheckpointV1;
+  reasons: ContextCheckpointValidationReasonV1[];
 }
 
 function missingRow(
@@ -141,6 +240,132 @@ function missingRow(
   gap: string,
 ): RequiredStateRowV1 {
   return { id, present: false, source, value_refs: [], constraint_satisfied: false, gap };
+}
+
+function cloneObservationRef(observation: ObservationRefV1): ObservationRefV1 {
+  const cloned: ObservationRefV1 = {
+    schema_version: observation.schema_version,
+    observation_id: observation.observation_id,
+    invocation: { ...observation.invocation },
+    payloads: observation.payloads.map((payload) => ({ ...payload })),
+    execution_status: observation.execution_status,
+    capture_completeness: observation.capture_completeness,
+    permitted_principals: [...observation.permitted_principals],
+    capture_policy_version: observation.capture_policy_version,
+    redaction_policy_version: observation.redaction_policy_version,
+    captured_at: observation.captured_at,
+  };
+  if (observation.snapshot_ref !== undefined) cloned.snapshot_ref = observation.snapshot_ref;
+  if (observation.coverage_ref !== undefined) cloned.coverage_ref = observation.coverage_ref;
+  return cloned;
+}
+
+function cloneObservationManifest(
+  manifest: ReadonlyArray<ObservationRefV1>,
+): ObservationRefV1[] {
+  return manifest.map(cloneObservationRef);
+}
+
+function observationManifestIssues(
+  manifest: ReadonlyArray<ObservationRefV1>,
+  sourceObservations?: LiveOperationalSourcesV1['observations'],
+): string[] {
+  const issues: string[] = [];
+  if (manifest.length === 0) issues.push('observation manifest is empty');
+  const ids = new Set<string>();
+
+  for (const observation of manifest) {
+    if (!/^obs:[0-9a-f]{64}$/.test(observation.observation_id)) {
+      issues.push(`observation id is invalid: ${observation.observation_id}`);
+    }
+    if (ids.has(observation.observation_id)) {
+      issues.push(`observation id is duplicated: ${observation.observation_id}`);
+    }
+    ids.add(observation.observation_id);
+    if (observation.schema_version !== 1) issues.push('observation schema is unsupported');
+    if (
+      observation.invocation.operation_id.length === 0 ||
+      observation.invocation.task_id.length === 0 ||
+      observation.invocation.run_id.length === 0
+    ) {
+      issues.push(`observation invocation identity is incomplete: ${observation.observation_id}`);
+    }
+    if (observation.payloads.length === 0) {
+      issues.push(`observation has no payload manifest: ${observation.observation_id}`);
+    }
+    if (observation.permitted_principals.length === 0) {
+      issues.push(`observation has no permitted principal: ${observation.observation_id}`);
+    }
+    if (
+      observation.capture_policy_version.length === 0 ||
+      observation.redaction_policy_version.length === 0 ||
+      observation.captured_at.length === 0
+    ) {
+      issues.push(`observation provenance is incomplete: ${observation.observation_id}`);
+    }
+    for (const payload of observation.payloads) {
+      if (!/^[0-9a-f]{64}$/.test(payload.sha256)) {
+        issues.push(`payload hash is invalid: ${observation.observation_id}`);
+      }
+      if (payload.payload_id !== `sha256:${payload.sha256}`) {
+        issues.push(`payload identity is not content-bound: ${observation.observation_id}`);
+      }
+      if (!payload.object_key.includes(payload.sha256)) {
+        issues.push(`payload object is not content-bound: ${observation.observation_id}`);
+      }
+    }
+  }
+
+  if (sourceObservations !== undefined) {
+    const authorized = sourceObservations.filter((observation) => observation.authorized);
+    const authorizedIds = new Set(authorized.map((observation) => observation.observation_id));
+    if (authorizedIds.size !== ids.size || [...authorizedIds].some((id) => !ids.has(id))) {
+      issues.push('observation manifest does not exactly match authorized observation refs');
+    }
+    for (const source of authorized) {
+      const manifestObservation = manifest.find(
+        (observation) => observation.observation_id === source.observation_id,
+      );
+      if (
+        manifestObservation &&
+        !manifestObservation.payloads.some((payload) => payload.sha256 === source.payload_sha256)
+      ) {
+        issues.push(`observation payload hash is not present in its manifest: ${source.observation_id}`);
+      }
+    }
+  }
+  return issues;
+}
+
+function ownerIssues(owner: unknown): ContextCheckpointValidationReasonV1[] {
+  if (typeof owner !== 'object' || owner === null) return ['invalid_owner'];
+  const candidate = owner as Partial<ContextCheckpointOwnerV1>;
+  const generation = candidate.generation;
+  if (
+    typeof candidate.threadId !== 'string' ||
+    candidate.threadId.length === 0 ||
+    !Number.isSafeInteger(generation) ||
+    (typeof generation === 'number' && generation < 1) ||
+    typeof candidate.token !== 'string' ||
+    candidate.token.length === 0
+  ) {
+    return ['invalid_owner'];
+  }
+  return [];
+}
+
+function ownersMatch(
+  left: unknown,
+  right: unknown,
+): boolean {
+  if (ownerIssues(left).length > 0 || ownerIssues(right).length > 0) return false;
+  const leftOwner = left as ContextCheckpointOwnerV1;
+  const rightOwner = right as ContextCheckpointOwnerV1;
+  return (
+    leftOwner.threadId === rightOwner.threadId &&
+    leftOwner.generation === rightOwner.generation &&
+    leftOwner.token === rightOwner.token
+  );
 }
 
 /**
@@ -354,14 +579,19 @@ export function mapCheckpointRequiredState(
     errors.push('instructions_route: effective capabilities required');
   }
 
-  // exact observations — authorized durable ref index only.
+  // exact observations — complete authorized durable ref manifest only.
   const authorizedObservations = sources.observations.filter((item) => item.authorized);
-  if (authorizedObservations.length > 0) {
+  const observationManifest = cloneObservationManifest(sources.observation_manifest ?? []);
+  const manifestIssues = observationManifestIssues(observationManifest, sources.observations);
+  if (authorizedObservations.length > 0 && manifestIssues.length === 0) {
     rows.push({
       id: 'exact_observations',
       present: true,
       source: 'authorized_durable_ref_index',
-      value_refs: authorizedObservations.map((item) => `obs:${item.observation_id}`),
+      value_refs: authorizedObservations.flatMap((item) => [
+        `obs:${item.observation_id}`,
+        `payload:${item.payload_sha256}`,
+      ]),
       constraint_satisfied: true,
     });
   } else {
@@ -369,12 +599,16 @@ export function mapCheckpointRequiredState(
       missingRow(
         'exact_observations',
         'authorized_durable_ref_index',
-        sources.legacy_observation_refs.length > 0
+        sources.legacy_observation_refs.length > 0 && authorizedObservations.length === 0
           ? 'only legacy obs: strings exist; they are descriptive metadata, not valid handles'
-          : 'no authorized durable observation refs',
+          : manifestIssues[0] ?? 'no authorized durable observation refs',
       ),
     );
-    errors.push('exact_observations: first32 obs: strings are not a complete recovery manifest');
+    errors.push(
+      `exact_observations: ${
+        manifestIssues[0] ?? 'first32 obs: strings are not a complete recovery manifest'
+      }`,
+    );
   }
 
   const required = rows.filter((row) => row.id !== 'pending_operations');
@@ -394,19 +628,241 @@ export function mapCheckpointRequiredState(
     workspace_revision_current: workspaceCaptureFresh,
     workspace_matches_verifier_revision: workspaceMatchesVerifierRevision,
     installation_blocked_on: CONTEXT_CHECKPOINT_INSTALL_BLOCKED_ON,
-    install_authorized: false,
+    observation_manifest: observationManifest,
+    install_authorized:
+      status === 'populated' &&
+      !anyConstraintViolation &&
+      errors.length === 0 &&
+      CONTEXT_CHECKPOINT_INSTALL_BLOCKED_ON.length === 0,
   };
 }
 
 /**
- * A failed required-state validation keeps the old window active. In this
- * shadow skeleton installation is never authorized (P06/P07 not landed), so
- * this always returns false while still expressing the gate condition.
+ * A failed required-state validation keeps the old window active. A populated
+ * contract may proceed to the caller's existing atomic checkpoint transaction.
  */
 export function checkpointPopulationAllowsInstall(
   population: CheckpointPopulationV1,
 ): boolean {
-  return population.status === 'populated' && population.install_authorized;
+  return population.install_authorized && population.status === 'populated';
+}
+
+/**
+ * Prepare a detached checkpoint from live operational sources. Preparation is
+ * side-effect free; it only becomes durable when the caller passes the result
+ * to an existing atomic checkpoint transaction through `installContextCheckpoint`.
+ */
+export function prepareContextCheckpoint(
+  input: ContextCheckpointPreparationInputV1,
+): ContextCheckpointPreparationResultV1 {
+  const population = mapCheckpointRequiredState(input.sources);
+  const reasons: ContextCheckpointValidationReasonV1[] = [];
+  if (input.checkpointId.trim().length === 0) reasons.push('invalid_checkpoint_id');
+  if (ownerIssues(input.owner).length > 0) reasons.push('invalid_owner');
+  if (!checkpointPopulationAllowsInstall(population)) reasons.push('population_incomplete');
+  if (observationManifestIssues(population.observation_manifest).length > 0) {
+    reasons.push('observation_manifest_incomplete');
+  }
+
+  if (reasons.length > 0) return { status: 'blocked', population, reasons };
+
+  const manifest = cloneObservationManifest(population.observation_manifest);
+  return {
+    status: 'prepared',
+    population,
+    checkpoint: {
+      schema_version: CONTEXT_CHECKPOINT_SCHEMA_VERSION,
+      checkpointId: input.checkpointId,
+      threadId: input.owner.threadId,
+      generation: input.owner.generation,
+      owner: { ...input.owner },
+      preparedAt: input.now?.() ?? new Date().toISOString(),
+      population: {
+        ...population,
+        rows: population.rows.map((row) => ({ ...row, value_refs: [...row.value_refs] })),
+        errors: [...population.errors],
+        observation_manifest: cloneObservationManifest(population.observation_manifest),
+      },
+      observation_manifest: manifest,
+      observation_manifest_digest: sha256Canonical(manifest),
+    },
+  };
+}
+
+/** Validate structure, required state, manifest binding, and an optional owner fence. */
+export function validateContextCheckpoint(
+  checkpoint: ContextCheckpointV1,
+  input: ContextCheckpointValidationInputV1 = {},
+): ContextCheckpointValidationResultV1 {
+  const reasons: ContextCheckpointValidationReasonV1[] = [];
+  if (typeof checkpoint !== 'object' || checkpoint === null) {
+    return { status: 'blocked', checkpoint, reasons: ['invalid_schema'] };
+  }
+  if (checkpoint.schema_version !== CONTEXT_CHECKPOINT_SCHEMA_VERSION) {
+    reasons.push('invalid_schema');
+  }
+  if (typeof checkpoint.checkpointId !== 'string' || checkpoint.checkpointId.trim().length === 0) {
+    reasons.push('invalid_checkpoint_id');
+  }
+  if (typeof checkpoint.threadId !== 'string' || checkpoint.threadId.trim().length === 0) {
+    reasons.push('invalid_thread_id');
+  }
+  reasons.push(...ownerIssues(checkpoint.owner));
+  if (
+    ownerIssues(checkpoint.owner).length === 0 &&
+    checkpoint.generation !== (checkpoint.owner as ContextCheckpointOwnerV1).generation
+  ) {
+    reasons.push('generation_mismatch');
+  }
+  if (
+    ownerIssues(checkpoint.owner).length === 0 &&
+    checkpoint.threadId !== (checkpoint.owner as ContextCheckpointOwnerV1).threadId
+  ) {
+    reasons.push('invalid_thread_id');
+  }
+  if (
+    typeof checkpoint.population !== 'object' ||
+    checkpoint.population === null ||
+    !checkpointPopulationAllowsInstall(checkpoint.population)
+  ) {
+    reasons.push('population_incomplete');
+  }
+  const manifestIsArray = Array.isArray(checkpoint.observation_manifest);
+  if (!manifestIsArray) {
+    reasons.push('observation_manifest_incomplete');
+  } else {
+    try {
+      if (observationManifestIssues(checkpoint.observation_manifest).length > 0) {
+        reasons.push('observation_manifest_incomplete');
+      }
+    } catch {
+      reasons.push('observation_manifest_incomplete');
+    }
+  }
+  try {
+    if (sha256Canonical(checkpoint.observation_manifest) !== checkpoint.observation_manifest_digest) {
+      reasons.push('manifest_digest_mismatch');
+    }
+    if (
+      manifestIsArray &&
+      typeof checkpoint.population === 'object' &&
+      checkpoint.population !== null &&
+      sha256Canonical(checkpoint.population.observation_manifest) !==
+        checkpoint.observation_manifest_digest
+    ) {
+      reasons.push('manifest_digest_mismatch');
+    }
+  } catch {
+    reasons.push('manifest_digest_mismatch');
+  }
+
+  if (
+    input.expectedThreadId !== undefined &&
+    checkpoint.threadId !== input.expectedThreadId
+  ) {
+    reasons.push('expected_thread_mismatch');
+  }
+  if (input.currentOwner !== undefined) {
+    if (input.currentOwner === null) {
+      reasons.push('owner_missing');
+    } else if (!ownersMatch(input.currentOwner, checkpoint.owner)) {
+      reasons.push('stale_owner');
+    }
+  }
+
+  return {
+    status: reasons.length === 0 ? 'valid' : 'blocked',
+    checkpoint,
+    reasons: [...new Set(reasons)],
+  };
+}
+
+/**
+ * Install a prepared checkpoint through the caller's existing atomic commit
+ * port. A stale owner is refused before the port is invoked, and an optional
+ * owner re-read closes the normal check-then-commit race at the boundary.
+ */
+export async function installContextCheckpoint(
+  preparation: ContextCheckpointPreparationResultV1 | ContextCheckpointV1,
+  input: ContextCheckpointInstallInputV1,
+): Promise<ContextCheckpointInstallResultV1> {
+  if ('status' in preparation) {
+    if (preparation.status !== 'prepared') {
+      return {
+        status: 'blocked',
+        checkpointId: null,
+        reasons: preparation.reasons,
+      };
+    }
+  }
+  const checkpoint = 'status' in preparation ? preparation.checkpoint : preparation;
+  const validation = validateContextCheckpoint(checkpoint, {
+    currentOwner: input.currentOwner,
+  });
+  if (validation.status === 'blocked') {
+    return {
+      status: 'blocked',
+      checkpointId: checkpoint.checkpointId,
+      reasons: validation.reasons,
+    };
+  }
+
+  if (input.readCurrentOwner !== undefined) {
+    let currentOwner: ContextCheckpointOwnerV1 | null;
+    try {
+      currentOwner = input.readCurrentOwner();
+    } catch {
+      return {
+        status: 'blocked',
+        checkpointId: checkpoint.checkpointId,
+        reasons: ['stale_owner'],
+      };
+    }
+    if (!ownersMatch(currentOwner, checkpoint.owner)) {
+      return {
+        status: 'blocked',
+        checkpointId: checkpoint.checkpointId,
+        reasons: ['stale_owner'],
+      };
+    }
+  }
+
+  try {
+    await input.install(checkpoint, checkpoint.owner);
+  } catch {
+    return {
+      status: 'blocked',
+      checkpointId: checkpoint.checkpointId,
+      reasons: ['install_failed'],
+    };
+  }
+  return { status: 'installed', checkpointId: checkpoint.checkpointId };
+}
+
+/** Validate that a durable checkpoint may become the cold-resume context. */
+export function validateColdResume(
+  input: ColdResumeValidationInputV1,
+): ColdResumeValidationResultV1 {
+  const validation = validateContextCheckpoint(
+    input.checkpoint,
+    input.currentOwner === null
+      ? { currentOwner: null }
+      : { currentOwner: input.currentOwner, expectedThreadId: input.currentOwner.threadId },
+  );
+  const reasons = [...validation.reasons];
+  if (
+    input.requestedOwner !== undefined &&
+    !ownersMatch(input.currentOwner, input.requestedOwner)
+  ) {
+    reasons.push('requested_owner_mismatch');
+  }
+  const uniqueReasons = [...new Set(reasons)];
+  return {
+    status: uniqueReasons.length === 0 ? 'ready' : 'blocked',
+    resumable: uniqueReasons.length === 0,
+    checkpoint: input.checkpoint,
+    reasons: uniqueReasons,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -617,8 +1073,8 @@ export function evaluateRetentionOracle(input: RetentionOracleInputV1): Retentio
 /**
  * Deterministic T12/T13 fixture: more than 32 removed observations, duplicate
  * text from distinct invocations, a complete native cycle and a pending one.
- * P06/P07 production installation remains blocked; this only exercises the
- * pure mapping/oracle shape.
+ * The fixture only exercises the pure retention oracle; installation remains
+ * owned by the checkpoint preparation and install port above.
  */
 export function buildRetentionOracleFixtureV1(): RetentionOracleInputV1 {
   const observations: RetentionOracleObservationV1[] = [];

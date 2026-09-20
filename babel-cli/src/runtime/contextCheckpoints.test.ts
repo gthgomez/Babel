@@ -7,9 +7,61 @@ import {
   checkpointPopulationAllowsInstall,
   evaluateRetentionOracle,
   mapCheckpointRequiredState,
+  prepareContextCheckpoint,
+  validateColdResume,
+  validateContextCheckpoint,
+  installContextCheckpoint,
   type LiveOperationalSourcesV1,
+  type ContextCheckpointOwnerV1,
   type RetentionOracleInputV1,
 } from './contextCheckpoints.js';
+import type { ObservationRefV1 } from '../evidence/observationStore.js';
+
+const OWNER: ContextCheckpointOwnerV1 = {
+  threadId: 'thread-p11',
+  generation: 4,
+  token: 'owner-token-4',
+};
+
+function observationManifest(
+  observation_id: string = `obs:${'1'.repeat(64)}`,
+  payloadSha256: string = '2'.repeat(64),
+): ObservationRefV1 {
+  return {
+    schema_version: 1,
+    observation_id,
+    invocation: {
+      operation_id: 'op-1',
+      task_id: 'task-1',
+      run_id: 'run-1',
+      turn_id: 'turn-1',
+      attempt_id: 'attempt-1',
+    },
+    payloads: [
+      {
+        payload_id: `sha256:${payloadSha256}`,
+        sha256: payloadSha256,
+        byte_length: 11,
+        representation: 'text',
+        encoding: 'utf8',
+        channel: 'stdout',
+        media_type: 'text/plain',
+        capture_policy_version: 'p11-capture-policy-v1',
+        redaction_policy_version: 'p11-redaction-policy-v1',
+        capture_completeness: 'complete',
+        object_key: `objects/${payloadSha256.slice(0, 2)}/${payloadSha256}.bin`,
+      },
+    ],
+    execution_status: 'succeeded',
+    snapshot_ref: 'snapshot-current',
+    coverage_ref: 'coverage-1',
+    capture_completeness: 'complete',
+    permitted_principals: ['agent:main'],
+    capture_policy_version: 'p11-capture-policy-v1',
+    redaction_policy_version: 'p11-redaction-policy-v1',
+    captured_at: '2026-09-20T00:00:00.000Z',
+  };
+}
 
 function completeSources(
   overrides: Partial<LiveOperationalSourcesV1> = {},
@@ -17,7 +69,7 @@ function completeSources(
   return {
     resumed: false,
     task_contract: {
-      goal: 'ship P11 shadow helpers',
+      goal: 'ship P11 checkpoint helpers',
       acceptance_clause_ids: ['clause-1'],
       contract_hash: 'contract-hash-1',
     },
@@ -60,22 +112,23 @@ function completeSources(
         authorized: true,
       },
     ],
+    observation_manifest: [observationManifest()],
     legacy_observation_refs: ['obs:deadbeef'],
     ...overrides,
   };
 }
 
-test('complete live sources map to a populated contract with install still blocked', () => {
+test('complete live sources map to a populated contract ready for install', () => {
   const population = mapCheckpointRequiredState(completeSources());
   assert.equal(population.status, 'populated');
   assert.equal(population.errors.length, 0);
   assert.equal(population.workspace_revision_current, true);
-  assert.equal(population.install_authorized, false);
-  assert.deepEqual(population.installation_blocked_on, ['P06', 'P07']);
+  assert.equal(population.install_authorized, true);
+  assert.deepEqual(population.installation_blocked_on, []);
   assert.deepEqual(population.installation_blocked_on, [...CONTEXT_CHECKPOINT_INSTALL_BLOCKED_ON]);
   assert.equal(population.rows.length, 8);
   assert.equal(population.rows.every((row) => row.present), true);
-  assert.equal(checkpointPopulationAllowsInstall(population), false);
+  assert.equal(checkpointPopulationAllowsInstall(population), true);
 });
 
 test('a missing frozen task contract blocks rather than deriving authority from text', () => {
@@ -83,6 +136,121 @@ test('a missing frozen task contract blocks rather than deriving authority from 
   assert.equal(population.status, 'blocked');
   assert.ok(population.errors.some((error) => error.startsWith('accepted_goal')));
   assert.equal(checkpointPopulationAllowsInstall(population), false);
+});
+
+test('prepares a detached checkpoint with a complete observation manifest', () => {
+  const prepared = prepareContextCheckpoint({
+    checkpointId: 'checkpoint-1',
+    owner: OWNER,
+    sources: completeSources(),
+    now: () => '2026-09-20T01:00:00.000Z',
+  });
+  assert.equal(prepared.status, 'prepared');
+  if (prepared.status !== 'prepared') return;
+  assert.equal(prepared.checkpoint.schema_version, 1);
+  assert.equal(prepared.checkpoint.checkpointId, 'checkpoint-1');
+  assert.equal(prepared.checkpoint.threadId, OWNER.threadId);
+  assert.equal(prepared.checkpoint.generation, OWNER.generation);
+  assert.equal(prepared.checkpoint.owner.token, OWNER.token);
+  assert.equal(prepared.checkpoint.observation_manifest.length, 1);
+  assert.match(prepared.checkpoint.observation_manifest_digest, /^[0-9a-f]{64}$/);
+  assert.equal(prepared.checkpoint.population.install_authorized, true);
+});
+
+test('preparation rejects an incomplete observation manifest', () => {
+  const prepared = prepareContextCheckpoint({
+    checkpointId: 'checkpoint-incomplete',
+    owner: OWNER,
+    sources: completeSources({ observation_manifest: [] }),
+  });
+  assert.equal(prepared.status, 'blocked');
+  if (prepared.status === 'blocked') {
+    assert.ok(prepared.reasons.includes('observation_manifest_incomplete'));
+  }
+});
+
+test('checkpoint validation fences a stale owner generation', () => {
+  const prepared = prepareContextCheckpoint({
+    checkpointId: 'checkpoint-fence',
+    owner: OWNER,
+    sources: completeSources(),
+  });
+  assert.equal(prepared.status, 'prepared');
+  if (prepared.status !== 'prepared') return;
+
+  const current = validateContextCheckpoint(prepared.checkpoint, {
+    currentOwner: OWNER,
+  });
+  assert.equal(current.status, 'valid');
+
+  const stale = validateContextCheckpoint(prepared.checkpoint, {
+    currentOwner: { ...OWNER, generation: OWNER.generation + 1, token: 'owner-token-5' },
+  });
+  assert.equal(stale.status, 'blocked');
+  assert.ok(stale.reasons.includes('stale_owner'));
+});
+
+test('install commits once only after the owner fence passes', async () => {
+  const prepared = prepareContextCheckpoint({
+    checkpointId: 'checkpoint-install',
+    owner: OWNER,
+    sources: completeSources(),
+  });
+  assert.equal(prepared.status, 'prepared');
+  if (prepared.status !== 'prepared') return;
+
+  let commits = 0;
+  const installed = await installContextCheckpoint(prepared, {
+    currentOwner: OWNER,
+    install: async (checkpoint, owner) => {
+      commits += 1;
+      assert.equal(checkpoint.checkpointId, 'checkpoint-install');
+      assert.deepEqual(owner, OWNER);
+    },
+  });
+  assert.equal(installed.status, 'installed');
+  assert.equal(commits, 1);
+
+  const blocked = await installContextCheckpoint(prepared, {
+    currentOwner: { ...OWNER, generation: OWNER.generation + 1, token: 'owner-token-5' },
+    install: async () => {
+      commits += 1;
+    },
+  });
+  assert.equal(blocked.status, 'blocked');
+  assert.ok(blocked.reasons.includes('stale_owner'));
+  assert.equal(commits, 1);
+});
+
+test('cold resume rejects a tampered manifest and stale owner', () => {
+  const prepared = prepareContextCheckpoint({
+    checkpointId: 'checkpoint-resume',
+    owner: OWNER,
+    sources: completeSources(),
+  });
+  assert.equal(prepared.status, 'prepared');
+  if (prepared.status !== 'prepared') return;
+
+  const tampered = {
+    ...prepared.checkpoint,
+    observation_manifest: prepared.checkpoint.observation_manifest.map((observation) => ({
+      ...observation,
+      execution_status: 'failed' as const,
+    })),
+  };
+  const tamperedResult = validateColdResume({
+    checkpoint: tampered,
+    currentOwner: OWNER,
+  });
+  assert.equal(tamperedResult.status, 'blocked');
+  assert.ok(tamperedResult.reasons.includes('manifest_digest_mismatch'));
+
+  const staleResult = validateColdResume({
+    checkpoint: prepared.checkpoint,
+    currentOwner: { ...OWNER, generation: OWNER.generation + 1, token: 'owner-token-5' },
+  });
+  assert.equal(staleResult.status, 'blocked');
+  assert.ok(staleResult.reasons.includes('stale_owner'));
 });
 
 test('a relabelled verifier revision never counts as current workspace coverage', () => {
