@@ -111,7 +111,9 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       assert.equal(entry?.transcriptPath, transcriptPath(sessionId));
 
       const ctx = makeResumeCtx(target);
-      const outcome = await resumeChatSession(ctx, sessionId);
+      // R0-3: this legacy fixture has no durable repository identity, so an
+      // explicit rebind is required before execution is admitted.
+      const outcome = await resumeChatSession(ctx, sessionId, { confirmUnknownIdentity: true });
       assert.equal(outcome.ok, true);
       if (!outcome.ok) return;
       assert.equal(outcome.source, 'thread_store');
@@ -135,12 +137,12 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       );
 
       const ctx = makeResumeCtx(target);
-      const outcome = await resumeChatSession(ctx, sessionId);
+      // R0-3: no durable repo identity in this legacy fixture -> explicit
+      // rebind required; then resumed as degraded history, never verified.
+      const outcome = await resumeChatSession(ctx, sessionId, { confirmUnknownIdentity: true });
       assert.equal(outcome.ok, true);
       if (!outcome.ok) return;
       assert.equal(outcome.source, 'transcript');
-      // D04: no durable repo identity in this legacy fixture -> degraded, not a
-      // silent claim of verified physical identity, and not a hard failure.
       assert.equal(outcome.degraded, true);
       assert.match(ctx.chatEngine?.getConversation().find((m) => m.role === 'user')?.content ?? '', /transcript-only hello/);
     } finally {
@@ -160,7 +162,11 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       recordUserSubmitted(log, { turn_id: 'turn-1', task: 'valid durable history' });
       flushSessionEventLog(sessionDir, log);
 
-      const outcome = await resumeChatSession(makeResumeCtx(target), sessionId);
+      // R0-3: session-events record no project_root here, so identity is
+      // unknown and an explicit rebind is required.
+      const outcome = await resumeChatSession(makeResumeCtx(target), sessionId, {
+        confirmUnknownIdentity: true,
+      });
       assert.equal(outcome.ok, true);
     } finally {
       fixture.cleanup();
@@ -304,7 +310,8 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       appendTurnCells(sessionId, 1, [makeUserCell(sessionId, 'thread store wins')]);
 
       const ctx = makeResumeCtx(target);
-      const outcome = await resumeChatSession(ctx, sessionId);
+      // R0-3: no durable identity in this fixture -> explicit rebind required.
+      const outcome = await resumeChatSession(ctx, sessionId, { confirmUnknownIdentity: true });
       assert.equal(outcome.ok, true);
       if (!outcome.ok) return;
       assert.equal(outcome.source, 'thread_store');
