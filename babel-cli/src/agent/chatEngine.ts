@@ -2932,17 +2932,20 @@ export class ChatEngine {
       if (this._cancelled || this.abortController.signal.aborted) {
         // AC3: stream cancel path flushes disk (idempotent if cancel() already did)
         finalizeParityCancel(this.parity, this.engineRunDir);
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamCancelled();
         return;
       }
 
       // Budget checks (P1): cost, wall-clock — honest receipts + last-chance critic
       if (this.terminatingLimiter === 'child_exhaustion') {
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         const kill = await this.handleBudgetKill(
           this.terminalLimiterReason ?? 'Inherited child allowance exhausted.',
           { onThought: () => {} },
           effectiveIntent,
         );
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
           ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
@@ -2952,6 +2955,7 @@ export class ChatEngine {
       }
       const budget = this.checkBudgets();
       if (!budget.ok) {
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         const kill = await this.handleBudgetKill(
           budget.reason ?? 'Budget limit exceeded.',
           { onThought: () => {} },
@@ -2959,6 +2963,7 @@ export class ChatEngine {
         );
         // AC3: every stream terminal goes through streamDone (buildResult already
         // finalized; streamDone finalize is idempotent on turn_ended).
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
           ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
@@ -3061,11 +3066,13 @@ export class ChatEngine {
           }
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           const cancelled = this.emitCancelledIfOperatorAbort(err);
           if (cancelled) {
             yield cancelled;
             return;
           }
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamFailed(err?.message ?? String(err));
           return;
         }
@@ -3161,7 +3168,8 @@ export class ChatEngine {
             yield { type: 'context_compacted', ...admissionRecovery };
             continue;
           }
-          const fb = yield* this.resolveFallbackOrFail(err, turn);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
+          const fb = yield* this.resolveFallbackOrFail(err, turn, submissionGeneration);
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
@@ -3170,6 +3178,7 @@ export class ChatEngine {
           if (typeof fb.executeWithToolsStream !== 'function') {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamFailed(err.message);
             return;
           }
@@ -3287,11 +3296,13 @@ export class ChatEngine {
               );
               endSpan(_turnSpan, SpanStatusCode.ERROR);
               _turnSpan = null;
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
               const cancelled = this.emitCancelledIfOperatorAbort(rawErr);
               if (cancelled) {
                 yield cancelled;
                 return;
               }
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
               yield this.streamFailed(rawErr?.message ?? String(rawErr));
               return;
             }
@@ -3336,7 +3347,8 @@ export class ChatEngine {
             yield { type: 'context_compacted', ...admissionRecovery };
             continue;
           }
-          const fb = yield* this.resolveFallbackOrFail(err, turn);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
+          const fb = yield* this.resolveFallbackOrFail(err, turn, submissionGeneration);
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
@@ -3362,11 +3374,13 @@ export class ChatEngine {
           } catch (fbErr: any) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             const cancelled = this.emitCancelledIfOperatorAbort(fbErr);
             if (cancelled) {
               yield cancelled;
               return;
             }
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamFailed(fbErr?.message ?? String(fbErr));
             return;
           }
@@ -3395,11 +3409,13 @@ export class ChatEngine {
         this.terminatingLimiter = 'tokens';
         this.terminalLimiterReason =
           `Token explosion with zero mutations: ${streamExplosion.tokensThisTurn} tokens this turn (ceiling ${this.limits.maxTokensPerRound}).`;
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         const kill = await this.handleBudgetKill(
           this.terminalLimiterReason,
           { onThought: () => {} },
           effectiveIntent,
         );
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
           ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
@@ -3425,6 +3441,7 @@ export class ChatEngine {
             _turnSpan.setAttribute('babel.chat.blocked', 'true');
             endSpan(_turnSpan, SpanStatusCode.OK);
             _turnSpan = null;
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamDone(turnResult.thinking, {
               blockedReport: thinkingBlocked,
             });
@@ -3686,6 +3703,7 @@ export class ChatEngine {
             role: 'assistant',
             content: finalTamperAnswer,
           });
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamDone(finalTamperAnswer, {
             blockedReport: tamperBlocked,
             verifierTampered: true,
@@ -3784,6 +3802,7 @@ export class ChatEngine {
           this._streamNativeToolCallIds = [];
           this._activeToolBatchId = null;
           if (captured) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamFailed(captured.operatorMessage);
             return;
           }
@@ -3946,6 +3965,7 @@ export class ChatEngine {
               const failMsg = `Answer synthesis failed after inspection completed: ${synthError?.message ?? 'no answer generated'}`;
               this.conversation.push({ role: 'assistant', content: failMsg });
               yield { type: 'answer_chunk', text: failMsg };
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
               yield this.streamDone(failMsg, {
                 blockedReport: attachTerminalReason(
                   {
@@ -3972,6 +3992,7 @@ export class ChatEngine {
             const synthBlocked = this.detectAndBuildBlockedReport(finalAnswer);
             this.conversation.push({ role: 'assistant', content: finalAnswer });
             yield { type: 'answer_chunk', text: finalAnswer };
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamDone(finalAnswer, {
               blockedReport: synthBlocked ?? null,
               // D03: the arbiter reason survives even when the bounded synthesis
@@ -3992,6 +4013,7 @@ export class ChatEngine {
                 role: 'assistant',
                 content: killAnswer,
               });
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
               yield this.streamDone(killAnswer, {
                 blockedReport: killBlocked,
                 // D03: this branch runs inside the arbiter-terminal block, so the
@@ -4006,6 +4028,7 @@ export class ChatEngine {
             role: 'assistant',
             content: arb.terminalAnswer,
           });
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamDone(arb.terminalAnswer, {
             blockedReport: buildPolicyTerminalBlockedReport(
               arb.policySource ?? 'progress_terminal',
@@ -4054,6 +4077,7 @@ export class ChatEngine {
           _turnSpan.setAttribute('babel.chat.blocked', 'true');
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamDone(answer, { blockedReport });
           return;
         }
@@ -4073,6 +4097,7 @@ export class ChatEngine {
             role: 'assistant',
             content: tokenCeilingBlocked,
           });
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamDone(tokenCeilingBlocked, {
             blockedReport: {
               schema_version: 1 as const,
@@ -4120,6 +4145,7 @@ export class ChatEngine {
               role: 'assistant',
               content: textBlockedMsg,
             });
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamDone(textBlockedMsg, {
               blockedReport: {
                 schema_version: 1 as const,
@@ -4220,6 +4246,7 @@ export class ChatEngine {
               role: 'assistant',
               content: AUTO_CONTINUE_REFUSAL_MSG,
             });
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamDone(AUTO_CONTINUE_REFUSAL_MSG, {
               blockedReport: buildAutoContinueBlockedReport(),
               ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
@@ -4230,6 +4257,7 @@ export class ChatEngine {
             _turnSpan.setAttribute('babel.chat.gate_blocked', 'true');
             endSpan(_turnSpan, SpanStatusCode.OK);
             _turnSpan = null;
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamDone(`BLOCKED: ${plan.reason}`, {
               blockedReport: this.buildVerifierBlockedReport(plan.reason),
               ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
@@ -4338,6 +4366,7 @@ export class ChatEngine {
           _turnSpan.setAttribute('babel.chat.critic_hard_block', 'true');
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamDone(blockedAnswer, {
             blockedReport: report,
             ...(this.lastCriticReceipt ? { criticReceipt: this.lastCriticReceipt } : {}),
@@ -4360,6 +4389,7 @@ export class ChatEngine {
         }
         endSpan(_turnSpan, SpanStatusCode.OK);
         _turnSpan = null;
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(answer, {
           ...(this.lastCriticReceipt ? { criticReceipt: this.lastCriticReceipt } : {}),
         });
@@ -4383,6 +4413,7 @@ export class ChatEngine {
     // that bypasses the write/verifier gate.
     const maxTurnBlockedReport = this.detectAndBuildBlockedReport(maxTurnAnswer);
     if (maxTurnBlockedReport) {
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       yield this.streamDone(maxTurnAnswer, {
         blockedReport: maxTurnBlockedReport,
       });
@@ -4395,6 +4426,7 @@ export class ChatEngine {
         effectiveIntent,
       );
       if (gateResult === 'reject') {
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamFailed(`Turn limit exceeded. ${this.buildRejectionMessage()}`);
         return;
       }
@@ -4425,6 +4457,7 @@ export class ChatEngine {
           },
         );
         const blockedAnswer = this.buildCriticBlockedAnswer(report);
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(blockedAnswer, {
           blockedReport: report,
           ...(this.lastCriticReceipt ? { criticReceipt: this.lastCriticReceipt } : {}),
@@ -4432,6 +4465,7 @@ export class ChatEngine {
         return;
       }
     }
+    if (!this.isSubmissionCurrent(submissionGeneration)) return;
     yield this.streamDone(maxTurnAnswer, {
       ...(this.lastCriticReceipt ? { criticReceipt: this.lastCriticReceipt } : {}),
     });
@@ -5648,6 +5682,29 @@ export class ChatEngine {
     };
   }
 
+  /**
+   * R0-7/R0-8: an ordinary action that completes after its submission was
+   * superseded must not write the current task's tool log, mutation
+   * attribution, verifier ledger or budget.
+   */
+  private settleStaleActionResult(
+    tool: string,
+    target: string,
+    index: number,
+    reason: string,
+  ): { index: number; observation: string } {
+    return {
+      index,
+      observation: [
+        `### ${tool} ${target}`,
+        'status: stale',
+        `reason: ${reason}`,
+        'This action completed after its submission was superseded and is not',
+        'applied to the current task.',
+      ].join('\n'),
+    };
+  }
+
   private async executeOneAction(
     action: ChatToolAction,
     toolContext: ToolContext,
@@ -6587,8 +6644,18 @@ export class ChatEngine {
           },
         );
 
+        // R0-7/R0-8: governedStrReplace is a suspension point; a superseded
+        // submission must not record a mutation batch from it.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         if (gov.mutationPaths && gov.mutationPaths.length > 0) {
-          recordMutationBatch(this.parity.sessionEvents, this.parity.turnId ?? 'unknown', {
+          recordMutationBatch(this.parity.sessionEvents, dispatchTurnId ?? 'unknown', {
             paths: gov.mutationPaths,
             pre_hash: Object.values(gov.preBatchHash ?? {}).join(','),
             post_hash: Object.values(gov.postBatchHash ?? {}).join(','),
@@ -6971,8 +7038,19 @@ export class ChatEngine {
         },
       );
 
+      // R0-7/R0-8: the governed action was a suspension point; a superseded
+      // submission must not record a mutation batch or write the current
+      // task's tool log from it.
+      if (!this.isSubmissionCurrent(ownerGeneration)) {
+        return this.settleStaleActionResult(
+          tool,
+          target,
+          meta.index,
+          'parent submission superseded before the action settled',
+        );
+      }
       if (result.mutationPaths && result.mutationPaths.length > 0) {
-        recordMutationBatch(this.parity.sessionEvents, this.parity.turnId ?? 'unknown', {
+        recordMutationBatch(this.parity.sessionEvents, dispatchTurnId ?? 'unknown', {
           paths: result.mutationPaths,
           pre_hash: Object.values(result.preBatchHash ?? {}).join(','),
           post_hash: Object.values(result.postBatchHash ?? {}).join(','),
@@ -8326,11 +8404,17 @@ export class ChatEngine {
   private async *resolveFallbackOrFail(
     err: any,
     turn: number,
+    ownerGeneration?: number,
   ): AsyncGenerator<
     ChatEvent,
     DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | null,
     undefined
   > {
+    // R0-8: a superseded generator must not resolve a fallback or emit a
+    // terminal for the task that now owns the engine.
+    if (ownerGeneration !== undefined && !this.isSubmissionCurrent(ownerGeneration)) {
+      return null;
+    }
     const cancelled = this.emitCancelledIfOperatorAbort(err);
     if (cancelled) {
       yield cancelled;
