@@ -1973,13 +1973,24 @@ export class ChatEngine {
     });
   }
 
-  private criticState(onThought?: (msg: string) => void): AsymmetricCriticState {
+  private criticState(
+    onThought: ((msg: string) => void) | undefined,
+    ownerGeneration: number,
+  ): AsymmetricCriticState {
+    const conversation = this.conversation.map((message) => ({ ...message }));
+    const toolCallLog = this.toolCallLog.map((entry) => ({
+      ...entry,
+      ...(entry.mutation_paths ? { mutation_paths: [...entry.mutation_paths] } : {}),
+    }));
+    const isOwnerCurrent = (): boolean => this.isSubmissionCurrent(ownerGeneration);
     return {
-      toolCallLog: this.toolCallLog,
-      conversation: this.conversation,
+      toolCallLog,
+      conversation,
       projectRoot: this.options.projectRoot,
       task: this.options.task,
-      lastVerifierReceipt: this.lastVerifierReceipt,
+      lastVerifierReceipt: this.lastVerifierReceipt
+        ? { ...this.lastVerifierReceipt }
+        : null,
       lastCriticReceipt: this.lastCriticReceipt,
       criticStrikes: this.criticStrikes,
       criticRunner: this.criticRunner,
@@ -1993,7 +2004,7 @@ export class ChatEngine {
       resolveDeliberationRunner: () => this.resolveDeliberationRunner(),
       providerCallbacks: this.providerRetryCallbacks({
         deliveryMode: 'text',
-        conversationState: this.conversation,
+        conversationState: conversation,
         userTaskPrompt: this.options.task,
         // The critic receives a synthesized text prompt, not provider-native
         // tool messages. Record that boundary explicitly so preservation is
@@ -2002,16 +2013,31 @@ export class ChatEngine {
         deliveredPriorEventIds: [],
         executionStage: 'critic',
       }),
-      trackRunnerUsage: (runner) => this.trackRunnerUsage(runner),
-      ...(onThought ? { onThought } : {}),
+      trackRunnerUsage: (runner) => {
+        if (isOwnerCurrent()) this.trackRunnerUsage(runner);
+      },
+      ...(onThought
+        ? {
+            onThought: (message: string) => {
+              if (isOwnerCurrent()) onThought(message);
+            },
+          }
+        : {}),
     };
   }
 
-  private applyCriticState(state: AsymmetricCriticState): void {
+  private applyCriticState(
+    state: AsymmetricCriticState,
+    ownerGeneration: number,
+    conversationStart: number,
+  ): boolean {
+    if (!this.isSubmissionCurrent(ownerGeneration)) return false;
     this.lastCriticReceipt = state.lastCriticReceipt;
     this.criticStrikes = state.criticStrikes;
     this.criticRunner = state.criticRunner;
     this.criticProRunner = state.criticProRunner;
+    this.conversation.push(...state.conversation.slice(conversationStart));
+    return true;
   }
 
   private async runAsymmetricDiffCritic(
@@ -2021,10 +2047,12 @@ export class ChatEngine {
     opts?: { terminal?: boolean },
   ): Promise<'allow' | 'reject' | 'block'> {
     const criticSpan = this.currentTurnTelemetry?.startCriticSpan();
+    const ownerGeneration = this.activeSubmissionGeneration;
+    const conversationStart = this.conversation.length;
     try {
-      const state = this.criticState(callbacks.onThought);
+      const state = this.criticState(callbacks.onThought, ownerGeneration);
       const decision = await runAsymmetricDiffCriticImpl(state, answer, taskIntent, opts);
-      this.applyCriticState(state);
+      if (!this.applyCriticState(state, ownerGeneration, conversationStart)) return 'allow';
       return decision;
     } finally {
       criticSpan?.end();
