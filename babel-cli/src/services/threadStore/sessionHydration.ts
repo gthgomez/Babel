@@ -8,12 +8,15 @@
  * are the secondary source. The typed event log stores string turn ids, so the
  * numeric turn count is taken from history cells when present.
  *
- * D04: the seam also owns physical repository-identity validation. Identity is
- * established before any engine is materialized/admitted, from the durable
- * thread event log first, then the session-events `user_submitted.project_root`,
- * then the caller-registered descriptor root. A provable mismatch fails closed;
- * an absent or unresolvable identity is degraded, never claimed verified. Roots
- * are compared by physical identity, never lexically.
+ * D04/R0-4: the seam also owns canonical repository-root continuity validation.
+ * Identity is established before any engine is materialized/admitted, from the
+ * durable thread event log first, then the session-events
+ * `user_submitted.project_root`, then a PERSISTED descriptor root (never a
+ * synthesized one — R0-2). A provable mismatch fails closed; an absent or
+ * unresolvable identity is degraded, never claimed verified. Roots are compared
+ * by canonical realpath (plus an advisory filesystem fingerprint when present),
+ * never lexically. `verified` means canonical-root continuity, not proven
+ * physical-repository identity.
  */
 
 import type { ChatEngine } from '../../agent/chatEngine.js';

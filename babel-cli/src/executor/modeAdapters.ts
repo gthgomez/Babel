@@ -51,10 +51,12 @@ export function resolveModeCapability(mode: BabelMode): ModeCapability {
 export type RestoreSource = 'thread_event_log' | 'history_cells' | 'none';
 
 /**
- * D04: physical repository identity established for a restore.
+ * D04/R0-4: canonical repository-root continuity established for a restore.
  *
  * - `verified`: the durable root and the current root resolve to the same
- *   physical repository.
+ *   canonical root (and, when recorded, a matching filesystem fingerprint).
+ *   This is CONTINUITY, not proof of the same physical repository — an inode
+ *   can be reused after a delete/recreate.
  * - `mismatch`: a durable identity exists and provably points elsewhere; the
  *   caller must fail closed before admitting an engine.
  * - `unknown`: no durable identity was recorded, or neither root could be

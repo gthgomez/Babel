@@ -191,6 +191,23 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
     }
   });
 
+  test('R0-5: stdout content and test assertions are never blocking origins', () => {
+    const cases: Array<{ name: string; entry: Parameters<typeof detectAndBuildBlockedReport>[1][number]; expected: boolean }> = [
+      { name: 'successful grep whose output mentions ECONNREFUSED', entry: { tool: 'grep', target: 'client.ts', exit_code: 0, stdout: 'net.ts: throw new ECONNREFUSED();' }, expected: false },
+      { name: 'successful read whose output contains EACCES', entry: { tool: 'read_file', target: 'codes.ts', exit_code: 0, stdout: "const code = 'EACCES';" }, expected: false },
+      { name: 'missing dev executable', entry: { tool: 'run_command', target: 'npx vitest', exit_code: 127, stderr: 'sh: 1: vitest: command not found' }, expected: false },
+      { name: 'test asserts a denial string', entry: { tool: 'run_command', target: 'npm test', exit_code: 1, stderr: "AssertionError: expected 'permission denied' to equal 'access ok'" }, expected: false },
+      { name: 'test asserts certificate error', entry: { tool: 'run_command', target: 'npm test', exit_code: 1, stderr: 'AssertionError: expected self-signed certificate error' }, expected: false },
+      { name: 'test asserts quota exceeded', entry: { tool: 'run_command', target: 'npm test', exit_code: 1, stderr: 'AssertionError: expected quota exceeded message' }, expected: false },
+      { name: 'real OS denial (positive)', entry: { tool: 'run_command', target: 'cat /root/secret', exit_code: 1, stderr: 'cat: /root/secret: Permission denied' }, expected: true },
+      { name: 'real network errno (positive)', entry: { tool: 'run_command', target: 'curl svc', exit_code: 7, stderr: 'curl: (7) connect: ECONNREFUSED' }, expected: true },
+    ];
+    for (const c of cases) {
+      const report = detectAndBuildBlockedReport('BLOCKED: cannot continue.', [c.entry]);
+      assert.equal(report !== null, c.expected, c.name);
+    }
+  });
+
   test('a typed denial with a zero exit code qualifies as evidence', () => {
     const report = detectAndBuildBlockedReport('BLOCKED: permission denied.', [
       { tool: 'read_file', target: 'secret.txt', exit_code: 0, error: 'permission denied' },

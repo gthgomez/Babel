@@ -339,24 +339,28 @@ const ERRNO_EXTERNAL_RE =
 // signals. A red test asserting a denial must not become terminal authority.
 const OS_PERMISSION_RE = /\bpermission denied\b/i;
 const OS_UNSUPPORTED_RE = /\bunsupported operation\b|\boperation not supported\b|\bnot supported by (?:this|the) runtime\b/i;
+// External dependency is ONLY genuine network/host unreachability. A missing
+// executable ("command not found") is repairable (install/locate) and must not
+// become terminal authority, so it is deliberately excluded.
 const OS_EXTERNAL_RE =
-  /\bcommand not found\b|\bexecutable file not found\b|\bis not recognized as an internal or external command\b|\bnetwork is unreachable\b|\btemporary failure in name resolution\b|\bcertificate verify failed\b|\bself[- ]signed certificate\b/i;
+  /\bnetwork is unreachable\b|\btemporary failure in name resolution\b|\bcertificate verify failed\b|\bself[- ]signed certificate\b/i;
 const PROVIDER_FAILURE_RE =
   /\b(?:insufficient_quota|invalid_api_key|authentication_error|rate_limit_exceeded|overloaded_error)\b|\bprovider stream error\b|\binvalid api key\b|\bauthentication failed\b/i;
 const BUDGET_EXHAUSTED_RE =
   /\b(?:budget exhausted|quota exceeded|out of credit|insufficient credit)\b/i;
 
-/** Errno markers may appear in any channel (stdout, stderr, error). */
-function errnoText(entry: BlockedToolLogEntry): string {
-  return [entry.error, entry.stderr, entry.stdout]
-    .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
-    .join('\n');
-}
+/**
+ * Ordinary test/lint/compiler output. A red test that *asserts* a denial must
+ * not type the run as blocked, so prose classification is skipped entirely when
+ * the failure channels look like a test/lint/compiler report.
+ */
+const TEST_OR_LINT_OUTPUT_RE =
+  /\bAssertionError\b|\berror TS\d+\b|\btypescript-eslint\b|\beslint\b|\b\d+ (?:passed|failed|failing|skipped)\b|\bFAIL\b|\b(?:expect(?:ed)?|assert)\b[^\n]*\b(?:to (?:equal|be|throw|match)|==|===)\b/i;
 
 /**
- * Prose phrases are only trusted from the failure channels (`error`, `stderr`),
- * never from `stdout` — a successful command's stdout may legitimately contain
- * the phrase (e.g. grep results or test assertions).
+ * Only the failure channels are trusted. A successful command's `stdout` may
+ * legitimately contain errno names or denial prose (grep results, source code,
+ * test fixtures), so `stdout` is never a blocking signal.
  */
 function failureChannelText(entry: BlockedToolLogEntry): string {
   return [entry.error, entry.stderr]
@@ -366,18 +370,24 @@ function failureChannelText(entry: BlockedToolLogEntry): string {
 
 /**
  * Classify a tool-log entry into a blocking origin, or null when the entry is
- * only generic failure evidence. Never infers from `exit_code` alone, and never
- * from generic prose that ordinary test/lint/compiler output also produces.
+ * only generic failure evidence. Never infers from `exit_code` alone, never
+ * from `stdout`, and never from generic prose that ordinary test/lint/compiler
+ * output also produces.
  */
 export function classifyBlockingOrigin(entry: BlockedToolLogEntry): BlockingOrigin | null {
-  const errno = errnoText(entry);
-  const channels = failureChannelText(entry);
-  if (errno === '' && channels === '') return null;
-  if (ERRNO_PERMISSION_RE.test(errno) || OS_PERMISSION_RE.test(channels)) return 'permission_denied';
-  if (ERRNO_UNSUPPORTED_RE.test(errno) || OS_UNSUPPORTED_RE.test(channels)) return 'unsupported_operation';
-  if (PROVIDER_FAILURE_RE.test(errno) || PROVIDER_FAILURE_RE.test(channels)) return 'provider_failure';
-  if (BUDGET_EXHAUSTED_RE.test(errno) || BUDGET_EXHAUSTED_RE.test(channels)) return 'budget_exhausted';
-  if (ERRNO_EXTERNAL_RE.test(errno) || OS_EXTERNAL_RE.test(channels)) return 'external_dependency';
+  const text = failureChannelText(entry);
+  if (text === '') return null;
+  // Errno markers are the strongest signal; still require a failure channel.
+  if (ERRNO_PERMISSION_RE.test(text)) return 'permission_denied';
+  if (ERRNO_UNSUPPORTED_RE.test(text)) return 'unsupported_operation';
+  if (ERRNO_EXTERNAL_RE.test(text)) return 'external_dependency';
+  // Prose is only trusted when the failure does not look like test/lint output.
+  if (TEST_OR_LINT_OUTPUT_RE.test(text)) return null;
+  if (OS_PERMISSION_RE.test(text)) return 'permission_denied';
+  if (OS_UNSUPPORTED_RE.test(text)) return 'unsupported_operation';
+  if (PROVIDER_FAILURE_RE.test(text)) return 'provider_failure';
+  if (BUDGET_EXHAUSTED_RE.test(text)) return 'budget_exhausted';
+  if (OS_EXTERNAL_RE.test(text)) return 'external_dependency';
   return null;
 }
 

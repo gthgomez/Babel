@@ -601,9 +601,17 @@ describe('hasBlockingToolEvidence declared-blocked gate (R0-F)', () => {
       }),
       true,
     );
+    // A missing executable is repairable (install/locate), not blocking.
     assert.equal(
       hasBlockingToolEvidence({
         toolCalls: [{ tool: 'run_command', target: 'missing-tool', exit_code: 127, stderr: 'missing-tool: command not found' }],
+      }),
+      false,
+    );
+    // Genuine host unreachability is external.
+    assert.equal(
+      hasBlockingToolEvidence({
+        toolCalls: [{ tool: 'run_command', target: 'curl svc', exit_code: 7, stderr: 'connect: ECONNREFUSED' }],
       }),
       true,
     );
