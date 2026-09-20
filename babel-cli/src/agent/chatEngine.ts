@@ -3093,6 +3093,7 @@ export class ChatEngine {
             providerStart,
             providerEnd,
           );
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           this.trackRunnerUsage(runner);
           turnResult = parseTextToolTurn(rawText);
         } catch (err: any) {
@@ -3102,6 +3103,7 @@ export class ChatEngine {
             providerStart,
             providerEnd,
           );
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
           if (admissionRecovery) {
             yield { type: 'context_compacted', ...admissionRecovery };
@@ -3191,6 +3193,7 @@ export class ChatEngine {
             providerStart,
             providerEnd,
           );
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           this.trackRunnerUsage(runner);
           this._streamNativeToolCallIds = nativeToolCallIds;
           streamedAnswerForTurn = answerText;
@@ -3206,6 +3209,7 @@ export class ChatEngine {
             providerStart,
             providerEnd,
           );
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
           if (admissionRecovery) {
             yield { type: 'context_compacted', ...admissionRecovery };
@@ -3377,6 +3381,7 @@ export class ChatEngine {
             legacyStart,
             legacyEnd,
           );
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           this.trackRunnerUsage(runner);
         } catch (err: any) {
           const legacyEnd = performance.now();
@@ -3385,6 +3390,7 @@ export class ChatEngine {
             legacyStart,
             legacyEnd,
           );
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
           if (admissionRecovery) {
             yield { type: 'context_compacted', ...admissionRecovery };
@@ -6874,6 +6880,16 @@ export class ChatEngine {
         let strObs = gov.observation;
         const staticResult = await this.runPostEditStaticCheck(gov.absolutePath);
         if (staticResult) strObs += `\n\n### static_check ${target}\n${staticResult}`;
+        // R0-8: the static check is a suspension point; a superseded submission
+        // must not set the new task's verifier-tamper state.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         const tamperWarning = this.checkVerifierTamper(gov.absolutePath);
         if (tamperWarning) strObs += `\n\n### verifier_integrity\n${tamperWarning}`;
         appendPatchRecovery(
@@ -7407,6 +7423,17 @@ export class ChatEngine {
               }`,
             );
           }
+          // R0-7/R0-8: verifier capture is a suspension point. A superseded
+          // submission must not install its receipt, working state or ledger
+          // invalidation on the task that now owns the engine.
+          if (!this.isSubmissionCurrent(ownerGeneration)) {
+            return this.settleStaleActionResult(
+              tool,
+              target,
+              meta.index,
+              'parent submission superseded before the verifier settled',
+            );
+          }
           if (receipt) {
             this.lastVerifierReceipt = receipt;
             const ingested = ingestVerifierResult({
@@ -7481,6 +7508,16 @@ export class ChatEngine {
           const staticResult = await this.runPostEditStaticCheck(editPath);
           if (staticResult) {
             obsParts.push(`### static_check ${editPath}\n${staticResult}`);
+          }
+          // R0-8: the static check is a suspension point; a superseded submission
+          // must not set the new task's verifier-tamper state.
+          if (!this.isSubmissionCurrent(ownerGeneration)) {
+            return this.settleStaleActionResult(
+              tool,
+              target,
+              meta.index,
+              'parent submission superseded before the action settled',
+            );
           }
           // R9: Check for verifier tampering — warn if a verifier dependency was modified
           const tamperWarning = this.checkVerifierTamper(editPath);
