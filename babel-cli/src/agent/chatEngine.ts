@@ -5800,6 +5800,24 @@ export class ChatEngine {
                 mutResult.error ?? 'child inherited allowance exhausted',
               );
             }
+            if (mutResult.changedFiles.length > 0) {
+              // R0-11: the in-tree mutation lane writes directly into the PARENT
+              // candidate. A prior green parent verifier receipt is revision-
+              // bound to the parent's earlier mutation scope; it must not remain
+              // current for a candidate that now contains the child's changes.
+              // (The worktree branch above is different: its diff is never
+              // promoted into the parent tree, so a parent receipt stays valid
+              // for the unchanged parent candidate.)
+              invalidateVerifierLedger(
+                this as never,
+                'child mutation changed the parent candidate',
+              );
+              recordMutationBatch(
+                this.parity.sessionEvents,
+                String(this.parity.turnId ?? this._turnIndex),
+                { paths: mutResult.changedFiles.map((file) => file.path) },
+              );
+            }
             callbacks?.onToolComplete?.(
               toolId,
               details,
