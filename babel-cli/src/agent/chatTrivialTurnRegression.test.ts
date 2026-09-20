@@ -13,7 +13,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { after, describe, test } from 'node:test';
+import { after, afterEach, describe, test } from 'node:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,14 +21,23 @@ import { ChatEngine, reconcileStreamedAnswer, type ChatEvent } from './chatEngin
 import { TEXT_ONLY_FORCE_BLOCKED_THRESHOLD } from './stallDetector.js';
 
 const roots: string[] = [];
-after(() => {
-  for (const root of roots) rmSync(root, { recursive: true, force: true });
-});
+function cleanupRoots(): void {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+}
+
+afterEach(cleanupRoots);
+after(cleanupRoots);
 
 function makeRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'babel-trivial-regression-'));
   roots.push(root);
   return root;
+}
+
+function makeTestEngine(options: ConstructorParameters<typeof ChatEngine>[0]): ChatEngine {
+  // These fixtures use synthetic provider messages; keep C1 diagnostic without
+  // making unrelated stream/terminal assertions depend on durable replay.
+  return new ChatEngine({ ...options, runtimeInvariantMode: 'shadow' });
 }
 
 type MockRunner = Record<string, unknown>;
@@ -95,7 +104,7 @@ describe('conversational turn classification', () => {
 describe('trivial text-only turns terminate normally', () => {
   test("'?' completes in one provider round without re-query", async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = makeTestEngine({
       task: '?',
       projectRoot: makeRoot(),
       maxTurns: 6,
@@ -118,7 +127,7 @@ describe('trivial text-only turns terminate normally', () => {
 
   test('execute-intent pure-text loops terminate at the bounded threshold', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = makeTestEngine({
       // Mutation-shaped fixture: the subject under test is the execute-intent
       // text-only loop guard, so the prompt must resolve to an effective
       // mutating operation (a bare problem statement is READ_ONLY-shaped).
@@ -160,7 +169,7 @@ describe('streamed answers are not duplicated', () => {
 
   test('final answer chunk is not re-emitted after live deltas', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = makeTestEngine({
       task: 'hello',
       projectRoot: makeRoot(),
       maxTurns: 4,
@@ -194,7 +203,7 @@ describe('streamed answers are not duplicated', () => {
 
   test('zero-stream completion emits the answer exactly once', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = makeTestEngine({
       task: 'hello',
       projectRoot: makeRoot(),
       maxTurns: 4,
@@ -223,7 +232,7 @@ describe('streamed answers are not duplicated', () => {
   });
 
   test('normalized legacy JSON final is buffered â€” parsed answer emitted exactly once', async () => {
-    const engine = new ChatEngine({
+    const engine = makeTestEngine({
       task: 'hello',
       projectRoot: makeRoot(),
       maxTurns: 4,
@@ -260,7 +269,7 @@ describe('streamed answers are not duplicated', () => {
 
   test('BLOCKED-declared completions are emitted once without prose promotion', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = makeTestEngine({
       task: 'check the service status',
       projectRoot: makeRoot(),
       maxTurns: 4,
@@ -297,7 +306,7 @@ describe('streamed answers are not duplicated', () => {
 describe('per-round budget terminal precedes continuation mechanisms', () => {
   test('a single over-limit text round hard-stops after one provider call', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = makeTestEngine({
       task: 'the login page is broken',
       projectRoot: makeRoot(),
       maxTurns: 8,
@@ -339,7 +348,7 @@ describe('per-round budget terminal precedes continuation mechanisms', () => {
 describe('generation boundaries (thinking without tools) segment streams', () => {
   test('engine emits thinking between consecutive text-only generations', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = makeTestEngine({
       // Mutation-shaped fixture: this test exercises the execute-intent
       // multi-generation loop, so the prompt must resolve to an effective
       // mutating operation.
@@ -393,30 +402,32 @@ describe('generation boundaries (thinking without tools) segment streams', () =>
     process.stdout.write = ((chunk: unknown) => true) as typeof process.stdout.write;
     try {
       const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
-      renderer.start();
+      try {
+        renderer.start();
 
-      renderer.onAnswerChunk('Generation A text.');
-      renderer.onAnswerGenerationBoundary();
-      renderer.onAnswerChunk('Generation B text.');
+        renderer.onAnswerChunk('Generation A text.');
+        renderer.onAnswerGenerationBoundary();
+        renderer.onAnswerChunk('Generation B text.');
 
-      const committed = renderer.getCommittedHistoryCells();
-      const assistantCells = committed.filter((c) => c.kind === 'assistant_message');
-      assert.equal(assistantCells.length, 1, 'generation A must be committed as its own cell');
-      const payloadA = assistantCells[0]!.payload as { message?: string };
-      assert.equal(payloadA.message, 'Generation A text.');
+        const committed = renderer.getCommittedHistoryCells();
+        const assistantCells = committed.filter((c) => c.kind === 'assistant_message');
+        assert.equal(assistantCells.length, 1, 'generation A must be committed as its own cell');
+        const payloadA = assistantCells[0]!.payload as { message?: string };
+        assert.equal(payloadA.message, 'Generation A text.');
 
-      // Live summary segment now contains only generation B.
-      const liveText = renderer.getAnswerText();
-      assert.match(liveText, /Generation B text\./);
-      assert.doesNotMatch(liveText, /Generation A text\./, 'generations must not concatenate');
+        // Live summary segment now contains only generation B.
+        const liveText = renderer.getAnswerText();
+        assert.match(liveText, /Generation B text\./);
+        assert.doesNotMatch(liveText, /Generation A text\./, 'generations must not concatenate');
 
-      const active = (renderer as unknown as {
-        _historyTranscript?: { getActiveRecord?: () => { kind: string; payload?: { message?: string } } | null };
-      })._historyTranscript?.getActiveRecord?.();
-      assert.equal(active?.kind, 'assistant_message');
-      assert.equal(active?.payload?.message, 'Generation B text.');
-
-      renderer.stop();
+        const active = (renderer as unknown as {
+          _historyTranscript?: { getActiveRecord?: () => { kind: string; payload?: { message?: string } } | null };
+        })._historyTranscript?.getActiveRecord?.();
+        assert.equal(active?.kind, 'assistant_message');
+        assert.equal(active?.payload?.message, 'Generation B text.');
+      } finally {
+        renderer.stop();
+      }
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -429,29 +440,31 @@ describe('assistant stream segments at tool boundaries', () => {  test('answer â
     process.stdout.write = ((chunk: unknown) => true) as typeof process.stdout.write;
     try {
       const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
-      renderer.start();
+      try {
+        renderer.start();
 
-      renderer.onAnswerChunk('Part A');
-      const id = renderer.onToolCallStart('read_file', 'src/a.ts');
-      assert.ok(id > 0);
-      renderer.onToolCallComplete(id, 'read 10 bytes', undefined, 0);
-      renderer.onAnswerChunk('Part B');
+        renderer.onAnswerChunk('Part A');
+        const id = renderer.onToolCallStart('read_file', 'src/a.ts');
+        assert.ok(id > 0);
+        renderer.onToolCallComplete(id, 'read 10 bytes', undefined, 0);
+        renderer.onAnswerChunk('Part B');
 
-      const committed = renderer.getCommittedHistoryCells();
-      const kinds = committed.map((c) => c.kind);
-      assert.deepEqual(
-        kinds.filter((k) => k === 'assistant_message' || k === 'tool_call'),
-        ['assistant_message', 'tool_call'],
-        `tool boundary must segment cells instead of concatenating streams, got: ${JSON.stringify(kinds)}`,
-      );
-      // The second stream becomes the new active assistant cell.
-      const active = (renderer as unknown as {
-        _historyTranscript?: { getActiveRecord?: () => { kind: string; payload?: { message?: string } } | null };
-      })._historyTranscript?.getActiveRecord?.();
-      assert.equal(active?.kind, 'assistant_message');
-      assert.equal(active?.payload?.message, 'Part B');
-
-      renderer.stop();
+        const committed = renderer.getCommittedHistoryCells();
+        const kinds = committed.map((c) => c.kind);
+        assert.deepEqual(
+          kinds.filter((k) => k === 'assistant_message' || k === 'tool_call'),
+          ['assistant_message', 'tool_call'],
+          `tool boundary must segment cells instead of concatenating streams, got: ${JSON.stringify(kinds)}`,
+        );
+        // The second stream becomes the new active assistant cell.
+        const active = (renderer as unknown as {
+          _historyTranscript?: { getActiveRecord?: () => { kind: string; payload?: { message?: string } } | null };
+        })._historyTranscript?.getActiveRecord?.();
+        assert.equal(active?.kind, 'assistant_message');
+        assert.equal(active?.payload?.message, 'Part B');
+      } finally {
+        renderer.stop();
+      }
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -471,7 +484,7 @@ describe('non-streaming path preserves generation boundaries', () => {
       // executor path and records real toolCallLog evidence.
       mkdirSync(join(wsRoot, 'src'), { recursive: true });
       writeFileSync(join(wsRoot, 'src', 'login.ts'), 'export const login = () => true\n', 'utf8');
-      const engine = new ChatEngine({
+      const engine = makeTestEngine({
         task: 'fix the login page',
         projectRoot: wsRoot,
         maxTurns: 6,
@@ -509,61 +522,63 @@ describe('non-streaming path preserves generation boundaries', () => {
 
       const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
       renderer.start();
+      try {
+        const result = await runChatEngineOnce({
+          task: 'fix the login page',
+          target: { targetRoot: wsRoot, workspaceRoot: null, project: null, source: 'cwd', cwd: wsRoot },
+          engine,
+          convRenderer: renderer,
+          useStreaming: false, // the BABEL_STREAM_TOOLS=off surface
+          taskIntent: 'execute',
+          preflightContext: '',
+        });
 
-      const result = await runChatEngineOnce({
-        task: 'fix the login page',
-        target: { targetRoot: wsRoot, workspaceRoot: null, project: null, source: 'cwd', cwd: wsRoot },
-        engine,
-        convRenderer: renderer,
-        useStreaming: false, // the BABEL_STREAM_TOOLS=off surface
-        taskIntent: 'execute',
-        preflightContext: '',
-      });
+        // R0-5: a missing file is a repairable failure, not blocking authority, so
+        // the model's BLOCKED prose is ignored. The execute-intent run keeps going
+        // and ends at its bounded harness text-only-loop terminal, with a typed
+        // harness report. Exact values, not a tolerant disjunction.
+        assert.equal(result.status, 'blocked', `unexpected status ${result.status}`);
+        assert.equal(result.outcome, 'BLOCKED_POLICY');
+        assert.equal(result.reason_code, 'recovery_exhausted');
+        assert.equal(result.cause_class, 'harness');
+        assert.ok(result.blockedReport, 'the harness terminal carries a structured report');
+        assert.equal(result.blockedReport?.reason_code, 'recovery_exhausted');
+        assert.equal(result.blockedReport?.cause_class, 'harness');
+        // 2 rounds (text, tool) + 5 text-only rounds to the harness threshold.
+        assert.equal(state.calls, 7, `expected 7 provider rounds, got ${state.calls}`);
 
-      // R0-5: a missing file is a repairable failure, not blocking authority, so
-      // the model's BLOCKED prose is ignored. The execute-intent run keeps going
-      // and ends at its bounded harness text-only-loop terminal, with a typed
-      // harness report. Exact values, not a tolerant disjunction.
-      assert.equal(result.status, 'blocked', `unexpected status ${result.status}`);
-      assert.equal(result.outcome, 'BLOCKED_POLICY');
-      assert.equal(result.reason_code, 'recovery_exhausted');
-      assert.equal(result.cause_class, 'harness');
-      assert.ok(result.blockedReport, 'the harness terminal carries a structured report');
-      assert.equal(result.blockedReport?.reason_code, 'recovery_exhausted');
-      assert.equal(result.blockedReport?.cause_class, 'harness');
-      // 2 rounds (text, tool) + 5 text-only rounds to the harness threshold.
-      assert.equal(state.calls, 7, `expected 7 provider rounds, got ${state.calls}`);
-
-      // Real lifecycle first: stop() flushes the active generation-B cell.
-      renderer.stop();
-
-      const committed = renderer.getCommittedHistoryCells();
-      const relevant = committed
-        .map((c) => c.kind)
-        .filter((k) => k === 'assistant_message' || k === 'tool_call');
-      assert.deepEqual(
-        relevant,
-        [
-          'assistant_message',
-          'tool_call',
-          'assistant_message',
-          'assistant_message',
-          'assistant_message',
-          'assistant_message',
-          'assistant_message',
-        ],
-        `non-stream mode must segment generations AND tools like streaming, got: ${JSON.stringify(relevant)}`,
-      );
-      const messages = committed
-        .filter((c) => c.kind === 'assistant_message')
-        .map((c) => (c.payload as { message?: string }).message);
-      assert.equal(messages[0], 'Generation A text.');
-      assert.match(messages[1] ?? '', /BLOCKED: src\/missing-login\.ts could not be read/);
-      assert.doesNotMatch(
-        messages.join('|'),
-        /Generation A text\.Generation/,
-        'generations must not concatenate in non-stream mode either',
-      );
+        // Real lifecycle first: stop() flushes the active generation-B cell.
+        renderer.stop();
+        const committed = renderer.getCommittedHistoryCells();
+        const relevant = committed
+          .map((c) => c.kind)
+          .filter((k) => k === 'assistant_message' || k === 'tool_call');
+        assert.deepEqual(
+          relevant,
+          [
+            'assistant_message',
+            'tool_call',
+            'assistant_message',
+            'assistant_message',
+            'assistant_message',
+            'assistant_message',
+            'assistant_message',
+          ],
+          `non-stream mode must segment generations AND tools like streaming, got: ${JSON.stringify(relevant)}`,
+        );
+        const messages = committed
+          .filter((c) => c.kind === 'assistant_message')
+          .map((c) => (c.payload as { message?: string }).message);
+        assert.equal(messages[0], 'Generation A text.');
+        assert.match(messages[1] ?? '', /BLOCKED: src\/missing-login\.ts could not be read/);
+        assert.doesNotMatch(
+          messages.join('|'),
+          /Generation A text\.Generation/,
+          'generations must not concatenate in non-stream mode either',
+        );
+      } finally {
+        renderer.stop();
+      }
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -577,7 +592,7 @@ describe('non-streaming path preserves generation boundaries', () => {
     try {
       const state = { calls: 0 };
       const wsRoot = makeRoot();
-      const engine = new ChatEngine({
+      const engine = makeTestEngine({
         task: 'explain the parser behavior',
         projectRoot: wsRoot,
         maxTurns: 4,
@@ -588,21 +603,24 @@ describe('non-streaming path preserves generation boundaries', () => {
       );
       const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
       renderer.start();
-      const result = await runChatEngineOnce({
-        task: 'explain the parser behavior',
-        target: { targetRoot: wsRoot, workspaceRoot: null, project: null, source: 'cwd', cwd: wsRoot },
-        engine,
-        convRenderer: renderer,
-        useStreaming: false,
-        taskIntent: 'explain',
-        preflightContext: '',
-      });
-      renderer.stop();
-      assert.equal(result.status, 'completed');
-      assert.equal(result.outcome, 'NO_CHANGE_REQUIRED');
-      assert.equal(result.blockedReport ?? null, null, 'no fabricated blocked report');
-      assert.equal(result.reason_code, undefined);
-      assert.equal(result.cause_class, undefined);
+      try {
+        const result = await runChatEngineOnce({
+          task: 'explain the parser behavior',
+          target: { targetRoot: wsRoot, workspaceRoot: null, project: null, source: 'cwd', cwd: wsRoot },
+          engine,
+          convRenderer: renderer,
+          useStreaming: false,
+          taskIntent: 'explain',
+          preflightContext: '',
+        });
+        assert.equal(result.status, 'completed');
+        assert.equal(result.outcome, 'NO_CHANGE_REQUIRED');
+        assert.equal(result.blockedReport ?? null, null, 'no fabricated blocked report');
+        assert.equal(result.reason_code, undefined);
+        assert.equal(result.cause_class, undefined);
+      } finally {
+        renderer.stop();
+      }
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -651,7 +669,7 @@ describe('cancelled turn reports consistent per-turn telemetry', () => {
       getLastInvocationMetadata: () => ({ ...meta }),
     };
 
-    const engine = new ChatEngine({
+    const engine = makeTestEngine({
       task: 'read the config file',
       projectRoot: makeRoot(),
       maxTurns: 6,
@@ -664,32 +682,37 @@ describe('cancelled turn reports consistent per-turn telemetry', () => {
         events.push(ev);
       }
     })();
+    try {
+      const deadline = Date.now() + 2000;
+      while (calls < 2 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      assert.equal(calls, 2, 'runner should be parked in round two');
+      engine.abortTurn();
+      release();
+      await finished;
 
-    const deadline = Date.now() + 2000;
-    while (calls < 2 && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 5));
+      const cancelled = events.find(
+        (e): e is Extract<ChatEvent, { type: 'cancelled' }> => e.type === 'cancelled',
+      );
+      assert.ok(cancelled, `expected a cancelled terminal, got: ${events.map((e) => e.type).join(',')}`);
+      assert.equal(events.some((e) => e.type === 'done'), false);
+      assert.equal(events.some((e) => e.type === 'failed'), false);
+
+      const telemetry = cancelled.turnTelemetry;
+      assert.ok(telemetry, 'cancelled event must carry finalized per-turn telemetry');
+      assert.equal(telemetry.counts.modelInvocations, 2);
+      assert.equal(telemetry.promptTokens, 123);
+      assert.equal(telemetry.completionTokens, 45);
+
+      const lastTelemetry = engine.getLastTurnTelemetry();
+      assert.ok(lastTelemetry, 'engine last-turn telemetry must be finalized on cancel');
+      assert.equal(lastTelemetry.turnId, telemetry.turnId);
+      assert.equal(lastTelemetry.counts.modelInvocations, 2);
+    } finally {
+      engine.abortTurn();
+      release();
+      await finished.catch(() => undefined);
     }
-    assert.equal(calls, 2, 'runner should be parked in round two');
-    engine.abortTurn();
-    release();
-    await finished;
-
-    const cancelled = events.find(
-      (e): e is Extract<ChatEvent, { type: 'cancelled' }> => e.type === 'cancelled',
-    );
-    assert.ok(cancelled, `expected a cancelled terminal, got: ${events.map((e) => e.type).join(',')}`);
-    assert.equal(events.some((e) => e.type === 'done'), false);
-    assert.equal(events.some((e) => e.type === 'failed'), false);
-
-    const telemetry = cancelled.turnTelemetry;
-    assert.ok(telemetry, 'cancelled event must carry finalized per-turn telemetry');
-    assert.equal(telemetry.counts.modelInvocations, 2);
-    assert.equal(telemetry.promptTokens, 123);
-    assert.equal(telemetry.completionTokens, 45);
-
-    const lastTelemetry = engine.getLastTurnTelemetry();
-    assert.ok(lastTelemetry, 'engine last-turn telemetry must be finalized on cancel');
-    assert.equal(lastTelemetry.turnId, telemetry.turnId);
-    assert.equal(lastTelemetry.counts.modelInvocations, 2);
   });
 });

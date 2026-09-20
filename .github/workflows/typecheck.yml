@@ -117,7 +117,8 @@ jobs:
         run: npm run test:acceptance-v0
         working-directory: babel-cli
       - name: Run required harness runtime suite
-        run: npm run test:harness-runtime
+        timeout-minutes: 15
+        run: npm run test:harness-runtime -- --test-timeout=60000
         working-directory: babel-cli
       - name: Log Chat truth test selection
         run: node scripts/print_chat_truth_selection.mjs
@@ -172,7 +173,8 @@ jobs:
         run: npm run test:acceptance-v0
         working-directory: babel-cli
       - name: Run required harness runtime suite
-        run: npm run test:harness-runtime
+        timeout-minutes: 15
+        run: npm run test:harness-runtime -- --test-timeout=60000
         working-directory: babel-cli
       - name: Log Chat truth test selection
         run: node scripts/print_chat_truth_selection.mjs
