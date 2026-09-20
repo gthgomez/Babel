@@ -449,3 +449,134 @@ test('a superseded Task A handleBudgetKill cannot finalize Task B', async () => 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('an obsolete Task A throwing ordinary action cannot write Task B tool log', async () => {
+  const root = createGitProject();
+  const aDispatched = deferred();
+  const aGate = deferred();
+  const bStarted = deferred();
+  const bGate = deferred();
+  try {
+    const engine = new ChatEngine({
+      task: 'Task A',
+      projectRoot: root,
+      runId: `r0-ordinary-read-${Math.random().toString(36).slice(2, 10)}`,
+      model: MODEL,
+    });
+
+    // Mutable runner with a per-call provider block latch.
+    let script: Array<ToolStreamEvent[]> = [];
+    let base = 0;
+    let call = 0;
+    let block: (() => Promise<void>) | null = null;
+    const runner: ScriptedRunner & {
+      setScript(next: Array<ToolStreamEvent[]>): void;
+      onProviderBlock(fn: () => Promise<void>): void;
+    } = {
+      setScript(next) {
+        script = next;
+        base = call;
+      },
+      onProviderBlock(fn) {
+        block = fn;
+      },
+      async *executeWithToolsStream() {
+        const index = call;
+        call += 1;
+        if (block) {
+          const current = block;
+          block = null;
+          await current();
+        }
+        const events = script[index - base] ?? [
+          { type: 'text_delta' as const, text: 'Inventory complete.' },
+          { type: 'done' as const, finishReason: 'stop' },
+        ];
+        for (const event of events) yield event;
+      },
+      async execute() {
+        return { type: 'completion', answer: 'scripted' };
+      },
+      async executeRaw() {
+        return 'scripted';
+      },
+      getLastInvocationMetadata() {
+        return null;
+      },
+    };
+    installRunner(engine, runner);
+
+    // Suspend A inside an ordinary read's hashFilePath (a production await),
+    // then reject it after B owns the engine.
+    const box = engine as unknown as {
+      hashFilePath(path: string): Promise<string | null>;
+      toolCallLog: Array<{ tool: string; target: string; error?: string; detail?: string }>;
+    };
+    const originalHash = box.hashFilePath.bind(engine);
+    let firstHash = true;
+    box.hashFilePath = async (path: string) => {
+      if (firstHash) {
+        firstHash = false;
+        aDispatched.resolve();
+        await aGate.promise;
+        throw new Error('r0 injected ordinary read failure');
+      }
+      return originalHash(path);
+    };
+
+    runner.setScript([
+      [
+        { type: 'tool_use', id: 'a-read', name: 'read_file', input: { path: 'src/main.ts' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [{ type: 'text_delta', text: 'A concluding.' }, { type: 'done', finishReason: 'stop' }],
+    ]);
+    const aEvents: ChatEvent[] = [];
+    const pumpA = (async () => {
+      for await (const event of engine.submitMessageStream('Task A: inspect src/main.ts.')) {
+        aEvents.push(event);
+      }
+    })();
+    await aDispatched.promise;
+
+    // Task B starts and blocks inside its provider before executing any tool.
+    runner.setScript([
+      [
+        { type: 'tool_use', id: 'b-read', name: 'read_file', input: { path: 'src/main.ts' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [{ type: 'text_delta', text: 'Inventory complete.' }, { type: 'done', finishReason: 'stop' }],
+    ]);
+    runner.onProviderBlock(async () => {
+      bStarted.resolve();
+      await bGate.promise;
+    });
+    const bEvents: ChatEvent[] = [];
+    const pumpB = (async () => {
+      for await (const event of engine.submitMessageStream('Task B: inventory only.')) {
+        bEvents.push(event);
+      }
+    })();
+    await bStarted.promise;
+
+    const logBeforeA = box.toolCallLog.length;
+    aGate.resolve();
+    await pumpA;
+    assert.equal(box.toolCallLog.length, logBeforeA, 'obsolete A appended no row to the live log');
+
+    bGate.resolve();
+    await pumpB;
+
+    const bTerminal = bEvents[bEvents.length - 1] as Extract<ChatEvent, { type: 'done' }>;
+    assert.equal(bTerminal.type, 'done', 'Task B completes normally');
+    assert.equal(terminals(aEvents).length, 0, 'the superseded Task A emits no terminal of its own');
+    assert.equal(
+      box.toolCallLog.filter((row) => row.error === 'error').length,
+      0,
+      'obsolete A must not append an error row to Task B tool log',
+    );
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: root, encoding: 'utf-8' });
+    rmSync(root, { recursive: true, force: true });
+  }
+});

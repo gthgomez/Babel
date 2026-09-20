@@ -7492,6 +7492,16 @@ export class ChatEngine {
 
       return { index: meta.index, observation: obsParts.join('\n') };
     } catch (err) {
+      // R0-7/R0-8: an action that throws after its submission was superseded
+      // must not append a failure row to the current task's tool log.
+      if (!this.isSubmissionCurrent(ownerGeneration)) {
+        return this.settleStaleActionResult(
+          tool,
+          target,
+          meta.index,
+          'parent submission superseded before the action settled',
+        );
+      }
       // R0-10: presentation callbacks are an observational side channel. If a
       // callback threw AFTER this action already recorded its execution row,
       // appending a second row would duplicate execution truth. One action
@@ -8893,7 +8903,10 @@ export class ChatEngine {
     recordCompletionDecision(this.parity.sessionEvents, turnId, decision);
   }
 
-  private assembleRunAllowance(finalStatus: ChatResult['status']): ChatEngineRunAllowanceReport {
+  private assembleRunAllowance(
+    finalStatus: ChatResult['status'],
+    persist = true,
+  ): ChatEngineRunAllowanceReport {
     const runAllowance = createRunAllowanceReport(this.limits, {
       postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
       criticRepairCostCapUsd: this.criticRepairCostCapUsd,
@@ -8918,6 +8931,11 @@ export class ChatEngine {
       if (runAllowance.terminalClassification === 'success') {
         runAllowance.terminalClassification = 'no_limit_triggered';
       }
+    }
+    if (!persist) {
+      // R0-8: a superseded caller computes its own (obsolete) report but must
+      // not overwrite the live task's run-allowance artifact or cost baseline.
+      return runAllowance;
     }
     this.limits.runAllowance = runAllowance;
     this.policyEventLog.record({
@@ -9081,7 +9099,7 @@ export class ChatEngine {
       );
     }
 
-    const runAllowance = this.assembleRunAllowance(terminal.status);
+    const runAllowance = this.assembleRunAllowance(terminal.status, !superseded);
 
     const result: ChatResult = {
       status: terminal.status,
