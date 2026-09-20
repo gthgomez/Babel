@@ -367,6 +367,7 @@ import {
   computeTerminalOutcome,
   makeChatRunner,
   observabilityResultFields,
+  outcomeFromReasonCode,
   persistPolicyEventsJsonl,
   persistTranscriptToDisk,
   pushProviderTurnMessages,
@@ -4719,10 +4720,17 @@ export class ChatEngine {
     // Preserve an unknown terminal cause when no classifier or limiter proves
     // one. Durable validation accepts this explicit absence; guessing would
     // make the model-visible outcome less truthful.
-    const outcome = classifyFailureText(error) ?? limiterOutcome;
-    if (outcome === 'BUDGET_EXHAUSTED') this.budgetExceeded = true;
+    const classifiedOutcome = classifyFailureText(error) ?? limiterOutcome;
     const terminalReason =
-      terminalReasonFromFailureText(error) ?? this.resolveTerminalReason(outcome);
+      terminalReasonFromFailureText(error) ?? this.resolveTerminalReason(classifiedOutcome);
+    // R0-9: status/outcome/reason_code/cause_class must form one coherent tuple.
+    // The typed reason is the single authority; when it maps to an outcome, that
+    // outcome wins over an independent text classifier that may disagree (e.g.
+    // an unsupported-operation message that also matches an infra pattern).
+    const outcome =
+      (terminalReason?.code ? outcomeFromReasonCode(terminalReason.code) : undefined) ??
+      classifiedOutcome;
+    if (outcome === 'BUDGET_EXHAUSTED') this.budgetExceeded = true;
     const terminal = projectChatTerminal({
       ...(outcome !== undefined ? { outcome } : {}),
       status: 'failed',
@@ -8474,6 +8482,11 @@ export class ChatEngine {
             finalBlockedReport,
             knownReason,
           );
+    // R0-9: keep the tuple coherent on the callback/non-stream path — a typed
+    // reason is authoritative and projects its matching outcome.
+    const projectedOutcome =
+      (terminalReason?.code ? outcomeFromReasonCode(terminalReason.code) : undefined) ??
+      authoritativeOutcome;
     if (kernelDecision) {
       this.recordCompletionDecisionOnce({
         requestedOutcome: kernelDecision.requestedOutcome,
@@ -8510,7 +8523,7 @@ export class ChatEngine {
     });
 
     const terminal = projectChatTerminal({
-      ...(authoritativeOutcome !== undefined ? { outcome: authoritativeOutcome } : {}),
+      ...(projectedOutcome !== undefined ? { outcome: projectedOutcome } : {}),
       status: finalStatus,
     });
 

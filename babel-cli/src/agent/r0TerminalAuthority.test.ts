@@ -304,6 +304,40 @@ describe('R0-A: streaming terminal authority', () => {
     assert.equal(done.reason_code, 'permission_denied');
     assert.equal(done.cause_class, 'environment');
   });
+
+  test('R0-9: an unsupported_operation failed stream carries a coherent tuple', async () => {
+    const wsRoot = makeRoot();
+    const engine = new ChatEngine({
+      task: 'run the unsupported operation',
+      projectRoot: wsRoot,
+      maxTurns: 3,
+    });
+    stubNativeRunner(engine, {
+      executeWithToolsStream: async function* () {
+        yield {
+          type: 'error' as const,
+          message: 'cannot execute unsupported operation: runtime-invariant',
+        };
+      },
+      getLastInvocationMetadata: () => null,
+    });
+
+    const events = await collect(engine, 'run the unsupported operation', 'explain');
+    const failed = events.filter(
+      (e): e is Extract<ChatEvent, { type: 'failed' }> => e.type === 'failed',
+    );
+    assert.equal(failed.length, 1, 'exactly one failed terminal');
+    const terminal = failed[0]!;
+    // The reason is typed by the kernel/adapter text; the outcome must match it.
+    assert.equal(terminal.reason_code, 'unsupported_operation');
+    assert.equal(terminal.cause_class, 'harness');
+    assert.equal(
+      terminal.outcome,
+      'BLOCKED_POLICY',
+      'a typed reason without a classified outcome still projects its matching outcome',
+    );
+    assert.notEqual(terminal.outcome, undefined);
+  });
 });
 
 // ── Callback / non-stream production path ───────────────────────────────────

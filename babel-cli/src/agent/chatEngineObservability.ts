@@ -824,7 +824,7 @@ export function isVerifierCollectErrorText(text: string | null | undefined): boo
  * it. Returns undefined only when no typed reason exists (legacy reports) or
  * the typed reason is `unknown`.
  */
-function blockedOutcomeFromReasonCode(
+export function outcomeFromReasonCode(
   code: TerminalReasonCode | undefined,
 ): TerminalOutcome | undefined {
   switch (code) {
@@ -881,7 +881,7 @@ export function computeTerminalOutcome(input: {
       // every code — diagnostic prose may not override it. An explicit
       // `unknown` means the harness did not establish a cause, so we also skip
       // the legacy prose heuristics rather than fabricate policy/external blame.
-      const typedBlocked = blockedOutcomeFromReasonCode(input.blockedReport?.reason_code);
+      const typedBlocked = outcomeFromReasonCode(input.blockedReport?.reason_code);
       if (typedBlocked) return typedBlocked;
       // An explicit `unknown` is a truthful "cause not established": do not
       // fabricate external OR policy blame. A block with no established cause
