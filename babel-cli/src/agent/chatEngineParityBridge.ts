@@ -78,6 +78,8 @@ import {
   type FailoverDecision,
 } from './providerCapabilities.js';
 import type { PolicyEvent } from './policyEventLog.js';
+import type { ContextCheckpointV1 } from '../runtime/contextCheckpoints.js';
+import type { AdmissionStore } from '../runtime/admission.js';
 import {
   dualWriteBudgetSnapshot,
   persistLiveSessionAuthority,
@@ -122,6 +124,10 @@ export interface ParityRuntime {
   pendingTaskClarification?: { capability: import('../authority/capabilities.js').CapabilityId; options?: string[] };
   /** H2: last projected LiveSession (rebuilt on resume). */
   liveSession?: import('./liveSession.js').LiveSessionV1;
+  /** P11: the last fully prepared context generation installed atomically. */
+  contextCheckpoint?: ContextCheckpointV1;
+  /** P05 durable owner record; injected by the authorized host, never created here. */
+  admissionStore?: AdmissionStore;
 }
 
 export interface PersistenceReceipt {
@@ -131,6 +137,8 @@ export interface PersistenceReceipt {
   artifacts: Array<{ kind: string; path?: string; status: 'committed' | 'blocked'; error?: string }>
   error?: string
 }
+
+export const CONTEXT_CHECKPOINT_FILENAME = 'context-checkpoint.json';
 
 export function createParityRuntime(threadId: string): ParityRuntime {
   return {
@@ -1151,7 +1159,7 @@ export async function checkpointParityEventLogStrict(
     });
 
     const targets: Array<{
-      kind: 'authority' | 'live_session' | 'thread_events' | 'session_events';
+      kind: 'authority' | 'live_session' | 'thread_events' | 'session_events' | 'context_checkpoint';
       filename: string;
       content: string;
     }> = [
@@ -1180,6 +1188,13 @@ export async function checkpointParityEventLogStrict(
         filename: SESSION_EVENTS_FILENAME,
         content: serializeSessionEventLog(rt.sessionEvents),
       },
+      ...(rt.contextCheckpoint
+        ? [{
+            kind: 'context_checkpoint' as const,
+            filename: CONTEXT_CHECKPOINT_FILENAME,
+            content: JSON.stringify(rt.contextCheckpoint, null, 2),
+          }]
+        : []),
     ];
 
     mkdirSync(runDir, { recursive: true });

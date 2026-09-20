@@ -132,6 +132,26 @@ test('P11 cold resume ignores a stale compaction generation after ownership chan
   assert.equal(rebuilt.some((message) => message.content === 'STALE A CAPSULE'), false);
 });
 
+test('P11 cold resume does not restore a stale advisory summary without its capsule', () => {
+  const log = createThreadEventLog('p11-stale-summary');
+  const turnA = startTurn(log, {
+    task: 'task A', model: 'm', provider: 'p', projectRoot: process.cwd(), policyPreset: 'default',
+  });
+  appendThreadEvent(log, {
+    kind: 'compaction_summary',
+    turn_id: turnA,
+    ownership_generation: 1,
+    content: 'STALE A SUMMARY',
+    provenance: 'model',
+    authoritative: false,
+  });
+  startTurn(log, {
+    task: 'task B', model: 'm', provider: 'p', projectRoot: process.cwd(), policyPreset: 'default',
+  });
+  const rebuilt = rebuildProviderMessagesFromEvents(log, { systemPrompt: 'controller policy' });
+  assert.equal(rebuilt.some((message) => message.content === 'STALE A SUMMARY'), false);
+});
+
 test('P11 failed stale-compaction compensation cannot restore the old capsule on cold resume', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-p11-fence-'));
   const durablePath = join(root, 'thread_events.json');

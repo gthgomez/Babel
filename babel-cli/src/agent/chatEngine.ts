@@ -246,6 +246,7 @@ import { isOperatorAbortError } from './operatorAbort.js';
 import {
   loadSessionEventLogForResume,
   loadSessionEventLogIfPresentForResume,
+  interruptedToolRecoveries,
   recordCompletionDecision,
   recordCapabilityBindingReceipt,
   recordModelInputReceipt,
@@ -260,6 +261,19 @@ import {
   requiresRecoveredOutcomeReconciliation,
   type SessionEventLog,
 } from './sessionEvents.js';
+import {
+  captureApprovedObservation,
+  type ObservationRefV1,
+} from '../evidence/observationStore.js';
+import {
+  installContextCheckpoint,
+  prepareContextCheckpoint,
+  validateContextCheckpoint,
+  type ContextCheckpointOwnerV1,
+  type ContextCheckpointV1,
+  type LiveOperationalSourcesV1,
+} from '../runtime/contextCheckpoints.js';
+import type { AdmissionStore } from '../runtime/admission.js';
 import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 import { captureSessionEventAppendFailure } from './sessionEventDiagnostics.js';
 import { buildRepoMapPreamble } from './repoMapPreamble.js';
@@ -644,6 +658,8 @@ export interface ChatEngineOptions {
   task: string;
   projectRoot: string;
   runId?: string;
+  /** Existing P05 durable owner/fencing authority supplied by the host. */
+  admissionStore?: AdmissionStore;
   resumeExisting?: boolean;
   systemContext?: string;
   /** Appended system prompt fragments (plugins, skills, project memory).
@@ -1052,7 +1068,7 @@ export function formatTextToolResults(entries: readonly TextToolResultEntry[]): 
       continue;
     }
     // Tools whose output content the model needs to ingest
-    if (entry.stdout && ['read_file', 'grep', 'glob', 'list_dir'].includes(entry.tool)) {
+    if (entry.stdout && ['read_file', 'read_range', 'grep', 'glob', 'list_dir'].includes(entry.tool)) {
       const truncated =
         entry.stdout.length > 3000
           ? entry.stdout.slice(0, 3000) + '\n... [truncated]'
@@ -1324,6 +1340,9 @@ export class ChatEngine {
   /** Last authoritative verifier failed (reopens investigation tools). */
   private lastVerifierFailed = false;
   private workingState: WorkingState = createWorkingState();
+  /** P11 A11a: exact approved observation refs retained for the installed context. */
+  private p11ObservationRefs: ObservationRefV1[] = [];
+  private p11ObservationCaptureIssues: string[] = [];
   /** Soft investigate-budget one-shot latch (synced via explore fuse state). */
   private investigateSoftNudgeDone = false;
   /** Cumulative exploration tools across the entire session (never resets).
@@ -1740,6 +1759,7 @@ export class ChatEngine {
     this.engineRunId = options.runId ?? allocateThreadId();
     // definite assignment: engineRunId set immediately above
     this.parity = createParityRuntime(this.engineRunId);
+    if (options.admissionStore) this.parity.admissionStore = options.admissionStore;
     this.runtimeInvariants = new RuntimeInvariantRegistry(
       resolveRuntimeInvariantMode(options.runtimeInvariantMode),
     );
@@ -3117,24 +3137,33 @@ export class ChatEngine {
         nativeTools: useNativeTools,
         textTools: useTextTools,
       });
+      // WorkingState is mixed controller/model advisory context. Record the
+      // exact revision before projecting provider messages so native warm and
+      // cold requests share one durable source of model-visible truth.
+      if (this.parity.turnId) {
+        this.services.conversation.recordAssistantMessage(
+          this.parity.eventLog,
+          this.parity.turnId,
+          formatWorkingStateBlock(this.workingState),
+          {
+            name: 'working_state',
+            provenance: 'mixed',
+            authoritative: false,
+          },
+        );
+      }
+      const hadInstalledP11Context = this.parity.contextCheckpoint !== undefined;
+      const p11ContextInstalled = await this.installP11ContextCheckpoint();
+      if (hadInstalledP11Context && !p11ContextInstalled) {
+        yield this.streamFailed(
+          'P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused.',
+        );
+        return;
+      }
       const providerMessages = useNativeTools
-        ? (() => {
-            const rebuilt = this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
-              systemPrompt: this.getOrBuildSystemPrompt('native'),
-            });
-            // After compaction/resume the durable advisory must be reused;
-            // appending a second live copy would make cold and warm requests
-            // diverge. Before the first event exists, inject the live state.
-            return rebuilt.some((message) => message.name === 'working_state')
-              ? rebuilt
-              : rebuilt.concat({
-                  role: 'assistant' as const,
-                  name: 'working_state',
-                  content: formatWorkingStateBlock(this.workingState),
-                  provenance: 'mixed' as const,
-                  authoritative: false,
-                });
-          })()
+        ? this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
+            systemPrompt: this.getOrBuildSystemPrompt('native'),
+          })
         : [];
 
       yield { type: 'thinking' };
@@ -5527,7 +5556,36 @@ export class ChatEngine {
     });
     engine.conversation = messages;
     const threadLog = loadThreadEventLogFromDir(sessionDir);
-    if (threadLog) engine.restoreEventLog(threadLog);
+    if (threadLog) {
+      engine.restoreEventLog(threadLog);
+      const checkpointPath = join(sessionDir, 'context-checkpoint.json');
+      if (existsSync(checkpointPath)) {
+        try {
+          const checkpoint = JSON.parse(readFileSync(checkpointPath, 'utf8')) as ContextCheckpointV1;
+          const latestGeneration = Math.max(
+            1,
+            ...threadLog.events
+              .filter((event): event is Extract<typeof event, { kind: 'turn_started' }> => event.kind === 'turn_started')
+              .map((event) => event.ownership_generation ?? 1),
+          );
+          const coldResume = validateContextCheckpoint(checkpoint, {
+            expectedThreadId: threadLog.thread_id,
+            currentOwner: engine.parity.admissionStore?.readOwner(threadLog.thread_id) ?? {
+              threadId: threadLog.thread_id,
+              generation: latestGeneration,
+              token: `chat:${engineRunId}`,
+            },
+          });
+          if (coldResume.status === 'valid') {
+            engine.parity.contextCheckpoint = checkpoint;
+            engine.p11ObservationRefs = [...checkpoint.observation_manifest];
+          }
+        } catch {
+          // A malformed or stale context checkpoint is unavailable evidence;
+          // durable thread/session logs remain the only resume source.
+        }
+      }
+    }
     engine.restoreSessionEvents(sessionLog, { runDir: sessionDir });
     engine.clearVerifierEvidenceState();
     engine.cachedSystemPromptLegacy = null;
@@ -5539,6 +5597,213 @@ export class ChatEngine {
   }
 
   // ── Private Methods ─────────────────────────────────────────────────────
+
+  private currentP11Owner(): ContextCheckpointOwnerV1 {
+    const durableOwner = this.parity.admissionStore?.readOwner(this.parity.eventLog.thread_id);
+    if (durableOwner) {
+      return {
+        threadId: durableOwner.threadId,
+        generation: durableOwner.generation,
+        token: durableOwner.token,
+      };
+    }
+    const currentTurn = this.parity.eventLog.events.find(
+      (event): event is Extract<typeof this.parity.eventLog.events[number], { kind: 'turn_started' }> =>
+        event.kind === 'turn_started' && event.turn_id === this.parity.turnId,
+    );
+    const generation = currentTurn?.ownership_generation ?? Math.max(
+      1,
+      ...this.parity.eventLog.events
+        .filter((event): event is Extract<typeof event, { kind: 'turn_started' }> => event.kind === 'turn_started')
+        .map((event) => event.ownership_generation ?? 1),
+    );
+    return {
+      threadId: this.parity.eventLog.thread_id,
+      generation: Math.max(1, generation),
+      // The durable P05 owner token is opaque. This run-scoped token is only
+      // used when the embedding has not supplied a separate admission owner;
+      // it remains stable for the run and is fenced by the generation.
+      token: `chat:${this.engineRunId}`,
+    };
+  }
+
+  private currentP11Workspace(): ReturnType<typeof RevisionManager.computeRevisionSync> | null {
+    try {
+      return RevisionManager.computeRevisionSync(this.options.projectRoot, [], {
+        scope_kind: 'repository',
+        git_binding: 'optional',
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  private captureP11Observation(
+    action: ChatToolAction,
+    result: { index: number; observation: string },
+    meta: { index: number; idempotencyKey: string; ownerGeneration: number },
+  ): void {
+    if (!result.observation || !this.isSubmissionCurrent(meta.ownerGeneration)) return;
+    const taskId = this.parity.liveAuthority?.taskContract.task_id ?? this.engineRunId;
+    const operationId = meta.idempotencyKey;
+    const turnId = this.parity.turnId ?? `turn-${this._turnIndex}`;
+    const workspace = this.currentP11Workspace();
+    const logEntry = [...this.toolCallLog]
+      .reverse()
+      .find((entry) => entry.index === meta.index && entry.tool === chatActionToolName(action));
+    const previousObservation = this.p11ObservationRefs.find(
+      (observation) => observation.invocation.operation_id === operationId,
+    );
+    const captured = captureApprovedObservation(
+      {
+        invocation: {
+          operation_id: operationId,
+          task_id: taskId,
+          run_id: this.engineRunId,
+          turn_id: turnId,
+          attempt_id: operationId,
+        },
+        sections: [{ channel: 'stdout', content: result.observation }],
+        execution_status: logEntry?.exit_code === 0 || logEntry?.exit_code === undefined ? 'succeeded' : 'failed',
+        permitted_principals: ['agent:main'],
+        data_policy: {
+          approved: true,
+          policy_version: 'babel-chat-model-readable-v1',
+          redaction_policy_version: 'babel-chat-redaction-v1',
+        },
+        ...(workspace
+          ? {
+              snapshot_ref: workspace.compositeTreeHash,
+              coverage_ref: workspace.compositeTreeHash,
+            }
+          : {}),
+        ...(previousObservation ? { previous_observation: previousObservation } : {}),
+      },
+      {
+        storage_root: join(this.engineRunDir, 'observations'),
+        clock: () => new Date().toISOString(),
+        policy: { durability: 'fsync_file_and_dir' },
+      },
+    );
+    if (captured.status === 'captured') {
+      this.p11ObservationRefs = [
+        ...this.p11ObservationRefs.filter(
+          (observation) => observation.observation_id !== captured.observation.observation_id,
+        ),
+        captured.observation,
+      ];
+    } else {
+      this.p11ObservationCaptureIssues.push(
+        captured.status === 'blocked' ? captured.reason : captured.reason,
+      );
+    }
+  }
+
+  private buildP11Sources(): LiveOperationalSourcesV1 | null {
+    const authority = this.parity.liveAuthority;
+    const workspace = this.currentP11Workspace();
+    const allowance = this.taskAllowance;
+    const latestInput = [...this.parity.sessionEvents.events]
+      .reverse()
+      .find((event) => event.kind === 'model_input_receipt');
+    if (!authority || !workspace || !allowance || !latestInput || latestInput.kind !== 'model_input_receipt') {
+      return null;
+    }
+    const interrupted = interruptedToolRecoveries(this.parity.sessionEvents).map((item) => ({
+      handle_id: item.idempotencyKey,
+      kind: item.toolName.includes('sub_agent') || item.toolName.includes('child') ? 'child' as const : 'operation' as const,
+      state: item.state === 'TOOL_OUTCOME_UNKNOWN' ? 'indeterminate' as const : 'pending' as const,
+    }));
+    const workingState = {
+      current_hypothesis:
+        this.workingState.currentHypothesis || this.workingState.goal || 'active chat context',
+      unresolved_failures: [
+        ...(this.workingState.failureSurface?.errorSignature
+          ? [this.workingState.failureSurface.errorSignature]
+          : []),
+        ...this.workingState.openQuestions,
+      ],
+      next_experiment: this.workingState.nextExperiment || 'continue the current controller step',
+    };
+    const receipts = this.lastVerifierReceipt
+      ? [{
+          receipt_id: this.lastVerifierReceipt.receiptId ?? `receipt:${this.lastVerifierReceipt.command}`,
+          identity: this.lastVerifierReceipt.verifierId ?? this.lastVerifierReceipt.command,
+          scope: this.lastVerifierReceipt.scope ?? 'unknown',
+          stale: this.lastVerifierReceipt.stale === true,
+          bound_revision: this.lastVerifierReceipt.boundRevision?.compositeTreeHash ?? null,
+        }]
+      : [];
+    const observations = this.p11ObservationRefs.map((observation) => ({
+      observation_id: observation.observation_id,
+      payload_sha256: observation.payloads[0]?.sha256 ?? '',
+      authorized: true,
+    }));
+    return {
+      resumed: this.options.resumeExisting === true,
+      task_contract: {
+        goal: authority.taskContract.goal,
+        acceptance_clause_ids: authority.taskContract.acceptance.map((item) => item.id),
+        contract_hash: authority.taskContract.contract_hash,
+      },
+      working_state: workingState,
+      workspace: {
+        current_snapshot_revision: workspace.compositeTreeHash,
+        capture_complete: true,
+        coverage_ref: workspace.compositeTreeHash,
+        capture_provenance: 'current_capture',
+        capture_epoch: `${workspace.capturedAt}:${workspace.compositeTreeHash}`,
+      },
+      receipts,
+      budget: {
+        owner: allowance.taskOwnerId,
+        remaining_allowance: Math.max(0, allowance.grant.turnCap - allowance.consumed.turns),
+        cancellation_owner: allowance.taskOwnerId,
+      },
+      pending: interrupted,
+      route: {
+        compiled_request_identity: latestInput.body_digest ?? latestInput.input_digest,
+        tool_profile: this.shouldUseTextTools() ? 'text-tools' : 'native-tools',
+        model_route: `${latestInput.provider}:${latestInput.sent_model_id}`,
+      },
+      observations,
+      observation_manifest: this.p11ObservationRefs,
+      legacy_observation_refs: [],
+    };
+  }
+
+  private async installP11ContextCheckpoint(): Promise<boolean> {
+    const sources = this.buildP11Sources();
+    if (!sources) return false;
+    const owner = this.currentP11Owner();
+    const prepared = prepareContextCheckpoint({
+      checkpointId: `context:${this.parity.turnId ?? this._turnIndex}:${this.workingState.revision}`,
+      sessionId: this.engineRunId,
+      turnId: this.parity.turnId,
+      contextEpoch: `${owner.generation}:${this.workingState.revision}:${sources.workspace?.capture_epoch ?? 'unknown'}`,
+      owner,
+      sources,
+    });
+    if (prepared.status !== 'prepared') return false;
+    const previous = this.parity.contextCheckpoint;
+    const ownerNow = this.parity.admissionStore?.readOwner(owner.threadId) ?? owner;
+    const installed = await installContextCheckpoint(prepared, {
+      currentOwner: ownerNow,
+      ...(this.parity.admissionStore
+        ? { readCurrentOwner: () => this.parity.admissionStore?.readOwner(owner.threadId) ?? null }
+        : {}),
+      install: async (checkpoint) => {
+        this.parity.contextCheckpoint = checkpoint;
+        const receipt = await checkpointParityEventLogStrict(this.parity, this.engineRunDir);
+        if (receipt.status !== 'committed') {
+          if (previous) this.parity.contextCheckpoint = previous;
+          else delete this.parity.contextCheckpoint;
+          throw new Error(receipt.error ?? 'checkpoint persistence blocked');
+        }
+      },
+    });
+    return installed.status === 'installed';
+  }
 
   /**
    * Execute a batch of tool actions sequentially through the policy gate.
@@ -5595,6 +5860,12 @@ export class ChatEngine {
                 this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
             });
             allResults.push(result);
+            this.captureP11Observation(actions[index]!, result, {
+              index,
+              ownerGeneration,
+              idempotencyKey:
+                this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
+            });
             if (result.stop) stopTerminal = true;
           }
           continue;
@@ -5602,8 +5873,7 @@ export class ChatEngine {
         for (let c = 0; c < batch.indices.length; c += MAX_TOOL_CONCURRENCY) {
           if (this._cancelled || this.abortController.signal.aborted || superseded()) break;
           const chunk = batch.indices.slice(c, c + MAX_TOOL_CONCURRENCY);
-          allResults.push(
-            ...(await Promise.all(
+          const parallelResults = await Promise.all(
               chunk.map((index) =>
                 this.executeOneAction(actions[index]!, toolContext, callbacks, {
                   index,
@@ -5612,8 +5882,19 @@ export class ChatEngine {
                     this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
                 }),
               ),
-            )),
-          );
+            );
+          allResults.push(...parallelResults);
+          for (const index of chunk) {
+            const result = parallelResults.find((item) => item.index === index);
+            if (result) {
+              this.captureP11Observation(actions[index]!, result, {
+                index,
+                ownerGeneration,
+                idempotencyKey:
+                  this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
+              });
+            }
+          }
         }
       } else {
         const result = await this.executeOneAction(actions[batch.index]!, toolContext, callbacks, {
@@ -5624,6 +5905,13 @@ export class ChatEngine {
             `tool_call_${this._turnIndex}_${batch.index}`,
         });
         allResults.push(result);
+        this.captureP11Observation(actions[batch.index]!, result, {
+          index: batch.index,
+          ownerGeneration,
+          idempotencyKey:
+            this._streamNativeToolCallIds[batch.index] ??
+            `tool_call_${this._turnIndex}_${batch.index}`,
+        });
         if (result.stop || isCircuitBreakerObservation(result.observation)) stopTerminal = true;
       }
     }
@@ -7150,6 +7438,12 @@ export class ChatEngine {
             type: 'add_evidence',
             evidence: `${action.type}:${target}`,
             file: action.file_path,
+            discriminating: isDiscriminatingInspectionEvidence(
+              this.workingState,
+              action,
+              target,
+              `${action.type}:${target}`,
+            ),
           });
         }
         return {
@@ -7755,9 +8049,7 @@ export class ChatEngine {
               target,
               `${action.type}:${target}`,
             ),
-            ...(action.type === 'read_file'
-              ? { file: action.path }
-              : {}),
+            ...(action.type === 'read_file' ? { file: action.path } : {}),
           });
         }
       }

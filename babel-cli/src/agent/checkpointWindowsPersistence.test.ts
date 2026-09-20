@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { checkpointParityEventLogStrict, createParityRuntime } from './chatEngineParityBridge.js'
+import { checkpointParityEventLogStrict, createParityRuntime, CONTEXT_CHECKPOINT_FILENAME } from './chatEngineParityBridge.js'
+import { prepareContextCheckpoint } from '../runtime/contextCheckpoints.js'
 import { CHECKPOINT_JOURNAL_FILENAME, recoverCheckpointArtifacts, resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import { persistThreadEventLog, recordAssistantMessage, serializeThreadEventLog, THREAD_EVENT_LOG_FILENAME } from './threadEventLog.js'
 
@@ -13,6 +14,56 @@ function fixture() {
   runtime.liveAuthority = resolveLiveSessionAuthority({ mode: 'chat', projectRoot: root, task: 'checkpoint fixture' })
   return { root, runtime }
 }
+
+function installableContext(threadId: string) {
+  const owner = { threadId, generation: 1, token: 'checkpoint-test-owner' }
+  const prepared = prepareContextCheckpoint({
+    checkpointId: 'checkpoint-test-1',
+    owner,
+    sessionId: threadId,
+    turnId: 'turn-1',
+    contextEpoch: 'epoch-1',
+    sources: {
+      resumed: false,
+      task_contract: { goal: 'checkpoint fixture', acceptance_clause_ids: ['a'], contract_hash: 'contract' },
+      working_state: { current_hypothesis: 'checkpoint is durable', unresolved_failures: [], next_experiment: 'resume' },
+      workspace: {
+        current_snapshot_revision: 'revision',
+        capture_complete: true,
+        coverage_ref: 'coverage',
+        capture_provenance: 'current_capture',
+        capture_epoch: 'epoch',
+      },
+      receipts: [{ receipt_id: 'receipt', identity: 'test', scope: 'targeted', stale: false, bound_revision: 'revision' }],
+      budget: { owner: 'budget', remaining_allowance: 4, cancellation_owner: 'budget' },
+      pending: [],
+      route: { compiled_request_identity: 'request', tool_profile: 'native', model_route: 'test-model' },
+      observations: [],
+      legacy_observation_refs: [],
+    },
+  })
+  assert.equal(prepared.status, 'prepared')
+  if (prepared.status !== 'prepared') throw new Error('context preparation was blocked')
+  return prepared.checkpoint
+}
+
+test('context checkpoint joins the strict batch and rolls back with it', async () => {
+  const { root, runtime } = fixture()
+  try {
+    runtime.contextCheckpoint = installableContext(runtime.eventLog.thread_id)
+    const initial = await checkpointParityEventLogStrict(runtime, root)
+    assert.equal(initial.status, 'committed')
+    const contextPath = join(root, CONTEXT_CHECKPOINT_FILENAME)
+    const before = readFileSync(contextPath, 'utf8')
+    runtime.contextCheckpoint = { ...runtime.contextCheckpoint, checkpointId: 'checkpoint-test-2' }
+    const failed = await checkpointParityEventLogStrict(runtime, root, { injectCommitFailureAfter: 5 })
+    assert.equal(failed.status, 'blocked')
+    assert.equal(readFileSync(contextPath, 'utf8'), before)
+    assert.equal(readdirSync(root).some(name => /\.(tmp|bak)$/.test(name)), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test('strict checkpoint recovers a transient thread-event rename failure before committing', async () => {
   const { root, runtime } = fixture()

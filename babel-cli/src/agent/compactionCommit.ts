@@ -745,6 +745,11 @@ export async function commitCompaction(
         content: summaryContent,
         provenance: 'model',
         authoritative: false,
+        ...(input.ownershipGeneration !== undefined
+          ? { ownership_generation: input.ownershipGeneration }
+          : ownershipGenerationForTurn(input.threadLog, turnId) !== undefined
+            ? { ownership_generation: ownershipGenerationForTurn(input.threadLog, turnId) }
+            : {}),
       }).event_id);
     }
     ownedThreadEventIds.push(...appendRetainedWorkingSet(input.threadLog, turnId, retained));

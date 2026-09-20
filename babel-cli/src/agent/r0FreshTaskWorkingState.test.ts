@@ -220,11 +220,22 @@ function installRunner(engine: ChatEngine, runner: DualRunner, isTextMode: () =>
 
 /** Extract the working-state block embedded in a provider prompt, if present. */
 function extractWorkingStateBlock(prompt: string): string {
-  const start = prompt.indexOf(WORKING_STATE_MARKER);
+  // Advisory context is escaped before it is placed inside the provider
+  // container. Decode only for this assertion so the oracle inspects the
+  // logical WorkingState payload while the hostile-delimiter protection stays
+  // exercised by the prompt-serialization tests.
+  const escapedMarker = WORKING_STATE_MARKER
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+  const start = prompt.indexOf(escapedMarker);
   assert.ok(start >= 0, 'provider prompt contains a working-state block');
   const rest = prompt.slice(start);
   const end = rest.search(/\n#{2,3} /);
-  return end >= 0 ? rest.slice(0, end) : rest;
+  return (end >= 0 ? rest.slice(0, end) : rest)
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&');
 }
 
 interface EngineInternals {
@@ -310,19 +321,20 @@ describe('R0-1 fresh-task WorkingState isolation', () => {
       assert.equal(wsA.lastVerifier?.exitCode, 1, 'task A verifier is red');
       assert.equal(wsA.lastVerifier?.fresh, true, 'task A verifier is fresh');
 
-      // Consume an implementation-repair failure budget so we can prove the
-      // fresh-task boundary recreates the tracker.
+      // The red verifier already consumed one implementation-repair allowance
+      // for the real repair attempt. Consume one more so the fresh-task
+      // boundary has a visibly non-default tracker to recreate.
       const trackerA = internals.failureBudgetTracker;
       const beforeConsume = trackerA.remainingBudgets();
       assert.equal(
         beforeConsume.implementation_repair,
-        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair,
-        'task A starts with the contract budget',
+        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair - 1,
+        'task A accounts for the red repair verifier',
       );
       trackerA.consume({ budget_key: 'implementation_repair' } as never);
       assert.equal(
         internals.failureBudgetTracker.remainingBudgets().implementation_repair,
-        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair - 1,
+        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair - 2,
         'task A consumed an implementation-repair budget',
       );
 
@@ -337,7 +349,7 @@ describe('R0-1 fresh-task WorkingState isolation', () => {
       assert.equal(internals.workingState.goal, TASK_A, 'explicit continuation preserves the goal');
       assert.equal(
         internals.failureBudgetTracker.remainingBudgets().implementation_repair,
-        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair - 1,
+        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair - 2,
         'explicit continuation preserves consumed failure budgets',
       );
 

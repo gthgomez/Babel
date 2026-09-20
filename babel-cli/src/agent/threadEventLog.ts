@@ -103,6 +103,8 @@ export type ThreadEvent =
       content: string;
       provenance: 'model';
       authoritative: false;
+      /** Summary belongs to the same durable owner generation as its capsule. */
+      ownership_generation?: number;
     })
   | (ThreadEventBase & {
       kind: 'policy_decision';
@@ -294,11 +296,19 @@ export function recordAssistantMessage(
   log: ThreadEventLog,
   turnId: string,
   content: string,
+  options: {
+    name?: string;
+    provenance?: 'controller' | 'model' | 'mixed';
+    authoritative?: boolean;
+  } = {},
 ): void {
   appendThreadEvent(log, {
     kind: 'assistant_message',
     turn_id: turnId,
     content,
+    ...(options.name !== undefined ? { name: options.name } : {}),
+    ...(options.provenance !== undefined ? { provenance: options.provenance } : {}),
+    ...(options.authoritative !== undefined ? { authoritative: options.authoritative } : {}),
   });
 }
 
@@ -393,7 +403,12 @@ export function rebuildProviderMessagesFromEvents(
   // model text is never re-promoted to system authority on resume.
   const summaryEvent = events
     .slice(lastCapsuleIdx + 1)
-    .find((event): event is Extract<ThreadEvent, { kind: 'compaction_summary' }> => event.kind === 'compaction_summary');
+    .find((event): event is Extract<ThreadEvent, { kind: 'compaction_summary' }> =>
+      event.kind === 'compaction_summary' &&
+      (lastCapsuleIdx >= 0 || event.ownership_generation === currentOwnershipGeneration) &&
+      (event.ownership_generation === undefined ||
+        event.ownership_generation === currentOwnershipGeneration),
+    );
   if (summaryEvent) {
     summaryContent = summaryEvent.content;
   } else if (capsuleContent?.includes('\n\n--- compaction_summary ---\n')) {
@@ -465,6 +480,18 @@ export function rebuildProviderMessagesFromEvents(
     }
   }
 
+  // WorkingState is a replaceable advisory snapshot. Keep every revision in
+  // the durable log for auditability, but project only the latest revision so
+  // a live request and a cold reconstruction name the same model-visible
+  // snapshot rather than accumulating stale copies.
+  let latestWorkingStateIndex = -1;
+  for (let i = startIdx; i < events.length; i++) {
+    const event = events[i]!;
+    if (event.kind === 'assistant_message' && event.name === 'working_state') {
+      latestWorkingStateIndex = i;
+    }
+  }
+
   for (let i = startIdx; i < events.length; i++) {
     const e = events[i]!;
     switch (e.kind) {
@@ -472,6 +499,7 @@ export function rebuildProviderMessagesFromEvents(
         messages.push({ role: 'user', content: e.content });
         break;
       case 'assistant_message':
+        if (e.name === 'working_state' && i !== latestWorkingStateIndex) break;
         messages.push({
           role: 'assistant',
           content: e.content,
@@ -855,6 +883,7 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
       if (event['provenance'] !== 'model' || event['authoritative'] !== false) {
         throw new Error(`${context} model summary must remain non-authoritative`);
       }
+      requireOptionalInteger(event, 'ownership_generation', context);
       return;
     case 'policy_decision':
       for (const key of ['source', 'action', 'message']) requireString(event, key, context);

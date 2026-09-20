@@ -50,6 +50,7 @@ export type ContextCheckpointValidationReasonV1 =
   | 'manifest_digest_mismatch'
   | 'expected_thread_mismatch'
   | 'requested_owner_mismatch'
+  | 'invalid_context_epoch'
   | 'install_failed';
 
 export type CheckpointPopulationStatusV1 = 'populated' | 'degraded' | 'blocked';
@@ -164,9 +165,23 @@ export interface ContextCheckpointV1 {
   schema_version: typeof CONTEXT_CHECKPOINT_SCHEMA_VERSION;
   checkpointId: string;
   threadId: string;
+  sessionId: string;
+  turnId: string | null;
+  contextEpoch: string;
   generation: number;
   owner: ContextCheckpointOwnerV1;
   preparedAt: string;
+  taskContractReference: string | null;
+  workingStateSnapshot: {
+    state: LiveOperationalSourcesV1['working_state'];
+    provenance: 'mixed';
+    authoritative: false;
+  };
+  workspace: LiveOperationalSourcesV1['workspace'];
+  receipts: LiveOperationalSourcesV1['receipts'];
+  budget: LiveOperationalSourcesV1['budget'];
+  pending: LiveOperationalSourcesV1['pending'];
+  route: LiveOperationalSourcesV1['route'];
   population: CheckpointPopulationV1;
   observation_manifest: readonly ObservationRefV1[];
   observation_manifest_digest: string;
@@ -176,6 +191,9 @@ export interface ContextCheckpointPreparationInputV1 {
   checkpointId: string;
   owner: ContextCheckpointOwnerV1;
   sources: LiveOperationalSourcesV1;
+  sessionId?: string;
+  turnId?: string | null;
+  contextEpoch?: string;
   now?: () => string;
 }
 
@@ -271,7 +289,11 @@ function observationManifestIssues(
   sourceObservations?: LiveOperationalSourcesV1['observations'],
 ): string[] {
   const issues: string[] = [];
-  if (manifest.length === 0) issues.push('observation manifest is empty');
+  // An empty authorized set is a valid first-turn manifest. Once an
+  // authorized observation exists, the manifest must be non-empty and exact.
+  if (manifest.length === 0 && (sourceObservations === undefined || sourceObservations.some((item) => item.authorized))) {
+    issues.push('observation manifest is empty');
+  }
   const ids = new Set<string>();
 
   for (const observation of manifest) {
@@ -583,7 +605,7 @@ export function mapCheckpointRequiredState(
   const authorizedObservations = sources.observations.filter((item) => item.authorized);
   const observationManifest = cloneObservationManifest(sources.observation_manifest ?? []);
   const manifestIssues = observationManifestIssues(observationManifest, sources.observations);
-  if (authorizedObservations.length > 0 && manifestIssues.length === 0) {
+  if (manifestIssues.length === 0) {
     rows.push({
       id: 'exact_observations',
       present: true,
@@ -660,7 +682,12 @@ export function prepareContextCheckpoint(
   if (input.checkpointId.trim().length === 0) reasons.push('invalid_checkpoint_id');
   if (ownerIssues(input.owner).length > 0) reasons.push('invalid_owner');
   if (!checkpointPopulationAllowsInstall(population)) reasons.push('population_incomplete');
-  if (observationManifestIssues(population.observation_manifest).length > 0) {
+  if (
+    observationManifestIssues(
+      population.observation_manifest,
+      input.sources.observations,
+    ).length > 0
+  ) {
     reasons.push('observation_manifest_incomplete');
   }
 
@@ -674,9 +701,23 @@ export function prepareContextCheckpoint(
       schema_version: CONTEXT_CHECKPOINT_SCHEMA_VERSION,
       checkpointId: input.checkpointId,
       threadId: input.owner.threadId,
+      sessionId: input.sessionId ?? input.owner.threadId,
+      turnId: input.turnId ?? null,
+      contextEpoch: input.contextEpoch ?? `${input.owner.generation}:${input.checkpointId}`,
       generation: input.owner.generation,
       owner: { ...input.owner },
       preparedAt: input.now?.() ?? new Date().toISOString(),
+      taskContractReference: input.sources.task_contract?.contract_hash ?? null,
+      workingStateSnapshot: {
+        state: input.sources.working_state,
+        provenance: 'mixed',
+        authoritative: false,
+      },
+      workspace: input.sources.workspace,
+      receipts: input.sources.receipts.map((receipt) => ({ ...receipt })),
+      budget: input.sources.budget ? { ...input.sources.budget } : null,
+      pending: input.sources.pending.map((pending) => ({ ...pending })),
+      route: input.sources.route ? { ...input.sources.route } : null,
       population: {
         ...population,
         rows: population.rows.map((row) => ({ ...row, value_refs: [...row.value_refs] })),
@@ -706,6 +747,9 @@ export function validateContextCheckpoint(
   }
   if (typeof checkpoint.threadId !== 'string' || checkpoint.threadId.trim().length === 0) {
     reasons.push('invalid_thread_id');
+  }
+  if (typeof checkpoint.contextEpoch !== 'string' || checkpoint.contextEpoch.trim().length === 0) {
+    reasons.push('invalid_context_epoch');
   }
   reasons.push(...ownerIssues(checkpoint.owner));
   if (
