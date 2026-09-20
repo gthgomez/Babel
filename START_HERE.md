@@ -141,6 +141,6 @@ default skills and dependencies, and the ordered manifest comes from
 - [docs/CHAT_MODE.md](./docs/CHAT_MODE.md) — default daily runtime
 - [docs/VISION.md](./docs/VISION.md) — product principles
 - [docs/ROADMAP.md](./docs/ROADMAP.md) — public NOW / NEXT / LATER (evidence-based)
-- [docs/STATUS.md](./docs/STATUS.md) — available vs verified vs qualification (when present; stewardship PR #230)
+- [docs/STATUS.md](./docs/STATUS.md) — available vs narrowly verified vs active qualification (when present on this revision)
 - [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md) — Prompt OS layers (progressive disclosure)
 - [INTEGRATION.md](./INTEGRATION.md) — model/integration invocation contract
