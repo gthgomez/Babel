@@ -4,7 +4,7 @@
  * Compaction: chatCompaction.ts. Critic/budget: chatEngineCriticBudget.ts.
  */
 
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
@@ -622,6 +622,13 @@ export interface SubmitMessageOptions {
    * a new task's completion gate.
    */
   continueTask?: boolean;
+  /**
+   * Internal: the submission generation already assigned by the caller
+   * (`submitMessage`). The stream body adopts it instead of incrementing so
+   * the non-streaming presentation guards and the ownership guards agree on
+   * one generation. Not part of the public contract.
+   */
+  submissionGeneration?: number;
 }
 
 import { deniesReadOnlyChatAction, filterReadOnlyChatTools, isReadOnlyChat, resolveChatRangePath } from './chatReadOnly.js';
@@ -681,6 +688,17 @@ export interface ChatEngineOptions {
   runtimeInvariantMode?: RuntimeInvariantMode;
   /** Test-only: explicit live workspace revision hash for gate freshness tests. */
   testWorkspaceRevisionHash?: string | null;
+  /**
+   * Test-only: deterministic overrides threaded into the child sub-agent
+   * lanes so lifecycle races can be driven through the real child
+   * dispatch/completion/application seam without a live provider. Production
+   * callers never set this.
+   */
+  testChildLaneOverrides?: {
+    useDeterministicMock?: boolean;
+    actionResolver?: (prompt: string, round: number) => Promise<import('./actions.js').AgentAction[]>;
+    executor?: import('./toolExecutor.js').ToolExecutor;
+  };
   /** Truthful delivery surface for the model-visible runtime metadata. */
   runtimeMode?: ChatRuntimeMode;
 }
@@ -1318,11 +1336,20 @@ export class ChatEngine {
   private repoMapCache: string | null = null;
   /**
    * Monotonically increasing generation counter. Incremented at the start
-   * of each submitMessage() call. Streaming callbacks check this value to
+   * of each submission (submitMessage and, on the direct streaming path,
+   * submitMessageStreamBody). Streaming callbacks check this value to
    * prevent stale callbacks from a cancelled/aborted request from
    * affecting the current turn.
    */
   private generationCounter = 0;
+  /**
+   * R0-7/R0-8: the submission generation whose generator is currently
+   * executing. Async continuations capture this value when they start and
+   * compare it before writing engine state, so work started under an older
+   * submission can never apply to the task that now owns the engine.
+   * Projected from `generationCounter`; not a second authority.
+   */
+  private activeSubmissionGeneration = 0;
   /** Flag set by cancel() to signal pending work should stop immediately.
    *  Used alongside AbortController to close the race window where a new
    *  controller replaces the aborted one before the loop re-checks it. */
@@ -2447,6 +2474,10 @@ export class ChatEngine {
   ): Promise<ChatResult> {
     this._cancelled = false;
     const generation = ++this.generationCounter;
+    // R0-7/R0-8: publish the owning generation synchronously so any async
+    // continuation during this submission (including before the lazy stream
+    // body first runs) is bound to it.
+    this.activeSubmissionGeneration = generation;
 
     const cb: ChatCallbacks = {};
     if (callbacks.onAnswerChunk) {
@@ -2528,7 +2559,9 @@ export class ChatEngine {
     } | null = null;
 
     try {
-      for await (const event of this.submitMessageStream(userInput, taskIntent)) {
+      for await (const event of this.submitMessageStream(userInput, taskIntent, {
+        submissionGeneration: generation,
+      })) {
         switch (event.type) {
           case 'answer_chunk':
             cb.onAnswerChunk?.(event.text);
@@ -2715,6 +2748,14 @@ export class ChatEngine {
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
+    // R0-7/R0-8: every submission owns a distinct generation. The non-stream
+    // adapter supplies the generation it already incremented; a direct
+    // streaming caller gets a fresh one here. All ownership guards compare
+    // against this value, so a superseded generator can neither continue the
+    // loop nor let a late async continuation write the new task's state.
+    const submissionGeneration =
+      submitOpts?.submissionGeneration ?? ++this.generationCounter;
+    this.activeSubmissionGeneration = submissionGeneration;
     this._cancelled = false;
     this.preparedAdmissionCompactionAttempts = 0;
     this.currentTurnTelemetry = new ChatTurnTelemetryCollector(performance.now());
@@ -2834,7 +2875,11 @@ export class ChatEngine {
       this.repoMapCache === null
         ? this.generateRepoMap()
             .then((map) => {
-              if (map) this.repoMapCache = map;
+              // R0-8: a repository map produced for a superseded submission
+              // must not seed the current task's cached context.
+              if (map && this.isSubmissionCurrent(submissionGeneration)) {
+                this.repoMapCache = map;
+              }
             })
             .catch(() => {
               /* best-effort */
@@ -2864,6 +2909,9 @@ export class ChatEngine {
     let _turnSpan: Span | null = null;
 
     for (let turn = 0; turn < maxTurns; turn++) {
+      // R0-8: a superseded generator must stop before it executes another
+      // turn, settles execution, or emits a terminal for the new owner.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       // Tier A: Track turn index for per-turn observability metadata
       this._turnIndex = turn;
       // Never leak native tool-call IDs from a prior turn/batch into a new cycle.
@@ -2879,6 +2927,8 @@ export class ChatEngine {
 
       // Ensure repo map is available for subsequent turns that may rebuild system prompt
       if (turn === 0) await repoMapPromise;
+      // R0-8: the repo-map await is a suspension point; re-check ownership.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       if (this._cancelled || this.abortController.signal.aborted) {
         // AC3: stream cancel path flushes disk (idempotent if cancel() already did)
         finalizeParityCancel(this.parity, this.engineRunDir);
@@ -3461,7 +3511,12 @@ export class ChatEngine {
               ...(content ? { content } : {}),
             });
           },
-        });
+        }, submissionGeneration);
+
+        // R0-8: tools are a suspension point. If the submission was superseded
+        // while they ran, stop before mutating the new owner's state or
+        // emitting a terminal on its behalf.
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
 
         // Repetition loop detection: record each executed action and check for loops
         for (const action of turnResult.actions) {
@@ -5294,6 +5349,7 @@ export class ChatEngine {
   private async executeActions(
     actions: ChatToolAction[],
     callbacks: ChatCallbacks,
+    ownerGeneration: number = this.activeSubmissionGeneration,
   ): Promise<{
     observations: string;
     observationList: string[];
@@ -5321,15 +5377,22 @@ export class ChatEngine {
 
     const allResults: Awaited<ReturnType<typeof this.executeOneAction>>[] = [];
     let stopTerminal = false;
+    // R0-8: a superseded generator must not run the new owner's tools. The
+    // generation check runs between every action and batch, including after
+    // an awaited tool/child returns.
+    const superseded = (): boolean => !this.isSubmissionCurrent(ownerGeneration);
     for (const batch of batches) {
-      if (this._cancelled || this.abortController.signal.aborted || stopTerminal) break;
+      if (this._cancelled || this.abortController.signal.aborted || stopTerminal || superseded())
+        break;
       if (batch.kind === 'parallel_reads') {
         const containsSubAgent = batch.indices.some((index) => actions[index]?.type === 'sub_agent');
         if (containsSubAgent) {
           for (const index of batch.indices) {
-            if (this._cancelled || this.abortController.signal.aborted || stopTerminal) break;
+            if (this._cancelled || this.abortController.signal.aborted || stopTerminal || superseded())
+              break;
             const result = await this.executeOneAction(actions[index]!, toolContext, callbacks, {
               index,
+              ownerGeneration,
               idempotencyKey:
                 this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
             });
@@ -5339,13 +5402,14 @@ export class ChatEngine {
           continue;
         }
         for (let c = 0; c < batch.indices.length; c += MAX_TOOL_CONCURRENCY) {
-          if (this._cancelled || this.abortController.signal.aborted) break;
+          if (this._cancelled || this.abortController.signal.aborted || superseded()) break;
           const chunk = batch.indices.slice(c, c + MAX_TOOL_CONCURRENCY);
           allResults.push(
             ...(await Promise.all(
               chunk.map((index) =>
                 this.executeOneAction(actions[index]!, toolContext, callbacks, {
                   index,
+                  ownerGeneration,
                   idempotencyKey:
                     this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
                 }),
@@ -5356,6 +5420,7 @@ export class ChatEngine {
       } else {
         const result = await this.executeOneAction(actions[batch.index]!, toolContext, callbacks, {
           index: batch.index,
+          ownerGeneration,
           idempotencyKey:
             this._streamNativeToolCallIds[batch.index] ??
             `tool_call_${this._turnIndex}_${batch.index}`,
@@ -5516,15 +5581,90 @@ export class ChatEngine {
     );
   }
 
+  /**
+   * R0-7/R0-8: true while `ownerGeneration` is still the submission that owns
+   * the engine. Async continuations capture their generation when they start
+   * and call this before writing state, so obsolete work cannot apply to the
+   * task that now owns the engine.
+   */
+  private isSubmissionCurrent(ownerGeneration: number): boolean {
+    return this.activeSubmissionGeneration === ownerGeneration;
+  }
+
+  /**
+   * R0-7: the current parent candidate revision, derived from the existing
+   * session mutation batches and RevisionManager. Returns null when the parent
+   * has no mutation scope yet (nothing to compare). Never invents a revision
+   * authority — this is the same computation the completion gate performs.
+   */
+  private currentCandidateRevisionHash(): string | null {
+    try {
+      const raw = mutationPathsFromSessionEvents(this.parity.sessionEvents.events);
+      if (raw.length === 0) return null;
+      // Session mutation batches may carry absolute or repo-relative paths;
+      // RevisionManager requires canonical repository-relative paths.
+      const root = resolve(this.options.projectRoot);
+      const relativePaths: string[] = [];
+      for (const candidate of raw) {
+        const absolute = isAbsolute(candidate) ? candidate : resolve(root, candidate);
+        const rel = relative(root, absolute);
+        if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) continue;
+        relativePaths.push(rel.split(sep).join('/'));
+      }
+      const unique = [...new Set(relativePaths)].sort();
+      if (unique.length === 0) return null;
+      return RevisionManager.computeRevisionSync(this.options.projectRoot, unique)
+        .compositeTreeHash;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * R0-7: a child result that no longer applies to the current parent
+   * candidate/submission is returned as historical evidence only. It must not
+   * enter the current task's tool log, budget, working state, verifier
+   * ledger, mutation attribution, or presentation callbacks.
+   */
+  private settleStaleChildResult(
+    tool: string,
+    target: string,
+    subId: string,
+    index: number,
+    reason: string,
+  ): { index: number; observation: string } {
+    return {
+      index,
+      observation: [
+        `### sub_agent ${subId}: stale_result`,
+        'status: stale',
+        'attribution: child_stale_result',
+        `reason: ${reason}`,
+        'This child result is historical evidence from a superseded parent',
+        'candidate and does not apply to the current task. It is deliberately',
+        'excluded from the current tool log, budget, verifier ledger, working',
+        'state, and mutation attribution.',
+      ].join('\n'),
+    };
+  }
+
   private async executeOneAction(
     action: ChatToolAction,
     toolContext: ToolContext,
     callbacks: ChatCallbacks,
-    meta: { index: number; idempotencyKey?: string },
+    meta: { index: number; idempotencyKey?: string; ownerGeneration?: number },
   ): Promise<{ index: number; observation: string; stop?: boolean }> {
     // R0-10: a throwing presentation callback must not unwind settlement or
     // duplicate execution truth. All callbacks below are the safe wrappers.
     callbacks = wrapPresentationCallbacks(callbacks);
+    // R0-7/R0-8: the submission that owns this action. Captured once, before
+    // any await, so a tool/child that settles after the engine is superseded
+    // is recognised as stale instead of being applied to the new task.
+    const ownerGeneration = meta.ownerGeneration ?? this.activeSubmissionGeneration;
+    // R0-7: the parent turn at dispatch time. Child mutation evidence must be
+    // attributed to the turn that produced it, never to whatever turn is live
+    // when the child finally resolves.
+    const dispatchTurnId = this.parity.turnId;
     // R0-10: baseline for "did this invocation already record an execution
     // row?". `meta.index` is not unique across a turn (it is per-round), so the
     // catch must compare against this invocation's own baseline.
@@ -5653,6 +5793,8 @@ export class ChatEngine {
         const mutationEnabled = spec.mutation;
         const writeScope = spec.writeScope;
         const specReceipt = formatChildSpecReceipt(spec);
+        // Test-only deterministic lane overrides (never set in production).
+        const childLane = this.options.testChildLaneOverrides;
 
         // #11: Fork an isolated ToolContext with a child AbortController.
         // Cancelling the parent cascades; cancelling a sibling does not.
@@ -5702,6 +5844,22 @@ export class ChatEngine {
           approvalSession: childApproval,
           parentTrace: { threadId: parentContext.threadId, turnId: parentContext.turnId },
         };
+        // R0-7: bind this child to the parent candidate revision at dispatch.
+        // A child result may become authority only while it still applies to
+        // the current parent candidate. A read-only child cannot move the
+        // candidate itself, so a changed revision means the parent moved; a
+        // mutation child does move it, so revision movement is judged only for
+        // non-mutating children and the submission/turn identity carries the
+        // rest. Existing authority only (RevisionManager + submission id).
+        const dispatchRevisionHash = this.currentCandidateRevisionHash();
+        const childResultIsStale = (changedFiles: number): boolean => {
+          if (!this.isSubmissionCurrent(ownerGeneration)) return true;
+          if (this.parity.turnId !== dispatchTurnId) return true;
+          if (changedFiles === 0 && dispatchRevisionHash !== this.currentCandidateRevisionHash()) {
+            return true;
+          }
+          return false;
+        };
         // R1: scope the entire child dispatch with the run-scoped helper. The
         // AsyncLocalStorage binding starts at this call and unwinds when the
         // awaited body settles, so a finished child can never leave its context
@@ -5741,13 +5899,35 @@ export class ChatEngine {
                   runDir: childRunDir,
                   abortSignal: childController.signal,
                   cleanupWorktree: false,
+                  ...(childLane?.useDeterministicMock !== undefined
+                    ? { useDeterministicMock: childLane.useDeterministicMock }
+                    : {}),
+                  ...(childLane?.executor ? { executor: childLane.executor } : {}),
                   toolContext: {
                     signal: childController.signal,
                   },
                   ...(mutationAllowance ? { inheritedAllowance: mutationAllowance } : {}),
-                  onUsageRecorded: () => this.persistTaskCostBaseline(),
+                  onUsageRecorded: () => {
+                    // R0-8: a superseded child must not flush the new task's
+                    // cost baseline / active-execution checkpoint.
+                    if (this.isSubmissionCurrent(ownerGeneration)) {
+                      this.persistTaskCostBaseline();
+                    }
+                  },
                 },
               );
+              // R0-7: a child that resolves after the parent moved must not
+              // install evidence, invalidate verifier authority, or spend the
+              // current task's budget. Visible as historical evidence only.
+              if (childResultIsStale(implResult.changedFiles.length)) {
+                return this.settleStaleChildResult(
+                  tool,
+                  target,
+                  subId,
+                  meta.index,
+                  'parent submission/revision superseded before the child resolved',
+                );
+              }
               if (implResult.inheritedBudgetExceeded && implResult.inheritedBudgetLimiter) {
                 this.markChildBudgetExhausted(
                   implResult.inheritedBudgetLimiter,
@@ -5826,11 +6006,40 @@ export class ChatEngine {
               maxRounds: spec.effectiveRounds,
               abortSignal: childController.signal,
               runDir: childRunDir,
+              ...(childLane?.useDeterministicMock !== undefined
+                ? { useDeterministicMock: childLane.useDeterministicMock }
+                : {}),
+              ...(childLane?.actionResolver
+                ? {
+                    actionResolver: (prompt: string) =>
+                      childLane.actionResolver!(prompt, 1),
+                  }
+                : {}),
+              ...(childLane?.executor ? { executor: childLane.executor } : {}),
               ...(mutationAllowance ? { inheritedAllowance: mutationAllowance } : {}),
-              onUsageRecorded: () => this.persistTaskCostBaseline(),
+              onUsageRecorded: () => {
+                // R0-8: a superseded child must not flush the new task's
+                // cost baseline / active-execution checkpoint.
+                if (this.isSubmissionCurrent(ownerGeneration)) {
+                  this.persistTaskCostBaseline();
+                }
+              },
               ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
               ...(spec.instructions ? { additionalInstructions: spec.instructions } : {}),
             });
+            // R0-7: a mutation child that resolves after the parent submission
+            // was superseded must not mint a mutation batch, invalidate the new
+            // task's verifier receipt, or be treated as incorporated into the
+            // current candidate. Its disk effects remain real and historical.
+            if (childResultIsStale(mutResult.changedFiles.length)) {
+              return this.settleStaleChildResult(
+                tool,
+                target,
+                subId,
+                meta.index,
+                'parent submission/revision superseded before the child resolved',
+              );
+            }
             const attribution: SubagentAttribution = mutResult.attribution;
             const clean = subagentFinishedCleanly(attribution);
             const details = clean
@@ -5872,7 +6081,9 @@ export class ChatEngine {
               );
               recordMutationBatch(
                 this.parity.sessionEvents,
-                String(this.parity.turnId ?? this._turnIndex),
+                // R0-7: attribute the child's change to the turn that
+                // dispatched it, never to a turn that started afterwards.
+                dispatchTurnId ?? String(this._turnIndex),
                 { paths: mutResult.changedFiles.map((file) => file.path) },
               );
             }
@@ -5905,6 +6116,17 @@ export class ChatEngine {
               ...(mutResult.inheritedBudgetExceeded ? { stop: true } : {}),
             };
           } catch (err) {
+            // R0-7: a child failure that surfaces after the parent was
+            // superseded must not poison the current task's tool log/callbacks.
+            if (!this.isSubmissionCurrent(ownerGeneration)) {
+              return this.settleStaleChildResult(
+                tool,
+                target,
+                subId,
+                meta.index,
+                'parent submission superseded before the child settled',
+              );
+            }
             const errMsg = err instanceof Error ? err.message : String(err);
             const attribution = classifySubagentFailure({
               success: false,
@@ -5974,11 +6196,34 @@ export class ChatEngine {
             maxRounds: childRounds,
             preset: 'read_only',
             abortSignal: childController.signal,
+            ...(childLane?.useDeterministicMock !== undefined
+              ? { useDeterministicMock: childLane.useDeterministicMock }
+              : {}),
+            ...(childLane?.actionResolver ? { actionResolver: childLane.actionResolver } : {}),
+            ...(childLane?.executor ? { executor: childLane.executor } : {}),
             ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
             ...(spec.instructions ? { additionalInstructions: spec.instructions } : {}),
             inheritedAllowance: readAllowance,
-            onUsageRecorded: () => this.persistTaskCostBaseline(),
+            onUsageRecorded: () => {
+              // R0-8: a superseded child must not flush the new task's
+              // cost baseline / active-execution checkpoint.
+              if (this.isSubmissionCurrent(ownerGeneration)) {
+                this.persistTaskCostBaseline();
+              }
+            },
           } as any);
+          // R0-7: a read-only child that resolves after the parent candidate
+          // moved (or the submission was superseded) is historical evidence
+          // only — it must not be attributed to the current task.
+          if (childResultIsStale(0)) {
+            return this.settleStaleChildResult(
+              tool,
+              target,
+              subId,
+              meta.index,
+              'parent submission/revision superseded before the child resolved',
+            );
+          }
           const attribution: SubagentAttribution = subResult.needsApproval || subResult.policyBlocked
             ? 'child_policy_block'
             : subResult.inheritedBudgetExceeded
@@ -6092,6 +6337,17 @@ export class ChatEngine {
             ...(subResult.inheritedBudgetExceeded ? { stop: true } : {}),
           };
         } catch (err) {
+          // R0-7: a child failure that surfaces after the parent was
+          // superseded must not poison the current task's tool log/callbacks.
+          if (!this.isSubmissionCurrent(ownerGeneration)) {
+            return this.settleStaleChildResult(
+              tool,
+              target,
+              subId,
+              meta.index,
+              'parent submission superseded before the child settled',
+            );
+          }
           const errMsg = err instanceof Error ? err.message : String(err);
           const attribution = classifySubagentFailure({
             success: false,

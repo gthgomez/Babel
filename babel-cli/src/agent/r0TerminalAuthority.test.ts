@@ -315,7 +315,15 @@ describe('R0-A: streaming terminal authority', () => {
     assert.equal(done.cause_class, undefined);
   });
 
-  test('R0-5: a typed permission denial + BLOCKED is a truthful typed block', async () => {
+  test('R0-5: a typed permission denial + BLOCKED is a truthful typed block', async (t) => {
+    if (process.platform === 'win32') {
+      // chmod 0o000 does not deny the owner read access on Windows, so this
+      // POSIX-only fixture cannot establish a real denial there. The typed
+      // denial contract remains covered on Windows by the classifier tests
+      // above; the end-to-end path is covered here on POSIX.
+      t.skip('POSIX chmod permission denial is not reproducible on Windows');
+      return;
+    }
     const wsRoot = makeRoot();
     const secret = join(wsRoot, 'secret.txt');
     writeFileSync(secret, 'top secret\n', 'utf8');
