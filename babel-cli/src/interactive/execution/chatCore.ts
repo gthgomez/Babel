@@ -84,7 +84,7 @@ import {
   compileIntentPlan,
   formatIntentPlanUserMessage,
 } from '../../agent/intentCompiler.js';
-import { persistIntentPlan } from '../../agent/chatEngineObservability.js';
+import { outcomeFromReasonCode, persistIntentPlan } from '../../agent/chatEngineObservability.js';
 import {
   compileChatStack,
   resolveStackBudgetForClass,
@@ -1380,6 +1380,16 @@ export function buildChatRunPayload(
       payload['blocked_report'] = report;
       // Also update the payload status so the benchmark recognizes the BLOCKED outcome
       payload['status'] = 'BLOCKED';
+      // R0-9: keep the tuple coherent — the typed report reason drives the
+      // terminal outcome and reason fields too, not just the nested report.
+      if (report.reason_code !== undefined) {
+        payload['reason_code'] = report.reason_code;
+        const derived = outcomeFromReasonCode(report.reason_code);
+        if (derived !== undefined) payload['terminal_outcome'] = derived;
+      }
+      if (report.cause_class !== undefined) {
+        payload['cause_class'] = report.cause_class;
+      }
     }
   }
 

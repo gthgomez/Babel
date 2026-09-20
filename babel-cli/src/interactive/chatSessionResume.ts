@@ -48,8 +48,13 @@ export interface ResumeChatSessionResult {
 export interface ResumeChatSessionFailure {
   ok: false;
   sessionId: string;
-  reason: 'missing' | 'error' | 'repo_identity_mismatch';
+  reason: 'missing' | 'error' | 'repo_identity_mismatch' | 'repo_identity_unknown';
   message: string;
+}
+
+/** R0-3: explicit rebind when a session's durable repository identity is unknown. */
+export interface ResumeChatSessionOptions {
+  confirmUnknownIdentity?: boolean;
 }
 
 /** D04: last durable project_root recorded in session-events.jsonl, if any. */
@@ -69,6 +74,7 @@ export type ResumeChatSessionOutcome = ResumeChatSessionResult | ResumeChatSessi
 export async function resumeChatSession(
   ctx: ReplContext,
   sessionId: string,
+  options: ResumeChatSessionOptions = {},
 ): Promise<ResumeChatSessionOutcome> {
   const hasThreadStore = threadStoreExists(sessionId);
   const txPath = transcriptPath(sessionId);
@@ -132,6 +138,21 @@ export async function resumeChatSession(
     const degraded = !identity.ok
       ? { degraded: true as const, degradedReason: identity.reason }
       : {};
+
+    // R0-3: unknown identity may not admit execution. Admitting the engine here
+    // would let the next user message execute against a repository whose
+    // historical identity is unproven. Require an explicit rebind/confirmation.
+    if (!identity.ok && options.confirmUnknownIdentity !== true) {
+      return {
+        ok: false,
+        sessionId,
+        reason: 'repo_identity_unknown',
+        message:
+          `Cannot resume ${sessionId}: ${identity.reason}. ` +
+          `Execution requires an explicit rebind — re-run ` +
+          `/resume ${sessionId} --confirm-repo-identity to bind this session to ${target.targetRoot}.`,
+      };
+    }
 
     if (eventLog && eventLog.events.length > 0) {
       ctx.chatEngine = createEngineFromEventLog(engineOptions, eventLog);

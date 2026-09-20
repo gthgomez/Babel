@@ -169,6 +169,28 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
     );
   });
 
+  test('R0-5: ordinary test/lint/compiler prose is not a blocking origin', () => {
+    // Adversarial over-match controls: these phrases routinely appear in a red
+    // test or compiler run and must not become terminal blocking authority.
+    const cases: Array<{ name: string; entry: Parameters<typeof detectAndBuildBlockedReport>[1][number] }> = [
+      { name: 'test asserts "not supported"', entry: { tool: 'run_command', target: 'npm test', exit_code: 1, stdout: '1 failing', stderr: 'TypeError: option is not supported' } },
+      { name: 'test expects 429', entry: { tool: 'run_command', target: 'npm test', exit_code: 1, stdout: 'expected 429 to equal 200', stderr: '' } },
+      { name: 'test asserts "forbidden"', entry: { tool: 'run_command', target: 'npm test', exit_code: 1, stdout: 'test: forbidden word rejected', stderr: '' } },
+      { name: 'compiler "Unsupported syntax"', entry: { tool: 'run_command', target: 'tsc --noEmit', exit_code: 2, stderr: 'error TS1005: Unsupported syntax' } },
+      { name: 'compiler "not implemented"', entry: { tool: 'run_command', target: 'tsc --noEmit', exit_code: 2, stderr: 'Type is not implemented' } },
+      { name: 'lint "Unauthorized use of any"', entry: { tool: 'run_command', target: 'eslint .', exit_code: 1, stderr: 'error Unauthorized use of any' } },
+      { name: 'test prose "connection refused"', entry: { tool: 'run_command', target: 'npm test', exit_code: 1, stdout: 'mapping after connection refused', stderr: '' } },
+      { name: 'test prose "service unavailable"', entry: { tool: 'run_command', target: 'npm test', exit_code: 1, stderr: 'expected service unavailable path' } },
+    ];
+    for (const c of cases) {
+      assert.equal(
+        detectAndBuildBlockedReport('BLOCKED: cannot continue.', [c.entry]),
+        null,
+        `${c.name} must not be blocking authority`,
+      );
+    }
+  });
+
   test('a typed denial with a zero exit code qualifies as evidence', () => {
     const report = detectAndBuildBlockedReport('BLOCKED: permission denied.', [
       { tool: 'read_file', target: 'secret.txt', exit_code: 0, error: 'permission denied' },

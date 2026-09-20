@@ -4661,9 +4661,24 @@ export class ChatEngine {
       planCompletion ? 'PLAN_COMPLETE' : requestedOutcome,
       hasMutation,
     );
-    const outcome =
+    const decisionOutcome =
       decision.finalOutcome === 'PLAN_COMPLETE' ? 'UNVERIFIED_PATCH' : decision.finalOutcome;
-    const terminalReason = this.resolveTerminalReason(outcome, extra?.blockedReport, extra?.reason);
+    const terminalReason = this.resolveTerminalReason(
+      decisionOutcome,
+      extra?.blockedReport,
+      extra?.reason,
+    );
+    // R0-9: keep the tuple coherent. A read-only hard-cap that resolves a
+    // `budget_exhausted` reason must not project `NO_CHANGE_REQUIRED` alongside
+    // it. Exception: `verification_failed` legitimately pairs with
+    // `UNVERIFIED_PATCH` on the completed path (the patch is recorded but not
+    // verified); `outcomeFromReasonCode` carries the failed-path mapping
+    // (AGENT_FAILURE), so the gate decision stays authoritative there.
+    const reasonOutcome =
+      terminalReason?.code && terminalReason.code !== 'verification_failed'
+        ? outcomeFromReasonCode(terminalReason.code)
+        : undefined;
+    const outcome = reasonOutcome ?? decisionOutcome;
     {
       this.recordCompletionDecisionOnce({
         requestedOutcome: decision.requestedOutcome,
@@ -5510,6 +5525,10 @@ export class ChatEngine {
     // R0-10: a throwing presentation callback must not unwind settlement or
     // duplicate execution truth. All callbacks below are the safe wrappers.
     callbacks = wrapPresentationCallbacks(callbacks);
+    // R0-10: baseline for "did this invocation already record an execution
+    // row?". `meta.index` is not unique across a turn (it is per-round), so the
+    // catch must compare against this invocation's own baseline.
+    const toolCallLogStart = this.toolCallLog.length;
     const tool = chatActionToolName(action);
     const target = chatActionTarget(action);
     const toolId = callbacks.onToolStart?.(tool, target) ?? -1;
@@ -7042,7 +7061,7 @@ export class ChatEngine {
       // appending a second row would duplicate execution truth. One action
       // settles exactly one log row; only a genuine executor fault with no
       // prior row adds a failure row here.
-      const alreadySettled = this.toolCallLog.some((entry) => entry.index === meta.index);
+      const alreadySettled = this.toolCallLog.length > toolCallLogStart;
       if (!alreadySettled) {
         this.toolCallLog.push({
           tool,
@@ -8554,11 +8573,13 @@ export class ChatEngine {
             finalBlockedReport,
             knownReason,
           );
-    // R0-9: keep the tuple coherent on the callback/non-stream path — a typed
-    // reason is authoritative and projects its matching outcome.
+    // R0-9: keep the tuple coherent on the callback/non-stream path. As on the
+    // streaming path, `verification_failed` pairs with `UNVERIFIED_PATCH` when
+    // the gate recorded a patch, so it is not remapped to AGENT_FAILURE.
     const projectedOutcome =
-      (terminalReason?.code ? outcomeFromReasonCode(terminalReason.code) : undefined) ??
-      authoritativeOutcome;
+      (terminalReason?.code && terminalReason.code !== 'verification_failed'
+        ? outcomeFromReasonCode(terminalReason.code)
+        : undefined) ?? authoritativeOutcome;
     if (kernelDecision) {
       this.recordCompletionDecisionOnce({
         requestedOutcome: kernelDecision.requestedOutcome,

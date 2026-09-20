@@ -710,6 +710,10 @@ describe('buildChatRunPayload blocked-evidence gate (R0-A/R0-F)', () => {
     // The controller-established origin types the report; prose does not.
     assert.equal(report['reason_code'], 'permission_denied');
     assert.equal(report['cause_class'], 'environment');
+    // R0-9: the top-level tuple stays coherent with the typed report.
+    assert.equal(payload['reason_code'], 'permission_denied');
+    assert.equal(payload['cause_class'], 'environment');
+    assert.equal(payload['terminal_outcome'], 'BLOCKED_POLICY');
     const checked = report['checked'] as Array<Record<string, unknown>>;
     assert.equal(checked.length, 1);
     assert.equal(checked[0]!['action'], 'read_file');

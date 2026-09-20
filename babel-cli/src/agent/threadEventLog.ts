@@ -117,11 +117,12 @@ export type ThreadEvent =
       projectRoot: string;
       gitHead?: string;
       /**
-       * R0-4: filesystem fingerprint of the repository root directory, when the
-       * platform exposes one. Distinct from `projectRoot` (a path): this proves
-       * the *same physical directory*, so a repository removed and replaced at
-       * the same path is detected as a mismatch. Absent on platforms/filesystems
-       * that do not expose a stable identity.
+       * R0-4: advisory filesystem fingerprint of the repository root directory,
+       * when the platform exposes one. A DIFFERENCE is strong evidence of a
+       * different directory and fails closed; a MATCH is not proof of the same
+       * physical repository, because filesystems may reuse an inode after a
+       * delete/recreate. The authoritative claim remains canonical-root
+       * continuity, not physical identity.
        */
       rootDevice?: number;
       rootInode?: number;
@@ -472,7 +473,10 @@ export function repoRootFingerprint(
 /**
  * D04 resume-identity outcome.
  *
- * - `verified`: the saved and current roots resolve to the same physical repo.
+ * - `verified`: the saved and current roots resolve to the same canonical root
+ *   (and, when a durable filesystem fingerprint exists, it matches). This is
+ *   canonical-root CONTINUITY, not proof of the same physical repository — an
+ *   inode can be reused after a delete/recreate.
  * - `mismatch`: a durable identity exists and provably points at a different
  *   repository (or only one side resolves); callers must fail closed.
  * - `unknown`: no durable identity was recorded, or neither root could be
@@ -489,7 +493,7 @@ const IDENTITY_CHANGED_REASON = 'Repository root changed since last turn; confir
 const IDENTITY_UNRESOLVABLE_REASON =
   'Repository root changed or could not be verified since last turn; physical identity cannot be established, so identity is not claimed (confirm before resume)';
 const IDENTITY_REPLACED_REASON =
-  'The repository at the recorded root was replaced since last turn (filesystem identity changed); confirm before resume';
+  'The repository at the recorded root appears to have been replaced since last turn (filesystem identity changed); confirm before resume';
 
 /** Last durable repository root recorded in the thread event log, or null. */
 export function resolveSavedRepoRootFromLog(log: ThreadEventLog | null): string | null {
@@ -533,9 +537,10 @@ export function resolveRepoIdentityOnResume(
       };
     }
     // R0-4: the canonical path matches. When a durable filesystem fingerprint
-    // was recorded, require it too — a repository removed and replaced at the
-    // same path has a different device/inode, so path continuity alone must not
-    // claim the same physical repository.
+    // was recorded, a DIFFERENCE fails closed (a different directory). A match
+    // is only advisory: an inode can be reused after delete/recreate, so the
+    // `verified` status here means canonical-root continuity, NOT proven
+    // physical-repository identity.
     if (
       savedFingerprint &&
       (savedFingerprint.device !== undefined || savedFingerprint.inode !== undefined)

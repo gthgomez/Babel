@@ -375,7 +375,7 @@ test('D04 protocol hydration identity', { concurrency: false }, async (t) => {
     }
   });
 
-  await t.test('R0-4: the durable log records a filesystem fingerprint of the root', async (tc) => {
+  await t.test('R0-4: the durable log records an advisory root fingerprint (canonical continuity)', async (tc) => {
     if (process.platform === 'win32') {
       tc.skip('filesystem inode identity is unavailable on this platform');
       return;
@@ -397,11 +397,14 @@ test('D04 protocol hydration identity', { concurrency: false }, async (t) => {
         'verified',
         'an unchanged repository verifies',
       );
-      // A different physical directory at the same path must not verify.
+      // A DIFFERENT filesystem identity is a mismatch, not path continuity.
+      // NOTE: this is advisory — an inode can be reused after delete/recreate,
+      // so a same-path replacement is not always distinguishable. The claim is
+      // canonical-root continuity, not proven physical identity.
       assert.equal(
         resolveRepoIdentityOnResume(repoRoot, repoRoot, { device: -1, inode: -1 }).status,
         'mismatch',
-        'a replaced physical directory is a mismatch, not path continuity',
+        'a differing filesystem identity fails closed',
       );
     } finally {
       fixture.cleanup();

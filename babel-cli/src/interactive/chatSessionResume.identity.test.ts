@@ -212,20 +212,30 @@ test('D04 resume seam identity', { concurrency: false }, async (t) => {
     }
   });
 
-  await t.test('legacy session with no durable identity resumes degraded, never verified', async () => {
+  await t.test('R0-3: legacy session with no durable identity requires explicit rebind', async () => {
     const fixture = withTempRunsDir();
     const targetRoot = mkdtempSync(join(tmpdir(), 'd04-seam-legacy-'));
     try {
       const sessionId = 'd04-seam-legacy';
       writeTranscript(fixture.root, sessionId, 'legacy history');
 
+      // Without confirmation, unknown identity must not admit execution.
       const ctx = makeResumeCtx(makeTarget(targetRoot));
-      const outcome = await resumeChatSession(ctx, sessionId);
-      assert.equal(outcome.ok, true, 'legacy transcript resume must not be hard-broken');
-      if (!outcome.ok) return;
-      assert.equal(outcome.degraded, true);
-      assert.match(outcome.degradedReason ?? '', /identity/i);
-      assert.equal(outcome.source, 'transcript');
+      const refused = await resumeChatSession(ctx, sessionId);
+      assert.equal(refused.ok, false, 'unknown identity must not silently admit execution');
+      if (refused.ok) return;
+      assert.equal(refused.reason, 'repo_identity_unknown');
+      assert.match(refused.message, /identity/i);
+      assert.match(refused.message, /--confirm-repo-identity/);
+
+      // Explicit rebind resumes as degraded history, never verified.
+      const ctx2 = makeResumeCtx(makeTarget(targetRoot));
+      const confirmed = await resumeChatSession(ctx2, sessionId, { confirmUnknownIdentity: true });
+      assert.equal(confirmed.ok, true, 'explicit rebind resumes');
+      if (!confirmed.ok) return;
+      assert.equal(confirmed.degraded, true);
+      assert.match(confirmed.degradedReason ?? '', /identity/i);
+      assert.equal(confirmed.source, 'transcript');
     } finally {
       fixture.cleanup();
       rmSync(targetRoot, { recursive: true, force: true });

@@ -326,41 +326,58 @@ export type BlockingOrigin = Extract<
   | 'budget_exhausted'
 >;
 
-const PERMISSION_DENIED_RE =
-  /\b(?:permission denied|access denied|forbidden|unauthorized|not authorized|operation not permitted|eacces|eperm)\b/i;
-const UNSUPPORTED_RE =
-  /\b(?:unsupported|not supported|enotsup|not implemented|no such method|not available in this runtime)\b/i;
-const PROVIDER_FAILURE_RE =
-  /\b(?:rate limit|too many requests|429|provider stream error|authentication failed|invalid api key|incorrect api key|context length exceeded|model overloaded|overloaded_error|insufficient_quota)\b/i;
-const BUDGET_EXHAUSTED_RE =
-  /\b(?:budget exhausted|quota exceeded|out of credit|insufficient credit|credit balance)\b/i;
-/**
- * External dependency: a service/network the agent cannot provision, or an
- * executable the agent cannot install. Deliberately excludes a missing project
- * FILE (wrong path / missing optional file is repairable localization) and a
- * missing importable MODULE (installable), both of which must drive recovery.
- */
-const EXTERNAL_DEPENDENCY_RE =
-  /\b(?:command not found|executable file not found|is not recognized as an internal or external command|connection refused|network is unreachable|temporary failure in name resolution|name or service not known|getaddrinfo|econnrefused|econnreset|eai_again|service unavailable|502 bad gateway|503 service unavailable|504 gateway|proxy authentication|certificate verify failed|self[- ]signed certificate)\b/i;
+// Errno / structured markers are strong: they appear only in genuine OS or
+// network failures, not in ordinary test, lint, or compiler prose.
+const ERRNO_PERMISSION_RE = /\b(?:EACCES|EPERM)\b/;
+const ERRNO_UNSUPPORTED_RE = /\b(?:ENOTSUP|EOPNOTSUPP)\b/;
+const ERRNO_EXTERNAL_RE =
+  /\b(?:ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ETIMEDOUT)\b/;
 
-function blockingEvidenceText(entry: BlockedToolLogEntry): string {
+// OS-level phrases. Deliberately narrow: generic words that routinely appear in
+// test/lint/compiler output ("forbidden", "unauthorized", "not supported",
+// "not implemented", "connection refused", bare "429") are NOT blocking
+// signals. A red test asserting a denial must not become terminal authority.
+const OS_PERMISSION_RE = /\bpermission denied\b/i;
+const OS_UNSUPPORTED_RE = /\bunsupported operation\b|\boperation not supported\b|\bnot supported by (?:this|the) runtime\b/i;
+const OS_EXTERNAL_RE =
+  /\bcommand not found\b|\bexecutable file not found\b|\bis not recognized as an internal or external command\b|\bnetwork is unreachable\b|\btemporary failure in name resolution\b|\bcertificate verify failed\b|\bself[- ]signed certificate\b/i;
+const PROVIDER_FAILURE_RE =
+  /\b(?:insufficient_quota|invalid_api_key|authentication_error|rate_limit_exceeded|overloaded_error)\b|\bprovider stream error\b|\binvalid api key\b|\bauthentication failed\b/i;
+const BUDGET_EXHAUSTED_RE =
+  /\b(?:budget exhausted|quota exceeded|out of credit|insufficient credit)\b/i;
+
+/** Errno markers may appear in any channel (stdout, stderr, error). */
+function errnoText(entry: BlockedToolLogEntry): string {
   return [entry.error, entry.stderr, entry.stdout]
     .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
     .join('\n');
 }
 
 /**
+ * Prose phrases are only trusted from the failure channels (`error`, `stderr`),
+ * never from `stdout` — a successful command's stdout may legitimately contain
+ * the phrase (e.g. grep results or test assertions).
+ */
+function failureChannelText(entry: BlockedToolLogEntry): string {
+  return [entry.error, entry.stderr]
+    .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+    .join('\n');
+}
+
+/**
  * Classify a tool-log entry into a blocking origin, or null when the entry is
- * only generic failure evidence. Never infers from `exit_code` alone.
+ * only generic failure evidence. Never infers from `exit_code` alone, and never
+ * from generic prose that ordinary test/lint/compiler output also produces.
  */
 export function classifyBlockingOrigin(entry: BlockedToolLogEntry): BlockingOrigin | null {
-  const text = blockingEvidenceText(entry);
-  if (text === '') return null;
-  if (PERMISSION_DENIED_RE.test(text)) return 'permission_denied';
-  if (UNSUPPORTED_RE.test(text)) return 'unsupported_operation';
-  if (PROVIDER_FAILURE_RE.test(text)) return 'provider_failure';
-  if (BUDGET_EXHAUSTED_RE.test(text)) return 'budget_exhausted';
-  if (EXTERNAL_DEPENDENCY_RE.test(text)) return 'external_dependency';
+  const errno = errnoText(entry);
+  const channels = failureChannelText(entry);
+  if (errno === '' && channels === '') return null;
+  if (ERRNO_PERMISSION_RE.test(errno) || OS_PERMISSION_RE.test(channels)) return 'permission_denied';
+  if (ERRNO_UNSUPPORTED_RE.test(errno) || OS_UNSUPPORTED_RE.test(channels)) return 'unsupported_operation';
+  if (PROVIDER_FAILURE_RE.test(errno) || PROVIDER_FAILURE_RE.test(channels)) return 'provider_failure';
+  if (BUDGET_EXHAUSTED_RE.test(errno) || BUDGET_EXHAUSTED_RE.test(channels)) return 'budget_exhausted';
+  if (ERRNO_EXTERNAL_RE.test(errno) || OS_EXTERNAL_RE.test(channels)) return 'external_dependency';
   return null;
 }
 
