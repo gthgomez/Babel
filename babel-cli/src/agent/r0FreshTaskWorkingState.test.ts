@@ -238,7 +238,10 @@ interface EngineInternals {
     nextExperiment: string;
     invalidatedAssumptions: string[];
   };
-  failureBudgetTracker: { remainingBudgets(): FailureClassBudgets };
+  failureBudgetTracker: {
+    remainingBudgets(): FailureClassBudgets;
+    consume(failure: unknown): boolean;
+  };
 }
 
 const TASK_A = 'Investigate why parser_test fails and fix it.';

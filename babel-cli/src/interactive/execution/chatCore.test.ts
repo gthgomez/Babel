@@ -659,7 +659,7 @@ describe('buildChatRunPayload blocked-evidence gate (R0-A/R0-F)', () => {
     assert.equal(payload['blocked_report'], undefined);
   });
 
-  it('failed read + BLOCKED prose surfaces a truthful blocked payload stamped unknown', () => {
+  it('R0-5: a repairable failed read + BLOCKED prose emits no blocked_report', () => {
     const payload = buildChatRunPayload(
       {
         status: 'completed',
@@ -679,18 +679,41 @@ describe('buildChatRunPayload blocked-evidence gate (R0-A/R0-F)', () => {
       { task: 'inspect', projectRoot: '/tmp/project' },
     );
 
+    assert.equal(payload['status'], 'ANSWER_READY');
+    assert.equal(payload['blocked_report'], undefined);
+  });
+
+  it('R0-5: a typed denial + BLOCKED prose surfaces a typed blocked payload', () => {
+    const payload = buildChatRunPayload(
+      {
+        status: 'completed',
+        outcome: 'NO_CHANGE_REQUIRED',
+        answer: 'Could not read a.txt.\nBLOCKED: required file is unreadable.',
+        usage: EMPTY_USAGE,
+        conversation: [],
+        toolCalls: [
+          {
+            tool: 'read_file',
+            target: 'a.txt',
+            detail: 'read failed',
+            error: 'EACCES: permission denied',
+          },
+        ],
+      },
+      { task: 'inspect', projectRoot: '/tmp/project' },
+    );
+
     assert.equal(payload['status'], 'BLOCKED');
     const report = payload['blocked_report'] as Record<string, unknown>;
     assert.ok(report);
     assert.equal(report['status'], 'BLOCKED');
-    // Prose-declared block: cause stays unknown, never fabricated external blame.
-    assert.equal(report['reason_code'], 'unknown');
-    assert.equal(report['cause_class'], null);
+    // The controller-established origin types the report; prose does not.
+    assert.equal(report['reason_code'], 'permission_denied');
+    assert.equal(report['cause_class'], 'environment');
     const checked = report['checked'] as Array<Record<string, unknown>>;
     assert.equal(checked.length, 1);
     assert.equal(checked[0]!['action'], 'read_file');
     assert.equal(checked[0]!['target'], 'a.txt');
-    assert.equal(checked[0]!['finding'], 'Error: ENOENT: no such file or directory');
   });
 
   it('successful run_command with clean exit stdout emits no blocked_report', () => {

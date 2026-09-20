@@ -27,7 +27,7 @@ import {
   isInfrastructureErrorText,
   isLocalEnvironmentErrorText,
 } from '../../agent/chatFailureClassification.js';
-import { isBlockingEvidence } from '../../agent/chatEngineSupport.js';
+import { detectAndBuildBlockedReport } from '../../agent/chatEngineSupport.js';
 import { BABEL_RUNS_DIR } from '../../cli/constants.js';
 import { getProtocolClient } from '../../protocol/client/index.js';
 import {
@@ -1363,49 +1363,21 @@ export function buildChatRunPayload(
     // R1 fallback: detect a protocol-shaped BLOCKED declaration in the answer
     // text when the engine didn't produce a structured report (e.g., streaming
     // path edge cases). F4/R0-A: prose is a report, not authority — the
-    // synthesized report may only exist when the tool log independently proves
-    // a blocking condition via the same evidence predicate the engine uses. A
-    // successful read/grep plus a BLOCKED sentence keeps the real outcome and
-    // emits no report. When evidence does exist, the report is stamped
-    // cause-`unknown` rather than asserting an external dependency.
-    const investigateTools = new Set([
-      'read_file',
-      'read_range',
-      'grep',
-      'glob',
-      'list_dir',
-      'run_command',
-      'shell_exec',
-      'test_run',
-    ]);
-    const checked = (result.toolCalls as Array<Record<string, unknown>>)
-      .map(tc => ({
-        tool: String(tc['tool'] ?? ''),
-        target: String(tc['target'] ?? ''),
-        detail: typeof tc['detail'] === 'string' ? tc['detail'] : 'Investigated',
-        ...(typeof tc['exit_code'] === 'number' ? { exit_code: tc['exit_code'] } : {}),
-        ...(typeof tc['error'] === 'string' ? { error: tc['error'] } : {}),
-        ...(typeof tc['stdout'] === 'string' ? { stdout: tc['stdout'] } : {}),
-        ...(typeof tc['stderr'] === 'string' ? { stderr: tc['stderr'] } : {}),
-      }))
-      .filter(tc => investigateTools.has(tc.tool) && tc.target !== '' && isBlockingEvidence(tc))
-      .slice(-15)
-      .map(tc => ({
-        action: tc.tool,
-        target: tc.target,
-        finding: tc.error?.trim() ? `Error: ${tc.error.trim().slice(0, 200)}` : tc.detail,
-      }));
-    if (checked.length > 0) {
-      payload['blocked_report'] = {
-        schema_version: 1,
-        status: 'BLOCKED' as const,
-        reason_code: 'unknown' as const,
-        cause_class: null,
-        reason: result.answer.slice(0, 200),
-        missing: 'Not established by the harness; the model declared the task blocked.',
-        checked,
-        next_steps: ['Review the blocked report and provide the missing dependencies before retrying.'],
-      };
+    // synthesized report may only exist when the tool log independently proves a
+    // TYPED blocking origin via the same predicate the engine uses (R0-5). A
+    // successful read/grep, a red test, a compile error or a failed search plus
+    // a BLOCKED sentence keeps the real outcome and emits no report.
+    const toolLog = (result.toolCalls as Array<Record<string, unknown>>).map(tc => ({
+      tool: String(tc['tool'] ?? ''),
+      target: String(tc['target'] ?? ''),
+      ...(typeof tc['exit_code'] === 'number' ? { exit_code: tc['exit_code'] } : {}),
+      ...(typeof tc['error'] === 'string' ? { error: tc['error'] } : {}),
+      ...(typeof tc['stdout'] === 'string' ? { stdout: tc['stdout'] } : {}),
+      ...(typeof tc['stderr'] === 'string' ? { stderr: tc['stderr'] } : {}),
+    }));
+    const report = detectAndBuildBlockedReport(result.answer, toolLog);
+    if (report) {
+      payload['blocked_report'] = report;
       // Also update the payload status so the benchmark recognizes the BLOCKED outcome
       payload['status'] = 'BLOCKED';
     }

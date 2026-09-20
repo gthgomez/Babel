@@ -5,7 +5,11 @@
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import type { BlockedReport } from '../schemas/agentContracts.js';
+import type {
+  BlockedReport,
+  TerminalReasonCauseClass,
+  TerminalReasonCode,
+} from '../schemas/agentContracts.js';
 import type { ToolCallRequest, ToolContext, ToolResult } from '../localTools.js';
 import {
   formatChatToolObservation,
@@ -298,29 +302,89 @@ export type BlockedToolLogEntry = {
 };
 
 /**
- * Strong denial/absence language. Used even when stdout is present, because a
- * successful-looking command can still surface an explicit denial. Deliberately
- * narrower than generic "failed"/"error" so a green run's "0 failed" summary is
- * not mistaken for a blocking condition.
+ * R0-5: typed, controller-established blocking origins.
+ *
+ * A failed action is evidence of FAILURE, not authority that the task cannot
+ * continue. A generic non-zero exit, a compiler error, a lint failure, a test
+ * failure, a grep miss, a wrong file, or a wrong hypothesis must drive
+ * repair/recovery — never terminal blocking. Only evidence that semantically
+ * establishes inability to continue (a denial the agent cannot grant itself, an
+ * unsupported operation, an unreachable external dependency, a provider
+ * failure, an exhausted budget) may authorize a terminal block.
+ *
+ * The vocabulary reuses the closed terminal-reason taxonomy so a UI can branch
+ * on the same codes everywhere. `verification_failed`, `recovery_exhausted`,
+ * `cancelled` and `unknown` are intentionally NOT tool-log origins: they are
+ * established by the controller at a later seam.
  */
-const STRONG_BLOCKING_SIGNAL_RE =
-  /\b(?:permission denied|access denied|forbidden|unauthorized|unsupported|not supported|not found|no such file|does not exist|doesn't exist|unavailable|not available|missing)\b/i;
+export type BlockingOrigin = Extract<
+  TerminalReasonCode,
+  | 'permission_denied'
+  | 'unsupported_operation'
+  | 'external_dependency'
+  | 'provider_failure'
+  | 'budget_exhausted'
+>;
+
+const PERMISSION_DENIED_RE =
+  /\b(?:permission denied|access denied|forbidden|unauthorized|not authorized|operation not permitted|eacces|eperm)\b/i;
+const UNSUPPORTED_RE =
+  /\b(?:unsupported|not supported|enotsup|not implemented|no such method|not available in this runtime)\b/i;
+const PROVIDER_FAILURE_RE =
+  /\b(?:rate limit|too many requests|429|provider stream error|authentication failed|invalid api key|incorrect api key|context length exceeded|model overloaded|overloaded_error|insufficient_quota)\b/i;
+const BUDGET_EXHAUSTED_RE =
+  /\b(?:budget exhausted|quota exceeded|out of credit|insufficient credit|credit balance)\b/i;
+/**
+ * External dependency: a service/network the agent cannot provision, or an
+ * executable the agent cannot install. Deliberately excludes a missing project
+ * FILE (wrong path / missing optional file is repairable localization) and a
+ * missing importable MODULE (installable), both of which must drive recovery.
+ */
+const EXTERNAL_DEPENDENCY_RE =
+  /\b(?:command not found|executable file not found|is not recognized as an internal or external command|connection refused|network is unreachable|temporary failure in name resolution|name or service not known|getaddrinfo|econnrefused|econnreset|eai_again|service unavailable|502 bad gateway|503 service unavailable|504 gateway|proxy authentication|certificate verify failed|self[- ]signed certificate)\b/i;
+
+function blockingEvidenceText(entry: BlockedToolLogEntry): string {
+  return [entry.error, entry.stderr, entry.stdout]
+    .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+    .join('\n');
+}
 
 /**
- * R0-A: a tool-log entry is evidence of an ACTUAL blocking condition only when
- * it shows a real failure/denial/absence — never a successful inspection.
- * Investigation activity (a read that worked) is not proof of a block.
+ * Classify a tool-log entry into a blocking origin, or null when the entry is
+ * only generic failure evidence. Never infers from `exit_code` alone.
+ */
+export function classifyBlockingOrigin(entry: BlockedToolLogEntry): BlockingOrigin | null {
+  const text = blockingEvidenceText(entry);
+  if (text === '') return null;
+  if (PERMISSION_DENIED_RE.test(text)) return 'permission_denied';
+  if (UNSUPPORTED_RE.test(text)) return 'unsupported_operation';
+  if (PROVIDER_FAILURE_RE.test(text)) return 'provider_failure';
+  if (BUDGET_EXHAUSTED_RE.test(text)) return 'budget_exhausted';
+  if (EXTERNAL_DEPENDENCY_RE.test(text)) return 'external_dependency';
+  return null;
+}
+
+/** Cause axis for a tool-log blocking origin. */
+export function blockingOriginCauseClass(origin: BlockingOrigin): TerminalReasonCauseClass {
+  switch (origin) {
+    case 'permission_denied':
+    case 'external_dependency':
+      return 'environment';
+    case 'provider_failure':
+      return 'provider';
+    case 'unsupported_operation':
+    case 'budget_exhausted':
+      return 'harness';
+  }
+}
+
+/**
+ * R0-5: a tool-log entry is blocking evidence only when it establishes a typed
+ * blocking origin. Investigation activity, a successful inspection, or a
+ * repairable failure is never proof of a block.
  */
 export function isBlockingEvidence(entry: BlockedToolLogEntry): boolean {
-  if (entry.exit_code !== undefined && entry.exit_code !== 0) return true;
-  const error = entry.error?.trim() ?? '';
-  if (error !== '') return true;
-  const stdout = entry.stdout?.trim() ?? '';
-  const stderr = entry.stderr?.trim() ?? '';
-  // stderr with no stdout is a failure/denial channel.
-  if (stderr !== '' && stdout === '') return true;
-  // With successful stdout, only an explicit strong denial/absence signal counts.
-  return stdout !== '' && STRONG_BLOCKING_SIGNAL_RE.test(stderr);
+  return classifyBlockingOrigin(entry) !== null;
 }
 
 /**
@@ -358,16 +422,19 @@ export function detectAndBuildBlockedReport(
     'shell_exec',
     'test_run',
   ]);
-  const checked = toolCallLog
-    .filter((tc): tc is typeof tc & { target: string } => {
+  const classified = toolCallLog
+    .map((tc) => {
       try {
-        return investigateTools.has(tc.tool) && !!tc.target && isBlockingEvidence(tc);
+        if (!investigateTools.has(tc.tool) || !tc.target) return null;
+        const origin = classifyBlockingOrigin(tc);
+        return origin ? { tc, origin } : null;
       } catch {
-        return false;
+        return null;
       }
     })
+    .filter((x): x is { tc: BlockedToolLogEntry & { target: string }; origin: BlockingOrigin } => x !== null)
     .slice(-15)
-    .map((tc) => {
+    .map(({ tc, origin }) => {
       // Only failure evidence reaches here; surface the failure text, not a
       // possibly-stale stdout from a partial run.
       const failureText = tc.error?.trim() || tc.stderr?.trim() || '';
@@ -379,18 +446,21 @@ export function detectAndBuildBlockedReport(
               ? tc.stdout.slice(0, 200) + '…'
               : tc.stdout
             : 'Investigated — see tool call log for details.';
-      return { action: tc.tool, target: tc.target!, finding };
+      return { action: tc.tool, target: tc.target, finding, origin };
     });
 
-  if (checked.length === 0) return null;
+  if (classified.length === 0) return null;
+
+  // The controller-established origin is the authority; the model's prose is
+  // narrative only. Use the most recent typed origin when several are present.
+  const origin = classified[classified.length - 1]!.origin;
+  const checked = classified.map(({ action, target, finding }) => ({ action, target, finding }));
 
   return {
     schema_version: 1,
     status: 'BLOCKED' as const,
-    // Model-declared block: the harness has not established a cause, so this is
-    // explicitly `unknown` and cannot fabricate a policy/permission cause.
-    reason_code: 'unknown' as const,
-    cause_class: null,
+    reason_code: origin,
+    cause_class: blockingOriginCauseClass(origin),
     reason,
     missing,
     checked,

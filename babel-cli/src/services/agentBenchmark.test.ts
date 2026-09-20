@@ -394,7 +394,7 @@ test('isBlockedWithinBudget enforces 100k ceiling', () => {
   assert.equal(isBlockedWithinBudget(10, null), null);
 });
 
-test('extractBlockedReportFromPayload soft-accepts status BLOCKED with tools', () => {
+test('R0-6: extractBlockedReportFromPayload rejects mismatched evidence (no soft accept)', () => {
   const payload = {
     status: 'BLOCKED',
     blocked_report: {
@@ -436,9 +436,46 @@ test('extractBlockedReportFromPayload soft-accepts status BLOCKED with tools', (
     ]),
     false,
   );
-  const extracted = extractBlockedReportFromPayload(strictMiss);
-  assert.ok(extracted, 'soft accept when status is BLOCKED and tools exist');
-  assert.equal(extracted?.status, 'BLOCKED');
+  // A top-level BLOCKED status and unrelated tool activity must NOT validate a
+  // report whose checked evidence does not match the tool log.
+  assert.equal(
+    extractBlockedReportFromPayload(strictMiss),
+    null,
+    'unrelated tool activity cannot soft-accept a report',
+  );
+  // A trusted harness-origin block IS accepted when separately typed.
+  const harness = {
+    status: 'BLOCKED',
+    blocked_report: {
+      schema_version: 1,
+      status: 'BLOCKED',
+      reason: 'per-round token ceiling reached',
+      missing: 'remaining budget',
+      reason_code: 'budget_exhausted',
+      cause_class: 'harness',
+      checked: [{ action: 'chat_turn', target: 'per_round_limit', finding: 'ceiling reached' }],
+    },
+    toolCalls: [],
+  };
+  const extracted = extractBlockedReportFromPayload(harness);
+  assert.ok(extracted, 'typed harness-origin block is accepted');
+  assert.equal(extracted?.reason_code, 'budget_exhausted');
+  // An untyped synthetic block is not trusted.
+  assert.equal(
+    extractBlockedReportFromPayload({
+      status: 'BLOCKED',
+      blocked_report: {
+        schema_version: 1,
+        status: 'BLOCKED',
+        reason: 'per-round token ceiling reached',
+        missing: 'remaining budget',
+        checked: [{ action: 'chat_turn', target: 'per_round_limit', finding: 'ceiling reached' }],
+      },
+      toolCalls: [],
+    }),
+    null,
+    'an untyped synthetic block is not trusted',
+  );
 });
 
 test('GOV-B03 maps to BLOCK-01 governance fixture', () => {
@@ -485,27 +522,42 @@ describe('synthesizeDeclaredBlockedReport evidence gate (R0-F)', () => {
     assert.equal(report, null);
   });
 
-  test('failed investigate + BLOCKED prose yields a truthful report stamped unknown', () => {
-    const report = synthesizeDeclaredBlockedReport(
-      [
-        { tool: 'read_file', target: 'a.txt', error: 'ENOENT: no such file or directory' },
-        { tool: 'read_file', target: 'ok.txt', detail: 'contents' },
-      ],
-      'Could not read a.txt.\nBLOCKED: required file is unavailable.',
+  test('R0-5: a repairable failed read + BLOCKED prose yields NO report', () => {
+    // A missing/wrong file is repairable localization, not blocking authority.
+    assert.equal(
+      synthesizeDeclaredBlockedReport(
+        [
+          { tool: 'read_file', target: 'a.txt', error: 'ENOENT: no such file or directory' },
+          { tool: 'read_file', target: 'ok.txt', detail: 'contents' },
+        ],
+        'Could not read a.txt.\nBLOCKED: required file is unavailable.',
+      ),
+      null,
     );
+  });
 
+  test('R0-5: a red verifier + BLOCKED prose yields NO report', () => {
+    assert.equal(
+      synthesizeDeclaredBlockedReport(
+        [{ tool: 'run_command', target: 'npm test', exit_code: 1, stdout: '1 failing' }],
+        'BLOCKED: tests still fail.',
+      ),
+      null,
+    );
+  });
+
+  test('R0-5: a typed denial + BLOCKED prose yields a typed report', () => {
+    const report = synthesizeDeclaredBlockedReport(
+      [{ tool: 'read_file', target: 'secret.txt', error: 'EACCES: permission denied' }],
+      'BLOCKED: the file is not readable.',
+    );
     assert.ok(report);
     assert.equal(report.status, 'BLOCKED');
-    assert.equal(report.reason_code, 'unknown');
-    assert.equal(report.cause_class, null);
-    assert.equal(
-      report.missing,
-      'Not established by the harness; the model declared the task blocked.',
-    );
+    assert.equal(report.reason_code, 'permission_denied');
+    assert.equal(report.cause_class, 'environment');
     assert.equal(report.checked.length, 1);
     assert.equal(report.checked[0]!.action, 'read_file');
-    assert.equal(report.checked[0]!.target, 'a.txt');
-    assert.equal(report.checked[0]!.finding, 'Error: ENOENT: no such file or directory');
+    assert.equal(report.checked[0]!.target, 'secret.txt');
   });
 });
 
@@ -522,16 +574,36 @@ describe('hasBlockingToolEvidence declared-blocked gate (R0-F)', () => {
     );
   });
 
-  test('failed/denied investigate calls count as blocking evidence', () => {
+  test('R0-5: only typed denials count as blocking evidence; generic failures do not', () => {
+    // Repairable failures: missing file, non-zero exit, compile/test failure.
     assert.equal(
       hasBlockingToolEvidence({
         toolCalls: [{ tool: 'read_file', target: 'a.txt', error: 'ENOENT' }],
+      }),
+      false,
+    );
+    assert.equal(
+      hasBlockingToolEvidence({
+        toolCalls: [{ tool: 'run_command', target: 'make', exit_code: 2, stderr: 'compile error' }],
+      }),
+      false,
+    );
+    assert.equal(
+      hasBlockingToolEvidence({
+        toolCalls: [{ tool: 'run_command', target: 'npm test', exit_code: 1, stdout: '1 failing' }],
+      }),
+      false,
+    );
+    // Typed origins: denial, unsupported, unreachable external dependency.
+    assert.equal(
+      hasBlockingToolEvidence({
+        toolCalls: [{ tool: 'read_file', target: 'a.txt', error: 'EACCES: permission denied' }],
       }),
       true,
     );
     assert.equal(
       hasBlockingToolEvidence({
-        toolCalls: [{ tool: 'run_command', target: 'make', exit_code: 2, stderr: 'not found' }],
+        toolCalls: [{ tool: 'run_command', target: 'missing-tool', exit_code: 127, stderr: 'missing-tool: command not found' }],
       }),
       true,
     );

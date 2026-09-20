@@ -8,8 +8,11 @@
  * A model may say BLOCKED; that alone cannot upgrade status / terminal_outcome /
  * reason_code / cause_class. Only a trusted origin (controller/tool/policy/
  * verifier/provider) may establish a block. A *successful* read-only inspection
- * is not evidence of a blocking condition, while a genuine tool failure
- * (non-zero exit / error / stderr-without-stdout) still is.
+ * is not evidence of a blocking condition, and — R0-5 — neither is a *generic*
+ * failure (non-zero exit, red verifier, compile error, lint failure, failed
+ * search, missing project file). Only a TYPED origin that semantically
+ * establishes inability to continue (permission denial, unsupported operation,
+ * unreachable external dependency, provider failure, exhausted budget) may.
  *
  * These tests drive the real production engine (streaming + non-stream) and the
  * real reason resolvers, with exact terminal assertions.
@@ -17,7 +20,7 @@
 
 import assert from 'node:assert/strict';
 import { after, describe, test } from 'node:test';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -116,38 +119,72 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
     );
   });
 
-  test('a failed read (non-zero exit) plus BLOCKED still builds a cause-unknown report', () => {
-    const report = detectAndBuildBlockedReport('BLOCKED: cannot read the config.', [
-      {
-        tool: 'read_file',
-        target: 'config.json',
-        exit_code: 2,
-        stdout: '',
-        stderr: 'ENOENT: no such file or directory',
-        error: 'read failed',
-      },
-    ]);
-    assert.ok(report, 'genuine tool failure is evidence of a blocking condition');
-    assert.equal(report.reason_code, 'unknown');
-    assert.equal(report.cause_class, null);
-    assert.equal(report.checked.length, 1);
-    assert.equal(report.checked[0]!.action, 'read_file');
-    assert.equal(report.checked[0]!.target, 'config.json');
+  test('R0-5: a generic failed read (ENOENT) plus BLOCKED is NOT terminal blocking authority', () => {
+    // A missing project file is repairable localization (wrong path / optional
+    // file), not an external dependency the agent cannot provision. The model's
+    // BLOCKED prose cannot promote it into terminal authority.
+    assert.equal(
+      detectAndBuildBlockedReport('BLOCKED: cannot read the config.', [
+        {
+          tool: 'read_file',
+          target: 'config.json',
+          exit_code: 2,
+          stdout: '',
+          stderr: 'ENOENT: no such file or directory',
+          error: 'read failed',
+        },
+      ]),
+      null,
+      'a repairable failed read is failure evidence, not blocking authority',
+    );
   });
 
-  test('a non-empty error with a zero exit code still qualifies as evidence', () => {
+  test('R0-5: a red verifier plus BLOCKED is verification_failed recovery, not terminal blocking', () => {
+    assert.equal(
+      detectAndBuildBlockedReport('BLOCKED: tests still fail.', [
+        {
+          tool: 'run_command',
+          target: 'npm test',
+          exit_code: 1,
+          stdout: '1 failing',
+          stderr: 'AssertionError: expected 3, got -1',
+        },
+      ]),
+      null,
+      'a red verifier must drive repair/recovery, never a terminal block',
+    );
+    assert.equal(
+      detectAndBuildBlockedReport('BLOCKED: the compiler rejects it.', [
+        { tool: 'run_command', target: 'tsc --noEmit', exit_code: 2, stderr: 'TS2345: argument not assignable' },
+      ]),
+      null,
+      'a compile error is repairable failure evidence',
+    );
+    assert.equal(
+      detectAndBuildBlockedReport('BLOCKED: the search found nothing.', [
+        { tool: 'grep', target: 'needle', exit_code: 1, stdout: '', stderr: '' },
+      ]),
+      null,
+      'a failed search is a repairable miss, not a block',
+    );
+  });
+
+  test('a typed denial with a zero exit code qualifies as evidence', () => {
     const report = detectAndBuildBlockedReport('BLOCKED: permission denied.', [
       { tool: 'read_file', target: 'secret.txt', exit_code: 0, error: 'permission denied' },
     ]);
-    assert.ok(report, 'explicit error is evidence even without a non-zero exit');
+    assert.ok(report, 'explicit denial is evidence even without a non-zero exit');
+    assert.equal(report.reason_code, 'permission_denied');
+    assert.equal(report.cause_class, 'environment');
   });
 
-  test('stderr-without-stdout qualifies, but a successful stdout does not', () => {
-    assert.ok(
+  test('R0-5: generic stderr does not qualify, but an explicit denial does', () => {
+    assert.equal(
       detectAndBuildBlockedReport('BLOCKED: grep unavailable.', [
         { tool: 'grep', target: 'needle', exit_code: 0, stdout: '', stderr: 'grep: command failed' },
       ]),
-      'stderr with no stdout is a failure signal',
+      null,
+      'a generic stderr failure message is not a typed blocking origin',
     );
     assert.equal(
       detectAndBuildBlockedReport('BLOCKED: seems fine.', [
@@ -215,14 +252,15 @@ describe('R0-A: streaming terminal authority', () => {
     assert.equal(done.cause_class, undefined);
   });
 
-  test('a real tool failure + BLOCKED is a truthful cause-unknown block', async () => {
+  test('R0-5: a missing file + BLOCKED is repairable, not a terminal block', async () => {
     const wsRoot = makeRoot();
     const engine = new ChatEngine({
       task: 'read the config file',
       projectRoot: wsRoot,
       maxTurns: 6,
     });
-    // The path does not exist, so the real executor records a failed read.
+    // The path does not exist, so the real executor records a failed read. A
+    // wrong/optional path is repairable localization, not blocking authority.
     stubNativeRunner(
       engine,
       readThenBlockedRunner('missing-config.json', 'BLOCKED: the config file cannot be read.'),
@@ -231,13 +269,40 @@ describe('R0-A: streaming terminal authority', () => {
     const events = await collect(engine, 'read the config file', 'explain');
     const done = doneEvent(events);
 
+    assert.equal(done.status, 'completed', 'a repairable failure is not terminal blocking');
+    assert.equal(done.outcome, 'NO_CHANGE_REQUIRED');
+    assert.equal(done.blockedReport ?? null, null);
+    assert.equal(done.reason_code, undefined);
+    assert.equal(done.cause_class, undefined);
+  });
+
+  test('R0-5: a typed permission denial + BLOCKED is a truthful typed block', async () => {
+    const wsRoot = makeRoot();
+    const secret = join(wsRoot, 'secret.txt');
+    writeFileSync(secret, 'top secret\n', 'utf8');
+    chmodSync(secret, 0o000);
+    const engine = new ChatEngine({
+      task: 'read the secret file',
+      projectRoot: wsRoot,
+      maxTurns: 6,
+    });
+    stubNativeRunner(
+      engine,
+      readThenBlockedRunner('secret.txt', 'BLOCKED: the file cannot be read.'),
+    );
+
+    const events = await collect(engine, 'read the secret file', 'explain');
+    const done = doneEvent(events);
+
     assert.equal(done.status, 'blocked');
-    assert.equal(done.outcome, 'NEEDS_HUMAN_DECISION');
-    assert.ok(done.blockedReport, 'genuine failure backs a structured report');
-    assert.equal(done.blockedReport.reason_code, 'unknown');
-    assert.equal(done.blockedReport.cause_class, null);
-    assert.equal(done.reason_code, 'unknown');
-    assert.equal(done.cause_class, null);
+    // permission_denied is the policy/permission bucket in the existing
+    // TerminalOutcome taxonomy; the reason_code carries the precise cause.
+    assert.equal(done.outcome, 'BLOCKED_POLICY');
+    assert.ok(done.blockedReport, 'a typed denial backs a structured report');
+    assert.equal(done.blockedReport.reason_code, 'permission_denied');
+    assert.equal(done.blockedReport.cause_class, 'environment');
+    assert.equal(done.reason_code, 'permission_denied');
+    assert.equal(done.cause_class, 'environment');
   });
 });
 

@@ -105,9 +105,11 @@ test('F4/R0-A: model prose cannot synthesize a policy block report', () => {
       error: 'permission denied',
     },
   ]);
-  assert.ok(report, 'protocol declaration plus real failure is detected');
-  assert.equal(report.reason_code, 'unknown');
-  assert.equal(report.cause_class, null);
+  assert.ok(report, 'protocol declaration plus a typed denial is detected');
+  // R0-5: the controller-established origin is the authority; the model's
+  // prose cannot mint a cause, but real denial evidence types it.
+  assert.equal(report.reason_code, 'permission_denied');
+  assert.equal(report.cause_class, 'environment');
 });
 
 test('read-only chat denies mutation and delegation before special-case dispatch', () => {
