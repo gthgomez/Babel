@@ -34,7 +34,7 @@ These items have **scoped** public evidence (CI gates, documented validation scr
 - **Provider-backed model sessions** — require local credentials and a working provider; quality varies by model.
 - **Execution profiles** — default `safe_repo` expects Docker isolation and can fail-closed without it; `dev_local` runs approved tools on the host (use only on repos you own / code you reviewed).
 - **Deep mode** — available as a higher-ceremony path intended for riskier work; still maturing. Route availability does **not** mean Deep is more reliable than chat for ordinary tasks.
-- **TUI polish and recovery UX** — usable; some recovery paths are CLI-first (see START_HERE notes on `undo` / checkpoints).
+- **TUI polish and recovery UX** — interactive TUI surfaces are present in the public tree; some recovery paths (including `undo` / checkpoints) remain CLI-first (see START_HERE).
 
 ## Active qualification (engineering; not user promises)
 
