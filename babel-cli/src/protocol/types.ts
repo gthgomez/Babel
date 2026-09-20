@@ -79,6 +79,8 @@ export enum BabelProtocolErrorCode {
   MODE_UNSUPPORTED = -32006,
   /** Durable state could not be restored; executing would run on empty history. */
   THREAD_NOT_RESUMABLE = -32007,
+  /** R0-3: durable history has no provable repository identity; explicit rebind required. */
+  REPO_IDENTITY_UNKNOWN = -32008,
 }
 
 /** Token/cost summary on turn completion — mirrors `SessionUsageSummary`. */
@@ -182,6 +184,13 @@ export interface TurnSubmitParams {
   message: string;
   /** Optional client idempotency key. Same id + same message hash replays the prior result. */
   command_id?: string;
+  /**
+   * R0-3: explicit rebind/confirmation that executing against this thread is
+   * intended even though its durable repository identity is unknown. Required
+   * only when a thread with durable history has no provable historical
+   * identity; never a substitute for a mismatch, which always fails closed.
+   */
+  repo_identity_confirmed?: boolean;
 }
 
 export interface TurnCancelParams {

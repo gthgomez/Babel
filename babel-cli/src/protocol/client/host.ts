@@ -15,6 +15,7 @@ import {
   isRuntimeCoordinatorEnabled,
 } from '../../runtime/coordinator.js';
 import type { RuntimeCoordinator, RuntimeExecution } from '../../runtime/contracts.js';
+import type { RepoIdentityResumeResult } from '../../agent/threadEventLog.js';
 import {
   hydrateEngineFromRestore,
   inspectSessionRestoreState,
@@ -175,7 +176,10 @@ function materializeEngine(state: ProtocolHostState, descriptor: SessionDescript
     // at the seam so a materialization cannot bypass the host-level check.
     hydrateEngineFromRestore(engine, report, {
       currentRoot: descriptor.projectRoot,
-      fallbackSavedRoot: descriptor.projectRoot,
+      // R0-2: a synthesized descriptor is not historical evidence.
+      fallbackSavedRoot: loadSessionDescriptor(descriptor.threadId)
+        ? descriptor.projectRoot
+        : null,
     });
   }
   state.engines.set(descriptor.threadId, engine);
@@ -312,10 +316,16 @@ export async function handleProtocolRequest(
         // session-events identity is authoritative; the descriptor root is only
         // a fallback. Roots are never compared lexically.
         const currentRoot = params.project_root ?? descriptor.projectRoot;
+        // R0-2: only a PERSISTED descriptor is historical identity evidence.
+        // When none exists, the descriptor above is synthesized from the very
+        // root being resumed; using it as its own "saved" root would verify
+        // current B against synthetic saved B. Pass null so identity stays
+        // unknown (never verified) without durable historical proof.
+        const persistedRoot = loadedDescriptor ? descriptor.projectRoot : null;
         const identity = inspectThreadRepoIdentityOnHydration(
           threadId,
           currentRoot,
-          descriptor.projectRoot,
+          persistedRoot,
         );
         if (!identity.ok && identity.status === 'mismatch') {
           return repoIdentityMismatchResponse(
@@ -332,7 +342,7 @@ export async function handleProtocolRequest(
         const resumeCapability = resolveModeCapability(descriptor.mode);
         const inspected = inspectSessionRestoreState(threadId, descriptor.mode, {
           currentRoot,
-          fallbackSavedRoot: descriptor.projectRoot,
+          fallbackSavedRoot: persistedRoot,
         });
         const report: RestoreReport = resumeCapability.resume
           ? inspected
@@ -365,6 +375,8 @@ export async function handleProtocolRequest(
           );
         }
         const descriptor = state.descriptors.get(params.thread_id) ?? loadSessionDescriptor(params.thread_id);
+        // R0-2: only a persisted descriptor is historical identity evidence.
+        const persistedDescriptor = loadSessionDescriptor(params.thread_id);
         const registeredEngine = state.engines.get(params.thread_id);
         if (!descriptor && !registeredEngine) {
           return errorResponse(
@@ -373,6 +385,7 @@ export async function handleProtocolRequest(
             `Cannot determine mode for thread ${params.thread_id}: no session descriptor or registered runtime`,
           );
         }
+        let identityResult: RepoIdentityResumeResult | undefined;
         if (descriptor) {
           const capability = resolveModeCapability(descriptor.mode);
           if (!capability.submission) {
@@ -384,11 +397,15 @@ export async function handleProtocolRequest(
           }
           // D04: identity is enforced before any cold restore is admitted. A
           // live registered engine was already validated when it was admitted.
+          // R0-2: the cached/synthesized descriptor is not historical evidence;
+          // only a persisted descriptor or durable log/session-events identity
+          // may serve as the saved root.
           const identity = inspectThreadRepoIdentityOnHydration(
             params.thread_id,
             descriptor.projectRoot,
-            descriptor.projectRoot,
+            persistedDescriptor ? persistedDescriptor.projectRoot : null,
           );
+          identityResult = identity;
           if (!identity.ok && identity.status === 'mismatch') {
             return repoIdentityMismatchResponse(
               id,
@@ -408,7 +425,12 @@ export async function handleProtocolRequest(
             params.thread_id,
             descriptor?.mode ?? 'chat',
             descriptor
-              ? { currentRoot: descriptor.projectRoot, fallbackSavedRoot: descriptor.projectRoot }
+              ? {
+                  currentRoot: descriptor.projectRoot,
+                  fallbackSavedRoot: persistedDescriptor
+                    ? persistedDescriptor.projectRoot
+                    : null,
+                }
               : undefined,
           );
           state.restoreReports.set(params.thread_id, restoreReport);
@@ -418,6 +440,27 @@ export async function handleProtocolRequest(
             id,
             BabelProtocolErrorCode.THREAD_NOT_RESUMABLE,
             restoreReport.reason ?? `Thread ${params.thread_id} has state that cannot be restored`,
+          );
+        }
+        // R0-3: unknown repository identity may be inspected as history, but
+        // executing against a thread with durable history requires an explicit
+        // rebind/confirmation. A mismatch always fails closed above; unknown is
+        // never silently treated as the current root's identity.
+        if (
+          identityResult &&
+          !identityResult.ok &&
+          identityResult.status === 'unknown' &&
+          !registeredEngine &&
+          restoreReport?.resumable &&
+          restoreReport.source !== 'none' &&
+          params.repo_identity_confirmed !== true
+        ) {
+          return errorResponse(
+            id,
+            BabelProtocolErrorCode.REPO_IDENTITY_UNKNOWN,
+            `repo_identity_unknown: ${identityResult.reason}. Re-submit with repo_identity_confirmed=true to bind this thread to ${
+              descriptor?.projectRoot ?? 'the requested root'
+            }.`,
           );
         }
         const integrity = hashUserMessage(params.message);

@@ -25,10 +25,15 @@ import {
   THREAD_EVENT_LOG_FILENAME,
   createThreadEventLog,
   endTurn,
+  loadThreadEventLogFromDir,
+  repoRootFingerprint,
+  resolveRepoIdentityOnResume,
+  resolveSavedRepoFingerprintFromLog,
   serializeThreadEventLog,
   startTurn,
+  validateRepoIdentityOnResume,
 } from '../../agent/threadEventLog.js';
-import { chatSessionDir } from '../../cli/runsLayout.js';
+import { chatSessionDir, threadDir } from '../../cli/runsLayout.js';
 import { BabelProtocolErrorCode } from '../types.js';
 import { createProtocolHostState, handleProtocolRequest } from './index.js';
 
@@ -168,9 +173,19 @@ function submit(
   state: ReturnType<typeof createProtocolHostState>,
   threadId: string,
   message: string,
+  confirmed?: boolean,
 ) {
   return handleProtocolRequest(
-    { jsonrpc: '2.0', id: 3, method: 'turn.submit', params: { thread_id: threadId, message } },
+    {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'turn.submit',
+      params: {
+        thread_id: threadId,
+        message,
+        ...(confirmed !== undefined ? { repo_identity_confirmed: confirmed } : {}),
+      },
+    },
     state,
   );
 }
@@ -327,6 +342,104 @@ test('D04 protocol hydration identity', { concurrency: false }, async (t) => {
     } finally {
       fixture.cleanup();
       rmSync(vanishedRoot, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('R0-2: a synthesized descriptor cannot serve as its own historical identity', async () => {
+    const fixture = withTempRunsDir();
+    const rootA = mkdtempSync(join(tmpdir(), 'r0-2-a-'));
+    const rootB = mkdtempSync(join(tmpdir(), 'r0-2-b-'));
+    try {
+      const creator = createProtocolHostState();
+      const threadId = await createThread(creator, rootA);
+      // Legacy / cells-only thread: no persisted descriptor, no durable
+      // event-log identity, no session-events identity.
+      rmSync(join(threadDir(threadId), 'session-descriptor.json'), { force: true });
+      rmSync(join(chatSessionDir(threadId), THREAD_EVENT_LOG_FILENAME), { force: true });
+
+      // Resume the thread against an unrelated repository B. With no historical
+      // evidence the current root must never prove its own identity.
+      const resumed = await resume(freshHost(), threadId, rootB);
+      assert.equal('error' in resumed, false, 'unknown identity resumes as inspectable history');
+      const restore = restoreOf(resumed);
+      assert.equal(
+        restore.repoIdentity?.status,
+        'unknown',
+        'no durable historical identity => unknown, never verified',
+      );
+      assert.notEqual(restore.repoIdentity?.status, 'verified');
+    } finally {
+      fixture.cleanup();
+      rmSync(rootA, { recursive: true, force: true });
+      rmSync(rootB, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('R0-4: the durable log records a filesystem fingerprint of the root', async (tc) => {
+    if (process.platform === 'win32') {
+      tc.skip('filesystem inode identity is unavailable on this platform');
+      return;
+    }
+    const fixture = withTempRunsDir();
+    const repoRoot = mkdtempSync(join(tmpdir(), 'r0-4-repo-'));
+    try {
+      const creator = createProtocolHostState();
+      const threadId = await createThread(creator, repoRoot);
+      writeEventLog(threadId, repoRoot);
+
+      const log = loadThreadEventLogFromDir(chatSessionDir(threadId));
+      const fingerprint = resolveSavedRepoFingerprintFromLog(log);
+      assert.ok(fingerprint, 'a filesystem fingerprint is recorded at turn start');
+      assert.deepEqual(fingerprint, repoRootFingerprint(repoRoot), 'fingerprint matches the root');
+      // The same repository verifies against its own recorded fingerprint.
+      assert.equal(
+        validateRepoIdentityOnResume(log, repoRoot).status,
+        'verified',
+        'an unchanged repository verifies',
+      );
+      // A different physical directory at the same path must not verify.
+      assert.equal(
+        resolveRepoIdentityOnResume(repoRoot, repoRoot, { device: -1, inode: -1 }).status,
+        'mismatch',
+        'a replaced physical directory is a mismatch, not path continuity',
+      );
+    } finally {
+      fixture.cleanup();
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('R0-3: unknown identity with durable history requires explicit rebind before execution', async () => {
+    const fixture = withTempRunsDir();
+    const savedRoot = mkdtempSync(join(tmpdir(), 'r0-3-history-'));
+    try {
+      const creator = createProtocolHostState();
+      const threadId = await createThread(creator, savedRoot);
+      writeEventLog(threadId, savedRoot);
+      // The recorded root no longer resolves, so identity is unprovable while
+      // durable history remains.
+      rmSync(savedRoot, { recursive: true, force: true });
+
+      // History is inspectable and truthfully reports unknown identity.
+      const resumed = await resume(freshHost(), threadId);
+      assert.equal('error' in resumed, false, 'history remains inspectable');
+      assert.equal(restoreOf(resumed).repoIdentity?.status, 'unknown');
+
+      // Execution is guarded: no silent run on unproven identity.
+      const harness = makeCountingHost();
+      const refused = await submit(harness.state, threadId, 'execute without rebind');
+      assert.equal('error' in refused, true, 'unknown identity must not execute silently');
+      if (!('error' in refused)) return;
+      assert.equal(refused.error.code, BabelProtocolErrorCode.REPO_IDENTITY_UNKNOWN);
+      assert.equal(harness.counter.calls, 0, 'no engine materialized without rebind');
+
+      // Explicit rebind/confirmation admits execution.
+      const confirmed = await submit(harness.state, threadId, 'execute after rebind', true);
+      assert.equal('error' in confirmed, false, 'explicit rebind admits execution');
+      assert.equal(harness.counter.calls, 1, 'confirmed submission materializes the runtime');
+    } finally {
+      fixture.cleanup();
+      rmSync(savedRoot, { recursive: true, force: true });
     }
   });
 

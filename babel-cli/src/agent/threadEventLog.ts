@@ -7,7 +7,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
@@ -116,6 +116,15 @@ export type ThreadEvent =
       kind: 'repo_identity';
       projectRoot: string;
       gitHead?: string;
+      /**
+       * R0-4: filesystem fingerprint of the repository root directory, when the
+       * platform exposes one. Distinct from `projectRoot` (a path): this proves
+       * the *same physical directory*, so a repository removed and replaced at
+       * the same path is detected as a mismatch. Absent on platforms/filesystems
+       * that do not expose a stable identity.
+       */
+      rootDevice?: number;
+      rootInode?: number;
     });
 
 export interface TurnSnapshot {
@@ -208,10 +217,14 @@ export function startTurn(
     ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
   });
+  const rootFingerprint = repoRootFingerprint(input.projectRoot);
   appendThreadEvent(log, {
     kind: 'repo_identity',
     turn_id: turnId,
     projectRoot: input.projectRoot,
+    ...(rootFingerprint !== null
+      ? { rootDevice: rootFingerprint.device, rootInode: rootFingerprint.inode }
+      : {}),
   });
   appendThreadEvent(log, {
     kind: 'user_message',
@@ -431,6 +444,32 @@ function physicalRootIdentity(path: string): string | null {
 }
 
 /**
+ * R0-4: filesystem fingerprint of the repository root directory.
+ *
+ * Returns `dev`/`ino` of the resolved root when the platform exposes a stable
+ * value. Windows and some network filesystems report inode 0 / unstable values;
+ * those return null so the caller falls back to canonical-path continuity
+ * rather than claiming a stronger proof than it has.
+ */
+export function repoRootFingerprint(
+  path: string,
+): { device: number; inode: number } | null {
+  const resolved = resolve(path);
+  if (!existsSync(resolved)) return null;
+  try {
+    const real = realpathSync(resolved);
+    const stat = statSync(real);
+    if (CASE_INSENSITIVE_FS) return null;
+    if (!Number.isFinite(stat.dev) || !Number.isFinite(stat.ino) || stat.ino === 0) {
+      return null;
+    }
+    return { device: stat.dev, inode: stat.ino };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * D04 resume-identity outcome.
  *
  * - `verified`: the saved and current roots resolve to the same physical repo.
@@ -449,6 +488,8 @@ const IDENTITY_UNPROVEN_REASON =
 const IDENTITY_CHANGED_REASON = 'Repository root changed since last turn; confirm before resume';
 const IDENTITY_UNRESOLVABLE_REASON =
   'Repository root changed or could not be verified since last turn; physical identity cannot be established, so identity is not claimed (confirm before resume)';
+const IDENTITY_REPLACED_REASON =
+  'The repository at the recorded root was replaced since last turn (filesystem identity changed); confirm before resume';
 
 /** Last durable repository root recorded in the thread event log, or null. */
 export function resolveSavedRepoRootFromLog(log: ThreadEventLog | null): string | null {
@@ -475,6 +516,7 @@ export function resolveSavedRepoRootFromLog(log: ThreadEventLog | null): string 
 export function resolveRepoIdentityOnResume(
   savedRoot: string | null,
   currentRoot: string,
+  savedFingerprint: { device?: number; inode?: number } | null = null,
 ): RepoIdentityResumeResult {
   if (savedRoot === null) {
     return { ok: false, status: 'unknown', reason: IDENTITY_UNPROVEN_REASON, savedRoot: null };
@@ -482,13 +524,44 @@ export function resolveRepoIdentityOnResume(
   const savedIdentity = physicalRootIdentity(savedRoot);
   const currentIdentity = physicalRootIdentity(currentRoot);
   if (savedIdentity !== null && currentIdentity !== null) {
-    if (savedIdentity === currentIdentity) return { ok: true, status: 'verified' };
-    return {
-      ok: false,
-      status: 'mismatch',
-      reason: IDENTITY_CHANGED_REASON,
-      savedRoot,
-    };
+    if (savedIdentity !== currentIdentity) {
+      return {
+        ok: false,
+        status: 'mismatch',
+        reason: IDENTITY_CHANGED_REASON,
+        savedRoot,
+      };
+    }
+    // R0-4: the canonical path matches. When a durable filesystem fingerprint
+    // was recorded, require it too — a repository removed and replaced at the
+    // same path has a different device/inode, so path continuity alone must not
+    // claim the same physical repository.
+    if (
+      savedFingerprint &&
+      (savedFingerprint.device !== undefined || savedFingerprint.inode !== undefined)
+    ) {
+      const currentFingerprint = repoRootFingerprint(currentRoot);
+      if (currentFingerprint === null) {
+        return {
+          ok: false,
+          status: 'unknown',
+          reason: IDENTITY_UNRESOLVABLE_REASON,
+          savedRoot,
+        };
+      }
+      if (
+        currentFingerprint.device !== savedFingerprint.device ||
+        currentFingerprint.inode !== savedFingerprint.inode
+      ) {
+        return {
+          ok: false,
+          status: 'mismatch',
+          reason: IDENTITY_REPLACED_REASON,
+          savedRoot,
+        };
+      }
+    }
+    return { ok: true, status: 'verified' };
   }
   if (savedIdentity === null && currentIdentity === null) {
     return {
@@ -519,7 +592,29 @@ export function validateRepoIdentityOnResume(
   fallbackSavedRoot: string | null = null,
 ): RepoIdentityResumeResult {
   const savedRoot = resolveSavedRepoRootFromLog(log) ?? fallbackSavedRoot;
-  return resolveRepoIdentityOnResume(savedRoot, currentRoot);
+  return resolveRepoIdentityOnResume(savedRoot, currentRoot, resolveSavedRepoFingerprintFromLog(log));
+}
+
+/**
+ * R0-4: last durable filesystem fingerprint recorded in the thread event log,
+ * or null when none was recorded (legacy session / platform without one).
+ */
+export function resolveSavedRepoFingerprintFromLog(
+  log: ThreadEventLog | null,
+): { device?: number; inode?: number } | null {
+  if (!log) return null;
+  const last = [...log.events]
+    .reverse()
+    .find(
+      (e): e is Extract<ThreadEvent, { kind: 'repo_identity' }> =>
+        e.kind === 'repo_identity',
+    );
+  if (!last) return null;
+  if (last.rootDevice === undefined && last.rootInode === undefined) return null;
+  return {
+    ...(last.rootDevice !== undefined ? { device: last.rootDevice } : {}),
+    ...(last.rootInode !== undefined ? { inode: last.rootInode } : {}),
+  };
 }
 
 export function latestTurnSnapshot(log: ThreadEventLog): TurnSnapshot | null {
