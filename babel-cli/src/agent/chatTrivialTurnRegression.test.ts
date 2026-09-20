@@ -520,15 +520,19 @@ describe('non-streaming path preserves generation boundaries', () => {
         preflightContext: '',
       });
 
-      // A BLOCKED declaration backed by a REAL tool failure must be an honest
-      // blocked terminal (exact, not a tolerant disjunction).
+      // R0-5: a missing file is a repairable failure, not blocking authority, so
+      // the model's BLOCKED prose is ignored. The execute-intent run keeps going
+      // and ends at its bounded harness text-only-loop terminal, with a typed
+      // harness report. Exact values, not a tolerant disjunction.
       assert.equal(result.status, 'blocked', `unexpected status ${result.status}`);
-      assert.equal(result.outcome, 'NEEDS_HUMAN_DECISION');
-      assert.equal(result.reason_code, 'unknown');
-      assert.equal(result.cause_class, null);
-      assert.ok(result.blockedReport, 'evidence-backed block carries a structured report');
-      assert.equal(result.blockedReport?.reason_code, 'unknown');
-      assert.equal(state.calls, 3, `expected 3 provider rounds, got ${state.calls}`);
+      assert.equal(result.outcome, 'BLOCKED_POLICY');
+      assert.equal(result.reason_code, 'recovery_exhausted');
+      assert.equal(result.cause_class, 'harness');
+      assert.ok(result.blockedReport, 'the harness terminal carries a structured report');
+      assert.equal(result.blockedReport?.reason_code, 'recovery_exhausted');
+      assert.equal(result.blockedReport?.cause_class, 'harness');
+      // 2 rounds (text, tool) + 5 text-only rounds to the harness threshold.
+      assert.equal(state.calls, 7, `expected 7 provider rounds, got ${state.calls}`);
 
       // Real lifecycle first: stop() flushes the active generation-B cell.
       renderer.stop();
@@ -539,14 +543,22 @@ describe('non-streaming path preserves generation boundaries', () => {
         .filter((k) => k === 'assistant_message' || k === 'tool_call');
       assert.deepEqual(
         relevant,
-        ['assistant_message', 'tool_call', 'assistant_message'],
+        [
+          'assistant_message',
+          'tool_call',
+          'assistant_message',
+          'assistant_message',
+          'assistant_message',
+          'assistant_message',
+          'assistant_message',
+        ],
         `non-stream mode must segment generations AND tools like streaming, got: ${JSON.stringify(relevant)}`,
       );
       const messages = committed
         .filter((c) => c.kind === 'assistant_message')
         .map((c) => (c.payload as { message?: string }).message);
       assert.equal(messages[0], 'Generation A text.');
-      assert.match(messages[1] ?? '', /BLOCKED:/);
+      assert.match(messages[1] ?? '', /BLOCKED: src\/missing-login\.ts could not be read/);
       assert.doesNotMatch(
         messages.join('|'),
         /Generation A text\.Generation/,
