@@ -40,6 +40,7 @@ const MANAGED_ENV = [
   'BABEL_ALLOW_HOST_FALLBACK',
   'BABEL_LITE_OFFLINE',
   'BABEL_IMPLEMENT_WORKTREE',
+  'BABEL_DIFF_CRITIC',
 ] as const;
 
 let envSnapshot: Record<string, string | undefined> = {};
@@ -56,6 +57,9 @@ before(() => {
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
   delete process.env['BABEL_LITE_OFFLINE'];
   process.env['BABEL_IMPLEMENT_WORKTREE'] = '0';
+  // Enable the last-chance diff critic so the budget-kill suspension point is
+  // reachable deterministically (the critic itself is stubbed per test).
+  process.env['BABEL_DIFF_CRITIC'] = '1';
 });
 
 after(() => {
@@ -218,6 +222,228 @@ test('a superseded Task A provider abort cannot finalize Task B', async () => {
       false,
       'a superseded cancel does not leave the engine cancelled for Task B',
     );
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: root, encoding: 'utf-8' });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a superseded non-stream Task A cannot finalize streaming Task B', async () => {
+  const root = createGitProject();
+  const gateA = deferred();
+  const startedA = deferred();
+  const gateB = deferred();
+  const startedB = deferred();
+  let call = 0;
+  const runner: ScriptedRunner = {
+    async *executeWithToolsStream() {
+      const index = call;
+      call += 1;
+      if (index === 0) {
+        startedA.resolve();
+        await gateA.promise;
+        yield { type: 'text_delta' as const, text: 'A final answer' };
+        yield { type: 'done' as const, finishReason: 'stop' };
+        return;
+      }
+      startedB.resolve();
+      await gateB.promise;
+      yield { type: 'text_delta' as const, text: 'B final answer' };
+      yield { type: 'done' as const, finishReason: 'stop' };
+    },
+    async execute() {
+      return { type: 'completion', answer: 'scripted' };
+    },
+    async executeRaw() {
+      return 'scripted';
+    },
+    getLastInvocationMetadata() {
+      return null;
+    },
+  };
+
+  try {
+    const engine = new ChatEngine({
+      task: 'Task A',
+      projectRoot: root,
+      runId: `r0-nonstream-owner-${Math.random().toString(36).slice(2, 10)}`,
+      model: MODEL,
+    });
+    installRunner(engine, runner);
+
+    // Task A through the non-stream adapter.
+    const aPromise = engine.submitMessage('Task A: do a thing.', {});
+    await startedA.promise;
+
+    // Task B streaming starts while A is suspended in its provider.
+    const bEvents: ChatEvent[] = [];
+    const pumpB = (async () => {
+      for await (const event of engine.submitMessageStream('Task B: inventory only.')) {
+        bEvents.push(event);
+      }
+    })();
+    await startedB.promise;
+
+    // Release A. Its generator is superseded and returns with no terminal, so
+    // the adapter must not finalize Task B as a "stream ended" failure.
+    gateA.resolve();
+    await aPromise;
+
+    gateB.resolve();
+    await pumpB;
+
+    const bTerminal = bEvents[bEvents.length - 1] as Extract<ChatEvent, { type: 'done' }>;
+    assert.equal(bTerminal.type, 'done', 'Task B completes normally');
+    assert.equal(bTerminal.status, 'completed', 'Task B status is its own, not a stale failure');
+    const bTurnId = (bTerminal as unknown as { turnTelemetry?: { turnId?: string } }).turnTelemetry
+      ?.turnId;
+    assert.ok(bTurnId, 'Task B terminal carries its turn id');
+    const bTurnEnded = engine
+      .getParityEventLog()
+      .events.filter((event) => event.kind === 'turn_ended' && event.turn_id === bTurnId);
+    assert.equal(bTurnEnded.length, 1, 'Task B ends its own turn exactly once');
+    assert.equal(
+      (bTurnEnded[0] as { status?: string }).status,
+      'completed',
+      'Task B durable turn status is its own, not a stale stream-without-terminal failure',
+    );
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: root, encoding: 'utf-8' });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** Fixture with an uncommitted change so the last-chance diff critic sees a patch. */
+function createModifiedGitProject(): string {
+  const root = createGitProject();
+  writeFileSync(
+    join(root, 'src', 'main.ts'),
+    'export const n = 1;\nexport function helper(x: number): number {\n  return x + 1;\n}\n',
+    'utf-8',
+  );
+  return root;
+}
+
+test('a superseded Task A handleBudgetKill cannot finalize Task B', async () => {
+  const root = createModifiedGitProject();
+  const criticStarted = deferred();
+  const gateCritic = deferred();
+  const gateB = deferred();
+  const startedB = deferred();
+  let call = 0;
+  const runner: ScriptedRunner = {
+    async *executeWithToolsStream() {
+      const index = call;
+      call += 1;
+      if (index > 0) throw new Error('unexpected extra provider stream');
+      startedB.resolve();
+      await gateB.promise;
+      yield { type: 'text_delta' as const, text: 'B final answer' };
+      yield { type: 'done' as const, finishReason: 'stop' };
+    },
+    async execute() {
+      return { type: 'completion', answer: 'scripted' };
+    },
+    async executeRaw() {
+      return 'scripted';
+    },
+    getLastInvocationMetadata() {
+      return null;
+    },
+  };
+
+  try {
+    const engine = new ChatEngine({
+      task: 'Task A',
+      projectRoot: root,
+      runId: `r0-budget-owner-${Math.random().toString(36).slice(2, 10)}`,
+      model: MODEL,
+    });
+    const box = engine as unknown as {
+      deliberationRunner: unknown;
+      synthesisRunner: unknown;
+      shouldUseNativeTools: () => boolean;
+      checkBudgets: () => { ok: boolean; reason?: string; limiter?: string };
+      toolCallLog: Array<Record<string, unknown>>;
+      runAsymmetricDiffCritic: () => Promise<'allow' | 'reject' | 'block'>;
+    };
+    box.deliberationRunner = runner;
+    box.synthesisRunner = runner;
+    box.shouldUseNativeTools = () => true;
+
+    // Stand-in for the real async last-chance critic; it suspends
+    // handleBudgetKill at its only await so the race ordering is explicit.
+    box.runAsymmetricDiffCritic = async () => {
+      criticStarted.resolve();
+      await gateCritic.promise;
+      return 'allow';
+    };
+
+    // Force Task A's first budget check to fail with a confirmed mutation so
+    // the last-chance critic runs; allow every later check (Task B).
+    let checks = 0;
+    box.checkBudgets = function (this: unknown) {
+      checks += 1;
+      if (checks === 1) {
+        box.toolCallLog.push({
+          tool: 'sub_agent',
+          target: 'src/main.ts',
+          index: 0,
+          effect_status: 'confirmed_change',
+          mutation_paths: ['src/main.ts'],
+        });
+        return { ok: false, reason: 'r0 budget kill', limiter: 'cost' };
+      }
+      return { ok: true };
+    };
+
+    const aEvents: ChatEvent[] = [];
+    const pumpA = (async () => {
+      for await (const event of engine.submitMessageStream('Task A: mutate.')) {
+        aEvents.push(event);
+      }
+    })();
+
+    // Wait until A is suspended inside handleBudgetKill -> critic.
+    const reachedCritic = await Promise.race([
+      criticStarted.promise.then(() => 'critic' as const),
+      pumpA.then(() => 'a-done' as const),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 4000)),
+    ]);
+    assert.equal(reachedCritic, 'critic', 'Task A reached the last-chance critic');
+
+    // Task B starts and blocks mid-turn.
+    const bEvents: ChatEvent[] = [];
+    const pumpB = (async () => {
+      for await (const event of engine.submitMessageStream('Task B: inventory only.')) {
+        bEvents.push(event);
+      }
+    })();
+    await startedB.promise;
+
+    // Release A's critic while B is still mid-turn.
+    gateCritic.resolve();
+    await pumpA;
+
+    gateB.resolve();
+    await pumpB;
+
+    const bTerminal = bEvents[bEvents.length - 1] as Extract<ChatEvent, { type: 'done' }>;
+    assert.equal(bTerminal.type, 'done', 'Task B completes normally');
+    assert.notEqual(bTerminal.outcome, 'BUDGET_EXHAUSTED', 'Task B is not budget-killed by late Task A');
+    const bTurnId = (bTerminal as unknown as { turnTelemetry?: { turnId?: string } }).turnTelemetry
+      ?.turnId;
+    assert.ok(bTurnId, 'Task B terminal carries its turn id');
+    const bTurnEnded = engine
+      .getParityEventLog()
+      .events.filter((event) => event.kind === 'turn_ended' && event.turn_id === bTurnId);
+    assert.equal(bTurnEnded.length, 1, 'Task B ends its own turn exactly once');
+    assert.notEqual(
+      (bTurnEnded[0] as { outcome?: string }).outcome,
+      'BUDGET_EXHAUSTED',
+      'Task B durable turn outcome is its own, not a stale Task A budget kill',
+    );
+    assert.equal(terminals(aEvents).length, 0, 'the superseded Task A emits no terminal of its own');
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: root, encoding: 'utf-8' });
     rmSync(root, { recursive: true, force: true });

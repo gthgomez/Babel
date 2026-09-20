@@ -2043,7 +2043,8 @@ export class ChatEngine {
     reason: string,
     callbacks: ChatCallbacks,
     taskIntent: TaskIntent,
-  ): Promise<ChatResult> {
+    ownerGeneration?: number,
+  ): Promise<ChatResult | null> {
     // Tier A2: Record budget kill event
     this.policyEventLog.record({
       at_turn: this._turnIndex,
@@ -2059,6 +2060,12 @@ export class ChatEngine {
         taskIntent,
         { terminal: true },
       );
+      // R0-8: the last-chance critic is a suspension point. If the submission
+      // was superseded while it ran, do not finalize or budget-kill the task
+      // that now owns the engine; the caller returns without a terminal.
+      if (ownerGeneration !== undefined && !this.isSubmissionCurrent(ownerGeneration)) {
+        return null;
+      }
       if (critic === 'block' || critic === 'reject') {
         const report = this.buildCriticBlockedReport(
           this.lastCriticReceipt ?? {
@@ -2073,15 +2080,25 @@ export class ChatEngine {
           callbacks,
           this.buildCriticBlockedAnswer(report),
           report,
+          undefined,
+          undefined,
+          ownerGeneration,
         );
       }
     }
 
+    if (ownerGeneration !== undefined && !this.isSubmissionCurrent(ownerGeneration)) {
+      return null;
+    }
     this.budgetExceeded = true;
     return this.buildResult(
       'budget_exhausted',
       callbacks,
       formatBudgetKillAnswer(reason, this.toolCallLog, this.lastCriticReceipt?.verdict ?? null),
+      undefined,
+      undefined,
+      undefined,
+      ownerGeneration,
     );
   }
 
@@ -2649,7 +2666,15 @@ export class ChatEngine {
       const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
       const message =
         captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error));
-      return this.buildResult('failed', cb, message, undefined, classifyFailureText(message));
+      return this.buildResult(
+        'failed',
+        cb,
+        message,
+        undefined,
+        classifyFailureText(message),
+        undefined,
+        generation,
+      );
     }
 
     if (!terminal) {
@@ -2657,6 +2682,10 @@ export class ChatEngine {
         'failed',
         cb,
         'Stream ended without a terminal event — possible internal error',
+        undefined,
+        undefined,
+        undefined,
+        generation,
       );
     }
     // D03: carry the terminal event's explicit reason into the sync result path.
@@ -2665,7 +2694,15 @@ export class ChatEngine {
         ? { code: terminal.reason_code, cause_class: terminal.cause_class ?? null }
         : undefined;
     if (terminal.kind === 'cancelled') {
-      return this.buildResult('cancelled', cb);
+      return this.buildResult(
+        'cancelled',
+        cb,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        generation,
+      );
     }
     if (terminal.kind === 'failed') {
       const failedOutcome = terminal.outcome ?? classifyFailureText(terminal.error ?? '');
@@ -2678,6 +2715,7 @@ export class ChatEngine {
           undefined,
           'BUDGET_EXHAUSTED',
           reasonFromTerminal,
+          generation,
         );
       }
       if (
@@ -2693,6 +2731,7 @@ export class ChatEngine {
           undefined,
           failedOutcome,
           reasonFromTerminal,
+          generation,
         );
       }
       return this.buildResult(
@@ -2702,6 +2741,7 @@ export class ChatEngine {
         undefined,
         failedOutcome,
         reasonFromTerminal,
+        generation,
       );
     }
     if (terminal.budgetExceeded || terminal.outcome === 'BUDGET_EXHAUSTED' || this.budgetExceeded) {
@@ -2722,6 +2762,7 @@ export class ChatEngine {
       terminal.blockedReport,
       doneTerminal.outcome,
       reasonFromTerminal,
+      generation,
     );
   }
 
@@ -2944,8 +2985,9 @@ export class ChatEngine {
           this.terminalLimiterReason ?? 'Inherited child allowance exhausted.',
           { onThought: () => {} },
           effectiveIntent,
+          submissionGeneration,
         );
-        if (!this.isSubmissionCurrent(submissionGeneration)) return;
+        if (!kill || !this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
           ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
@@ -2960,10 +3002,11 @@ export class ChatEngine {
           budget.reason ?? 'Budget limit exceeded.',
           { onThought: () => {} },
           effectiveIntent,
+          submissionGeneration,
         );
         // AC3: every stream terminal goes through streamDone (buildResult already
         // finalized; streamDone finalize is idempotent on turn_ended).
-        if (!this.isSubmissionCurrent(submissionGeneration)) return;
+        if (!kill || !this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
           ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
@@ -3414,8 +3457,9 @@ export class ChatEngine {
           this.terminalLimiterReason,
           { onThought: () => {} },
           effectiveIntent,
+          submissionGeneration,
         );
-        if (!this.isSubmissionCurrent(submissionGeneration)) return;
+        if (!kill || !this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
           ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
@@ -6460,6 +6504,16 @@ export class ChatEngine {
           ...toolContext,
           onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta),
         });
+        // R0-8: an MCP call is a suspension point; a superseded submission must
+        // not append its result to the current task's tool log.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         const detail = mcpResult.exit_code === 0 ? 'ok' : `exit ${mcpResult.exit_code ?? -1}`;
         this.toolCallLog.push({
           tool,
@@ -6491,6 +6545,16 @@ export class ChatEngine {
           ...toolContext,
           onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta),
         });
+        // R0-8: a web call is a suspension point; a superseded submission must
+        // not append its result to the current task's tool log.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         const detail =
           webResult.exit_code === 0
             ? formatResultDetail(action, webResult)
@@ -6529,6 +6593,16 @@ export class ChatEngine {
           },
           executeTool,
         });
+        // R0-8: an LSP call is a suspension point; a superseded submission must
+        // not append its result to the current task's tool log.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         this.toolCallLog.push({
           tool,
           target,
@@ -6590,6 +6664,16 @@ export class ChatEngine {
           };
         }
         fileReadCacheHash = await this.hashFilePath(action.path);
+        // R0-8: hashing is a suspension point; a superseded submission must not
+        // append its read result (or advance its caches) for the new task.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         const fullDecision = decideReadInjection({
           pathKey,
           fileHash: fileReadCacheHash,
@@ -6805,6 +6889,16 @@ export class ChatEngine {
       if (action.type === 'read_range') {
         const rPath = resolveChatRangePath(this.options.projectRoot, action.file_path);
         const rContent = await readFile(rPath, 'utf-8');
+        // R0-8: the read is a suspension point; a superseded submission must not
+        // append its result for the new task.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         const rHash = this.hashContent(rContent);
         const rKey = this.readCacheKey(rPath);
         // read_range does not bump fullReadCounts (line windows allowed)
@@ -6886,7 +6980,11 @@ export class ChatEngine {
           target,
           toolId,
           index: meta.index,
-          pushLog: (entry) => this.toolCallLog.push(entry),
+          pushLog: (entry) => {
+            // R0-8: the await is a suspension point; a superseded submission
+            // must not append the settled row to the new task's tool log.
+            if (this.isSubmissionCurrent(ownerGeneration)) this.toolCallLog.push(entry);
+          },
           onToolComplete: callbacks.onToolComplete,
           onBeforeAwait: () => this.persistToolStartedAtExecutorDispatch(action, meta),
         });
@@ -6900,7 +6998,11 @@ export class ChatEngine {
           index: meta.index,
           ownerId: this.engineRunId,
           toolCallId: meta.idempotencyKey,
-          pushLog: (entry) => this.toolCallLog.push(entry),
+          pushLog: (entry) => {
+            // R0-8: a superseded submission must not append the settled row to
+            // the new task's tool log.
+            if (this.isSubmissionCurrent(ownerGeneration)) this.toolCallLog.push(entry);
+          },
           onToolComplete: callbacks.onToolComplete,
           onBeforeSpawn: () => this.persistToolStartedAtExecutorDispatch(action, meta),
         });
@@ -8839,7 +8941,14 @@ export class ChatEngine {
     blockedReport?: BlockedReport | null,
     knownOutcome?: TerminalOutcome,
     knownReason?: TerminalReason,
+    ownerGeneration?: number,
   ): ChatResult {
+    // R0-8: a superseded caller must not finalize the task that now owns the
+    // engine. It still receives a truthful result for its own (obsolete)
+    // submission, but no completion decision, wall settlement or durable turn
+    // finalization is applied to the live task.
+    const superseded =
+      ownerGeneration !== undefined && !this.isSubmissionCurrent(ownerGeneration);
     // R1: If the answer explicitly declares BLOCKED but no blockedReport was
     // provided (e.g., the detection ran in a code path that didn't provide it),
     // promote the status to 'blocked' and generate the report here.
@@ -8920,7 +9029,7 @@ export class ChatEngine {
       (terminalReason?.code && terminalReason.code !== 'verification_failed'
         ? outcomeFromReasonCode(terminalReason.code)
         : undefined) ?? authoritativeOutcome;
-    if (kernelDecision) {
+    if (kernelDecision && !superseded) {
       this.recordCompletionDecisionOnce({
         requestedOutcome: kernelDecision.requestedOutcome,
         finalOutcome: authoritativeOutcome ?? kernelDecision.finalOutcome,
@@ -8960,15 +9069,17 @@ export class ChatEngine {
       status: finalStatus,
     });
 
-    this.settleActiveExecutionForTerminal();
-    // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
-    finalizeParityTurnSync(
-      this.parity,
-      this.engineRunDir,
-      terminal.outcome,
-      terminal.status,
-      terminalReason,
-    );
+    if (!superseded) {
+      this.settleActiveExecutionForTerminal();
+      // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
+      finalizeParityTurnSync(
+        this.parity,
+        this.engineRunDir,
+        terminal.outcome,
+        terminal.status,
+        terminalReason,
+      );
+    }
 
     const runAllowance = this.assembleRunAllowance(terminal.status);
 
