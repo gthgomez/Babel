@@ -17,10 +17,19 @@ export interface WorkingState {
   lastMutation?: { path: string; at: number; fingerprint?: string }
   lastVerifier?: { identity: string; exitCode: number; summary: string; fresh: boolean }
   failureSurface?: FailureSurface
+  /** Controller-captured red result observed before any mutation in this task. */
+  baselineFailureSignature?: string
   repairDiagnosis?: RepairDiagnosis
   openQuestions: string[]
   invalidatedAssumptions: string[]
   nextExperiment: string
+  /** Controller-owned gate after a red verifier; model prose cannot clear it. */
+  recoveryGate?: {
+    failureSignature: string
+    requiredEvidence: string
+    mutationFingerprint?: string
+    satisfied: boolean
+  }
   revision: number
 }
 
@@ -47,6 +56,7 @@ export type WorkingStateEvent =
   | { type: 'diagnosis'; diagnosis: RepairDiagnosis }
   | { type: 'invalidate'; assumption: string }
   | { type: 'next_experiment'; experiment: string }
+  | { type: 'recovery_gate'; failureSignature: string; requiredEvidence: string; mutationFingerprint?: string }
 
 /**
  * Apply an event. New evidence invalidates a stale red verifier and drops
@@ -82,6 +92,9 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       if (next.lastVerifier && !next.lastVerifier.fresh) {
         next.lastVerifier = { ...next.lastVerifier, fresh: false }
       }
+      if (next.recoveryGate && !next.recoveryGate.satisfied) {
+        next.recoveryGate = { ...next.recoveryGate, satisfied: true }
+      }
       break
     case 'mutation':
       next.lastMutation = {
@@ -103,6 +116,7 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       }
       if (event.exitCode === 0) {
         delete next.failureSurface
+        delete next.recoveryGate
       }
       break
     case 'failure_surface':
@@ -116,6 +130,13 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         )
       }
       next.failureSurface = event.surface
+      if (
+        !next.lastMutation &&
+        next.baselineFailureSignature === undefined &&
+        ['TEST_FAILURE', 'TYPECHECK_FAILURE', 'BUILD_FAILURE', 'LINT_FAILURE', 'RUNTIME_FAILURE'].includes(event.surface.kind)
+      ) {
+        next.baselineFailureSignature = event.surface.errorSignature
+      }
       break
     case 'diagnosis':
       next.repairDiagnosis = event.diagnosis
@@ -133,6 +154,15 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       break
     case 'next_experiment':
       next.nextExperiment = event.experiment
+      break
+    case 'recovery_gate':
+      next.recoveryGate = {
+        failureSignature: event.failureSignature,
+        requiredEvidence: event.requiredEvidence,
+        ...(event.mutationFingerprint ? { mutationFingerprint: event.mutationFingerprint } : {}),
+        satisfied: false,
+      }
+      next.nextExperiment = event.requiredEvidence
       break
   }
   return next
@@ -158,11 +188,19 @@ export function formatWorkingStateBlock(state: WorkingState): string {
         : 'none'
     }`,
     `  failure_surface: ${state.failureSurface ? state.failureSurface.kind : 'none'}`,
+    `  failure_causality: ${state.failureSurface?.causality ?? 'unknown'}`,
+    `  baseline_failure_signature: ${state.baselineFailureSignature ?? 'none'}`,
     `  repair_diagnosis: ${state.repairDiagnosis ? state.repairDiagnosis.kind : 'none'}`,
     `  open_questions: ${yamlList(state.openQuestions, 4)}`,
     `  invalidated_assumptions: ${yamlList(state.invalidatedAssumptions, 4)}`,
     `  next_experiment: ${yamlScalar(state.nextExperiment)}`,
   ]
+  if (state.recoveryGate) {
+    lines.push(
+      `  recovery_gate: ${state.recoveryGate.satisfied ? 'satisfied' : 'evidence_required'}`,
+      `  recovery_evidence: ${yamlScalar(state.recoveryGate.requiredEvidence)}`,
+    )
+  }
   if (state.lastVerifier && !state.lastVerifier.fresh) {
     lines.push('  note: last_verifier is stale after newer evidence/mutation — do not treat as current')
   }
@@ -180,7 +218,15 @@ export function upsertWorkingStateMessage(
   const existing = messages.findIndex(
     (m) => m.name === WORKING_STATE_NAME || (typeof m.content === 'string' && m.content.includes(WORKING_STATE_MARKER)),
   )
-  const msg: ChatMessage = { role: 'system', name: WORKING_STATE_NAME, content }
+  // WorkingState contains controller facts plus model-proposed reasoning. Keep
+  // it out of the system-authority role and mark it explicitly advisory.
+  const msg: ChatMessage = {
+    role: 'assistant',
+    name: WORKING_STATE_NAME,
+    content,
+    provenance: 'mixed',
+    authoritative: false,
+  }
   if (existing >= 0) {
     const copy = messages.slice()
     copy[existing] = msg

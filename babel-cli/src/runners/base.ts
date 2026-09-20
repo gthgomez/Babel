@@ -342,6 +342,9 @@ export interface ProviderMessage {
   tool_calls?: ProviderToolCall[];
   /** Display name / purpose tag (e.g. "tool_calls", "sub_agent"). */
   name?: string;
+  /** Content provenance; provider roles remain the authority boundary. */
+  provenance?: 'controller' | 'model' | 'mixed';
+  authoritative?: boolean;
 }
 
 /** A single native tool call within an assistant ProviderMessage. */

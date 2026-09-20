@@ -39,6 +39,8 @@ export type RepairDiagnosisKind = (typeof REPAIR_DIAGNOSES)[number]
 
 export interface FailureSurface {
   kind: FailureSurfaceKind
+  /** Pre-existing is only emitted when a trusted baseline signature matches. */
+  causality: 'unknown' | 'pre_existing' | 'patch_induced'
   errorSignature: string
   failingTests: string[]
   failingFiles: string[]
@@ -75,6 +77,7 @@ export function classifyFailureSurface(input: {
   const errorSignature = buildErrorSignature(kind, obs)
   return {
     kind,
+    causality: kind === 'BASELINE_FAILURE' ? 'pre_existing' : 'unknown',
     errorSignature,
     failingTests,
     failingFiles,
@@ -110,17 +113,30 @@ function surfaceFromObservation(
 
   if (obs.exitCode === 0) return 'UNKNOWN_FAILURE'
 
-  if (knownBaselineSignature && buildErrorSignature('BASELINE_FAILURE', obs) === knownBaselineSignature) {
+  const baselineSignature = buildErrorSignature('BASELINE_FAILURE', obs)
+  if (
+    knownBaselineSignature &&
+    (baselineSignature === knownBaselineSignature ||
+      signatureWithoutKind(baselineSignature) === signatureWithoutKind(knownBaselineSignature))
+  ) {
     return 'BASELINE_FAILURE'
   }
 
   if (/policy blocked|permission denied|not allowed|sandbox/i.test(blob)) {
     return 'POLICY_FAILURE'
   }
-  if (/econnreset|enotfound|api key|rate limit|provider|401|403/i.test(blob) && /provider|model|llm/i.test(blob)) {
+  if (/\b(?:ENOSPC|EROFS|EIO|EBUSY|EMFILE|ENFILE)\b/i.test(blob)) {
+    return 'ENVIRONMENT_FAILURE'
+  }
+  if (
+    /econnreset|econnrefused|etimedout|enotfound|api key|rate limit|provider|401|403/i.test(blob) &&
+    /provider|model|llm|request|transport|network|api/i.test(blob)
+  ) {
     return 'PROVIDER_FAILURE'
   }
-  if (/enoent|command not found|not recognized as an internal|no such file or directory.*bin/i.test(blob)) {
+  if (
+    /enoent|eacces|eperm|access is denied|command not found|not recognized as an internal|no such file or directory.*bin/i.test(blob)
+  ) {
     return 'ENVIRONMENT_FAILURE'
   }
   if (/cannot find module|modulenotfound|npm err!|yarn error|pnpm err|unresolved dependency/i.test(blob)) {
@@ -157,4 +173,9 @@ function buildErrorSignature(kind: FailureSurfaceKind, obs: CompiledObservation)
     .map((f) => `${f.file ?? ''}:${f.line ?? ''}:${f.test ?? ''}:${f.message}`)
     .join('|')
   return `${kind}|exit=${obs.exitCode}|parser=${obs.parserName ?? 'none'}|${failKey || obs.summary}`
+}
+
+function signatureWithoutKind(signature: string): string {
+  const separator = signature.indexOf('|')
+  return separator >= 0 ? signature.slice(separator + 1) : signature
 }

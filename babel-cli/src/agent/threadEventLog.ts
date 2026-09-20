@@ -32,6 +32,7 @@ export type ThreadEventKind =
   | 'assistant_tool_calls'
   | 'tool_result'
   | 'compaction_capsule'
+  | 'compaction_summary'
   | 'policy_decision'
   | 'approval'
   | 'progress'
@@ -68,7 +69,13 @@ export type ThreadEvent =
       continuedTask?: boolean;
     })
   | (ThreadEventBase & { kind: 'user_message'; content: string })
-  | (ThreadEventBase & { kind: 'assistant_message'; content: string })
+  | (ThreadEventBase & {
+      kind: 'assistant_message';
+      content: string;
+      name?: string;
+      provenance?: 'controller' | 'model' | 'mixed';
+      authoritative?: boolean;
+    })
   | (ThreadEventBase & {
       kind: 'assistant_tool_calls';
       content: string;
@@ -85,6 +92,12 @@ export type ThreadEvent =
       kind: 'compaction_capsule';
       content: string;
       preserved_tool_call_ids: string[];
+    })
+  | (ThreadEventBase & {
+      kind: 'compaction_summary';
+      content: string;
+      provenance: 'model';
+      authoritative: false;
     })
   | (ThreadEventBase & {
       kind: 'policy_decision';
@@ -329,6 +342,7 @@ export function rebuildProviderMessagesFromEvents(
   // Find last compaction capsule — history before it is replaced by capsule content.
   let startIdx = 0;
   let capsuleContent: string | null = null;
+  let summaryContent: string | null = null;
   let lastCapsuleEvent: Extract<ThreadEvent, { kind: 'compaction_capsule' }> | null = null;
   let lastCapsuleIdx = -1;
   for (let i = 0; i < events.length; i++) {
@@ -340,6 +354,21 @@ export function rebuildProviderMessagesFromEvents(
     }
   }
 
+  // New logs carry the summary as a sibling advisory event. Legacy logs may
+  // contain the old combined marker; split it into assistant context so old
+  // model text is never re-promoted to system authority on resume.
+  const summaryEvent = events
+    .slice(lastCapsuleIdx + 1)
+    .find((event): event is Extract<ThreadEvent, { kind: 'compaction_summary' }> => event.kind === 'compaction_summary');
+  if (summaryEvent) {
+    summaryContent = summaryEvent.content;
+  } else if (capsuleContent?.includes('\n\n--- compaction_summary ---\n')) {
+    const marker = '\n\n--- compaction_summary ---\n';
+    const splitAt = capsuleContent.indexOf(marker);
+    summaryContent = capsuleContent.slice(splitAt + marker.length);
+    capsuleContent = capsuleContent.slice(0, splitAt);
+  }
+
   const messages: ProviderMessage[] = [];
   if (options.systemPrompt) {
     messages.push({ role: 'system', content: options.systemPrompt });
@@ -349,6 +378,17 @@ export function rebuildProviderMessagesFromEvents(
       role: 'system',
       content: capsuleContent,
       name: 'compaction_capsule',
+      provenance: 'controller',
+      authoritative: true,
+    });
+  }
+  if (summaryContent) {
+    messages.push({
+      role: 'assistant',
+      content: summaryContent,
+      name: 'compaction_summary',
+      provenance: 'model',
+      authoritative: false,
     });
   }
 
@@ -398,7 +438,13 @@ export function rebuildProviderMessagesFromEvents(
         messages.push({ role: 'user', content: e.content });
         break;
       case 'assistant_message':
-        messages.push({ role: 'assistant', content: e.content });
+        messages.push({
+          role: 'assistant',
+          content: e.content,
+          ...(e.name !== undefined ? { name: e.name } : {}),
+          ...(e.provenance !== undefined ? { provenance: e.provenance } : {}),
+          ...(e.authoritative !== undefined ? { authoritative: e.authoritative } : {}),
+        });
         break;
       case 'assistant_tool_calls': {
         const msg: ProviderMessage = {
@@ -725,6 +771,9 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
     case 'user_message':
     case 'assistant_message':
       requireString(event, 'content', context);
+      requireOptionalString(event, 'name', context);
+      requireOptionalString(event, 'provenance', context);
+      requireOptionalBoolean(event, 'authoritative', context);
       return;
     case 'assistant_tool_calls':
       requireString(event, 'content', context);
@@ -746,6 +795,12 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
       requireString(event, 'content', context);
       if (!Array.isArray(event['preserved_tool_call_ids']) || !event['preserved_tool_call_ids'].every((id) => typeof id === 'string')) {
         throw new Error(`${context} preserved_tool_call_ids must be a string array`);
+      }
+      return;
+    case 'compaction_summary':
+      requireString(event, 'content', context);
+      if (event['provenance'] !== 'model' || event['authoritative'] !== false) {
+        throw new Error(`${context} model summary must remain non-authoritative`);
       }
       return;
     case 'policy_decision':

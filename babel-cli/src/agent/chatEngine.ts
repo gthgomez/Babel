@@ -101,6 +101,7 @@ import type { LiveSessionV1 } from './liveSession.js';
 import {
   applyHonestTaskOutcomeToCompletion,
   createFailureBudgetTrackerFromContract,
+  makeFailureCapsule,
   type FailureClassBudgetTracker,
   type FailureCapsuleV1,
 } from './taskContract.js';
@@ -159,6 +160,7 @@ import {
   formatReadFailureObservation,
   formatReadObservation,
   formatVerifierReceiptSummary,
+  formatWorkingStateBlock,
   invalidateReadCacheForPath,
   resetOneShotSnapshot,
   resolveNextTurnToolAccess,
@@ -3056,7 +3058,7 @@ export class ChatEngine {
 
       // Compact if needed; user-visible notice via stream event
       const compactionSpan = this.currentTurnTelemetry?.startCompactionSpan();
-      const compactInfo = await this.compactIfNeeded();
+      const compactInfo = await this.compactIfNeeded(undefined, false, submissionGeneration);
       compactionSpan?.end();
       // R0-8: compaction is a suspension point; a superseded generator must not
       // rewrite the new task's working state or conversation.
@@ -3085,9 +3087,23 @@ export class ChatEngine {
         textTools: useTextTools,
       });
       const providerMessages = useNativeTools
-        ? this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
-            systemPrompt: this.getOrBuildSystemPrompt('native'),
-          })
+        ? (() => {
+            const rebuilt = this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
+              systemPrompt: this.getOrBuildSystemPrompt('native'),
+            });
+            // After compaction/resume the durable advisory must be reused;
+            // appending a second live copy would make cold and warm requests
+            // diverge. Before the first event exists, inject the live state.
+            return rebuilt.some((message) => message.name === 'working_state')
+              ? rebuilt
+              : rebuilt.concat({
+                  role: 'assistant' as const,
+                  name: 'working_state',
+                  content: formatWorkingStateBlock(this.workingState),
+                  provenance: 'mixed' as const,
+                  authoritative: false,
+                });
+          })()
         : [];
 
       yield { type: 'thinking' };
@@ -3139,7 +3155,7 @@ export class ChatEngine {
             providerEnd,
           );
           if (!this.isSubmissionCurrent(submissionGeneration)) return;
-          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+          const admissionRecovery = await this.recoverPreparedRequestAdmission(err, submissionGeneration);
           if (admissionRecovery) {
             yield { type: 'context_compacted', ...admissionRecovery };
             continue;
@@ -3245,7 +3261,7 @@ export class ChatEngine {
             providerEnd,
           );
           if (!this.isSubmissionCurrent(submissionGeneration)) return;
-          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+            const admissionRecovery = await this.recoverPreparedRequestAdmission(err, submissionGeneration);
           if (admissionRecovery) {
             yield { type: 'context_compacted', ...admissionRecovery };
             continue;
@@ -3428,7 +3444,7 @@ export class ChatEngine {
             legacyEnd,
           );
           if (!this.isSubmissionCurrent(submissionGeneration)) return;
-          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+              const admissionRecovery = await this.recoverPreparedRequestAdmission(err, submissionGeneration);
           if (admissionRecovery) {
             yield { type: 'context_compacted', ...admissionRecovery };
             continue;
@@ -5922,6 +5938,51 @@ export class ChatEngine {
         return { index: meta.index, observation: phaseGate.observation ?? '' };
       }
 
+      const mutationAttempt =
+        action.type === 'write_file' ||
+        action.type === 'str_replace' ||
+        action.type === 'apply_patch' ||
+        (action.type === 'sub_agent' && (action as { mutation?: boolean }).mutation === true);
+      const shellObservation = action.type === 'run_command' || action.type === 'test_run';
+      const recoveryGate = this.workingState.recoveryGate;
+      const recoveryAction = mutationAttempt || shellObservation;
+      const actionFingerprint = recoveryAction
+        ? operationFingerprint(chatActionToolName(action), action)
+        : null;
+      const equivalentRedMutation = recoveryAction &&
+        recoveryGate?.satisfied === true &&
+        recoveryGate.mutationFingerprint !== undefined &&
+        recoveryGate.mutationFingerprint === actionFingerprint &&
+        this.workingState.failureSurface?.errorSignature === recoveryGate.failureSignature;
+      if (
+        recoveryGate &&
+        ((mutationAttempt && !recoveryGate.satisfied) || equivalentRedMutation)
+      ) {
+        const detail = [
+          equivalentRedMutation ? '[RECOVERY_STRATEGY_CHANGE_REQUIRED]' : '[RECOVERY_EVIDENCE_REQUIRED]',
+          `failure_signature=${recoveryGate.failureSignature}`,
+          equivalentRedMutation
+            ? 'The same mutation fingerprint remains tied to the same red verifier; choose a materially different repair.'
+            : recoveryGate.requiredEvidence,
+          equivalentRedMutation
+            ? 'A different mutation or localization is required; repeating the equivalent patch is blocked.'
+            : 'The previous repair hypothesis remains unverified. Acquire a new observation before another mutation.',
+        ].join(' ');
+        this.toolCallLog.push({
+          tool,
+          target,
+          detail,
+          error: 'blocked',
+          index: meta.index,
+          exit_code: 1,
+        });
+        callbacks?.onToolComplete?.(toolId, 'recovery-evidence-required', 'blocked', 1);
+        return {
+          index: meta.index,
+          observation: `### ${tool} ${target}\nexit_code: 1\n${detail}`,
+        };
+      }
+
       const recoveredAuthorization = this.recoveredOperationDispatchAuthorization(action);
       if (!recoveredAuthorization.allowed) {
         const detail = `[RECOVERY_RECONCILIATION_REQUIRED] ${recoveredAuthorization.message ?? 'Reconcile the prior unknown effect before retrying'}`;
@@ -6113,6 +6174,13 @@ export class ChatEngine {
               const details = clean
                 ? `${implResult.stepsExecuted} steps, ${implResult.changedFiles.length} changed, attribution=${attribution} (worktree ${implResult.worktree.name})`
                 : `failed: ${implResult.error || 'unknown error'}, attribution=${attribution}`;
+              if (implResult.changedFiles.length > 0) {
+                this.workingState = applyWorkingStateEvent(this.workingState, {
+                  type: 'mutation',
+                  path: implResult.changedFiles[0]!.path,
+                  fingerprint: operationFingerprint(chatActionToolName(action), action),
+                });
+              }
               this.toolCallLog.push({
                 tool,
                 target,
@@ -6219,6 +6287,13 @@ export class ChatEngine {
             const details = clean
               ? `${mutResult.stepsExecuted} steps, ${mutResult.changedFiles.length} changed, attribution=${attribution}`
               : `failed: ${mutResult.error || 'unknown error'}, attribution=${attribution}`;
+            if (mutResult.changedFiles.length > 0) {
+              this.workingState = applyWorkingStateEvent(this.workingState, {
+                type: 'mutation',
+                path: mutResult.changedFiles[0]!.path,
+                fingerprint: operationFingerprint(chatActionToolName(action), action),
+              });
+            }
             this.toolCallLog.push({
               tool,
               target,
@@ -6862,6 +6937,7 @@ export class ChatEngine {
             this.workingState = applyWorkingStateEvent(this.workingState, {
               type: 'mutation',
               path: gov.absolutePath,
+              fingerprint: operationFingerprint(chatActionToolName(action), action),
             });
             noteChatWorkspaceMutation(this as never);
             callbacks?.onFileChanged?.(
@@ -6924,6 +7000,7 @@ export class ChatEngine {
         this.workingState = applyWorkingStateEvent(this.workingState, {
           type: 'mutation',
           path: gov.absolutePath,
+          fingerprint: operationFingerprint(chatActionToolName(action), action),
         });
         noteChatWorkspaceMutation(this as never);
         const lineNumber = gov.lineNumber ?? 0;
@@ -7024,6 +7101,13 @@ export class ChatEngine {
           exit_code: 0,
         });
         callbacks?.onToolComplete?.(toolId, `${evaluated.window.lines.length} lines`, undefined, 0);
+        if (this.isSubmissionCurrent(ownerGeneration)) {
+          this.workingState = applyWorkingStateEvent(this.workingState, {
+            type: 'add_evidence',
+            evidence: `${action.type}:${target}`,
+            file: action.file_path,
+          });
+        }
         return {
           index: meta.index,
           observation: formatReadObservation('read_range', target, evaluated.window),
@@ -7418,6 +7502,7 @@ export class ChatEngine {
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'mutation',
             path: action.path,
+            fingerprint: operationFingerprint(chatActionToolName(action), action),
           });
           noteChatWorkspaceMutation(this as never);
           // Crash-safe: persist patch to recovery log
@@ -7434,6 +7519,7 @@ export class ChatEngine {
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'mutation',
             path,
+            fingerprint: operationFingerprint(chatActionToolName(action), action),
           });
           noteChatWorkspaceMutation(this as never);
           // Crash-safe: persist patch to recovery log
@@ -7446,7 +7532,13 @@ export class ChatEngine {
         // verifier evidence.
         if ((action.type === 'run_command' || action.type === 'test_run') && lastResult) {
           const confirmedShellMutation = mutationEffect.status === 'confirmed_change';
+          const mutationPaths = result.mutationPaths ?? [];
           if (confirmedShellMutation) {
+            this.workingState = applyWorkingStateEvent(this.workingState, {
+              type: 'mutation',
+              path: mutationPaths[0] ?? target,
+              fingerprint: operationFingerprint(chatActionToolName(action), action),
+            });
             noteChatWorkspaceMutation(this as never);
           }
 
@@ -7513,6 +7605,7 @@ export class ChatEngine {
           }
           if (receipt) {
             this.lastVerifierReceipt = receipt;
+            const previousFailureSignature = this.workingState.failureSurface?.errorSignature;
             const ingested = ingestVerifierResult({
               state: this.workingState,
               tool: action.type,
@@ -7521,9 +7614,33 @@ export class ChatEngine {
               stdout: lastResult.stdout,
               stderr: lastResult.stderr,
               summary: receipt.summary ?? String(lastResult.exit_code),
+              verifierId: target,
+              ...(receipt.boundRevision?.compositeTreeHash
+                ? { workspaceRevision: String(receipt.boundRevision.compositeTreeHash) }
+                : {}),
             });
             this.workingState = ingested.state;
             this.lastVerifierFailed = ingested.lastVerifierFailed;
+            const surfaceKind = this.workingState.failureSurface?.kind;
+            const implementationRepairSurface = surfaceKind === 'TEST_FAILURE' ||
+              surfaceKind === 'TYPECHECK_FAILURE' ||
+              surfaceKind === 'BUILD_FAILURE' ||
+              surfaceKind === 'LINT_FAILURE' ||
+              surfaceKind === 'RUNTIME_FAILURE' ||
+              surfaceKind === 'UNKNOWN_FAILURE';
+            if (
+              implementationRepairSurface &&
+              this.workingState.failureSurface &&
+              this.workingState.failureSurface.causality !== 'pre_existing' &&
+              this.workingState.failureSurface.errorSignature !== previousFailureSignature
+            ) {
+              this.consumeFailureBudget(makeFailureCapsule(
+                'implementation',
+                this.workingState.failureSurface.kind,
+                this.workingState.failureSurface.errorSignature,
+                { evidence_refs: this.workingState.failureSurface.evidenceRefs },
+              ));
+            }
           } else if (lastResult.exit_code === 0 && !confirmedShellMutation) {
             invalidateVerifierLedger(this as never, 'non-verifier shell command executed');
           }
@@ -7568,6 +7685,30 @@ export class ChatEngine {
           action.type === 'semantic_search'
         ) {
           this.noteToolForReadThrash(tool);
+        }
+
+        // A successful inspection is the discriminating observation required
+        // after a red verifier.  This is controller-owned evidence: it clears
+        // the recovery gate without treating model prose as proof.
+        const inspectionAction =
+          action.type === 'read_file' ||
+          action.type === 'grep' ||
+          action.type === 'glob' ||
+          action.type === 'list_dir' ||
+          action.type === 'semantic_search';
+        if (
+          inspectionAction &&
+          lastResult &&
+          lastResult.exit_code === 0 &&
+          this.isSubmissionCurrent(ownerGeneration)
+        ) {
+          this.workingState = applyWorkingStateEvent(this.workingState, {
+            type: 'add_evidence',
+            evidence: `${action.type}:${target}`,
+            ...(action.type === 'read_file'
+              ? { file: action.path }
+              : {}),
+          });
         }
       }
 
@@ -7845,6 +7986,7 @@ export class ChatEngine {
   private async compactIfNeeded(
     callbacks?: ChatCallbacks,
     forceCompaction = false,
+    ownerGeneration = this.activeSubmissionGeneration,
   ): Promise<ContextCompactedInfo | null> {
     const host: import('./compactionCommit.js').ChatEngineCompactionHost = {
       conversation: this.conversation,
@@ -7863,6 +8005,7 @@ export class ChatEngine {
       providerCallbacks: this.providerRetryCallbacks({
         deliveryMode: this.shouldUseTextTools() ? 'text' : 'native',
         executionStage: 'compaction',
+        isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
       }),
       shouldUseTextTools: () => this.shouldUseTextTools(),
       compactHeuristic: () => {
@@ -7878,6 +8021,7 @@ export class ChatEngine {
       reserveTokens: DEFAULT_COMPACTION_CONFIG.reserveTokens,
       textToolsReserve: 1024,
       forceCompaction,
+      isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
       resolveModel: resolveCompactionModelId,
       shouldCompactByTokens: parityShouldCompact,
       estimateTokens,
@@ -7911,12 +8055,13 @@ export class ChatEngine {
   /** Rebuild one over-limit final request after a durable, bounded compaction. */
   private async recoverPreparedRequestAdmission(
     error: unknown,
+    ownerGeneration = this.activeSubmissionGeneration,
   ): Promise<ContextCompactedInfo | null> {
     if (!(error instanceof PreparedRequestAdmissionError)) return null;
     if (this.preparedAdmissionCompactionAttempts >= 1) return null;
     this.preparedAdmissionCompactionAttempts += 1;
     this.pendingParentRequestId = error.request.request_id;
-    return this.compactIfNeeded(undefined, true);
+    return this.compactIfNeeded(undefined, true, ownerGeneration);
   }
 
   private compactConversation(): void {

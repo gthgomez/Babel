@@ -45,6 +45,9 @@ export interface ChatMessage {
   toolCallId?: string;
   toolName?: string;
   name?: string;
+  /** Provenance is descriptive; only controller-owned system messages are authority. */
+  provenance?: 'controller' | 'model' | 'mixed';
+  authoritative?: boolean;
 }
 
 export interface CompactionOptions {

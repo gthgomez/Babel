@@ -22,6 +22,9 @@ export function ingestVerifierResult(input: {
   stdout: string
   stderr: string
   summary: string
+  knownBaselineSignature?: string
+  verifierId?: string
+  workspaceRevision?: string
 }): { state: WorkingState; lastVerifierFailed: boolean } {
   let state = applyWorkingStateEvent(input.state, {
     type: 'verifier',
@@ -40,8 +43,33 @@ export function ingestVerifierResult(input: {
     })
     state = applyWorkingStateEvent(state, {
       type: 'failure_surface',
-      surface: classifyFailureSurface({ observation: compiled }),
+      surface: classifyFailureSurface({
+        observation: compiled,
+        ...(state.failureSurface?.errorSignature !== undefined
+          ? { previousSignature: state.failureSurface.errorSignature }
+          : {}),
+        ...(state.baselineFailureSignature !== undefined
+          ? { knownBaselineSignature: state.baselineFailureSignature }
+          : {}),
+        ...(input.knownBaselineSignature !== undefined
+          ? { knownBaselineSignature: input.knownBaselineSignature }
+          : {}),
+        ...(input.verifierId !== undefined ? { verifierId: input.verifierId } : {}),
+        ...(input.workspaceRevision !== undefined ? { workspaceRevision: input.workspaceRevision } : {}),
+      }),
     })
+    if (
+      state.lastMutation &&
+      state.failureSurface &&
+      ['TEST_FAILURE', 'TYPECHECK_FAILURE', 'BUILD_FAILURE', 'LINT_FAILURE', 'RUNTIME_FAILURE', 'UNKNOWN_FAILURE'].includes(state.failureSurface.kind)
+    ) {
+      state = applyWorkingStateEvent(state, {
+        type: 'recovery_gate',
+        failureSignature: state.failureSurface.errorSignature,
+        requiredEvidence: 'Acquire discriminating evidence before another mutation: reread the failing assertion and inspect the relevant caller/callee boundary.',
+        ...(state.lastMutation?.fingerprint ? { mutationFingerprint: state.lastMutation.fingerprint } : {}),
+      })
+    }
   }
   return { state, lastVerifierFailed: input.exitCode !== 0 }
 }

@@ -177,6 +177,8 @@ describe('H1 assembleCompactedConversation preserves LLM summary', () => {
     const capsules = assembled.filter((m) => m.name === 'compaction_capsule');
     assert.strictEqual(summaries.length, 1);
     assert.ok(summaries[0]!.content.includes('Node.js'));
+    assert.strictEqual(summaries[0]!.role, 'assistant');
+    assert.strictEqual(summaries[0]!.authoritative, false);
     assert.strictEqual(capsules.length, 1);
     assert.strictEqual(assembled[0]!.role, 'system');
     assert.ok(!assembled[0]!.name || assembled[0]!.name !== 'compaction_summary');
@@ -316,9 +318,10 @@ describe('H1 commitCompaction dual-write + resume equivalence', () => {
       // Thread event written
       const capsules = threadLog.events.filter((e) => e.kind === 'compaction_capsule');
       assert.strictEqual(capsules.length, 1);
-      assert.ok(
-        (capsules[0] as { content: string }).content.includes('SECRET_FACT_ALPHA'),
-      );
+      assert.ok(!(capsules[0] as { content: string }).content.includes('SECRET_FACT_ALPHA'));
+      assert.ok(commit.conversation.some(
+        (m) => m.name === 'compaction_summary' && m.role === 'assistant' && m.content.includes('SECRET_FACT_ALPHA'),
+      ));
       // Legacy boundary remains for existing consumers; C2 additionally records a
       // linked start → summary → committed lifecycle with an auditable replacement range.
       const sess = sessionLog.events.filter((e) => e.kind === 'compaction_created');
@@ -345,10 +348,13 @@ describe('H1 commitCompaction dual-write + resume equivalence', () => {
       });
       const liveCapsule = commit.conversation.find((m) => m.name === 'compaction_capsule');
       const rebuildCapsule = rebuilt.find((m) => m.name === 'compaction_capsule');
+      const rebuiltSummary = rebuilt.find((m) => m.name === 'compaction_summary');
       assert.ok(liveCapsule);
       assert.ok(rebuildCapsule);
+      assert.ok(rebuiltSummary);
       assert.strictEqual(liveCapsule!.content, rebuildCapsule!.content);
-      assert.ok(rebuildCapsule!.content.includes('SECRET_FACT_ALPHA'));
+      assert.ok(!rebuildCapsule!.content.includes('SECRET_FACT_ALPHA'));
+      assert.ok(rebuiltSummary!.content.includes('SECRET_FACT_ALPHA'));
     } finally {
       if (savedKey) process.env['BABEL_COMPACTION_API_KEY'] = savedKey;
       else delete process.env['BABEL_COMPACTION_API_KEY'];
@@ -465,20 +471,28 @@ describe('H1 commitCompaction dual-write + resume equivalence', () => {
       systemPrompt: 'sys',
     });
     const capsule = rebuilt.find((m) => m.name === 'compaction_capsule');
+    const summary = rebuilt.find((m) => m.name === 'compaction_summary');
     assert.ok(capsule);
-    assert.ok(capsule!.content.includes('summary-v2-LATEST'));
-    assert.ok(!capsule!.content.includes('summary-v1'));
+    assert.ok(summary);
+    assert.ok(summary!.content.includes('summary-v2-LATEST'));
+    assert.ok(!capsule!.content.includes('summary-v2-LATEST'));
+    assert.ok(!summary!.content.includes('summary-v1'));
   });
 });
 
 describe('H1 tool pairing + observation reduction + long-session metrics', () => {
   it('preserves tool call/result ids in working set', () => {
-    const msgs: ChatMessage[] = [
+    const msgs = ([
       { role: 'system', content: 'sys' },
       {
         role: 'assistant',
         content: 'Using tools',
         name: 'tool_calls',
+        tool_calls: [{
+          id: 'call_abc',
+          type: 'function',
+          function: { name: 'read_file', arguments: '{"path":"a.ts"}' },
+        }],
       },
       {
         role: 'tool',
@@ -487,7 +501,7 @@ describe('H1 tool pairing + observation reduction + long-session metrics', () =>
         toolName: 'read_file',
       },
       { role: 'user', content: 'thanks' },
-    ];
+    ] as unknown) as ChatMessage[];
     const assembled = assembleCompactedConversation(msgs, '# capsule');
     const ids = collectPreservedToolCallIds(assembled);
     assert.deepStrictEqual(ids, ['call_abc']);
@@ -560,7 +574,7 @@ describe('H1 durable capsule content helper', () => {
     const content = buildDurableCapsuleContent('# cap', 'my summary body');
     assert.ok(content.includes('# cap'));
     assert.ok(content.includes('my summary body'));
-    assert.ok(content.includes('compaction_summary'));
+    assert.strictEqual(content, '# cap');
   });
 });
 
