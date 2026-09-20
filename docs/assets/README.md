@@ -1,6 +1,8 @@
 # Product visuals (screenshots & recordings)
 
-The README “See Babel in action” section should eventually show a **real** Babel TUI capture. Until one exists, the README keeps an **illustrative** transcript and must not embed fake imagery.
+**Maintainer runbook.** The README “See Babel in action” section should eventually show a **real** Babel TUI capture. Until one exists, the README keeps an **illustrative** transcript and must not embed fake imagery.
+
+This file is for maintainers producing assets. Do not link it from the product front door as a user-facing invite.
 
 ## Target assets
 
@@ -23,20 +25,16 @@ Suggested image width: ~1200–1600px. Prefer a readable font and cropped termin
    - **Recording (optional):** asciinema, VHS, or OS screen recorder → `docs/assets/tui-chat.webm`
 7. Open a docs PR that:
    - adds the asset file(s);
-   - replaces the illustrative transcript in `README.md` with an image/video embed;
+   - replaces the illustrative transcript in `README.md` with an image/video embed from the repo root;
    - removes the “illustrative” wording once the asset is authentic.
 
 ## README embed (after capture)
 
-```markdown
-![Babel TUI chat session](./docs/assets/tui-chat.png)
-```
+From the repository root `README.md`, embed the screenshot with a normal Markdown image whose target is the path `docs/assets/tui-chat.png` (relative to repo root).
 
-or for video:
+For a short recording, link or embed `docs/assets/tui-chat.webm` the same way, using the GitHub raw URL for this repository if needed.
 
-```markdown
-https://github.com/gthgomez/Babel/raw/main/docs/assets/tui-chat.webm
-```
+Do not commit placeholder image binaries.
 
 ## Rules
 

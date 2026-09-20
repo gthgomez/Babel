@@ -6,13 +6,13 @@
 
 **Open-source coding agent for real repositories — with inspectable prompts, permissions, and verification.**
 
-Babel runs locally in your terminal. Chat is the default. Plan and Deep are there when the work is riskier. The harness underneath keeps instructions, tools, and evidence visible instead of burying them in an opaque prompt.
+Babel runs locally in your terminal. Chat is the default. Plan and Deep are additional modes when you want more ceremony. The harness underneath keeps instructions, tools, and evidence visible instead of burying them in an opaque prompt.
 
-> **Pre-1.0.** The public checkout builds and typechecks. Model choice, provider setup, sandboxing, and repo-specific execution policy still matter. See [project status](./docs/STATUS.md) for what is verified, experimental, or not claimed.
+> **Pre-1.0.** The public checkout builds and typechecks. Model choice, provider setup, sandboxing, and repo-specific execution policy still matter. **Ordinary coding-loop reliability is still under active qualification** — see [project status](./docs/STATUS.md).
 
 ## See Babel in action
 
-<!-- Maintainer: replace this block with a real capture at docs/assets/tui-chat.png (or .webm). Capture steps: docs/assets/README.md. Do not fabricate imagery. -->
+<!-- Maintainer: replace this block with a real capture at docs/assets/tui-chat.png (or .webm). Capture steps live in docs/assets/README.md (maintainer-only). Do not fabricate imagery. -->
 
 *Illustrative transcript (not a live capture) of a chat turn in the Babel TUI:*
 
@@ -41,8 +41,6 @@ Babel
 
   Completed · 2 files changed · verified
 ```
-
-Want a real screenshot or recording? See the [capture runbook](./docs/assets/README.md).
 
 ## Quick start (from source)
 
@@ -95,9 +93,9 @@ Operational command reference: **[docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.
 |---|---|
 | **Chat** | Daily work — ask, inspect, edit with permission, verify |
 | **Plan** | You want a reviewable proposal before anything changes |
-| **Deep** | Riskier work — plan, critique, stricter execution, verify |
+| **Deep** | Higher-ceremony path for riskier work (maturing; not a reliability upgrade by itself) |
 
-Also available: headless chat for scripts/CI, checkpoints / `undo`, cost and diagnostics, and a read-only MCP control-plane surface.
+Also available as CLI entrypoints: headless chat for scripts/CI, checkpoints / `undo`, cost and diagnostics, and a read-only MCP control-plane surface. Entrypoint availability is not a reliability claim.
 
 ```powershell
 node .\babel-cli\dist\index.js "Fix the failing webhook retry test"
@@ -129,19 +127,20 @@ pwsh -File .\tools\resolve-local-stack.ps1 -TaskCategory backend -Project exampl
 |---|---|
 | **Maturity** | Pre-1.0 public source |
 | **Install** | Clone + build (npm package not published yet) |
-| **Strong public proof today** | Runnable CLI (chat / plan / deep), catalog/stack validation, typed contracts, read-only MCP inspection, release/scrub/secret-scan gates |
+| **Present in the public tree** | CLI entrypoints (chat / plan / deep), catalog/stack validation tooling, typed contracts, read-only MCP inspection, release/scrub/secret-scan gates |
+| **Still under active qualification** | Ordinary coding-loop reliability |
 | **Depends on your environment** | Provider credentials, Docker vs `dev_local`, repo policy |
 
 Honest detail: **[docs/STATUS.md](./docs/STATUS.md)**. Product direction: **[docs/VISION.md](./docs/VISION.md)**.
 
-We do **not** claim: universal verifiers, unrestricted autonomous workers, mutating subagent teams, sandbox parity across every host, or market parity with other agents.
+We do **not** claim: universal verifiers, unrestricted autonomous workers, mutating subagent teams, sandbox parity across every host, market parity with other agents, or that everyday coding-loop reliability is already settled.
 
 ## Documentation
 
 | Doc | Purpose |
 |---|---|
 | [START_HERE.md](./START_HERE.md) | First success, then optional inspect path |
-| [docs/STATUS.md](./docs/STATUS.md) | Verified / experimental / limitations |
+| [docs/STATUS.md](./docs/STATUS.md) | Availability, narrow verification, limits |
 | [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) | Commands: chat, plan, deep, doctor, MCP |
 | [docs/CHAT_MODE.md](./docs/CHAT_MODE.md) | Default daily runtime in depth |
 | [docs/VISION.md](./docs/VISION.md) | Principles and public scope |

@@ -3,39 +3,49 @@
 **Audience:** developers evaluating or trying Babel.  
 **Updated:** 2026-09-19 (docs stewardship pass; derived from public README, START_HERE, and release notes — not a marketing scorecard).
 
-Babel is **pre-1.0**. This page separates what the public tree currently supports from what we are not claiming.
+Babel is **pre-1.0**. This page separates **what is present in the public tree** from **narrow, evidence-scoped verification**, and from what we are not claiming.
 
-## Verified / working (public proof)
+**Ordinary coding-loop reliability is still under active qualification.** A route or CLI command existing in the tree is not evidence that everyday repository work is already reliable.
 
-These are things a clone of `main` is expected to support when documented requirements are met:
+## Available in the public tree
 
-- **Local CLI build** from this repository (`babel-cli` install + build).
-- **Chat, plan, and deep routes** as product modes of the CLI/TUI.
+These surfaces are present in a current `main` checkout and documented for trial. **Availability means the entrypoint or artifact exists** — not that end-to-end coding reliability is established.
+
+- **Local CLI build** path via `babel-cli` (`npm --prefix ./babel-cli ci` / `run build`).
+- **Chat, plan, and deep modes** as CLI/TUI entrypoints (see START_HERE / CLI_QUICKSTART).
 - **Doctor / environment checks** via `node ./babel-cli/dist/index.js doctor`.
-- **Deterministic catalog and stack/manifest validation** (including model-free preview paths documented in START_HERE / README).
-- **Typed routing and runtime contracts** exercised by the public release gate.
-- **Read-only MCP inspection** surface for control-plane style inspection.
+- **Catalog and stack/manifest validation tooling**, including model-free preview paths documented in START_HERE / README.
+- **Typed routing and runtime contracts** covered by the public release gate workflows.
+- **Read-only MCP inspection** entrypoint for control-plane style inspection.
 - **Public hygiene gates** — typecheck CI, scrub, and secret-scan tooling described in release docs.
 
 Exact commands: [START_HERE.md](../START_HERE.md), [CLI_QUICKSTART.md](./CLI_QUICKSTART.md).
 
-## Experimental / environment-dependent
+## Narrowly verified properties
+
+These items have **scoped** public evidence (CI gates, documented validation scripts, or checked-in contracts). They are **not** a general reliability rating for agent coding sessions.
+
+- The public checkout **builds and typechecks** under the Public Release Gate when that workflow is green on the commit you are evaluating.
+- Catalog / stack validation and related release hygiene checks run as documented in the public tools and CI.
+- The documented install path remains **clone + build** (no published npm package on the public docs path today).
+
+## Environment-dependent / maturing
 
 - **Provider-backed model sessions** — require local credentials and a working provider; quality varies by model.
 - **Execution profiles** — default `safe_repo` expects Docker isolation and can fail-closed without it; `dev_local` runs approved tools on the host (use only on repos you own / code you reviewed).
-- **Deep mode** — intended for higher-risk work with stricter controls; treat as maturing, not finished product surface.
+- **Deep mode** — available as a higher-ceremony path intended for riskier work; still maturing. Route availability does **not** mean Deep is more reliable than chat for ordinary tasks.
 - **TUI polish and recovery UX** — usable; some recovery paths are CLI-first (see START_HERE notes on `undo` / checkpoints).
 
-## Known limitations (be honest with newcomers)
+## Active qualification (engineering; not user promises)
+
+Public issues and draft PRs currently focus on **ordinary coding-loop reliability**, terminal truthfulness, and related harness hardening. Treat that work as **in progress**. Do not read mode or command availability as proof that the daily coding loop is already reliable.
+
+## Known limitations
 
 - **No published npm/npx package today** — install is clone + build.
-- **No real TUI screenshot/recording in the README yet** — the landing example is labeled illustrative; capture runbook: [assets/README.md](./assets/README.md).
+- **No real TUI screenshot/recording in the README yet** — the landing example is labeled illustrative.
 - **Not a zero-config cloud agent** — Babel is local; you bring providers and policy.
 - **Pre-1.0 API/catalog surfaces may change**.
-
-## In progress (engineering; not user promises)
-
-Public issues and draft PRs currently emphasize ordinary coding-loop reliability, terminal truthfulness, and related harness hardening. Treat those as engineering workstreams, not as shipped features, until they land on `main` and are reflected here.
 
 ## Not currently claimed
 
@@ -43,9 +53,10 @@ Do not interpret Babel's docs or marketing-adjacent language as claiming:
 
 - parity with any specific commercial coding agent;
 - unrestricted autonomous operation without human-set permissions/policy;
-- universal verification that always proves correctness;
+- universal verification that is always correct in every case;
 - sandbox behavior identical on every OS/host configuration;
-- a stable 1.0 package API.
+- a stable 1.0 package API;
+- that everyday coding-loop reliability is already settled.
 
 ## Related
 
