@@ -1126,6 +1126,42 @@ export function reconcileStreamedAnswer(streamed: string | null, final: string):
   return final;
 }
 
+/**
+ * R0-10: presentation callbacks are an observational side channel. A throwing
+ * host callback must never unwind the settlement path — that would both skip
+ * real execution bookkeeping and let the settlement catch append a duplicate
+ * execution-truth row. Wrap every callback so a throw is logged and ignored.
+ */
+const PRESENTATION_CALLBACK_KEYS = [
+  'onToolStart',
+  'onToolComplete',
+  'onFileChanged',
+  'onSubAgentStart',
+  'onSubAgentComplete',
+  'onSubAgentFailed',
+] as const;
+
+export function wrapPresentationCallbacks(callbacks: ChatCallbacks): ChatCallbacks {
+  const wrapped: Record<string, unknown> = { ...callbacks };
+  for (const key of PRESENTATION_CALLBACK_KEYS) {
+    const fn = (callbacks as unknown as Record<string, unknown>)[key];
+    if (typeof fn === 'function') {
+      wrapped[key] = (...args: unknown[]): unknown => {
+        try {
+          return (fn as (...a: unknown[]) => unknown)(...args);
+        } catch (err) {
+          console.error(
+            `[chatEngine] presentation callback ${key} failed (ignored):`,
+            err,
+          );
+          return undefined;
+        }
+      };
+    }
+  }
+  return wrapped as unknown as ChatCallbacks;
+}
+
 // ─── ChatEngine ───────────────────────────────────────────────────────────
 
 export class ChatEngine {
@@ -5471,6 +5507,9 @@ export class ChatEngine {
     callbacks: ChatCallbacks,
     meta: { index: number; idempotencyKey?: string },
   ): Promise<{ index: number; observation: string; stop?: boolean }> {
+    // R0-10: a throwing presentation callback must not unwind settlement or
+    // duplicate execution truth. All callbacks below are the safe wrappers.
+    callbacks = wrapPresentationCallbacks(callbacks);
     const tool = chatActionToolName(action);
     const target = chatActionTarget(action);
     const toolId = callbacks.onToolStart?.(tool, target) ?? -1;
@@ -6998,20 +7037,35 @@ export class ChatEngine {
 
       return { index: meta.index, observation: obsParts.join('\n') };
     } catch (err) {
-      this.toolCallLog.push({
-        tool,
-        target,
-        detail: 'error',
-        error: 'error',
-        index: meta.index,
-        exit_code: 1,
-      });
-      callbacks?.onToolComplete?.(
-        toolId,
-        'error',
-        err instanceof Error ? err.message : String(err),
-        1,
-      );
+      // R0-10: presentation callbacks are an observational side channel. If a
+      // callback threw AFTER this action already recorded its execution row,
+      // appending a second row would duplicate execution truth. One action
+      // settles exactly one log row; only a genuine executor fault with no
+      // prior row adds a failure row here.
+      const alreadySettled = this.toolCallLog.some((entry) => entry.index === meta.index);
+      if (!alreadySettled) {
+        this.toolCallLog.push({
+          tool,
+          target,
+          detail: 'error',
+          error: 'error',
+          index: meta.index,
+          exit_code: 1,
+        });
+      }
+      try {
+        callbacks?.onToolComplete?.(
+          toolId,
+          'error',
+          err instanceof Error ? err.message : String(err),
+          1,
+        );
+      } catch (callbackErr) {
+        console.error(
+          '[chatEngine] presentation callback failed after settlement (ignored):',
+          callbackErr,
+        );
+      }
       return {
         index: meta.index,
         observation: `### ${tool} ${target}\nError: ${err instanceof Error ? err.message : String(err)}`,

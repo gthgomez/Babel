@@ -516,7 +516,7 @@ describe('verifier settlement fault matrix', { concurrency: false }, () => {
     assert.equal(interruptedToolRecoveries(log).length, 0, 'no open interrupted operations remain');
   });
 
-  test('callback throws after tool logging: executeActions rejects and pushes a duplicate row (private seam)', async () => {
+  test('R0-10: a throwing presentation callback does not duplicate execution truth (private seam)', async () => {
     const root = makeFixture();
     const runId = 'matrix-callback-throw';
     process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
@@ -531,23 +531,21 @@ describe('verifier settlement fault matrix', { concurrency: false }, () => {
         }
       ).executeActions.bind(engine);
 
-      await assert.rejects(
-        () =>
-          executeActions([{ type: 'read_file', path: 'a.txt' }], {
-            onToolStart: () => 1,
-            onToolComplete: () => {
-              throw new Error('host callback exploded');
-            },
-          }),
-        /host callback exploded/,
-      );
+      // A throwing presentation callback is logged and ignored: it neither
+      // rejects the settlement nor appends a second execution-truth row.
+      await executeActions([{ type: 'read_file', path: 'a.txt' }], {
+        onToolStart: () => 1,
+        onToolComplete: () => {
+          throw new Error('host callback exploded');
+        },
+      });
 
       const log = (engine as unknown as { toolCallLog: Array<{ index: number; tool: string }> }).toolCallLog;
       const rowsForAction = log.filter((row) => row.index === 0 && row.tool === 'read_file');
       assert.equal(
         rowsForAction.length,
-        2,
-        'a throwing host callback duplicates the row for one action (latent exactly-one-row violation)',
+        1,
+        'one action settles exactly one execution-truth row even when a callback throws',
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
