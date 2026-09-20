@@ -55,10 +55,10 @@ Dotfiles (`.gitignore`, `.gitattributes`, `.rgignore`) are **KEEP** operational 
 
 | Path | Class | Notes |
 |---|---|---|
-| `README.md` | **KEEP** | Product front door (stewardship PR1 owns progressive disclosure). |
+| `README.md` | **KEEP** | Product front door (progressive disclosure / try-path belongs here). |
 | `START_HERE.md` | **KEEP** | **Canonical first-success** path. |
 | `LICENSE` | **KEEP** | Apache-2.0 for this tree. |
-| `CHANGELOG.md` | **KEEP** | Release history (user-outcome pass is a later stewardship PR). |
+| `CHANGELOG.md` | **KEEP** | Release history (user-outcome-first Unreleased narrative is a follow-up docs pass). |
 | `CONTRIBUTING.md` | **KEEP** | Contributor entry (progressive disclosure later). |
 | `CODE_OF_CONDUCT.md` | **KEEP** | Community standard. |
 | `SECURITY.md` | **KEEP** | Security reporting. |
