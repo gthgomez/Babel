@@ -29,6 +29,7 @@ export interface WorkingState {
     requiredEvidence: string
     mutationFingerprint?: string
     hypothesisAtFailure: string
+    strategyAtFailure?: string
     satisfied: boolean
     strategyChanged: boolean
   }
@@ -52,6 +53,7 @@ export type WorkingStateEvent =
   | { type: 'set_goal'; goal: string }
   | { type: 'set_hypothesis'; hypothesis: string; evidence?: string[] }
   | { type: 'add_evidence'; evidence: string; file?: string; discriminating?: boolean }
+  | { type: 'recovery_strategy'; strategy: string; evidence?: string[] }
   | { type: 'mutation'; path: string; fingerprint?: string }
   | { type: 'verifier'; identity: string; exitCode: number; summary: string }
   | { type: 'failure_surface'; surface: FailureSurface }
@@ -170,13 +172,47 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         requiredEvidence: event.requiredEvidence,
         ...(event.mutationFingerprint ? { mutationFingerprint: event.mutationFingerprint } : {}),
         hypothesisAtFailure: event.hypothesisAtFailure ?? next.currentHypothesis,
+        strategyAtFailure: next.currentHypothesis,
         satisfied: false,
         strategyChanged: false,
       }
       next.nextExperiment = event.requiredEvidence
       break
+    case 'recovery_strategy':
+      if (event.evidence) next.evidence = pushAll(next.evidence, event.evidence)
+      next.nextExperiment = event.strategy
+      if (
+        next.recoveryGate?.satisfied &&
+        event.strategy.trim() !== '' &&
+        event.strategy !== (next.recoveryGate.strategyAtFailure ?? next.recoveryGate.hypothesisAtFailure)
+      ) {
+        next.recoveryGate = {
+          ...next.recoveryGate,
+          strategyAtFailure: event.strategy,
+          strategyChanged: true,
+        }
+      }
+      break
   }
   return next
+}
+
+/**
+ * Record a controller-owned strategy revision after accepted discriminating
+ * evidence. This is separate from model hypothesis prose: only a novel,
+ * relevant target can open this transition, and it makes no claim about
+ * semantic equivalence of repair attempts.
+ */
+export function recordControllerRecoveryStrategy(
+  state: WorkingState,
+  input: { target: string; evidence: string },
+): WorkingState {
+  if (!state.recoveryGate?.satisfied || state.recoveryGate.strategyChanged) return state
+  return applyWorkingStateEvent(state, {
+    type: 'recovery_strategy',
+    strategy: `controller-investigate:${input.target}`,
+    evidence: [input.evidence],
+  })
 }
 
 /**

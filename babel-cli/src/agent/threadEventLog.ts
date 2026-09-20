@@ -405,9 +405,10 @@ export function rebuildProviderMessagesFromEvents(
     .slice(lastCapsuleIdx + 1)
     .find((event): event is Extract<ThreadEvent, { kind: 'compaction_summary' }> =>
       event.kind === 'compaction_summary' &&
-      (lastCapsuleIdx >= 0 || event.ownership_generation === currentOwnershipGeneration) &&
-      (event.ownership_generation === undefined ||
-        event.ownership_generation === currentOwnershipGeneration),
+      (lastCapsuleIdx >= 0
+        ? event.ownership_generation === undefined ||
+          event.ownership_generation === lastCapsuleEvent?.ownership_generation
+        : event.ownership_generation === currentOwnershipGeneration),
     );
   if (summaryEvent) {
     summaryContent = summaryEvent.content;
@@ -542,7 +543,7 @@ function isCurrentCompactionGeneration(
   return (
     currentOwnershipGeneration < 0 ||
     (event.ownership_generation !== undefined
-      ? event.ownership_generation >= currentOwnershipGeneration
+      ? event.ownership_generation <= currentOwnershipGeneration
       : event.turn_id === currentOwnerTurnId)
   );
 }

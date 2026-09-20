@@ -67,6 +67,7 @@ export {
   formatWorkingStateBlock,
   isWorkingStateMessage,
   preserveWorkingStateMessages,
+  recordControllerRecoveryStrategy,
   upsertWorkingStateMessage,
   WORKING_STATE_MARKER,
   WORKING_STATE_NAME,

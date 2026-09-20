@@ -1106,7 +1106,13 @@ export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): voi
 export async function checkpointParityEventLogStrict(
   rt: ParityRuntime,
   runDir: string,
-  options?: { injectCommitFailureAfter?: number; renameOptions?: AtomicCheckpointRenameOptions; unlinkCheckpoint?: typeof unlinkSync },
+  options?: {
+    injectCommitFailureAfter?: number;
+    renameOptions?: AtomicCheckpointRenameOptions;
+    unlinkCheckpoint?: typeof unlinkSync;
+    /** P05 owner fence checked at the authority-bearing rename boundary. */
+    assertOwnerCurrent?: () => void;
+  },
 ): Promise<PersistenceReceipt> {
   const initialEventsCount = rt.sessionEvents.events.length;
   const initialNextSeq = rt.sessionEvents.nextSeq;
@@ -1238,6 +1244,7 @@ export async function checkpointParityEventLogStrict(
     // Do not mark receipt artifacts committed until the full batch succeeds (honest blocked receipts).
     const committedIndices: number[] = [];
     try {
+      options?.assertOwnerCurrent?.();
       for (let i = 0; i < targets.length; i++) {
         if (options?.injectCommitFailureAfter === i) {
           throw new Error('simulated_commit_failure');

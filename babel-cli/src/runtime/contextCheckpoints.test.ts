@@ -154,7 +154,26 @@ test('prepares a detached checkpoint with a complete observation manifest', () =
   assert.equal(prepared.checkpoint.owner.token, OWNER.token);
   assert.equal(prepared.checkpoint.observation_manifest.length, 1);
   assert.match(prepared.checkpoint.observation_manifest_digest, /^[0-9a-f]{64}$/);
+  assert.match(prepared.checkpoint.checkpoint_digest, /^[0-9a-f]{64}$/);
   assert.equal(prepared.checkpoint.population.install_authorized, true);
+});
+
+test('first-turn preparation records no verifier yet without fabricating a receipt', () => {
+  const population = mapCheckpointRequiredState(completeSources({ receipts: [] }));
+  assert.equal(population.status, 'populated');
+  assert.deepEqual(
+    population.rows.find((row) => row.id === 'verification')?.value_refs,
+    ['no_verifier_yet'],
+  );
+});
+
+test('unavailable cold-resume observations keep the next install incomplete', () => {
+  const population = mapCheckpointRequiredState(
+    completeSources({ observation_recovery_issues: ['observation obs:missing unavailable'] }),
+  );
+  assert.equal(population.status, 'blocked');
+  assert.ok(population.errors.some((error) => error.includes('obs:missing unavailable')));
+  assert.equal(checkpointPopulationAllowsInstall(population), false);
 });
 
 test('preparation rejects an incomplete observation manifest', () => {
@@ -222,6 +241,31 @@ test('install commits once only after the owner fence passes', async () => {
   assert.equal(commits, 1);
 });
 
+test('install rechecks the owner at the atomic port boundary', async () => {
+  const prepared = prepareContextCheckpoint({
+    checkpointId: 'checkpoint-owner-boundary',
+    owner: OWNER,
+    sources: completeSources(),
+  });
+  assert.equal(prepared.status, 'prepared');
+  if (prepared.status !== 'prepared') return;
+
+  let currentOwner: ContextCheckpointOwnerV1 | null = OWNER;
+  let commits = 0;
+  const result = await installContextCheckpoint(prepared, {
+    currentOwner: OWNER,
+    readCurrentOwner: () => currentOwner,
+    install: async (_checkpoint, _owner, assertOwnerCurrent) => {
+      currentOwner = { ...OWNER, generation: OWNER.generation + 1, token: 'owner-token-5' };
+      assertOwnerCurrent?.();
+      commits += 1;
+    },
+  });
+  assert.equal(result.status, 'blocked');
+  assert.ok(result.reasons.includes('stale_owner'));
+  assert.equal(commits, 0);
+});
+
 test('cold resume rejects a tampered manifest and stale owner', () => {
   const prepared = prepareContextCheckpoint({
     checkpointId: 'checkpoint-resume',
@@ -244,6 +288,7 @@ test('cold resume rejects a tampered manifest and stale owner', () => {
   });
   assert.equal(tamperedResult.status, 'blocked');
   assert.ok(tamperedResult.reasons.includes('manifest_digest_mismatch'));
+  assert.ok(tamperedResult.reasons.includes('checkpoint_digest_mismatch'));
 
   const staleResult = validateColdResume({
     checkpoint: prepared.checkpoint,

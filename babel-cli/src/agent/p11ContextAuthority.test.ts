@@ -116,7 +116,7 @@ test('P11 native wire mapping makes advisory downgrade visible to the provider',
   assert.equal(wire.some((message) => message.role === 'assistant' && message.content === 'model narrative'), true);
 });
 
-test('P11 cold resume ignores a stale compaction generation after ownership changes', () => {
+test('P11 cold resume retains a valid prior compaction across a later owner turn', () => {
   const log = createThreadEventLog('p11-generation-fence');
   const turnA = startTurn(log, {
     task: 'task A', model: 'm', provider: 'p', projectRoot: process.cwd(), policyPreset: 'default',
@@ -129,7 +129,20 @@ test('P11 cold resume ignores a stale compaction generation after ownership chan
     task: 'task B', model: 'm', provider: 'p', projectRoot: process.cwd(), policyPreset: 'default',
   });
   const rebuilt = rebuildProviderMessagesFromEvents(log, { systemPrompt: 'controller policy' });
-  assert.equal(rebuilt.some((message) => message.content === 'STALE A CAPSULE'), false);
+  assert.equal(rebuilt.some((message) => message.content === 'STALE A CAPSULE'), true);
+});
+
+test('P11 cold resume rejects a future-generation compaction capsule', () => {
+  const log = createThreadEventLog('p11-future-generation');
+  const turnA = startTurn(log, {
+    task: 'task A', model: 'm', provider: 'p', projectRoot: process.cwd(), policyPreset: 'default',
+  });
+  appendThreadEvent(log, {
+    kind: 'compaction_capsule', turn_id: turnA, ownership_generation: 2,
+    content: 'FUTURE CAPSULE', preserved_tool_call_ids: [],
+  });
+  const rebuilt = rebuildProviderMessagesFromEvents(log, { systemPrompt: 'controller policy' });
+  assert.equal(rebuilt.some((message) => message.content === 'FUTURE CAPSULE'), false);
 });
 
 test('P11 cold resume does not restore a stale advisory summary without its capsule', () => {
@@ -152,7 +165,7 @@ test('P11 cold resume does not restore a stale advisory summary without its caps
   assert.equal(rebuilt.some((message) => message.content === 'STALE A SUMMARY'), false);
 });
 
-test('P11 failed stale-compaction compensation cannot restore the old capsule on cold resume', async () => {
+test('P11 failed newer compaction compensation preserves the last valid capsule on cold resume', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-p11-fence-'));
   const durablePath = join(root, 'thread_events.json');
   let owner = true;
@@ -194,7 +207,7 @@ test('P11 failed stale-compaction compensation cannot restore the old capsule on
     assert.equal(result.status, 'blocked_persistence');
     assert.ok(persists >= 2);
     const cold = rebuildProviderMessagesFromEvents(parseThreadEventLog(readFileSync(durablePath, 'utf8')));
-    assert.equal(cold.some((message) => message.name === 'compaction_capsule'), false);
+    assert.equal(cold.some((message) => message.name === 'compaction_capsule'), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -5,6 +5,7 @@ import {
   applyWorkingStateEvent,
   createWorkingState,
   formatWorkingStateBlock,
+  recordControllerRecoveryStrategy,
   upsertWorkingStateMessage,
 } from './codingLoop/workingState.js';
 import { buildChatTurnPrompt } from './chatToolDefinitions.js';
@@ -96,6 +97,38 @@ test('a new hypothesis is required before a post-red mutation can proceed', () =
     hypothesis: 'the caller passes the wrong collection shape',
   });
   assert.equal(state.recoveryGate?.strategyChanged, true);
+});
+
+test('accepted discriminating evidence records a controller strategy revision', () => {
+  let state = createWorkingState('fix bug X');
+  state = applyWorkingStateEvent(state, {
+    type: 'set_hypothesis',
+    hypothesis: 'the parser is the cause',
+  });
+  state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
+  state = ingestVerifierResult({
+    state,
+    tool: 'test_run',
+    target: 'npm test -- parser',
+    exitCode: 1,
+    stdout: 'FAIL parser adds values',
+    stderr: '',
+    summary: 'same assertion remains red',
+  }).state;
+  const evidence = 'read_file:src/parser.ts';
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence',
+    evidence,
+    file: 'src/parser.ts',
+    discriminating: true,
+  });
+  state = recordControllerRecoveryStrategy(state, {
+    target: 'src/parser.ts',
+    evidence,
+  });
+  assert.equal(state.recoveryGate?.satisfied, true);
+  assert.equal(state.recoveryGate?.strategyChanged, true);
+  assert.match(state.nextExperiment, /^controller-investigate:/);
 });
 
 test('environment and provider failures stay outside implementation recovery gate', () => {

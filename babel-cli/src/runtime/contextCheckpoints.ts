@@ -51,6 +51,7 @@ export type ContextCheckpointValidationReasonV1 =
   | 'expected_thread_mismatch'
   | 'requested_owner_mismatch'
   | 'invalid_context_epoch'
+  | 'checkpoint_digest_mismatch'
   | 'install_failed';
 
 export type CheckpointPopulationStatusV1 = 'populated' | 'degraded' | 'blocked';
@@ -131,6 +132,8 @@ export interface LiveOperationalSourcesV1 {
   }>;
   /** Full immutable observation refs; ids and payload hashes alone are not a manifest. */
   observation_manifest?: ReadonlyArray<ObservationRefV1>;
+  /** Explicit cold-resume failures; unavailable evidence never becomes an empty success. */
+  observation_recovery_issues?: readonly string[];
   /** Legacy decorative refs; descriptive metadata only, never valid handles. */
   legacy_observation_refs: readonly string[];
 }
@@ -185,6 +188,8 @@ export interface ContextCheckpointV1 {
   population: CheckpointPopulationV1;
   observation_manifest: readonly ObservationRefV1[];
   observation_manifest_digest: string;
+  /** Digest of every checkpoint field except this digest itself. */
+  checkpoint_digest: string;
 }
 
 export interface ContextCheckpointPreparationInputV1 {
@@ -228,6 +233,7 @@ export interface ContextCheckpointInstallInputV1 {
   install: (
     checkpoint: ContextCheckpointV1,
     owner: ContextCheckpointOwnerV1,
+    assertOwnerCurrent?: () => void,
   ) => void | Promise<void>;
 }
 
@@ -513,6 +519,17 @@ export function mapCheckpointRequiredState(
       ],
       constraint_satisfied: true,
     });
+  } else if (sources.receipts.length === 0) {
+    // A first request has not produced a verifier receipt yet. This is an
+    // explicit "no verifier executed" state, not a fabricated receipt; the
+    // next installed generation must bind any real receipt once one exists.
+    rows.push({
+      id: 'verification',
+      present: true,
+      source: 'no_verifier_yet',
+      value_refs: ['no_verifier_yet'],
+      constraint_satisfied: true,
+    });
   } else {
     rows.push(
       missingRow(
@@ -604,7 +621,10 @@ export function mapCheckpointRequiredState(
   // exact observations — complete authorized durable ref manifest only.
   const authorizedObservations = sources.observations.filter((item) => item.authorized);
   const observationManifest = cloneObservationManifest(sources.observation_manifest ?? []);
-  const manifestIssues = observationManifestIssues(observationManifest, sources.observations);
+  const manifestIssues = [
+    ...observationManifestIssues(observationManifest, sources.observations),
+    ...(sources.observation_recovery_issues ?? []),
+  ];
   if (manifestIssues.length === 0) {
     rows.push({
       id: 'exact_observations',
@@ -694,38 +714,42 @@ export function prepareContextCheckpoint(
   if (reasons.length > 0) return { status: 'blocked', population, reasons };
 
   const manifest = cloneObservationManifest(population.observation_manifest);
+  const checkpointWithoutDigest = {
+    schema_version: CONTEXT_CHECKPOINT_SCHEMA_VERSION,
+    checkpointId: input.checkpointId,
+    threadId: input.owner.threadId,
+    sessionId: input.sessionId ?? input.owner.threadId,
+    turnId: input.turnId ?? null,
+    contextEpoch: input.contextEpoch ?? `${input.owner.generation}:${input.checkpointId}`,
+    generation: input.owner.generation,
+    owner: { ...input.owner },
+    preparedAt: input.now?.() ?? new Date().toISOString(),
+    taskContractReference: input.sources.task_contract?.contract_hash ?? null,
+    workingStateSnapshot: {
+      state: input.sources.working_state,
+      provenance: 'mixed' as const,
+      authoritative: false as const,
+    },
+    workspace: input.sources.workspace,
+    receipts: input.sources.receipts.map((receipt) => ({ ...receipt })),
+    budget: input.sources.budget ? { ...input.sources.budget } : null,
+    pending: input.sources.pending.map((pending) => ({ ...pending })),
+    route: input.sources.route ? { ...input.sources.route } : null,
+    population: {
+      ...population,
+      rows: population.rows.map((row) => ({ ...row, value_refs: [...row.value_refs] })),
+      errors: [...population.errors],
+      observation_manifest: cloneObservationManifest(population.observation_manifest),
+    },
+    observation_manifest: manifest,
+    observation_manifest_digest: sha256Canonical(manifest),
+  };
   return {
     status: 'prepared',
     population,
     checkpoint: {
-      schema_version: CONTEXT_CHECKPOINT_SCHEMA_VERSION,
-      checkpointId: input.checkpointId,
-      threadId: input.owner.threadId,
-      sessionId: input.sessionId ?? input.owner.threadId,
-      turnId: input.turnId ?? null,
-      contextEpoch: input.contextEpoch ?? `${input.owner.generation}:${input.checkpointId}`,
-      generation: input.owner.generation,
-      owner: { ...input.owner },
-      preparedAt: input.now?.() ?? new Date().toISOString(),
-      taskContractReference: input.sources.task_contract?.contract_hash ?? null,
-      workingStateSnapshot: {
-        state: input.sources.working_state,
-        provenance: 'mixed',
-        authoritative: false,
-      },
-      workspace: input.sources.workspace,
-      receipts: input.sources.receipts.map((receipt) => ({ ...receipt })),
-      budget: input.sources.budget ? { ...input.sources.budget } : null,
-      pending: input.sources.pending.map((pending) => ({ ...pending })),
-      route: input.sources.route ? { ...input.sources.route } : null,
-      population: {
-        ...population,
-        rows: population.rows.map((row) => ({ ...row, value_refs: [...row.value_refs] })),
-        errors: [...population.errors],
-        observation_manifest: cloneObservationManifest(population.observation_manifest),
-      },
-      observation_manifest: manifest,
-      observation_manifest_digest: sha256Canonical(manifest),
+      ...checkpointWithoutDigest,
+      checkpoint_digest: sha256Canonical(checkpointWithoutDigest),
     },
   };
 }
@@ -741,6 +765,19 @@ export function validateContextCheckpoint(
   }
   if (checkpoint.schema_version !== CONTEXT_CHECKPOINT_SCHEMA_VERSION) {
     reasons.push('invalid_schema');
+  }
+  try {
+    const { checkpoint_digest: suppliedDigest, ...checkpointWithoutDigest } = checkpoint as ContextCheckpointV1 & {
+      checkpoint_digest?: unknown;
+    };
+    if (
+      typeof suppliedDigest !== 'string' ||
+      sha256Canonical(checkpointWithoutDigest) !== suppliedDigest
+    ) {
+      reasons.push('checkpoint_digest_mismatch');
+    }
+  } catch {
+    reasons.push('checkpoint_digest_mismatch');
   }
   if (typeof checkpoint.checkpointId !== 'string' || checkpoint.checkpointId.trim().length === 0) {
     reasons.push('invalid_checkpoint_id');
@@ -872,12 +909,17 @@ export async function installContextCheckpoint(
   }
 
   try {
-    await input.install(checkpoint, checkpoint.owner);
-  } catch {
+    const assertOwnerCurrent = (): void => {
+      if (input.readCurrentOwner === undefined) return;
+      const currentOwner = input.readCurrentOwner();
+      if (!ownersMatch(currentOwner, checkpoint.owner)) throw new Error('stale_owner');
+    };
+    await input.install(checkpoint, checkpoint.owner, assertOwnerCurrent);
+  } catch (error) {
     return {
       status: 'blocked',
       checkpointId: checkpoint.checkpointId,
-      reasons: ['install_failed'],
+      reasons: [error instanceof Error && error.message === 'stale_owner' ? 'stale_owner' : 'install_failed'],
     };
   }
   return { status: 'installed', checkpointId: checkpoint.checkpointId };

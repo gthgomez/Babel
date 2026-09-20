@@ -162,6 +162,7 @@ import {
   formatVerifierReceiptSummary,
   formatWorkingStateBlock,
   invalidateReadCacheForPath,
+  recordControllerRecoveryStrategy,
   resetOneShotSnapshot,
   resolveNextTurnToolAccess,
   selectReadWindow,
@@ -263,6 +264,7 @@ import {
 } from './sessionEvents.js';
 import {
   captureApprovedObservation,
+  resolveObservation,
   type ObservationRefV1,
 } from '../evidence/observationStore.js';
 import {
@@ -3152,20 +3154,34 @@ export class ChatEngine {
           },
         );
       }
+      const activeSystemPrompt = this.getOrBuildSystemPrompt(
+        useNativeTools ? 'native' : useTextTools ? 'text' : 'legacy',
+      );
+      const providerMessages = useNativeTools
+        ? this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
+            systemPrompt: activeSystemPrompt,
+          })
+        : [];
+      const preparedRoute = {
+        compiled_request_identity: createHash('sha256')
+          .update(JSON.stringify({
+            mode: useNativeTools ? 'native' : useTextTools ? 'text' : 'legacy',
+            prompt,
+            systemPrompt: activeSystemPrompt,
+            providerMessages,
+          }))
+          .digest('hex'),
+        tool_profile: useNativeTools ? 'native-tools' : useTextTools ? 'text-tools' : 'legacy-tools',
+        model_route: `${providerName}:${modelName}`,
+      } as const;
       const hadInstalledP11Context = this.parity.contextCheckpoint !== undefined;
-      const p11ContextInstalled = await this.installP11ContextCheckpoint();
+      const p11ContextInstalled = await this.installP11ContextCheckpoint(preparedRoute);
       if (hadInstalledP11Context && !p11ContextInstalled) {
         yield this.streamFailed(
           'P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused.',
         );
         return;
       }
-      const providerMessages = useNativeTools
-        ? this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
-            systemPrompt: this.getOrBuildSystemPrompt('native'),
-          })
-        : [];
-
       yield { type: 'thinking' };
 
       let turnResult: ChatTurn;
@@ -5293,6 +5309,12 @@ export class ChatEngine {
       // preserves the current state by construction; this reset lives only in the
       // fresh-task branch. Historical durable logs are untouched.
       this.workingState = createWorkingState(runtime.taskText.slice(0, 240));
+      // P11 exact observations and the installed generation are task-scoped.
+      // A fresh task may not recall or checkpoint evidence captured under a
+      // prior task owner, even when the physical observation bytes remain.
+      this.p11ObservationRefs = [];
+      this.p11ObservationCaptureIssues = [];
+      delete this.parity.contextCheckpoint;
       // R0-1: failure-class budgets are task-scoped. A fresh task must not
       // inherit budgets already consumed by the previous task; recreate the
       // tracker from the live contract at the same fresh-task boundary.
@@ -5577,8 +5599,38 @@ export class ChatEngine {
             },
           });
           if (coldResume.status === 'valid') {
-            engine.parity.contextCheckpoint = checkpoint;
-            engine.p11ObservationRefs = [...checkpoint.observation_manifest];
+            const authorizedObservationIds = checkpoint.observation_manifest.map(
+              (observation) => observation.observation_id,
+            );
+            const resolvedObservations = checkpoint.observation_manifest.map((observation) =>
+              resolveObservation(
+                observation.observation_id,
+                {
+                  principal_id: 'agent:main',
+                  authorized_observation_ids: authorizedObservationIds,
+                },
+                {
+                  storage_root: join(engine.engineRunDir, 'observations'),
+                  clock: () => new Date().toISOString(),
+                  policy: { durability: 'none' },
+                },
+              ),
+            );
+            const unavailable = resolvedObservations
+              .map((result, index) =>
+                result.status === 'resolved'
+                  ? null
+                  : `observation ${checkpoint.observation_manifest[index]?.observation_id ?? 'unknown'} unavailable: ${result.reason}`,
+              )
+              .filter((issue): issue is string => issue !== null);
+            if (unavailable.length === 0) {
+              engine.parity.contextCheckpoint = checkpoint;
+              engine.p11ObservationRefs = resolvedObservations
+                .map((result) => result.status === 'resolved' ? result.observation : null)
+                .filter((observation): observation is ObservationRefV1 => observation !== null);
+            } else {
+              engine.p11ObservationCaptureIssues = unavailable;
+            }
           }
         } catch {
           // A malformed or stale context checkpoint is unavailable evidence;
@@ -5699,14 +5751,25 @@ export class ChatEngine {
     }
   }
 
-  private buildP11Sources(): LiveOperationalSourcesV1 | null {
+  private buildP11Sources(
+    routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,
+  ): LiveOperationalSourcesV1 | null {
     const authority = this.parity.liveAuthority;
     const workspace = this.currentP11Workspace();
     const allowance = this.taskAllowance;
     const latestInput = [...this.parity.sessionEvents.events]
       .reverse()
       .find((event) => event.kind === 'model_input_receipt');
-    if (!authority || !workspace || !allowance || !latestInput || latestInput.kind !== 'model_input_receipt') {
+    const route = routeOverride ?? (
+      latestInput && latestInput.kind === 'model_input_receipt'
+        ? {
+            compiled_request_identity: latestInput.body_digest ?? latestInput.input_digest,
+            tool_profile: this.shouldUseTextTools() ? 'text-tools' : 'native-tools',
+            model_route: `${latestInput.provider}:${latestInput.sent_model_id}`,
+          }
+        : null
+    );
+    if (!authority || !workspace || !allowance || !route) {
       return null;
     }
     const interrupted = interruptedToolRecoveries(this.parity.sessionEvents).map((item) => ({
@@ -5761,19 +5824,18 @@ export class ChatEngine {
         cancellation_owner: allowance.taskOwnerId,
       },
       pending: interrupted,
-      route: {
-        compiled_request_identity: latestInput.body_digest ?? latestInput.input_digest,
-        tool_profile: this.shouldUseTextTools() ? 'text-tools' : 'native-tools',
-        model_route: `${latestInput.provider}:${latestInput.sent_model_id}`,
-      },
+      route,
       observations,
       observation_manifest: this.p11ObservationRefs,
+      observation_recovery_issues: [...this.p11ObservationCaptureIssues],
       legacy_observation_refs: [],
     };
   }
 
-  private async installP11ContextCheckpoint(): Promise<boolean> {
-    const sources = this.buildP11Sources();
+  private async installP11ContextCheckpoint(
+    routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,
+  ): Promise<boolean> {
+    const sources = this.buildP11Sources(routeOverride);
     if (!sources) return false;
     const owner = this.currentP11Owner();
     const prepared = prepareContextCheckpoint({
@@ -5792,9 +5854,11 @@ export class ChatEngine {
       ...(this.parity.admissionStore
         ? { readCurrentOwner: () => this.parity.admissionStore?.readOwner(owner.threadId) ?? null }
         : {}),
-      install: async (checkpoint) => {
+      install: async (checkpoint, _owner, assertOwnerCurrent) => {
         this.parity.contextCheckpoint = checkpoint;
-        const receipt = await checkpointParityEventLogStrict(this.parity, this.engineRunDir);
+        const receipt = await checkpointParityEventLogStrict(this.parity, this.engineRunDir, {
+          ...(assertOwnerCurrent ? { assertOwnerCurrent } : {}),
+        });
         if (receipt.status !== 'committed') {
           if (previous) this.parity.contextCheckpoint = previous;
           else delete this.parity.contextCheckpoint;
@@ -7434,17 +7498,25 @@ export class ChatEngine {
         });
         callbacks?.onToolComplete?.(toolId, `${evaluated.window.lines.length} lines`, undefined, 0);
         if (this.isSubmissionCurrent(ownerGeneration)) {
+          const evidence = `${action.type}:${target}`;
+          const discriminating = isDiscriminatingInspectionEvidence(
+            this.workingState,
+            action,
+            target,
+            evidence,
+          );
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'add_evidence',
-            evidence: `${action.type}:${target}`,
+            evidence,
             file: action.file_path,
-            discriminating: isDiscriminatingInspectionEvidence(
-              this.workingState,
-              action,
-              target,
-              `${action.type}:${target}`,
-            ),
+            discriminating,
           });
+          if (discriminating) {
+            this.workingState = recordControllerRecoveryStrategy(this.workingState, {
+              target,
+              evidence,
+            });
+          }
         }
         return {
           index: meta.index,
@@ -8040,17 +8112,25 @@ export class ChatEngine {
           lastResult.exit_code === 0 &&
           this.isSubmissionCurrent(ownerGeneration)
         ) {
+          const evidence = `${action.type}:${target}`;
+          const discriminating = isDiscriminatingInspectionEvidence(
+            this.workingState,
+            action,
+            target,
+            evidence,
+          );
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'add_evidence',
-            evidence: `${action.type}:${target}`,
-            discriminating: isDiscriminatingInspectionEvidence(
-              this.workingState,
-              action,
-              target,
-              `${action.type}:${target}`,
-            ),
+            evidence,
+            discriminating,
             ...(action.type === 'read_file' ? { file: action.path } : {}),
           });
+          if (discriminating) {
+            this.workingState = recordControllerRecoveryStrategy(this.workingState, {
+              target,
+              evidence,
+            });
+          }
         }
       }
 
