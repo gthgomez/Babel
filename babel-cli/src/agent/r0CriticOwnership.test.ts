@@ -72,6 +72,14 @@ function usageMetadata() {
   }
 }
 
+type CriticProviderCallbacks = {
+  onInvocationStarted?: (event: Record<string, unknown>) => void
+  onInvocationCompleted?: (event: Record<string, unknown>) => void
+  onInvocationPhase?: (event: Record<string, unknown>) => void
+  onRetry?: (event: Record<string, unknown>) => void
+  onRetrySettled?: (event: Record<string, unknown>) => void
+}
+
 function internals(engine: ChatEngine): {
   activeSubmissionGeneration: number
   generationCounter: number
@@ -87,7 +95,14 @@ function internals(engine: ChatEngine): {
   postWriteRepairWallCapMs: number | null
   taskAllowance: { consumed: { costUsd: number }; accountedChargeIds: string[] }
   toolCallLog: Array<Record<string, unknown>>
+  parity: { turnId: string | null; sessionEvents: { events: unknown[] } }
+  pendingUsageChargeId: string | null
+  lastLogicalRequestId: string | null
   criticRunner: unknown
+  criticState: (
+    onThought: undefined,
+    ownerGeneration: number,
+  ) => { providerCallbacks: unknown }
   runAsymmetricDiffCritic: (
     answer: string,
     callbacks: { onThought?: (message: string) => void },
@@ -128,6 +143,7 @@ test('stale critic inference cannot mutate the current task owner', async () => 
     })
     const box = internals(engine)
     box.criticRunner = criticRunner
+    box.parity.turnId = 'task-a-turn'
     box.apiTokenCount = 0
     box.activeSubmissionGeneration = 1
     box.generationCounter = 1
@@ -153,6 +169,8 @@ test('stale critic inference cannot mutate the current task owner', async () => 
     box.criticStrikes = 0
     box.criticRepairCostCapUsd = null
     box.postWriteRepairWallCapMs = null
+    box.pendingUsageChargeId = 'task-b-pending'
+    box.lastLogicalRequestId = 'task-b-logical-request'
     const baseline = {
       apiTokenCount: box.apiTokenCount,
       promptTokens: box.lastRequestPromptTokens,
@@ -166,7 +184,55 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       strikes: box.criticStrikes,
       repairCap: box.criticRepairCostCapUsd,
       repairWall: box.postWriteRepairWallCapMs,
+      pendingCharge: box.pendingUsageChargeId,
+      logicalRequestId: box.lastLogicalRequestId,
+      sessionEvents: box.parity.sessionEvents.events.length,
     }
+
+    const staleCallbacks = box.criticState(undefined, 1).providerCallbacks as CriticProviderCallbacks
+    staleCallbacks.onInvocationStarted?.({
+      inference_id: 'critic-inference-a',
+      request_id: 'critic-request-a',
+      attempt_id: 'critic-attempt-a',
+      parent_request_id: null,
+      provider: 'openrouter',
+      requested_model_id: 'deepseek-v4-flash',
+      normalized_model_id: 'deepseek-v4-flash',
+      sent_model_id: 'deepseek-v4-flash',
+      input_digest: 'critic-input-a',
+    })
+    staleCallbacks.onInvocationPhase?.({
+      inference_id: 'critic-inference-a',
+      provider: 'openrouter',
+      model: 'deepseek-v4-flash',
+      phase: 'response_started',
+    })
+    staleCallbacks.onRetry?.({
+      provider: 'openrouter',
+      model: 'deepseek-v4-flash',
+      attempt: 2,
+      reason: 'transport',
+      backoff_ms: 1,
+      request_id: 'critic-request-a',
+      attempt_id: 'critic-attempt-b',
+      body_digest: 'critic-input-a',
+    })
+    staleCallbacks.onRetrySettled?.({
+      provider: 'openrouter',
+      model: 'deepseek-v4-flash',
+      attempt: 2,
+      outcome: 'cancelled',
+      request_id: 'critic-request-a',
+      attempt_id: 'critic-attempt-b',
+      body_digest: 'critic-input-a',
+    })
+    staleCallbacks.onInvocationCompleted?.({
+      inference_id: 'critic-inference-a',
+      provider: 'openrouter',
+      model: 'deepseek-v4-flash',
+      status: 'delivered',
+      observed_model_id: 'deepseek-v4-flash',
+    })
 
     releaseCritic.resolve()
     const staleDecision = await aCritic
@@ -185,6 +251,9 @@ test('stale critic inference cannot mutate the current task owner', async () => 
     assert.equal(box.criticStrikes, baseline.strikes)
     assert.equal(box.criticRepairCostCapUsd, baseline.repairCap)
     assert.equal(box.postWriteRepairWallCapMs, baseline.repairWall)
+    assert.equal(box.pendingUsageChargeId, baseline.pendingCharge)
+    assert.equal(box.lastLogicalRequestId, baseline.logicalRequestId)
+    assert.equal(box.parity.sessionEvents.events.length, baseline.sessionEvents)
     assert.equal(readFileSync(join(root, 'main.ts'), 'utf8'), 'export const value = 2\n')
 
     // Negative control: a current-owner critic still applies its reject,

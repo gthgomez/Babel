@@ -2012,6 +2012,7 @@ export class ChatEngine {
         expectedPriorEventIds: [],
         deliveredPriorEventIds: [],
         executionStage: 'critic',
+        isOwnerCurrent,
       }),
       trackRunnerUsage: (runner) => {
         if (isOwnerCurrent()) this.trackRunnerUsage(runner);
@@ -4555,6 +4556,9 @@ export class ChatEngine {
         effectiveIntent,
         { terminal: true },
       );
+      // R0-8: terminal critic inference is a suspension point. Do not read
+      // its receipt or emit any terminal evidence after ownership changes.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       if (this.lastCriticReceipt) {
         yield {
           type: 'thought',
@@ -8116,9 +8120,11 @@ export class ChatEngine {
     executionStage?: ModelRouteStage;
     contractRef?: string;
     substitutionOrFallback?: boolean;
+    isOwnerCurrent?: () => boolean;
   } = {}): RunnerCallbacks {
     let startedInvocation: ProviderInvocationStarted | null = null;
     let retryCount = 0;
+    const isOwnerCurrent = context.isOwnerCurrent ?? (() => true);
     const parentRequestId =
       this.pendingParentRequestId ??
       (context.substitutionOrFallback && this.lastLogicalRequestId !== null
@@ -8127,6 +8133,7 @@ export class ChatEngine {
     return {
       parentRequestId,
       onInvocationStarted: (event) => {
+        if (!isOwnerCurrent()) return;
         if (!this.parity.turnId) return;
         startedInvocation = event;
         this.pendingUsageChargeId = event.request_id ?? event.inference_id;
@@ -8236,6 +8243,7 @@ export class ChatEngine {
         checkpointParityEventLog(this.parity, this.engineRunDir);
       },
       onInvocationCompleted: (event) => {
+        if (!isOwnerCurrent()) return;
         if (!this.parity.turnId) return;
         const observedRouteReceipt = startedInvocation
           ? buildModelRouteReceipt({
@@ -8312,6 +8320,7 @@ export class ChatEngine {
         checkpointParityEventLog(this.parity, this.engineRunDir);
       },
       onInvocationPhase: (event) => {
+        if (!isOwnerCurrent()) return;
         if (!this.parity.turnId) return;
         recordModelInvocationPhase(this.parity.sessionEvents, {
           turn_id: this.parity.turnId,
@@ -8325,6 +8334,7 @@ export class ChatEngine {
         checkpointParityEventLog(this.parity, this.engineRunDir);
       },
       onRetry: (event) => {
+        if (!isOwnerCurrent()) return;
         retryCount += 1;
         const retryRequestId = event.request_id ?? startedInvocation?.inference_id;
         const retryBodyDigest = event.body_digest ?? startedInvocation?.input_digest;
@@ -8344,6 +8354,7 @@ export class ChatEngine {
         );
       },
       onRetrySettled: (event) => {
+        if (!isOwnerCurrent()) return;
         const retryRequestId = event.request_id ?? startedInvocation?.inference_id;
         const retryBodyDigest = event.body_digest ?? startedInvocation?.input_digest;
         paritySettleProviderRetry(
