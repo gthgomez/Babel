@@ -725,3 +725,120 @@ test('a superseded Task A fallback completion cannot spend Task B budget', async
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a superseded Task A post-setImmediate block cannot mutate Task B progress state', async () => {
+  const root = createGitProject();
+  const aAtDetect = deferred();
+  const bProviderEntered = deferred();
+  const bGate = deferred();
+
+  let call = 0;
+  let pumpB: Promise<void> | null = null;
+  const bEvents: ChatEvent[] = [];
+  const runner: ScriptedRunner = {
+    async *executeWithToolsStream() {
+      const index = call;
+      call += 1;
+      if (index === 0) {
+        yield {
+          type: 'tool_use' as const,
+          id: 'a-read',
+          name: 'read_file',
+          input: { path: 'src/main.ts' },
+        };
+        yield { type: 'done' as const, finishReason: 'tool_calls' };
+        return;
+      }
+      bProviderEntered.resolve();
+      await bGate.promise;
+      yield { type: 'text_delta' as const, text: 'B final answer' };
+      yield { type: 'done' as const, finishReason: 'stop' };
+    },
+    async execute() {
+      return { type: 'completion', answer: 'scripted' };
+    },
+    async executeRaw() {
+      return 'scripted';
+    },
+    getLastInvocationMetadata() {
+      return null;
+    },
+  };
+
+  try {
+    const engine = new ChatEngine({
+      task: 'Task A',
+      projectRoot: root,
+      runId: `r0-setImmediate-${Math.random().toString(36).slice(2, 10)}`,
+      model: MODEL,
+    });
+    installRunner(engine, runner);
+    const box = engine as unknown as {
+      repetitionDetector: { detect: () => { loop: boolean; message?: string }; reset(): void };
+      turnsWithoutWrite: number;
+      _lastPhase: string | null;
+      parity: { turnId: string | null; sessionEvents: { events: Array<Record<string, unknown>> } };
+    };
+
+    const originalDetect = box.repetitionDetector.detect.bind(box.repetitionDetector);
+    let scheduled = false;
+    box.repetitionDetector.detect = () => {
+      const outcome = originalDetect();
+      if (!scheduled) {
+        scheduled = true;
+        // Registered before A reaches its `setImmediate` await, so the check
+        // phase starts B first and only then resumes A.
+        setImmediate(() => {
+          pumpB = (async () => {
+            for await (const event of engine.submitMessageStream('Task B: inventory only.')) {
+              bEvents.push(event);
+            }
+          })();
+        });
+        aAtDetect.resolve();
+      }
+      return outcome;
+    };
+
+    const aEvents: ChatEvent[] = [];
+    const pumpA = (async () => {
+      for await (const event of engine.submitMessageStream('Task A: inspect src/main.ts.')) {
+        aEvents.push(event);
+      }
+    })();
+
+    await aAtDetect.promise;
+    await bProviderEntered.promise; // B is the current owner, blocked in its provider.
+
+    const turnsAfterBStarted = box.turnsWithoutWrite;
+    const lastPhaseAfterBStarted = box._lastPhase;
+    const eventsAfterBStarted = box.parity.sessionEvents.events.length;
+
+    await pumpA; // A's setImmediate continuation runs here.
+
+    assert.equal(
+      box.turnsWithoutWrite,
+      turnsAfterBStarted,
+      'superseded A must not advance Task B turnsWithoutWrite after the setImmediate await',
+    );
+    assert.equal(
+      box._lastPhase,
+      lastPhaseAfterBStarted,
+      'superseded A must not set Task B phase after the setImmediate await',
+    );
+    assert.equal(
+      box.parity.sessionEvents.events.length,
+      eventsAfterBStarted,
+      'superseded A must not append durable events under Task B after the setImmediate await',
+    );
+    assert.equal(terminals(aEvents).length, 0, 'the superseded Task A emits no terminal of its own');
+
+    bGate.resolve();
+    if (pumpB) await pumpB;
+    const bTerminal = bEvents[bEvents.length - 1] as Extract<ChatEvent, { type: 'done' }>;
+    assert.equal(bTerminal.type, 'done', 'Task B completes normally');
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: root, encoding: 'utf-8' });
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -2930,6 +2930,9 @@ export class ChatEngine {
     if (this.conversation.length === 1 || this.conversation[0]?.role !== 'system') {
       // R4: Await repo map first so it's included in the system prompt
       await repoMapPromise;
+      // R0-8: the repo-map await is a suspension point; a superseded generator
+      // must not install its system turn or active-execution ownership.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       const useNativeInit = this.shouldUseNativeTools(this.resolveDeliberationRunner());
       const useTextInit = !useNativeInit && this.shouldUseTextTools();
       // P3: native preferred; legacy Markdown flatten only when no native tools
@@ -3026,6 +3029,9 @@ export class ChatEngine {
       const compactionSpan = this.currentTurnTelemetry?.startCompactionSpan();
       const compactInfo = await this.compactIfNeeded();
       compactionSpan?.end();
+      // R0-8: compaction is a suspension point; a superseded generator must not
+      // rewrite the new task's working state or conversation.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       if (compactInfo) {
         yield { type: 'context_compacted', ...compactInfo };
       }
@@ -3669,6 +3675,10 @@ export class ChatEngine {
         }
 
         await new Promise((resolve) => setImmediate(resolve));
+        // R0-8: the setImmediate yield is a real suspension point — a second
+        // submission can start here. A superseded generator must not update the
+        // new task's progress counters, phase, or durable session events.
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         // Only reset gate strikes when this turn includes a mutation —
         // read-only turns don't reset the counter.
         if (this.currentTurnHasMutation()) {
@@ -3748,6 +3758,9 @@ export class ChatEngine {
           const tamperAnswer = await this.synthesizeAnswer(allToolObservations, {
             onAnswerChunk: (_chunk: string) => {},
           }).catch(() => '');
+          // R0-8: synthesis is a suspension point; a superseded generator must
+          // not append to the new task's conversation.
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           // R0/W7: the tamper violation is established by the harness
           // (applyTamperEscalation at tamperCount >= 3), so the blocked report
           // is harness-origin and typed. Model prose may supply the answer text
@@ -4019,6 +4032,9 @@ export class ChatEngine {
             } catch (err: any) {
               synthError = err instanceof Error ? err : new Error(String(err));
             }
+            // R0-8: synthesis is a suspension point; a superseded generator must
+            // not append to the new task's conversation.
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
 
             if (synthError || !synthAnswer?.trim()) {
               const failMsg = `Answer synthesis failed after inspection completed: ${synthError?.message ?? 'no answer generated'}`;
@@ -4066,6 +4082,9 @@ export class ChatEngine {
             const killAnswer = await this.synthesizeAnswer(allToolObservations, {
               onAnswerChunk: (_chunk: string) => {},
             }).catch(() => '');
+            // R0-8: synthesis is a suspension point; a superseded generator must
+            // not append to the new task's conversation.
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             const killBlocked = killAnswer ? this.detectAndBuildBlockedReport(killAnswer) : null;
             if (killBlocked) {
               this.conversation.push({
@@ -4373,6 +4392,10 @@ export class ChatEngine {
           },
           effectiveIntent,
         );
+        // R0-8: the diff critic is a suspension point; a superseded generator
+        // must not install critic receipts, strikes or repair budgets on the
+        // task that now owns the engine.
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         if (this.lastCriticReceipt) {
           yield {
             type: 'thought',
@@ -4465,6 +4488,9 @@ export class ChatEngine {
     const maxTurnAnswer = await this.synthesizeAnswer(allToolObservations, {
       onAnswerChunk: (_chunk) => {},
     }).catch(() => '');
+    // R0-8: synthesis is a suspension point; a superseded generator must not
+    // append to the new task's conversation.
+    if (!this.isSubmissionCurrent(submissionGeneration)) return;
     this.conversation.push({ role: 'assistant', content: maxTurnAnswer });
 
     // R1: Check synthesized answer for BLOCKED before gate — must come
