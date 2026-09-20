@@ -7,6 +7,10 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 # Babel CLI Quickstart
 
+**Role:** operational **command reference** for chat / plan / deep / doctor / MCP.
+**Canonical first-success** (clone → build → talk) lives in [START_HERE.md](../START_HERE.md).
+Docs map: [README.md](./README.md).
+
 Babel is a **local coding agent**. The primary interface is the interactive
 **TUI/REPL**. Daily work uses three product modes: **chat**, **plan**, and
 **deep**.
@@ -142,13 +146,13 @@ Use when you want an explicit plan gate before mutations.
 
 ## Deep
 
-Governed pipeline with extra critique and execution rigor:
+Higher-ceremony path with extra critique and execution structure:
 
 ```powershell
 node .\babel-cli\dist\index.js deep "Harden the migration path and verify it"
 ```
 
-Use for higher-risk changes when you want more structure than chat.
+Use for riskier changes when you want more structure than chat. Route availability does **not** mean Deep is more reliable than chat for ordinary tasks (see [STATUS.md](./STATUS.md) when present; [ROADMAP.md](./ROADMAP.md)).
 
 ## Resume and recovery
 
@@ -214,5 +218,6 @@ node .\babel-cli\dist\index.js remote serve --port 4545 --project $PWD
 
 Evidence and limits: [architecture/babel-remote/BABEL_REMOTE_SPIKE_RESULTS.md](./architecture/babel-remote/BABEL_REMOTE_SPIKE_RESULTS.md).
 
-Further reading: [START_HERE.md](../START_HERE.md) · [README.md](../README.md) ·
-[CHAT_MODE.md](./CHAT_MODE.md)
+Further reading: [START_HERE.md](../START_HERE.md) (first-success) · [README.md](./README.md) (docs map) ·
+[README.md](../README.md) (product front door) · [CHAT_MODE.md](./CHAT_MODE.md) ·
+[ROADMAP.md](./ROADMAP.md)

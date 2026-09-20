@@ -2,6 +2,9 @@
 
 Babel is a **local terminal coding agent**. First success is talking to it.
 
+This page is the **canonical first-success** path. For the docs map (product vs architecture vs campaigns),
+see [docs/README.md](./docs/README.md). Command reference: [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md).
+
 There is an optional second path: inspect the Prompt OS / instruction stack
 without a model or API key. That path is useful, but it is not the product.
 
@@ -133,8 +136,11 @@ default skills and dependencies, and the ordered manifest comes from
 ## Where to go next
 
 - [README.md](./README.md) — product overview
-- [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) — copy-paste CLI flows
+- [docs/README.md](./docs/README.md) — docs index (product path vs architecture vs campaigns)
+- [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) — command reference (chat / plan / deep / doctor)
 - [docs/CHAT_MODE.md](./docs/CHAT_MODE.md) — default daily runtime
 - [docs/VISION.md](./docs/VISION.md) — product principles
-- [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md) — Prompt OS layers
+- [docs/ROADMAP.md](./docs/ROADMAP.md) — public NOW / NEXT / LATER (evidence-based)
+- [docs/STATUS.md](./docs/STATUS.md) — available vs verified vs qualification (when present; stewardship PR #230)
+- [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md) — Prompt OS layers (progressive disclosure)
 - [INTEGRATION.md](./INTEGRATION.md) — model/integration invocation contract
