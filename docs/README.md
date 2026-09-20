@@ -4,7 +4,7 @@
 
 Babel is a **local coding-agent harness**. Chat is the default daily lane; Plan and Deep add stronger gates. The Prompt OS is the inspectable instruction architecture underneath — useful, but **not** what you must learn before first success.
 
-**Ordinary coding-loop reliability is still under active qualification.** Entrypoint availability is not a reliability claim. Maturity language belongs in [STATUS.md](./STATUS.md) when that page is present on your branch (stewardship PR [#230](https://github.com/gthgomez/Babel/pull/230)); until then, treat README / START_HERE caveats as authoritative.
+**Ordinary coding-loop reliability is still under active qualification.** Entrypoint availability is not a reliability claim. Maturity language belongs in [STATUS.md](./STATUS.md) when that page is present on the revision you are reading; otherwise treat README / START_HERE caveats as authoritative.
 
 ---
 
@@ -17,7 +17,7 @@ Babel is a **local coding-agent harness**. Chat is the default daily lane; Plan 
 | [CHAT_MODE.md](./CHAT_MODE.md) | Default daily runtime in depth |
 | [VISION.md](./VISION.md) | Product principles and public scope |
 | [ROADMAP.md](./ROADMAP.md) | Public NOW / NEXT / LATER (evidence-based; not shipped promises) |
-| [STATUS.md](./STATUS.md) | Available vs narrowly verified vs active qualification (**via PR #230** if not on `main` yet) |
+| [STATUS.md](./STATUS.md) | Available vs narrowly verified vs active qualification (when present on this revision) |
 
 Root companions: [README.md](../README.md) (product front door), [CHANGELOG.md](../CHANGELOG.md).
 
