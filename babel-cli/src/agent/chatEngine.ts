@@ -4942,6 +4942,22 @@ export class ChatEngine {
       this.terminatingLimiter = null;
       this.terminalLimiterReason = null;
       this.clearVerifierEvidenceState();
+      // R0-1: a fresh submission owns its own WorkingState. Task A's goal,
+      // hypothesis, evidence, files of interest, mutation attribution, verifier
+      // receipt, failure surface, repair diagnosis, invalidated assumptions and
+      // next experiment must not seed task B's reasoning or the working-state
+      // block injected into task B's provider prompt. The previous block only
+      // set a goal when `workingState.goal` was empty, so task A's goal survived
+      // and task B never received its own. Explicit continuation (`continuedTask`)
+      // preserves the current state by construction; this reset lives only in the
+      // fresh-task branch. Historical durable logs are untouched.
+      this.workingState = createWorkingState(runtime.taskText.slice(0, 240));
+      // R0-1: failure-class budgets are task-scoped. A fresh task must not
+      // inherit budgets already consumed by the previous task; recreate the
+      // tracker from the live contract at the same fresh-task boundary.
+      this.failureBudgetTracker = createFailureBudgetTrackerFromContract(
+        this.parity.liveAuthority?.taskContract,
+      );
       // R0 Scenario 8: a fresh submission must not inherit the previous task's
       // in-memory mutation/tool-call ownership. hasAnyWrites() and
       // currentTurnHasMutation() read toolCallLog, so leaving task A's confirmed
