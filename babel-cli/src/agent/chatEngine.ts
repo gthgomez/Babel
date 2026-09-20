@@ -1146,6 +1146,37 @@ export function reconcileStreamedAnswer(streamed: string | null, final: string):
   return final;
 }
 
+function isDiscriminatingInspectionEvidence(
+  state: WorkingState,
+  action: { type: string; path?: string | undefined; pattern?: string | undefined },
+  target: string,
+  evidence: string,
+): boolean {
+  if (state.evidence.includes(evidence)) return false;
+  const relevantPaths = [
+    ...state.filesOfInterest,
+    ...(state.failureSurface?.failingFiles ?? []),
+    ...(state.failureSurface?.evidenceRefs ?? []),
+  ].filter(Boolean);
+  if (relevantPaths.length === 0) return false;
+  const candidate = action.path ?? action.pattern ?? target;
+  const normalizedCandidate = normalizeEvidencePath(candidate);
+  return relevantPaths.some((path) => {
+    const normalizedPath = normalizeEvidencePath(path);
+    return (
+      normalizedCandidate === normalizedPath ||
+      normalizedCandidate.startsWith(`${normalizedPath}/`) ||
+      normalizedPath.startsWith(`${normalizedCandidate}/`) ||
+      normalizedCandidate.includes(normalizedPath) ||
+      normalizedPath.includes(normalizedCandidate)
+    );
+  });
+}
+
+function normalizeEvidencePath(value: string): string {
+  return value.replaceAll('\\', '/').replace(/^\.[/]/, '').replace(/\/$/, '').toLowerCase();
+}
+
 /**
  * R0-10: presentation callbacks are an observational side channel. A throwing
  * host callback must never unwind the settlement path — that would both skip
@@ -5943,9 +5974,13 @@ export class ChatEngine {
         action.type === 'str_replace' ||
         action.type === 'apply_patch' ||
         (action.type === 'sub_agent' && (action as { mutation?: boolean }).mutation === true);
+      // run_command is an arbitrary shell, so classify it as potentially
+      // mutating before execution. The dedicated test_run verifier remains
+      // available for observation while the recovery gate is closed.
+      const shellMutationAttempt = action.type === 'run_command';
       const shellObservation = action.type === 'run_command' || action.type === 'test_run';
       const recoveryGate = this.workingState.recoveryGate;
-      const recoveryAction = mutationAttempt || shellObservation;
+      const recoveryAction = mutationAttempt || shellMutationAttempt || shellObservation;
       const actionFingerprint = recoveryAction
         ? operationFingerprint(chatActionToolName(action), action)
         : null;
@@ -5954,17 +5989,26 @@ export class ChatEngine {
         recoveryGate.mutationFingerprint !== undefined &&
         recoveryGate.mutationFingerprint === actionFingerprint &&
         this.workingState.failureSurface?.errorSignature === recoveryGate.failureSignature;
+      const strategyChangeRequired =
+        recoveryGate !== undefined &&
+        recoveryGate.satisfied === true &&
+        recoveryGate.strategyChanged !== true &&
+        this.workingState.failureSurface?.errorSignature === recoveryGate.failureSignature;
       if (
         recoveryGate &&
-        ((mutationAttempt && !recoveryGate.satisfied) || equivalentRedMutation)
+        (((mutationAttempt || shellMutationAttempt) && !recoveryGate.satisfied) ||
+          ((mutationAttempt || shellMutationAttempt) && strategyChangeRequired) ||
+          equivalentRedMutation)
       ) {
         const detail = [
-          equivalentRedMutation ? '[RECOVERY_STRATEGY_CHANGE_REQUIRED]' : '[RECOVERY_EVIDENCE_REQUIRED]',
+          equivalentRedMutation || strategyChangeRequired
+            ? '[RECOVERY_STRATEGY_CHANGE_REQUIRED]'
+            : '[RECOVERY_EVIDENCE_REQUIRED]',
           `failure_signature=${recoveryGate.failureSignature}`,
-          equivalentRedMutation
+          equivalentRedMutation || strategyChangeRequired
             ? 'The same mutation fingerprint remains tied to the same red verifier; choose a materially different repair.'
             : recoveryGate.requiredEvidence,
-          equivalentRedMutation
+          equivalentRedMutation || strategyChangeRequired
             ? 'A different mutation or localization is required; repeating the equivalent patch is blocked.'
             : 'The previous repair hypothesis remains unverified. Acquire a new observation before another mutation.',
         ].join(' ');
@@ -7705,6 +7749,12 @@ export class ChatEngine {
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'add_evidence',
             evidence: `${action.type}:${target}`,
+            discriminating: isDiscriminatingInspectionEvidence(
+              this.workingState,
+              action,
+              target,
+              `${action.type}:${target}`,
+            ),
             ...(action.type === 'read_file'
               ? { file: action.path }
               : {}),

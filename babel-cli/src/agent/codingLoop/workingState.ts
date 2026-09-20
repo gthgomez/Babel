@@ -28,7 +28,9 @@ export interface WorkingState {
     failureSignature: string
     requiredEvidence: string
     mutationFingerprint?: string
+    hypothesisAtFailure: string
     satisfied: boolean
+    strategyChanged: boolean
   }
   revision: number
 }
@@ -49,14 +51,14 @@ export function createWorkingState(goal = ''): WorkingState {
 export type WorkingStateEvent =
   | { type: 'set_goal'; goal: string }
   | { type: 'set_hypothesis'; hypothesis: string; evidence?: string[] }
-  | { type: 'add_evidence'; evidence: string; file?: string }
+  | { type: 'add_evidence'; evidence: string; file?: string; discriminating?: boolean }
   | { type: 'mutation'; path: string; fingerprint?: string }
   | { type: 'verifier'; identity: string; exitCode: number; summary: string }
   | { type: 'failure_surface'; surface: FailureSurface }
   | { type: 'diagnosis'; diagnosis: RepairDiagnosis }
   | { type: 'invalidate'; assumption: string }
   | { type: 'next_experiment'; experiment: string }
-  | { type: 'recovery_gate'; failureSignature: string; requiredEvidence: string; mutationFingerprint?: string }
+  | { type: 'recovery_gate'; failureSignature: string; requiredEvidence: string; mutationFingerprint?: string; hypothesisAtFailure?: string }
 
 /**
  * Apply an event. New evidence invalidates a stale red verifier and drops
@@ -85,6 +87,13 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       }
       next.currentHypothesis = event.hypothesis
       if (event.evidence) next.evidence = pushAll(next.evidence, event.evidence)
+      if (
+        next.recoveryGate?.satisfied &&
+        event.hypothesis.trim() !== '' &&
+        event.hypothesis !== next.recoveryGate.hypothesisAtFailure
+      ) {
+        next.recoveryGate = { ...next.recoveryGate, strategyChanged: true }
+      }
       break
     case 'add_evidence':
       next.evidence = pushUnique(next.evidence, event.evidence)
@@ -92,7 +101,7 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       if (next.lastVerifier && !next.lastVerifier.fresh) {
         next.lastVerifier = { ...next.lastVerifier, fresh: false }
       }
-      if (next.recoveryGate && !next.recoveryGate.satisfied) {
+      if (next.recoveryGate && !next.recoveryGate.satisfied && event.discriminating === true) {
         next.recoveryGate = { ...next.recoveryGate, satisfied: true }
       }
       break
@@ -160,7 +169,9 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         failureSignature: event.failureSignature,
         requiredEvidence: event.requiredEvidence,
         ...(event.mutationFingerprint ? { mutationFingerprint: event.mutationFingerprint } : {}),
+        hypothesisAtFailure: event.hypothesisAtFailure ?? next.currentHypothesis,
         satisfied: false,
+        strategyChanged: false,
       }
       next.nextExperiment = event.requiredEvidence
       break
@@ -199,6 +210,7 @@ export function formatWorkingStateBlock(state: WorkingState): string {
     lines.push(
       `  recovery_gate: ${state.recoveryGate.satisfied ? 'satisfied' : 'evidence_required'}`,
       `  recovery_evidence: ${yamlScalar(state.recoveryGate.requiredEvidence)}`,
+      `  recovery_strategy: ${state.recoveryGate.strategyChanged ? 'changed' : 'unchanged'}`,
     )
   }
   if (state.lastVerifier && !state.lastVerifier.fresh) {

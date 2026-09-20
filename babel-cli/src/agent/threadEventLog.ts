@@ -67,6 +67,8 @@ export type ThreadEvent =
       submissionIndex?: number;
       /** P0-C: whether counters continued from prior task. */
       continuedTask?: boolean;
+      /** Durable ownership generation used to fence stale compaction. */
+      ownership_generation?: number;
     })
   | (ThreadEventBase & { kind: 'user_message'; content: string })
   | (ThreadEventBase & {
@@ -92,6 +94,9 @@ export type ThreadEvent =
       kind: 'compaction_capsule';
       content: string;
       preserved_tool_call_ids: string[];
+      raw_observation_refs?: string[];
+      /** Compactions from an older owner are ignored on cold resume. */
+      ownership_generation?: number;
     })
   | (ThreadEventBase & {
       kind: 'compaction_summary';
@@ -217,6 +222,10 @@ export function startTurn(
   },
 ): string {
   const turnId = randomUUID();
+  const priorGenerations = log.events
+    .filter((event): event is Extract<ThreadEvent, { kind: 'turn_started' }> => event.kind === 'turn_started')
+    .map((event) => event.ownership_generation ?? 0);
+  const ownershipGeneration = Math.max(0, ...priorGenerations) + 1;
   appendThreadEvent(log, {
     kind: 'turn_started',
     turn_id: turnId,
@@ -230,6 +239,7 @@ export function startTurn(
     ...(input.gatePolicy !== undefined ? { gatePolicy: input.gatePolicy } : {}),
     ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
+    ownership_generation: ownershipGeneration,
   });
   const rootFingerprint = repoRootFingerprint(input.projectRoot);
   appendThreadEvent(log, {
@@ -339,14 +349,38 @@ export function rebuildProviderMessagesFromEvents(
       ? log.events
       : log.events.filter((e) => e.seq <= options.upToSeq!);
 
-  // Find last compaction capsule — history before it is replaced by capsule content.
+  // Find the latest durable ownership generation. A capsule from an older
+  // owner may remain on disk after a failed compensating checkpoint, but it
+  // must not regain authority during cold resume.
+  const currentOwnershipGeneration = Math.max(
+    -1,
+    ...events
+      .filter((event): event is Extract<ThreadEvent, { kind: 'turn_started' }> => event.kind === 'turn_started')
+      .map((event) => event.ownership_generation ?? -1),
+  );
+  const currentOwnerTurnId = [...events]
+    .reverse()
+    .find(
+      (event): event is Extract<ThreadEvent, { kind: 'turn_started' }> =>
+        event.kind === 'turn_started' &&
+        (event.ownership_generation ?? -1) === currentOwnershipGeneration,
+    )?.turn_id;
+
+  // Find last non-stale compaction capsule — history before it is replaced by capsule content.
   let startIdx = 0;
   let capsuleContent: string | null = null;
   let summaryContent: string | null = null;
   let lastCapsuleEvent: Extract<ThreadEvent, { kind: 'compaction_capsule' }> | null = null;
   let lastCapsuleIdx = -1;
   for (let i = 0; i < events.length; i++) {
-    if (events[i]!.kind === 'compaction_capsule') {
+    if (
+      events[i]!.kind === 'compaction_capsule' &&
+      isCurrentCompactionGeneration(
+        events[i] as Extract<ThreadEvent, { kind: 'compaction_capsule' }>,
+        currentOwnershipGeneration,
+        currentOwnerTurnId,
+      )
+    ) {
       startIdx = i + 1;
       lastCapsuleIdx = i;
       lastCapsuleEvent = events[i] as Extract<ThreadEvent, { kind: 'compaction_capsule' }>;
@@ -470,6 +504,19 @@ export function rebuildProviderMessagesFromEvents(
   }
 
   return messages;
+}
+
+function isCurrentCompactionGeneration(
+  event: Extract<ThreadEvent, { kind: 'compaction_capsule' }>,
+  currentOwnershipGeneration: number,
+  currentOwnerTurnId: string | undefined,
+): boolean {
+  return (
+    currentOwnershipGeneration < 0 ||
+    (event.ownership_generation !== undefined
+      ? event.ownership_generation >= currentOwnershipGeneration
+      : event.turn_id === currentOwnerTurnId)
+  );
 }
 
 /** Windows filesystems are case-insensitive; POSIX is (normally) case-sensitive. */
@@ -767,6 +814,7 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
       for (const key of ['verifier', 'taskClass', 'gatePolicy']) requireOptionalString(event, key, context);
       requireOptionalInteger(event, 'submissionIndex', context);
       requireOptionalBoolean(event, 'continuedTask', context);
+      requireOptionalInteger(event, 'ownership_generation', context);
       return;
     case 'user_message':
     case 'assistant_message':
@@ -796,6 +844,11 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
       if (!Array.isArray(event['preserved_tool_call_ids']) || !event['preserved_tool_call_ids'].every((id) => typeof id === 'string')) {
         throw new Error(`${context} preserved_tool_call_ids must be a string array`);
       }
+      if (event['raw_observation_refs'] !== undefined &&
+        (!Array.isArray(event['raw_observation_refs']) || !event['raw_observation_refs'].every((ref) => typeof ref === 'string'))) {
+        throw new Error(`${context} raw_observation_refs must be a string array`);
+      }
+      requireOptionalInteger(event, 'ownership_generation', context);
       return;
     case 'compaction_summary':
       requireString(event, 'content', context);

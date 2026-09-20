@@ -68,6 +68,7 @@ export function ingestVerifierResult(input: {
         failureSignature: state.failureSurface.errorSignature,
         requiredEvidence: 'Acquire discriminating evidence before another mutation: reread the failing assertion and inspect the relevant caller/callee boundary.',
         ...(state.lastMutation?.fingerprint ? { mutationFingerprint: state.lastMutation.fingerprint } : {}),
+        hypothesisAtFailure: state.currentHypothesis,
       })
     }
   }

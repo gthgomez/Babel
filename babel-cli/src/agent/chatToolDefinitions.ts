@@ -573,7 +573,7 @@ export function buildChatTurnPrompt(options: ChatTurnPromptOptions): string {
           ? `${msg.role} (${msg.name})`
           : msg.role;
       sections.push(`### ${label}`);
-      sections.push(advisory ? `<advisory_context>\n${msg.content}\n</advisory_context>` : msg.content);
+      sections.push(advisory ? `<advisory_context>\n${escapeAdvisoryContext(msg.content)}\n</advisory_context>` : msg.content);
       sections.push('');
     }
   }
@@ -600,6 +600,14 @@ export function buildChatTurnPrompt(options: ChatTurnPromptOptions): string {
   }
 
   return sections.join('\n');
+}
+
+/** Keep model-provided advisory data inside its controller-owned delimiter. */
+function escapeAdvisoryContext(content: string): string {
+  return content
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
 
 // ─── Provider-Native Structured Messages ────────────────────────────

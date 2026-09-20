@@ -28,7 +28,7 @@ test('repeated repair evidence gate changes the next strategy before mutation', 
   state = first.state;
   assert.equal(first.lastVerifierFailed, true);
   assert.equal(state.recoveryGate?.satisfied, false);
-  assert.ok(state.recoveryGate?.mutationFingerprint);
+  assert.equal(state.recoveryGate?.mutationFingerprint, undefined);
   assert.match(formatWorkingStateBlock(state), /evidence_required/);
   assert.match(formatWorkingStateBlock(state), /caller\/callee/);
   const nextProviderPrompt = buildChatTurnPrompt({
@@ -45,8 +45,57 @@ test('repeated repair evidence gate changes the next strategy before mutation', 
     type: 'add_evidence',
     evidence: 'read src/parser.ts and the caller boundary',
     file: 'src/parser.ts',
+    discriminating: true,
   });
   assert.equal(state.recoveryGate?.satisfied, true);
+});
+
+test('irrelevant evidence does not clear the controller recovery gate', () => {
+  let state = createWorkingState('fix bug X');
+  state = applyWorkingStateEvent(state, { type: 'set_hypothesis', hypothesis: 'the parser is the cause' });
+  state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
+  state = ingestVerifierResult({
+    state,
+    tool: 'test_run',
+    target: 'npm test -- parser',
+    exitCode: 1,
+    stdout: 'FAIL parser adds values',
+    stderr: '',
+    summary: 'same assertion remains red',
+  }).state;
+
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence',
+    evidence: 'list_dir:.',
+  });
+  assert.equal(state.recoveryGate?.satisfied, false);
+});
+
+test('a new hypothesis is required before a post-red mutation can proceed', () => {
+  let state = createWorkingState('fix bug X');
+  state = applyWorkingStateEvent(state, { type: 'set_hypothesis', hypothesis: 'the parser is the cause' });
+  state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
+  state = ingestVerifierResult({
+    state,
+    tool: 'test_run',
+    target: 'npm test -- parser',
+    exitCode: 1,
+    stdout: 'FAIL parser adds values',
+    stderr: '',
+    summary: 'same assertion remains red',
+  }).state;
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence',
+    evidence: 'read src/parser.ts and the caller boundary',
+    file: 'src/parser.ts',
+    discriminating: true,
+  });
+  assert.equal(state.recoveryGate?.strategyChanged, false);
+  state = applyWorkingStateEvent(state, {
+    type: 'set_hypothesis',
+    hypothesis: 'the caller passes the wrong collection shape',
+  });
+  assert.equal(state.recoveryGate?.strategyChanged, true);
 });
 
 test('environment and provider failures stay outside implementation recovery gate', () => {

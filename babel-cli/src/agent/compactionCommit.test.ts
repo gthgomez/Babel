@@ -385,7 +385,7 @@ describe('H1 commitCompaction dual-write + resume equivalence', () => {
         throw new Error('disk full');
       },
     });
-    assert.strictEqual(commit.status, 'degraded_persistence');
+    assert.strictEqual(commit.status, 'blocked_persistence');
     assert.ok(commit.error?.includes('disk full'));
   });
 
@@ -515,6 +515,14 @@ describe('H1 tool pairing + observation reduction + long-session metrics', () =>
     assert.ok(refs.every((r) => r.startsWith('obs:')));
   });
 
+  it('retains the complete exact-observation manifest beyond the legacy 32-entry cap', () => {
+    const prior = longConversation(45);
+    const refs = buildRawObservationRefs(prior, [prior[0]!]);
+    assert.ok(refs.length > 32, `expected all dropped observations, got ${refs.length}`);
+    assert.equal(new Set(refs).size, refs.length);
+    assert.ok(refs.every((ref) => /^obs:[0-9a-f]{64}$/.test(ref)));
+  });
+
   it('measures critical-fact retention and token reduction on long session', async () => {
     const facts = [
       'FACT_ALPHA_42',
@@ -573,7 +581,7 @@ describe('H1 durable capsule content helper', () => {
   it('embeds summary for rebuild path', () => {
     const content = buildDurableCapsuleContent('# cap', 'my summary body');
     assert.ok(content.includes('# cap'));
-    assert.ok(content.includes('my summary body'));
+    assert.ok(!content.includes('my summary body'));
     assert.strictEqual(content, '# cap');
   });
 });

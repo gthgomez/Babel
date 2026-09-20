@@ -72,6 +72,8 @@ export interface CompactionCommitInput {
   threadLog: ThreadEventLog;
   sessionLog: SessionEventLog;
   turnId: string | null;
+  /** Captured before compaction work begins; fences stale ownership on resume. */
+  ownershipGeneration?: number;
   modelId: string;
   /**
    * Optional persistence hook. Called after in-memory + event append.
@@ -113,7 +115,7 @@ export function messageObservationRef(msg: ChatMessage, index: number): string {
   const h = createHash('sha256')
     .update(`${index}|${msg.role}|${msg.name ?? ''}|${msg.toolCallId ?? ''}|${msg.content}`)
     .digest('hex')
-    .slice(0, 16);
+    .toLowerCase();
   return `obs:${h}`;
 }
 
@@ -222,28 +224,27 @@ export function buildRawObservationRefs(
   prior: ChatMessage[],
   afterStrategy: ChatMessage[],
 ): string[] {
-  const afterKeys = new Set(
-    afterStrategy.map(
-      (m, i) => `${m.role}|${m.name ?? ''}|${m.toolCallId ?? ''}|${m.content.slice(0, 64)}|${i}`,
-    ),
-  );
+  const retainedCounts = new Map<string, number>();
+  for (const message of afterStrategy) {
+    const key = observationIdentity(message);
+    retainedCounts.set(key, (retainedCounts.get(key) ?? 0) + 1);
+  }
   const refs: string[] = [];
   for (let i = 0; i < prior.length; i++) {
     const m = prior[i]!;
-    const key = `${m.role}|${m.name ?? ''}|${m.toolCallId ?? ''}|${m.content.slice(0, 64)}|${i}`;
-    // Prefer content-hash based membership for dropped messages
-    const contentKey = `${m.role}|${m.content}`;
-    const stillPresent = afterStrategy.some(
-      (a) => a.role === m.role && a.content === m.content && a.name === m.name,
-    );
-    if (!stillPresent && m.role !== 'system') {
+    const key = observationIdentity(m);
+    const retained = retainedCounts.get(key) ?? 0;
+    if (retained > 0) {
+      retainedCounts.set(key, retained - 1);
+    } else if (m.role !== 'system') {
       refs.push(messageObservationRef(m, i));
     }
-    void afterKeys;
-    void key;
-    void contentKey;
   }
-  return refs.slice(0, 32);
+  return refs;
+}
+
+function observationIdentity(message: ChatMessage): string {
+  return `${message.role}|${message.name ?? ''}|${message.toolCallId ?? ''}|${message.content}`;
 }
 
 /** ChatMessage plus optional native tool_calls carried by the live working set. */
@@ -556,6 +557,14 @@ function appendRetainedWorkingSet(
   return eventIds;
 }
 
+function ownershipGenerationForTurn(threadLog: ThreadEventLog, turnId: string): number | undefined {
+  const event = threadLog.events.find(
+    (candidate): candidate is Extract<ThreadEvent, { kind: 'turn_started' }> =>
+      candidate.kind === 'turn_started' && candidate.turn_id === turnId,
+  );
+  return event?.ownership_generation;
+}
+
 /**
  * Canonical H1 compaction commit: memory + thread + session, recoverable.
  */
@@ -720,6 +729,12 @@ export async function commitCompaction(
       turn_id: turnId,
       content: durableContent,
       preserved_tool_call_ids: preservedToolCallIds,
+      raw_observation_refs: rawRefs,
+      ...(input.ownershipGeneration !== undefined
+        ? { ownership_generation: input.ownershipGeneration }
+        : ownershipGenerationForTurn(input.threadLog, turnId) !== undefined
+          ? { ownership_generation: ownershipGenerationForTurn(input.threadLog, turnId) }
+          : {}),
     });
     threadEventId = threadEv.event_id;
     ownedThreadEventIds.push(threadEv.event_id);

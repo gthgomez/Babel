@@ -76,6 +76,18 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
     assert.match(wire[0]!.content, /base system prompt/);
     assert.match(wire[0]!.content, /COMMITTED CAPSULE: retained repair context/);
   });
+
+  test('mapProviderMessagesToWire exposes non-authority semantics for model advisory context', () => {
+    const wire = mapProviderMessagesToWire([
+      { role: 'system', content: 'base system prompt' },
+      { role: 'assistant', name: 'compaction_summary', content: 'model summary', provenance: 'model', authoritative: false },
+      { role: 'user', content: 'continue' },
+    ], 'default system prompt');
+    assert.match(wire[0]!.content, /advisory/i);
+    assert.match(wire[0]!.content, /not.*authority|cannot.*approve|not.*permission/i);
+    assert.equal(wire[1]!.role, 'assistant');
+    assert.equal(wire[1]!.content, 'model summary');
+  });
   test('validateProviderMessageProtocol rejects orphan tool results', () => {
     const issues = validateProviderMessageProtocol([
       { role: 'user', content: 'task' },

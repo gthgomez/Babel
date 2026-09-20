@@ -16,8 +16,13 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import { ChatEngine } from './chatEngine.js';
+import { ingestVerifierResult } from './codingLoop/chatBindings.js';
+import { applyWorkingStateEvent, createWorkingState } from './codingLoop/workingState.js';
 
 interface ProgressControllerProbe {
   readonly InterventionLevel: string;
@@ -44,6 +49,74 @@ function driveToTerminalBlocked(engine: ChatEngine, turns = 12): void {
   // ProgressController exposes both `InterventionLevel` and `TotalScore`; the
   // level is the task-local punishment state this fixture needs to assert.
 }
+
+function redRecoveryState() {
+  let state = createWorkingState('repair the parser failure');
+  state = applyWorkingStateEvent(state, {
+    type: 'set_hypothesis',
+    hypothesis: 'the parser is the cause',
+  });
+  state = applyWorkingStateEvent(state, {
+    type: 'mutation',
+    path: 'src/agent/codingLoop/workingState.ts',
+    fingerprint: 'first-repair',
+  });
+  return ingestVerifierResult({
+    state,
+    tool: 'test_run',
+    target: 'npm test -- parser',
+    exitCode: 1,
+    stdout: 'FAIL tests failed: parser adds values',
+    stderr: '',
+    summary: 'same assertion remains red',
+  }).state;
+}
+
+test('R1 production path blocks arbitrary shell mutation before execution', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-r1-shell-'));
+  const target = join(root, 'must-not-exist.txt');
+  try {
+    const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
+    (engine as any).workingState = redRecoveryState();
+    const result = await (engine as any).executeOneAction(
+      {
+        type: 'run_command',
+        command: `node -e "require('fs').writeFileSync('${target.replaceAll('\\', '/')}', 'mutated')"`,
+      },
+      { agentId: 'test', runId: 'test', runDir: root, babelRoot: root },
+      {},
+      { index: 0, ownerGeneration: 0 },
+    );
+    assert.match(result.observation, /RECOVERY_EVIDENCE_REQUIRED/);
+    assert.equal(existsSync(target), false, 'the shell mutation must not reach the executor');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('R1 production path rejects unrelated reads and accepts implicated-file evidence', async () => {
+  const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
+  (engine as any).workingState = redRecoveryState();
+  const context = { agentId: 'test', runId: 'test', runDir: process.cwd(), babelRoot: process.cwd() };
+
+  await (engine as any).executeOneAction(
+    { type: 'read_file', path: 'package.json' },
+    context,
+    {},
+    { index: 0, ownerGeneration: 0 },
+  );
+  assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
+
+  const target = 'src/agent/codingLoop/workingState.ts';
+  await (engine as any).executeOneAction(
+    { type: 'read_file', path: target },
+    context,
+    {},
+    { index: 1, ownerGeneration: 0 },
+  );
+  assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+  assert.match(readFileSync(target, 'utf8'), /recoveryGate/);
+});
 
 test('#216 [REPRODUCTION] fresh submission must not inherit task-local recovery punishment', () => {
   const engine = new ChatEngine({ task: 'A: investigate stall', projectRoot: process.cwd() });
