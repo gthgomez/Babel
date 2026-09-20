@@ -53,7 +53,7 @@ Do not interpret Babel's docs or marketing-adjacent language as claiming:
 
 - parity with any specific commercial coding agent;
 - unrestricted autonomous operation without human-set permissions/policy;
-- universal verification that is always correct in every case;
+- verification outcomes that hold for every task and environment without scoped evidence;
 - sandbox behavior identical on every OS/host configuration;
 - a stable 1.0 package API;
 - that everyday coding-loop reliability is already settled.
