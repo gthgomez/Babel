@@ -3291,6 +3291,7 @@ export class ChatEngine {
               fbStart,
               fbEnd,
             );
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             this.trackRunnerUsage(fb);
             this._streamNativeToolCallIds = nativeToolCallIds;
             streamedAnswerForTurn = answerText;
@@ -3332,6 +3333,7 @@ export class ChatEngine {
                 rawFbStart,
                 rawFbEnd,
               );
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
               this.trackRunnerUsage(fb);
               turnResult = this.parseChatTurnLenient(rawText);
             } catch (rawErr: any) {
@@ -3419,6 +3421,7 @@ export class ChatEngine {
               rawText += chunk;
               this.currentTurnTelemetry?.markFirstToken();
             }
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             this.trackRunnerUsage(fb);
           } catch (fbErr: any) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -3455,6 +3458,9 @@ export class ChatEngine {
         );
         endSpan(_turnSpan, SpanStatusCode.OK);
         _turnSpan = null;
+        // R0-8: a superseded generator must not install a terminal limiter on
+        // the task that now owns the engine.
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         this.terminatingLimiter = 'tokens';
         this.terminalLimiterReason =
           `Token explosion with zero mutations: ${streamExplosion.tokensThisTurn} tokens this turn (ceiling ${this.limits.maxTokensPerRound}).`;
@@ -3499,6 +3505,9 @@ export class ChatEngine {
           }
         }
 
+        // R0-8: a superseded generator must not reserve the new task's
+        // tool-call identity or propose its tools.
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         // Capture toolCallLog start index BEFORE execution so the
         // per-turn slice is correct even as the log grows across turns.
         this._turnToolCallLogStart = this.toolCallLog.length;
@@ -7412,6 +7421,16 @@ export class ChatEngine {
                 `tool_call_${this._turnIndex}_${meta.index}`,
             });
           } catch (verifierErr) {
+            // R0-7/R0-8: a superseded submission must not invalidate the live
+            // task's verifier ledger from a stale capture failure.
+            if (!this.isSubmissionCurrent(ownerGeneration)) {
+              return this.settleStaleActionResult(
+                tool,
+                target,
+                meta.index,
+                'parent submission superseded before the verifier settled',
+              );
+            }
             // A verifier-receipt capture failure must degrade to "no receipt",
             // never fall through to the generic catch: that path records a
             // second terminal for an already-settled tool call and corrupts the
@@ -7618,6 +7637,9 @@ export class ChatEngine {
     toolObservations: string,
     callbacks: ChatCallbacks,
   ): Promise<string> {
+    // R0-8: bind this synthesis to the submission that started it, so a late
+    // completion cannot charge the task that now owns the engine.
+    const ownerGeneration = this.activeSubmissionGeneration;
     const prompt = buildAnswerSynthesisPrompt({
       conversation: this.conversation,
       task: this.options.task,
@@ -7699,7 +7721,10 @@ export class ChatEngine {
           executionStage: 'synthesis',
         });
     const answer = await this.executeWithTimeout(this.synthesisRunner, prompt, runnerCallbacks);
-    this.trackRunnerUsage(this.synthesisRunner);
+    // R0-8: a superseded synthesis must not charge the live task's usage.
+    if (this.isSubmissionCurrent(ownerGeneration)) {
+      this.trackRunnerUsage(this.synthesisRunner);
+    }
     return answer;
   }
 

@@ -580,3 +580,148 @@ test('an obsolete Task A throwing ordinary action cannot write Task B tool log',
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a superseded Task A fallback completion cannot spend Task B budget', async () => {
+  const root = createGitProject();
+  const fallbackStarted = deferred();
+  const fallbackGate = deferred();
+  const bSecondStarted = deferred();
+  const bSecondGate = deferred();
+
+  // Primary provider: A's first call fails (generic, non-abort); B succeeds.
+  let primaryCall = 0;
+  const primary: ScriptedRunner & {
+    executeRawStream: () => AsyncGenerator<string, void, undefined>;
+  } = {
+    async *executeWithToolsStream() {
+      const index = primaryCall;
+      primaryCall += 1;
+      if (index === 0) throw new Error('primary provider exploded for task A');
+      if (index === 1) {
+        yield {
+          type: 'tool_use' as const,
+          id: 'b-read',
+          name: 'read_file',
+          input: { path: 'src/main.ts' },
+        };
+        yield { type: 'done' as const, finishReason: 'tool_calls' };
+        return;
+      }
+      bSecondStarted.resolve();
+      await bSecondGate.promise;
+      yield { type: 'text_delta' as const, text: 'B final answer' };
+      yield { type: 'done' as const, finishReason: 'stop' };
+    },
+    async *executeRawStream() {
+      throw new Error('unused raw stream');
+    },
+    async execute() {
+      return { type: 'completion', answer: 'scripted' };
+    },
+    async executeRaw() {
+      return 'scripted';
+    },
+    getLastInvocationMetadata() {
+      return null;
+    },
+  };
+
+  // Fallback provider: blocks until released, then reports large usage.
+  const fallback = {
+    async *executeWithToolsStream() {
+      fallbackStarted.resolve();
+      await fallbackGate.promise;
+      yield { type: 'text_delta' as const, text: 'A fallback answer' };
+      yield { type: 'done' as const, finishReason: 'stop' };
+    },
+    async *executeRawStream() {
+      fallbackStarted.resolve();
+      await fallbackGate.promise;
+      yield 'A fallback answer';
+    },
+    async execute() {
+      return { type: 'completion', answer: 'scripted' };
+    },
+    async executeRaw() {
+      return 'scripted';
+    },
+    getLastInvocationMetadata() {
+      return {
+        provider_model_id: 'fallback-model',
+        prompt_tokens: 100_000,
+        completion_tokens: 100_000,
+        prompt_cache_hit_tokens: 0,
+        prompt_cache_miss_tokens: 0,
+        estimated_cost_usd: 0,
+      };
+    },
+  };
+
+  try {
+    const engine = new ChatEngine({
+      task: 'Task A',
+      projectRoot: root,
+      runId: `r0-fb-sibling-${Math.random().toString(36).slice(2, 10)}`,
+      model: MODEL,
+      maxTokensPerRound: 100,
+      providerRunner: fallback as never,
+    });
+    installRunner(engine, primary);
+    const box = engine as unknown as {
+      runAsymmetricDiffCritic: () => Promise<'allow' | 'reject' | 'block'>;
+      apiTokenCount: number;
+      lastRequestModelId: string | null;
+    };
+    box.runAsymmetricDiffCritic = async () => 'allow';
+
+    // Task A: primary fails, the fallback stream suspends.
+    const aEvents: ChatEvent[] = [];
+    const pumpA = (async () => {
+      for await (const event of engine.submitMessageStream('Task A: do a thing.')) {
+        aEvents.push(event);
+      }
+    })();
+    await fallbackStarted.promise;
+
+    // Task B: one read turn, then blocks inside its second provider call.
+    const bEvents: ChatEvent[] = [];
+    const pumpB = (async () => {
+      for await (const event of engine.submitMessageStream('Task B: inventory only.')) {
+        bEvents.push(event);
+      }
+    })();
+    await bSecondStarted.promise;
+
+    const tokensBeforeA = box.apiTokenCount;
+
+    // Release A's fallback while B is mid-turn; A is superseded.
+    fallbackGate.resolve();
+    await pumpA;
+
+    assert.equal(
+      box.apiTokenCount,
+      tokensBeforeA,
+      'superseded Task A fallback must not add tokens to Task B apiTokenCount',
+    );
+    assert.notEqual(
+      box.lastRequestModelId,
+      'fallback-model',
+      'superseded Task A fallback must not overwrite Task B request model identity',
+    );
+
+    bSecondGate.resolve();
+    await pumpB;
+
+    const bTerminal = bEvents[bEvents.length - 1] as Extract<ChatEvent, { type: 'done' }>;
+    assert.equal(bTerminal.type, 'done', 'Task B completes normally');
+    assert.notEqual(
+      bTerminal.outcome,
+      'BUDGET_EXHAUSTED',
+      'Task B is not token-explosion killed by late Task A fallback usage',
+    );
+    assert.equal(terminals(aEvents).length, 0, 'the superseded Task A emits no terminal of its own');
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: root, encoding: 'utf-8' });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
