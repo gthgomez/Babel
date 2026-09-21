@@ -1111,6 +1111,7 @@ export function validateColdResume(
   // fail closed rather than treating the defaulted [] as proven-empty.
   if (
     input.authorizedObservationIds === undefined &&
+    Array.isArray(input.checkpoint?.observation_manifest) &&
     input.checkpoint.observation_manifest.length === 0
   ) {
     reasons.push('observation_manifest_incomplete');

@@ -340,6 +340,15 @@ test('cold resume cannot treat an omitted membership source as proven-empty', ()
   assert.equal(explicitEmpty.status, 'ready');
 });
 
+test('cold resume degrades a malformed checkpoint instead of throwing', () => {
+  const result = validateColdResume({
+    checkpoint: null as unknown as ContextCheckpointV1,
+    currentOwner: OWNER,
+  });
+  assert.equal(result.status, 'blocked');
+  assert.ok(result.reasons.includes('invalid_schema'));
+});
+
 test('a capsule becomes provider authority only through a matching installed lineage', () => {
   const log = createThreadEventLog('installed-authority-binding');
   const turn = startTurn(log, {
