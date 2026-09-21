@@ -14,7 +14,10 @@
  *     and none for unattempted ids
  *   - a multi-action turn emits exactly one durable terminal per provider id
  *
- * No production source is modified. Private fields are only read.
+ * No production behavior is modified; teardown awaits the sandbox termination
+ * latch so a cancelled foreground child cannot hold the fixture directory on
+ * Windows after the settlement assertions have already passed. Private fields
+ * are only read.
  */
 
 import assert from 'node:assert/strict';
@@ -28,6 +31,27 @@ import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
 import type { ResolvedModelPolicy } from '../modelPolicy.js';
 import { chatSessionDir } from '../cli/runsLayout.js';
 import { inspectSessionEventLogFromDir, type SessionEvent } from './sessionEvents.js';
+import { awaitPendingProcessTerminations } from '../sandbox.js';
+
+/**
+ * Windows can keep a directory locked for a moment after a forced tree kill
+ * while the OS releases handles. Retry the fixture delete a bounded number of
+ * times; the settlement assertions never sleep or retry.
+ */
+async function removeFixtureDir(root: string): Promise<void> {
+  const retryDelaysMs = [20, 40, 80, 160, 320];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const retryable = ['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(code ?? '');
+      if (!retryable || attempt >= retryDelaysMs.length) throw error;
+      await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]!));
+    }
+  }
+}
 
 const MANAGED_ENV = [
   'BABEL_RUNS_DIR',
@@ -414,7 +438,8 @@ describe('settlement identity — positional settleCallIds invariant', { concurr
       }
     } finally {
       restore();
-      rmSync(root, { recursive: true, force: true });
+      await awaitPendingProcessTerminations();
+      await removeFixtureDir(root);
     }
   });
 });

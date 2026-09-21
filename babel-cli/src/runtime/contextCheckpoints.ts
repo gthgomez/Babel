@@ -344,10 +344,19 @@ function observationManifestIssues(
   independentlyAuthorizedIds?: readonly string[],
 ): string[] {
   const issues: string[] = [];
-  // An empty authorized set is a valid first-turn manifest. Once an
-  // authorized observation exists, the manifest must be non-empty and exact.
-  if (manifest.length === 0 && (sourceObservations === undefined || sourceObservations.some((item) => item.authorized))) {
-    issues.push('observation manifest is empty');
+  // An empty manifest is valid only when the independent source proves there
+  // are no authorized observations. If the caller supplies no independent
+  // membership at all, the emptiness is unproven and fails closed.
+  if (manifest.length === 0) {
+    const hasAuthorizedObservations =
+      sourceObservations !== undefined
+        ? sourceObservations.some((item) => item.authorized)
+        : independentlyAuthorizedIds !== undefined
+          ? independentlyAuthorizedIds.length > 0
+          : true;
+    if (hasAuthorizedObservations) {
+      issues.push('observation manifest is empty');
+    }
   }
   const ids = new Set<string>();
 
@@ -447,7 +456,10 @@ export function validateContextCheckpointInstalledLineage(
     return ['lineage_invalid'];
   }
   if (lineage.compaction_event_id === null) return [];
-  if (!evidence) return [];
+  // A checkpoint that names a committed compaction must prove it. Omitting the
+  // evidence is not an absence of a claim: it is an unproven claim, so it fails
+  // closed instead of silently promoting the checkpoint to an authority root.
+  if (!evidence) return ['lineage_missing'];
 
   const committed = evidence.sessionEvents.find(
     (event) =>
@@ -1012,8 +1024,12 @@ export async function installContextCheckpoint(
   const validation = validateContextCheckpoint(checkpoint, {
     currentOwner: input.currentOwner,
     requireInstalledLineage: input.requireInstalledLineage === true,
-    authorizedObservationIds: input.authorizedObservationIds,
-    lineageEvidence: input.lineageEvidence,
+    ...(input.authorizedObservationIds !== undefined
+      ? { authorizedObservationIds: input.authorizedObservationIds }
+      : {}),
+    ...(input.lineageEvidence !== undefined
+      ? { lineageEvidence: input.lineageEvidence }
+      : {}),
   });
   if (validation.status === 'blocked') {
     return {
@@ -1064,21 +1080,29 @@ export async function installContextCheckpoint(
 export function validateColdResume(
   input: ColdResumeValidationInputV1,
 ): ColdResumeValidationResultV1 {
+  // Cold resume must prove observation membership independently. Omitting the
+  // authorized set defaults to the empty set (fail closed) instead of letting
+  // the checkpoint manifest authorize its own observations.
+  const authorizedObservationIds = input.authorizedObservationIds ?? [];
   const validation = validateContextCheckpoint(
     input.checkpoint,
     input.currentOwner === null
       ? {
           currentOwner: null,
           requireInstalledLineage: true,
-          authorizedObservationIds: input.authorizedObservationIds,
-          lineageEvidence: input.lineageEvidence,
+          authorizedObservationIds,
+          ...(input.lineageEvidence !== undefined
+            ? { lineageEvidence: input.lineageEvidence }
+            : {}),
         }
       : {
           currentOwner: input.currentOwner,
           expectedThreadId: input.currentOwner.threadId,
           requireInstalledLineage: true,
-          authorizedObservationIds: input.authorizedObservationIds,
-          lineageEvidence: input.lineageEvidence,
+          authorizedObservationIds,
+          ...(input.lineageEvidence !== undefined
+            ? { lineageEvidence: input.lineageEvidence }
+            : {}),
         },
   );
   const reasons = [...validation.reasons];

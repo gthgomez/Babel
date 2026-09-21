@@ -364,6 +364,21 @@ export function terminateChildTree(child: ChildProcessWithoutNullStreams): void 
 export const PROCESS_ABORT_SETTLE_MS = 500;
 
 /**
+ * Deferred child-tree terminations requested by aborted async spawns.
+ *
+ * Cancel settles the tool result before the tree kill so Windows cancel latency
+ * is not dominated by `taskkill`. A caller that immediately removes the child's
+ * working tree must first await this latch, otherwise the still-live child can
+ * hold the directory on Windows and fail the delete with EBUSY.
+ */
+const pendingProcessTerminations = new Set<Promise<void>>();
+
+/** Resolve once every deferred abort-path child-tree termination has been issued. */
+export function awaitPendingProcessTerminations(): Promise<void> {
+  return Promise.all([...pendingProcessTerminations]).then(() => undefined);
+}
+
+/**
  * W0.1 Process supervisor — async spawn with AbortSignal, output caps, tree kill.
  * Used by SafeExecutor.shellExecAsync (chat/REPL foreground path).
  */
@@ -481,9 +496,19 @@ export function spawnCommandAsync(
       // queue — otherwise Windows cancel latency is dominated by taskkill, not
       // by AbortSignal delivery.
       finish(1, new Error(`spawn ${executable} aborted`));
-      setImmediate(() => {
-        terminateChildTree(child);
-        if (executionId) options.processWitness?.killed(processInput, executionId);
+      const termination = new Promise<void>((resolveTermination) => {
+        setImmediate(() => {
+          try {
+            terminateChildTree(child);
+            if (executionId) options.processWitness?.killed(processInput, executionId);
+          } finally {
+            resolveTermination();
+          }
+        });
+      });
+      pendingProcessTerminations.add(termination);
+      void termination.then(() => {
+        pendingProcessTerminations.delete(termination);
       });
     };
 

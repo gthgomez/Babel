@@ -436,7 +436,9 @@ export function projectFromDurableSession(input: {
     ...(input.workspaceRevision
       ? { workspaceRevision: input.workspaceRevision }
       : {}),
-    authorizedObservationIds: input.authorizedObservationIds,
+    ...(input.authorizedObservationIds !== undefined
+      ? { authorizedObservationIds: input.authorizedObservationIds }
+      : {}),
   });
 }
 
