@@ -243,7 +243,9 @@ subagent teams, sandbox parity, or market parity are intentionally excluded.
 - [Harness architecture](./docs/architecture/HARNESS_ARCHITECTURE_V1.md) — normative runtime contract
 - [Harness hardening roadmap](./docs/architecture/HARNESS_HARDENING_ROADMAP_V1.md) — canonical H0–H7 implementation sequence
 - [Portable agent workflow plan](./docs/guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) — proposed cross-harness contract, subordinate to the native harness
-- [Integration guide](./INTEGRATION.md) — integration and model-facing invocation contract
+- [Contributor router](./AGENTS.md) — repository work, task-specific rules, and delivery gates
+- [Project context](./PROJECT_CONTEXT.md) — repository facts, topology, and contracts
+- [Integration guide](./INTEGRATION.md) — Babel invocation and Prompt OS stack assembly
 - [Contributing](./CONTRIBUTING.md)
 
 ## Contributing

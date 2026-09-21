@@ -5,9 +5,10 @@ last_verified: 2026-09-08
 # Independent Review Routing
 
 Every PR requires an independent Babel **chat** review of its exact current
-base/head. GREEN, YELLOW and RED require one approving independent Babel chat
-review. A second perspective remains an explicit escalation. BLACK remains an
-owner-decision boundary. Required CI,
+base/head. This repository minimum applies to GREEN, YELLOW, and RED work. It
+composes with, rather than replaces, stronger user, task, or risk requirements:
+authorized RED work requires two independent perspectives or equivalent
+adversarial evidence. BLACK remains an owner-decision boundary. Required CI,
 resolved review threads, and immutable-base merge evaluation still apply.
 
 **Gate identity.** The merge gate requires a Babel chat review executed on
@@ -60,8 +61,10 @@ and obtain fresh evidence. Escalate only for unresolved product intent, new
 credential trust boundaries, nondelegable account actions, or consequences
 outside the owner's task authority.
 
-For owner-authorized Babel PR reviews, there is no monetary cap. Record usage
-and uncertainty; do not convert unknown cost to zero. Wall-clock, turn, stall,
-concurrency, duplicate-effect, and bounded-retry controls still apply. Retain
-private raw telemetry and failed attempts so harness defects can become tested
-regressions; do not publish raw transcripts or credentials in PR comments.
+Only an applicable owner authorization may supply any review budget or spending
+authority; this repository policy cannot create an unlimited monetary cap.
+Record usage and uncertainty; do not convert unknown cost to zero. Wall-clock,
+turn, stall, concurrency, duplicate-effect, and bounded-retry controls still
+apply. Retain private raw telemetry and failed attempts so harness defects can
+become tested regressions; do not publish raw transcripts or credentials in PR
+comments.

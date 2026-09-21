@@ -26,8 +26,8 @@ Scope: Applies in all environments (planning, research, coding, review).
 1. State objective and current phase (`plan|implement|verify|review`).
 2. List known facts from files actually inspected in the current run.
 3. List unknowns/assumptions explicitly.
-4. Define a minimal action set before execution; do not treat the plan as a request for approval when the mission already grants the required scope.
-5. Define objective verification criteria up front.
+4. Define a minimal action set before execution; do not treat the plan as a request for approval when the mission already grants the required scope. A requested plan or report artifact does not authorize implementation beyond that artifact.
+5. Define objective verification criteria proportionate to the changed behavior and consequence, including applicable repository gates.
 
 ## Autonomous Scaffolding (Compensatory Agency)
 
@@ -45,6 +45,8 @@ Scope: Applies in all environments (planning, research, coding, review).
   pseudocode, patch previews, fixtures, and verification commands when that makes the plan useful.
 - Label proposed work as unexecuted and preserve the PLAN boundary; do not turn a plan into an
   approval stall when the mission already authorizes implementation in a later phase.
+- When the user requests a plan or report artifact, create that artifact within the requested
+  scope without treating it as execution of the proposed product changes.
 
 ### Uncertainty and Recovery
 

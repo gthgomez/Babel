@@ -16,29 +16,35 @@ The concise autonomy contract is [`docs/AUTONOMY_POLICY.md`](./docs/AUTONOMY_POL
 It defines what an agent should decide autonomously and which authority boundaries
 still require the user; it does not replace runtime enforcement.
 
-When a user says:
+When a user, operator, or another model explicitly asks to invoke Babel or
+assemble a Babel instruction stack, such as:
 
 - "Use Babel"
 - "Read the integration guide"
 - "Read INTEGRATION.md"
 - "Use the Babel system before doing the task"
 
-the model should read this file first, then follow the public Babel workflow before planning or implementing anything.
+read this file and follow the Babel invocation workflow. This guide does not
+define the startup sequence for contributors working on this repository; they
+start with [AGENTS.md](./AGENTS.md).
 
 If you are a human exploring the repo for the first time, start with `README.md` and `START_HERE.md` first. Come here when you want the invocation contract that another model, client, or wrapper should follow.
 
-## Public Repo Root And First Read
+## Babel Invocation Prerequisites
 
 Treat this repo root as:
 
 `<YOUR_BABEL_REPO_ROOT>`
 
-Minimum first-read chain:
+For Babel invocation or stack assembly, read:
 
-1. `INTEGRATION.md`
-2. `PROJECT_CONTEXT.md`
-3. `README.md`
-4. `prompt_catalog.yaml`
+1. `PROJECT_CONTEXT.md` for repository facts and contracts.
+2. `prompt_catalog.yaml` for the authoritative asset registry.
+3. `00_System_Router/OLS-v9-Orchestrator.md` and only the cataloged layers
+   selected for the task.
+
+Read `README.md` when product onboarding or runnable examples are needed; it is
+not an assembly prerequisite.
 
 ## What This Repository Truthfully Is
 
@@ -59,9 +65,9 @@ Supporting inspection surfaces include catalog validation, deterministic stack/m
 
 For **runtime harness architecture** (Chat / Plan / Deep controllers, completion authority, isolation, verifiers), the normative document is `docs/architecture/HARNESS_ARCHITECTURE_V1.md`. Its one implementation sequence is `docs/architecture/HARNESS_HARDENING_ROADMAP_V1.md`. The daily interactive path is ChatEngine; Prompt OS layers and catalog remain documented in `docs/architecture/ARCHITECTURE.md` and `prompt_catalog.yaml`.
 
-## Canonical Public Workflow
+## Stack Assembly Workflow
 
-When using this repository, do this:
+When invoking Babel or assembling a stack, do this:
 
 1. Read `PROJECT_CONTEXT.md`.
 2. Read `prompt_catalog.yaml`.
@@ -115,7 +121,7 @@ The harness is powered by an inspectable Prompt OS underneath. It separates:
 
 The `v9` lane emits typed routing intent. The resolver/compiler turns that into the ordered manifest preview and final `prompt_manifest`.
 
-## Canonical Source Of Truth
+## Assembly Sources Of Truth
 
 Use these files in this order:
 

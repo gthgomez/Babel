@@ -163,9 +163,10 @@ entries:
     layer: system_documentation
     path: PROJECT_CONTEXT.md
     description: >
-      Canonical system contracts and hot paths for the Babel control plane.
-      Referenced by CLAUDE.md startup sequence as step 2. Not loaded as a
-      runtime prompt layer — catalogued for discoverability and drift checks.
+      Canonical repository facts, system contracts, and hot paths for the Babel
+      control plane. Read through the AGENTS.md contributor router or when
+      assembling Babel; not loaded as a runtime prompt layer. Catalogued for
+      discoverability and drift checks.
     status: reference
     selection_scope: reference_only
     token_budget: 60
@@ -175,10 +176,10 @@ entries:
     layer: entrypoint
     path: INTEGRATION.md
     description: >
-      Model/integration-facing Babel entrypoint. Tells any model or operator how
-      to use the coding-agent harness, which files are authoritative, and how to
-      assemble a prompt
-      stack from the catalog.
+      Babel invocation and stack-assembly entrypoint. Tells a model or operator
+      how to use the coding-agent harness, which assembly files are
+      authoritative, and how to assemble a prompt stack from the catalog.
+      Contributor routing remains in AGENTS.md.
     status: active
     token_budget: 450
     tags: [bible, entrypoint, human, llm]
@@ -3222,8 +3223,8 @@ entries:
       Assembles the correct Babel instruction stack for a task. Covers
       task-purpose identification, domain/skill/adapter selection, overlay
       loading, and risk classification (COMPATIBLE|RISKY|BREAKING).
-      Also live in .agents/skills/assemble-babel-stack/SKILL.md for
-      Claude Code agent system access.
+      Also available in .agents/skills/assemble-babel-stack/SKILL.md for
+      repository-local agent integrations.
     status: active
     tags: [governance:safety, skill, utility:babel, utility:catalog, utility:stack-assembly]
     dependencies: []

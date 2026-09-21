@@ -7,28 +7,29 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
 -->
 
-
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-09-20
 -->
-# GEMINI.md — Babel Gemini Playbook
+# GEMINI.md — Babel Gemini Adapter
 
-## Startup
+This adapter supplements, but does not replace, the contributor router in
+[AGENTS.md](./AGENTS.md). Start repository work there, then read
+[PROJECT_CONTEXT.md](./PROJECT_CONTEXT.md) for Babel facts and contracts.
 
-[CLAUDE.md](./CLAUDE.md) is the canonical entry point. It owns the startup sequence, invariants, and high-risk zones. For Babel Local Mode, see [CLAUDE.md](./CLAUDE.md) §Babel Local Mode.
-
-## Operating Style (Gemini-specific)
+## Gemini-Specific Guidance
 
 - Be concise, structured, and file-backed.
-- On Windows, use PowerShell-native commands (not bash heredocs or Unix syntax).
-- Preserve contracts before refactoring prompt assets.
-- Prefer minimal, well-scoped changes with objective validation.
-- Separate observed facts from inference.
-- Do not call control-plane work complete without typecheck or validation evidence.
+- On Windows, prefer PowerShell-native commands rather than Bash heredocs or
+  Unix-only syntax.
+- Preserve contracts before refactoring prompt assets and distinguish observed
+  facts from inference.
+- Use only host-supported tools and report unavailable capabilities instead of
+  assuming another model's tool surface.
 
-## Skill Porting & Catalog Management
+## Targeted Pointers
 
-- **Multi-Language Gating:** For platform-bridging skills (JNI, Sockets, AAudio/Oboe), the `file_extension_gate` must include both Kotlin and C++ file extensions (e.g. `[".kt", ".cpp", ".h"]`) to ensure activation across JVM and native NDK source scopes.
-- **Commit Integrity:** Do not stage or commit merely because files are new. When the mission explicitly grants local commit authority, stage only the deterministic ship set after verification and staged-diff review; otherwise leave the worktree available for review. Follow `.agents/rules/05-github-workflow.md` for remote operations.
-- **Walkthrough Veracity:** Walkthroughs must detail only the mutations completed in the current session. They must not claim credit for pre-existing work and must explicitly identify legacy files that are intentional standalones (without a `v2` equivalent).
+- For Babel invocation or stack assembly, use [INTEGRATION.md](./INTEGRATION.md)
+  and `prompt_catalog.yaml`.
+- For model-specific catalog, skill-porting, or commit details, load the
+  relevant selected rule rather than treating this adapter as policy authority.

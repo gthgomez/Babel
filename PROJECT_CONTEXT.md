@@ -51,12 +51,11 @@ harness surfaces. Technical flows may still inspect a resolved stack before
 governed execution; that is a control-plane invariant, not the product
 category.
 
-## Required Startup Order
+## Contributor and Consumer Boundaries
 
-1. Read `INTEGRATION.md`
-2. Read `PROJECT_CONTEXT.md`
-3. Read `README.md`
-4. Read `prompt_catalog.yaml`
+[AGENTS.md](./AGENTS.md) routes contributors to the facts and task-specific
+rules they need. `INTEGRATION.md` is for explicitly invoking Babel or assembling
+a Prompt OS stack; it is not a universal contributor startup sequence.
 
 Consumer repositories may provide optional repo-local rules or project overlays.
 Those files are external inputs, not prerequisites for understanding, validating,
@@ -95,6 +94,33 @@ repository, or safety instructions and is never automatically published.
 - **Canonical Independence Contract:** `tools/check-canonical-independence.ps1` verifies that a clean clone has all mandatory startup references and no required parent-workspace, sibling-repository, or removed-export dependencies.
 - Maintainer release validation supplies the private supplemental scrub policy outside this repository and passes `-RequireSupplementalPolicy` so missing or empty configuration fails closed.
 - **Source Authority Contract:** `docs/adr/ADR-0001-canonical-public-source.md` records this repository as the sole canonical source. Private repositories consume versioned releases and must not publish source back into this repository.
+
+## Control-Plane Invariants and High-Risk Surfaces
+
+- `00_System_Router/OLS-v9-Orchestrator.md` is the only active typed runtime
+  lane. `OLS-v8-Orchestrator.md` is historical compatibility material, not an
+  active fallback.
+- `prompt_catalog.yaml` is the single source of truth for prompt asset paths,
+  versions, and selection metadata. Do not invent routable prompt files outside
+  the catalog.
+- Behavioral OS defines how a model behaves; Domain Architects define what it
+  knows. Keep the two roles separate.
+- Runtime changes to `babel-cli/src/agentContracts.ts` or a `build*Task`
+  function in `babel-cli/src/pipeline.ts` require the corresponding prompt
+  contract to evolve in the same change set.
+- Operator-facing surfaces must preserve uncertainty: configured is not
+  qualified, historical is not current, and missing evidence is not success.
+  See `docs/architecture/operator-status-taxonomy.md` for the detailed contract.
+- Historical-superlative claims need current GitHub evidence. A failure is
+  pre-existing only when a suitable base/control reproduction or equivalent
+  recorded evidence establishes that fact.
+- The highest-risk control-plane surfaces are `00_System_Router/`,
+  `01_Behavioral_OS/`, `prompt_catalog.yaml`,
+  `04_Meta_Tools/OLS-MCC/ols-compiler/`,
+  `babel-cli/src/schemas/agentContracts.ts`, and
+  `babel-cli/src/pipeline.ts`.
+- After catalog or routing changes, run the catalog validation trio. Public
+  delivery also requires the repository's content-policy and secret-scan gates.
 
 ## First-Success Surfaces
 
