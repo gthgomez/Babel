@@ -319,6 +319,27 @@ test('an explicitly empty authorized set permits a first-turn empty manifest', (
   assert.ok(invalid.reasons.includes('observation_manifest_incomplete'));
 });
 
+test('cold resume cannot treat an omitted membership source as proven-empty', () => {
+  const prepared = prepareContextCheckpoint({
+    checkpointId: 'checkpoint-empty-resume',
+    owner: OWNER,
+    sources: sources({ observations: [], observation_manifest: [] }),
+  });
+  assert.equal(prepared.status, 'prepared');
+  if (prepared.status !== 'prepared') return;
+
+  const omitted = validateColdResume({ checkpoint: prepared.checkpoint, currentOwner: OWNER });
+  assert.equal(omitted.status, 'blocked');
+  assert.ok(omitted.reasons.includes('observation_manifest_incomplete'));
+
+  const explicitEmpty = validateColdResume({
+    checkpoint: prepared.checkpoint,
+    currentOwner: OWNER,
+    authorizedObservationIds: [],
+  });
+  assert.equal(explicitEmpty.status, 'ready');
+});
+
 test('a capsule becomes provider authority only through a matching installed lineage', () => {
   const log = createThreadEventLog('installed-authority-binding');
   const turn = startTurn(log, {

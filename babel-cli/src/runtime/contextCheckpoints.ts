@@ -1106,6 +1106,15 @@ export function validateColdResume(
         },
   );
   const reasons = [...validation.reasons];
+  // Omitting the independent membership source cannot prove that an empty
+  // manifest is empty by authority, so mirror validateContextCheckpoint and
+  // fail closed rather than treating the defaulted [] as proven-empty.
+  if (
+    input.authorizedObservationIds === undefined &&
+    input.checkpoint.observation_manifest.length === 0
+  ) {
+    reasons.push('observation_manifest_incomplete');
+  }
   if (
     input.requestedOwner !== undefined &&
     !ownersMatch(input.currentOwner, input.requestedOwner)
