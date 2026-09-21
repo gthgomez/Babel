@@ -63,11 +63,16 @@ export function ingestVerifierResult(input: {
       state.failureSurface &&
       ['TEST_FAILURE', 'TYPECHECK_FAILURE', 'BUILD_FAILURE', 'LINT_FAILURE', 'RUNTIME_FAILURE', 'UNKNOWN_FAILURE'].includes(state.failureSurface.kind)
     ) {
+      const failingTargets = [
+        ...state.failureSurface.failingFiles,
+        ...(state.lastMutation?.path ? [state.lastMutation.path] : []),
+      ].filter((value) => value.trim().length > 0)
       state = applyWorkingStateEvent(state, {
         type: 'recovery_gate',
         failureSignature: state.failureSurface.errorSignature,
         requiredEvidence: 'Acquire discriminating evidence before another mutation: reread the failing assertion and inspect the relevant caller/callee boundary.',
         ...(state.lastMutation?.fingerprint ? { mutationFingerprint: state.lastMutation.fingerprint } : {}),
+        ...(failingTargets.length > 0 ? { failingTargets } : {}),
         hypothesisAtFailure: state.currentHypothesis,
       })
     }

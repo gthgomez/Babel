@@ -115,5 +115,8 @@ export function createEngineFromEventLog(
   engine.restoreEventLog(log);
   // W2.2: settle interrupted tools from session-events.jsonl if present.
   engine.restoreSessionEventsFromDir();
+  // R1: the primary resume path must run the same context-authority hydration
+  // as `ChatEngine.restore`, not silently skip checkpoint validation.
+  engine.hydrateInstalledContextAuthority();
   return engine;
 }

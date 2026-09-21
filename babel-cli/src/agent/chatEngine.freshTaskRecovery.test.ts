@@ -118,6 +118,70 @@ test('R1 production path rejects unrelated reads and accepts implicated-file evi
   assert.match(readFileSync(target, 'utf8'), /recoveryGate/);
 });
 
+test('R1 production path rejects content-free inspections as recovery evidence', async () => {
+  const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
+  (engine as any).workingState = redRecoveryState();
+  const context = { agentId: 'test', runId: 'test', runDir: process.cwd(), babelRoot: process.cwd() };
+
+  const denied: Array<Record<string, unknown>> = [
+    { type: 'list_dir', path: '.' },
+    { type: 'glob', pattern: '**/*.ts' },
+    { type: 'grep', pattern: '.' },
+  ];
+  let index = 0;
+  for (const action of denied) {
+    await (engine as any).executeOneAction(action, context, {}, { index: index++, ownerGeneration: 0 });
+    assert.equal(
+      (engine as any).workingState.recoveryGate.satisfied,
+      false,
+      `${String(action.type)} must not clear the recovery gate`,
+    );
+  }
+
+  // A search scoped to the implicated file is content-bearing and localizes the failure.
+  await (engine as any).executeOneAction(
+    { type: 'grep', pattern: 'recoveryGate', path: 'src/agent/codingLoop/workingState.ts' },
+    context,
+    {},
+    { index: index++, ownerGeneration: 0 },
+  );
+  assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+});
+
+test('R1 production path does not accept a repeated read as new evidence for the same failure', async () => {
+  const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
+  (engine as any).workingState = redRecoveryState();
+  const context = { agentId: 'test', runId: 'test', runDir: process.cwd(), babelRoot: process.cwd() };
+  const target = 'src/agent/codingLoop/workingState.ts';
+
+  await (engine as any).executeOneAction(
+    { type: 'read_file', path: target },
+    context,
+    {},
+    { index: 0, ownerGeneration: 0 },
+  );
+  assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+
+  // Arm a fresh gate for the *same* failure signature, as happens after another
+  // equivalent red. The target was already consumed, so re-reading it is not new
+  // discriminating evidence.
+  const state = (engine as any).workingState;
+  const signature = state.recoveryGate.failureSignature;
+  (engine as any).workingState = applyWorkingStateEvent(state, {
+    type: 'recovery_gate',
+    failureSignature: signature,
+    requiredEvidence: 'reread the failing assertion',
+  });
+
+  await (engine as any).executeOneAction(
+    { type: 'read_file', path: target },
+    context,
+    {},
+    { index: 1, ownerGeneration: 0 },
+  );
+  assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
+});
+
 test('#216 [REPRODUCTION] fresh submission must not inherit task-local recovery punishment', () => {
   const engine = new ChatEngine({ task: 'A: investigate stall', projectRoot: process.cwd() });
   engine.applyUserSubmission({ userInput: 'A: investigate stall' });

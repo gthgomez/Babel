@@ -68,9 +68,13 @@ export {
   isWorkingStateMessage,
   preserveWorkingStateMessages,
   recordControllerRecoveryStrategy,
+  recoveryEvidenceKey,
+  RECOVERY_EVIDENCE_TOOLS,
+  targetMatchesGate,
   upsertWorkingStateMessage,
   WORKING_STATE_MARKER,
   WORKING_STATE_NAME,
+  type RecoveryEvidenceProvenance,
   type WorkingState,
 } from './workingState.js'
 

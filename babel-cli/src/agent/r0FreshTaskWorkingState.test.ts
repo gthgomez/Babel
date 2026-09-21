@@ -321,20 +321,22 @@ describe('R0-1 fresh-task WorkingState isolation', () => {
       assert.equal(wsA.lastVerifier?.exitCode, 1, 'task A verifier is red');
       assert.equal(wsA.lastVerifier?.fresh, true, 'task A verifier is fresh');
 
-      // The red verifier already consumed one implementation-repair allowance
-      // for the real repair attempt. Consume one more so the fresh-task
-      // boundary has a visibly non-default tracker to recreate.
+      // The fixture's red verifier is not a *classified* implementation
+      // failure (its runner output is not parseable), so it must NOT spend the
+      // implementation-repair budget. Only a classified failure may. Consume
+      // one explicitly so the fresh-task boundary has a visibly non-default
+      // tracker to recreate.
       const trackerA = internals.failureBudgetTracker;
       const beforeConsume = trackerA.remainingBudgets();
       assert.equal(
         beforeConsume.implementation_repair,
-        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair - 1,
-        'task A accounts for the red repair verifier',
+        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair,
+        'an unclassified red verifier does not spend implementation-repair budget',
       );
       trackerA.consume({ budget_key: 'implementation_repair' } as never);
       assert.equal(
         internals.failureBudgetTracker.remainingBudgets().implementation_repair,
-        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair - 2,
+        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair - 1,
         'task A consumed an implementation-repair budget',
       );
 
@@ -349,7 +351,7 @@ describe('R0-1 fresh-task WorkingState isolation', () => {
       assert.equal(internals.workingState.goal, TASK_A, 'explicit continuation preserves the goal');
       assert.equal(
         internals.failureBudgetTracker.remainingBudgets().implementation_repair,
-        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair - 2,
+        DEFAULT_FAILURE_CLASS_BUDGETS.implementation_repair - 1,
         'explicit continuation preserves consumed failure budgets',
       );
 

@@ -228,6 +228,114 @@ test('a superseded Task A provider abort cannot finalize Task B', async () => {
   }
 });
 
+test('a superseded Task A provider-retry callback cannot write Task B provider facts', async () => {
+  const root = createGitProject();
+  const startedA = deferred();
+  const gateA = deferred();
+  const startedB = deferred();
+  const gateB = deferred();
+  const callbacksA: Record<string, (...args: unknown[]) => void> = {};
+  let call = 0;
+  const runner: ScriptedRunner = {
+    async *executeWithToolsStream(...args: unknown[]) {
+      const index = call;
+      call += 1;
+      if (index === 0) {
+        Object.assign(callbacksA, args[5] as Record<string, (...a: unknown[]) => void>);
+        startedA.resolve();
+        await gateA.promise;
+        yield { type: 'done' as const, finishReason: 'stop' };
+        return;
+      }
+      startedB.resolve();
+      await gateB.promise;
+      yield { type: 'text_delta' as const, text: 'B final answer' };
+      yield { type: 'done' as const, finishReason: 'stop' };
+    },
+    async execute() {
+      return { type: 'completion', answer: 'scripted' };
+    },
+    async executeRaw() {
+      return 'scripted';
+    },
+    getLastInvocationMetadata() {
+      return null;
+    },
+  };
+
+  try {
+    const engine = new ChatEngine({
+      task: 'Task A',
+      projectRoot: root,
+      runId: `r0-provider-callback-owner-${Math.random().toString(36).slice(2, 10)}`,
+      model: MODEL,
+    });
+    installRunner(engine, runner);
+
+    const pumpA = (async () => {
+      for await (const _event of engine.submitMessageStream('Task A: do a thing.')) {
+        // drain
+      }
+    })();
+    await startedA.promise;
+    engine.cancel();
+
+    const bEvents: ChatEvent[] = [];
+    const pumpB = (async () => {
+      for await (const event of engine.submitMessageStream('Task B: inventory only.')) {
+        bEvents.push(event);
+      }
+    })();
+    await startedB.promise;
+
+    const sessionLog = (
+      engine as unknown as { parity: { sessionEvents: { events: Array<Record<string, unknown>> } } }
+    ).parity.sessionEvents;
+    const before = sessionLog.events.length;
+    const staleRequestId = 'stale-a-request';
+
+    // A's captured callbacks fire while B owns the engine.
+    callbacksA.onRetry?.({
+      provider: 'deepseek',
+      model: MODEL,
+      request_id: staleRequestId,
+      attempt: 1,
+      reason: 'provider_unavailable',
+      backoff_ms: 10,
+    });
+    callbacksA.onRetrySettled?.({
+      provider: 'deepseek',
+      model: MODEL,
+      request_id: staleRequestId,
+      outcome: 'retrying',
+    });
+
+    const staleFacts = sessionLog.events
+      .slice(before)
+      .filter(
+        (event) =>
+          event['request_id'] === staleRequestId ||
+          event['kind'] === 'provider_retry_scheduled' ||
+          event['kind'] === 'provider_retry_settled',
+      );
+    assert.equal(
+      staleFacts.length,
+      0,
+      'a superseded provider retry callback must not write Task B provider-retry facts',
+    );
+
+    gateA.resolve();
+    await pumpA;
+    gateB.resolve();
+    await pumpB;
+    const bTerminal = bEvents[bEvents.length - 1] as Extract<ChatEvent, { type: 'done' }>;
+    assert.equal(bTerminal.type, 'done', 'Task B still completes normally after the stale callback');
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: root, encoding: 'utf-8' });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a superseded non-stream Task A cannot finalize streaming Task B', async () => {
   const root = createGitProject();
   const gateA = deferred();

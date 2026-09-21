@@ -41,14 +41,60 @@ test('repeated repair evidence gate changes the next strategy before mutation', 
   assert.match(nextProviderPrompt, /caller\/callee boundary/);
 
   // A discriminating read is the controller-recognized evidence transition;
-  // a counter or model prose alone cannot clear this gate.
+  // a counter or model prose alone cannot clear this gate. The boolean is not
+  // authority: provenance bound to the gate failure signature is required.
+  const failureSignature = state.recoveryGate!.failureSignature;
   state = applyWorkingStateEvent(state, {
     type: 'add_evidence',
     evidence: 'read src/parser.ts and the caller boundary',
     file: 'src/parser.ts',
     discriminating: true,
+    provenance: {
+      tool: 'read_file',
+      target: 'src/parser.ts',
+      failureSignature,
+    },
   });
   assert.equal(state.recoveryGate?.satisfied, true);
+
+  // A bare boolean without provenance is not authority.
+  let unprovenanced = createWorkingState('fix bug X');
+  unprovenanced = applyWorkingStateEvent(unprovenanced, { type: 'mutation', path: 'src/parser.ts' });
+  unprovenanced = ingestVerifierResult({
+    state: unprovenanced,
+    tool: 'test_run',
+    target: 'npm test -- parser',
+    exitCode: 1,
+    stdout: 'FAIL tests failed: parser adds values',
+    stderr: '',
+    summary: 'same assertion remains red',
+  }).state;
+  const gateSignature = unprovenanced.recoveryGate!.failureSignature;
+  unprovenanced = applyWorkingStateEvent(unprovenanced, {
+    type: 'add_evidence',
+    evidence: 'read_file:src/parser.ts',
+    discriminating: true,
+  });
+  assert.equal(unprovenanced.recoveryGate?.satisfied, false);
+
+  // Provenance naming the wrong failure signature must not clear the gate.
+  unprovenanced = applyWorkingStateEvent(unprovenanced, {
+    type: 'add_evidence',
+    evidence: 'read_file:src/parser.ts',
+    discriminating: true,
+    provenance: { tool: 'read_file', target: 'src/parser.ts', failureSignature: 'other-signature' },
+  });
+  assert.equal(unprovenanced.recoveryGate?.satisfied, false);
+  assert.equal(gateSignature.length > 0, true);
+
+  // A non-content tool is not discriminating even with matching provenance.
+  unprovenanced = applyWorkingStateEvent(unprovenanced, {
+    type: 'add_evidence',
+    evidence: 'list_dir:.',
+    discriminating: true,
+    provenance: { tool: 'list_dir', target: 'src/parser.ts', failureSignature: gateSignature },
+  });
+  assert.equal(unprovenanced.recoveryGate?.satisfied, false);
 });
 
 test('irrelevant evidence does not clear the controller recovery gate', () => {
@@ -90,6 +136,11 @@ test('a new hypothesis is required before a post-red mutation can proceed', () =
     evidence: 'read src/parser.ts and the caller boundary',
     file: 'src/parser.ts',
     discriminating: true,
+    provenance: {
+      tool: 'read_file',
+      target: 'src/parser.ts',
+      failureSignature: state.recoveryGate!.failureSignature,
+    },
   });
   assert.equal(state.recoveryGate?.strategyChanged, false);
   state = applyWorkingStateEvent(state, {
@@ -121,6 +172,11 @@ test('accepted discriminating evidence records a controller strategy revision', 
     evidence,
     file: 'src/parser.ts',
     discriminating: true,
+    provenance: {
+      tool: 'read_file',
+      target: 'src/parser.ts',
+      failureSignature: state.recoveryGate!.failureSignature,
+    },
   });
   state = recordControllerRecoveryStrategy(state, {
     target: 'src/parser.ts',

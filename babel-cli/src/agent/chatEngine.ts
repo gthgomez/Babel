@@ -164,7 +164,11 @@ import {
   formatWorkingStateBlock,
   invalidateReadCacheForPath,
   recordControllerRecoveryStrategy,
+  recoveryEvidenceKey,
+  RECOVERY_EVIDENCE_TOOLS,
   resetOneShotSnapshot,
+  targetMatchesGate,
+  type RecoveryEvidenceProvenance,
   resolveNextTurnToolAccess,
   selectReadWindow,
   snapshotOnce,
@@ -1167,35 +1171,47 @@ export function reconcileStreamedAnswer(streamed: string | null, final: string):
   return final;
 }
 
+/** Only these tools carry inspectable content that can localize a failure. */
+const CONTENT_BEARING_INSPECTION_TOOLS = new Set<string>(RECOVERY_EVIDENCE_TOOLS);
+
+/**
+ * A discriminating observation is not a boolean claim. It must be
+ * content-bearing, must localize a target already implicated by the failure
+ * (or by the mutation that preceded it), and must not repeat an observation the
+ * gate has already consumed. A directory listing or a pattern-only search can
+ * never clear the gate.
+ */
 function isDiscriminatingInspectionEvidence(
   state: WorkingState,
-  action: { type: string; path?: string | undefined; pattern?: string | undefined },
+  action: { type: string; path?: string | undefined; pattern?: string | undefined; file_path?: string | undefined },
   target: string,
   evidence: string,
-): boolean {
-  if (state.evidence.includes(evidence)) return false;
-  const relevantPaths = [
-    ...state.filesOfInterest,
-    ...(state.failureSurface?.failingFiles ?? []),
-    ...(state.failureSurface?.evidenceRefs ?? []),
-  ].filter(Boolean);
-  if (relevantPaths.length === 0) return false;
-  const candidate = action.path ?? action.pattern ?? target;
-  const normalizedCandidate = normalizeEvidencePath(candidate);
-  return relevantPaths.some((path) => {
-    const normalizedPath = normalizeEvidencePath(path);
-    return (
-      normalizedCandidate === normalizedPath ||
-      normalizedCandidate.startsWith(`${normalizedPath}/`) ||
-      normalizedPath.startsWith(`${normalizedCandidate}/`) ||
-      normalizedCandidate.includes(normalizedPath) ||
-      normalizedPath.includes(normalizedCandidate)
-    );
-  });
-}
-
-function normalizeEvidencePath(value: string): string {
-  return value.replaceAll('\\', '/').replace(/^\.[/]/, '').replace(/\/$/, '').toLowerCase();
+): { discriminating: boolean; provenance?: RecoveryEvidenceProvenance } {
+  const gate = state.recoveryGate;
+  if (!gate || gate.satisfied) return { discriminating: false };
+  if (!CONTENT_BEARING_INSPECTION_TOOLS.has(action.type)) return { discriminating: false };
+  if ((gate.observedKeys ?? []).includes(evidence)) return { discriminating: false };
+  if (
+    state.consumedRecoveryEvidence.includes(
+      recoveryEvidenceKey(evidence, gate.failureSignature),
+    )
+  ) {
+    return { discriminating: false };
+  }
+  // Require a concrete inspected path. A `grep` without an explicit path is a
+  // repository-wide search and cannot localize the failure.
+  const candidate = action.type === 'read_range' ? action.file_path : action.path;
+  if (!candidate) return { discriminating: false };
+  const failingTargets = gate.failingTargets ?? state.failureSurface?.failingFiles ?? [];
+  if (!targetMatchesGate(candidate, failingTargets)) return { discriminating: false };
+  return {
+    discriminating: true,
+    provenance: {
+      tool: action.type,
+      target: candidate,
+      failureSignature: gate.failureSignature,
+    },
+  };
 }
 
 /**
@@ -3182,6 +3198,9 @@ export class ChatEngine {
       } as const;
       const hadInstalledP11Context = this.parity.contextCheckpoint !== undefined;
       const p11ContextInstalled = await this.installP11ContextCheckpoint(preparedRoute);
+      // R0-8/R1: a superseded submission must not finalize the live turn as
+      // failed nor dispatch a provider request for the new owner.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       if (hadInstalledP11Context && !p11ContextInstalled) {
         yield this.streamFailed(
           'P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused.',
@@ -3215,6 +3234,7 @@ export class ChatEngine {
               conversationState: prompt,
               systemPolicyPrompt: systemPrompt,
               executionStage: 'chat',
+              isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
             rawText += chunk;
@@ -3285,6 +3305,7 @@ export class ChatEngine {
               userTaskPrompt: prompt,
               toolSchema: toolDefs,
               executionStage: 'chat',
+              isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
             switch (event.type) {
@@ -3383,6 +3404,7 @@ export class ChatEngine {
                 toolSchema: toolDefs,
                 executionStage: 'chat',
                 substitutionOrFallback: true,
+                isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
               }),
             )) {
               switch (event.type) {
@@ -3455,6 +3477,7 @@ export class ChatEngine {
                   conversationState: prompt,
                   executionStage: 'chat',
                   substitutionOrFallback: true,
+                  isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
                 }),
               )) {
                 rawText += chunk;
@@ -3505,6 +3528,7 @@ export class ChatEngine {
               deliveryMode: 'text',
               conversationState: prompt,
               executionStage: 'chat',
+              isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
             rawText += chunk;
@@ -3549,6 +3573,7 @@ export class ChatEngine {
                 conversationState: prompt,
                 executionStage: 'chat',
                 substitutionOrFallback: true,
+                isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
               }),
             )) {
               rawText += chunk;
@@ -5593,65 +5618,12 @@ export class ChatEngine {
     const threadLog = loadThreadEventLogFromDir(sessionDir);
     if (threadLog) {
       engine.restoreEventLog(threadLog);
-      const liveSnapshot = loadLiveSessionSnapshot(sessionDir);
-      engine.parity.authorizedObservationIds = new Set(
-        liveSnapshot?.authorized_observation_ids ?? [],
-      );
-      const checkpointPath = join(sessionDir, 'context-checkpoint.json');
-      if (existsSync(checkpointPath)) {
-        try {
-          const checkpoint = JSON.parse(readFileSync(checkpointPath, 'utf8')) as ContextCheckpointV1;
-          const durableOwner = engine.parity.admissionStore?.readOwner(threadLog.thread_id) ?? null;
-          const lineageEvidence: ContextCheckpointLineageEvidenceV1 = {
-            threadEvents: threadLog.events,
-            sessionEvents: sessionLog.events,
-          };
-          const coldResume = validateContextCheckpoint(checkpoint, {
-            expectedThreadId: threadLog.thread_id,
-            currentOwner: durableOwner,
-            requireInstalledLineage: true,
-            authorizedObservationIds: [...engine.parity.authorizedObservationIds],
-            lineageEvidence,
-          });
-          if (coldResume.status === 'valid') {
-            const authorizedObservationIds = [...engine.parity.authorizedObservationIds];
-            const resolvedObservations = checkpoint.observation_manifest.map((observation) =>
-              resolveObservation(
-                observation.observation_id,
-                {
-                  principal_id: 'agent:main',
-                  authorized_observation_ids: authorizedObservationIds,
-                },
-                {
-                  storage_root: join(engine.engineRunDir, 'observations'),
-                  clock: () => new Date().toISOString(),
-                  policy: { durability: 'none' },
-                },
-              ),
-            );
-            const unavailable = resolvedObservations
-              .map((result, index) =>
-                result.status === 'resolved'
-                  ? null
-                  : `observation ${checkpoint.observation_manifest[index]?.observation_id ?? 'unknown'} unavailable: ${result.reason}`,
-              )
-              .filter((issue): issue is string => issue !== null);
-            if (unavailable.length === 0) {
-              engine.parity.contextCheckpoint = checkpoint;
-              engine.p11ObservationRefs = resolvedObservations
-                .map((result) => result.status === 'resolved' ? result.observation : null)
-                .filter((observation): observation is ObservationRefV1 => observation !== null);
-            } else {
-              engine.p11ObservationCaptureIssues = unavailable;
-            }
-          }
-        } catch {
-          // A malformed or stale context checkpoint is unavailable evidence;
-          // durable thread/session logs remain the only resume source.
-        }
-      }
     }
     engine.restoreSessionEvents(sessionLog, { runDir: sessionDir });
+    // One authoritative authority-hydration path for every resume: durable
+    // owner recovery + installed-lineage validation + independent observation
+    // re-authorization. A checkpoint that cannot prove all three stays inert.
+    engine.hydrateInstalledContextAuthority(sessionDir);
     engine.clearVerifierEvidenceState();
     engine.cachedSystemPromptLegacy = null;
     engine.cachedSystemPromptNative = null;
@@ -5659,6 +5631,89 @@ export class ChatEngine {
     engine.apiTokenCount = 0;
     engine.compactionConsecutiveFailures = 0;
     return engine;
+  }
+
+  /**
+   * Authoritative context-authority hydration — the single path used by every
+   * resume/construction entrypoint. Loads `context-checkpoint.json`, requires
+   * the durable owner and installed lineage to validate, independently
+   * re-authorizes the observation manifest against durable session membership,
+   * and only then promotes the checkpoint to provider context. A checkpoint
+   * that cannot prove ownership, lineage, and observation membership stays
+   * advisory/inert and the durable thread/session logs remain the only source.
+   */
+  hydrateInstalledContextAuthority(sessionDir: string = this.engineRunDir): {
+    applied: boolean;
+    issues: string[];
+  } {
+    const issues: string[] = [];
+    const checkpointPath = join(sessionDir, 'context-checkpoint.json');
+    if (!existsSync(checkpointPath)) return { applied: false, issues };
+    const threadId = this.parity.eventLog.thread_id;
+    // Durable session membership for model-readable observations is loaded from
+    // the live-session snapshot; a checkpoint manifest cannot grant its own.
+    const liveSnapshot = loadLiveSessionSnapshot(sessionDir);
+    this.parity.authorizedObservationIds = new Set(
+      liveSnapshot?.authorized_observation_ids ?? [],
+    );
+    try {
+      const checkpoint = JSON.parse(readFileSync(checkpointPath, 'utf8')) as ContextCheckpointV1;
+      const durableOwner = this.parity.admissionStore?.readOwner(threadId) ?? null;
+      const lineageEvidence: ContextCheckpointLineageEvidenceV1 = {
+        threadEvents: this.parity.eventLog.events,
+        sessionEvents: this.parity.sessionEvents.events,
+      };
+      const coldResume = validateContextCheckpoint(checkpoint, {
+        expectedThreadId: threadId,
+        currentOwner: durableOwner,
+        requireInstalledLineage: true,
+        authorizedObservationIds: [...(this.parity.authorizedObservationIds ?? [])],
+        lineageEvidence,
+      });
+      if (coldResume.status !== 'valid') {
+        issues.push(coldResume.reasons.join('; '));
+        return { applied: false, issues };
+      }
+      const authorizedObservationIds = [...(this.parity.authorizedObservationIds ?? [])];
+      const resolvedObservations = checkpoint.observation_manifest.map((observation) =>
+        resolveObservation(
+          observation.observation_id,
+          {
+            principal_id: 'agent:main',
+            authorized_observation_ids: authorizedObservationIds,
+          },
+          {
+            storage_root: join(this.engineRunDir, 'observations'),
+            clock: () => new Date().toISOString(),
+            policy: { durability: 'none' },
+          },
+        ),
+      );
+      const unavailable = resolvedObservations
+        .map((result, index) =>
+          result.status === 'resolved'
+            ? null
+            : `observation ${checkpoint.observation_manifest[index]?.observation_id ?? 'unknown'} unavailable: ${result.reason}`,
+        )
+        .filter((issue): issue is string => issue !== null);
+      if (unavailable.length > 0) {
+        // An authorized id with no durable payload must not silently
+        // reconstruct partial trusted context.
+        this.p11ObservationCaptureIssues = unavailable;
+        issues.push(...unavailable);
+        return { applied: false, issues };
+      }
+      this.parity.contextCheckpoint = checkpoint;
+      this.p11ObservationRefs = resolvedObservations
+        .map((result) => (result.status === 'resolved' ? result.observation : null))
+        .filter((observation): observation is ObservationRefV1 => observation !== null);
+      return { applied: true, issues };
+    } catch (err) {
+      // A malformed or stale context checkpoint is unavailable evidence;
+      // durable thread/session logs remain the only resume source.
+      issues.push(err instanceof Error ? err.message : String(err));
+      return { applied: false, issues };
+    }
   }
 
   // ── Private Methods ─────────────────────────────────────────────────────
@@ -7531,7 +7586,7 @@ export class ChatEngine {
         callbacks?.onToolComplete?.(toolId, `${evaluated.window.lines.length} lines`, undefined, 0);
         if (this.isSubmissionCurrent(ownerGeneration)) {
           const evidence = `${action.type}:${target}`;
-          const discriminating = isDiscriminatingInspectionEvidence(
+          const discrimination = isDiscriminatingInspectionEvidence(
             this.workingState,
             action,
             target,
@@ -7541,9 +7596,10 @@ export class ChatEngine {
             type: 'add_evidence',
             evidence,
             file: action.file_path,
-            discriminating,
+            discriminating: discrimination.discriminating,
+            ...(discrimination.provenance ? { provenance: discrimination.provenance } : {}),
           });
-          if (discriminating) {
+          if (discrimination.discriminating) {
             this.workingState = recordControllerRecoveryStrategy(this.workingState, {
               target,
               evidence,
@@ -8064,12 +8120,15 @@ export class ChatEngine {
             this.workingState = ingested.state;
             this.lastVerifierFailed = ingested.lastVerifierFailed;
             const surfaceKind = this.workingState.failureSurface?.kind;
+            // Only a *classified* implementation failure spends implementation
+            // repair budget. An unclassified/unknown failure may be a transport
+            // or environment error after a mutation; charging it would blame the
+            // repair strategy for something it did not cause.
             const implementationRepairSurface = surfaceKind === 'TEST_FAILURE' ||
               surfaceKind === 'TYPECHECK_FAILURE' ||
               surfaceKind === 'BUILD_FAILURE' ||
               surfaceKind === 'LINT_FAILURE' ||
-              surfaceKind === 'RUNTIME_FAILURE' ||
-              surfaceKind === 'UNKNOWN_FAILURE';
+              surfaceKind === 'RUNTIME_FAILURE';
             if (
               implementationRepairSurface &&
               this.workingState.failureSurface &&
@@ -8145,7 +8204,7 @@ export class ChatEngine {
           this.isSubmissionCurrent(ownerGeneration)
         ) {
           const evidence = `${action.type}:${target}`;
-          const discriminating = isDiscriminatingInspectionEvidence(
+          const discrimination = isDiscriminatingInspectionEvidence(
             this.workingState,
             action,
             target,
@@ -8154,10 +8213,11 @@ export class ChatEngine {
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'add_evidence',
             evidence,
-            discriminating,
+            discriminating: discrimination.discriminating,
+            ...(discrimination.provenance ? { provenance: discrimination.provenance } : {}),
             ...(action.type === 'read_file' ? { file: action.path } : {}),
           });
-          if (discriminating) {
+          if (discrimination.discriminating) {
             this.workingState = recordControllerRecoveryStrategy(this.workingState, {
               target,
               evidence,
@@ -8364,6 +8424,7 @@ export class ChatEngine {
             deliveryMode: 'text',
             conversationState: prompt,
             executionStage: 'synthesis',
+            isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
           }),
           onChunk: callbacks.onAnswerChunk,
           ...(callbacks.onThought ? { onThought: callbacks.onThought } : {}),
@@ -8372,6 +8433,7 @@ export class ChatEngine {
           deliveryMode: 'text',
           conversationState: prompt,
           executionStage: 'synthesis',
+          isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
         });
     const answer = await this.executeWithTimeout(this.synthesisRunner, prompt, runnerCallbacks);
     // R0-8: a superseded synthesis must not charge the live task's usage.

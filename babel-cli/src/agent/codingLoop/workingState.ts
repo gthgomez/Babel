@@ -23,11 +23,28 @@ export interface WorkingState {
   openQuestions: string[]
   invalidatedAssumptions: string[]
   nextExperiment: string
+  /**
+   * Observation keys already consumed to clear a recovery gate, scoped to the
+   * failure signature they addressed. Re-observing the same target for the same
+   * failure is not new discriminating evidence, even across gate recreation.
+   */
+  consumedRecoveryEvidence: string[]
   /** Controller-owned gate after a red verifier; model prose cannot clear it. */
   recoveryGate?: {
     failureSignature: string
     requiredEvidence: string
     mutationFingerprint?: string
+    /**
+     * Concrete targets implicated by the failure (failing files and the
+     * mutation target). Discriminating evidence must localize one of these.
+     */
+    failingTargets?: string[]
+    /**
+     * Gate-scoped set of accepted observation keys. This is deliberately
+     * separate from the capped `evidence` list so that evidence churn cannot
+     * resurrect an already-consumed observation.
+     */
+    observedKeys?: string[]
     hypothesisAtFailure: string
     strategyAtFailure?: string
     satisfied: boolean
@@ -45,14 +62,50 @@ export function createWorkingState(goal = ''): WorkingState {
     openQuestions: [],
     invalidatedAssumptions: [],
     nextExperiment: '',
+    consumedRecoveryEvidence: [],
     revision: 0,
   }
+}
+
+/**
+ * Tools whose output carries inspectable content and can therefore localize a
+ * failure. Directory listings and globs are deliberately excluded.
+ */
+export const RECOVERY_EVIDENCE_TOOLS = [
+  'read_file',
+  'read_range',
+  'grep',
+  'semantic_search',
+] as const
+
+/**
+ * Controller-owned provenance for an observation that claims to be
+ * discriminating. A bare `discriminating: true` boolean is not authority: the
+ * reducer additionally requires this record to agree with the live recovery
+ * gate's failure signature. The provenance is produced by the controller from
+ * the tool identity and the failure surface, never by model prose.
+ */
+export interface RecoveryEvidenceProvenance {
+  /** Tool that produced the observation (one of `RECOVERY_EVIDENCE_TOOLS`). */
+  tool: string
+  /** Concrete file/range the observation inspected. */
+  target: string
+  /** Failure signature the observation is claimed to discriminate. */
+  failureSignature: string
+  /** Workspace revision the observation was taken against, when known. */
+  revision?: string
 }
 
 export type WorkingStateEvent =
   | { type: 'set_goal'; goal: string }
   | { type: 'set_hypothesis'; hypothesis: string; evidence?: string[] }
-  | { type: 'add_evidence'; evidence: string; file?: string; discriminating?: boolean }
+  | {
+      type: 'add_evidence'
+      evidence: string
+      file?: string
+      discriminating?: boolean
+      provenance?: RecoveryEvidenceProvenance
+    }
   | { type: 'recovery_strategy'; strategy: string; evidence?: string[] }
   | { type: 'mutation'; path: string; fingerprint?: string }
   | { type: 'verifier'; identity: string; exitCode: number; summary: string }
@@ -60,7 +113,14 @@ export type WorkingStateEvent =
   | { type: 'diagnosis'; diagnosis: RepairDiagnosis }
   | { type: 'invalidate'; assumption: string }
   | { type: 'next_experiment'; experiment: string }
-  | { type: 'recovery_gate'; failureSignature: string; requiredEvidence: string; mutationFingerprint?: string; hypothesisAtFailure?: string }
+  | {
+      type: 'recovery_gate'
+      failureSignature: string
+      requiredEvidence: string
+      mutationFingerprint?: string
+      failingTargets?: string[]
+      hypothesisAtFailure?: string
+    }
 
 /**
  * Apply an event. New evidence invalidates a stale red verifier and drops
@@ -73,6 +133,7 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
     filesOfInterest: [...state.filesOfInterest],
     openQuestions: [...state.openQuestions],
     invalidatedAssumptions: [...state.invalidatedAssumptions],
+    consumedRecoveryEvidence: [...state.consumedRecoveryEvidence],
     revision: state.revision + 1,
   }
 
@@ -97,16 +158,44 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         next.recoveryGate = { ...next.recoveryGate, strategyChanged: true }
       }
       break
-    case 'add_evidence':
+    case 'add_evidence': {
       next.evidence = pushUnique(next.evidence, event.evidence)
       if (event.file) next.filesOfInterest = pushUnique(next.filesOfInterest, event.file)
       if (next.lastVerifier && !next.lastVerifier.fresh) {
         next.lastVerifier = { ...next.lastVerifier, fresh: false }
       }
-      if (next.recoveryGate && !next.recoveryGate.satisfied && event.discriminating === true) {
-        next.recoveryGate = { ...next.recoveryGate, satisfied: true }
+      const gate = next.recoveryGate
+      if (gate && !gate.satisfied && event.discriminating === true) {
+        // A boolean claim is not authority. The observation must carry
+        // provenance that agrees with the gate's frozen failure signature and
+        // must not already have been consumed for this gate.
+        const provenance = event.provenance
+        const observationKey = recoveryEvidenceKey(event.evidence, gate.failureSignature)
+        const alreadyObserved =
+          (gate.observedKeys ?? []).includes(event.evidence) ||
+          next.consumedRecoveryEvidence.includes(observationKey)
+        const bound =
+          provenance !== undefined &&
+          provenance.failureSignature === gate.failureSignature &&
+          provenance.failureSignature.length > 0 &&
+          (RECOVERY_EVIDENCE_TOOLS as readonly string[]).includes(provenance.tool) &&
+          provenance.target.trim().length > 0 &&
+          targetMatchesGate(provenance.target, gate.failingTargets) &&
+          !alreadyObserved
+        if (bound) {
+          next.recoveryGate = {
+            ...gate,
+            satisfied: true,
+            observedKeys: [...(gate.observedKeys ?? []), event.evidence].slice(-64),
+          }
+          next.consumedRecoveryEvidence = pushUnique(
+            next.consumedRecoveryEvidence,
+            observationKey,
+          )
+        }
       }
       break
+    }
     case 'mutation':
       next.lastMutation = {
         path: event.path,
@@ -171,6 +260,10 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         failureSignature: event.failureSignature,
         requiredEvidence: event.requiredEvidence,
         ...(event.mutationFingerprint ? { mutationFingerprint: event.mutationFingerprint } : {}),
+        ...(event.failingTargets && event.failingTargets.length > 0
+          ? { failingTargets: [...event.failingTargets] }
+          : {}),
+        observedKeys: [],
         hypothesisAtFailure: event.hypothesisAtFailure ?? next.currentHypothesis,
         strategyAtFailure: next.currentHypothesis,
         satisfied: false,
@@ -335,9 +428,49 @@ const REPAIR_SET = new Set<string>([
   'UNKNOWN_DIAGNOSIS',
 ])
 
+/**
+ * Normalize a repository-relative target for gate membership checks. `"."` and
+ * empty values are never concrete targets, regardless of the failing set.
+ */
+function normalizeTarget(value: string): string {
+  return value.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase()
+}
+
+/**
+ * Identity of an observation for recovery-gate dedup. Scoping by failure
+ * signature lets a genuinely new failure re-use an inspection while rejecting
+ * repeated reads of the same target for the same failure.
+ */
+export function recoveryEvidenceKey(evidence: string, failureSignature: string): string {
+  return `${evidence}#${failureSignature}`
+}
+
+/**
+ * Whether an inspected target localizes one of the gate's failing targets. An
+ * absent/empty failing set is treated as "cannot prove exclusion" (callers that
+ * care must supply targets); a directory-wide or unrecognized target never
+ * matches.
+ */
+export function targetMatchesGate(target: string, failingTargets?: string[]): boolean {
+  const candidate = normalizeTarget(target)
+  if (!candidate || candidate === '.') return false
+  if (!failingTargets || failingTargets.length === 0) return true
+  return failingTargets.some((raw) => {
+    const known = normalizeTarget(raw)
+    if (!known) return false
+    return (
+      candidate === known ||
+      candidate.startsWith(`${known}/`) ||
+      known.startsWith(`${candidate}/`)
+    )
+  })
+}
+
 function pushUnique(list: string[], value: string): string[] {
   if (!value || list.includes(value)) return list
-  return [...list, value].slice(-16)
+  // Generous bound: the recovery-observation ledger must not evict a consumed
+  // key under ordinary evidence churn. Rendering already truncates for display.
+  return [...list, value].slice(-96)
 }
 
 function pushAll(list: string[], values: string[]): string[] {
