@@ -8,7 +8,13 @@
     "(?i)[A-Z]:[\\\\/]+(?:Users|Workspace|Projects)[\\\\/]+",
     "\\.supabase\\.co"
   ],
-  "binary_asset_allowlist": [],
+  "binary_asset_allowlist": [
+    {
+      "path": "docs/design/babel-tui-north-star.png",
+      "sha256": "14923C49165BBA3AE3A60C5FCCCBC4127992F5ED8CB2BA4EDDA7649341D2EEF3",
+      "rationale": "Approved public Babel TUI North Star design reference; SHA-256 pins the reviewed binary asset."
+    }
+  ],
   "identifier_exceptions": [],
   "forbidden_dependency_fingerprints": [
     "GPCGuard"

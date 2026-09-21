@@ -3,7 +3,13 @@
   "description": "Deterministic policy for public-facing content and canonical-repository independence.",
   "active_extensions": [".md", ".yaml", ".yml", ".json", ".ts", ".js", ".ps1"],
   "claim_extensions": [".md"],
-  "binary_asset_allowlist": [],
+  "binary_asset_allowlist": [
+    {
+      "path": "docs/design/babel-tui-north-star.png",
+      "sha256": "14923C49165BBA3AE3A60C5FCCCBC4127992F5ED8CB2BA4EDDA7649341D2EEF3",
+      "rationale": "Approved public Babel TUI North Star design reference; SHA-256 pins the reviewed binary asset."
+    }
+  ],
   "forbidden_generated_path_patterns": [
     "(?i)(^|/)(dist|runs|artifacts|coverage|scratch|\\.compiled|\\.cache)/",
     "(?i)(^|/)babel-benchmark-results\\.jsonl$"
@@ -277,7 +283,13 @@
     "scan_extensions": [".md", ".yaml", ".yml", ".json", ".ts", ".js", ".ps1"],
     "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/"],
     "excluded_paths": [],
-    "binary_asset_allowlist": [],
+    "binary_asset_allowlist": [
+      {
+        "path": "docs/design/babel-tui-north-star.png",
+        "sha256": "14923C49165BBA3AE3A60C5FCCCBC4127992F5ED8CB2BA4EDDA7649341D2EEF3",
+        "rationale": "Approved public Babel TUI North Star design reference; SHA-256 pins the reviewed binary asset."
+      }
+    ],
     "fixture_exceptions": [
       {
         "id": "FIXTURE-CANONICAL-POLICY-EXPORT",
