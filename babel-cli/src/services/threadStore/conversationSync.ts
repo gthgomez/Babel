@@ -113,6 +113,9 @@ export function createEngineFromEventLog(
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
   });
   engine.restoreEventLog(log);
+  // R1: load durable observation membership before session-event restore, which
+  // re-persists the snapshot from `parity.authorizedObservationIds`.
+  engine.loadObservationMembership();
   // W2.2: settle interrupted tools from session-events.jsonl if present.
   engine.restoreSessionEventsFromDir();
   // R1: the primary resume path must run the same context-authority hydration

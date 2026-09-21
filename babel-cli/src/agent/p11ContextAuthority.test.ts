@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { ChatEngine } from './chatEngine.js';
+import { chatSessionDir } from '../cli/runsLayout.js';
+import {
+  LIVE_SESSION_SNAPSHOT_FILENAME,
+  persistLiveSessionAuthority,
+  resolveLiveSessionAuthority,
+} from './liveSessionBridge.js';
 import { commitCompaction, planRetainedWorkingSet, runChatEngineCompaction } from './compactionCommit.js';
 import { createSessionEventLog } from './sessionEvents.js';
 import {
@@ -376,4 +383,58 @@ test('P11 stale compaction rolls back durable events after the checkpoint bounda
   assert.equal(persistCalls, 2);
   assert.equal(threadLog.events.length, 0);
   assert.equal(sessionLog.events.length, 0);
+});
+
+test('P11 resume preserves durable observation membership across session-event restore', () => {
+  const previousRunsDir = process.env['BABEL_RUNS_DIR'];
+  const runsRoot = mkdtempSync(join(tmpdir(), 'babel-p11-membership-'));
+  process.env['BABEL_RUNS_DIR'] = runsRoot;
+  const runId = 'p11-membership-preserve';
+  try {
+    const dir = chatSessionDir(runId);
+    mkdirSync(dir, { recursive: true });
+    persistLiveSessionAuthority(
+      dir,
+      resolveLiveSessionAuthority({
+        mode: 'chat',
+        projectRoot: process.cwd(),
+        task: 'resume membership',
+      }),
+    );
+    // The durable snapshot is the independent authority for model-readable
+    // observation membership; session-event restore must not erase it.
+    writeFileSync(
+      join(dir, LIVE_SESSION_SNAPSHOT_FILENAME),
+      JSON.stringify({
+        schema_version: 1,
+        session_id: runId,
+        authorized_observation_ids: ['obs:abc'],
+      }),
+      'utf8',
+    );
+
+    const engine = new ChatEngine({
+      task: 'resume membership',
+      projectRoot: process.cwd(),
+      runId,
+      model: 'deepseek-v4-flash',
+    });
+    engine.loadObservationMembership(dir);
+    engine.restoreSessionEvents(createSessionEventLog(runId), { runDir: dir });
+
+    const ids = [
+      ...((
+        engine as unknown as { parity: { authorizedObservationIds?: Set<string> } }
+      ).parity.authorizedObservationIds ?? new Set<string>()),
+    ];
+    assert.deepEqual(
+      ids,
+      ['obs:abc'],
+      'durable observation membership must survive session-event restore',
+    );
+  } finally {
+    if (previousRunsDir === undefined) delete process.env['BABEL_RUNS_DIR'];
+    else process.env['BABEL_RUNS_DIR'] = previousRunsDir;
+    rmSync(runsRoot, { recursive: true, force: true });
+  }
 });

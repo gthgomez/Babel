@@ -5619,6 +5619,9 @@ export class ChatEngine {
     if (threadLog) {
       engine.restoreEventLog(threadLog);
     }
+    // Load durable observation membership before session-event restore; the
+    // restore re-persists the snapshot from this membership.
+    engine.loadObservationMembership(sessionDir);
     engine.restoreSessionEvents(sessionLog, { runDir: sessionDir });
     // One authoritative authority-hydration path for every resume: durable
     // owner recovery + installed-lineage validation + independent observation
@@ -5631,6 +5634,19 @@ export class ChatEngine {
     engine.apiTokenCount = 0;
     engine.compactionConsecutiveFailures = 0;
     return engine;
+  }
+
+  /**
+   * Load durable observation membership from the live-session snapshot. This
+   * MUST run before session-event restore: `restoreSessionEvents` re-projects
+   * and persists the snapshot from `parity.authorizedObservationIds`, so loading
+   * afterwards would observe (and then erase) the durable membership.
+   */
+  loadObservationMembership(sessionDir: string = this.engineRunDir): void {
+    const liveSnapshot = loadLiveSessionSnapshot(sessionDir);
+    this.parity.authorizedObservationIds = new Set(
+      liveSnapshot?.authorized_observation_ids ?? [],
+    );
   }
 
   /**
@@ -5652,10 +5668,7 @@ export class ChatEngine {
     const threadId = this.parity.eventLog.thread_id;
     // Durable session membership for model-readable observations is loaded from
     // the live-session snapshot; a checkpoint manifest cannot grant its own.
-    const liveSnapshot = loadLiveSessionSnapshot(sessionDir);
-    this.parity.authorizedObservationIds = new Set(
-      liveSnapshot?.authorized_observation_ids ?? [],
-    );
+    this.loadObservationMembership(sessionDir);
     try {
       const checkpoint = JSON.parse(readFileSync(checkpointPath, 'utf8')) as ContextCheckpointV1;
       const durableOwner = this.parity.admissionStore?.readOwner(threadId) ?? null;
