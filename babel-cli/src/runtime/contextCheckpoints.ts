@@ -26,6 +26,7 @@
  */
 
 import { sha256Canonical } from '../acceptance/canonical.js';
+import { createHash } from 'node:crypto';
 import type { ObservationRefV1 } from '../evidence/observationStore.js';
 import type { OwnerRecordV1 } from './admissionContracts.js';
 
@@ -36,6 +37,19 @@ export const CONTEXT_CHECKPOINT_SCHEMA_VERSION = 1 as const;
 export const CONTEXT_CHECKPOINT_INSTALL_BLOCKED_ON = [] as const;
 
 export type ContextCheckpointOwnerV1 = Pick<OwnerRecordV1, 'threadId' | 'generation' | 'token'>;
+
+/**
+ * Durable proof that a checkpoint belongs to an installed context lineage.
+ * The checkpoint is the authority root; ownership generation alone is only a
+ * fencing value and cannot make a stale capsule authoritative.
+ */
+export interface ContextCheckpointInstalledLineageV1 {
+  checkpoint_id: string;
+  compaction_event_id: string | null;
+  compaction_commit_event_id: string | null;
+  compaction_digest: string | null;
+  thread_event_boundary_seq: number | null;
+}
 
 export type ContextCheckpointValidationReasonV1 =
   | 'invalid_schema'
@@ -51,6 +65,10 @@ export type ContextCheckpointValidationReasonV1 =
   | 'expected_thread_mismatch'
   | 'requested_owner_mismatch'
   | 'invalid_context_epoch'
+  | 'lineage_missing'
+  | 'lineage_invalid'
+  | 'lineage_not_committed'
+  | 'observation_membership_unavailable'
   | 'checkpoint_digest_mismatch'
   | 'install_failed';
 
@@ -132,6 +150,8 @@ export interface LiveOperationalSourcesV1 {
   }>;
   /** Full immutable observation refs; ids and payload hashes alone are not a manifest. */
   observation_manifest?: ReadonlyArray<ObservationRefV1>;
+  /** Independent task/session authority for observation membership. */
+  authorized_observation_ids?: readonly string[];
   /** Explicit cold-resume failures; unavailable evidence never becomes an empty success. */
   observation_recovery_issues?: readonly string[];
   /** Legacy decorative refs; descriptive metadata only, never valid handles. */
@@ -185,6 +205,7 @@ export interface ContextCheckpointV1 {
   budget: LiveOperationalSourcesV1['budget'];
   pending: LiveOperationalSourcesV1['pending'];
   route: LiveOperationalSourcesV1['route'];
+  installed_lineage?: ContextCheckpointInstalledLineageV1;
   population: CheckpointPopulationV1;
   observation_manifest: readonly ObservationRefV1[];
   observation_manifest_digest: string;
@@ -199,6 +220,7 @@ export interface ContextCheckpointPreparationInputV1 {
   sessionId?: string;
   turnId?: string | null;
   contextEpoch?: string;
+  installedLineage?: ContextCheckpointInstalledLineageV1;
   now?: () => string;
 }
 
@@ -217,6 +239,11 @@ export type ContextCheckpointPreparationResultV1 =
 export interface ContextCheckpointValidationInputV1 {
   currentOwner?: ContextCheckpointOwnerV1 | null;
   expectedThreadId?: string;
+  /** Production resume/install must prove the checkpoint is an installed root. */
+  requireInstalledLineage?: boolean;
+  /** Independent durable membership source; never use the checkpoint manifest. */
+  authorizedObservationIds?: readonly string[];
+  lineageEvidence?: ContextCheckpointLineageEvidenceV1;
 }
 
 export interface ContextCheckpointValidationResultV1 {
@@ -227,6 +254,10 @@ export interface ContextCheckpointValidationResultV1 {
 
 export interface ContextCheckpointInstallInputV1 {
   currentOwner: ContextCheckpointOwnerV1 | null;
+  /** Production callers set this; pure preparation tests may omit it. */
+  requireInstalledLineage?: boolean;
+  authorizedObservationIds?: readonly string[];
+  lineageEvidence?: ContextCheckpointLineageEvidenceV1;
   /** Re-read the P05 owner immediately before the atomic commit when available. */
   readCurrentOwner?: () => ContextCheckpointOwnerV1 | null;
   /** Adapter for the existing atomic checkpoint transaction; no second journal. */
@@ -249,6 +280,23 @@ export interface ColdResumeValidationInputV1 {
   checkpoint: ContextCheckpointV1;
   currentOwner: ContextCheckpointOwnerV1 | null;
   requestedOwner?: ContextCheckpointOwnerV1;
+  authorizedObservationIds?: readonly string[];
+  lineageEvidence?: ContextCheckpointLineageEvidenceV1;
+}
+
+export interface ContextCheckpointLineageEvidenceV1 {
+  threadEvents: ReadonlyArray<{
+    event_id: string;
+    kind: string;
+    seq: number;
+    content?: string;
+  }>;
+  sessionEvents: ReadonlyArray<{
+    event_id: string;
+    kind: string;
+    thread_event_id?: string;
+    capsule_digest?: string;
+  }>;
 }
 
 export interface ColdResumeValidationResultV1 {
@@ -293,6 +341,7 @@ function cloneObservationManifest(
 function observationManifestIssues(
   manifest: ReadonlyArray<ObservationRefV1>,
   sourceObservations?: LiveOperationalSourcesV1['observations'],
+  independentlyAuthorizedIds?: readonly string[],
 ): string[] {
   const issues: string[] = [];
   // An empty authorized set is a valid first-turn manifest. Once an
@@ -362,7 +411,62 @@ function observationManifestIssues(
       }
     }
   }
+  if (independentlyAuthorizedIds !== undefined) {
+    const independent = new Set(independentlyAuthorizedIds);
+    for (const observation of manifest) {
+      if (!independent.has(observation.observation_id)) {
+        issues.push(`observation membership is not independently authorized: ${observation.observation_id}`);
+      }
+    }
+  }
   return issues;
+}
+
+function digestCompactionContent(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+/**
+ * Validate the installed context root against the durable session/thread
+ * linkage. A physically present capsule is inert unless a committed session
+ * event names that exact capsule and digest.
+ */
+export function validateContextCheckpointInstalledLineage(
+  checkpoint: ContextCheckpointV1,
+  evidence?: ContextCheckpointLineageEvidenceV1,
+): ContextCheckpointValidationReasonV1[] {
+  const lineage = checkpoint.installed_lineage;
+  if (!lineage) return ['lineage_missing'];
+  if (
+    lineage.checkpoint_id !== checkpoint.checkpointId ||
+    (lineage.compaction_event_id === null) !== (lineage.compaction_commit_event_id === null) ||
+    (lineage.compaction_event_id === null) !== (lineage.compaction_digest === null) ||
+    (lineage.thread_event_boundary_seq !== null &&
+      (!Number.isSafeInteger(lineage.thread_event_boundary_seq) || lineage.thread_event_boundary_seq < 0))
+  ) {
+    return ['lineage_invalid'];
+  }
+  if (lineage.compaction_event_id === null) return [];
+  if (!evidence) return [];
+
+  const committed = evidence.sessionEvents.find(
+    (event) =>
+      event.kind === 'compaction_committed' &&
+      event.event_id === lineage.compaction_commit_event_id &&
+      event.thread_event_id === lineage.compaction_event_id &&
+      event.capsule_digest === lineage.compaction_digest,
+  );
+  const capsule = evidence.threadEvents.find(
+    (event) => event.kind === 'compaction_capsule' && event.event_id === lineage.compaction_event_id,
+  );
+  if (!committed || !capsule || capsule.content === undefined) return ['lineage_not_committed'];
+  if (
+    digestCompactionContent(capsule.content) !== lineage.compaction_digest ||
+    (lineage.thread_event_boundary_seq !== null && capsule.seq !== lineage.thread_event_boundary_seq)
+  ) {
+    return ['lineage_invalid'];
+  }
+  return [];
 }
 
 function ownerIssues(owner: unknown): ContextCheckpointValidationReasonV1[] {
@@ -622,7 +726,11 @@ export function mapCheckpointRequiredState(
   const authorizedObservations = sources.observations.filter((item) => item.authorized);
   const observationManifest = cloneObservationManifest(sources.observation_manifest ?? []);
   const manifestIssues = [
-    ...observationManifestIssues(observationManifest, sources.observations),
+    ...observationManifestIssues(
+      observationManifest,
+      sources.observations,
+      sources.authorized_observation_ids,
+    ),
     ...(sources.observation_recovery_issues ?? []),
   ];
   if (manifestIssues.length === 0) {
@@ -706,6 +814,7 @@ export function prepareContextCheckpoint(
     observationManifestIssues(
       population.observation_manifest,
       input.sources.observations,
+      input.sources.authorized_observation_ids,
     ).length > 0
   ) {
     reasons.push('observation_manifest_incomplete');
@@ -743,6 +852,13 @@ export function prepareContextCheckpoint(
     },
     observation_manifest: manifest,
     observation_manifest_digest: sha256Canonical(manifest),
+    installed_lineage: {
+      checkpoint_id: input.checkpointId,
+      compaction_event_id: input.installedLineage?.compaction_event_id ?? null,
+      compaction_commit_event_id: input.installedLineage?.compaction_commit_event_id ?? null,
+      compaction_digest: input.installedLineage?.compaction_digest ?? null,
+      thread_event_boundary_seq: input.installedLineage?.thread_event_boundary_seq ?? null,
+    },
   };
   return {
     status: 'prepared',
@@ -813,7 +929,13 @@ export function validateContextCheckpoint(
     reasons.push('observation_manifest_incomplete');
   } else {
     try {
-      if (observationManifestIssues(checkpoint.observation_manifest).length > 0) {
+      if (
+        observationManifestIssues(
+          checkpoint.observation_manifest,
+          undefined,
+          input.authorizedObservationIds,
+        ).length > 0
+      ) {
         reasons.push('observation_manifest_incomplete');
       }
     } catch {
@@ -851,6 +973,16 @@ export function validateContextCheckpoint(
     }
   }
 
+  if (input.authorizedObservationIds !== undefined) {
+    const authorized = new Set(input.authorizedObservationIds);
+    if (checkpoint.observation_manifest.some((observation) => !authorized.has(observation.observation_id))) {
+      reasons.push('observation_membership_unavailable');
+    }
+  }
+  if (input.requireInstalledLineage) {
+    reasons.push(...validateContextCheckpointInstalledLineage(checkpoint, input.lineageEvidence));
+  }
+
   return {
     status: reasons.length === 0 ? 'valid' : 'blocked',
     checkpoint,
@@ -879,6 +1011,9 @@ export async function installContextCheckpoint(
   const checkpoint = 'status' in preparation ? preparation.checkpoint : preparation;
   const validation = validateContextCheckpoint(checkpoint, {
     currentOwner: input.currentOwner,
+    requireInstalledLineage: input.requireInstalledLineage === true,
+    authorizedObservationIds: input.authorizedObservationIds,
+    lineageEvidence: input.lineageEvidence,
   });
   if (validation.status === 'blocked') {
     return {
@@ -932,8 +1067,19 @@ export function validateColdResume(
   const validation = validateContextCheckpoint(
     input.checkpoint,
     input.currentOwner === null
-      ? { currentOwner: null }
-      : { currentOwner: input.currentOwner, expectedThreadId: input.currentOwner.threadId },
+      ? {
+          currentOwner: null,
+          requireInstalledLineage: true,
+          authorizedObservationIds: input.authorizedObservationIds,
+          lineageEvidence: input.lineageEvidence,
+        }
+      : {
+          currentOwner: input.currentOwner,
+          expectedThreadId: input.currentOwner.threadId,
+          requireInstalledLineage: true,
+          authorizedObservationIds: input.authorizedObservationIds,
+          lineageEvidence: input.lineageEvidence,
+        },
   );
   const reasons = [...validation.reasons];
   if (

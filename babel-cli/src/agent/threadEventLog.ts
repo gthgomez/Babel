@@ -10,6 +10,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
+import type { ContextCheckpointV1 } from '../runtime/contextCheckpoints.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { writeCheckpointFileSync } from '../utils/atomicCheckpointFile.js';
 
@@ -352,7 +353,12 @@ export function recordToolResult(
  */
 export function rebuildProviderMessagesFromEvents(
   log: ThreadEventLog,
-  options: { systemPrompt?: string; upToSeq?: number } = {},
+  options: {
+    systemPrompt?: string;
+    upToSeq?: number;
+    /** Production reconstruction must name the durably installed context root. */
+    installedContextCheckpoint?: ContextCheckpointV1;
+  } = {},
 ): ProviderMessage[] {
   const events =
     options.upToSeq === undefined
@@ -389,6 +395,7 @@ export function rebuildProviderMessagesFromEvents(
         events[i] as Extract<ThreadEvent, { kind: 'compaction_capsule' }>,
         currentOwnershipGeneration,
         currentOwnerTurnId,
+        options.installedContextCheckpoint,
       )
     ) {
       startIdx = i + 1;
@@ -539,7 +546,19 @@ function isCurrentCompactionGeneration(
   event: Extract<ThreadEvent, { kind: 'compaction_capsule' }>,
   currentOwnershipGeneration: number,
   currentOwnerTurnId: string | undefined,
+  installedContextCheckpoint?: ContextCheckpointV1,
 ): boolean {
+  if (installedContextCheckpoint !== undefined) {
+    const lineage = installedContextCheckpoint.installed_lineage;
+    if (!lineage || lineage.checkpoint_id !== installedContextCheckpoint.checkpointId) return false;
+    if (lineage.compaction_event_id !== event.event_id) return false;
+    if (lineage.compaction_digest !== createHash('sha256').update(event.content).digest('hex')) return false;
+    if (
+      lineage.thread_event_boundary_seq !== null &&
+      lineage.thread_event_boundary_seq !== event.seq
+    ) return false;
+    return true;
+  }
   return (
     currentOwnershipGeneration < 0 ||
     (event.ownership_generation !== undefined

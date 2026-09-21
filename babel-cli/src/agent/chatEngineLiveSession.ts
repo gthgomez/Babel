@@ -206,6 +206,7 @@ export function projectEngineLiveSession(
     threadLog: parity.eventLog,
     ...(parity.liveAuthority ? { authority: parity.liveAuthority } : {}),
     ...(budgetCeilings ? { budgetCeilings } : {}),
+    authorizedObservationIds: [...(parity.authorizedObservationIds ?? [])],
   });
   parity.liveSession = live;
   return live;
@@ -258,6 +259,7 @@ export function restoreEngineSessionEvents(input: {
     ...(input.parity.liveAuthority
       ? { authority: input.parity.liveAuthority }
       : {}),
+    authorizedObservationIds: [...(input.parity.authorizedObservationIds ?? [])],
   });
   try {
     if (input.parity.liveSession) {

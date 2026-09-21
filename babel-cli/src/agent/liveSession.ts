@@ -100,6 +100,8 @@ export interface LiveSessionV1 {
   last_seq: number;
   /** Event ids that form the projection evidence chain. */
   evidence_event_ids: string[];
+  /** Independent durable task/session membership for model-readable observations. */
+  authorized_observation_ids: string[];
   degraded: boolean;
   degraded_reasons: string[];
 }
@@ -117,6 +119,8 @@ export interface ProjectLiveSessionInput {
   };
   /** Optional workspace revision override (e.g. from Git). */
   workspaceRevision?: string;
+  /** Independent authority source; checkpoint manifests cannot mint this set. */
+  authorizedObservationIds?: readonly string[];
 }
 
 const DEFAULT_BUDGETS: LiveSessionBudgetState = {
@@ -163,6 +167,7 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
     policy_intervention_count: 0,
     last_seq: -1,
     evidence_event_ids: [],
+    authorized_observation_ids: [...new Set(input.authorizedObservationIds ?? [])].sort(),
     degraded: false,
     degraded_reasons: [],
   };
@@ -477,6 +482,7 @@ export function liveSessionsEquivalentForResume(
     policy_intervention_count: session.policy_intervention_count,
     last_seq: session.last_seq,
     evidence_event_ids: [...session.evidence_event_ids],
+    authorized_observation_ids: [...(session.authorized_observation_ids ?? [])].sort(),
     degraded: session.degraded,
     degraded_reasons: [...session.degraded_reasons].sort(),
   });

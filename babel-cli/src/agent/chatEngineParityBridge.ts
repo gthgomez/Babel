@@ -126,6 +126,8 @@ export interface ParityRuntime {
   liveSession?: import('./liveSession.js').LiveSessionV1;
   /** P11: the last fully prepared context generation installed atomically. */
   contextCheckpoint?: ContextCheckpointV1;
+  /** Independent durable session membership for model-readable observations. */
+  authorizedObservationIds?: Set<string>;
   /** P05 durable owner record; injected by the authorized host, never created here. */
   admissionStore?: AdmissionStore;
 }
@@ -151,6 +153,7 @@ export function createParityRuntime(threadId: string): ParityRuntime {
     turnId: null,
     recoveryTried: false,
     lastFailover: null,
+    authorizedObservationIds: new Set<string>(),
   };
 }
 
@@ -1053,6 +1056,7 @@ function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
     sessionLog: rt.sessionEvents,
     threadLog: rt.eventLog,
     ...(rt.liveAuthority ? { authority: rt.liveAuthority } : {}),
+    authorizedObservationIds: [...(rt.authorizedObservationIds ?? [])],
   });
   rt.liveSession = live;
   persistLiveSessionSnapshot(runDir, live);
@@ -1162,6 +1166,7 @@ export async function checkpointParityEventLogStrict(
       sessionLog: rt.sessionEvents,
       threadLog: rt.eventLog,
       authority: rt.liveAuthority,
+      authorizedObservationIds: [...(rt.authorizedObservationIds ?? [])],
     });
 
     const targets: Array<{
@@ -1246,6 +1251,7 @@ export async function checkpointParityEventLogStrict(
     try {
       options?.assertOwnerCurrent?.();
       for (let i = 0; i < targets.length; i++) {
+        options?.assertOwnerCurrent?.();
         if (options?.injectCommitFailureAfter === i) {
           throw new Error('simulated_commit_failure');
         }
@@ -1253,6 +1259,14 @@ export async function checkpointParityEventLogStrict(
         const tmpPath = tmpPaths[i]!;
         renameCheckpointSync(tmpPath, targetPath, options?.renameOptions);
         committedIndices.push(i);
+        // Recheck after every authority-bearing rename. A rotation that lands
+        // between two renames must roll the entire batch back.
+        options?.assertOwnerCurrent?.();
+        if (targets[i]!.kind === 'context_checkpoint') {
+          // The context primary is the installed-generation linearization
+          // boundary; fence immediately before and after publishing it.
+          options?.assertOwnerCurrent?.();
+        }
       }
     } catch (commitErr) {
       // Uncommitted primaries remain intact; do not reopen the locked target.
@@ -1280,6 +1294,7 @@ export async function checkpointParityEventLogStrict(
     }
 
     // Step 5: Post-commit state advance (success only) — then drop sidecars
+    options?.assertOwnerCurrent?.();
     writeCheckpointJournal(runDir, {
       schema_version: 1,
       batch_id: batchId,
@@ -1349,6 +1364,7 @@ export function parityProviderMessages(
 ): ProviderMessage[] {
   return rebuildProviderMessagesFromEvents(rt.eventLog, {
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    ...(rt.contextCheckpoint ? { installedContextCheckpoint: rt.contextCheckpoint } : {}),
   });
 }
 

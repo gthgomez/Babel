@@ -95,6 +95,7 @@ import {
 } from '../authority/sessionContext.js';
 import {
   loadLiveSessionAuthorityStrict,
+  loadLiveSessionSnapshot,
   persistLiveSessionAuthority,
 } from './liveSessionBridge.js';
 import type { LiveSessionV1 } from './liveSession.js';
@@ -271,6 +272,8 @@ import {
   installContextCheckpoint,
   prepareContextCheckpoint,
   validateContextCheckpoint,
+  type ContextCheckpointInstalledLineageV1,
+  type ContextCheckpointLineageEvidenceV1,
   type ContextCheckpointOwnerV1,
   type ContextCheckpointV1,
   type LiveOperationalSourcesV1,
@@ -3160,6 +3163,9 @@ export class ChatEngine {
       const providerMessages = useNativeTools
         ? this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
             systemPrompt: activeSystemPrompt,
+            ...(this.parity.contextCheckpoint
+              ? { installedContextCheckpoint: this.parity.contextCheckpoint }
+              : {}),
           })
         : [];
       const preparedRoute = {
@@ -4742,6 +4748,9 @@ export class ChatEngine {
   ): void {
     const reconstructed = this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
       systemPrompt,
+      ...(this.parity.contextCheckpoint
+        ? { installedContextCheckpoint: this.parity.contextCheckpoint }
+        : {}),
     });
     // Native runners share this deterministic final serializer. Compare its
     // exact output rather than neutral messages so committed capsules cannot
@@ -5178,7 +5187,11 @@ export class ChatEngine {
   }
 
   getProviderConversation(): ProviderMessage[] {
-    return this.services.conversation.rebuildProviderMessages(this.parity.eventLog);
+    return this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
+      ...(this.parity.contextCheckpoint
+        ? { installedContextCheckpoint: this.parity.contextCheckpoint }
+        : {}),
+    });
   }
 
   resyncTurnStateAfterBranch(): void {
@@ -5580,28 +5593,28 @@ export class ChatEngine {
     const threadLog = loadThreadEventLogFromDir(sessionDir);
     if (threadLog) {
       engine.restoreEventLog(threadLog);
+      const liveSnapshot = loadLiveSessionSnapshot(sessionDir);
+      engine.parity.authorizedObservationIds = new Set(
+        liveSnapshot?.authorized_observation_ids ?? [],
+      );
       const checkpointPath = join(sessionDir, 'context-checkpoint.json');
       if (existsSync(checkpointPath)) {
         try {
           const checkpoint = JSON.parse(readFileSync(checkpointPath, 'utf8')) as ContextCheckpointV1;
-          const latestGeneration = Math.max(
-            1,
-            ...threadLog.events
-              .filter((event): event is Extract<typeof event, { kind: 'turn_started' }> => event.kind === 'turn_started')
-              .map((event) => event.ownership_generation ?? 1),
-          );
+          const durableOwner = engine.parity.admissionStore?.readOwner(threadLog.thread_id) ?? null;
+          const lineageEvidence: ContextCheckpointLineageEvidenceV1 = {
+            threadEvents: threadLog.events,
+            sessionEvents: sessionLog.events,
+          };
           const coldResume = validateContextCheckpoint(checkpoint, {
             expectedThreadId: threadLog.thread_id,
-            currentOwner: engine.parity.admissionStore?.readOwner(threadLog.thread_id) ?? {
-              threadId: threadLog.thread_id,
-              generation: latestGeneration,
-              token: `chat:${engineRunId}`,
-            },
+            currentOwner: durableOwner,
+            requireInstalledLineage: true,
+            authorizedObservationIds: [...engine.parity.authorizedObservationIds],
+            lineageEvidence,
           });
           if (coldResume.status === 'valid') {
-            const authorizedObservationIds = checkpoint.observation_manifest.map(
-              (observation) => observation.observation_id,
-            );
+            const authorizedObservationIds = [...engine.parity.authorizedObservationIds];
             const resolvedObservations = checkpoint.observation_manifest.map((observation) =>
               resolveObservation(
                 observation.observation_id,
@@ -5650,32 +5663,41 @@ export class ChatEngine {
 
   // ── Private Methods ─────────────────────────────────────────────────────
 
-  private currentP11Owner(): ContextCheckpointOwnerV1 {
+  private currentP11Owner(): ContextCheckpointOwnerV1 | null {
     const durableOwner = this.parity.admissionStore?.readOwner(this.parity.eventLog.thread_id);
-    if (durableOwner) {
+    return durableOwner
+      ? {
+          threadId: durableOwner.threadId,
+          generation: durableOwner.generation,
+          token: durableOwner.token,
+        }
+      : null;
+  }
+
+  private currentInstalledContextLineage(
+    checkpointId: string,
+  ): ContextCheckpointInstalledLineageV1 {
+    const committed = [...this.parity.sessionEvents.events]
+      .reverse()
+      .find((event) => event.kind === 'compaction_committed');
+    if (!committed || committed.kind !== 'compaction_committed') {
       return {
-        threadId: durableOwner.threadId,
-        generation: durableOwner.generation,
-        token: durableOwner.token,
+        checkpoint_id: checkpointId,
+        compaction_event_id: null,
+        compaction_commit_event_id: null,
+        compaction_digest: null,
+        thread_event_boundary_seq: null,
       };
     }
-    const currentTurn = this.parity.eventLog.events.find(
-      (event): event is Extract<typeof this.parity.eventLog.events[number], { kind: 'turn_started' }> =>
-        event.kind === 'turn_started' && event.turn_id === this.parity.turnId,
-    );
-    const generation = currentTurn?.ownership_generation ?? Math.max(
-      1,
-      ...this.parity.eventLog.events
-        .filter((event): event is Extract<typeof event, { kind: 'turn_started' }> => event.kind === 'turn_started')
-        .map((event) => event.ownership_generation ?? 1),
+    const capsule = this.parity.eventLog.events.find(
+      (event) => event.kind === 'compaction_capsule' && event.event_id === committed.thread_event_id,
     );
     return {
-      threadId: this.parity.eventLog.thread_id,
-      generation: Math.max(1, generation),
-      // The durable P05 owner token is opaque. This run-scoped token is only
-      // used when the embedding has not supplied a separate admission owner;
-      // it remains stable for the run and is fenced by the generation.
-      token: `chat:${this.engineRunId}`,
+      checkpoint_id: checkpointId,
+      compaction_event_id: committed.thread_event_id,
+      compaction_commit_event_id: committed.event_id,
+      compaction_digest: committed.capsule_digest,
+      thread_event_boundary_seq: capsule?.seq ?? null,
     };
   }
 
@@ -5744,6 +5766,7 @@ export class ChatEngine {
         ),
         captured.observation,
       ];
+      (this.parity.authorizedObservationIds ??= new Set()).add(captured.observation.observation_id);
     } else {
       this.p11ObservationCaptureIssues.push(
         captured.status === 'blocked' ? captured.reason : captured.reason,
@@ -5800,7 +5823,7 @@ export class ChatEngine {
     const observations = this.p11ObservationRefs.map((observation) => ({
       observation_id: observation.observation_id,
       payload_sha256: observation.payloads[0]?.sha256 ?? '',
-      authorized: true,
+      authorized: this.parity.authorizedObservationIds?.has(observation.observation_id) === true,
     }));
     return {
       resumed: this.options.resumeExisting === true,
@@ -5827,6 +5850,7 @@ export class ChatEngine {
       route,
       observations,
       observation_manifest: this.p11ObservationRefs,
+      authorized_observation_ids: [...(this.parity.authorizedObservationIds ?? [])],
       observation_recovery_issues: [...this.p11ObservationCaptureIssues],
       legacy_observation_refs: [],
     };
@@ -5838,22 +5862,30 @@ export class ChatEngine {
     const sources = this.buildP11Sources(routeOverride);
     if (!sources) return false;
     const owner = this.currentP11Owner();
+    if (!owner || !this.parity.admissionStore) return false;
+    const checkpointId = `context:${this.parity.turnId ?? this._turnIndex}:${this.workingState.revision}`;
     const prepared = prepareContextCheckpoint({
-      checkpointId: `context:${this.parity.turnId ?? this._turnIndex}:${this.workingState.revision}`,
+      checkpointId,
       sessionId: this.engineRunId,
       turnId: this.parity.turnId,
       contextEpoch: `${owner.generation}:${this.workingState.revision}:${sources.workspace?.capture_epoch ?? 'unknown'}`,
       owner,
       sources,
+      installedLineage: this.currentInstalledContextLineage(checkpointId),
     });
     if (prepared.status !== 'prepared') return false;
     const previous = this.parity.contextCheckpoint;
-    const ownerNow = this.parity.admissionStore?.readOwner(owner.threadId) ?? owner;
+    const ownerNow = this.parity.admissionStore.readOwner(owner.threadId);
+    if (!ownerNow) return false;
     const installed = await installContextCheckpoint(prepared, {
       currentOwner: ownerNow,
-      ...(this.parity.admissionStore
-        ? { readCurrentOwner: () => this.parity.admissionStore?.readOwner(owner.threadId) ?? null }
-        : {}),
+      requireInstalledLineage: true,
+      authorizedObservationIds: [...(this.parity.authorizedObservationIds ?? [])],
+      lineageEvidence: {
+        threadEvents: this.parity.eventLog.events,
+        sessionEvents: this.parity.sessionEvents.events,
+      },
+      readCurrentOwner: () => this.parity.admissionStore?.readOwner(owner.threadId) ?? null,
       install: async (checkpoint, _owner, assertOwnerCurrent) => {
         this.parity.contextCheckpoint = checkpoint;
         const receipt = await checkpointParityEventLogStrict(this.parity, this.engineRunDir, {

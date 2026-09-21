@@ -424,6 +424,7 @@ export function projectFromDurableSession(input: {
     infra_retries?: number;
   };
   workspaceRevision?: string;
+  authorizedObservationIds?: readonly string[];
 }): LiveSessionV1 {
   return projectLiveSession({
     sessionLog: input.sessionLog,
@@ -435,6 +436,7 @@ export function projectFromDurableSession(input: {
     ...(input.workspaceRevision
       ? { workspaceRevision: input.workspaceRevision }
       : {}),
+    authorizedObservationIds: input.authorizedObservationIds,
   });
 }
 
