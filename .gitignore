@@ -127,3 +127,26 @@ docs/guides/PARITY_BENCHMARK.md
 docs/OSS_DOCS_CRITIQUE_2026-08-01.md
 # Deterministic Remote UI browser artifacts (review locally or upload in CI).
 /artifacts/remote-ui/
+
+# Local worktrees, audit bundles, caches, and Astra experiments.
+.audit-worktrees/
+.chat-final-worktree/
+.chat-qualification-*/
+.closure-pr149-repair/
+.closure-pr149.bundle
+.codex-remote-attachments/
+.custody-worktrees/
+.experiment-worktrees/
+.mission-open-pr-worktree/
+.pnpm-store/
+.tmp-pr185-audit/
+.trusted-babel-review/
+.worktrees/
+ASTRA_ORCHESTRATOR_PROMPT.md
+ASTRA_ZCODE_DISCOVERY.md
+ASTRA_ZCODE_WORKER_READINESS_REPORT.md
+tools/astra-workers/
+
+# Keep the approved public design reference; ignore other local design files.
+docs/design/*
+!docs/design/babel-tui-north-star.png
