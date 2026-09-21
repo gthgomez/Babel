@@ -127,6 +127,8 @@ test('R1 production path rejects content-free inspections as recovery evidence',
     { type: 'list_dir', path: '.' },
     { type: 'glob', pattern: '**/*.ts' },
     { type: 'grep', pattern: '.' },
+    // An ancestor directory is a repository-wide search, not a localization.
+    { type: 'grep', pattern: 'recoveryGate', path: 'src/agent' },
   ];
   let index = 0;
   for (const action of denied) {

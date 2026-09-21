@@ -187,6 +187,81 @@ test('accepted discriminating evidence records a controller strategy revision', 
   assert.match(state.nextExperiment, /^controller-investigate:/);
 });
 
+test('a gate with no implicated target fails closed', () => {
+  let state = createWorkingState('fix bug X');
+  state = applyWorkingStateEvent(state, {
+    type: 'recovery_gate',
+    failureSignature: 'sig-no-targets',
+    requiredEvidence: 'inspect the failure',
+  });
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence',
+    evidence: 'read_file:src/parser.ts',
+    discriminating: true,
+    provenance: { tool: 'read_file', target: 'src/parser.ts', failureSignature: 'sig-no-targets' },
+  });
+  assert.equal(state.recoveryGate?.satisfied, false);
+});
+
+test('equivalent target spellings cannot defeat failure-scoped dedup', () => {
+  let state = createWorkingState('fix bug X');
+  state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
+  state = ingestVerifierResult({
+    state,
+    tool: 'test_run',
+    target: 'npm test -- parser',
+    exitCode: 1,
+    stdout: 'FAIL parser adds values',
+    stderr: '',
+    summary: 'same assertion remains red',
+  }).state;
+  const signature = state.recoveryGate!.failureSignature;
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence',
+    evidence: 'read_file:src/parser.ts',
+    discriminating: true,
+    provenance: { tool: 'read_file', target: 'src/parser.ts', failureSignature: signature },
+  });
+  assert.equal(state.recoveryGate?.satisfied, true);
+
+  // Re-arm for the same failure, then re-read through an equivalent spelling.
+  state = applyWorkingStateEvent(state, {
+    type: 'recovery_gate',
+    failureSignature: signature,
+    requiredEvidence: 'reread',
+    failingTargets: ['src/parser.ts'],
+  });
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence',
+    evidence: 'read_file:./src/parser.ts',
+    discriminating: true,
+    provenance: { tool: 'read_file', target: './src/parser.ts', failureSignature: signature },
+  });
+  assert.equal(state.recoveryGate?.satisfied, false);
+});
+
+test('an ancestor directory does not localize a failing file', () => {
+  let state = createWorkingState('fix bug X');
+  state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
+  state = ingestVerifierResult({
+    state,
+    tool: 'test_run',
+    target: 'npm test -- parser',
+    exitCode: 1,
+    stdout: 'FAIL parser adds values',
+    stderr: '',
+    summary: 'same assertion remains red',
+  }).state;
+  const signature = state.recoveryGate!.failureSignature;
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence',
+    evidence: 'grep:src',
+    discriminating: true,
+    provenance: { tool: 'grep', target: 'src', failureSignature: signature },
+  });
+  assert.equal(state.recoveryGate?.satisfied, false);
+});
+
 test('environment and provider failures stay outside implementation recovery gate', () => {
   let state = createWorkingState('fix bug X');
   state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });

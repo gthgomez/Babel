@@ -442,27 +442,30 @@ function normalizeTarget(value: string): string {
  * repeated reads of the same target for the same failure.
  */
 export function recoveryEvidenceKey(evidence: string, failureSignature: string): string {
-  return `${evidence}#${failureSignature}`
+  // Normalize the target component so equivalent spellings (`src/x.ts` vs
+  // `./src/x.ts` vs `src\x.ts`) cannot defeat failure-scoped dedup.
+  const separator = evidence.indexOf(':')
+  const tool = separator >= 0 ? evidence.slice(0, separator) : evidence
+  const rawTarget = separator >= 0 ? evidence.slice(separator + 1) : ''
+  const normalized = rawTarget ? `${tool}:${normalizeTarget(rawTarget)}` : tool
+  return `${normalized}#${failureSignature}`
 }
 
 /**
  * Whether an inspected target localizes one of the gate's failing targets. An
- * absent/empty failing set is treated as "cannot prove exclusion" (callers that
- * care must supply targets); a directory-wide or unrecognized target never
- * matches.
+ * absent/empty failing set fails closed (there is nothing to localize, so the
+ * observation cannot be discriminating). The inspected target must name the
+ * failing file itself or a path inside it; naming an ancestor directory is a
+ * repository-wide search, not a localization.
  */
 export function targetMatchesGate(target: string, failingTargets?: string[]): boolean {
   const candidate = normalizeTarget(target)
   if (!candidate || candidate === '.') return false
-  if (!failingTargets || failingTargets.length === 0) return true
+  if (!failingTargets || failingTargets.length === 0) return false
   return failingTargets.some((raw) => {
     const known = normalizeTarget(raw)
     if (!known) return false
-    return (
-      candidate === known ||
-      candidate.startsWith(`${known}/`) ||
-      known.startsWith(`${candidate}/`)
-    )
+    return candidate === known || candidate.startsWith(`${known}/`)
   })
 }
 
