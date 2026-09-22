@@ -167,7 +167,13 @@ function evidenceOf(
   return { threadEvents: threadLog.events, sessionEvents: sessionLog.events };
 }
 
-/** Mirrors chatEngine.currentInstalledContextLineage (install-time rule). */
+/**
+ * Test mirror of the PRODUCTION install-time lineage builder:
+ * `chatEngine.currentInstalledContextLineage` (src/agent/chatEngine.ts:6055-6080).
+ * Keep this mirror in sync with that production counterpart — if the
+ * production reverse-scan changes (ordering, identity fields, or the
+ * all-null-when-zero-commits semantics), update this mirror in the same change.
+ */
 function lineageFromLatestCommit(
   threadLog: ThreadEventLog,
   sessionLog: SessionEventLog,
@@ -206,6 +212,17 @@ function scenario(): { threadLog: ThreadEventLog; sessionLog: SessionEventLog; o
     token: 'owner-token-1',
   };
   return { threadLog, sessionLog, owner };
+}
+
+/** The all-null lineage production emits when zero commits exist. */
+function nullLineage(checkpointId: string): ContextCheckpointInstalledLineageV1 {
+  return {
+    checkpoint_id: checkpointId,
+    compaction_event_id: null,
+    compaction_commit_event_id: null,
+    compaction_digest: null,
+    thread_event_boundary_seq: null,
+  };
 }
 
 function newTurn(threadLog: ThreadEventLog, task: string): string {
@@ -305,6 +322,51 @@ function capsuleShown(
     (message) => message.name === 'compaction_capsule' && (message.content ?? '').includes(marker),
   );
 }
+
+// ── Null-lineage currency: BOTH directions locked (contextCheckpoints.ts
+// null-lineage branch: `latest === undefined ? [] : ['lineage_superseded']`).
+// Reverting that branch to a bare `return []` must turn the first test RED. ──
+test('null-lineage currency: all-null lineage is superseded once ANY commit exists', async () => {
+  const { threadLog, sessionLog, owner } = scenario();
+  const turnA = newTurn(threadLog, 'task A');
+  await commitCapsule(threadLog, sessionLog, turnA, ALPHA);
+  assert.equal(
+    sessionLog.events.filter((event) => event.kind === 'compaction_committed').length,
+    1,
+    'fixture: exactly one durable commit',
+  );
+
+  // A checkpoint installed BEFORE the first compaction: its lineage claims
+  // "no committed compaction exists". Once A is committed, that claim is a
+  // stale currency claim and must be refused explicitly — never accepted as
+  // "valid because it names nothing".
+  const cpNull = buildCheckpoint('checkpoint-null-stale', owner, nullLineage('checkpoint-null-stale'));
+  const valid = validateFull(cpNull, owner, threadLog, sessionLog);
+  assert.equal(
+    valid.status,
+    'blocked',
+    `null lineage must not validate over a committed root — ${valid.reasons.join('; ')}`,
+  );
+  assert.deepEqual(valid.reasons, ['lineage_superseded']);
+  const resume = resumeFull(cpNull, owner, threadLog, sessionLog);
+  assert.equal(resume.status, 'blocked');
+  assert.ok(resume.reasons.includes('lineage_superseded'), resume.reasons.join('; '));
+});
+
+test('null-lineage currency: all-null lineage stays valid while zero commits exist', () => {
+  const { threadLog, sessionLog, owner } = scenario();
+  assert.equal(
+    sessionLog.events.filter((event) => event.kind === 'compaction_committed').length,
+    0,
+    'fixture: session log has zero commits',
+  );
+
+  const cpNull = buildCheckpoint('checkpoint-null-clean', owner, nullLineage('checkpoint-null-clean'));
+  const valid = validateFull(cpNull, owner, threadLog, sessionLog);
+  assert.equal(valid.status, 'valid', `all-null must stay valid pre-first-commit — ${valid.reasons.join('; ')}`);
+  const resume = resumeFull(cpNull, owner, threadLog, sessionLog);
+  assert.equal(resume.status, 'ready', resume.reasons.join('; '));
+});
 
 // ── Matrix case 1: A only → A valid ────────────────────────────────────────
 test('matrix 1: with only capsule A committed, installed lineage A is valid', async () => {
