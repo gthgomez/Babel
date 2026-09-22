@@ -23,3 +23,24 @@ export const ADMISSION_FAULT_HOOK: unique symbol = Symbol('babel.runtime.admissi
 export interface AdmissionFaultInjectionOptions {
   readonly [ADMISSION_FAULT_HOOK]?: (point: AdmissionFaultPoint) => void;
 }
+
+/**
+ * Open-handle observability for lifetime tests ("repeated open/close leaks
+ * nothing"). `admission.ts` notes every inner store that enters/leaves its
+ * per-process registry; tests read the count through this module so the
+ * counter itself is test-only surface.
+ */
+let openAdmissionStores = 0;
+
+export function noteAdmissionStoreOpened(): void {
+  openAdmissionStores += 1;
+}
+
+export function noteAdmissionStoreClosed(): void {
+  openAdmissionStores = Math.max(0, openAdmissionStores - 1);
+}
+
+/** Number of inner admission DB handles currently owned by this process. */
+export function getOpenAdmissionStoreCount(): number {
+  return openAdmissionStores;
+}

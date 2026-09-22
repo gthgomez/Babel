@@ -59,6 +59,8 @@ import {
 } from './admissionContracts.js';
 import {
   ADMISSION_FAULT_HOOK,
+  noteAdmissionStoreClosed,
+  noteAdmissionStoreOpened,
   type AdmissionFaultInjectionOptions,
 } from './admissionTestHooks.js';
 
@@ -81,6 +83,14 @@ export interface AdmitCommandInput {
   readonly digestInput: CommandDigestInput;
   readonly ownerGeneration: number;
   readonly ownerToken: string;
+  /**
+   * Proof of the CURRENT owner token when this admission advances ownership
+   * past it (generation > stored generation). Optional so a first/manual
+   * admission stays possible, but a caller that holds a lease must present the
+   * current token to take over — a superseded holder cannot: its old token no
+   * longer matches. Mismatch fails closed with `ADMISSION_STALE_OWNER`.
+   */
+  readonly previousOwnerToken?: string;
   readonly leaseId?: string;
   readonly baselineId?: string;
   readonly effectClass: ToolEffectClass;
@@ -511,6 +521,90 @@ function serializeHashes(hashes: Record<string, string> | undefined): string | n
   return JSON.stringify(hashes);
 }
 
+// ─── Per-process handle registry (single owner per DB path) ────────────────
+//
+// Two production seams may open the same session's store in one process (for
+// example a REPL engine and a protocol-host materialization of the same
+// thread). A second open must not double-own the SQLite handle: concurrent
+// opens share ONE inner store through reference-counted façades, `close()`
+// releases this façade's reference, and the handle closes only when the last
+// reference is gone. After the final close the registry entry is dropped, so
+// a later reopen (crash/restart simulation included) opens fresh.
+
+interface OpenStoreEntry {
+  readonly store: AdmissionStore;
+  refs: number;
+}
+
+const OPEN_STORES = new Map<string, OpenStoreEntry>();
+
+/** Test observability lives in the test-hooks module (see admissionTestHooks). */
+function noteStoreOpened(): void {
+  noteAdmissionStoreOpened();
+}
+
+function noteStoreClosed(): void {
+  noteAdmissionStoreClosed();
+}
+
+function refCountedStore(inner: AdmissionStore): AdmissionStore {
+  let released = false;
+  return {
+    dbPath: inner.dbPath,
+    admitCommand(input) {
+      if (released) {
+        return {
+          kind: 'rejected',
+          reasonCode: ADMISSION_REASONS.UNAVAILABLE,
+          detail: 'store_closed',
+        };
+      }
+      return inner.admitCommand(input);
+    },
+    settleAdmission(input) {
+      if (released) {
+        return { settled: false, reasonCode: ADMISSION_REASONS.UNAVAILABLE, detail: 'store_closed' };
+      }
+      return inner.settleAdmission(input);
+    },
+    recoverAdmission(input) {
+      if (released) {
+        return {
+          kind: 'rejected',
+          reasonCode: ADMISSION_REASONS.UNAVAILABLE,
+          detail: 'store_closed',
+        };
+      }
+      return inner.recoverAdmission(input);
+    },
+    readAdmission(threadId, commandId) {
+      // Fail closed after this façade's close: a released handle proves nothing.
+      return released ? null : inner.readAdmission(threadId, commandId);
+    },
+    listAdmissions(threadId) {
+      return released ? { records: [], skippedCorruptRows: 0 } : inner.listAdmissions(threadId);
+    },
+    readOwner(threadId) {
+      return released ? null : inner.readOwner(threadId);
+    },
+    readOutbox(admissionId) {
+      return released ? null : inner.readOutbox(admissionId);
+    },
+    close(): void {
+      if (released) return;
+      released = true;
+      const entry = OPEN_STORES.get(inner.dbPath);
+      if (!entry || entry.store !== inner) return;
+      entry.refs -= 1;
+      if (entry.refs <= 0) {
+        OPEN_STORES.delete(inner.dbPath);
+        noteStoreClosed();
+        inner.close();
+      }
+    },
+  };
+}
+
 /** Open (creating if needed) the durable admission store for one run dir. */
 export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpenResult {
   let root: string;
@@ -526,6 +620,13 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
   const dir = jailed.dir;
 
   const dbPath = join(dir, DB_FILENAME);
+  // A second in-process open of the same DB path must not double-own the
+  // handle: hand out another reference to the already-open inner store.
+  const alreadyOpen = OPEN_STORES.get(dbPath);
+  if (alreadyOpen) {
+    alreadyOpen.refs += 1;
+    return { ok: true, store: refCountedStore(alreadyOpen.store) };
+  }
   try {
     // `lstat` (not `exists`) so a dangling symlink counts as present: creating
     // through it would write outside the jail before the realpath check.
@@ -683,6 +784,33 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
               detail: `generation ${input.ownerGeneration} is superseded by ${ownerGeneration}`,
             };
           }
+          // A1/ownership seizure fence: an EXISTING owner may only be advanced
+          // by exactly one generation, never seized by an arbitrary larger
+          // number. When the caller presents the previous owner token it must
+          // be the current one, so a stale holder can never prove takeover.
+          if (
+            input.ownerGeneration > ownerGeneration &&
+            input.ownerGeneration !== ownerGeneration + 1
+          ) {
+            db.exec('ROLLBACK');
+            return {
+              kind: 'rejected',
+              reasonCode: ADMISSION_REASONS.STALE_OWNER,
+              detail: `generation ${input.ownerGeneration} must advance the owner generation ${ownerGeneration} by exactly one`,
+            };
+          }
+          if (
+            input.ownerGeneration === ownerGeneration + 1 &&
+            input.previousOwnerToken !== undefined &&
+            input.previousOwnerToken !== ownerToken
+          ) {
+            db.exec('ROLLBACK');
+            return {
+              kind: 'rejected',
+              reasonCode: ADMISSION_REASONS.STALE_OWNER,
+              detail: 'previous_owner_token_mismatch',
+            };
+          }
         }
 
         const admissionId = newId();
@@ -799,7 +927,21 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
             return { settled: false, reasonCode: ADMISSION_REASONS.UNAVAILABLE, detail: 'corrupt_owner_row' };
           }
         }
-        if (ownerGeneration !== input.ownerGeneration || ownerToken !== input.ownerToken) {
+        const ownerMatches =
+          ownerGeneration !== null &&
+          ownerGeneration === input.ownerGeneration &&
+          ownerToken === input.ownerToken;
+        // A1: after a generation takeover the superseded owner's *claimed*
+        // command must remain settleable — otherwise a gen-N admission would
+        // stay `'claimed'` forever once gen N+1 appears. The fence: only a
+        // non-success terminal state is allowed, and only for an admission
+        // actually claimed under the settling generation (checked below), so a
+        // superseded command can never record success under current authority.
+        const ownerSuperseded =
+          ownerGeneration !== null && input.ownerGeneration < ownerGeneration;
+        const supersededSettleAllowed =
+          ownerSuperseded && (input.state === 'aborted' || input.state === 'indeterminate');
+        if (!ownerMatches && !supersededSettleAllowed) {
           db.exec('ROLLBACK');
           return {
             settled: false,
@@ -937,7 +1079,9 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
 
     readAdmission(threadId, commandId): AdmissionRecordV1 | null {
       const row = readAdmissionRow(threadId, commandId);
-      return row ? rowToAdmission(row) : null;
+      // A1: a corrupt row fails closed to null (non-authoritative) instead of
+      // throwing out of a reader on the owner/checkpoint decision path.
+      return safeRowToAdmission(row);
     },
 
     listAdmissions(threadId): AdmissionListing {
@@ -958,7 +1102,14 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
       const row = db.prepare('SELECT * FROM owner WHERE thread_id = ?').get(threadId) as
         | Record<string, unknown>
         | undefined;
-      return row ? rowToOwner(row) : null;
+      if (!row) return null;
+      // A1: a corrupt owner row fails closed to null — `owner_missing` on the
+      // P11 path — instead of throwing out of `currentP11Owner`/hydration.
+      try {
+        return rowToOwner(row);
+      } catch {
+        return null;
+      }
     },
 
     readOutbox(admissionId): OutboxRecordV1 | null {
@@ -970,7 +1121,9 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
     },
   };
 
-  return { ok: true, store };
+  OPEN_STORES.set(dbPath, { store, refs: 1 });
+  noteStoreOpened();
+  return { ok: true, store: refCountedStore(store) };
 }
 
 function errorText(error: unknown): string {
