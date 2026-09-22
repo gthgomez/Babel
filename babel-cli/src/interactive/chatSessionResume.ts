@@ -18,6 +18,7 @@ import {
   applyEventLogToChatEngine,
 } from '../services/threadStore/conversationSync.js';
 import { loadThreadEventLogFromDir, validateRepoIdentityOnResume } from '../agent/threadEventLog.js';
+import { recoverCheckpointArtifacts } from '../agent/liveSessionBridge.js';
 import { SessionEventLogRestoreError } from '../agent/sessionEvents.js';
 import { inspectSessionEventLogFromDir } from '../agent/sessionEvents.js';
 import type { SessionEventLog } from '../agent/sessionEvents.js';
@@ -110,6 +111,11 @@ export async function resumeChatSession(
 
     // Prefer durable thread event log (preserves tool call/result IDs)
     const sessionDir = chatSessionDir(sessionId);
+    // R1 durability (6b-1): recover an interrupted checkpoint batch BEFORE the
+    // resume inspection reads durable state — a staged/abandoned artifact is
+    // never current authority. Idempotent no-op without a journal; a malformed
+    // journal fails closed here (surfaced as a failed resume).
+    recoverCheckpointArtifacts(sessionDir);
     const sessionEvents = inspectSessionEventLogFromDir(sessionDir, sessionId);
     if (sessionEvents.kind === 'invalid') {
       throw new SessionEventLogRestoreError(

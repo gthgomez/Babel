@@ -97,6 +97,7 @@ import {
   loadLiveSessionAuthorityStrict,
   loadLiveSessionSnapshot,
   persistLiveSessionAuthority,
+  recoverCheckpointArtifacts,
 } from './liveSessionBridge.js';
 import type { LiveSessionV1 } from './liveSession.js';
 import {
@@ -4913,6 +4914,12 @@ export class ChatEngine {
   }
   restoreSessionEventsFromDir(runDir?: string): number {
     const targetDir = runDir ?? this.engineRunDir;
+    // R1 durability (6b-1): recover an interrupted checkpoint batch BEFORE the
+    // session log is read, so a staged/abandoned artifact can never be
+    // consumed as durable state. Idempotent no-op when no journal exists; a
+    // malformed journal still fails closed (CHECKPOINT_JOURNAL_INVALID), now
+    // before the reads it would otherwise corrupt.
+    recoverCheckpointArtifacts(targetDir);
     const loaded = loadSessionEventLogIfPresentForResume(targetDir, this.engineRunId);
     return loaded ? this.restoreSessionEvents(loaded, { runDir: targetDir }) : 0;
   }
@@ -5704,8 +5711,18 @@ export class ChatEngine {
       .split('\n')
       .filter((line) => line.trim() !== '')
       .map((line) => JSON.parse(line));
-    const sessionDir = chatSessionDir(engineRunId),
-      sessionLog = loadSessionEventLogForResume(sessionDir, engineRunId);
+    const sessionDir = chatSessionDir(engineRunId);
+    // R1 durability (6b-1): recover an interrupted checkpoint batch BEFORE any
+    // durable artifact is read. A merely staged/abandoned artifact is NEVER
+    // current authority: a crash between batch renames must not let the
+    // pre-recovery thread/session logs (which may still carry an uncommitted
+    // capsule) be loaded into the restored engine, and with no valid published
+    // checkpoint the restore ends non-authoritative (lineage_not_committed /
+    // lineage_missing → checkpoint inert, durable logs remain the only
+    // source). Idempotent no-op without a journal; a malformed journal fails
+    // closed (CHECKPOINT_JOURNAL_INVALID) here rather than after partial reads.
+    recoverCheckpointArtifacts(sessionDir);
+    const sessionLog = loadSessionEventLogForResume(sessionDir, engineRunId);
     const engine = new ChatEngine({
       ...options,
       runId: engineRunId,

@@ -34,6 +34,7 @@ import {
 import { chatSessionDir } from '../../cli/runsLayout.js';
 import type { BabelMode } from '../../executor/contracts.js';
 import type { RestoreReport, RestoreRepoIdentity } from '../../executor/modeAdapters.js';
+import { recoverCheckpointArtifacts } from '../../agent/liveSessionBridge.js';
 import { applyCellsToChatEngine, applyEventLogToChatEngine } from './conversationSync.js';
 import { loadThreadCells } from './threadStore.js';
 
@@ -270,20 +271,48 @@ export function hydrateEngineFromRestore(
   if (!report.resumable) return;
   const sessionDir = chatSessionDir(report.threadId);
 
+  // R1 durability (6b-1): recover an interrupted checkpoint batch BEFORE any
+  // durable artifact is read here. A merely staged/abandoned artifact is NEVER
+  // current authority — without this, the thread event log could be loaded
+  // pre-recovery and an uncommitted capsule would feed both the rebuilt
+  // conversation and the installed-lineage validation below. Idempotent no-op
+  // without a journal; a malformed journal fails closed (CHECKPOINT_JOURNAL_INVALID)
+  // before any read, and the host never caches an engine that throws here.
+  recoverCheckpointArtifacts(sessionDir);
+
   if (report.source === 'thread_event_log') {
     const log = loadThreadEventLogFromDir(sessionDir);
     if (!log || log.events.length === 0) {
       throw new Error(`Thread event log for ${report.threadId} is no longer available`);
     }
     applyEventLogToChatEngine(engine, log);
-    return;
-  }
-
-  if (report.source === 'history_cells') {
+  } else if (report.source === 'history_cells') {
     const cells = loadThreadCells(report.threadId);
     if (cells.length === 0) {
       throw new Error(`History cells for ${report.threadId} are no longer available`);
     }
     applyCellsToChatEngine(engine, cells);
+  }
+
+  // R1 (6b-2): the protocol materialization path reconstructs the same session
+  // lifecycle state as the primary resume entrypoint
+  // (`createEngineFromEventLog`, conversationSync.ts) in the SAME repaired
+  // ordering — durable observation membership FIRST (session-event restore
+  // re-projects and persists the snapshot from it, so loading it afterwards
+  // would erase the durable membership), then session-event restore (seq
+  // continuity: without it `nextSeq` restarts at 0 and the next flush writes
+  // duplicate seqs, bricking the durable log), then installed context
+  // authority validated against the durable owner the host attached (owner
+  // missing/stale owner fail closed to an inert checkpoint — no second
+  // authority source). typeof guards keep injected stub engines on their
+  // pre-fix fail-closed behavior: no seam → no restored state → no authority.
+  if (typeof engine.loadObservationMembership === 'function') {
+    engine.loadObservationMembership(sessionDir);
+  }
+  if (typeof engine.restoreSessionEventsFromDir === 'function') {
+    engine.restoreSessionEventsFromDir(sessionDir);
+  }
+  if (typeof engine.hydrateInstalledContextAuthority === 'function') {
+    engine.hydrateInstalledContextAuthority(sessionDir);
   }
 }
