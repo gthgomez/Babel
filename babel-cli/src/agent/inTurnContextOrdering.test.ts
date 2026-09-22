@@ -309,6 +309,7 @@ function stubMidTurnCompaction(
   engine: ChatEngine,
   task: string,
   commitAtCall: number,
+  onCommitted?: () => void,
 ): CompactionStubState {
   const state: CompactionStubState = {
     calls: 0,
@@ -349,6 +350,7 @@ function stubMidTurnCompaction(
     state.threadEventId = commit.threadEventId ?? null;
     state.sessionEventId = commit.sessionEventId ?? null;
     state.committed = true;
+    onCommitted?.();
     internals['conversation'] = commit.conversation;
     return {
       mode: 'llm' as const,
@@ -586,6 +588,7 @@ test('compacting turn: provider request uses the just-installed generation (runn
       const bValidation = validateContextCheckpoint(diskB, {
         requireInstalledLineage: true,
         lineageEvidence: evidence,
+        authorizedObservationIds: [...(parity.authorizedObservationIds ?? [])],
       });
       assert.equal(
         bValidation.status,
@@ -595,6 +598,7 @@ test('compacting turn: provider request uses the just-installed generation (runn
       const aValidation = validateContextCheckpoint(checkpointA, {
         requireInstalledLineage: true,
         lineageEvidence: evidence,
+        authorizedObservationIds: [...(parity.authorizedObservationIds ?? [])],
       });
       assert.equal(aValidation.status, 'blocked', 'A must no longer be provable as current');
       assert.ok(
@@ -806,7 +810,10 @@ test('routed Task-4 trace: after B commits mid-process the next dispatch roots a
 
         // Single submission: iteration 1 promotes A, iteration 2 commits B.
         capture.control.syntheticToolRound = true;
-        const compaction = stubMidTurnCompaction(engine, TURN2_TASK, 2);
+        let rebuildCountAtCommit: number | undefined;
+        const compaction = stubMidTurnCompaction(engine, TURN2_TASK, 2, () => {
+          rebuildCountAtCommit = capture.rebuilds.length;
+        });
         const bodiesBefore = provider.bodies.length;
         const outcome = await submit(engine, TURN1_TASK);
         assert.equal(
@@ -850,8 +857,13 @@ test('routed Task-4 trace: after B commits mid-process the next dispatch roots a
           countContent(dispatchB.messages, TURN1_TASK) <= 1,
           `[${mode}] no duplicated pre-compaction history (the A-rooted defect)`,
         );
+        assert.notEqual(rebuildCountAtCommit, undefined, 'the compaction boundary must be observed');
+        const rebuildsAfterCommit = capture.rebuilds.slice(rebuildCountAtCommit);
+        assert.ok(rebuildsAfterCommit.length > 0, 'B must be rebuilt after its commit');
         assert.ok(
-          capture.rebuilds.every((entry) => entry.root !== checkpointA),
+          rebuildsAfterCommit.every(
+            (entry) => entry.root?.installed_lineage?.compaction_commit_event_id === compaction.sessionEventId,
+          ),
           `[${mode}] no rebuild in the compacting iteration may consume A once B commits`,
         );
         const wire = wireMessages(provider.bodies, bodiesBefore);

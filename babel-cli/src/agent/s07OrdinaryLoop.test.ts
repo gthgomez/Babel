@@ -24,15 +24,22 @@
 import assert from 'node:assert/strict';
 import { describe, test, before, after, afterEach } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { ChatEngine, type ChatEvent, type ChatResult } from './chatEngine.js';
 import type { ToolStreamEvent } from '../runners/base.js';
-import { chatSessionDir } from '../cli/runsLayout.js';
+import { chatSessionDir, openSessionAdmissionStore } from '../cli/runsLayout.js';
+import { resumeChatSession } from '../interactive/chatSessionResume.js';
+import type { ReplContext } from '../interactive/context.js';
+import { rebuildProviderMessagesFromEvents } from './threadEventLog.js';
+import { getOpenAdmissionStoreCount } from '../runtime/admissionTestHooks.js';
+import { sha256Canonical } from '../acceptance/canonical.js';
+import type { ContextCheckpointV1 } from '../runtime/contextCheckpoints.js';
 import { inspectSessionEventLogFromDir, recordProgressRecovery, type SessionEvent } from './sessionEvents.js';
-import { computeTerminalOutcome } from './chatEngineObservability.js';
+import { computeTerminalOutcome, persistTranscriptToDisk } from './chatEngineObservability.js';
 import { DIRECT_MUTATION_TOOLS } from './mutationTools.js';
 import { globalCostTracker } from '../services/costTracker.js';
 import type { CompactionStrategy, ChatMessage } from './chatCompaction.js';
@@ -1012,6 +1019,8 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
 
   test('Scenario 6 — post-compaction reread: content leaves active context, then is reinjected into the final provider request', async () => {
     const fixture = makeFixture();
+    let admittedEngine: ChatEngine | undefined;
+    let resumedEngine: ChatEngine | undefined;
     try {
       writeBigFile(fixture);
       // Deterministic compaction strategy: drop the whole prior window and
@@ -1060,6 +1069,12 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
         {
           maxEstimatedTokens: 200,
           configureEngine(engine) {
+            // Match production construction: the submission must acquire a
+            // real durable owner before a compacted context can be installed.
+            const admission = openSessionAdmissionStore(engine.getParityRuntime().eventLog.thread_id);
+            if (!admission.ok) throw new Error(admission.detail);
+            engine.attachAdmissionStore(admission.store);
+            admittedEngine = engine;
             (engine as unknown as { compactionManager: unknown }).compactionManager = new CompactionManager([
               deterministicCompaction,
             ]);
@@ -1076,6 +1091,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       for (const event of o.events) {
         if (event.type === 'context_compacted') compactionEvents += 1;
       }
+      assert.equal(o.events.at(-1)?.type, 'done', o.answer);
       assert.ok(compactionEvents >= 1, 'real compaction occurred in the loop, not just an epoch bump');
       assert.ok(
         o.sessionEvents.some((e) => e.kind === 'compaction_committed' || e.kind === 'compaction_created'),
@@ -1092,9 +1108,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.ok(internals.readContextEpoch >= 1, 'compaction started a new read-injection epoch');
 
       // ...and re-reading 100-150 after compaction reinjects the content into
-      // the final provider-bound request. (P11 follow-up: the frozen head still
-      // carries the compaction summary in the system role; authority separation
-      // of model summary vs. harness working state is a later lane.)
+      // the final provider-bound request.
       const finalRequest = JSON.stringify(o.providerRequests[2]?.messages ?? []);
       assert.match(finalRequest, /BIGROW_0100/, 'reinjected range start reaches the final request');
       assert.match(finalRequest, /BIGROW_0150/, 'reinjected range end reaches the final request');
@@ -1102,9 +1116,172 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
         !o.progressInterventions.includes('terminal_blocked'),
         'post-compaction re-read is not treated as read thrash',
       );
+
+      // Close the producing engine and use the ordinary /resume seam. No
+      // manual hydration or synthetic owner may make the checkpoint active.
+      const produced = o.engine.getParityRuntime();
+      const checkpoint = produced.contextCheckpoint;
+      assert.ok(checkpoint, 'the real submission installed a checkpoint');
+      assert.ok(checkpoint.installed_lineage?.compaction_commit_event_id);
+      assert.ok(checkpoint.observation_manifest.length > 0, 'real reads captured durable observations');
+      const observationIds = checkpoint.observation_manifest.map((entry) => entry.observation_id);
+      o.engine.closeAdmissionStore();
+      assert.equal(getOpenAdmissionStoreCount(), 0, 'the producer releases its durable store');
+      // The streaming fixture has no UI history writer. Persist its actual
+      // conversation with the production transcript writer before cold resume.
+      await persistTranscriptToDisk(chatSessionDir(checkpoint.threadId), [...o.engine.getConversation()]);
+      const ctx = {
+        state: { model: MODEL },
+        turns: [],
+        turnCounter: 0,
+        chatEngine: undefined,
+        saveSessionState: () => undefined,
+        resolveCurrentTarget: () => ({
+          targetRoot: fixture.root,
+          workspaceRoot: null,
+          project: null,
+          source: 'cwd',
+          cwd: fixture.root,
+        }),
+      } as unknown as ReplContext;
+      const readResumedEngine = (): ChatEngine | undefined => ctx.chatEngine;
+      const resumed = await resumeChatSession(ctx, produced.eventLog.thread_id);
+      resumedEngine = readResumedEngine();
+      assert.equal(resumed.ok, true, resumed.ok ? '' : resumed.message);
+      assert.ok(resumedEngine, '/resume reconstructed an engine');
+      const restored = resumedEngine.getParityRuntime();
+      assert.equal(restored.contextCheckpoint?.checkpoint_digest, checkpoint.checkpoint_digest);
+      assert.deepEqual(restored.admissionStore?.readOwner(checkpoint.threadId)?.token, checkpoint.owner.token);
+      for (const id of observationIds) {
+        assert.ok(restored.authorizedObservationIds?.has(id), 'membership survives ordinary resume');
+      }
+      const reconstructed = rebuildProviderMessagesFromEvents(restored.eventLog, {
+        systemPrompt: 'controller policy',
+        installedContextCheckpoint: restored.contextCheckpoint!,
+      });
+      const capsuleMessages = reconstructed.filter(
+        (message) => 'name' in message && message.name === 'compaction_capsule',
+      );
+      assert.equal(capsuleMessages.length, 1, 'resume consumes exactly the installed capsule');
+      assert.match(JSON.stringify(reconstructed), /BIGROW_0100/, 'resumed provider context retains the reread');
+
+      const sessionDir = chatSessionDir(checkpoint.threadId);
+      const checkpointPath = join(sessionDir, 'context-checkpoint.json');
+      const snapshotPath = join(sessionDir, 'live-session-snapshot.json');
+      const originalCheckpoint = readFileSync(checkpointPath, 'utf8');
+      const originalSnapshot = readFileSync(snapshotPath, 'utf8');
+      const dbPath = restored.admissionStore!.dbPath;
+      const payloadPath = join(sessionDir, 'observations', checkpoint.observation_manifest[0]!.payloads[0]!.object_key);
+      const renameOwner = (from: string, to: string): void => {
+        const db = new DatabaseSync(dbPath);
+        try {
+          db.prepare('UPDATE owner SET thread_id = ? WHERE thread_id = ?').run(to, from);
+        } finally {
+          db.close();
+        }
+      };
+      const controls: Array<{
+        name: string;
+        reason?: string;
+        change?: (value: ContextCheckpointV1) => void;
+        corruptJson?: boolean;
+        corruptDigest?: boolean;
+        withhold?: () => () => void;
+      }> = [
+        { name: 'uninstalled checkpoint', reason: 'lineage_missing', change: (value) => { delete value.installed_lineage; } },
+        { name: 'stale owner', reason: 'stale_owner', change: (value) => {
+          value.owner = { ...value.owner, generation: value.owner.generation + 1 };
+          value.generation += 1;
+        } },
+        { name: 'wrong owner token', reason: 'stale_owner', change: (value) => { value.owner = { ...value.owner, token: 'foreign-token' }; } },
+        { name: 'cross-session owner', reason: 'expected_thread_mismatch', change: (value) => {
+          value.owner = { ...value.owner, threadId: 'foreign-session' };
+          value.threadId = 'foreign-session'; value.sessionId = 'foreign-session';
+        } },
+        { name: 'wrong checkpoint digest', reason: 'checkpoint_digest_mismatch', corruptDigest: true },
+        { name: 'wrong capsule digest', reason: 'lineage_not_committed', change: (value) => { value.installed_lineage!.compaction_digest = '0'.repeat(64); } },
+        { name: 'wrong capsule event', reason: 'lineage_not_committed', change: (value) => { value.installed_lineage!.compaction_event_id = 'foreign-event'; } },
+        { name: 'wrong commit event', reason: 'lineage_not_committed', change: (value) => { value.installed_lineage!.compaction_commit_event_id = 'foreign-commit'; } },
+        { name: 'wrong boundary', reason: 'lineage_invalid', change: (value) => { value.installed_lineage!.thread_event_boundary_seq! += 1; } },
+        { name: 'missing owner', reason: 'owner_missing', withhold: () => {
+          renameOwner(checkpoint.threadId, 'withheld-owner');
+          return () => renameOwner('withheld-owner', checkpoint.threadId);
+        } },
+        { name: 'missing observation membership', reason: 'observation_manifest_incomplete', withhold: () => {
+          const snapshot = JSON.parse(originalSnapshot);
+          snapshot.authorized_observation_ids = [];
+          writeFileSync(snapshotPath, JSON.stringify(snapshot));
+          return () => writeFileSync(snapshotPath, originalSnapshot);
+        } },
+        { name: 'missing observation payload', reason: 'unavailable', withhold: () => {
+          renameSync(payloadPath, `${payloadPath}.withheld`);
+          return () => renameSync(`${payloadPath}.withheld`, payloadPath);
+        } },
+        { name: 'malformed checkpoint', corruptJson: true },
+      ];
+      for (const control of controls) {
+        resumedEngine?.closeAdmissionStore();
+        ctx.chatEngine = undefined;
+        const value = JSON.parse(originalCheckpoint) as ContextCheckpointV1;
+        control.change?.(value);
+        // Re-sign edited fields so lineage/owner controls cannot pass merely
+        // because the outer integrity digest detected an unrelated mismatch.
+        const { checkpoint_digest: _digest, ...unsigned } = value;
+        value.checkpoint_digest = control.corruptDigest ? '0'.repeat(64) : sha256Canonical(unsigned);
+        writeFileSync(checkpointPath, control.corruptJson ? '{' : JSON.stringify(value));
+        writeFileSync(snapshotPath, originalSnapshot);
+        const restoreWithheld = control.withhold?.();
+        try {
+          const result = await resumeChatSession(ctx, checkpoint.threadId);
+          resumedEngine = readResumedEngine();
+          assert.equal(result.ok, true, `${control.name}: history remains resumable`);
+          assert.ok(resumedEngine, control.name);
+          assert.equal(resumedEngine.getParityRuntime().contextCheckpoint, undefined, `${control.name}: no authority promoted`);
+          const validation = resumedEngine.hydrateInstalledContextAuthority();
+          assert.equal(validation.applied, false, control.name);
+          if (control.reason) {
+            assert.ok(validation.issues.some((issue) => issue.includes(control.reason!)), `${control.name}: ${validation.issues.join('; ')}`);
+          }
+        } finally {
+          resumedEngine?.closeAdmissionStore();
+          restoreWithheld?.();
+          writeFileSync(checkpointPath, originalCheckpoint);
+          writeFileSync(snapshotPath, originalSnapshot);
+        }
+      }
+      ctx.chatEngine = undefined;
+      const recovered = await resumeChatSession(ctx, checkpoint.threadId);
+      resumedEngine = readResumedEngine();
+      assert.equal(recovered.ok, true, 'restoring genuine artifacts restores resumability');
+      assert.equal(resumedEngine?.getParityRuntime().contextCheckpoint?.checkpoint_digest, checkpoint.checkpoint_digest);
+      assert.ok(resumedEngine);
+      const resumedRunner = makeRunner([
+        [{ type: 'text_delta', text: 'The resumed investigation retains the reread.' }, { type: 'done', finishReason: 'stop' }],
+      ]);
+      installRunner(resumedEngine, resumedRunner);
+      currentEngine = resumedEngine;
+      const resumedEvents: ChatEvent[] = [];
+      for await (const event of resumedEngine.submitMessageStream('Continue this investigation without edits.', undefined, { continueTask: true })) {
+        resumedEvents.push(event);
+      }
+      assert.equal(resumedEvents.at(-1)?.type, 'done', 'the resumed engine dispatches and completes');
+      const resumedRequest = resumedRunner.requests()[0];
+      assert.ok(resumedRequest, 'the actual resumed runner receives a provider request');
+      assert.equal(resumedRequest.messages.filter((message) => message.name === 'compaction_capsule').length, 1);
+      assert.match(JSON.stringify(resumedRequest.messages), /BIGROW_0100/, 'the resumed dispatch consumes the recovered context');
+      const nextCheckpoint = resumedEngine.getParityRuntime().contextCheckpoint;
+      assert.ok(nextCheckpoint);
+      assert.deepEqual(nextCheckpoint.installed_lineage, {
+        ...checkpoint.installed_lineage,
+        checkpoint_id: nextCheckpoint.checkpointId,
+      }, 'a new turn checkpoint must retain the recovered compaction lineage');
+      assert.equal(resumedEngine.getRuntimeInvariantViolationCount(), 0);
     } finally {
+      resumedEngine?.closeAdmissionStore();
+      admittedEngine?.closeAdmissionStore();
       fixture.cleanup();
     }
+    assert.equal(getOpenAdmissionStoreCount(), 0, 'all resumed store references are released');
   });
 
   test('Scenario 7a — a successful read-only child is child-reported evidence, never verified completion', async () => {
