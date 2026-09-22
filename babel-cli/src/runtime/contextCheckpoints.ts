@@ -68,6 +68,7 @@ export type ContextCheckpointValidationReasonV1 =
   | 'lineage_missing'
   | 'lineage_invalid'
   | 'lineage_not_committed'
+  | 'lineage_superseded'
   | 'observation_membership_unavailable'
   | 'checkpoint_digest_mismatch'
   | 'install_failed';
@@ -294,6 +295,8 @@ export interface ContextCheckpointLineageEvidenceV1 {
   sessionEvents: ReadonlyArray<{
     event_id: string;
     kind: string;
+    /** Canonical durable order; optional so fixture evidence may omit it. */
+    seq?: number;
     thread_event_id?: string;
     capsule_digest?: string;
   }>;
@@ -436,9 +439,59 @@ function digestCompactionContent(content: string): string {
 }
 
 /**
+ * Durable currency identity: the current context root for a session log is
+ * the capsule named by the `compaction_committed` session event with the
+ * MAXIMUM canonical `seq`. Session-event `seq` is contiguous and unique (a
+ * timestamp-free total order); `ts` fields are informational and are never
+ * consulted. Evidence that omits `seq` (fixtures) falls back to append order,
+ * which is identical to `seq` order for a parsed log.
+ */
+function latestCommittedSessionEvent(
+  evidence: ContextCheckpointLineageEvidenceV1 | undefined,
+): ContextCheckpointLineageEvidenceV1['sessionEvents'][number] | undefined {
+  if (!evidence) return undefined;
+  let latest: ContextCheckpointLineageEvidenceV1['sessionEvents'][number] | undefined;
+  let latestOrder = -1;
+  evidence.sessionEvents.forEach((event, index) => {
+    if (event.kind !== 'compaction_committed') return;
+    const order = event.seq ?? index;
+    if (order > latestOrder) {
+      latestOrder = order;
+      latest = event;
+    }
+  });
+  return latest;
+}
+
+/**
  * Validate the installed context root against the durable session/thread
- * linkage. A physically present capsule is inert unless a committed session
- * event names that exact capsule and digest.
+ * linkage AND its currency.
+ *
+ * Invariant: an installed checkpoint lineage must name EXACTLY the latest
+ * relevant committed compaction for this session/context generation — the
+ * `compaction_committed` event with the maximum canonical `seq` (commit id +
+ * capsule digest + boundary sequence). "This capsule was once committed" is
+ * necessary but not sufficient; a stale historical lineage is refused with an
+ * explicit `lineage_superseded` reason instead of silently suppressing the
+ * newer committed root.
+ *
+ * Durability semantics (fail closed, never silently ignored):
+ *   - A merely staged/uncommitted newer capsule does not move the current
+ *     root: only `compaction_committed` session events count.
+ *   - If the LATEST committed artifact is malformed (its capsule is missing,
+ *     or its digest disagrees with the capsule content), the checkpoint is
+ *     non-authoritative (`lineage_not_committed` / `lineage_invalid`). An
+ *     older valid checkpoint never silently falls back over corrupted newer
+ *     state — an interrupted/crashed later transaction degrades to
+ *     "checkpoint inert, durable logs remain the only source", never to
+ *     "old checkpoint still fine".
+ *   - A checkpoint whose lineage is all-null is current only while the
+ *     authoritative session log has no `compaction_committed` at all.
+ *   - Ordering/identity is durable event `seq` only — never wall-clock.
+ *   - Cross-thread/session/generation fences (`stale_owner`,
+ *     `expected_thread_mismatch`) stay with the owner/thread checks in
+ *     `validateContextCheckpoint`; currency is computed only from the
+ *     caller-supplied authoritative session log.
  */
 export function validateContextCheckpointInstalledLineage(
   checkpoint: ContextCheckpointV1,
@@ -455,7 +508,14 @@ export function validateContextCheckpointInstalledLineage(
   ) {
     return ['lineage_invalid'];
   }
-  if (lineage.compaction_event_id === null) return [];
+
+  const latest = latestCommittedSessionEvent(evidence);
+
+  if (lineage.compaction_event_id === null) {
+    // "No committed compaction exists" is a currency claim too: it holds only
+    // while the authoritative session log has no compaction_committed event.
+    return latest === undefined ? [] : ['lineage_superseded'];
+  }
   // A checkpoint that names a committed compaction must prove it. Omitting the
   // evidence is not an absence of a claim: it is an unproven claim, so it fails
   // closed instead of silently promoting the checkpoint to an authority root.
@@ -477,6 +537,34 @@ export function validateContextCheckpointInstalledLineage(
     (lineage.thread_event_boundary_seq !== null && capsule.seq !== lineage.thread_event_boundary_seq)
   ) {
     return ['lineage_invalid'];
+  }
+
+  // Currency: the checkpoint's own lineage is well-formed above, so at least
+  // one commit exists and `latest` is defined. Fail closed when the latest
+  // committed artifact is malformed rather than ignoring corrupted newer
+  // state (see the durability semantics on this function).
+  if (latest === undefined) return [];
+  const latestCapsule = evidence.threadEvents.find(
+    (event) =>
+      event.kind === 'compaction_capsule' && event.event_id === latest.thread_event_id,
+  );
+  if (!latestCapsule || latestCapsule.content === undefined) return ['lineage_not_committed'];
+  if (
+    latest.capsule_digest === undefined ||
+    digestCompactionContent(latestCapsule.content) !== latest.capsule_digest
+  ) {
+    return ['lineage_invalid'];
+  }
+
+  // Supersession: the lineage must name exactly the latest commit — same
+  // commit id, same capsule event id, same digest, same boundary sequence.
+  if (
+    lineage.compaction_commit_event_id !== latest.event_id ||
+    lineage.compaction_event_id !== latest.thread_event_id ||
+    lineage.compaction_digest !== latest.capsule_digest ||
+    lineage.thread_event_boundary_seq !== latestCapsule.seq
+  ) {
+    return ['lineage_superseded'];
   }
   return [];
 }
