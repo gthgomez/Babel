@@ -20,8 +20,15 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 
 import { ChatEngine } from './chatEngine.js';
+import {
+  THREAD_EVENT_LOG_FILENAME,
+  createThreadEventLog,
+  serializeThreadEventLog,
+  startTurn,
+} from './threadEventLog.js';
 import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
 import type { ResolvedModelPolicy } from '../modelPolicy.js';
 import { chatSessionDir, openSessionAdmissionStore } from '../cli/runsLayout.js';
@@ -33,6 +40,11 @@ import {
   type LiveOperationalSourcesV1,
 } from '../runtime/contextCheckpoints.js';
 import type { AdmissionStore } from '../runtime/admission.js';
+import { resumeChatSession } from '../interactive/chatSessionResume.js';
+import type { ReplContext } from '../interactive/context.js';
+import { runChatEngineOnce } from '../interactive/execution/chatCore.js';
+import type { ConversationalRenderer } from '../ui/waterfall.js';
+import type { AgentTargetContext } from '../services/targetResolver.js';
 import type { OwnerRecordV1 } from '../runtime/admissionContracts.js';
 
 /** Static model for engines that never submit (policy must resolve offline). */
@@ -571,6 +583,13 @@ test('fencing negatives: missing/stale/cross-thread/cross-session/wrong-token st
           result.issues.some((issue) => issue.includes('expected_thread_mismatch') || issue.includes('stale_owner')),
           result.issues.join('; '),
         );
+        // Install fence (m5): the durable owner row no longer belongs to this
+        // engine's thread, so the admitted identity cannot be proven → no install.
+        const rawThread = new DatabaseSync(store.dbPath);
+        rawThread.exec("UPDATE owner SET thread_id = 'renamed-thread'");
+        rawThread.close();
+        assert.equal(internals(engine).currentP11Owner(), null);
+        assert.equal(await internals(engine).installP11ContextCheckpoint(ROUTE), false);
       } finally {
         engine?.closeAdmissionStore();
         store.close();
@@ -594,6 +613,12 @@ test('fencing negatives: missing/stale/cross-thread/cross-session/wrong-token st
           result.issues.some((issue) => issue.includes('expected_thread_mismatch') || issue.includes('stale_owner')),
           result.issues.join('; '),
         );
+        // Install fence (m5): an engine paired with ANOTHER session's store
+        // cannot prove its claimed identity against that store's owner row.
+        const foreignStore = requireStore('p11-neg-session-source');
+        engine.attachAdmissionStore(foreignStore);
+        assert.equal(internals(engine).currentP11Owner(), null);
+        assert.equal(await internals(engine).installP11ContextCheckpoint(ROUTE), false);
       } finally {
         engine?.closeAdmissionStore();
         store.close();
@@ -615,6 +640,13 @@ test('fencing negatives: missing/stale/cross-thread/cross-session/wrong-token st
         const result = engine.hydrateInstalledContextAuthority();
         assert.equal(result.applied, false, 'wrong owner token → checkpoint inert');
         assert.ok(result.issues.some((issue) => issue.includes('stale_owner')), result.issues.join('; '));
+        // Install fence (m5): the durable token no longer matches the engine's
+        // admitted identity → the claimed owner cannot be proven → no install.
+        const rawToken = new DatabaseSync(store.dbPath);
+        rawToken.exec("UPDATE owner SET token = 'mutated-durable-token'");
+        rawToken.close();
+        assert.equal(internals(engine).currentP11Owner(), null);
+        assert.equal(await internals(engine).installP11ContextCheckpoint(ROUTE), false);
       } finally {
         engine?.closeAdmissionStore();
         store.close();
@@ -624,3 +656,214 @@ test('fencing negatives: missing/stale/cross-thread/cross-session/wrong-token st
     assert.equal(getOpenAdmissionStoreCount(), 0, 'every fencing fixture released its handle');
   });
 });
+
+test('task replacement: a superseded stream finalizing mid-successor never settles the successor claim', async () => {
+  await withRunsDir(async () => {
+    const runId = 'p11-replace-interleave';
+    const projectRoot = makeProjectRoot();
+    const store = requireStore(runId);
+    const mode: ProviderMode = { providerCalls: 0, abort: false };
+    const originalFetch = globalThis.fetch;
+    stubProvider(mode);
+    let engine: ChatEngine | undefined;
+    try {
+      engine = submittingEngine(runId, projectRoot, store);
+
+      // Submission A: admitted, suspended at its pre-provider yield.
+      const iteratorA = engine.submitMessageStream('first task')[Symbol.asyncIterator]();
+      const stepA = await iteratorA.next();
+      assert.equal(stepA.done, false);
+      assert.equal((stepA.value as { type?: string } | undefined)?.type, 'thinking');
+
+      // Submission B: admitted while A is in flight (A aborted, generation 2),
+      // also suspended at its pre-provider yield — B is STILL RUNNING.
+      const iteratorB = engine.submitMessageStream('replacement task')[Symbol.asyncIterator]();
+      const stepB = await iteratorB.next();
+      assert.equal(stepB.done, false);
+      assert.equal((stepB.value as { type?: string } | undefined)?.type, 'thinking');
+      const during = store.listAdmissions(runId).records;
+      assert.equal(during.length, 2);
+
+      // THE MASKING INTERLEAVE: A finalizes WHILE B is mid-turn. A's wrapper
+      // must settle its OWN captured claim (already aborted), never B's.
+      await iteratorA.return?.();
+
+      const claimA = store.listAdmissions(runId).records.find((r) => r.ownerGeneration === 1);
+      const claimB = store.listAdmissions(runId).records.find((r) => r.ownerGeneration === 2);
+      assert.equal(claimA?.state, 'aborted', 'A ends in a non-success terminal, never a false settled');
+      assert.equal(
+        (claimA?.outcome as { finalOutcome?: string } | undefined)?.finalOutcome,
+        'SUPERSEDED_BY_SUBMISSION',
+      );
+      assert.equal(claimB?.state, 'claimed', 'B — still executing — must keep its live unsettled claim');
+
+      // B's install authority survives A's finalization.
+      const p11Owner = internals(engine).currentP11Owner();
+      assert.equal(p11Owner?.generation, 2, 'the live command keeps its install authority');
+      assert.equal(
+        await internals(engine).installP11ContextCheckpoint(ROUTE),
+        true,
+        'installs still work inside B\'s turn',
+      );
+
+      // Drain B to its own terminal; its claim settles exactly once, as success.
+      let pull = await iteratorB.next();
+      while (!pull.done) pull = await iteratorB.next();
+      const settledB = store.listAdmissions(runId).records.find((r) => r.ownerGeneration === 2);
+      assert.equal(settledB?.state, 'settled', 'B settles at ITS terminal, not A\'s');
+      assert.equal(
+        (settledB?.outcome as { finalOutcome?: string } | undefined)?.finalOutcome,
+        'CHAT_SUBMISSION_TERMINAL',
+      );
+      assert.equal(store.readOwner(runId)?.generation, 2);
+      assert.equal(internals(engine).currentP11Owner(), null, 'after B settles, authority is released');
+    } finally {
+      globalThis.fetch = originalFetch;
+      engine?.closeAdmissionStore();
+      store.close();
+    }
+    assert.equal(getOpenAdmissionStoreCount(), 0);
+  });
+});
+
+test('resume releases the admission store when construction throws before assignment', async () => {
+  await withRunsDir(async () => {
+    // ── Control: a healthy resume ADOPTS the store (engine holds 1 handle). ──
+    const controlId = 'p11-resume-adopt';
+    {
+      const dir = chatSessionDir(controlId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, 'transcript.jsonl'),
+        `${JSON.stringify({ role: 'user', content: 'hello' })}\n`,
+        'utf8',
+      );
+      const ctx = makeResumeCtx();
+      const outcome = await resumeChatSession(ctx, controlId, { confirmUnknownIdentity: true });
+      assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.message);
+      assert.equal(getOpenAdmissionStoreCount(), 1, 'a successful resume adopts exactly one handle');
+      ctx.chatEngine?.closeAdmissionStore?.();
+      assert.equal(getOpenAdmissionStoreCount(), 0);
+    }
+
+    // ── Leak case: engine construction throws AFTER the store was opened but
+    // BEFORE any `ctx.chatEngine = …` assignment adopted it. ──
+    const leakId = 'p11-resume-leak';
+    {
+      const dir = chatSessionDir(leakId);
+      mkdirSync(dir, { recursive: true });
+      const log = createThreadEventLog(leakId);
+      startTurn(log, {
+        task: 'resume me',
+        model: 'm',
+        provider: 'p',
+        projectRoot: process.cwd(),
+        policyPreset: 'default',
+      });
+      writeFileSync(join(dir, THREAD_EVENT_LOG_FILENAME), serializeThreadEventLog(log), 'utf8');
+      writeFileSync(
+        join(dir, 'transcript.jsonl'),
+        `${JSON.stringify({ role: 'user', content: 'hi' })}\n`,
+        'utf8',
+      );
+
+      const ctx = makeResumeCtx();
+      // An unconfigured model family makes `new ChatEngine(...)` throw inside
+      // createEngineFromEventLog — the designed pre-assignment throw path.
+      ctx.state.model = 'not-a-configured-model-family';
+      const outcome = await resumeChatSession(ctx, leakId, { confirmUnknownIdentity: true });
+      assert.equal(outcome.ok, false, 'construction failure surfaces as a failed resume');
+      if (!outcome.ok) {
+        assert.match(outcome.message, /not configured/, 'the throw really came from construction');
+      }
+      assert.equal(ctx.chatEngine, undefined, 'no engine adopted the store');
+      assert.equal(
+        getOpenAdmissionStoreCount(),
+        0,
+        'a pre-assignment throw must release the resume store reference',
+      );
+    }
+  });
+});
+
+test('headless: pre-stream throws never strand the admission handle', async () => {
+  await withRunsDir(async () => {
+    const projectRoot = makeProjectRoot();
+    const target = {
+      targetRoot: projectRoot,
+      workspaceRoot: null,
+      project: null,
+      source: 'cwd',
+      cwd: projectRoot,
+    } as AgentTargetContext;
+
+    // (a) A throw in prepareRendererTurn — BEFORE the guarded region: with the
+    // attach moved inside the try, no handle is ever opened for this run.
+    const engineA = new ChatEngine({ task: 'headless leak probe', projectRoot, model: STATIC_MODEL });
+    const throwingRenderer = {
+      setTaskLabel(): void {
+        throw new Error('pre-stream boom');
+      },
+    } as unknown as ConversationalRenderer;
+    await assert.rejects(
+      () =>
+        runChatEngineOnce({
+          task: 'headless leak probe',
+          target,
+          preflightContext: 'fixture',
+          engineFactory: () => engineA,
+          convRenderer: throwingRenderer,
+        }),
+      /pre-stream boom/,
+    );
+    assert.equal(
+      getOpenAdmissionStoreCount(),
+      0,
+      'a pre-try throw must never open (or strand) a handle',
+    );
+    engineA.closeAdmissionStore(); // idempotent belt
+
+    // (b) A throw at the first statement AFTER the in-guard attach: the
+    // guarded region's finally must release the handle it just attached.
+    const engineB = new ChatEngine({ task: 'headless leak probe', projectRoot, model: STATIC_MODEL });
+    engineB.submitMessage = (() => {
+      throw new Error('in-guard boom');
+    }) as unknown as ChatEngine['submitMessage'];
+    await assert.rejects(
+      () =>
+        runChatEngineOnce({
+          task: 'headless leak probe two',
+          target,
+          preflightContext: 'fixture',
+          engineFactory: () => engineB,
+          useStreaming: false,
+        }),
+      /in-guard boom/,
+    );
+    assert.equal(
+      getOpenAdmissionStoreCount(),
+      0,
+      'the guarded region must close the handle it attached',
+    );
+    engineB.closeAdmissionStore(); // post-close belt: façade fails closed
+    assert.equal(getOpenAdmissionStoreCount(), 0);
+  });
+});
+
+function makeResumeCtx(): ReplContext {
+  const target: AgentTargetContext = {
+    targetRoot: process.cwd(),
+    workspaceRoot: null,
+    project: null,
+    source: 'cwd',
+    cwd: process.cwd(),
+  };
+  return {
+    state: {},
+    turns: [],
+    turnCounter: 0,
+    chatEngine: undefined,
+    saveSessionState: () => undefined,
+    resolveCurrentTarget: () => target,
+  } as unknown as ReplContext;
+}

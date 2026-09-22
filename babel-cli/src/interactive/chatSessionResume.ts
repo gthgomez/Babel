@@ -89,6 +89,15 @@ export async function resumeChatSession(
     };
   }
 
+  // P05/P11: the resume store reference below is adopted by the REPL engine
+  // lifecycle ONLY when one of the `ctx.chatEngine = …` assignments completes
+  // (`resumeAdmissionAdopted`). Any throw between open and assignment (e.g.
+  // `ChatEngine.restore` rethrowing a non-SESSION_EVENT_LOG_MISSING error, or
+  // a construction failure inside a branch) must release the reference here,
+  // or it would leak for process lifetime. Hoisted so the outer catch can see it.
+  let resumeAdmission: ReturnType<typeof openSessionAdmissionStore> | null = null;
+  let resumeAdmissionAdopted = false;
+
   try {
     const target = ctx.resolveCurrentTarget();
     const engineOptions = {
@@ -165,6 +174,7 @@ export async function resumeChatSession(
     // lifecycle — each assignment below releases the previous engine's
     // reference first.
     const admission = openSessionAdmissionStore(sessionId);
+    resumeAdmission = admission;
     const resumeOptions = {
       ...engineOptions,
       ...(admission.ok ? { admissionStore: admission.store } : {}),
@@ -173,6 +183,7 @@ export async function resumeChatSession(
     if (eventLog && eventLog.events.length > 0) {
       ctx.chatEngine?.closeAdmissionStore?.();
       ctx.chatEngine = createEngineFromEventLog(resumeOptions, eventLog);
+      resumeAdmissionAdopted = true;
       ctx.chatEngine.assignRunId(sessionId);
       // W2.2: session-events settle after run id assignment (same session dir).
       ctx.chatEngine.restoreSessionEventsFromDir(sessionDir);
@@ -214,6 +225,7 @@ export async function resumeChatSession(
       const cells = loadThreadCells(sessionId);
       ctx.chatEngine?.closeAdmissionStore?.();
       ctx.chatEngine = createEngineFromThreadCells(sessionId, resumeOptions, cells);
+      resumeAdmissionAdopted = true;
       // If an event log appears mid-session, keep cells as UI; still prefer empty event log path above
       hydrateResumedThreadToScreen(ctx, sessionId);
       const { turnCount, exchangeCount } = hydrateReplTurnsFromCells(ctx, cells, {
@@ -255,6 +267,7 @@ export async function resumeChatSession(
     }
     ctx.chatEngine?.closeAdmissionStore?.();
     ctx.chatEngine = engine;
+    resumeAdmissionAdopted = true;
     const { turnCount, exchangeCount } = hydrateReplTurnsFromChatTranscript(ctx, {
       sessionId,
       transcriptPath: txPath,
@@ -277,6 +290,11 @@ export async function resumeChatSession(
       ...degraded,
     };
   } catch (err) {
+    // I2: a throw before any assignment never handed the store to the REPL
+    // lifecycle — release the reference, then surface the failure as before.
+    if (resumeAdmission?.ok === true && !resumeAdmissionAdopted) {
+      resumeAdmission.store.close();
+    }
     return {
       ok: false,
       sessionId,

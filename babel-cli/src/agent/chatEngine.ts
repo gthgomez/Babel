@@ -678,6 +678,8 @@ interface ChatEngineAdmissionClaim {
   commandId: string;
   generation: number;
   token: string;
+  /** The submission generation this claim was admitted for (wrapper capture). */
+  submissionGeneration: number;
   settled: boolean;
 }
 
@@ -2933,14 +2935,18 @@ export class ChatEngine {
   ): AsyncGenerator<ChatEvent, void, undefined> {
     const submissionGeneration =
       submitOpts?.submissionGeneration ?? ++this.generationCounter;
-    this.admitCurrentSubmission(submissionGeneration, userInput);
+    // Capture THIS wrapper's own claim: the finally must settle this exact
+    // claim, never `activeAdmissionClaim` — during task replacement that slot
+    // belongs to the successor, and settling it would record a false terminal
+    // for a command that is still executing (stripping its install authority).
+    const claim = this.admitCurrentSubmission(submissionGeneration, userInput);
     try {
       yield* this.submitMessageStreamLoop(userInput, taskIntent, {
         ...submitOpts,
         submissionGeneration,
       });
     } finally {
-      this.settleActiveAdmissionClaim();
+      this.settleClaimOnExit(claim);
     }
   }
 
@@ -5266,6 +5272,10 @@ export class ChatEngine {
    * owners and admits/settles the commands it executes.
    */
   attachAdmissionStore(store: AdmissionStore): void {
+    const previous = this.parity.admissionStore;
+    // Close-before-replace (consistent with every other store-replace site):
+    // a re-attach must never orphan the previous refcounted reference.
+    if (previous && previous !== store) previous.close();
     this.parity.admissionStore = store;
   }
 
@@ -5859,10 +5869,16 @@ export class ChatEngine {
    * live claim and drops the lease, so `currentP11Owner` resolves null and no
    * checkpoint can install. Admission is a record, never a permission gate —
    * a rejected admission does not block execution itself.
+   *
+   * Returns the claim THIS admission created (or null) so the submission
+   * wrapper can settle exactly that claim at exit.
    */
-  private admitCurrentSubmission(submissionGeneration: number, userInput: string): void {
+  private admitCurrentSubmission(
+    submissionGeneration: number,
+    userInput: string,
+  ): ChatEngineAdmissionClaim | null {
     const store = this.parity.admissionStore;
-    if (!store) return;
+    if (!store) return null;
     try {
       const threadId = this.parity.eventLog.thread_id;
       const commandId = `${this.admissionEpoch}:s${submissionGeneration}`;
@@ -5924,24 +5940,28 @@ export class ChatEngine {
       });
       if (decision.kind === 'admitted' || decision.kind === 'pending') {
         this.admissionLease = { generation: ownerGeneration, token: ownerToken };
-        this.activeAdmissionClaim = {
+        const claim: ChatEngineAdmissionClaim = {
           threadId,
           commandId,
           generation: ownerGeneration,
           token: ownerToken,
+          submissionGeneration,
           settled: false,
         };
-      } else {
-        // Rejected or replayed: fail closed — no live claim, and a rejected
-        // admission means this engine is not the durable owner.
-        this.activeAdmissionClaim = null;
-        if (decision.kind === 'rejected') this.admissionLease = null;
+        this.activeAdmissionClaim = claim;
+        return claim;
       }
+      // Rejected or replayed: fail closed — no live claim, and a rejected
+      // admission means this engine is not the durable owner.
+      this.activeAdmissionClaim = null;
+      if (decision.kind === 'rejected') this.admissionLease = null;
+      return null;
     } catch {
       // Record-only: never break execution, but never keep claim state that
       // admission did not durably prove.
       this.activeAdmissionClaim = null;
       this.admissionLease = null;
+      return null;
     }
   }
 
@@ -5983,13 +6003,36 @@ export class ChatEngine {
     }
   }
 
-  /** Terminal settlement for the submission that owns the live claim. */
-  private settleActiveAdmissionClaim(): void {
-    const claim = this.activeAdmissionClaim;
+  /**
+   * Exit settlement for a CAPTURED claim — never the mutable
+   * `activeAdmissionClaim`, which during task replacement already belongs to
+   * the successor. A claim already settled by the replacement's admission is
+   * a correct no-op here. Cancellation is derived PER CLAIM: `this._cancelled`
+   * only describes the submission that owns `activeSubmissionGeneration`, so a
+   * successor's reset of that flag can never re-label this claim.
+   */
+  private settleClaimOnExit(claim: ChatEngineAdmissionClaim | null): void {
     if (!claim || claim.settled) return;
+    const isCurrent =
+      this.activeAdmissionClaim === claim ||
+      claim.submissionGeneration === this.activeSubmissionGeneration;
+    if (!isCurrent) {
+      // Superseded while still live: a command that no longer executes can
+      // never record success (the replacement's admission normally settled it
+      // as aborted already — this covers paths that did not).
+      this.settleAdmissionClaim(claim, 'indeterminate', {
+        finalOutcome: 'SUPERSEDED_BY_SUBMISSION',
+      });
+      return;
+    }
     this.settleAdmissionClaim(claim, this._cancelled ? 'aborted' : 'settled', {
       finalOutcome: this._cancelled ? 'CANCELLED' : 'CHAT_SUBMISSION_TERMINAL',
     });
+  }
+
+  /** Terminal settlement for the engine's currently-active claim. */
+  private settleActiveAdmissionClaim(): void {
+    this.settleClaimOnExit(this.activeAdmissionClaim);
   }
 
   private currentInstalledContextLineage(

@@ -715,14 +715,6 @@ export async function runChatEngineOnce(input: {
       ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
     });
 
-  if (!input.engine) {
-    // P05/P11 headless companion: a run that creates its own engine owns the
-    // durable admission store for this call and releases it when the run ends
-    // (closed in the stream settle `finally` below and, idempotently, before
-    // returning). A caller-supplied engine (REPL) keeps its own reference.
-    attachSessionAdmissionStore(engine);
-  }
-
   if (input.engine) {
     applyEngineTurnPreparation(input.engine, {
       task: input.task,
@@ -821,6 +813,13 @@ export async function runChatEngineOnce(input: {
 
   let result: ChatResult;
   try {
+    if (!input.engine) {
+      // P05/P11 headless companion: attach INSIDE the guarded region so any
+      // throw before or during the stream releases the refcounted handle in
+      // the `finally` below — a caller-supplied engine (REPL) keeps its own
+      // reference, and a throw before this point never opened a handle.
+      attachSessionAdmissionStore(engine);
+    }
     if (useStreaming) {
       const stream =
         execution !== null

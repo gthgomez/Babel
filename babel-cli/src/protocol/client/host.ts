@@ -182,6 +182,10 @@ function materializeEngine(state: ProtocolHostState, descriptor: SessionDescript
   if (typeof attachable.attachAdmissionStore === 'function') {
     const admission = openSessionAdmissionStore(descriptor.threadId);
     if (admission.ok) {
+      // I4: a prior attempt that threw during hydration recorded a store the
+      // never-cached engine still references; release it before replacing so
+      // the orphaned ref cannot outlive `closeProtocolHostState`.
+      state.admissionStores.get(descriptor.threadId)?.close();
       state.admissionStores.set(descriptor.threadId, admission.store);
       attachable.attachAdmissionStore(admission.store);
     }
