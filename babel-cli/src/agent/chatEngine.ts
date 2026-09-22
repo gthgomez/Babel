@@ -280,6 +280,8 @@ import {
   type ContextCheckpointInstalledLineageV1,
   type ContextCheckpointLineageEvidenceV1,
   type ContextCheckpointOwnerV1,
+  type ContextCheckpointPreparationInputV1,
+  type ContextCheckpointPreparationResultV1,
   type ContextCheckpointV1,
   type LiveOperationalSourcesV1,
 } from '../runtime/contextCheckpoints.js';
@@ -667,6 +669,16 @@ import { deniesReadOnlyChatAction, filterReadOnlyChatTools, isReadOnlyChat, reso
  * admitted command".
  */
 const CHAT_ADMISSION_TOOL_SCHEMA_VERSION = 'chat-tools-v1';
+
+/**
+ * R1/T5: placeholder compiled-request identity for the side-effect-free
+ * candidate prepare. The real identity can only be computed after this turn's
+ * provider messages are rebuilt from the candidate (the identity hashes that
+ * exact message sequence), and `installP11ContextCheckpoint` always
+ * re-prepares from the live sources with the real identity — so this marker is
+ * never installed and never becomes durable authority.
+ */
+const PENDING_COMPILED_REQUEST_IDENTITY = 'pending-compiled-request-identity';
 
 /**
  * P05: this engine's admitted command claim. `settled` flips at command
@@ -3241,36 +3253,81 @@ export class ChatEngine {
       const activeSystemPrompt = this.getOrBuildSystemPrompt(
         useNativeTools ? 'native' : useTextTools ? 'text' : 'legacy',
       );
-      const providerMessages = useNativeTools
+      const hadInstalledP11Context = this.parity.contextCheckpoint !== undefined;
+      const requestMode = useNativeTools ? 'native' : useTextTools ? 'text' : 'legacy';
+      const toolProfile = useNativeTools
+        ? 'native-tools'
+        : useTextTools
+          ? 'text-tools'
+          : 'legacy-tools';
+      const modelRoute = `${providerName}:${modelName}`;
+      // R1/T5 ordering invariant (task-5 brief): candidate compaction → durable
+      // capsule commit (compactIfNeeded above) → validate/install the CURRENT
+      // checkpoint → rebuild provider messages FROM THE INSTALLED AUTHORITY →
+      // provider invocation. A durable capsule that the in-memory root does not
+      // name (committed this turn, or by an earlier admission-recovery
+      // iteration) makes the previous generation stale — rebuilding from it
+      // would dispatch a superseded sequence (the routed Task-4 trace). The
+      // candidate below is a side-effect-free prepare: it never installs and
+      // never authorizes a dispatch by itself — it only roots the rebuild that
+      // computes this turn's route identity. `installP11ContextCheckpoint`
+      // remains the single authority swap, and the dispatched messages are
+      // re-projected from the INSTALLED checkpoint below. If the install cannot
+      // happen while authority is pending/promoted, dispatch is refused — a
+      // stale root never authorizes a request.
+      const pendingCapsuleAuthority = this.hasPendingCompactionAuthority();
+      const turnCheckpointCandidate =
+        useNativeTools && (pendingCapsuleAuthority || hadInstalledP11Context)
+          ? this.prepareP11ContextCheckpointCandidate({
+              tool_profile: toolProfile,
+              model_route: modelRoute,
+            })
+          : null;
+      const rebuildRoot =
+        turnCheckpointCandidate?.status === 'prepared'
+          ? turnCheckpointCandidate.checkpoint
+          : this.parity.contextCheckpoint;
+      let providerMessages = useNativeTools
         ? this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
             systemPrompt: activeSystemPrompt,
-            ...(this.parity.contextCheckpoint
-              ? { installedContextCheckpoint: this.parity.contextCheckpoint }
-              : {}),
+            ...(rebuildRoot ? { installedContextCheckpoint: rebuildRoot } : {}),
           })
         : [];
       const preparedRoute = {
         compiled_request_identity: createHash('sha256')
           .update(JSON.stringify({
-            mode: useNativeTools ? 'native' : useTextTools ? 'text' : 'legacy',
+            mode: requestMode,
             prompt,
             systemPrompt: activeSystemPrompt,
             providerMessages,
           }))
           .digest('hex'),
-        tool_profile: useNativeTools ? 'native-tools' : useTextTools ? 'text-tools' : 'legacy-tools',
-        model_route: `${providerName}:${modelName}`,
+        tool_profile: toolProfile,
+        model_route: modelRoute,
       } as const;
-      const hadInstalledP11Context = this.parity.contextCheckpoint !== undefined;
       const p11ContextInstalled = await this.installP11ContextCheckpoint(preparedRoute);
       // R0-8/R1: a superseded submission must not finalize the live turn as
       // failed nor dispatch a provider request for the new owner.
       if (!this.isSubmissionCurrent(submissionGeneration)) return;
-      if (hadInstalledP11Context && !p11ContextInstalled) {
+      if (!p11ContextInstalled && (hadInstalledP11Context || pendingCapsuleAuthority)) {
         yield this.streamFailed(
-          'P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused.',
+          hadInstalledP11Context
+            ? 'P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused.'
+            : 'P11 context installation was blocked; this turn committed a compaction capsule that no installed context root authorizes, so provider dispatch was refused.',
         );
         return;
+      }
+      // Single authority: project the dispatched messages from the checkpoint
+      // that is NOW installed (equal to the candidate-rooted array above by
+      // construction — the reconstruction tripwire below verifies it).
+      if (useNativeTools && p11ContextInstalled && this.parity.contextCheckpoint) {
+        providerMessages = this.services.conversation.rebuildProviderMessages(
+          this.parity.eventLog,
+          {
+            systemPrompt: activeSystemPrompt,
+            installedContextCheckpoint: this.parity.contextCheckpoint,
+          },
+        );
       }
       yield { type: 'thinking' };
 
@@ -6079,6 +6136,88 @@ export class ChatEngine {
     };
   }
 
+  /**
+   * R1/T5: id of the latest durable `compaction_committed` session event, or
+   * null when this session has committed no compaction at all.
+   */
+  private latestDurableCompactionCommitId(): string | null {
+    const events = this.parity.sessionEvents.events;
+    for (let index = events.length - 1; index >= 0; index--) {
+      const event = events[index]!;
+      if (event.kind === 'compaction_committed') return event.event_id;
+    }
+    return null;
+  }
+
+  /**
+   * R1/T5: true while a durable compaction commit exists that the in-memory
+   * installed context root does not name — the exact "stale root silently
+   * suppresses the newer capsule" window (routed Task-4 trace). False on
+   * capsule-less turns and on turns whose promoted root already names the
+   * latest commit, which keeps the non-compacting path byte-identical to the
+   * previous ordering.
+   */
+  private hasPendingCompactionAuthority(): boolean {
+    const latestCommit = this.latestDurableCompactionCommitId();
+    if (latestCommit === null) return false;
+    const installedCommit =
+      this.parity.contextCheckpoint?.installed_lineage?.compaction_commit_event_id ?? null;
+    return latestCommit !== installedCommit;
+  }
+
+  /**
+   * Shared preparation input for the R1/T5 candidate prepare and the installing
+   * prepare: identical checkpoint id, epoch, and lineage (derived AFTER the
+   * capsule commit, so both name the same current capsule). Only
+   * `sources.route.compiled_request_identity` differs between the two, and the
+   * route identity is never an input to the rebuild or to the lineage — so the
+   * candidate-rooted rebuild and the installed-authority rebuild are the same
+   * message sequence by construction.
+   */
+  private p11CheckpointPreparationInput(
+    owner: ContextCheckpointOwnerV1,
+    sources: LiveOperationalSourcesV1,
+  ): ContextCheckpointPreparationInputV1 {
+    const checkpointId = `context:${this.parity.turnId ?? this._turnIndex}:${this.workingState.revision}`;
+    return {
+      checkpointId,
+      sessionId: this.engineRunId,
+      turnId: this.parity.turnId,
+      contextEpoch: `${owner.generation}:${this.workingState.revision}:${sources.workspace?.capture_epoch ?? 'unknown'}`,
+      owner,
+      sources,
+      installedLineage: this.currentInstalledContextLineage(checkpointId),
+    };
+  }
+
+  /**
+   * R1/T5: side-effect-free candidate of THIS turn's context checkpoint.
+   * `prepareContextCheckpoint` is documented as detached — preparation never
+   * installs — so the candidate only roots the pre-install rebuild that
+   * computes this turn's compiled request identity. It never dispatches on its
+   * own: only `installP11ContextCheckpoint` swaps the durable authority, and it
+   * re-prepares from the live sources with the REAL identity (the candidate's
+   * pending marker can therefore never become durable authority). Blocked or
+   * unavailable candidate ⇒ null ⇒ the turn falls back to the in-memory root
+   * and the dispatch guard refuses when authority stays pending.
+   */
+  private prepareP11ContextCheckpointCandidate(route: {
+    tool_profile: string;
+    model_route: string;
+  }): ContextCheckpointPreparationResultV1 | null {
+    // A5 fence (same as install): the candidate is rooted in THIS engine's own
+    // admitted identity — never a synthetic owner.
+    const owner = this.currentP11Owner();
+    if (!owner || !this.parity.admissionStore) return null;
+    const sources = this.buildP11Sources({
+      ...route,
+      compiled_request_identity: PENDING_COMPILED_REQUEST_IDENTITY,
+    });
+    if (!sources) return null;
+    const prepared = prepareContextCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
+    return prepared.status === 'prepared' ? prepared : null;
+  }
+
   private currentP11Workspace(): ReturnType<typeof RevisionManager.computeRevisionSync> | null {
     try {
       return RevisionManager.computeRevisionSync(this.options.projectRoot, [], {
@@ -6244,16 +6383,10 @@ export class ChatEngine {
     // would validate itself. A losing/superseded engine resolves null here.
     const owner = this.currentP11Owner();
     if (!owner || !this.parity.admissionStore) return false;
-    const checkpointId = `context:${this.parity.turnId ?? this._turnIndex}:${this.workingState.revision}`;
-    const prepared = prepareContextCheckpoint({
-      checkpointId,
-      sessionId: this.engineRunId,
-      turnId: this.parity.turnId,
-      contextEpoch: `${owner.generation}:${this.workingState.revision}:${sources.workspace?.capture_epoch ?? 'unknown'}`,
-      owner,
-      sources,
-      installedLineage: this.currentInstalledContextLineage(checkpointId),
-    });
+    // Same checkpoint id / epoch / lineage derivation as the R1/T5 candidate
+    // prepare (p11CheckpointPreparationInput), now with the REAL compiled
+    // request identity computed from this turn's rebuilt messages.
+    const prepared = prepareContextCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
     if (prepared.status !== 'prepared') return false;
     const previous = this.parity.contextCheckpoint;
     // Durable re-read: the installer's claimed (admitted) identity must still
