@@ -9,6 +9,7 @@ export {
 } from './client.js';
 export {
   assertSuccess,
+  closeProtocolHostState,
   createProtocolHostState,
   formatCellCommittedNotification,
   formatTurnEventNotification,

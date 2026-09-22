@@ -283,6 +283,7 @@ import {
   type LiveOperationalSourcesV1,
 } from '../runtime/contextCheckpoints.js';
 import type { AdmissionStore } from '../runtime/admission.js';
+import { ADMISSION_REASONS } from '../runtime/admissionContracts.js';
 import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 import { captureSessionEventAppendFailure } from './sessionEventDiagnostics.js';
 import { buildRepoMapPreamble } from './repoMapPreamble.js';
@@ -657,6 +658,28 @@ export interface SubmitMessageOptions {
 }
 
 import { deniesReadOnlyChatAction, filterReadOnlyChatTools, isReadOnlyChat, resolveChatRangePath } from './chatReadOnly.js';
+
+/**
+ * Version label for the chat tool surface offered to admitted commands. Part
+ * of the canonical admission digest; bump when the offered chat tool schema
+ * changes so a digest can never call two different tool surfaces "the same
+ * admitted command".
+ */
+const CHAT_ADMISSION_TOOL_SCHEMA_VERSION = 'chat-tools-v1';
+
+/**
+ * P05: this engine's admitted command claim. `settled` flips at command
+ * settlement (terminal stream, cancellation, replacement, or session close);
+ * a live (unsettled) claim matching the durable owner row is the ONLY
+ * authority under which this engine may install a P11 checkpoint.
+ */
+interface ChatEngineAdmissionClaim {
+  threadId: string;
+  commandId: string;
+  generation: number;
+  token: string;
+  settled: boolean;
+}
 
 export interface ChatEngineOptions {
   instructionRoot?: string;
@@ -1503,6 +1526,13 @@ export class ChatEngine {
   private testWorkspaceRevisionHash?: string | null | undefined;
   private currentTurnTelemetry: ChatTurnTelemetryCollector | null = null;
   private lastTurnTelemetry: ChatTurnTelemetryRecord | null = null;
+
+  /** P05: per-instance namespace so admitted command ids never collide across restarts. */
+  private readonly admissionEpoch: string = randomUUID();
+  /** P05: the (generation, token) lease this engine was last admitted under. */
+  private admissionLease: { generation: number; token: string } | null = null;
+  /** P05: live admitted claim for the in-flight submission, if any. */
+  private activeAdmissionClaim: ChatEngineAdmissionClaim | null = null;
 
   public setTestWorkspaceRevisionHash(hash: string | null | undefined): void {
     this.testWorkspaceRevisionHash = hash;
@@ -2887,16 +2917,44 @@ export class ChatEngine {
     );
   }
 
+  /**
+   * P05 admission wrapper around the execution loop: admit THIS authorized
+   * command BEFORE the loop runs — the production admission site, so every
+   * P11 checkpoint install inside the loop is already fenced to this engine's
+   * own admitted identity — and settle the claim when the stream terminates,
+   * including cancellation, failure, and consumer abandonment (`finally` runs
+   * on generator return/throw). A superseded claim was already settled (and
+   * its generation advanced) by the replacement submission's admission.
+   */
   private async *submitMessageStreamBody(
+    userInput: string,
+    taskIntent?: TaskIntent,
+    submitOpts?: SubmitMessageOptions,
+  ): AsyncGenerator<ChatEvent, void, undefined> {
+    const submissionGeneration =
+      submitOpts?.submissionGeneration ?? ++this.generationCounter;
+    this.admitCurrentSubmission(submissionGeneration, userInput);
+    try {
+      yield* this.submitMessageStreamLoop(userInput, taskIntent, {
+        ...submitOpts,
+        submissionGeneration,
+      });
+    } finally {
+      this.settleActiveAdmissionClaim();
+    }
+  }
+
+  private async *submitMessageStreamLoop(
     userInput: string,
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
     // R0-7/R0-8: every submission owns a distinct generation. The non-stream
     // adapter supplies the generation it already incremented; a direct
-    // streaming caller gets a fresh one here. All ownership guards compare
-    // against this value, so a superseded generator can neither continue the
-    // loop nor let a late async continuation write the new task's state.
+    // streaming caller gets a fresh one here (the admission wrapper above
+    // pre-computes it, so this adopts rather than increments). All ownership
+    // guards compare against this value, so a superseded generator can neither
+    // continue the loop nor let a late async continuation write the new task's state.
     const submissionGeneration =
       submitOpts?.submissionGeneration ?? ++this.generationCounter;
     this.activeSubmissionGeneration = submissionGeneration;
@@ -5185,15 +5243,44 @@ export class ChatEngine {
       throw new Error('Cannot change ChatEngine run identity after durable events exist');
     }
     const authority = this.parity.liveAuthority;
+    // A2 F2/A3: the host-injected durable admission store must survive the
+    // parity rebuild — this is the primary event-log resume path
+    // (construct without runId, then assignRunId).
+    const admissionStore = this.parity.admissionStore;
     this.engineRunId = runId;
     this.parity = createParityRuntime(runId);
     if (authority) this.parity.liveAuthority = authority;
+    if (admissionStore) this.parity.admissionStore = admissionStore;
     mkdirSync(this.engineRunDir, { recursive: true });
     const persistedTaskBudget = this.readPersistedTaskBudget(this.engineRunDir);
     this.restorePersistedTaskBudget(persistedTaskBudget);
     this.persistTaskCostBaseline();
     if (authority) persistLiveSessionAuthority(this.engineRunDir, authority);
     this.failureBudgetTracker = createFailureBudgetTrackerFromContract(authority?.taskContract);
+  }
+
+  /**
+   * Host seam: attach the durable P05 admission store once the engine's final
+   * run id is known (fresh sessions allocate their run id during/after
+   * construction). The opening host owns open/close; the engine only reads
+   * owners and admits/settles the commands it executes.
+   */
+  attachAdmissionStore(store: AdmissionStore): void {
+    this.parity.admissionStore = store;
+  }
+
+  /**
+   * Session teardown (REPL /clear, resume replacement, headless run end,
+   * protocol-host close): a session ending aborts any still-live admitted
+   * claim, then releases this engine's store reference. The underlying
+   * refcounted handle closes only when the last reference is released.
+   */
+  closeAdmissionStore(): void {
+    const claim = this.activeAdmissionClaim;
+    if (claim && !claim.settled) {
+      this.settleAdmissionClaim(claim, 'aborted', { finalOutcome: 'SESSION_CLOSED' });
+    }
+    this.parity.admissionStore?.close();
   }
 
   replaceConversation(messages: ChatMessage[]): void {
@@ -5732,14 +5819,177 @@ export class ChatEngine {
   // ── Private Methods ─────────────────────────────────────────────────────
 
   private currentP11Owner(): ContextCheckpointOwnerV1 | null {
-    const durableOwner = this.parity.admissionStore?.readOwner(this.parity.eventLog.thread_id);
-    return durableOwner
-      ? {
-          threadId: durableOwner.threadId,
-          generation: durableOwner.generation,
-          token: durableOwner.token,
+    try {
+      const store = this.parity.admissionStore;
+      const claim = this.activeAdmissionClaim;
+      // A live admitted claim is required: install authority is bounded to an
+      // admitted command in flight, never to a settled owner row alone.
+      if (!store || !claim || claim.settled) return null;
+      // The reference is this engine's OWN admitted identity (from
+      // admitCommand), verified against the durable owner row — not a fresh
+      // read validated against itself (A5 self-referential fence).
+      const durable = store.readOwner(claim.threadId);
+      if (!durable) return null;
+      if (durable.generation !== claim.generation || durable.token !== claim.token) return null;
+      return {
+        threadId: durable.threadId,
+        generation: durable.generation,
+        token: durable.token,
+      };
+    } catch {
+      // A1: owner reads fail closed to null, never out of the install path.
+      return null;
+    }
+  }
+
+  /**
+   * P05: admit the authorized command this submission is about to execute —
+   * the production admission site, introduced before any P11 checkpoint
+   * installation can succeed (installs run inside the stream loop this
+   * wrapper precedes).
+   *
+   * Owner origin: the durable owner row is written ONLY by real command
+   * admission — generation 1 with a fresh random lease token on a thread's
+   * first command, the durable owner of record recovered on resume/restart,
+   * or exactly one generation up (proving the token this engine still holds)
+   * when this submission replaces an in-flight one. Never turn numbers, run
+   * ids, or session-dir existence.
+   *
+   * Fails closed: any rejection (stale/foreign owner, corrupt state) leaves no
+   * live claim and drops the lease, so `currentP11Owner` resolves null and no
+   * checkpoint can install. Admission is a record, never a permission gate —
+   * a rejected admission does not block execution itself.
+   */
+  private admitCurrentSubmission(submissionGeneration: number, userInput: string): void {
+    const store = this.parity.admissionStore;
+    if (!store) return;
+    try {
+      const threadId = this.parity.eventLog.thread_id;
+      const commandId = `${this.admissionEpoch}:s${submissionGeneration}`;
+      const prior = this.activeAdmissionClaim;
+      let ownerGeneration: number;
+      let ownerToken: string;
+      let previousOwnerToken: string | undefined;
+      if (prior && !prior.settled) {
+        // Task replacement: the in-flight claim is settled as aborted first,
+        // then ownership advances by exactly one generation with the old token
+        // presented as proof — a stale holder can never prove takeover.
+        this.settleAdmissionClaim(prior, 'aborted', { finalOutcome: 'SUPERSEDED_BY_SUBMISSION' });
+        ownerGeneration = prior.generation + 1;
+        previousOwnerToken = prior.token;
+        ownerToken = randomUUID();
+      } else if (this.admissionLease) {
+        ownerGeneration = this.admissionLease.generation;
+        ownerToken = this.admissionLease.token;
+      } else {
+        // Resume/crash restart: recover the durable owner of record; only a
+        // thread with no owner row ever mints generation 1.
+        const durable = store.readOwner(threadId);
+        if (durable) {
+          ownerGeneration = durable.generation;
+          ownerToken = durable.token;
+        } else {
+          ownerGeneration = 1;
+          ownerToken = randomUUID();
         }
-      : null;
+      }
+      const decision = store.admitCommand({
+        digestInput: {
+          threadId,
+          taskId: this.parity.liveAuthority?.taskContract.task_id ?? this.engineRunId,
+          commandId,
+          mode: this.executionProfile,
+          resolvedOperationPolicy: {
+            taskClass: this.taskClass,
+            executionProfile: this.executionProfile,
+            hardPlanMode: this.options.hardPlanMode === true,
+          },
+          taskShapeClass: this.taskClass,
+          targetRoot: this.options.projectRoot,
+          offeredToolSchemaVersion: CHAT_ADMISSION_TOOL_SCHEMA_VERSION,
+          contextSnapshotId: commandId,
+          payload: {
+            kind: 'chat_submission',
+            input_sha256: createHash('sha256').update(userInput).digest('hex'),
+          },
+        },
+        ownerGeneration,
+        ownerToken,
+        ...(previousOwnerToken !== undefined ? { previousOwnerToken } : {}),
+        leaseId: this.admissionEpoch,
+        // A chat command's durable effect is its thread/session event-log
+        // append — reconcilable after a crash, never silently replayed as ok.
+        effectClass: 'reconcilable_mutation',
+        operationId: `chat-submission:${threadId}:${commandId}`,
+      });
+      if (decision.kind === 'admitted' || decision.kind === 'pending') {
+        this.admissionLease = { generation: ownerGeneration, token: ownerToken };
+        this.activeAdmissionClaim = {
+          threadId,
+          commandId,
+          generation: ownerGeneration,
+          token: ownerToken,
+          settled: false,
+        };
+      } else {
+        // Rejected or replayed: fail closed — no live claim, and a rejected
+        // admission means this engine is not the durable owner.
+        this.activeAdmissionClaim = null;
+        if (decision.kind === 'rejected') this.admissionLease = null;
+      }
+    } catch {
+      // Record-only: never break execution, but never keep claim state that
+      // admission did not durably prove.
+      this.activeAdmissionClaim = null;
+      this.admissionLease = null;
+    }
+  }
+
+  /** Settle an admitted claim at command settlement (terminal/replacement/close). */
+  private settleAdmissionClaim(
+    claim: ChatEngineAdmissionClaim,
+    state: 'settled' | 'aborted' | 'indeterminate',
+    outcome: unknown,
+  ): void {
+    if (claim.settled) return;
+    try {
+      const store = this.parity.admissionStore;
+      if (store) {
+        const input = {
+          threadId: claim.threadId,
+          commandId: claim.commandId,
+          ownerGeneration: claim.generation,
+          ownerToken: claim.token,
+          state,
+          outcome,
+        } as const;
+        const decision = store.settleAdmission(input);
+        // A1: a gen-N command superseded before settlement can no longer
+        // prove success under current authority — record it as indeterminate
+        // instead of leaving it 'claimed' forever.
+        if (
+          !decision.settled &&
+          state === 'settled' &&
+          decision.reasonCode === ADMISSION_REASONS.STALE_OWNER
+        ) {
+          store.settleAdmission({ ...input, state: 'indeterminate' });
+        }
+      }
+    } catch {
+      // Record-only: a failed settle leaves the claim 'claimed' for recovery
+      // (fail-closed manual review) and never blocks the caller.
+    } finally {
+      claim.settled = true;
+    }
+  }
+
+  /** Terminal settlement for the submission that owns the live claim. */
+  private settleActiveAdmissionClaim(): void {
+    const claim = this.activeAdmissionClaim;
+    if (!claim || claim.settled) return;
+    this.settleAdmissionClaim(claim, this._cancelled ? 'aborted' : 'settled', {
+      finalOutcome: this._cancelled ? 'CANCELLED' : 'CHAT_SUBMISSION_TERMINAL',
+    });
   }
 
   private currentInstalledContextLineage(
@@ -5929,6 +6179,9 @@ export class ChatEngine {
   ): Promise<boolean> {
     const sources = this.buildP11Sources(routeOverride);
     if (!sources) return false;
+    // A5 fence: the claimed owner is THIS engine's own admitted identity
+    // (admitted ∩ durable, see currentP11Owner) — never a fresh read that
+    // would validate itself. A losing/superseded engine resolves null here.
     const owner = this.currentP11Owner();
     if (!owner || !this.parity.admissionStore) return false;
     const checkpointId = `context:${this.parity.turnId ?? this._turnIndex}:${this.workingState.revision}`;
@@ -5943,17 +6196,29 @@ export class ChatEngine {
     });
     if (prepared.status !== 'prepared') return false;
     const previous = this.parity.contextCheckpoint;
+    // Durable re-read: the installer's claimed (admitted) identity must still
+    // match the owner row of record before the checkpoint may install.
     const ownerNow = this.parity.admissionStore.readOwner(owner.threadId);
     if (!ownerNow) return false;
+    if (ownerNow.generation !== owner.generation || ownerNow.token !== owner.token) return false;
     const installed = await installContextCheckpoint(prepared, {
-      currentOwner: ownerNow,
+      currentOwner: {
+        threadId: ownerNow.threadId,
+        generation: ownerNow.generation,
+        token: ownerNow.token,
+      },
       requireInstalledLineage: true,
       authorizedObservationIds: [...(this.parity.authorizedObservationIds ?? [])],
       lineageEvidence: {
         threadEvents: this.parity.eventLog.events,
         sessionEvents: this.parity.sessionEvents.events,
       },
-      readCurrentOwner: () => this.parity.admissionStore?.readOwner(owner.threadId) ?? null,
+      readCurrentOwner: () => {
+        const current = this.parity.admissionStore?.readOwner(owner.threadId) ?? null;
+        return current
+          ? { threadId: current.threadId, generation: current.generation, token: current.token }
+          : null;
+      },
       install: async (checkpoint, _owner, assertOwnerCurrent) => {
         this.parity.contextCheckpoint = checkpoint;
         const receipt = await checkpointParityEventLogStrict(this.parity, this.engineRunDir, {

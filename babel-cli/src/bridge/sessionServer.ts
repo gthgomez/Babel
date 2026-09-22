@@ -48,6 +48,7 @@ import { ProtocolGateway, originAllowed, readLimitedBody } from './protocolGatew
 import { writeRemoteUiResponse } from './remoteUiAssets.js';
 import { WsTicketStore } from './wsTicket.js';
 import type { ProtocolHostState } from '../protocol/client/host.js';
+import { closeProtocolHostState } from '../protocol/client/host.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -291,6 +292,10 @@ export class BridgeServer {
 
     // Shutdown session runner
     sessionRunner.shutdown();
+
+    // P05/P11 (A4): release the gateway host's durable admission handles so a
+    // stopped bridge leaks no SQLite ownership into a later start.
+    closeProtocolHostState(this.protocolGateway.host);
 
     return new Promise<void>((resolve) => {
       this.server.close(() => resolve());

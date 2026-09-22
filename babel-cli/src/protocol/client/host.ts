@@ -4,6 +4,8 @@
  */
 
 import { ChatEngine, type ChatEvent } from '../../agent/chatEngine.js';
+import { openSessionAdmissionStore } from '../../cli/runsLayout.js';
+import type { AdmissionStore } from '../../runtime/admission.js';
 import type { BabelMode, SessionDescriptor } from '../../executor/contracts.js';
 import {
   buildPreparedTurn,
@@ -97,6 +99,12 @@ export interface ProtocolHostState {
   restoreReports: Map<string, RestoreReport>;
   /** P03: shared lifecycle facade that owns controller dispatch per turn. */
   coordinator: RuntimeCoordinator;
+  /**
+   * P05/P11 (A4): session-scoped durable admission stores owned by the host
+   * state, keyed by threadId. Opened lazily at engine materialization; closed
+   * by `closeProtocolHostState`.
+   */
+  admissionStores: Map<string, AdmissionStore>;
 }
 
 export function createProtocolHostState(options: {
@@ -121,6 +129,7 @@ export function createProtocolHostState(options: {
     verificationByThread: new Map(),
     restoreReports: new Map(),
     coordinator: options.coordinator ?? createRuntimeCoordinator(),
+    admissionStores: new Map(),
   };
 }
 
@@ -164,6 +173,19 @@ function materializeEngine(state: ProtocolHostState, descriptor: SessionDescript
   const existing = state.engines.get(descriptor.threadId);
   if (existing) return existing;
   const engine = state.engineFactory(descriptor);
+  // P05/P11 (A4): open the session-scoped durable admission store and attach
+  // it before hydration so protocol turns admit commands and fence P11
+  // checkpoint installs to their own admitted identity. Test-injected stub
+  // engines without the seam are left untouched (fail closed: no store → no
+  // install). Owner of close: `closeProtocolHostState`.
+  const attachable = engine as unknown as { attachAdmissionStore?: (store: AdmissionStore) => void };
+  if (typeof attachable.attachAdmissionStore === 'function') {
+    const admission = openSessionAdmissionStore(descriptor.threadId);
+    if (admission.ok) {
+      state.admissionStores.set(descriptor.threadId, admission.store);
+      attachable.attachAdmissionStore(admission.store);
+    }
+  }
   const report = state.restoreReports.get(descriptor.threadId);
   if (report?.resumable && report.source !== 'none') {
     if (!engineSupportsHydration(engine)) {
@@ -199,6 +221,23 @@ function engineSupportsHydration(engine: ChatEngine): boolean {
     typeof candidate.replaceConversation === 'function' &&
     typeof candidate.getConversation === 'function'
   );
+}
+
+/**
+ * P05/P11 (A4): release every durable admission handle this host state owns.
+ * Idempotent. Engines keep their (now released) references and fail closed on
+ * any later admit/install, so a stopped host can never mint or install
+ * authority. Called from bridge/session shutdown.
+ */
+export function closeProtocolHostState(state: ProtocolHostState): void {
+  for (const store of state.admissionStores.values()) {
+    try {
+      store.close();
+    } catch {
+      // Fail closed: a handle that cannot close is already unusable.
+    }
+  }
+  state.admissionStores.clear();
 }
 
 /**

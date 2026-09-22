@@ -6,7 +6,7 @@
 import { existsSync } from 'node:fs';
 
 import { ChatEngine } from '../agent/chatEngine.js';
-import { chatSessionDir, transcriptPath } from '../cli/runsLayout.js';
+import { chatSessionDir, openSessionAdmissionStore, transcriptPath } from '../cli/runsLayout.js';
 import {
   hydrateResumedThreadToScreen,
   loadThreadCells,
@@ -154,8 +154,25 @@ export async function resumeChatSession(
       };
     }
 
+    // P05/P11: reopen the durable admission store for this session — AFTER
+    // the identity gates, so a refused resume never touches the store. This
+    // single seam covers /resume, the in-command SessionPicker, the startup
+    // picker, and BABEL_RESUME_SESSION (all converge here). Hydration inside
+    // the construction paths below validates any existing checkpoint against
+    // the durable owner of record BEFORE a new admission can mint a newer
+    // generation. On `!admission.ok` degrade fail-closed: no store → no owner
+    // → checkpoints stay inert. Owner of close: the ReplContext engine
+    // lifecycle — each assignment below releases the previous engine's
+    // reference first.
+    const admission = openSessionAdmissionStore(sessionId);
+    const resumeOptions = {
+      ...engineOptions,
+      ...(admission.ok ? { admissionStore: admission.store } : {}),
+    };
+
     if (eventLog && eventLog.events.length > 0) {
-      ctx.chatEngine = createEngineFromEventLog(engineOptions, eventLog);
+      ctx.chatEngine?.closeAdmissionStore?.();
+      ctx.chatEngine = createEngineFromEventLog(resumeOptions, eventLog);
       ctx.chatEngine.assignRunId(sessionId);
       // W2.2: session-events settle after run id assignment (same session dir).
       ctx.chatEngine.restoreSessionEventsFromDir(sessionDir);
@@ -195,7 +212,8 @@ export async function resumeChatSession(
 
     if (hasThreadStore) {
       const cells = loadThreadCells(sessionId);
-      ctx.chatEngine = createEngineFromThreadCells(sessionId, engineOptions, cells);
+      ctx.chatEngine?.closeAdmissionStore?.();
+      ctx.chatEngine = createEngineFromThreadCells(sessionId, resumeOptions, cells);
       // If an event log appears mid-session, keep cells as UI; still prefer empty event log path above
       hydrateResumedThreadToScreen(ctx, sessionId);
       const { turnCount, exchangeCount } = hydrateReplTurnsFromCells(ctx, cells, {
@@ -215,7 +233,7 @@ export async function resumeChatSession(
 
     let engine: ChatEngine;
     try {
-      engine = await ChatEngine.restore(sessionId, engineOptions);
+      engine = await ChatEngine.restore(sessionId, resumeOptions);
     } catch (err) {
       // Legacy transcript-only sessions may predate session-events.jsonl.
       // They remain resumable as conversation history; the durable event log
@@ -227,7 +245,7 @@ export async function resumeChatSession(
       ) {
         throw err;
       }
-      engine = new ChatEngine({ ...engineOptions, runId: sessionId });
+      engine = new ChatEngine({ ...resumeOptions, runId: sessionId });
       engine.replaceConversation(parseChatTranscriptFile(txPath));
     }
     // Attach event log if it lands after transcript restore
@@ -235,6 +253,7 @@ export async function resumeChatSession(
     if (lateLog && lateLog.events.length > 0) {
       applyEventLogToChatEngine(engine, lateLog);
     }
+    ctx.chatEngine?.closeAdmissionStore?.();
     ctx.chatEngine = engine;
     const { turnCount, exchangeCount } = hydrateReplTurnsFromChatTranscript(ctx, {
       sessionId,

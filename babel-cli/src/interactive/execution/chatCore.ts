@@ -39,6 +39,7 @@ import {
 } from './chatEventDispatch.js';
 import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 import {
+  attachSessionAdmissionStore,
   finalizeProtocolTurn,
   getEngineThreadId,
   prepareHeadlessTurn,
@@ -714,6 +715,14 @@ export async function runChatEngineOnce(input: {
       ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
     });
 
+  if (!input.engine) {
+    // P05/P11 headless companion: a run that creates its own engine owns the
+    // durable admission store for this call and releases it when the run ends
+    // (closed in the stream settle `finally` below and, idempotently, before
+    // returning). A caller-supplied engine (REPL) keeps its own reference.
+    attachSessionAdmissionStore(engine);
+  }
+
   if (input.engine) {
     applyEngineTurnPreparation(input.engine, {
       task: input.task,
@@ -865,6 +874,9 @@ export async function runChatEngineOnce(input: {
     finalizeProtocolTurn(protocolSession);
   } finally {
     if (execution !== null) coordinator.settle(execution);
+    // Headless run end: release this run's admission-store reference (no-op
+    // when the engine, and therefore the store, belongs to the caller).
+    if (!input.engine && typeof engine.closeAdmissionStore === 'function') engine.closeAdmissionStore();
   }
 
   // C1: Persist intent plan to run_dir/intent_plan.json after the run
@@ -978,6 +990,9 @@ export async function runChatEngineOnce(input: {
   if (acceptanceBundle && result.runDir) {
     recordAcceptanceArtifacts(result.runDir, acceptanceBundle);
   }
+
+  // Idempotent backstop for failures thrown outside the stream stage above.
+  if (!input.engine && typeof engine.closeAdmissionStore === 'function') engine.closeAdmissionStore();
 
   return result;
 }
