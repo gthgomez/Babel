@@ -33,6 +33,9 @@ export interface ProjectStats {
   sessionReceipts?: Record<string, ChargeReceipt[]>;
   /** A temporary checkpoint ordering gap can clear after receipt coverage is proven. */
   projectionPending?: boolean;
+  pendingSessionIds?: string[];
+  /** Old aggregate-only snapshots lack the identity needed for reconciliation. */
+  projectionUnverifiable?: boolean;
   /** A legacy aggregate cannot be disaggregated into idempotent session receipts. */
   projectionComplete?: boolean;
 }
@@ -881,17 +884,27 @@ export class CostTracker {
     // The old format has only an aggregate and last-session label; its
     // contribution from that session cannot be separated safely.
     const candidateReceiptView = this.projectReceiptSummary(dirname(statsPath));
+    if (candidateReceiptView && sessionId !== this.projectSessionId) {
+      throw new Error('Project receipt projection has a different session identity');
+    }
     const priorSnapshot = stats.sessionSnapshots[sessionId];
     const priorReceipts = stats.sessionReceipts?.[sessionId];
+    const missingPriorIdentity = this.restoredSessionChargeIds !== null &&
+      priorSnapshot !== undefined && !Array.isArray(priorReceipts);
     const unprovenRestore = this.restoredSessionChargeIds !== null &&
       (candidateReceiptView === null || (priorSnapshot !== undefined &&
         (!Array.isArray(priorReceipts) || !this.receiptsMatchSummary(priorReceipts, priorSnapshot) ||
          !this.receiptViewCovers(priorReceipts, candidateReceiptView.receipts))));
-    const canClearPending = candidateReceiptView !== null && !unprovenRestore;
-    const permanentFailure = stats.projectionComplete === false &&
-      (!stats.projectionPending || !canClearPending);
-    stats.projectionComplete = !permanentFailure && this.sessionProjectionComplete && !unprovenRestore;
-    stats.projectionPending = unprovenRestore || (stats.projectionPending === true && !canClearPending);
+    const pendingSessions = new Set(stats.pendingSessionIds ??
+      (stats.projectionPending && stats.lastSessionId ? [stats.lastSessionId] : []));
+    const permanentFailure = stats.projectionUnverifiable === true ||
+      (stats.projectionComplete === false && pendingSessions.size === 0);
+    if (unprovenRestore && !missingPriorIdentity) pendingSessions.add(sessionId);
+    else if (!unprovenRestore) pendingSessions.delete(sessionId);
+    stats.projectionUnverifiable = permanentFailure || missingPriorIdentity || !this.sessionProjectionComplete;
+    stats.pendingSessionIds = [...pendingSessions];
+    stats.projectionPending = pendingSessions.size > 0;
+    stats.projectionComplete = !stats.projectionUnverifiable && pendingSessions.size === 0;
     const receiptSummary = candidateReceiptView?.summary ?? null;
     if (!overlapsLegacySession && !unprovenRestore) {
       const current = this.getSessionSummary();

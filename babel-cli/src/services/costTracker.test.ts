@@ -683,6 +683,77 @@ test('a later matching receipt clears temporary project projection uncertainty',
   }
 });
 
+test('a new session cannot clear another session’s pending receipt gap', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-pending-scope-'));
+  try {
+    const original = new CostTracker(root);
+    const a = { taskOwnerId: 'A', chargeId: 'A', projectRoot: root };
+    const b = { taskOwnerId: 'B', chargeId: 'B', projectRoot: root };
+    original.settleUsage('deepseek-v4-flash', 100, 10, null, null, a);
+    const stale = {
+      ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+      chargeObservations: original.getSessionChargeObservations(),
+      projectSessionId: original.getProjectSessionId(),
+    };
+    original.settleUsage('deepseek-v4-flash', 200, 20, null, null, b);
+    original.saveToProjectStats(original.getProjectSessionId(), undefined, root);
+    const resumed = new CostTracker(root);
+    resumed.restoreSessionCost(stale);
+    resumed.restoreTaskUsage('A', {
+      totalCostUSD: original.getTaskSummary('A').totalCostUSD,
+      unknownChargeCount: 0,
+      chargeIds: original.getTaskChargeIds('A'),
+      chargeObservations: original.getTaskChargeObservations('A'),
+    });
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), stale, root);
+    const next = new CostTracker(root);
+    next.settleUsage('deepseek-v4-flash', 50, 5, null, null,
+      { taskOwnerId: 'D', chargeId: 'D', projectRoot: root });
+    next.saveToProjectStats(next.getProjectSessionId(), undefined, root);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.projectionComplete, false);
+    assert.equal(stats.projectionPending, true);
+    assert.deepEqual(stats.pendingSessionIds, [original.getProjectSessionId()]);
+    assert.equal(next.getProjectHistoricalCost(root), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a pre-receipt project snapshot stays explicitly unverifiable after resume', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-no-prior-ids-'));
+  try {
+    const original = new CostTracker(root);
+    const attribution = { taskOwnerId: 'A', chargeId: 'legacy-project', projectRoot: root };
+    original.settleUsage('deepseek-v4-flash', 100, 10, null, null, attribution);
+    original.saveToProjectStats(original.getProjectSessionId(), undefined, root);
+    const statsPath = join(root, 'project_stats.json');
+    const older = JSON.parse(readFileSync(statsPath, 'utf8'));
+    delete older.sessionReceipts;
+    writeFileSync(statsPath, JSON.stringify(older));
+    const resumed = new CostTracker(root);
+    resumed.restoreSessionCost({
+      ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+      chargeObservations: original.getSessionChargeObservations(),
+      projectSessionId: original.getProjectSessionId(),
+    });
+    resumed.restoreTaskUsage('A', {
+      totalCostUSD: original.getTaskSummary('A').totalCostUSD,
+      unknownChargeCount: 0,
+      chargeIds: original.getTaskChargeIds('A'),
+      chargeObservations: original.getTaskChargeObservations('A'),
+    });
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), resumed.getSessionSummary(), root);
+    const stats = JSON.parse(readFileSync(statsPath, 'utf8'));
+    assert.equal(stats.projectionComplete, false);
+    assert.equal(stats.projectionUnverifiable, true);
+    assert.equal(stats.totalCostUSD, older.totalCostUSD);
+    assert.equal(resumed.getProjectHistoricalCost(root), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('legacy lexical root alias is resolved before receipt projection', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'babel-project-alias-'));
   const alias = `${root}-alias`;
