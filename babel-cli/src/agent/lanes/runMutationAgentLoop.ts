@@ -11,7 +11,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
 import type { WorktreeRollbackSummary } from '../../services/worktreeSafety.js';
@@ -581,7 +581,7 @@ export async function runMutationAgentLoop(
                     usageAttribution: {
                       taskOwnerId: input.inheritedAllowance.taskOwnerId,
                       parentTaskOwnerId: input.inheritedAllowance.parentTaskOwnerId,
-                      projectRoot,
+                      projectRoot: realpathSync(projectRoot),
                     },
                   }
                 : {}),

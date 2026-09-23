@@ -772,16 +772,11 @@ export class CostTracker {
       return null;
     }
     const identity = (path: string): string => process.platform === 'win32' ? path.toLowerCase() : path;
-    const selected: ChargeReceipt[] = [];
-    for (const receipt of receipts) {
-      let receiptRoot: string;
-      try {
-        receiptRoot = realpathSync(receipt.attribution.projectRoot!);
-      } catch {
-        return null;
-      }
-      if (identity(receiptRoot) === identity(physicalRoot)) selected.push(receipt);
-    }
+    // Roots were captured physically at dispatch. A different project's
+    // worktree may have disappeared before this save; it cannot turn that
+    // receipt into usage for the current project.
+    const selected = receipts.filter((receipt) =>
+      identity(receipt.attribution.projectRoot!) === identity(physicalRoot));
     const modelBreakdown: Record<string, ModelUsage> = {};
     let totalCostUSD = 0;
     let unknownChargeCount = 0;
@@ -815,15 +810,23 @@ export class CostTracker {
   }
 
   /** Reject a restored receipt projection that could erase newer project data. */
-  private receiptSummaryDominates(saved: SessionUsageSummary, projected: SessionUsageSummary): boolean {
+  private receiptSummaryDominates(
+    saved: SessionUsageSummary, projected: SessionUsageSummary, projectRoot: string,
+  ): boolean {
     const covers = (before: ModelUsage, after: ModelUsage): boolean =>
       after.inputTokens >= before.inputTokens && after.outputTokens >= before.outputTokens &&
-      after.costUSD + 1e-9 >= before.costUSD &&
-      (after.unknownChargeCount ?? 0) <= (before.unknownChargeCount ?? 0);
+      after.costUSD + 1e-9 >= before.costUSD;
+    const identity = (path: string): string => process.platform === 'win32' ? path.toLowerCase() : path;
+    const physicalProjectRoot = realpathSync(projectRoot);
+    const newUnknownCharges = [...this.chargeObservations.values()].filter((receipt) =>
+      receipt.projectedInSession && receipt.knownCostUSD === null &&
+      !this.restoredSessionChargeIds?.has(receipt.attribution.chargeId) &&
+      receipt.attribution.projectRoot &&
+      identity(receipt.attribution.projectRoot) === identity(physicalProjectRoot)).length;
     return projected.totalInputTokens >= saved.totalInputTokens &&
       projected.totalOutputTokens >= saved.totalOutputTokens &&
       projected.totalCostUSD + 1e-9 >= saved.totalCostUSD &&
-      (projected.unknownChargeCount ?? 0) <= (saved.unknownChargeCount ?? 0) &&
+      (projected.unknownChargeCount ?? 0) - (saved.unknownChargeCount ?? 0) <= newUnknownCharges &&
       Object.entries(saved.modelBreakdown).every(([modelId, before]) => {
         const after = projected.modelBreakdown[modelId];
         return after !== undefined && covers(before, after);
@@ -864,7 +867,7 @@ export class CostTracker {
     const priorSnapshot = stats.sessionSnapshots[sessionId];
     const staleRestoredReceipts = this.restoredSessionChargeIds !== null &&
       candidateReceiptSummary !== null && priorSnapshot !== undefined &&
-      !this.receiptSummaryDominates(priorSnapshot, candidateReceiptSummary);
+      !this.receiptSummaryDominates(priorSnapshot, candidateReceiptSummary, dirname(statsPath));
     const receiptSummary = staleRestoredReceipts ? null : candidateReceiptSummary;
     stats.projectionComplete = stats.projectionComplete !== false && this.sessionProjectionComplete &&
       !staleRestoredReceipts && (this.restoredSessionChargeIds === null || receiptSummary !== null);

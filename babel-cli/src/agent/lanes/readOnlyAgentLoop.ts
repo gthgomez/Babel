@@ -10,6 +10,7 @@
  * → observations for synthesis prompt + session_loop_steps + tool_call_log.
  */
 
+import { realpathSync } from 'node:fs';
 import { BABEL_ROOT } from '../../cli/constants.js';
 import {
   buildDiscoveryAnchorWarmupActions,
@@ -440,7 +441,7 @@ async function resolveLiveActionTurn(
           usageAttribution: {
             taskOwnerId: inheritedAllowance.taskOwnerId,
             parentTaskOwnerId: inheritedAllowance.parentTaskOwnerId,
-            ...(projectRoot ? { projectRoot } : {}),
+            ...(projectRoot ? { projectRoot: realpathSync(projectRoot) } : {}),
           },
         }
       : {}),

@@ -611,6 +611,65 @@ test('older resumed receipts cannot overwrite a newer project snapshot', () => {
   }
 });
 
+test('a new pending receipt after resume does not permanently poison project completeness', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-new-pending-'));
+  try {
+    const original = new CostTracker(root);
+    const first = { taskOwnerId: 'A', chargeId: 'first', projectRoot: root };
+    original.settleUsage('deepseek-v4-flash', 100, 10, null, null, first);
+    original.saveToProjectStats(original.getProjectSessionId(), undefined, root);
+    const saved = {
+      ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+      chargeObservations: original.getSessionChargeObservations(),
+      projectSessionId: original.getProjectSessionId(),
+    };
+    const resumed = new CostTracker(root);
+    resumed.restoreSessionCost(saved);
+    resumed.restoreTaskUsage('A', {
+      totalCostUSD: original.getTaskSummary('A').totalCostUSD,
+      unknownChargeCount: 0,
+      chargeIds: original.getTaskChargeIds('A'),
+      chargeObservations: original.getTaskChargeObservations('A'),
+    });
+    const next = { taskOwnerId: 'B', chargeId: 'next', projectRoot: root };
+    resumed.recordUnknownCharge('deepseek-v4-flash', next);
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), saved, root);
+    let stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.projectionComplete, true);
+    assert.equal(stats.unknownChargeCount, 1);
+    resumed.settleUsage('deepseek-v4-flash', 50, 5, null, null, next);
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), saved, root);
+    stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.projectionComplete, true);
+    assert.equal(stats.unknownChargeCount, 0);
+    assert.equal(stats.completeCostUSD, resumed.getSessionSummary().totalCostUSD);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a removed unrelated root cannot contribute to another project snapshot', () => {
+  const rootA = mkdtempSync(join(tmpdir(), 'babel-removed-A-'));
+  const rootB = mkdtempSync(join(tmpdir(), 'babel-remaining-B-'));
+  try {
+    const tracker = new CostTracker(rootB);
+    tracker.settleUsage('deepseek-v4-flash', 1000, 100, null, null,
+      { taskOwnerId: 'A', chargeId: 'removed-A', projectRoot: rootA });
+    rmSync(rootA, { recursive: true, force: true });
+    tracker.settleUsage('deepseek-v4-flash', 200, 20, null, null,
+      { taskOwnerId: 'B', chargeId: 'remaining-B', projectRoot: rootB });
+    tracker.saveToProjectStats(tracker.getProjectSessionId(), undefined, rootB);
+    const stats = JSON.parse(readFileSync(join(rootB, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.projectionComplete, true);
+    assert.equal(stats.totalInputTokens, 200);
+    assert.equal(stats.totalOutputTokens, 20);
+    assert.equal(stats.totalCostUSD, tracker.getTaskSummary('B').totalCostUSD);
+  } finally {
+    rmSync(rootA, { recursive: true, force: true });
+    rmSync(rootB, { recursive: true, force: true });
+  }
+});
+
 test('rooted project matching accepts Windows path case aliases', { skip: process.platform !== 'win32' }, () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-project-case-'));
   try {

@@ -5,7 +5,7 @@
  */
 
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
@@ -2192,7 +2192,7 @@ export class ChatEngine {
     const isOwnerCurrent = (): boolean => this.isSubmissionCurrent(ownerGeneration);
     const usageScope = {
       taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
-      projectRoot: this.options.projectRoot,
+      projectRoot: realpathSync(this.options.projectRoot),
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       turnId: this.parity.turnId,
       chargeId: null as string | null,
@@ -3374,7 +3374,7 @@ export class ChatEngine {
       const hadInstalledP11Context = this.parity.contextCheckpoint !== undefined;
       const usageScope = {
         taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
-        projectRoot: this.options.projectRoot,
+        projectRoot: realpathSync(this.options.projectRoot),
         accountingEpoch: globalCostTracker.getAccountingEpoch(),
         turnId: this.parity.turnId,
         chargeId: null as string | null,
@@ -9405,7 +9405,7 @@ export class ChatEngine {
 
     const usageScope = {
       taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
-      projectRoot: this.options.projectRoot,
+      projectRoot: realpathSync(this.options.projectRoot),
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       turnId: this.parity.turnId,
       chargeId: null as string | null,
@@ -9474,7 +9474,7 @@ export class ChatEngine {
           : this.taskAllowance
           ? {
               taskOwnerId: this.taskAllowance.taskOwnerId,
-              projectRoot: this.options.projectRoot,
+              projectRoot: realpathSync(this.options.projectRoot),
               chargeId: this.pendingUsageChargeId ?? randomUUID(),
             }
           : undefined,
@@ -9569,7 +9569,7 @@ export class ChatEngine {
       chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string;
     } = {
       taskOwnerId: compactionOwnerId,
-      projectRoot: this.options.projectRoot,
+      projectRoot: realpathSync(this.options.projectRoot),
       accountingEpoch: compactionEpoch,
       turnId: compactionTurnId,
       chargeId: null as string | null,
@@ -10487,7 +10487,7 @@ export class ChatEngine {
     const usageGeneration = this.activeSubmissionGeneration;
     const usageScope = {
       taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
-      projectRoot: this.options.projectRoot,
+      projectRoot: realpathSync(this.options.projectRoot),
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       turnId: this.parity.turnId,
       chargeId: null as string | null,
