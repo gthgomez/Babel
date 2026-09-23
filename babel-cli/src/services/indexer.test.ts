@@ -62,6 +62,34 @@ test('semantic indexer resets between project indexes', async () => {
   }
 });
 
+test('overlapping project searches retain their own index root through the search', async () => {
+  const temp = mkdtempSync(join(tmpdir(), 'babel-index-overlap-'));
+  const first = join(temp, 'first');
+  const second = join(temp, 'second');
+  try {
+    mkdirSync(first);
+    mkdirSync(second);
+    writeFileSync(join(first, 'one.ts'), 'export const firstUniqueNeedle = 1;', 'utf-8');
+    writeFileSync(join(second, 'two.ts'), 'export const secondUniqueNeedle = 2;', 'utf-8');
+    const indexer = new SemanticIndexer(join(temp, 'index.db'));
+    const [a, b] = await Promise.all([
+      indexer.withProjectIndex(first, true, async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        return indexer.search('firstUniqueNeedle');
+      }),
+      indexer.withProjectIndex(second, true, async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        return indexer.search('secondUniqueNeedle');
+      }),
+    ]);
+    assert.deepEqual(a.map((hit) => hit.name), ['one.ts']);
+    assert.deepEqual(b.map((hit) => hit.name), ['two.ts']);
+    indexer.close();
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('semantic_search lazily indexes the active project root', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-semantic-lazy-'));
   const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
@@ -78,6 +106,7 @@ test('semantic_search lazily indexes the active project root', async () => {
         agentId: 'test-agent',
         runId: 'test-run',
         babelRoot: root,
+        projectRoot: root,
       },
     );
     assert.equal(result.exit_code, 0);

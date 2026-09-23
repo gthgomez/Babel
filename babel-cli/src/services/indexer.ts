@@ -441,30 +441,49 @@ export class SemanticIndexer {
     return this.indexedRoot;
   }
 
-  /**
-   * Index a project directory. Uses incremental indexing by default —
-   * only files whose content hash changed are reindexed.
-   * Pass { force: true } to reindex everything.
-   */
-  /**
-   * Guard against concurrent indexProject() calls. Without this, a
-   * semantic_search tool invocation during warmup indexing starts a second
-   * directory walk + indexing run that doubles I/O and CPU load.
-   */
-  private _indexingPromise: Promise<number> | null = null;
+  /** Keep a root switch and its search together across overlapping tasks. */
+  private indexQueue: Promise<void> = Promise.resolve();
 
+  private async withIndexLock<T>(work: () => Promise<T>): Promise<T> {
+    const prior = this.indexQueue;
+    let release!: () => void;
+    this.indexQueue = new Promise<void>((resolve) => { release = resolve; });
+    await prior;
+    try {
+      return await work();
+    } finally {
+      release();
+    }
+  }
+
+  /** A search cannot race another task's project reindex. */
+  public withProjectIndex<T>(
+    rootPath: string,
+    allowIndex: boolean,
+    search: () => Promise<T>,
+  ): Promise<T> {
+    const root = resolve(rootPath);
+    return this.withIndexLock(async () => {
+      if (this.indexedRoot !== root || this.count === 0) {
+        if (!allowIndex) throw new Error('Semantic search unavailable: no already-open index for this project in the read-only lane.');
+        await this.indexProjectUnlocked(root);
+      }
+      return search();
+    });
+  }
+
+  /** Incrementally index a project without racing another root switch. */
   public async indexProject(
     rootPath: string,
     options?: { force?: boolean; onProgress?: (indexed: number, total: number) => void },
   ): Promise<number> {
-    // If an indexing run is already in-flight for this root, await its result
-    // instead of starting a second concurrent walk + FTS insert.
-    if (this._indexingPromise !== null) {
-      return this._indexingPromise;
-    }
+    return this.withIndexLock(() => this.indexProjectUnlocked(resolve(rootPath), options));
+  }
 
-    const root = resolve(rootPath);
-    const doIndex = async (): Promise<number> => {
+  private async indexProjectUnlocked(
+    root: string,
+    options?: { force?: boolean; onProgress?: (indexed: number, total: number) => void },
+  ): Promise<number> {
       const files = await collectTextFiles(root);
 
       const fileEntries: Array<{ filePath: string; relativePath: string }> = [];
@@ -494,14 +513,6 @@ export class SemanticIndexer {
       }
 
       return this.fts.count;
-    };
-
-    this._indexingPromise = doIndex();
-    try {
-      return await this._indexingPromise;
-    } finally {
-      this._indexingPromise = null;
-    }
   }
 
   /**
@@ -1002,6 +1013,9 @@ export const globalIndexer = {
   },
   searchWithEmbedding(query: string, limit?: number) {
     return getGlobalIndexer().searchWithEmbedding(query, limit);
+  },
+  withProjectIndex<T>(rootPath: string, allowIndex: boolean, search: () => Promise<T>): Promise<T> {
+    return getGlobalIndexer().withProjectIndex(rootPath, allowIndex, search);
   },
   close(): void {
     return getGlobalIndexer().close();

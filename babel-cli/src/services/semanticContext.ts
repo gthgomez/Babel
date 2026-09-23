@@ -12,6 +12,7 @@
  */
 
 import { globalIndexer } from './indexer.js';
+import { resolve } from 'node:path';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -136,7 +137,7 @@ function extractTaskKeywords(task: string): string[] {
  */
 export function buildSemanticContext(
   task: string,
-  _projectRoot?: string,
+  projectRoot?: string,
   maxHits = 5,
 ): SemanticContextResult {
   const keywords = extractTaskKeywords(task);
@@ -147,6 +148,9 @@ export function buildSemanticContext(
 
   try {
     const indexer = globalIndexer;
+    if (projectRoot && indexer.indexedProjectRoot !== resolve(projectRoot)) {
+      return { lines: [], hits: [], indexAvailable: false };
+    }
     if (!indexer || indexer.count === 0) {
       return { lines: [], hits: [], indexAvailable: indexer !== undefined };
     }
