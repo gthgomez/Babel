@@ -42,6 +42,9 @@ export function providerMessagesToChatMessages(
       content: m.content,
     };
     if (m.name) base.name = m.name;
+    if (m.provenance) base.provenance = m.provenance;
+    if (m.authoritative !== undefined) base.authoritative = m.authoritative;
+    if (m.compactionCandidate) base.compactionCandidate = true;
     return base;
   });
 }

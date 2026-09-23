@@ -1269,7 +1269,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       for await (const event of resumedEngine.submitMessageStream('Continue this investigation without edits.', undefined, { continueTask: true })) {
         resumedEvents.push(event);
       }
-      assert.equal(resumedEvents.at(-1)?.type, 'done', 'the resumed engine dispatches and completes');
+      assert.equal(resumedEvents.at(-1)?.type, 'done', `the resumed engine dispatches and completes: ${JSON.stringify(resumedEvents.at(-1))}`);
       const resumedRequest = resumedRunner.requests()[0];
       assert.ok(resumedRequest, 'the actual resumed runner receives a provider request');
       assert.equal(resumedRequest.messages.filter((message) => message.name === 'compaction_capsule').length, 1);
