@@ -888,15 +888,18 @@ export class CostTracker {
       throw new Error('Project receipt projection has a different session identity');
     }
     const priorSnapshot = stats.sessionSnapshots[sessionId];
-    const priorReceipts = stats.sessionReceipts?.[sessionId];
+    // An all-zero snapshot contains no billable receipt identity to preserve.
+    const priorReceipts = stats.sessionReceipts?.[sessionId] ??
+      (priorSnapshot && this.receiptsMatchSummary([], priorSnapshot) ? [] : undefined);
     const missingPriorIdentity = this.restoredSessionChargeIds !== null &&
       priorSnapshot !== undefined && !Array.isArray(priorReceipts);
     const unprovenRestore = this.restoredSessionChargeIds !== null &&
       (candidateReceiptView === null || (priorSnapshot !== undefined &&
         (!Array.isArray(priorReceipts) || !this.receiptsMatchSummary(priorReceipts, priorSnapshot) ||
          !this.receiptViewCovers(priorReceipts, candidateReceiptView.receipts))));
-    const pendingSessions = new Set(stats.pendingSessionIds ??
-      (stats.projectionPending && stats.lastSessionId ? [stats.lastSessionId] : []));
+    // A legacy pending flag does not identify its owner. lastSessionId may
+    // belong to a later save, so keep that gap incomplete after migration.
+    const pendingSessions = new Set(stats.pendingSessionIds ?? []);
     const permanentFailure = stats.projectionUnverifiable === true ||
       (stats.projectionComplete === false && pendingSessions.size === 0);
     if (unprovenRestore && !missingPriorIdentity) pendingSessions.add(sessionId);

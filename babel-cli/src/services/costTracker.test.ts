@@ -720,6 +720,60 @@ test('a new session cannot clear another session’s pending receipt gap', () =>
   }
 });
 
+test('a legacy pending project gap without a session owner cannot be cleared', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-legacy-pending-'));
+  try {
+    const original = new CostTracker(root);
+    original.settleUsage('deepseek-v4-flash', 100, 10, null, null,
+      { taskOwnerId: 'B', chargeId: 'B', projectRoot: root });
+    original.saveToProjectStats(original.getProjectSessionId(), undefined, root);
+    const statsPath = join(root, 'project_stats.json');
+    const legacy = JSON.parse(readFileSync(statsPath, 'utf8'));
+    legacy.projectionPending = true;
+    legacy.projectionComplete = false;
+    delete legacy.pendingSessionIds;
+    writeFileSync(statsPath, JSON.stringify(legacy));
+    const resumed = new CostTracker(root);
+    resumed.restoreSessionCost({
+      ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+      chargeObservations: original.getSessionChargeObservations(),
+      projectSessionId: original.getProjectSessionId(),
+    });
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), resumed.getSessionSummary(), root);
+    const stats = JSON.parse(readFileSync(statsPath, 'utf8'));
+    assert.equal(stats.projectionComplete, false);
+    assert.equal(stats.projectionUnverifiable, true);
+    assert.equal(resumed.getProjectHistoricalCost(root), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an empty project snapshot can be covered by the first charge after resume', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-empty-resume-'));
+  try {
+    const original = new CostTracker(root);
+    original.saveToProjectStats(original.getProjectSessionId(), undefined, root);
+    const resumed = new CostTracker(root);
+    resumed.restoreSessionCost({
+      ...original.getSessionSummary(), accountedChargeIds: [], chargeObservations: [],
+      projectSessionId: original.getProjectSessionId(),
+    });
+    resumed.settleUsage('deepseek-v4-flash', 100, 10, null, null,
+      { taskOwnerId: 'A', chargeId: 'first', projectRoot: root });
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), original.getSessionSummary(), root);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.projectionComplete, true);
+    assert.equal(stats.totalInputTokens, 100);
+    assert.equal(stats.totalOutputTokens, 10);
+    assert.equal(stats.totalCostUSD, resumed.getSessionSummary().totalCostUSD);
+    assert.deepEqual(stats.sessionReceipts[resumed.getProjectSessionId()].map(
+      (receipt: { attribution: { chargeId: string } }) => receipt.attribution.chargeId), ['first']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a pre-receipt project snapshot stays explicitly unverifiable after resume', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-project-no-prior-ids-'));
   try {
