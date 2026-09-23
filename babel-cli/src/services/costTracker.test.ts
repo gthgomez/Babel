@@ -579,6 +579,53 @@ test('rooted restored receipts repair one project without poisoning another', ()
   }
 });
 
+test('older resumed receipts cannot overwrite a newer project snapshot', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-ahead-'));
+  try {
+    const original = new CostTracker(root);
+    const attribution = { taskOwnerId: 'A', chargeId: 'project-ahead', projectRoot: root };
+    original.recordUnknownCharge('deepseek-v4-flash', attribution);
+    const olderSession = {
+      ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+      chargeObservations: original.getSessionChargeObservations(),
+      projectSessionId: original.getProjectSessionId(),
+    };
+    original.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution);
+    original.saveToProjectStats(original.getProjectSessionId(), undefined, root);
+    const newerCost = original.getTaskSummary('A').totalCostUSD;
+    const resumed = new CostTracker(root);
+    resumed.restoreSessionCost(olderSession);
+    resumed.restoreTaskUsage('A', {
+      totalCostUSD: 0, unknownChargeCount: 1,
+      chargeIds: olderSession.accountedChargeIds,
+      chargeObservations: olderSession.chargeObservations,
+    });
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), resumed.getSessionSummary(), root);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.totalCostUSD, newerCost);
+    assert.equal(stats.unknownChargeCount, 0);
+    assert.equal(stats.projectionComplete, false);
+    assert.equal(stats.completeCostUSD, null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rooted project matching accepts Windows path case aliases', { skip: process.platform !== 'win32' }, () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-case-'));
+  try {
+    const tracker = new CostTracker(root);
+    const attribution = { taskOwnerId: 'A', chargeId: 'case-alias', projectRoot: root.toLowerCase() };
+    tracker.settleUsage('deepseek-v4-flash', 100, 10, null, null, attribution);
+    tracker.saveToProjectStats(tracker.getProjectSessionId(), undefined, root);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.totalInputTokens, 100);
+    assert.equal(stats.projectionComplete, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('explicit project root receives governed cost history instead of launch root', () => {
   const launch = mkdtempSync(join(tmpdir(), 'babel-cost-launch-'));
   const target = mkdtempSync(join(tmpdir(), 'babel-cost-target-'));

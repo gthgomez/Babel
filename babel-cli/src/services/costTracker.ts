@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { closeSync, existsSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   estimateProviderUsageCost,
   getModelPricingByModelId,
@@ -765,7 +765,23 @@ export class CostTracker {
     if (allInput !== session.totalInputTokens || allOutput !== session.totalOutputTokens ||
         Math.abs(allCost - session.totalCostUSD) > 1e-9 ||
         allUnknown !== (session.unknownChargeCount ?? 0)) return null;
-    const selected = receipts.filter((receipt) => resolve(receipt.attribution.projectRoot!) === resolve(projectRoot));
+    let physicalRoot: string;
+    try {
+      physicalRoot = realpathSync(projectRoot);
+    } catch {
+      return null;
+    }
+    const identity = (path: string): string => process.platform === 'win32' ? path.toLowerCase() : path;
+    const selected: ChargeReceipt[] = [];
+    for (const receipt of receipts) {
+      let receiptRoot: string;
+      try {
+        receiptRoot = realpathSync(receipt.attribution.projectRoot!);
+      } catch {
+        return null;
+      }
+      if (identity(receiptRoot) === identity(physicalRoot)) selected.push(receipt);
+    }
     const modelBreakdown: Record<string, ModelUsage> = {};
     let totalCostUSD = 0;
     let unknownChargeCount = 0;
@@ -798,6 +814,22 @@ export class CostTracker {
     };
   }
 
+  /** Reject a restored receipt projection that could erase newer project data. */
+  private receiptSummaryDominates(saved: SessionUsageSummary, projected: SessionUsageSummary): boolean {
+    const covers = (before: ModelUsage, after: ModelUsage): boolean =>
+      after.inputTokens >= before.inputTokens && after.outputTokens >= before.outputTokens &&
+      after.costUSD + 1e-9 >= before.costUSD &&
+      (after.unknownChargeCount ?? 0) <= (before.unknownChargeCount ?? 0);
+    return projected.totalInputTokens >= saved.totalInputTokens &&
+      projected.totalOutputTokens >= saved.totalOutputTokens &&
+      projected.totalCostUSD + 1e-9 >= saved.totalCostUSD &&
+      (projected.unknownChargeCount ?? 0) <= (saved.unknownChargeCount ?? 0) &&
+      Object.entries(saved.modelBreakdown).every(([modelId, before]) => {
+        const after = projected.modelBreakdown[modelId];
+        return after !== undefined && covers(before, after);
+      });
+  }
+
   private saveToProjectStatsLocked(sessionId: string, baseline: SessionUsageSummary | undefined, statsPath: string): void {
     let stats: ProjectStats = {
       totalCostUSD: 0,
@@ -828,10 +860,15 @@ export class CostTracker {
     }
     // The old format has only an aggregate and last-session label; its
     // contribution from that session cannot be separated safely.
-    const receiptSummary = this.projectReceiptSummary(dirname(statsPath));
+    const candidateReceiptSummary = this.projectReceiptSummary(dirname(statsPath));
+    const priorSnapshot = stats.sessionSnapshots[sessionId];
+    const staleRestoredReceipts = this.restoredSessionChargeIds !== null &&
+      candidateReceiptSummary !== null && priorSnapshot !== undefined &&
+      !this.receiptSummaryDominates(priorSnapshot, candidateReceiptSummary);
+    const receiptSummary = staleRestoredReceipts ? null : candidateReceiptSummary;
     stats.projectionComplete = stats.projectionComplete !== false && this.sessionProjectionComplete &&
-      (this.restoredSessionChargeIds === null || receiptSummary !== null);
-    if (!overlapsLegacySession) {
+      !staleRestoredReceipts && (this.restoredSessionChargeIds === null || receiptSummary !== null);
+    if (!overlapsLegacySession && !staleRestoredReceipts) {
       const current = this.getSessionSummary();
       const delta = receiptSummary ?? (baseline ? {
         ...current,
