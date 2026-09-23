@@ -166,10 +166,12 @@ import {
   invalidateReadCacheForPath,
   recordControllerRecoveryStrategy,
   recoveryEvidenceKey,
+  sameRecoveryBinding,
   RECOVERY_EVIDENCE_TOOLS,
   resetOneShotSnapshot,
   targetMatchesGate,
   type RecoveryEvidenceProvenance,
+  type RecoveryCandidateBinding,
   resolveNextTurnToolAccess,
   selectReadWindow,
   snapshotOnce,
@@ -178,6 +180,8 @@ import {
   type WorkingState,
 } from './codingLoop/index.js';
 import { ingestVerifierResult, rememberFullReadWindow } from './codingLoop/chatBindings.js';
+import { recoveryTargetIdentity, recoveryWorkspaceRevision } from './codingLoop/recoveryIdentity.js';
+import { canonicalizeContained } from '../bridge/workspaceBound.js';
 
 import { parseTextToolTurn } from './textToolParser.js';
 import {
@@ -248,7 +252,7 @@ import {
   checkpointParityEventLogStrict,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
-import { loadThreadEventLogFromDir, recordUserMessage } from './threadEventLog.js';
+import { loadThreadEventLogFromDir, recordUserMessage, repoRootFingerprint } from './threadEventLog.js';
 import { isOperatorAbortError } from './operatorAbort.js';
 import {
   loadSessionEventLogForResume,
@@ -1222,33 +1226,35 @@ const CONTENT_BEARING_INSPECTION_TOOLS = new Set<string>(RECOVERY_EVIDENCE_TOOLS
 function isDiscriminatingInspectionEvidence(
   state: WorkingState,
   action: { type: string; path?: string | undefined; pattern?: string | undefined; file_path?: string | undefined },
-  target: string,
-  evidence: string,
+  physicalTarget: string | null,
+  binding: RecoveryCandidateBinding | null,
+  observationDigest: string,
 ): { discriminating: boolean; provenance?: RecoveryEvidenceProvenance } {
   const gate = state.recoveryGate;
   if (!gate || gate.satisfied) return { discriminating: false };
+  if (!gate.binding || !binding || !sameRecoveryBinding(gate.binding, binding)) return { discriminating: false };
   if (!CONTENT_BEARING_INSPECTION_TOOLS.has(action.type)) return { discriminating: false };
-  if ((gate.observedKeys ?? []).includes(evidence)) return { discriminating: false };
-  if (
-    state.consumedRecoveryEvidence.includes(
-      recoveryEvidenceKey(evidence, gate.failureSignature),
-    )
-  ) {
-    return { discriminating: false };
-  }
+  if (!physicalTarget || !observationDigest) return { discriminating: false };
   // Require a concrete inspected path. A `grep` without an explicit path is a
   // repository-wide search and cannot localize the failure.
   const candidate = action.type === 'read_range' ? action.file_path : action.path;
   if (!candidate) return { discriminating: false };
   const failingTargets = gate.failingTargets ?? state.failureSurface?.failingFiles ?? [];
-  if (!targetMatchesGate(candidate, failingTargets)) return { discriminating: false };
+  if (!targetMatchesGate(physicalTarget, failingTargets)) return { discriminating: false };
+  const provenance: RecoveryEvidenceProvenance = {
+    tool: action.type,
+    target: physicalTarget,
+    failureSignature: gate.failureSignature,
+    binding,
+    observationDigest,
+  };
+  const key = recoveryEvidenceKey(provenance, gate.failureSignature);
+  if (!key || (gate.observedKeys ?? []).includes(key) || state.consumedRecoveryEvidence.includes(key)) {
+    return { discriminating: false };
+  }
   return {
     discriminating: true,
-    provenance: {
-      tool: action.type,
-      target: candidate,
-      failureSignature: gate.failureSignature,
-    },
+    provenance,
   };
 }
 
@@ -6218,6 +6224,25 @@ export class ChatEngine {
     return prepared.status === 'prepared' ? prepared : null;
   }
 
+  private currentRecoveryBinding(): RecoveryCandidateBinding | null {
+    try {
+      const root = canonicalizeContained(this.options.projectRoot);
+      const revision = recoveryWorkspaceRevision(root);
+      if (!revision) return null;
+      const fingerprint = repoRootFingerprint(root);
+      const ownerId = this.taskAllowance?.taskOwnerId ?? this.engineRunId;
+      return {
+        schemaVersion: 1,
+        taskId: this.parity.liveAuthority?.taskContract.task_id ?? ownerId,
+        contractHash: this.parity.liveAuthority?.taskContract.contract_hash ?? `uncontracted:${ownerId}`,
+        repositoryIdentity: JSON.stringify([root, fingerprint]),
+        workspaceRevision: revision,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private currentP11Workspace(): ReturnType<typeof RevisionManager.computeRevisionSync> | null {
     try {
       return RevisionManager.computeRevisionSync(this.options.projectRoot, [], {
@@ -6889,7 +6914,14 @@ export class ChatEngine {
       // available for observation while the recovery gate is closed.
       const shellMutationAttempt = action.type === 'run_command';
       const shellObservation = action.type === 'run_command' || action.type === 'test_run';
-      const recoveryGate = this.workingState.recoveryGate;
+      let recoveryGate = this.workingState.recoveryGate;
+      if (recoveryGate && (mutationAttempt || shellMutationAttempt)) {
+        const currentBinding = this.currentRecoveryBinding();
+        if (!recoveryGate.binding || !currentBinding || !sameRecoveryBinding(recoveryGate.binding, currentBinding)) {
+          this.workingState = applyWorkingStateEvent(this.workingState, { type: 'recovery_candidate_drift' });
+          recoveryGate = this.workingState.recoveryGate;
+        }
+      }
       const recoveryAction = mutationAttempt || shellMutationAttempt || shellObservation;
       const actionFingerprint = recoveryAction
         ? operationFingerprint(chatActionToolName(action), action)
@@ -8060,8 +8092,11 @@ export class ChatEngine {
           const discrimination = isDiscriminatingInspectionEvidence(
             this.workingState,
             action,
-            target,
-            evidence,
+            recoveryTargetIdentity(this.options.projectRoot, action.file_path),
+            this.workingState.recoveryGate ? this.currentRecoveryBinding() : null,
+            evaluated.window.lines.join('\n').trim()
+              ? createHash('sha256').update(evaluated.window.lines.join('\n')).digest('hex')
+              : '',
           );
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'add_evidence',
@@ -8575,6 +8610,9 @@ export class ChatEngine {
           if (receipt) {
             this.lastVerifierReceipt = receipt;
             const previousFailureSignature = this.workingState.failureSurface?.errorSignature;
+            const recoveryBinding = lastResult.exit_code !== 0 && this.workingState.lastMutation
+              ? this.currentRecoveryBinding()
+              : null;
             const ingested = ingestVerifierResult({
               state: this.workingState,
               tool: action.type,
@@ -8584,6 +8622,8 @@ export class ChatEngine {
               stderr: lastResult.stderr,
               summary: receipt.summary ?? String(lastResult.exit_code),
               verifierId: target,
+              recoveryProjectRoot: this.options.projectRoot,
+              ...(recoveryBinding ? { recoveryBinding } : {}),
               ...(receipt.boundRevision?.compositeTreeHash
                 ? { workspaceRevision: String(receipt.boundRevision.compositeTreeHash) }
                 : {}),
@@ -8678,8 +8718,11 @@ export class ChatEngine {
           const discrimination = isDiscriminatingInspectionEvidence(
             this.workingState,
             action,
-            target,
-            evidence,
+            recoveryTargetIdentity(this.options.projectRoot, 'path' in action && typeof action.path === 'string' ? action.path : ''),
+            this.workingState.recoveryGate ? this.currentRecoveryBinding() : null,
+            lastResult.stdout.trim()
+              ? createHash('sha256').update(lastResult.stdout).digest('hex')
+              : '',
           );
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'add_evidence',

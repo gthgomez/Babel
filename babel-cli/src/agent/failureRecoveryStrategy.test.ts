@@ -6,9 +6,17 @@ import {
   createWorkingState,
   formatWorkingStateBlock,
   recordControllerRecoveryStrategy,
+  sameRecoveryBinding,
+  targetMatchesGate,
   upsertWorkingStateMessage,
 } from './codingLoop/workingState.js';
 import { buildChatTurnPrompt } from './chatToolDefinitions.js';
+
+const TEST_BINDING = {
+  schemaVersion: 1 as const,
+  taskId: 'task-1', contractHash: 'contract-1',
+  repositoryIdentity: '/repo', workspaceRevision: 'revision-A',
+};
 
 test('repeated repair evidence gate changes the next strategy before mutation', () => {
   let state = createWorkingState('fix bug X');
@@ -19,6 +27,7 @@ test('repeated repair evidence gate changes the next strategy before mutation', 
   state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
   const first = ingestVerifierResult({
     state,
+    recoveryBinding: TEST_BINDING,
     tool: 'test_run',
     target: 'npm test -- parser',
     exitCode: 1,
@@ -53,6 +62,8 @@ test('repeated repair evidence gate changes the next strategy before mutation', 
       tool: 'read_file',
       target: 'src/parser.ts',
       failureSignature,
+      binding: TEST_BINDING,
+      observationDigest: 'parser-and-caller-content',
     },
   });
   assert.equal(state.recoveryGate?.satisfied, true);
@@ -124,6 +135,7 @@ test('a new hypothesis is required before a post-red mutation can proceed', () =
   state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
   state = ingestVerifierResult({
     state,
+    recoveryBinding: TEST_BINDING,
     tool: 'test_run',
     target: 'npm test -- parser',
     exitCode: 1,
@@ -140,6 +152,8 @@ test('a new hypothesis is required before a post-red mutation can proceed', () =
       tool: 'read_file',
       target: 'src/parser.ts',
       failureSignature: state.recoveryGate!.failureSignature,
+      binding: TEST_BINDING,
+      observationDigest: 'parser-and-caller-content',
     },
   });
   assert.equal(state.recoveryGate?.strategyChanged, false);
@@ -159,6 +173,7 @@ test('accepted discriminating evidence records a controller strategy revision', 
   state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
   state = ingestVerifierResult({
     state,
+    recoveryBinding: TEST_BINDING,
     tool: 'test_run',
     target: 'npm test -- parser',
     exitCode: 1,
@@ -176,6 +191,8 @@ test('accepted discriminating evidence records a controller strategy revision', 
       tool: 'read_file',
       target: 'src/parser.ts',
       failureSignature: state.recoveryGate!.failureSignature,
+      binding: TEST_BINDING,
+      observationDigest: 'parser-content',
     },
   });
   state = recordControllerRecoveryStrategy(state, {
@@ -208,6 +225,7 @@ test('equivalent target spellings cannot defeat failure-scoped dedup', () => {
   state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
   state = ingestVerifierResult({
     state,
+    recoveryBinding: TEST_BINDING,
     tool: 'test_run',
     target: 'npm test -- parser',
     exitCode: 1,
@@ -220,7 +238,7 @@ test('equivalent target spellings cannot defeat failure-scoped dedup', () => {
     type: 'add_evidence',
     evidence: 'read_file:src/parser.ts',
     discriminating: true,
-    provenance: { tool: 'read_file', target: 'src/parser.ts', failureSignature: signature },
+    provenance: { tool: 'read_file', target: 'src/parser.ts', failureSignature: signature, binding: TEST_BINDING, observationDigest: 'same-content' },
   });
   assert.equal(state.recoveryGate?.satisfied, true);
 
@@ -230,12 +248,13 @@ test('equivalent target spellings cannot defeat failure-scoped dedup', () => {
     failureSignature: signature,
     requiredEvidence: 'reread',
     failingTargets: ['src/parser.ts'],
+    binding: TEST_BINDING,
   });
   state = applyWorkingStateEvent(state, {
     type: 'add_evidence',
     evidence: 'read_file:./src/parser.ts',
     discriminating: true,
-    provenance: { tool: 'read_file', target: './src/parser.ts', failureSignature: signature },
+    provenance: { tool: 'read_file', target: './src/parser.ts', failureSignature: signature, binding: TEST_BINDING, observationDigest: 'same-content' },
   });
   assert.equal(state.recoveryGate?.satisfied, false);
 });
@@ -259,6 +278,160 @@ test('an ancestor directory does not localize a failing file', () => {
     discriminating: true,
     provenance: { tool: 'grep', target: 'src', failureSignature: signature },
   });
+  assert.equal(state.recoveryGate?.satisfied, false);
+});
+
+test('an observation from revision A cannot clear the same failure gate at revision B', () => {
+  const candidateA = {
+    schemaVersion: 1 as const,
+    taskId: 'task-1',
+    contractHash: 'contract-1',
+    repositoryIdentity: '/repo',
+    workspaceRevision: 'revision-A',
+  };
+  const candidateB = { ...candidateA, workspaceRevision: 'revision-B' };
+  let state = applyWorkingStateEvent(createWorkingState('fix parser'), {
+    type: 'recovery_gate',
+    failureSignature: 'same-red-verifier',
+    requiredEvidence: 'inspect parser',
+    failingTargets: ['src/parser.ts'],
+    binding: candidateA,
+  });
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence',
+    evidence: 'read_file:src/parser.ts#call-A',
+    discriminating: true,
+    provenance: {
+      tool: 'read_file', target: 'src/parser.ts', failureSignature: 'same-red-verifier',
+      binding: candidateA, observationDigest: 'payload-A',
+    },
+  });
+  assert.equal(state.recoveryGate?.satisfied, true);
+
+  state = applyWorkingStateEvent(state, {
+    type: 'recovery_gate',
+    failureSignature: 'same-red-verifier',
+    requiredEvidence: 'inspect current parser',
+    failingTargets: ['src/parser.ts'],
+    binding: candidateB,
+  });
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence',
+    evidence: 'read_file:src/parser.ts#call-B',
+    discriminating: true,
+    provenance: {
+      tool: 'read_file', target: 'src/parser.ts', failureSignature: 'same-red-verifier',
+      binding: candidateA, observationDigest: 'payload-B',
+    },
+  });
+  assert.equal(state.recoveryGate?.satisfied, false, 'stale revision cannot authorize a new repair');
+});
+
+test('a new tool call with the same observation payload does not mint another recovery permit', () => {
+  const binding = {
+    schemaVersion: 1 as const,
+    taskId: 'task-1',
+    contractHash: 'contract-1',
+    repositoryIdentity: '/repo',
+    workspaceRevision: 'revision-A',
+  };
+  let state = applyWorkingStateEvent(createWorkingState('fix parser'), {
+    type: 'recovery_gate', failureSignature: 'same-red-verifier', requiredEvidence: 'inspect parser',
+    failingTargets: ['src/parser.ts'], binding,
+  });
+  for (const callId of ['call-1', 'call-2']) {
+    if (callId === 'call-2') {
+      state = applyWorkingStateEvent(state, {
+        type: 'recovery_gate', failureSignature: 'same-red-verifier', requiredEvidence: 'inspect parser',
+        failingTargets: ['src/parser.ts'], binding,
+      });
+    }
+    state = applyWorkingStateEvent(state, {
+      type: 'add_evidence', evidence: `read_file:src/parser.ts#${callId}`, discriminating: true,
+      provenance: {
+        tool: 'read_file', target: 'src/parser.ts', failureSignature: 'same-red-verifier',
+        binding, observationDigest: 'same-payload',
+      },
+    });
+    assert.equal(state.recoveryGate?.satisfied, callId === 'call-1');
+  }
+});
+
+test('recovery target matching preserves case and resolves dot segments', () => {
+  assert.equal(targetMatchesGate('src/Foo.ts', ['src/foo.ts']), false);
+  assert.equal(targetMatchesGate('src/./parser.ts', ['src/parser.ts']), true);
+  assert.equal(targetMatchesGate('../src/parser.ts', ['src/parser.ts']), false);
+});
+
+test('recovery provenance binds task, contract, repository, revision, and failure', () => {
+  const mismatches = [
+    { taskId: 'other-task' },
+    { contractHash: 'other-contract' },
+    { repositoryIdentity: '/other-repo' },
+    { workspaceRevision: 'other-revision' },
+  ];
+  for (const mismatch of mismatches) {
+    let state = applyWorkingStateEvent(createWorkingState('repair'), {
+      type: 'recovery_gate', failureSignature: 'red', requiredEvidence: 'inspect',
+      failingTargets: ['src/parser.ts'], binding: TEST_BINDING,
+    });
+    state = applyWorkingStateEvent(state, {
+      type: 'add_evidence', evidence: 'read_file:src/parser.ts', discriminating: true,
+      provenance: {
+        tool: 'read_file', target: 'src/parser.ts', failureSignature: 'red',
+        binding: { ...TEST_BINDING, ...mismatch }, observationDigest: 'content',
+      },
+    });
+    assert.equal(state.recoveryGate?.satisfied, false, JSON.stringify(mismatch));
+  }
+  assert.equal(sameRecoveryBinding(TEST_BINDING, { ...TEST_BINDING, workspaceRevision: 'other' }), false);
+});
+
+test('serialized recovery evidence stays consumed and legacy permits downgrade', () => {
+  let state = applyWorkingStateEvent(createWorkingState('repair'), {
+    type: 'recovery_gate', failureSignature: 'red', requiredEvidence: 'inspect',
+    failingTargets: ['src/parser.ts'], binding: TEST_BINDING,
+  });
+  const observation = {
+    type: 'add_evidence' as const, evidence: 'read_file:src/parser.ts#call-1', discriminating: true,
+    provenance: {
+      tool: 'read_file', target: 'src/parser.ts', failureSignature: 'red',
+      binding: TEST_BINDING, observationDigest: 'content',
+    },
+  };
+  state = applyWorkingStateEvent(state, observation);
+  assert.equal(state.recoveryGate?.satisfied, true);
+  state = JSON.parse(JSON.stringify(state));
+  state = applyWorkingStateEvent(state, {
+    type: 'recovery_gate', failureSignature: 'red', requiredEvidence: 'inspect again',
+    failingTargets: ['src/parser.ts'], binding: TEST_BINDING,
+  });
+  state = applyWorkingStateEvent(state, { ...observation, evidence: 'read_file:src/parser.ts#call-2' });
+  assert.equal(state.recoveryGate?.satisfied, false);
+
+  const legacy = JSON.parse(JSON.stringify(state));
+  delete legacy.recoveryGate.binding;
+  legacy.recoveryGate.satisfied = true;
+  legacy.recoveryGate.strategyChanged = true;
+  const migrated = applyWorkingStateEvent(legacy, { type: 'next_experiment', experiment: 'recheck' });
+  assert.equal(migrated.recoveryGate?.satisfied, false);
+  assert.equal(migrated.recoveryGate?.strategyChanged, false);
+});
+
+test('a mutation invalidates a previously satisfied recovery permit', () => {
+  let state = applyWorkingStateEvent(createWorkingState('repair'), {
+    type: 'recovery_gate', failureSignature: 'red', requiredEvidence: 'inspect',
+    failingTargets: ['src/parser.ts'], binding: TEST_BINDING,
+  });
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence', evidence: 'read_file:src/parser.ts', discriminating: true,
+    provenance: {
+      tool: 'read_file', target: 'src/parser.ts', failureSignature: 'red',
+      binding: TEST_BINDING, observationDigest: 'content',
+    },
+  });
+  assert.equal(state.recoveryGate?.satisfied, true);
+  state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
   assert.equal(state.recoveryGate?.satisfied, false);
 });
 

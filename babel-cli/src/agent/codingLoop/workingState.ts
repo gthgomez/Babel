@@ -9,6 +9,15 @@ import type { FailureSurface, RepairDiagnosis, RepairDiagnosisKind } from './fai
 export const WORKING_STATE_NAME = 'working_state'
 export const WORKING_STATE_MARKER = '<!-- BABEL_WORKING_STATE -->'
 
+/** Frozen identity of the failed candidate, supplied by the controller. */
+export interface RecoveryCandidateBinding {
+  schemaVersion: 1
+  taskId: string
+  contractHash: string
+  repositoryIdentity: string
+  workspaceRevision: string
+}
+
 export interface WorkingState {
   goal: string
   currentHypothesis: string
@@ -32,6 +41,7 @@ export interface WorkingState {
   /** Controller-owned gate after a red verifier; model prose cannot clear it. */
   recoveryGate?: {
     failureSignature: string
+    binding?: RecoveryCandidateBinding
     requiredEvidence: string
     mutationFingerprint?: string
     /**
@@ -94,6 +104,9 @@ export interface RecoveryEvidenceProvenance {
   failureSignature: string
   /** Workspace revision the observation was taken against, when known. */
   revision?: string
+  binding?: RecoveryCandidateBinding
+  /** Digest of the actual inspected content, independent of tool-call ID. */
+  observationDigest?: string
 }
 
 export type WorkingStateEvent =
@@ -113,6 +126,7 @@ export type WorkingStateEvent =
   | { type: 'diagnosis'; diagnosis: RepairDiagnosis }
   | { type: 'invalidate'; assumption: string }
   | { type: 'next_experiment'; experiment: string }
+  | { type: 'recovery_candidate_drift' }
   | {
       type: 'recovery_gate'
       failureSignature: string
@@ -120,6 +134,7 @@ export type WorkingStateEvent =
       mutationFingerprint?: string
       failingTargets?: string[]
       hypothesisAtFailure?: string
+      binding?: RecoveryCandidateBinding
     }
 
 /**
@@ -134,6 +149,9 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
     openQuestions: [...state.openQuestions],
     invalidatedAssumptions: [...state.invalidatedAssumptions],
     consumedRecoveryEvidence: [...state.consumedRecoveryEvidence],
+    ...(state.recoveryGate && !state.recoveryGate.binding
+      ? { recoveryGate: { ...state.recoveryGate, satisfied: false, strategyChanged: false } }
+      : {}),
     revision: state.revision + 1,
   }
 
@@ -170,12 +188,19 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         // provenance that agrees with the gate's frozen failure signature and
         // must not already have been consumed for this gate.
         const provenance = event.provenance
-        const observationKey = recoveryEvidenceKey(event.evidence, gate.failureSignature)
+        const observationKey = provenance?.binding && provenance.observationDigest
+          ? recoveryEvidenceKey(provenance, gate.failureSignature)
+          : ''
         const alreadyObserved =
-          (gate.observedKeys ?? []).includes(event.evidence) ||
-          next.consumedRecoveryEvidence.includes(observationKey)
+          (observationKey !== '' && (gate.observedKeys ?? []).includes(observationKey)) ||
+          (observationKey !== '' && next.consumedRecoveryEvidence.includes(observationKey))
         const bound =
+          gate.binding !== undefined &&
           provenance !== undefined &&
+          provenance.binding !== undefined &&
+          sameRecoveryBinding(gate.binding, provenance.binding) &&
+          typeof provenance.observationDigest === 'string' &&
+          provenance.observationDigest.length > 0 &&
           provenance.failureSignature === gate.failureSignature &&
           provenance.failureSignature.length > 0 &&
           (RECOVERY_EVIDENCE_TOOLS as readonly string[]).includes(provenance.tool) &&
@@ -186,17 +211,19 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
           next.recoveryGate = {
             ...gate,
             satisfied: true,
-            observedKeys: [...(gate.observedKeys ?? []), event.evidence].slice(-64),
+            observedKeys: [...(gate.observedKeys ?? []), observationKey].slice(-64),
           }
-          next.consumedRecoveryEvidence = pushUnique(
-            next.consumedRecoveryEvidence,
-            observationKey,
-          )
+          next.consumedRecoveryEvidence = next.consumedRecoveryEvidence.includes(observationKey)
+            ? next.consumedRecoveryEvidence
+            : [...next.consumedRecoveryEvidence, observationKey]
         }
       }
       break
     }
     case 'mutation':
+      if (next.recoveryGate) {
+        next.recoveryGate = { ...next.recoveryGate, satisfied: false, strategyChanged: false }
+      }
       next.lastMutation = {
         path: event.path,
         at: Date.now(),
@@ -205,6 +232,12 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       next.filesOfInterest = pushUnique(next.filesOfInterest, event.path)
       if (next.lastVerifier) {
         next.lastVerifier = { ...next.lastVerifier, fresh: false }
+      }
+      break
+    case 'recovery_candidate_drift':
+      if (next.recoveryGate) {
+        next.recoveryGate = { ...next.recoveryGate, satisfied: false, strategyChanged: false }
+        next.nextExperiment = 'The failed candidate changed. Rerun the verifier before acquiring recovery evidence.'
       }
       break
     case 'verifier':
@@ -258,6 +291,7 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
     case 'recovery_gate':
       next.recoveryGate = {
         failureSignature: event.failureSignature,
+        ...(event.binding ? { binding: event.binding } : {}),
         requiredEvidence: event.requiredEvidence,
         ...(event.mutationFingerprint ? { mutationFingerprint: event.mutationFingerprint } : {}),
         ...(event.failingTargets && event.failingTargets.length > 0
@@ -433,7 +467,27 @@ const REPAIR_SET = new Set<string>([
  * empty values are never concrete targets, regardless of the failing set.
  */
 function normalizeTarget(value: string): string {
-  return value.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase()
+  const raw = value.replaceAll('\\', '/')
+  if (!raw || raw.startsWith('/') || /^[a-zA-Z]:/.test(raw)) return ''
+  const segments: string[] = []
+  for (const segment of raw.split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      if (segments.length === 0) return ''
+      segments.pop()
+    } else {
+      segments.push(segment)
+    }
+  }
+  return segments.join('/')
+}
+
+export function sameRecoveryBinding(a: RecoveryCandidateBinding, b: RecoveryCandidateBinding): boolean {
+  return a.schemaVersion === 1 && b.schemaVersion === 1 &&
+    a.taskId.length > 0 && a.taskId === b.taskId &&
+    a.contractHash.length > 0 && a.contractHash === b.contractHash &&
+    a.repositoryIdentity.length > 0 && a.repositoryIdentity === b.repositoryIdentity &&
+    a.workspaceRevision.length > 0 && a.workspaceRevision === b.workspaceRevision
 }
 
 /**
@@ -441,14 +495,15 @@ function normalizeTarget(value: string): string {
  * signature lets a genuinely new failure re-use an inspection while rejecting
  * repeated reads of the same target for the same failure.
  */
-export function recoveryEvidenceKey(evidence: string, failureSignature: string): string {
-  // Normalize the target component so equivalent spellings (`src/x.ts` vs
-  // `./src/x.ts` vs `src\x.ts`) cannot defeat failure-scoped dedup.
-  const separator = evidence.indexOf(':')
-  const tool = separator >= 0 ? evidence.slice(0, separator) : evidence
-  const rawTarget = separator >= 0 ? evidence.slice(separator + 1) : ''
-  const normalized = rawTarget ? `${tool}:${normalizeTarget(rawTarget)}` : tool
-  return `${normalized}#${failureSignature}`
+export function recoveryEvidenceKey(provenance: RecoveryEvidenceProvenance, failureSignature: string): string {
+  const binding = provenance.binding
+  const target = normalizeTarget(provenance.target)
+  if (!binding || !target || !provenance.observationDigest) return ''
+  return JSON.stringify([
+    1, failureSignature, binding.taskId, binding.contractHash,
+    binding.repositoryIdentity, binding.workspaceRevision, provenance.tool,
+    target, provenance.observationDigest,
+  ])
 }
 
 /**

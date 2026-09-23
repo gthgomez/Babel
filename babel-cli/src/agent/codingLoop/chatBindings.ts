@@ -7,8 +7,10 @@ import { compileObservation } from './observationCompiler.js'
 import {
   applyWorkingStateEvent,
   type WorkingState,
+  type RecoveryCandidateBinding,
 } from './workingState.js'
 import { rememberReadInjection, selectReadWindow } from './readWindow.js'
+import { recoveryTargetIdentity } from './recoveryIdentity.js'
 import type { ReadInjectionCache } from './readWindow.js'
 
 /**
@@ -25,6 +27,8 @@ export function ingestVerifierResult(input: {
   knownBaselineSignature?: string
   verifierId?: string
   workspaceRevision?: string
+  recoveryBinding?: RecoveryCandidateBinding
+  recoveryProjectRoot?: string
 }): { state: WorkingState; lastVerifierFailed: boolean } {
   let state = applyWorkingStateEvent(input.state, {
     type: 'verifier',
@@ -63,13 +67,17 @@ export function ingestVerifierResult(input: {
       state.failureSurface &&
       ['TEST_FAILURE', 'TYPECHECK_FAILURE', 'BUILD_FAILURE', 'LINT_FAILURE', 'RUNTIME_FAILURE', 'UNKNOWN_FAILURE'].includes(state.failureSurface.kind)
     ) {
-      const failingTargets = [
+      const rawTargets = [
         ...state.failureSurface.failingFiles,
         ...(state.lastMutation?.path ? [state.lastMutation.path] : []),
       ].filter((value) => value.trim().length > 0)
+      const failingTargets = input.recoveryProjectRoot
+        ? rawTargets.map((value) => recoveryTargetIdentity(input.recoveryProjectRoot!, value)).filter((value): value is string => value !== null)
+        : rawTargets
       state = applyWorkingStateEvent(state, {
         type: 'recovery_gate',
         failureSignature: state.failureSurface.errorSignature,
+        ...(input.recoveryBinding ? { binding: input.recoveryBinding } : {}),
         requiredEvidence: 'Acquire discriminating evidence before another mutation: reread the failing assertion and inspect the relevant caller/callee boundary.',
         ...(state.lastMutation?.fingerprint ? { mutationFingerprint: state.lastMutation.fingerprint } : {}),
         ...(failingTargets.length > 0 ? { failingTargets } : {}),

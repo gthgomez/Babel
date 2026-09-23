@@ -16,7 +16,8 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -50,7 +51,7 @@ function driveToTerminalBlocked(engine: ChatEngine, turns = 12): void {
   // level is the task-local punishment state this fixture needs to assert.
 }
 
-function redRecoveryState() {
+function redRecoveryState(engine: ChatEngine) {
   let state = createWorkingState('repair the parser failure');
   state = applyWorkingStateEvent(state, {
     type: 'set_hypothesis',
@@ -63,6 +64,8 @@ function redRecoveryState() {
   });
   return ingestVerifierResult({
     state,
+    recoveryBinding: (engine as any).currentRecoveryBinding(),
+    recoveryProjectRoot: process.cwd(),
     tool: 'test_run',
     target: 'npm test -- parser',
     exitCode: 1,
@@ -77,7 +80,7 @@ test('R1 production path blocks arbitrary shell mutation before execution', asyn
   const target = join(root, 'must-not-exist.txt');
   try {
     const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
-    (engine as any).workingState = redRecoveryState();
+    (engine as any).workingState = redRecoveryState(engine);
     const result = await (engine as any).executeOneAction(
       {
         type: 'run_command',
@@ -96,7 +99,7 @@ test('R1 production path blocks arbitrary shell mutation before execution', asyn
 
 test('R1 production path rejects unrelated reads and accepts implicated-file evidence', async () => {
   const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
-  (engine as any).workingState = redRecoveryState();
+  (engine as any).workingState = redRecoveryState(engine);
   const context = { agentId: 'test', runId: 'test', runDir: process.cwd(), babelRoot: process.cwd() };
 
   await (engine as any).executeOneAction(
@@ -120,7 +123,7 @@ test('R1 production path rejects unrelated reads and accepts implicated-file evi
 
 test('R1 production path rejects content-free inspections as recovery evidence', async () => {
   const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
-  (engine as any).workingState = redRecoveryState();
+  (engine as any).workingState = redRecoveryState(engine);
   const context = { agentId: 'test', runId: 'test', runDir: process.cwd(), babelRoot: process.cwd() };
 
   const denied: Array<Record<string, unknown>> = [
@@ -152,7 +155,7 @@ test('R1 production path rejects content-free inspections as recovery evidence',
 
 test('R1 production path does not accept a repeated read as new evidence for the same failure', async () => {
   const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
-  (engine as any).workingState = redRecoveryState();
+  (engine as any).workingState = redRecoveryState(engine);
   const context = { agentId: 'test', runId: 'test', runDir: process.cwd(), babelRoot: process.cwd() };
   const target = 'src/agent/codingLoop/workingState.ts';
 
@@ -173,6 +176,8 @@ test('R1 production path does not accept a repeated read as new evidence for the
     type: 'recovery_gate',
     failureSignature: signature,
     requiredEvidence: 'reread the failing assertion',
+    failingTargets: state.recoveryGate.failingTargets,
+    binding: state.recoveryGate.binding,
   });
 
   await (engine as any).executeOneAction(
@@ -182,6 +187,45 @@ test('R1 production path does not accept a repeated read as new evidence for the
     { index: 1, ownerGeneration: 0 },
   );
   assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
+});
+
+test('R1 recovery permit is invalidated by external workspace drift before mutation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-r1-drift-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
+    mkdirSync(join(root, 'src'));
+    const file = join(root, 'src', 'parser.ts');
+    const marker = join(root, 'executed.txt');
+    writeFileSync(file, 'export const value = 1\n');
+    execFileSync('git', ['add', 'src/parser.ts'], { cwd: root, windowsHide: true });
+    const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
+    let state = applyWorkingStateEvent(createWorkingState('repair parser'), {
+      type: 'mutation', path: 'src/parser.ts', fingerprint: 'failed-patch',
+    });
+    state = ingestVerifierResult({
+      state, tool: 'test_run', target: 'npm test', exitCode: 1,
+      stdout: 'FAIL parser', stderr: '', summary: 'parser remains red',
+      recoveryProjectRoot: root,
+      recoveryBinding: (engine as any).currentRecoveryBinding(),
+    }).state;
+    (engine as any).workingState = state;
+    const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
+    await (engine as any).executeOneAction(
+      { type: 'read_file', path: 'src/parser.ts' }, context, {},
+      { index: 0, ownerGeneration: 0 },
+    );
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+    writeFileSync(file, 'export const value = 2\n');
+    const result = await (engine as any).executeOneAction(
+      { type: 'run_command', command: `node -e "require('fs').writeFileSync('${marker.replaceAll('\\', '/')}', 'executed')"` },
+      context, {}, { index: 1, ownerGeneration: 0 },
+    );
+    assert.match(result.observation, /RECOVERY_EVIDENCE_REQUIRED/);
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('#216 [REPRODUCTION] fresh submission must not inherit task-local recovery punishment', () => {
