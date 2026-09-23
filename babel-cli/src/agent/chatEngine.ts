@@ -3238,6 +3238,18 @@ export class ChatEngine {
       }
       this.conversation = upsertWorkingStateMessage(this.conversation, this.workingState);
 
+      if (this.conversation.some((message) => message.compactionCandidate === true ||
+          (message.name === 'compaction_summary' && (message.role !== 'assistant' ||
+            message.provenance !== 'model' || message.authoritative !== false)) ||
+          (message.name === 'compaction_capsule' && (message.role !== 'system' ||
+            message.provenance !== 'controller' || message.authoritative !== true)) ||
+          (message.role === 'system' && (message.name === 'compaction_summary' ||
+            message.provenance === 'model' || message.provenance === 'mixed' ||
+            message.authoritative === false)))) {
+        yield this.streamFailed('An uncommitted compaction candidate cannot authorize provider dispatch.');
+        return;
+      }
+
       const runner = this.resolveRoutedRunner();
       const useNativeTools = this.shouldUseNativeTools(runner);
       const useTextTools = !useNativeTools && this.shouldUseTextTools();
@@ -3340,6 +3352,11 @@ export class ChatEngine {
             installedContextCheckpoint: this.parity.contextCheckpoint,
           },
         );
+      }
+      if (useNativeTools && providerMessages.some((message) => message.name === 'compaction_capsule') &&
+          !this.parity.contextCheckpoint) {
+        yield this.streamFailed('An uninstalled compaction capsule cannot authorize provider dispatch.');
+        return;
       }
       yield { type: 'thinking' };
 

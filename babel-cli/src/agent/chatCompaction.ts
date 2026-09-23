@@ -48,6 +48,8 @@ export interface ChatMessage {
   /** Provenance is descriptive; only controller-owned system messages are authority. */
   provenance?: 'controller' | 'model' | 'mixed';
   authoritative?: boolean;
+  /** A strategy result is advisory data until the controller commits it. */
+  compactionCandidate?: true;
 }
 
 export interface CompactionOptions {
@@ -464,9 +466,12 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       const summaryResult = await this.callCompactionApi(toCompact, targetTokens, options);
 
       const summaryMessage: ChatMessage = {
-        role: 'system',
+        role: 'assistant',
         content: `[Compacted conversation summary — ${summaryResult.inputTokens} input → ${summaryResult.outputTokens} output tokens]\n\n${summaryResult.summary}`,
         name: 'compaction_summary',
+        provenance: 'model',
+        authoritative: false,
+        compactionCandidate: true,
       };
 
       this.consecutiveFailures = 0;

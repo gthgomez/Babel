@@ -174,12 +174,12 @@ export function assembleCompactedConversation(
   const baseSystem = systemMsgs.find(
     (m) => !m.name || !COMPACTION_SYSTEM_NAMES.has(m.name),
   );
-  const summaryFromStrategy = systemMsgs.find((m) => m.name === 'compaction_summary');
+  const summaryFromStrategy = strategyMessages.find((m) => m.name === 'compaction_summary');
   const summaryContent =
     llmSummaryContent ??
     (summaryFromStrategy ? summaryFromStrategy.content : undefined);
 
-  const nonSystem = strategyMessages.filter((m) => m.role !== 'system');
+  const nonSystem = strategyMessages.filter((m) => m.role !== 'system' && m.name !== 'compaction_summary');
 
   const out: ChatMessage[] = [];
   if (baseSystem) out.push({ ...baseSystem });

@@ -490,6 +490,10 @@ describe('LLMSummarizeCompaction', () => {
     const summaries = result.filter((m) => m.name === 'compaction_summary');
     assert.strictEqual(summaries.length, 1);
     assert.ok(summaries[0]!.content.includes('KEY_DECISIONS'));
+    assert.strictEqual(summaries[0]!.role, 'assistant');
+    assert.strictEqual(summaries[0]!.provenance, 'model');
+    assert.strictEqual(summaries[0]!.authoritative, false);
+    assert.strictEqual(summaries[0]!.compactionCandidate, true);
 
     // Restore env
     if (savedKey) {

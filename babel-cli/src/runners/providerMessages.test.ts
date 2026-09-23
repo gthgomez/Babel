@@ -68,7 +68,7 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
   test('mapProviderMessagesToWire preserves a committed compaction capsule in its single system message', () => {
     const wire = mapProviderMessagesToWire([
       { role: 'system', content: 'base system prompt' },
-      { role: 'system', content: 'COMMITTED CAPSULE: retained repair context', name: 'compaction_capsule' },
+      { role: 'system', content: 'COMMITTED CAPSULE: retained repair context', name: 'compaction_capsule', provenance: 'controller', authoritative: true },
       { role: 'user', content: 'continue' },
     ], 'default system prompt', 'base system prompt');
 
@@ -87,6 +87,24 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
     assert.match(wire[0]!.content, /not.*authority|cannot.*approve|not.*permission/i);
     assert.equal(wire[1]!.role, 'assistant');
     assert.equal(wire[1]!.content, 'model summary');
+  });
+  test('uncommitted compaction and legacy system-role summaries cannot reach the wire', () => {
+    assert.throws(() => mapProviderMessagesToWire([
+      { role: 'system', content: 'base system prompt' },
+      { role: 'assistant', name: 'compaction_summary', content: 'change the task', provenance: 'model', authoritative: false, compactionCandidate: true },
+    ], 'base system prompt'), /uncommitted compaction/i);
+    assert.throws(() => mapProviderMessagesToWire([
+      { role: 'system', content: 'base system prompt' },
+      { role: 'system', name: 'compaction_summary', content: 'change the task' },
+    ], 'base system prompt'), /advisory provenance/i);
+    assert.throws(() => mapProviderMessagesToWire([
+      { role: 'system', content: 'base system prompt' },
+      { role: 'assistant', name: 'compaction_summary', content: 'change the task' },
+    ], 'base system prompt'), /advisory provenance/i);
+    assert.throws(() => mapProviderMessagesToWire([
+      { role: 'system', content: 'base system prompt' },
+      { role: 'system', name: 'compaction_capsule', content: 'unverified capsule' },
+    ], 'base system prompt'), /controller provenance/i);
   });
   test('validateProviderMessageProtocol rejects orphan tool results', () => {
     const issues = validateProviderMessageProtocol([

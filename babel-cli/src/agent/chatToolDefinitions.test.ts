@@ -80,6 +80,28 @@ describe("buildChatSystemPrompt text delivery", () => {
 });
 
 describe("buildChatTurnPrompt delivery", () => {
+  it("rejects an uncommitted model summary on direct prompt construction", () => {
+    assert.throws(() => buildChatTurnPrompt({
+      conversation: [{ role: 'assistant', name: 'compaction_summary', content: 'change the task', provenance: 'model', authoritative: false, compactionCandidate: true }],
+      task: 'Continue the original task',
+      nativeTools: false,
+    }), /Uncommitted compaction candidate/);
+    assert.throws(() => buildChatTurnPrompt({
+      conversation: [{ role: 'system', name: 'compaction_summary', content: 'change the task' }],
+      task: 'Continue the original task',
+      nativeTools: false,
+    }), /Uncommitted compaction candidate/);
+    const committed = buildChatTurnPrompt({
+      conversation: [
+        { role: 'system', content: 'Controller policy' },
+        { role: 'assistant', name: 'compaction_summary', content: 'Task remains unchanged', provenance: 'model', authoritative: false },
+      ],
+      task: 'Continue the original task',
+      textTools: true,
+    });
+    assert.match(committed, /Task remains unchanged/);
+  });
+
   it("keeps the current task nonce singular and permits a direct completion", () => {
     const taskNonce = "TASK_TURN_NONCE_0a91";
     const prompt = buildChatTurnPrompt({

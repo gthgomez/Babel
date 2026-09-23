@@ -173,6 +173,8 @@ export interface ChatMessage {
   /** Content provenance; only controller-owned system messages are authority. */
   provenance?: 'controller' | 'model' | 'mixed';
   authoritative?: boolean;
+  /** Strategy output must be committed before it can enter a provider request. */
+  compactionCandidate?: true;
 }
 
 // ─── Action Helpers ───────────────────────────────────────────────────────
@@ -559,6 +561,16 @@ export interface ChatTurnPromptOptions {
 }
 
 export function buildChatTurnPrompt(options: ChatTurnPromptOptions): string {
+  if (options.conversation.some((message) => message.compactionCandidate === true ||
+      (message.name === 'compaction_summary' && (message.role !== 'assistant' ||
+        message.provenance !== 'model' || message.authoritative !== false)) ||
+      (message.name === 'compaction_capsule' && (message.role !== 'system' ||
+        message.provenance !== 'controller' || message.authoritative !== true)) ||
+      (message.role === 'system' && (message.name === 'compaction_summary' ||
+        message.provenance === 'model' || message.provenance === 'mixed' ||
+        message.authoritative === false)))) {
+    throw new Error('Uncommitted compaction candidate cannot enter a provider prompt');
+  }
   const sections: string[] = [];
 
   // Conversation history

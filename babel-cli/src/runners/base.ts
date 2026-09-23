@@ -345,6 +345,8 @@ export interface ProviderMessage {
   /** Content provenance; provider roles remain the authority boundary. */
   provenance?: 'controller' | 'model' | 'mixed';
   authoritative?: boolean;
+  /** Candidate compaction content must be committed before provider dispatch. */
+  compactionCandidate?: true;
 }
 
 /** A single native tool call within an assistant ProviderMessage. */
