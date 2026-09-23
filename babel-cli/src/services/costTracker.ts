@@ -103,6 +103,27 @@ export interface UsageAttribution {
   projectRootVersion?: 1;
 }
 
+/** Compare stable identity fields without relying on serialized property order. */
+function sameUsageAttribution(
+  a: UsageAttribution | undefined,
+  b: UsageAttribution | undefined,
+): boolean {
+  if (!a || !b) return a === b;
+  return (
+    [
+      'taskOwnerId',
+      'chargeId',
+      'parentTaskOwnerId',
+      'accountingEpoch',
+      'turnId',
+      'requestId',
+      'attemptId',
+      'projectRoot',
+      'projectRootVersion',
+    ] as const
+  ).every((key) => a[key] === b[key]);
+}
+
 /** Accepted settlement delta, or a replay/conflict with no projection. */
 export type ChargeUpdate =
   | { kind: 'inserted' | 'refined'; knownCostDelta: number; unknownDelta: number }
@@ -118,6 +139,14 @@ export interface ChargeReceipt {
   cacheHitTokens: number;
   cacheMissTokens: number;
   knownCostUSD: number | null;
+}
+
+/** Compare durable receipt values without relying on serialized key order. */
+function sameChargeReceipt(a: ChargeReceipt, b: ChargeReceipt): boolean {
+  return a.modelId === b.modelId && sameUsageAttribution(a.attribution, b.attribution) &&
+    a.inputTokens === b.inputTokens && a.outputTokens === b.outputTokens &&
+    a.cacheHitTokens === b.cacheHitTokens && a.cacheMissTokens === b.cacheMissTokens &&
+    a.knownCostUSD === b.knownCostUSD;
 }
 
 interface ChargeObservation extends ChargeReceipt {
@@ -197,8 +226,7 @@ export class CostTracker {
     }
     if (previous) {
       const sameIdentity = previous.modelId === modelId &&
-        (['taskOwnerId', 'parentTaskOwnerId', 'accountingEpoch', 'turnId', 'requestId', 'attemptId', 'projectRoot'] as const)
-          .every((key) => previous.attribution[key] === attribution?.[key]);
+        sameUsageAttribution(previous.attribution, attribution);
       if (!sameIdentity) return { kind: 'conflict', reason: 'Charge identity differs from the recorded attempt' };
       if (previous.knownCostUSD !== null) {
         if (cost === null) return { kind: 'duplicate' }; // A stale unknown cannot downgrade a known receipt.
@@ -298,7 +326,7 @@ export class CostTracker {
     const prior = this.chargeObservations.get(attribution.chargeId);
     if (!prior || prior.knownCostUSD !== null || prior.inputTokens !== 0 ||
         prior.outputTokens !== 0 || prior.cacheHitTokens !== 0 || prior.cacheMissTokens !== 0 ||
-        JSON.stringify(prior.attribution) !== JSON.stringify(attribution)) return false;
+        !sameUsageAttribution(prior.attribution, attribution)) return false;
     if (prior.projectedInSession) {
       const model = this.sessionUsage[prior.modelId];
       if (prior.restoredInSession) {
@@ -565,9 +593,9 @@ export class CostTracker {
 
   /** Reconcile a newer owner receipt against the exact older REPL snapshot. */
   private reconcileRestoredSessionReceipt(saved: ChargeReceipt, current: ChargeReceipt): boolean {
-    if (JSON.stringify(saved) === JSON.stringify(current)) return false;
+    if (sameChargeReceipt(saved, current)) return false;
     const monotone = saved.modelId === current.modelId && saved.knownCostUSD === null &&
-      JSON.stringify(saved.attribution) === JSON.stringify(current.attribution) &&
+      sameUsageAttribution(saved.attribution, current.attribution) &&
       current.inputTokens >= saved.inputTokens && current.outputTokens >= saved.outputTokens &&
       current.cacheHitTokens >= saved.cacheHitTokens && current.cacheMissTokens >= saved.cacheMissTokens;
     const aggregate = this.sessionUsage['__restored__'];
@@ -653,9 +681,9 @@ export class CostTracker {
       // any owner or session state.
       const effectiveReceipts = receipts.map((receipt) => {
         const saved = this.restoredSessionObservations?.get(receipt.attribution.chargeId);
-        if (!saved || JSON.stringify(saved) === JSON.stringify(receipt)) return receipt;
+        if (!saved || sameChargeReceipt(saved, receipt)) return receipt;
         const sameIdentity = saved.modelId === receipt.modelId &&
-          JSON.stringify(saved.attribution) === JSON.stringify(receipt.attribution);
+          sameUsageAttribution(saved.attribution, receipt.attribution);
         if (sameIdentity && saved.knownCostUSD !== null && receipt.knownCostUSD === null &&
             saved.inputTokens >= receipt.inputTokens && saved.outputTokens >= receipt.outputTokens &&
             saved.cacheHitTokens >= receipt.cacheHitTokens && saved.cacheMissTokens >= receipt.cacheMissTokens) {
@@ -670,8 +698,7 @@ export class CostTracker {
       });
       for (const receipt of effectiveReceipts) {
         const previous = this.chargeObservations.get(receipt.attribution.chargeId);
-        if (previous && JSON.stringify({ ...previous, projectedInSession: false, restoredInSession: undefined }) !==
-            JSON.stringify({ ...receipt, projectedInSession: false, restoredInSession: undefined })) {
+        if (previous && !sameChargeReceipt(previous, receipt)) {
           throw new Error('Conflicting durable charge observation');
         }
       }
@@ -835,7 +862,7 @@ export class CostTracker {
     return prior.every((saved) => {
       const latest = byId.get(saved.attribution.chargeId);
       if (!latest || latest.modelId !== saved.modelId ||
-          JSON.stringify(latest.attribution) !== JSON.stringify(saved.attribution)) return false;
+          !sameUsageAttribution(latest.attribution, saved.attribution)) return false;
       if (saved.knownCostUSD !== null) {
         return latest.knownCostUSD === saved.knownCostUSD &&
           latest.inputTokens === saved.inputTokens && latest.outputTokens === saved.outputTokens &&

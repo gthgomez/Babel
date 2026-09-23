@@ -241,6 +241,42 @@ test('an unknown charge refines to one known charge without duplicating tokens o
   assert.equal(tracker.getSessionSummary().totalTokens, 120);
 });
 
+test('a retired parent resumes one child charge after replay without billing its successor', () => {
+  const original = new CostTracker();
+  const parent = 'retired-parent-A';
+  const child = 'delegated-child-A';
+  const successor = 'successor-B';
+  const attribution = {
+    taskOwnerId: child, parentTaskOwnerId: parent, chargeId: 'child-attempt-1',
+    turnId: 'child-turn',
+    requestId: 'child-request', attemptId: 'child-attempt', projectRoot: '/workspace/A',
+    projectRootVersion: 1 as const,
+  };
+  assert.equal(original.settleUsage('deepseek-v4-flash', 0, 0, null, null, attribution, false).kind, 'inserted');
+  const prior = original.getTaskSummary(parent);
+  const savedParent = {
+    totalCostUSD: prior.totalCostUSD,
+    unknownChargeCount: prior.unknownChargeCount ?? 0,
+    chargeIds: original.getTaskChargeIds(parent),
+    chargeObservations: original.getTaskChargeObservations(parent),
+  };
+
+  const resumed = new CostTracker();
+  resumed.restoreTaskUsage(parent, savedParent);
+  resumed.restoreTaskUsage(successor, {
+    totalCostUSD: 0, unknownChargeCount: 0, chargeIds: [], chargeObservations: [],
+  });
+  assert.equal(resumed.getTaskSummary(parent).unknownChargeCount, 1);
+  const settled = resumed.settleUsage('deepseek-v4-flash', 100, 20, null, null, attribution);
+  assert.equal(settled.kind, 'refined');
+  assert.equal(resumed.settleUsage('deepseek-v4-flash', 100, 20, null, null, attribution).kind, 'duplicate');
+  assert.equal(resumed.getTaskSummary(parent).unknownChargeCount, 0);
+  assert.deepEqual(resumed.getTaskChargeIds(parent), ['child-attempt-1']);
+  assert.equal(resumed.getTaskSummary(parent).totalTokens, 120);
+  assert.equal(resumed.getTaskSummary(successor).totalCostUSD, 0);
+  assert.deepEqual(resumed.getTaskChargeIds(successor), []);
+});
+
 test('pending unpriced usage accepts later tokens without minting another charge', () => {
   const tracker = new CostTracker();
   const attribution = { taskOwnerId: 'A', chargeId: 'unpriced-dispatch' };
@@ -296,6 +332,48 @@ test('owner receipt newer than session snapshot reconciles on cold resume', () =
   assert.equal(resumed.getSessionSummary().completeCostUSD, latestOwner.totalCostUSD);
   assert.equal(resumed.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution).kind, 'duplicate');
   assert.equal(resumed.getSessionSummary().totalTokens, 1100);
+});
+
+test('cold reconciliation accepts semantically identical receipts with reordered attribution keys', () => {
+  const original = new CostTracker();
+  const attribution = { taskOwnerId: 'A', chargeId: 'reordered-reconcile', requestId: 'request-1', attemptId: 'attempt-1' };
+  original.recordUnknownCharge('deepseek-v4-flash', attribution);
+  const staleSession = {
+    ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+    chargeObservations: original.getSessionChargeObservations().map((receipt) => ({
+      ...receipt,
+      attribution: {
+        attemptId: receipt.attribution.attemptId!,
+        requestId: receipt.attribution.requestId!,
+        chargeId: receipt.attribution.chargeId,
+        taskOwnerId: receipt.attribution.taskOwnerId,
+      },
+    })),
+  };
+  original.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution);
+  const latestOwner = {
+    totalCostUSD: original.getTaskSummary('A').totalCostUSD,
+    unknownChargeCount: original.getTaskSummary('A').unknownChargeCount ?? 0,
+    chargeIds: original.getTaskChargeIds('A'),
+    chargeObservations: original.getTaskChargeObservations('A').map((receipt) => ({
+      ...receipt,
+      attribution: {
+        taskOwnerId: receipt.attribution.taskOwnerId,
+        chargeId: receipt.attribution.chargeId,
+        requestId: receipt.attribution.requestId!,
+        attemptId: receipt.attribution.attemptId!,
+      },
+    })),
+  };
+
+  const resumed = new CostTracker();
+  resumed.restoreSessionCost(staleSession);
+  resumed.restoreTaskUsage('A', latestOwner);
+  assert.equal(resumed.getSessionSummary().unknownChargeCount, 0);
+  assert.equal(resumed.getSessionSummary().totalTokens, 1100);
+  assert.equal(resumed.getTaskSummary('A').totalTokens, 1100);
+  assert.equal(resumed.getTaskSummary('A').totalCostUSD, latestOwner.totalCostUSD);
+  assert.equal(resumed.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution).kind, 'duplicate');
 });
 
 test('newer confirmed session receipt supersedes a stale pending owner receipt', () => {

@@ -200,6 +200,11 @@ test('a started provider attempt that streams partial output then fails retains 
       assert.equal(events.at(-1)?.type, 'failed')
       assert.equal(globalCostTracker.getTaskSummary(owner).unknownChargeCount, 1)
       assert.deepEqual(globalCostTracker.getTaskChargeIds(owner), ['partial-attempt-1'])
+      const receipt = globalCostTracker.getTaskChargeObservations(owner)[0]
+      assert.equal(receipt?.attribution.projectRoot, realpathSync(root))
+      assert.equal(receipt?.attribution.projectRootVersion, 1)
+      assert.equal(receipt?.attribution.requestId, 'logical-request-1')
+      assert.equal(receipt?.attribution.attemptId, 'attempt-1')
     } finally {
       globalCostTracker.resetSession()
       globalCostTracker.restoreSessionCost({
@@ -225,6 +230,7 @@ test('unknown settlement keeps the invocation physical root and does not conflic
         accountingEpoch: globalCostTracker.getAccountingEpoch(),
         turnId: 'rooted-unknown-turn',
         chargeId: null as string | null,
+        usageMetadata: undefined as RunnerInvocationMetadata | null | undefined,
       }
       const internal = chat as unknown as {
         providerRetryCallbacks: (context: {
@@ -257,6 +263,24 @@ test('unknown settlement keeps the invocation physical root and does not conflic
       assert.equal(receipt?.attribution.attemptId, 'rooted-unknown-attempt')
       assert.equal(globalCostTracker.getTaskSummary(owner).unknownChargeCount, 1)
       assert.equal(internal.taskCostScopeUnavailable, false)
+
+      Object.assign(scope, { usageMetadata: {
+        provider: 'deepseek', provider_model_id: 'deepseek-v4-flash', latency_ms: 1,
+        prompt_tokens: 100, completion_tokens: 10, total_tokens: 110,
+        estimated_cost_usd: null,
+      } satisfies RunnerInvocationMetadata })
+      internal.trackRunnerUsage({ getLastInvocationMetadata: () => null }, scope)
+      const refined = globalCostTracker.getTaskChargeObservations(owner)
+        .find((item) => item.attribution.chargeId === 'rooted-unknown-charge')
+      assert.ok(refined && refined.knownCostUSD !== null)
+      assert.equal(refined?.attribution.projectRoot, realpathSync(root))
+      assert.equal(refined?.attribution.requestId, 'rooted-unknown-request')
+      assert.equal(refined?.attribution.attemptId, 'rooted-unknown-attempt')
+      const settledTokens = refined?.inputTokens
+      internal.trackRunnerUsage({ getLastInvocationMetadata: () => null }, scope)
+      assert.equal(globalCostTracker.getTaskSummary(owner).unknownChargeCount, 0)
+      assert.equal(globalCostTracker.getTaskChargeObservations(owner)
+        .find((item) => item.attribution.chargeId === 'rooted-unknown-charge')?.inputTokens, settledTokens)
     } finally {
       globalCostTracker.resetSession()
     }
@@ -927,3 +951,587 @@ test('an uncertain first attempt blocks a paid retry under a finite cost cap', a
     }
   })
 })
+test("rooted unstarted inference clears its finite-cap charge and permits a same-owner dispatch", async () => {
+  await withFixture(async (root) => {
+    globalCostTracker.resetSession();
+    try {
+      let dispatches = 0;
+      const chat = engine(
+        root,
+        () => {
+          dispatches++;
+        },
+        1,
+      );
+      const runId = chat.getEngineRunId();
+      chat.applyUserSubmission({ userInput: "Rooted pre-inference failure" });
+      const owner = chat.getTaskAllowanceSnapshot()!.taskOwnerId;
+      const scope = {
+        taskOwnerId: owner,
+        projectRoot: realpathSync(root),
+        accountingEpoch: globalCostTracker.getAccountingEpoch(),
+        turnId: "unstarted-turn",
+        chargeId: null as string | null,
+      };
+      const callbacks = (
+        chat as unknown as {
+          providerRetryCallbacks: (context: {
+            usageScope: typeof scope;
+          }) => RunnerCallbacks;
+        }
+      ).providerRetryCallbacks({ usageScope: scope });
+      callbacks.onInvocationStarted?.({
+        inference_id: "unstarted-rooted",
+        request_id: "unstarted-request",
+        attempt_id: "attempt-1",
+        provider: "deepseek",
+        requested_model_id: "deepseek-v4-flash",
+        normalized_model_id: "deepseek-v4-flash",
+        sent_model_id: "deepseek-v4-flash",
+        input_digest: "fixture-input",
+      });
+      assert.equal(
+        globalCostTracker.getTaskSummary(owner).unknownChargeCount,
+        1,
+      );
+      callbacks.onInvocationCompleted?.({
+        inference_id: "unstarted-rooted",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        status: "failed",
+        inference_started: false,
+      });
+      assert.equal(
+        globalCostTracker.getTaskSummary(owner).unknownChargeCount,
+        0,
+      );
+      assert.deepEqual(globalCostTracker.getTaskChargeIds(owner), []);
+
+      const coldResume = `
+        import assert from 'node:assert/strict';
+        import { ChatEngine } from './src/agent/chatEngine.ts';
+        import { globalCostTracker } from './src/services/costTracker.ts';
+        const engine = new ChatEngine({ task: 'resume', projectRoot: ${JSON.stringify(root)},
+          runId: ${JSON.stringify(runId)}, model: 'deepseek-v4-flash', maxCostUsd: 1, resumeExisting: true });
+        const owner = ${JSON.stringify(owner)};
+        assert.equal(engine.getTaskAllowanceSnapshot()?.taskOwnerId, owner);
+        assert.equal(globalCostTracker.getTaskSummary(owner).unknownChargeCount, 0);
+        assert.equal(engine.checkBudgets().ok, true);
+      `;
+      const cold = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "-e", coldResume],
+        { cwd: process.cwd(), encoding: "utf8", env: process.env },
+      );
+      assert.equal(cold.status, 0, cold.stderr || cold.stdout);
+
+      const events = [];
+      for await (const event of chat.submitMessageStream(
+        "Continue the same task",
+        undefined,
+        {
+          continueTask: true,
+        },
+      ))
+        events.push(event);
+      assert.equal(events.at(-1)?.type, "done");
+      assert.equal(dispatches, 1);
+      assert.equal(chat.getTaskAllowanceSnapshot()?.taskOwnerId, owner);
+    } finally {
+      globalCostTracker.resetSession();
+    }
+  });
+});
+
+
+test("semantic attribution identity preserves reordered receipts and rejects scope changes", () => {
+  const tracker = new CostTracker();
+  const canonical = {
+    taskOwnerId: "owner-A",
+    chargeId: "charge-A",
+    accountingEpoch: tracker.getAccountingEpoch(),
+    turnId: "turn-A",
+    requestId: "request-A",
+    attemptId: "attempt-A",
+    projectRoot: "/workspace/A",
+    projectRootVersion: 1 as const,
+  };
+  const reordered = {
+    projectRootVersion: 1 as const,
+    attemptId: "attempt-A",
+    requestId: "request-A",
+    turnId: "turn-A",
+    accountingEpoch: tracker.getAccountingEpoch(),
+    chargeId: "charge-A",
+    projectRoot: "/workspace/A",
+    taskOwnerId: "owner-A",
+  };
+  tracker.recordUnknownCharge("fixture-model", canonical);
+  const wrongScopes = [
+    { ...reordered, taskOwnerId: "owner-B" },
+    { ...reordered, projectRoot: "/workspace/B" },
+    { ...reordered, attemptId: "attempt-B" },
+    { ...reordered, accountingEpoch: `${reordered.accountingEpoch}-other` },
+    { ...reordered, requestId: "request-B" },
+  ];
+  for (const wrong of wrongScopes)
+    assert.equal(tracker.clearUnstartedCharge(wrong), false);
+  assert.equal(tracker.getTaskSummary("owner-A").unknownChargeCount, 1);
+  assert.equal(tracker.clearUnstartedCharge(reordered), true);
+
+  const receipt = {
+    attribution: canonical,
+    modelId: "fixture-model",
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheHitTokens: 0,
+    cacheMissTokens: 0,
+    knownCostUSD: null,
+  };
+  const covers = (
+    tracker as unknown as {
+      receiptViewCovers: (
+        prior: (typeof receipt)[],
+        current: (typeof receipt)[],
+      ) => boolean;
+    }
+  ).receiptViewCovers.bind(tracker);
+  assert.equal(
+    covers([receipt], [{ ...receipt, attribution: reordered }]),
+    true,
+  );
+
+  const rootTracker = new CostTracker();
+  const rooted = {
+    taskOwnerId: "root-owner",
+    chargeId: "root-charge",
+    accountingEpoch: rootTracker.getAccountingEpoch(),
+    requestId: "root-request",
+    attemptId: "root-attempt",
+    projectRoot: "/workspace/A",
+    projectRootVersion: 1 as const,
+  };
+  assert.equal(
+    rootTracker.settleUsage(
+      "deepseek-v4-flash",
+      100,
+      10,
+      null,
+      null,
+      rooted,
+      false,
+    ).kind,
+    "inserted",
+  );
+  assert.equal(
+    rootTracker.settleUsage(
+      "deepseek-v4-flash",
+      100,
+      10,
+      null,
+      null,
+      {
+        ...rooted,
+        projectRoot: "/workspace/B",
+      },
+      true,
+    ).kind,
+    "conflict",
+  );
+  assert.equal(rootTracker.getTaskSummary("root-owner").unknownChargeCount, 1);
+  assert.equal(
+    rootTracker.getTaskChargeObservations("root-owner")[0]?.attribution
+      .projectRoot,
+    "/workspace/A",
+  );
+});
+
+
+test("retry fallback attempt identity is stored when provider omits attempt_id", async () => {
+  await withFixture(async (root) => {
+    globalCostTracker.resetSession();
+    try {
+      const chat = engine(root, () => {});
+      chat.applyUserSubmission({ userInput: "Retry without attempt id" });
+      const owner = chat.getTaskAllowanceSnapshot()!.taskOwnerId;
+      const scope = {
+        taskOwnerId: owner,
+        projectRoot: realpathSync(root),
+        accountingEpoch: globalCostTracker.getAccountingEpoch(),
+        turnId: "retry-turn",
+        chargeId: null as string | null,
+      };
+      const callbacks = (
+        chat as unknown as {
+          providerRetryCallbacks: (context: {
+            usageScope: typeof scope;
+          }) => RunnerCallbacks;
+        }
+      ).providerRetryCallbacks({ usageScope: scope });
+      callbacks.onInvocationStarted?.({
+        inference_id: "retry-no-attempt",
+        request_id: "retry-request",
+        provider: "deepseek",
+        requested_model_id: "deepseek-v4-flash",
+        normalized_model_id: "deepseek-v4-flash",
+        sent_model_id: "deepseek-v4-flash",
+        input_digest: "fixture-input",
+      });
+      callbacks.onRetry?.({
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        attempt: 2,
+        request_id: "retry-request",
+        reason: "transport",
+        backoff_ms: 0,
+      });
+      const prior = globalCostTracker
+        .getTaskChargeObservations(owner)
+        .find(
+          (receipt) =>
+            receipt.attribution.chargeId === "retry-no-attempt:attempt-1",
+        );
+      assert.equal(prior?.attribution.attemptId, "attempt-1");
+      assert.equal(prior?.attribution.requestId, "retry-request");
+    } finally {
+      globalCostTracker.resetSession();
+    }
+  });
+});
+
+
+test("compaction attribution honors explicit omission for a different inference id", async () => {
+  await withFixture(async (root) => {
+    globalCostTracker.resetSession();
+    try {
+      const chat = engine(root, () => {});
+      chat.applyUserSubmission({
+        userInput: "Compaction attribution identity",
+      });
+      const owner = chat.getTaskAllowanceSnapshot()!.taskOwnerId;
+      const internal = chat as unknown as {
+        activeSubmissionGeneration: number;
+        compactIfNeeded: (
+          callbacks: undefined,
+          force: boolean,
+          generation: number,
+        ) => Promise<unknown>;
+        compactionManager: unknown;
+      };
+      internal.compactionManager = {
+        compactWithResult: async (
+          messages: unknown[],
+          options: {
+            callbacks: RunnerCallbacks;
+            onUsageRecorded: (usage: {
+              inferenceId: string;
+              modelId: string;
+              inputTokens: number;
+              outputTokens: number;
+            }) => void;
+          },
+        ) => {
+          options.callbacks.onInvocationStarted?.({
+            inference_id: "compaction-A",
+            request_id: "request-A",
+            attempt_id: "attempt-A",
+            provider: "deepseek",
+            requested_model_id: "deepseek-v4-flash",
+            normalized_model_id: "deepseek-v4-flash",
+            sent_model_id: "deepseek-v4-flash",
+            input_digest: "fixture-input",
+          });
+          options.onUsageRecorded({
+            inferenceId: "compaction-A",
+            modelId: "deepseek-v4-flash",
+            inputTokens: 10,
+            outputTokens: 2,
+          });
+          options.onUsageRecorded({
+            inferenceId: "compaction-B",
+            modelId: "deepseek-v4-flash",
+            inputTokens: 4,
+            outputTokens: 1,
+          });
+          return {
+            messages,
+            strategy: "fixture",
+            tokensBefore: 20,
+            tokensAfter: 15,
+            changed: false,
+          };
+        },
+      };
+      await internal.compactIfNeeded(
+        undefined,
+        true,
+        internal.activeSubmissionGeneration,
+      );
+      const receipts = globalCostTracker.getTaskChargeObservations(owner);
+      const matched = receipts.find(
+        (receipt) => receipt.attribution.chargeId === "compaction-A",
+      );
+      const mismatched = receipts.find(
+        (receipt) => receipt.attribution.chargeId === "compaction-B",
+      );
+      assert.equal(matched?.attribution.requestId, "request-A");
+      assert.equal(matched?.attribution.attemptId, "attempt-A");
+      assert.equal(mismatched?.attribution.requestId, undefined);
+      assert.equal(mismatched?.attribution.attemptId, undefined);
+    } finally {
+      globalCostTracker.resetSession();
+    }
+  });
+});
+
+
+test("cold resume accepts a reordered #246 owner receipt without accountingFaults", async () => {
+  await withFixture(async (root) => {
+    globalCostTracker.resetSession();
+    try {
+      const chat = engine(root, () => {}, 1);
+      chat.applyUserSubmission({
+        userInput: "Legacy owner receipt compatibility",
+      });
+      const owner = chat.getTaskAllowanceSnapshot()!.taskOwnerId;
+      const runId = chat.getEngineRunId();
+      const scope = {
+        taskOwnerId: owner,
+        projectRoot: realpathSync(root),
+        accountingEpoch: globalCostTracker.getAccountingEpoch(),
+        turnId: "legacy-turn",
+        chargeId: null as string | null,
+      };
+      const callbacks = (
+        chat as unknown as {
+          providerRetryCallbacks: (context: {
+            usageScope: typeof scope;
+          }) => RunnerCallbacks;
+        }
+      ).providerRetryCallbacks({ usageScope: scope });
+      callbacks.onInvocationStarted?.({
+        inference_id: "legacy-charge",
+        request_id: "legacy-request",
+        attempt_id: "legacy-attempt",
+        provider: "deepseek",
+        requested_model_id: "deepseek-v4-flash",
+        normalized_model_id: "deepseek-v4-flash",
+        sent_model_id: "deepseek-v4-flash",
+        input_digest: "fixture-input",
+      });
+      const internal = chat as unknown as { engineRunDir: string };
+      const chargeDir = join(internal.engineRunDir, "task-charges");
+      const file = readdirSync(chargeDir).find(
+        (name) =>
+          JSON.parse(readFileSync(join(chargeDir, name), "utf8"))
+            .taskOwnerId === owner,
+      );
+      assert.ok(file);
+      const saved = JSON.parse(readFileSync(join(chargeDir, file), "utf8"));
+      const prior = saved.chargeObservations[0].attribution;
+      saved.chargeObservations[0].attribution = {
+        taskOwnerId: prior.taskOwnerId,
+        projectRoot: prior.projectRoot,
+        projectRootVersion: prior.projectRootVersion,
+        chargeId: prior.chargeId,
+        accountingEpoch: prior.accountingEpoch,
+        turnId: prior.turnId,
+        requestId: prior.requestId,
+        attemptId: prior.attemptId,
+      };
+      delete saved.accountingFaults;
+      writeFileSync(join(chargeDir, file), JSON.stringify(saved));
+
+      globalCostTracker.resetSession();
+      const restored = new ChatEngine({
+        task: "fixture task",
+        projectRoot: root,
+        runId,
+        model: "deepseek-v4-flash",
+        maxCostUsd: 1,
+        resumeExisting: true,
+      });
+      const receipt = globalCostTracker.getTaskChargeObservations(owner)[0];
+      assert.equal(receipt?.attribution.projectRoot, realpathSync(root));
+      assert.equal(receipt?.attribution.requestId, "legacy-request");
+      assert.equal(restored.getTaskAllowanceSnapshot()?.taskOwnerId, owner);
+      assert.equal(
+        globalCostTracker.getTaskSummary(owner).unknownChargeCount,
+        1,
+      );
+      assert.equal(
+        (
+          restored as unknown as { checkBudgets: () => { ok: boolean } }
+        ).checkBudgets().ok,
+        false,
+      );
+    } finally {
+      globalCostTracker.resetSession();
+    }
+  });
+});
+
+
+test("an old-owner conflict survives a separate-process resume after its receipt write fails", async () => {
+  await withFixture(async (root) => {
+    globalCostTracker.resetSession();
+    try {
+      const chat = engine(root, () => {}, 1);
+      const runId = chat.getEngineRunId();
+      chat.applyUserSubmission({ userInput: "Known receipt owner A" });
+      const ownerA = chat.getTaskAllowanceSnapshot()!.taskOwnerId;
+      const scope = {
+        taskOwnerId: ownerA,
+        projectRoot: realpathSync(root),
+        accountingEpoch: globalCostTracker.getAccountingEpoch(),
+        turnId: "known-turn",
+        chargeId: null as string | null,
+        requestId: undefined as string | undefined,
+        attemptId: undefined as string | undefined,
+        usageMetadata: undefined as RunnerInvocationMetadata | null | undefined,
+      };
+      const callbacks = (
+        chat as unknown as {
+          providerRetryCallbacks: (context: {
+            usageScope: typeof scope;
+            isOwnerCurrent: () => boolean;
+          }) => RunnerCallbacks;
+          trackRunnerUsage: (runner: unknown, usageScope: typeof scope) => void;
+          persistOwnerCharges: (ownerId: string, runDir?: string) => void;
+          engineRunDir: string;
+          ownerAccountingFaults: Map<
+            string,
+            Array<{ kind: string; reason: string }>
+          >;
+          taskCostScopeUnavailable: boolean;
+          checkBudgets: () => { ok: boolean; reason?: string };
+        }
+      ).providerRetryCallbacks({
+        usageScope: scope,
+        isOwnerCurrent: () =>
+          chat.getTaskAllowanceSnapshot()?.taskOwnerId === ownerA,
+      });
+      const internals = chat as unknown as {
+        trackRunnerUsage: (runner: unknown, usageScope: typeof scope) => void;
+        persistOwnerCharges: (ownerId: string, runDir?: string) => void;
+        engineRunDir: string;
+        ownerAccountingFaults: Map<
+          string,
+          Array<{ kind: string; reason: string }>
+        >;
+        taskCostScopeUnavailable: boolean;
+        checkBudgets: () => { ok: boolean; reason?: string };
+      };
+      callbacks.onInvocationStarted?.({
+        inference_id: "known-A",
+        request_id: "known-request",
+        attempt_id: "known-attempt",
+        provider: "deepseek",
+        requested_model_id: "deepseek-v4-flash",
+        normalized_model_id: "deepseek-v4-flash",
+        sent_model_id: "deepseek-v4-flash",
+        input_digest: "fixture-input",
+      });
+      callbacks.onInvocationCompleted?.({
+        inference_id: "known-A",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        status: "delivered",
+        usage_metadata: {
+          provider: "deepseek",
+          provider_model_id: "deepseek-v4-flash",
+          latency_ms: 1,
+          prompt_tokens: 100,
+          completion_tokens: 10,
+          total_tokens: 110,
+          estimated_cost_usd: null,
+        },
+      });
+      internals.trackRunnerUsage(
+        { getLastInvocationMetadata: () => null },
+        scope,
+      );
+      assert.equal(
+        globalCostTracker.getTaskSummary(ownerA).unknownChargeCount,
+        0,
+      );
+      assert.ok(
+        globalCostTracker.getTaskChargeObservations(ownerA)[0]?.knownCostUSD !==
+          null,
+      );
+
+      chat.applyUserSubmission({ userInput: "Healthy successor B" });
+      const ownerB = chat.getTaskAllowanceSnapshot()!.taskOwnerId;
+      assert.notEqual(ownerA, ownerB);
+      const originalPersist = internals.persistOwnerCharges.bind(chat);
+      internals.persistOwnerCharges = (ownerId, runDir) => {
+        if (ownerId === ownerA)
+          throw new Error("injected owner receipt write failure");
+        originalPersist(ownerId, runDir);
+      };
+      scope.requestId = "conflicting-request";
+      callbacks.onInvocationCompleted?.({
+        inference_id: "known-A",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        status: "delivered",
+        usage_metadata: {
+          provider: "deepseek",
+          provider_model_id: "deepseek-v4-flash",
+          latency_ms: 1,
+          prompt_tokens: 100,
+          completion_tokens: 10,
+          total_tokens: 110,
+          estimated_cost_usd: null,
+        },
+      });
+      assert.ok(
+        internals.ownerAccountingFaults
+          .get(ownerA)
+          ?.some((fault) => fault.kind === "persistence-failure"),
+      );
+      assert.equal(internals.taskCostScopeUnavailable, false);
+      assert.equal(internals.checkBudgets().ok, true);
+      chat.applyUserSubmission({
+        userInput: "Successor C after old-owner fault",
+      });
+      const ownerC = chat.getTaskAllowanceSnapshot()!.taskOwnerId;
+      assert.notEqual(ownerC, ownerB);
+      assert.equal(internals.taskCostScopeUnavailable, false);
+      assert.equal(internals.checkBudgets().ok, true);
+      const persistedBudget = JSON.parse(
+        readFileSync(join(internals.engineRunDir, "task-budget.json"), "utf8"),
+      );
+      assert.ok(
+        persistedBudget.accountingFaults.some(
+          (fault: { taskOwnerId: string; kind: string }) =>
+            fault.taskOwnerId === ownerA &&
+            fault.kind === "persistence-failure",
+        ),
+      );
+
+      const source = `
+        import assert from 'node:assert/strict';
+        import { ChatEngine } from './src/agent/chatEngine.ts';
+        const engine = new ChatEngine({ task: 'resume', projectRoot: ${JSON.stringify(root)},
+          runId: ${JSON.stringify(runId)}, model: 'deepseek-v4-flash', maxCostUsd: 1, resumeExisting: true });
+        const ownerA = ${JSON.stringify(ownerA)};
+        const ownerB = ${JSON.stringify(ownerC)};
+        const internal = engine;
+        assert.equal(engine.getTaskAllowanceSnapshot()?.taskOwnerId, ownerB);
+        assert.equal(internal.taskCostScopeUnavailable, false);
+        assert.equal(internal.checkBudgets().ok, true);
+        assert.ok(internal.ownerAccountingFaults.get(ownerA)?.some((fault) => fault.kind === 'persistence-failure'));
+        assert.equal(internal.ownerAccountingFaults.has(ownerB), false);
+      `;
+      const child = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "-e", source],
+        { cwd: process.cwd(), encoding: "utf8", env: process.env },
+      );
+      assert.equal(child.status, 0, child.stderr || child.stdout);
+    } finally {
+      globalCostTracker.resetSession();
+    }
+  });
+});
