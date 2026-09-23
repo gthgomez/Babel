@@ -461,6 +461,55 @@ test('R1 no-target red localizes through a related read before admitting a plan'
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('PR242: proven old_str mismatch permits one fresh corrected repair through the native executor', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-pr242-no-effect-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
+    mkdirSync(join(root, 'src'));
+    const file = join(root, 'src', 'parser.js');
+    writeFileSync(file, 'export function parseToken() {\n  return 1\n}\n');
+    execFileSync('git', ['add', 'src/parser.js'], { cwd: root, windowsHide: true });
+    const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
+    const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
+    (engine as any).workingState = ingestVerifierResult({
+      state: createWorkingState('repair parser'), tool: 'test_run', target: 'npm test', exitCode: 1,
+      stdout: '', stderr: 'TypeError: bad\n    at parseToken (src/parser.js:2:3)',
+      summary: 'parser failed', recoveryProjectRoot: root,
+      recoveryBinding: (engine as any).currentRecoveryBinding(),
+    }).state;
+    await (engine as any).executeOneAction(
+      { type: 'read_file', path: 'src/parser.js' }, context, {}, { index: 0, ownerGeneration: 0 },
+    );
+    const plan = () => {
+      const gate = (engine as any).workingState.recoveryGate;
+      return {
+        schemaVersion: 1, failureSignature: gate.failureSignature,
+        workspaceRevision: gate.binding.workspaceRevision,
+        hypothesisClass: 'logic', targetIdentities: ['src/parser.js'],
+        actionFamily: 'str_replace', criterionId: 'npm test',
+        supportingObservationIds: gate.observedKeys.map(recoveryObservationId),
+      };
+    };
+    const mismatch = await (engine as any).executeOneAction(
+      { type: 'str_replace', file_path: 'src/parser.js',
+        old_str: 'return 42', new_str: 'return 2', repair_plan: plan() },
+      context, {}, { index: 1, ownerGeneration: 0 },
+    );
+    assert.equal(readFileSync(file, 'utf8'), 'export function parseToken() {\n  return 1\n}\n');
+    assert.match(mismatch.observation, /not found|No match|old_str/i);
+    assert.equal((engine as any).workingState.recoveryGate.noEffectReplans, 1,
+      `${mismatch.observation}\n${JSON.stringify((engine as any).workingState.recoveryGate)}`);
+    assert.equal((engine as any).workingState.recoveryGate.permitConsumed, false);
+    const corrected = await (engine as any).executeOneAction(
+      { type: 'str_replace', file_path: 'src/parser.js',
+        old_str: 'return 1', new_str: 'return 2', repair_plan: plan() },
+      context, {}, { index: 2, ownerGeneration: 0 },
+    );
+    assert.doesNotMatch(corrected.observation, /RECOVERY_PLAN_REQUIRED|RECOVERY_EVIDENCE_REQUIRED/);
+    assert.match(readFileSync(file, 'utf8'), /return 2/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('R1 no-target test name needs a bounded glob followed by a corroborating read', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-r1-localize-testname-'));
   try {

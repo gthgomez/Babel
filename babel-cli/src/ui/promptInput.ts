@@ -1898,7 +1898,9 @@ export class PromptInput {
   private async startMentionSearch(query: string): Promise<void> {
     try {
       const { globalIndexer } = await import("../services/indexer.js");
-      const hits: SearchHit[] = globalIndexer.search(query, 20);
+      const projectRoot = process.env["BABEL_PROJECT_ROOT"] || process.cwd();
+      const hits: SearchHit[] = globalIndexer.isReadyForRoot(projectRoot)
+        ? globalIndexer.search(query, 20) : [];
 
       if (hits.length > 0) {
         const results: MentionResult[] = hits.map((r) => ({

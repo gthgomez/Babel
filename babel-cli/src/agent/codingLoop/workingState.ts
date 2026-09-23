@@ -66,6 +66,8 @@ export interface WorkingState {
     strategyChanged: boolean
     planAdmitted?: boolean
     permitConsumed?: boolean
+    /** At most one fresh admission follows a controller-proven no-effect edit. */
+    noEffectReplans?: number
     admittedPlan?: AdmittedRecoveryPlanV1
   }
   revision: number
@@ -137,6 +139,7 @@ export type WorkingStateEvent =
   | { type: 'recovery_candidate_drift' }
   | { type: 'recovery_plan_admitted'; plan: AdmittedRecoveryPlanV1 }
   | { type: 'recovery_plan_consumed' }
+  | { type: 'recovery_proven_no_effect'; fingerprint: string }
   | { type: 'localization_begin'; localization: FailureLocalization }
   | { type: 'localization_update'; localization: FailureLocalization }
   | {
@@ -255,6 +258,18 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       if (next.recoveryGate?.planAdmitted && next.recoveryGate.admittedPlan) {
         next.lastAdmittedPlan = next.recoveryGate.admittedPlan
         next.recoveryGate = { ...next.recoveryGate, planAdmitted: false, permitConsumed: true }
+      }
+      break
+    case 'recovery_proven_no_effect':
+      if (next.recoveryGate?.permitConsumed && next.recoveryGate.satisfied &&
+          next.lastAdmittedPlan?.exactFingerprint === event.fingerprint &&
+          (next.recoveryGate.noEffectReplans ?? 0) < 1) {
+        const { admittedPlan: _consumedPlan, ...gate } = next.recoveryGate
+        next.recoveryGate = {
+          ...gate,
+          permitConsumed: false,
+          noEffectReplans: 1,
+        }
       }
       break
     case 'localization_begin':
@@ -538,7 +553,8 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
   }
   if (gate) {
     if (typeof gate.failureSignature !== 'string' || typeof gate.requiredEvidence !== 'string' ||
-        !strings(gate.observedKeys ?? []) || !strings(gate.failingTargets ?? [])) return null
+        !strings(gate.observedKeys ?? []) || !strings(gate.failingTargets ?? []) ||
+        (gate.noEffectReplans !== undefined && gate.noEffectReplans !== 0 && gate.noEffectReplans !== 1)) return null
     const binding = gate.binding
     const validBinding = binding && binding.schemaVersion === 1 &&
       typeof binding.taskId === 'string' && binding.taskId.length > 0 &&

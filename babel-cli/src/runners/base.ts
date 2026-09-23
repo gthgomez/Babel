@@ -229,6 +229,8 @@ export interface ProviderInvocationCompleted {
   provider: ProviderId;
   model: string;
   status: 'delivered' | 'failed';
+  /** Request-local token receipt captured before another invocation can reuse the runner. */
+  usage_metadata?: RunnerInvocationMetadata | null;
   observed_model_id?: string | null;
   /** Upstream provider identity when the gateway exposes it. */
   upstream_provider?: string | null;

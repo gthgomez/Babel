@@ -5,7 +5,7 @@
  */
 
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
@@ -26,6 +26,7 @@ import type {
   ProviderInvocationStarted,
   ProviderMessage,
   RunnerCallbacks,
+  RunnerInvocationMetadata,
 } from '../runners/base.js';
 import { mapProviderMessagesToWire } from '../runners/providerMessages.js';
 import {
@@ -44,7 +45,7 @@ import {
   captureCostBaselineUsd,
   globalCostTracker,
 } from '../services/costTracker.js';
-import type { SessionUsageSummary } from '../services/costTracker.js';
+import type { ChargeReceipt, SessionUsageSummary } from '../services/costTracker.js';
 import {
   proposeProjectMemoryWriteback,
   readProjectMemory,
@@ -1586,6 +1587,72 @@ export class ChatEngine {
     }
   }
 
+  /** A task can be retired while its provider still reports a billable result. */
+  private ownerChargeDir(runDir = this.engineRunDir): string {
+    return join(runDir, 'task-charges');
+  }
+
+  private ownerChargePath(ownerId: string, runDir = this.engineRunDir): string {
+    const name = createHash('sha256').update(ownerId).digest('hex');
+    return join(this.ownerChargeDir(runDir), `${name}.json`);
+  }
+
+  private persistOwnerCharges(ownerId: string, runDir = this.engineRunDir): void {
+    const summary = globalCostTracker.getTaskSummary(ownerId);
+    const chargeIds = globalCostTracker.getTaskChargeIds(ownerId);
+    const chargeObservations = globalCostTracker.getTaskChargeObservations(ownerId);
+    // An old ID-only snapshot cannot safely be rewritten as a complete
+    // receipt ledger. Keep its task budget conservative on this path.
+    if (chargeObservations.length !== chargeIds.length) {
+      throw new Error('Owner charge receipts are incomplete');
+    }
+    const dir = this.ownerChargeDir(runDir);
+    mkdirSync(dir, { recursive: true });
+    const path = this.ownerChargePath(ownerId, runDir);
+    const tmpPath = `${path}.tmp-${randomUUID()}`;
+    writeFileSync(tmpPath, JSON.stringify({
+      schemaVersion: 1,
+      taskOwnerId: ownerId,
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      totalCostUSD: summary.totalCostUSD,
+      unknownChargeCount: summary.unknownChargeCount ?? 0,
+      chargeIds,
+      chargeObservations,
+    }), 'utf8');
+    renameSync(tmpPath, path);
+  }
+
+  private restoreOwnerCharges(runDir: string): boolean {
+    const dir = this.ownerChargeDir(runDir);
+    if (!existsSync(dir)) return true;
+    try {
+      for (const name of readdirSync(dir)) {
+        if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
+        const raw: unknown = JSON.parse(readFileSync(join(dir, name), 'utf8'));
+        if (raw === null || typeof raw !== 'object') throw new Error('Invalid owner charge file');
+        const data = raw as Record<string, unknown>;
+        if (data['schemaVersion'] !== 1 ||
+            typeof data['taskOwnerId'] !== 'string' ||
+            name !== `${createHash('sha256').update(data['taskOwnerId']).digest('hex')}.json` ||
+            !Array.isArray(data['chargeIds']) ||
+            !Array.isArray(data['chargeObservations']) ||
+            typeof data['totalCostUSD'] !== 'number' ||
+            typeof data['unknownChargeCount'] !== 'number') {
+          throw new Error('Invalid owner charge file');
+        }
+        globalCostTracker.restoreTaskUsage(data['taskOwnerId'], {
+          totalCostUSD: data['totalCostUSD'],
+          unknownChargeCount: data['unknownChargeCount'],
+          chargeIds: data['chargeIds'] as string[],
+          chargeObservations: data['chargeObservations'] as ChargeReceipt[],
+        });
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private checkpointActiveWall(nowMs = Date.now()): void {
     if (!this.taskAllowance || this.activeExecutionCheckpointMs === null) return;
     this.taskAllowance.consumed.activeWallMs += Math.max(
@@ -1613,6 +1680,7 @@ export class ChatEngine {
         postWriteRepairRestrict: this.postWriteRepairRestrict,
       };
       if (this.lastTurnRuntime) this.taskAllowance.lastTurnRuntime = this.lastTurnRuntime;
+      this.persistOwnerCharges(this.taskAllowance.taskOwnerId);
       const path = join(this.engineRunDir, 'task-budget.json');
       const tmpPath = `${path}.tmp-${process.pid}`;
       writeFileSync(tmpPath, JSON.stringify(this.taskAllowance), 'utf8');
@@ -1864,11 +1932,13 @@ export class ChatEngine {
     const persistedTaskBudget = options.resumeExisting
       ? this.readPersistedTaskBudget(this.engineRunDir)
       : null;
+    const chargeFilesValid = !options.resumeExisting || this.restoreOwnerCharges(this.engineRunDir);
     if (options.resumeExisting) this.restorePersistedTaskBudget(persistedTaskBudget);
     else {
       this.taskAllowance = this.createTaskAllowance();
       this.taskCostBaselineUsd = this.taskAllowance.taskCostBaselineUsd;
     }
+    if (!chargeFilesValid) this.taskCostScopeUnavailable = true;
     this.persistTaskCostBaseline();
 
     if (options.resumeExisting) {
@@ -2225,7 +2295,8 @@ export class ChatEngine {
       kind: 'budget_kill',
       detail: reason.slice(0, 200),
     });
-    if (!this.budgetLastChanceDone && this.hasAnyWrites() && isDiffCriticEnabled()) {
+    if (this.terminatingLimiter !== 'cost' && !this.budgetLastChanceDone &&
+        this.hasAnyWrites() && isDiffCriticEnabled()) {
       this.budgetLastChanceDone = true;
       callbacks.onThought?.('[Budget: last-chance critic before kill…]');
       const critic = await this.runAsymmetricDiffCritic(
@@ -2440,14 +2511,14 @@ export class ChatEngine {
     };
   }
 
-  private checkBudgets(): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {
+  private checkBudgets(skipTurnLimit = false): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {
     if (this.taskCostScopeUnavailable || !this.taskAllowance) {
       const reason = 'Cannot restore durable task cost scope for resumed run; refusing a fresh allowance.';
       this.terminatingLimiter = 'cost';
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: 'cost' };
     }
-    if (this.taskAllowance.consumed.turns >= this.taskAllowance.grant.turnCap) {
+    if (!skipTurnLimit && this.taskAllowance.consumed.turns >= this.taskAllowance.grant.turnCap) {
       const reason =
         `Task turn allowance exhausted (${this.taskAllowance.consumed.turns} of ` +
         `${this.taskAllowance.grant.turnCap}).`;
@@ -3247,6 +3318,7 @@ export class ChatEngine {
       if (!this.isSubmissionCurrent(submissionGeneration)) return;
       if (compactInfo) {
         yield { type: 'context_compacted', ...compactInfo };
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
       }
 
       // C1: Inject current todo list into conversation before LLM call
@@ -3305,6 +3377,10 @@ export class ChatEngine {
         turnId: this.parity.turnId,
         chargeId: null as string | null,
         isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
+      };
+      const settleRetiredUsage = (usedRunner: typeof runner): void => {
+        if (!('usageMetadata' in usageScope)) Object.assign(usageScope, { usageMetadata: null });
+        this.trackRunnerUsage(usedRunner, usageScope);
       };
       const requestMode = useNativeTools ? 'native' : useTextTools ? 'text' : 'legacy';
       const toolProfile = useNativeTools
@@ -3387,6 +3463,28 @@ export class ChatEngine {
         return;
       }
       yield { type: 'thinking' };
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
+      // Compaction can itself consume a paid request after the turn-start
+      // allowance check. Recheck cost and wall limits at the final dispatch
+      // boundary without charging this already-admitted turn twice.
+      const dispatchBudget = this.checkBudgets(true);
+      if (!dispatchBudget.ok) {
+        const kill = await this.handleBudgetKill(
+          dispatchBudget.reason ?? 'Budget limit exceeded.',
+          { onThought: () => {} },
+          effectiveIntent,
+          submissionGeneration,
+        );
+        if (!kill || !this.isSubmissionCurrent(submissionGeneration)) return;
+        endSpan(_turnSpan, SpanStatusCode.OK);
+        _turnSpan = null;
+        yield this.streamDone(kill.answer, {
+          ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
+          ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
+          ...(kill.verifierTampered ? { verifierTampered: true as const } : {}),
+        });
+        return;
+      }
 
       let turnResult: ChatTurn;
       let toolsAnnouncedInStream = false;
@@ -3417,10 +3515,18 @@ export class ChatEngine {
               isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(runner);
+              return;
+            }
             rawText += chunk;
             this.currentTurnTelemetry?.markFirstToken();
           }
           const providerEnd = performance.now();
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
+          }
           this.currentTurnTelemetry?.recordProviderSpan(
             Math.max(0, providerEnd - providerStart),
             providerStart,
@@ -3430,6 +3536,10 @@ export class ChatEngine {
           if (!this.isSubmissionCurrent(submissionGeneration)) return;
           turnResult = parseTextToolTurn(rawText);
         } catch (err: any) {
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
+          }
           const providerEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
             Math.max(0, providerEnd - providerStart),
@@ -3489,6 +3599,10 @@ export class ChatEngine {
               isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(runner);
+              return;
+            }
             switch (event.type) {
               case 'text_delta':
                 this.currentTurnTelemetry?.markFirstToken();
@@ -3523,6 +3637,10 @@ export class ChatEngine {
             }
           }
           const providerEnd = performance.now();
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
+          }
           this.currentTurnTelemetry?.recordProviderSpan(
             Math.max(0, providerEnd - providerStart),
             providerStart,
@@ -3538,6 +3656,10 @@ export class ChatEngine {
             finishReason: nativeFinishReason,
           });
         } catch (err: any) {
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
+          }
           const providerEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
             Math.max(0, providerEnd - providerStart),
@@ -3552,6 +3674,7 @@ export class ChatEngine {
           }
           if (!this.isSubmissionCurrent(submissionGeneration)) return;
           const fb = yield* this.resolveFallbackOrFail(err, turn, submissionGeneration);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
@@ -3589,6 +3712,10 @@ export class ChatEngine {
                 isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
               }),
             )) {
+              if (!this.isSubmissionCurrent(submissionGeneration)) {
+                settleRetiredUsage(fb);
+                return;
+              }
               switch (event.type) {
                 case 'text_delta':
                   this.currentTurnTelemetry?.markFirstToken();
@@ -3623,6 +3750,10 @@ export class ChatEngine {
               }
             }
             const fbEnd = performance.now();
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(fb);
+              return;
+            }
             this.currentTurnTelemetry?.recordProviderSpan(
               Math.max(0, fbEnd - fbStart),
               fbStart,
@@ -3638,6 +3769,10 @@ export class ChatEngine {
               finishReason: nativeFinishReason,
             });
           } catch (fbErr: any) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(fb);
+              return;
+            }
             const fbEnd = performance.now();
             this.currentTurnTelemetry?.recordProviderSpan(
               Math.max(0, fbEnd - fbStart),
@@ -3647,6 +3782,7 @@ export class ChatEngine {
             // If tools still fail, degrade to raw-text (buffered — the lenient
             // parser may transform the final answer; not append-compatible).
             yield { type: 'thought', text: 'Retrying without tools…' };
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             let rawText = '';
             const rawFbStart = performance.now();
             try {
@@ -3663,10 +3799,18 @@ export class ChatEngine {
                   isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
                 }),
               )) {
+                if (!this.isSubmissionCurrent(submissionGeneration)) {
+                  settleRetiredUsage(fb);
+                  return;
+                }
                 rawText += chunk;
                 this.currentTurnTelemetry?.markFirstToken();
               }
               const rawFbEnd = performance.now();
+              if (!this.isSubmissionCurrent(submissionGeneration)) {
+                settleRetiredUsage(fb);
+                return;
+              }
               this.currentTurnTelemetry?.recordProviderSpan(
                 Math.max(0, rawFbEnd - rawFbStart),
                 rawFbStart,
@@ -3676,6 +3820,10 @@ export class ChatEngine {
               if (!this.isSubmissionCurrent(submissionGeneration)) return;
               turnResult = this.parseChatTurnLenient(rawText);
             } catch (rawErr: any) {
+              if (!this.isSubmissionCurrent(submissionGeneration)) {
+                settleRetiredUsage(fb);
+                return;
+              }
               const rawFbEnd = performance.now();
               this.currentTurnTelemetry?.recordProviderSpan(
                 Math.max(0, rawFbEnd - rawFbStart),
@@ -3715,10 +3863,18 @@ export class ChatEngine {
               isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(runner);
+              return;
+            }
             rawText += chunk;
             this.currentTurnTelemetry?.markFirstToken();
           }
           const legacyEnd = performance.now();
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
+          }
           this.currentTurnTelemetry?.recordProviderSpan(
             Math.max(0, legacyEnd - legacyStart),
             legacyStart,
@@ -3727,6 +3883,10 @@ export class ChatEngine {
           this.trackRunnerUsage(runner, usageScope);
           if (!this.isSubmissionCurrent(submissionGeneration)) return;
         } catch (err: any) {
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
+          }
           const legacyEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
             Math.max(0, legacyEnd - legacyStart),
@@ -3741,6 +3901,7 @@ export class ChatEngine {
           }
           if (!this.isSubmissionCurrent(submissionGeneration)) return;
           const fb = yield* this.resolveFallbackOrFail(err, turn, submissionGeneration);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
@@ -3761,12 +3922,20 @@ export class ChatEngine {
                 isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
               }),
             )) {
+              if (!this.isSubmissionCurrent(submissionGeneration)) {
+                settleRetiredUsage(fb);
+                return;
+              }
               rawText += chunk;
               this.currentTurnTelemetry?.markFirstToken();
             }
             this.trackRunnerUsage(fb, usageScope);
             if (!this.isSubmissionCurrent(submissionGeneration)) return;
           } catch (fbErr: any) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(fb);
+              return;
+            }
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
             if (!this.isSubmissionCurrent(submissionGeneration)) return;
@@ -3826,6 +3995,7 @@ export class ChatEngine {
       if (turnResult.type === 'tool_calls' && turnResult.actions.length > 0) {
         if (turnResult.thinking) {
           yield { type: 'thought', text: turnResult.thinking };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
 
         // R7: After force_status intervention (level ≥ 3), check if the model
@@ -3873,6 +4043,7 @@ export class ChatEngine {
               tool: chatActionToolName(action),
               target: chatActionTarget(action),
             };
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
           }
         }
         if (turnResult.actions.length > 0) {
@@ -3958,6 +4129,7 @@ export class ChatEngine {
         // Yield sub-agent lifecycle events collected during execution
         for (const event of subAgentEvents) {
           yield event;
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
 
         recordTurnToolObservability(this.obsHandles());
@@ -4009,6 +4181,7 @@ export class ChatEngine {
             ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
             ...(tc.mutation_paths !== undefined ? { mutation_paths: [...tc.mutation_paths] } : {}),
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
 
         await new Promise((resolve) => setImmediate(resolve));
@@ -4043,6 +4216,7 @@ export class ChatEngine {
         );
         for (const label of exploreFuses.labels) {
           yield { type: 'thought', text: label };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
 
         // P2: Update stall detector and inject phase nudge if needed
@@ -4125,6 +4299,7 @@ export class ChatEngine {
             type: 'thought',
             text: `[Tamper escalation: ${this.tamperCount} violations]`,
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
 
         // R2: Escalating stall intervention — kill routed through parity arbiter
@@ -4149,6 +4324,7 @@ export class ChatEngine {
             type: 'thought',
             text: `[Stall intervention: ${stallIntervention.level}]`,
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
         if (stallIntervention?.level === 'kill') {
           recordPolicyEvent(
@@ -4268,6 +4444,7 @@ export class ChatEngine {
             score: pcResult.score,
             message: `Transitioned to ${pcResult.intervention}`,
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
 
         // P0-E: zero-write shadow by default for coding classes (one-shot log);
@@ -4457,6 +4634,7 @@ export class ChatEngine {
         if (arb.policyMessage) {
           this.conversation.push({ role: 'user', content: arb.policyMessage });
           yield { type: 'thought', text: `[Policy: ${arb.policySource}]` };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
         // Mid-loop checkpoint only (turn continues) — terminal paths use finalizeParityTurn.
         // Also flush policy events so hard harness kills still leave scoreboard data.
@@ -4487,6 +4665,7 @@ export class ChatEngine {
           const blockedDelta = reconcileStreamedAnswer(streamedAnswerForTurn, answer);
           if (blockedDelta !== null) {
             yield { type: 'answer_chunk', text: blockedDelta };
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
           }
           this.conversation.push({ role: 'assistant', content: answer });
           _turnSpan.setAttribute('babel.chat.blocked', 'true');
@@ -4593,6 +4772,7 @@ export class ChatEngine {
             type: 'thought',
             text: `[Text-only loop: ${this.stallState.textOnlyTurns} turns, escalating]`,
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           _turnSpan.setAttribute('babel.chat.text_only_turn', this.stallState.textOnlyTurns);
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
@@ -4623,6 +4803,7 @@ export class ChatEngine {
             type: 'thought',
             text: '[Implementor: completion prefers patch — continuing]',
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           this.policyEventLog.record({
             at_turn: this._turnIndex,
             kind: 'progress_policy',
@@ -4702,6 +4883,7 @@ export class ChatEngine {
                 score: pcResult.score,
                 message: `Gate strike threshold escalated to ${pcResult.intervention}`,
               };
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
             }
 
             this.conversation.push({ role: 'assistant', content: answer });
@@ -4738,6 +4920,7 @@ export class ChatEngine {
             type: 'thought',
             text: `[Diff critic: ${this.lastCriticReceipt.verdict}]`,
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
         if (streamCritic === 'reject') {
           _turnSpan.setAttribute('babel.chat.critic_strike', this.criticStrikes);
@@ -4800,6 +4983,7 @@ export class ChatEngine {
         const answerDelta = reconcileStreamedAnswer(streamedAnswerForTurn, answer);
         if (answerDelta !== null) {
           yield { type: 'answer_chunk', text: answerDelta };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
         this.conversation.push({ role: 'assistant', content: answer });
         _turnSpan.setAttribute('babel.chat.turn', `${turn + 1}:completion`);
@@ -4872,6 +5056,7 @@ export class ChatEngine {
           type: 'thought',
           text: `[Diff critic: ${this.lastCriticReceipt.verdict}]`,
         };
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
       }
       if (terminalCritic === 'block' || terminalCritic === 'reject') {
         const report = this.buildCriticBlockedReport(
@@ -5494,7 +5679,9 @@ export class ChatEngine {
     if (admissionStore) this.parity.admissionStore = admissionStore;
     mkdirSync(this.engineRunDir, { recursive: true });
     const persistedTaskBudget = this.readPersistedTaskBudget(this.engineRunDir);
+    const chargeFilesValid = this.restoreOwnerCharges(this.engineRunDir);
     this.restorePersistedTaskBudget(persistedTaskBudget);
+    if (!chargeFilesValid) this.taskCostScopeUnavailable = true;
     this.persistTaskCostBaseline();
     if (authority) persistLiveSessionAuthority(this.engineRunDir, authority);
     this.failureBudgetTracker = createFailureBudgetTrackerFromContract(authority?.taskContract);
@@ -6982,6 +7169,7 @@ export class ChatEngine {
     // any await, so a tool/child that settles after the engine is superseded
     // is recognised as stale instead of being applied to the new task.
     const ownerGeneration = meta.ownerGeneration ?? this.activeSubmissionGeneration;
+    const ownerRunDir = this.engineRunDir;
     // R0-7: the parent turn at dispatch time. Child mutation evidence must be
     // attributed to the turn that produced it, never to whatever turn is live
     // when the child finally resolves.
@@ -7335,6 +7523,14 @@ export class ChatEngine {
                   },
                   ...(mutationAllowance ? { inheritedAllowance: mutationAllowance } : {}),
                   onUsageRecorded: () => {
+                    if (mutationAllowance?.parentTaskOwnerId) {
+                      try {
+                        this.persistOwnerCharges(mutationAllowance.parentTaskOwnerId, ownerRunDir);
+                      } catch {
+                        this.taskCostScopeUnavailable = true;
+                        throw new Error('Delegated charge receipt could not be saved');
+                      }
+                    }
                     // R0-8: a superseded child must not flush the new task's
                     // cost baseline / active-execution checkpoint.
                     if (this.isSubmissionCurrent(ownerGeneration)) {
@@ -7452,6 +7648,14 @@ export class ChatEngine {
               ...(childLane?.executor ? { executor: childLane.executor } : {}),
               ...(mutationAllowance ? { inheritedAllowance: mutationAllowance } : {}),
               onUsageRecorded: () => {
+                if (mutationAllowance?.parentTaskOwnerId) {
+                  try {
+                    this.persistOwnerCharges(mutationAllowance.parentTaskOwnerId, ownerRunDir);
+                  } catch {
+                    this.taskCostScopeUnavailable = true;
+                    throw new Error('Delegated charge receipt could not be saved');
+                  }
+                }
                 // R0-8: a superseded child must not flush the new task's
                 // cost baseline / active-execution checkpoint.
                 if (this.isSubmissionCurrent(ownerGeneration)) {
@@ -7646,6 +7850,14 @@ export class ChatEngine {
             ...(spec.instructions ? { additionalInstructions: spec.instructions } : {}),
             inheritedAllowance: readAllowance,
             onUsageRecorded: () => {
+              if (readAllowance.parentTaskOwnerId) {
+                try {
+                  this.persistOwnerCharges(readAllowance.parentTaskOwnerId, ownerRunDir);
+                } catch {
+                  this.taskCostScopeUnavailable = true;
+                  throw new Error('Delegated charge receipt could not be saved');
+                }
+              }
               // R0-8: a superseded child must not flush the new task's
               // cost baseline / active-execution checkpoint.
               if (this.isSubmissionCurrent(ownerGeneration)) {
@@ -8107,7 +8319,16 @@ export class ChatEngine {
           mutationPaths: gov.mutationPaths,
           mutationReceipt: gov.mutationReceipt,
           effectTransaction: gov.effectTransaction,
+          preDispatchNoEffect: gov.preDispatchNoEffect,
         });
+        if (admittedThisAction && proposedEdit &&
+            strReplaceEffect.status === 'confirmed_no_change' &&
+            this.isSubmissionCurrent(ownerGeneration)) {
+          this.workingState = applyWorkingStateEvent(this.workingState, {
+            type: 'recovery_proven_no_effect', fingerprint: proposedEdit.exactFingerprint,
+          });
+          this.persistRecoveryWorkingState();
+        }
 
         if (gov.exit_code !== 0) {
           // Process failure does not erase an independently proven workspace
@@ -8644,6 +8865,14 @@ export class ChatEngine {
         mutationReceipt: result.mutationReceipt,
         effectTransaction: result.effectTransaction,
       });
+      if (admittedThisAction && proposedEdit && directMutationAction &&
+          mutationEffect.status === 'confirmed_no_change' &&
+          this.isSubmissionCurrent(ownerGeneration)) {
+        this.workingState = applyWorkingStateEvent(this.workingState, {
+          type: 'recovery_proven_no_effect', fingerprint: proposedEdit.exactFingerprint,
+        });
+        this.persistRecoveryWorkingState();
+      }
       const confirmedDirectMutation =
         directMutationAction &&
         mutationEffect.status === 'confirmed_change';
@@ -9207,12 +9436,14 @@ export class ChatEngine {
    *  #12: Also accumulates API-reported token counts for accurate estimation. */
   private trackRunnerUsage(
     runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
-    usageScope?: { taskOwnerId: string | null; accountingEpoch: string; turnId: string | null; chargeId: string | null; isOwnerCurrent?: () => boolean },
+    usageScope?: { taskOwnerId: string | null; accountingEpoch: string; turnId: string | null; chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string; modelId?: string; usageMetadata?: RunnerInvocationMetadata | null; isOwnerCurrent?: () => boolean },
   ): void {
     // A task charge must be tied to an observed invocation start. Test/offline
     // runners can return placeholder metadata without starting a paid request.
     if (usageScope && usageScope.chargeId === null) return;
-    const metadata = runner.getLastInvocationMetadata?.();
+    const metadata = usageScope && 'usageMetadata' in usageScope
+      ? usageScope.usageMetadata
+      : runner.getLastInvocationMetadata?.();
     const appliesToCurrent = !usageScope ||
       (usageScope.taskOwnerId === this.taskAllowance?.taskOwnerId &&
         (usageScope.isOwnerCurrent?.() ?? true));
@@ -9221,7 +9452,7 @@ export class ChatEngine {
       metadata.prompt_tokens !== null &&
       metadata.completion_tokens !== null
     ) {
-      globalCostTracker.trackUsage(
+      const chargeUpdate = globalCostTracker.settleUsage(
         metadata.provider_model_id,
         metadata.prompt_tokens,
         metadata.completion_tokens,
@@ -9233,6 +9464,8 @@ export class ChatEngine {
               chargeId: usageScope.chargeId ?? randomUUID(),
               accountingEpoch: usageScope.accountingEpoch,
               ...(usageScope.turnId ? { turnId: usageScope.turnId } : {}),
+              ...(usageScope.requestId ? { requestId: usageScope.requestId } : {}),
+              ...(usageScope.attemptId ? { attemptId: usageScope.attemptId } : {}),
             } : undefined
           : this.taskAllowance
           ? {
@@ -9241,6 +9474,19 @@ export class ChatEngine {
             }
           : undefined,
       );
+      if (chargeUpdate.kind === 'duplicate') return;
+      if (chargeUpdate.kind === 'conflict') {
+        this.taskCostScopeUnavailable = true;
+        return;
+      }
+      if (usageScope?.taskOwnerId) {
+        try {
+          this.persistOwnerCharges(usageScope.taskOwnerId, usageScope.runDir);
+        } catch {
+          this.taskCostScopeUnavailable = true;
+          return;
+        }
+      }
       if (!usageScope || (appliesToCurrent && this.pendingUsageChargeId === usageScope.chargeId)) {
         this.pendingUsageChargeId = null;
       }
@@ -9279,12 +9525,24 @@ export class ChatEngine {
       const chargeId = usageScope?.chargeId ?? this.pendingUsageChargeId;
       const ownerId = usageScope ? usageScope.taskOwnerId : this.taskAllowance?.taskOwnerId;
       if (chargeId && ownerId) {
-        globalCostTracker.recordUnknownCharge(metadata?.provider_model_id ?? 'unknown-provider-model', {
+        const update = globalCostTracker.settleUsage(
+          usageScope?.modelId ?? metadata?.provider_model_id ?? 'unknown-provider-model',
+          0, 0, null, null, {
           taskOwnerId: ownerId,
           chargeId,
           accountingEpoch: usageScope?.accountingEpoch ?? globalCostTracker.getAccountingEpoch(),
           ...(usageScope?.turnId ? { turnId: usageScope.turnId } : {}),
-        });
+          ...(usageScope?.requestId ? { requestId: usageScope.requestId } : {}),
+          ...(usageScope?.attemptId ? { attemptId: usageScope.attemptId } : {}),
+        }, false);
+        if (update.kind === 'conflict') this.taskCostScopeUnavailable = true;
+        if (usageScope && update.kind !== 'duplicate' && update.kind !== 'conflict') {
+          try {
+            this.persistOwnerCharges(ownerId, usageScope.runDir);
+          } catch {
+            this.taskCostScopeUnavailable = true;
+          }
+        }
         if (appliesToCurrent) this.persistTaskCostBaseline();
       }
     }
@@ -9296,10 +9554,15 @@ export class ChatEngine {
     forceCompaction = false,
     ownerGeneration = this.activeSubmissionGeneration,
   ): Promise<ContextCompactedInfo | null> {
+    const compactionParity = this.parity;
+    const compactionRunDir = this.engineRunDir;
     const compactionOwnerId = this.taskAllowance?.taskOwnerId ?? null;
     const compactionEpoch = globalCostTracker.getAccountingEpoch();
     const compactionTurnId = this.parity.turnId;
-    const usageScope = {
+    const usageScope: {
+      taskOwnerId: string | null; accountingEpoch: string; turnId: string | null;
+      chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string;
+    } = {
       taskOwnerId: compactionOwnerId,
       accountingEpoch: compactionEpoch,
       turnId: compactionTurnId,
@@ -9331,21 +9594,38 @@ export class ChatEngine {
           chargeId: usage.inferenceId,
           accountingEpoch: compactionEpoch,
           ...(compactionTurnId ? { turnId: compactionTurnId } : {}),
+          ...(usageScope.chargeId === usage.inferenceId && usageScope.requestId
+            ? { requestId: usageScope.requestId } : {}),
+          ...(usageScope.chargeId === usage.inferenceId && usageScope.attemptId
+            ? { attemptId: usageScope.attemptId } : {}),
         } : undefined;
-        if (usage.inputTokens === null || usage.outputTokens === null) {
-          globalCostTracker.recordUnknownCharge(usage.modelId, attribution);
-        } else {
-          globalCostTracker.trackUsage(usage.modelId, usage.inputTokens, usage.outputTokens, null, null, attribution);
+        const update = globalCostTracker.settleUsage(
+          usage.modelId, usage.inputTokens ?? 0, usage.outputTokens ?? 0,
+          null, null, attribution,
+          usage.inputTokens !== null && usage.outputTokens !== null,
+        );
+        if (update.kind === 'conflict') {
+          this.taskCostScopeUnavailable = true;
+          return;
+        }
+        if (compactionOwnerId && update.kind !== 'duplicate') {
+          try {
+            this.persistOwnerCharges(compactionOwnerId, compactionRunDir);
+          } catch {
+            this.taskCostScopeUnavailable = true;
+          }
         }
         if (this.isSubmissionCurrent(ownerGeneration)) this.persistTaskCostBaseline();
       },
       shouldUseTextTools: () => this.shouldUseTextTools(),
       compactHeuristic: () => {
+        if (!this.isSubmissionCurrent(ownerGeneration)) return;
         this.compactConversation();
         host.conversation = this.conversation;
       },
       checkpoint: async () => {
-        const receipt = await checkpointParityEventLogStrict(this.parity, this.engineRunDir);
+        if (!this.isSubmissionCurrent(ownerGeneration)) return;
+        const receipt = await checkpointParityEventLogStrict(compactionParity, compactionRunDir);
         if (receipt.status !== 'committed') {
           throw new Error(receipt.error ?? 'checkpoint persistence blocked');
         }
@@ -9360,6 +9640,7 @@ export class ChatEngine {
     };
     if (this.compactionManager) host.compactionManager = this.compactionManager;
     const result = await runChatEngineCompaction(host);
+    if (!this.isSubmissionCurrent(ownerGeneration)) return null;
     this.conversation = host.conversation;
     if (!result) return null;
     if (this.lastLogicalRequestId !== null) {
@@ -9598,10 +9879,12 @@ export class ChatEngine {
     contractRef?: string;
     substitutionOrFallback?: boolean;
     isOwnerCurrent?: () => boolean;
-    usageScope?: { taskOwnerId: string | null; accountingEpoch: string; turnId: string | null; chargeId: string | null; isOwnerCurrent?: () => boolean };
+    usageScope?: { taskOwnerId: string | null; accountingEpoch: string; turnId: string | null; chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string; modelId?: string; usageMetadata?: RunnerInvocationMetadata | null; isOwnerCurrent?: () => boolean };
   } = {}): RunnerCallbacks {
     let startedInvocation: ProviderInvocationStarted | null = null;
     let retryCount = 0;
+    const seenRetryAttemptIds = new Set<string>();
+    const ownerRunDir = this.engineRunDir;
     const isOwnerCurrent = context.isOwnerCurrent ?? (() => true);
     const parentRequestId =
       this.pendingParentRequestId ??
@@ -9611,11 +9894,44 @@ export class ChatEngine {
     return {
       parentRequestId,
       onInvocationStarted: (event) => {
-        if (context.usageScope) context.usageScope.chargeId = event.request_id ?? event.inference_id;
+        if (context.usageScope) {
+          context.usageScope.chargeId = event.inference_id;
+          delete context.usageScope.usageMetadata;
+          Object.assign(context.usageScope, {
+            requestId: event.request_id,
+            attemptId: event.attempt_id,
+            runDir: ownerRunDir,
+            modelId: event.sent_model_id,
+          });
+          if (context.usageScope.taskOwnerId) {
+            const scope = context.usageScope;
+            const ownerId = scope.taskOwnerId!;
+            const update = globalCostTracker.settleUsage(event.sent_model_id, 0, 0, null, null, {
+              taskOwnerId: ownerId,
+              chargeId: event.inference_id,
+              accountingEpoch: scope.accountingEpoch,
+              ...(scope.turnId ? { turnId: scope.turnId } : {}),
+              ...(event.request_id ? { requestId: event.request_id } : {}),
+              ...(event.attempt_id ? { attemptId: event.attempt_id } : {}),
+            }, false);
+            if (update.kind === 'conflict') {
+              this.taskCostScopeUnavailable = true;
+              throw new Error(`Provider dispatch blocked by charge conflict: ${update.reason}`);
+            }
+            if (update.kind === 'inserted') {
+              try {
+                this.persistOwnerCharges(ownerId, ownerRunDir);
+              } catch {
+                this.taskCostScopeUnavailable = true;
+                throw new Error('Provider dispatch blocked because its charge receipt could not be saved');
+              }
+            }
+          }
+        }
+        startedInvocation = event;
         if (!isOwnerCurrent()) return;
         if (!this.parity.turnId) return;
-        startedInvocation = event;
-        this.pendingUsageChargeId = event.request_id ?? event.inference_id;
+        this.pendingUsageChargeId = event.inference_id;
         retryCount = 0;
         const recordedParentRequestId = event.parent_request_id ?? parentRequestId;
         const derivedExpectedPriorEventIds = this.parity.sessionEvents.events
@@ -9722,6 +10038,89 @@ export class ChatEngine {
         checkpointParityEventLog(this.parity, this.engineRunDir);
       },
       onInvocationCompleted: (event) => {
+        if (event.status === 'failed' && context.usageScope?.chargeId === event.inference_id) {
+          context.usageScope.usageMetadata = null;
+          context.usageScope.modelId = event.model;
+          if (event.inference_started === false) {
+            const scope = context.usageScope;
+            if (scope.taskOwnerId && globalCostTracker.clearUnstartedCharge({
+              taskOwnerId: scope.taskOwnerId,
+              chargeId: event.inference_id,
+              accountingEpoch: scope.accountingEpoch,
+              ...(scope.turnId ? { turnId: scope.turnId } : {}),
+              ...(scope.requestId ? { requestId: scope.requestId } : {}),
+              ...(scope.attemptId ? { attemptId: scope.attemptId } : {}),
+            })) {
+              try {
+                this.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
+              } catch {
+                this.taskCostScopeUnavailable = true;
+              }
+            }
+            context.usageScope.chargeId = null;
+          }
+        }
+        if (event.status === 'delivered' && context.usageScope &&
+            context.usageScope.chargeId === event.inference_id) {
+          context.usageScope.usageMetadata = event.usage_metadata
+            ? { ...event.usage_metadata } : null;
+          if (!isOwnerCurrent() && context.usageScope.taskOwnerId) {
+            const metadata = context.usageScope.usageMetadata;
+            const known = metadata?.prompt_tokens != null &&
+              metadata.completion_tokens != null;
+            const update = globalCostTracker.settleUsage(
+              metadata?.provider_model_id ?? event.model,
+              known ? metadata!.prompt_tokens! : 0,
+              known ? metadata!.completion_tokens! : 0,
+              metadata?.prompt_cache_hit_tokens ?? null,
+              metadata?.prompt_cache_miss_tokens ?? null,
+              {
+                taskOwnerId: context.usageScope.taskOwnerId,
+                chargeId: event.inference_id,
+                accountingEpoch: context.usageScope.accountingEpoch,
+                ...(context.usageScope.turnId ? { turnId: context.usageScope.turnId } : {}),
+                ...(context.usageScope.requestId ? { requestId: context.usageScope.requestId } : {}),
+                ...(context.usageScope.attemptId ? { attemptId: context.usageScope.attemptId } : {}),
+              },
+              known,
+            );
+            if (update.kind === 'conflict') this.taskCostScopeUnavailable = true;
+            if (update.kind === 'inserted' || update.kind === 'refined') {
+              try {
+                this.persistOwnerCharges(context.usageScope.taskOwnerId, ownerRunDir);
+              } catch {
+                this.taskCostScopeUnavailable = true;
+              }
+            }
+          }
+        }
+        // An inference that started and failed may still be billed. Settle its
+        // attempt under the captured owner even if a successor now owns the
+        // engine; authority checks below govern live state, not old billing.
+        if (event.status === 'failed' && event.inference_started === true &&
+            context.usageScope?.taskOwnerId &&
+            globalCostTracker.getTaskChargeIds(context.usageScope.taskOwnerId).includes(event.inference_id)) {
+          const update = globalCostTracker.settleUsage(
+            event.model, 0, 0, null, null,
+            {
+              taskOwnerId: context.usageScope.taskOwnerId,
+              chargeId: event.inference_id,
+              accountingEpoch: context.usageScope.accountingEpoch,
+              ...(context.usageScope.turnId ? { turnId: context.usageScope.turnId } : {}),
+              ...(context.usageScope.requestId ? { requestId: context.usageScope.requestId } : {}),
+              ...(context.usageScope.attemptId ? { attemptId: context.usageScope.attemptId } : {}),
+            },
+            false,
+          );
+          if (update.kind === 'inserted' || update.kind === 'refined') {
+            try {
+              this.persistOwnerCharges(context.usageScope.taskOwnerId, ownerRunDir);
+            } catch {
+              this.taskCostScopeUnavailable = true;
+            }
+            if (isOwnerCurrent()) this.persistTaskCostBaseline();
+          }
+        }
         if (!isOwnerCurrent()) return;
         if (!this.parity.turnId) return;
         const observedRouteReceipt = startedInvocation
@@ -9799,6 +10198,32 @@ export class ChatEngine {
         checkpointParityEventLog(this.parity, this.engineRunDir);
       },
       onInvocationPhase: (event) => {
+        if (event.phase === 'request_dispatched' && context.usageScope?.taskOwnerId && startedInvocation) {
+          const scope = context.usageScope;
+          const ownerId = scope.taskOwnerId!;
+          if (!globalCostTracker.getTaskChargeIds(ownerId).includes(event.inference_id)) {
+            const update = globalCostTracker.settleUsage(
+              startedInvocation.sent_model_id, 0, 0, null, null, {
+                taskOwnerId: ownerId,
+                chargeId: event.inference_id,
+                accountingEpoch: scope.accountingEpoch,
+                ...(scope.turnId ? { turnId: scope.turnId } : {}),
+                ...(scope.requestId ? { requestId: scope.requestId } : {}),
+                ...(scope.attemptId ? { attemptId: scope.attemptId } : {}),
+              }, false,
+            );
+            if (update.kind !== 'inserted') {
+              this.taskCostScopeUnavailable = true;
+              throw new Error('Provider dispatch blocked by a pending charge conflict');
+            }
+            try {
+              this.persistOwnerCharges(ownerId, ownerRunDir);
+            } catch {
+              this.taskCostScopeUnavailable = true;
+              throw new Error('Provider dispatch blocked because its charge receipt could not be saved');
+            }
+          }
+        }
         if (!isOwnerCurrent()) return;
         if (!this.parity.turnId) return;
         recordModelInvocationPhase(this.parity.sessionEvents, {
@@ -9813,7 +10238,56 @@ export class ChatEngine {
         checkpointParityEventLog(this.parity, this.engineRunDir);
       },
       onRetry: (event) => {
-        if (!isOwnerCurrent()) return;
+        // A retry schedules the next transport attempt only after the prior
+        // attempt was dispatched. Preserve possible prior billing separately
+        // from the final response's logical inference charge.
+        const retryKey = event.attempt_id ?? `${event.request_id ?? startedInvocation?.inference_id}:${event.attempt}`;
+        if (seenRetryAttemptIds.has(retryKey)) return;
+        seenRetryAttemptIds.add(retryKey);
+        const scope = context.usageScope;
+        if (scope?.taskOwnerId && startedInvocation) {
+          const priorAttemptId = scope.attemptId ?? `attempt-${event.attempt - 1}`;
+          const update = globalCostTracker.settleUsage(
+            startedInvocation.sent_model_id, 0, 0, null, null,
+            {
+              taskOwnerId: scope.taskOwnerId,
+              chargeId: `${startedInvocation.inference_id}:${priorAttemptId}`,
+              accountingEpoch: scope.accountingEpoch,
+              ...(scope.turnId ? { turnId: scope.turnId } : {}),
+              ...(scope.requestId ? { requestId: scope.requestId } : {}),
+              attemptId: priorAttemptId,
+            },
+            false,
+          );
+          if (update.kind === 'conflict') this.taskCostScopeUnavailable = true;
+          if (update.kind === 'inserted' || update.kind === 'refined') {
+            try {
+              this.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
+            } catch {
+              this.taskCostScopeUnavailable = true;
+            }
+            if (isOwnerCurrent()) this.persistTaskCostBaseline();
+          }
+          const pendingExists = globalCostTracker.getTaskChargeIds(scope.taskOwnerId)
+            .includes(startedInvocation.inference_id);
+          if (pendingExists && !globalCostTracker.clearUnstartedCharge({
+            taskOwnerId: scope.taskOwnerId,
+            chargeId: startedInvocation.inference_id,
+            accountingEpoch: scope.accountingEpoch,
+            ...(scope.turnId ? { turnId: scope.turnId } : {}),
+            ...(scope.requestId ? { requestId: scope.requestId } : {}),
+            ...(scope.attemptId ? { attemptId: scope.attemptId } : {}),
+          })) {
+            this.taskCostScopeUnavailable = true;
+          } else if (pendingExists) {
+            try {
+              this.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
+            } catch {
+              this.taskCostScopeUnavailable = true;
+            }
+          }
+        }
+        if (!isOwnerCurrent()) throw new Error('Provider retry blocked by retired task owner');
         retryCount += 1;
         const retryRequestId = event.request_id ?? startedInvocation?.inference_id;
         const retryBodyDigest = event.body_digest ?? startedInvocation?.input_digest;
@@ -9831,6 +10305,13 @@ export class ChatEngine {
           },
           this.engineRunDir,
         );
+        if (scope?.taskOwnerId) {
+          const budget = this.checkBudgets(true);
+          if (!budget.ok) {
+            throw new Error(`Provider retry blocked by task allowance: ${budget.reason ?? 'unavailable'}`);
+          }
+          scope.attemptId = event.attempt_id ?? `attempt-${event.attempt}`;
+        }
       },
       onRetrySettled: (event) => {
         if (!isOwnerCurrent()) return;

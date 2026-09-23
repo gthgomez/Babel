@@ -295,14 +295,14 @@ test('a superseded Task A provider-retry callback cannot write Task B provider f
     const staleRequestId = 'stale-a-request';
 
     // A's captured callbacks fire while B owns the engine.
-    callbacksA.onRetry?.({
+    assert.throws(() => callbacksA.onRetry?.({
       provider: 'deepseek',
       model: MODEL,
       request_id: staleRequestId,
       attempt: 1,
       reason: 'provider_unavailable',
       backoff_ms: 10,
-    });
+    }), /retired task owner/);
     callbacksA.onRetrySettled?.({
       provider: 'deepseek',
       model: MODEL,

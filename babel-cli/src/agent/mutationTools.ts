@@ -74,6 +74,7 @@ export function assessMutationEffect(input: {
   mutationPaths?: readonly string[] | undefined;
   mutationReceipt?: MutationReceiptEvidence | undefined;
   effectTransaction?: EffectTransactionEvidence | undefined;
+  preDispatchNoEffect?: boolean | undefined;
 }): MutationEffectAssessment {
   const mutationCandidate = isDirectMutationTool(input.tool) || SHELL_MUTATION_TOOLS.has(input.tool);
   if (!mutationCandidate) {
@@ -81,6 +82,9 @@ export function assessMutationEffect(input: {
   }
   if (input.policyBlocked || input.error === 'blocked') {
     return { status: 'not_applicable', reason: 'mutation was denied by policy' };
+  }
+  if (input.preDispatchNoEffect === true) {
+    return { status: 'confirmed_no_change', reason: 'edit validation stopped before executor dispatch' };
   }
 
   const transaction = input.effectTransaction;

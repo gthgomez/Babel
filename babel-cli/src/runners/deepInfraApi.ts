@@ -890,6 +890,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         provider: this.providerId,
         model: this.model,
         status,
+        ...(status === 'delivered' ? { usage_metadata: this.getLastInvocationMetadata() } : {}),
         observed_model_id: observedModelId,
         upstream_provider: upstreamProvider,
         output_digest: createHash('sha256').update(outputText).digest('hex'),
@@ -1012,6 +1013,12 @@ export class DeepInfraApiRunner implements LlmRunner {
       this.validateObservedModelId(streamState.observedModelId);
       this.validateObservedUpstream(streamState.upstreamProvider);
       this.validateObservedRouterMetadata(streamState.routerMetadata, streamState.observedModelId, streamState.upstreamProvider);
+      this.lastInvocationMetadata = buildInvocationMetadata(
+        this.providerId, this.model, Date.now() - startedAt,
+        streamState.usage ?? undefined, streamState.ttftMs, streamState.generationMs,
+        undefined, streamState.observedModelId, streamState.upstreamProvider,
+        streamState.routerMetadata, streamState.finishReason, this.maxTokens,
+      );
       notifyCompleted('delivered', streamState.observedModelId, text, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens);
       return { text, startedAt, streamState };
     }
@@ -1748,6 +1755,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         provider: this.providerId,
         model: this.model,
         status,
+        ...(status === 'delivered' ? { usage_metadata: this.getLastInvocationMetadata() } : {}),
         observed_model_id: observedModelId,
         upstream_provider: upstreamProvider,
         output_digest: createHash('sha256').update(outputText).digest('hex'),

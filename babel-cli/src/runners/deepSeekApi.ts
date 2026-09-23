@@ -663,6 +663,7 @@ export class DeepSeekApiRunner implements LlmRunner {
         provider: 'deepseek',
         model: this.model,
         status,
+        ...(status === 'delivered' ? { usage_metadata: this.getLastInvocationMetadata() } : {}),
         observed_model_id: options.observedModelId ?? null,
         output_digest: createHash('sha256').update(outputText).digest('hex'),
         ...(failureReceipt === undefined
@@ -982,6 +983,10 @@ export class DeepSeekApiRunner implements LlmRunner {
 
     if (isStreaming) notifyPhase('stream_completed');
     notifyPhase('response_normalized');
+    this.lastInvocationMetadata = buildInvocationMetadata(
+      this.model, Date.now() - startedAt, streamState.usage ?? undefined,
+      streamState.ttftMs, streamState.generationMs,
+    );
     notifyCompleted('delivered', text);
     return { text, startedAt, streamState };
   }
@@ -1310,6 +1315,7 @@ export class DeepSeekApiRunner implements LlmRunner {
         provider: 'deepseek',
         model: this.model,
         status,
+        ...(status === 'delivered' ? { usage_metadata: this.getLastInvocationMetadata() } : {}),
         observed_model_id: options.observedModelId ?? null,
         output_digest: createHash('sha256').update(outputText).digest('hex'),
         ...(failureReceipt === undefined

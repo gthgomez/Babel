@@ -51,16 +51,15 @@ export function actualRecoveryEdit(action: RecoveryEditAction, root: string): Ac
   const targets = rawTargets.map((target) => recoveryTargetIdentity(root, target))
   if (targets.length === 0 || targets.some((target) => target === null)) return null
   const targetIdentities = [...new Set(targets as string[])].sort()
-  // Normalize only transport line endings. Whitespace, comments, hunk order and
-  // file association can change behavior, so none of them proves edit equality.
-  const normalizeLines = (text: string): string => text.replace(/\r\n/g, '\n')
-  const payload = action.type === 'write_file' ? normalizeLines(action.content)
-    : action.type === 'str_replace' ? [normalizeLines(action.old_str), normalizeLines(action.new_str)]
-      : normalizeLines(action.patch)
+  // V2 hashes the literal payload. CRLF and LF produce different file bytes for
+  // writes and replacements, so a V1 normalized fingerprint cannot veto V2.
+  const payload = action.type === 'write_file' ? action.content
+    : action.type === 'str_replace' ? [action.old_str, action.new_str]
+      : action.patch
   return {
     actionFamily: action.type,
     targetIdentities,
-    editFingerprint: createHash('sha256').update(JSON.stringify([action.type, targetIdentities, payload])).digest('hex'),
+    editFingerprint: `v2:${createHash('sha256').update(JSON.stringify([action.type, targetIdentities, payload])).digest('hex')}`,
     exactFingerprint: operationFingerprint(action.type, action.type === 'write_file'
       ? { type: action.type, path: action.path, content: action.content }
       : action.type === 'str_replace'

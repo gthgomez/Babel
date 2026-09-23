@@ -99,6 +99,28 @@ test('admitted repair is single-use and a later candidate cannot replay it', () 
   assert.equal(admitRecoveryPlan(drifted, proposal(state), changedEdit, { ...binding, workspaceRevision: 'revision-B' }).admitted, false)
 })
 
+test('a proven no-effect repair grants one new admission without replaying the old permit', () => {
+  const initial = readyState()
+  const first = admitRecoveryPlan(initial, proposal(initial), changedEdit, binding)
+  assert.equal(first.admitted, true)
+  const consumed = applyWorkingStateEvent(first.state, { type: 'recovery_plan_consumed' })
+  const corrected = { ...changedEdit, editFingerprint: 'corrected-v2', exactFingerprint: 'corrected-exact' }
+  assert.equal(admitRecoveryPlan(consumed, proposal(initial), corrected, binding).admitted, false)
+  const noEffect = applyWorkingStateEvent(consumed, {
+    type: 'recovery_proven_no_effect', fingerprint: changedEdit.exactFingerprint,
+  })
+  assert.equal(admitRecoveryPlan(noEffect, proposal(initial), changedEdit, binding).admitted, false)
+  const second = admitRecoveryPlan(noEffect, proposal(initial), corrected, binding)
+  assert.equal(second.admitted, true)
+  const spent = applyWorkingStateEvent(second.state, { type: 'recovery_plan_consumed' })
+  const bounded = applyWorkingStateEvent(spent, {
+    type: 'recovery_proven_no_effect', fingerprint: corrected.exactFingerprint,
+  })
+  assert.equal(admitRecoveryPlan(bounded, proposal(initial), {
+    ...corrected, editFingerprint: 'third-v2', exactFingerprint: 'third-exact',
+  }, binding).admitted, false)
+})
+
 test('edit identity preserves significant newlines, whitespace, and per-file patch association', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-recovery-plan-'))
   try {
@@ -181,6 +203,25 @@ test('a new bound observation admits a distinct second repair in the same class,
   state = applyWorkingStateEvent(state, { type: 'verifier', identity: 'npm test', exitCode: 0, summary: 'green' })
   assert.equal(state.lastVerifier?.exitCode, 0)
   assert.equal(state.recoveryGate, undefined)
+})
+
+test('a resumed legacy lossy fingerprint cannot veto a literal CRLF repair', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-pr242-legacy-repair-'))
+  try {
+    const lf = actualRecoveryEdit({ type: 'write_file', path: 'src/parser.ts', content: 'a\nb\n' }, root)
+    const crlf = actualRecoveryEdit({ type: 'write_file', path: 'src/parser.ts', content: 'a\r\nb\r\n' }, root)
+    assert.ok(lf && crlf)
+    const snapshot = readyState()
+    snapshot.lastMutation = { path: 'src/parser.ts', at: 1,
+      canonicalFingerprint: lf.editFingerprint.slice(3), fingerprint: 'old-exact' }
+    snapshot.recoveryGate!.mutationFingerprint = 'old-exact'
+    const restored = restoreWorkingStateSnapshot(snapshot)
+    assert.ok(restored)
+    const plan = { ...proposal(restored), actionFamily: 'write_file' as const }
+    assert.equal(admitRecoveryPlan(restored, plan, crlf, binding).admitted, true)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('native and text tool paths carry a repair plan to the controller', () => {

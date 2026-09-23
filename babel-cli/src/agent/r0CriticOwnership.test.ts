@@ -207,7 +207,7 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       model: 'deepseek-v4-flash',
       phase: 'response_started',
     })
-    staleCallbacks.onRetry?.({
+    assert.throws(() => staleCallbacks.onRetry?.({
       provider: 'openrouter',
       model: 'deepseek-v4-flash',
       attempt: 2,
@@ -216,7 +216,7 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       request_id: 'critic-request-a',
       attempt_id: 'critic-attempt-b',
       body_digest: 'critic-input-a',
-    })
+    }), /retired task owner/)
     staleCallbacks.onRetrySettled?.({
       provider: 'openrouter',
       model: 'deepseek-v4-flash',
