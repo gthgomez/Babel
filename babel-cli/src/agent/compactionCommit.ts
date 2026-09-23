@@ -968,6 +968,9 @@ export interface ChatEngineCompactionHost {
   turnId: string | null;
   /** Provider lifecycle callbacks for the LLM summarizer inference. */
   providerCallbacks?: RunnerCallbacks;
+  onCompactionUsage?: (usage: {
+    inferenceId: string; modelId: string; inputTokens: number | null; outputTokens: number | null;
+  }) => void;
   shouldUseTextTools: () => boolean;
   compactHeuristic: () => void;
   checkpoint: () => Promise<void>;
@@ -1072,6 +1075,7 @@ export async function runChatEngineCompaction(
           maxTokens: host.limits.maxEstimatedTokens,
           signal: host.abortSignal,
           ...(host.providerCallbacks ? { callbacks: host.providerCallbacks } : {}),
+          ...(host.onCompactionUsage ? { onUsageRecorded: host.onCompactionUsage } : {}),
         });
         if (!ownerIsCurrent()) return null;
         if (mgr.changed) {

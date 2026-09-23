@@ -2,15 +2,14 @@
  * One bounded allowance contract shared by ChatEngine delegation and the
  * read-only/mutation child loops.
  *
- * The global tracker is the accounting source. A parent supplies a snapshot
- * baseline plus the remaining cost/deadline; a child can only consume that
+ * The task-owner ledger is the accounting source. A parent supplies the
+ * remaining cost/deadline; a child can only consume that
  * snapshot allowance and may further restrict itself by max rounds.
  */
 
 import { randomUUID } from 'node:crypto';
 import {
   captureCostBaselineUsd,
-  costSpentSinceBaselineUsd,
   globalCostTracker,
 } from '../services/costTracker.js';
 
@@ -21,9 +20,9 @@ export interface InheritedChildAllowance {
   taskOwnerId?: string;
   /** Parent owner charged once for each child provider charge. */
   parentTaskOwnerId?: string;
-  /** Global cost at the instant delegation was created. */
+  /** Reporting-only global cost at delegation; never a task budget source. */
   costBaselineUsd: number;
-  /** Maximum additional global cost available to this child; null = unlimited. */
+  /** Maximum additional owner-ledger cost available; null = unlimited. */
   remainingCostUsd: number | null;
   /** Absolute deadline inherited from the parent; null = no wall deadline. */
   deadlineAtMs: number | null;
@@ -45,9 +44,11 @@ export function deriveChildAllowance(input: {
   const globalCost = captureCostBaselineUsd();
   const parentSpentUsd = input.parentTaskOwnerId
     ? globalCostTracker.getTaskSummary(input.parentTaskOwnerId).totalCostUSD
-    : (input.parentTaskCarryoverUsd ?? 0) + costSpentSinceBaselineUsd(input.parentTaskBaselineUsd);
+    : 0;
   const remainingCostUsd = Number.isFinite(input.parentEffectiveCostCapUsd)
-    ? Math.max(0, input.parentEffectiveCostCapUsd - parentSpentUsd)
+    ? input.parentTaskOwnerId && globalCostTracker.getTaskSummary(input.parentTaskOwnerId).costComplete !== false
+      ? Math.max(0, input.parentEffectiveCostCapUsd - parentSpentUsd)
+      : 0
     : null;
   const childDeadline =
     input.childTimeoutMs !== undefined
@@ -81,9 +82,9 @@ export function inheritedChildBudgetLimiter(
   }
   if (
     allowance.remainingCostUsd !== null &&
-    (allowance.taskOwnerId
-      ? globalCostTracker.getTaskSummary(allowance.taskOwnerId).totalCostUSD
-      : costSpentSinceBaselineUsd(allowance.costBaselineUsd)) >= allowance.remainingCostUsd
+    (!allowance.taskOwnerId ||
+      globalCostTracker.getTaskSummary(allowance.taskOwnerId).costComplete === false ||
+      globalCostTracker.getTaskSummary(allowance.taskOwnerId).totalCostUSD >= allowance.remainingCostUsd)
   ) {
     return 'cost';
   }

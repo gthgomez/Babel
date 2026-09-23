@@ -63,7 +63,7 @@ function createModifiedGitProject(): string {
 
 function usageMetadata() {
   return {
-    provider_model_id: 'critic-test-model',
+    provider_model_id: 'deepseek-v4-flash',
     prompt_tokens: 90_000,
     completion_tokens: 12_000,
     prompt_cache_hit_tokens: 0,
@@ -266,7 +266,18 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       mutation_paths: ['main.ts'],
     })
     box.criticRunner = {
-      async executeRaw() {
+      async executeRaw(_prompt: string, callbacks?: CriticProviderCallbacks) {
+        callbacks?.onInvocationStarted?.({
+          inference_id: 'current-critic-inference',
+          request_id: 'current-critic-request',
+          attempt_id: 'current-critic-attempt',
+          parent_request_id: null,
+          provider: 'openrouter',
+          requested_model_id: 'deepseek-v4-flash',
+          normalized_model_id: 'deepseek-v4-flash',
+          sent_model_id: 'deepseek-v4-flash',
+          input_digest: 'current-critic-input',
+        })
         return JSON.stringify({
           verdict: 'reject',
           confidence: 0.99,
@@ -286,7 +297,7 @@ test('stale critic inference cannot mutate the current task owner', async () => 
     assert.equal(box.apiTokenCount, baseline.apiTokenCount + 102_000)
     assert.equal(box.lastRequestPromptTokens, 90_000)
     assert.equal(box.lastRequestCompletionTokens, 12_000)
-    assert.equal(box.lastRequestModelId, 'critic-test-model')
+    assert.equal(box.lastRequestModelId, 'deepseek-v4-flash')
     assert.equal(box.taskAllowance.consumed.costUsd > baseline.costUsd, true)
     assert.equal(box.routingReceiptLog.all().length, baseline.routingReceipts + 1)
     assert.equal(box.lastCriticReceipt?.verdict, 'reject')

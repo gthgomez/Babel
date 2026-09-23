@@ -32,6 +32,7 @@ const MANAGED_ENV = [
   'BABEL_AUTONOMY_LEASE',
   'BABEL_EXECUTION_PROFILE',
   'BABEL_ALLOW_HOST_FALLBACK',
+  'BABEL_CHAT_MAX_COST',
 ] as const;
 
 const FIXTURE_POLICY: ResolvedModelPolicy = {
@@ -77,6 +78,9 @@ before(() => {
   });
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+  // The fixture OpenCodeGo route has no pinned price; verifier semantics are
+  // exercised under an explicit unlimited cost allowance.
+  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
 });
 
 after(() => {

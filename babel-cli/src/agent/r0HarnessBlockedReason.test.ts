@@ -23,7 +23,7 @@ import { join } from 'node:path';
 
 import { ChatEngine, type ChatEvent } from './chatEngine.js';
 import { initializeVerifierDependencyHashes } from './chatEngineVerifierSession.js';
-import type { RunnerInvocationMetadata, ToolStreamEvent } from '../runners/base.js';
+import type { RunnerCallbacks, RunnerInvocationMetadata, ToolStreamEvent } from '../runners/base.js';
 
 const MODEL = 'deepseek-v4-flash';
 
@@ -124,7 +124,10 @@ type MetadataForCall = (call: number) => RunnerInvocationMetadata | null;
 type OnYield = (event: ToolStreamEvent, call: number, engine: ChatEngine) => void;
 
 interface ScriptedRunner {
-  executeWithToolsStream: () => AsyncGenerator<ToolStreamEvent, void, undefined>;
+  executeWithToolsStream: (
+    messages?: unknown, tools?: unknown, system?: unknown, signal?: unknown,
+    choice?: unknown, callbacks?: RunnerCallbacks,
+  ) => AsyncGenerator<ToolStreamEvent, void, undefined>;
   execute: () => Promise<{ type: string; answer: string }>;
   executeRaw: () => Promise<string>;
   getLastInvocationMetadata: () => RunnerInvocationMetadata | null;
@@ -155,10 +158,24 @@ function makeRunner(
   const synthesisText = 'Synthesis complete. No further action is required.';
   return {
     calls: () => call,
-    async *executeWithToolsStream() {
+    async *executeWithToolsStream(
+      _messages?: unknown, _tools?: unknown, _system?: unknown, _signal?: unknown,
+      _choice?: unknown, callbacks?: RunnerCallbacks,
+    ) {
       const index = call;
       call += 1;
       lastMetadata = metadataForCall ? metadataForCall(index) : null;
+      if (lastMetadata) callbacks?.onInvocationStarted?.({
+        inference_id: `scripted-inference-${index}`,
+        request_id: `scripted-request-${index}`,
+        attempt_id: `scripted-attempt-${index}`,
+        parent_request_id: null,
+        provider: 'openrouter',
+        requested_model_id: MODEL,
+        normalized_model_id: MODEL,
+        sent_model_id: MODEL,
+        input_digest: `scripted-input-${index}`,
+      });
       const events = script[index] ?? [
         { type: 'text_delta', text: 'No further action; concluding.' },
         { type: 'done', finishReason: 'stop' },

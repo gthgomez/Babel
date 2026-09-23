@@ -30,6 +30,8 @@ export interface SessionState {
   pendingPlanBody?: string;
   costTotals: {
     totalCostUSD: number;
+    completeCostUSD?: number | null;
+    unknownChargeCount?: number;
     totalInputTokens: number;
     totalOutputTokens: number;
     totalTokens: number;

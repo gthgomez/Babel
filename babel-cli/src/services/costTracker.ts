@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
-  MODEL_PRICING_REGISTRY,
   estimateProviderUsageCost,
   getModelPricingByModelId,
 } from './modelPricingRegistry.js';
@@ -12,6 +11,9 @@ export interface ModelUsage {
   inputTokens: number;
   outputTokens: number;
   costUSD: number;
+  /** Known subtotal; a nonzero unknown count makes the full cost unavailable. */
+  unknownChargeCount?: number;
+  completeCostUSD?: number | null;
   /** P-3.1: DeepSeek context cache hit tokens (KV cache reuse across turns). */
   promptCacheHitTokens?: number;
   /** P-3.1: DeepSeek context cache miss tokens (new encoding required). */
@@ -20,6 +22,8 @@ export interface ModelUsage {
 
 export interface ProjectStats {
   totalCostUSD: number;
+  completeCostUSD?: number | null;
+  unknownChargeCount?: number;
   totalInputTokens: number;
   totalOutputTokens: number;
   lastSessionId?: string;
@@ -56,6 +60,11 @@ export function costSpentSinceBaselineUsd(baselineUsd: number): number {
 
 export interface SessionUsageSummary {
   totalCostUSD: number;
+  /** Full cost remains null while any provider charge lacks a known price. */
+  completeCostUSD?: number | null;
+  knownCostUSD?: number;
+  unknownChargeCount?: number;
+  costComplete?: boolean;
   totalInputTokens: number;
   totalOutputTokens: number;
   totalTokens: number;
@@ -74,23 +83,20 @@ export interface UsageAttribution {
   chargeId: string;
   /** Optional delegating task. Child usage is charged to this owner once. */
   parentTaskOwnerId?: string;
+  accountingEpoch?: string;
+  turnId?: string;
+  requestId?: string;
+  attemptId?: string;
 }
-
-const PRICING: Record<string, { input: number; output: number }> = {
-  ...Object.fromEntries(
-    Object.values(MODEL_PRICING_REGISTRY).map((entry) => [
-      entry.modelId,
-      { input: entry.inputCostPer1M, output: entry.outputCostPer1M },
-    ]),
-  ),
-};
 
 export class CostTracker {
   private readonly accountingEpoch = randomUUID();
   private sessionUsage: Record<string, ModelUsage> = {};
   private sessionTotalCost = 0;
+  private sessionUnknownCharges = 0;
   private taskUsage = new Map<string, Record<string, ModelUsage>>();
   private taskTotalCost = new Map<string, number>();
+  private taskUnknownCharges = new Map<string, number>();
   private taskChargeIds = new Map<string, Set<string>>();
   private recordedChargeIds = new Set<string>();
   private projectStatsPath: string;
@@ -108,7 +114,11 @@ export class CostTracker {
     cacheHitTokens?: number | null,
     cacheMissTokens?: number | null,
     attribution?: UsageAttribution,
-  ): number {
+    usageKnown = true,
+  ): number | null {
+    if (attribution?.accountingEpoch && attribution.accountingEpoch !== this.accountingEpoch) {
+      throw new Error('Usage attribution belongs to a different accounting epoch');
+    }
     const pricingEntry = getModelPricingByModelId(modelId);
     const estimate = estimateProviderUsageCost({
       provider: pricingEntry?.provider ?? null,
@@ -116,10 +126,7 @@ export class CostTracker {
       promptTokens: inputTokens,
       completionTokens: outputTokens,
     });
-    const pricing = PRICING[modelId] || { input: 0.5, output: 1.5 };
-    const cost =
-      estimate.estimatedCostUsd ??
-      (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output;
+    const cost = usageKnown ? estimate.estimatedCostUsd : null;
 
     if (attribution && this.recordedChargeIds.has(attribution.chargeId)) {
       return 0;
@@ -131,7 +138,18 @@ export class CostTracker {
 
     this.sessionUsage[modelId].inputTokens += inputTokens;
     this.sessionUsage[modelId].outputTokens += outputTokens;
-    this.sessionUsage[modelId].costUSD += cost;
+    if (cost === null) {
+      this.sessionUnknownCharges++;
+      this.sessionUsage[modelId].unknownChargeCount =
+        (this.sessionUsage[modelId].unknownChargeCount ?? 0) + 1;
+      this.sessionUsage[modelId].completeCostUSD = null;
+    } else {
+      this.sessionUsage[modelId].costUSD += cost;
+      if ((this.sessionUsage[modelId].unknownChargeCount ?? 0) === 0) {
+        this.sessionUsage[modelId].completeCostUSD = this.sessionUsage[modelId].costUSD;
+      }
+      this.sessionTotalCost += cost;
+    }
     if (cacheHitTokens != null) {
       this.sessionUsage[modelId].promptCacheHitTokens =
         (this.sessionUsage[modelId].promptCacheHitTokens ?? 0) + cacheHitTokens;
@@ -140,8 +158,6 @@ export class CostTracker {
       this.sessionUsage[modelId].promptCacheMissTokens =
         (this.sessionUsage[modelId].promptCacheMissTokens ?? 0) + cacheMissTokens;
     }
-    this.sessionTotalCost += cost;
-
     if (attribution) {
       this.recordedChargeIds.add(attribution.chargeId);
       const owners = new Set([
@@ -165,13 +181,18 @@ export class CostTracker {
     return cost;
   }
 
+  /** A paid request with missing usage cannot be priced as a zero-token call. */
+  public recordUnknownCharge(modelId: string, attribution?: UsageAttribution): void {
+    this.trackUsage(modelId, 0, 0, null, null, attribution, false);
+  }
+
   private recordTaskUsage(
     taskOwnerId: string,
     chargeId: string,
     modelId: string,
     inputTokens: number,
     outputTokens: number,
-    costUSD: number,
+    costUSD: number | null,
     cacheHitTokens?: number | null,
     cacheMissTokens?: number | null,
   ): void {
@@ -179,7 +200,15 @@ export class CostTracker {
     const model = usage[modelId] ?? { inputTokens: 0, outputTokens: 0, costUSD: 0 };
     model.inputTokens += inputTokens;
     model.outputTokens += outputTokens;
-    model.costUSD += costUSD;
+    if (costUSD === null) {
+      model.unknownChargeCount = (model.unknownChargeCount ?? 0) + 1;
+      model.completeCostUSD = null;
+      this.taskUnknownCharges.set(taskOwnerId, (this.taskUnknownCharges.get(taskOwnerId) ?? 0) + 1);
+    } else {
+      model.costUSD += costUSD;
+      if ((model.unknownChargeCount ?? 0) === 0) model.completeCostUSD = model.costUSD;
+      this.taskTotalCost.set(taskOwnerId, (this.taskTotalCost.get(taskOwnerId) ?? 0) + costUSD);
+    }
     if (cacheHitTokens != null) {
       model.promptCacheHitTokens = (model.promptCacheHitTokens ?? 0) + cacheHitTokens;
     }
@@ -188,7 +217,6 @@ export class CostTracker {
     }
     usage[modelId] = model;
     this.taskUsage.set(taskOwnerId, usage);
-    this.taskTotalCost.set(taskOwnerId, (this.taskTotalCost.get(taskOwnerId) ?? 0) + costUSD);
     const charges = this.taskChargeIds.get(taskOwnerId) ?? new Set<string>();
     charges.add(chargeId);
     this.taskChargeIds.set(taskOwnerId, charges);
@@ -197,8 +225,10 @@ export class CostTracker {
   public resetSession(): void {
     this.sessionUsage = {};
     this.sessionTotalCost = 0;
+    this.sessionUnknownCharges = 0;
     this.taskUsage.clear();
     this.taskTotalCost.clear();
+    this.taskUnknownCharges.clear();
     this.taskChargeIds.clear();
     this.recordedChargeIds.clear();
   }
@@ -214,14 +244,18 @@ export class CostTracker {
     totalInputTokens: number;
     totalOutputTokens: number;
     totalTokens: number;
+    unknownChargeCount?: number;
   }): void {
     this.sessionTotalCost = totals.totalCostUSD;
+    this.sessionUnknownCharges = totals.unknownChargeCount ?? 0;
     // Best-effort: reconstruct a synthetic usage entry so getSessionSummary() returns non-zero
     if (totals.totalTokens > 0) {
       this.sessionUsage['__restored__'] = {
         inputTokens: totals.totalInputTokens,
         outputTokens: totals.totalOutputTokens,
         costUSD: totals.totalCostUSD,
+        unknownChargeCount: this.sessionUnknownCharges,
+        completeCostUSD: this.sessionUnknownCharges === 0 ? totals.totalCostUSD : null,
         // Cache fields set to 0 since they can't be recovered from a previous session
         // but the structure must be consistent with ModelUsage.
         promptCacheHitTokens: 0,
@@ -254,6 +288,10 @@ export class CostTracker {
 
     const summary: SessionUsageSummary = {
       totalCostUSD: this.sessionTotalCost,
+      knownCostUSD: this.sessionTotalCost,
+      completeCostUSD: this.sessionUnknownCharges === 0 ? this.sessionTotalCost : null,
+      unknownChargeCount: this.sessionUnknownCharges,
+      costComplete: this.sessionUnknownCharges === 0,
       totalInputTokens,
       totalOutputTokens,
       totalTokens: totalInputTokens + totalOutputTokens,
@@ -294,6 +332,11 @@ export class CostTracker {
     );
     return {
       totalCostUSD: this.taskTotalCost.get(taskOwnerId) ?? 0,
+      knownCostUSD: this.taskTotalCost.get(taskOwnerId) ?? 0,
+      completeCostUSD: (this.taskUnknownCharges.get(taskOwnerId) ?? 0) === 0
+        ? (this.taskTotalCost.get(taskOwnerId) ?? 0) : null,
+      unknownChargeCount: this.taskUnknownCharges.get(taskOwnerId) ?? 0,
+      costComplete: (this.taskUnknownCharges.get(taskOwnerId) ?? 0) === 0,
       totalInputTokens,
       totalOutputTokens,
       totalTokens: totalInputTokens + totalOutputTokens,
@@ -314,10 +357,11 @@ export class CostTracker {
    */
   public restoreTaskUsage(
     taskOwnerId: string,
-    input: { totalCostUSD: number; chargeIds: readonly string[] },
+    input: { totalCostUSD: number; chargeIds: readonly string[]; unknownChargeCount?: number },
   ): void {
     if (!this.taskTotalCost.has(taskOwnerId)) {
       this.taskTotalCost.set(taskOwnerId, input.totalCostUSD);
+      this.taskUnknownCharges.set(taskOwnerId, input.unknownChargeCount ?? 0);
       this.taskUsage.set(
         taskOwnerId,
         input.totalCostUSD > 0
@@ -366,6 +410,7 @@ export class CostTracker {
 
     for (const [model, usage] of Object.entries(this.sessionUsage)) {
       stats.totalCostUSD += usage.costUSD;
+      stats.unknownChargeCount = (stats.unknownChargeCount ?? 0) + (usage.unknownChargeCount ?? 0);
       stats.totalInputTokens += usage.inputTokens;
       stats.totalOutputTokens += usage.outputTokens;
 
@@ -375,6 +420,11 @@ export class CostTracker {
       stats.modelBreakdown[model].inputTokens += usage.inputTokens;
       stats.modelBreakdown[model].outputTokens += usage.outputTokens;
       stats.modelBreakdown[model].costUSD += usage.costUSD;
+      stats.modelBreakdown[model].unknownChargeCount =
+        (stats.modelBreakdown[model].unknownChargeCount ?? 0) + (usage.unknownChargeCount ?? 0);
+      stats.modelBreakdown[model].completeCostUSD =
+        stats.modelBreakdown[model].unknownChargeCount === 0
+          ? stats.modelBreakdown[model].costUSD : null;
       if (usage.promptCacheHitTokens != null) {
         stats.modelBreakdown[model].promptCacheHitTokens =
           (stats.modelBreakdown[model].promptCacheHitTokens ?? 0) + usage.promptCacheHitTokens;
@@ -384,6 +434,7 @@ export class CostTracker {
           (stats.modelBreakdown[model].promptCacheMissTokens ?? 0) + usage.promptCacheMissTokens;
       }
     }
+    stats.completeCostUSD = stats.unknownChargeCount === 0 ? stats.totalCostUSD : null;
 
     // Atomic write: temp file → rename, prevents corruption on crash.
     const tmpPath = `${this.projectStatsPath}.tmp`;

@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChatEngine, reconcileStreamedAnswer, type ChatEvent } from './chatEngine.js';
 import { TEXT_ONLY_FORCE_BLOCKED_THRESHOLD } from './stallDetector.js';
+import type { RunnerCallbacks } from '../runners/base.js';
 
 const roots: string[] = [];
 function cleanupRoots(): void {
@@ -306,13 +307,27 @@ describe('per-round budget terminal precedes continuation mechanisms', () => {
       maxTurns: 8,
     });
     stubNativeRunner(engine, {
-      executeWithToolsStream: async function* () {
+      executeWithToolsStream: async function* (
+        _messages: unknown, _tools: unknown, _system: unknown, _signal: unknown,
+        _choice: unknown, callbacks?: RunnerCallbacks,
+      ) {
         state.calls += 1;
+        callbacks?.onInvocationStarted?.({
+          inference_id: 'over-limit-inference',
+          request_id: 'over-limit-request',
+          attempt_id: 'over-limit-attempt',
+          parent_request_id: null,
+          provider: 'openrouter',
+          requested_model_id: 'deepseek-v4-flash',
+          normalized_model_id: 'deepseek-v4-flash',
+          sent_model_id: 'deepseek-v4-flash',
+          input_digest: 'over-limit-input',
+        });
         yield { type: 'text_delta' as const, text: 'thinking out loud about the fix' };
         yield { type: 'done' as const, finishReason: 'stop' };
       },
       getLastInvocationMetadata: () => ({
-        provider_model_id: 'test-model',
+        provider_model_id: 'deepseek-v4-flash',
         prompt_tokens: 250_000,
         completion_tokens: 10_000,
       }),
@@ -628,7 +643,7 @@ describe('cancelled turn reports consistent per-turn telemetry', () => {
     const parked = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const meta = { provider_model_id: 'test-model', prompt_tokens: 123, completion_tokens: 45 };
+    const meta = { provider_model_id: 'deepseek-v4-flash', prompt_tokens: 123, completion_tokens: 45 };
     let observedSignal: AbortSignal | null = null;
 
     const runner: MockRunner = {
@@ -637,8 +652,21 @@ describe('cancelled turn reports consistent per-turn telemetry', () => {
         _defs: unknown,
         _system: unknown,
         signal?: AbortSignal,
+        _choice?: unknown,
+        callbacks?: RunnerCallbacks,
       ) {
         calls += 1;
+        callbacks?.onInvocationStarted?.({
+          inference_id: `cancel-inference-${calls}`,
+          request_id: `cancel-request-${calls}`,
+          attempt_id: `cancel-attempt-${calls}`,
+          parent_request_id: null,
+          provider: 'openrouter',
+          requested_model_id: 'deepseek-v4-flash',
+          normalized_model_id: 'deepseek-v4-flash',
+          sent_model_id: 'deepseek-v4-flash',
+          input_digest: `cancel-input-${calls}`,
+        });
         observedSignal = signal ?? null;
         if (calls === 1) {
           // Tool round so the loop continues to a second provider call.

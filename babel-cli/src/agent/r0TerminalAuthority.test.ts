@@ -19,7 +19,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { after, describe, test } from 'node:test';
+import { after, before, describe, test } from 'node:test';
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,7 +38,15 @@ import {
 } from './chatTerminalReason.js';
 
 const roots: string[] = [];
+let priorCostAllowance: string | undefined;
+before(() => {
+  priorCostAllowance = process.env['BABEL_CHAT_MAX_COST'];
+  // This terminal-classification suite uses unpriced fixture routes.
+  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
+});
 after(() => {
+  if (priorCostAllowance === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+  else process.env['BABEL_CHAT_MAX_COST'] = priorCostAllowance;
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
@@ -373,7 +381,7 @@ describe('R0-A: streaming terminal authority', () => {
     const failed = events.filter(
       (e): e is Extract<ChatEvent, { type: 'failed' }> => e.type === 'failed',
     );
-    assert.equal(failed.length, 1, 'exactly one failed terminal');
+    assert.equal(failed.length, 1, `exactly one failed terminal: ${JSON.stringify(events.at(-1))}`);
     const terminal = failed[0]!;
     // The reason is typed by the kernel/adapter text; the outcome must match it.
     assert.equal(terminal.reason_code, 'unsupported_operation');

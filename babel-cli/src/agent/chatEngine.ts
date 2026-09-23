@@ -540,6 +540,7 @@ export interface ChatTaskAllowanceSnapshot {
   };
   consumed: {
     costUsd: number;
+    unknownChargeCount?: number;
     activeWallMs: number;
     turns: number;
   };
@@ -633,6 +634,8 @@ function parseTaskAllowance(value: unknown): ChatTaskAllowanceSnapshot | null {
     },
     consumed: {
       costUsd: consumedRecord['costUsd'],
+      unknownChargeCount: isNonNegativeFinite(consumedRecord['unknownChargeCount'])
+        ? consumedRecord['unknownChargeCount'] : 1,
       activeWallMs: consumedRecord['activeWallMs'],
       turns: consumedRecord['turns'] as number,
     },
@@ -1598,6 +1601,8 @@ export class ChatEngine {
       this.checkpointActiveWall();
       this.taskAllowance.accountingEpoch = globalCostTracker.getAccountingEpoch();
       this.taskAllowance.consumed.costUsd = this.currentTaskCostUsd();
+      this.taskAllowance.consumed.unknownChargeCount =
+        globalCostTracker.getTaskSummary(this.taskAllowance.taskOwnerId).unknownChargeCount ?? 0;
       this.taskAllowance.accountedChargeIds = globalCostTracker.getTaskChargeIds(
         this.taskAllowance.taskOwnerId,
       );
@@ -1635,7 +1640,7 @@ export class ChatEngine {
         wallCapMs: this.limits.maxWallMs,
         turnCap: this.limits.maxTurns,
       },
-      consumed: { costUsd: 0, activeWallMs: 0, turns: 0 },
+      consumed: { costUsd: 0, unknownChargeCount: 0, activeWallMs: 0, turns: 0 },
       repair: {
         criticRepairCostCapUsd: null,
         postWriteRepairWallCapMs: null,
@@ -1686,6 +1691,7 @@ export class ChatEngine {
     globalCostTracker.restoreTaskUsage(persisted.taskOwnerId, {
       totalCostUSD: persisted.consumed.costUsd,
       chargeIds: persisted.accountedChargeIds,
+      unknownChargeCount: persisted.consumed.unknownChargeCount ?? 1,
     });
     this.limits = {
       ...this.limits,
@@ -2114,6 +2120,13 @@ export class ChatEngine {
       ...(entry.mutation_paths ? { mutation_paths: [...entry.mutation_paths] } : {}),
     }));
     const isOwnerCurrent = (): boolean => this.isSubmissionCurrent(ownerGeneration);
+    const usageScope = {
+      taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      turnId: this.parity.turnId,
+      chargeId: null as string | null,
+      isOwnerCurrent,
+    };
     return {
       toolCallLog,
       conversation,
@@ -2143,10 +2156,11 @@ export class ChatEngine {
         expectedPriorEventIds: [],
         deliveredPriorEventIds: [],
         executionStage: 'critic',
+        usageScope,
         isOwnerCurrent,
       }),
       trackRunnerUsage: (runner) => {
-        if (isOwnerCurrent()) this.trackRunnerUsage(runner);
+        this.trackRunnerUsage(runner, usageScope);
       },
       ...(onThought
         ? {
@@ -2449,6 +2463,13 @@ export class ChatEngine {
       Number.isFinite(grantedCostCapUsd) && this.criticRepairCostCapUsd != null
         ? Math.min(grantedCostCapUsd, this.criticRepairCostCapUsd)
         : grantedCostCapUsd;
+    if (Number.isFinite(maxCostUsd) &&
+        globalCostTracker.getTaskSummary(this.taskAllowance.taskOwnerId).costComplete === false) {
+      const reason = 'Task cost is incomplete because a provider charge has unknown pricing; refusing paid dispatch under a finite dollar cap.';
+      this.terminatingLimiter = 'cost';
+      this.terminalLimiterReason = reason;
+      return { ok: false, reason, limiter: 'cost' };
+    }
     // After first write: absolute wall cap from session start (repair window).
     const maxWallMs =
       this.postWriteRepairWallCapMs != null
@@ -3278,6 +3299,13 @@ export class ChatEngine {
         useNativeTools ? 'native' : useTextTools ? 'text' : 'legacy',
       );
       const hadInstalledP11Context = this.parity.contextCheckpoint !== undefined;
+      const usageScope = {
+        taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+        accountingEpoch: globalCostTracker.getAccountingEpoch(),
+        turnId: this.parity.turnId,
+        chargeId: null as string | null,
+        isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
+      };
       const requestMode = useNativeTools ? 'native' : useTextTools ? 'text' : 'legacy';
       const toolProfile = useNativeTools
         ? 'native-tools'
@@ -3385,6 +3413,7 @@ export class ChatEngine {
               conversationState: prompt,
               systemPolicyPrompt: systemPrompt,
               executionStage: 'chat',
+              usageScope,
               isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
@@ -3397,8 +3426,8 @@ export class ChatEngine {
             providerStart,
             providerEnd,
           );
+          this.trackRunnerUsage(runner, usageScope);
           if (!this.isSubmissionCurrent(submissionGeneration)) return;
-          this.trackRunnerUsage(runner);
           turnResult = parseTextToolTurn(rawText);
         } catch (err: any) {
           const providerEnd = performance.now();
@@ -3456,6 +3485,7 @@ export class ChatEngine {
               userTaskPrompt: prompt,
               toolSchema: toolDefs,
               executionStage: 'chat',
+              usageScope,
               isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
@@ -3498,8 +3528,8 @@ export class ChatEngine {
             providerStart,
             providerEnd,
           );
+          this.trackRunnerUsage(runner, usageScope);
           if (!this.isSubmissionCurrent(submissionGeneration)) return;
-          this.trackRunnerUsage(runner);
           this._streamNativeToolCallIds = nativeToolCallIds;
           streamedAnswerForTurn = answerText;
           turnResult = nativeTurnFromStream({
@@ -3555,6 +3585,7 @@ export class ChatEngine {
                 toolSchema: toolDefs,
                 executionStage: 'chat',
                 substitutionOrFallback: true,
+                usageScope,
                 isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
               }),
             )) {
@@ -3597,8 +3628,8 @@ export class ChatEngine {
               fbStart,
               fbEnd,
             );
+            this.trackRunnerUsage(fb, usageScope);
             if (!this.isSubmissionCurrent(submissionGeneration)) return;
-            this.trackRunnerUsage(fb);
             this._streamNativeToolCallIds = nativeToolCallIds;
             streamedAnswerForTurn = answerText;
             turnResult = nativeTurnFromStream({
@@ -3628,6 +3659,7 @@ export class ChatEngine {
                   conversationState: prompt,
                   executionStage: 'chat',
                   substitutionOrFallback: true,
+                  usageScope,
                   isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
                 }),
               )) {
@@ -3640,8 +3672,8 @@ export class ChatEngine {
                 rawFbStart,
                 rawFbEnd,
               );
+              this.trackRunnerUsage(fb, usageScope);
               if (!this.isSubmissionCurrent(submissionGeneration)) return;
-              this.trackRunnerUsage(fb);
               turnResult = this.parseChatTurnLenient(rawText);
             } catch (rawErr: any) {
               const rawFbEnd = performance.now();
@@ -3679,6 +3711,7 @@ export class ChatEngine {
               deliveryMode: 'text',
               conversationState: prompt,
               executionStage: 'chat',
+              usageScope,
               isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
@@ -3691,8 +3724,8 @@ export class ChatEngine {
             legacyStart,
             legacyEnd,
           );
+          this.trackRunnerUsage(runner, usageScope);
           if (!this.isSubmissionCurrent(submissionGeneration)) return;
-          this.trackRunnerUsage(runner);
         } catch (err: any) {
           const legacyEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
@@ -3724,14 +3757,15 @@ export class ChatEngine {
                 conversationState: prompt,
                 executionStage: 'chat',
                 substitutionOrFallback: true,
+                usageScope,
                 isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
               }),
             )) {
               rawText += chunk;
               this.currentTurnTelemetry?.markFirstToken();
             }
+            this.trackRunnerUsage(fb, usageScope);
             if (!this.isSubmissionCurrent(submissionGeneration)) return;
-            this.trackRunnerUsage(fb);
           } catch (fbErr: any) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
@@ -9138,12 +9172,20 @@ export class ChatEngine {
       }
     }
 
+    const usageScope = {
+      taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      turnId: this.parity.turnId,
+      chargeId: null as string | null,
+      isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
+    };
     const runnerCallbacks: RunnerCallbacks | undefined = callbacks.onAnswerChunk
       ? {
           ...this.providerRetryCallbacks({
             deliveryMode: 'text',
             conversationState: prompt,
             executionStage: 'synthesis',
+            usageScope,
             isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
           }),
           onChunk: callbacks.onAnswerChunk,
@@ -9153,13 +9195,11 @@ export class ChatEngine {
           deliveryMode: 'text',
           conversationState: prompt,
           executionStage: 'synthesis',
+          usageScope,
           isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
         });
     const answer = await this.executeWithTimeout(this.synthesisRunner, prompt, runnerCallbacks);
-    // R0-8: a superseded synthesis must not charge the live task's usage.
-    if (this.isSubmissionCurrent(ownerGeneration)) {
-      this.trackRunnerUsage(this.synthesisRunner);
-    }
+    this.trackRunnerUsage(this.synthesisRunner, usageScope);
     return answer;
   }
 
@@ -9167,43 +9207,63 @@ export class ChatEngine {
    *  #12: Also accumulates API-reported token counts for accurate estimation. */
   private trackRunnerUsage(
     runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
+    usageScope?: { taskOwnerId: string | null; accountingEpoch: string; turnId: string | null; chargeId: string | null; isOwnerCurrent?: () => boolean },
   ): void {
+    // A task charge must be tied to an observed invocation start. Test/offline
+    // runners can return placeholder metadata without starting a paid request.
+    if (usageScope && usageScope.chargeId === null) return;
     const metadata = runner.getLastInvocationMetadata?.();
+    const appliesToCurrent = !usageScope ||
+      (usageScope.taskOwnerId === this.taskAllowance?.taskOwnerId &&
+        (usageScope.isOwnerCurrent?.() ?? true));
     if (
       metadata?.provider_model_id &&
       metadata.prompt_tokens !== null &&
       metadata.completion_tokens !== null
     ) {
-      this.lastRequestPromptTokens = metadata.prompt_tokens;
-      this.lastRequestCompletionTokens = metadata.completion_tokens;
-      this.lastRequestModelId = metadata.provider_model_id;
       globalCostTracker.trackUsage(
         metadata.provider_model_id,
         metadata.prompt_tokens,
         metadata.completion_tokens,
         metadata.prompt_cache_hit_tokens,
         metadata.prompt_cache_miss_tokens,
-        this.taskAllowance
+        usageScope
+          ? usageScope.taskOwnerId ? {
+              taskOwnerId: usageScope.taskOwnerId,
+              chargeId: usageScope.chargeId ?? randomUUID(),
+              accountingEpoch: usageScope.accountingEpoch,
+              ...(usageScope.turnId ? { turnId: usageScope.turnId } : {}),
+            } : undefined
+          : this.taskAllowance
           ? {
               taskOwnerId: this.taskAllowance.taskOwnerId,
               chargeId: this.pendingUsageChargeId ?? randomUUID(),
             }
           : undefined,
       );
-      this.pendingUsageChargeId = null;
+      if (!usageScope || (appliesToCurrent && this.pendingUsageChargeId === usageScope.chargeId)) {
+        this.pendingUsageChargeId = null;
+      }
       // Checkpoint usage immediately after accounting so a crash before the
       // enclosing turn result is persisted cannot mint a fresh continuation
       // allowance on resume.
-      this.persistTaskCostBaseline();
+      if (appliesToCurrent) {
+        this.persistTaskCostBaseline();
+      }
 
       // Feed token history tracker
       const tokenTracker = getGlobalTokenTracker();
-      tokenTracker.record({
+      if (metadata.estimated_cost_usd !== null) tokenTracker.record({
         inputTokens: metadata.prompt_tokens,
         outputTokens: metadata.completion_tokens,
-        cost: metadata.estimated_cost_usd ?? 0,
+        cost: metadata.estimated_cost_usd,
         modelId: metadata.provider_model_id,
       });
+
+      if (!appliesToCurrent) return;
+      this.lastRequestPromptTokens = metadata.prompt_tokens;
+      this.lastRequestCompletionTokens = metadata.completion_tokens;
+      this.lastRequestModelId = metadata.provider_model_id;
 
       // #12: Track cumulative API-reported tokens for accurate compaction estimates
       this.apiTokenCount += metadata.prompt_tokens + metadata.completion_tokens;
@@ -9215,6 +9275,18 @@ export class ChatEngine {
         this._lastPhase,
         metadata,
       );
+    } else {
+      const chargeId = usageScope?.chargeId ?? this.pendingUsageChargeId;
+      const ownerId = usageScope ? usageScope.taskOwnerId : this.taskAllowance?.taskOwnerId;
+      if (chargeId && ownerId) {
+        globalCostTracker.recordUnknownCharge(metadata?.provider_model_id ?? 'unknown-provider-model', {
+          taskOwnerId: ownerId,
+          chargeId,
+          accountingEpoch: usageScope?.accountingEpoch ?? globalCostTracker.getAccountingEpoch(),
+          ...(usageScope?.turnId ? { turnId: usageScope.turnId } : {}),
+        });
+        if (appliesToCurrent) this.persistTaskCostBaseline();
+      }
     }
   }
 
@@ -9224,6 +9296,15 @@ export class ChatEngine {
     forceCompaction = false,
     ownerGeneration = this.activeSubmissionGeneration,
   ): Promise<ContextCompactedInfo | null> {
+    const compactionOwnerId = this.taskAllowance?.taskOwnerId ?? null;
+    const compactionEpoch = globalCostTracker.getAccountingEpoch();
+    const compactionTurnId = this.parity.turnId;
+    const usageScope = {
+      taskOwnerId: compactionOwnerId,
+      accountingEpoch: compactionEpoch,
+      turnId: compactionTurnId,
+      chargeId: null as string | null,
+    };
     const host: import('./compactionCommit.js').ChatEngineCompactionHost = {
       conversation: this.conversation,
       options: this.options,
@@ -9241,8 +9322,23 @@ export class ChatEngine {
       providerCallbacks: this.providerRetryCallbacks({
         deliveryMode: this.shouldUseTextTools() ? 'text' : 'native',
         executionStage: 'compaction',
+        usageScope,
         isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
       }),
+      onCompactionUsage: (usage) => {
+        const attribution = compactionOwnerId ? {
+          taskOwnerId: compactionOwnerId,
+          chargeId: usage.inferenceId,
+          accountingEpoch: compactionEpoch,
+          ...(compactionTurnId ? { turnId: compactionTurnId } : {}),
+        } : undefined;
+        if (usage.inputTokens === null || usage.outputTokens === null) {
+          globalCostTracker.recordUnknownCharge(usage.modelId, attribution);
+        } else {
+          globalCostTracker.trackUsage(usage.modelId, usage.inputTokens, usage.outputTokens, null, null, attribution);
+        }
+        if (this.isSubmissionCurrent(ownerGeneration)) this.persistTaskCostBaseline();
+      },
       shouldUseTextTools: () => this.shouldUseTextTools(),
       compactHeuristic: () => {
         this.compactConversation();
@@ -9502,6 +9598,7 @@ export class ChatEngine {
     contractRef?: string;
     substitutionOrFallback?: boolean;
     isOwnerCurrent?: () => boolean;
+    usageScope?: { taskOwnerId: string | null; accountingEpoch: string; turnId: string | null; chargeId: string | null; isOwnerCurrent?: () => boolean };
   } = {}): RunnerCallbacks {
     let startedInvocation: ProviderInvocationStarted | null = null;
     let retryCount = 0;
@@ -9514,6 +9611,7 @@ export class ChatEngine {
     return {
       parentRequestId,
       onInvocationStarted: (event) => {
+        if (context.usageScope) context.usageScope.chargeId = event.request_id ?? event.inference_id;
         if (!isOwnerCurrent()) return;
         if (!this.parity.turnId) return;
         startedInvocation = event;
@@ -9891,6 +9989,14 @@ export class ChatEngine {
     hooks: { onStreamedChunks?: (text: string) => void } = {},
   ): Promise<ChatTurn> {
     resetOneShotSnapshot(this.logicalTurnToolPolicy);
+    const usageGeneration = this.activeSubmissionGeneration;
+    const usageScope = {
+      taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      turnId: this.parity.turnId,
+      chargeId: null as string | null,
+      isOwnerCurrent: () => this.isSubmissionCurrent(usageGeneration),
+    };
     if (useNativeTools && typeof runner.executeWithToolsStream === 'function') {
       const nextTools = this.nextTurnToolPolicy();
       const restrictTools = nextTools.restrict && !isReadOnlyChat();
@@ -9918,6 +10024,7 @@ export class ChatEngine {
           systemPolicyPrompt: systemPrompt,
           toolSchema: toolDefs,
           executionStage: 'chat',
+          usageScope,
         }),
       )) {
         switch (event.type) {
@@ -9946,7 +10053,7 @@ export class ChatEngine {
           }
         }
       }
-      this.trackRunnerUsage(runner);
+      this.trackRunnerUsage(runner, usageScope);
       return nativeTurnFromStream({
         answerText,
         actions: nativeActions,
@@ -9965,11 +10072,12 @@ export class ChatEngine {
           conversationState: promptOrMessages,
           systemPolicyPrompt: systemPrompt,
           executionStage: 'chat',
+          usageScope,
         }),
         systemPrompt,
       );
       const turn = parseTextToolTurn(rawText);
-      this.trackRunnerUsage(runner);
+      this.trackRunnerUsage(runner, usageScope);
       return turn;
     }
 
@@ -9980,6 +10088,7 @@ export class ChatEngine {
         deliveryMode: 'text',
         conversationState: promptOrMessages,
         executionStage: 'chat',
+        usageScope,
       }),
       ...(callbacks.onThought || callbacks.onAnswerChunk
         ? {
@@ -10009,7 +10118,7 @@ export class ChatEngine {
       promptOrMessages as string,
       deliberationCallbacks,
     );
-    this.trackRunnerUsage(runner);
+    this.trackRunnerUsage(runner, usageScope);
     return this.parseChatTurnLenient(rawText);
   }
 

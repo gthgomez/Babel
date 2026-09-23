@@ -418,13 +418,7 @@ export function pushRoutingReceiptFromMetadata(
   phase: ChatPhase,
   metadata: RoutingReceiptMetadata,
 ): void {
-  if (
-    !metadata.provider_model_id ||
-    metadata.prompt_tokens == null ||
-    metadata.completion_tokens == null
-  ) {
-    return;
-  }
+  if (!metadata.provider_model_id) return;
 
   const requested = metadata.requested_reasoning_effort ?? null;
   const normalized = metadata.normalized_reasoning_effort ?? null;
@@ -437,15 +431,16 @@ export function pushRoutingReceiptFromMetadata(
     observed,
   });
   const effort_aliased = deriveEffortAliased(requested, sent, normalized);
-  const cost_basis = mapCostPrecisionToBasis(metadata.cost_precision);
+  const cost_basis = metadata.estimated_cost_usd === null || metadata.estimated_cost_usd === undefined
+    ? 'unknown' : mapCostPrecisionToBasis(metadata.cost_precision);
 
   const receipt: TurnRoutingReceipt = {
     turn,
     phase,
     model: metadata.provider_model_id,
-    input_tokens: metadata.prompt_tokens,
-    output_tokens: metadata.completion_tokens,
-    cost_usd: metadata.estimated_cost_usd ?? 0,
+    input_tokens: metadata.prompt_tokens ?? null,
+    output_tokens: metadata.completion_tokens ?? null,
+    cost_usd: metadata.estimated_cost_usd ?? null,
     cost_basis,
     effective_source,
     effort_aliased,

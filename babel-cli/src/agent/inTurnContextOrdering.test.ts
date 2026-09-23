@@ -87,13 +87,19 @@ const FIXTURE_POLICY: ResolvedModelPolicy = {
 
 async function withRunsDir(fn: () => Promise<void>): Promise<void> {
   const previous = process.env['BABEL_RUNS_DIR'];
+  const previousCost = process.env['BABEL_CHAT_MAX_COST'];
   const runsRoot = mkdtempSync(join(tmpdir(), 't5-ordering-'));
   process.env['BABEL_RUNS_DIR'] = runsRoot;
+  // The OpenCodeGo fixture model has no pinned dollar rate. This suite tests
+  // context ordering and explicitly uses an unlimited cost allowance.
+  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
   try {
     await fn();
   } finally {
     if (previous === undefined) delete process.env['BABEL_RUNS_DIR'];
     else process.env['BABEL_RUNS_DIR'] = previous;
+    if (previousCost === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previousCost;
     rmSync(runsRoot, { recursive: true, force: true });
   }
 }
