@@ -3,12 +3,14 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { basename, extname, join, relative, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { FtsSearchIndex, type FtsSearchHit } from './ftsIndex.js';
 import { VectorIndex } from './vectorIndex.js';
@@ -41,6 +43,7 @@ export interface RepoMap {
   generated_at: string;
   files_indexed: number;
   entries: RepoMapEntry[];
+  coverage?: { complete: boolean; truncated: boolean; depth_limited: boolean; unreadable_files: number; unreadable_directories: number; target_exists: boolean };
 }
 
 export interface RepoMapOptions {
@@ -382,11 +385,17 @@ export class SemanticIndexer {
   private ftsIndex: FtsSearchIndex | null = null;
   private vecIndex: VectorIndex | null = null;
   private indexedRoot: string | null = null;
-  private dbPath: string;
+  private readonly baseDbPath: string;
+  private activeDbPath: string | null = null;
+  private ready = false;
+  private lifetime = 0;
+  private revision = 0;
+  private activeWork = false;
+  private retirementRequested = false;
   private embedFn: ((text: string) => Float32Array | Promise<Float32Array>) | null = null;
 
   constructor(dbPath?: string) {
-    this.dbPath = dbPath ?? resolveFtsDbPath();
+    this.baseDbPath = dbPath ?? resolveFtsDbPath();
   }
 
   /**
@@ -400,24 +409,20 @@ export class SemanticIndexer {
   }
 
   private get fts(): FtsSearchIndex {
-    if (!this.ftsIndex) {
-      this.ftsIndex = new FtsSearchIndex(this.dbPath);
-    }
+    if (!this.ready || !this.ftsIndex) throw new Error('Semantic search unavailable: no ready project index');
     return this.ftsIndex;
   }
 
-  /**
-   * Lazy-initialised VectorIndex that shares the same SQLite database as
-   * the FTS index. Accessing this property loads the sqlite-vec native
-   * extension and creates the vec0 virtual table on the first call.
-   *
-   * Returns null if the sqlite-vec extension cannot be loaded (unsupported
-   * platform or missing native binary).
-   */
+  /** Already-open vector view; read-only callers never initialize SQLite. */
   public get vectorIndex(): VectorIndex | null {
+    return this.ready ? this.vecIndex : null;
+  }
+
+  private initializeVectorIndex(): void {
+    if (!this.ready || !this.activeDbPath || !this.embedFn) return;
     if (this.vecIndex === null) {
       try {
-        this.vecIndex = new VectorIndex(this.dbPath);
+        this.vecIndex = new VectorIndex(this.activeDbPath);
         // If the extension didn't load, discard the instance
         if (!this.vecIndex.getStats().extensionLoaded) {
           this.vecIndex.close();
@@ -427,31 +432,56 @@ export class SemanticIndexer {
         this.vecIndex = null;
       }
     }
-    return this.vecIndex;
   }
 
   /**
    * The database file path shared by the FTS and vector indices.
    */
   public getDbPath(): string {
-    return this.dbPath;
+    return this.activeDbPath ?? this.baseDbPath;
   }
 
   public get indexedProjectRoot(): string | null {
-    return this.indexedRoot;
+    return this.ready ? this.indexedRoot : null;
+  }
+
+  /** Readiness is a side-effect-free check against a physical project root. */
+  public isReadyForRoot(rootPath: string): boolean {
+    try {
+      return this.ready && this.ftsIndex !== null && this.indexedRoot === realpathSync(rootPath);
+    } catch {
+      return false;
+    }
+  }
+
+  private dbPathForRoot(root: string): string {
+    const digest = createHash('sha256').update(root).digest('hex').slice(0, 24);
+    const extension = extname(this.baseDbPath) || '.db';
+    return join(dirname(this.baseDbPath), `${basename(this.baseDbPath, extension)}-${digest}${extension}`);
   }
 
   /** Keep a root switch and its search together across overlapping tasks. */
   private indexQueue: Promise<void> = Promise.resolve();
 
-  private async withIndexLock<T>(work: () => Promise<T>): Promise<T> {
+  private async withIndexLock<T>(work: (lifetime: number) => Promise<T>): Promise<T> {
+    const lifetime = this.lifetime;
     const prior = this.indexQueue;
     let release!: () => void;
     this.indexQueue = new Promise<void>((resolve) => { release = resolve; });
     await prior;
+    if (lifetime !== this.lifetime) {
+      release();
+      throw new Error('Semantic index lifetime retired');
+    }
+    this.activeWork = true;
     try {
-      return await work();
+      return await work(lifetime);
     } finally {
+      this.activeWork = false;
+      if (this.retirementRequested) {
+        this.retireHandles();
+        this.retirementRequested = false;
+      }
       release();
     }
   }
@@ -462,29 +492,51 @@ export class SemanticIndexer {
     allowIndex: boolean,
     search: () => Promise<T>,
   ): Promise<T> {
-    const root = resolve(rootPath);
-    return this.withIndexLock(async () => {
-      if (this.indexedRoot !== root || this.count === 0) {
-        if (!allowIndex) throw new Error('Semantic search unavailable: no already-open index for this project in the read-only lane.');
-        await this.indexProjectUnlocked(root);
+    let root: string;
+    try {
+      root = realpathSync(rootPath);
+    } catch (error) {
+      if (!allowIndex) {
+        return Promise.reject(new Error('Semantic search unavailable: no already-open index for this project in the read-only lane.'));
       }
-      return search();
+      return Promise.reject(error);
+    }
+    return this.withIndexLock(async (lifetime) => {
+      if (!this.isReadyForRoot(root)) {
+        if (!allowIndex) throw new Error('Semantic search unavailable: no already-open index for this project in the read-only lane.');
+        await this.indexProjectUnlocked(root, undefined, lifetime);
+      }
+      if (lifetime !== this.lifetime) throw new Error('Semantic index lifetime retired');
+      const result = await search();
+      if (lifetime !== this.lifetime || !this.isReadyForRoot(root)) {
+        throw new Error('Semantic index query view retired');
+      }
+      return result;
     });
   }
 
   /** Incrementally index a project without racing another root switch. */
   public async indexProject(
     rootPath: string,
-    options?: { force?: boolean; onProgress?: (indexed: number, total: number) => void },
+    options?: { force?: boolean; onProgress?: (indexed: number, total: number) => void; maxFiles?: number },
   ): Promise<number> {
-    return this.withIndexLock(() => this.indexProjectUnlocked(resolve(rootPath), options));
+    const root = realpathSync(rootPath);
+    return this.withIndexLock((lifetime) => this.indexProjectUnlocked(root, options, lifetime));
   }
 
   private async indexProjectUnlocked(
     root: string,
-    options?: { force?: boolean; onProgress?: (indexed: number, total: number) => void },
+    options?: { force?: boolean; onProgress?: (indexed: number, total: number) => void; maxFiles?: number },
+    lifetime = this.lifetime,
   ): Promise<number> {
-      const files = await collectTextFiles(root);
+      let scanIncomplete = false;
+      const files = await collectTextFiles(root, [], {
+        ...(options?.maxFiles !== undefined ? { maxFiles: options.maxFiles } : {}),
+        onDepthLimit: () => { scanIncomplete = true; },
+        onUnreadableDirectory: () => { scanIncomplete = true; },
+      });
+      if (files.length >= (options?.maxFiles ?? MAX_INDEX_FILES)) scanIncomplete = true;
+      if (lifetime !== this.lifetime) throw new Error('Semantic index lifetime retired');
 
       const fileEntries: Array<{ filePath: string; relativePath: string }> = [];
       for (const filePath of files) {
@@ -492,15 +544,41 @@ export class SemanticIndexer {
         fileEntries.push({ filePath, relativePath });
       }
 
-      const indexed = await this.fts.indexFiles(fileEntries, options);
-      this.indexedRoot = root;
+      const sameRoot = this.isReadyForRoot(root);
+      const nextDbPath = this.dbPathForRoot(root);
+      const nextFts = sameRoot ? this.ftsIndex! : new FtsSearchIndex(nextDbPath);
+      const discoveredPaths = new Set(fileEntries.map((entry) => entry.relativePath));
+      if (sameRoot) this.ready = false;
+      try {
+        await nextFts.indexFiles(fileEntries, {
+          ...options,
+          rootPath: root,
+          shouldContinue: () => lifetime === this.lifetime,
+        });
+        await nextFts.pruneMissing(root, scanIncomplete ? undefined : discoveredPaths,
+          () => lifetime === this.lifetime);
+        if (lifetime !== this.lifetime) throw new Error('Semantic index lifetime retired');
 
-      // Prune files that no longer exist (await — yields to event loop in large repos)
-      await this.fts.pruneMissing(root);
+        if (!sameRoot) {
+          this.vecIndex?.close();
+          this.vecIndex = null;
+          this.ftsIndex?.close();
+          this.ftsIndex = nextFts;
+        }
+        this.activeDbPath = nextDbPath;
+        this.indexedRoot = root;
+        this.revision++;
+        this.ready = true;
+      } catch (error) {
+        if (!sameRoot) nextFts.close();
+        else this.close();
+        throw error;
+      }
 
       // ── Vector embedding generation (R2.5) ──────────────────────────────
       // After FTS indexing completes, generate embeddings for newly indexed
       // files. Skipped when no embedding provider is configured (graceful no-op).
+      this.initializeVectorIndex();
       if (this.embedFn && this.vectorIndex) {
         try {
           await this.vectorIndex.indexEmbeddings(
@@ -512,7 +590,8 @@ export class SemanticIndexer {
         }
       }
 
-      return this.fts.count;
+      if (lifetime !== this.lifetime) throw new Error('Semantic index lifetime retired');
+      return nextFts.count;
   }
 
   /**
@@ -548,13 +627,23 @@ export class SemanticIndexer {
    * strictly additive and never blocks or degrades existing search.
    */
   public async searchWithEmbedding(query: string, limit = 5): Promise<SearchHit[]> {
-    if (!this.embedFn || !this.vectorIndex) {
+    const fts = this.fts;
+    const vector = this.vectorIndex;
+    if (!this.embedFn || !vector) {
       return this.search(query, limit);
     }
+    const root = this.indexedRoot;
+    const lifetime = this.lifetime;
+    const revision = this.revision;
+    const currentView = () =>
+      this.ready && this.indexedRoot === root && this.lifetime === lifetime &&
+      this.revision === revision &&
+      this.ftsIndex === fts && this.vecIndex === vector;
 
     try {
       const queryVec = await this.embedFn(query);
-      const vectorHits = this.vectorIndex.search(queryVec, Math.max(1, limit));
+      if (!currentView()) throw new Error('Semantic index query view retired');
+      const vectorHits = vector.search(queryVec, Math.max(1, limit));
 
       if (vectorHits.length === 0) {
         return this.search(query, limit);
@@ -562,19 +651,16 @@ export class SemanticIndexer {
 
       // Resolve vector hit file IDs to path/name pairs
       const fileIds = vectorHits.map((h) => h.fileId);
-      const idToPath = this.fts.resolveFilePaths(fileIds);
+      const idToPath = fts.resolveFilePaths(fileIds);
 
       return vectorHits
         .map((hit) => {
           const file = idToPath.get(hit.fileId);
-          return {
-            id: file?.path ?? `unknown:${hit.fileId}`,
-            name: file?.name ?? 'unknown',
-            score: hit.score,
-          };
+          return file ? { id: file.path, name: file.name, score: hit.score } : null;
         })
-        .filter((h) => h.id !== undefined);
+        .filter((hit): hit is SearchHit => hit !== null);
     } catch {
+      if (!currentView()) throw new Error('Semantic index query view retired');
       // Vector search failed — fall back to FTS5
       return this.search(query, limit);
     }
@@ -584,7 +670,7 @@ export class SemanticIndexer {
    * Number of files currently indexed.
    */
   public get count(): number {
-    return this.fts.count;
+    return this.ready && this.ftsIndex ? this.ftsIndex.count : 0;
   }
 
   /**
@@ -598,6 +684,17 @@ export class SemanticIndexer {
    * Close the index (releases SQLite WAL).
    */
   public close(): void {
+    this.lifetime++;
+    this.ready = false;
+    this.indexedRoot = null;
+    if (this.activeWork) {
+      this.retirementRequested = true;
+      return;
+    }
+    this.retireHandles();
+  }
+
+  private retireHandles(): void {
     if (this.ftsIndex) {
       this.ftsIndex.close();
       this.ftsIndex = null;
@@ -606,6 +703,7 @@ export class SemanticIndexer {
       this.vecIndex.close();
       this.vecIndex = null;
     }
+    this.activeDbPath = null;
   }
 }
 
@@ -628,6 +726,8 @@ export async function collectTextFiles(
     currentDepth?: number;
     /** Hard cap on total files collected. Defaults to {@link MAX_INDEX_FILES}. */
     maxFiles?: number;
+    onDepthLimit?: () => void;
+    onUnreadableDirectory?: () => void;
   } = {},
 ): Promise<string[]> {
   const projectRoot = options.projectRoot ? resolve(options.projectRoot) : undefined;
@@ -663,6 +763,7 @@ export async function collectTextFiles(
 
   // Depth guard — applies to project root AND sibling roots alike.
   if (currentDepth > maxDepth) {
+    options.onDepthLimit?.();
     return allFiles;
   }
 
@@ -680,7 +781,10 @@ export async function collectTextFiles(
     }
   }
 
-  if (!statSync(resolvedDir).isDirectory()) {
+  try {
+    if (!statSync(resolvedDir).isDirectory()) return allFiles;
+  } catch {
+    options.onUnreadableDirectory?.();
     return allFiles;
   }
 
@@ -688,6 +792,7 @@ export async function collectTextFiles(
   try {
     entries = await fs.readdir(resolvedDir, { withFileTypes: true });
   } catch {
+    options.onUnreadableDirectory?.();
     return allFiles;
   }
 
@@ -716,22 +821,43 @@ export async function buildRepoMap(
   rootPath: string,
   options: RepoMapOptions = {},
 ): Promise<RepoMap> {
-  const root = resolve(rootPath);
-  const targetPrefix = options.target?.replace(/\\/g, '/').replace(/^\.\//, '');
+  const root = realpathSync(rootPath);
   const limit = Math.max(1, options.limit ?? 200);
-  // Pass limit as maxFiles so collectTextFiles stops early on huge repos.
-  // Without this, a 1M-file workspace walks the entire tree for 3+ minutes
-  // before the LLM call even starts.
-  const files = (await collectTextFiles(root, [], { maxFiles: limit }))
+  const requestedTarget = options.target ? resolve(root, options.target) : root;
+  const lexicalRelative = relative(root, requestedTarget);
+  if (lexicalRelative === '..' || lexicalRelative.startsWith(`..${sep}`) || isAbsolute(lexicalRelative)) {
+    throw new Error('Repo map target is outside the project root');
+  }
+  const targetExists = existsSync(requestedTarget);
+  const target = targetExists ? realpathSync(requestedTarget) : requestedTarget;
+  const physicalRelative = relative(root, target);
+  if (physicalRelative === '..' || physicalRelative.startsWith(`..${sep}`) || isAbsolute(physicalRelative)) {
+    throw new Error('Repo map target resolves outside the project root');
+  }
+  const targetIsFile = targetExists && statSync(target).isFile();
+  let depthLimited = false;
+  let unreadableDirectories = 0;
+  const collected = !targetExists
+    ? []
+    : targetIsFile
+      ? (TEXT_EXTENSIONS.has(extname(target).toLowerCase()) ? [target] : [])
+      : await collectTextFiles(target, [], {
+          maxFiles: limit + 1,
+          onDepthLimit: () => { depthLimited = true; },
+          onUnreadableDirectory: () => { unreadableDirectories++; },
+        });
+  const truncated = collected.length > limit;
+  const files = collected
     .map((filePath) => ({ filePath, relativePath: normalizeRepoPath(root, filePath) }))
-    .filter((entry) => (targetPrefix ? entry.relativePath.startsWith(targetPrefix) : true))
     .sort((left, right) => left.relativePath.localeCompare(right.relativePath))
     .slice(0, limit);
 
   const entries: RepoMapEntry[] = [];
+  let unreadableFiles = 0;
   for (const { filePath, relativePath } of files) {
-    try {
-      const content = await fs.readFile(filePath, 'utf-8');
+    const file = FtsSearchIndex.readFileContent(filePath, root);
+    if (file) {
+      const content = file.content;
       const extension = extname(filePath).toLowerCase();
       entries.push({
         path: relativePath,
@@ -739,8 +865,8 @@ export async function buildRepoMap(
         symbols: extractSymbols(content.slice(0, 16_384), extension),
         ...(options.includePreview ? { preview: previewContent(content) } : {}),
       });
-    } catch {
-      // Skip unreadable files.
+    } else {
+      unreadableFiles++;
     }
   }
 
@@ -750,6 +876,14 @@ export async function buildRepoMap(
     generated_at: new Date().toISOString(),
     files_indexed: entries.length,
     entries,
+    coverage: {
+      complete: targetExists && !truncated && !depthLimited && unreadableFiles === 0 && unreadableDirectories === 0,
+      truncated,
+      depth_limited: depthLimited,
+      unreadable_files: unreadableFiles,
+      unreadable_directories: unreadableDirectories,
+      target_exists: targetExists,
+    },
   };
 }
 
@@ -858,7 +992,7 @@ export async function buildCachedRepoMap(
   const maxEntries = Math.max(1, options?.maxEntries ?? 60);
 
   const indexer = getGlobalIndexer();
-  const hasIndex = indexer.indexedProjectRoot === root && indexer.count > 0;
+  const hasIndex = indexer.isReadyForRoot(root) && indexer.count > 0;
 
   let entries: RepoMapEntry[] = [];
 
@@ -987,6 +1121,9 @@ export const globalIndexer = {
   },
   get count(): number {
     return getGlobalIndexer().count;
+  },
+  isReadyForRoot(rootPath: string): boolean {
+    return getGlobalIndexer().isReadyForRoot(rootPath);
   },
   get underlyingFts(): FtsSearchIndex {
     return getGlobalIndexer().underlyingFts;

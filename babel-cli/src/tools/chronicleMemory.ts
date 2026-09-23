@@ -184,7 +184,7 @@ export async function ensureSemanticIndexForProject(
   onProgress?: (indexed: number, total: number) => void,
 ): Promise<void> {
   const root = path.resolve(projectRoot);
-  if (globalIndexer.indexedProjectRoot === root && globalIndexer.count > 0) {
+  if (globalIndexer.isReadyForRoot(root)) {
     return;
   }
   await globalIndexer.indexProject(root, onProgress ? { onProgress } : undefined);

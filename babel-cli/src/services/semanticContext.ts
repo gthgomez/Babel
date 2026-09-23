@@ -12,7 +12,6 @@
  */
 
 import { globalIndexer } from './indexer.js';
-import { resolve } from 'node:path';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -148,7 +147,7 @@ export function buildSemanticContext(
 
   try {
     const indexer = globalIndexer;
-    if (projectRoot && indexer.indexedProjectRoot !== resolve(projectRoot)) {
+    if (!indexer.isReadyForRoot(projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd())) {
       return { lines: [], hits: [], indexAvailable: false };
     }
     if (!indexer || indexer.count === 0) {
