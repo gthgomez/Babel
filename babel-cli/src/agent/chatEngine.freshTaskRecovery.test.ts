@@ -25,7 +25,7 @@ import { ChatEngine } from './chatEngine.js';
 import { ingestVerifierResult } from './codingLoop/chatBindings.js';
 import { applyWorkingStateEvent, createWorkingState } from './codingLoop/workingState.js';
 import { actualRecoveryEdit, recoveryObservationId } from './codingLoop/recoveryPlan.js';
-import { createSessionEventLog, recordVerifierAttempt, recordWorkingStateSnapshot } from './sessionEvents.js';
+import { createSessionEventLog, recordUserSubmitted, recordVerifierAttempt, recordWorkingStateSnapshot } from './sessionEvents.js';
 
 interface ProgressControllerProbe {
   readonly InterventionLevel: string;
@@ -325,6 +325,35 @@ test('R1 resume restores bound evidence and refuses a newer unbound red verifier
   (engine as any).restoreRecoveryWorkingState(log);
   assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
   assert.equal((engine as any).workingState.recoveryGate.binding, undefined);
+});
+
+test('R1 cold resume respects fresh and continued task boundaries without an early snapshot flush', () => {
+  const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+  const binding = (engine as any).currentRecoveryBinding();
+  assert.ok(binding);
+  let state = applyWorkingStateEvent(createWorkingState('repair parser'), {
+    type: 'recovery_gate', failureSignature: 'red', requiredEvidence: 'inspect',
+    failingTargets: ['src/agent/codingLoop/workingState.ts'], binding,
+  });
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence', evidence: 'inspection', discriminating: true,
+    provenance: {
+      tool: 'read_file', target: 'src/agent/codingLoop/workingState.ts',
+      failureSignature: 'red', binding, observationDigest: 'content',
+    },
+  });
+  const continued = createSessionEventLog('continued-boundary');
+  recordWorkingStateSnapshot(continued, state, 'turn-a');
+  recordUserSubmitted(continued, { turn_id: 'turn-b', task: 'continue parser', continuedTask: true });
+  (engine as any).restoreRecoveryWorkingState(continued);
+  assert.equal((engine as any).workingState.recoveryGate?.satisfied, true);
+
+  const fresh = createSessionEventLog('fresh-boundary');
+  recordWorkingStateSnapshot(fresh, state, 'turn-a');
+  recordUserSubmitted(fresh, { turn_id: 'turn-b', task: 'new task', continuedTask: false });
+  (engine as any).restoreRecoveryWorkingState(fresh);
+  assert.equal((engine as any).workingState.goal, 'new task');
+  assert.equal((engine as any).workingState.recoveryGate, undefined);
 });
 
 test('R1 snapshot persistence failure blocks mutation without running the shell', async () => {

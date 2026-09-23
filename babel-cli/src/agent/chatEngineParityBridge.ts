@@ -195,6 +195,7 @@ export function parityOnUserTurn(
     provider: input.provider,
     projectRoot: input.projectRoot,
     ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
+    ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
   });
   recordModelStarted(rt.sessionEvents, {
     turn_id: rt.turnId,

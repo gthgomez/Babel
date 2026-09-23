@@ -4998,6 +4998,22 @@ export class ChatEngine {
     const latestVerifier = [...log.events].reverse().find((event) =>
       event.kind === 'verifier_attempt' && event.authoritative && event.exit_code !== undefined,
     );
+    const latestSubmission = [...log.events].reverse().find((event) => event.kind === 'user_submitted');
+    if (latestSubmission?.kind === 'user_submitted' && latestSubmission.continued_task === false &&
+        (!latestSnapshot || latestSnapshot.seq < latestSubmission.seq) &&
+        (!latestVerifier || latestVerifier.seq < latestSubmission.seq)) {
+      this.workingState = createWorkingState(latestSubmission.task_preview);
+      return;
+    }
+    if (latestSubmission?.kind === 'user_submitted' && latestSubmission.continued_task !== true &&
+        latestSnapshot && latestSnapshot.seq < latestSubmission.seq) {
+      this.workingState = applyWorkingStateEvent(createWorkingState(latestSubmission.task_preview), {
+        type: 'recovery_gate',
+        failureSignature: 'resumed-unknown-task-boundary',
+        requiredEvidence: 'Rerun an authoritative verifier before recovery.',
+      });
+      return;
+    }
     if (latestSnapshot?.kind === 'working_state_snapshot' &&
         (!latestVerifier || latestSnapshot.seq > latestVerifier.seq)) {
       const restored = restoreWorkingStateSnapshot(latestSnapshot.state);
@@ -5553,7 +5569,6 @@ export class ChatEngine {
       // preserves the current state by construction; this reset lives only in the
       // fresh-task branch. Historical durable logs are untouched.
       this.workingState = createWorkingState(runtime.taskText.slice(0, 240));
-      this.persistRecoveryWorkingState();
       // P11 exact observations and the installed generation are task-scoped.
       // A fresh task may not recall or checkpoint evidence captured under a
       // prior task owner, even when the physical observation bytes remain.

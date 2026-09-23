@@ -158,6 +158,7 @@ export type SessionEvent =
       provider?: string;
       project_root?: string;
       task_class?: string;
+      continued_task?: boolean;
     })
   | (SessionEventBase & {
       kind: 'model_started';
@@ -1134,6 +1135,7 @@ export function recordUserSubmitted(
     provider?: string;
     projectRoot?: string;
     taskClass?: string;
+    continuedTask?: boolean;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -1144,6 +1146,7 @@ export function recordUserSubmitted(
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
     ...(input.projectRoot !== undefined ? { project_root: input.projectRoot } : {}),
     ...(input.taskClass !== undefined ? { task_class: input.taskClass } : {}),
+    ...(input.continuedTask !== undefined ? { continued_task: input.continuedTask } : {}),
   });
 }
 
@@ -1938,7 +1941,7 @@ export function parseSessionEventLog(
     }
     const arrayFields = new Set(['paths', 'signals', 'evidence_refs', 'raw_observation_refs', 'preserved_tool_call_ids', 'delivered_tool_call_ids'])
     const objectFields = new Set(['receipt', 'state'])
-    const booleanFields = new Set(['authoritative', 'allowed', 'advertised'])
+    const booleanFields = new Set(['authoritative', 'allowed', 'advertised', 'continued_task'])
     const nullableBooleanFields = new Set(['authorized', 'effective'])
     const numberFields = new Set(['score', 'attempt', 'backoff_ms', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'status_code', 'state_schema_version'])
     for (const field of required[ev.kind as SessionEventKind]) {
@@ -1963,6 +1966,9 @@ export function parseSessionEventLog(
     if (ev.kind === 'working_state_snapshot' &&
         (ev.state_schema_version !== 1 || typeof ev.state !== 'object' || ev.state === null || Array.isArray(ev.state))) {
       throw new Error(`Invalid session event at line ${index + 1}: working state snapshot schema`)
+    }
+    if (ev.kind === 'user_submitted' && ev.continued_task !== undefined && typeof ev.continued_task !== 'boolean') {
+      throw new Error(`Invalid session event at line ${index + 1}: continued_task must be a boolean`)
     }
     const effectClasses: ToolEffectClass[] = [
       'read_only', 'idempotent', 'reconcilable_mutation',
