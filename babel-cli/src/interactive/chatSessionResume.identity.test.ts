@@ -24,6 +24,7 @@ import {
   recordUserSubmitted,
 } from '../agent/sessionEvents.js';
 import { ChatEngine } from '../agent/chatEngine.js';
+import { getOpenAdmissionStoreCount } from '../runtime/admissionTestHooks.js';
 import { HistoryCellViewport } from '../ui/historyCells/viewport.js';
 import { ScreenManager } from '../ui/screenManager.js';
 import type { AgentTargetContext } from '../services/targetResolver.js';
@@ -100,12 +101,13 @@ test('D04 resume seam identity', { concurrency: false }, async (t) => {
   await t.test('verified thread-log identity resumes without degraded flag', async () => {
     const fixture = withTempRunsDir();
     const targetRoot = mkdtempSync(join(tmpdir(), 'd04-seam-root-'));
+    let ctx: ReplContext | undefined;
     try {
       const sessionId = 'd04-seam-verified';
       const sessionDir = writeTranscript(fixture.root, sessionId, 'verified history');
       writeThreadIdentity(sessionDir, sessionId, targetRoot);
 
-      const ctx = makeResumeCtx(makeTarget(targetRoot));
+      ctx = makeResumeCtx(makeTarget(targetRoot));
       const outcome = await resumeChatSession(ctx, sessionId);
       assert.equal(outcome.ok, true);
       if (!outcome.ok) return;
@@ -113,6 +115,8 @@ test('D04 resume seam identity', { concurrency: false }, async (t) => {
       assert.equal(outcome.source, 'transcript');
       assert.ok(ctx.chatEngine, 'engine admitted for verified identity');
     } finally {
+      ctx?.chatEngine?.closeAdmissionStore();
+      assert.equal(getOpenAdmissionStoreCount(), 0, 'resume owner releases its admission handle');
       fixture.cleanup();
       rmSync(targetRoot, { recursive: true, force: true });
     }
@@ -169,6 +173,7 @@ test('D04 resume seam identity', { concurrency: false }, async (t) => {
   await t.test('session-events project_root match resumes without degraded flag', async () => {
     const fixture = withTempRunsDir();
     const targetRoot = mkdtempSync(join(tmpdir(), 'd04-seam-ev-match-'));
+    let ctx: ReplContext | undefined;
     try {
       const sessionId = 'd04-seam-events-match';
       const sessionDir = writeTranscript(fixture.root, sessionId, 'events identity match');
@@ -179,10 +184,13 @@ test('D04 resume seam identity', { concurrency: false }, async (t) => {
       recordUserSubmitted(log, { turn_id: 'turn-1', task: 't', projectRoot: targetRoot });
       flushSessionEventLog(sessionDir, log);
 
-      const outcome = await resumeChatSession(makeResumeCtx(makeTarget(targetRoot)), sessionId);
+      ctx = makeResumeCtx(makeTarget(targetRoot));
+      const outcome = await resumeChatSession(ctx, sessionId);
       assert.equal(outcome.ok, true);
       if (outcome.ok) assert.equal(outcome.degraded, undefined);
     } finally {
+      ctx?.chatEngine?.closeAdmissionStore();
+      assert.equal(getOpenAdmissionStoreCount(), 0, 'resume owner releases its admission handle');
       fixture.cleanup();
       rmSync(targetRoot, { recursive: true, force: true });
     }
@@ -196,16 +204,19 @@ test('D04 resume seam identity', { concurrency: false }, async (t) => {
     const fixture = withTempRunsDir();
     const realRoot = mkdtempSync(join(tmpdir(), 'd04-seam-real-'));
     const linkRoot = join(tmpdir(), `d04-seam-link-${process.pid}-${Date.now()}`);
+    let ctx: ReplContext | undefined;
     try {
       symlinkSync(realRoot, linkRoot, 'dir');
       const sessionId = 'd04-seam-symlink';
       const sessionDir = writeTranscript(fixture.root, sessionId, 'symlink history');
       writeThreadIdentity(sessionDir, sessionId, realRoot);
 
-      const outcome = await resumeChatSession(makeResumeCtx(makeTarget(linkRoot)), sessionId);
+      ctx = makeResumeCtx(makeTarget(linkRoot));
+      const outcome = await resumeChatSession(ctx, sessionId);
       assert.equal(outcome.ok, true);
       if (outcome.ok) assert.equal(outcome.degraded, undefined);
     } finally {
+      ctx?.chatEngine?.closeAdmissionStore();
       fixture.cleanup();
       rmSync(linkRoot, { force: true });
       rmSync(realRoot, { recursive: true, force: true });
@@ -215,6 +226,7 @@ test('D04 resume seam identity', { concurrency: false }, async (t) => {
   await t.test('R0-3: legacy session with no durable identity requires explicit rebind', async () => {
     const fixture = withTempRunsDir();
     const targetRoot = mkdtempSync(join(tmpdir(), 'd04-seam-legacy-'));
+    let ctx2: ReplContext | undefined;
     try {
       const sessionId = 'd04-seam-legacy';
       writeTranscript(fixture.root, sessionId, 'legacy history');
@@ -229,7 +241,7 @@ test('D04 resume seam identity', { concurrency: false }, async (t) => {
       assert.match(refused.message, /--confirm-repo-identity/);
 
       // Explicit rebind resumes as degraded history, never verified.
-      const ctx2 = makeResumeCtx(makeTarget(targetRoot));
+      ctx2 = makeResumeCtx(makeTarget(targetRoot));
       const confirmed = await resumeChatSession(ctx2, sessionId, { confirmUnknownIdentity: true });
       assert.equal(confirmed.ok, true, 'explicit rebind resumes');
       if (!confirmed.ok) return;
@@ -237,6 +249,8 @@ test('D04 resume seam identity', { concurrency: false }, async (t) => {
       assert.match(confirmed.degradedReason ?? '', /identity/i);
       assert.equal(confirmed.source, 'transcript');
     } finally {
+      ctx2?.chatEngine?.closeAdmissionStore();
+      assert.equal(getOpenAdmissionStoreCount(), 0, 'explicit rebind owner releases its handle');
       fixture.cleanup();
       rmSync(targetRoot, { recursive: true, force: true });
     }

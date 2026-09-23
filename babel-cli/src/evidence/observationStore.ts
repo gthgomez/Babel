@@ -212,7 +212,8 @@ export function createNodeObservationFs(): ObservationStorageFsV1 {
       }
     },
     syncFile(path: string): void {
-      const fd = openSync(path, 'r');
+      // FlushFileBuffers on Windows rejects a read-only handle with EPERM.
+      const fd = openSync(path, process.platform === 'win32' ? 'r+' : 'r');
       try {
         fsyncSync(fd);
       } finally {
@@ -220,7 +221,9 @@ export function createNodeObservationFs(): ObservationStorageFsV1 {
       }
     },
     syncDir(path: string): void {
-      const fd = openSync(path, 'r');
+      // Windows requires a writable directory handle for FlushFileBuffers.
+      // A read-only handle opens but fsyncSync rejects it with EPERM.
+      const fd = openSync(path, process.platform === 'win32' ? 'r+' : 'r');
       try {
         fsyncSync(fd);
       } finally {

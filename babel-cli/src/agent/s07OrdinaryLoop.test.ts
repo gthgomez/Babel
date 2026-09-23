@@ -237,6 +237,7 @@ interface EngineInternals {
   readContextEpoch: number;
   conversation: ChatMessage[];
   readCache: Map<string, { hash: string; requestKey: string }>;
+  p11ObservationCaptureIssues?: string[];
 }
 
 function engineInternals(engine: ChatEngine): EngineInternals {
@@ -1091,7 +1092,11 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       for (const event of o.events) {
         if (event.type === 'context_compacted') compactionEvents += 1;
       }
-      assert.equal(o.events.at(-1)?.type, 'done', o.answer);
+      assert.equal(
+        o.events.at(-1)?.type,
+        'done',
+        `${o.answer}; observation capture: ${engineInternals(o.engine).p11ObservationCaptureIssues?.join('; ') ?? 'none'}`,
+      );
       assert.ok(compactionEvents >= 1, 'real compaction occurred in the loop, not just an epoch bump');
       assert.ok(
         o.sessionEvents.some((e) => e.kind === 'compaction_committed' || e.kind === 'compaction_created'),

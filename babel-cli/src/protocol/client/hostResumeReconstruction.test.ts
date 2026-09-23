@@ -220,7 +220,7 @@ function captureObservation(sessionDir: string, suffix: string): ObservationFixt
       policy: { durability: 'fsync_file_and_dir' },
     },
   );
-  assert.equal(captured.status, 'captured');
+  assert.equal(captured.status, 'captured', captured.status === 'evidence_degraded' ? captured.reason : '');
   if (captured.status !== 'captured') throw new Error('capture failed');
   const payload = captured.observation.payloads[0];
   assert.ok(payload, 'captured observation must carry a payload');
