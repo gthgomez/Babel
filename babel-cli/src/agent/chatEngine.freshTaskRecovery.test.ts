@@ -24,6 +24,8 @@ import { tmpdir } from 'node:os';
 import { ChatEngine } from './chatEngine.js';
 import { ingestVerifierResult } from './codingLoop/chatBindings.js';
 import { applyWorkingStateEvent, createWorkingState } from './codingLoop/workingState.js';
+import { actualRecoveryEdit, recoveryObservationId } from './codingLoop/recoveryPlan.js';
+import { createSessionEventLog, recordVerifierAttempt, recordWorkingStateSnapshot } from './sessionEvents.js';
 
 interface ProgressControllerProbe {
   readonly InterventionLevel: string;
@@ -90,7 +92,7 @@ test('R1 production path blocks arbitrary shell mutation before execution', asyn
       {},
       { index: 0, ownerGeneration: 0 },
     );
-    assert.match(result.observation, /RECOVERY_EVIDENCE_REQUIRED/);
+    assert.match(result.observation, /RECOVERY_EVIDENCE_REQUIRED|RECOVERY_CANDIDATE_DRIFT/);
     assert.equal(existsSync(target), false, 'the shell mutation must not reach the executor');
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -220,10 +222,166 @@ test('R1 recovery permit is invalidated by external workspace drift before mutat
       { type: 'run_command', command: `node -e "require('fs').writeFileSync('${marker.replaceAll('\\', '/')}', 'executed')"` },
       context, {}, { index: 1, ownerGeneration: 0 },
     );
-    assert.match(result.observation, /RECOVERY_EVIDENCE_REQUIRED/);
+    assert.match(result.observation, /RECOVERY_CANDIDATE_DRIFT/);
     assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
     assert.equal(existsSync(marker), false);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('R1 repair plan rejects a repeated edit and admits one changed scoped edit', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-r1-plan-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
+    mkdirSync(join(root, 'src'));
+    const file = join(root, 'src', 'parser.ts');
+    writeFileSync(file, 'export const value = 2\n');
+    execFileSync('git', ['add', 'src/parser.ts'], { cwd: root, windowsHide: true });
+    const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
+    const failedAction = { type: 'str_replace' as const, file_path: 'src/parser.ts', old_str: 'value = 1', new_str: 'value = 2' };
+    const failedEdit = actualRecoveryEdit(failedAction, root)!;
+    let state = applyWorkingStateEvent(createWorkingState('repair parser'), {
+      type: 'mutation', path: 'src/parser.ts', fingerprint: failedEdit.exactFingerprint,
+      canonicalFingerprint: failedEdit.editFingerprint,
+    });
+    state = ingestVerifierResult({
+      state, tool: 'test_run', target: 'npm test', exitCode: 1,
+      stdout: 'FAIL parser', stderr: '', summary: 'parser remains red',
+      recoveryProjectRoot: root, recoveryBinding: (engine as any).currentRecoveryBinding(),
+    }).state;
+    (engine as any).workingState = state;
+    const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
+    await (engine as any).executeOneAction(
+      { type: 'read_file', path: 'src/parser.ts' }, context, {}, { index: 0, ownerGeneration: 0 },
+    );
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+    const gate = (engine as any).workingState.recoveryGate;
+    const repairPlan = {
+      schemaVersion: 1, failureSignature: gate.failureSignature,
+      workspaceRevision: gate.binding.workspaceRevision,
+      hypothesisClass: 'logic', targetIdentities: ['src/parser.ts'],
+      actionFamily: 'str_replace', criterionId: 'npm test',
+      supportingObservationIds: gate.observedKeys.map(recoveryObservationId),
+    };
+    const noPlan = await (engine as any).executeOneAction(
+      { type: 'str_replace', file_path: 'src/parser.ts', old_str: 'value = 2', new_str: 'value = 3' },
+      context, {}, { index: 1, ownerGeneration: 0 },
+    );
+    assert.match(noPlan.observation, /RECOVERY_PLAN_REQUIRED/);
+    assert.match(readFileSync(file, 'utf8'), /value = 2/);
+
+    const repeated = await (engine as any).executeOneAction(
+      { ...failedAction, repair_plan: repairPlan }, context, {}, { index: 2, ownerGeneration: 0 },
+    );
+    assert.match(repeated.observation, /RECOVERY_STRATEGY_CHANGE_REQUIRED|RECOVERY_PLAN_REQUIRED/);
+    assert.match(readFileSync(file, 'utf8'), /value = 2/);
+
+    const changed = await (engine as any).executeOneAction(
+      { type: 'str_replace', file_path: 'src/parser.ts', old_str: 'value = 2', new_str: 'value = 3', repair_plan: repairPlan },
+      context, {}, { index: 3, ownerGeneration: 0 },
+    );
+    assert.doesNotMatch(changed.observation, /RECOVERY_PLAN_REQUIRED|RECOVERY_EVIDENCE_REQUIRED/);
+    assert.match(readFileSync(file, 'utf8'), /value = 3/);
+    assert.equal((engine as any).workingState.recoveryGate.permitConsumed, true);
+    const replay = await (engine as any).executeOneAction(
+      { type: 'str_replace', file_path: 'src/parser.ts', old_str: 'value = 3', new_str: 'value = 4', repair_plan: repairPlan },
+      context, {}, { index: 4, ownerGeneration: 0 },
+    );
+    assert.match(replay.observation, /RECOVERY_EVIDENCE_REQUIRED|RECOVERY_CANDIDATE_DRIFT/);
+    assert.match(readFileSync(file, 'utf8'), /value = 3/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('R1 resume restores bound evidence and refuses a newer unbound red verifier', () => {
+  const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+  const binding = (engine as any).currentRecoveryBinding();
+  assert.ok(binding);
+  let state = applyWorkingStateEvent(createWorkingState('repair parser'), {
+    type: 'verifier', identity: 'npm test', exitCode: 1, summary: 'parser red',
+  });
+  state = applyWorkingStateEvent(state, {
+    type: 'recovery_gate', failureSignature: 'parser-red', requiredEvidence: 'inspect',
+    failingTargets: ['src/agent/codingLoop/workingState.ts'], binding,
+  });
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence', evidence: 'read_file:workingState.ts', discriminating: true,
+    provenance: {
+      tool: 'read_file', target: 'src/agent/codingLoop/workingState.ts',
+      failureSignature: 'parser-red', binding, observationDigest: 'content',
+    },
+  });
+  assert.equal(state.recoveryGate?.satisfied, true);
+  const log = createSessionEventLog('recovery-resume-test');
+  recordVerifierAttempt(log, { turn_id: 'turn-1', command_preview: 'npm test', authoritative: true, exit_code: 1 });
+  recordWorkingStateSnapshot(log, state, 'turn-1');
+  (engine as any).restoreRecoveryWorkingState(log);
+  assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+  assert.deepEqual((engine as any).workingState.consumedRecoveryEvidence, state.consumedRecoveryEvidence);
+
+  recordVerifierAttempt(log, { turn_id: 'turn-2', command_preview: 'npm test', authoritative: true, exit_code: 1 });
+  (engine as any).restoreRecoveryWorkingState(log);
+  assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
+  assert.equal((engine as any).workingState.recoveryGate.binding, undefined);
+});
+
+test('R1 snapshot persistence failure blocks mutation without running the shell', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-r1-persistence-'));
+  const marker = join(root, 'executed.txt');
+  try {
+    const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+    (engine as any).recoveryStatePersistenceUnavailable = true;
+    const result = await (engine as any).executeOneAction(
+      { type: 'run_command', command: `node -e "require('fs').writeFileSync('${marker.replaceAll('\\', '/')}', 'executed')"` },
+      { agentId: 'test', runId: 'test', runDir: root, babelRoot: root },
+      {}, { index: 0, ownerGeneration: 0 },
+    );
+    assert.match(result.observation, /RECOVERY_STATE_PERSISTENCE_UNAVAILABLE/);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('R1 red command without verifier receipt closes recovery until a bound rerun', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-r1-unbound-red-'));
+  const marker = join(root, 'blocked.txt');
+  const envKeys = ['BABEL_BENCHMARK_AUTO_APPROVE', 'BABEL_BENCHMARK_MODE', 'BABEL_AUTONOMY_LEASE', 'BABEL_EXECUTION_PROFILE', 'BABEL_ALLOW_HOST_FALLBACK'] as const;
+  const prior = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+  try {
+    process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
+    process.env['BABEL_BENCHMARK_MODE'] = '1';
+    process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
+      version: 2, leaseId: 'recovery-unbound-red-test',
+      scope: { repository: 'fixture', objective: 'verify fail-closed recovery' },
+      allowedCapabilities: ['inspect_repository', 'run_arbitrary_code', 'run_local_command', 'run_tests', 'edit_task_files'],
+    });
+    process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+    const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+    (engine as any).workingState = applyWorkingStateEvent(createWorkingState('repair parser'), {
+      type: 'mutation', path: 'src/parser.ts', fingerprint: 'first-edit',
+    });
+    const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
+    const red = await (engine as any).executeOneAction(
+      { type: 'run_command', command: 'node -e "process.exit(1)"' },
+      context, {}, { index: 0, ownerGeneration: 0 },
+    );
+    assert.equal((engine as any).workingState.recoveryGate?.satisfied, false, red.observation);
+    assert.equal((engine as any).workingState.recoveryGate?.binding, undefined);
+    const blocked = await (engine as any).executeOneAction(
+      { type: 'run_command', command: `node -e "require('fs').writeFileSync('${marker.replaceAll('\\', '/')}', 'executed')"` },
+      context, {}, { index: 1, ownerGeneration: 0 },
+    );
+    assert.match(blocked.observation, /RECOVERY_CANDIDATE_DRIFT|RECOVERY_EVIDENCE_REQUIRED/);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    for (const key of envKeys) {
+      if (prior[key] === undefined) delete process.env[key];
+      else process.env[key] = prior[key];
+    }
     rmSync(root, { recursive: true, force: true });
   }
 });

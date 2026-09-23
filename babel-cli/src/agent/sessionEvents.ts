@@ -15,6 +15,7 @@ import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import type { TerminalReason, TerminalReasonCode } from './chatTerminalReason.js';
 import { classifyToolEffect, type ToolEffectClass } from '../executor/contracts.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
+import type { WorkingState } from './codingLoop/workingState.js';
 import {
   buildToolLifecycleCausalityDiagnostic,
   SessionEventLifecycleCausalityError,
@@ -136,7 +137,8 @@ export type SessionEventKind =
   /** H2: approval decision boundary. */
   | 'approval_decision'
   /** H2: typed repair attempt (failure-class keyed). */
-  | 'repair_attempt';
+  | 'repair_attempt'
+  | 'working_state_snapshot';
 
 export interface SessionEventBase {
   schema_version: typeof SESSION_EVENT_SCHEMA_VERSION;
@@ -486,6 +488,11 @@ export type SessionEvent =
       failure_class: string;
       attempt: number;
       detail?: string;
+    })
+  | (SessionEventBase & {
+      kind: 'working_state_snapshot';
+      state_schema_version: 1;
+      state: WorkingState;
     });
 
 /** Stable, content-free identity for matching a resumed tool request to durable evidence. */
@@ -1842,6 +1849,16 @@ export function shortDigest(text: string): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 16);
 }
 
+/** Snapshot controller recovery state in the existing durable session envelope. */
+export function recordWorkingStateSnapshot(log: SessionEventLog, state: WorkingState, turnId: string | null): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'working_state_snapshot',
+    turn_id: turnId,
+    state_schema_version: 1,
+    state: structuredClone(state),
+  })
+}
+
 /** Serialize all events as JSONL (one object per line). */
 export function serializeSessionEventLog(log: SessionEventLog): string {
   return log.events.map((e) => JSON.stringify(e)).join('\n') + (log.events.length ? '\n' : '');
@@ -1865,7 +1882,7 @@ export function parseSessionEventLog(
     'tool_completed', 'tool_failed', 'tool_cancelled', 'recovery_reconciled', 'mutation_batch',
     'verifier_attempt', 'gate_decision', 'policy_intervened', 'progress_recovery',
     'completion_decision', 'model_failover', 'compaction_started', 'compaction_summary', 'compaction_committed', 'compaction_created', 'turn_ended',
-    'budget_snapshot', 'approval_decision', 'repair_attempt',
+    'budget_snapshot', 'approval_decision', 'repair_attempt', 'working_state_snapshot',
   ])
 
   for (const [index, line] of lines.entries()) {
@@ -1917,12 +1934,13 @@ export function parseSessionEventLog(
       completion_decision: ['requested_outcome', 'final_outcome', 'allowed', 'reason', 'evidence_refs', 'policy_version'],
       model_failover: [], compaction_started: ['operation_id', 'strategy', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count'], compaction_summary: ['operation_id', 'capsule_digest', 'raw_observation_refs', 'preserved_tool_call_ids'], compaction_committed: ['operation_id', 'thread_event_id', 'capsule_digest', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'preserved_tool_call_ids'], compaction_created: [], turn_ended: ['status'], budget_snapshot: [],
       approval_decision: ['request_id', 'decision'], repair_attempt: ['failure_class', 'attempt'],
+      working_state_snapshot: ['state_schema_version', 'state'],
     }
     const arrayFields = new Set(['paths', 'signals', 'evidence_refs', 'raw_observation_refs', 'preserved_tool_call_ids', 'delivered_tool_call_ids'])
-    const objectFields = new Set(['receipt'])
+    const objectFields = new Set(['receipt', 'state'])
     const booleanFields = new Set(['authoritative', 'allowed', 'advertised'])
     const nullableBooleanFields = new Set(['authorized', 'effective'])
-    const numberFields = new Set(['score', 'attempt', 'backoff_ms', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'status_code'])
+    const numberFields = new Set(['score', 'attempt', 'backoff_ms', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'status_code', 'state_schema_version'])
     for (const field of required[ev.kind as SessionEventKind]) {
       if (!(field in ev)) throw new Error(`Invalid session event at line ${index + 1}: ${field} is required`)
       const fieldValue = ev[field]
@@ -1941,6 +1959,10 @@ export function parseSessionEventLog(
       if (!arrayFields.has(field) && !objectFields.has(field) && !booleanFields.has(field) && !nullableBooleanFields.has(field) && !numberFields.has(field) && typeof fieldValue !== 'string') {
         throw new Error(`Invalid session event at line ${index + 1}: ${field} must be a string`)
       }
+    }
+    if (ev.kind === 'working_state_snapshot' &&
+        (ev.state_schema_version !== 1 || typeof ev.state !== 'object' || ev.state === null || Array.isArray(ev.state))) {
+      throw new Error(`Invalid session event at line ${index + 1}: working state snapshot schema`)
     }
     const effectClasses: ToolEffectClass[] = [
       'read_only', 'idempotent', 'reconcilable_mutation',

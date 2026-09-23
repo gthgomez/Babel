@@ -69,6 +69,7 @@ export {
   preserveWorkingStateMessages,
   recordControllerRecoveryStrategy,
   recoveryEvidenceKey,
+  restoreWorkingStateSnapshot,
   sameRecoveryBinding,
   RECOVERY_EVIDENCE_TOOLS,
   targetMatchesGate,

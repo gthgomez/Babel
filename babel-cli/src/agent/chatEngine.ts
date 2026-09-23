@@ -166,6 +166,7 @@ import {
   invalidateReadCacheForPath,
   recordControllerRecoveryStrategy,
   recoveryEvidenceKey,
+  restoreWorkingStateSnapshot,
   sameRecoveryBinding,
   RECOVERY_EVIDENCE_TOOLS,
   resetOneShotSnapshot,
@@ -181,6 +182,7 @@ import {
 } from './codingLoop/index.js';
 import { ingestVerifierResult, rememberFullReadWindow } from './codingLoop/chatBindings.js';
 import { recoveryTargetIdentity, recoveryWorkspaceRevision } from './codingLoop/recoveryIdentity.js';
+import { actualRecoveryEdit, admitRecoveryPlan } from './codingLoop/recoveryPlan.js';
 import { canonicalizeContained } from '../bridge/workspaceBound.js';
 
 import { parseTextToolTurn } from './textToolParser.js';
@@ -267,6 +269,8 @@ import {
   recordMutationBatch,
   recordPolicyIntervened,
   recordProgressRecovery,
+  recordWorkingStateSnapshot,
+  flushSessionEventLogStrict,
   resumedToolRecoveryGuidance,
   operationFingerprint,
   requiresRecoveredOutcomeReconciliation,
@@ -1405,6 +1409,7 @@ export class ChatEngine {
   /** Last authoritative verifier failed (reopens investigation tools). */
   private lastVerifierFailed = false;
   private workingState: WorkingState = createWorkingState();
+  private recoveryStatePersistenceUnavailable = false;
   /** P11 A11a: exact approved observation refs retained for the installed context. */
   private p11ObservationRefs: ObservationRefV1[] = [];
   private p11ObservationCaptureIssues: string[] = [];
@@ -4966,6 +4971,7 @@ export class ChatEngine {
       runDir: options?.runDir ?? this.engineRunDir,
     });
     this.restorePersistedVerifierEvidence(log);
+    this.restoreRecoveryWorkingState(log);
     const repairGuidance = resumedToolRecoveryGuidance(this.parity.sessionEvents);
     if (
       repairGuidance &&
@@ -4974,6 +4980,39 @@ export class ChatEngine {
       this.conversation.push({ role: 'system', content: repairGuidance });
     }
     return interrupted;
+  }
+
+  private persistRecoveryWorkingState(): void {
+    try {
+      recordWorkingStateSnapshot(this.parity.sessionEvents, this.workingState, this.parity.turnId ?? null);
+      flushSessionEventLogStrict(this.engineRunDir, this.parity.sessionEvents);
+    } catch {
+      // A settled tool must not throw into the generic settlement catch and
+      // append a duplicate terminal. Future mutations fail closed instead.
+      this.recoveryStatePersistenceUnavailable = true;
+    }
+  }
+
+  private restoreRecoveryWorkingState(log: SessionEventLog): void {
+    const latestSnapshot = [...log.events].reverse().find((event) => event.kind === 'working_state_snapshot');
+    const latestVerifier = [...log.events].reverse().find((event) =>
+      event.kind === 'verifier_attempt' && event.authoritative && event.exit_code !== undefined,
+    );
+    if (latestSnapshot?.kind === 'working_state_snapshot' &&
+        (!latestVerifier || latestSnapshot.seq > latestVerifier.seq)) {
+      const restored = restoreWorkingStateSnapshot(latestSnapshot.state);
+      if (restored) {
+        this.workingState = restored;
+        return;
+      }
+    }
+    if (latestSnapshot || (latestVerifier?.kind === 'verifier_attempt' && latestVerifier.exit_code !== 0)) {
+      this.workingState = applyWorkingStateEvent(createWorkingState(this.options.task), {
+        type: 'recovery_gate',
+        failureSignature: 'resumed-unbound-red-verifier',
+        requiredEvidence: 'Rerun the failed verifier to bind recovery to the current candidate.',
+      });
+    }
   }
   restoreSessionEventsFromDir(runDir?: string): number {
     const targetDir = runDir ?? this.engineRunDir;
@@ -5514,6 +5553,7 @@ export class ChatEngine {
       // preserves the current state by construction; this reset lives only in the
       // fresh-task branch. Historical durable logs are untouched.
       this.workingState = createWorkingState(runtime.taskText.slice(0, 240));
+      this.persistRecoveryWorkingState();
       // P11 exact observations and the installed generation are task-scoped.
       // A fresh task may not recall or checkpoint evidence captured under a
       // prior task owner, even when the physical observation bytes remain.
@@ -6915,44 +6955,59 @@ export class ChatEngine {
       const shellMutationAttempt = action.type === 'run_command';
       const shellObservation = action.type === 'run_command' || action.type === 'test_run';
       let recoveryGate = this.workingState.recoveryGate;
+      let driftedCandidate = false;
+      let currentBinding = null as RecoveryCandidateBinding | null;
       if (recoveryGate && (mutationAttempt || shellMutationAttempt)) {
-        const currentBinding = this.currentRecoveryBinding();
+        currentBinding = this.currentRecoveryBinding();
         if (!recoveryGate.binding || !currentBinding || !sameRecoveryBinding(recoveryGate.binding, currentBinding)) {
           this.workingState = applyWorkingStateEvent(this.workingState, { type: 'recovery_candidate_drift' });
+          this.persistRecoveryWorkingState();
           recoveryGate = this.workingState.recoveryGate;
+          driftedCandidate = true;
+        }
+      }
+      const proposedEdit = recoveryGate && (action.type === 'write_file' || action.type === 'str_replace' || action.type === 'apply_patch')
+        ? actualRecoveryEdit(action, this.options.projectRoot)
+        : null;
+      let admittedThisAction = false;
+      if (recoveryGate?.satisfied && mutationAttempt && proposedEdit && currentBinding && !driftedCandidate) {
+        const proposal = 'repair_plan' in action ? action.repair_plan : undefined;
+        const admission = admitRecoveryPlan(this.workingState, proposal, proposedEdit, currentBinding);
+        if (admission.admitted) {
+          this.workingState = admission.state;
+          recoveryGate = this.workingState.recoveryGate;
+          admittedThisAction = true;
         }
       }
       const recoveryAction = mutationAttempt || shellMutationAttempt || shellObservation;
       const actionFingerprint = recoveryAction
-        ? operationFingerprint(chatActionToolName(action), action)
+        ? proposedEdit?.exactFingerprint ?? operationFingerprint(chatActionToolName(action), action)
         : null;
       const equivalentRedMutation = recoveryAction &&
         recoveryGate?.satisfied === true &&
         recoveryGate.mutationFingerprint !== undefined &&
         recoveryGate.mutationFingerprint === actionFingerprint &&
         this.workingState.failureSurface?.errorSignature === recoveryGate.failureSignature;
-      const strategyChangeRequired =
+      const planRequired =
         recoveryGate !== undefined &&
         recoveryGate.satisfied === true &&
-        recoveryGate.strategyChanged !== true &&
-        this.workingState.failureSurface?.errorSignature === recoveryGate.failureSignature;
+        !admittedThisAction;
       if (
         recoveryGate &&
         (((mutationAttempt || shellMutationAttempt) && !recoveryGate.satisfied) ||
-          ((mutationAttempt || shellMutationAttempt) && strategyChangeRequired) ||
+          ((mutationAttempt || shellMutationAttempt) && planRequired) ||
           equivalentRedMutation)
       ) {
         const detail = [
-          equivalentRedMutation || strategyChangeRequired
-            ? '[RECOVERY_STRATEGY_CHANGE_REQUIRED]'
+          driftedCandidate ? '[RECOVERY_CANDIDATE_DRIFT]'
+            : equivalentRedMutation ? '[RECOVERY_STRATEGY_CHANGE_REQUIRED]'
+            : planRequired ? '[RECOVERY_PLAN_REQUIRED]'
             : '[RECOVERY_EVIDENCE_REQUIRED]',
           `failure_signature=${recoveryGate.failureSignature}`,
-          equivalentRedMutation || strategyChangeRequired
-            ? 'The same mutation fingerprint remains tied to the same red verifier; choose a materially different repair.'
+          driftedCandidate ? 'The workspace differs from the failed candidate; rerun the verifier before repairing.'
+            : equivalentRedMutation ? 'The proposed edit repeats the failed operation.'
+            : planRequired ? 'Submit a scoped repair plan supported by current observation IDs and the actual edit.'
             : recoveryGate.requiredEvidence,
-          equivalentRedMutation || strategyChangeRequired
-            ? 'A different mutation or localization is required; repeating the equivalent patch is blocked.'
-            : 'The previous repair hypothesis remains unverified. Acquire a new observation before another mutation.',
         ].join(' ');
         this.toolCallLog.push({
           tool,
@@ -6967,6 +7022,16 @@ export class ChatEngine {
           index: meta.index,
           observation: `### ${tool} ${target}\nexit_code: 1\n${detail}`,
         };
+      }
+      if (admittedThisAction) {
+        this.workingState = applyWorkingStateEvent(this.workingState, { type: 'recovery_plan_consumed' });
+        this.persistRecoveryWorkingState();
+      }
+      if (this.recoveryStatePersistenceUnavailable && (mutationAttempt || shellMutationAttempt)) {
+        const detail = '[RECOVERY_STATE_PERSISTENCE_UNAVAILABLE] Recovery state could not be saved before mutation.';
+        this.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1 });
+        callbacks?.onToolComplete?.(toolId, 'recovery-state-persistence-unavailable', 'blocked', 1);
+        return { index: meta.index, observation: `### ${tool} ${target}\nexit_code: 1\n${detail}` };
       }
 
       const recoveredAuthorization = this.recoveredOperationDispatchAuthorization(action);
@@ -7920,10 +7985,12 @@ export class ChatEngine {
             invalidateVerifierLedger(this as never, strReplaceEffect.reason);
           }
           if (strReplaceEffect.status === 'confirmed_change') {
+            const edit = actualRecoveryEdit(action, this.options.projectRoot);
             this.workingState = applyWorkingStateEvent(this.workingState, {
               type: 'mutation',
               path: gov.absolutePath,
-              fingerprint: operationFingerprint(chatActionToolName(action), action),
+              fingerprint: edit?.exactFingerprint ?? operationFingerprint(chatActionToolName(action), action),
+              ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
             });
             noteChatWorkspaceMutation(this as never);
             callbacks?.onFileChanged?.(
@@ -7983,10 +8050,12 @@ export class ChatEngine {
         }
         invalidateReadCacheForPath(this.readCache, this.readCacheKey(gov.absolutePath));
         this.fullReadCounts.delete(this.readCacheKey(gov.absolutePath));
+        const edit = actualRecoveryEdit(action, this.options.projectRoot);
         this.workingState = applyWorkingStateEvent(this.workingState, {
           type: 'mutation',
           path: gov.absolutePath,
-          fingerprint: operationFingerprint(chatActionToolName(action), action),
+          fingerprint: edit?.exactFingerprint ?? operationFingerprint(chatActionToolName(action), action),
+          ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
         });
         noteChatWorkspaceMutation(this as never);
         const lineNumber = gov.lineNumber ?? 0;
@@ -8110,6 +8179,7 @@ export class ChatEngine {
               target,
               evidence,
             });
+            this.persistRecoveryWorkingState();
           }
         }
         return {
@@ -8503,10 +8573,12 @@ export class ChatEngine {
           const dels = (diff.match(/^-[^-]/gm) ?? []).length;
           callbacks.onFileChanged?.(action.path, adds, dels, diff);
           this.fullReadCounts.delete(this.readCacheKey(action.path));
+          const edit = actualRecoveryEdit(action, this.options.projectRoot);
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'mutation',
             path: action.path,
-            fingerprint: operationFingerprint(chatActionToolName(action), action),
+            fingerprint: edit?.exactFingerprint ?? operationFingerprint(chatActionToolName(action), action),
+            ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
           });
           noteChatWorkspaceMutation(this as never);
           // Crash-safe: persist patch to recovery log
@@ -8520,10 +8592,12 @@ export class ChatEngine {
           const { adds, dels } = countPatchStats(action.patch);
           const path = primaryPatchPath(action.patch);
           callbacks.onFileChanged?.(path, adds, dels, action.patch);
+          const edit = actualRecoveryEdit(action, this.options.projectRoot);
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'mutation',
             path,
-            fingerprint: operationFingerprint(chatActionToolName(action), action),
+            fingerprint: edit?.exactFingerprint ?? operationFingerprint(chatActionToolName(action), action),
+            ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
           });
           noteChatWorkspaceMutation(this as never);
           // Crash-safe: persist patch to recovery log
@@ -8629,6 +8703,7 @@ export class ChatEngine {
                 : {}),
             });
             this.workingState = ingested.state;
+            this.persistRecoveryWorkingState();
             this.lastVerifierFailed = ingested.lastVerifierFailed;
             const surfaceKind = this.workingState.failureSurface?.kind;
             // Only a *classified* implementation failure spends implementation
@@ -8653,6 +8728,17 @@ export class ChatEngine {
                 { evidence_refs: this.workingState.failureSurface.evidenceRefs },
               ));
             }
+          } else if (lastResult.exit_code !== 0 && this.workingState.lastMutation) {
+            // A red command without a durable verifier receipt cannot grant
+            // recovery authority. Keep the failed candidate closed until an
+            // authoritative verifier can bind a fresh failure and revision.
+            this.workingState = applyWorkingStateEvent(this.workingState, {
+              type: 'recovery_gate',
+              failureSignature: 'unbound-red-verifier',
+              requiredEvidence: 'Rerun an authoritative verifier to bind this failure to the current candidate.',
+            });
+            this.persistRecoveryWorkingState();
+            this.lastVerifierFailed = true;
           } else if (lastResult.exit_code === 0 && !confirmedShellMutation) {
             invalidateVerifierLedger(this as never, 'non-verifier shell command executed');
           }
@@ -8736,6 +8822,7 @@ export class ChatEngine {
               target,
               evidence,
             });
+            this.persistRecoveryWorkingState();
           }
         }
       }

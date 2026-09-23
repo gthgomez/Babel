@@ -129,7 +129,7 @@ test('irrelevant evidence does not clear the controller recovery gate', () => {
   assert.equal(state.recoveryGate?.satisfied, false);
 });
 
-test('a new hypothesis is required before a post-red mutation can proceed', () => {
+test('a new hypothesis alone does not admit a post-red mutation', () => {
   let state = createWorkingState('fix bug X');
   state = applyWorkingStateEvent(state, { type: 'set_hypothesis', hypothesis: 'the parser is the cause' });
   state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
@@ -161,10 +161,11 @@ test('a new hypothesis is required before a post-red mutation can proceed', () =
     type: 'set_hypothesis',
     hypothesis: 'the caller passes the wrong collection shape',
   });
-  assert.equal(state.recoveryGate?.strategyChanged, true);
+  assert.equal(state.recoveryGate?.strategyChanged, false);
+  assert.equal(state.recoveryGate?.planAdmitted, false);
 });
 
-test('accepted discriminating evidence records a controller strategy revision', () => {
+test('accepted evidence proposes investigation without admitting a repair plan', () => {
   let state = createWorkingState('fix bug X');
   state = applyWorkingStateEvent(state, {
     type: 'set_hypothesis',
@@ -200,7 +201,8 @@ test('accepted discriminating evidence records a controller strategy revision', 
     evidence,
   });
   assert.equal(state.recoveryGate?.satisfied, true);
-  assert.equal(state.recoveryGate?.strategyChanged, true);
+  assert.equal(state.recoveryGate?.strategyChanged, false);
+  assert.equal(state.recoveryGate?.planAdmitted, false);
   assert.match(state.nextExperiment, /^controller-investigate:/);
 });
 

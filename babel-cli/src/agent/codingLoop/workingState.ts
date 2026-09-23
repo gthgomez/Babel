@@ -4,7 +4,9 @@
  */
 
 import type { ChatMessage } from '../chatToolDefinitions.js'
+import { createHash } from 'node:crypto'
 import type { FailureSurface, RepairDiagnosis, RepairDiagnosisKind } from './failureSurface.js'
+import type { AdmittedRecoveryPlanV1 } from './recoveryPlan.js'
 
 export const WORKING_STATE_NAME = 'working_state'
 export const WORKING_STATE_MARKER = '<!-- BABEL_WORKING_STATE -->'
@@ -23,7 +25,7 @@ export interface WorkingState {
   currentHypothesis: string
   evidence: string[]
   filesOfInterest: string[]
-  lastMutation?: { path: string; at: number; fingerprint?: string }
+  lastMutation?: { path: string; at: number; fingerprint?: string; canonicalFingerprint?: string }
   lastVerifier?: { identity: string; exitCode: number; summary: string; fresh: boolean }
   failureSurface?: FailureSurface
   /** Controller-captured red result observed before any mutation in this task. */
@@ -38,6 +40,7 @@ export interface WorkingState {
    * failure is not new discriminating evidence, even across gate recreation.
    */
   consumedRecoveryEvidence: string[]
+  lastAdmittedPlan?: AdmittedRecoveryPlanV1
   /** Controller-owned gate after a red verifier; model prose cannot clear it. */
   recoveryGate?: {
     failureSignature: string
@@ -59,6 +62,9 @@ export interface WorkingState {
     strategyAtFailure?: string
     satisfied: boolean
     strategyChanged: boolean
+    planAdmitted?: boolean
+    permitConsumed?: boolean
+    admittedPlan?: AdmittedRecoveryPlanV1
   }
   revision: number
 }
@@ -120,13 +126,15 @@ export type WorkingStateEvent =
       provenance?: RecoveryEvidenceProvenance
     }
   | { type: 'recovery_strategy'; strategy: string; evidence?: string[] }
-  | { type: 'mutation'; path: string; fingerprint?: string }
+  | { type: 'mutation'; path: string; fingerprint?: string; canonicalFingerprint?: string }
   | { type: 'verifier'; identity: string; exitCode: number; summary: string }
   | { type: 'failure_surface'; surface: FailureSurface }
   | { type: 'diagnosis'; diagnosis: RepairDiagnosis }
   | { type: 'invalidate'; assumption: string }
   | { type: 'next_experiment'; experiment: string }
   | { type: 'recovery_candidate_drift' }
+  | { type: 'recovery_plan_admitted'; plan: AdmittedRecoveryPlanV1 }
+  | { type: 'recovery_plan_consumed' }
   | {
       type: 'recovery_gate'
       failureSignature: string
@@ -168,13 +176,6 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       }
       next.currentHypothesis = event.hypothesis
       if (event.evidence) next.evidence = pushAll(next.evidence, event.evidence)
-      if (
-        next.recoveryGate?.satisfied &&
-        event.hypothesis.trim() !== '' &&
-        event.hypothesis !== next.recoveryGate.hypothesisAtFailure
-      ) {
-        next.recoveryGate = { ...next.recoveryGate, strategyChanged: true }
-      }
       break
     case 'add_evidence': {
       next.evidence = pushUnique(next.evidence, event.evidence)
@@ -222,12 +223,13 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
     }
     case 'mutation':
       if (next.recoveryGate) {
-        next.recoveryGate = { ...next.recoveryGate, satisfied: false, strategyChanged: false }
+        next.recoveryGate = { ...next.recoveryGate, satisfied: false, strategyChanged: false, planAdmitted: false, permitConsumed: true }
       }
       next.lastMutation = {
         path: event.path,
         at: Date.now(),
         ...(event.fingerprint !== undefined ? { fingerprint: event.fingerprint } : {}),
+        ...(event.canonicalFingerprint !== undefined ? { canonicalFingerprint: event.canonicalFingerprint } : {}),
       }
       next.filesOfInterest = pushUnique(next.filesOfInterest, event.path)
       if (next.lastVerifier) {
@@ -236,8 +238,19 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       break
     case 'recovery_candidate_drift':
       if (next.recoveryGate) {
-        next.recoveryGate = { ...next.recoveryGate, satisfied: false, strategyChanged: false }
+        next.recoveryGate = { ...next.recoveryGate, satisfied: false, strategyChanged: false, planAdmitted: false, permitConsumed: true }
         next.nextExperiment = 'The failed candidate changed. Rerun the verifier before acquiring recovery evidence.'
+      }
+      break
+    case 'recovery_plan_admitted':
+      if (next.recoveryGate?.satisfied && !next.recoveryGate.permitConsumed) {
+        next.recoveryGate = { ...next.recoveryGate, admittedPlan: event.plan, planAdmitted: true, strategyChanged: true }
+      }
+      break
+    case 'recovery_plan_consumed':
+      if (next.recoveryGate?.planAdmitted && next.recoveryGate.admittedPlan) {
+        next.lastAdmittedPlan = next.recoveryGate.admittedPlan
+        next.recoveryGate = { ...next.recoveryGate, planAdmitted: false, permitConsumed: true }
       }
       break
     case 'verifier':
@@ -302,39 +315,28 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         strategyAtFailure: next.currentHypothesis,
         satisfied: false,
         strategyChanged: false,
+        planAdmitted: false,
+        permitConsumed: false,
       }
       next.nextExperiment = event.requiredEvidence
       break
     case 'recovery_strategy':
       if (event.evidence) next.evidence = pushAll(next.evidence, event.evidence)
       next.nextExperiment = event.strategy
-      if (
-        next.recoveryGate?.satisfied &&
-        event.strategy.trim() !== '' &&
-        event.strategy !== (next.recoveryGate.strategyAtFailure ?? next.recoveryGate.hypothesisAtFailure)
-      ) {
-        next.recoveryGate = {
-          ...next.recoveryGate,
-          strategyAtFailure: event.strategy,
-          strategyChanged: true,
-        }
-      }
       break
   }
   return next
 }
 
 /**
- * Record a controller-owned strategy revision after accepted discriminating
- * evidence. This is separate from model hypothesis prose: only a novel,
- * relevant target can open this transition, and it makes no claim about
- * semantic equivalence of repair attempts.
+ * Suggest the next investigation after accepted evidence. Repair authority is
+ * separate and requires an admitted plan tied to the actual edit.
  */
 export function recordControllerRecoveryStrategy(
   state: WorkingState,
   input: { target: string; evidence: string },
 ): WorkingState {
-  if (!state.recoveryGate?.satisfied || state.recoveryGate.strategyChanged) return state
+  if (!state.recoveryGate?.satisfied) return state
   return applyWorkingStateEvent(state, {
     type: 'recovery_strategy',
     strategy: `controller-investigate:${input.target}`,
@@ -370,10 +372,15 @@ export function formatWorkingStateBlock(state: WorkingState): string {
     `  next_experiment: ${yamlScalar(state.nextExperiment)}`,
   ]
   if (state.recoveryGate) {
+    const observationIds = (state.recoveryGate.observedKeys ?? [])
+      .map((key) => createHash('sha256').update(key).digest('hex').slice(0, 16))
     lines.push(
-      `  recovery_gate: ${state.recoveryGate.satisfied ? 'satisfied' : 'evidence_required'}`,
+      `  recovery_gate: ${state.recoveryGate.satisfied ? 'evidence_satisfied' : 'evidence_required'}`,
+      `  recovery_failure: ${yamlScalar(state.recoveryGate.failureSignature)}`,
+      `  recovery_revision: ${yamlScalar(state.recoveryGate.binding?.workspaceRevision ?? '')}`,
       `  recovery_evidence: ${yamlScalar(state.recoveryGate.requiredEvidence)}`,
-      `  recovery_strategy: ${state.recoveryGate.strategyChanged ? 'changed' : 'unchanged'}`,
+      `  recovery_observation_keys: ${yamlList(observationIds, 4)}`,
+      `  recovery_plan: ${state.recoveryGate.planAdmitted ? 'admitted' : 'required'}`,
     )
   }
   if (state.lastVerifier && !state.lastVerifier.fresh) {
@@ -480,6 +487,40 @@ function normalizeTarget(value: string): string {
     }
   }
   return segments.join('/')
+}
+
+/** Restore a controller snapshot without promoting legacy permits to authority. */
+export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as Partial<WorkingState>
+  const strings = (list: unknown): list is string[] =>
+    Array.isArray(list) && list.every((item) => typeof item === 'string')
+  if (typeof candidate.goal !== 'string' || typeof candidate.currentHypothesis !== 'string' ||
+      typeof candidate.nextExperiment !== 'string' ||
+      !strings(candidate.evidence) || !strings(candidate.filesOfInterest) ||
+      !strings(candidate.openQuestions) || !strings(candidate.invalidatedAssumptions) ||
+      !strings(candidate.consumedRecoveryEvidence) ||
+      typeof candidate.revision !== 'number' || !Number.isSafeInteger(candidate.revision)) return null
+  const restored = structuredClone(candidate) as WorkingState
+  const gate = restored.recoveryGate
+  if (gate) {
+    if (typeof gate.failureSignature !== 'string' || typeof gate.requiredEvidence !== 'string' ||
+        !strings(gate.observedKeys ?? []) || !strings(gate.failingTargets ?? [])) return null
+    const binding = gate.binding
+    const validBinding = binding && binding.schemaVersion === 1 &&
+      typeof binding.taskId === 'string' && binding.taskId.length > 0 &&
+      typeof binding.contractHash === 'string' && binding.contractHash.length > 0 &&
+      typeof binding.repositoryIdentity === 'string' && binding.repositoryIdentity.length > 0 &&
+      typeof binding.workspaceRevision === 'string' && binding.workspaceRevision.length > 0
+    restored.recoveryGate = {
+      ...gate,
+      satisfied: validBinding === true && gate.satisfied === true && (gate.observedKeys ?? []).length > 0,
+      strategyChanged: false,
+      planAdmitted: false,
+      permitConsumed: gate.permitConsumed === true,
+    }
+  }
+  return restored
 }
 
 export function sameRecoveryBinding(a: RecoveryCandidateBinding, b: RecoveryCandidateBinding): boolean {

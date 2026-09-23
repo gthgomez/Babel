@@ -31,6 +31,7 @@ import type { ToolCallRequest } from '../localTools.js';
 import { targetBasename } from '../services/targetResolver.js';
 import { trimForPrompt } from '../services/liteProjectContext.js';
 import { normalizeModelToolName } from './canonicalToolMapping.js';
+import { RecoveryPlanProposalSchema } from './codingLoop/recoveryPlan.js';
 import {
   compileObservation,
   formatCompiledObservation,
@@ -53,8 +54,8 @@ export const ChatToolActionSchema = z.discriminatedUnion('type', [
   BaseListDirSchema,
   BaseGrepSchema,
   BaseGlobSchema,
-  BaseWriteFileSchema,
-  BaseApplyPatchSchema,
+  BaseWriteFileSchema.extend({ repair_plan: RecoveryPlanProposalSchema.optional() }),
+  BaseApplyPatchSchema.extend({ repair_plan: RecoveryPlanProposalSchema.optional() }),
   // Optional background flag on run_command (chat path only).
   BaseRunCommandSchema.extend({
     background: z.boolean().optional(),
@@ -80,6 +81,7 @@ export const ChatToolActionSchema = z.discriminatedUnion('type', [
     file_path: z.string().min(1),
     old_str: z.string().min(1),
     new_str: z.string(),
+    repair_plan: RecoveryPlanProposalSchema.optional(),
   }),
   z.object({
     type: z.literal('read_range'),
@@ -908,6 +910,22 @@ export function parseChatTurn(rawText: string): ChatTurn {
 
 // ─── Native Tool Definitions ───────────────────────────────────────────────
 
+const RECOVERY_PLAN_PARAMETER = {
+  type: 'object',
+  description: 'Required after a failed repair: cite the current failure, revision, inspected observation IDs, verifier criterion, scoped targets, and proposed strategy. The controller validates it against the actual edit.',
+  properties: {
+    schemaVersion: { type: 'number', enum: [1] },
+    failureSignature: { type: 'string' },
+    workspaceRevision: { type: 'string' },
+    hypothesisClass: { type: 'string', enum: ['logic', 'data_flow', 'interface', 'test_expectation', 'configuration'] },
+    targetIdentities: { type: 'array', items: { type: 'string' } },
+    actionFamily: { type: 'string', enum: ['write_file', 'str_replace', 'apply_patch'] },
+    criterionId: { type: 'string' },
+    supportingObservationIds: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['schemaVersion', 'failureSignature', 'workspaceRevision', 'hypothesisClass', 'targetIdentities', 'actionFamily', 'criterionId', 'supportingObservationIds'],
+} as const;
+
 /**
  * Build the OpenAI-compatible tool definitions for all available chat actions.
  * Each tool definition is a JSON Schema describing the function's parameters.
@@ -1013,6 +1031,7 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
           properties: {
             path: { type: 'string', description: 'Target file path' },
             content: { type: 'string', description: 'Full file contents to write' },
+            repair_plan: RECOVERY_PLAN_PARAMETER,
           },
           required: ['path', 'content'],
         },
@@ -1030,6 +1049,7 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
             file_path: { type: 'string', description: 'Absolute or project-relative path to the target file' },
             old_str: { type: 'string', description: 'The exact text to replace (must match including whitespace and indentation)' },
             new_str: { type: 'string', description: 'The new text to substitute in place of old_str' },
+            repair_plan: RECOVERY_PLAN_PARAMETER,
           },
           required: ['file_path', 'old_str', 'new_str'],
         },
@@ -1088,6 +1108,7 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
           type: 'object',
           properties: {
             patch: { type: 'string', description: 'Unified diff content to apply' },
+            repair_plan: RECOVERY_PLAN_PARAMETER,
           },
           required: ['patch'],
         },
