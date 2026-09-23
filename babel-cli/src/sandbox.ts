@@ -373,7 +373,7 @@ export const PROCESS_ABORT_SETTLE_MS = 500;
  */
 const pendingProcessTerminations = new Set<Promise<void>>();
 
-/** Resolve once every deferred abort-path child-tree termination has been issued. */
+/** Resolve once every deferred abort-path child-tree termination has closed. */
 export function awaitPendingProcessTerminations(): Promise<void> {
   return Promise.all([...pendingProcessTerminations]).then(() => undefined);
 }
@@ -496,20 +496,47 @@ export function spawnCommandAsync(
       // queue — otherwise Windows cancel latency is dominated by taskkill, not
       // by AbortSignal delivery.
       finish(1, new Error(`spawn ${executable} aborted`));
-      const termination = new Promise<void>((resolveTermination) => {
+      const termination = new Promise<void>((resolveTermination, rejectTermination) => {
+        let killIssued = false;
+        let childClosed = false;
+        let complete = false;
+        const finishTermination = () => {
+          if (complete || !killIssued || !childClosed) return;
+          complete = true;
+          clearTimeout(closeTimeout);
+          resolveTermination();
+        };
+        const onClose = () => {
+          childClosed = true;
+          finishTermination();
+        };
+        const closeTimeout = setTimeout(() => {
+          if (complete) return;
+          complete = true;
+          child.removeListener('close', onClose);
+          rejectTermination(new Error(`Aborted process ${executable} did not close after tree termination`));
+        }, 5_000);
+        child.once('close', onClose);
         setImmediate(() => {
           try {
             terminateChildTree(child);
             if (executionId) options.processWitness?.killed(processInput, executionId);
-          } finally {
-            resolveTermination();
+            killIssued = true;
+            finishTermination();
+          } catch (error) {
+            if (complete) return;
+            complete = true;
+            clearTimeout(closeTimeout);
+            child.removeListener('close', onClose);
+            rejectTermination(error);
           }
         });
       });
       pendingProcessTerminations.add(termination);
-      void termination.then(() => {
-        pendingProcessTerminations.delete(termination);
-      });
+      void termination.then(
+        () => pendingProcessTerminations.delete(termination),
+        () => pendingProcessTerminations.delete(termination),
+      );
     };
 
     if (options.timeoutMs > 0) {

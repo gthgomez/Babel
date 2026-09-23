@@ -43,50 +43,6 @@ export type RecoveryEditAction =
   | { type: 'str_replace'; file_path: string; old_str: string; new_str: string }
   | { type: 'apply_patch'; patch: string }
 
-function canonicalText(value: string): string {
-  const source = value.replace(/\r\n/g, '\n')
-  let result = ''
-  let quote: string | null = null
-  let pendingSpace = false
-  for (let i = 0; i < source.length; i += 1) {
-    const char = source[i]!
-    const next = source[i + 1]
-    if (quote) {
-      result += char
-      if (char === '\\' && next !== undefined) result += source[++i]!
-      else if (char === quote) quote = null
-      continue
-    }
-    if (char === '"' || char === "'" || char === '`') {
-      if (pendingSpace && /[\w$]$/.test(result)) result += ' '
-      pendingSpace = false
-      quote = char
-      result += char
-      continue
-    }
-    if (char === '/' && next === '/') {
-      while (i < source.length && source[i] !== '\n') i += 1
-      pendingSpace = true
-      continue
-    }
-    if (char === '/' && next === '*') {
-      i += 2
-      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) i += 1
-      i += 1
-      pendingSpace = true
-      continue
-    }
-    if (/\s/.test(char)) {
-      pendingSpace = true
-      continue
-    }
-    if (pendingSpace && /[\w$]$/.test(result) && /[\w$]/.test(char)) result += ' '
-    pendingSpace = false
-    result += char
-  }
-  return result
-}
-
 /** Fingerprint the concrete edit, excluding model-supplied plan prose. */
 export function actualRecoveryEdit(action: RecoveryEditAction, root: string): ActualRecoveryEdit | null {
   const rawTargets = action.type === 'write_file' ? [action.path]
@@ -95,13 +51,12 @@ export function actualRecoveryEdit(action: RecoveryEditAction, root: string): Ac
   const targets = rawTargets.map((target) => recoveryTargetIdentity(root, target))
   if (targets.length === 0 || targets.some((target) => target === null)) return null
   const targetIdentities = [...new Set(targets as string[])].sort()
-  const payload = action.type === 'write_file' ? canonicalText(action.content)
-    : action.type === 'str_replace' ? [canonicalText(action.old_str), canonicalText(action.new_str)]
-      : action.patch.split(/\r?\n/)
-        .filter((line) => (line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---')))
-        .map((line) => `${line[0]}${canonicalText(line.slice(1))}`)
-        .filter((line) => line.length > 1)
-        .sort()
+  // Normalize only transport line endings. Whitespace, comments, hunk order and
+  // file association can change behavior, so none of them proves edit equality.
+  const normalizeLines = (text: string): string => text.replace(/\r\n/g, '\n')
+  const payload = action.type === 'write_file' ? normalizeLines(action.content)
+    : action.type === 'str_replace' ? [normalizeLines(action.old_str), normalizeLines(action.new_str)]
+      : normalizeLines(action.patch)
   return {
     actionFamily: action.type,
     targetIdentities,
@@ -159,9 +114,7 @@ export function admitRecoveryPlan(
   const intentDigest = createHash('sha256').update(JSON.stringify([
     plan.hypothesisClass, [...plan.targetIdentities].sort(), plan.actionFamily, plan.criterionId,
   ])).digest('hex')
-  if (state.lastAdmittedPlan &&
-      (state.lastAdmittedPlan.editFingerprint === actual.editFingerprint ||
-        state.lastAdmittedPlan.intentDigest === intentDigest)) {
+  if (state.lastAdmittedPlan?.editFingerprint === actual.editFingerprint) {
     return { admitted: false, state, reason: 'repeated_plan_or_edit' }
   }
   const admittedPlan: AdmittedRecoveryPlanV1 = {

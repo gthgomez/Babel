@@ -29,6 +29,7 @@ import {
 import {
   createThreadEventLog,
   rebuildProviderMessagesFromEvents,
+  recordUserMessage,
   startTurn,
 } from './threadEventLog.js';
 import { createSessionEventLog } from './sessionEvents.js';
@@ -258,6 +259,39 @@ describe('H1 CompactionManager structured result + heuristic fallback', () => {
 });
 
 describe('H1 commitCompaction dual-write + resume equivalence', () => {
+  it('keeps a durable message hidden from the compactor and never fabricates it from summary text', async () => {
+    const threadLog = createThreadEventLog('thread-filtered-compactor');
+    const sessionLog = createSessionEventLog('thread-filtered-compactor');
+    const turnId = startTurn(threadLog, {
+      task: 'A visible', model: 'deepseek-chat', provider: 'deepseek',
+      projectRoot: '/tmp/proj', policyPreset: 'chat',
+    });
+    recordUserMessage(threadLog, turnId, 'B hidden from compactor');
+    recordUserMessage(threadLog, turnId, 'C visible');
+    const prior: ChatMessage[] = [
+      { role: 'system', content: 'System instructions' },
+      { role: 'user', content: 'A visible' },
+      { role: 'user', content: 'B hidden from compactor' },
+      { role: 'user', content: 'C visible' },
+    ];
+    const strategyMessages: ChatMessage[] = [
+      prior[0]!, prior[1]!, prior[3]!,
+      { role: 'assistant', name: 'compaction_summary', content: 'Summary of A and C only', provenance: 'model', authoritative: false },
+    ];
+    const hiddenRef = buildRawObservationRefs(prior, strategyMessages);
+    assert.strictEqual(hiddenRef.length, 1);
+    const result = await commitCompaction({
+      strategyMessages, priorConversation: prior, strategy: 'llm-summarize',
+      tokensBefore: 100, tokensAfter: 30, operational: { task: 'A visible' },
+      threadLog, sessionLog, turnId, modelId: 'deepseek-chat',
+    });
+    assert.strictEqual(result.status, 'committed');
+    assert.deepStrictEqual(result.capsule.rawObservationRefs, hiddenRef);
+    assert.ok(threadLog.events.some((event) => event.kind === 'user_message' && event.content === 'B hidden from compactor'));
+    assert.ok(!result.conversation.some((message) => message.content.includes('B hidden from compactor')));
+    assert.ok(!result.conversation.some((message) => message.name === 'compaction_summary' && message.content.includes('B hidden from compactor')));
+  });
+
   it('writes thread capsule + session compaction_created; live≡rebuild', async () => {
     const prior = longConversation(6, ['SECRET_FACT_ALPHA']);
     const llm = new LLMSummarizeCompaction({ keepRecentMessages: 2 });

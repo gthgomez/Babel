@@ -99,11 +99,12 @@ test('admitted repair is single-use and a later candidate cannot replay it', () 
   assert.equal(admitRecoveryPlan(drifted, proposal(state), changedEdit, { ...binding, workspaceRevision: 'revision-B' }).admitted, false)
 })
 
-test('canonical edit identity ignores plan prose, formatting, comments, and patch hunk order', () => {
+test('edit identity preserves significant newlines, whitespace, and per-file patch association', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-recovery-plan-'))
   try {
     mkdirSync(join(root, 'src'))
     writeFileSync(join(root, 'src', 'parser.ts'), 'export const value = 1\n')
+    writeFileSync(join(root, 'src', 'other.ts'), 'export const value = 1\n')
     const base = actualRecoveryEdit({
       type: 'str_replace', file_path: 'src/parser.ts', old_str: 'value = 1', new_str: 'value = 2',
     }, root)
@@ -115,19 +116,71 @@ test('canonical edit identity ignores plan prose, formatting, comments, and patc
       type: 'str_replace', file_path: 'src/parser.ts', old_str: 'value = 1', new_str: 'value = 3',
     }, root)
     assert.ok(base && commentOnly && changed)
-    assert.equal(base.editFingerprint, commentOnly.editFingerprint)
+    assert.notEqual(base.editFingerprint, commentOnly.editFingerprint)
     assert.notEqual(base.exactFingerprint, commentOnly.exactFingerprint)
     assert.notEqual(base.editFingerprint, changed.editFingerprint)
 
-    const patchA = 'diff --git a/src/parser.ts b/src/parser.ts\n--- a/src/parser.ts\n+++ b/src/parser.ts\n@@ -1 +1 @@\n-value = 1\n+value = 2\n@@ -3 +3 @@\n-old = true\n+old = false\n'
-    const patchB = 'diff --git a/src/parser.ts b/src/parser.ts\n--- a/src/parser.ts\n+++ b/src/parser.ts\n@@ -3 +3 @@\n-old = true\n+old = false\n@@ -1 +1 @@\n-value = 1\n+value = 2\n'
-    assert.equal(
+    const newlineA = actualRecoveryEdit({ type: 'write_file', path: 'src/parser.ts', content: 'function f(){return\n{ok:true};}' }, root)
+    const newlineB = actualRecoveryEdit({ type: 'write_file', path: 'src/parser.ts', content: 'function f(){return {ok:true};}' }, root)
+    assert.ok(newlineA && newlineB)
+    assert.notEqual(newlineA.editFingerprint, newlineB.editFingerprint)
+    assert.equal(new Function('function f(){return\n{ok:true};} return f()')(), undefined)
+    assert.deepEqual(new Function('function f(){return {ok:true};} return f()')(), { ok: true })
+
+    const patch = (file: string, value: number) => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-value = 0\n+value = ${value}\n`
+    const patchA = patch('src/parser.ts', 1) + patch('src/other.ts', 2)
+    const patchB = patch('src/parser.ts', 2) + patch('src/other.ts', 1)
+    assert.notEqual(
       actualRecoveryEdit({ type: 'apply_patch', patch: patchA }, root)?.editFingerprint,
       actualRecoveryEdit({ type: 'apply_patch', patch: patchB }, root)?.editFingerprint,
     )
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('a new bound observation admits a distinct second repair in the same class, file, and criterion', () => {
+  const firstState = readyState()
+  const first = admitRecoveryPlan(firstState, proposal(firstState), changedEdit, binding)
+  assert.equal(first.admitted, true)
+  let state = applyWorkingStateEvent(first.state, { type: 'recovery_plan_consumed' })
+  assert.equal(admitRecoveryPlan(state, proposal(firstState), changedEdit, binding).admitted, false)
+  state = applyWorkingStateEvent(state, {
+    type: 'mutation', path: 'src/parser.ts', fingerprint: changedEdit.exactFingerprint,
+    canonicalFingerprint: changedEdit.editFingerprint,
+  })
+  state = applyWorkingStateEvent(state, { type: 'verifier', identity: 'npm test', exitCode: 1, summary: 'still red' })
+  const nextBinding = { ...binding, workspaceRevision: 'revision-B' }
+  state = applyWorkingStateEvent(state, {
+    type: 'recovery_gate', failureSignature: 'parser-still-red', requiredEvidence: 'inspect parser again',
+    failingTargets: ['src/parser.ts'], binding: nextBinding, mutationFingerprint: changedEdit.exactFingerprint,
+  })
+  const stale = admitRecoveryPlan(state, proposal(firstState), {
+    ...changedEdit, editFingerprint: 'second-canonical', exactFingerprint: 'second-exact',
+  }, nextBinding)
+  assert.equal(stale.admitted, false)
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence', evidence: 'read_file:src/parser.ts#call-2', discriminating: true,
+    provenance: {
+      tool: 'read_file', target: 'src/parser.ts', failureSignature: 'parser-still-red',
+      binding: nextBinding, observationDigest: 'new-discriminating-content',
+    },
+  })
+  const secondProposal = {
+    ...proposal(state), failureSignature: 'parser-still-red', workspaceRevision: 'revision-B',
+  }
+  const secondEdit = { ...changedEdit, editFingerprint: 'second-canonical', exactFingerprint: 'second-exact' }
+  assert.equal(admitRecoveryPlan(state, secondProposal, changedEdit, nextBinding).admitted, false, 'same edit remains blocked')
+  const second = admitRecoveryPlan(state, secondProposal, secondEdit, nextBinding)
+  assert.equal(second.admitted, true)
+  state = applyWorkingStateEvent(second.state, { type: 'recovery_plan_consumed' })
+  state = applyWorkingStateEvent(state, {
+    type: 'mutation', path: 'src/parser.ts', fingerprint: secondEdit.exactFingerprint,
+    canonicalFingerprint: secondEdit.editFingerprint,
+  })
+  state = applyWorkingStateEvent(state, { type: 'verifier', identity: 'npm test', exitCode: 0, summary: 'green' })
+  assert.equal(state.lastVerifier?.exitCode, 0)
+  assert.equal(state.recoveryGate, undefined)
 })
 
 test('native and text tool paths carry a repair plan to the controller', () => {

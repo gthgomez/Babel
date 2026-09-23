@@ -90,6 +90,30 @@ test('overlapping project searches retain their own index root through the searc
   }
 });
 
+test('overlapping indexProject calls finish with the requested second root ready', async () => {
+  const temp = mkdtempSync(join(tmpdir(), 'babel-index-two-roots-'));
+  const first = join(temp, 'first');
+  const second = join(temp, 'second');
+  try {
+    mkdirSync(first);
+    mkdirSync(second);
+    writeFileSync(join(first, 'one.ts'), 'export const firstOnlyNeedle = 1;', 'utf-8');
+    writeFileSync(join(second, 'two.ts'), 'export const secondOnlyNeedle = 2;', 'utf-8');
+    const indexer = new SemanticIndexer(join(temp, 'index.db'));
+    const [firstCount, secondCount] = await Promise.all([
+      indexer.indexProject(first), indexer.indexProject(second),
+    ]);
+    assert.equal(firstCount, 1);
+    assert.equal(secondCount, 1);
+    assert.equal(indexer.indexedProjectRoot, second);
+    assert.deepEqual(indexer.search('secondOnlyNeedle').map((hit) => hit.name), ['two.ts']);
+    assert.deepEqual(indexer.search('firstOnlyNeedle'), []);
+    indexer.close();
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('semantic_search lazily indexes the active project root', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-semantic-lazy-'));
   const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];

@@ -58,6 +58,8 @@ import {
   evaluateParserModule,
   renderParserVerifierScript,
 } from './codingLoop/parserOracle.js';
+import { recoveryObservationId } from './codingLoop/recoveryPlan.js';
+import { recoveryTargetIdentity } from './codingLoop/recoveryIdentity.js';
 
 const MODEL = 'deepseek-v4-flash';
 
@@ -444,6 +446,7 @@ interface LoopObservation {
 function makeRunner(
   script: Script,
   onYield?: (event: ToolStreamEvent, call: number, engine: ChatEngine) => void,
+  onBeforeCall?: (call: number, engine: ChatEngine, script: Script) => void,
 ): ScriptedRunner {
   let call = 0;
   const requests: ProviderRequestRecord[] = [];
@@ -465,6 +468,7 @@ function makeRunner(
         toolNames: (tools ?? []).map((t) => t.function?.name ?? ''),
         toolChoice,
       });
+      onBeforeCall?.(index, currentEngine!, script);
       const events = script[index] ?? [
         { type: 'text_delta', text: 'No further action; concluding.' },
         { type: 'done', finishReason: 'stop' },
@@ -577,6 +581,7 @@ async function driveLoop(
     maxConversationMessages?: number;
     maxEstimatedTokens?: number;
     onYield?: (e: ToolStreamEvent, c: number, eng: ChatEngine) => void;
+    onBeforeCall?: (call: number, engine: ChatEngine, script: Script) => void;
     configureEngine?: (engine: ChatEngine) => void;
   } = {},
 ): Promise<LoopObservation> {
@@ -595,7 +600,7 @@ async function driveLoop(
       : {}),
   });
   currentEngine = engine;
-  const runner = makeRunner(script, options.onYield);
+  const runner = makeRunner(script, options.onYield, options.onBeforeCall);
   installRunner(engine, runner);
   options.configureEngine?.(engine);
 
@@ -1013,6 +1018,80 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
         !o.progressInterventions.includes('terminal_blocked'),
         'a useful targeted read is not punished with a terminal read-thrash stop',
       );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('a wrong repair can be followed by a different supported repair in the same file and criterion', async () => {
+    const fixture = makeFixture();
+    try {
+      for (const args of [
+        ['init', '-q'],
+        ['add', 'parser.ts', 'parser.test.ts', 'verify.mjs', 'package.json'],
+        ['-c', 'user.name=Babel Test', '-c', 'user.email=babel-test@example.com', 'commit', '-qm', 'fixture'],
+      ]) {
+        const git = spawnSync('git', args, { cwd: fixture.root, windowsHide: true });
+        assert.equal(git.status, 0, git.stderr.toString());
+      }
+      const task = 'Investigate why parser_test fails and fix it.';
+      const script: Script = [
+        [{ type: 'tool_use', id: 'w0', name: 'str_replace', input: { file_path: 'parser.ts', old_str: '// Defect: subtracts instead of adding the operands.', new_str: '// Initial wrong edit.' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'v0', name: 'test_run', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'r0', name: 'read_file', input: { path: 'parser.ts' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [],
+        [{ type: 'tool_use', id: 'v1', name: 'test_run', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'parser.ts' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [],
+        [{ type: 'tool_use', id: 'v2', name: 'test_run', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'text_delta', text: 'The second repair fixed the parser, and npm test passed.' }, { type: 'done', finishReason: 'stop' }],
+      ];
+      const admittedPlans: string[] = [];
+      const o = await driveLoop(fixture, task, script, {
+        maxTurns: 14,
+        onBeforeCall(call, engine, turns) {
+          if (call !== 3 && call !== 6) return;
+          const state = (engine as unknown as { workingState: {
+            lastVerifier?: { identity: string };
+            recoveryGate?: {
+              failureSignature: string;
+              binding?: { workspaceRevision: string };
+              observedKeys?: string[];
+              satisfied: boolean;
+            };
+          } }).workingState;
+          const gate = state.recoveryGate;
+          assert.ok(gate?.satisfied, `repair ${call}: ${JSON.stringify({ gate, localization: (engine as unknown as { workingState: { localization?: unknown } }).workingState.localization })}`);
+          assert.ok(gate.binding);
+          const target = recoveryTargetIdentity(fixture.root, 'parser.ts');
+          assert.ok(target);
+          const repairPlan = {
+            schemaVersion: 1,
+            failureSignature: gate.failureSignature,
+            workspaceRevision: gate.binding.workspaceRevision,
+            hypothesisClass: 'logic',
+            targetIdentities: [target],
+            actionFamily: 'str_replace',
+            criterionId: state.lastVerifier?.identity,
+            supportingObservationIds: (gate.observedKeys ?? []).map(recoveryObservationId),
+          };
+          admittedPlans.push(`${repairPlan.hypothesisClass}:${repairPlan.targetIdentities[0]}:${repairPlan.criterionId}`);
+          const input = call === 3
+            ? { file_path: 'parser.ts', old_str: '// Initial wrong edit.', new_str: '// First admitted repair: still wrong.' }
+            : { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' };
+          turns[call] = [{ type: 'tool_use', id: `w${call}`, name: 'str_replace', input: { ...input, repair_plan: repairPlan } }, { type: 'done', finishReason: 'tool_calls' }];
+        },
+      });
+      assert.equal(admittedPlans.length, 2, JSON.stringify({ status: o.status, outcome: o.outcome, toolCalls: o.toolCalls, providerCalls: o.providerCalls, answer: o.answer }));
+      assert.equal(admittedPlans[0], admittedPlans[1], 'both plans share the broad class, file, and criterion');
+      const verifiers = o.toolCalls.filter((call) => call.tool === 'test_run');
+      assert.equal(verifiers.length, 3);
+      assert.ok(verifiers[0]?.error && verifiers[1]?.error, 'both wrong repairs have red verifier results');
+      assert.equal(verifiers[2]?.error, undefined, 'the distinct second repair has a green verifier');
+      assert.equal(readFileSync(join(fixture.root, 'parser.ts'), 'utf8').includes('Number(parts[0]) + Number(parts[1])'), true);
+      assert.equal(o.toolCalls.filter((call) => call.tool === 'str_replace' && !call.error).length, 3);
+      assert.equal(o.outcome, 'VERIFIED_COMPLETE');
+      assert.equal(o.status, 'completed');
     } finally {
       fixture.cleanup();
     }

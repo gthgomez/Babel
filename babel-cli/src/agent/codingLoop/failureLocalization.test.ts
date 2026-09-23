@@ -8,6 +8,7 @@ import { advanceFailureLocalization, captureLocalizationCandidates, captureLocal
 import { captureChatVerifierReceipt } from '../chatEngineVerifierAdapter.js'
 import { applyWorkingStateEvent, createWorkingState, restoreWorkingStateSnapshot } from './workingState.js'
 import { createSessionEventLog, parseSessionEventLog, recordWorkingStateSnapshot, serializeSessionEventLog } from '../sessionEvents.js'
+import { ingestVerifierResult } from './chatBindings.js'
 
 const binding = {
   schemaVersion: 1 as const, taskId: 'task', contractHash: 'contract',
@@ -164,4 +165,27 @@ test('cold resume retains spent localization calls and cannot reset the allowanc
   const fourth = advanceFailureLocalization(restored!.localization!, { type: 'glob', target: '**/*', succeeded: true })
   assert.equal(fourth.phase, 'exhausted')
   assert.equal(fourth.calls, 4)
+})
+
+test('identical red verifier re-observation cannot reset spent localization allowance', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-localize-reobserve-'))
+  try {
+    const red = (state: ReturnType<typeof createWorkingState>) => ingestVerifierResult({
+      state, tool: 'test_run', target: 'npm test', exitCode: 1,
+      stdout: 'Expected 2, received 1', stderr: '', summary: 'assertion red',
+      recoveryBinding: binding, recoveryProjectRoot: root,
+    }).state
+    let state = red(createWorkingState('repair unknown failure'))
+    assert.ok(state.localization)
+    let loc = state.localization
+    for (let i = 0; i < 4; i += 1) {
+      loc = advanceFailureLocalization(loc, { type: 'glob', target: '**/*', succeeded: true })
+    }
+    assert.equal(loc.phase, 'exhausted')
+    state = applyWorkingStateEvent(state, { type: 'localization_update', localization: loc })
+    const repeated = red(state)
+    assert.equal(repeated.failureSurface?.errorSignature, state.failureSurface?.errorSignature)
+    assert.equal(repeated.localization?.calls, 4)
+    assert.equal(repeated.localization?.phase, 'exhausted')
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

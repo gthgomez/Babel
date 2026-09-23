@@ -6,6 +6,7 @@ import { classifyFailureSurface } from './failureSurface.js'
 import { compileObservation } from './observationCompiler.js'
 import {
   applyWorkingStateEvent,
+  sameRecoveryBinding,
   type WorkingState,
   type RecoveryCandidateBinding,
 } from './workingState.js'
@@ -80,33 +81,46 @@ export function ingestVerifierResult(input: {
         ? recoveryTargetIdentity(input.recoveryProjectRoot, state.lastMutation.path)
         : state.lastMutation?.path ?? null
       const trustedTargets = mutationTarget ? failingTargets : []
-      state = applyWorkingStateEvent(state, {
-        type: 'recovery_gate',
-        failureSignature: state.failureSurface.errorSignature,
-        ...(input.recoveryBinding ? { binding: input.recoveryBinding } : {}),
-        requiredEvidence: 'Acquire discriminating evidence before another mutation: reread the failing assertion and inspect the relevant caller/callee boundary.',
-        ...(state.lastMutation?.fingerprint ? { mutationFingerprint: state.lastMutation.fingerprint } : {}),
-        ...(trustedTargets.length > 0 ? { failingTargets: trustedTargets } : {}),
-        hypothesisAtFailure: state.currentHypothesis,
-      })
-      if (trustedTargets.length === 0 && state.failureSurface && input.recoveryBinding && input.recoveryProjectRoot) {
-        state = applyWorkingStateEvent(state, {
-          type: 'localization_begin',
-          localization: startFailureLocalization(
-            state.failureSurface.errorSignature,
-            input.recoveryBinding,
-            captureLocalizationCandidates({
-              projectRoot: input.recoveryProjectRoot,
-              stdout: input.stdout,
-              stderr: input.stderr,
-              tool: input.tool,
-              command: input.target,
-            }),
-            captureLocalizationTestHints({
-              stdout: input.stdout, stderr: input.stderr, tool: input.tool, command: input.target,
-            }),
-          ),
+      const failureSignature = state.failureSurface.errorSignature
+      const previousGate = input.state.recoveryGate
+      const sameFailedCandidate = previousGate?.binding && input.recoveryBinding &&
+        previousGate.failureSignature === failureSignature &&
+        sameRecoveryBinding(previousGate.binding, input.recoveryBinding)
+      if (sameFailedCandidate) {
+        // Re-running the same red verifier observes the same episode. It cannot
+        // replenish a spent localization allowance or a consumed repair permit.
+        if (input.state.localization) state = applyWorkingStateEvent(state, {
+          type: 'localization_update', localization: input.state.localization,
         })
+      } else {
+        state = applyWorkingStateEvent(state, {
+          type: 'recovery_gate',
+          failureSignature,
+          ...(input.recoveryBinding ? { binding: input.recoveryBinding } : {}),
+          requiredEvidence: 'Acquire discriminating evidence before another mutation: reread the failing assertion and inspect the relevant caller/callee boundary.',
+          ...(state.lastMutation?.fingerprint ? { mutationFingerprint: state.lastMutation.fingerprint } : {}),
+          ...(trustedTargets.length > 0 ? { failingTargets: trustedTargets } : {}),
+          hypothesisAtFailure: state.currentHypothesis,
+        })
+        if (trustedTargets.length === 0 && input.recoveryBinding && input.recoveryProjectRoot) {
+          state = applyWorkingStateEvent(state, {
+            type: 'localization_begin',
+            localization: startFailureLocalization(
+              failureSignature,
+              input.recoveryBinding,
+              captureLocalizationCandidates({
+                projectRoot: input.recoveryProjectRoot,
+                stdout: input.stdout,
+                stderr: input.stderr,
+                tool: input.tool,
+                command: input.target,
+              }),
+              captureLocalizationTestHints({
+                stdout: input.stdout, stderr: input.stderr, tool: input.tool, command: input.target,
+              }),
+            ),
+          })
+        }
       }
     }
   }
