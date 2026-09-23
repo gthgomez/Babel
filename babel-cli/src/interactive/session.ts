@@ -27,6 +27,12 @@ export function updateCostTotals(ctx: ReplContext): void {
     totalInputTokens: summary.totalInputTokens,
     totalOutputTokens: summary.totalOutputTokens,
     totalTokens: summary.totalTokens,
+    projectSessionId: globalCostTracker.getProjectSessionId(),
+    ...(globalCostTracker.isSessionProjectionComplete()
+      ? {
+          accountedChargeIds: globalCostTracker.getSessionChargeIds(),
+          chargeObservations: globalCostTracker.getSessionChargeObservations(),
+        } : {}),
   };
 }
 

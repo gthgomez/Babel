@@ -1576,14 +1576,14 @@ async function runWaterfall<T>(
     if (limiter) throw new RunBudgetExceededError(limiter);
     if (signal?.aborted) throw new Error('Aborted by user or parent');
   };
-  const recordRunnerUsage = (runner: LlmRunner): RunnerInvocationMetadata | null => {
+  const recordRunnerUsage = (runner: LlmRunner, dispatchedChargeId?: string | null): RunnerInvocationMetadata | null => {
     const metadata = getRunnerInvocationMetadata(runner);
     if (
       metadata?.provider_model_id &&
       metadata.prompt_tokens !== null &&
       metadata.completion_tokens !== null
     ) {
-      globalCostTracker.trackUsage(
+      const update = globalCostTracker.settleUsage(
         metadata.provider_model_id,
         metadata.prompt_tokens,
         metadata.completion_tokens,
@@ -1592,11 +1592,12 @@ async function runWaterfall<T>(
         usageAttribution
           ? {
               ...usageAttribution,
-              chargeId: `${usageAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}`,
+              chargeId: dispatchedChargeId ?? `${usageAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}`,
             }
           : undefined,
       );
-      onUsageRecorded?.(metadata);
+      if (update.kind === 'conflict') throw new Error(`Delegated charge conflict: ${update.reason}`);
+      if (update.kind === 'inserted' || update.kind === 'refined') onUsageRecorded?.(metadata);
     }
     return metadata;
   };
@@ -1652,6 +1653,8 @@ async function runWaterfall<T>(
     let promptForTier = prompt;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let dispatchedChargeId: string | null = null;
+      let chargePersistenceFailed = false;
       try {
         ensureBudgetAvailable();
         const remainingMs = ensureTimeRemaining(
@@ -1659,6 +1662,31 @@ async function runWaterfall<T>(
         );
 
         const runnerCallbacks: RunnerCallbacks = {
+          onInvocationPhase: (event) => {
+            if (event.phase !== 'request_dispatched' || !usageAttribution) return;
+            dispatchedChargeId = `${usageAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}`;
+            const update = globalCostTracker.settleUsage(event.model, 0, 0, null, null, {
+              ...usageAttribution, chargeId: dispatchedChargeId,
+            }, false);
+            if (update.kind !== 'inserted') throw new Error('Delegated dispatch blocked by charge conflict');
+            try {
+              onUsageRecorded?.({
+                provider: event.provider, provider_model_id: event.model, latency_ms: null,
+                prompt_tokens: null, completion_tokens: null, total_tokens: null,
+                estimated_cost_usd: null,
+              });
+            } catch {
+              chargePersistenceFailed = true;
+              throw new Error('Delegated dispatch blocked because its charge receipt could not be saved');
+            }
+          },
+          onRetry: () => {
+            if (chargePersistenceFailed) {
+              throw new Error('Delegated retry blocked by charge persistence failure');
+            }
+            const limiter = budgetGuard?.();
+            if (limiter) throw new RunBudgetExceededError(limiter);
+          },
           onChunk: (chunk: string) => {
             // Heartbeat: each content chunk extends the waterfall deadline so
             // actively-streaming models aren't hard-killed mid-generation.
@@ -1695,7 +1723,7 @@ async function runWaterfall<T>(
           systemPrompt,
           signal,
         );
-        const invocationMetadata = recordRunnerUsage(runner);
+        const invocationMetadata = recordRunnerUsage(runner, dispatchedChargeId);
         ensureBudgetAvailable();
 
         const recoveryEntry = appendSchemaFailureRecoveryIfNeeded({
@@ -1786,7 +1814,7 @@ async function runWaterfall<T>(
         if (isAggregateWaterfallTimeoutError(lastError)) {
           throw lastError;
         }
-        const invocationMetadata = recordRunnerUsage(runner);
+        const invocationMetadata = recordRunnerUsage(runner, dispatchedChargeId);
         lastFailureMetadata = invocationMetadata;
         ensureBudgetAvailable();
         let schemaFailureEntryId: string | null = null;
@@ -2297,6 +2325,8 @@ export async function runWaterfallForSchemaFailureTest<T>(input: {
   maxAttempts?: number;
   tiers: Array<{ name: string; runner: LlmRunner }>;
   budgetGuard?: () => RunBudgetLimiter | null;
+  onUsageRecorded?: (metadata: RunnerInvocationMetadata) => void;
+  usageAttribution?: Pick<UsageAttribution, 'taskOwnerId' | 'parentTaskOwnerId'>;
 }): Promise<T> {
   const waterfall = input.tiers.map(
     (tier, index): TierSpec => ({
@@ -2320,7 +2350,8 @@ export async function runWaterfallForSchemaFailureTest<T>(input: {
     undefined,
     undefined,
     input.budgetGuard,
-    undefined,
+    input.onUsageRecorded,
+    input.usageAttribution,
   );
   input.evidence.appendWaterfallLog({
     ...waterfallResult.outcome,

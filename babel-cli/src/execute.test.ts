@@ -16,7 +16,8 @@ import { tmpdir } from 'node:os';
 import { z } from 'zod';
 
 import { EvidenceBundle } from './evidence.js';
-import type { LlmRunner } from './runners/base.js';
+import type { LlmRunner, RunnerCallbacks } from './runners/base.js';
+import { globalCostTracker } from './services/costTracker.js';
 import {
   RELIABILITY_REPAIR_PROOF_MARKER,
   buildPipelineV9OfflineFixtureResponse,
@@ -64,6 +65,38 @@ function makeRunner(impl: Partial<LlmRunner>): LlmRunner {
     ...impl,
   };
 }
+
+test('delegated dispatch records an unknown parent charge before missing telemetry returns', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-child-charge-'));
+  globalCostTracker.resetSession();
+  try {
+    const evidence = new EvidenceBundle('child charge', root);
+    let checkpointed = 0;
+    const runner = makeRunner({
+      async execute<T>(_prompt: string, _schema: unknown, callbacks?: RunnerCallbacks): Promise<T> {
+        callbacks?.onInvocationPhase?.({
+          inference_id: 'child-inference', provider: 'deepseek', model: 'deepseek-v4-flash',
+          phase: 'request_dispatched',
+        });
+        return { ok: true } as T;
+      },
+    });
+    const result = await runWaterfallForSchemaFailureTest({
+      prompt: 'child task', schema: z.object({ ok: z.literal(true) }),
+      stage: 'child', schemaName: 'ChildSchema', evidence, maxAttempts: 1,
+      tiers: [{ name: 'deepseek', runner }],
+      usageAttribution: { taskOwnerId: 'child-owner', parentTaskOwnerId: 'parent-owner' },
+      onUsageRecorded: () => { checkpointed++; },
+    });
+    assert.deepEqual(result, { ok: true });
+    assert.equal(checkpointed, 1);
+    assert.equal(globalCostTracker.getTaskSummary('child-owner').unknownChargeCount, 1);
+    assert.equal(globalCostTracker.getTaskSummary('parent-owner').unknownChargeCount, 1);
+  } finally {
+    globalCostTracker.resetSession();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 // ─── resolveAggregateWaterfallTimeoutMs (internal) ──────────────────────────────
 // This function is NOT exported. It reads BABEL_WATERFALL_TIMEOUT_MS from the

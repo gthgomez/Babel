@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { CostTracker, usageDelta } from './costTracker.js';
+import { resetGlobalTokenHistoryDb, TokenHistoryDb } from './tokenHistoryDb.js';
 
 test('CostTracker prices direct DeepSeek v4 Flash with conservative cache-miss input', () => {
   const tracker = new CostTracker();
@@ -104,4 +108,478 @@ test('restored task snapshot keeps unknown cost incomplete without adding a sess
   assert.equal(resumed.trackUsage('deepseek-v4-flash', 100, 10, null, null, {
     taskOwnerId: 'owner-A', chargeId: 'unpriced-1',
   }), 0);
+});
+
+test('a durable charge observation can refine after cold owner restore', () => {
+  const original = new CostTracker();
+  const attribution = { taskOwnerId: 'owner-A', chargeId: 'attempt-1', requestId: 'request-1', attemptId: 'try-1' };
+  original.recordUnknownCharge('deepseek-v4-flash', attribution);
+  const snapshot = JSON.parse(JSON.stringify({
+    totalCostUSD: original.getTaskSummary('owner-A').totalCostUSD,
+    unknownChargeCount: original.getTaskSummary('owner-A').unknownChargeCount,
+    chargeIds: original.getTaskChargeIds('owner-A'),
+    chargeObservations: original.getTaskChargeObservations('owner-A'),
+  }));
+  const resumed = new CostTracker();
+  resumed.restoreTaskUsage('owner-A', snapshot);
+  const result = resumed.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution);
+  assert.ok(result.kind === 'refined');
+  assert.equal(result.unknownDelta, -1);
+  assert.equal(resumed.getTaskSummary('owner-A').unknownChargeCount, 0);
+  assert.equal(resumed.getTaskSummary('owner-A').totalTokens, 1100);
+  assert.ok(resumed.getTaskSummary('owner-A').totalCostUSD > 0);
+  assert.equal(resumed.getSessionSummary().unknownChargeCount, 0);
+  assert.equal(resumed.getSessionSummary().totalTokens, 1100);
+});
+
+test('resume projects a known refinement once against restored session totals', () => {
+  const original = new CostTracker();
+  const attribution = { taskOwnerId: 'A', chargeId: 'pending-1', attemptId: 'try-1' };
+  original.recordUnknownCharge('deepseek-v4-flash', attribution);
+  const saved = original.getSessionSummary();
+  const snapshot = {
+    totalCostUSD: original.getTaskSummary('A').totalCostUSD,
+    unknownChargeCount: original.getTaskSummary('A').unknownChargeCount ?? 0,
+    chargeIds: original.getTaskChargeIds('A'),
+    chargeObservations: original.getTaskChargeObservations('A'),
+  };
+  const resumed = new CostTracker();
+  resumed.restoreSessionCost({ ...saved,
+    accountedChargeIds: original.getSessionChargeIds(),
+    chargeObservations: original.getSessionChargeObservations(),
+  });
+  resumed.restoreTaskUsage('A', snapshot);
+  const update = resumed.settleUsage('deepseek-v4-flash', 100, 20, null, null, attribution);
+  assert.equal(update.kind, 'refined');
+  assert.equal(resumed.getSessionSummary().totalTokens, 120);
+  assert.equal(resumed.getSessionSummary().unknownChargeCount, 0);
+  assert.equal(resumed.getSessionSummary().completeCostUSD, resumed.getTaskSummary('A').totalCostUSD);
+  assert.deepEqual(resumed.getSessionChargeIds(), ['pending-1']);
+});
+
+test('a pending dispatch survives cold restore and can clear only on proven refusal', () => {
+  const original = new CostTracker();
+  const attribution = { taskOwnerId: 'A', chargeId: 'pending-1', requestId: 'r1', attemptId: 't1' };
+  original.recordUnknownCharge('deepseek-v4-flash', attribution);
+  const pending = {
+    totalCostUSD: original.getTaskSummary('A').totalCostUSD,
+    unknownChargeCount: original.getTaskSummary('A').unknownChargeCount ?? 0,
+    chargeIds: original.getTaskChargeIds('A'),
+    chargeObservations: original.getTaskChargeObservations('A'),
+  };
+  const resumed = new CostTracker();
+  resumed.restoreTaskUsage('A', pending);
+  assert.equal(resumed.getTaskSummary('A').costComplete, false);
+  assert.equal(resumed.getTaskSummary('A').unknownChargeCount, 1);
+  assert.equal(resumed.clearUnstartedCharge({ ...attribution, chargeId: 'wrong' }), false);
+  assert.equal(resumed.clearUnstartedCharge(attribution), true);
+  assert.equal(resumed.getTaskSummary('A').costComplete, true);
+  assert.deepEqual(resumed.getTaskChargeIds('A'), []);
+});
+
+test('duplicate durable receipts cannot masquerade as two declared charges', () => {
+  const tracker = new CostTracker();
+  const receipt = {
+    attribution: { taskOwnerId: 'A', chargeId: 'one' }, modelId: 'deepseek-v4-flash',
+    inputTokens: 0, outputTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0,
+    knownCostUSD: null,
+  };
+  assert.throws(() => tracker.restoreTaskUsage('A', {
+    totalCostUSD: 0, unknownChargeCount: 2, chargeIds: ['one', 'two'],
+    chargeObservations: [receipt, { ...receipt }],
+  }), /Invalid durable charge observation/);
+  assert.deepEqual(tracker.getTaskChargeIds('A'), []);
+});
+
+test('malformed cold receipts fail without partially restoring owner state', () => {
+  const tracker = new CostTracker();
+  const receipt = {
+    attribution: { taskOwnerId: 'A', chargeId: 'charge-1', requestId: 'req-1', attemptId: 'try-1' },
+    modelId: 'deepseek-v4-flash', inputTokens: -1, outputTokens: 0,
+    cacheHitTokens: 0, cacheMissTokens: 0, knownCostUSD: null,
+  };
+  assert.throws(() => tracker.restoreTaskUsage('A', {
+    totalCostUSD: 0, unknownChargeCount: 1, chargeIds: ['charge-1'],
+    chargeObservations: [receipt],
+  }), /Invalid durable charge observation/);
+  assert.deepEqual(tracker.getTaskChargeIds('A'), []);
+  assert.equal(tracker.getTaskSummary('A').unknownChargeCount, 0);
+  assert.equal(tracker.getSessionSummary().unknownChargeCount, 0);
+});
+
+test('a mismatched durable charge total is rejected before any owner mutation', () => {
+  const tracker = new CostTracker();
+  const receipt = {
+    attribution: { taskOwnerId: 'A', chargeId: 'charge-1', requestId: 'req-1', attemptId: 'try-1' },
+    modelId: 'deepseek-v4-flash', inputTokens: 0, outputTokens: 0,
+    cacheHitTokens: 0, cacheMissTokens: 0, knownCostUSD: 0.01,
+  };
+  assert.throws(() => tracker.restoreTaskUsage('A', {
+    totalCostUSD: 0.02, unknownChargeCount: 0, chargeIds: ['charge-1'],
+    chargeObservations: [receipt],
+  }), /disagree with the task totals/);
+  assert.deepEqual(tracker.getTaskChargeIds('A'), []);
+  assert.equal(tracker.getTaskSummary('A').totalCostUSD, 0);
+});
+
+test('an unknown charge refines to one known charge without duplicating tokens or parent spend', () => {
+  const tracker = new CostTracker();
+  const attribution = { taskOwnerId: 'child', parentTaskOwnerId: 'parent', chargeId: 'attempt-1', attemptId: 'try-1' };
+  assert.deepEqual(tracker.settleUsage('deepseek-v4-flash', 100, 20, null, null, attribution, false), {
+    kind: 'inserted', knownCostDelta: 0, unknownDelta: 1,
+  });
+  const refined = tracker.settleUsage('deepseek-v4-flash', 100, 20, null, null, attribution);
+  assert.ok(refined.kind === 'refined');
+  assert.ok(refined.knownCostDelta > 0);
+  assert.equal(refined.unknownDelta, -1);
+  assert.equal(tracker.getTaskSummary('child').unknownChargeCount, 0);
+  assert.equal(tracker.getTaskSummary('child').totalTokens, 120);
+  assert.equal(tracker.getTaskSummary('parent').totalCostUSD, tracker.getTaskSummary('child').totalCostUSD);
+  assert.equal(tracker.getSessionSummary().totalTokens, 120);
+  assert.equal(tracker.getSessionSummary().costComplete, true);
+  assert.deepEqual(tracker.settleUsage('deepseek-v4-flash', 100, 20, null, null, attribution), { kind: 'duplicate' });
+  assert.equal(tracker.getSessionSummary().totalTokens, 120);
+});
+
+test('pending unpriced usage accepts later tokens without minting another charge', () => {
+  const tracker = new CostTracker();
+  const attribution = { taskOwnerId: 'A', chargeId: 'unpriced-dispatch' };
+  tracker.recordUnknownCharge('unlisted-provider-model', attribution);
+  const update = tracker.settleUsage('unlisted-provider-model', 150, 25, null, null, attribution);
+  assert.deepEqual(update, { kind: 'refined', knownCostDelta: 0, unknownDelta: 0 });
+  assert.equal(tracker.getTaskSummary('A').totalTokens, 175);
+  assert.equal(tracker.getTaskSummary('A').unknownChargeCount, 1);
+  assert.equal(tracker.getSessionSummary().totalTokens, 175);
+  assert.equal(tracker.getSessionSummary().completeCostUSD, null);
+});
+
+test('cold resumed pending unpriced usage transfers its unknown projection once', () => {
+  const original = new CostTracker();
+  const attribution = { taskOwnerId: 'A', chargeId: 'unpriced-cold' };
+  original.recordUnknownCharge('unlisted-provider-model', attribution);
+  const resumed = new CostTracker();
+  resumed.restoreSessionCost({
+    ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+    chargeObservations: original.getSessionChargeObservations(),
+  });
+  resumed.restoreTaskUsage('A', {
+    totalCostUSD: 0, unknownChargeCount: 1,
+    chargeIds: original.getTaskChargeIds('A'),
+    chargeObservations: original.getTaskChargeObservations('A'),
+  });
+  assert.equal(resumed.settleUsage('unlisted-provider-model', 5, 7, null, null, attribution).kind, 'refined');
+  assert.equal(resumed.getSessionSummary().unknownChargeCount, 1);
+  assert.equal(resumed.getSessionSummary().totalTokens, 12);
+  assert.equal(resumed.getTaskSummary('A').unknownChargeCount, 1);
+});
+
+test('owner receipt newer than session snapshot reconciles on cold resume', () => {
+  const original = new CostTracker();
+  const attribution = { taskOwnerId: 'A', chargeId: 'late-known' };
+  original.recordUnknownCharge('deepseek-v4-flash', attribution);
+  const staleSession = {
+    ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+    chargeObservations: original.getSessionChargeObservations(),
+  };
+  original.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution);
+  const latestOwner = {
+    totalCostUSD: original.getTaskSummary('A').totalCostUSD,
+    unknownChargeCount: original.getTaskSummary('A').unknownChargeCount ?? 0,
+    chargeIds: original.getTaskChargeIds('A'),
+    chargeObservations: original.getTaskChargeObservations('A'),
+  };
+  const resumed = new CostTracker();
+  resumed.restoreSessionCost(staleSession);
+  resumed.restoreTaskUsage('A', latestOwner);
+  assert.equal(resumed.getSessionSummary().unknownChargeCount, 0);
+  assert.equal(resumed.getSessionSummary().totalTokens, 1100);
+  assert.equal(resumed.getSessionSummary().completeCostUSD, latestOwner.totalCostUSD);
+  assert.equal(resumed.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution).kind, 'duplicate');
+  assert.equal(resumed.getSessionSummary().totalTokens, 1100);
+});
+
+test('newer confirmed session receipt supersedes a stale pending owner receipt', () => {
+  const original = new CostTracker();
+  const attribution = { taskOwnerId: 'A', chargeId: 'session-newer' };
+  original.recordUnknownCharge('deepseek-v4-flash', attribution);
+  const staleOwner = {
+    totalCostUSD: 0, unknownChargeCount: 1,
+    chargeIds: original.getTaskChargeIds('A'),
+    chargeObservations: original.getTaskChargeObservations('A'),
+  };
+  original.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution);
+  const resumed = new CostTracker();
+  resumed.restoreSessionCost({
+    ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+    chargeObservations: original.getSessionChargeObservations(),
+  });
+  resumed.restoreTaskUsage('A', staleOwner);
+  assert.equal(resumed.getTaskSummary('A').unknownChargeCount, 0);
+  assert.equal(resumed.getTaskSummary('A').totalCostUSD, original.getTaskSummary('A').totalCostUSD);
+  assert.equal(resumed.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution).kind, 'duplicate');
+  assert.equal(resumed.getSessionSummary().unknownChargeCount, 0);
+  assert.equal(resumed.getSessionSummary().totalCostUSD, original.getSessionSummary().totalCostUSD);
+});
+
+test('charge identity conflict is explicit and cannot move a receipt to another owner', () => {
+  const tracker = new CostTracker();
+  const attribution = { taskOwnerId: 'A', chargeId: 'shared-id', attemptId: 'try-1' };
+  tracker.settleUsage('deepseek-v4-flash', 100, 20, null, null, attribution);
+  const conflict = tracker.settleUsage('deepseek-v4-flash', 100, 20, null, null, { ...attribution, taskOwnerId: 'B' });
+  assert.equal(conflict.kind, 'conflict');
+  assert.equal(tracker.getTaskSummary('B').totalCostUSD, 0);
+  assert.equal(tracker.getTaskSummary('A').totalTokens, 120);
+  assert.equal(tracker.settleUsage('deepseek-v4-flash', 0, 0, null, null, attribution, false).kind, 'duplicate');
+  assert.equal(tracker.getTaskSummary('A').costComplete, true);
+});
+
+test('restoring a stale snapshot preserves a live unknown-only charge', () => {
+  const tracker = new CostTracker();
+  tracker.recordUnknownCharge('deepseek-v4-flash', { taskOwnerId: 'A', chargeId: 'late' });
+  tracker.restoreTaskUsage('A', { totalCostUSD: 0, unknownChargeCount: 0, chargeIds: [] });
+  assert.equal(tracker.getTaskSummary('A').unknownChargeCount, 1);
+  assert.deepEqual(tracker.getTaskChargeIds('A'), ['late']);
+});
+
+test('restoring stale session totals preserves a newer live model ledger', () => {
+  const tracker = new CostTracker();
+  tracker.trackUsage('deepseek-v4-flash', 1000, 100);
+  const before = tracker.getSessionSummary();
+  tracker.restoreSessionCost({ totalCostUSD: 0, totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0 });
+  assert.deepEqual(tracker.getSessionSummary(), before);
+});
+
+test('an unavailable history store reports unavailable instead of known zero', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-cost-unavailable-'));
+  try {
+    writeFileSync(join(root, 'blocker'), 'file');
+    const history = new TokenHistoryDb(join(root, 'blocker', 'history.db'));
+    assert.equal(history.getProjectCostSummary(root), null);
+    history.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('project history upserts changing sessions and retains unknown completeness', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-cost-'));
+  const oldDb = process.env['BABEL_TOKEN_DB_PATH'];
+  process.env['BABEL_TOKEN_DB_PATH'] = join(root, 'history.db');
+  resetGlobalTokenHistoryDb();
+  try {
+    const a = new CostTracker(root);
+    a.trackUsage('deepseek-v4-flash', 1000, 100);
+    a.saveToProjectStats('A');
+    a.trackUsage('deepseek-v4-flash', 2000, 200);
+    a.saveToProjectStats('A');
+    const aCost = a.getSessionSummary().totalCostUSD;
+    const b = new CostTracker(root);
+    b.trackUsage('deepseek-v4-pro', 1000, 100);
+    b.saveToProjectStats('B');
+    const bCost = b.getSessionSummary().totalCostUSD;
+    a.saveToProjectStats('A');
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf-8'));
+    assert.ok(Math.abs(stats.totalCostUSD - aCost - bCost) < 1e-12);
+    assert.ok(Math.abs(stats.modelBreakdown['deepseek-v4-flash'].costUSD - aCost) < 1e-12);
+    assert.ok(Math.abs(stats.modelBreakdown['deepseek-v4-pro'].costUSD - bCost) < 1e-12);
+    assert.ok(Math.abs(a.getProjectHistoricalCost(root)! - aCost - bCost) < 1e-12);
+
+    b.recordUnknownCharge('unlisted-provider-model', { taskOwnerId: 'B', chargeId: 'unknown-B' });
+    b.saveToProjectStats('B');
+    const unknownStats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf-8'));
+    assert.equal(unknownStats.unknownChargeCount, 1);
+    assert.equal(unknownStats.completeCostUSD, null);
+    assert.equal(b.getProjectHistoricalCost(root), null);
+  } finally {
+    resetGlobalTokenHistoryDb();
+    if (oldDb === undefined) delete process.env['BABEL_TOKEN_DB_PATH'];
+    else process.env['BABEL_TOKEN_DB_PATH'] = oldDb;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('project stats sum per-run deltas from one cumulative tracker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-runs-'));
+  const oldDb = process.env['BABEL_TOKEN_DB_PATH'];
+  process.env['BABEL_TOKEN_DB_PATH'] = join(root, 'history.db');
+  resetGlobalTokenHistoryDb();
+  try {
+    const tracker = new CostTracker(root);
+    const beforeA = tracker.getSessionSummary();
+    tracker.trackUsage('deepseek-v4-flash', 1000, 100);
+    const afterA = tracker.getSessionSummary();
+    tracker.saveToProjectStats('run-A', beforeA);
+    tracker.trackUsage('deepseek-v4-pro', 2000, 200);
+    tracker.saveToProjectStats('run-B', afterA);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.ok(Math.abs(stats.totalCostUSD - tracker.getSessionSummary().totalCostUSD) < 1e-12);
+    assert.equal(stats.totalInputTokens, 3000);
+    assert.equal(stats.totalOutputTokens, 300);
+    assert.ok(Math.abs(tracker.getProjectHistoricalCost(root)! - tracker.getSessionSummary().totalCostUSD) < 1e-12);
+  } finally {
+    resetGlobalTokenHistoryDb();
+    if (oldDb === undefined) delete process.env['BABEL_TOKEN_DB_PATH'];
+    else process.env['BABEL_TOKEN_DB_PATH'] = oldDb;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a later run refines an earlier unknown in one session snapshot', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-late-refinement-'));
+  try {
+    const tracker = new CostTracker(root);
+    const sessionId = tracker.getProjectSessionId();
+    const attribution = { taskOwnerId: 'A', chargeId: 'late' };
+    const beforeFirstRun = tracker.getSessionSummary();
+    tracker.recordUnknownCharge('deepseek-v4-flash', attribution);
+    tracker.saveToProjectStats(sessionId, beforeFirstRun, root);
+    const beforeSecondRun = tracker.getSessionSummary();
+    tracker.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution);
+    tracker.saveToProjectStats(sessionId, beforeSecondRun, root);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.unknownChargeCount, 0);
+    assert.equal(stats.totalInputTokens, 1000);
+    assert.equal(stats.totalOutputTokens, 100);
+    assert.equal(stats.completeCostUSD, tracker.getSessionSummary().totalCostUSD);
+    assert.deepEqual(Object.keys(stats.sessionSnapshots), [sessionId]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('crash-window project projection stays incomplete without receipt root attribution', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-crash-'));
+  try {
+    const original = new CostTracker(root);
+    const attribution = { taskOwnerId: 'A', chargeId: 'crash-late' };
+    original.recordUnknownCharge('deepseek-v4-flash', attribution);
+    original.saveToProjectStats(original.getProjectSessionId(), undefined, root);
+    const savedSession = {
+      ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+      chargeObservations: original.getSessionChargeObservations(),
+      projectSessionId: original.getProjectSessionId(),
+    };
+    original.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution);
+    const resumed = new CostTracker(root);
+    resumed.restoreSessionCost(savedSession);
+    resumed.restoreTaskUsage('A', {
+      totalCostUSD: original.getTaskSummary('A').totalCostUSD,
+      unknownChargeCount: 0,
+      chargeIds: original.getTaskChargeIds('A'),
+      chargeObservations: original.getTaskChargeObservations('A'),
+    });
+    const baseline = resumed.getSessionSummary();
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), baseline, root);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.projectionComplete, false);
+    assert.equal(stats.completeCostUSD, null);
+    assert.equal(resumed.getProjectHistoricalCost(root), null);
+    assert.equal(resumed.getSessionSummary().unknownChargeCount, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('project snapshots use each target root run delta', () => {
+  const rootA = mkdtempSync(join(tmpdir(), 'babel-project-A-'));
+  const rootB = mkdtempSync(join(tmpdir(), 'babel-project-B-'));
+  try {
+    const tracker = new CostTracker(rootA);
+    const beforeA = tracker.getSessionSummary();
+    tracker.trackUsage('deepseek-v4-flash', 100, 10);
+    tracker.saveToProjectStats(tracker.getProjectSessionId(), beforeA, rootA);
+    const beforeB = tracker.getSessionSummary();
+    tracker.trackUsage('deepseek-v4-flash', 200, 20);
+    tracker.saveToProjectStats(tracker.getProjectSessionId(), beforeB, rootB);
+    const a = JSON.parse(readFileSync(join(rootA, 'project_stats.json'), 'utf8'));
+    const b = JSON.parse(readFileSync(join(rootB, 'project_stats.json'), 'utf8'));
+    assert.equal(a.totalInputTokens, 100);
+    assert.equal(b.totalInputTokens, 200);
+    assert.ok(Math.abs(tracker.getProjectHistoricalCost(rootA)! - a.totalCostUSD) < 1e-12);
+    assert.ok(Math.abs(tracker.getProjectHistoricalCost(rootB)! - b.totalCostUSD) < 1e-12);
+  } finally {
+    rmSync(rootA, { recursive: true, force: true });
+    rmSync(rootB, { recursive: true, force: true });
+  }
+});
+
+test('explicit project root receives governed cost history instead of launch root', () => {
+  const launch = mkdtempSync(join(tmpdir(), 'babel-cost-launch-'));
+  const target = mkdtempSync(join(tmpdir(), 'babel-cost-target-'));
+  try {
+    const tracker = new CostTracker(launch);
+    const baseline = tracker.getSessionSummary();
+    tracker.trackUsage('deepseek-v4-flash', 100, 10);
+    tracker.saveToProjectStats(tracker.getProjectSessionId(), baseline, target);
+    assert.equal(readFileSync(join(target, 'project_stats.json'), 'utf8').includes('totalCostUSD'), true);
+    assert.equal(existsSync(join(launch, 'project_stats.json')), false);
+  } finally {
+    rmSync(launch, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test('stale project stats lock from a dead owner is recovered', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-stale-cost-lock-'));
+  try {
+    const lock = join(root, 'project_stats.json.lock');
+    writeFileSync(lock, JSON.stringify({ pid: 999_999_999, createdAt: Date.now() - 120_000 }));
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(lock, old, old);
+    const tracker = new CostTracker(root);
+    tracker.trackUsage('deepseek-v4-flash', 10, 1);
+    tracker.saveToProjectStats('recovered');
+    assert.equal(existsSync(lock), false);
+    assert.equal(existsSync(join(root, 'project_stats.json')), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy project aggregates do not claim a complete session projection after migration', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-cost-legacy-'));
+  const oldDb = process.env['BABEL_TOKEN_DB_PATH'];
+  process.env['BABEL_TOKEN_DB_PATH'] = join(root, 'history.db');
+  resetGlobalTokenHistoryDb();
+  try {
+    writeFileSync(join(root, 'project_stats.json'), JSON.stringify({
+      totalCostUSD: 0.01,
+      totalInputTokens: 100,
+      totalOutputTokens: 10,
+      lastSessionId: 'A',
+      modelBreakdown: { 'deepseek-v4-flash': { inputTokens: 100, outputTokens: 10, costUSD: 0.01 } },
+    }));
+    const tracker = new CostTracker(root);
+    tracker.trackUsage('deepseek-v4-flash', 200, 20);
+    tracker.saveToProjectStats('A');
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf-8'));
+    assert.equal(stats.projectionComplete, false);
+    assert.equal(stats.totalCostUSD, 0.01);
+    assert.equal(stats.completeCostUSD, null);
+    assert.equal(tracker.getProjectHistoricalCost(root), null);
+  } finally {
+    resetGlobalTokenHistoryDb();
+    if (oldDb === undefined) delete process.env['BABEL_TOKEN_DB_PATH'];
+    else process.env['BABEL_TOKEN_DB_PATH'] = oldDb;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy resumed session identities keep project completeness unavailable after save', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-legacy-resume-'));
+  try {
+    const tracker = new CostTracker(root);
+    tracker.restoreSessionCost({
+      totalCostUSD: 0.02, totalInputTokens: 100, totalOutputTokens: 10,
+      totalTokens: 110,
+    });
+    tracker.trackUsage('deepseek-v4-flash', 10, 1);
+    tracker.saveToProjectStats('run-after-resume');
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.projectionComplete, false);
+    assert.equal(stats.completeCostUSD, null);
+    assert.equal(tracker.getProjectHistoricalCost(root), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
