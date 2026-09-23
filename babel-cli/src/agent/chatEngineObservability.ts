@@ -829,6 +829,7 @@ export function outcomeFromReasonCode(
 ): TerminalOutcome | undefined {
   switch (code) {
     case 'recovery_exhausted':
+    case 'localization_exhausted':
     case 'permission_denied':
     case 'unsupported_operation':
       return 'BLOCKED_POLICY';

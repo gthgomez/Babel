@@ -986,6 +986,8 @@ export type AskAnswer = z.infer<typeof AskAnswerSchema>;
  */
 export const TerminalReasonCodeSchema = z.enum([
   'recovery_exhausted',
+  /** Bounded red-failure localization ended without a corroborated source. */
+  'localization_exhausted',
   'permission_denied',
   'external_dependency',
   'provider_failure',

@@ -11,6 +11,7 @@ import {
 } from './workingState.js'
 import { rememberReadInjection, selectReadWindow } from './readWindow.js'
 import { recoveryTargetIdentity } from './recoveryIdentity.js'
+import { captureLocalizationCandidates, captureLocalizationTestHints, startFailureLocalization } from './failureLocalization.js'
 import type { ReadInjectionCache } from './readWindow.js'
 
 /**
@@ -63,7 +64,6 @@ export function ingestVerifierResult(input: {
       }),
     })
     if (
-      state.lastMutation &&
       state.failureSurface &&
       ['TEST_FAILURE', 'TYPECHECK_FAILURE', 'BUILD_FAILURE', 'LINT_FAILURE', 'RUNTIME_FAILURE', 'UNKNOWN_FAILURE'].includes(state.failureSurface.kind)
     ) {
@@ -74,15 +74,40 @@ export function ingestVerifierResult(input: {
       const failingTargets = input.recoveryProjectRoot
         ? rawTargets.map((value) => recoveryTargetIdentity(input.recoveryProjectRoot!, value)).filter((value): value is string => value !== null)
         : rawTargets
+      // A controller-observed prior edit is an implicated target. A path in
+      // diagnostic output alone is only a localization candidate.
+      const mutationTarget = state.lastMutation?.path && input.recoveryProjectRoot
+        ? recoveryTargetIdentity(input.recoveryProjectRoot, state.lastMutation.path)
+        : state.lastMutation?.path ?? null
+      const trustedTargets = mutationTarget ? failingTargets : []
       state = applyWorkingStateEvent(state, {
         type: 'recovery_gate',
         failureSignature: state.failureSurface.errorSignature,
         ...(input.recoveryBinding ? { binding: input.recoveryBinding } : {}),
         requiredEvidence: 'Acquire discriminating evidence before another mutation: reread the failing assertion and inspect the relevant caller/callee boundary.',
         ...(state.lastMutation?.fingerprint ? { mutationFingerprint: state.lastMutation.fingerprint } : {}),
-        ...(failingTargets.length > 0 ? { failingTargets } : {}),
+        ...(trustedTargets.length > 0 ? { failingTargets: trustedTargets } : {}),
         hypothesisAtFailure: state.currentHypothesis,
       })
+      if (trustedTargets.length === 0 && state.failureSurface && input.recoveryBinding && input.recoveryProjectRoot) {
+        state = applyWorkingStateEvent(state, {
+          type: 'localization_begin',
+          localization: startFailureLocalization(
+            state.failureSurface.errorSignature,
+            input.recoveryBinding,
+            captureLocalizationCandidates({
+              projectRoot: input.recoveryProjectRoot,
+              stdout: input.stdout,
+              stderr: input.stderr,
+              tool: input.tool,
+              command: input.target,
+            }),
+            captureLocalizationTestHints({
+              stdout: input.stdout, stderr: input.stderr, tool: input.tool, command: input.target,
+            }),
+          ),
+        })
+      }
     }
   }
   return { state, lastVerifierFailed: input.exitCode !== 0 }

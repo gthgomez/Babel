@@ -50,6 +50,10 @@ const GUIDANCE: Record<TerminalReasonCode, TerminalReasonGuidance> = {
     message: 'No progress after recovery; inspect diagnostics / narrow scope',
     nextActions: ['Inspect diagnostics', 'Narrow scope', 'Continue with guidance'],
   },
+  localization_exhausted: {
+    message: 'The failure source could not be confirmed within the localization allowance',
+    nextActions: ['Provide a failing test or source location', 'Rerun verification with detailed output'],
+  },
   permission_denied: {
     message: 'Blocked by policy — an action was not permitted',
     nextActions: ['Review permission', 'Request access'],

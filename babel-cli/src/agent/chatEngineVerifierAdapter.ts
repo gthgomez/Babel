@@ -38,6 +38,8 @@ export async function captureChatVerifierReceipt(input: {
   exitCode: number;
   summary: string;
   mutationPaths: string[];
+  /** Explicit red-only baseline route; cannot satisfy a green completion. */
+  allowRepositoryScopeForRedRecovery?: boolean;
 }): Promise<BoundChatVerifierReceipt | null> {
   if (!isAuthoritativeVerifierCommand(input.command)) return null;
   const parsed = parseStructuredVerifierCommand(input.command, {
@@ -50,12 +52,15 @@ export async function captureChatVerifierReceipt(input: {
   // of throwing and corrupting the loop.
   const mutationPaths = toRepositoryRelativePaths(input.projectRoot, input.mutationPaths);
   if (mutationPaths === null) return null;
-  return bindChatVerifierReceipt({
+  const repositoryScopedRed = input.allowRepositoryScopeForRedRecovery === true &&
+    input.exitCode !== 0 && mutationPaths.length === 0;
+  const receipt = await bindChatVerifierReceipt({
     projectRoot: input.projectRoot,
     command: input.command,
     exit_code: input.exitCode,
     summary: input.summary,
     mutationPaths,
+    ...(repositoryScopedRed ? { scopeKind: 'repository' as const } : {}),
     structured: {
       verifierId: parsed.verifierId,
       authoritySource: parsed.authoritySource,
@@ -63,6 +68,10 @@ export async function captureChatVerifierReceipt(input: {
       args: parsed.args,
     },
   });
+  // Repository scope falls back to a root-path digest without a Git commit.
+  // That is insufficient evidence for a red baseline repair candidate.
+  if (repositoryScopedRed && !receipt.boundRevision?.gitCommitHash) return null;
+  return receipt;
 }
 
 /**
@@ -127,6 +136,7 @@ export async function captureAndRecordVerifierReceipt(input: {
   exitCode: number;
   summary: string;
   mutationPaths: string[];
+  allowRepositoryScopeForRedRecovery?: boolean;
   sessionEvents: SessionEventLog;
   turnId: string;
   ledger: BoundChatVerifierReceipt[];

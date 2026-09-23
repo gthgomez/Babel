@@ -7,6 +7,7 @@ import type { ChatMessage } from '../chatToolDefinitions.js'
 import { createHash } from 'node:crypto'
 import type { FailureSurface, RepairDiagnosis, RepairDiagnosisKind } from './failureSurface.js'
 import type { AdmittedRecoveryPlanV1 } from './recoveryPlan.js'
+import type { FailureLocalization } from './failureLocalization.js'
 
 export const WORKING_STATE_NAME = 'working_state'
 export const WORKING_STATE_MARKER = '<!-- BABEL_WORKING_STATE -->'
@@ -41,6 +42,7 @@ export interface WorkingState {
    */
   consumedRecoveryEvidence: string[]
   lastAdmittedPlan?: AdmittedRecoveryPlanV1
+  localization?: FailureLocalization
   /** Controller-owned gate after a red verifier; model prose cannot clear it. */
   recoveryGate?: {
     failureSignature: string
@@ -135,6 +137,8 @@ export type WorkingStateEvent =
   | { type: 'recovery_candidate_drift' }
   | { type: 'recovery_plan_admitted'; plan: AdmittedRecoveryPlanV1 }
   | { type: 'recovery_plan_consumed' }
+  | { type: 'localization_begin'; localization: FailureLocalization }
+  | { type: 'localization_update'; localization: FailureLocalization }
   | {
       type: 'recovery_gate'
       failureSignature: string
@@ -253,6 +257,10 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         next.recoveryGate = { ...next.recoveryGate, planAdmitted: false, permitConsumed: true }
       }
       break
+    case 'localization_begin':
+    case 'localization_update':
+      next.localization = structuredClone(event.localization)
+      break
     case 'verifier':
       next.lastVerifier = {
         identity: event.identity,
@@ -260,6 +268,7 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         summary: event.summary,
         fresh: true,
       }
+      delete next.localization
       if (event.exitCode === 0) {
         delete next.failureSurface
         delete next.recoveryGate
@@ -383,6 +392,15 @@ export function formatWorkingStateBlock(state: WorkingState): string {
       `  recovery_plan: ${state.recoveryGate.planAdmitted ? 'admitted' : 'required'}`,
     )
   }
+  if (state.localization) {
+    lines.push(
+      `  localization_phase: ${state.localization.phase}`,
+      `  localization_calls: ${state.localization.calls}/4`,
+      `  localization_rounds: ${state.localization.rounds}/2`,
+      `  localization_candidates: ${yamlList(state.localization.candidates.map((candidate) => candidate.path), 4)}`,
+      `  localization_test_hints: ${yamlList(state.localization.testHints, 4)}`,
+    )
+  }
   if (state.lastVerifier && !state.lastVerifier.fresh) {
     lines.push('  note: last_verifier is stale after newer evidence/mutation — do not treat as current')
   }
@@ -503,6 +521,21 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
       typeof candidate.revision !== 'number' || !Number.isSafeInteger(candidate.revision)) return null
   const restored = structuredClone(candidate) as WorkingState
   const gate = restored.recoveryGate
+  if (restored.localization) {
+    const loc = restored.localization
+    if (!['LOCALIZE_FAILURE', 'localized', 'exhausted'].includes(loc.phase) ||
+        !Number.isSafeInteger(loc.calls) || loc.calls < 0 || loc.calls > 4 ||
+        !Number.isSafeInteger(loc.rounds) || loc.rounds < 0 || loc.rounds > 2 ||
+        !strings(loc.inspected) || !strings(loc.testHints) || loc.testHints.length > 4 ||
+        !Array.isArray(loc.candidates) || loc.candidates.length > 8 ||
+        loc.candidates.some((item) => !item || typeof item.path !== 'string' || typeof item.relation !== 'string') ||
+        !loc.binding || loc.binding.schemaVersion !== 1 ||
+        typeof loc.binding.workspaceRevision !== 'string' || !loc.binding.workspaceRevision ||
+        loc.failureSignature !== gate?.failureSignature ||
+        (loc.phase === 'localized' && (!loc.acceptedPath || !loc.observationDigest ||
+          !loc.candidates.some((item) => item.path === loc.acceptedPath) ||
+          !gate?.failingTargets?.includes(loc.acceptedPath)))) return null
+  }
   if (gate) {
     if (typeof gate.failureSignature !== 'string' || typeof gate.requiredEvidence !== 'string' ||
         !strings(gate.observedKeys ?? []) || !strings(gate.failingTargets ?? [])) return null

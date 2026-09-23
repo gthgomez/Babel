@@ -25,6 +25,7 @@ import { ChatEngine } from './chatEngine.js';
 import { ingestVerifierResult } from './codingLoop/chatBindings.js';
 import { applyWorkingStateEvent, createWorkingState } from './codingLoop/workingState.js';
 import { actualRecoveryEdit, recoveryObservationId } from './codingLoop/recoveryPlan.js';
+import { startFailureLocalization } from './codingLoop/failureLocalization.js';
 import { createSessionEventLog, recordUserSubmitted, recordVerifierAttempt, recordWorkingStateSnapshot } from './sessionEvents.js';
 
 interface ProgressControllerProbe {
@@ -413,6 +414,98 @@ test('R1 red command without verifier receipt closes recovery until a bound reru
     }
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('R1 no-target red localizes through a related read before admitting a plan', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-r1-localize-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
+    mkdirSync(join(root, 'src'));
+    const file = join(root, 'src', 'parser.js');
+    writeFileSync(file, 'export function parseToken() {\n  return 1\n}\n');
+    execFileSync('git', ['add', 'src/parser.js'], { cwd: root, windowsHide: true });
+    const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
+    const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
+    (engine as any).workingState = ingestVerifierResult({
+      state: createWorkingState('repair parser'), tool: 'test_run', target: 'npm test', exitCode: 1,
+      stdout: '', stderr: 'TypeError: bad\n    at parseToken (src/parser.js:2:3)',
+      summary: 'parser failed', recoveryProjectRoot: root,
+      recoveryBinding: (engine as any).currentRecoveryBinding(),
+    }).state;
+    assert.equal((engine as any).workingState.localization.phase, 'LOCALIZE_FAILURE');
+    assert.equal((engine as any).workingState.recoveryGate.failingTargets, undefined);
+    const denied = await (engine as any).executeOneAction(
+      { type: 'str_replace', file_path: 'src/parser.js', old_str: 'return 1', new_str: 'return 2' },
+      context, {}, { index: 0, ownerGeneration: 0 },
+    );
+    assert.match(denied.observation, /RECOVERY_EVIDENCE_REQUIRED/);
+    await (engine as any).executeOneAction(
+      { type: 'read_file', path: 'src/parser.js' }, context, {}, { index: 1, ownerGeneration: 0 },
+    );
+    const state = (engine as any).workingState;
+    assert.equal(state.localization.phase, 'localized');
+    assert.deepEqual(state.recoveryGate.failingTargets, ['src/parser.js']);
+    assert.equal(state.recoveryGate.satisfied, true);
+    const repairPlan = {
+      schemaVersion: 1, failureSignature: state.recoveryGate.failureSignature,
+      workspaceRevision: state.recoveryGate.binding.workspaceRevision,
+      hypothesisClass: 'logic', targetIdentities: ['src/parser.js'], actionFamily: 'str_replace',
+      criterionId: 'npm test', supportingObservationIds: state.recoveryGate.observedKeys.map(recoveryObservationId),
+    };
+    const changed = await (engine as any).executeOneAction(
+      { type: 'str_replace', file_path: 'src/parser.js', old_str: 'return 1', new_str: 'return 2', repair_plan: repairPlan },
+      context, {}, { index: 2, ownerGeneration: 0 },
+    );
+    assert.doesNotMatch(changed.observation, /RECOVERY_PLAN_REQUIRED|RECOVERY_EVIDENCE_REQUIRED/);
+    assert.match(readFileSync(file, 'utf8'), /return 2/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('R1 no-target test name needs a bounded glob followed by a corroborating read', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-r1-localize-testname-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
+    mkdirSync(join(root, 'tests'));
+    writeFileSync(join(root, 'tests', 'parser.test.ts'), 'test("parser handles tokens", () => {})\n');
+    execFileSync('git', ['add', 'tests/parser.test.ts'], { cwd: root, windowsHide: true });
+    const engine = new ChatEngine({ task: 'repair parser test', projectRoot: root });
+    (engine as any).workingState = ingestVerifierResult({
+      state: createWorkingState('repair parser test'), tool: 'test_run',
+      target: 'npm test -- parser.test.ts', exitCode: 1,
+      stdout: 'Tests: 1 failed', stderr: '', summary: 'parser test failed',
+      recoveryProjectRoot: root, recoveryBinding: (engine as any).currentRecoveryBinding(),
+    }).state;
+    const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
+    await (engine as any).executeOneAction(
+      { type: 'glob', pattern: '**/*parser*.test.ts' }, context, {}, { index: 0, ownerGeneration: 0 },
+    );
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
+    assert.deepEqual((engine as any).workingState.localization.candidates.map((candidate: { path: string }) => candidate.path), ['tests/parser.test.ts']);
+    await (engine as any).executeOneAction(
+      { type: 'read_file', path: 'tests/parser.test.ts' }, context, {}, { index: 1, ownerGeneration: 0 },
+    );
+    assert.equal((engine as any).workingState.localization.phase, 'localized');
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('R1 exhausted localization blocks another search and reports a typed reason', async () => {
+  const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+  const binding = (engine as any).currentRecoveryBinding();
+  assert.ok(binding);
+  (engine as any).workingState = applyWorkingStateEvent(createWorkingState('repair parser'), {
+    type: 'localization_begin',
+    localization: { ...startFailureLocalization('red', binding, []), calls: 4, phase: 'exhausted' },
+  });
+  const result = await (engine as any).executeOneAction(
+    { type: 'glob', pattern: '**/*.ts' },
+    { agentId: 'test', runId: 'test', runDir: process.cwd(), babelRoot: process.cwd() },
+    {}, { index: 0, ownerGeneration: 0 },
+  );
+  assert.match(result.observation, /LOCALIZATION_EXHAUSTED/);
+  const report = (engine as any).buildVerifierBlockedReport('not localized');
+  assert.equal(report.reason_code, 'localization_exhausted');
+  assert.match(report.checked[0].finding, /4 inspection call/);
 });
 
 test('#216 [REPRODUCTION] fresh submission must not inherit task-local recovery punishment', () => {

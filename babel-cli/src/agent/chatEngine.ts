@@ -183,6 +183,7 @@ import {
 import { ingestVerifierResult, rememberFullReadWindow } from './codingLoop/chatBindings.js';
 import { recoveryTargetIdentity, recoveryWorkspaceRevision } from './codingLoop/recoveryIdentity.js';
 import { actualRecoveryEdit, admitRecoveryPlan } from './codingLoop/recoveryPlan.js';
+import { beginLocalizationCall, discoverTestCandidates, finishLocalizationCall } from './codingLoop/failureLocalization.js';
 import { canonicalizeContained } from '../bridge/workspaceBound.js';
 
 import { parseTextToolTurn } from './textToolParser.js';
@@ -4993,6 +4994,64 @@ export class ChatEngine {
     }
   }
 
+  private beginRecoveryLocalizationInspection(tool: string, rawTarget: string): boolean {
+    const localization = this.workingState.localization;
+    if (!localization || localization.phase === 'localized') return true;
+    if (localization.phase === 'exhausted' || localization.calls >= 4 || localization.rounds >= 2) {
+      this.workingState = applyWorkingStateEvent(this.workingState, {
+        type: 'localization_update', localization: { ...localization, phase: 'exhausted' },
+      });
+      this.persistRecoveryWorkingState();
+      return false;
+    }
+    const current = this.currentRecoveryBinding();
+    if (!current || !sameRecoveryBinding(localization.binding, current)) {
+      this.workingState = applyWorkingStateEvent(this.workingState, { type: 'recovery_candidate_drift' });
+      this.persistRecoveryWorkingState();
+      return false;
+    }
+    const target = recoveryTargetIdentity(this.options.projectRoot, rawTarget) ?? undefined;
+    this.workingState = applyWorkingStateEvent(this.workingState, {
+      type: 'localization_update',
+      localization: beginLocalizationCall(localization, target),
+    });
+    this.persistRecoveryWorkingState();
+    return true;
+  }
+
+  private finishRecoveryLocalizationInspection(input: {
+    tool: string; rawTarget: string; content?: string; succeeded: boolean; startLine?: number; pattern?: string;
+  }): void {
+    const localization = this.workingState.localization;
+    if (!localization || localization.phase !== 'LOCALIZE_FAILURE') return;
+    const target = recoveryTargetIdentity(this.options.projectRoot, input.rawTarget) ?? undefined;
+    const withCandidates = input.tool === 'glob' && input.succeeded && input.pattern && input.content
+      ? discoverTestCandidates(localization, this.options.projectRoot, input.pattern, input.content)
+      : localization;
+    const updated = finishLocalizationCall(withCandidates, {
+      type: input.tool, succeeded: input.succeeded, projectRoot: this.options.projectRoot,
+      ...(target ? { target } : {}),
+      ...(input.content !== undefined ? { content: input.content } : {}),
+      ...(input.startLine !== undefined ? { startLine: input.startLine } : {}),
+    });
+    this.workingState = applyWorkingStateEvent(this.workingState, { type: 'localization_update', localization: updated });
+    if (updated.phase === 'localized' && updated.acceptedPath && updated.observationDigest && this.workingState.recoveryGate) {
+      this.workingState = {
+        ...this.workingState,
+        recoveryGate: { ...this.workingState.recoveryGate, failingTargets: [updated.acceptedPath] },
+      };
+      this.workingState = applyWorkingStateEvent(this.workingState, {
+        type: 'add_evidence', evidence: `${input.tool}:${updated.acceptedPath}`, discriminating: true,
+        provenance: {
+          tool: input.tool, target: updated.acceptedPath,
+          failureSignature: updated.failureSignature, binding: updated.binding,
+          observationDigest: updated.observationDigest,
+        },
+      });
+    }
+    this.persistRecoveryWorkingState();
+  }
+
   private restoreRecoveryWorkingState(log: SessionEventLog): void {
     const latestSnapshot = [...log.events].reverse().find((event) => event.kind === 'working_state_snapshot');
     const latestVerifier = [...log.events].reverse().find((event) =>
@@ -7049,6 +7108,22 @@ export class ChatEngine {
         return { index: meta.index, observation: `### ${tool} ${target}\nexit_code: 1\n${detail}` };
       }
 
+      const localizationInspection = action.type === 'read_file' || action.type === 'read_range' ||
+        action.type === 'grep' || action.type === 'glob' || action.type === 'list_dir' ||
+        action.type === 'semantic_search';
+      if (localizationInspection) {
+        const inspectionTarget = 'file_path' in action && typeof action.file_path === 'string'
+          ? action.file_path : 'path' in action && typeof action.path === 'string' ? action.path : '';
+        if (!this.beginRecoveryLocalizationInspection(action.type, inspectionTarget)) {
+          const detail = this.workingState.localization?.phase === 'exhausted'
+            ? '[LOCALIZATION_EXHAUSTED] The four-call or two-scope localization allowance is spent.'
+            : '[RECOVERY_CANDIDATE_DRIFT] Rerun the verifier before localization.';
+          this.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1 });
+          callbacks?.onToolComplete?.(toolId, 'localization-blocked', 'blocked', 1);
+          return { index: meta.index, observation: `### ${tool} ${target}\nexit_code: 1\n${detail}` };
+        }
+      }
+
       const recoveredAuthorization = this.recoveredOperationDispatchAuthorization(action);
       if (!recoveredAuthorization.allowed) {
         const detail = `[RECOVERY_RECONCILIATION_REQUIRED] ${recoveredAuthorization.message ?? 'Reconcile the prior unknown effect before retrying'}`;
@@ -8196,6 +8271,11 @@ export class ChatEngine {
             });
             this.persistRecoveryWorkingState();
           }
+          this.finishRecoveryLocalizationInspection({
+            tool: 'read_range', rawTarget: action.file_path,
+            content: evaluated.window.lines.join('\n'), succeeded: true,
+            startLine: evaluated.window.startLine,
+          });
         }
         return {
           index: meta.index,
@@ -8653,6 +8733,7 @@ export class ChatEngine {
                 stderr: lastResult.stderr,
               }),
               mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
+              allowRepositoryScopeForRedRecovery: lastResult.exit_code !== 0,
               sessionEvents: this.parity.sessionEvents,
               turnId: String(this.parity.turnId ?? this._turnIndex),
               ledger: this.executedVerifierLedger,
@@ -8699,7 +8780,7 @@ export class ChatEngine {
           if (receipt) {
             this.lastVerifierReceipt = receipt;
             const previousFailureSignature = this.workingState.failureSurface?.errorSignature;
-            const recoveryBinding = lastResult.exit_code !== 0 && this.workingState.lastMutation
+            const recoveryBinding = lastResult.exit_code !== 0
               ? this.currentRecoveryBinding()
               : null;
             const ingested = ingestVerifierResult({
@@ -8839,6 +8920,12 @@ export class ChatEngine {
             });
             this.persistRecoveryWorkingState();
           }
+          this.finishRecoveryLocalizationInspection({
+            tool: action.type,
+            rawTarget: 'path' in action && typeof action.path === 'string' ? action.path : '',
+            content: lastResult.stdout, succeeded: true,
+            ...(action.type === 'glob' ? { pattern: action.pattern } : {}),
+          });
         }
       }
 
@@ -10114,6 +10201,22 @@ export class ChatEngine {
   }
 
   private buildVerifierBlockedReport(reason: string): BlockedReport {
+    if (this.workingState.localization?.phase === 'exhausted') {
+      const localization = this.workingState.localization;
+      return {
+        schema_version: 1,
+        status: 'BLOCKED',
+        reason_code: 'localization_exhausted',
+        cause_class: 'harness',
+        reason: 'LOCALIZATION_EXHAUSTED: no diagnostic candidate was corroborated within the bounded allowance.',
+        missing: 'A source or test location supported by a content-bearing read and the failure diagnostic.',
+        checked: [{
+          action: 'localize_failure',
+          target: localization.failureSignature.slice(0, 180),
+          finding: `${localization.calls} inspection call(s), ${localization.rounds} candidate scope(s); no accepted target`,
+        }],
+      };
+    }
     // R0-A: a harness-origin block must carry REAL checked evidence, never an
     // empty `checked` array (BlockedReportSchema requires >=1) and never a fake
     // placeholder. Prefer the actual verifier attempt when one ran red; else the
