@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { CostTracker, globalCostTracker } from '../services/costTracker.js'
-import type { RunnerCallbacks } from '../runners/base.js'
+import type { RunnerCallbacks, RunnerInvocationMetadata } from '../runners/base.js'
 import { ChatEngine } from './chatEngine.js'
 import { createWorkingState } from './codingLoop/workingState.js'
 import { parseLeaseJson } from '../authority/lease.js'
@@ -208,6 +208,257 @@ test('a started provider attempt that streams partial output then fails retains 
         totalOutputTokens: prior.totalOutputTokens,
         totalTokens: prior.totalTokens,
       })
+    }
+  })
+})
+
+test('unknown settlement keeps the invocation physical root and does not conflict with its pending receipt', async () => {
+  await withFixture(async (root) => {
+    globalCostTracker.resetSession()
+    try {
+      const chat = engine(root, () => {})
+      chat.applyUserSubmission({ userInput: 'rooted unknown task' })
+      const owner = chat.getTaskAllowanceSnapshot()!.taskOwnerId
+      const scope = {
+        taskOwnerId: owner,
+        projectRoot: realpathSync(root),
+        accountingEpoch: globalCostTracker.getAccountingEpoch(),
+        turnId: 'rooted-unknown-turn',
+        chargeId: null as string | null,
+      }
+      const internal = chat as unknown as {
+        providerRetryCallbacks: (context: {
+          usageScope: typeof scope; isOwnerCurrent: () => boolean
+        }) => RunnerCallbacks
+        trackRunnerUsage: (runner: unknown, usageScope: typeof scope) => void
+        taskCostScopeUnavailable: boolean
+      }
+      const callbacks = internal.providerRetryCallbacks({
+        usageScope: scope,
+        isOwnerCurrent: () => chat.getTaskAllowanceSnapshot()?.taskOwnerId === owner,
+      })
+      callbacks.onInvocationStarted?.({
+        inference_id: 'rooted-unknown-charge', request_id: 'rooted-unknown-request',
+        attempt_id: 'rooted-unknown-attempt', provider: 'deepseek',
+        requested_model_id: 'deepseek-v4-flash', normalized_model_id: 'deepseek-v4-flash',
+        sent_model_id: 'deepseek-v4-flash', input_digest: 'fixture-input',
+      })
+      callbacks.onInvocationCompleted?.({
+        inference_id: 'rooted-unknown-charge', provider: 'deepseek', model: 'deepseek-v4-flash',
+        status: 'failed', inference_started: true, failure_stage: 'stream',
+      })
+
+      internal.trackRunnerUsage({ getLastInvocationMetadata: () => null }, scope)
+
+      const receipt = globalCostTracker.getTaskChargeObservations(owner)[0]
+      assert.equal(receipt?.attribution.projectRoot, realpathSync(root))
+      assert.equal(receipt?.attribution.projectRootVersion, 1)
+      assert.equal(receipt?.attribution.requestId, 'rooted-unknown-request')
+      assert.equal(receipt?.attribution.attemptId, 'rooted-unknown-attempt')
+      assert.equal(globalCostTracker.getTaskSummary(owner).unknownChargeCount, 1)
+      assert.equal(internal.taskCostScopeUnavailable, false)
+    } finally {
+      globalCostTracker.resetSession()
+    }
+  })
+})
+
+test('A owner receipt persistence failure after B admission leaves B budget health unchanged', async () => {
+  await withFixture(async (root) => {
+    globalCostTracker.resetSession()
+    try {
+      const chat = engine(root, () => {}, 1)
+      chat.applyUserSubmission({ userInput: 'Task A' })
+      const ownerA = chat.getTaskAllowanceSnapshot()!.taskOwnerId
+      const scope = {
+        taskOwnerId: ownerA,
+        projectRoot: realpathSync(root),
+        accountingEpoch: globalCostTracker.getAccountingEpoch(),
+        turnId: 'turn-A',
+        chargeId: null as string | null,
+      }
+      const internal = chat as unknown as {
+        providerRetryCallbacks: (context: {
+          usageScope: typeof scope; isOwnerCurrent: () => boolean
+        }) => RunnerCallbacks
+        persistOwnerCharges: (ownerId: string, runDir?: string) => void
+        engineRunDir: string
+        taskCostScopeUnavailable: boolean
+        ownerAccountingFaults: Map<string, Array<{ kind: string; reason: string }>>
+        checkBudgets: () => { ok: boolean; reason?: string }
+      }
+      const callbacks = internal.providerRetryCallbacks({
+        usageScope: scope,
+        isOwnerCurrent: () => chat.getTaskAllowanceSnapshot()?.taskOwnerId === ownerA,
+      })
+      callbacks.onInvocationStarted?.({
+        inference_id: 'late-A-persist', request_id: 'late-A-request', attempt_id: 'late-A-attempt',
+        provider: 'deepseek', requested_model_id: 'deepseek-v4-flash',
+        normalized_model_id: 'deepseek-v4-flash', sent_model_id: 'deepseek-v4-flash',
+        input_digest: 'fixture-input',
+      })
+      chat.applyUserSubmission({ userInput: 'Task B' })
+      const ownerB = chat.getTaskAllowanceSnapshot()!.taskOwnerId
+      assert.notEqual(ownerA, ownerB)
+
+      const originalPersist = internal.persistOwnerCharges.bind(chat)
+      internal.persistOwnerCharges = (ownerId, runDir) => {
+        if (ownerId === ownerA) throw new Error('injected old-owner persistence failure')
+        originalPersist(ownerId, runDir)
+      }
+      callbacks.onInvocationCompleted?.({
+        inference_id: 'late-A-persist', provider: 'deepseek', model: 'deepseek-v4-flash',
+        status: 'delivered', usage_metadata: {
+          provider: 'deepseek', provider_model_id: 'deepseek-v4-flash', latency_ms: 1,
+          prompt_tokens: 100, completion_tokens: 10, total_tokens: 110,
+          estimated_cost_usd: null,
+        },
+      })
+
+      assert.equal(internal.taskCostScopeUnavailable, false)
+      assert.equal(internal.checkBudgets().ok, true)
+      assert.equal(globalCostTracker.getTaskSummary(ownerB).unknownChargeCount, 0)
+      assert.ok(internal.ownerAccountingFaults.get(ownerA)?.some(
+        (fault) => fault.kind === 'persistence-failure' &&
+          fault.reason.includes('injected old-owner persistence failure'),
+      ))
+      const oldOwnerReceipt = readdirSync(join(internal.engineRunDir, 'task-charges'))
+        .map((name) => JSON.parse(readFileSync(join(internal.engineRunDir, 'task-charges', name), 'utf8')))
+        .find((record) => record.taskOwnerId === ownerA)
+      assert.ok(oldOwnerReceipt)
+      assert.equal(oldOwnerReceipt.unknownChargeCount, 1)
+      assert.equal(oldOwnerReceipt.chargeObservations[0].attribution.projectRoot, realpathSync(root))
+    } finally {
+      globalCostTracker.resetSession()
+    }
+  })
+})
+
+test('A owner conflict after B admission does not poison B accounting health', async () => {
+  await withFixture(async (root) => {
+    globalCostTracker.resetSession()
+    try {
+      const chat = engine(root, () => {}, 1)
+      const runId = chat.getEngineRunId()
+      chat.applyUserSubmission({ userInput: 'Task A' })
+      const ownerA = chat.getTaskAllowanceSnapshot()!.taskOwnerId
+      const scope = {
+        taskOwnerId: ownerA,
+        projectRoot: realpathSync(root),
+        accountingEpoch: globalCostTracker.getAccountingEpoch(),
+        turnId: 'turn-A',
+        chargeId: null as string | null,
+        requestId: undefined as string | undefined,
+        usageMetadata: undefined as RunnerInvocationMetadata | null | undefined,
+      }
+      const internal = chat as unknown as {
+        providerRetryCallbacks: (context: {
+          usageScope: typeof scope; isOwnerCurrent: () => boolean
+        }) => RunnerCallbacks
+        trackRunnerUsage: (runner: unknown, usageScope: typeof scope) => void
+        engineRunDir: string
+        ownerAccountingFaults: Map<string, Array<{ kind: string; reason: string }>>
+        taskCostScopeUnavailable: boolean
+        checkBudgets: () => { ok: boolean; reason?: string }
+      }
+      const callbacks = internal.providerRetryCallbacks({
+        usageScope: scope,
+        isOwnerCurrent: () => chat.getTaskAllowanceSnapshot()?.taskOwnerId === ownerA,
+      })
+      callbacks.onInvocationStarted?.({
+        inference_id: 'late-A-conflict', request_id: 'late-A-original-request',
+        attempt_id: 'late-A-attempt', provider: 'deepseek',
+        requested_model_id: 'deepseek-v4-flash', normalized_model_id: 'deepseek-v4-flash',
+        sent_model_id: 'deepseek-v4-flash', input_digest: 'fixture-input',
+      })
+      chat.applyUserSubmission({ userInput: 'Task B' })
+      const ownerB = chat.getTaskAllowanceSnapshot()!.taskOwnerId
+      scope.requestId = 'conflicting-request'
+      scope.usageMetadata = {
+        provider: 'deepseek', provider_model_id: 'deepseek-v4-flash', latency_ms: 1,
+        prompt_tokens: 100, completion_tokens: 10, total_tokens: 110,
+        estimated_cost_usd: null,
+      }
+
+      internal.trackRunnerUsage({ getLastInvocationMetadata: () => null }, scope)
+
+      assert.equal(globalCostTracker.getTaskSummary(ownerA).unknownChargeCount, 1)
+      assert.equal(globalCostTracker.getTaskSummary(ownerB).unknownChargeCount, 0)
+      assert.equal(internal.taskCostScopeUnavailable, false)
+      assert.equal(internal.checkBudgets().ok, true)
+
+      const receiptPath = join(internal.engineRunDir, 'task-charges')
+      const ownerReceipt = readdirSync(receiptPath)
+        .map((name) => JSON.parse(readFileSync(join(receiptPath, name), 'utf8')))
+        .find((record) => record.taskOwnerId === ownerA)
+      assert.ok(ownerReceipt)
+      assert.ok(ownerReceipt.accountingFaults.some(
+        (fault: { kind: string; reason: string }) => fault.kind === 'settlement-conflict',
+      ))
+
+      globalCostTracker.resetSession()
+      const restored = new ChatEngine({
+        task: 'fixture task', projectRoot: root, runId, model: 'deepseek-v4-flash',
+        maxCostUsd: 1, resumeExisting: true,
+      })
+      const restoredInternal = restored as unknown as {
+        taskCostScopeUnavailable: boolean; checkBudgets: () => { ok: boolean; reason?: string }
+      }
+      assert.equal(restored.getTaskAllowanceSnapshot()?.taskOwnerId, ownerB)
+      assert.equal(restoredInternal.taskCostScopeUnavailable, false)
+      assert.equal(restoredInternal.checkBudgets().ok, true)
+      assert.ok((globalCostTracker.getTaskSummary(ownerA).unknownChargeCount ?? 0) >= 1)
+    } finally {
+      globalCostTracker.resetSession()
+    }
+  })
+})
+
+test('a current-owner settlement conflict still blocks its own task budget', async () => {
+  await withFixture(async (root) => {
+    globalCostTracker.resetSession()
+    try {
+      const chat = engine(root, () => {}, 1)
+      chat.applyUserSubmission({ userInput: 'Current task' })
+      const owner = chat.getTaskAllowanceSnapshot()!.taskOwnerId
+      const scope = {
+        taskOwnerId: owner,
+        projectRoot: realpathSync(root),
+        accountingEpoch: globalCostTracker.getAccountingEpoch(),
+        turnId: 'current-turn',
+        chargeId: null as string | null,
+        requestId: undefined as string | undefined,
+        usageMetadata: undefined as RunnerInvocationMetadata | null | undefined,
+      }
+      const internal = chat as unknown as {
+        providerRetryCallbacks: (context: {
+          usageScope: typeof scope; isOwnerCurrent: () => boolean
+        }) => RunnerCallbacks
+        trackRunnerUsage: (runner: unknown, usageScope: typeof scope) => void
+        taskCostScopeUnavailable: boolean
+        checkBudgets: () => { ok: boolean; reason?: string }
+      }
+      const callbacks = internal.providerRetryCallbacks({
+        usageScope: scope, isOwnerCurrent: () => true,
+      })
+      callbacks.onInvocationStarted?.({
+        inference_id: 'current-conflict', request_id: 'original-request', attempt_id: 'attempt-1',
+        provider: 'deepseek', requested_model_id: 'deepseek-v4-flash',
+        normalized_model_id: 'deepseek-v4-flash', sent_model_id: 'deepseek-v4-flash',
+        input_digest: 'fixture-input',
+      })
+      scope.requestId = 'conflicting-request'
+      scope.usageMetadata = {
+        provider: 'deepseek', provider_model_id: 'deepseek-v4-flash', latency_ms: 1,
+        prompt_tokens: 100, completion_tokens: 10, total_tokens: 110,
+        estimated_cost_usd: null,
+      }
+      internal.trackRunnerUsage({ getLastInvocationMetadata: () => null }, scope)
+
+      assert.equal(internal.taskCostScopeUnavailable, true)
+      assert.equal(internal.checkBudgets().ok, false)
+    } finally {
+      globalCostTracker.resetSession()
     }
   })
 })

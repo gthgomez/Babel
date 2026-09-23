@@ -45,7 +45,7 @@ import {
   captureCostBaselineUsd,
   globalCostTracker,
 } from '../services/costTracker.js';
-import type { ChargeReceipt, SessionUsageSummary } from '../services/costTracker.js';
+import type { ChargeReceipt, SessionUsageSummary, UsageAttribution } from '../services/costTracker.js';
 import {
   proposeProjectMemoryWriteback,
   readProjectMemory,
@@ -1038,6 +1038,51 @@ export interface ChatResult {
   cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
 }
 
+type ChatUsageScope = {
+  taskOwnerId: string | null;
+  projectRoot?: string;
+  accountingEpoch: string;
+  turnId: string | null;
+  chargeId: string | null;
+  requestId?: string;
+  attemptId?: string;
+  runDir?: string;
+  modelId?: string;
+  usageMetadata?: RunnerInvocationMetadata | null;
+  ownerGeneration?: number;
+  isOwnerCurrent?: () => boolean;
+};
+
+type OwnerAccountingFault = {
+  taskOwnerId: string;
+  ownerGeneration: number | null;
+  accountingEpoch: string;
+  chargeId: string | null;
+  persistenceScope: 'owner-charge-receipt';
+  kind: 'settlement-conflict' | 'persistence-failure';
+  reason: string;
+};
+
+function captureUsageAttribution(
+  scope: ChatUsageScope,
+  chargeId = scope.chargeId,
+  requestId = scope.requestId,
+  attemptId = scope.attemptId,
+): UsageAttribution | undefined {
+  if (!scope.taskOwnerId || !chargeId) return undefined;
+  return Object.freeze({
+    taskOwnerId: scope.taskOwnerId,
+    chargeId,
+    accountingEpoch: scope.accountingEpoch,
+    ...(scope.turnId ? { turnId: scope.turnId } : {}),
+    ...(requestId ? { requestId } : {}),
+    ...(attemptId ? { attemptId } : {}),
+    ...(scope.projectRoot
+      ? { projectRoot: scope.projectRoot, projectRootVersion: 1 as const }
+      : {}),
+  });
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────
 
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
@@ -1450,6 +1495,8 @@ export class ChatEngine {
   private taskCostBaselineUsd = 0;
   /** Durable allowance for the current immutable task owner. */
   private taskAllowance: ChatTaskAllowanceSnapshot | null = null;
+  /** Owner-bound accounting faults travel with the existing owner charge receipt checkpoint. */
+  private readonly ownerAccountingFaults = new Map<string, OwnerAccountingFault[]>();
   /** Monotonic checkpoint for active execution wall time. */
   private activeExecutionCheckpointMs: number | null = null;
   /** Stable logical provider request identity consumed by trackRunnerUsage. */
@@ -1597,6 +1644,36 @@ export class ChatEngine {
     return join(this.ownerChargeDir(runDir), `${name}.json`);
   }
 
+  private recordOwnerAccountingFault(
+    scope: ChatUsageScope,
+    kind: OwnerAccountingFault['kind'],
+    reason: string,
+    appliesToCurrent: boolean,
+  ): void {
+    const ownerId = scope.taskOwnerId;
+    if (!ownerId) {
+      if (appliesToCurrent) this.taskCostScopeUnavailable = true;
+      return;
+    }
+    const fault: OwnerAccountingFault = {
+      taskOwnerId: ownerId,
+      ownerGeneration: scope.ownerGeneration ?? null,
+      accountingEpoch: scope.accountingEpoch,
+      chargeId: scope.chargeId,
+      persistenceScope: 'owner-charge-receipt',
+      kind,
+      reason,
+    };
+    const faults = this.ownerAccountingFaults.get(ownerId) ?? [];
+    if (!faults.some((existing) => JSON.stringify(existing) === JSON.stringify(fault))) {
+      faults.push(fault);
+      this.ownerAccountingFaults.set(ownerId, faults);
+    }
+    if (appliesToCurrent && ownerId === this.taskAllowance?.taskOwnerId) {
+      this.taskCostScopeUnavailable = true;
+    }
+  }
+
   private persistOwnerCharges(ownerId: string, runDir = this.engineRunDir): void {
     const summary = globalCostTracker.getTaskSummary(ownerId);
     const chargeIds = globalCostTracker.getTaskChargeIds(ownerId);
@@ -1618,6 +1695,7 @@ export class ChatEngine {
       unknownChargeCount: summary.unknownChargeCount ?? 0,
       chargeIds,
       chargeObservations,
+      accountingFaults: this.ownerAccountingFaults.get(ownerId) ?? [],
     }), 'utf8');
     renameSync(tmpPath, path);
   }
@@ -1639,6 +1717,22 @@ export class ChatEngine {
             typeof data['totalCostUSD'] !== 'number' ||
             typeof data['unknownChargeCount'] !== 'number') {
           throw new Error('Invalid owner charge file');
+        }
+        const accountingFaults = data['accountingFaults'] ?? [];
+        if (!Array.isArray(accountingFaults) || accountingFaults.some((fault) => {
+          if (fault === null || typeof fault !== 'object') return true;
+          const entry = fault as Record<string, unknown>;
+          return entry['taskOwnerId'] !== data['taskOwnerId'] ||
+            !(entry['ownerGeneration'] === null ||
+              (typeof entry['ownerGeneration'] === 'number' && Number.isInteger(entry['ownerGeneration']))) ||
+            typeof entry['accountingEpoch'] !== 'string' ||
+            !(entry['chargeId'] === null || typeof entry['chargeId'] === 'string') ||
+            entry['persistenceScope'] !== 'owner-charge-receipt' ||
+            !['settlement-conflict', 'persistence-failure'].includes(String(entry['kind'])) ||
+            typeof entry['reason'] !== 'string';
+        })) throw new Error('Invalid owner accounting fault');
+        if (accountingFaults.length > 0) {
+          this.ownerAccountingFaults.set(data['taskOwnerId'], accountingFaults as OwnerAccountingFault[]);
         }
         globalCostTracker.restoreTaskUsage(data['taskOwnerId'], {
           totalCostUSD: data['totalCostUSD'],
@@ -1742,7 +1836,8 @@ export class ChatEngine {
   }
 
   private restorePersistedTaskBudget(persisted: ChatTaskAllowanceSnapshot | null): void {
-    this.taskCostScopeUnavailable = persisted === null || persisted.lastTurnRuntime === undefined;
+    this.taskCostScopeUnavailable = persisted === null || persisted.lastTurnRuntime === undefined ||
+      this.ownerAccountingFaults.has(persisted.taskOwnerId);
     this.activeExecutionCheckpointMs = null;
     if (!persisted) {
       this.taskAllowance = null;
@@ -2196,6 +2291,7 @@ export class ChatEngine {
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       turnId: this.parity.turnId,
       chargeId: null as string | null,
+      ownerGeneration,
       isOwnerCurrent,
     };
     return {
@@ -3378,6 +3474,7 @@ export class ChatEngine {
         accountingEpoch: globalCostTracker.getAccountingEpoch(),
         turnId: this.parity.turnId,
         chargeId: null as string | null,
+        ownerGeneration: submissionGeneration,
         isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
       };
       const settleRetiredUsage = (usedRunner: typeof runner): void => {
@@ -7528,8 +7625,16 @@ export class ChatEngine {
                     if (mutationAllowance?.parentTaskOwnerId) {
                       try {
                         this.persistOwnerCharges(mutationAllowance.parentTaskOwnerId, ownerRunDir);
-                      } catch {
-                        this.taskCostScopeUnavailable = true;
+                      } catch (error) {
+                        this.recordOwnerAccountingFault({
+                          taskOwnerId: mutationAllowance.parentTaskOwnerId,
+                          accountingEpoch: globalCostTracker.getAccountingEpoch(),
+                          turnId: this.parity.turnId,
+                          chargeId: null,
+                          ownerGeneration,
+                        }, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                        mutationAllowance.parentTaskOwnerId === this.taskAllowance?.taskOwnerId &&
+                          this.isSubmissionCurrent(ownerGeneration));
                         throw new Error('Delegated charge receipt could not be saved');
                       }
                     }
@@ -7653,8 +7758,16 @@ export class ChatEngine {
                 if (mutationAllowance?.parentTaskOwnerId) {
                   try {
                     this.persistOwnerCharges(mutationAllowance.parentTaskOwnerId, ownerRunDir);
-                  } catch {
-                    this.taskCostScopeUnavailable = true;
+                  } catch (error) {
+                    this.recordOwnerAccountingFault({
+                      taskOwnerId: mutationAllowance.parentTaskOwnerId,
+                      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+                      turnId: this.parity.turnId,
+                      chargeId: null,
+                      ownerGeneration,
+                    }, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                    mutationAllowance.parentTaskOwnerId === this.taskAllowance?.taskOwnerId &&
+                      this.isSubmissionCurrent(ownerGeneration));
                     throw new Error('Delegated charge receipt could not be saved');
                   }
                 }
@@ -7855,8 +7968,16 @@ export class ChatEngine {
               if (readAllowance.parentTaskOwnerId) {
                 try {
                   this.persistOwnerCharges(readAllowance.parentTaskOwnerId, ownerRunDir);
-                } catch {
-                  this.taskCostScopeUnavailable = true;
+                } catch (error) {
+                  this.recordOwnerAccountingFault({
+                    taskOwnerId: readAllowance.parentTaskOwnerId,
+                    accountingEpoch: globalCostTracker.getAccountingEpoch(),
+                    turnId: this.parity.turnId,
+                    chargeId: null,
+                    ownerGeneration,
+                  }, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  readAllowance.parentTaskOwnerId === this.taskAllowance?.taskOwnerId &&
+                    this.isSubmissionCurrent(ownerGeneration));
                   throw new Error('Delegated charge receipt could not be saved');
                 }
               }
@@ -9409,6 +9530,7 @@ export class ChatEngine {
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       turnId: this.parity.turnId,
       chargeId: null as string | null,
+      ownerGeneration,
       isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
     };
     const runnerCallbacks: RunnerCallbacks | undefined = callbacks.onAnswerChunk
@@ -9439,7 +9561,7 @@ export class ChatEngine {
    *  #12: Also accumulates API-reported token counts for accurate estimation. */
   private trackRunnerUsage(
     runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
-    usageScope?: { taskOwnerId: string | null; projectRoot?: string; accountingEpoch: string; turnId: string | null; chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string; modelId?: string; usageMetadata?: RunnerInvocationMetadata | null; isOwnerCurrent?: () => boolean },
+    usageScope?: ChatUsageScope,
   ): void {
     // A task charge must be tied to an observed invocation start. Test/offline
     // runners can return placeholder metadata without starting a paid request.
@@ -9462,15 +9584,7 @@ export class ChatEngine {
         metadata.prompt_cache_hit_tokens,
         metadata.prompt_cache_miss_tokens,
         usageScope
-          ? usageScope.taskOwnerId ? {
-              taskOwnerId: usageScope.taskOwnerId,
-              ...(usageScope.projectRoot ? { projectRoot: usageScope.projectRoot, projectRootVersion: 1 as const } : {}),
-              chargeId: usageScope.chargeId ?? randomUUID(),
-              accountingEpoch: usageScope.accountingEpoch,
-              ...(usageScope.turnId ? { turnId: usageScope.turnId } : {}),
-              ...(usageScope.requestId ? { requestId: usageScope.requestId } : {}),
-              ...(usageScope.attemptId ? { attemptId: usageScope.attemptId } : {}),
-            } : undefined
+          ? captureUsageAttribution(usageScope)
           : this.taskAllowance
           ? {
               taskOwnerId: this.taskAllowance.taskOwnerId,
@@ -9482,14 +9596,35 @@ export class ChatEngine {
       );
       if (chargeUpdate.kind === 'duplicate') return;
       if (chargeUpdate.kind === 'conflict') {
-        this.taskCostScopeUnavailable = true;
+        const faultScope: ChatUsageScope = usageScope ?? {
+          taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+          accountingEpoch: globalCostTracker.getAccountingEpoch(),
+          turnId: this.parity.turnId,
+          chargeId: this.pendingUsageChargeId,
+        };
+        this.recordOwnerAccountingFault(
+          faultScope, 'settlement-conflict', chargeUpdate.reason, appliesToCurrent,
+        );
+        if (faultScope.taskOwnerId) {
+          try {
+            this.persistOwnerCharges(faultScope.taskOwnerId, usageScope?.runDir);
+          } catch (error) {
+            this.recordOwnerAccountingFault(
+              faultScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+              appliesToCurrent,
+            );
+          }
+        }
         return;
       }
       if (usageScope?.taskOwnerId) {
         try {
           this.persistOwnerCharges(usageScope.taskOwnerId, usageScope.runDir);
-        } catch {
-          this.taskCostScopeUnavailable = true;
+        } catch (error) {
+          this.recordOwnerAccountingFault(
+            usageScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+            appliesToCurrent,
+          );
           return;
         }
       }
@@ -9531,22 +9666,45 @@ export class ChatEngine {
       const chargeId = usageScope?.chargeId ?? this.pendingUsageChargeId;
       const ownerId = usageScope ? usageScope.taskOwnerId : this.taskAllowance?.taskOwnerId;
       if (chargeId && ownerId) {
+        const attribution = usageScope
+          ? captureUsageAttribution(usageScope, chargeId)
+          : {
+              taskOwnerId: ownerId,
+              chargeId,
+              accountingEpoch: globalCostTracker.getAccountingEpoch(),
+            };
+        if (!attribution) throw new Error('Missing captured provider charge attribution');
         const update = globalCostTracker.settleUsage(
           usageScope?.modelId ?? metadata?.provider_model_id ?? 'unknown-provider-model',
-          0, 0, null, null, {
-          taskOwnerId: ownerId,
-          chargeId,
-          accountingEpoch: usageScope?.accountingEpoch ?? globalCostTracker.getAccountingEpoch(),
-          ...(usageScope?.turnId ? { turnId: usageScope.turnId } : {}),
-          ...(usageScope?.requestId ? { requestId: usageScope.requestId } : {}),
-          ...(usageScope?.attemptId ? { attemptId: usageScope.attemptId } : {}),
-        }, false);
-        if (update.kind === 'conflict') this.taskCostScopeUnavailable = true;
+          0, 0, null, null, attribution, false,
+        );
+        if (update.kind === 'conflict') {
+          const faultScope: ChatUsageScope = usageScope ?? {
+            taskOwnerId: ownerId,
+            accountingEpoch: globalCostTracker.getAccountingEpoch(),
+            turnId: null,
+            chargeId,
+          };
+          this.recordOwnerAccountingFault(
+            faultScope, 'settlement-conflict', update.reason, appliesToCurrent,
+          );
+          try {
+            this.persistOwnerCharges(ownerId, usageScope?.runDir);
+          } catch (error) {
+            this.recordOwnerAccountingFault(
+              faultScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+              appliesToCurrent,
+            );
+          }
+        }
         if (usageScope && update.kind !== 'duplicate' && update.kind !== 'conflict') {
           try {
             this.persistOwnerCharges(ownerId, usageScope.runDir);
-          } catch {
-            this.taskCostScopeUnavailable = true;
+          } catch (error) {
+            this.recordOwnerAccountingFault(
+              usageScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+              appliesToCurrent,
+            );
           }
         }
         if (appliesToCurrent) this.persistTaskCostBaseline();
@@ -9568,12 +9726,14 @@ export class ChatEngine {
     const usageScope: {
       taskOwnerId: string | null; projectRoot: string; accountingEpoch: string; turnId: string | null;
       chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string;
+      ownerGeneration: number;
     } = {
       taskOwnerId: compactionOwnerId,
       projectRoot: realpathSync(this.options.projectRoot),
       accountingEpoch: compactionEpoch,
       turnId: compactionTurnId,
       chargeId: null as string | null,
+      ownerGeneration,
     };
     const host: import('./compactionCommit.js').ChatEngineCompactionHost = {
       conversation: this.conversation,
@@ -9596,32 +9756,43 @@ export class ChatEngine {
         isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
       }),
       onCompactionUsage: (usage) => {
-        const attribution = compactionOwnerId ? {
-          taskOwnerId: compactionOwnerId,
-          projectRoot: usageScope.projectRoot,
-          projectRootVersion: 1 as const,
-          chargeId: usage.inferenceId,
-          accountingEpoch: compactionEpoch,
-          ...(compactionTurnId ? { turnId: compactionTurnId } : {}),
-          ...(usageScope.chargeId === usage.inferenceId && usageScope.requestId
-            ? { requestId: usageScope.requestId } : {}),
-          ...(usageScope.chargeId === usage.inferenceId && usageScope.attemptId
-            ? { attemptId: usageScope.attemptId } : {}),
-        } : undefined;
+        const attribution = compactionOwnerId
+          ? captureUsageAttribution(
+              usageScope, usage.inferenceId,
+              usageScope.chargeId === usage.inferenceId ? usageScope.requestId : undefined,
+              usageScope.chargeId === usage.inferenceId ? usageScope.attemptId : undefined,
+            )
+          : undefined;
         const update = globalCostTracker.settleUsage(
           usage.modelId, usage.inputTokens ?? 0, usage.outputTokens ?? 0,
           null, null, attribution,
           usage.inputTokens !== null && usage.outputTokens !== null,
         );
         if (update.kind === 'conflict') {
-          this.taskCostScopeUnavailable = true;
+          this.recordOwnerAccountingFault(
+            { ...usageScope, chargeId: usage.inferenceId }, 'settlement-conflict', update.reason,
+            compactionOwnerId === this.taskAllowance?.taskOwnerId && this.isSubmissionCurrent(ownerGeneration),
+          );
+          try {
+            if (compactionOwnerId) this.persistOwnerCharges(compactionOwnerId, compactionRunDir);
+          } catch (error) {
+            this.recordOwnerAccountingFault(
+              { ...usageScope, chargeId: usage.inferenceId }, 'persistence-failure',
+              error instanceof Error ? error.message : String(error),
+              compactionOwnerId === this.taskAllowance?.taskOwnerId && this.isSubmissionCurrent(ownerGeneration),
+            );
+          }
           return;
         }
         if (compactionOwnerId && update.kind !== 'duplicate') {
           try {
             this.persistOwnerCharges(compactionOwnerId, compactionRunDir);
-          } catch {
-            this.taskCostScopeUnavailable = true;
+          } catch (error) {
+            this.recordOwnerAccountingFault(
+              { ...usageScope, chargeId: usage.inferenceId }, 'persistence-failure',
+              error instanceof Error ? error.message : String(error),
+              compactionOwnerId === this.taskAllowance?.taskOwnerId && this.isSubmissionCurrent(ownerGeneration),
+            );
           }
         }
         if (this.isSubmissionCurrent(ownerGeneration)) this.persistTaskCostBaseline();
@@ -9888,7 +10059,7 @@ export class ChatEngine {
     contractRef?: string;
     substitutionOrFallback?: boolean;
     isOwnerCurrent?: () => boolean;
-    usageScope?: { taskOwnerId: string | null; projectRoot?: string; accountingEpoch: string; turnId: string | null; chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string; modelId?: string; usageMetadata?: RunnerInvocationMetadata | null; isOwnerCurrent?: () => boolean };
+    usageScope?: ChatUsageScope;
   } = {}): RunnerCallbacks {
     let startedInvocation: ProviderInvocationStarted | null = null;
     let retryCount = 0;
@@ -9915,24 +10086,33 @@ export class ChatEngine {
           if (context.usageScope.taskOwnerId) {
             const scope = context.usageScope;
             const ownerId = scope.taskOwnerId!;
-            const update = globalCostTracker.settleUsage(event.sent_model_id, 0, 0, null, null, {
-              taskOwnerId: ownerId,
-              ...(scope.projectRoot ? { projectRoot: scope.projectRoot, projectRootVersion: 1 as const } : {}),
-              chargeId: event.inference_id,
-              accountingEpoch: scope.accountingEpoch,
-              ...(scope.turnId ? { turnId: scope.turnId } : {}),
-              ...(event.request_id ? { requestId: event.request_id } : {}),
-              ...(event.attempt_id ? { attemptId: event.attempt_id } : {}),
-            }, false);
+            const attribution = captureUsageAttribution(
+              scope, event.inference_id, event.request_id, event.attempt_id,
+            );
+            const update = globalCostTracker.settleUsage(
+              event.sent_model_id, 0, 0, null, null, attribution, false,
+            );
             if (update.kind === 'conflict') {
-              this.taskCostScopeUnavailable = true;
+              const appliesToCurrent = ownerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent();
+              this.recordOwnerAccountingFault(scope, 'settlement-conflict', update.reason, appliesToCurrent);
+              try {
+                this.persistOwnerCharges(ownerId, ownerRunDir);
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  appliesToCurrent,
+                );
+              }
               throw new Error(`Provider dispatch blocked by charge conflict: ${update.reason}`);
             }
             if (update.kind === 'inserted') {
               try {
                 this.persistOwnerCharges(ownerId, ownerRunDir);
-              } catch {
-                this.taskCostScopeUnavailable = true;
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  ownerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+                );
                 throw new Error('Provider dispatch blocked because its charge receipt could not be saved');
               }
             }
@@ -10064,8 +10244,11 @@ export class ChatEngine {
             })) {
               try {
                 this.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
-              } catch {
-                this.taskCostScopeUnavailable = true;
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+                );
               }
             }
             context.usageScope.chargeId = null;
@@ -10076,32 +10259,43 @@ export class ChatEngine {
           context.usageScope.usageMetadata = event.usage_metadata
             ? { ...event.usage_metadata } : null;
           if (!isOwnerCurrent() && context.usageScope.taskOwnerId) {
-            const metadata = context.usageScope.usageMetadata;
+            const scope = context.usageScope;
+            const metadata = scope.usageMetadata;
             const known = metadata?.prompt_tokens != null &&
               metadata.completion_tokens != null;
+            const attribution = captureUsageAttribution(
+              scope, event.inference_id, scope.requestId, scope.attemptId,
+            );
             const update = globalCostTracker.settleUsage(
               metadata?.provider_model_id ?? event.model,
               known ? metadata!.prompt_tokens! : 0,
               known ? metadata!.completion_tokens! : 0,
               metadata?.prompt_cache_hit_tokens ?? null,
               metadata?.prompt_cache_miss_tokens ?? null,
-              {
-                taskOwnerId: context.usageScope.taskOwnerId,
-                ...(context.usageScope.projectRoot ? { projectRoot: context.usageScope.projectRoot, projectRootVersion: 1 as const } : {}),
-                chargeId: event.inference_id,
-                accountingEpoch: context.usageScope.accountingEpoch,
-                ...(context.usageScope.turnId ? { turnId: context.usageScope.turnId } : {}),
-                ...(context.usageScope.requestId ? { requestId: context.usageScope.requestId } : {}),
-                ...(context.usageScope.attemptId ? { attemptId: context.usageScope.attemptId } : {}),
-              },
+              attribution,
               known,
             );
-            if (update.kind === 'conflict') this.taskCostScopeUnavailable = true;
+            if (update.kind === 'conflict') {
+              const scope = context.usageScope;
+              const appliesToCurrent = scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent();
+              this.recordOwnerAccountingFault(scope, 'settlement-conflict', update.reason, appliesToCurrent);
+              try {
+                this.persistOwnerCharges(scope.taskOwnerId!, ownerRunDir);
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  appliesToCurrent,
+                );
+              }
+            }
             if (update.kind === 'inserted' || update.kind === 'refined') {
               try {
                 this.persistOwnerCharges(context.usageScope.taskOwnerId, ownerRunDir);
-              } catch {
-                this.taskCostScopeUnavailable = true;
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  context.usageScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  context.usageScope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+                );
               }
             }
           }
@@ -10112,24 +10306,32 @@ export class ChatEngine {
         if (event.status === 'failed' && event.inference_started === true &&
             context.usageScope?.taskOwnerId &&
             globalCostTracker.getTaskChargeIds(context.usageScope.taskOwnerId).includes(event.inference_id)) {
+          const scope = context.usageScope;
+          const attribution = captureUsageAttribution(scope, event.inference_id, scope.requestId, scope.attemptId);
           const update = globalCostTracker.settleUsage(
-            event.model, 0, 0, null, null,
-            {
-              taskOwnerId: context.usageScope.taskOwnerId,
-              ...(context.usageScope.projectRoot ? { projectRoot: context.usageScope.projectRoot, projectRootVersion: 1 as const } : {}),
-              chargeId: event.inference_id,
-              accountingEpoch: context.usageScope.accountingEpoch,
-              ...(context.usageScope.turnId ? { turnId: context.usageScope.turnId } : {}),
-              ...(context.usageScope.requestId ? { requestId: context.usageScope.requestId } : {}),
-              ...(context.usageScope.attemptId ? { attemptId: context.usageScope.attemptId } : {}),
-            },
+            event.model, 0, 0, null, null, attribution,
             false,
           );
+          if (update.kind === 'conflict') {
+            const appliesToCurrent = scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent();
+            this.recordOwnerAccountingFault(scope, 'settlement-conflict', update.reason, appliesToCurrent);
+            try {
+              this.persistOwnerCharges(scope.taskOwnerId!, ownerRunDir);
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                appliesToCurrent,
+              );
+            }
+          }
           if (update.kind === 'inserted' || update.kind === 'refined') {
             try {
-              this.persistOwnerCharges(context.usageScope.taskOwnerId, ownerRunDir);
-            } catch {
-              this.taskCostScopeUnavailable = true;
+              this.persistOwnerCharges(scope.taskOwnerId!, ownerRunDir);
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+              );
             }
             if (isOwnerCurrent()) this.persistTaskCostBaseline();
           }
@@ -10215,25 +10417,35 @@ export class ChatEngine {
           const scope = context.usageScope;
           const ownerId = scope.taskOwnerId!;
           if (!globalCostTracker.getTaskChargeIds(ownerId).includes(event.inference_id)) {
+            const attribution = captureUsageAttribution(
+              scope, event.inference_id, scope.requestId, scope.attemptId,
+            );
             const update = globalCostTracker.settleUsage(
-              startedInvocation.sent_model_id, 0, 0, null, null, {
-                taskOwnerId: ownerId,
-                ...(scope.projectRoot ? { projectRoot: scope.projectRoot, projectRootVersion: 1 as const } : {}),
-                chargeId: event.inference_id,
-                accountingEpoch: scope.accountingEpoch,
-                ...(scope.turnId ? { turnId: scope.turnId } : {}),
-                ...(scope.requestId ? { requestId: scope.requestId } : {}),
-                ...(scope.attemptId ? { attemptId: scope.attemptId } : {}),
-              }, false,
+              startedInvocation.sent_model_id, 0, 0, null, null, attribution, false,
             );
             if (update.kind !== 'inserted') {
-              this.taskCostScopeUnavailable = true;
+              const appliesToCurrent = ownerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent();
+              this.recordOwnerAccountingFault(
+                scope, 'settlement-conflict', update.kind === 'conflict'
+                  ? update.reason : 'Pending provider charge was not newly admitted', appliesToCurrent,
+              );
+              try {
+                this.persistOwnerCharges(ownerId, ownerRunDir);
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  appliesToCurrent,
+                );
+              }
               throw new Error('Provider dispatch blocked by a pending charge conflict');
             }
             try {
               this.persistOwnerCharges(ownerId, ownerRunDir);
-            } catch {
-              this.taskCostScopeUnavailable = true;
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                ownerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+              );
               throw new Error('Provider dispatch blocked because its charge receipt could not be saved');
             }
           }
@@ -10261,45 +10473,55 @@ export class ChatEngine {
         const scope = context.usageScope;
         if (scope?.taskOwnerId && startedInvocation) {
           const priorAttemptId = scope.attemptId ?? `attempt-${event.attempt - 1}`;
+          const priorAttemptScope = { ...scope, chargeId: `${startedInvocation.inference_id}:${priorAttemptId}` };
+          const attribution = captureUsageAttribution(priorAttemptScope, priorAttemptScope.chargeId);
           const update = globalCostTracker.settleUsage(
             startedInvocation.sent_model_id, 0, 0, null, null,
-            {
-              taskOwnerId: scope.taskOwnerId,
-              ...(scope.projectRoot ? { projectRoot: scope.projectRoot, projectRootVersion: 1 as const } : {}),
-              chargeId: `${startedInvocation.inference_id}:${priorAttemptId}`,
-              accountingEpoch: scope.accountingEpoch,
-              ...(scope.turnId ? { turnId: scope.turnId } : {}),
-              ...(scope.requestId ? { requestId: scope.requestId } : {}),
-              attemptId: priorAttemptId,
-            },
+            attribution,
             false,
           );
-          if (update.kind === 'conflict') this.taskCostScopeUnavailable = true;
+          if (update.kind === 'conflict') {
+            const appliesToCurrent = scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent();
+            this.recordOwnerAccountingFault(priorAttemptScope, 'settlement-conflict', update.reason, appliesToCurrent);
+            try {
+              this.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                priorAttemptScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                appliesToCurrent,
+              );
+            }
+          }
           if (update.kind === 'inserted' || update.kind === 'refined') {
             try {
               this.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
-            } catch {
-              this.taskCostScopeUnavailable = true;
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                priorAttemptScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+              );
             }
             if (isOwnerCurrent()) this.persistTaskCostBaseline();
           }
           const pendingExists = globalCostTracker.getTaskChargeIds(scope.taskOwnerId)
             .includes(startedInvocation.inference_id);
-          if (pendingExists && !globalCostTracker.clearUnstartedCharge({
-            taskOwnerId: scope.taskOwnerId,
-            ...(scope.projectRoot ? { projectRoot: scope.projectRoot, projectRootVersion: 1 as const } : {}),
-            chargeId: startedInvocation.inference_id,
-            accountingEpoch: scope.accountingEpoch,
-            ...(scope.turnId ? { turnId: scope.turnId } : {}),
-            ...(scope.requestId ? { requestId: scope.requestId } : {}),
-            ...(scope.attemptId ? { attemptId: scope.attemptId } : {}),
-          })) {
-            this.taskCostScopeUnavailable = true;
+          const currentAttemptAttribution = captureUsageAttribution(
+            scope, startedInvocation.inference_id, scope.requestId, scope.attemptId,
+          );
+          if (pendingExists && (!currentAttemptAttribution ||
+              !globalCostTracker.clearUnstartedCharge(currentAttemptAttribution))) {
+            this.recordOwnerAccountingFault(
+              scope, 'settlement-conflict', 'Unstarted retry charge could not be cleared safely',
+              scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+            );
           } else if (pendingExists) {
             try {
               this.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
-            } catch {
-              this.taskCostScopeUnavailable = true;
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+              );
             }
           }
         }
@@ -10493,6 +10715,7 @@ export class ChatEngine {
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       turnId: this.parity.turnId,
       chargeId: null as string | null,
+      ownerGeneration: usageGeneration,
       isOwnerCurrent: () => this.isSubmissionCurrent(usageGeneration),
     };
     if (useNativeTools && typeof runner.executeWithToolsStream === 'function') {
