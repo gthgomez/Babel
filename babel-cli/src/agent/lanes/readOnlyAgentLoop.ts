@@ -424,6 +424,7 @@ async function resolveLiveActionTurn(
   budgetGuard?: () => ChildBudgetLimiter | null,
   onUsageRecorded?: () => void,
   inheritedAllowance?: InheritedChildAllowance,
+  projectRoot?: string,
 ): Promise<AgentAction[]> {
   const envelope = await runWithPrimaryOnlyFallback(prompt, AgentActionsEnvelopeSchema, {
     ...(evidence !== undefined ? { evidence } : {}),
@@ -439,6 +440,7 @@ async function resolveLiveActionTurn(
           usageAttribution: {
             taskOwnerId: inheritedAllowance.taskOwnerId,
             parentTaskOwnerId: inheritedAllowance.parentTaskOwnerId,
+            ...(projectRoot ? { projectRoot } : {}),
           },
         }
       : {}),
@@ -650,6 +652,7 @@ export async function runReadOnlyAgentLoop(
           () => budgetController.limiter(),
           input.onUsageRecorded,
           input.inheritedAllowance,
+          input.projectRoot,
         );
       }
     } catch (err) {

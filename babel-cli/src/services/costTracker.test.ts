@@ -480,6 +480,38 @@ test('crash-window project projection stays incomplete without receipt root attr
   }
 });
 
+test('a newer saved session cannot certify an older project snapshot after resume', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-session-ahead-'));
+  try {
+    const original = new CostTracker(root);
+    const attribution = { taskOwnerId: 'A', chargeId: 'session-ahead', projectRoot: root };
+    original.recordUnknownCharge('deepseek-v4-flash', attribution);
+    original.saveToProjectStats(original.getProjectSessionId(), undefined, root);
+    original.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution);
+    const savedSession = {
+      ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+      chargeObservations: original.getSessionChargeObservations(),
+      projectSessionId: original.getProjectSessionId(),
+    };
+    const resumed = new CostTracker(root);
+    resumed.restoreSessionCost(savedSession);
+    resumed.restoreTaskUsage('A', {
+      totalCostUSD: original.getTaskSummary('A').totalCostUSD,
+      unknownChargeCount: 0,
+      chargeIds: original.getTaskChargeIds('A'),
+      chargeObservations: original.getTaskChargeObservations('A'),
+    });
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), resumed.getSessionSummary(), root);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.projectionComplete, true);
+    assert.equal(stats.unknownChargeCount, 0);
+    assert.equal(stats.completeCostUSD, original.getSessionSummary().totalCostUSD);
+    assert.equal(resumed.getProjectHistoricalCost(root), original.getSessionSummary().totalCostUSD);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('project snapshots use each target root run delta', () => {
   const rootA = mkdtempSync(join(tmpdir(), 'babel-project-A-'));
   const rootB = mkdtempSync(join(tmpdir(), 'babel-project-B-'));
@@ -497,6 +529,50 @@ test('project snapshots use each target root run delta', () => {
     assert.equal(b.totalInputTokens, 200);
     assert.ok(Math.abs(tracker.getProjectHistoricalCost(rootA)! - a.totalCostUSD) < 1e-12);
     assert.ok(Math.abs(tracker.getProjectHistoricalCost(rootB)! - b.totalCostUSD) < 1e-12);
+  } finally {
+    rmSync(rootA, { recursive: true, force: true });
+    rmSync(rootB, { recursive: true, force: true });
+  }
+});
+
+test('rooted restored receipts repair one project without poisoning another', () => {
+  const rootA = mkdtempSync(join(tmpdir(), 'babel-rooted-A-'));
+  const rootB = mkdtempSync(join(tmpdir(), 'babel-rooted-B-'));
+  try {
+    const original = new CostTracker(rootA);
+    const a = { taskOwnerId: 'A', chargeId: 'charge-A', projectRoot: rootA };
+    const b = { taskOwnerId: 'B', chargeId: 'charge-B', projectRoot: rootB };
+    original.recordUnknownCharge('deepseek-v4-flash', a);
+    original.saveToProjectStats(original.getProjectSessionId(), undefined, rootA);
+    original.settleUsage('deepseek-v4-flash', 1000, 100, null, null, a);
+    original.settleUsage('deepseek-v4-flash', 200, 20, null, null, b);
+    const saved = {
+      ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+      chargeObservations: original.getSessionChargeObservations(),
+      projectSessionId: original.getProjectSessionId(),
+    };
+    const resumed = new CostTracker(rootA);
+    resumed.restoreSessionCost(saved);
+    for (const owner of ['A', 'B']) {
+      resumed.restoreTaskUsage(owner, {
+        totalCostUSD: original.getTaskSummary(owner).totalCostUSD,
+        unknownChargeCount: 0,
+        chargeIds: original.getTaskChargeIds(owner),
+        chargeObservations: original.getTaskChargeObservations(owner),
+      });
+    }
+    const baseline = resumed.getSessionSummary();
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), baseline, rootA);
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), baseline, rootB);
+    const statsA = JSON.parse(readFileSync(join(rootA, 'project_stats.json'), 'utf8'));
+    const statsB = JSON.parse(readFileSync(join(rootB, 'project_stats.json'), 'utf8'));
+    assert.equal(statsA.projectionComplete, true);
+    assert.equal(statsB.projectionComplete, true);
+    assert.equal(statsA.unknownChargeCount, 0);
+    assert.equal(statsA.totalInputTokens, 1000);
+    assert.equal(statsB.totalInputTokens, 200);
+    assert.ok(Math.abs(resumed.getProjectHistoricalCost(rootA)! - original.getTaskSummary('A').totalCostUSD) < 1e-12);
+    assert.ok(Math.abs(resumed.getProjectHistoricalCost(rootB)! - original.getTaskSummary('B').totalCostUSD) < 1e-12);
   } finally {
     rmSync(rootA, { recursive: true, force: true });
     rmSync(rootB, { recursive: true, force: true });

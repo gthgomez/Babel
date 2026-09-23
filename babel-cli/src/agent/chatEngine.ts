@@ -2192,6 +2192,7 @@ export class ChatEngine {
     const isOwnerCurrent = (): boolean => this.isSubmissionCurrent(ownerGeneration);
     const usageScope = {
       taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+      projectRoot: this.options.projectRoot,
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       turnId: this.parity.turnId,
       chargeId: null as string | null,
@@ -3373,6 +3374,7 @@ export class ChatEngine {
       const hadInstalledP11Context = this.parity.contextCheckpoint !== undefined;
       const usageScope = {
         taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+        projectRoot: this.options.projectRoot,
         accountingEpoch: globalCostTracker.getAccountingEpoch(),
         turnId: this.parity.turnId,
         chargeId: null as string | null,
@@ -9403,6 +9405,7 @@ export class ChatEngine {
 
     const usageScope = {
       taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+      projectRoot: this.options.projectRoot,
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       turnId: this.parity.turnId,
       chargeId: null as string | null,
@@ -9436,7 +9439,7 @@ export class ChatEngine {
    *  #12: Also accumulates API-reported token counts for accurate estimation. */
   private trackRunnerUsage(
     runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
-    usageScope?: { taskOwnerId: string | null; accountingEpoch: string; turnId: string | null; chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string; modelId?: string; usageMetadata?: RunnerInvocationMetadata | null; isOwnerCurrent?: () => boolean },
+    usageScope?: { taskOwnerId: string | null; projectRoot?: string; accountingEpoch: string; turnId: string | null; chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string; modelId?: string; usageMetadata?: RunnerInvocationMetadata | null; isOwnerCurrent?: () => boolean },
   ): void {
     // A task charge must be tied to an observed invocation start. Test/offline
     // runners can return placeholder metadata without starting a paid request.
@@ -9461,6 +9464,7 @@ export class ChatEngine {
         usageScope
           ? usageScope.taskOwnerId ? {
               taskOwnerId: usageScope.taskOwnerId,
+              ...(usageScope.projectRoot ? { projectRoot: usageScope.projectRoot } : {}),
               chargeId: usageScope.chargeId ?? randomUUID(),
               accountingEpoch: usageScope.accountingEpoch,
               ...(usageScope.turnId ? { turnId: usageScope.turnId } : {}),
@@ -9470,6 +9474,7 @@ export class ChatEngine {
           : this.taskAllowance
           ? {
               taskOwnerId: this.taskAllowance.taskOwnerId,
+              projectRoot: this.options.projectRoot,
               chargeId: this.pendingUsageChargeId ?? randomUUID(),
             }
           : undefined,
@@ -9560,10 +9565,11 @@ export class ChatEngine {
     const compactionEpoch = globalCostTracker.getAccountingEpoch();
     const compactionTurnId = this.parity.turnId;
     const usageScope: {
-      taskOwnerId: string | null; accountingEpoch: string; turnId: string | null;
+      taskOwnerId: string | null; projectRoot: string; accountingEpoch: string; turnId: string | null;
       chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string;
     } = {
       taskOwnerId: compactionOwnerId,
+      projectRoot: this.options.projectRoot,
       accountingEpoch: compactionEpoch,
       turnId: compactionTurnId,
       chargeId: null as string | null,
@@ -9591,6 +9597,7 @@ export class ChatEngine {
       onCompactionUsage: (usage) => {
         const attribution = compactionOwnerId ? {
           taskOwnerId: compactionOwnerId,
+          projectRoot: usageScope.projectRoot,
           chargeId: usage.inferenceId,
           accountingEpoch: compactionEpoch,
           ...(compactionTurnId ? { turnId: compactionTurnId } : {}),
@@ -9879,7 +9886,7 @@ export class ChatEngine {
     contractRef?: string;
     substitutionOrFallback?: boolean;
     isOwnerCurrent?: () => boolean;
-    usageScope?: { taskOwnerId: string | null; accountingEpoch: string; turnId: string | null; chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string; modelId?: string; usageMetadata?: RunnerInvocationMetadata | null; isOwnerCurrent?: () => boolean };
+    usageScope?: { taskOwnerId: string | null; projectRoot?: string; accountingEpoch: string; turnId: string | null; chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string; modelId?: string; usageMetadata?: RunnerInvocationMetadata | null; isOwnerCurrent?: () => boolean };
   } = {}): RunnerCallbacks {
     let startedInvocation: ProviderInvocationStarted | null = null;
     let retryCount = 0;
@@ -9908,6 +9915,7 @@ export class ChatEngine {
             const ownerId = scope.taskOwnerId!;
             const update = globalCostTracker.settleUsage(event.sent_model_id, 0, 0, null, null, {
               taskOwnerId: ownerId,
+              ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
               chargeId: event.inference_id,
               accountingEpoch: scope.accountingEpoch,
               ...(scope.turnId ? { turnId: scope.turnId } : {}),
@@ -10045,6 +10053,7 @@ export class ChatEngine {
             const scope = context.usageScope;
             if (scope.taskOwnerId && globalCostTracker.clearUnstartedCharge({
               taskOwnerId: scope.taskOwnerId,
+              ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
               chargeId: event.inference_id,
               accountingEpoch: scope.accountingEpoch,
               ...(scope.turnId ? { turnId: scope.turnId } : {}),
@@ -10076,6 +10085,7 @@ export class ChatEngine {
               metadata?.prompt_cache_miss_tokens ?? null,
               {
                 taskOwnerId: context.usageScope.taskOwnerId,
+                ...(context.usageScope.projectRoot ? { projectRoot: context.usageScope.projectRoot } : {}),
                 chargeId: event.inference_id,
                 accountingEpoch: context.usageScope.accountingEpoch,
                 ...(context.usageScope.turnId ? { turnId: context.usageScope.turnId } : {}),
@@ -10104,6 +10114,7 @@ export class ChatEngine {
             event.model, 0, 0, null, null,
             {
               taskOwnerId: context.usageScope.taskOwnerId,
+              ...(context.usageScope.projectRoot ? { projectRoot: context.usageScope.projectRoot } : {}),
               chargeId: event.inference_id,
               accountingEpoch: context.usageScope.accountingEpoch,
               ...(context.usageScope.turnId ? { turnId: context.usageScope.turnId } : {}),
@@ -10205,6 +10216,7 @@ export class ChatEngine {
             const update = globalCostTracker.settleUsage(
               startedInvocation.sent_model_id, 0, 0, null, null, {
                 taskOwnerId: ownerId,
+                ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
                 chargeId: event.inference_id,
                 accountingEpoch: scope.accountingEpoch,
                 ...(scope.turnId ? { turnId: scope.turnId } : {}),
@@ -10251,6 +10263,7 @@ export class ChatEngine {
             startedInvocation.sent_model_id, 0, 0, null, null,
             {
               taskOwnerId: scope.taskOwnerId,
+              ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
               chargeId: `${startedInvocation.inference_id}:${priorAttemptId}`,
               accountingEpoch: scope.accountingEpoch,
               ...(scope.turnId ? { turnId: scope.turnId } : {}),
@@ -10272,6 +10285,7 @@ export class ChatEngine {
             .includes(startedInvocation.inference_id);
           if (pendingExists && !globalCostTracker.clearUnstartedCharge({
             taskOwnerId: scope.taskOwnerId,
+            ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
             chargeId: startedInvocation.inference_id,
             accountingEpoch: scope.accountingEpoch,
             ...(scope.turnId ? { turnId: scope.turnId } : {}),
@@ -10473,6 +10487,7 @@ export class ChatEngine {
     const usageGeneration = this.activeSubmissionGeneration;
     const usageScope = {
       taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+      projectRoot: this.options.projectRoot,
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       turnId: this.parity.turnId,
       chargeId: null as string | null,

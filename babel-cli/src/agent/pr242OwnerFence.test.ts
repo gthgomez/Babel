@@ -396,6 +396,7 @@ test('a late delivered A receipt uses its callback tokens instead of B runner me
       assert.equal(globalCostTracker.getTaskSummary(ownerA).totalInputTokens, 100)
       assert.equal(globalCostTracker.getTaskSummary(ownerB).totalInputTokens, 0)
       assert.deepEqual(globalCostTracker.getTaskChargeIds(ownerA), ['late-known-A'])
+      assert.equal(globalCostTracker.getTaskChargeObservations(ownerA)[0]?.attribution.projectRoot, root)
     } finally {
       globalCostTracker.resetSession()
     }
@@ -654,8 +655,10 @@ test('an uncertain first attempt blocks a paid retry under a finite cost cap', a
         input_digest: 'fixture-input',
       })
       const chargeDir = join((chat as unknown as { engineRunDir: string }).engineRunDir, 'task-charges')
-      const chargeFile = join(chargeDir, readdirSync(chargeDir)[0]!)
-      const pending = JSON.parse(readFileSync(chargeFile, 'utf8'))
+      const pending = readdirSync(chargeDir)
+        .map((name) => JSON.parse(readFileSync(join(chargeDir, name), 'utf8')))
+        .find((record) => record.taskOwnerId === owner)
+      assert.ok(pending)
       assert.equal(pending.unknownChargeCount, 1)
       assert.deepEqual(pending.chargeIds, ['bounded-inference'])
       const cold = new CostTracker()

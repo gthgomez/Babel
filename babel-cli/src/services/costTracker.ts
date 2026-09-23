@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   estimateProviderUsageCost,
   getModelPricingByModelId,
@@ -90,6 +90,8 @@ export interface UsageAttribution {
   turnId?: string;
   requestId?: string;
   attemptId?: string;
+  /** Captured at dispatch so late receipts retain their original project. */
+  projectRoot?: string;
 }
 
 /** Accepted settlement delta, or a replay/conflict with no projection. */
@@ -129,8 +131,6 @@ export class CostTracker {
   private restoredSessionChargeIds: Set<string> | null = null;
   private restoredSessionObservations: Map<string, ChargeReceipt> | null = null;
   private sessionProjectionComplete = true;
-  /** Restored receipts can outrun project files without carrying a project root. */
-  private restoredProjectAttributionIncomplete = false;
   private projectStatsPath: string;
 
   constructor(projectRoot?: string) {
@@ -188,7 +188,7 @@ export class CostTracker {
     }
     if (previous) {
       const sameIdentity = previous.modelId === modelId &&
-        (['taskOwnerId', 'parentTaskOwnerId', 'accountingEpoch', 'turnId', 'requestId', 'attemptId'] as const)
+        (['taskOwnerId', 'parentTaskOwnerId', 'accountingEpoch', 'turnId', 'requestId', 'attemptId', 'projectRoot'] as const)
           .every((key) => previous.attribution[key] === attribution?.[key]);
       if (!sameIdentity) return { kind: 'conflict', reason: 'Charge identity differs from the recorded attempt' };
       if (previous.knownCostUSD !== null) {
@@ -365,7 +365,6 @@ export class CostTracker {
     this.restoredSessionChargeIds = null;
     this.restoredSessionObservations = null;
     this.sessionProjectionComplete = true;
-    this.restoredProjectAttributionIncomplete = false;
   }
 
   /** Identifies the in-process accounting epoch for durable task scoping. */
@@ -584,7 +583,6 @@ export class CostTracker {
     this.sessionUsage[current.modelId] = model;
     this.sessionTotalCost += current.knownCostUSD ?? 0;
     this.sessionUnknownCharges += current.knownCostUSD === null ? 0 : -1;
-    this.restoredProjectAttributionIncomplete = true;
     return true;
   }
 
@@ -753,6 +751,53 @@ export class CostTracker {
     }
   }
 
+  /** Exact per-root session projection when every session charge has a root. */
+  private projectReceiptSummary(projectRoot: string): SessionUsageSummary | null {
+    if (!this.sessionProjectionComplete ||
+        [...this.chargeObservations.values()].some((receipt) => !receipt.projectedInSession)) return null;
+    const receipts = this.getSessionChargeObservations();
+    if (receipts.length === 0 || receipts.some((receipt) => !receipt.attribution.projectRoot)) return null;
+    const session = this.getSessionSummary();
+    const allInput = receipts.reduce((sum, receipt) => sum + receipt.inputTokens, 0);
+    const allOutput = receipts.reduce((sum, receipt) => sum + receipt.outputTokens, 0);
+    const allCost = receipts.reduce((sum, receipt) => sum + (receipt.knownCostUSD ?? 0), 0);
+    const allUnknown = receipts.filter((receipt) => receipt.knownCostUSD === null).length;
+    if (allInput !== session.totalInputTokens || allOutput !== session.totalOutputTokens ||
+        Math.abs(allCost - session.totalCostUSD) > 1e-9 ||
+        allUnknown !== (session.unknownChargeCount ?? 0)) return null;
+    const selected = receipts.filter((receipt) => resolve(receipt.attribution.projectRoot!) === resolve(projectRoot));
+    const modelBreakdown: Record<string, ModelUsage> = {};
+    let totalCostUSD = 0;
+    let unknownChargeCount = 0;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    for (const receipt of selected) {
+      const model = modelBreakdown[receipt.modelId] ?? {
+        inputTokens: 0, outputTokens: 0, costUSD: 0, unknownChargeCount: 0,
+        promptCacheHitTokens: 0, promptCacheMissTokens: 0,
+      };
+      model.inputTokens += receipt.inputTokens;
+      model.outputTokens += receipt.outputTokens;
+      model.costUSD += receipt.knownCostUSD ?? 0;
+      model.unknownChargeCount = (model.unknownChargeCount ?? 0) + (receipt.knownCostUSD === null ? 1 : 0);
+      model.promptCacheHitTokens = (model.promptCacheHitTokens ?? 0) + receipt.cacheHitTokens;
+      model.promptCacheMissTokens = (model.promptCacheMissTokens ?? 0) + receipt.cacheMissTokens;
+      model.completeCostUSD = model.unknownChargeCount === 0 ? model.costUSD : null;
+      modelBreakdown[receipt.modelId] = model;
+      totalCostUSD += receipt.knownCostUSD ?? 0;
+      unknownChargeCount += receipt.knownCostUSD === null ? 1 : 0;
+      totalInputTokens += receipt.inputTokens;
+      totalOutputTokens += receipt.outputTokens;
+    }
+    return {
+      totalCostUSD, knownCostUSD: totalCostUSD,
+      completeCostUSD: unknownChargeCount === 0 ? totalCostUSD : null,
+      unknownChargeCount, costComplete: unknownChargeCount === 0,
+      totalInputTokens, totalOutputTokens, totalTokens: totalInputTokens + totalOutputTokens,
+      modelBreakdown,
+    };
+  }
+
   private saveToProjectStatsLocked(sessionId: string, baseline: SessionUsageSummary | undefined, statsPath: string): void {
     let stats: ProjectStats = {
       totalCostUSD: 0,
@@ -783,11 +828,12 @@ export class CostTracker {
     }
     // The old format has only an aggregate and last-session label; its
     // contribution from that session cannot be separated safely.
+    const receiptSummary = this.projectReceiptSummary(dirname(statsPath));
     stats.projectionComplete = stats.projectionComplete !== false && this.sessionProjectionComplete &&
-      !this.restoredProjectAttributionIncomplete;
+      (this.restoredSessionChargeIds === null || receiptSummary !== null);
     if (!overlapsLegacySession) {
       const current = this.getSessionSummary();
-      const delta = baseline ? {
+      const delta = receiptSummary ?? (baseline ? {
         ...current,
         totalCostUSD: current.totalCostUSD - baseline.totalCostUSD,
         totalInputTokens: current.totalInputTokens - baseline.totalInputTokens,
@@ -808,8 +854,8 @@ export class CostTracker {
             promptCacheMissTokens: (after?.promptCacheMissTokens ?? 0) - (before?.promptCacheMissTokens ?? 0),
           }];
         })),
-      } : current;
-      const prior = baseline ? stats.sessionSnapshots[sessionId] : undefined;
+      } : current);
+      const prior = baseline && receiptSummary === null ? stats.sessionSnapshots[sessionId] : undefined;
       stats.sessionSnapshots[sessionId] = prior ? {
         ...delta,
         totalCostUSD: prior.totalCostUSD + delta.totalCostUSD,

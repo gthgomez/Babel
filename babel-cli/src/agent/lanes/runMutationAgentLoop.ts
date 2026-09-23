@@ -581,6 +581,7 @@ export async function runMutationAgentLoop(
                     usageAttribution: {
                       taskOwnerId: input.inheritedAllowance.taskOwnerId,
                       parentTaskOwnerId: input.inheritedAllowance.parentTaskOwnerId,
+                      projectRoot,
                     },
                   }
                 : {}),
