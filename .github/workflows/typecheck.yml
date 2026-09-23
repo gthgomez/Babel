@@ -118,14 +118,43 @@ jobs:
         working-directory: babel-cli
       - name: Run required harness runtime suite
         timeout-minutes: 15
-        run: npm run test:harness-runtime -- --test-timeout=60000
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/harness-runtime | Out-Null
+          npm run test:harness-runtime -- --test-timeout=60000 2>&1 | Tee-Object -FilePath artifacts/harness-runtime/full.tap
+          exit $LASTEXITCODE
         working-directory: babel-cli
+      - name: Summarize harness runtime TAP (Linux)
+        if: always()
+        run: node scripts/summarize_required_tap.mjs harness-runtime
+        working-directory: babel-cli
+      - name: Upload harness runtime TAP (Linux)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: harness-runtime-linux
+          path: babel-cli/artifacts/harness-runtime
+          if-no-files-found: warn
       - name: Log Chat truth test selection
         run: node scripts/print_chat_truth_selection.mjs
         working-directory: babel-cli
       - name: Run required Chat truth suite
-        run: npm run test:chat-truth
+        shell: pwsh
+        run: |
+          npm run test:chat-truth 2>&1 | Tee-Object -FilePath artifacts/chat-truth/full.tap
+          exit $LASTEXITCODE
         working-directory: babel-cli
+      - name: Summarize Chat truth TAP (Linux)
+        if: always()
+        run: node scripts/summarize_required_tap.mjs chat-truth
+        working-directory: babel-cli
+      - name: Upload Chat truth selection and TAP (Linux)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: chat-truth-linux
+          path: babel-cli/artifacts/chat-truth
+          if-no-files-found: warn
       - name: Run required benchmark/eval suite
         run: npm run test:benchmark-eval
         working-directory: babel-cli
@@ -174,14 +203,43 @@ jobs:
         working-directory: babel-cli
       - name: Run required harness runtime suite
         timeout-minutes: 15
-        run: npm run test:harness-runtime -- --test-timeout=60000
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/harness-runtime | Out-Null
+          npm run test:harness-runtime -- --test-timeout=60000 2>&1 | Tee-Object -FilePath artifacts/harness-runtime/full.tap
+          exit $LASTEXITCODE
         working-directory: babel-cli
+      - name: Summarize harness runtime TAP (Windows)
+        if: always()
+        run: node scripts/summarize_required_tap.mjs harness-runtime
+        working-directory: babel-cli
+      - name: Upload harness runtime TAP (Windows)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: harness-runtime-windows
+          path: babel-cli/artifacts/harness-runtime
+          if-no-files-found: warn
       - name: Log Chat truth test selection
         run: node scripts/print_chat_truth_selection.mjs
         working-directory: babel-cli
       - name: Run required Chat truth suite
-        run: npm run test:chat-truth
+        shell: pwsh
+        run: |
+          npm run test:chat-truth 2>&1 | Tee-Object -FilePath artifacts/chat-truth/full.tap
+          exit $LASTEXITCODE
         working-directory: babel-cli
+      - name: Summarize Chat truth TAP (Windows)
+        if: always()
+        run: node scripts/summarize_required_tap.mjs chat-truth
+        working-directory: babel-cli
+      - name: Upload Chat truth selection and TAP (Windows)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: chat-truth-windows
+          path: babel-cli/artifacts/chat-truth
+          if-no-files-found: warn
       - name: Run required benchmark/eval suite
         run: npm run test:benchmark-eval
         working-directory: babel-cli

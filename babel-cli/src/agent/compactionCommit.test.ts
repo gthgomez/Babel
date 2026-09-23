@@ -5,6 +5,9 @@
 
 import * as assert from 'node:assert';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import {
   CompactionManager,
@@ -31,8 +34,11 @@ import {
   rebuildProviderMessagesFromEvents,
   recordUserMessage,
   startTurn,
+  parseThreadEventLog,
+  serializeThreadEventLog,
 } from './threadEventLog.js';
-import { createSessionEventLog } from './sessionEvents.js';
+import { createSessionEventLog, parseSessionEventLog, serializeSessionEventLog } from './sessionEvents.js';
+import { captureApprovedObservation, readObservationPage, resolveObservation } from '../evidence/observationStore.js';
 import {
   buildContextBudgetSnapshot,
   buildCompactionCapsule,
@@ -621,6 +627,115 @@ describe('H1 durable capsule content helper', () => {
 });
 
 describe('H1 compaction lifecycle result', () => {
+  it('PR242 keeps excluded B out of compactor input and permits only original-ID recall after restart', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-pr242-observation-restart-'));
+    try {
+      const storage = {
+        storage_root: join(root, 'observations'),
+        clock: () => '2026-09-23T00:00:00.000Z',
+        policy: { durability: 'none' as const },
+      };
+      const captured = captureApprovedObservation({
+        invocation: {
+          operation_id: 'op-B', task_id: 'task-ABC', run_id: 'run-ABC',
+          turn_id: 'turn-ABC', attempt_id: 'attempt-1',
+        },
+        sections: [{ channel: 'stdout', content: 'B excluded durable observation' }],
+        execution_status: 'succeeded',
+        permitted_principals: ['agent:main'],
+        data_policy: {
+          approved: true, policy_version: 'policy-v1', redaction_policy_version: 'redaction-v1',
+        },
+        snapshot_ref: 'snapshot-ABC', coverage_ref: 'coverage-ABC',
+      }, storage);
+      assert.strictEqual(captured.status, 'captured');
+      if (captured.status !== 'captured') return;
+
+      const threadLog = createThreadEventLog('thread-ABC');
+      const sessionLog = createSessionEventLog('thread-ABC');
+      const turnId = startTurn(threadLog, {
+        task: 'retain A and C', model: 'test-model', provider: 'deepseek',
+        projectRoot: root, policyPreset: 'chat',
+      });
+      recordUserMessage(threadLog, turnId, 'A visible');
+      recordUserMessage(threadLog, turnId, 'B excluded durable observation');
+      recordUserMessage(threadLog, turnId, 'C visible');
+      const visible: ChatMessage[] = [
+        { role: 'system', content: 'System instructions' },
+        { role: 'user', content: 'A visible' },
+        { role: 'user', content: 'C visible' },
+      ];
+      let compactorInput: ChatMessage[] = [];
+      const host: ChatEngineCompactionHost = {
+        conversation: visible,
+        compactionManager: {
+          compactWithResult: async (messages) => {
+            compactorInput = messages.map((message) => ({ ...message }));
+            return {
+              messages: [visible[0]!, visible[2]!, {
+                role: 'assistant', name: 'compaction_summary',
+                content: 'A and C remain visible', provenance: 'model', authoritative: false,
+              }],
+              strategy: 'llm-summarize', tokensBefore: 100, tokensAfter: 20, changed: true,
+            };
+          },
+        },
+        options: { task: 'retain A and C', model: 'test-model' },
+        limits: { maxEstimatedTokens: 10 },
+        abortSignal: new AbortController().signal,
+        writeCount: 0, turnIndex: 1, toolCallLog: [],
+        progress: { receipts: [], consecutiveNoProgress: 0 },
+        threadLog, sessionLog, turnId,
+        shouldUseTextTools: () => false,
+        compactHeuristic: () => { throw new Error('unexpected heuristic fallback'); },
+        checkpoint: async () => undefined,
+        reserveTokens: 0, textToolsReserve: 0, forceCompaction: true,
+        resolveModel: () => 'test-model', shouldCompactByTokens: () => true,
+        estimateTokens: (messages) => messages.length,
+      };
+      const result = await runChatEngineCompaction(host);
+      assert.ok(result?.changed);
+      assert.ok(compactorInput.some((message) => message.content === 'A visible'));
+      assert.ok(compactorInput.some((message) => message.content === 'C visible'));
+      assert.ok(!compactorInput.some((message) => message.content.includes('B excluded')));
+
+      const threadPath = join(root, 'thread.json');
+      const sessionPath = join(root, 'session.json');
+      writeFileSync(threadPath, serializeThreadEventLog(threadLog));
+      writeFileSync(sessionPath, serializeSessionEventLog(sessionLog));
+      const restoredThread = parseThreadEventLog(readFileSync(threadPath, 'utf8'));
+      const restoredSession = parseSessionEventLog(readFileSync(sessionPath, 'utf8'), 'thread-ABC');
+      assert.ok(restoredSession.events.some((event) => event.kind === 'compaction_committed'));
+      assert.ok(restoredThread.events.some((event) => event.kind === 'user_message' &&
+        event.content === 'B excluded durable observation'));
+      const provider = rebuildProviderMessagesFromEvents(restoredThread,
+        { systemPrompt: 'System instructions' });
+      assert.ok(!provider.some((message) => message.content?.includes('B excluded')));
+      const recalled = resolveObservation(captured.observation.observation_id, {
+        principal_id: 'agent:main',
+        authorized_observation_ids: [captured.observation.observation_id],
+      }, storage);
+      assert.strictEqual(recalled.status, 'resolved');
+      if (recalled.status === 'resolved') {
+        const page = readObservationPage(captured.observation.observation_id, null,
+          { max_bytes: 1024 }, {
+            principal_id: 'agent:main',
+            authorized_observation_ids: [captured.observation.observation_id],
+          }, storage);
+        assert.strictEqual(page.status, 'page');
+        if (page.status === 'page') {
+          assert.strictEqual(page.content, 'B excluded durable observation');
+        }
+      }
+      assert.notStrictEqual(resolveObservation('fabricated-B', {
+        principal_id: 'agent:main',
+        authorized_observation_ids: [captured.observation.observation_id],
+      }, storage).status, 'resolved');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('reports a changed context when compaction retains the same message count', async () => {
     const prior: ChatMessage[] = [
       { role: 'system', content: 'system' },
