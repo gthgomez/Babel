@@ -9464,7 +9464,7 @@ export class ChatEngine {
         usageScope
           ? usageScope.taskOwnerId ? {
               taskOwnerId: usageScope.taskOwnerId,
-              ...(usageScope.projectRoot ? { projectRoot: usageScope.projectRoot } : {}),
+              ...(usageScope.projectRoot ? { projectRoot: usageScope.projectRoot, projectRootVersion: 1 as const } : {}),
               chargeId: usageScope.chargeId ?? randomUUID(),
               accountingEpoch: usageScope.accountingEpoch,
               ...(usageScope.turnId ? { turnId: usageScope.turnId } : {}),
@@ -9475,6 +9475,7 @@ export class ChatEngine {
           ? {
               taskOwnerId: this.taskAllowance.taskOwnerId,
               projectRoot: realpathSync(this.options.projectRoot),
+              projectRootVersion: 1,
               chargeId: this.pendingUsageChargeId ?? randomUUID(),
             }
           : undefined,
@@ -9598,6 +9599,7 @@ export class ChatEngine {
         const attribution = compactionOwnerId ? {
           taskOwnerId: compactionOwnerId,
           projectRoot: usageScope.projectRoot,
+          projectRootVersion: 1 as const,
           chargeId: usage.inferenceId,
           accountingEpoch: compactionEpoch,
           ...(compactionTurnId ? { turnId: compactionTurnId } : {}),
@@ -9915,7 +9917,7 @@ export class ChatEngine {
             const ownerId = scope.taskOwnerId!;
             const update = globalCostTracker.settleUsage(event.sent_model_id, 0, 0, null, null, {
               taskOwnerId: ownerId,
-              ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
+              ...(scope.projectRoot ? { projectRoot: scope.projectRoot, projectRootVersion: 1 as const } : {}),
               chargeId: event.inference_id,
               accountingEpoch: scope.accountingEpoch,
               ...(scope.turnId ? { turnId: scope.turnId } : {}),
@@ -10053,7 +10055,7 @@ export class ChatEngine {
             const scope = context.usageScope;
             if (scope.taskOwnerId && globalCostTracker.clearUnstartedCharge({
               taskOwnerId: scope.taskOwnerId,
-              ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
+              ...(scope.projectRoot ? { projectRoot: scope.projectRoot, projectRootVersion: 1 as const } : {}),
               chargeId: event.inference_id,
               accountingEpoch: scope.accountingEpoch,
               ...(scope.turnId ? { turnId: scope.turnId } : {}),
@@ -10085,7 +10087,7 @@ export class ChatEngine {
               metadata?.prompt_cache_miss_tokens ?? null,
               {
                 taskOwnerId: context.usageScope.taskOwnerId,
-                ...(context.usageScope.projectRoot ? { projectRoot: context.usageScope.projectRoot } : {}),
+                ...(context.usageScope.projectRoot ? { projectRoot: context.usageScope.projectRoot, projectRootVersion: 1 as const } : {}),
                 chargeId: event.inference_id,
                 accountingEpoch: context.usageScope.accountingEpoch,
                 ...(context.usageScope.turnId ? { turnId: context.usageScope.turnId } : {}),
@@ -10114,7 +10116,7 @@ export class ChatEngine {
             event.model, 0, 0, null, null,
             {
               taskOwnerId: context.usageScope.taskOwnerId,
-              ...(context.usageScope.projectRoot ? { projectRoot: context.usageScope.projectRoot } : {}),
+              ...(context.usageScope.projectRoot ? { projectRoot: context.usageScope.projectRoot, projectRootVersion: 1 as const } : {}),
               chargeId: event.inference_id,
               accountingEpoch: context.usageScope.accountingEpoch,
               ...(context.usageScope.turnId ? { turnId: context.usageScope.turnId } : {}),
@@ -10216,7 +10218,7 @@ export class ChatEngine {
             const update = globalCostTracker.settleUsage(
               startedInvocation.sent_model_id, 0, 0, null, null, {
                 taskOwnerId: ownerId,
-                ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
+                ...(scope.projectRoot ? { projectRoot: scope.projectRoot, projectRootVersion: 1 as const } : {}),
                 chargeId: event.inference_id,
                 accountingEpoch: scope.accountingEpoch,
                 ...(scope.turnId ? { turnId: scope.turnId } : {}),
@@ -10263,7 +10265,7 @@ export class ChatEngine {
             startedInvocation.sent_model_id, 0, 0, null, null,
             {
               taskOwnerId: scope.taskOwnerId,
-              ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
+              ...(scope.projectRoot ? { projectRoot: scope.projectRoot, projectRootVersion: 1 as const } : {}),
               chargeId: `${startedInvocation.inference_id}:${priorAttemptId}`,
               accountingEpoch: scope.accountingEpoch,
               ...(scope.turnId ? { turnId: scope.turnId } : {}),
@@ -10285,7 +10287,7 @@ export class ChatEngine {
             .includes(startedInvocation.inference_id);
           if (pendingExists && !globalCostTracker.clearUnstartedCharge({
             taskOwnerId: scope.taskOwnerId,
-            ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
+            ...(scope.projectRoot ? { projectRoot: scope.projectRoot, projectRootVersion: 1 as const } : {}),
             chargeId: startedInvocation.inference_id,
             accountingEpoch: scope.accountingEpoch,
             ...(scope.turnId ? { turnId: scope.turnId } : {}),

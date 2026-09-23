@@ -347,7 +347,7 @@ export interface RunOptions {
   onUsageRecorded?: (metadata: RunnerInvocationMetadata) => void;
 
   /** Immutable child/parent ownership for delegated provider usage. */
-  usageAttribution?: Pick<UsageAttribution, 'taskOwnerId' | 'parentTaskOwnerId' | 'projectRoot'>;
+  usageAttribution?: Pick<UsageAttribution, 'taskOwnerId' | 'parentTaskOwnerId' | 'projectRoot' | 'projectRootVersion'>;
 }
 
 export type RunBudgetLimiter = 'wall' | 'cost';
@@ -1525,7 +1525,7 @@ async function runWaterfall<T>(
   signal?: AbortSignal,
   budgetGuard?: () => RunBudgetLimiter | null,
   onUsageRecorded?: (metadata: RunnerInvocationMetadata) => void,
-  usageAttribution?: Pick<UsageAttribution, 'taskOwnerId' | 'parentTaskOwnerId' | 'projectRoot'>,
+  usageAttribution?: Pick<UsageAttribution, 'taskOwnerId' | 'parentTaskOwnerId' | 'projectRoot' | 'projectRootVersion'>,
 ): Promise<WaterfallRunResult<T>> {
   const verboseFallbackLogs =
     process.env['BABEL_VERBOSE_WATERFALLS'] === 'true' || !evidence;
@@ -2326,7 +2326,7 @@ export async function runWaterfallForSchemaFailureTest<T>(input: {
   tiers: Array<{ name: string; runner: LlmRunner }>;
   budgetGuard?: () => RunBudgetLimiter | null;
   onUsageRecorded?: (metadata: RunnerInvocationMetadata) => void;
-  usageAttribution?: Pick<UsageAttribution, 'taskOwnerId' | 'parentTaskOwnerId' | 'projectRoot'>;
+  usageAttribution?: Pick<UsageAttribution, 'taskOwnerId' | 'parentTaskOwnerId' | 'projectRoot' | 'projectRootVersion'>;
 }): Promise<T> {
   const waterfall = input.tiers.map(
     (tier, index): TierSpec => ({

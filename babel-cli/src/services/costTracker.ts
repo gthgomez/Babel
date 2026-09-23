@@ -29,6 +29,10 @@ export interface ProjectStats {
   lastSessionId?: string;
   modelBreakdown: Record<string, ModelUsage>;
   sessionSnapshots?: Record<string, SessionUsageSummary>;
+  /** Exact receipts behind each session's project-local snapshot. */
+  sessionReceipts?: Record<string, ChargeReceipt[]>;
+  /** A temporary checkpoint ordering gap can clear after receipt coverage is proven. */
+  projectionPending?: boolean;
   /** A legacy aggregate cannot be disaggregated into idempotent session receipts. */
   projectionComplete?: boolean;
 }
@@ -92,6 +96,8 @@ export interface UsageAttribution {
   attemptId?: string;
   /** Captured at dispatch so late receipts retain their original project. */
   projectRoot?: string;
+  /** Version 1 means projectRoot was resolved physically before dispatch. */
+  projectRootVersion?: 1;
 }
 
 /** Accepted settlement delta, or a replay/conflict with no projection. */
@@ -752,7 +758,7 @@ export class CostTracker {
   }
 
   /** Exact per-root session projection when every session charge has a root. */
-  private projectReceiptSummary(projectRoot: string): SessionUsageSummary | null {
+  private projectReceiptSummary(projectRoot: string): { summary: SessionUsageSummary; receipts: ChargeReceipt[] } | null {
     if (!this.sessionProjectionComplete ||
         [...this.chargeObservations.values()].some((receipt) => !receipt.projectedInSession)) return null;
     const receipts = this.getSessionChargeObservations();
@@ -775,8 +781,18 @@ export class CostTracker {
     // Roots were captured physically at dispatch. A different project's
     // worktree may have disappeared before this save; it cannot turn that
     // receipt into usage for the current project.
-    const selected = receipts.filter((receipt) =>
-      identity(receipt.attribution.projectRoot!) === identity(physicalRoot));
+    const selected: ChargeReceipt[] = [];
+    for (const receipt of receipts) {
+      let receiptRoot = receipt.attribution.projectRoot!;
+      if (receipt.attribution.projectRootVersion !== 1) {
+        try {
+          receiptRoot = realpathSync(receiptRoot);
+        } catch {
+          return null; // A legacy lexical root can no longer be attributed.
+        }
+      }
+      if (identity(receiptRoot) === identity(physicalRoot)) selected.push(receipt);
+    }
     const modelBreakdown: Record<string, ModelUsage> = {};
     let totalCostUSD = 0;
     let unknownChargeCount = 0;
@@ -800,37 +816,38 @@ export class CostTracker {
       totalInputTokens += receipt.inputTokens;
       totalOutputTokens += receipt.outputTokens;
     }
-    return {
+    return { receipts: selected, summary: {
       totalCostUSD, knownCostUSD: totalCostUSD,
       completeCostUSD: unknownChargeCount === 0 ? totalCostUSD : null,
       unknownChargeCount, costComplete: unknownChargeCount === 0,
       totalInputTokens, totalOutputTokens, totalTokens: totalInputTokens + totalOutputTokens,
       modelBreakdown,
-    };
+    } };
   }
 
-  /** Reject a restored receipt projection that could erase newer project data. */
-  private receiptSummaryDominates(
-    saved: SessionUsageSummary, projected: SessionUsageSummary, projectRoot: string,
-  ): boolean {
-    const covers = (before: ModelUsage, after: ModelUsage): boolean =>
-      after.inputTokens >= before.inputTokens && after.outputTokens >= before.outputTokens &&
-      after.costUSD + 1e-9 >= before.costUSD;
-    const identity = (path: string): string => process.platform === 'win32' ? path.toLowerCase() : path;
-    const physicalProjectRoot = realpathSync(projectRoot);
-    const newUnknownCharges = [...this.chargeObservations.values()].filter((receipt) =>
-      receipt.projectedInSession && receipt.knownCostUSD === null &&
-      !this.restoredSessionChargeIds?.has(receipt.attribution.chargeId) &&
-      receipt.attribution.projectRoot &&
-      identity(receipt.attribution.projectRoot) === identity(physicalProjectRoot)).length;
-    return projected.totalInputTokens >= saved.totalInputTokens &&
-      projected.totalOutputTokens >= saved.totalOutputTokens &&
-      projected.totalCostUSD + 1e-9 >= saved.totalCostUSD &&
-      (projected.unknownChargeCount ?? 0) - (saved.unknownChargeCount ?? 0) <= newUnknownCharges &&
-      Object.entries(saved.modelBreakdown).every(([modelId, before]) => {
-        const after = projected.modelBreakdown[modelId];
-        return after !== undefined && covers(before, after);
-      });
+  /** A newer view must contain every prior project charge, with no downgrade. */
+  private receiptViewCovers(prior: readonly ChargeReceipt[], current: readonly ChargeReceipt[]): boolean {
+    const byId = new Map(current.map((receipt) => [receipt.attribution.chargeId, receipt]));
+    if (byId.size !== current.length) return false;
+    return prior.every((saved) => {
+      const latest = byId.get(saved.attribution.chargeId);
+      if (!latest || latest.modelId !== saved.modelId ||
+          JSON.stringify(latest.attribution) !== JSON.stringify(saved.attribution)) return false;
+      if (saved.knownCostUSD !== null) {
+        return latest.knownCostUSD === saved.knownCostUSD &&
+          latest.inputTokens === saved.inputTokens && latest.outputTokens === saved.outputTokens &&
+          latest.cacheHitTokens === saved.cacheHitTokens && latest.cacheMissTokens === saved.cacheMissTokens;
+      }
+      return latest.inputTokens >= saved.inputTokens && latest.outputTokens >= saved.outputTokens &&
+        latest.cacheHitTokens >= saved.cacheHitTokens && latest.cacheMissTokens >= saved.cacheMissTokens;
+    });
+  }
+
+  private receiptsMatchSummary(receipts: readonly ChargeReceipt[], summary: SessionUsageSummary): boolean {
+    return receipts.reduce((sum, receipt) => sum + receipt.inputTokens, 0) === summary.totalInputTokens &&
+      receipts.reduce((sum, receipt) => sum + receipt.outputTokens, 0) === summary.totalOutputTokens &&
+      Math.abs(receipts.reduce((sum, receipt) => sum + (receipt.knownCostUSD ?? 0), 0) - summary.totalCostUSD) <= 1e-9 &&
+      receipts.filter((receipt) => receipt.knownCostUSD === null).length === (summary.unknownChargeCount ?? 0);
   }
 
   private saveToProjectStatsLocked(sessionId: string, baseline: SessionUsageSummary | undefined, statsPath: string): void {
@@ -863,15 +880,20 @@ export class CostTracker {
     }
     // The old format has only an aggregate and last-session label; its
     // contribution from that session cannot be separated safely.
-    const candidateReceiptSummary = this.projectReceiptSummary(dirname(statsPath));
+    const candidateReceiptView = this.projectReceiptSummary(dirname(statsPath));
     const priorSnapshot = stats.sessionSnapshots[sessionId];
-    const staleRestoredReceipts = this.restoredSessionChargeIds !== null &&
-      candidateReceiptSummary !== null && priorSnapshot !== undefined &&
-      !this.receiptSummaryDominates(priorSnapshot, candidateReceiptSummary, dirname(statsPath));
-    const receiptSummary = staleRestoredReceipts ? null : candidateReceiptSummary;
-    stats.projectionComplete = stats.projectionComplete !== false && this.sessionProjectionComplete &&
-      !staleRestoredReceipts && (this.restoredSessionChargeIds === null || receiptSummary !== null);
-    if (!overlapsLegacySession && !staleRestoredReceipts) {
+    const priorReceipts = stats.sessionReceipts?.[sessionId];
+    const unprovenRestore = this.restoredSessionChargeIds !== null &&
+      (candidateReceiptView === null || (priorSnapshot !== undefined &&
+        (!Array.isArray(priorReceipts) || !this.receiptsMatchSummary(priorReceipts, priorSnapshot) ||
+         !this.receiptViewCovers(priorReceipts, candidateReceiptView.receipts))));
+    const canClearPending = candidateReceiptView !== null && !unprovenRestore;
+    const permanentFailure = stats.projectionComplete === false &&
+      (!stats.projectionPending || !canClearPending);
+    stats.projectionComplete = !permanentFailure && this.sessionProjectionComplete && !unprovenRestore;
+    stats.projectionPending = unprovenRestore || (stats.projectionPending === true && !canClearPending);
+    const receiptSummary = candidateReceiptView?.summary ?? null;
+    if (!overlapsLegacySession && !unprovenRestore) {
       const current = this.getSessionSummary();
       const delta = receiptSummary ?? (baseline ? {
         ...current,
@@ -921,6 +943,10 @@ export class CostTracker {
       if ((stats.sessionSnapshots[sessionId].unknownChargeCount ?? 0) < 0) {
         stats.projectionComplete = false;
       }
+      if (candidateReceiptView) {
+        stats.sessionReceipts ??= {};
+        stats.sessionReceipts[sessionId] = candidateReceiptView.receipts;
+      }
       stats.lastSessionId = sessionId;
     }
     stats.totalCostUSD = 0;
@@ -960,7 +986,9 @@ export class CostTracker {
 
     // Also upsert the session summary into SQLite for historical queries.
     // This is additive — JSON project_stats.json remains as the primary store.
-    if (!overlapsLegacySession) this._upsertSessionSummaryToSqlite(sessionId, stats.sessionSnapshots[sessionId]!, dirname(statsPath));
+    if (!overlapsLegacySession && !unprovenRestore && stats.sessionSnapshots[sessionId]) {
+      this._upsertSessionSummaryToSqlite(sessionId, stats.sessionSnapshots[sessionId], dirname(statsPath));
+    }
   }
 
   /**

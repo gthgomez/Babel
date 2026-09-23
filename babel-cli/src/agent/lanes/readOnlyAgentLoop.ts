@@ -441,7 +441,7 @@ async function resolveLiveActionTurn(
           usageAttribution: {
             taskOwnerId: inheritedAllowance.taskOwnerId,
             parentTaskOwnerId: inheritedAllowance.parentTaskOwnerId,
-            ...(projectRoot ? { projectRoot: realpathSync(projectRoot) } : {}),
+            ...(projectRoot ? { projectRoot: realpathSync(projectRoot), projectRootVersion: 1 as const } : {}),
           },
         }
       : {}),

@@ -582,6 +582,7 @@ export async function runMutationAgentLoop(
                       taskOwnerId: input.inheritedAllowance.taskOwnerId,
                       parentTaskOwnerId: input.inheritedAllowance.parentTaskOwnerId,
                       projectRoot: realpathSync(projectRoot),
+                      projectRootVersion: 1 as const,
                     },
                   }
                 : {}),

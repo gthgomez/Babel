@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -611,6 +611,104 @@ test('older resumed receipts cannot overwrite a newer project snapshot', () => {
   }
 });
 
+test('a new large charge cannot hide a missing receipt from a newer project snapshot', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-missing-receipt-'));
+  try {
+    const original = new CostTracker(root);
+    const a = { taskOwnerId: 'A', chargeId: 'A', projectRoot: root };
+    const b = { taskOwnerId: 'B', chargeId: 'B', projectRoot: root };
+    original.settleUsage('deepseek-v4-flash', 100, 10, null, null, a);
+    const staleSession = {
+      ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+      chargeObservations: original.getSessionChargeObservations(),
+      projectSessionId: original.getProjectSessionId(),
+    };
+    original.settleUsage('deepseek-v4-flash', 200, 20, null, null, b);
+    original.saveToProjectStats(original.getProjectSessionId(), undefined, root);
+    const priorCost = original.getSessionSummary().totalCostUSD;
+    const resumed = new CostTracker(root);
+    resumed.restoreSessionCost(staleSession);
+    resumed.restoreTaskUsage('A', {
+      totalCostUSD: original.getTaskSummary('A').totalCostUSD,
+      unknownChargeCount: 0,
+      chargeIds: original.getTaskChargeIds('A'),
+      chargeObservations: original.getTaskChargeObservations('A'),
+    });
+    resumed.settleUsage('deepseek-v4-flash', 2000, 200, null, null,
+      { taskOwnerId: 'C', chargeId: 'C', projectRoot: root });
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), staleSession, root);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.totalCostUSD, priorCost);
+    assert.equal(stats.totalInputTokens, 300);
+    assert.equal(stats.projectionComplete, false);
+    assert.deepEqual(stats.sessionReceipts[resumed.getProjectSessionId()].map((receipt: { attribution: { chargeId: string } }) =>
+      receipt.attribution.chargeId), ['A', 'B']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a later matching receipt clears temporary project projection uncertainty', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-gap-recovery-'));
+  try {
+    const original = new CostTracker(root);
+    const attribution = { taskOwnerId: 'A', chargeId: 'recover', projectRoot: root };
+    original.recordUnknownCharge('deepseek-v4-flash', attribution);
+    const stale = {
+      ...original.getSessionSummary(), accountedChargeIds: original.getSessionChargeIds(),
+      chargeObservations: original.getSessionChargeObservations(),
+      projectSessionId: original.getProjectSessionId(),
+    };
+    original.settleUsage('deepseek-v4-flash', 100, 10, null, null, attribution);
+    original.saveToProjectStats(original.getProjectSessionId(), undefined, root);
+    const resumed = new CostTracker(root);
+    resumed.restoreSessionCost(stale);
+    resumed.restoreTaskUsage('A', {
+      totalCostUSD: 0, unknownChargeCount: 1,
+      chargeIds: stale.accountedChargeIds,
+      chargeObservations: stale.chargeObservations,
+    });
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), resumed.getSessionSummary(), root);
+    let stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.projectionComplete, false);
+    assert.equal(stats.projectionPending, true);
+    resumed.settleUsage('deepseek-v4-flash', 100, 10, null, null, attribution);
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), stale, root);
+    stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.projectionComplete, true);
+    assert.equal(stats.projectionPending, false);
+    assert.equal(stats.unknownChargeCount, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy lexical root alias is resolved before receipt projection', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-alias-'));
+  const alias = `${root}-alias`;
+  try {
+    try {
+      symlinkSync(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (error) {
+      if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') {
+        t.skip('Creating a junction requires permission on this host');
+        return;
+      }
+      throw error;
+    }
+    const tracker = new CostTracker(root);
+    tracker.settleUsage('deepseek-v4-flash', 100, 10, null, null,
+      { taskOwnerId: 'A', chargeId: 'alias', projectRoot: alias });
+    tracker.saveToProjectStats(tracker.getProjectSessionId(), undefined, root);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.totalInputTokens, 100);
+    assert.equal(stats.projectionComplete, true);
+  } finally {
+    rmSync(alias, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a new pending receipt after resume does not permanently poison project completeness', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-project-new-pending-'));
   try {
@@ -654,7 +752,7 @@ test('a removed unrelated root cannot contribute to another project snapshot', (
   try {
     const tracker = new CostTracker(rootB);
     tracker.settleUsage('deepseek-v4-flash', 1000, 100, null, null,
-      { taskOwnerId: 'A', chargeId: 'removed-A', projectRoot: rootA });
+      { taskOwnerId: 'A', chargeId: 'removed-A', projectRoot: rootA, projectRootVersion: 1 });
     rmSync(rootA, { recursive: true, force: true });
     tracker.settleUsage('deepseek-v4-flash', 200, 20, null, null,
       { taskOwnerId: 'B', chargeId: 'remaining-B', projectRoot: rootB });
