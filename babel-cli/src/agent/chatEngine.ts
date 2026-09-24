@@ -7411,9 +7411,15 @@ export class ChatEngine {
         action.type === 'apply_patch' ||
         (action.type === 'sub_agent' && (action as { mutation?: boolean }).mutation === true);
       // run_command is an arbitrary shell, so classify it as potentially
-      // mutating before execution. The dedicated test_run verifier remains
-      // available for observation while the recovery gate is closed.
-      const shellMutationAttempt = action.type === 'run_command';
+      // mutating before execution. A test_run command is also a process and
+      // can write source despite its verifier label. During recovery it needs
+      // the already-consumed one-shot repair plan before it may execute.
+      const activeRecoveryGate = this.workingState.recoveryGate;
+      const testRunWithoutRepairPermit = action.type === 'test_run' &&
+        activeRecoveryGate !== undefined &&
+        !(activeRecoveryGate.permitConsumed === true &&
+          activeRecoveryGate.admittedPlan !== undefined);
+      const shellMutationAttempt = action.type === 'run_command' || testRunWithoutRepairPermit;
       const shellObservation = action.type === 'run_command' || action.type === 'test_run';
       let recoveryGate = this.workingState.recoveryGate;
       let driftedCandidate = false;

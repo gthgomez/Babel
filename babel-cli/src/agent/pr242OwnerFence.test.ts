@@ -737,7 +737,7 @@ test('R01: test_run git apply cannot mutate source while recovery admission is c
       signal: mutable.abortController.signal,
     }, {}, { index: 0 })
     assert.equal(readFileSync(join(root, 'README.md'), 'utf8'), 'fixture\n')
-    assert.match(result.observation, /DENY_UNKNOWN_EXTERNAL_SIDE_EFFECT|RECOVERY_EVIDENCE_REQUIRED/i)
+    assert.match(result.observation, /DENY_UNKNOWN_EXTERNAL_SIDE_EFFECT|RECOVERY_EVIDENCE_REQUIRED|RECOVERY_CANDIDATE_DRIFT/i)
     } finally {
       if (priorLease === undefined) delete process.env['BABEL_AUTONOMY_LEASE']
       else process.env['BABEL_AUTONOMY_LEASE'] = priorLease
