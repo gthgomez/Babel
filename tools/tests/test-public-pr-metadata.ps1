@@ -15,6 +15,30 @@ $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("babel-pr-metadata-{0}" -f [gu
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) { throw "ASSERTION FAILED: $Message" }
 }
+$paginationModule = Join-Path $repoRoot 'tools/security/public-pr-metadata-pagination.psm1'
+Assert-True (Test-Path -LiteralPath $paginationModule -PathType Leaf) 'metadata pagination validator module must exist'
+Import-Module -Name $paginationModule -Force
+$eventFixture = [pscustomobject]@{
+  repository = [pscustomobject]@{ id = 1195300304; owner = [pscustomobject]@{ login = 'gthgomez' }; name = 'Babel' }
+  pull_request = [pscustomobject]@{ number = 251 }
+}
+$invalidIdEvent = [pscustomobject]@{
+  repository = [pscustomobject]@{ id = 0; owner = [pscustomobject]@{ login = 'gthgomez' }; name = 'Babel' }
+  pull_request = [pscustomobject]@{ number = 251 }
+}
+$invalidIdRejected = $false
+try { Get-PullRequestCommitPaths -Event $invalidIdEvent | Out-Null } catch { $invalidIdRejected = $true }
+Assert-True $invalidIdRejected 'missing or invalid numeric repository identity must be rejected'
+$allowedCommitPaths = @(Get-PullRequestCommitPaths -Event $eventFixture)
+Assert-True ($allowedCommitPaths.Count -eq 2) 'commit traversal must accept the event repository path and GitHub numeric repository path'
+Assert-True (Test-PullRequestCommitPageUri -Url 'https://api.github.com/repos/gthgomez/Babel/pulls/251/commits?per_page=100' -AllowedPaths $allowedCommitPaths) 'initial owner/name endpoint must remain allowed'
+Assert-True (Test-PullRequestCommitPageUri -Url 'https://api.github.com/repositories/1195300304/pulls/251/commits?per_page=100&page=2' -AllowedPaths $allowedCommitPaths) 'GitHub numeric repository pagination link must be accepted for this repository'
+Assert-True (-not (Test-PullRequestCommitPageUri -Url 'https://api.github.com/repositories/1195300305/pulls/251/commits?page=2' -AllowedPaths $allowedCommitPaths)) 'pagination link for a different repository ID must be rejected'
+Assert-True (-not (Test-PullRequestCommitPageUri -Url 'https://api.github.com/repos/gthgomez/Other/pulls/251/commits?page=2' -AllowedPaths $allowedCommitPaths)) 'pagination link for a different repository name must be rejected'
+Assert-True (-not (Test-PullRequestCommitPageUri -Url 'https://api.github.com.attacker.invalid/repositories/1195300304/pulls/251/commits?page=2' -AllowedPaths $allowedCommitPaths)) 'lookalike API host must be rejected'
+Assert-True (-not (Test-PullRequestCommitPageUri -Url 'http://api.github.com/repositories/1195300304/pulls/251/commits?page=2' -AllowedPaths $allowedCommitPaths)) 'non-HTTPS pagination endpoint must be rejected'
+Assert-True (-not (Test-PullRequestCommitPageUri -Url 'https://api.github.com:444/repositories/1195300304/pulls/251/commits?page=2' -AllowedPaths $allowedCommitPaths)) 'nonstandard API port must be rejected'
+Remove-Module -Name (Get-Item -LiteralPath $paginationModule).BaseName -ErrorAction SilentlyContinue
 function New-SupplementalPolicy([string[]]$Identifiers) {
   $json = @{ forbidden_private_identifiers = $Identifiers } | ConvertTo-Json -Compress
   return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
@@ -51,6 +75,8 @@ try {
   $checkerSource = Get-Content -LiteralPath $checker -Raw
   $trustedWorkflowSource = Get-Content -LiteralPath $trustedWorkflow -Raw
   $ordinaryWorkflowSource = Get-Content -LiteralPath $ordinaryWorkflow -Raw
+  Assert-True ($checkerSource -match 'Get-PullRequestCommitPaths') 'checker must bind allowed pagination routes to trusted event repository identity'
+  Assert-True ($checkerSource -match 'Test-PullRequestCommitPageUri') 'checker must validate the initial and next-page commit endpoints'
   Assert-True ($checkerSource -match "response\.Headers\.GetValues\('Link'\)") 'checker must tolerate commit responses without a Link header under strict mode'
   Assert-True ($checkerSource -notmatch 'ResponseHeadersVariable') 'checker must avoid unsupported response-header parameters'
   Assert-True ($checkerSource -match 'Net\.Http\.HttpClient') 'checker must use cross-platform HTTP handling'
@@ -115,7 +141,7 @@ try {
   New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
   $eventPath = Join-Path $tempRoot 'pull-request-event.json'
   $event = @{
-    repository = @{ owner = @{ login = 'babel-fixture' }; name = 'public-repo' }
+    repository = @{ id = 12345; owner = @{ login = 'babel-fixture' }; name = 'public-repo' }
     pull_request = @{ number = 42; title = 'docs: update guide'; body = 'Public documentation update.' }
   } | ConvertTo-Json -Depth 5
   Set-Content -LiteralPath $eventPath -Value $event
