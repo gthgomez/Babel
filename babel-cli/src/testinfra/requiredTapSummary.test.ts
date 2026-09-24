@@ -95,6 +95,37 @@ test('duplicate test identities invalidate the inventory', () => withDirectory((
   assert.ok(result.summary.errors.includes('duplicate_test_id'))
 }))
 
+test('duplicate root TAP sequence numbers cannot produce complete evidence', () => withDirectory((directory) => {
+  const tap = [
+    'TAP version 13',
+    'ok 1 - first distinct test',
+    '  ---', "  duration_ms: 1", "  type: 'test'", '  ...',
+    'ok 1 - second distinct test',
+    '  ---', "  duration_ms: 1", "  type: 'test'", '  ...',
+    footer({ tests: 2, passed: 2 }),
+  ].join('\n')
+  const result = tapResult(directory, tap)
+  assert.equal(result.status, 1)
+  assert.equal(result.summary.status, 'failed')
+  assert.ok(result.summary.errors.includes('invalid_tap_sequence'))
+}))
+
+test('nested TAP sequence numbers restart within each distinct subtest', () => withDirectory((directory) => {
+  const tap = [
+    'TAP version 13',
+    '# Subtest: first group',
+    '    ok 1 - alpha', '      ---', "      duration_ms: 1", "      type: 'test'", '      ...',
+    'ok 1 - first group', '  ---', "  duration_ms: 1", "  type: 'suite'", '  ...',
+    '# Subtest: second group',
+    '    ok 1 - beta', '      ---', "      duration_ms: 1", "      type: 'test'", '      ...',
+    'ok 2 - second group', '  ---', "  duration_ms: 1", "  type: 'suite'", '  ...',
+    footer({ tests: 2, suites: 2, passed: 2 }),
+  ].join('\n')
+  const result = tapResult(directory, tap)
+  assert.equal(result.status, 0)
+  assert.equal(result.summary.status, 'complete')
+}))
+
 test('cancelled tests invalidate otherwise passing TAP output', () => withDirectory((directory) => {
   const tap = [
     'TAP version 13',

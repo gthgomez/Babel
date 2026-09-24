@@ -30,6 +30,7 @@ export function parseRequiredTapInventory(tap, suite) {
   if (tapHeaderIndexes.length !== 1) errors.push('missing_or_duplicate_tap_version_13')
   const outcomes = []
   const parents = new Map()
+  let nextParentId = 1
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]
@@ -37,7 +38,7 @@ export function parseRequiredTapInventory(tap, suite) {
     if (header) {
       const depth = header[1].length
       for (const prior of parents.keys()) if (prior >= depth) parents.delete(prior)
-      parents.set(depth, header[2].trim())
+      parents.set(depth, { id: nextParentId++, name: header[2].trim() })
       continue
     }
 
@@ -70,7 +71,12 @@ export function parseRequiredTapInventory(tap, suite) {
     const path = [...parents.entries()]
       .filter(([parentDepth]) => parentDepth < depth)
       .sort(([left], [right]) => left - right)
-      .map(([, parentName]) => parentName)
+      .map(([, parent]) => parent.name)
+    const scopeKey = [...parents.entries()]
+      .filter(([parentDepth]) => parentDepth < depth)
+      .sort(([left], [right]) => left - right)
+      .map(([, parent]) => parent.id)
+      .join('/')
     const id = [...path, idSuffix].join(' / ')
     const result = {
       id,
@@ -79,7 +85,7 @@ export function parseRequiredTapInventory(tap, suite) {
       ...(skipReason !== null ? { skipReason } : {}),
       ...(todoReason !== null ? { todoReason } : {}),
     }
-    const record = { depth, kind, outcome: outcome[2], result }
+    const record = { depth, kind, sequence: Number(outcome[3]), scopeKey, outcome: outcome[2], result }
     outcomes.push(record)
     if (kind === 'test') tests.push(result)
   }
@@ -120,6 +126,13 @@ export function parseRequiredTapInventory(tap, suite) {
     if (tests.length === 0) errors.push('empty_test_inventory')
   }
 
+  const sequenceByScope = new Map()
+  for (const item of outcomes) {
+    const previous = sequenceByScope.get(item.scopeKey) ?? 0
+    if (item.sequence !== previous + 1) errors.push('invalid_tap_sequence')
+    sequenceByScope.set(item.scopeKey, item.sequence)
+  }
+
   const ids = new Set()
   for (const item of tests) {
     if (ids.has(item.id)) errors.push('duplicate_test_id')
@@ -131,7 +144,7 @@ export function parseRequiredTapInventory(tap, suite) {
   const failed = tests.filter((item) => item.result === 'failed').length
   const hasExecutionFailure = failed > 0 || (footer.fail ?? 0) > 0 || (footer.cancelled ?? 0) > 0 || (footer.todo ?? 0) > 0
   const hasTerminal = rootPlans.length === 1 && Object.keys(footer).length === FOOTER_FIELDS.length
-  const status = hasExecutionFailure || errors.includes('duplicate_test_id') ? 'failed' :
+  const status = hasExecutionFailure || errors.includes('duplicate_test_id') || errors.includes('invalid_tap_sequence') ? 'failed' :
     errors.length > 0 || !hasTerminal ? 'incomplete' : 'complete'
 
   return {
