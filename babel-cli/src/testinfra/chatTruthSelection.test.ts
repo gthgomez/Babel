@@ -20,6 +20,8 @@ test('required Chat truth selection includes focused accounting, Chronicle and b
     'src/sandboxTermination.test.ts',
     'src/testinfra/pr242Audit.regression.test.ts',
     'src/testinfra/chatTruthSelection.test.ts',
+    'src/testinfra/requiredTapSummary.test.ts',
+    'src/agent/recoveryBarrierA2.test.ts',
   ]) {
     assert.ok(files.has(required), `${required} is missing from the required selection`)
   }
@@ -27,4 +29,6 @@ test('required Chat truth selection includes focused accounting, Chronicle and b
   assert.equal(workflow.match(/node scripts\/summarize_required_tap\.mjs chat-truth/g)?.length, 2)
   assert.equal(workflow.match(/npm run test:harness-runtime -- --test-timeout=60000 2>&1/g)?.length, 2)
   assert.equal(workflow.match(/node scripts\/summarize_required_tap\.mjs harness-runtime/g)?.length, 2)
+  assert.equal(workflow.match(/node scripts\/capture_required_tap_selection\.mjs chat-truth/g)?.length, 2)
+  assert.equal(workflow.match(/node scripts\/capture_required_tap_selection\.mjs harness-runtime/g)?.length, 2)
 })

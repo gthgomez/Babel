@@ -116,6 +116,9 @@ jobs:
       - name: Run required Acceptance V0 suite
         run: npm run test:acceptance-v0
         working-directory: babel-cli
+      - name: Capture required harness runtime selection
+        run: node scripts/capture_required_tap_selection.mjs harness-runtime
+        working-directory: babel-cli
       - name: Run required harness runtime suite
         timeout-minutes: 15
         shell: pwsh
@@ -135,8 +138,8 @@ jobs:
           name: harness-runtime-linux
           path: babel-cli/artifacts/harness-runtime
           if-no-files-found: warn
-      - name: Log Chat truth test selection
-        run: node scripts/print_chat_truth_selection.mjs
+      - name: Capture Chat truth test selection
+        run: node scripts/capture_required_tap_selection.mjs chat-truth
         working-directory: babel-cli
       - name: Run required Chat truth suite
         shell: pwsh
@@ -201,6 +204,9 @@ jobs:
       - name: Run required Acceptance V0 suite
         run: npm run test:acceptance-v0
         working-directory: babel-cli
+      - name: Capture required harness runtime selection
+        run: node scripts/capture_required_tap_selection.mjs harness-runtime
+        working-directory: babel-cli
       - name: Run required harness runtime suite
         timeout-minutes: 15
         shell: pwsh
@@ -220,8 +226,8 @@ jobs:
           name: harness-runtime-windows
           path: babel-cli/artifacts/harness-runtime
           if-no-files-found: warn
-      - name: Log Chat truth test selection
-        run: node scripts/print_chat_truth_selection.mjs
+      - name: Capture Chat truth test selection
+        run: node scripts/capture_required_tap_selection.mjs chat-truth
         working-directory: babel-cli
       - name: Run required Chat truth suite
         shell: pwsh
