@@ -16,6 +16,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+Import-Module (Join-Path $PSScriptRoot 'security/public-pr-metadata-pagination.psm1') -Force
+
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 if ([string]::IsNullOrWhiteSpace($PolicyPath)) {
   $PolicyPath = Join-Path $RepoRoot 'tools/security/public-pr-metadata-policy.json'
@@ -78,10 +80,10 @@ function Get-PullRequestCommitUrl {
 }
 
 function Get-PullRequestCommits {
-  param([string]$Url, [string]$ExpectedPath)
+  param([string]$Url, [string[]]$ExpectedPaths)
   try {
+    if (-not (Test-PullRequestCommitPageUri -Url $Url -AllowedPaths $ExpectedPaths)) { throw 'invalid endpoint' }
     $uri = [Uri]$Url
-    if ($uri.Scheme -ne 'https' -or $uri.Host -ne 'api.github.com' -or $uri.AbsolutePath -ne $ExpectedPath) { throw 'invalid endpoint' }
     if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'missing token' }
     $commits = [Collections.Generic.List[object]]::new()
     $client = [Net.Http.HttpClient]::new()
@@ -102,9 +104,8 @@ function Get-PullRequestCommits {
         if ($response.Headers.Contains('Link')) { $linkHeader = [string](@($response.Headers.GetValues('Link')) -join ', ') }
         if ($linkHeader -match '<([^>]+)>;\s*rel="next"') { $next = $Matches[1] }
         if ($next) {
-          $nextUri = [Uri]$next
-          if ($nextUri.Scheme -ne 'https' -or $nextUri.Host -ne 'api.github.com' -or $nextUri.AbsolutePath -ne $ExpectedPath) { throw 'invalid pagination endpoint' }
-          $uri = $nextUri
+          if (-not (Test-PullRequestCommitPageUri -Url $next -AllowedPaths $ExpectedPaths)) { throw 'invalid pagination endpoint' }
+          $uri = [Uri]$next
         } else {
           $uri = $null
         }
@@ -142,7 +143,7 @@ if ($null -ne $supplemental) {
 }
 
 $commitApiUrl = ''
-$commitApiPath = ''
+$commitApiPaths = @()
 if ($PSBoundParameters.ContainsKey('Title') -or $PSBoundParameters.ContainsKey('Body')) {
   # Explicit values are used by tests and local callers.
 } elseif (-not [string]::IsNullOrWhiteSpace($env:GITHUB_EVENT_PATH) -and (Test-Path -LiteralPath $env:GITHUB_EVENT_PATH)) {
@@ -151,14 +152,14 @@ if ($PSBoundParameters.ContainsKey('Title') -or $PSBoundParameters.ContainsKey('
     $Title = [string]$event.pull_request.title
     $Body = [string]$event.pull_request.body
     $commitApiUrl = Get-PullRequestCommitUrl -Event $event
-    $commitApiPath = ([Uri]$commitApiUrl).AbsolutePath
+    $commitApiPaths = @(Get-PullRequestCommitPaths -Event $event)
   } catch {
     throw 'GitHub pull request event metadata could not be parsed.'
   }
 }
 
 if ($CommitMessages.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($commitApiUrl)) {
-  $CommitMessages = @(Get-PullRequestCommits -Url $commitApiUrl -ExpectedPath $commitApiPath)
+  $CommitMessages = @(Get-PullRequestCommits -Url $commitApiUrl -ExpectedPaths $commitApiPaths)
 }
 
 $findings = [Collections.Generic.List[object]]::new()
