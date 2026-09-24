@@ -794,6 +794,27 @@ describe('S07 Scenario 3 — behavioral parser oracle', { concurrency: false }, 
     assert.doesNotMatch(VERIFY_MJS, /readFileSync/);
     assert.doesNotMatch(VERIFY_MJS, /includes\(/);
   });
+
+  test('generated verifier reports failures and exits nonzero through natural process shutdown', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-s07-verifier-process-'));
+    try {
+      writeFileSync(join(root, 'parser.ts'), PARSER_BUGGY, 'utf8');
+      writeFileSync(join(root, 'verify.mjs'), VERIFY_MJS, 'utf8');
+
+      const result = spawnSync(process.execPath, ['verify.mjs'], {
+        cwd: root,
+        encoding: 'utf8',
+      });
+
+      assert.equal(result.error, undefined, result.error?.message);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /parseExpression\("1\+2"\) => -1 \(expected 3\)/);
+      assert.doesNotMatch(result.stdout, /parser behavior verified/);
+      assert.doesNotMatch(VERIFY_MJS, /process\.exit\s*\(/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── Scenarios ────────────────────────────────────────────────────────────────

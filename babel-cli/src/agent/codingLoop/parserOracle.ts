@@ -111,9 +111,10 @@ export function renderParserVerifierScript(): string {
     `}`,
     `if (failures.length > 0) {`,
     `  for (const f of failures) console.error(f);`,
-    `  process.exit(1);`,
+    `  process.exitCode = 1;`,
+    `} else {`,
+    `  console.log('parser behavior verified for ' + cases.length + ' cases');`,
     `}`,
-    `console.log('parser behavior verified for ' + cases.length + ' cases');`,
     ``,
   ].join('\n');
 }

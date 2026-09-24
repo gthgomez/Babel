@@ -20,43 +20,44 @@ if (!root || !runDir || !threadId || !commandId) {
       error: 'usage: admissionRestartChild <authorizedRoot> <runDir> <threadId> <commandId>',
     }),
   );
-  process.exit(2);
-}
-
-const opened = openAdmissionStore({ authorizedRoot: root, runDir });
-if (!opened.ok) {
-  console.log(JSON.stringify({ ok: false, error: `${opened.reasonCode}: ${opened.detail}` }));
-  process.exit(1);
-}
-
-const owner = opened.store.readOwner(threadId);
-const digestInput: CommandDigestInput = {
-  threadId,
-  taskId: 'task-restart-probe',
-  commandId,
-  mode: 'chat',
-  resolvedOperationPolicy: { mutation: 'normal', approval: 'interactive' },
-  taskShapeClass: 'general',
-  targetRoot: root,
-  offeredToolSchemaVersion: 'tools-v1',
-  contextSnapshotId: 'ctx-restart-probe',
-  payload: { command: 'restart_probe' },
-};
-
-let admitted: string;
-if (owner) {
-  const decision = opened.store.admitCommand({
-    digestInput,
-    ownerGeneration: owner.generation,
-    ownerToken: owner.token,
-    effectClass: 'read_only',
-    operationId: `op-${commandId}`,
-  });
-  admitted = decision.kind;
+  process.exitCode = 2;
 } else {
-  admitted = 'no_owner';
-}
+  const opened = openAdmissionStore({ authorizedRoot: root, runDir });
+  if (!opened.ok) {
+    console.log(JSON.stringify({ ok: false, error: `${opened.reasonCode}: ${opened.detail}` }));
+    process.exitCode = 1;
+  } else {
+    const owner = opened.store.readOwner(threadId);
+    const digestInput: CommandDigestInput = {
+      threadId,
+      taskId: 'task-restart-probe',
+      commandId,
+      mode: 'chat',
+      resolvedOperationPolicy: { mutation: 'normal', approval: 'interactive' },
+      taskShapeClass: 'general',
+      targetRoot: root,
+      offeredToolSchemaVersion: 'tools-v1',
+      contextSnapshotId: 'ctx-restart-probe',
+      payload: { command: 'restart_probe' },
+    };
 
-console.log(JSON.stringify({ ok: true, owner, admitted }));
-// Crash-like exit: the handle is still open; every COMMIT above must survive.
-process.exit(0);
+    let admitted: string;
+    if (owner) {
+      const decision = opened.store.admitCommand({
+        digestInput,
+        ownerGeneration: owner.generation,
+        ownerToken: owner.token,
+        effectClass: 'read_only',
+        operationId: `op-${commandId}`,
+      });
+      admitted = decision.kind;
+    } else {
+      admitted = 'no_owner';
+    }
+
+    console.log(JSON.stringify({ ok: true, owner, admitted }));
+    // The exact-path architectural exception preserves a real crash/restart:
+    // terminate before closing SQLite so the parent can verify durable state.
+    process.exit(0);
+  }
+}
