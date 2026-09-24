@@ -111,10 +111,11 @@ export function parseRequiredTapInventory(tap, suite) {
       fail: tests.filter((item) => item.result === 'failed').length,
       cancelled: footer.cancelled,
       skipped: tests.filter((item) => item.result === 'skipped').length,
-      todo: tests.filter((item) => item.result === 'todo').length,
+      pending: tests.filter((item) => item.result === 'todo').length,
     }
     for (const [field, count] of Object.entries(observed)) {
-      if (footer[field] !== count) errors.push(`inventory_footer_mismatch_${field}`)
+      const footerField = field === 'pending' ? 'todo' : field
+      if (footer[footerField] !== count) errors.push(`inventory_footer_mismatch_${footerField}`)
     }
     if (tests.length === 0) errors.push('empty_test_inventory')
   }
@@ -146,7 +147,7 @@ export function parseRequiredTapInventory(tap, suite) {
     failed,
     cancelled: footer.cancelled ?? 0,
     skipped: tests.filter((item) => item.result === 'skipped').length,
-    todo: tests.filter((item) => item.result === 'todo').length,
+    pendingCount: tests.filter((item) => item.result === 'todo').length,
     footer: Object.keys(footer).length > 0 ? footer : undefined,
     tests,
   }
