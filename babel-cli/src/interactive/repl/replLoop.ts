@@ -38,6 +38,10 @@ async function executeTaskAndDrainQueue(
   deps: ReplLoopDeps,
   input: string,
 ): Promise<void> {
+  // Ordinary Chat/Plan/Deep work stays hosted in the root shell. Exclusive
+  // terminal ownership is reserved for intentional foreign surfaces such as
+  // the pager or external editor; wrapping the whole task would hide the
+  // very activity the shell is responsible for presenting.
   await deps.executeTask(input);
   while (!ctx.isRunning) {
     const next = dequeueComposerMessage();
@@ -78,7 +82,7 @@ function setAdapterDraft(ctx: ReplContext, text: string): void {
 }
 
 export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise<void> {
-  printIdleHeader(ctx);
+  if (!ctx.shellHost) printIdleHeader(ctx);
   const coordinator = InputCoordinator.getInstance();
   let release: (() => void) | null = await coordinator.acquire('repl');
 
@@ -177,7 +181,10 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     }
 
     if (input === '.editor') {
-      const edited = await openEditor({ rl: ctx.rl });
+      const runEditor = () => openEditor({ rl: ctx.rl });
+      const edited = ctx.withExclusiveTerminal
+        ? await ctx.withExclusiveTerminal('external-editor', runEditor)
+        : await runEditor();
       if (edited) {
         saveHistory((ctx.rl as ReadlineWithHistory).history);
         await executeTaskAndDrainQueue(ctx, deps, edited.trim());
@@ -205,7 +212,11 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     saveHistory((ctx.rl as ReadlineWithHistory).history);
 
     if (input.startsWith('/')) {
-      await handleCommand(ctx, input);
+      if (ctx.withExclusiveTerminal) {
+        await ctx.withExclusiveTerminal('command', () => handleCommand(ctx, input));
+      } else {
+        await handleCommand(ctx, input);
+      }
       release = await finishReplTurn(ctx, coordinator, release);
     } else {
       await executeTaskAndDrainQueue(ctx, deps, input);

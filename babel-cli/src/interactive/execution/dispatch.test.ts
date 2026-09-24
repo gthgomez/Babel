@@ -34,9 +34,11 @@ interface CallRecord {
 }
 
 const calls: CallRecord[] = [];
+const shellEvents: Array<{ type: 'begin' | 'settle'; turnId?: number }> = [];
 
 function resetCalls() {
   calls.length = 0;
+  shellEvents.length = 0;
 }
 
 function makeExecuteChatTask() {
@@ -187,6 +189,12 @@ function makeContext(opts: MakeContextOptions = {}): ReplContext {
     });
     return ctx.turns[ctx.turns.length - 1]!;
   };
+  ctx.beginShellTurn = (turnId) => {
+    shellEvents.push({ type: 'begin', turnId });
+  };
+  (ctx as ReplContext & { settleShellTurn?: () => void }).settleShellTurn = () => {
+    shellEvents.push({ type: 'settle' });
+  };
   ctx.resolveCurrentTarget = () => makeTarget();
   ctx.scheduleIndexWarmup = () => {};
   ctx.exit = () => {};
@@ -231,6 +239,7 @@ describe('executeTask dispatch routing', { concurrency: 1 }, () => {
     assert.equal(calls[0]?.name, 'chat');
     assert.equal(calls[0]?.task, 'what is git status?');
     assert.equal(calls[0]?.mode, 'chat');
+    assert.deepEqual(shellEvents.map((event) => event.type), ['begin', 'settle']);
   });
 
   test('chat mode routes follow-up input to executeChatTask', async () => {
@@ -279,6 +288,7 @@ describe('executeTask dispatch routing', { concurrency: 1 }, () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.name, 'plan');
     assert.equal(calls[0]?.task, 'add a logout button');
+    assert.deepEqual(shellEvents.map((event) => event.type), ['begin', 'settle']);
   });
 
   test('plan mode + "babel deep" routes to executeGovernedTask (lane check precedes mode check)', async () => {
@@ -300,6 +310,7 @@ describe('executeTask dispatch routing', { concurrency: 1 }, () => {
     await executeTask(ctx, 'build the authentication system', testDeps);
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.name, 'governed');
+    assert.deepEqual(shellEvents.map((event) => event.type), ['begin', 'settle']);
   });
 
   test('deep mode + "babel deep" routes to executeGovernedTask with variant=deep', async () => {
@@ -324,6 +335,7 @@ describe('executeTask dispatch routing', { concurrency: 1 }, () => {
 
     assert.equal(calls.length, 0, 'no execution engine should be called');
     assert.equal(ctx.state.lastRunUserStatus, 'blocked');
+    assert.deepEqual(shellEvents, [], 'ambiguous confirmation must not activate a shell turn');
   });
 
   // ── Empty task guard ──────────────────────────────────────────────────────
@@ -346,6 +358,51 @@ describe('executeTask dispatch routing', { concurrency: 1 }, () => {
     } finally {
       console.log = origLog;
     }
+  });
+
+  test('empty explicit task does not activate or settle a shell turn', async () => {
+    const ctx = makeContext({ mode: 'chat' });
+    await executeTask(ctx, 'babel   ', testDeps);
+    assert.deepEqual(shellEvents, []);
+  });
+
+  test('pre-execution preparation failure does not activate a shell turn', async () => {
+    const ctx = makeContext({ mode: 'chat' });
+    await assert.rejects(
+      executeTask(ctx, 'prepare this task', {
+        ...testDeps,
+        loadSessionIdentity: async () => {
+          throw new Error('identity preparation failed');
+        },
+      }),
+      /identity preparation failed/,
+    );
+    assert.deepEqual(shellEvents, []);
+  });
+
+  test('accepted executor exception settles the shell turn exactly once', async () => {
+    const ctx = makeContext({ mode: 'chat' });
+    await assert.rejects(
+      executeTask(ctx, 'throw during execution', {
+        ...testDeps,
+        executeChatTask: async () => {
+          throw new Error('execution failed');
+        },
+      }),
+      /execution failed/,
+    );
+    assert.deepEqual(shellEvents.map((event) => event.type), ['begin', 'settle']);
+  });
+
+  test('queued follow-up executions each get their own accepted lifecycle', async () => {
+    const ctx = makeContext({ mode: 'chat' });
+    const queued = ['first queued task', 'second queued task'];
+    for (const input of queued) {
+      await executeTask(ctx, input, testDeps);
+    }
+    assert.deepEqual(shellEvents.map((event) => event.type), [
+      'begin', 'settle', 'begin', 'settle',
+    ]);
   });
 
   // ── Fallthrough legacy governed ───────────────────────────────────────────

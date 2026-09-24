@@ -107,9 +107,9 @@ export async function executeChatTask(
 ): Promise<void> {
   ctx.isRunning = true;
   notifyRunStarted();
-  // Slice 2: do not re-activate PromptInput during the turn. A live composer
-  // shares stdin with ConversationalRenderer and turns one Ctrl+C into
-  // cancel + process-exit on ConPTY (raw 0x03 plus SIGINT).
+  // Hosted North Star keeps the composer mounted for queueing, but the
+  // renderer must not install a second stdin owner. Legacy Chat continues to
+  // use the renderer-owned raw input path below.
   // Per-turn usage scope: capture the full session summary before the run so
   // turn-scoped cost AND tokens are both derived as deltas of the same source.
   const preRunUsage = globalCostTracker.getSessionSummary();
@@ -122,7 +122,12 @@ export async function executeChatTask(
   const useConversational =
     process.stdout.isTTY && !process.env['CI'] && !process.env['NO_COLOR'];
   const convRenderer = useConversational
-    ? new ConversationalRenderer({ verboseMode: Boolean(ctx.verboseMode) })
+    ? new ConversationalRenderer({
+        verboseMode: Boolean(ctx.verboseMode),
+        // Hosted North Star owns stdin through its shell root. The legacy
+        // renderer remains self-owned for non-hosted Chat execution.
+        ownsInput: !ctx.shellHost,
+      })
     : null;
 
   // U1.2: surface active coding profile when non-default/specialized or in verbose mode
@@ -195,6 +200,7 @@ export async function executeChatTask(
       ctx.chatEngine = await createChatEngineForSession(engineOptions, engineFactory);
     }
 
+    const shellEpoch = ctx.shellRuntime?.store.epoch;
     const result = await runChatEngineOnce({
       task,
       target,
@@ -209,6 +215,9 @@ export async function executeChatTask(
 
       ...(preflightContext ? { preflightContext } : {}),
       onCancel: () => ctx.chatEngine!.abortTurn(),
+      ...(ctx.shellRuntime
+        ? { onChatEvent: (event) => ctx.shellRuntime?.onChatEvent(event, shellEpoch) }
+        : {}),
     });
 
     // U1.3: Surface last routing receipt label on status bar (model tier + phase)
@@ -462,7 +471,7 @@ export async function executeChatTask(
         : 'not_run',
       next: ctx.lastAssistantNext,
       ...(result.turnTelemetry !== undefined ? { turn_telemetry: result.turnTelemetry } : {}),
-    });
+    }, result.outcome ?? result.status);
     // updateConversationMemory remaps TerminalOutcome onto legacy AskAnswer
     // statuses (CANCELLED → NEEDS_MORE_CONTEXT). Restore the operator-facing
     // status so cancel cannot masquerade as a generic failure.
@@ -496,6 +505,33 @@ export async function executeChatTask(
       console.log(`\n${review.body}\n`);
       ctx.state.lastRunUserStatus = 'cancelled';
       ctx.lastAssistantStatus = 'CANCELLED';
+      updateConversationMemory(
+        ctx,
+        {
+          status: 'CHAT_CANCELLED',
+          summary: 'Cancelled',
+          answer: 'Cancelled',
+          facts: [],
+          assumptions: [],
+          evidence: [],
+          next: [],
+          changed_files: [],
+          checks: [],
+          verification: { status: 'not_run', commands: [], skipped_reason: 'cancelled' },
+        },
+        task,
+      );
+      ctx.appendTurn({
+        role: 'assistant',
+        answer: 'Cancelled',
+        summary: 'Cancelled',
+        run_dir: null,
+        target_root: target.targetRoot,
+        workspace_root: target.workspaceRoot,
+        changed_files: [],
+        verification: 'not_run',
+        next: null,
+      }, 'cancelled');
       return;
     }
     const message = err?.message ?? String(err);
@@ -531,13 +567,16 @@ export async function executeChatTask(
       changed_files: [],
       verification: 'failed',
       next: null,
-    });
+    }, 'failed');
     if (process.stdout.isTTY && !process.env['CI']) {
       try {
-        await alert({
-          title: 'Chat Failed',
-          message: err.message ?? String(err),
-        });
+        const showAlert = () =>
+          alert({
+            title: 'Chat Failed',
+            message: err.message ?? String(err),
+          });
+        if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('error-alert', showAlert);
+        else await showAlert();
         (err as any)[Symbol.for('babel.error.alerted')] = true;
       } catch (alertErr) {
         console.error('[chat] alert display failed:', (alertErr as Error)?.message ?? alertErr);
@@ -547,7 +586,7 @@ export async function executeChatTask(
     ctx.isRunning = false;
     notifyRunEnded();
     const typedDuringRun = takeStreamingDraft();
-    if (typedDuringRun) {
+    if (typedDuringRun && !ctx.shellHost) {
       const adapter = ctx.rl as unknown as {
         getInputText?: () => string;
         setInputText?: (text: string) => void;

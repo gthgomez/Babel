@@ -3,7 +3,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { AppendOnlyRenderer, WaterfallRenderer, ConversationalRenderer } from './waterfall.js';
+import {
+  AppendOnlyRenderer,
+  WaterfallRenderer,
+  ConversationalRenderer,
+} from './waterfall.js';
+import { suspendActiveRendererForExclusiveSurface } from './rendererFence.js';
 
 // Direct imports of exported helper functions (no more reference duplicates).
 import {
@@ -18,8 +23,71 @@ import {
   activityColor,
   successLike,
 } from './waterfall.js';
-import { isBrokenStdoutError } from './outputBuffer.js';
+import { isBrokenStdoutError, OutputBuffer } from './outputBuffer.js';
 import { stripAnsi } from './theme.js';
+
+it('exclusive surface fences active renderer output and raw input, then restores both', () => {
+  const bus = new EventEmitter();
+  const renderer = new AppendOnlyRenderer(bus as any);
+  const output = OutputBuffer.getInstance();
+  const originalWrite = output.write;
+  const writes: string[] = [];
+  output.write = ((text: string) => {
+    writes.push(text);
+  }) as typeof output.write;
+
+  let disabled = 0;
+  let enabled = 0;
+  (renderer as any).isRawModeActive = () => true;
+  (renderer as any).disableRawMode = () => { disabled += 1; };
+  (renderer as any).enableRawMode = () => { enabled += 1; };
+
+  try {
+    renderer.write('before exclusive surface');
+    const release = suspendActiveRendererForExclusiveSurface();
+    renderer.write('during exclusive surface');
+
+    assert.equal(disabled, 1);
+    assert.equal(writes.some((text) => text.includes('before exclusive surface')), true);
+    assert.equal(writes.some((text) => text.includes('during exclusive surface')), false);
+    assert.match(renderer.getTranscript(), /during exclusive surface/);
+
+    release();
+    renderer.write('after exclusive surface');
+    assert.equal(enabled, 1);
+    assert.equal(writes.some((text) => text.includes('after exclusive surface')), true);
+  } finally {
+    output.write = originalWrite;
+    renderer.stop();
+  }
+});
+
+it('hosted conversational renderer leaves stdin ownership to the shell root', () => {
+  const renderer = new ConversationalRenderer({ isTTY: true, ownsInput: false });
+  try {
+    renderer.enableRawMode();
+    assert.equal(renderer.isRawModeActive(), false);
+  } finally {
+    renderer.stop();
+  }
+});
+
+it('conversational renderer transfers raw input ownership across a host transition', () => {
+  const renderer = new ConversationalRenderer({ isTTY: true, ownsInput: true });
+  let disabled = 0;
+  let enabled = 0;
+  (renderer as any).disableRawMode = () => { disabled += 1; };
+  (renderer as any).enableRawMode = () => { enabled += 1; };
+  try {
+    renderer.setInputOwnership(false);
+    assert.equal(disabled, 1);
+    assert.equal(renderer.isRawModeActive(), false);
+    renderer.setInputOwnership(true);
+    assert.equal(enabled, 1);
+  } finally {
+    renderer.stop();
+  }
+});
 
 // ── Direct tests ─────────────────────────────────────────────────────────────
 // All tests now exercise the real exported functions directly.
