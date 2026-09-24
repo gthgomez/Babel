@@ -72,6 +72,8 @@ export function mapChatEventToTurnStreamEvent(event: ChatEvent): TurnStreamEvent
         usage: event.usage,
         status: terminal.status,
         ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
+        ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+        ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
       };
     }
     case 'failed': {
@@ -84,6 +86,8 @@ export function mapChatEventToTurnStreamEvent(event: ChatEvent): TurnStreamEvent
         error: event.error,
         status: terminal.status,
         ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
+        ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+        ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
       };
     }
     case 'cancelled': {

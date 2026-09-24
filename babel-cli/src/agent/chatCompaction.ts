@@ -45,6 +45,11 @@ export interface ChatMessage {
   toolCallId?: string;
   toolName?: string;
   name?: string;
+  /** Provenance is descriptive; only controller-owned system messages are authority. */
+  provenance?: 'controller' | 'model' | 'mixed';
+  authoritative?: boolean;
+  /** A strategy result is advisory data until the controller commits it. */
+  compactionCandidate?: true;
 }
 
 export interface CompactionOptions {
@@ -58,6 +63,13 @@ export interface CompactionOptions {
   signal?: AbortSignal;
   /** Bounded provider lifecycle receipts for the summarizer inference. */
   callbacks?: RunnerCallbacks;
+  /** Billed inference usage is recorded even if its summary is later discarded. */
+  onUsageRecorded?: (usage: {
+    inferenceId: string;
+    modelId: string;
+    inputTokens: number | null;
+    outputTokens: number | null;
+  }) => void;
 }
 
 export interface CompactionStrategy {
@@ -461,9 +473,12 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       const summaryResult = await this.callCompactionApi(toCompact, targetTokens, options);
 
       const summaryMessage: ChatMessage = {
-        role: 'system',
+        role: 'assistant',
         content: `[Compacted conversation summary — ${summaryResult.inputTokens} input → ${summaryResult.outputTokens} output tokens]\n\n${summaryResult.summary}`,
         name: 'compaction_summary',
+        provenance: 'model',
+        authoritative: false,
+        compactionCandidate: true,
       };
 
       this.consecutiveFailures = 0;
@@ -539,7 +554,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     const prompt = buildCompactionPrompt(toCompact, targetTokens);
 
     if (isAnthropic) {
-      return this.callAnthropicApi(prompt, model, apiKey, signal, options.callbacks);
+      return this.callAnthropicApi(prompt, model, apiKey, signal, options.callbacks, options.onUsageRecorded);
     }
     return this.callOpenAiCompatibleApi(
       prompt,
@@ -548,6 +563,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       baseUrl,
       signal,
       options.callbacks,
+      options.onUsageRecorded,
     );
   }
 
@@ -561,6 +577,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     baseUrl: string,
     signal?: AbortSignal,
     callbacks?: RunnerCallbacks,
+    onUsageRecorded?: CompactionOptions['onUsageRecorded'],
   ): Promise<CompactionApiResult> {
     const timeoutMs = 30_000; // compaction should be fast
     const controller = new AbortController();
@@ -644,6 +661,12 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         model?: string;
       };
       phase('first_byte');
+      onUsageRecorded?.({
+        inferenceId,
+        modelId: typeof data.model === 'string' ? data.model : model,
+        inputTokens: data.usage?.prompt_tokens ?? null,
+        outputTokens: data.usage?.completion_tokens ?? null,
+      });
 
       const summary = data?.choices?.[0]?.message?.content ?? '';
       if (!summary.trim()) {
@@ -705,6 +728,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     apiKey: string,
     signal?: AbortSignal,
     callbacks?: RunnerCallbacks,
+    onUsageRecorded?: CompactionOptions['onUsageRecorded'],
   ): Promise<CompactionApiResult> {
     const timeoutMs = 30_000;
     const controller = new AbortController();
@@ -782,6 +806,12 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         model?: string;
       };
       phase('first_byte');
+      onUsageRecorded?.({
+        inferenceId,
+        modelId: typeof data.model === 'string' ? data.model : model,
+        inputTokens: data.usage?.input_tokens ?? null,
+        outputTokens: data.usage?.output_tokens ?? null,
+      });
 
       const summary =
         data?.content

@@ -49,9 +49,19 @@ describe('H4 targetPathFromAction / defaultIdempotencyKey', () => {
       targetPathFromAction({ type: 'write_file', path: '.env', content: 'x' }),
       '.env',
     );
-    assert.strictEqual(
-      defaultIdempotencyKeyForAction({ type: 'write_file', path: 'a.ts', content: 'x' }),
-      'write_file:a.ts',
+    const key = defaultIdempotencyKeyForAction({ type: 'write_file', path: 'a.ts', content: 'x' });
+    assert.match(key!, /^write_file:v2:[0-9a-f]{64}$/);
+    assert.notStrictEqual(key, defaultIdempotencyKeyForAction({
+      type: 'write_file', path: 'a.ts', content: 'y',
+    }));
+    assert.notStrictEqual(
+      defaultIdempotencyKeyForAction({ type: 'apply_patch', patch: 'a' }),
+      defaultIdempotencyKeyForAction({ type: 'apply_patch', patch: 'b' }),
+    );
+    const common = 'echo '.padEnd(130, 'x');
+    assert.notStrictEqual(
+      defaultIdempotencyKeyForAction({ type: 'run_command', command: `${common}a` }),
+      defaultIdempotencyKeyForAction({ type: 'run_command', command: `${common}b` }),
     );
   });
 });

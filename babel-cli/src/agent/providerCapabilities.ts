@@ -229,7 +229,7 @@ export function buildCompactionCapsule(input: {
     workspaceRevision: input.workspaceRevision ?? '',
     evidenceRefs: (input.evidenceRefs ?? []).slice(0, 32),
     recentToolResults: (input.recentToolResults ?? []).slice(-8),
-    rawObservationRefs: (input.rawObservationRefs ?? []).slice(0, 32),
+    rawObservationRefs: [...(input.rawObservationRefs ?? [])],
     createdAt: new Date().toISOString(),
   };
 }
@@ -259,8 +259,10 @@ export function formatCompactionCapsule(capsule: CompactionCapsule): string {
     capsule.recentToolResults.length > 0
       ? `Recent tools:\n${capsule.recentToolResults.map((r) => `- ${r}`).join('\n')}`
       : null,
-    capsule.rawObservationRefs.length > 0
+    capsule.rawObservationRefs.length > 0 && capsule.rawObservationRefs.length <= 4
       ? `RawObservationRefs: ${capsule.rawObservationRefs.join(', ')}`
+      : capsule.rawObservationRefs.length > 4
+        ? `RawObservationRefs: ${capsule.rawObservationRefs.length} exact references retained durably`
       : null,
   ].filter(Boolean);
   return parts.join('\n');

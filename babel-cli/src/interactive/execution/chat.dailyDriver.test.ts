@@ -367,7 +367,9 @@ describe('resume then follow-up and cancel', () => {
         'utf8',
       );
       const ctx = makeReplContext();
-      const outcome = await resumeChatSession(ctx, sessionId);
+      // R0-3: a legacy transcript has no durable repository identity, so
+      // resuming it for execution requires an explicit rebind.
+      const outcome = await resumeChatSession(ctx, sessionId, { confirmUnknownIdentity: true });
       assert.equal(outcome.ok, true);
       if (!outcome.ok) return;
       assert.ok(outcome.turnCount >= 1);

@@ -73,14 +73,18 @@ describe('pushRoutingReceiptFromMetadata', () => {
     assert.equal(r.sent_model_id, 'deepseek-v4-flash');
   });
 
-  test('skips incomplete metadata (no silent zero-token receipt)', () => {
+  test('keeps incomplete usage and cost nullable in the receipt', () => {
     const log = new TurnRoutingReceiptLog();
     pushRoutingReceiptFromMetadata(log, 0, null, {
       provider_model_id: 'x',
       prompt_tokens: null,
       completion_tokens: 1,
+      cost_precision: 'exact',
     });
-    assert.equal(log.toJSON().length, 0);
+    assert.equal(log.toJSON().length, 1);
+    assert.equal(log.toJSON()[0]!.input_tokens, null);
+    assert.equal(log.toJSON()[0]!.cost_usd, null);
+    assert.equal(log.toJSON()[0]!.cost_basis, 'unknown');
   });
 
   test('effort_aliased false when requested equals sent', () => {

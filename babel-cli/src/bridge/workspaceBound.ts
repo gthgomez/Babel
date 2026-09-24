@@ -31,7 +31,9 @@ export function canonicalizeContained(path: string): string {
   if (!existsSync(cursor)) {
     throw new WorkspaceBoundError('path cannot be canonicalized');
   }
-  const real = realpathSync(cursor);
+  // The native resolver preserves the actual directory-entry spelling on
+  // Windows. That matters for directories configured as case-sensitive.
+  const real = realpathSync.native(cursor);
   return missing.length === 0 ? real : resolve(real, ...missing);
 }
 

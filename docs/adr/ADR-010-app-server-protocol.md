@@ -191,3 +191,43 @@ not a second catalog.
   every method and notification in this catalog. **Open.**
 - Loopback HTTP/WS gateway for the same catalog (`babel remote serve`): **Partial**
   (see `docs/architecture/babel-remote/`). Not a D2 transport exit.
+
+### Amendment — P02 preparation/resume and mode capability (2026-09-18)
+
+`thread.resume` now returns an additive `restore` field (`RestoreReport`) naming the
+durable source used (`thread_event_log`, `history_cells`, or `none`), the turn count,
+whether execution may resume, and precisely what could not be reconstructed. On resume
+the host hydrates the engine through the shared
+`services/threadStore/sessionHydration.ts` seam (typed thread events first, then history
+cells) so a resumed thread never runs on empty history.
+
+Two additive error codes are defined in `BabelProtocolErrorCode`:
+
+- `MODE_UNSUPPORTED` (-32006) — the requested mode has no controller wired to this
+  surface. `deep` is explicitly unsupported here until its adapter invokes the V9
+  pipeline; it is never silently executed as a Chat engine carrying a `deep` profile.
+- `THREAD_NOT_RESUMABLE` (-32007) — durable state exists but could not be restored;
+  execution is refused instead of running on empty history.
+
+Mode capability is resolved by `resolveModeCapability` in `src/executor/modeAdapters.ts`;
+`PreparedTurn`/`RestoreReport` are the P02 contracts. Read-only `history.lookup` remains
+available for unsupported or non-resumable threads. No existing response shape or status
+name changes.
+
+### Amendment — P03 in-process runtime coordinator (2026-09-18)
+
+The protocol host dispatches `turn.submit` through the shared in-process runtime
+coordinator (`src/runtime/coordinator.ts`) when a durable session descriptor is
+present. The coordinator selects exactly one mode adapter per turn
+(`src/runtime/adapters/{chat,plan,deep}.ts`), reuses the P02 `PreparedTurn`, and
+enforces single-owner settlement: cancellation is a request, and a stale
+finalizer cannot release a successor's ownership (the P01 protocol contract).
+Renderer-independent submission is shared with the CLI chat path
+(`src/interactive/execution/chatCore.ts`).
+
+No wire method, response shape, status name or terminal outcome changes. The
+protocol host retains its `ActiveLaunch` ownership/cancellation authority; the
+coordinator adds controller dispatch only. The pre-P03 direct adapter remains
+selectable through `BABEL_RUNTIME_COORDINATOR=legacy` for trace comparison; the
+default is the coordinator. Deep remains explicitly unsupported on this surface
+until its adapter invokes the real V9 pipeline.

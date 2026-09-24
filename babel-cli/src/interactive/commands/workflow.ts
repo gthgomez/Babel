@@ -9,6 +9,7 @@ import { resolve } from 'node:path';
 
 import type { ReplContext } from '../context.js';
 import { ChatEngine } from '../../agent/chatEngine.js';
+import { openSessionAdmissionStore } from '../../cli/runsLayout.js';
 import { WorkflowEngine } from '../../orchestrator/workflowEngine.js';
 import type {
   ChatEngineFactory,
@@ -66,7 +67,7 @@ export async function handleWorkflow(
 
   // Build factory that creates ChatEngines with REPL context
   const factory: ChatEngineFactory = ({ node, projectRoot, workspaceRoot, systemContext }) => {
-    return new ChatEngine({
+    const engine = new ChatEngine({
       task: node.task,
       projectRoot,
       runtimeMode: 'direct',
@@ -78,6 +79,12 @@ export async function handleWorkflow(
       ...(node.modelTier ? { modelTier: node.modelTier } : {}),
       maxTurns: 30,
     });
+    // P05/P11: workflow nodes execute real authorized chat commands — each
+    // attempt engine attaches a store reference released by WorkflowEngine
+    // when the attempt finishes (executeSingleAttempt `finally`).
+    const admission = openSessionAdmissionStore(engine.getEngineRunId());
+    if (admission.ok) engine.attachAdmissionStore(admission.store);
+    return engine;
   };
 
   const engine = new WorkflowEngine(

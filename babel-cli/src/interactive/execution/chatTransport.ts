@@ -3,6 +3,7 @@
  */
 
 import type { ChatEngine, ChatEngineOptions, ChatEvent } from '../../agent/chatEngine.js';
+import { openSessionAdmissionStore } from '../../cli/runsLayout.js';
 import {
   allocateThreadViaProtocol,
   getProtocolClient,
@@ -113,7 +114,28 @@ export async function createChatEngineForSession(
     engine.assignRunId(protocolThreadId);
     registerEngineWithProtocolHost(protocolThreadId, engine);
   }
+  // P05/P11: open the durable admission store for the engine's FINAL run id
+  // (after protocol thread allocation) and attach it before any command runs.
+  // Owner of close: the ReplContext engine lifecycle (/clear and resume
+  // replacement release the reference); headless one-shots close in
+  // runChatEngineOnce. Degrades fail-closed when the store cannot open.
+  attachSessionAdmissionStore(engine);
   return engine;
+}
+
+/**
+ * Best-effort attach of the session's durable P05 admission store for an
+ * engine whose final run id is known. Engines that do not expose the real
+ * seam (test stubs cast as ChatEngine) fall back to fail-closed: no store →
+ * no owner → checkpoints stay inert. Shared by the interactive, headless,
+ * session, workflow, and branch-rebind construction paths.
+ */
+export function attachSessionAdmissionStore(engine: ChatEngine): void {
+  if (typeof engine.attachAdmissionStore !== 'function') return;
+  const runId = typeof engine.getEngineRunId === 'function' ? engine.getEngineRunId() : '';
+  if (!runId) return;
+  const admission = openSessionAdmissionStore(runId);
+  if (admission.ok) engine.attachAdmissionStore(admission.store);
 }
 
 export interface RendererTurnContext {

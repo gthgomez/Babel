@@ -4,8 +4,8 @@
  * Compaction: chatCompaction.ts. Critic/budget: chatEngineCriticBudget.ts.
  */
 
-import { join } from 'node:path';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
@@ -26,6 +26,7 @@ import type {
   ProviderInvocationStarted,
   ProviderMessage,
   RunnerCallbacks,
+  RunnerInvocationMetadata,
 } from '../runners/base.js';
 import { mapProviderMessagesToWire } from '../runners/providerMessages.js';
 import {
@@ -44,7 +45,7 @@ import {
   captureCostBaselineUsd,
   globalCostTracker,
 } from '../services/costTracker.js';
-import type { SessionUsageSummary } from '../services/costTracker.js';
+import type { ChargeReceipt, SessionUsageSummary, UsageAttribution } from '../services/costTracker.js';
 import {
   proposeProjectMemoryWriteback,
   readProjectMemory,
@@ -67,7 +68,11 @@ import {
 import { detectEnvBlockedFromText, extractToolEnvBlockedSignal, evaluateCompletionPrefersPatch } from './implementorPolicy.js';
 import { evaluatePhaseToolGate } from './phaseToolPolicy.js';
 import { extractJson } from '../utils/extractJson.js';
-import type { BlockedReport, TerminalOutcome } from '../schemas/agentContracts.js';
+import type {
+  BlockedReport,
+  TerminalOutcome,
+  TerminalReasonCode,
+} from '../schemas/agentContracts.js';
 import {
   CompactionManager,
   DEFAULT_COMPACTION_CONFIG,
@@ -79,6 +84,7 @@ import { PreparedRequestAdmissionError } from '../runners/preparedProviderReques
 import {
   initLiveAuthorityOnEngine,
   projectEngineLiveSession,
+  refreshEngineInstructionManifest,
   restoreEngineSessionEvents,
   engineCanMutateKey,
   evaluateSubmitTaskAuthorityHalt,
@@ -90,12 +96,15 @@ import {
 } from '../authority/sessionContext.js';
 import {
   loadLiveSessionAuthorityStrict,
+  loadLiveSessionSnapshot,
   persistLiveSessionAuthority,
+  recoverCheckpointArtifacts,
 } from './liveSessionBridge.js';
 import type { LiveSessionV1 } from './liveSession.js';
 import {
   applyHonestTaskOutcomeToCompletion,
   createFailureBudgetTrackerFromContract,
+  makeFailureCapsule,
   type FailureClassBudgetTracker,
   type FailureCapsuleV1,
 } from './taskContract.js';
@@ -121,6 +130,7 @@ import {
   resolveChatTaskClass,
   getChatTaskTune,
   type ChatTaskClass,
+  type TaskOperation,
   type VerificationPolicy,
 } from '../config/chatTaskClass.js';
 import {
@@ -153,8 +163,17 @@ import {
   formatReadFailureObservation,
   formatReadObservation,
   formatVerifierReceiptSummary,
+  formatWorkingStateBlock,
   invalidateReadCacheForPath,
+  recordControllerRecoveryStrategy,
+  recoveryEvidenceKey,
+  restoreWorkingStateSnapshot,
+  sameRecoveryBinding,
+  RECOVERY_EVIDENCE_TOOLS,
   resetOneShotSnapshot,
+  targetMatchesGate,
+  type RecoveryEvidenceProvenance,
+  type RecoveryCandidateBinding,
   resolveNextTurnToolAccess,
   selectReadWindow,
   snapshotOnce,
@@ -163,6 +182,10 @@ import {
   type WorkingState,
 } from './codingLoop/index.js';
 import { ingestVerifierResult, rememberFullReadWindow } from './codingLoop/chatBindings.js';
+import { recoveryTargetIdentity, recoveryWorkspaceRevision } from './codingLoop/recoveryIdentity.js';
+import { actualRecoveryEdit, admitRecoveryPlan } from './codingLoop/recoveryPlan.js';
+import { beginLocalizationCall, discoverTestCandidates, finishLocalizationCall } from './codingLoop/failureLocalization.js';
+import { canonicalizeContained } from '../bridge/workspaceBound.js';
 
 import { parseTextToolTurn } from './textToolParser.js';
 import {
@@ -181,6 +204,16 @@ import {
   type ChatTurn,
   type ChatRuntimeMode,
 } from './chatToolDefinitions.js';
+import {
+  buildReadOnlyChildResult,
+  renderReadOnlyChildResultSection,
+} from './childConclusion.js';
+import {
+  CHILD_MUTATION_DEFAULT_ROUNDS,
+  CHILD_READ_DEFAULT_ROUNDS,
+  formatChildSpecReceipt,
+  resolveChildSpec,
+} from './childSpec.js';
 import { type ChatEngineServices, type ChatExecutionProfile } from './chatEngineServices.js';
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
 import {
@@ -223,11 +256,12 @@ import {
   checkpointParityEventLogStrict,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
-import { loadThreadEventLogFromDir, recordUserMessage } from './threadEventLog.js';
+import { loadThreadEventLogFromDir, recordUserMessage, repoRootFingerprint } from './threadEventLog.js';
 import { isOperatorAbortError } from './operatorAbort.js';
 import {
   loadSessionEventLogForResume,
   loadSessionEventLogIfPresentForResume,
+  interruptedToolRecoveries,
   recordCompletionDecision,
   recordCapabilityBindingReceipt,
   recordModelInputReceipt,
@@ -237,21 +271,45 @@ import {
   recordMutationBatch,
   recordPolicyIntervened,
   recordProgressRecovery,
+  recordWorkingStateSnapshot,
+  flushSessionEventLogStrict,
   resumedToolRecoveryGuidance,
   operationFingerprint,
   requiresRecoveredOutcomeReconciliation,
   type SessionEventLog,
 } from './sessionEvents.js';
+import {
+  captureApprovedObservation,
+  resolveObservation,
+  type ObservationRefV1,
+} from '../evidence/observationStore.js';
+import {
+  installContextCheckpoint,
+  prepareContextCheckpoint,
+  validateContextCheckpoint,
+  type ContextCheckpointInstalledLineageV1,
+  type ContextCheckpointLineageEvidenceV1,
+  type ContextCheckpointOwnerV1,
+  type ContextCheckpointPreparationInputV1,
+  type ContextCheckpointPreparationResultV1,
+  type ContextCheckpointV1,
+  type LiveOperationalSourcesV1,
+} from '../runtime/contextCheckpoints.js';
+import type { AdmissionStore } from '../runtime/admission.js';
+import { ADMISSION_REASONS } from '../runtime/admissionContracts.js';
 import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 import { captureSessionEventAppendFailure } from './sessionEventDiagnostics.js';
 import { buildRepoMapPreamble } from './repoMapPreamble.js';
-import {
-  bindChatApprovalSession,
-  getChatApprovalSession,
-  setChatApprovalTurnId,
-} from './chatApproval.js';
+import { getChatApprovalSession } from './chatApproval.js';
 import { remoteMcpFailClosedObservation, remoteMcpIsFailClosed } from '../bridge/remoteApproval.js';
 import { deriveSubagentApprovalSession } from './approvalRequests.js';
+import {
+  assertChildApprovalWithinParent,
+  getExecutionContext,
+  runWithExecutionContext,
+  scopeAsyncGenerator,
+  type ExecutionContext,
+} from './executionContext.js';
 import { clearBackgroundShellRegistry, killAllBackgroundShells } from './backgroundShell.js';
 import {
   createProviderProtocolInvariant,
@@ -280,6 +338,7 @@ import {
   type InheritedChildAllowance,
 } from './childBudget.js';
 import {
+  childBudgetAttribution,
   classifySubagentFailure,
   runMutationAgentLoop,
   subagentFinishedCleanly,
@@ -299,6 +358,10 @@ import {
 import type { StallState, StallIntervention } from './stallDetector.js';
 import type { ProgressController, ProgressSignal } from './progressController.js';
 import { classifyShellCapability } from './progressController.js';
+import {
+  progressSignalsFromReceipt,
+  type ProgressReceipt,
+} from './progressReceipt.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './chatPhaseNudge.js';
 import {
   assessMutationEffect,
@@ -312,11 +375,19 @@ import type { DiffCriticVerdict } from './diffCritic.js';
 import { evaluateTokenExplosionAfterTurn } from './budgetKillPolicy.js';
 import {
   applyExploreFuses as applyExploreFusesPolicy,
+  attachTerminalReason,
   buildPolicyTerminalBlockedReport,
   resolveInvestigateHardCapObserveOnly,
   type ExploreFuseResult,
 } from './chatZeroWritePolicy.js';
 import { PolicyEventLog, type PolicyEvent } from './policyEventLog.js';
+import {
+  terminalReasonFromClassification,
+  terminalReasonFromFailureText,
+  terminalReasonFromOutcome,
+  terminalReasonFromVerifierFailure,
+  type TerminalReason,
+} from './chatTerminalReason.js';
 import {
   evaluateZeroWriteWithShadow,
   recordPolicyShadowSessionOutcome,
@@ -335,6 +406,7 @@ import {
   computeTerminalOutcome,
   makeChatRunner,
   observabilityResultFields,
+  outcomeFromReasonCode,
   persistPolicyEventsJsonl,
   persistTranscriptToDisk,
   pushProviderTurnMessages,
@@ -469,6 +541,7 @@ export interface ChatTaskAllowanceSnapshot {
   };
   consumed: {
     costUsd: number;
+    unknownChargeCount?: number;
     activeWallMs: number;
     turns: number;
   };
@@ -480,6 +553,8 @@ export interface ChatTaskAllowanceSnapshot {
   accountedChargeIds: string[];
   activeExecution: boolean;
   taskCostBaselineUsd: number;
+  /** Owner-scoped faults mirrored when an owner-receipt write fails. */
+  accountingFaults?: OwnerAccountingFault[];
   lastTurnRuntime?: TurnRuntimeSnapshot;
 }
 
@@ -549,6 +624,10 @@ function parseTaskAllowance(value: unknown): ChatTaskAllowanceSnapshot | null {
     typeof candidate['activeExecution'] !== 'boolean' ||
     !isNonNegativeFinite(candidate['taskCostBaselineUsd'])
   ) return null;
+  const accountingFaults = candidate['accountingFaults'] === undefined
+    ? []
+    : parseOwnerAccountingFaults(candidate['accountingFaults']);
+  if (accountingFaults === null) return null;
   const parsed: ChatTaskAllowanceSnapshot = {
     schemaVersion: 2,
     taskOwnerId: candidate['taskOwnerId'],
@@ -562,6 +641,8 @@ function parseTaskAllowance(value: unknown): ChatTaskAllowanceSnapshot | null {
     },
     consumed: {
       costUsd: consumedRecord['costUsd'],
+      unknownChargeCount: isNonNegativeFinite(consumedRecord['unknownChargeCount'])
+        ? consumedRecord['unknownChargeCount'] : 1,
       activeWallMs: consumedRecord['activeWallMs'],
       turns: consumedRecord['turns'] as number,
     },
@@ -574,6 +655,7 @@ function parseTaskAllowance(value: unknown): ChatTaskAllowanceSnapshot | null {
     // A crashed active marker is cleared on restore; downtime is not execution.
     activeExecution: false,
     taskCostBaselineUsd: candidate['taskCostBaselineUsd'],
+    ...(accountingFaults.length > 0 ? { accountingFaults } : {}),
     ...(isPersistedTurnRuntime(candidate['lastTurnRuntime'])
       ? { lastTurnRuntime: candidate['lastTurnRuntime'] }
       : {}),
@@ -589,9 +671,50 @@ export interface SubmitMessageOptions {
    * a new task's completion gate.
    */
   continueTask?: boolean;
+  /**
+   * Internal: the submission generation already assigned by the caller
+   * (`submitMessage`). The stream body adopts it instead of incrementing so
+   * the non-streaming presentation guards and the ownership guards agree on
+   * one generation. Not part of the public contract.
+   */
+  submissionGeneration?: number;
 }
 
 import { deniesReadOnlyChatAction, filterReadOnlyChatTools, isReadOnlyChat, resolveChatRangePath } from './chatReadOnly.js';
+
+/**
+ * Version label for the chat tool surface offered to admitted commands. Part
+ * of the canonical admission digest; bump when the offered chat tool schema
+ * changes so a digest can never call two different tool surfaces "the same
+ * admitted command".
+ */
+const CHAT_ADMISSION_TOOL_SCHEMA_VERSION = 'chat-tools-v1';
+
+/**
+ * R1/T5: placeholder compiled-request identity for the side-effect-free
+ * candidate prepare. The real identity can only be computed after this turn's
+ * provider messages are rebuilt from the candidate (the identity hashes that
+ * exact message sequence), and `installP11ContextCheckpoint` always
+ * re-prepares from the live sources with the real identity — so this marker is
+ * never installed and never becomes durable authority.
+ */
+const PENDING_COMPILED_REQUEST_IDENTITY = 'pending-compiled-request-identity';
+
+/**
+ * P05: this engine's admitted command claim. `settled` flips at command
+ * settlement (terminal stream, cancellation, replacement, or session close);
+ * a live (unsettled) claim matching the durable owner row is the ONLY
+ * authority under which this engine may install a P11 checkpoint.
+ */
+interface ChatEngineAdmissionClaim {
+  threadId: string;
+  commandId: string;
+  generation: number;
+  token: string;
+  /** The submission generation this claim was admitted for (wrapper capture). */
+  submissionGeneration: number;
+  settled: boolean;
+}
 
 export interface ChatEngineOptions {
   instructionRoot?: string;
@@ -602,6 +725,8 @@ export interface ChatEngineOptions {
   task: string;
   projectRoot: string;
   runId?: string;
+  /** Existing P05 durable owner/fencing authority supplied by the host. */
+  admissionStore?: AdmissionStore;
   resumeExisting?: boolean;
   systemContext?: string;
   /** Appended system prompt fragments (plugins, skills, project memory).
@@ -648,6 +773,17 @@ export interface ChatEngineOptions {
   runtimeInvariantMode?: RuntimeInvariantMode;
   /** Test-only: explicit live workspace revision hash for gate freshness tests. */
   testWorkspaceRevisionHash?: string | null;
+  /**
+   * Test-only: deterministic overrides threaded into the child sub-agent
+   * lanes so lifecycle races can be driven through the real child
+   * dispatch/completion/application seam without a live provider. Production
+   * callers never set this.
+   */
+  testChildLaneOverrides?: {
+    useDeterministicMock?: boolean;
+    actionResolver?: (prompt: string, round: number) => Promise<import('./actions.js').AgentAction[]>;
+    executor?: import('./toolExecutor.js').ToolExecutor;
+  };
   /** Truthful delivery surface for the model-visible runtime metadata. */
   runtimeMode?: ChatRuntimeMode;
 }
@@ -794,6 +930,9 @@ export type ChatEvent =
       turnTelemetry?: ChatTurnTelemetryRecord;
       costBudget?: ChatEngineLimits['costBudget'];
       runAllowance?: ChatEngineRunAllowanceReport;
+      /** D03: structured terminal reason code (additive; outcome unchanged). */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     }
   | {
       type: 'failed';
@@ -815,12 +954,18 @@ export type ChatEvent =
       turnTelemetry?: ChatTurnTelemetryRecord;
       costBudget?: ChatEngineLimits['costBudget'];
       runAllowance?: ChatEngineRunAllowanceReport;
+      /** D03: structured terminal reason code. */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     }
   | {
       type: 'cancelled';
       status?: ChatStatus;
       outcome?: 'CANCELLED';
       turnTelemetry?: ChatTurnTelemetryRecord;
+      /** D03: cancelled is a structured terminal reason too. */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     }
   | {
       type: 'progress_recovery';
@@ -894,13 +1039,187 @@ export interface ChatResult {
   costBudget?: ChatEngineLimits['costBudget'];
   /** Enumerable declared vs effective run allowance + terminating limiter. */
   runAllowance?: ChatEngineRunAllowanceReport;
+  /** D03: structured terminal reason code; survives engine → payload → clients. */
+  reason_code?: TerminalReasonCode;
+  /** D03: separate model-vs-harness cause axis; null = not established. */
+  cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
+}
+
+type ChatUsageScope = {
+  taskOwnerId: string | null;
+  projectRoot?: string;
+  accountingEpoch: string;
+  turnId: string | null;
+  chargeId: string | null;
+  requestId?: string;
+  attemptId?: string;
+  runDir?: string;
+  modelId?: string;
+  usageMetadata?: RunnerInvocationMetadata | null;
+  ownerGeneration?: number;
+  isOwnerCurrent?: () => boolean;
+};
+
+type OwnerAccountingFault = {
+  taskOwnerId: string;
+  ownerGeneration: number | null;
+  accountingEpoch: string;
+  chargeId: string | null;
+  persistenceScope: 'owner-charge-receipt';
+  kind: 'settlement-conflict' | 'persistence-failure';
+  reason: string;
+};
+
+function parseOwnerAccountingFaults(value: unknown): OwnerAccountingFault[] | null {
+  if (!Array.isArray(value)) return null;
+  if (value.some((fault) => {
+    if (fault === null || typeof fault !== 'object') return true;
+    const entry = fault as Record<string, unknown>;
+    return typeof entry['taskOwnerId'] !== 'string' ||
+      !(entry['ownerGeneration'] === null ||
+        (typeof entry['ownerGeneration'] === 'number' && Number.isInteger(entry['ownerGeneration']))) ||
+      typeof entry['accountingEpoch'] !== 'string' ||
+      !(entry['chargeId'] === null || typeof entry['chargeId'] === 'string') ||
+      entry['persistenceScope'] !== 'owner-charge-receipt' ||
+      !['settlement-conflict', 'persistence-failure'].includes(String(entry['kind'])) ||
+      typeof entry['reason'] !== 'string';
+  })) return null;
+  return value as OwnerAccountingFault[];
+}
+
+function captureUsageAttribution(
+  scope: ChatUsageScope,
+  chargeId = scope.chargeId,
+  requestId?: string,
+  attemptId?: string,
+): UsageAttribution | undefined {
+  if (!scope.taskOwnerId || !chargeId) return undefined;
+  // Explicit undefined means omission; inherit only when the argument is absent.
+  const capturedRequestId = arguments.length < 3 ? scope.requestId : requestId;
+  const capturedAttemptId = arguments.length < 4 ? scope.attemptId : attemptId;
+  return Object.freeze({
+    taskOwnerId: scope.taskOwnerId,
+    chargeId,
+    accountingEpoch: scope.accountingEpoch,
+    ...(scope.turnId ? { turnId: scope.turnId } : {}),
+    ...(capturedRequestId ? { requestId: capturedRequestId } : {}),
+    ...(capturedAttemptId ? { attemptId: capturedAttemptId } : {}),
+    ...(scope.projectRoot
+      ? { projectRoot: scope.projectRoot, projectRootVersion: 1 as const }
+      : {}),
+  });
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────
 
-const SUB_AGENT_MAX_ROUNDS = 4;
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
 const MAX_TOOL_CONCURRENCY = 6; // Prevent exhausting connection pools
+/**
+ * I1: text-tools cap for the bounded child section. The section is already
+ * bounded by childConclusion (2 KB conclusion + 0.5 KB error + 12 evidence
+ * refs), so this is comfortably above its worst case and keeps the provenance
+ * `authority` line and evidence tail visible on the text path.
+ */
+const SUB_AGENT_TEXT_MAX_CHARS = 6000;
+
+/**
+ * S03/#213 slice 2: stable child delegation id bound to the parent operation
+ * (run + turn + batch + action index + operation fingerprint), not a batch-local
+ * counter. Distinct batches -> distinct ids; same delegation -> same id.
+ */
+export function deriveChildDelegationId(input: {
+  parentRunId: string;
+  turnId: string;
+  batchId: string;
+  actionIndex: number;
+  fingerprint: string;
+}): string {
+  const digest = createHash('sha256')
+    .update(
+      [
+        input.parentRunId,
+        input.turnId,
+        input.batchId,
+        String(input.actionIndex),
+        input.fingerprint,
+      ].join('|'),
+    )
+    .digest('hex')
+    .slice(0, 12);
+  return `chat-sub-${digest}`;
+}
+
+/** S03/#213 slice 2: per-attempt evidence dir so a retry cannot overwrite it. */
+export function childAttemptDir(engineRunDir: string, subId: string, attempt: number): string {
+  return join(engineRunDir, subId, `attempt-${attempt}`);
+}
+
+/** S02: minimal shape of a text-tools log entry (see ChatEngine.toolCallLog). */
+export interface TextToolResultEntry {
+  tool: string;
+  target: string;
+  detail?: string;
+  error?: string;
+  exit_code?: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+/**
+ * S02/#212: text-tools rendering was rebuilt from `toolCallLog` and only
+ * surfaced read/grep/glob/list_dir/run_command stdout, so a read-only child
+ * conclusion never reached the model on the text path. Extracted pure so both
+ * delivery modes can be asserted directly.
+ */
+export function formatTextToolResults(entries: readonly TextToolResultEntry[]): string {
+  const parts: string[] = [];
+  for (const entry of entries) {
+    if (entry.error === 'blocked') {
+      parts.push(`[ERROR] ${entry.tool}:${entry.target} blocked`);
+      continue;
+    }
+    // S02/I1: sub_agent handoff (conclusion + status + evidence refs) before the
+    // generic exit-code branch, so failed/policy-denied children still surface
+    // their bounded result instead of a 500-char error slice. The child section
+    // is self-bounded by childConclusion (conclusion/error/evidence caps), so it
+    // gets a larger explicit cap than generic tool output — otherwise the
+    // provenance `authority` line and evidence tail would be truncated away.
+    if (entry.tool === 'sub_agent' && entry.stdout) {
+      const out =
+        entry.stdout.length > SUB_AGENT_TEXT_MAX_CHARS
+          ? entry.stdout.slice(0, SUB_AGENT_TEXT_MAX_CHARS) + '\n... [truncated]'
+          : entry.stdout;
+      parts.push(
+        `[RESULT] ${entry.tool}:${entry.target}\n${entry.detail ? entry.detail + '\n' : ''}${out}`,
+      );
+      continue;
+    }
+    if (entry.exit_code !== undefined && entry.exit_code !== 0) {
+      const err = (entry.stderr || entry.stdout || '').slice(0, 500);
+      parts.push(`[ERROR] ${entry.tool}:${entry.target} exit ${entry.exit_code}: ${err}`);
+      continue;
+    }
+    // Tools whose output content the model needs to ingest
+    if (entry.stdout && ['read_file', 'read_range', 'grep', 'glob', 'list_dir'].includes(entry.tool)) {
+      const truncated =
+        entry.stdout.length > 3000
+          ? entry.stdout.slice(0, 3000) + '\n... [truncated]'
+          : entry.stdout;
+      parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${truncated}`);
+      continue;
+    }
+    // run_command: include output
+    if (entry.tool === 'run_command' && entry.stdout) {
+      const out = entry.stdout.slice(0, 1000);
+      parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${out}`);
+      continue;
+    }
+    // Default: simple [OK] summary
+    const detail = entry.detail ? ` (${entry.detail})` : '';
+    parts.push(`[OK] ${entry.tool}:${entry.target}${detail}`);
+  }
+  return parts.join('\n\n');
+}
 
 // ─── Conversational-turn detection ────────────────────────────────────────
 // Pure greetings / acknowledgements / punctuation-only turns ('?', 'hello',
@@ -975,6 +1294,87 @@ export function reconcileStreamedAnswer(streamed: string | null, final: string):
   return final;
 }
 
+/** Only these tools carry inspectable content that can localize a failure. */
+const CONTENT_BEARING_INSPECTION_TOOLS = new Set<string>(RECOVERY_EVIDENCE_TOOLS);
+
+/**
+ * A discriminating observation is not a boolean claim. It must be
+ * content-bearing, must localize a target already implicated by the failure
+ * (or by the mutation that preceded it), and must not repeat an observation the
+ * gate has already consumed. A directory listing or a pattern-only search can
+ * never clear the gate.
+ */
+function isDiscriminatingInspectionEvidence(
+  state: WorkingState,
+  action: { type: string; path?: string | undefined; pattern?: string | undefined; file_path?: string | undefined },
+  physicalTarget: string | null,
+  binding: RecoveryCandidateBinding | null,
+  observationDigest: string,
+): { discriminating: boolean; provenance?: RecoveryEvidenceProvenance } {
+  const gate = state.recoveryGate;
+  if (!gate || gate.satisfied) return { discriminating: false };
+  if (!gate.binding || !binding || !sameRecoveryBinding(gate.binding, binding)) return { discriminating: false };
+  if (!CONTENT_BEARING_INSPECTION_TOOLS.has(action.type)) return { discriminating: false };
+  if (!physicalTarget || !observationDigest) return { discriminating: false };
+  // Require a concrete inspected path. A `grep` without an explicit path is a
+  // repository-wide search and cannot localize the failure.
+  const candidate = action.type === 'read_range' ? action.file_path : action.path;
+  if (!candidate) return { discriminating: false };
+  const failingTargets = gate.failingTargets ?? state.failureSurface?.failingFiles ?? [];
+  if (!targetMatchesGate(physicalTarget, failingTargets)) return { discriminating: false };
+  const provenance: RecoveryEvidenceProvenance = {
+    tool: action.type,
+    target: physicalTarget,
+    failureSignature: gate.failureSignature,
+    binding,
+    observationDigest,
+  };
+  const key = recoveryEvidenceKey(provenance, gate.failureSignature);
+  if (!key || (gate.observedKeys ?? []).includes(key) || state.consumedRecoveryEvidence.includes(key)) {
+    return { discriminating: false };
+  }
+  return {
+    discriminating: true,
+    provenance,
+  };
+}
+
+/**
+ * R0-10: presentation callbacks are an observational side channel. A throwing
+ * host callback must never unwind the settlement path — that would both skip
+ * real execution bookkeeping and let the settlement catch append a duplicate
+ * execution-truth row. Wrap every callback so a throw is logged and ignored.
+ */
+const PRESENTATION_CALLBACK_KEYS = [
+  'onToolStart',
+  'onToolComplete',
+  'onFileChanged',
+  'onSubAgentStart',
+  'onSubAgentComplete',
+  'onSubAgentFailed',
+] as const;
+
+export function wrapPresentationCallbacks(callbacks: ChatCallbacks): ChatCallbacks {
+  const wrapped: Record<string, unknown> = { ...callbacks };
+  for (const key of PRESENTATION_CALLBACK_KEYS) {
+    const fn = (callbacks as unknown as Record<string, unknown>)[key];
+    if (typeof fn === 'function') {
+      wrapped[key] = (...args: unknown[]): unknown => {
+        try {
+          return (fn as (...a: unknown[]) => unknown)(...args);
+        } catch (err) {
+          console.error(
+            `[chatEngine] presentation callback ${key} failed (ignored):`,
+            err,
+          );
+          return undefined;
+        }
+      };
+    }
+  }
+  return wrapped as unknown as ChatCallbacks;
+}
+
 // ─── ChatEngine ───────────────────────────────────────────────────────────
 
 export class ChatEngine {
@@ -1024,6 +1424,11 @@ export class ChatEngine {
   }> = [];
   private lastVerifierReceipt: BoundChatVerifierReceipt | null = null;
   private executedVerifierLedger: BoundChatVerifierReceipt[] = [];
+  /**
+   * M1: fingerprint (tool + exit code + output hash) of the last verifier run
+   * this task. A repeated identical shell loop is not "verifier progress".
+   */
+  private lastVerifierSignalSignature: string | null = null;
   /** Index into toolCallLog at the start of the current turn's actions.
    *  Used to correctly slice per-turn entries even as the log grows across turns. */
   private _turnToolCallLogStart = 0;
@@ -1081,6 +1486,10 @@ export class ChatEngine {
   /** Last authoritative verifier failed (reopens investigation tools). */
   private lastVerifierFailed = false;
   private workingState: WorkingState = createWorkingState();
+  private recoveryStatePersistenceUnavailable = false;
+  /** P11 A11a: exact approved observation refs retained for the installed context. */
+  private p11ObservationRefs: ObservationRefV1[] = [];
+  private p11ObservationCaptureIssues: string[] = [];
   /** Soft investigate-budget one-shot latch (synced via explore fuse state). */
   private investigateSoftNudgeDone = false;
   /** Cumulative exploration tools across the entire session (never resets).
@@ -1113,6 +1522,8 @@ export class ChatEngine {
   private taskCostBaselineUsd = 0;
   /** Durable allowance for the current immutable task owner. */
   private taskAllowance: ChatTaskAllowanceSnapshot | null = null;
+  /** Owner-bound accounting faults travel with the existing owner charge receipt checkpoint. */
+  private readonly ownerAccountingFaults = new Map<string, OwnerAccountingFault[]>();
   /** Monotonic checkpoint for active execution wall time. */
   private activeExecutionCheckpointMs: number | null = null;
   /** Stable logical provider request identity consumed by trackRunnerUsage. */
@@ -1126,11 +1537,20 @@ export class ChatEngine {
   private repoMapCache: string | null = null;
   /**
    * Monotonically increasing generation counter. Incremented at the start
-   * of each submitMessage() call. Streaming callbacks check this value to
+   * of each submission (submitMessage and, on the direct streaming path,
+   * submitMessageStreamBody). Streaming callbacks check this value to
    * prevent stale callbacks from a cancelled/aborted request from
    * affecting the current turn.
    */
   private generationCounter = 0;
+  /**
+   * R0-7/R0-8: the submission generation whose generator is currently
+   * executing. Async continuations capture this value when they start and
+   * compare it before writing engine state, so work started under an older
+   * submission can never apply to the task that now owns the engine.
+   * Projected from `generationCounter`; not a second authority.
+   */
+  private activeSubmissionGeneration = 0;
   /** Flag set by cancel() to signal pending work should stop immediately.
    *  Used alongside AbortController to close the race window where a new
    *  controller replaces the aborted one before the loop re-checks it. */
@@ -1212,6 +1632,13 @@ export class ChatEngine {
   private currentTurnTelemetry: ChatTurnTelemetryCollector | null = null;
   private lastTurnTelemetry: ChatTurnTelemetryRecord | null = null;
 
+  /** P05: per-instance namespace so admitted command ids never collide across restarts. */
+  private readonly admissionEpoch: string = randomUUID();
+  /** P05: the (generation, token) lease this engine was last admitted under. */
+  private admissionLease: { generation: number; token: string } | null = null;
+  /** P05: live admitted claim for the in-flight submission, if any. */
+  private activeAdmissionClaim: ChatEngineAdmissionClaim | null = null;
+
   public setTestWorkspaceRevisionHash(hash: string | null | undefined): void {
     this.testWorkspaceRevisionHash = hash;
   }
@@ -1234,6 +1661,133 @@ export class ChatEngine {
     }
   }
 
+  /** A task can be retired while its provider still reports a billable result. */
+  private ownerChargeDir(runDir = this.engineRunDir): string {
+    return join(runDir, 'task-charges');
+  }
+
+  private ownerChargePath(ownerId: string, runDir = this.engineRunDir): string {
+    const name = createHash('sha256').update(ownerId).digest('hex');
+    return join(this.ownerChargeDir(runDir), `${name}.json`);
+  }
+
+  private recordOwnerAccountingFault(
+    scope: ChatUsageScope,
+    kind: OwnerAccountingFault['kind'],
+    reason: string,
+    appliesToCurrent: boolean,
+  ): void {
+    const ownerId = scope.taskOwnerId;
+    if (!ownerId) {
+      if (appliesToCurrent) this.taskCostScopeUnavailable = true;
+      return;
+    }
+    const fault: OwnerAccountingFault = {
+      taskOwnerId: ownerId,
+      ownerGeneration: scope.ownerGeneration ?? null,
+      accountingEpoch: scope.accountingEpoch,
+      chargeId: scope.chargeId,
+      persistenceScope: 'owner-charge-receipt',
+      kind,
+      reason,
+    };
+    const faults = this.ownerAccountingFaults.get(ownerId) ?? [];
+    if (!faults.some((existing) => JSON.stringify(existing) === JSON.stringify(fault))) {
+      faults.push(fault);
+      this.ownerAccountingFaults.set(ownerId, faults);
+    }
+    if (appliesToCurrent && ownerId === this.taskAllowance?.taskOwnerId) {
+      this.taskCostScopeUnavailable = true;
+    }
+    this.persistOwnerAccountingFaultCheckpoint();
+  }
+
+  /**
+   * Mirror owner-scoped faults into the existing task allowance checkpoint.
+   * This is a fallback when an owner receipt write fails, not a new ledger. A
+   * retired owner's fault remains visible after restart without blocking the
+   * currently admitted successor.
+   */
+  private persistOwnerAccountingFaultCheckpoint(): void {
+    if (!this.taskAllowance) return;
+    const accountingFaults = [...this.ownerAccountingFaults.values()].flat();
+    if (accountingFaults.length === 0) return;
+    this.taskAllowance.accountingFaults = accountingFaults;
+    try {
+      const path = join(this.engineRunDir, 'task-budget.json');
+      const tmpPath = `${path}.tmp-${randomUUID()}`;
+      writeFileSync(tmpPath, JSON.stringify(this.taskAllowance), 'utf8');
+      renameSync(tmpPath, path);
+    } catch {
+      // The live owner remains fail-closed. If both established checkpoints
+      // are unavailable, a cold process cannot recover an unpersisted fault.
+    }
+  }
+
+  private persistOwnerCharges(ownerId: string, runDir = this.engineRunDir): void {
+    const summary = globalCostTracker.getTaskSummary(ownerId);
+    const chargeIds = globalCostTracker.getTaskChargeIds(ownerId);
+    const chargeObservations = globalCostTracker.getTaskChargeObservations(ownerId);
+    // An old ID-only snapshot cannot safely be rewritten as a complete
+    // receipt ledger. Keep its task budget conservative on this path.
+    if (chargeObservations.length !== chargeIds.length) {
+      throw new Error('Owner charge receipts are incomplete');
+    }
+    const dir = this.ownerChargeDir(runDir);
+    mkdirSync(dir, { recursive: true });
+    const path = this.ownerChargePath(ownerId, runDir);
+    const tmpPath = `${path}.tmp-${randomUUID()}`;
+    writeFileSync(tmpPath, JSON.stringify({
+      schemaVersion: 1,
+      taskOwnerId: ownerId,
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      totalCostUSD: summary.totalCostUSD,
+      unknownChargeCount: summary.unknownChargeCount ?? 0,
+      chargeIds,
+      chargeObservations,
+      accountingFaults: this.ownerAccountingFaults.get(ownerId) ?? [],
+    }), 'utf8');
+    renameSync(tmpPath, path);
+  }
+
+  private restoreOwnerCharges(runDir: string): boolean {
+    const dir = this.ownerChargeDir(runDir);
+    if (!existsSync(dir)) return true;
+    try {
+      for (const name of readdirSync(dir)) {
+        if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
+        const raw: unknown = JSON.parse(readFileSync(join(dir, name), 'utf8'));
+        if (raw === null || typeof raw !== 'object') throw new Error('Invalid owner charge file');
+        const data = raw as Record<string, unknown>;
+        if (data['schemaVersion'] !== 1 ||
+            typeof data['taskOwnerId'] !== 'string' ||
+            name !== `${createHash('sha256').update(data['taskOwnerId']).digest('hex')}.json` ||
+            !Array.isArray(data['chargeIds']) ||
+            !Array.isArray(data['chargeObservations']) ||
+            typeof data['totalCostUSD'] !== 'number' ||
+            typeof data['unknownChargeCount'] !== 'number') {
+          throw new Error('Invalid owner charge file');
+        }
+        const accountingFaults = parseOwnerAccountingFaults(data['accountingFaults'] ?? []);
+        if (!accountingFaults || accountingFaults.some((fault) => fault.taskOwnerId !== data['taskOwnerId'])) {
+          throw new Error('Invalid owner accounting fault');
+        }
+        if (accountingFaults.length > 0) {
+          this.ownerAccountingFaults.set(data['taskOwnerId'], accountingFaults as OwnerAccountingFault[]);
+        }
+        globalCostTracker.restoreTaskUsage(data['taskOwnerId'], {
+          totalCostUSD: data['totalCostUSD'],
+          unknownChargeCount: data['unknownChargeCount'],
+          chargeIds: data['chargeIds'] as string[],
+          chargeObservations: data['chargeObservations'] as ChargeReceipt[],
+        });
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private checkpointActiveWall(nowMs = Date.now()): void {
     if (!this.taskAllowance || this.activeExecutionCheckpointMs === null) return;
     this.taskAllowance.consumed.activeWallMs += Math.max(
@@ -1249,6 +1803,8 @@ export class ChatEngine {
       this.checkpointActiveWall();
       this.taskAllowance.accountingEpoch = globalCostTracker.getAccountingEpoch();
       this.taskAllowance.consumed.costUsd = this.currentTaskCostUsd();
+      this.taskAllowance.consumed.unknownChargeCount =
+        globalCostTracker.getTaskSummary(this.taskAllowance.taskOwnerId).unknownChargeCount ?? 0;
       this.taskAllowance.accountedChargeIds = globalCostTracker.getTaskChargeIds(
         this.taskAllowance.taskOwnerId,
       );
@@ -1259,6 +1815,10 @@ export class ChatEngine {
         postWriteRepairRestrict: this.postWriteRepairRestrict,
       };
       if (this.lastTurnRuntime) this.taskAllowance.lastTurnRuntime = this.lastTurnRuntime;
+      const ownerFaults = [...this.ownerAccountingFaults.values()].flat();
+      if (ownerFaults.length > 0) this.taskAllowance.accountingFaults = ownerFaults;
+      else delete this.taskAllowance.accountingFaults;
+      this.persistOwnerCharges(this.taskAllowance.taskOwnerId);
       const path = join(this.engineRunDir, 'task-budget.json');
       const tmpPath = `${path}.tmp-${process.pid}`;
       writeFileSync(tmpPath, JSON.stringify(this.taskAllowance), 'utf8');
@@ -1286,7 +1846,7 @@ export class ChatEngine {
         wallCapMs: this.limits.maxWallMs,
         turnCap: this.limits.maxTurns,
       },
-      consumed: { costUsd: 0, activeWallMs: 0, turns: 0 },
+      consumed: { costUsd: 0, unknownChargeCount: 0, activeWallMs: 0, turns: 0 },
       repair: {
         criticRepairCostCapUsd: null,
         postWriteRepairWallCapMs: null,
@@ -1320,7 +1880,13 @@ export class ChatEngine {
   }
 
   private restorePersistedTaskBudget(persisted: ChatTaskAllowanceSnapshot | null): void {
-    this.taskCostScopeUnavailable = persisted === null || persisted.lastTurnRuntime === undefined;
+    for (const fault of persisted?.accountingFaults ?? []) {
+      const faults = this.ownerAccountingFaults.get(fault.taskOwnerId) ?? [];
+      if (!faults.some((existing) => JSON.stringify(existing) === JSON.stringify(fault))) faults.push(fault);
+      this.ownerAccountingFaults.set(fault.taskOwnerId, faults);
+    }
+    this.taskCostScopeUnavailable = persisted === null || persisted.lastTurnRuntime === undefined ||
+      this.ownerAccountingFaults.has(persisted.taskOwnerId);
     this.activeExecutionCheckpointMs = null;
     if (!persisted) {
       this.taskAllowance = null;
@@ -1337,6 +1903,7 @@ export class ChatEngine {
     globalCostTracker.restoreTaskUsage(persisted.taskOwnerId, {
       totalCostUSD: persisted.consumed.costUsd,
       chargeIds: persisted.accountedChargeIds,
+      unknownChargeCount: persisted.consumed.unknownChargeCount ?? 1,
     });
     this.limits = {
       ...this.limits,
@@ -1488,6 +2055,7 @@ export class ChatEngine {
     this.engineRunId = options.runId ?? allocateThreadId();
     // definite assignment: engineRunId set immediately above
     this.parity = createParityRuntime(this.engineRunId);
+    if (options.admissionStore) this.parity.admissionStore = options.admissionStore;
     this.runtimeInvariants = new RuntimeInvariantRegistry(
       resolveRuntimeInvariantMode(options.runtimeInvariantMode),
     );
@@ -1508,11 +2076,13 @@ export class ChatEngine {
     const persistedTaskBudget = options.resumeExisting
       ? this.readPersistedTaskBudget(this.engineRunDir)
       : null;
+    const chargeFilesValid = !options.resumeExisting || this.restoreOwnerCharges(this.engineRunDir);
     if (options.resumeExisting) this.restorePersistedTaskBudget(persistedTaskBudget);
     else {
       this.taskAllowance = this.createTaskAllowance();
       this.taskCostBaselineUsd = this.taskAllowance.taskCostBaselineUsd;
     }
+    if (!chargeFilesValid) this.taskCostScopeUnavailable = true;
     this.persistTaskCostBaseline();
 
     if (options.resumeExisting) {
@@ -1630,18 +2200,20 @@ export class ChatEngine {
     // the implementor zero-write refusal loop re-query them until maxTurns.
     if (isConversationalTurnText(task)) return 'explain';
 
-    // Explicit markdown fenced code blocks or diff/patch snippets → execute
-    if (/```(?:diff|patch|javascript|typescript|python|go|rust)\b/.test(task)) return 'execute';
-
-    // Explicit read-only / no-edit directives → explain
-    // MUST be checked before execute verb patterns so "fix this without editing
-    // files" routes to explain, not execute.
+    // Explicit read-only / no-edit directives → explain.
+    // MUST be checked before fenced code and execute verb patterns: evidence
+    // content (a pasted snippet, diff, or a path named "repair"/"write") is
+    // never mutation authority, and "fix this without editing files" routes to
+    // explain rather than execute.
     if (
-      /\b(without\s+(editing|modifying|changing|writing|touching)|read[- ]only|do\s+not\s+(edit|modify|change|write))\b/i.test(
+      /\b(without\s+(editing|modifying|changing|writing|touching)|read[- ]only|do\s+not\s+(edit|modify|change|write|delete|remove))\b/i.test(
         task,
       )
     )
       return 'explain';
+
+    // Explicit markdown fenced code blocks or diff/patch snippets → execute
+    if (/```(?:diff|patch|javascript|typescript|python|go|rust)\b/.test(task)) return 'execute';
 
     // Review/audit prompts are read-only even when their evidence contains
     // mutation-shaped words such as "repair" in a path or diff description.
@@ -1649,7 +2221,7 @@ export class ChatEngine {
     // fix it"). Keeping this before the generic mutation verbs prevents the
     // trusted reviewer from entering the coding zero-write recovery loop.
     if (
-      /\b(review|audit|analyze|diagnose|inspect|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and|then)\s+(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update|create|write|edit|modify|change|remove|delete|revert|rewrite|replace)\b)(?!.*\bfix\s+it\b)/i.test(
+      /\b(review|audit|analyze|diagnose|inspect|investigate|research|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and|then)\s+(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update|create|write|edit|modify|change|remove|delete|revert|rewrite|replace)\b)(?!.*\bfix\s+it\b)/i.test(
         task,
       )
     )
@@ -1752,13 +2324,33 @@ export class ChatEngine {
     });
   }
 
-  private criticState(onThought?: (msg: string) => void): AsymmetricCriticState {
+  private criticState(
+    onThought: ((msg: string) => void) | undefined,
+    ownerGeneration: number,
+  ): AsymmetricCriticState {
+    const conversation = this.conversation.map((message) => ({ ...message }));
+    const toolCallLog = this.toolCallLog.map((entry) => ({
+      ...entry,
+      ...(entry.mutation_paths ? { mutation_paths: [...entry.mutation_paths] } : {}),
+    }));
+    const isOwnerCurrent = (): boolean => this.isSubmissionCurrent(ownerGeneration);
+    const usageScope = {
+      taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+      projectRoot: realpathSync(this.options.projectRoot),
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      turnId: this.parity.turnId,
+      chargeId: null as string | null,
+      ownerGeneration,
+      isOwnerCurrent,
+    };
     return {
-      toolCallLog: this.toolCallLog,
-      conversation: this.conversation,
+      toolCallLog,
+      conversation,
       projectRoot: this.options.projectRoot,
       task: this.options.task,
-      lastVerifierReceipt: this.lastVerifierReceipt,
+      lastVerifierReceipt: this.lastVerifierReceipt
+        ? { ...this.lastVerifierReceipt }
+        : null,
       lastCriticReceipt: this.lastCriticReceipt,
       criticStrikes: this.criticStrikes,
       criticRunner: this.criticRunner,
@@ -1772,7 +2364,7 @@ export class ChatEngine {
       resolveDeliberationRunner: () => this.resolveDeliberationRunner(),
       providerCallbacks: this.providerRetryCallbacks({
         deliveryMode: 'text',
-        conversationState: this.conversation,
+        conversationState: conversation,
         userTaskPrompt: this.options.task,
         // The critic receives a synthesized text prompt, not provider-native
         // tool messages. Record that boundary explicitly so preservation is
@@ -1780,17 +2372,34 @@ export class ChatEngine {
         expectedPriorEventIds: [],
         deliveredPriorEventIds: [],
         executionStage: 'critic',
+        usageScope,
+        isOwnerCurrent,
       }),
-      trackRunnerUsage: (runner) => this.trackRunnerUsage(runner),
-      ...(onThought ? { onThought } : {}),
+      trackRunnerUsage: (runner) => {
+        this.trackRunnerUsage(runner, usageScope);
+      },
+      ...(onThought
+        ? {
+            onThought: (message: string) => {
+              if (isOwnerCurrent()) onThought(message);
+            },
+          }
+        : {}),
     };
   }
 
-  private applyCriticState(state: AsymmetricCriticState): void {
+  private applyCriticState(
+    state: AsymmetricCriticState,
+    ownerGeneration: number,
+    conversationStart: number,
+  ): boolean {
+    if (!this.isSubmissionCurrent(ownerGeneration)) return false;
     this.lastCriticReceipt = state.lastCriticReceipt;
     this.criticStrikes = state.criticStrikes;
     this.criticRunner = state.criticRunner;
     this.criticProRunner = state.criticProRunner;
+    this.conversation.push(...state.conversation.slice(conversationStart));
+    return true;
   }
 
   private async runAsymmetricDiffCritic(
@@ -1800,10 +2409,12 @@ export class ChatEngine {
     opts?: { terminal?: boolean },
   ): Promise<'allow' | 'reject' | 'block'> {
     const criticSpan = this.currentTurnTelemetry?.startCriticSpan();
+    const ownerGeneration = this.activeSubmissionGeneration;
+    const conversationStart = this.conversation.length;
     try {
-      const state = this.criticState(callbacks.onThought);
+      const state = this.criticState(callbacks.onThought, ownerGeneration);
       const decision = await runAsymmetricDiffCriticImpl(state, answer, taskIntent, opts);
-      this.applyCriticState(state);
+      if (!this.applyCriticState(state, ownerGeneration, conversationStart)) return 'allow';
       return decision;
     } finally {
       criticSpan?.end();
@@ -1822,14 +2433,16 @@ export class ChatEngine {
     reason: string,
     callbacks: ChatCallbacks,
     taskIntent: TaskIntent,
-  ): Promise<ChatResult> {
+    ownerGeneration?: number,
+  ): Promise<ChatResult | null> {
     // Tier A2: Record budget kill event
     this.policyEventLog.record({
       at_turn: this._turnIndex,
       kind: 'budget_kill',
       detail: reason.slice(0, 200),
     });
-    if (!this.budgetLastChanceDone && this.hasAnyWrites() && isDiffCriticEnabled()) {
+    if (this.terminatingLimiter !== 'cost' && !this.budgetLastChanceDone &&
+        this.hasAnyWrites() && isDiffCriticEnabled()) {
       this.budgetLastChanceDone = true;
       callbacks.onThought?.('[Budget: last-chance critic before kill…]');
       const critic = await this.runAsymmetricDiffCritic(
@@ -1838,6 +2451,12 @@ export class ChatEngine {
         taskIntent,
         { terminal: true },
       );
+      // R0-8: the last-chance critic is a suspension point. If the submission
+      // was superseded while it ran, do not finalize or budget-kill the task
+      // that now owns the engine; the caller returns without a terminal.
+      if (ownerGeneration !== undefined && !this.isSubmissionCurrent(ownerGeneration)) {
+        return null;
+      }
       if (critic === 'block' || critic === 'reject') {
         const report = this.buildCriticBlockedReport(
           this.lastCriticReceipt ?? {
@@ -1852,15 +2471,25 @@ export class ChatEngine {
           callbacks,
           this.buildCriticBlockedAnswer(report),
           report,
+          undefined,
+          undefined,
+          ownerGeneration,
         );
       }
     }
 
+    if (ownerGeneration !== undefined && !this.isSubmissionCurrent(ownerGeneration)) {
+      return null;
+    }
     this.budgetExceeded = true;
     return this.buildResult(
       'budget_exhausted',
       callbacks,
       formatBudgetKillAnswer(reason, this.toolCallLog, this.lastCriticReceipt?.verdict ?? null),
+      undefined,
+      undefined,
+      undefined,
+      ownerGeneration,
     );
   }
 
@@ -1958,7 +2587,10 @@ export class ChatEngine {
   }
 
   /** Force-mutate + read-thrash + cumulative exploration fuses (shared submit/stream). */
-  private applyExploreFuses(executeIntent: boolean): ExploreFuseResult {
+  private applyExploreFuses(
+    executeIntent: boolean,
+    readOnlyOperation: boolean,
+  ): ExploreFuseResult {
     const state = {
       turnsWithoutWrite: this.turnsWithoutWrite,
       consecutiveReadOnlyTools: this.consecutiveReadOnlyTools,
@@ -1972,6 +2604,7 @@ export class ChatEngine {
     };
     const out = applyExploreFusesPolicy({
       executeIntent,
+      readOnlyOperation,
       taskClass: this.taskClass,
       hasAnyWrites: this.hasAnyWrites(),
       state,
@@ -2000,6 +2633,12 @@ export class ChatEngine {
   private _streamNativeToolCallIds: string[] = [];
   /** Stable batch id for the in-flight tool cycle (propose → start → terminal). */
   private _activeToolBatchId: string | null = null;
+  /**
+   * S03/#213 slice 2: dispatch attempt per stable child delegation id. The
+   * first dispatch is attempt 1; re-dispatching the same delegation increments,
+   * so a retry never overwrites the original child's evidence directory.
+   */
+  private childAttempts = new Map<string, number>();
 
   /** Snapshot for Tier A observability helpers (keeps chatEngine thin). */
   private obsHandles(): ObservabilityHandles {
@@ -2018,14 +2657,14 @@ export class ChatEngine {
     };
   }
 
-  private checkBudgets(): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {
+  private checkBudgets(skipTurnLimit = false): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {
     if (this.taskCostScopeUnavailable || !this.taskAllowance) {
       const reason = 'Cannot restore durable task cost scope for resumed run; refusing a fresh allowance.';
       this.terminatingLimiter = 'cost';
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: 'cost' };
     }
-    if (this.taskAllowance.consumed.turns >= this.taskAllowance.grant.turnCap) {
+    if (!skipTurnLimit && this.taskAllowance.consumed.turns >= this.taskAllowance.grant.turnCap) {
       const reason =
         `Task turn allowance exhausted (${this.taskAllowance.consumed.turns} of ` +
         `${this.taskAllowance.grant.turnCap}).`;
@@ -2041,6 +2680,13 @@ export class ChatEngine {
       Number.isFinite(grantedCostCapUsd) && this.criticRepairCostCapUsd != null
         ? Math.min(grantedCostCapUsd, this.criticRepairCostCapUsd)
         : grantedCostCapUsd;
+    if (Number.isFinite(maxCostUsd) &&
+        globalCostTracker.getTaskSummary(this.taskAllowance.taskOwnerId).costComplete === false) {
+      const reason = 'Task cost is incomplete because a provider charge has unknown pricing; refusing paid dispatch under a finite dollar cap.';
+      this.terminatingLimiter = 'cost';
+      this.terminalLimiterReason = reason;
+      return { ok: false, reason, limiter: 'cost' };
+    }
     // After first write: absolute wall cap from session start (repair window).
     const maxWallMs =
       this.postWriteRepairWallCapMs != null
@@ -2199,11 +2845,14 @@ export class ChatEngine {
    *
    *  P0-E: stall_kill mode shadow|enforce|off (env ablation or task-class default).
    *  Shadow downgrades kill → nudge and logs stall_shadow_kill. */
-  private checkStallIntervention(): StallIntervention | null {
+  private checkStallIntervention(isReadOnlyInspection: boolean): StallIntervention | null {
     if (!resolveStallInterventionsEnabled(this.taskClass)) {
       return null;
     }
-    const isReadOnly = this.taskClass === 'quick_inspect' || this.taskClass === 'investigate';
+    // I4: consume the admitted effective-operation policy instead of
+    // re-deriving read-only from taskClass (which can be overridden by env /
+    // autonomy / plan handoff and disagree with isReadOnlyInspection).
+    const isReadOnly = isReadOnlyInspection;
     const stallShadow = resolveStallShadowMode(this.taskClass);
     const intervention = getStallInterventionMessage(
       this.stallState,
@@ -2240,6 +2889,10 @@ export class ChatEngine {
   ): Promise<ChatResult> {
     this._cancelled = false;
     const generation = ++this.generationCounter;
+    // R0-7/R0-8: publish the owning generation synchronously so any async
+    // continuation during this submission (including before the lazy stream
+    // body first runs) is bound to it.
+    this.activeSubmissionGeneration = generation;
 
     const cb: ChatCallbacks = {};
     if (callbacks.onAnswerChunk) {
@@ -2315,10 +2968,15 @@ export class ChatEngine {
       /** Authoritative outcome from streamDone (P0-D B4). */
       outcome?: TerminalOutcome;
       budgetExceeded?: boolean;
+      /** D03: structured reason from the terminal event. */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     } | null = null;
 
     try {
-      for await (const event of this.submitMessageStream(userInput, taskIntent)) {
+      for await (const event of this.submitMessageStream(userInput, taskIntent, {
+        submissionGeneration: generation,
+      })) {
         switch (event.type) {
           case 'answer_chunk':
             cb.onAnswerChunk?.(event.text);
@@ -2377,6 +3035,8 @@ export class ChatEngine {
               blockedReport: event.blockedReport ?? null,
               ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
               ...(event.budgetExceeded ? { budgetExceeded: true } : {}),
+              ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+              ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
             };
             break;
           case 'failed':
@@ -2384,10 +3044,16 @@ export class ChatEngine {
               kind: 'failed',
               error: event.error,
               ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+              ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+              ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
             };
             break;
           case 'cancelled':
-            terminal = { kind: 'cancelled' };
+            terminal = {
+              kind: 'cancelled',
+              ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+              ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
+            };
             break;
           default:
             break;
@@ -2398,7 +3064,15 @@ export class ChatEngine {
       const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
       const message =
         captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error));
-      return this.buildResult('failed', cb, message, undefined, classifyFailureText(message));
+      return this.buildResult(
+        'failed',
+        cb,
+        message,
+        undefined,
+        classifyFailureText(message),
+        undefined,
+        generation,
+      );
     }
 
     if (!terminal) {
@@ -2406,10 +3080,27 @@ export class ChatEngine {
         'failed',
         cb,
         'Stream ended without a terminal event — possible internal error',
+        undefined,
+        undefined,
+        undefined,
+        generation,
       );
     }
+    // D03: carry the terminal event's explicit reason into the sync result path.
+    const reasonFromTerminal: TerminalReason | undefined =
+      terminal.reason_code !== undefined
+        ? { code: terminal.reason_code, cause_class: terminal.cause_class ?? null }
+        : undefined;
     if (terminal.kind === 'cancelled') {
-      return this.buildResult('cancelled', cb);
+      return this.buildResult(
+        'cancelled',
+        cb,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        generation,
+      );
     }
     if (terminal.kind === 'failed') {
       const failedOutcome = terminal.outcome ?? classifyFailureText(terminal.error ?? '');
@@ -2421,6 +3112,8 @@ export class ChatEngine {
           terminal.error ?? 'Stream failed',
           undefined,
           'BUDGET_EXHAUSTED',
+          reasonFromTerminal,
+          generation,
         );
       }
       if (
@@ -2429,7 +3122,15 @@ export class ChatEngine {
         failedOutcome === 'NEEDS_HUMAN_DECISION' ||
         failedOutcome === 'INVALID_TASK'
       ) {
-        return this.buildResult('blocked', cb, terminal.error ?? 'Stream failed', undefined, failedOutcome);
+        return this.buildResult(
+          'blocked',
+          cb,
+          terminal.error ?? 'Stream failed',
+          undefined,
+          failedOutcome,
+          reasonFromTerminal,
+          generation,
+        );
       }
       return this.buildResult(
         'failed',
@@ -2437,6 +3138,8 @@ export class ChatEngine {
         terminal.error ?? 'Stream failed',
         undefined,
         failedOutcome,
+        reasonFromTerminal,
+        generation,
       );
     }
     if (terminal.budgetExceeded || terminal.outcome === 'BUDGET_EXHAUSTED' || this.budgetExceeded) {
@@ -2456,17 +3159,74 @@ export class ChatEngine {
       terminal.answer,
       terminal.blockedReport,
       doneTerminal.outcome,
+      reasonFromTerminal,
+      generation,
     );
   }
 
   /** #1 Async generator: yields typed ChatEvents as the conversation progresses.
    *  Callers use `for await (const event of engine.submitMessageStream(...))`.
-   *  Uses executeRawStream() for true chunk-by-chunk streaming. */
-  async *submitMessageStream(
+   *  Uses executeRawStream() for true chunk-by-chunk streaming.
+   *
+   *  S04/#214 C1: every step runs inside this turn's execution context, and the
+   *  context is scoped per step (`scopeAsyncGenerator`), so no execution context
+   *  survives a completed turn. */
+  submitMessageStream(
     userInput: string,
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
+    return scopeAsyncGenerator(
+      () => this.buildBaseExecutionContext(),
+      this.submitMessageStreamBody(userInput, taskIntent, submitOpts),
+    );
+  }
+
+  /**
+   * P05 admission wrapper around the execution loop: admit THIS authorized
+   * command BEFORE the loop runs — the production admission site, so every
+   * P11 checkpoint install inside the loop is already fenced to this engine's
+   * own admitted identity — and settle the claim when the stream terminates,
+   * including cancellation, failure, and consumer abandonment (`finally` runs
+   * on generator return/throw). A superseded claim was already settled (and
+   * its generation advanced) by the replacement submission's admission.
+   */
+  private async *submitMessageStreamBody(
+    userInput: string,
+    taskIntent?: TaskIntent,
+    submitOpts?: SubmitMessageOptions,
+  ): AsyncGenerator<ChatEvent, void, undefined> {
+    const submissionGeneration =
+      submitOpts?.submissionGeneration ?? ++this.generationCounter;
+    // Capture THIS wrapper's own claim: the finally must settle this exact
+    // claim, never `activeAdmissionClaim` — during task replacement that slot
+    // belongs to the successor, and settling it would record a false terminal
+    // for a command that is still executing (stripping its install authority).
+    const claim = this.admitCurrentSubmission(submissionGeneration, userInput);
+    try {
+      yield* this.submitMessageStreamLoop(userInput, taskIntent, {
+        ...submitOpts,
+        submissionGeneration,
+      });
+    } finally {
+      this.settleClaimOnExit(claim);
+    }
+  }
+
+  private async *submitMessageStreamLoop(
+    userInput: string,
+    taskIntent?: TaskIntent,
+    submitOpts?: SubmitMessageOptions,
+  ): AsyncGenerator<ChatEvent, void, undefined> {
+    // R0-7/R0-8: every submission owns a distinct generation. The non-stream
+    // adapter supplies the generation it already incremented; a direct
+    // streaming caller gets a fresh one here (the admission wrapper above
+    // pre-computes it, so this adopts rather than increments). All ownership
+    // guards compare against this value, so a superseded generator can neither
+    // continue the loop nor let a late async continuation write the new task's state.
+    const submissionGeneration =
+      submitOpts?.submissionGeneration ?? ++this.generationCounter;
+    this.activeSubmissionGeneration = submissionGeneration;
     this._cancelled = false;
     this.preparedAdmissionCompactionAttempts = 0;
     this.currentTurnTelemetry = new ChatTurnTelemetryCollector(performance.now());
@@ -2480,8 +3240,33 @@ export class ChatEngine {
       ...(taskIntent !== undefined ? { taskIntent } : {}),
       ...(submitOpts?.continueTask !== undefined ? { continueTask: submitOpts.continueTask } : {}),
     });
+    // D01/S01/M2: one effective-operation policy for this accepted submission,
+    // resolved BEFORE any generated guidance is appended. TaskShape is
+    // authoritative (derived from the same classifier that sets taskClass), so
+    // read-only gating, preparation fuses, progress scoring, loop-control and
+    // finalization all consume this decision.
+    //
+    // There are still two *inputs* by design: `resolvedIntent` is the legacy
+    // text-intent classifier (`classifyChatTaskIntent`) and TaskShape is the
+    // operation classifier. Neither is a second authority: `effectiveOperation`
+    // (TaskShape) dominates, and `effectiveExecutePolicy` below ANDs the two so
+    // the legacy `execute` label can never re-add mutation pressure to a
+    // READ_ONLY shape. Zero-write is safe for the same reason — its
+    // `executeIntent` is `effectiveExecutePolicy`, so a read-only shape cannot
+    // reach the zero-write terminal even where a class tune left the threshold
+    // non-zero. Older hydrated snapshots without the field fall back to their
+    // persisted shape; unknown defaults to MUTATING (fail-safe: never silently
+    // loosens mutation pressure).
+    const effectiveOperation: TaskOperation =
+      runtime.effectiveOperation ?? runtime.taskShape?.operation ?? 'MUTATING';
+    const isReadOnlyInspection = effectiveOperation === 'READ_ONLY';
+
     this.conversation.push({ role: 'user', content: userInput });
-    if (this.options.intentPlanUserMessage)
+    // S01/#211: harness-generated repair guidance is only ever injected for an
+    // execute-like operation. A READ_ONLY submission never receives the
+    // generated edit mandate, and the injected text identifies itself as
+    // guidance rather than user authorization (see compileIntentPlanUserMessage).
+    if (this.options.intentPlanUserMessage && !isReadOnlyInspection)
       this.conversation.push({
         role: 'user',
         content: this.options.intentPlanUserMessage,
@@ -2503,6 +3288,14 @@ export class ChatEngine {
     let allToolObservations = '';
 
     const resolvedIntent = runtime.taskIntent;
+
+    // F1/C1: finalization and loop-control consume the same effective operation
+    // policy as gating/fuses/progress. The legacy text classifier can say
+    // `execute` for a READ_ONLY TaskShape (bare "how to fix …", fenced evidence
+    // with no directive), and such a submission must not be pressed to patch,
+    // gated as an execute task, or fed a mutation-oriented critic.
+    const effectiveExecutePolicy = resolvedIntent === 'execute' && !isReadOnlyInspection;
+    const effectiveIntent: TaskIntent = effectiveExecutePolicy ? 'execute' : 'explain';
 
     const authorityHalt = evaluateSubmitTaskAuthorityHalt(this.parity, userInput);
     if (authorityHalt) {
@@ -2537,21 +3330,27 @@ export class ChatEngine {
       submissionIndex: runtime.submissionIndex,
       continuedTask: runtime.continuedTask,
     });
-    if (this.options.intentPlanUserMessage && this.parity.turnId) {
+    if (this.options.intentPlanUserMessage && !isReadOnlyInspection && this.parity.turnId) {
       recordUserMessage(
         this.parity.eventLog,
         this.parity.turnId,
         this.options.intentPlanUserMessage,
       );
     }
-    setChatApprovalTurnId(this.parity.turnId);
+    // S04/#214 C1: the turn's execution context is scoped per step by
+    // `submitMessageStream` (scopeAsyncGenerator), so no context survives the
+    // turn and no global turn id has to be set or restored here.
 
     // R4: Fire-and-forget repo map generation, awaited before first LLM call
     const repoMapPromise =
       this.repoMapCache === null
         ? this.generateRepoMap()
             .then((map) => {
-              if (map) this.repoMapCache = map;
+              // R0-8: a repository map produced for a superseded submission
+              // must not seed the current task's cached context.
+              if (map && this.isSubmissionCurrent(submissionGeneration)) {
+                this.repoMapCache = map;
+              }
             })
             .catch(() => {
               /* best-effort */
@@ -2561,6 +3360,9 @@ export class ChatEngine {
     if (this.conversation.length === 1 || this.conversation[0]?.role !== 'system') {
       // R4: Await repo map first so it's included in the system prompt
       await repoMapPromise;
+      // R0-8: the repo-map await is a suspension point; a superseded generator
+      // must not install its system turn or active-execution ownership.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       const useNativeInit = this.shouldUseNativeTools(this.resolveDeliberationRunner());
       const useTextInit = !useNativeInit && this.shouldUseTextTools();
       // P3: native preferred; legacy Markdown flatten only when no native tools
@@ -2581,6 +3383,9 @@ export class ChatEngine {
     let _turnSpan: Span | null = null;
 
     for (let turn = 0; turn < maxTurns; turn++) {
+      // R0-8: a superseded generator must stop before it executes another
+      // turn, settles execution, or emits a terminal for the new owner.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       // Tier A: Track turn index for per-turn observability metadata
       this._turnIndex = turn;
       // Never leak native tool-call IDs from a prior turn/batch into a new cycle.
@@ -2596,20 +3401,26 @@ export class ChatEngine {
 
       // Ensure repo map is available for subsequent turns that may rebuild system prompt
       if (turn === 0) await repoMapPromise;
+      // R0-8: the repo-map await is a suspension point; re-check ownership.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       if (this._cancelled || this.abortController.signal.aborted) {
         // AC3: stream cancel path flushes disk (idempotent if cancel() already did)
         finalizeParityCancel(this.parity, this.engineRunDir);
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamCancelled();
         return;
       }
 
       // Budget checks (P1): cost, wall-clock — honest receipts + last-chance critic
       if (this.terminatingLimiter === 'child_exhaustion') {
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         const kill = await this.handleBudgetKill(
           this.terminalLimiterReason ?? 'Inherited child allowance exhausted.',
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
+          submissionGeneration,
         );
+        if (!kill || !this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
           ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
@@ -2619,13 +3430,16 @@ export class ChatEngine {
       }
       const budget = this.checkBudgets();
       if (!budget.ok) {
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         const kill = await this.handleBudgetKill(
           budget.reason ?? 'Budget limit exceeded.',
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
+          submissionGeneration,
         );
         // AC3: every stream terminal goes through streamDone (buildResult already
         // finalized; streamDone finalize is idempotent on turn_ended).
+        if (!kill || !this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
           ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
@@ -2643,10 +3457,14 @@ export class ChatEngine {
 
       // Compact if needed; user-visible notice via stream event
       const compactionSpan = this.currentTurnTelemetry?.startCompactionSpan();
-      const compactInfo = await this.compactIfNeeded();
+      const compactInfo = await this.compactIfNeeded(undefined, false, submissionGeneration);
       compactionSpan?.end();
+      // R0-8: compaction is a suspension point; a superseded generator must not
+      // rewrite the new task's working state or conversation.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       if (compactInfo) {
         yield { type: 'context_compacted', ...compactInfo };
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
       }
 
       // C1: Inject current todo list into conversation before LLM call
@@ -2659,6 +3477,18 @@ export class ChatEngine {
       }
       this.conversation = upsertWorkingStateMessage(this.conversation, this.workingState);
 
+      if (this.conversation.some((message) => message.compactionCandidate === true ||
+          (message.name === 'compaction_summary' && (message.role !== 'assistant' ||
+            message.provenance !== 'model' || message.authoritative !== false)) ||
+          (message.name === 'compaction_capsule' && (message.role !== 'system' ||
+            message.provenance !== 'controller' || message.authoritative !== true)) ||
+          (message.role === 'system' && (message.name === 'compaction_summary' ||
+            message.provenance === 'model' || message.provenance === 'mixed' ||
+            message.authoritative === false)))) {
+        yield this.streamFailed('An uncommitted compaction candidate cannot authorize provider dispatch.');
+        return;
+      }
+
       const runner = this.resolveRoutedRunner();
       const useNativeTools = this.shouldUseNativeTools(runner);
       const useTextTools = !useNativeTools && this.shouldUseTextTools();
@@ -2668,13 +3498,141 @@ export class ChatEngine {
         nativeTools: useNativeTools,
         textTools: useTextTools,
       });
-      const providerMessages = useNativeTools
+      // WorkingState is mixed controller/model advisory context. Record the
+      // exact revision before projecting provider messages so native warm and
+      // cold requests share one durable source of model-visible truth.
+      if (this.parity.turnId) {
+        this.services.conversation.recordAssistantMessage(
+          this.parity.eventLog,
+          this.parity.turnId,
+          formatWorkingStateBlock(this.workingState),
+          {
+            name: 'working_state',
+            provenance: 'mixed',
+            authoritative: false,
+          },
+        );
+      }
+      const activeSystemPrompt = this.getOrBuildSystemPrompt(
+        useNativeTools ? 'native' : useTextTools ? 'text' : 'legacy',
+      );
+      const hadInstalledP11Context = this.parity.contextCheckpoint !== undefined;
+      const usageScope = {
+        taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+        projectRoot: realpathSync(this.options.projectRoot),
+        accountingEpoch: globalCostTracker.getAccountingEpoch(),
+        turnId: this.parity.turnId,
+        chargeId: null as string | null,
+        ownerGeneration: submissionGeneration,
+        isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
+      };
+      const settleRetiredUsage = (usedRunner: typeof runner): void => {
+        if (!('usageMetadata' in usageScope)) Object.assign(usageScope, { usageMetadata: null });
+        this.trackRunnerUsage(usedRunner, usageScope);
+      };
+      const requestMode = useNativeTools ? 'native' : useTextTools ? 'text' : 'legacy';
+      const toolProfile = useNativeTools
+        ? 'native-tools'
+        : useTextTools
+          ? 'text-tools'
+          : 'legacy-tools';
+      const modelRoute = `${providerName}:${modelName}`;
+      // R1/T5 ordering invariant (task-5 brief): candidate compaction → durable
+      // capsule commit (compactIfNeeded above) → validate/install the CURRENT
+      // checkpoint → rebuild provider messages FROM THE INSTALLED AUTHORITY →
+      // provider invocation. A durable capsule that the in-memory root does not
+      // name (committed this turn, or by an earlier admission-recovery
+      // iteration) makes the previous generation stale — rebuilding from it
+      // would dispatch a superseded sequence (the routed Task-4 trace). The
+      // candidate below is a side-effect-free prepare: it never installs and
+      // never authorizes a dispatch by itself — it only roots the rebuild that
+      // computes this turn's route identity. `installP11ContextCheckpoint`
+      // remains the single authority swap, and the dispatched messages are
+      // re-projected from the INSTALLED checkpoint below. If the install cannot
+      // happen while authority is pending/promoted, dispatch is refused — a
+      // stale root never authorizes a request.
+      const pendingCapsuleAuthority = this.hasPendingCompactionAuthority();
+      const turnCheckpointCandidate =
+        useNativeTools && (pendingCapsuleAuthority || hadInstalledP11Context)
+          ? this.prepareP11ContextCheckpointCandidate({
+              tool_profile: toolProfile,
+              model_route: modelRoute,
+            })
+          : null;
+      const rebuildRoot =
+        turnCheckpointCandidate?.status === 'prepared'
+          ? turnCheckpointCandidate.checkpoint
+          : this.parity.contextCheckpoint;
+      let providerMessages = useNativeTools
         ? this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
-            systemPrompt: this.getOrBuildSystemPrompt('native'),
+            systemPrompt: activeSystemPrompt,
+            ...(rebuildRoot ? { installedContextCheckpoint: rebuildRoot } : {}),
           })
         : [];
-
+      const preparedRoute = {
+        compiled_request_identity: createHash('sha256')
+          .update(JSON.stringify({
+            mode: requestMode,
+            prompt,
+            systemPrompt: activeSystemPrompt,
+            providerMessages,
+          }))
+          .digest('hex'),
+        tool_profile: toolProfile,
+        model_route: modelRoute,
+      } as const;
+      const p11ContextInstalled = await this.installP11ContextCheckpoint(preparedRoute);
+      // R0-8/R1: a superseded submission must not finalize the live turn as
+      // failed nor dispatch a provider request for the new owner.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
+      if (!p11ContextInstalled && (hadInstalledP11Context || pendingCapsuleAuthority)) {
+        yield this.streamFailed(
+          hadInstalledP11Context
+            ? 'P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused.'
+            : 'P11 context installation was blocked; this turn committed a compaction capsule that no installed context root authorizes, so provider dispatch was refused.',
+        );
+        return;
+      }
+      // Single authority: project the dispatched messages from the checkpoint
+      // that is NOW installed (equal to the candidate-rooted array above by
+      // construction — the reconstruction tripwire below verifies it).
+      if (useNativeTools && p11ContextInstalled && this.parity.contextCheckpoint) {
+        providerMessages = this.services.conversation.rebuildProviderMessages(
+          this.parity.eventLog,
+          {
+            systemPrompt: activeSystemPrompt,
+            installedContextCheckpoint: this.parity.contextCheckpoint,
+          },
+        );
+      }
+      if (useNativeTools && providerMessages.some((message) => message.name === 'compaction_capsule') &&
+          !this.parity.contextCheckpoint) {
+        yield this.streamFailed('An uninstalled compaction capsule cannot authorize provider dispatch.');
+        return;
+      }
       yield { type: 'thinking' };
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
+      // Compaction can itself consume a paid request after the turn-start
+      // allowance check. Recheck cost and wall limits at the final dispatch
+      // boundary without charging this already-admitted turn twice.
+      const dispatchBudget = this.checkBudgets(true);
+      if (!dispatchBudget.ok) {
+        const kill = await this.handleBudgetKill(
+          dispatchBudget.reason ?? 'Budget limit exceeded.',
+          { onThought: () => {} },
+          effectiveIntent,
+          submissionGeneration,
+        );
+        if (!kill || !this.isSubmissionCurrent(submissionGeneration)) return;
+        endSpan(_turnSpan, SpanStatusCode.OK);
+        _turnSpan = null;
+        yield this.streamDone(kill.answer, {
+          ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
+          ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
+          ...(kill.verifierTampered ? { verifierTampered: true as const } : {}),
+        });
+        return;
+      }
 
       let turnResult: ChatTurn;
       let toolsAnnouncedInStream = false;
@@ -2701,10 +3659,34 @@ export class ChatEngine {
               conversationState: prompt,
               systemPolicyPrompt: systemPrompt,
               executionStage: 'chat',
+              usageScope,
+              isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(runner);
+              return;
+            }
             rawText += chunk;
             this.currentTurnTelemetry?.markFirstToken();
+          }
+          const providerEnd = performance.now();
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
+          }
+          this.currentTurnTelemetry?.recordProviderSpan(
+            Math.max(0, providerEnd - providerStart),
+            providerStart,
+            providerEnd,
+          );
+          this.trackRunnerUsage(runner, usageScope);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
+          turnResult = parseTextToolTurn(rawText);
+        } catch (err: any) {
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
           }
           const providerEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
@@ -2712,27 +3694,21 @@ export class ChatEngine {
             providerStart,
             providerEnd,
           );
-          this.trackRunnerUsage(runner);
-          turnResult = parseTextToolTurn(rawText);
-        } catch (err: any) {
-          const providerEnd = performance.now();
-          this.currentTurnTelemetry?.recordProviderSpan(
-            Math.max(0, providerEnd - providerStart),
-            providerStart,
-            providerEnd,
-          );
-          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
+          const admissionRecovery = await this.recoverPreparedRequestAdmission(err, submissionGeneration);
           if (admissionRecovery) {
             yield { type: 'context_compacted', ...admissionRecovery };
             continue;
           }
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           const cancelled = this.emitCancelledIfOperatorAbort(err);
           if (cancelled) {
             yield cancelled;
             return;
           }
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamFailed(err?.message ?? String(err));
           return;
         }
@@ -2767,8 +3743,14 @@ export class ChatEngine {
               userTaskPrompt: prompt,
               toolSchema: toolDefs,
               executionStage: 'chat',
+              usageScope,
+              isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(runner);
+              return;
+            }
             switch (event.type) {
               case 'text_delta':
                 this.currentTurnTelemetry?.markFirstToken();
@@ -2803,12 +3785,17 @@ export class ChatEngine {
             }
           }
           const providerEnd = performance.now();
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
+          }
           this.currentTurnTelemetry?.recordProviderSpan(
             Math.max(0, providerEnd - providerStart),
             providerStart,
             providerEnd,
           );
-          this.trackRunnerUsage(runner);
+          this.trackRunnerUsage(runner, usageScope);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           this._streamNativeToolCallIds = nativeToolCallIds;
           streamedAnswerForTurn = answerText;
           turnResult = nativeTurnFromStream({
@@ -2817,18 +3804,25 @@ export class ChatEngine {
             finishReason: nativeFinishReason,
           });
         } catch (err: any) {
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
+          }
           const providerEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
             Math.max(0, providerEnd - providerStart),
             providerStart,
             providerEnd,
           );
-          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
+            const admissionRecovery = await this.recoverPreparedRequestAdmission(err, submissionGeneration);
           if (admissionRecovery) {
             yield { type: 'context_compacted', ...admissionRecovery };
             continue;
           }
-          const fb = yield* this.resolveFallbackOrFail(err, turn);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
+          const fb = yield* this.resolveFallbackOrFail(err, turn, submissionGeneration);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
@@ -2837,6 +3831,7 @@ export class ChatEngine {
           if (typeof fb.executeWithToolsStream !== 'function') {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamFailed(err.message);
             return;
           }
@@ -2861,8 +3856,14 @@ export class ChatEngine {
                 toolSchema: toolDefs,
                 executionStage: 'chat',
                 substitutionOrFallback: true,
+                usageScope,
+                isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
               }),
             )) {
+              if (!this.isSubmissionCurrent(submissionGeneration)) {
+                settleRetiredUsage(fb);
+                return;
+              }
               switch (event.type) {
                 case 'text_delta':
                   this.currentTurnTelemetry?.markFirstToken();
@@ -2897,12 +3898,17 @@ export class ChatEngine {
               }
             }
             const fbEnd = performance.now();
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(fb);
+              return;
+            }
             this.currentTurnTelemetry?.recordProviderSpan(
               Math.max(0, fbEnd - fbStart),
               fbStart,
               fbEnd,
             );
-            this.trackRunnerUsage(fb);
+            this.trackRunnerUsage(fb, usageScope);
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             this._streamNativeToolCallIds = nativeToolCallIds;
             streamedAnswerForTurn = answerText;
             turnResult = nativeTurnFromStream({
@@ -2911,6 +3917,10 @@ export class ChatEngine {
               finishReason: nativeFinishReason,
             });
           } catch (fbErr: any) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(fb);
+              return;
+            }
             const fbEnd = performance.now();
             this.currentTurnTelemetry?.recordProviderSpan(
               Math.max(0, fbEnd - fbStart),
@@ -2920,6 +3930,7 @@ export class ChatEngine {
             // If tools still fail, degrade to raw-text (buffered — the lenient
             // parser may transform the final answer; not append-compatible).
             yield { type: 'thought', text: 'Retrying without tools…' };
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             let rawText = '';
             const rawFbStart = performance.now();
             try {
@@ -2932,20 +3943,35 @@ export class ChatEngine {
                   conversationState: prompt,
                   executionStage: 'chat',
                   substitutionOrFallback: true,
+                  usageScope,
+                  isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
                 }),
               )) {
+                if (!this.isSubmissionCurrent(submissionGeneration)) {
+                  settleRetiredUsage(fb);
+                  return;
+                }
                 rawText += chunk;
                 this.currentTurnTelemetry?.markFirstToken();
               }
               const rawFbEnd = performance.now();
+              if (!this.isSubmissionCurrent(submissionGeneration)) {
+                settleRetiredUsage(fb);
+                return;
+              }
               this.currentTurnTelemetry?.recordProviderSpan(
                 Math.max(0, rawFbEnd - rawFbStart),
                 rawFbStart,
                 rawFbEnd,
               );
-              this.trackRunnerUsage(fb);
+              this.trackRunnerUsage(fb, usageScope);
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
               turnResult = this.parseChatTurnLenient(rawText);
             } catch (rawErr: any) {
+              if (!this.isSubmissionCurrent(submissionGeneration)) {
+                settleRetiredUsage(fb);
+                return;
+              }
               const rawFbEnd = performance.now();
               this.currentTurnTelemetry?.recordProviderSpan(
                 Math.max(0, rawFbEnd - rawFbStart),
@@ -2954,11 +3980,13 @@ export class ChatEngine {
               );
               endSpan(_turnSpan, SpanStatusCode.ERROR);
               _turnSpan = null;
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
               const cancelled = this.emitCancelledIfOperatorAbort(rawErr);
               if (cancelled) {
                 yield cancelled;
                 return;
               }
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
               yield this.streamFailed(rawErr?.message ?? String(rawErr));
               return;
             }
@@ -2979,31 +4007,49 @@ export class ChatEngine {
               deliveryMode: 'text',
               conversationState: prompt,
               executionStage: 'chat',
+              usageScope,
+              isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
             }),
           )) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(runner);
+              return;
+            }
             rawText += chunk;
             this.currentTurnTelemetry?.markFirstToken();
           }
           const legacyEnd = performance.now();
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
+          }
           this.currentTurnTelemetry?.recordProviderSpan(
             Math.max(0, legacyEnd - legacyStart),
             legacyStart,
             legacyEnd,
           );
-          this.trackRunnerUsage(runner);
+          this.trackRunnerUsage(runner, usageScope);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         } catch (err: any) {
+          if (!this.isSubmissionCurrent(submissionGeneration)) {
+            settleRetiredUsage(runner);
+            return;
+          }
           const legacyEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
             Math.max(0, legacyEnd - legacyStart),
             legacyStart,
             legacyEnd,
           );
-          const admissionRecovery = await this.recoverPreparedRequestAdmission(err);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
+              const admissionRecovery = await this.recoverPreparedRequestAdmission(err, submissionGeneration);
           if (admissionRecovery) {
             yield { type: 'context_compacted', ...admissionRecovery };
             continue;
           }
-          const fb = yield* this.resolveFallbackOrFail(err, turn);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
+          const fb = yield* this.resolveFallbackOrFail(err, turn, submissionGeneration);
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
@@ -3020,20 +4066,33 @@ export class ChatEngine {
                 conversationState: prompt,
                 executionStage: 'chat',
                 substitutionOrFallback: true,
+                usageScope,
+                isOwnerCurrent: () => this.isSubmissionCurrent(submissionGeneration),
               }),
             )) {
+              if (!this.isSubmissionCurrent(submissionGeneration)) {
+                settleRetiredUsage(fb);
+                return;
+              }
               rawText += chunk;
               this.currentTurnTelemetry?.markFirstToken();
             }
-            this.trackRunnerUsage(fb);
+            this.trackRunnerUsage(fb, usageScope);
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
           } catch (fbErr: any) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) {
+              settleRetiredUsage(fb);
+              return;
+            }
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             const cancelled = this.emitCancelledIfOperatorAbort(fbErr);
             if (cancelled) {
               yield cancelled;
               return;
             }
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamFailed(fbErr?.message ?? String(fbErr));
             return;
           }
@@ -3059,14 +4118,20 @@ export class ChatEngine {
         );
         endSpan(_turnSpan, SpanStatusCode.OK);
         _turnSpan = null;
+        // R0-8: a superseded generator must not install a terminal limiter on
+        // the task that now owns the engine.
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         this.terminatingLimiter = 'tokens';
         this.terminalLimiterReason =
           `Token explosion with zero mutations: ${streamExplosion.tokensThisTurn} tokens this turn (ceiling ${this.limits.maxTokensPerRound}).`;
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         const kill = await this.handleBudgetKill(
           this.terminalLimiterReason,
           { onThought: () => {} },
-          resolvedIntent,
+          effectiveIntent,
+          submissionGeneration,
         );
+        if (!kill || !this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(kill.answer, {
           ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
           ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
@@ -3078,6 +4143,7 @@ export class ChatEngine {
       if (turnResult.type === 'tool_calls' && turnResult.actions.length > 0) {
         if (turnResult.thinking) {
           yield { type: 'thought', text: turnResult.thinking };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
 
         // R7: After force_status intervention (level ≥ 3), check if the model
@@ -3092,6 +4158,7 @@ export class ChatEngine {
             _turnSpan.setAttribute('babel.chat.blocked', 'true');
             endSpan(_turnSpan, SpanStatusCode.OK);
             _turnSpan = null;
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamDone(turnResult.thinking, {
               blockedReport: thinkingBlocked,
             });
@@ -3099,6 +4166,9 @@ export class ChatEngine {
           }
         }
 
+        // R0-8: a superseded generator must not reserve the new task's
+        // tool-call identity or propose its tools.
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         // Capture toolCallLog start index BEFORE execution so the
         // per-turn slice is correct even as the log grows across turns.
         this._turnToolCallLogStart = this.toolCallLog.length;
@@ -3121,6 +4191,7 @@ export class ChatEngine {
               tool: chatActionToolName(action),
               target: chatActionTarget(action),
             };
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
           }
         }
         if (turnResult.actions.length > 0) {
@@ -3178,7 +4249,12 @@ export class ChatEngine {
               ...(content ? { content } : {}),
             });
           },
-        });
+        }, submissionGeneration);
+
+        // R0-8: tools are a suspension point. If the submission was superseded
+        // while they ran, stop before mutating the new owner's state or
+        // emitting a terminal on its behalf.
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
 
         // Repetition loop detection: record each executed action and check for loops
         for (const action of turnResult.actions) {
@@ -3201,6 +4277,7 @@ export class ChatEngine {
         // Yield sub-agent lifecycle events collected during execution
         for (const event of subAgentEvents) {
           yield event;
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
 
         recordTurnToolObservability(this.obsHandles());
@@ -3252,9 +4329,14 @@ export class ChatEngine {
             ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
             ...(tc.mutation_paths !== undefined ? { mutation_paths: [...tc.mutation_paths] } : {}),
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
 
         await new Promise((resolve) => setImmediate(resolve));
+        // R0-8: the setImmediate yield is a real suspension point — a second
+        // submission can start here. A superseded generator must not update the
+        // new task's progress counters, phase, or durable session events.
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         // Only reset gate strikes when this turn includes a mutation —
         // read-only turns don't reset the counter.
         if (this.currentTurnHasMutation()) {
@@ -3273,59 +4355,21 @@ export class ChatEngine {
 
         // Mid-loop heuristic critic (stream path)
         if (this.currentTurnHasMutation() || (this.hasAnyWrites() && this.lastVerifierReceipt)) {
-          this.maybeInjectMidLoopHeuristicCritic({ onThought: () => {} }, resolvedIntent);
+          this.maybeInjectMidLoopHeuristicCritic({ onThought: () => {} }, effectiveIntent);
         }
 
-        const exploreFuses = this.applyExploreFuses(resolvedIntent === 'execute');
+        const exploreFuses = this.applyExploreFuses(
+          effectiveExecutePolicy,
+          isReadOnlyInspection,
+        );
         for (const label of exploreFuses.labels) {
           yield { type: 'thought', text: label };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
 
         // P2: Update stall detector and inject phase nudge if needed
         const turnCallsStr = this.toolCallLog.slice(this._turnToolCallLogStart);
         this.stallState = updateStallState(this.stallState, turnCallsStr, turn);
-
-        // W3 Phase 3 Progress and Recovery Controller
-        const signals: ProgressSignal[] = [];
-        if (
-          turnCallsStr.some(
-            (tc) =>
-              isConfirmedMutation({
-                tool: tc.tool,
-                error: tc.error,
-                effectStatus: tc.effect_status,
-                mutationPaths: tc.mutation_paths,
-              }) ||
-              (tc.tool === 'sub_agent' &&
-                tc.effect_status === 'confirmed_change'),
-          )
-        ) {
-          signals.push('production_mutation');
-        }
-
-        const isTextOnly = turnCallsStr.length === 0;
-        const pcResult = this.progressController.scoreTurn(signals, isTextOnly, this.gateStrikes);
-        recordProgressRecovery(
-          this.parity.sessionEvents,
-          String(this.parity.turnId ?? this._turnIndex),
-          {
-            intervention: pcResult.intervention,
-            score: pcResult.score,
-            signals,
-            reason: 'turn_scored',
-          },
-        );
-
-        if (pcResult.transitioned) {
-          this.currentTurnTelemetry?.recordPolicyIntervention();
-          yield {
-            type: 'progress_recovery',
-            intervention: pcResult.intervention,
-            source: 'progress_controller',
-            score: pcResult.score,
-            message: `Transitioned to ${pcResult.intervention}`,
-          };
-        }
 
         const streamPhase = classifyPhase(
           this.stallState,
@@ -3342,9 +4386,6 @@ export class ChatEngine {
           );
         }
         this._lastPhase = streamPhase;
-        const isReadOnlyInspection =
-          resolvedIntent !== 'execute' &&
-          (this.taskClass === 'quick_inspect' || this.taskClass === 'investigate');
         if (shouldNudge(this._lastPhase) && !isReadOnlyInspection) {
           const hintsStr = turnCallsStr
             .filter(
@@ -3376,18 +4417,26 @@ export class ChatEngine {
           const tamperAnswer = await this.synthesizeAnswer(allToolObservations, {
             onAnswerChunk: (_chunk: string) => {},
           }).catch(() => '');
-          const tamperBlocked = tamperAnswer
-            ? this.detectAndBuildBlockedReport(tamperAnswer)
-            : null;
-          const finalTamperAnswer = tamperBlocked
-            ? tamperAnswer
-            : `BLOCKED: Verifier integrity compromised — ${this.tamperCount} verifier dependency files were modified. The task cannot be completed honestly.`;
+          // R0-8: synthesis is a suspension point; a superseded generator must
+          // not append to the new task's conversation.
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
+          // R0/W7: the tamper violation is established by the harness
+          // (applyTamperEscalation at tamperCount >= 3), so the blocked report
+          // is harness-origin and typed. Model prose may supply the answer text
+          // but can no longer determine whether a block exists — a prose-only
+          // path could emit a false `completed` terminal.
+          const tamperBlocked = this.buildTamperBlockedReport();
+          const finalTamperAnswer =
+            tamperAnswer && /(?:^|\n)\s*BLOCKED\b/.test(tamperAnswer)
+              ? tamperAnswer
+              : `BLOCKED: Verifier integrity compromised — ${this.tamperCount} verifier dependency files were modified. The task cannot be completed honestly.`;
           this.conversation.push({
             role: 'assistant',
             content: finalTamperAnswer,
           });
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamDone(finalTamperAnswer, {
-            blockedReport: tamperBlocked ?? null,
+            blockedReport: tamperBlocked,
             verifierTampered: true,
           });
           return;
@@ -3398,10 +4447,11 @@ export class ChatEngine {
             type: 'thought',
             text: `[Tamper escalation: ${this.tamperCount} violations]`,
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
 
         // R2: Escalating stall intervention — kill routed through parity arbiter
-        const stallIntervention = this.checkStallIntervention();
+        const stallIntervention = this.checkStallIntervention(isReadOnlyInspection);
         if (stallIntervention && stallIntervention.level !== 'kill') {
           recordPolicyEvent(
             this.policyEventLog,
@@ -3409,7 +4459,9 @@ export class ChatEngine {
             'stall_intervention',
             `level=${stallIntervention.level}`,
           );
-          if (stallIntervention.level === 'restrict_tools') {
+          // I4: never latch a mutate-only tool restriction onto a read-only
+          // operation; the read-only stall path concludes or synthesizes.
+          if (stallIntervention.level === 'restrict_tools' && !isReadOnlyInspection) {
             this.restrictToolsNextTurn = true;
           }
           this.conversation.push({
@@ -3420,6 +4472,7 @@ export class ChatEngine {
             type: 'thought',
             text: `[Stall intervention: ${stallIntervention.level}]`,
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
         if (stallIntervention?.level === 'kill') {
           recordPolicyEvent(
@@ -3450,8 +4503,9 @@ export class ChatEngine {
               ? createHash('sha256').update(content).digest('hex').slice(0, 16)
               : undefined,
         });
+        let cycleReceipt: ProgressReceipt | null = null;
         try {
-          parityRecordToolBatch(this.parity, {
+          cycleReceipt = parityRecordToolBatch(this.parity, {
             at_turn: turn,
             ...(turnResult.type === 'tool_calls' && turnResult.thinking
               ? { thinking: turnResult.thinking }
@@ -3469,9 +4523,9 @@ export class ChatEngine {
             patchFailed: turnSlice.some(
               (t) => t.tool === 'str_replace' && t.error != null && t.error !== '',
             ),
-            verifierChanged: turnSlice.some(
-              (t) => t.tool === 'run_command' || t.tool === 'test_run' || t.tool === 'shell_exec',
-            ),
+            verifierChanged: this.computeVerifierChanged(projected.results),
+            // Context epoch: advancing it makes necessary re-reads count again.
+            contextEpoch: this.readContextEpoch,
             // W2.2: propose+start already flushed before executeActions.
             settleAlreadyProposed: turnResult.actions.length > 0,
             // Do NOT pass every read as localizedPaths — re-reads use contentHash only.
@@ -3481,6 +4535,7 @@ export class ChatEngine {
           this._streamNativeToolCallIds = [];
           this._activeToolBatchId = null;
           if (captured) {
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamFailed(captured.operatorMessage);
             return;
           }
@@ -3489,13 +4544,64 @@ export class ChatEngine {
         this._streamNativeToolCallIds = [];
         this._activeToolBatchId = null;
 
+        // D02: score the W3 progress/recovery controller from the same evidence
+        // set as the durable receipt (confirmed mutation + receipt read-novelty)
+        // instead of an empty mutation-only list. A read-only investigation with
+        // distinct reads therefore stays at "none" rather than emitting false
+        // restricted_tools / terminal_blocked labels.
+        const progressSignals: ProgressSignal[] = [];
+        if (
+          turnCallsStr.some(
+            (tc) =>
+              isConfirmedMutation({
+                tool: tc.tool,
+                error: tc.error,
+                effectStatus: tc.effect_status,
+                mutationPaths: tc.mutation_paths,
+              }) ||
+              (tc.tool === 'sub_agent' && tc.effect_status === 'confirmed_change'),
+          )
+        ) {
+          progressSignals.push('production_mutation');
+        }
+        for (const signal of progressSignalsFromReceipt(cycleReceipt)) {
+          if (!progressSignals.includes(signal)) progressSignals.push(signal);
+        }
+        const isTextOnly = turnCallsStr.length === 0;
+        const pcResult = this.progressController.scoreTurn(
+          progressSignals,
+          isTextOnly,
+          this.gateStrikes,
+        );
+        recordProgressRecovery(
+          this.parity.sessionEvents,
+          String(this.parity.turnId ?? this._turnIndex),
+          {
+            intervention: pcResult.intervention,
+            score: pcResult.score,
+            signals: progressSignals,
+            reason: 'turn_scored',
+          },
+        );
+        if (pcResult.transitioned) {
+          this.currentTurnTelemetry?.recordPolicyIntervention();
+          yield {
+            type: 'progress_recovery',
+            intervention: pcResult.intervention,
+            source: 'progress_controller',
+            score: pcResult.score,
+            message: `Transitioned to ${pcResult.intervention}`,
+          };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
+        }
+
         // P0-E: zero-write shadow by default for coding classes (one-shot log);
         // enforce ablation is a real terminal via zeroWriteTerminalMessage.
         const alreadyHasZeroWriteShadow = this.policyEventLog
           .all()
           .some((e) => e.kind === 'zero_write_shadow');
         const zeroWriteDecision = evaluateZeroWriteWithShadow({
-          executeIntent: resolvedIntent === 'execute',
+          executeIntent: effectiveExecutePolicy,
           completedTurns: turn + 1,
           hasAnyWrites: this.hasAnyWrites(),
           taskClass: this.taskClass,
@@ -3569,10 +4675,14 @@ export class ChatEngine {
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
 
-          // Read-only inspection hard cap: synthesize gathered evidence into a final informational answer
+          // Read-only inspection terminal: synthesize gathered evidence into a
+          // bounded final informational answer instead of a generic capability
+          // block. Covers the read-only hard cap and the evidence-based
+          // no-progress terminal (never press a research task to mutate).
           if (
             (arb.policySource === 'investigate_hard_cap' ||
-              arb.policySource === 'read_only_hard_cap') &&
+              arb.policySource === 'read_only_hard_cap' ||
+              arb.policySource === 'progress_terminal') &&
             isReadOnlyInspection
           ) {
             let synthAnswer = '';
@@ -3584,25 +4694,33 @@ export class ChatEngine {
             } catch (err: any) {
               synthError = err instanceof Error ? err : new Error(String(err));
             }
+            // R0-8: synthesis is a suspension point; a superseded generator must
+            // not append to the new task's conversation.
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
 
             if (synthError || !synthAnswer?.trim()) {
               const failMsg = `Answer synthesis failed after inspection completed: ${synthError?.message ?? 'no answer generated'}`;
               this.conversation.push({ role: 'assistant', content: failMsg });
               yield { type: 'answer_chunk', text: failMsg };
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
               yield this.streamDone(failMsg, {
-                blockedReport: {
-                  schema_version: 1,
-                  status: 'BLOCKED',
-                  reason: 'Answer synthesis unavailable',
-                  missing: 'LLM provider response for answer synthesis',
-                  checked: [
-                    {
-                      action: 'synthesize_answer',
-                      target: 'provider',
-                      finding: synthError?.message ?? 'Empty synthesis output',
-                    },
-                  ],
-                },
+                blockedReport: attachTerminalReason(
+                  {
+                    schema_version: 1,
+                    status: 'BLOCKED',
+                    reason: 'Answer synthesis unavailable',
+                    missing: 'LLM provider response for answer synthesis',
+                    checked: [
+                      {
+                        action: 'synthesize_answer',
+                        target: 'provider',
+                        finding: synthError?.message ?? 'Empty synthesis output',
+                      },
+                    ],
+                  },
+                  arb.terminalReason,
+                ),
+                ...(arb.terminalReason !== undefined ? { reason: arb.terminalReason } : {}),
               });
               return;
             }
@@ -3611,8 +4729,12 @@ export class ChatEngine {
             const synthBlocked = this.detectAndBuildBlockedReport(finalAnswer);
             this.conversation.push({ role: 'assistant', content: finalAnswer });
             yield { type: 'answer_chunk', text: finalAnswer };
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamDone(finalAnswer, {
               blockedReport: synthBlocked ?? null,
+              // D03: the arbiter reason survives even when the bounded synthesis
+              // produced an informational answer rather than a blocked report.
+              ...(arb.terminalReason !== undefined ? { reason: arb.terminalReason } : {}),
             });
             return;
           }
@@ -3622,13 +4744,23 @@ export class ChatEngine {
             const killAnswer = await this.synthesizeAnswer(allToolObservations, {
               onAnswerChunk: (_chunk: string) => {},
             }).catch(() => '');
+            // R0-8: synthesis is a suspension point; a superseded generator must
+            // not append to the new task's conversation.
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             const killBlocked = killAnswer ? this.detectAndBuildBlockedReport(killAnswer) : null;
             if (killBlocked) {
               this.conversation.push({
                 role: 'assistant',
                 content: killAnswer,
               });
-              yield this.streamDone(killAnswer, { blockedReport: killBlocked });
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
+              yield this.streamDone(killAnswer, {
+                blockedReport: killBlocked,
+                // D03: this branch runs inside the arbiter-terminal block, so the
+                // structured reason is known — do not let the reason degrade to
+                // the outcome fallback.
+                ...(arb.terminalReason !== undefined ? { reason: arb.terminalReason } : {}),
+              });
               return;
             }
           }
@@ -3636,17 +4768,21 @@ export class ChatEngine {
             role: 'assistant',
             content: arb.terminalAnswer,
           });
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamDone(arb.terminalAnswer, {
             blockedReport: buildPolicyTerminalBlockedReport(
               arb.policySource ?? 'progress_terminal',
               arb.terminalAnswer,
+              arb.terminalReason,
             ),
+            ...(arb.terminalReason !== undefined ? { reason: arb.terminalReason } : {}),
           });
           return;
         }
         if (arb.policyMessage) {
           this.conversation.push({ role: 'user', content: arb.policyMessage });
           yield { type: 'thought', text: `[Policy: ${arb.policySource}]` };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
         // Mid-loop checkpoint only (turn continues) — terminal paths use finalizeParityTurn.
         // Also flush policy events so hard harness kills still leave scoreboard data.
@@ -3677,11 +4813,13 @@ export class ChatEngine {
           const blockedDelta = reconcileStreamedAnswer(streamedAnswerForTurn, answer);
           if (blockedDelta !== null) {
             yield { type: 'answer_chunk', text: blockedDelta };
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
           }
           this.conversation.push({ role: 'assistant', content: answer });
           _turnSpan.setAttribute('babel.chat.blocked', 'true');
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamDone(answer, { blockedReport });
           return;
         }
@@ -3701,10 +4839,16 @@ export class ChatEngine {
             role: 'assistant',
             content: tokenCeilingBlocked,
           });
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamDone(tokenCeilingBlocked, {
             blockedReport: {
               schema_version: 1 as const,
               status: 'BLOCKED' as const,
+              // R0/W7: harness-origin budget condition. Typed so
+              // computeTerminalOutcome cannot fall through to the legacy prose
+              // regex and fabricate external blame.
+              reason_code: 'budget_exhausted' as const,
+              cause_class: 'harness' as const,
               reason: `Per-round token ceiling exceeded: ${this.apiTokenCount - this.apiTokenCountAtTurnStart} tokens with zero tool calls`,
               missing: 'Agent produced only text — no tool calls were made',
               checked: [
@@ -3743,10 +4887,15 @@ export class ChatEngine {
               role: 'assistant',
               content: textBlockedMsg,
             });
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamDone(textBlockedMsg, {
               blockedReport: {
                 schema_version: 1 as const,
                 status: 'BLOCKED' as const,
+                // R0/W7: harness-origin stall/recovery terminal. Typed so
+                // computeTerminalOutcome cannot fabricate external blame.
+                reason_code: 'recovery_exhausted' as const,
+                cause_class: 'harness' as const,
                 reason: 'Agent produced only text responses without tool calls or file changes',
                 missing: 'Unable to determine — no tool calls were made',
                 checked: [
@@ -3771,6 +4920,7 @@ export class ChatEngine {
             type: 'thought',
             text: `[Text-only loop: ${this.stallState.textOnlyTurns} turns, escalating]`,
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           _turnSpan.setAttribute('babel.chat.text_only_turn', this.stallState.textOnlyTurns);
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
@@ -3787,7 +4937,7 @@ export class ChatEngine {
             extractToolEnvBlockedSignal(t, envDetectOpts) !== null,
           );
         const completionPref = evaluateCompletionPrefersPatch({
-          executeIntent: resolvedIntent === 'execute',
+          executeIntent: effectiveExecutePolicy,
           hasAnyWrites: completionHasWrites,
           envBlocked,
         });
@@ -3801,6 +4951,7 @@ export class ChatEngine {
             type: 'thought',
             text: '[Implementor: completion prefers patch — continuing]',
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           this.policyEventLog.record({
             at_turn: this._turnIndex,
             kind: 'progress_policy',
@@ -3812,7 +4963,7 @@ export class ChatEngine {
         }
 
         // Execution gate: buffer streaming answer until gate check passes
-        const gateResult = this.evaluateCompletionGate(turnResult, resolvedIntent);
+        const gateResult = this.evaluateCompletionGate(turnResult, effectiveIntent);
         const hardGate = isBabelHeadlessEnv() || !process.stdout.isTTY;
 
         if (gateResult === 'reject') {
@@ -3839,6 +4990,7 @@ export class ChatEngine {
               role: 'assistant',
               content: AUTO_CONTINUE_REFUSAL_MSG,
             });
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamDone(AUTO_CONTINUE_REFUSAL_MSG, {
               blockedReport: buildAutoContinueBlockedReport(),
               ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
@@ -3849,6 +5001,7 @@ export class ChatEngine {
             _turnSpan.setAttribute('babel.chat.gate_blocked', 'true');
             endSpan(_turnSpan, SpanStatusCode.OK);
             _turnSpan = null;
+            if (!this.isSubmissionCurrent(submissionGeneration)) return;
             yield this.streamDone(`BLOCKED: ${plan.reason}`, {
               blockedReport: this.buildVerifierBlockedReport(plan.reason),
               ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
@@ -3878,6 +5031,7 @@ export class ChatEngine {
                 score: pcResult.score,
                 message: `Gate strike threshold escalated to ${pcResult.intervention}`,
               };
+              if (!this.isSubmissionCurrent(submissionGeneration)) return;
             }
 
             this.conversation.push({ role: 'assistant', content: answer });
@@ -3903,13 +5057,18 @@ export class ChatEngine {
               /* thought emitted via yield below when we can */
             },
           },
-          resolvedIntent,
+          effectiveIntent,
         );
+        // R0-8: the diff critic is a suspension point; a superseded generator
+        // must not install critic receipts, strikes or repair budgets on the
+        // task that now owns the engine.
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         if (this.lastCriticReceipt) {
           yield {
             type: 'thought',
             text: `[Diff critic: ${this.lastCriticReceipt.verdict}]`,
           };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
         if (streamCritic === 'reject') {
           _turnSpan.setAttribute('babel.chat.critic_strike', this.criticStrikes);
@@ -3957,6 +5116,7 @@ export class ChatEngine {
           _turnSpan.setAttribute('babel.chat.critic_hard_block', 'true');
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
           yield this.streamDone(blockedAnswer, {
             blockedReport: report,
             ...(this.lastCriticReceipt ? { criticReceipt: this.lastCriticReceipt } : {}),
@@ -3971,6 +5131,7 @@ export class ChatEngine {
         const answerDelta = reconcileStreamedAnswer(streamedAnswerForTurn, answer);
         if (answerDelta !== null) {
           yield { type: 'answer_chunk', text: answerDelta };
+          if (!this.isSubmissionCurrent(submissionGeneration)) return;
         }
         this.conversation.push({ role: 'assistant', content: answer });
         _turnSpan.setAttribute('babel.chat.turn', `${turn + 1}:completion`);
@@ -3979,6 +5140,7 @@ export class ChatEngine {
         }
         endSpan(_turnSpan, SpanStatusCode.OK);
         _turnSpan = null;
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(answer, {
           ...(this.lastCriticReceipt ? { criticReceipt: this.lastCriticReceipt } : {}),
         });
@@ -3995,6 +5157,9 @@ export class ChatEngine {
     const maxTurnAnswer = await this.synthesizeAnswer(allToolObservations, {
       onAnswerChunk: (_chunk) => {},
     }).catch(() => '');
+    // R0-8: synthesis is a suspension point; a superseded generator must not
+    // append to the new task's conversation.
+    if (!this.isSubmissionCurrent(submissionGeneration)) return;
     this.conversation.push({ role: 'assistant', content: maxTurnAnswer });
 
     // R1: Check synthesized answer for BLOCKED before gate — must come
@@ -4002,18 +5167,20 @@ export class ChatEngine {
     // that bypasses the write/verifier gate.
     const maxTurnBlockedReport = this.detectAndBuildBlockedReport(maxTurnAnswer);
     if (maxTurnBlockedReport) {
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       yield this.streamDone(maxTurnAnswer, {
         blockedReport: maxTurnBlockedReport,
       });
       return;
     }
 
-    if (resolvedIntent === 'execute') {
+    if (effectiveExecutePolicy) {
       const gateResult = this.evaluateCompletionGate(
         { type: 'completion', answer: '' },
-        resolvedIntent,
+        effectiveIntent,
       );
       if (gateResult === 'reject') {
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamFailed(`Turn limit exceeded. ${this.buildRejectionMessage()}`);
         return;
       }
@@ -4026,14 +5193,18 @@ export class ChatEngine {
             /* no-op on terminal stream path */
           },
         },
-        resolvedIntent,
+        effectiveIntent,
         { terminal: true },
       );
+      // R0-8: terminal critic inference is a suspension point. Do not read
+      // its receipt or emit any terminal evidence after ownership changes.
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
       if (this.lastCriticReceipt) {
         yield {
           type: 'thought',
           text: `[Diff critic: ${this.lastCriticReceipt.verdict}]`,
         };
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
       }
       if (terminalCritic === 'block' || terminalCritic === 'reject') {
         const report = this.buildCriticBlockedReport(
@@ -4044,6 +5215,7 @@ export class ChatEngine {
           },
         );
         const blockedAnswer = this.buildCriticBlockedAnswer(report);
+        if (!this.isSubmissionCurrent(submissionGeneration)) return;
         yield this.streamDone(blockedAnswer, {
           blockedReport: report,
           ...(this.lastCriticReceipt ? { criticReceipt: this.lastCriticReceipt } : {}),
@@ -4051,6 +5223,7 @@ export class ChatEngine {
         return;
       }
     }
+    if (!this.isSubmissionCurrent(submissionGeneration)) return;
     yield this.streamDone(maxTurnAnswer, {
       ...(this.lastCriticReceipt ? { criticReceipt: this.lastCriticReceipt } : {}),
     });
@@ -4118,6 +5291,9 @@ export class ChatEngine {
   ): void {
     const reconstructed = this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
       systemPrompt,
+      ...(this.parity.contextCheckpoint
+        ? { installedContextCheckpoint: this.parity.contextCheckpoint }
+        : {}),
     });
     // Native runners share this deterministic final serializer. Compare its
     // exact output rather than neutral messages so committed capsules cannot
@@ -4180,6 +5356,7 @@ export class ChatEngine {
       runDir: options?.runDir ?? this.engineRunDir,
     });
     this.restorePersistedVerifierEvidence(log);
+    this.restoreRecoveryWorkingState(log);
     const repairGuidance = resumedToolRecoveryGuidance(this.parity.sessionEvents);
     if (
       repairGuidance &&
@@ -4189,8 +5366,121 @@ export class ChatEngine {
     }
     return interrupted;
   }
+
+  private persistRecoveryWorkingState(): void {
+    try {
+      recordWorkingStateSnapshot(this.parity.sessionEvents, this.workingState, this.parity.turnId ?? null);
+      flushSessionEventLogStrict(this.engineRunDir, this.parity.sessionEvents);
+    } catch {
+      // A settled tool must not throw into the generic settlement catch and
+      // append a duplicate terminal. Future mutations fail closed instead.
+      this.recoveryStatePersistenceUnavailable = true;
+    }
+  }
+
+  private beginRecoveryLocalizationInspection(tool: string, rawTarget: string): boolean {
+    const localization = this.workingState.localization;
+    if (!localization || localization.phase === 'localized') return true;
+    if (localization.phase === 'exhausted' || localization.calls >= 4 || localization.rounds >= 2) {
+      this.workingState = applyWorkingStateEvent(this.workingState, {
+        type: 'localization_update', localization: { ...localization, phase: 'exhausted' },
+      });
+      this.persistRecoveryWorkingState();
+      return false;
+    }
+    const current = this.currentRecoveryBinding();
+    if (!current || !sameRecoveryBinding(localization.binding, current)) {
+      this.workingState = applyWorkingStateEvent(this.workingState, { type: 'recovery_candidate_drift' });
+      this.persistRecoveryWorkingState();
+      return false;
+    }
+    const target = recoveryTargetIdentity(this.options.projectRoot, rawTarget) ?? undefined;
+    this.workingState = applyWorkingStateEvent(this.workingState, {
+      type: 'localization_update',
+      localization: beginLocalizationCall(localization, target),
+    });
+    this.persistRecoveryWorkingState();
+    return true;
+  }
+
+  private finishRecoveryLocalizationInspection(input: {
+    tool: string; rawTarget: string; content?: string; succeeded: boolean; startLine?: number; pattern?: string;
+  }): void {
+    const localization = this.workingState.localization;
+    if (!localization || localization.phase !== 'LOCALIZE_FAILURE') return;
+    const target = recoveryTargetIdentity(this.options.projectRoot, input.rawTarget) ?? undefined;
+    const withCandidates = input.tool === 'glob' && input.succeeded && input.pattern && input.content
+      ? discoverTestCandidates(localization, this.options.projectRoot, input.pattern, input.content)
+      : localization;
+    const updated = finishLocalizationCall(withCandidates, {
+      type: input.tool, succeeded: input.succeeded, projectRoot: this.options.projectRoot,
+      ...(target ? { target } : {}),
+      ...(input.content !== undefined ? { content: input.content } : {}),
+      ...(input.startLine !== undefined ? { startLine: input.startLine } : {}),
+    });
+    this.workingState = applyWorkingStateEvent(this.workingState, { type: 'localization_update', localization: updated });
+    if (updated.phase === 'localized' && updated.acceptedPath && updated.observationDigest && this.workingState.recoveryGate) {
+      this.workingState = {
+        ...this.workingState,
+        recoveryGate: { ...this.workingState.recoveryGate, failingTargets: [updated.acceptedPath] },
+      };
+      this.workingState = applyWorkingStateEvent(this.workingState, {
+        type: 'add_evidence', evidence: `${input.tool}:${updated.acceptedPath}`, discriminating: true,
+        provenance: {
+          tool: input.tool, target: updated.acceptedPath,
+          failureSignature: updated.failureSignature, binding: updated.binding,
+          observationDigest: updated.observationDigest,
+        },
+      });
+    }
+    this.persistRecoveryWorkingState();
+  }
+
+  private restoreRecoveryWorkingState(log: SessionEventLog): void {
+    const latestSnapshot = [...log.events].reverse().find((event) => event.kind === 'working_state_snapshot');
+    const latestVerifier = [...log.events].reverse().find((event) =>
+      event.kind === 'verifier_attempt' && event.authoritative && event.exit_code !== undefined,
+    );
+    const latestSubmission = [...log.events].reverse().find((event) => event.kind === 'user_submitted');
+    if (latestSubmission?.kind === 'user_submitted' && latestSubmission.continued_task === false &&
+        (!latestSnapshot || latestSnapshot.seq < latestSubmission.seq) &&
+        (!latestVerifier || latestVerifier.seq < latestSubmission.seq)) {
+      this.workingState = createWorkingState(latestSubmission.task_preview);
+      return;
+    }
+    if (latestSubmission?.kind === 'user_submitted' && latestSubmission.continued_task !== true &&
+        latestSnapshot && latestSnapshot.seq < latestSubmission.seq) {
+      this.workingState = applyWorkingStateEvent(createWorkingState(latestSubmission.task_preview), {
+        type: 'recovery_gate',
+        failureSignature: 'resumed-unknown-task-boundary',
+        requiredEvidence: 'Rerun an authoritative verifier before recovery.',
+      });
+      return;
+    }
+    if (latestSnapshot?.kind === 'working_state_snapshot' &&
+        (!latestVerifier || latestSnapshot.seq > latestVerifier.seq)) {
+      const restored = restoreWorkingStateSnapshot(latestSnapshot.state);
+      if (restored) {
+        this.workingState = restored;
+        return;
+      }
+    }
+    if (latestSnapshot || (latestVerifier?.kind === 'verifier_attempt' && latestVerifier.exit_code !== 0)) {
+      this.workingState = applyWorkingStateEvent(createWorkingState(this.options.task), {
+        type: 'recovery_gate',
+        failureSignature: 'resumed-unbound-red-verifier',
+        requiredEvidence: 'Rerun the failed verifier to bind recovery to the current candidate.',
+      });
+    }
+  }
   restoreSessionEventsFromDir(runDir?: string): number {
     const targetDir = runDir ?? this.engineRunDir;
+    // R1 durability (6b-1): recover an interrupted checkpoint batch BEFORE the
+    // session log is read, so a staged/abandoned artifact can never be
+    // consumed as durable state. Idempotent no-op when no journal exists; a
+    // malformed journal still fails closed (CHECKPOINT_JOURNAL_INVALID), now
+    // before the reads it would otherwise corrupt.
+    recoverCheckpointArtifacts(targetDir);
     const loaded = loadSessionEventLogIfPresentForResume(targetDir, this.engineRunId);
     return loaded ? this.restoreSessionEvents(loaded, { runDir: targetDir }) : 0;
   }
@@ -4209,6 +5499,30 @@ export class ChatEngine {
     this.verifierReceiptCache.clear();
     this.platformUnusableVerifiers.clear();
     this.verifierDependencyHashes.clear();
+    this.lastVerifierSignalSignature = null;
+  }
+
+  /**
+   * M1: a verifier signal only counts as progress when the verifier's identity
+   * or observed output changed. Repeated identical shell loops must not reset
+   * the no-progress bound (D-T06) or add verifier score.
+   */
+  private computeVerifierChanged(
+    results: ReadonlyArray<{ tool_name: string; content?: string; exit_code?: number }>,
+  ): boolean {
+    const verifierTools = new Set(['run_command', 'test_run', 'shell_exec']);
+    const relevant = results.filter((r) => verifierTools.has(r.tool_name));
+    if (relevant.length === 0) return false;
+    const signature = relevant
+      .map(
+        (r) =>
+          `${r.tool_name}:${r.exit_code ?? ''}:` +
+          createHash('sha256').update(r.content ?? '').digest('hex').slice(0, 16),
+      )
+      .join('|');
+    const changed = signature !== this.lastVerifierSignalSignature;
+    this.lastVerifierSignalSignature = signature;
+    return changed;
   }
 
   private restorePersistedVerifierEvidence(log: SessionEventLog): void {
@@ -4223,6 +5537,20 @@ export class ChatEngine {
       ...prepareKernelVerifierInput(this.lastVerifierReceipt, this.executedVerifierLedger),
       requiredVerifierCommands: this.getResolvedRequiredVerifiers(),
     };
+  }
+
+  /**
+   * R0/D01: terminal read-only input must be the *accepted* operation for this
+   * submission, not an ambient mode inference. `effectiveOperation` is resolved
+   * once from TaskShape in `beginUserSubmission`; `isReadOnlyChat()` remains a
+   * sufficient explicit read-only signal (BABEL_READ_ONLY / read_only_audit).
+   *
+   * Unknown/missing accepted runtime falls back to explicit-only behavior so a
+   * legacy caller cannot be reinterpreted as "no change" merely by writing
+   * nothing. A mutating accepted operation still requires a real verifier.
+   */
+  private isAcceptedReadOnlyTerminal(): boolean {
+    return this.lastTurnRuntime?.effectiveOperation === 'READ_ONLY' || isReadOnlyChat();
   }
 
   private decideCompletion(
@@ -4267,12 +5595,14 @@ export class ChatEngine {
       blockedReport?: BlockedReport | null;
       verifierTampered?: boolean;
       criticReceipt?: DiffCriticVerdict | null;
+      /** D03: explicit structured reason from the arbiter. */
+      reason?: TerminalReason;
     },
   ) {
     this.settleActiveExecutionForTerminal();
     const hasMutation = this.hasAnyWrites();
     let requestedOutcome = computeTerminalOutcome({
-      readOnly: isReadOnlyChat(),
+      readOnly: this.isAcceptedReadOnlyTerminal(),
       finalStatus: extra?.blockedReport
         ? 'blocked'
         : this.budgetExceeded
@@ -4295,8 +5625,24 @@ export class ChatEngine {
       planCompletion ? 'PLAN_COMPLETE' : requestedOutcome,
       hasMutation,
     );
-    const outcome =
+    const decisionOutcome =
       decision.finalOutcome === 'PLAN_COMPLETE' ? 'UNVERIFIED_PATCH' : decision.finalOutcome;
+    const terminalReason = this.resolveTerminalReason(
+      decisionOutcome,
+      extra?.blockedReport,
+      extra?.reason,
+    );
+    // R0-9: keep the tuple coherent. A read-only hard-cap that resolves a
+    // `budget_exhausted` reason must not project `NO_CHANGE_REQUIRED` alongside
+    // it. Exception: `verification_failed` legitimately pairs with
+    // `UNVERIFIED_PATCH` on the completed path (the patch is recorded but not
+    // verified); `outcomeFromReasonCode` carries the failed-path mapping
+    // (AGENT_FAILURE), so the gate decision stays authoritative there.
+    const reasonOutcome =
+      terminalReason?.code && terminalReason.code !== 'verification_failed'
+        ? outcomeFromReasonCode(terminalReason.code)
+        : undefined;
+    const outcome = reasonOutcome ?? decisionOutcome;
     {
       this.recordCompletionDecisionOnce({
         requestedOutcome: decision.requestedOutcome,
@@ -4305,6 +5651,9 @@ export class ChatEngine {
         reason: decision.reason,
         evidenceRefs: decision.evidenceRefs,
         policyVersion: decision.policyVersion,
+        ...(terminalReason !== undefined
+          ? { reasonCode: terminalReason.code, causeClass: terminalReason.cause_class }
+          : {}),
       });
     }
     // P0-E: attach shadow later-succeeded summary before export (idempotent with buildResult).
@@ -4340,6 +5689,7 @@ export class ChatEngine {
       this.engineRunDir,
       terminal.outcome,
       terminal.status,
+      terminalReason,
     );
     const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
       turnId: String(this.parity.turnId ?? this._turnIndex),
@@ -4361,6 +5711,7 @@ export class ChatEngine {
       ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
       runAllowance,
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
+      ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
     });
   }
 
@@ -4384,14 +5735,29 @@ export class ChatEngine {
     // Preserve an unknown terminal cause when no classifier or limiter proves
     // one. Durable validation accepts this explicit absence; guessing would
     // make the model-visible outcome less truthful.
-    const outcome = classifyFailureText(error) ?? limiterOutcome;
+    const classifiedOutcome = classifyFailureText(error) ?? limiterOutcome;
+    const terminalReason =
+      terminalReasonFromFailureText(error) ?? this.resolveTerminalReason(classifiedOutcome);
+    // R0-9: status/outcome/reason_code/cause_class must form one coherent tuple.
+    // The typed reason is the single authority; when it maps to an outcome, that
+    // outcome wins over an independent text classifier that may disagree (e.g.
+    // an unsupported-operation message that also matches an infra pattern).
+    const outcome =
+      (terminalReason?.code ? outcomeFromReasonCode(terminalReason.code) : undefined) ??
+      classifiedOutcome;
     if (outcome === 'BUDGET_EXHAUSTED') this.budgetExceeded = true;
     const terminal = projectChatTerminal({
       ...(outcome !== undefined ? { outcome } : {}),
       status: 'failed',
     });
     const runAllowance = this.assembleRunAllowance(terminal.status);
-    finalizeParityTurnSync(this.parity, this.engineRunDir, terminal.outcome, terminal.status);
+    finalizeParityTurnSync(
+      this.parity,
+      this.engineRunDir,
+      terminal.outcome,
+      terminal.status,
+      terminalReason,
+    );
     const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
       turnId: String(this.parity.turnId ?? this._turnIndex),
       taskClass: this.taskClass,
@@ -4406,6 +5772,7 @@ export class ChatEngine {
       ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
       runAllowance,
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
+      ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
     });
   }
 
@@ -4430,6 +5797,8 @@ export class ChatEngine {
       type: 'cancelled',
       status: 'cancelled',
       outcome: 'CANCELLED',
+      reason_code: 'cancelled',
+      cause_class: null,
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     };
   }
@@ -4448,15 +5817,50 @@ export class ChatEngine {
       throw new Error('Cannot change ChatEngine run identity after durable events exist');
     }
     const authority = this.parity.liveAuthority;
+    // A2 F2/A3: the host-injected durable admission store must survive the
+    // parity rebuild — this is the primary event-log resume path
+    // (construct without runId, then assignRunId).
+    const admissionStore = this.parity.admissionStore;
     this.engineRunId = runId;
     this.parity = createParityRuntime(runId);
     if (authority) this.parity.liveAuthority = authority;
+    if (admissionStore) this.parity.admissionStore = admissionStore;
     mkdirSync(this.engineRunDir, { recursive: true });
     const persistedTaskBudget = this.readPersistedTaskBudget(this.engineRunDir);
+    const chargeFilesValid = this.restoreOwnerCharges(this.engineRunDir);
     this.restorePersistedTaskBudget(persistedTaskBudget);
+    if (!chargeFilesValid) this.taskCostScopeUnavailable = true;
     this.persistTaskCostBaseline();
     if (authority) persistLiveSessionAuthority(this.engineRunDir, authority);
     this.failureBudgetTracker = createFailureBudgetTrackerFromContract(authority?.taskContract);
+  }
+
+  /**
+   * Host seam: attach the durable P05 admission store once the engine's final
+   * run id is known (fresh sessions allocate their run id during/after
+   * construction). The opening host owns open/close; the engine only reads
+   * owners and admits/settles the commands it executes.
+   */
+  attachAdmissionStore(store: AdmissionStore): void {
+    const previous = this.parity.admissionStore;
+    // Close-before-replace (consistent with every other store-replace site):
+    // a re-attach must never orphan the previous refcounted reference.
+    if (previous && previous !== store) previous.close();
+    this.parity.admissionStore = store;
+  }
+
+  /**
+   * Session teardown (REPL /clear, resume replacement, headless run end,
+   * protocol-host close): a session ending aborts any still-live admitted
+   * claim, then releases this engine's store reference. The underlying
+   * refcounted handle closes only when the last reference is released.
+   */
+  closeAdmissionStore(): void {
+    const claim = this.activeAdmissionClaim;
+    if (claim && !claim.settled) {
+      this.settleAdmissionClaim(claim, 'aborted', { finalOutcome: 'SESSION_CLOSED' });
+    }
+    this.parity.admissionStore?.close();
   }
 
   replaceConversation(messages: ChatMessage[]): void {
@@ -4475,7 +5879,11 @@ export class ChatEngine {
   }
 
   getProviderConversation(): ProviderMessage[] {
-    return this.services.conversation.rebuildProviderMessages(this.parity.eventLog);
+    return this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
+      ...(this.parity.contextCheckpoint
+        ? { installedContextCheckpoint: this.parity.contextCheckpoint }
+        : {}),
+    });
   }
 
   resyncTurnStateAfterBranch(): void {
@@ -4523,6 +5931,21 @@ export class ChatEngine {
   }
 
   /**
+   * S04/#214: this engine's execution context for the current turn. Approval
+   * session/turn/root come from engine state, never from another engine's
+   * ALS-bound scope.
+   */
+  private buildBaseExecutionContext(): ExecutionContext {
+    return {
+      threadId: this.parity.eventLog.thread_id ?? this.engineRunId,
+      turnId: this.parity.turnId,
+      root: this.options.projectRoot,
+      approvalSession: getChatApprovalSession(),
+      indexWritePolicy: 'allow',
+    };
+  }
+
+  /**
    * W0.3: open TurnRuntime for a user submission.
    * Isolates write/gate counters by default so a prior task's patch cannot
    * satisfy a later completion gate. Pass continueTask: true for explicit
@@ -4564,6 +5987,16 @@ export class ChatEngine {
     if (!runtime.continuedTask && !continuationScopeUnavailable) {
       // A fresh submission starts a new enforcement scope. The global tracker
       // is intentionally preserved for session/accounting views.
+      //
+      // S06 cross-task integration: reset ONLY task-local progress punishment
+      // (level/score/strikes/streak/signals). Do not recreate the controller and
+      // do not blank environment/provider capability health: a DEGRADED
+      // capability persists across submissions and is recoverable only via
+      // recordSuccess on a genuinely successful operation. Recreating the
+      // controller here would silently revert DEGRADED capabilities to
+      // AVAILABLE and would also discard task-local punishment on explicit
+      // `continueTask`.
+      this.progressController.resetTaskLocal();
       this.taskCostScopeUnavailable = false;
       this.criticRepairCostCapUsd = null;
       this.postWriteRepairWallCapMs = null;
@@ -4571,6 +6004,49 @@ export class ChatEngine {
       this.terminatingLimiter = null;
       this.terminalLimiterReason = null;
       this.clearVerifierEvidenceState();
+      // R0-1: a fresh submission owns its own WorkingState. Task A's goal,
+      // hypothesis, evidence, files of interest, mutation attribution, verifier
+      // receipt, failure surface, repair diagnosis, invalidated assumptions and
+      // next experiment must not seed task B's reasoning or the working-state
+      // block injected into task B's provider prompt. The previous block only
+      // set a goal when `workingState.goal` was empty, so task A's goal survived
+      // and task B never received its own. Explicit continuation (`continuedTask`)
+      // preserves the current state by construction; this reset lives only in the
+      // fresh-task branch. Historical durable logs are untouched.
+      this.workingState = createWorkingState(runtime.taskText.slice(0, 240));
+      // P11 exact observations and the installed generation are task-scoped.
+      // A fresh task may not recall or checkpoint evidence captured under a
+      // prior task owner, even when the physical observation bytes remain.
+      this.p11ObservationRefs = [];
+      this.p11ObservationCaptureIssues = [];
+      delete this.parity.contextCheckpoint;
+      // R0-1: failure-class budgets are task-scoped. A fresh task must not
+      // inherit budgets already consumed by the previous task; recreate the
+      // tracker from the live contract at the same fresh-task boundary.
+      this.failureBudgetTracker = createFailureBudgetTrackerFromContract(
+        this.parity.liveAuthority?.taskContract,
+      );
+      // R0 Scenario 8: a fresh submission must not inherit the previous task's
+      // in-memory mutation/tool-call ownership. hasAnyWrites() and
+      // currentTurnHasMutation() read toolCallLog, so leaving task A's confirmed
+      // write in place projects task B from task A's patch (UNVERIFIED_PATCH
+      // instead of NO_CHANGE_REQUIRED). This drops only in-memory task-local
+      // evidence; task A's physical on-disk changes remain visible, exactly as
+      // resyncTurnStateAfterBranch treats a discarded branch.
+      this.toolCallLog = [];
+      this._turnToolCallLogStart = 0;
+      this._logIndexToTurn.clear();
+      // Cancellation state belongs to the previous submission. submitMessageStream
+      // also clears it, but the direct applyUserSubmission seam must be
+      // self-consistent.
+      this._cancelled = false;
+      // A red verifier in task A must not keep reopening investigation tools, and
+      // a one-shot investigate soft nudge must not stay latched for task B.
+      this.lastVerifierFailed = false;
+      this.investigateSoftNudgeDone = false;
+      // Child delegation attempt identity and phase routing are task-local.
+      this.childAttempts.clear();
+      this._lastPhase = null;
       // Plan handoff force-mutate elevation must not leak into an unrelated task.
       this.forceMutateTurnsOverride = null;
       // P0-C: prior task exploration / stall state must not bias a new submission.
@@ -4743,6 +6219,37 @@ export class ChatEngine {
     // task's read dedupe suppress evidence in the new request.
     this.resetReadInjectionContext();
     this.clearSystemPromptCache();
+    // S06/#4: a reused engine replaced projectRoot/instructionRoot/systemContext
+    // above, so the manifest built at construction is stale. Recompute the
+    // delivered-instruction authority from the current options/roots (and the
+    // new turn's task class) so the persisted manifest reports what this turn
+    // actually delivered.
+    if (this.parity?.liveAuthority) {
+      try {
+        refreshEngineInstructionManifest({
+          parity: this.parity,
+          options: this.options,
+          taskClass: this.taskClass,
+          executionProfile: this.executionProfile,
+          engineRunDir: this.engineRunDir,
+        });
+      } catch (err) {
+        // Manifest refresh is best-effort telemetry: a failure must not fail
+        // the turn (some test doubles run applyTurnPreparation without an
+        // established authority). Record it so a persistent failure is visible.
+        try {
+          this.policyEventLog.record({
+            at_turn: this._turnIndex,
+            kind: 'progress_policy',
+            detail: `instruction_manifest_refresh_failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          });
+        } catch {
+          /* telemetry must not fail the turn */
+        }
+      }
+    }
   }
 
   /**
@@ -4767,8 +6274,18 @@ export class ChatEngine {
       .split('\n')
       .filter((line) => line.trim() !== '')
       .map((line) => JSON.parse(line));
-    const sessionDir = chatSessionDir(engineRunId),
-      sessionLog = loadSessionEventLogForResume(sessionDir, engineRunId);
+    const sessionDir = chatSessionDir(engineRunId);
+    // R1 durability (6b-1): recover an interrupted checkpoint batch BEFORE any
+    // durable artifact is read. A merely staged/abandoned artifact is NEVER
+    // current authority: a crash between batch renames must not let the
+    // pre-recovery thread/session logs (which may still carry an uncommitted
+    // capsule) be loaded into the restored engine, and with no valid published
+    // checkpoint the restore ends non-authoritative (lineage_not_committed /
+    // lineage_missing → checkpoint inert, durable logs remain the only
+    // source). Idempotent no-op without a journal; a malformed journal fails
+    // closed (CHECKPOINT_JOURNAL_INVALID) here rather than after partial reads.
+    recoverCheckpointArtifacts(sessionDir);
+    const sessionLog = loadSessionEventLogForResume(sessionDir, engineRunId);
     const engine = new ChatEngine({
       ...options,
       runId: engineRunId,
@@ -4776,8 +6293,17 @@ export class ChatEngine {
     });
     engine.conversation = messages;
     const threadLog = loadThreadEventLogFromDir(sessionDir);
-    if (threadLog) engine.restoreEventLog(threadLog);
+    if (threadLog) {
+      engine.restoreEventLog(threadLog);
+    }
+    // Load durable observation membership before session-event restore; the
+    // restore re-persists the snapshot from this membership.
+    engine.loadObservationMembership(sessionDir);
     engine.restoreSessionEvents(sessionLog, { runDir: sessionDir });
+    // One authoritative authority-hydration path for every resume: durable
+    // owner recovery + installed-lineage validation + independent observation
+    // re-authorization. A checkpoint that cannot prove all three stays inert.
+    engine.hydrateInstalledContextAuthority(sessionDir);
     engine.clearVerifierEvidenceState();
     engine.cachedSystemPromptLegacy = null;
     engine.cachedSystemPromptNative = null;
@@ -4787,7 +6313,644 @@ export class ChatEngine {
     return engine;
   }
 
+  /**
+   * Load durable observation membership from the live-session snapshot. This
+   * MUST run before session-event restore: `restoreSessionEvents` re-projects
+   * and persists the snapshot from `parity.authorizedObservationIds`, so loading
+   * afterwards would observe (and then erase) the durable membership.
+   */
+  loadObservationMembership(sessionDir: string = this.engineRunDir): void {
+    const liveSnapshot = loadLiveSessionSnapshot(sessionDir);
+    this.parity.authorizedObservationIds = new Set(
+      liveSnapshot?.authorized_observation_ids ?? [],
+    );
+  }
+
+  /**
+   * Authoritative context-authority hydration — the single path used by every
+   * resume/construction entrypoint. Loads `context-checkpoint.json`, requires
+   * the durable owner and installed lineage to validate, independently
+   * re-authorizes the observation manifest against durable session membership,
+   * and only then promotes the checkpoint to provider context. A checkpoint
+   * that cannot prove ownership, lineage, and observation membership stays
+   * advisory/inert and the durable thread/session logs remain the only source.
+   */
+  hydrateInstalledContextAuthority(sessionDir: string = this.engineRunDir): {
+    applied: boolean;
+    issues: string[];
+  } {
+    const issues: string[] = [];
+    const checkpointPath = join(sessionDir, 'context-checkpoint.json');
+    if (!existsSync(checkpointPath)) return { applied: false, issues };
+    const threadId = this.parity.eventLog.thread_id;
+    // Durable session membership for model-readable observations is loaded from
+    // the live-session snapshot; a checkpoint manifest cannot grant its own.
+    this.loadObservationMembership(sessionDir);
+    try {
+      const checkpoint = JSON.parse(readFileSync(checkpointPath, 'utf8')) as ContextCheckpointV1;
+      const durableOwner = this.parity.admissionStore?.readOwner(threadId) ?? null;
+      const lineageEvidence: ContextCheckpointLineageEvidenceV1 = {
+        threadEvents: this.parity.eventLog.events,
+        sessionEvents: this.parity.sessionEvents.events,
+      };
+      const coldResume = validateContextCheckpoint(checkpoint, {
+        expectedThreadId: threadId,
+        currentOwner: durableOwner,
+        requireInstalledLineage: true,
+        authorizedObservationIds: [...(this.parity.authorizedObservationIds ?? [])],
+        lineageEvidence,
+      });
+      if (coldResume.status !== 'valid') {
+        issues.push(coldResume.reasons.join('; '));
+        return { applied: false, issues };
+      }
+      const authorizedObservationIds = [...(this.parity.authorizedObservationIds ?? [])];
+      const resolvedObservations = checkpoint.observation_manifest.map((observation) =>
+        resolveObservation(
+          observation.observation_id,
+          {
+            principal_id: 'agent:main',
+            authorized_observation_ids: authorizedObservationIds,
+          },
+          {
+            storage_root: join(this.engineRunDir, 'observations'),
+            clock: () => new Date().toISOString(),
+            policy: { durability: 'none' },
+          },
+        ),
+      );
+      const unavailable = resolvedObservations
+        .map((result, index) =>
+          result.status === 'resolved'
+            ? null
+            : `observation ${checkpoint.observation_manifest[index]?.observation_id ?? 'unknown'} unavailable: ${result.reason}`,
+        )
+        .filter((issue): issue is string => issue !== null);
+      if (unavailable.length > 0) {
+        // An authorized id with no durable payload must not silently
+        // reconstruct partial trusted context.
+        this.p11ObservationCaptureIssues = unavailable;
+        issues.push(...unavailable);
+        return { applied: false, issues };
+      }
+      this.parity.contextCheckpoint = checkpoint;
+      this.p11ObservationRefs = resolvedObservations
+        .map((result) => (result.status === 'resolved' ? result.observation : null))
+        .filter((observation): observation is ObservationRefV1 => observation !== null);
+      return { applied: true, issues };
+    } catch (err) {
+      // A malformed or stale context checkpoint is unavailable evidence;
+      // durable thread/session logs remain the only resume source.
+      issues.push(err instanceof Error ? err.message : String(err));
+      return { applied: false, issues };
+    }
+  }
+
   // ── Private Methods ─────────────────────────────────────────────────────
+
+  private currentP11Owner(): ContextCheckpointOwnerV1 | null {
+    try {
+      const store = this.parity.admissionStore;
+      const claim = this.activeAdmissionClaim;
+      // A live admitted claim is required: install authority is bounded to an
+      // admitted command in flight, never to a settled owner row alone.
+      if (!store || !claim || claim.settled) return null;
+      // The reference is this engine's OWN admitted identity (from
+      // admitCommand), verified against the durable owner row — not a fresh
+      // read validated against itself (A5 self-referential fence).
+      const durable = store.readOwner(claim.threadId);
+      if (!durable) return null;
+      if (durable.generation !== claim.generation || durable.token !== claim.token) return null;
+      return {
+        threadId: durable.threadId,
+        generation: durable.generation,
+        token: durable.token,
+      };
+    } catch {
+      // A1: owner reads fail closed to null, never out of the install path.
+      return null;
+    }
+  }
+
+  /**
+   * P05: admit the authorized command this submission is about to execute —
+   * the production admission site, introduced before any P11 checkpoint
+   * installation can succeed (installs run inside the stream loop this
+   * wrapper precedes).
+   *
+   * Owner origin: the durable owner row is written ONLY by real command
+   * admission — generation 1 with a fresh random lease token on a thread's
+   * first command, the durable owner of record recovered on resume/restart,
+   * or exactly one generation up (proving the token this engine still holds)
+   * when this submission replaces an in-flight one. Never turn numbers, run
+   * ids, or session-dir existence.
+   *
+   * Fails closed: any rejection (stale/foreign owner, corrupt state) leaves no
+   * live claim and drops the lease, so `currentP11Owner` resolves null and no
+   * checkpoint can install. Admission is a record, never a permission gate —
+   * a rejected admission does not block execution itself.
+   *
+   * Returns the claim THIS admission created (or null) so the submission
+   * wrapper can settle exactly that claim at exit.
+   */
+  private admitCurrentSubmission(
+    submissionGeneration: number,
+    userInput: string,
+  ): ChatEngineAdmissionClaim | null {
+    const store = this.parity.admissionStore;
+    if (!store) return null;
+    try {
+      const threadId = this.parity.eventLog.thread_id;
+      const commandId = `${this.admissionEpoch}:s${submissionGeneration}`;
+      const prior = this.activeAdmissionClaim;
+      let ownerGeneration: number;
+      let ownerToken: string;
+      let previousOwnerToken: string | undefined;
+      if (prior && !prior.settled) {
+        // Task replacement: the in-flight claim is settled as aborted first,
+        // then ownership advances by exactly one generation with the old token
+        // presented as proof — a stale holder can never prove takeover.
+        this.settleAdmissionClaim(prior, 'aborted', { finalOutcome: 'SUPERSEDED_BY_SUBMISSION' });
+        ownerGeneration = prior.generation + 1;
+        previousOwnerToken = prior.token;
+        ownerToken = randomUUID();
+      } else if (this.admissionLease) {
+        ownerGeneration = this.admissionLease.generation;
+        ownerToken = this.admissionLease.token;
+      } else {
+        // Resume/crash restart: recover the durable owner of record; only a
+        // thread with no owner row ever mints generation 1.
+        const durable = store.readOwner(threadId);
+        if (durable) {
+          ownerGeneration = durable.generation;
+          ownerToken = durable.token;
+        } else {
+          ownerGeneration = 1;
+          ownerToken = randomUUID();
+        }
+      }
+      const decision = store.admitCommand({
+        digestInput: {
+          threadId,
+          taskId: this.parity.liveAuthority?.taskContract.task_id ?? this.engineRunId,
+          commandId,
+          mode: this.executionProfile,
+          resolvedOperationPolicy: {
+            taskClass: this.taskClass,
+            executionProfile: this.executionProfile,
+            hardPlanMode: this.options.hardPlanMode === true,
+          },
+          taskShapeClass: this.taskClass,
+          targetRoot: this.options.projectRoot,
+          offeredToolSchemaVersion: CHAT_ADMISSION_TOOL_SCHEMA_VERSION,
+          contextSnapshotId: commandId,
+          payload: {
+            kind: 'chat_submission',
+            input_sha256: createHash('sha256').update(userInput).digest('hex'),
+          },
+        },
+        ownerGeneration,
+        ownerToken,
+        ...(previousOwnerToken !== undefined ? { previousOwnerToken } : {}),
+        leaseId: this.admissionEpoch,
+        // A chat command's durable effect is its thread/session event-log
+        // append — reconcilable after a crash, never silently replayed as ok.
+        effectClass: 'reconcilable_mutation',
+        operationId: `chat-submission:${threadId}:${commandId}`,
+      });
+      if (decision.kind === 'admitted' || decision.kind === 'pending') {
+        this.admissionLease = { generation: ownerGeneration, token: ownerToken };
+        const claim: ChatEngineAdmissionClaim = {
+          threadId,
+          commandId,
+          generation: ownerGeneration,
+          token: ownerToken,
+          submissionGeneration,
+          settled: false,
+        };
+        this.activeAdmissionClaim = claim;
+        return claim;
+      }
+      // Rejected or replayed: fail closed — no live claim, and a rejected
+      // admission means this engine is not the durable owner.
+      this.activeAdmissionClaim = null;
+      if (decision.kind === 'rejected') this.admissionLease = null;
+      return null;
+    } catch {
+      // Record-only: never break execution, but never keep claim state that
+      // admission did not durably prove.
+      this.activeAdmissionClaim = null;
+      this.admissionLease = null;
+      return null;
+    }
+  }
+
+  /** Settle an admitted claim at command settlement (terminal/replacement/close). */
+  private settleAdmissionClaim(
+    claim: ChatEngineAdmissionClaim,
+    state: 'settled' | 'aborted' | 'indeterminate',
+    outcome: unknown,
+  ): void {
+    if (claim.settled) return;
+    try {
+      const store = this.parity.admissionStore;
+      if (store) {
+        const input = {
+          threadId: claim.threadId,
+          commandId: claim.commandId,
+          ownerGeneration: claim.generation,
+          ownerToken: claim.token,
+          state,
+          outcome,
+        } as const;
+        const decision = store.settleAdmission(input);
+        // A1: a gen-N command superseded before settlement can no longer
+        // prove success under current authority — record it as indeterminate
+        // instead of leaving it 'claimed' forever.
+        if (
+          !decision.settled &&
+          state === 'settled' &&
+          decision.reasonCode === ADMISSION_REASONS.STALE_OWNER
+        ) {
+          store.settleAdmission({ ...input, state: 'indeterminate' });
+        }
+      }
+    } catch {
+      // Record-only: a failed settle leaves the claim 'claimed' for recovery
+      // (fail-closed manual review) and never blocks the caller.
+    } finally {
+      claim.settled = true;
+    }
+  }
+
+  /**
+   * Exit settlement for a CAPTURED claim — never the mutable
+   * `activeAdmissionClaim`, which during task replacement already belongs to
+   * the successor. A claim already settled by the replacement's admission is
+   * a correct no-op here. Cancellation is derived PER CLAIM: `this._cancelled`
+   * only describes the submission that owns `activeSubmissionGeneration`, so a
+   * successor's reset of that flag can never re-label this claim.
+   */
+  private settleClaimOnExit(claim: ChatEngineAdmissionClaim | null): void {
+    if (!claim || claim.settled) return;
+    const isCurrent =
+      this.activeAdmissionClaim === claim ||
+      claim.submissionGeneration === this.activeSubmissionGeneration;
+    if (!isCurrent) {
+      // Superseded while still live: a command that no longer executes can
+      // never record success (the replacement's admission normally settled it
+      // as aborted already — this covers paths that did not).
+      this.settleAdmissionClaim(claim, 'indeterminate', {
+        finalOutcome: 'SUPERSEDED_BY_SUBMISSION',
+      });
+      return;
+    }
+    this.settleAdmissionClaim(claim, this._cancelled ? 'aborted' : 'settled', {
+      finalOutcome: this._cancelled ? 'CANCELLED' : 'CHAT_SUBMISSION_TERMINAL',
+    });
+  }
+
+  /** Terminal settlement for the engine's currently-active claim. */
+  private settleActiveAdmissionClaim(): void {
+    this.settleClaimOnExit(this.activeAdmissionClaim);
+  }
+
+  private currentInstalledContextLineage(
+    checkpointId: string,
+  ): ContextCheckpointInstalledLineageV1 {
+    const committed = [...this.parity.sessionEvents.events]
+      .reverse()
+      .find((event) => event.kind === 'compaction_committed');
+    if (!committed || committed.kind !== 'compaction_committed') {
+      return {
+        checkpoint_id: checkpointId,
+        compaction_event_id: null,
+        compaction_commit_event_id: null,
+        compaction_digest: null,
+        thread_event_boundary_seq: null,
+      };
+    }
+    const capsule = this.parity.eventLog.events.find(
+      (event) => event.kind === 'compaction_capsule' && event.event_id === committed.thread_event_id,
+    );
+    return {
+      checkpoint_id: checkpointId,
+      compaction_event_id: committed.thread_event_id,
+      compaction_commit_event_id: committed.event_id,
+      compaction_digest: committed.capsule_digest,
+      thread_event_boundary_seq: capsule?.seq ?? null,
+    };
+  }
+
+  /**
+   * R1/T5: id of the latest durable `compaction_committed` session event, or
+   * null when this session has committed no compaction at all.
+   */
+  private latestDurableCompactionCommitId(): string | null {
+    const events = this.parity.sessionEvents.events;
+    for (let index = events.length - 1; index >= 0; index--) {
+      const event = events[index]!;
+      if (event.kind === 'compaction_committed') return event.event_id;
+    }
+    return null;
+  }
+
+  /**
+   * R1/T5: true while a durable compaction commit exists that the in-memory
+   * installed context root does not name — the exact "stale root silently
+   * suppresses the newer capsule" window (routed Task-4 trace). False on
+   * capsule-less turns and on turns whose promoted root already names the
+   * latest commit, which keeps the non-compacting path byte-identical to the
+   * previous ordering.
+   */
+  private hasPendingCompactionAuthority(): boolean {
+    const latestCommit = this.latestDurableCompactionCommitId();
+    if (latestCommit === null) return false;
+    const installedCommit =
+      this.parity.contextCheckpoint?.installed_lineage?.compaction_commit_event_id ?? null;
+    return latestCommit !== installedCommit;
+  }
+
+  /**
+   * Shared preparation input for the R1/T5 candidate prepare and the installing
+   * prepare: identical checkpoint id, epoch, and lineage (derived AFTER the
+   * capsule commit, so both name the same current capsule). Only
+   * `sources.route.compiled_request_identity` differs between the two, and the
+   * route identity is never an input to the rebuild or to the lineage — so the
+   * candidate-rooted rebuild and the installed-authority rebuild are the same
+   * message sequence by construction.
+   */
+  private p11CheckpointPreparationInput(
+    owner: ContextCheckpointOwnerV1,
+    sources: LiveOperationalSourcesV1,
+  ): ContextCheckpointPreparationInputV1 {
+    const checkpointId = `context:${this.parity.turnId ?? this._turnIndex}:${this.workingState.revision}`;
+    return {
+      checkpointId,
+      sessionId: this.engineRunId,
+      turnId: this.parity.turnId,
+      contextEpoch: `${owner.generation}:${this.workingState.revision}:${sources.workspace?.capture_epoch ?? 'unknown'}`,
+      owner,
+      sources,
+      installedLineage: this.currentInstalledContextLineage(checkpointId),
+    };
+  }
+
+  /**
+   * R1/T5: side-effect-free candidate of THIS turn's context checkpoint.
+   * `prepareContextCheckpoint` is documented as detached — preparation never
+   * installs — so the candidate only roots the pre-install rebuild that
+   * computes this turn's compiled request identity. It never dispatches on its
+   * own: only `installP11ContextCheckpoint` swaps the durable authority, and it
+   * re-prepares from the live sources with the REAL identity (the candidate's
+   * pending marker can therefore never become durable authority). Blocked or
+   * unavailable candidate ⇒ null ⇒ the turn falls back to the in-memory root
+   * and the dispatch guard refuses when authority stays pending.
+   */
+  private prepareP11ContextCheckpointCandidate(route: {
+    tool_profile: string;
+    model_route: string;
+  }): ContextCheckpointPreparationResultV1 | null {
+    // A5 fence (same as install): the candidate is rooted in THIS engine's own
+    // admitted identity — never a synthetic owner.
+    const owner = this.currentP11Owner();
+    if (!owner || !this.parity.admissionStore) return null;
+    const sources = this.buildP11Sources({
+      ...route,
+      compiled_request_identity: PENDING_COMPILED_REQUEST_IDENTITY,
+    });
+    if (!sources) return null;
+    const prepared = prepareContextCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
+    return prepared.status === 'prepared' ? prepared : null;
+  }
+
+  private currentRecoveryBinding(): RecoveryCandidateBinding | null {
+    try {
+      const root = canonicalizeContained(this.options.projectRoot);
+      const revision = recoveryWorkspaceRevision(root);
+      if (!revision) return null;
+      const fingerprint = repoRootFingerprint(root);
+      const ownerId = this.taskAllowance?.taskOwnerId ?? this.engineRunId;
+      return {
+        schemaVersion: 1,
+        taskId: this.parity.liveAuthority?.taskContract.task_id ?? ownerId,
+        contractHash: this.parity.liveAuthority?.taskContract.contract_hash ?? `uncontracted:${ownerId}`,
+        repositoryIdentity: JSON.stringify([root, fingerprint]),
+        workspaceRevision: revision,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private currentP11Workspace(): ReturnType<typeof RevisionManager.computeRevisionSync> | null {
+    try {
+      return RevisionManager.computeRevisionSync(this.options.projectRoot, [], {
+        scope_kind: 'repository',
+        git_binding: 'optional',
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  private captureP11Observation(
+    action: ChatToolAction,
+    result: { index: number; observation: string },
+    meta: { index: number; idempotencyKey: string; ownerGeneration: number },
+  ): void {
+    if (!result.observation || !this.isSubmissionCurrent(meta.ownerGeneration)) return;
+    const taskId = this.parity.liveAuthority?.taskContract.task_id ?? this.engineRunId;
+    const operationId = meta.idempotencyKey;
+    const turnId = this.parity.turnId ?? `turn-${this._turnIndex}`;
+    const workspace = this.currentP11Workspace();
+    const logEntry = [...this.toolCallLog]
+      .reverse()
+      .find((entry) => entry.index === meta.index && entry.tool === chatActionToolName(action));
+    const previousObservation = this.p11ObservationRefs.find(
+      (observation) => observation.invocation.operation_id === operationId,
+    );
+    const captured = captureApprovedObservation(
+      {
+        invocation: {
+          operation_id: operationId,
+          task_id: taskId,
+          run_id: this.engineRunId,
+          turn_id: turnId,
+          attempt_id: operationId,
+        },
+        sections: [{ channel: 'stdout', content: result.observation }],
+        execution_status: logEntry?.exit_code === 0 || logEntry?.exit_code === undefined ? 'succeeded' : 'failed',
+        permitted_principals: ['agent:main'],
+        data_policy: {
+          approved: true,
+          policy_version: 'babel-chat-model-readable-v1',
+          redaction_policy_version: 'babel-chat-redaction-v1',
+        },
+        ...(workspace
+          ? {
+              snapshot_ref: workspace.compositeTreeHash,
+              coverage_ref: workspace.compositeTreeHash,
+            }
+          : {}),
+        ...(previousObservation ? { previous_observation: previousObservation } : {}),
+      },
+      {
+        storage_root: join(this.engineRunDir, 'observations'),
+        clock: () => new Date().toISOString(),
+        policy: { durability: 'fsync_file_and_dir' },
+      },
+    );
+    if (captured.status === 'captured') {
+      this.p11ObservationRefs = [
+        ...this.p11ObservationRefs.filter(
+          (observation) => observation.observation_id !== captured.observation.observation_id,
+        ),
+        captured.observation,
+      ];
+      (this.parity.authorizedObservationIds ??= new Set()).add(captured.observation.observation_id);
+    } else {
+      this.p11ObservationCaptureIssues.push(
+        captured.status === 'blocked' ? captured.reason : captured.reason,
+      );
+    }
+  }
+
+  private buildP11Sources(
+    routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,
+  ): LiveOperationalSourcesV1 | null {
+    const authority = this.parity.liveAuthority;
+    const workspace = this.currentP11Workspace();
+    const allowance = this.taskAllowance;
+    const latestInput = [...this.parity.sessionEvents.events]
+      .reverse()
+      .find((event) => event.kind === 'model_input_receipt');
+    const route = routeOverride ?? (
+      latestInput && latestInput.kind === 'model_input_receipt'
+        ? {
+            compiled_request_identity: latestInput.body_digest ?? latestInput.input_digest,
+            tool_profile: this.shouldUseTextTools() ? 'text-tools' : 'native-tools',
+            model_route: `${latestInput.provider}:${latestInput.sent_model_id}`,
+          }
+        : null
+    );
+    if (!authority || !workspace || !allowance || !route) {
+      return null;
+    }
+    const interrupted = interruptedToolRecoveries(this.parity.sessionEvents).map((item) => ({
+      handle_id: item.idempotencyKey,
+      kind: item.toolName.includes('sub_agent') || item.toolName.includes('child') ? 'child' as const : 'operation' as const,
+      state: item.state === 'TOOL_OUTCOME_UNKNOWN' ? 'indeterminate' as const : 'pending' as const,
+    }));
+    const workingState = {
+      current_hypothesis:
+        this.workingState.currentHypothesis || this.workingState.goal || 'active chat context',
+      unresolved_failures: [
+        ...(this.workingState.failureSurface?.errorSignature
+          ? [this.workingState.failureSurface.errorSignature]
+          : []),
+        ...this.workingState.openQuestions,
+      ],
+      next_experiment: this.workingState.nextExperiment || 'continue the current controller step',
+    };
+    const receipts = this.lastVerifierReceipt
+      ? [{
+          receipt_id: this.lastVerifierReceipt.receiptId ?? `receipt:${this.lastVerifierReceipt.command}`,
+          identity: this.lastVerifierReceipt.verifierId ?? this.lastVerifierReceipt.command,
+          scope: this.lastVerifierReceipt.scope ?? 'unknown',
+          stale: this.lastVerifierReceipt.stale === true,
+          bound_revision: this.lastVerifierReceipt.boundRevision?.compositeTreeHash ?? null,
+        }]
+      : [];
+    const observations = this.p11ObservationRefs.map((observation) => ({
+      observation_id: observation.observation_id,
+      payload_sha256: observation.payloads[0]?.sha256 ?? '',
+      authorized: this.parity.authorizedObservationIds?.has(observation.observation_id) === true,
+    }));
+    return {
+      resumed: this.options.resumeExisting === true,
+      task_contract: {
+        goal: authority.taskContract.goal,
+        acceptance_clause_ids: authority.taskContract.acceptance.map((item) => item.id),
+        contract_hash: authority.taskContract.contract_hash,
+      },
+      working_state: workingState,
+      workspace: {
+        current_snapshot_revision: workspace.compositeTreeHash,
+        capture_complete: true,
+        coverage_ref: workspace.compositeTreeHash,
+        capture_provenance: 'current_capture',
+        capture_epoch: `${workspace.capturedAt}:${workspace.compositeTreeHash}`,
+      },
+      receipts,
+      budget: {
+        owner: allowance.taskOwnerId,
+        remaining_allowance: Math.max(0, allowance.grant.turnCap - allowance.consumed.turns),
+        cancellation_owner: allowance.taskOwnerId,
+      },
+      pending: interrupted,
+      route,
+      observations,
+      observation_manifest: this.p11ObservationRefs,
+      authorized_observation_ids: [...(this.parity.authorizedObservationIds ?? [])],
+      observation_recovery_issues: [...this.p11ObservationCaptureIssues],
+      legacy_observation_refs: [],
+    };
+  }
+
+  private async installP11ContextCheckpoint(
+    routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,
+  ): Promise<boolean> {
+    const sources = this.buildP11Sources(routeOverride);
+    if (!sources) return false;
+    // A5 fence: the claimed owner is THIS engine's own admitted identity
+    // (admitted ∩ durable, see currentP11Owner) — never a fresh read that
+    // would validate itself. A losing/superseded engine resolves null here.
+    const owner = this.currentP11Owner();
+    if (!owner || !this.parity.admissionStore) return false;
+    // Same checkpoint id / epoch / lineage derivation as the R1/T5 candidate
+    // prepare (p11CheckpointPreparationInput), now with the REAL compiled
+    // request identity computed from this turn's rebuilt messages.
+    const prepared = prepareContextCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
+    if (prepared.status !== 'prepared') return false;
+    const previous = this.parity.contextCheckpoint;
+    // Durable re-read: the installer's claimed (admitted) identity must still
+    // match the owner row of record before the checkpoint may install.
+    const ownerNow = this.parity.admissionStore.readOwner(owner.threadId);
+    if (!ownerNow) return false;
+    if (ownerNow.generation !== owner.generation || ownerNow.token !== owner.token) return false;
+    const installed = await installContextCheckpoint(prepared, {
+      currentOwner: {
+        threadId: ownerNow.threadId,
+        generation: ownerNow.generation,
+        token: ownerNow.token,
+      },
+      requireInstalledLineage: true,
+      authorizedObservationIds: [...(this.parity.authorizedObservationIds ?? [])],
+      lineageEvidence: {
+        threadEvents: this.parity.eventLog.events,
+        sessionEvents: this.parity.sessionEvents.events,
+      },
+      readCurrentOwner: () => {
+        const current = this.parity.admissionStore?.readOwner(owner.threadId) ?? null;
+        return current
+          ? { threadId: current.threadId, generation: current.generation, token: current.token }
+          : null;
+      },
+      install: async (checkpoint, _owner, assertOwnerCurrent) => {
+        this.parity.contextCheckpoint = checkpoint;
+        const receipt = await checkpointParityEventLogStrict(this.parity, this.engineRunDir, {
+          ...(assertOwnerCurrent ? { assertOwnerCurrent } : {}),
+        });
+        if (receipt.status !== 'committed') {
+          if (previous) this.parity.contextCheckpoint = previous;
+          else delete this.parity.contextCheckpoint;
+          throw new Error(receipt.error ?? 'checkpoint persistence blocked');
+        }
+      },
+    });
+    return installed.status === 'installed';
+  }
 
   /**
    * Execute a batch of tool actions sequentially through the policy gate.
@@ -4796,6 +6959,7 @@ export class ChatEngine {
   private async executeActions(
     actions: ChatToolAction[],
     callbacks: ChatCallbacks,
+    ownerGeneration: number = this.activeSubmissionGeneration,
   ): Promise<{
     observations: string;
     observationList: string[];
@@ -4811,7 +6975,6 @@ export class ChatEngine {
       sessionId: this.engineRunId,
       ...(this.parity.turnId ? { turnId: this.parity.turnId } : {}),
     };
-    let subAgentCounter = 0;
     // Order-preserving batches (only consecutive reads may parallelize).
     const batches = planToolBatches(
       orderChatToolActions(
@@ -4824,49 +6987,78 @@ export class ChatEngine {
 
     const allResults: Awaited<ReturnType<typeof this.executeOneAction>>[] = [];
     let stopTerminal = false;
+    // R0-8: a superseded generator must not run the new owner's tools. The
+    // generation check runs between every action and batch, including after
+    // an awaited tool/child returns.
+    const superseded = (): boolean => !this.isSubmissionCurrent(ownerGeneration);
     for (const batch of batches) {
-      if (this._cancelled || this.abortController.signal.aborted || stopTerminal) break;
+      if (this._cancelled || this.abortController.signal.aborted || stopTerminal || superseded())
+        break;
       if (batch.kind === 'parallel_reads') {
         const containsSubAgent = batch.indices.some((index) => actions[index]?.type === 'sub_agent');
         if (containsSubAgent) {
           for (const index of batch.indices) {
-            if (this._cancelled || this.abortController.signal.aborted || stopTerminal) break;
+            if (this._cancelled || this.abortController.signal.aborted || stopTerminal || superseded())
+              break;
             const result = await this.executeOneAction(actions[index]!, toolContext, callbacks, {
               index,
-              subAgentCounter: ++subAgentCounter,
+              ownerGeneration,
               idempotencyKey:
                 this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
             });
             allResults.push(result);
+            this.captureP11Observation(actions[index]!, result, {
+              index,
+              ownerGeneration,
+              idempotencyKey:
+                this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
+            });
             if (result.stop) stopTerminal = true;
           }
           continue;
         }
         for (let c = 0; c < batch.indices.length; c += MAX_TOOL_CONCURRENCY) {
-          if (this._cancelled || this.abortController.signal.aborted) break;
+          if (this._cancelled || this.abortController.signal.aborted || superseded()) break;
           const chunk = batch.indices.slice(c, c + MAX_TOOL_CONCURRENCY);
-          allResults.push(
-            ...(await Promise.all(
+          const parallelResults = await Promise.all(
               chunk.map((index) =>
                 this.executeOneAction(actions[index]!, toolContext, callbacks, {
                   index,
-                  subAgentCounter: ++subAgentCounter,
+                  ownerGeneration,
                   idempotencyKey:
                     this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
                 }),
               ),
-            )),
-          );
+            );
+          allResults.push(...parallelResults);
+          for (const index of chunk) {
+            const result = parallelResults.find((item) => item.index === index);
+            if (result) {
+              this.captureP11Observation(actions[index]!, result, {
+                index,
+                ownerGeneration,
+                idempotencyKey:
+                  this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
+              });
+            }
+          }
         }
       } else {
         const result = await this.executeOneAction(actions[batch.index]!, toolContext, callbacks, {
           index: batch.index,
-          subAgentCounter: ++subAgentCounter,
+          ownerGeneration,
           idempotencyKey:
             this._streamNativeToolCallIds[batch.index] ??
             `tool_call_${this._turnIndex}_${batch.index}`,
         });
         allResults.push(result);
+        this.captureP11Observation(actions[batch.index]!, result, {
+          index: batch.index,
+          ownerGeneration,
+          idempotencyKey:
+            this._streamNativeToolCallIds[batch.index] ??
+            `tool_call_${this._turnIndex}_${batch.index}`,
+        });
         if (result.stop || isCircuitBreakerObservation(result.observation)) stopTerminal = true;
       }
     }
@@ -4916,7 +7108,10 @@ export class ChatEngine {
     toolId: number,
     subId: string,
     reason: string,
+    limiter?: ChildBudgetLimiter,
   ): { index: number; observation: string; stop: true } {
+    // S03/T04: a wall/cost rejection is not a round exhaustion.
+    const attribution = childBudgetAttribution(limiter);
     const idempotencyKey =
       meta.idempotencyKey ??
       this._streamNativeToolCallIds[meta.index] ??
@@ -4933,7 +7128,7 @@ export class ChatEngine {
       this.engineRunDir,
       reason,
     );
-    const detail = `failed, attribution=child_round_exhaustion: ${reason}`;
+    const detail = `failed, attribution=${attribution}: ${reason}`;
     this.toolCallLog.push({
       tool: chatActionToolName(action),
       target: chatActionTarget(action),
@@ -4947,12 +7142,32 @@ export class ChatEngine {
     callbacks.onSubAgentFailed?.({ id: subId, error: reason });
     return {
       index: meta.index,
-      observation: `### sub_agent ${subId}\nstatus: failed\nattribution: child_round_exhaustion\n${reason}`,
+      observation: `### sub_agent ${subId}\nstatus: failed\nattribution: ${attribution}\n${reason}`,
       stop: true,
     };
   }
 
   /** Block a fresh tool-call id from replaying an equivalent unknown external/non-idempotent effect. */
+  /**
+   * S03/#213 slice 2: bind child identity to the parent operation/delegation
+   * (parent run + turn + batch + action index + operation fingerprint), not a
+   * batch-local display counter that resets on every `executeActions` call.
+   * Two successive batches therefore get distinct ids; a re-dispatch of the
+   * same admitted delegation keeps its base id.
+   */
+  private childDelegationIdForAction(action: ChatToolAction, meta: { index: number }): string {
+    const turnId = String(this.parity.turnId ?? this._turnIndex);
+    const batchId =
+      this._activeToolBatchId ?? `batch_${this._turnIndex}_${this._turnToolCallLogStart}`;
+    return deriveChildDelegationId({
+      parentRunId: this.engineRunId,
+      turnId,
+      batchId,
+      actionIndex: meta.index,
+      fingerprint: operationFingerprint(chatActionToolName(action), action),
+    });
+  }
+
   private recoveredOperationDispatchAuthorization(action: ChatToolAction): {
     allowed: boolean;
     message?: string;
@@ -4999,12 +7214,118 @@ export class ChatEngine {
     );
   }
 
+  /**
+   * R0-7/R0-8: true while `ownerGeneration` is still the submission that owns
+   * the engine. Async continuations capture their generation when they start
+   * and call this before writing state, so obsolete work cannot apply to the
+   * task that now owns the engine.
+   */
+  private isSubmissionCurrent(ownerGeneration: number): boolean {
+    return this.activeSubmissionGeneration === ownerGeneration;
+  }
+
+  /**
+   * R0-7: the current parent candidate revision, derived from the existing
+   * session mutation batches and RevisionManager. Returns null when the parent
+   * has no mutation scope yet (nothing to compare). Never invents a revision
+   * authority — this is the same computation the completion gate performs.
+   */
+  private currentCandidateRevisionHash(): string | null {
+    try {
+      const raw = mutationPathsFromSessionEvents(this.parity.sessionEvents.events);
+      if (raw.length === 0) return null;
+      // Session mutation batches may carry absolute or repo-relative paths;
+      // RevisionManager requires canonical repository-relative paths.
+      const root = resolve(this.options.projectRoot);
+      const relativePaths: string[] = [];
+      for (const candidate of raw) {
+        const absolute = isAbsolute(candidate) ? candidate : resolve(root, candidate);
+        const rel = relative(root, absolute);
+        if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) continue;
+        relativePaths.push(rel.split(sep).join('/'));
+      }
+      const unique = [...new Set(relativePaths)].sort();
+      if (unique.length === 0) return null;
+      return RevisionManager.computeRevisionSync(this.options.projectRoot, unique)
+        .compositeTreeHash;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * R0-7: a child result that no longer applies to the current parent
+   * candidate/submission is returned as historical evidence only. It must not
+   * enter the current task's tool log, budget, working state, verifier
+   * ledger, mutation attribution, or presentation callbacks.
+   */
+  private settleStaleChildResult(
+    tool: string,
+    target: string,
+    subId: string,
+    index: number,
+    reason: string,
+  ): { index: number; observation: string } {
+    return {
+      index,
+      observation: [
+        `### sub_agent ${subId}: stale_result`,
+        'status: stale',
+        'attribution: child_stale_result',
+        `reason: ${reason}`,
+        'This child result is historical evidence from a superseded parent',
+        'candidate and does not apply to the current task. It is deliberately',
+        'excluded from the current tool log, budget, verifier ledger, working',
+        'state, and mutation attribution.',
+      ].join('\n'),
+    };
+  }
+
+  /**
+   * R0-7/R0-8: an ordinary action that completes after its submission was
+   * superseded must not write the current task's tool log, mutation
+   * attribution, verifier ledger or budget.
+   */
+  private settleStaleActionResult(
+    tool: string,
+    target: string,
+    index: number,
+    reason: string,
+  ): { index: number; observation: string } {
+    return {
+      index,
+      observation: [
+        `### ${tool} ${target}`,
+        'status: stale',
+        `reason: ${reason}`,
+        'This action completed after its submission was superseded and is not',
+        'applied to the current task.',
+      ].join('\n'),
+    };
+  }
+
   private async executeOneAction(
     action: ChatToolAction,
     toolContext: ToolContext,
     callbacks: ChatCallbacks,
-    meta: { index: number; subAgentCounter: number; idempotencyKey?: string },
+    meta: { index: number; idempotencyKey?: string; ownerGeneration?: number },
   ): Promise<{ index: number; observation: string; stop?: boolean }> {
+    // R0-10: a throwing presentation callback must not unwind settlement or
+    // duplicate execution truth. All callbacks below are the safe wrappers.
+    callbacks = wrapPresentationCallbacks(callbacks);
+    // R0-7/R0-8: the submission that owns this action. Captured once, before
+    // any await, so a tool/child that settles after the engine is superseded
+    // is recognised as stale instead of being applied to the new task.
+    const ownerGeneration = meta.ownerGeneration ?? this.activeSubmissionGeneration;
+    const ownerRunDir = this.engineRunDir;
+    // R0-7: the parent turn at dispatch time. Child mutation evidence must be
+    // attributed to the turn that produced it, never to whatever turn is live
+    // when the child finally resolves.
+    const dispatchTurnId = this.parity.turnId;
+    // R0-10: baseline for "did this invocation already record an execution
+    // row?". `meta.index` is not unique across a turn (it is per-round), so the
+    // catch must compare against this invocation's own baseline.
+    const toolCallLogStart = this.toolCallLog.length;
     const tool = chatActionToolName(action);
     const target = chatActionTarget(action);
     const toolId = callbacks.onToolStart?.(tool, target) ?? -1;
@@ -5084,6 +7405,118 @@ export class ChatEngine {
         return { index: meta.index, observation: phaseGate.observation ?? '' };
       }
 
+      const mutationAttempt =
+        action.type === 'write_file' ||
+        action.type === 'str_replace' ||
+        action.type === 'apply_patch' ||
+        (action.type === 'sub_agent' && (action as { mutation?: boolean }).mutation === true);
+      // run_command is an arbitrary shell, so classify it as potentially
+      // mutating before execution. A test_run command is also a process and
+      // can write source despite its verifier label. During recovery it needs
+      // the already-consumed one-shot repair plan before it may execute.
+      const activeRecoveryGate = this.workingState.recoveryGate;
+      const testRunWithoutRepairPermit = action.type === 'test_run' &&
+        activeRecoveryGate !== undefined &&
+        !(activeRecoveryGate.permitConsumed === true &&
+          activeRecoveryGate.admittedPlan !== undefined);
+      const shellMutationAttempt = action.type === 'run_command' || testRunWithoutRepairPermit;
+      const shellObservation = action.type === 'run_command' || action.type === 'test_run';
+      let recoveryGate = this.workingState.recoveryGate;
+      let driftedCandidate = false;
+      let currentBinding = null as RecoveryCandidateBinding | null;
+      if (recoveryGate && (mutationAttempt || shellMutationAttempt)) {
+        currentBinding = this.currentRecoveryBinding();
+        if (!recoveryGate.binding || !currentBinding || !sameRecoveryBinding(recoveryGate.binding, currentBinding)) {
+          this.workingState = applyWorkingStateEvent(this.workingState, { type: 'recovery_candidate_drift' });
+          this.persistRecoveryWorkingState();
+          recoveryGate = this.workingState.recoveryGate;
+          driftedCandidate = true;
+        }
+      }
+      const proposedEdit = recoveryGate && (action.type === 'write_file' || action.type === 'str_replace' || action.type === 'apply_patch')
+        ? actualRecoveryEdit(action, this.options.projectRoot)
+        : null;
+      let admittedThisAction = false;
+      if (recoveryGate?.satisfied && mutationAttempt && proposedEdit && currentBinding && !driftedCandidate) {
+        const proposal = 'repair_plan' in action ? action.repair_plan : undefined;
+        const admission = admitRecoveryPlan(this.workingState, proposal, proposedEdit, currentBinding);
+        if (admission.admitted) {
+          this.workingState = admission.state;
+          recoveryGate = this.workingState.recoveryGate;
+          admittedThisAction = true;
+        }
+      }
+      const recoveryAction = mutationAttempt || shellMutationAttempt || shellObservation;
+      const actionFingerprint = recoveryAction
+        ? proposedEdit?.exactFingerprint ?? operationFingerprint(chatActionToolName(action), action)
+        : null;
+      const equivalentRedMutation = recoveryAction &&
+        recoveryGate?.satisfied === true &&
+        recoveryGate.mutationFingerprint !== undefined &&
+        recoveryGate.mutationFingerprint === actionFingerprint &&
+        this.workingState.failureSurface?.errorSignature === recoveryGate.failureSignature;
+      const planRequired =
+        recoveryGate !== undefined &&
+        recoveryGate.satisfied === true &&
+        !admittedThisAction;
+      if (
+        recoveryGate &&
+        (((mutationAttempt || shellMutationAttempt) && !recoveryGate.satisfied) ||
+          ((mutationAttempt || shellMutationAttempt) && planRequired) ||
+          equivalentRedMutation)
+      ) {
+        const detail = [
+          driftedCandidate ? '[RECOVERY_CANDIDATE_DRIFT]'
+            : equivalentRedMutation ? '[RECOVERY_STRATEGY_CHANGE_REQUIRED]'
+            : planRequired ? '[RECOVERY_PLAN_REQUIRED]'
+            : '[RECOVERY_EVIDENCE_REQUIRED]',
+          `failure_signature=${recoveryGate.failureSignature}`,
+          driftedCandidate ? 'The workspace differs from the failed candidate; rerun the verifier before repairing.'
+            : equivalentRedMutation ? 'The proposed edit repeats the failed operation.'
+            : planRequired ? 'Submit a scoped repair plan supported by current observation IDs and the actual edit.'
+            : recoveryGate.requiredEvidence,
+        ].join(' ');
+        this.toolCallLog.push({
+          tool,
+          target,
+          detail,
+          error: 'blocked',
+          index: meta.index,
+          exit_code: 1,
+        });
+        callbacks?.onToolComplete?.(toolId, 'recovery-evidence-required', 'blocked', 1);
+        return {
+          index: meta.index,
+          observation: `### ${tool} ${target}\nexit_code: 1\n${detail}`,
+        };
+      }
+      if (admittedThisAction) {
+        this.workingState = applyWorkingStateEvent(this.workingState, { type: 'recovery_plan_consumed' });
+        this.persistRecoveryWorkingState();
+      }
+      if (this.recoveryStatePersistenceUnavailable && (mutationAttempt || shellMutationAttempt)) {
+        const detail = '[RECOVERY_STATE_PERSISTENCE_UNAVAILABLE] Recovery state could not be saved before mutation.';
+        this.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1 });
+        callbacks?.onToolComplete?.(toolId, 'recovery-state-persistence-unavailable', 'blocked', 1);
+        return { index: meta.index, observation: `### ${tool} ${target}\nexit_code: 1\n${detail}` };
+      }
+
+      const localizationInspection = action.type === 'read_file' || action.type === 'read_range' ||
+        action.type === 'grep' || action.type === 'glob' || action.type === 'list_dir' ||
+        action.type === 'semantic_search';
+      if (localizationInspection) {
+        const inspectionTarget = 'file_path' in action && typeof action.file_path === 'string'
+          ? action.file_path : 'path' in action && typeof action.path === 'string' ? action.path : '';
+        if (!this.beginRecoveryLocalizationInspection(action.type, inspectionTarget)) {
+          const detail = this.workingState.localization?.phase === 'exhausted'
+            ? '[LOCALIZATION_EXHAUSTED] The four-call or two-scope localization allowance is spent.'
+            : '[RECOVERY_CANDIDATE_DRIFT] Rerun the verifier before localization.';
+          this.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1 });
+          callbacks?.onToolComplete?.(toolId, 'localization-blocked', 'blocked', 1);
+          return { index: meta.index, observation: `### ${tool} ${target}\nexit_code: 1\n${detail}` };
+        }
+      }
+
       const recoveredAuthorization = this.recoveredOperationDispatchAuthorization(action);
       if (!recoveredAuthorization.allowed) {
         const detail = `[RECOVERY_RECONCILIATION_REQUIRED] ${recoveredAuthorization.message ?? 'Reconcile the prior unknown effect before retrying'}`;
@@ -5103,9 +7536,34 @@ export class ChatEngine {
       }
 
       if (action.type === 'sub_agent') {
-        const subId = `chat-sub-${meta.subAgentCounter}`;
-        const mutationEnabled = (action as any).mutation === true;
-        const writeScope: string[] = (action as any).write_scope ?? [];
+        // S03/#213 slice 2: stable delegation id + per-attempt evidence dir.
+        //
+        // M7 (open, disclosed): this makes retry *identity* stable and prevents
+        // the retry from overwriting attempt-1 evidence, but it does NOT yet
+        // replay a terminal idempotency key instead of re-running the child.
+        // The recon's full T05 dedupe gate remains unimplemented; the existing
+        // recovered-outcome authorization gate (above) still blocks unknown
+        // outcomes until reconciliation.
+        const subId = this.childDelegationIdForAction(action, meta);
+        const attempt = (this.childAttempts.get(subId) ?? 0) + 1;
+        this.childAttempts.set(subId, attempt);
+        const childRunDir = childAttemptDir(this.engineRunDir, subId, attempt);
+        // S03/#213 slice 1: resolve ONE effective child spec. Every declared
+        // option is honored, rejected, or clamped with a reason; the runtime
+        // receipts and the advertised schema both derive from these semantics.
+        const spec = resolveChildSpec({
+          mutation: (action as { mutation?: boolean }).mutation === true,
+          writeScope: (action as { write_scope?: string[] }).write_scope ?? [],
+          instructions: (action as { instructions?: string }).instructions ?? null,
+          model: (action as { model?: string }).model ?? null,
+          maxRounds: (action as { max_rounds?: number }).max_rounds ?? null,
+          parentModel: this.modelPolicy?.providerModelId ?? null,
+        });
+        const mutationEnabled = spec.mutation;
+        const writeScope = spec.writeScope;
+        const specReceipt = formatChildSpecReceipt(spec);
+        // Test-only deterministic lane overrides (never set in production).
+        const childLane = this.options.testChildLaneOverrides;
 
         // #11: Fork an isolated ToolContext with a child AbortController.
         // Cancelling the parent cascades; cancelling a sibling does not.
@@ -5115,7 +7573,7 @@ export class ChatEngine {
           once: true,
         });
         const mutationAllowance = mutationEnabled
-          ? this.deriveChildAllowance(SUB_AGENT_MAX_ROUNDS)
+          ? this.deriveChildAllowance(spec.effectiveRounds)
           : null;
         if (mutationAllowance) {
           const inheritedLimiter = inheritedChildBudgetLimiter(mutationAllowance);
@@ -5129,30 +7587,66 @@ export class ChatEngine {
               toolId,
               subId,
               reason,
+              inheritedLimiter,
             );
             this.abortController.signal.removeEventListener('abort', onParentAbort);
             return rejected;
           }
         }
 
-        // Subagent approval session cannot exceed parent permission ceiling
-        const parentApproval = getChatApprovalSession();
+        // S04/#214: derive the child session ONLY from the ALS-bound parent
+        // context and scope it with the async context. No global bind/restore,
+        // so cancellation/rejection/exception restore the owner automatically
+        // and a sibling scope can never be read.
+        const parentContext = getExecutionContext() ?? this.buildBaseExecutionContext();
+        const parentApproval = parentContext.approvalSession ?? getChatApprovalSession();
         const childCeiling = mutationEnabled
           ? (['shell', 'write', 'other'] as const)
           : (['other'] as const);
         const childApproval = deriveSubagentApprovalSession(parentApproval, subId, [
           ...childCeiling,
         ]);
-        const restoreApproval = () => bindChatApprovalSession(parentApproval);
-        bindChatApprovalSession(childApproval);
-
+        // Fail closed if a derived child would widen the parent lease.
+        assertChildApprovalWithinParent(childApproval, parentApproval);
+        const childContext: ExecutionContext = {
+          ...parentContext,
+          approvalSession: childApproval,
+          parentTrace: { threadId: parentContext.threadId, turnId: parentContext.turnId },
+        };
+        // R0-7: bind this child to the parent candidate revision at dispatch.
+        // A child result may become authority only while it still applies to
+        // the current parent candidate. A read-only child cannot move the
+        // candidate itself, so a changed revision means the parent moved; a
+        // mutation child does move it, so revision movement is judged only for
+        // non-mutating children and the submission/turn identity carries the
+        // rest. Existing authority only (RevisionManager + submission id).
+        const dispatchRevisionHash = this.currentCandidateRevisionHash();
+        const childResultIsStale = (changedFiles: number): boolean => {
+          if (!this.isSubmissionCurrent(ownerGeneration)) return true;
+          if (this.parity.turnId !== dispatchTurnId) return true;
+          if (changedFiles === 0 && dispatchRevisionHash !== this.currentCandidateRevisionHash()) {
+            return true;
+          }
+          return false;
+        };
+        // R1: scope the entire child dispatch with the run-scoped helper. The
+        // AsyncLocalStorage binding starts at this call and unwinds when the
+        // awaited body settles, so a finished child can never leave its context
+        // visible to caller or sibling work. Never use `enterWith` here (it
+        // rebinds the ambient execution until a manual restore) and never
+        // manually restore ambient state.
+        return await runWithExecutionContext(
+          childContext,
+          async (): Promise<{ index: number; observation: string; stop?: boolean }> => {
         // Mutation sub-agent path (W2.1: git worktree + write_scope allowlist)
         if (mutationEnabled) {
-          callbacks.onSubAgentStart?.({
-            id: subId,
-            label: action.task.slice(0, 60),
-          });
           try {
+            // M3: the start callback runs inside the run-scoped child context so
+            // a throwing callback unwinds with the scope and cannot leak.
+            callbacks.onSubAgentStart?.({
+              id: subId,
+              label: action.task.slice(0, 60),
+            });
             // Prefer implement-worktree isolation when write_scope is declared.
             // Empty write_scope still routes through the legacy in-tree loop so
             // read-only mutation attempts get the existing "no write scope" error.
@@ -5165,26 +7659,60 @@ export class ChatEngine {
                   id: subId,
                   task: action.task,
                   writeScope,
-                  maxRounds: SUB_AGENT_MAX_ROUNDS,
-                  ...(((action as any).model ?? this.modelPolicy?.providerModelId)
-                    ? {
-                        model: ((action as any).model ??
-                          this.modelPolicy?.providerModelId) as string,
-                      }
-                    : {}),
+                  maxRounds: spec.effectiveRounds,
+                  ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
+                  ...(spec.instructions ? { instructions: spec.instructions } : {}),
                 },
                 {
                   projectRoot: this.options.projectRoot,
-                  runDir: join(this.engineRunDir, subId),
+                  runDir: childRunDir,
                   abortSignal: childController.signal,
                   cleanupWorktree: false,
+                  ...(childLane?.useDeterministicMock !== undefined
+                    ? { useDeterministicMock: childLane.useDeterministicMock }
+                    : {}),
+                  ...(childLane?.executor ? { executor: childLane.executor } : {}),
                   toolContext: {
                     signal: childController.signal,
                   },
                   ...(mutationAllowance ? { inheritedAllowance: mutationAllowance } : {}),
-                  onUsageRecorded: () => this.persistTaskCostBaseline(),
+                  onUsageRecorded: () => {
+                    if (mutationAllowance?.parentTaskOwnerId) {
+                      try {
+                        this.persistOwnerCharges(mutationAllowance.parentTaskOwnerId, ownerRunDir);
+                      } catch (error) {
+                        this.recordOwnerAccountingFault({
+                          taskOwnerId: mutationAllowance.parentTaskOwnerId,
+                          accountingEpoch: globalCostTracker.getAccountingEpoch(),
+                          turnId: this.parity.turnId,
+                          chargeId: null,
+                          ownerGeneration,
+                        }, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                        mutationAllowance.parentTaskOwnerId === this.taskAllowance?.taskOwnerId &&
+                          this.isSubmissionCurrent(ownerGeneration));
+                        throw new Error('Delegated charge receipt could not be saved');
+                      }
+                    }
+                    // R0-8: a superseded child must not flush the new task's
+                    // cost baseline / active-execution checkpoint.
+                    if (this.isSubmissionCurrent(ownerGeneration)) {
+                      this.persistTaskCostBaseline();
+                    }
+                  },
                 },
               );
+              // R0-7: a child that resolves after the parent moved must not
+              // install evidence, invalidate verifier authority, or spend the
+              // current task's budget. Visible as historical evidence only.
+              if (childResultIsStale(implResult.changedFiles.length)) {
+                return this.settleStaleChildResult(
+                  tool,
+                  target,
+                  subId,
+                  meta.index,
+                  'parent submission/revision superseded before the child resolved',
+                );
+              }
               if (implResult.inheritedBudgetExceeded && implResult.inheritedBudgetLimiter) {
                 this.markChildBudgetExhausted(
                   implResult.inheritedBudgetLimiter,
@@ -5196,6 +7724,13 @@ export class ChatEngine {
               const details = clean
                 ? `${implResult.stepsExecuted} steps, ${implResult.changedFiles.length} changed, attribution=${attribution} (worktree ${implResult.worktree.name})`
                 : `failed: ${implResult.error || 'unknown error'}, attribution=${attribution}`;
+              if (implResult.changedFiles.length > 0) {
+                this.workingState = applyWorkingStateEvent(this.workingState, {
+                  type: 'mutation',
+                  path: implResult.changedFiles[0]!.path,
+                  fingerprint: operationFingerprint(chatActionToolName(action), action),
+                });
+              }
               this.toolCallLog.push({
                 tool,
                 target,
@@ -5231,6 +7766,7 @@ export class ChatEngine {
                 `status: ${clean ? (attribution === 'child_noop' ? 'noop' : 'success') : 'failed'}`,
                 `attribution: ${attribution}`,
                 `isolation: git_worktree`,
+                `child_spec: ${specReceipt}`,
                 `worktree: ${implResult.worktree.path}`,
                 `write_scope: ${implResult.writeScope.join(', ') || '(none)'}`,
                 `parent_tree_clean: ${implResult.parentTreeClean}`,
@@ -5255,26 +7791,75 @@ export class ChatEngine {
               toolContext: {
                 agentId: subId,
                 runId: this.engineRunId,
-                runDir: join(this.engineRunDir, subId),
+                runDir: childRunDir,
                 babelRoot: process.env['BABEL_ROOT'] ?? process.cwd(),
                 signal: childController.signal,
               },
-              maxRounds: SUB_AGENT_MAX_ROUNDS,
+              maxRounds: spec.effectiveRounds,
               abortSignal: childController.signal,
-              runDir: join(this.engineRunDir, subId),
-              ...(mutationAllowance ? { inheritedAllowance: mutationAllowance } : {}),
-              onUsageRecorded: () => this.persistTaskCostBaseline(),
-              ...((action as any).model || this.modelPolicy?.providerModelId
+              runDir: childRunDir,
+              ...(childLane?.useDeterministicMock !== undefined
+                ? { useDeterministicMock: childLane.useDeterministicMock }
+                : {}),
+              ...(childLane?.actionResolver
                 ? {
-                    model: ((action as any).model ?? this.modelPolicy?.providerModelId) as string,
+                    actionResolver: (prompt: string) =>
+                      childLane.actionResolver!(prompt, 1),
                   }
                 : {}),
+              ...(childLane?.executor ? { executor: childLane.executor } : {}),
+              ...(mutationAllowance ? { inheritedAllowance: mutationAllowance } : {}),
+              onUsageRecorded: () => {
+                if (mutationAllowance?.parentTaskOwnerId) {
+                  try {
+                    this.persistOwnerCharges(mutationAllowance.parentTaskOwnerId, ownerRunDir);
+                  } catch (error) {
+                    this.recordOwnerAccountingFault({
+                      taskOwnerId: mutationAllowance.parentTaskOwnerId,
+                      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+                      turnId: this.parity.turnId,
+                      chargeId: null,
+                      ownerGeneration,
+                    }, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                    mutationAllowance.parentTaskOwnerId === this.taskAllowance?.taskOwnerId &&
+                      this.isSubmissionCurrent(ownerGeneration));
+                    throw new Error('Delegated charge receipt could not be saved');
+                  }
+                }
+                // R0-8: a superseded child must not flush the new task's
+                // cost baseline / active-execution checkpoint.
+                if (this.isSubmissionCurrent(ownerGeneration)) {
+                  this.persistTaskCostBaseline();
+                }
+              },
+              ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
+              ...(spec.instructions ? { additionalInstructions: spec.instructions } : {}),
             });
+            // R0-7: a mutation child that resolves after the parent submission
+            // was superseded must not mint a mutation batch, invalidate the new
+            // task's verifier receipt, or be treated as incorporated into the
+            // current candidate. Its disk effects remain real and historical.
+            if (childResultIsStale(mutResult.changedFiles.length)) {
+              return this.settleStaleChildResult(
+                tool,
+                target,
+                subId,
+                meta.index,
+                'parent submission/revision superseded before the child resolved',
+              );
+            }
             const attribution: SubagentAttribution = mutResult.attribution;
             const clean = subagentFinishedCleanly(attribution);
             const details = clean
               ? `${mutResult.stepsExecuted} steps, ${mutResult.changedFiles.length} changed, attribution=${attribution}`
               : `failed: ${mutResult.error || 'unknown error'}, attribution=${attribution}`;
+            if (mutResult.changedFiles.length > 0) {
+              this.workingState = applyWorkingStateEvent(this.workingState, {
+                type: 'mutation',
+                path: mutResult.changedFiles[0]!.path,
+                fingerprint: operationFingerprint(chatActionToolName(action), action),
+              });
+            }
             this.toolCallLog.push({
               tool,
               target,
@@ -5297,6 +7882,26 @@ export class ChatEngine {
                 mutResult.error ?? 'child inherited allowance exhausted',
               );
             }
+            if (mutResult.changedFiles.length > 0) {
+              // R0-11: the in-tree mutation lane writes directly into the PARENT
+              // candidate. A prior green parent verifier receipt is revision-
+              // bound to the parent's earlier mutation scope; it must not remain
+              // current for a candidate that now contains the child's changes.
+              // (The worktree branch above is different: its diff is never
+              // promoted into the parent tree, so a parent receipt stays valid
+              // for the unchanged parent candidate.)
+              invalidateVerifierLedger(
+                this as never,
+                'child mutation changed the parent candidate',
+              );
+              recordMutationBatch(
+                this.parity.sessionEvents,
+                // R0-7: attribute the child's change to the turn that
+                // dispatched it, never to a turn that started afterwards.
+                dispatchTurnId ?? String(this._turnIndex),
+                { paths: mutResult.changedFiles.map((file) => file.path) },
+              );
+            }
             callbacks?.onToolComplete?.(
               toolId,
               details,
@@ -5315,6 +7920,7 @@ export class ChatEngine {
               `### sub_agent ${subId}: ${action.task}`,
               `status: ${clean ? (attribution === 'child_noop' ? 'noop' : 'success') : 'failed'}`,
               `attribution: ${attribution}`,
+              `child_spec: ${specReceipt}`,
               `steps: ${mutResult.stepsExecuted}`,
               `changed_files: ${mutResult.changedFiles.map((f) => f.path).join(', ') || 'none'}`,
               mutResult.summary,
@@ -5325,6 +7931,17 @@ export class ChatEngine {
               ...(mutResult.inheritedBudgetExceeded ? { stop: true } : {}),
             };
           } catch (err) {
+            // R0-7: a child failure that surfaces after the parent was
+            // superseded must not poison the current task's tool log/callbacks.
+            if (!this.isSubmissionCurrent(ownerGeneration)) {
+              return this.settleStaleChildResult(
+                tool,
+                target,
+                subId,
+                meta.index,
+                'parent submission superseded before the child settled',
+              );
+            }
             const errMsg = err instanceof Error ? err.message : String(err);
             const attribution = classifySubagentFailure({
               success: false,
@@ -5347,21 +7964,20 @@ export class ChatEngine {
               observation: `### sub_agent ${subId}: ${action.task}\nattribution: ${attribution}\nError: ${errMsg}`,
             };
           } finally {
-            restoreApproval();
             this.abortController.signal.removeEventListener('abort', onParentAbort);
           }
         }
 
         // Read-only sub-agent path (existing)
-        callbacks.onSubAgentStart?.({
-          id: subId,
-          label: action.task.slice(0, 60),
-        });
         try {
-          const requestedRounds = (action as { max_rounds?: number }).max_rounds;
-          const childRounds = Number.isFinite(requestedRounds)
-            ? Math.min(20, Math.max(1, Math.trunc(requestedRounds as number)))
-            : SUB_AGENT_MAX_ROUNDS;
+          // M3: start callback inside the run-scoped child context so a throw
+          // unwinds with the scope and cannot leak.
+          callbacks.onSubAgentStart?.({
+            id: subId,
+            label: action.task.slice(0, 60),
+          });
+          // S03: use the one resolved spec (bounds/defaults live in childSpec).
+          const childRounds = spec.effectiveRounds;
           const readAllowance = this.deriveChildAllowance(childRounds);
           const readInheritedLimiter = inheritedChildBudgetLimiter(readAllowance);
           if (readInheritedLimiter) {
@@ -5374,12 +7990,12 @@ export class ChatEngine {
               toolId,
               subId,
               reason,
+              readInheritedLimiter,
             );
             this.abortController.signal.removeEventListener('abort', onParentAbort);
             return rejected;
           }
           this.persistToolStartedAtExecutorDispatch(action, meta);
-          const extraInstructions = (action as { instructions?: string }).instructions;
           const subResult = await runReadOnlyAgentLoop({
             verb: 'ask',
             task: action.task,
@@ -5388,23 +8004,61 @@ export class ChatEngine {
             toolContext: {
               agentId: subId,
               runId: this.engineRunId,
-              runDir: join(this.engineRunDir, subId),
+              runDir: childRunDir,
               babelRoot: process.env['BABEL_ROOT'] ?? process.cwd(),
               signal: childController.signal,
             },
             maxRounds: childRounds,
             preset: 'read_only',
             abortSignal: childController.signal,
-            model:
-              ((action as any).model as string | undefined) ?? this.modelPolicy?.providerModelId,
-              ...(extraInstructions ? { additionalInstructions: extraInstructions } : {}),
-              inheritedAllowance: readAllowance,
-              onUsageRecorded: () => this.persistTaskCostBaseline(),
-            } as any);
+            ...(childLane?.useDeterministicMock !== undefined
+              ? { useDeterministicMock: childLane.useDeterministicMock }
+              : {}),
+            ...(childLane?.actionResolver ? { actionResolver: childLane.actionResolver } : {}),
+            ...(childLane?.executor ? { executor: childLane.executor } : {}),
+            ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
+            ...(spec.instructions ? { additionalInstructions: spec.instructions } : {}),
+            inheritedAllowance: readAllowance,
+            onUsageRecorded: () => {
+              if (readAllowance.parentTaskOwnerId) {
+                try {
+                  this.persistOwnerCharges(readAllowance.parentTaskOwnerId, ownerRunDir);
+                } catch (error) {
+                  this.recordOwnerAccountingFault({
+                    taskOwnerId: readAllowance.parentTaskOwnerId,
+                    accountingEpoch: globalCostTracker.getAccountingEpoch(),
+                    turnId: this.parity.turnId,
+                    chargeId: null,
+                    ownerGeneration,
+                  }, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  readAllowance.parentTaskOwnerId === this.taskAllowance?.taskOwnerId &&
+                    this.isSubmissionCurrent(ownerGeneration));
+                  throw new Error('Delegated charge receipt could not be saved');
+                }
+              }
+              // R0-8: a superseded child must not flush the new task's
+              // cost baseline / active-execution checkpoint.
+              if (this.isSubmissionCurrent(ownerGeneration)) {
+                this.persistTaskCostBaseline();
+              }
+            },
+          } as any);
+          // R0-7: a read-only child that resolves after the parent candidate
+          // moved (or the submission was superseded) is historical evidence
+          // only — it must not be attributed to the current task.
+          if (childResultIsStale(0)) {
+            return this.settleStaleChildResult(
+              tool,
+              target,
+              subId,
+              meta.index,
+              'parent submission/revision superseded before the child resolved',
+            );
+          }
           const attribution: SubagentAttribution = subResult.needsApproval || subResult.policyBlocked
             ? 'child_policy_block'
             : subResult.inheritedBudgetExceeded
-              ? 'child_round_exhaustion'
+              ? childBudgetAttribution(subResult.inheritedBudgetLimiter)
             : subResult.providerError
               ? classifySubagentFailure({
                   success: false,
@@ -5425,13 +8079,47 @@ export class ChatEngine {
                     });
           const clean = subagentFinishedCleanly(attribution);
           const details = `${subResult.stepsExecuted} steps, 0 changed, attribution=${attribution}`;
+          // S02/#212: one bounded child result (conclusion + structured status
+          // + evidence refs). Child-reported only; never completion authority.
+          const childResult = buildReadOnlyChildResult({
+            steps: subResult.steps,
+            toolCallLog: subResult.toolCallLog,
+            observations: subResult.observations,
+            stepsExecuted: subResult.stepsExecuted,
+            degraded: subResult.degraded,
+            completed: subResult.completed,
+            roundExhausted: subResult.roundExhausted,
+            policyBlocked: subResult.policyBlocked,
+            ...(subResult.needsApproval !== undefined
+              ? { needsApproval: subResult.needsApproval }
+              : {}),
+            ...(subResult.providerError !== undefined
+              ? { providerError: subResult.providerError }
+              : {}),
+            ...(subResult.inheritedBudgetExceeded !== undefined
+              ? { inheritedBudgetExceeded: subResult.inheritedBudgetExceeded }
+              : {}),
+            ...(subResult.blockedReason !== undefined
+              ? { blockedReason: subResult.blockedReason }
+              : {}),
+            ...(subResult.roundsExecuted !== undefined
+              ? { roundsExecuted: subResult.roundsExecuted }
+              : {}),
+            lane: 'ask',
+            childId: subId,
+            maxRounds: childRounds,
+            cancelled: childController.signal.aborted,
+          });
+          const childSection = renderReadOnlyChildResultSection(childResult);
           const findings = [
             formatSubAgentFindings(subId, action.task, {
               observations: subResult.observations,
               stepsExecuted: subResult.stepsExecuted,
               degraded: subResult.degraded,
+              childResult,
             }),
             `attribution: ${attribution}`,
+            `child_spec: ${specReceipt}`,
             `completed: ${subResult.completed}`,
             `round_exhausted: ${subResult.roundExhausted}`,
             ...(subResult.needsApproval ? ['needs_approval: true'] : []),
@@ -5444,6 +8132,12 @@ export class ChatEngine {
             index: meta.index,
             exit_code: clean ? 0 : 1,
             ...(clean ? {} : { error: subResult.blockedReason || attribution }),
+            // S02: the text-tools path surfaces the bounded handoff via stdout;
+            // `detail` stays untouched for gate/critic consumers. Note: this
+            // also makes recordTurnToolObservability capture the child section
+            // in observationTails (previously no tail existed for this row); it
+            // is diagnostic only and is not re-injected as authority.
+            stdout: childSection,
           });
           callbacks?.onToolComplete?.(
             toolId,
@@ -5474,6 +8168,17 @@ export class ChatEngine {
             ...(subResult.inheritedBudgetExceeded ? { stop: true } : {}),
           };
         } catch (err) {
+          // R0-7: a child failure that surfaces after the parent was
+          // superseded must not poison the current task's tool log/callbacks.
+          if (!this.isSubmissionCurrent(ownerGeneration)) {
+            return this.settleStaleChildResult(
+              tool,
+              target,
+              subId,
+              meta.index,
+              'parent submission superseded before the child settled',
+            );
+          }
           const errMsg = err instanceof Error ? err.message : String(err);
           const attribution = classifySubagentFailure({
             success: false,
@@ -5496,9 +8201,10 @@ export class ChatEngine {
             observation: `### sub_agent ${subId}: ${action.task}\nattribution: ${attribution}\nError: ${errMsg}`,
           };
         } finally {
-          restoreApproval();
           this.abortController.signal.removeEventListener('abort', onParentAbort);
         }
+          },
+        );
       }
 
       if (isMcpChatAction(action)) {
@@ -5528,6 +8234,16 @@ export class ChatEngine {
           ...toolContext,
           onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta),
         });
+        // R0-8: an MCP call is a suspension point; a superseded submission must
+        // not append its result to the current task's tool log.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         const detail = mcpResult.exit_code === 0 ? 'ok' : `exit ${mcpResult.exit_code ?? -1}`;
         this.toolCallLog.push({
           tool,
@@ -5559,6 +8275,16 @@ export class ChatEngine {
           ...toolContext,
           onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta),
         });
+        // R0-8: a web call is a suspension point; a superseded submission must
+        // not append its result to the current task's tool log.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         const detail =
           webResult.exit_code === 0
             ? formatResultDetail(action, webResult)
@@ -5597,6 +8323,16 @@ export class ChatEngine {
           },
           executeTool,
         });
+        // R0-8: an LSP call is a suspension point; a superseded submission must
+        // not append its result to the current task's tool log.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         this.toolCallLog.push({
           tool,
           target,
@@ -5658,6 +8394,16 @@ export class ChatEngine {
           };
         }
         fileReadCacheHash = await this.hashFilePath(action.path);
+        // R0-8: hashing is a suspension point; a superseded submission must not
+        // append its read result (or advance its caches) for the new task.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         const fullDecision = decideReadInjection({
           pathKey,
           fileHash: fileReadCacheHash,
@@ -5712,8 +8458,18 @@ export class ChatEngine {
           },
         );
 
+        // R0-7/R0-8: governedStrReplace is a suspension point; a superseded
+        // submission must not record a mutation batch from it.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         if (gov.mutationPaths && gov.mutationPaths.length > 0) {
-          recordMutationBatch(this.parity.sessionEvents, this.parity.turnId ?? 'unknown', {
+          recordMutationBatch(this.parity.sessionEvents, dispatchTurnId ?? 'unknown', {
             paths: gov.mutationPaths,
             pre_hash: Object.values(gov.preBatchHash ?? {}).join(','),
             post_hash: Object.values(gov.postBatchHash ?? {}).join(','),
@@ -5741,7 +8497,16 @@ export class ChatEngine {
           mutationPaths: gov.mutationPaths,
           mutationReceipt: gov.mutationReceipt,
           effectTransaction: gov.effectTransaction,
+          preDispatchNoEffect: gov.preDispatchNoEffect,
         });
+        if (admittedThisAction && proposedEdit &&
+            strReplaceEffect.status === 'confirmed_no_change' &&
+            this.isSubmissionCurrent(ownerGeneration)) {
+          this.workingState = applyWorkingStateEvent(this.workingState, {
+            type: 'recovery_proven_no_effect', fingerprint: proposedEdit.exactFingerprint,
+          });
+          this.persistRecoveryWorkingState();
+        }
 
         if (gov.exit_code !== 0) {
           // Process failure does not erase an independently proven workspace
@@ -5760,9 +8525,12 @@ export class ChatEngine {
             invalidateVerifierLedger(this as never, strReplaceEffect.reason);
           }
           if (strReplaceEffect.status === 'confirmed_change') {
+            const edit = actualRecoveryEdit(action, this.options.projectRoot);
             this.workingState = applyWorkingStateEvent(this.workingState, {
               type: 'mutation',
               path: gov.absolutePath,
+              fingerprint: edit?.exactFingerprint ?? operationFingerprint(chatActionToolName(action), action),
+              ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
             });
             noteChatWorkspaceMutation(this as never);
             callbacks?.onFileChanged?.(
@@ -5822,9 +8590,12 @@ export class ChatEngine {
         }
         invalidateReadCacheForPath(this.readCache, this.readCacheKey(gov.absolutePath));
         this.fullReadCounts.delete(this.readCacheKey(gov.absolutePath));
+        const edit = actualRecoveryEdit(action, this.options.projectRoot);
         this.workingState = applyWorkingStateEvent(this.workingState, {
           type: 'mutation',
           path: gov.absolutePath,
+          fingerprint: edit?.exactFingerprint ?? operationFingerprint(chatActionToolName(action), action),
+          ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
         });
         noteChatWorkspaceMutation(this as never);
         const lineNumber = gov.lineNumber ?? 0;
@@ -5848,6 +8619,16 @@ export class ChatEngine {
         let strObs = gov.observation;
         const staticResult = await this.runPostEditStaticCheck(gov.absolutePath);
         if (staticResult) strObs += `\n\n### static_check ${target}\n${staticResult}`;
+        // R0-8: the static check is a suspension point; a superseded submission
+        // must not set the new task's verifier-tamper state.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         const tamperWarning = this.checkVerifierTamper(gov.absolutePath);
         if (tamperWarning) strObs += `\n\n### verifier_integrity\n${tamperWarning}`;
         appendPatchRecovery(
@@ -5863,6 +8644,16 @@ export class ChatEngine {
       if (action.type === 'read_range') {
         const rPath = resolveChatRangePath(this.options.projectRoot, action.file_path);
         const rContent = await readFile(rPath, 'utf-8');
+        // R0-8: the read is a suspension point; a superseded submission must not
+        // append its result for the new task.
+        if (!this.isSubmissionCurrent(ownerGeneration)) {
+          return this.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            'parent submission superseded before the action settled',
+          );
+        }
         const rHash = this.hashContent(rContent);
         const rKey = this.readCacheKey(rPath);
         // read_range does not bump fullReadCounts (line windows allowed)
@@ -5905,6 +8696,37 @@ export class ChatEngine {
           exit_code: 0,
         });
         callbacks?.onToolComplete?.(toolId, `${evaluated.window.lines.length} lines`, undefined, 0);
+        if (this.isSubmissionCurrent(ownerGeneration)) {
+          const evidence = `${action.type}:${target}`;
+          const discrimination = isDiscriminatingInspectionEvidence(
+            this.workingState,
+            action,
+            recoveryTargetIdentity(this.options.projectRoot, action.file_path),
+            this.workingState.recoveryGate ? this.currentRecoveryBinding() : null,
+            evaluated.window.lines.join('\n').trim()
+              ? createHash('sha256').update(evaluated.window.lines.join('\n')).digest('hex')
+              : '',
+          );
+          this.workingState = applyWorkingStateEvent(this.workingState, {
+            type: 'add_evidence',
+            evidence,
+            file: action.file_path,
+            discriminating: discrimination.discriminating,
+            ...(discrimination.provenance ? { provenance: discrimination.provenance } : {}),
+          });
+          if (discrimination.discriminating) {
+            this.workingState = recordControllerRecoveryStrategy(this.workingState, {
+              target,
+              evidence,
+            });
+            this.persistRecoveryWorkingState();
+          }
+          this.finishRecoveryLocalizationInspection({
+            tool: 'read_range', rawTarget: action.file_path,
+            content: evaluated.window.lines.join('\n'), succeeded: true,
+            startLine: evaluated.window.startLine,
+          });
+        }
         return {
           index: meta.index,
           observation: formatReadObservation('read_range', target, evaluated.window),
@@ -5944,7 +8766,11 @@ export class ChatEngine {
           target,
           toolId,
           index: meta.index,
-          pushLog: (entry) => this.toolCallLog.push(entry),
+          pushLog: (entry) => {
+            // R0-8: the await is a suspension point; a superseded submission
+            // must not append the settled row to the new task's tool log.
+            if (this.isSubmissionCurrent(ownerGeneration)) this.toolCallLog.push(entry);
+          },
           onToolComplete: callbacks.onToolComplete,
           onBeforeAwait: () => this.persistToolStartedAtExecutorDispatch(action, meta),
         });
@@ -5958,7 +8784,11 @@ export class ChatEngine {
           index: meta.index,
           ownerId: this.engineRunId,
           toolCallId: meta.idempotencyKey,
-          pushLog: (entry) => this.toolCallLog.push(entry),
+          pushLog: (entry) => {
+            // R0-8: a superseded submission must not append the settled row to
+            // the new task's tool log.
+            if (this.isSubmissionCurrent(ownerGeneration)) this.toolCallLog.push(entry);
+          },
           onToolComplete: callbacks.onToolComplete,
           onBeforeSpawn: () => this.persistToolStartedAtExecutorDispatch(action, meta),
         });
@@ -6096,8 +8926,19 @@ export class ChatEngine {
         },
       );
 
+      // R0-7/R0-8: the governed action was a suspension point; a superseded
+      // submission must not record a mutation batch or write the current
+      // task's tool log from it.
+      if (!this.isSubmissionCurrent(ownerGeneration)) {
+        return this.settleStaleActionResult(
+          tool,
+          target,
+          meta.index,
+          'parent submission superseded before the action settled',
+        );
+      }
       if (result.mutationPaths && result.mutationPaths.length > 0) {
-        recordMutationBatch(this.parity.sessionEvents, this.parity.turnId ?? 'unknown', {
+        recordMutationBatch(this.parity.sessionEvents, dispatchTurnId ?? 'unknown', {
           paths: result.mutationPaths,
           pre_hash: Object.values(result.preBatchHash ?? {}).join(','),
           post_hash: Object.values(result.postBatchHash ?? {}).join(','),
@@ -6202,6 +9043,14 @@ export class ChatEngine {
         mutationReceipt: result.mutationReceipt,
         effectTransaction: result.effectTransaction,
       });
+      if (admittedThisAction && proposedEdit && directMutationAction &&
+          mutationEffect.status === 'confirmed_no_change' &&
+          this.isSubmissionCurrent(ownerGeneration)) {
+        this.workingState = applyWorkingStateEvent(this.workingState, {
+          type: 'recovery_proven_no_effect', fingerprint: proposedEdit.exactFingerprint,
+        });
+        this.persistRecoveryWorkingState();
+      }
       const confirmedDirectMutation =
         directMutationAction &&
         mutationEffect.status === 'confirmed_change';
@@ -6277,9 +9126,12 @@ export class ChatEngine {
           const dels = (diff.match(/^-[^-]/gm) ?? []).length;
           callbacks.onFileChanged?.(action.path, adds, dels, diff);
           this.fullReadCounts.delete(this.readCacheKey(action.path));
+          const edit = actualRecoveryEdit(action, this.options.projectRoot);
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'mutation',
             path: action.path,
+            fingerprint: edit?.exactFingerprint ?? operationFingerprint(chatActionToolName(action), action),
+            ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
           });
           noteChatWorkspaceMutation(this as never);
           // Crash-safe: persist patch to recovery log
@@ -6293,9 +9145,12 @@ export class ChatEngine {
           const { adds, dels } = countPatchStats(action.patch);
           const path = primaryPatchPath(action.patch);
           callbacks.onFileChanged?.(path, adds, dels, action.patch);
+          const edit = actualRecoveryEdit(action, this.options.projectRoot);
           this.workingState = applyWorkingStateEvent(this.workingState, {
             type: 'mutation',
             path,
+            fingerprint: edit?.exactFingerprint ?? operationFingerprint(chatActionToolName(action), action),
+            ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
           });
           noteChatWorkspaceMutation(this as never);
           // Crash-safe: persist patch to recovery log
@@ -6308,7 +9163,13 @@ export class ChatEngine {
         // verifier evidence.
         if ((action.type === 'run_command' || action.type === 'test_run') && lastResult) {
           const confirmedShellMutation = mutationEffect.status === 'confirmed_change';
+          const mutationPaths = result.mutationPaths ?? [];
           if (confirmedShellMutation) {
+            this.workingState = applyWorkingStateEvent(this.workingState, {
+              type: 'mutation',
+              path: mutationPaths[0] ?? target,
+              fingerprint: operationFingerprint(chatActionToolName(action), action),
+            });
             noteChatWorkspaceMutation(this as never);
           }
 
@@ -6316,30 +9177,70 @@ export class ChatEngine {
           if (isFatalWindowsProcessExit(lastResult.exit_code) && target) {
             this.platformUnusableVerifiers.add(target);
           }
-          const receipt = await captureAndRecordVerifierReceipt({
-            projectRoot: this.options.projectRoot,
-            command: target,
-            exitCode: lastResult.exit_code,
-            summary: formatVerifierReceiptSummary({
-              verifierId: target,
+          let receipt: Awaited<ReturnType<typeof captureAndRecordVerifierReceipt>> = null;
+          try {
+            receipt = await captureAndRecordVerifierReceipt({
+              projectRoot: this.options.projectRoot,
               command: target,
               exitCode: lastResult.exit_code,
-              stdout: lastResult.stdout,
-              stderr: lastResult.stderr,
-            }),
-            mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
-            sessionEvents: this.parity.sessionEvents,
-            turnId: String(this.parity.turnId ?? this._turnIndex),
-            ledger: this.executedVerifierLedger,
-            cache: this.verifierReceiptCache,
-            writeCount: this.writeCount,
-            toolCallId:
-              meta.idempotencyKey ??
-              this._streamNativeToolCallIds[meta.index] ??
-              `tool_call_${this._turnIndex}_${meta.index}`,
-          });
+              summary: formatVerifierReceiptSummary({
+                verifierId: target,
+                command: target,
+                exitCode: lastResult.exit_code,
+                stdout: lastResult.stdout,
+                stderr: lastResult.stderr,
+              }),
+              mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
+              allowRepositoryScopeForRedRecovery: lastResult.exit_code !== 0,
+              sessionEvents: this.parity.sessionEvents,
+              turnId: String(this.parity.turnId ?? this._turnIndex),
+              ledger: this.executedVerifierLedger,
+              cache: this.verifierReceiptCache,
+              writeCount: this.writeCount,
+              toolCallId:
+                meta.idempotencyKey ??
+                this._streamNativeToolCallIds[meta.index] ??
+                `tool_call_${this._turnIndex}_${meta.index}`,
+            });
+          } catch (verifierErr) {
+            // R0-7/R0-8: a superseded submission must not invalidate the live
+            // task's verifier ledger from a stale capture failure.
+            if (!this.isSubmissionCurrent(ownerGeneration)) {
+              return this.settleStaleActionResult(
+                tool,
+                target,
+                meta.index,
+                'parent submission superseded before the verifier settled',
+              );
+            }
+            // A verifier-receipt capture failure must degrade to "no receipt",
+            // never fall through to the generic catch: that path records a
+            // second terminal for an already-settled tool call and corrupts the
+            // outbound tool protocol on the next provider request.
+            invalidateVerifierLedger(this as never, 'verifier receipt capture failed');
+            obsParts.push(
+              `### verifier_receipt_unavailable\n${
+                verifierErr instanceof Error ? verifierErr.message : String(verifierErr)
+              }`,
+            );
+          }
+          // R0-7/R0-8: verifier capture is a suspension point. A superseded
+          // submission must not install its receipt, working state or ledger
+          // invalidation on the task that now owns the engine.
+          if (!this.isSubmissionCurrent(ownerGeneration)) {
+            return this.settleStaleActionResult(
+              tool,
+              target,
+              meta.index,
+              'parent submission superseded before the verifier settled',
+            );
+          }
           if (receipt) {
             this.lastVerifierReceipt = receipt;
+            const previousFailureSignature = this.workingState.failureSurface?.errorSignature;
+            const recoveryBinding = lastResult.exit_code !== 0
+              ? this.currentRecoveryBinding()
+              : null;
             const ingested = ingestVerifierResult({
               state: this.workingState,
               tool: action.type,
@@ -6348,9 +9249,50 @@ export class ChatEngine {
               stdout: lastResult.stdout,
               stderr: lastResult.stderr,
               summary: receipt.summary ?? String(lastResult.exit_code),
+              verifierId: target,
+              recoveryProjectRoot: this.options.projectRoot,
+              ...(recoveryBinding ? { recoveryBinding } : {}),
+              ...(receipt.boundRevision?.compositeTreeHash
+                ? { workspaceRevision: String(receipt.boundRevision.compositeTreeHash) }
+                : {}),
             });
             this.workingState = ingested.state;
+            this.persistRecoveryWorkingState();
             this.lastVerifierFailed = ingested.lastVerifierFailed;
+            const surfaceKind = this.workingState.failureSurface?.kind;
+            // Only a *classified* implementation failure spends implementation
+            // repair budget. An unclassified/unknown failure may be a transport
+            // or environment error after a mutation; charging it would blame the
+            // repair strategy for something it did not cause.
+            const implementationRepairSurface = surfaceKind === 'TEST_FAILURE' ||
+              surfaceKind === 'TYPECHECK_FAILURE' ||
+              surfaceKind === 'BUILD_FAILURE' ||
+              surfaceKind === 'LINT_FAILURE' ||
+              surfaceKind === 'RUNTIME_FAILURE';
+            if (
+              implementationRepairSurface &&
+              this.workingState.failureSurface &&
+              this.workingState.failureSurface.causality !== 'pre_existing' &&
+              this.workingState.failureSurface.errorSignature !== previousFailureSignature
+            ) {
+              this.consumeFailureBudget(makeFailureCapsule(
+                'implementation',
+                this.workingState.failureSurface.kind,
+                this.workingState.failureSurface.errorSignature,
+                { evidence_refs: this.workingState.failureSurface.evidenceRefs },
+              ));
+            }
+          } else if (lastResult.exit_code !== 0 && this.workingState.lastMutation) {
+            // A red command without a durable verifier receipt cannot grant
+            // recovery authority. Keep the failed candidate closed until an
+            // authoritative verifier can bind a fresh failure and revision.
+            this.workingState = applyWorkingStateEvent(this.workingState, {
+              type: 'recovery_gate',
+              failureSignature: 'unbound-red-verifier',
+              requiredEvidence: 'Rerun an authoritative verifier to bind this failure to the current candidate.',
+            });
+            this.persistRecoveryWorkingState();
+            this.lastVerifierFailed = true;
           } else if (lastResult.exit_code === 0 && !confirmedShellMutation) {
             invalidateVerifierLedger(this as never, 'non-verifier shell command executed');
           }
@@ -6396,6 +9338,53 @@ export class ChatEngine {
         ) {
           this.noteToolForReadThrash(tool);
         }
+
+        // A successful inspection is the discriminating observation required
+        // after a red verifier.  This is controller-owned evidence: it clears
+        // the recovery gate without treating model prose as proof.
+        const inspectionAction =
+          action.type === 'read_file' ||
+          action.type === 'grep' ||
+          action.type === 'glob' ||
+          action.type === 'list_dir' ||
+          action.type === 'semantic_search';
+        if (
+          inspectionAction &&
+          lastResult &&
+          lastResult.exit_code === 0 &&
+          this.isSubmissionCurrent(ownerGeneration)
+        ) {
+          const evidence = `${action.type}:${target}`;
+          const discrimination = isDiscriminatingInspectionEvidence(
+            this.workingState,
+            action,
+            recoveryTargetIdentity(this.options.projectRoot, 'path' in action && typeof action.path === 'string' ? action.path : ''),
+            this.workingState.recoveryGate ? this.currentRecoveryBinding() : null,
+            lastResult.stdout.trim()
+              ? createHash('sha256').update(lastResult.stdout).digest('hex')
+              : '',
+          );
+          this.workingState = applyWorkingStateEvent(this.workingState, {
+            type: 'add_evidence',
+            evidence,
+            discriminating: discrimination.discriminating,
+            ...(discrimination.provenance ? { provenance: discrimination.provenance } : {}),
+            ...(action.type === 'read_file' ? { file: action.path } : {}),
+          });
+          if (discrimination.discriminating) {
+            this.workingState = recordControllerRecoveryStrategy(this.workingState, {
+              target,
+              evidence,
+            });
+            this.persistRecoveryWorkingState();
+          }
+          this.finishRecoveryLocalizationInspection({
+            tool: action.type,
+            rawTarget: 'path' in action && typeof action.path === 'string' ? action.path : '',
+            content: lastResult.stdout, succeeded: true,
+            ...(action.type === 'glob' ? { pattern: action.pattern } : {}),
+          });
+        }
       }
 
       // R3a: Post-edit static check after successful write/apply_patch
@@ -6413,6 +9402,16 @@ export class ChatEngine {
           if (staticResult) {
             obsParts.push(`### static_check ${editPath}\n${staticResult}`);
           }
+          // R0-8: the static check is a suspension point; a superseded submission
+          // must not set the new task's verifier-tamper state.
+          if (!this.isSubmissionCurrent(ownerGeneration)) {
+            return this.settleStaleActionResult(
+              tool,
+              target,
+              meta.index,
+              'parent submission superseded before the action settled',
+            );
+          }
           // R9: Check for verifier tampering — warn if a verifier dependency was modified
           const tamperWarning = this.checkVerifierTamper(editPath);
           if (tamperWarning) {
@@ -6423,20 +9422,45 @@ export class ChatEngine {
 
       return { index: meta.index, observation: obsParts.join('\n') };
     } catch (err) {
-      this.toolCallLog.push({
-        tool,
-        target,
-        detail: 'error',
-        error: 'error',
-        index: meta.index,
-        exit_code: 1,
-      });
-      callbacks?.onToolComplete?.(
-        toolId,
-        'error',
-        err instanceof Error ? err.message : String(err),
-        1,
-      );
+      // R0-7/R0-8: an action that throws after its submission was superseded
+      // must not append a failure row to the current task's tool log.
+      if (!this.isSubmissionCurrent(ownerGeneration)) {
+        return this.settleStaleActionResult(
+          tool,
+          target,
+          meta.index,
+          'parent submission superseded before the action settled',
+        );
+      }
+      // R0-10: presentation callbacks are an observational side channel. If a
+      // callback threw AFTER this action already recorded its execution row,
+      // appending a second row would duplicate execution truth. One action
+      // settles exactly one log row; only a genuine executor fault with no
+      // prior row adds a failure row here.
+      const alreadySettled = this.toolCallLog.length > toolCallLogStart;
+      if (!alreadySettled) {
+        this.toolCallLog.push({
+          tool,
+          target,
+          detail: 'error',
+          error: 'error',
+          index: meta.index,
+          exit_code: 1,
+        });
+      }
+      try {
+        callbacks?.onToolComplete?.(
+          toolId,
+          'error',
+          err instanceof Error ? err.message : String(err),
+          1,
+        );
+      } catch (callbackErr) {
+        console.error(
+          '[chatEngine] presentation callback failed after settlement (ignored):',
+          callbackErr,
+        );
+      }
       return {
         index: meta.index,
         observation: `### ${tool} ${target}\nError: ${err instanceof Error ? err.message : String(err)}`,
@@ -6464,43 +9488,7 @@ export class ChatEngine {
    * the next turn instead of a role:tool message it does not understand.
    */
   private buildTextToolResults(startIndex: number): string {
-    const entries = this.toolCallLog.slice(startIndex);
-    const parts: string[] = [];
-
-    for (const entry of entries) {
-      if (entry.error === 'blocked') {
-        parts.push(`[ERROR] ${entry.tool}:${entry.target} blocked`);
-        continue;
-      }
-      if (entry.exit_code !== undefined && entry.exit_code !== 0) {
-        const err = (entry.stderr || entry.stdout || '').slice(0, 500);
-        parts.push(`[ERROR] ${entry.tool}:${entry.target} exit ${entry.exit_code}: ${err}`);
-        continue;
-      }
-
-      // Tools whose output content the model needs to ingest
-      if (entry.stdout && ['read_file', 'grep', 'glob', 'list_dir'].includes(entry.tool)) {
-        const truncated =
-          entry.stdout.length > 3000
-            ? entry.stdout.slice(0, 3000) + '\n... [truncated]'
-            : entry.stdout;
-        parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${truncated}`);
-        continue;
-      }
-
-      // run_command: include output
-      if (entry.tool === 'run_command' && entry.stdout) {
-        const out = entry.stdout.slice(0, 1000);
-        parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${out}`);
-        continue;
-      }
-
-      // Default: simple [OK] summary
-      const detail = entry.detail ? ` (${entry.detail})` : '';
-      parts.push(`[OK] ${entry.tool}:${entry.target}${detail}`);
-    }
-
-    return parts.join('\n\n');
+    return formatTextToolResults(this.toolCallLog.slice(startIndex));
   }
 
   private async runPostEditStaticCheck(filePath: string): Promise<string | null> {
@@ -6523,6 +9511,9 @@ export class ChatEngine {
     toolObservations: string,
     callbacks: ChatCallbacks,
   ): Promise<string> {
+    // R0-8: bind this synthesis to the submission that started it, so a late
+    // completion cannot charge the task that now owns the engine.
+    const ownerGeneration = this.activeSubmissionGeneration;
     const prompt = buildAnswerSynthesisPrompt({
       conversation: this.conversation,
       task: this.options.task,
@@ -6588,12 +9579,23 @@ export class ChatEngine {
       }
     }
 
+    const usageScope = {
+      taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+      projectRoot: realpathSync(this.options.projectRoot),
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      turnId: this.parity.turnId,
+      chargeId: null as string | null,
+      ownerGeneration,
+      isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
+    };
     const runnerCallbacks: RunnerCallbacks | undefined = callbacks.onAnswerChunk
       ? {
           ...this.providerRetryCallbacks({
             deliveryMode: 'text',
             conversationState: prompt,
             executionStage: 'synthesis',
+            usageScope,
+            isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
           }),
           onChunk: callbacks.onAnswerChunk,
           ...(callbacks.onThought ? { onThought: callbacks.onThought } : {}),
@@ -6602,9 +9604,11 @@ export class ChatEngine {
           deliveryMode: 'text',
           conversationState: prompt,
           executionStage: 'synthesis',
+          usageScope,
+          isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
         });
     const answer = await this.executeWithTimeout(this.synthesisRunner, prompt, runnerCallbacks);
-    this.trackRunnerUsage(this.synthesisRunner);
+    this.trackRunnerUsage(this.synthesisRunner, usageScope);
     return answer;
   }
 
@@ -6612,43 +9616,96 @@ export class ChatEngine {
    *  #12: Also accumulates API-reported token counts for accurate estimation. */
   private trackRunnerUsage(
     runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
+    usageScope?: ChatUsageScope,
   ): void {
-    const metadata = runner.getLastInvocationMetadata?.();
+    // A task charge must be tied to an observed invocation start. Test/offline
+    // runners can return placeholder metadata without starting a paid request.
+    if (usageScope && usageScope.chargeId === null) return;
+    const metadata = usageScope && 'usageMetadata' in usageScope
+      ? usageScope.usageMetadata
+      : runner.getLastInvocationMetadata?.();
+    const appliesToCurrent = !usageScope ||
+      (usageScope.taskOwnerId === this.taskAllowance?.taskOwnerId &&
+        (usageScope.isOwnerCurrent?.() ?? true));
     if (
       metadata?.provider_model_id &&
       metadata.prompt_tokens !== null &&
       metadata.completion_tokens !== null
     ) {
-      this.lastRequestPromptTokens = metadata.prompt_tokens;
-      this.lastRequestCompletionTokens = metadata.completion_tokens;
-      this.lastRequestModelId = metadata.provider_model_id;
-      globalCostTracker.trackUsage(
+      const chargeUpdate = globalCostTracker.settleUsage(
         metadata.provider_model_id,
         metadata.prompt_tokens,
         metadata.completion_tokens,
         metadata.prompt_cache_hit_tokens,
         metadata.prompt_cache_miss_tokens,
-        this.taskAllowance
+        usageScope
+          ? captureUsageAttribution(usageScope)
+          : this.taskAllowance
           ? {
               taskOwnerId: this.taskAllowance.taskOwnerId,
+              projectRoot: realpathSync(this.options.projectRoot),
+              projectRootVersion: 1,
               chargeId: this.pendingUsageChargeId ?? randomUUID(),
             }
           : undefined,
       );
-      this.pendingUsageChargeId = null;
+      if (chargeUpdate.kind === 'duplicate') return;
+      if (chargeUpdate.kind === 'conflict') {
+        const faultScope: ChatUsageScope = usageScope ?? {
+          taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+          accountingEpoch: globalCostTracker.getAccountingEpoch(),
+          turnId: this.parity.turnId,
+          chargeId: this.pendingUsageChargeId,
+        };
+        this.recordOwnerAccountingFault(
+          faultScope, 'settlement-conflict', chargeUpdate.reason, appliesToCurrent,
+        );
+        if (faultScope.taskOwnerId) {
+          try {
+            this.persistOwnerCharges(faultScope.taskOwnerId, usageScope?.runDir);
+          } catch (error) {
+            this.recordOwnerAccountingFault(
+              faultScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+              appliesToCurrent,
+            );
+          }
+        }
+        return;
+      }
+      if (usageScope?.taskOwnerId) {
+        try {
+          this.persistOwnerCharges(usageScope.taskOwnerId, usageScope.runDir);
+        } catch (error) {
+          this.recordOwnerAccountingFault(
+            usageScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+            appliesToCurrent,
+          );
+          return;
+        }
+      }
+      if (!usageScope || (appliesToCurrent && this.pendingUsageChargeId === usageScope.chargeId)) {
+        this.pendingUsageChargeId = null;
+      }
       // Checkpoint usage immediately after accounting so a crash before the
       // enclosing turn result is persisted cannot mint a fresh continuation
       // allowance on resume.
-      this.persistTaskCostBaseline();
+      if (appliesToCurrent) {
+        this.persistTaskCostBaseline();
+      }
 
       // Feed token history tracker
       const tokenTracker = getGlobalTokenTracker();
-      tokenTracker.record({
+      if (metadata.estimated_cost_usd !== null) tokenTracker.record({
         inputTokens: metadata.prompt_tokens,
         outputTokens: metadata.completion_tokens,
-        cost: metadata.estimated_cost_usd ?? 0,
+        cost: metadata.estimated_cost_usd,
         modelId: metadata.provider_model_id,
       });
+
+      if (!appliesToCurrent) return;
+      this.lastRequestPromptTokens = metadata.prompt_tokens;
+      this.lastRequestCompletionTokens = metadata.completion_tokens;
+      this.lastRequestModelId = metadata.provider_model_id;
 
       // #12: Track cumulative API-reported tokens for accurate compaction estimates
       this.apiTokenCount += metadata.prompt_tokens + metadata.completion_tokens;
@@ -6660,6 +9717,53 @@ export class ChatEngine {
         this._lastPhase,
         metadata,
       );
+    } else {
+      const chargeId = usageScope?.chargeId ?? this.pendingUsageChargeId;
+      const ownerId = usageScope ? usageScope.taskOwnerId : this.taskAllowance?.taskOwnerId;
+      if (chargeId && ownerId) {
+        const attribution = usageScope
+          ? captureUsageAttribution(usageScope, chargeId)
+          : {
+              taskOwnerId: ownerId,
+              chargeId,
+              accountingEpoch: globalCostTracker.getAccountingEpoch(),
+            };
+        if (!attribution) throw new Error('Missing captured provider charge attribution');
+        const update = globalCostTracker.settleUsage(
+          usageScope?.modelId ?? metadata?.provider_model_id ?? 'unknown-provider-model',
+          0, 0, null, null, attribution, false,
+        );
+        if (update.kind === 'conflict') {
+          const faultScope: ChatUsageScope = usageScope ?? {
+            taskOwnerId: ownerId,
+            accountingEpoch: globalCostTracker.getAccountingEpoch(),
+            turnId: null,
+            chargeId,
+          };
+          this.recordOwnerAccountingFault(
+            faultScope, 'settlement-conflict', update.reason, appliesToCurrent,
+          );
+          try {
+            this.persistOwnerCharges(ownerId, usageScope?.runDir);
+          } catch (error) {
+            this.recordOwnerAccountingFault(
+              faultScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+              appliesToCurrent,
+            );
+          }
+        }
+        if (usageScope && update.kind !== 'duplicate' && update.kind !== 'conflict') {
+          try {
+            this.persistOwnerCharges(ownerId, usageScope.runDir);
+          } catch (error) {
+            this.recordOwnerAccountingFault(
+              usageScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+              appliesToCurrent,
+            );
+          }
+        }
+        if (appliesToCurrent) this.persistTaskCostBaseline();
+      }
     }
   }
 
@@ -6667,7 +9771,25 @@ export class ChatEngine {
   private async compactIfNeeded(
     callbacks?: ChatCallbacks,
     forceCompaction = false,
+    ownerGeneration = this.activeSubmissionGeneration,
   ): Promise<ContextCompactedInfo | null> {
+    const compactionParity = this.parity;
+    const compactionRunDir = this.engineRunDir;
+    const compactionOwnerId = this.taskAllowance?.taskOwnerId ?? null;
+    const compactionEpoch = globalCostTracker.getAccountingEpoch();
+    const compactionTurnId = this.parity.turnId;
+    const usageScope: {
+      taskOwnerId: string | null; projectRoot: string; accountingEpoch: string; turnId: string | null;
+      chargeId: string | null; requestId?: string; attemptId?: string; runDir?: string;
+      ownerGeneration: number;
+    } = {
+      taskOwnerId: compactionOwnerId,
+      projectRoot: realpathSync(this.options.projectRoot),
+      accountingEpoch: compactionEpoch,
+      turnId: compactionTurnId,
+      chargeId: null as string | null,
+      ownerGeneration,
+    };
     const host: import('./compactionCommit.js').ChatEngineCompactionHost = {
       conversation: this.conversation,
       options: this.options,
@@ -6685,14 +9807,60 @@ export class ChatEngine {
       providerCallbacks: this.providerRetryCallbacks({
         deliveryMode: this.shouldUseTextTools() ? 'text' : 'native',
         executionStage: 'compaction',
+        usageScope,
+        isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
       }),
+      onCompactionUsage: (usage) => {
+        const attribution = compactionOwnerId
+          ? captureUsageAttribution(
+              usageScope, usage.inferenceId,
+              usageScope.chargeId === usage.inferenceId ? usageScope.requestId : undefined,
+              usageScope.chargeId === usage.inferenceId ? usageScope.attemptId : undefined,
+            )
+          : undefined;
+        const update = globalCostTracker.settleUsage(
+          usage.modelId, usage.inputTokens ?? 0, usage.outputTokens ?? 0,
+          null, null, attribution,
+          usage.inputTokens !== null && usage.outputTokens !== null,
+        );
+        if (update.kind === 'conflict') {
+          this.recordOwnerAccountingFault(
+            { ...usageScope, chargeId: usage.inferenceId }, 'settlement-conflict', update.reason,
+            compactionOwnerId === this.taskAllowance?.taskOwnerId && this.isSubmissionCurrent(ownerGeneration),
+          );
+          try {
+            if (compactionOwnerId) this.persistOwnerCharges(compactionOwnerId, compactionRunDir);
+          } catch (error) {
+            this.recordOwnerAccountingFault(
+              { ...usageScope, chargeId: usage.inferenceId }, 'persistence-failure',
+              error instanceof Error ? error.message : String(error),
+              compactionOwnerId === this.taskAllowance?.taskOwnerId && this.isSubmissionCurrent(ownerGeneration),
+            );
+          }
+          return;
+        }
+        if (compactionOwnerId && update.kind !== 'duplicate') {
+          try {
+            this.persistOwnerCharges(compactionOwnerId, compactionRunDir);
+          } catch (error) {
+            this.recordOwnerAccountingFault(
+              { ...usageScope, chargeId: usage.inferenceId }, 'persistence-failure',
+              error instanceof Error ? error.message : String(error),
+              compactionOwnerId === this.taskAllowance?.taskOwnerId && this.isSubmissionCurrent(ownerGeneration),
+            );
+          }
+        }
+        if (this.isSubmissionCurrent(ownerGeneration)) this.persistTaskCostBaseline();
+      },
       shouldUseTextTools: () => this.shouldUseTextTools(),
       compactHeuristic: () => {
+        if (!this.isSubmissionCurrent(ownerGeneration)) return;
         this.compactConversation();
         host.conversation = this.conversation;
       },
       checkpoint: async () => {
-        const receipt = await checkpointParityEventLogStrict(this.parity, this.engineRunDir);
+        if (!this.isSubmissionCurrent(ownerGeneration)) return;
+        const receipt = await checkpointParityEventLogStrict(compactionParity, compactionRunDir);
         if (receipt.status !== 'committed') {
           throw new Error(receipt.error ?? 'checkpoint persistence blocked');
         }
@@ -6700,12 +9868,14 @@ export class ChatEngine {
       reserveTokens: DEFAULT_COMPACTION_CONFIG.reserveTokens,
       textToolsReserve: 1024,
       forceCompaction,
+      isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
       resolveModel: resolveCompactionModelId,
       shouldCompactByTokens: parityShouldCompact,
       estimateTokens,
     };
     if (this.compactionManager) host.compactionManager = this.compactionManager;
     const result = await runChatEngineCompaction(host);
+    if (!this.isSubmissionCurrent(ownerGeneration)) return null;
     this.conversation = host.conversation;
     if (!result) return null;
     if (this.lastLogicalRequestId !== null) {
@@ -6733,12 +9903,13 @@ export class ChatEngine {
   /** Rebuild one over-limit final request after a durable, bounded compaction. */
   private async recoverPreparedRequestAdmission(
     error: unknown,
+    ownerGeneration = this.activeSubmissionGeneration,
   ): Promise<ContextCompactedInfo | null> {
     if (!(error instanceof PreparedRequestAdmissionError)) return null;
     if (this.preparedAdmissionCompactionAttempts >= 1) return null;
     this.preparedAdmissionCompactionAttempts += 1;
     this.pendingParentRequestId = error.request.request_id;
-    return this.compactIfNeeded(undefined, true);
+    return this.compactIfNeeded(undefined, true, ownerGeneration);
   }
 
   private compactConversation(): void {
@@ -6942,9 +10113,14 @@ export class ChatEngine {
     executionStage?: ModelRouteStage;
     contractRef?: string;
     substitutionOrFallback?: boolean;
+    isOwnerCurrent?: () => boolean;
+    usageScope?: ChatUsageScope;
   } = {}): RunnerCallbacks {
     let startedInvocation: ProviderInvocationStarted | null = null;
     let retryCount = 0;
+    const seenRetryAttemptIds = new Set<string>();
+    const ownerRunDir = this.engineRunDir;
+    const isOwnerCurrent = context.isOwnerCurrent ?? (() => true);
     const parentRequestId =
       this.pendingParentRequestId ??
       (context.substitutionOrFallback && this.lastLogicalRequestId !== null
@@ -6953,9 +10129,54 @@ export class ChatEngine {
     return {
       parentRequestId,
       onInvocationStarted: (event) => {
-        if (!this.parity.turnId) return;
+        if (context.usageScope) {
+          context.usageScope.chargeId = event.inference_id;
+          delete context.usageScope.usageMetadata;
+          Object.assign(context.usageScope, {
+            requestId: event.request_id,
+            attemptId: event.attempt_id,
+            runDir: ownerRunDir,
+            modelId: event.sent_model_id,
+          });
+          if (context.usageScope.taskOwnerId) {
+            const scope = context.usageScope;
+            const ownerId = scope.taskOwnerId!;
+            const attribution = captureUsageAttribution(
+              scope, event.inference_id, event.request_id, event.attempt_id,
+            );
+            const update = globalCostTracker.settleUsage(
+              event.sent_model_id, 0, 0, null, null, attribution, false,
+            );
+            if (update.kind === 'conflict') {
+              const appliesToCurrent = ownerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent();
+              this.recordOwnerAccountingFault(scope, 'settlement-conflict', update.reason, appliesToCurrent);
+              try {
+                this.persistOwnerCharges(ownerId, ownerRunDir);
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  appliesToCurrent,
+                );
+              }
+              throw new Error(`Provider dispatch blocked by charge conflict: ${update.reason}`);
+            }
+            if (update.kind === 'inserted') {
+              try {
+                this.persistOwnerCharges(ownerId, ownerRunDir);
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  ownerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+                );
+                throw new Error('Provider dispatch blocked because its charge receipt could not be saved');
+              }
+            }
+          }
+        }
         startedInvocation = event;
-        this.pendingUsageChargeId = event.request_id ?? event.inference_id;
+        if (!isOwnerCurrent()) return;
+        if (!this.parity.turnId) return;
+        this.pendingUsageChargeId = event.inference_id;
         retryCount = 0;
         const recordedParentRequestId = event.parent_request_id ?? parentRequestId;
         const derivedExpectedPriorEventIds = this.parity.sessionEvents.events
@@ -7062,6 +10283,118 @@ export class ChatEngine {
         checkpointParityEventLog(this.parity, this.engineRunDir);
       },
       onInvocationCompleted: (event) => {
+        if (event.status === 'failed' && context.usageScope?.chargeId === event.inference_id) {
+          context.usageScope.usageMetadata = null;
+          context.usageScope.modelId = event.model;
+          if (event.inference_started === false) {
+            const scope = context.usageScope;
+            const attribution = captureUsageAttribution(
+              scope, event.inference_id, scope.requestId, scope.attemptId,
+            );
+            const chargeStillPending = scope.taskOwnerId &&
+              globalCostTracker.getTaskChargeIds(scope.taskOwnerId).includes(event.inference_id);
+            const cleared = !!attribution && globalCostTracker.clearUnstartedCharge(attribution);
+            if (cleared && scope.taskOwnerId) {
+              try {
+                this.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+                );
+              }
+            } else if (chargeStillPending) {
+              this.recordOwnerAccountingFault(
+                scope, 'settlement-conflict', 'Unstarted provider charge could not be cleared safely',
+                scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+              );
+            }
+            if (!chargeStillPending || cleared) context.usageScope.chargeId = null;
+          }
+        }
+        if (event.status === 'delivered' && context.usageScope &&
+            context.usageScope.chargeId === event.inference_id) {
+          context.usageScope.usageMetadata = event.usage_metadata
+            ? { ...event.usage_metadata } : null;
+          if (!isOwnerCurrent() && context.usageScope.taskOwnerId) {
+            const scope = context.usageScope;
+            const metadata = scope.usageMetadata;
+            const known = metadata?.prompt_tokens != null &&
+              metadata.completion_tokens != null;
+            const attribution = captureUsageAttribution(
+              scope, event.inference_id, scope.requestId, scope.attemptId,
+            );
+            const update = globalCostTracker.settleUsage(
+              metadata?.provider_model_id ?? event.model,
+              known ? metadata!.prompt_tokens! : 0,
+              known ? metadata!.completion_tokens! : 0,
+              metadata?.prompt_cache_hit_tokens ?? null,
+              metadata?.prompt_cache_miss_tokens ?? null,
+              attribution,
+              known,
+            );
+            if (update.kind === 'conflict') {
+              const scope = context.usageScope;
+              const appliesToCurrent = scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent();
+              this.recordOwnerAccountingFault(scope, 'settlement-conflict', update.reason, appliesToCurrent);
+              try {
+                this.persistOwnerCharges(scope.taskOwnerId!, ownerRunDir);
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  appliesToCurrent,
+                );
+              }
+            }
+            if (update.kind === 'inserted' || update.kind === 'refined') {
+              try {
+                this.persistOwnerCharges(context.usageScope.taskOwnerId, ownerRunDir);
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  context.usageScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  context.usageScope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+                );
+              }
+            }
+          }
+        }
+        // An inference that started and failed may still be billed. Settle its
+        // attempt under the captured owner even if a successor now owns the
+        // engine; authority checks below govern live state, not old billing.
+        if (event.status === 'failed' && event.inference_started === true &&
+            context.usageScope?.taskOwnerId &&
+            globalCostTracker.getTaskChargeIds(context.usageScope.taskOwnerId).includes(event.inference_id)) {
+          const scope = context.usageScope;
+          const attribution = captureUsageAttribution(scope, event.inference_id, scope.requestId, scope.attemptId);
+          const update = globalCostTracker.settleUsage(
+            event.model, 0, 0, null, null, attribution,
+            false,
+          );
+          if (update.kind === 'conflict') {
+            const appliesToCurrent = scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent();
+            this.recordOwnerAccountingFault(scope, 'settlement-conflict', update.reason, appliesToCurrent);
+            try {
+              this.persistOwnerCharges(scope.taskOwnerId!, ownerRunDir);
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                appliesToCurrent,
+              );
+            }
+          }
+          if (update.kind === 'inserted' || update.kind === 'refined') {
+            try {
+              this.persistOwnerCharges(scope.taskOwnerId!, ownerRunDir);
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+              );
+            }
+            if (isOwnerCurrent()) this.persistTaskCostBaseline();
+          }
+        }
+        if (!isOwnerCurrent()) return;
         if (!this.parity.turnId) return;
         const observedRouteReceipt = startedInvocation
           ? buildModelRouteReceipt({
@@ -7138,6 +10471,44 @@ export class ChatEngine {
         checkpointParityEventLog(this.parity, this.engineRunDir);
       },
       onInvocationPhase: (event) => {
+        if (event.phase === 'request_dispatched' && context.usageScope?.taskOwnerId && startedInvocation) {
+          const scope = context.usageScope;
+          const ownerId = scope.taskOwnerId!;
+          if (!globalCostTracker.getTaskChargeIds(ownerId).includes(event.inference_id)) {
+            const attribution = captureUsageAttribution(
+              scope, event.inference_id, scope.requestId, scope.attemptId,
+            );
+            const update = globalCostTracker.settleUsage(
+              startedInvocation.sent_model_id, 0, 0, null, null, attribution, false,
+            );
+            if (update.kind !== 'inserted') {
+              const appliesToCurrent = ownerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent();
+              this.recordOwnerAccountingFault(
+                scope, 'settlement-conflict', update.kind === 'conflict'
+                  ? update.reason : 'Pending provider charge was not newly admitted', appliesToCurrent,
+              );
+              try {
+                this.persistOwnerCharges(ownerId, ownerRunDir);
+              } catch (error) {
+                this.recordOwnerAccountingFault(
+                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                  appliesToCurrent,
+                );
+              }
+              throw new Error('Provider dispatch blocked by a pending charge conflict');
+            }
+            try {
+              this.persistOwnerCharges(ownerId, ownerRunDir);
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                ownerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+              );
+              throw new Error('Provider dispatch blocked because its charge receipt could not be saved');
+            }
+          }
+        }
+        if (!isOwnerCurrent()) return;
         if (!this.parity.turnId) return;
         recordModelInvocationPhase(this.parity.sessionEvents, {
           turn_id: this.parity.turnId,
@@ -7151,6 +10522,72 @@ export class ChatEngine {
         checkpointParityEventLog(this.parity, this.engineRunDir);
       },
       onRetry: (event) => {
+        // A retry schedules the next transport attempt only after the prior
+        // attempt was dispatched. Preserve possible prior billing separately
+        // from the final response's logical inference charge.
+        const retryKey = event.attempt_id ?? `${event.request_id ?? startedInvocation?.inference_id}:${event.attempt}`;
+        if (seenRetryAttemptIds.has(retryKey)) return;
+        seenRetryAttemptIds.add(retryKey);
+        const scope = context.usageScope;
+        if (scope?.taskOwnerId && startedInvocation) {
+          const priorAttemptId = scope.attemptId ?? `attempt-${event.attempt - 1}`;
+          const priorAttemptScope = {
+            ...scope,
+            attemptId: priorAttemptId,
+            chargeId: `${startedInvocation.inference_id}:${priorAttemptId}`,
+          };
+          const attribution = captureUsageAttribution(priorAttemptScope, priorAttemptScope.chargeId);
+          const update = globalCostTracker.settleUsage(
+            startedInvocation.sent_model_id, 0, 0, null, null,
+            attribution,
+            false,
+          );
+          if (update.kind === 'conflict') {
+            const appliesToCurrent = scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent();
+            this.recordOwnerAccountingFault(priorAttemptScope, 'settlement-conflict', update.reason, appliesToCurrent);
+            try {
+              this.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                priorAttemptScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                appliesToCurrent,
+              );
+            }
+          }
+          if (update.kind === 'inserted' || update.kind === 'refined') {
+            try {
+              this.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                priorAttemptScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+              );
+            }
+            if (isOwnerCurrent()) this.persistTaskCostBaseline();
+          }
+          const pendingExists = globalCostTracker.getTaskChargeIds(scope.taskOwnerId)
+            .includes(startedInvocation.inference_id);
+          const currentAttemptAttribution = captureUsageAttribution(
+            scope, startedInvocation.inference_id, scope.requestId, scope.attemptId,
+          );
+          if (pendingExists && (!currentAttemptAttribution ||
+              !globalCostTracker.clearUnstartedCharge(currentAttemptAttribution))) {
+            this.recordOwnerAccountingFault(
+              scope, 'settlement-conflict', 'Unstarted retry charge could not be cleared safely',
+              scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+            );
+          } else if (pendingExists) {
+            try {
+              this.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
+            } catch (error) {
+              this.recordOwnerAccountingFault(
+                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                scope.taskOwnerId === this.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+              );
+            }
+          }
+        }
+        if (!isOwnerCurrent()) throw new Error('Provider retry blocked by retired task owner');
         retryCount += 1;
         const retryRequestId = event.request_id ?? startedInvocation?.inference_id;
         const retryBodyDigest = event.body_digest ?? startedInvocation?.input_digest;
@@ -7168,8 +10605,16 @@ export class ChatEngine {
           },
           this.engineRunDir,
         );
+        if (scope?.taskOwnerId) {
+          const budget = this.checkBudgets(true);
+          if (!budget.ok) {
+            throw new Error(`Provider retry blocked by task allowance: ${budget.reason ?? 'unavailable'}`);
+          }
+          scope.attemptId = event.attempt_id ?? `attempt-${event.attempt}`;
+        }
       },
       onRetrySettled: (event) => {
+        if (!isOwnerCurrent()) return;
         const retryRequestId = event.request_id ?? startedInvocation?.inference_id;
         const retryBodyDigest = event.body_digest ?? startedInvocation?.input_digest;
         paritySettleProviderRetry(
@@ -7325,6 +10770,16 @@ export class ChatEngine {
     hooks: { onStreamedChunks?: (text: string) => void } = {},
   ): Promise<ChatTurn> {
     resetOneShotSnapshot(this.logicalTurnToolPolicy);
+    const usageGeneration = this.activeSubmissionGeneration;
+    const usageScope = {
+      taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+      projectRoot: realpathSync(this.options.projectRoot),
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      turnId: this.parity.turnId,
+      chargeId: null as string | null,
+      ownerGeneration: usageGeneration,
+      isOwnerCurrent: () => this.isSubmissionCurrent(usageGeneration),
+    };
     if (useNativeTools && typeof runner.executeWithToolsStream === 'function') {
       const nextTools = this.nextTurnToolPolicy();
       const restrictTools = nextTools.restrict && !isReadOnlyChat();
@@ -7352,6 +10807,7 @@ export class ChatEngine {
           systemPolicyPrompt: systemPrompt,
           toolSchema: toolDefs,
           executionStage: 'chat',
+          usageScope,
         }),
       )) {
         switch (event.type) {
@@ -7380,7 +10836,7 @@ export class ChatEngine {
           }
         }
       }
-      this.trackRunnerUsage(runner);
+      this.trackRunnerUsage(runner, usageScope);
       return nativeTurnFromStream({
         answerText,
         actions: nativeActions,
@@ -7399,11 +10855,12 @@ export class ChatEngine {
           conversationState: promptOrMessages,
           systemPolicyPrompt: systemPrompt,
           executionStage: 'chat',
+          usageScope,
         }),
         systemPrompt,
       );
       const turn = parseTextToolTurn(rawText);
-      this.trackRunnerUsage(runner);
+      this.trackRunnerUsage(runner, usageScope);
       return turn;
     }
 
@@ -7414,6 +10871,7 @@ export class ChatEngine {
         deliveryMode: 'text',
         conversationState: promptOrMessages,
         executionStage: 'chat',
+        usageScope,
       }),
       ...(callbacks.onThought || callbacks.onAnswerChunk
         ? {
@@ -7443,7 +10901,7 @@ export class ChatEngine {
       promptOrMessages as string,
       deliberationCallbacks,
     );
-    this.trackRunnerUsage(runner);
+    this.trackRunnerUsage(runner, usageScope);
     return this.parseChatTurnLenient(rawText);
   }
 
@@ -7458,11 +10916,17 @@ export class ChatEngine {
   private async *resolveFallbackOrFail(
     err: any,
     turn: number,
+    ownerGeneration?: number,
   ): AsyncGenerator<
     ChatEvent,
     DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | null,
     undefined
   > {
+    // R0-8: a superseded generator must not resolve a fallback or emit a
+    // terminal for the task that now owns the engine.
+    if (ownerGeneration !== undefined && !this.isSubmissionCurrent(ownerGeneration)) {
+      return null;
+    }
     const cancelled = this.emitCancelledIfOperatorAbort(err);
     if (cancelled) {
       yield cancelled;
@@ -7620,13 +11084,91 @@ export class ChatEngine {
     );
   }
 
+  /**
+   * R0/W7: harness-origin verifier-tamper block. The R9 tamper guard records
+   * each integrity violation and auto-blocks at tamperCount >= 3; that origin
+   * is trusted, so the report must never depend on the model's synthesized
+   * prose. A repeated integrity violation is a recovery-exhausted policy block
+   * with a harness cause.
+   */
+  private buildTamperBlockedReport(): BlockedReport {
+    return {
+      schema_version: 1,
+      status: 'BLOCKED',
+      reason_code: 'recovery_exhausted',
+      cause_class: 'harness',
+      reason: `Verifier integrity compromised — ${this.tamperCount} verifier dependency files were modified. The task cannot be completed honestly.`,
+      missing: 'An unmodified verifier dependency set for an independent verification.',
+      checked: [
+        {
+          action: 'verifier_integrity',
+          target: 'verifier_dependencies',
+          finding: `${this.tamperCount} verifier dependency modification(s) recorded by the R9 tamper guard`,
+        },
+      ],
+    };
+  }
+
   private buildVerifierBlockedReport(reason: string): BlockedReport {
+    if (this.workingState.localization?.phase === 'exhausted') {
+      const localization = this.workingState.localization;
+      return {
+        schema_version: 1,
+        status: 'BLOCKED',
+        reason_code: 'localization_exhausted',
+        cause_class: 'harness',
+        reason: 'LOCALIZATION_EXHAUSTED: no diagnostic candidate was corroborated within the bounded allowance.',
+        missing: 'A source or test location supported by a content-bearing read and the failure diagnostic.',
+        checked: [{
+          action: 'localize_failure',
+          target: localization.failureSignature.slice(0, 180),
+          finding: `${localization.calls} inspection call(s), ${localization.rounds} candidate scope(s); no accepted target`,
+        }],
+      };
+    }
+    // R0-A: a harness-origin block must carry REAL checked evidence, never an
+    // empty `checked` array (BlockedReportSchema requires >=1) and never a fake
+    // placeholder. Prefer the actual verifier attempt when one ran red; else the
+    // completion gate's own rejection is the evidence of record.
+    const receipt = this.lastVerifierReceipt;
+    const redReceipt =
+      receipt && receipt.exit_code !== 0 && receipt.stale !== true ? receipt : null;
+    if (redReceipt) {
+      const finding = (
+        redReceipt.summary && redReceipt.summary.trim() !== ''
+          ? redReceipt.summary
+          : `exit ${redReceipt.exit_code}`
+      ).slice(0, 500);
+      return {
+        schema_version: 1,
+        status: 'BLOCKED',
+        reason,
+        missing: 'A passing authoritative verifier for the current workspace revision.',
+        reason_code: 'verification_failed',
+        cause_class: 'verification',
+        checked: [
+          {
+            action: 'run_command',
+            target: redReceipt.command || 'verifier',
+            finding,
+          },
+        ],
+      };
+    }
     return {
       schema_version: 1,
       status: 'BLOCKED',
       reason,
-      missing: 'Verifier could not be satisfied after multiple attempts.',
-      checked: [],
+      missing: 'A completion that satisfies the artifact and verifier honesty gate.',
+      reason_code: 'recovery_exhausted',
+      cause_class: 'harness',
+      checked: [
+        {
+          action: 'completion_gate',
+          target: this.hasAnyWrites() ? 'verifier_honesty' : 'zero_successful_writes',
+          finding: reason.slice(0, 500),
+        },
+      ],
     };
   }
 
@@ -7712,6 +11254,50 @@ export class ChatEngine {
     return detectBlockedReportFromAnswer(answer, this.toolCallLog);
   }
 
+  /**
+   * D03: single resolution point for the structured terminal reason. Explicit
+   * arbiter reason wins; then a reason already on the blocked report; then the
+   * limiter classification; then the outcome fallback.
+   */
+  private resolveTerminalReason(
+    outcome: TerminalOutcome | undefined,
+    blockedReport?: BlockedReport | null,
+    explicit?: TerminalReason,
+  ): TerminalReason | undefined {
+    if (explicit) return explicit;
+    if (blockedReport?.reason_code !== undefined) {
+      return {
+        code: blockedReport.reason_code,
+        cause_class: blockedReport.cause_class ?? null,
+      };
+    }
+    const verificationFailure = this.resolveVerificationFailureReason(outcome);
+    if (verificationFailure) return verificationFailure;
+    return (
+      terminalReasonFromClassification(
+        this.terminatingLimiter
+          ? classifyTerminalLimiter(this.terminatingLimiter, this.terminalLimiterReason ?? undefined)
+          : null,
+      ) ?? terminalReasonFromOutcome(outcome)
+    );
+  }
+
+  /**
+   * D03/S07: a mutation that ended without success while a *current*
+   * authoritative verifier receipt is red is a verification failure — distinct
+   * from "no verifier was run" (which stays unknown). Stale receipts cannot
+   * establish this cause.
+   */
+  private resolveVerificationFailureReason(
+    outcome: TerminalOutcome | undefined,
+  ): TerminalReason | undefined {
+    return terminalReasonFromVerifierFailure({
+      hasMutation: this.hasAnyWrites(),
+      outcome,
+      receipt: this.lastVerifierReceipt,
+    });
+  }
+
   /** Persist exactly one authoritative completion decision for this turn. */
   private recordCompletionDecisionOnce(decision: {
     requestedOutcome: string;
@@ -7720,6 +11306,8 @@ export class ChatEngine {
     reason: string;
     evidenceRefs: string[];
     policyVersion: string;
+    reasonCode?: TerminalReasonCode;
+    causeClass?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
   }): void {
     const turnId = String(this.parity.turnId ?? this._turnIndex);
     if (
@@ -7731,7 +11319,10 @@ export class ChatEngine {
     recordCompletionDecision(this.parity.sessionEvents, turnId, decision);
   }
 
-  private assembleRunAllowance(finalStatus: ChatResult['status']): ChatEngineRunAllowanceReport {
+  private assembleRunAllowance(
+    finalStatus: ChatResult['status'],
+    persist = true,
+  ): ChatEngineRunAllowanceReport {
     const runAllowance = createRunAllowanceReport(this.limits, {
       postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
       criticRepairCostCapUsd: this.criticRepairCostCapUsd,
@@ -7742,7 +11333,13 @@ export class ChatEngine {
           ? 'cancelled'
           : null,
       terminalReason: this.terminalLimiterReason,
-      childLimits: { maxRounds: SUB_AGENT_MAX_ROUNDS },
+      // I3: coarse run-level child defaults; effective rounds are resolved at
+      // dispatch (read 4 / mutation 8, clamped 1-20).
+      childLimits: {
+        maxRounds: CHILD_READ_DEFAULT_ROUNDS,
+        readMaxRounds: CHILD_READ_DEFAULT_ROUNDS,
+        mutationMaxRounds: CHILD_MUTATION_DEFAULT_ROUNDS,
+      },
       taskCostBaselineUsd: this.taskCostBaselineUsd,
       taskCostSpentUsd: this.currentTaskCostUsd(),
     });
@@ -7750,6 +11347,11 @@ export class ChatEngine {
       if (runAllowance.terminalClassification === 'success') {
         runAllowance.terminalClassification = 'no_limit_triggered';
       }
+    }
+    if (!persist) {
+      // R0-8: a superseded caller computes its own (obsolete) report but must
+      // not overwrite the live task's run-allowance artifact or cost baseline.
+      return runAllowance;
     }
     this.limits.runAllowance = runAllowance;
     this.policyEventLog.record({
@@ -7772,17 +11374,31 @@ export class ChatEngine {
     answer?: string,
     blockedReport?: BlockedReport | null,
     knownOutcome?: TerminalOutcome,
+    knownReason?: TerminalReason,
+    ownerGeneration?: number,
   ): ChatResult {
+    // R0-8: a superseded caller must not finalize the task that now owns the
+    // engine. It still receives a truthful result for its own (obsolete)
+    // submission, but no completion decision, wall settlement or durable turn
+    // finalization is applied to the live task.
+    const superseded =
+      ownerGeneration !== undefined && !this.isSubmissionCurrent(ownerGeneration);
     // R1: If the answer explicitly declares BLOCKED but no blockedReport was
     // provided (e.g., the detection ran in a code path that didn't provide it),
     // promote the status to 'blocked' and generate the report here.
-    const hasBlocked = !!(answer && /\bBLOCKED\b/.test(answer));
+    // F4: only a protocol-shaped declaration (`BLOCKED` at the start of a line)
+    // is even considered, and promotion to a blocked terminal requires an actual
+    // evidence-backed report (harness-provided, or synthesized only when real
+    // investigate tool calls exist). Model prose alone cannot create a block —
+    // this keeps the callback surface consistent with the streaming surface.
+    const declaredBlocked = !!(answer && /(?:^|\n)\s*BLOCKED\b/.test(answer));
+    const synthesizedReport =
+      declaredBlocked && !blockedReport ? this.detectAndBuildBlockedReport(answer ?? '') : null;
+    const finalBlockedReport = blockedReport ?? synthesizedReport;
     const finalStatus =
-      (status === 'completed' || status === 'failed') && hasBlocked ? ('blocked' as const) : status;
-    const finalBlockedReport =
-      finalStatus === 'blocked' && !blockedReport
-        ? this.detectAndBuildBlockedReport(answer ?? '')
-        : blockedReport;
+      (status === 'completed' || status === 'failed') && finalBlockedReport
+        ? ('blocked' as const)
+        : status;
 
     if (this.cachedSystemPromptNative)
       stashEngineFingerprint(
@@ -7806,7 +11422,7 @@ export class ChatEngine {
         ? failedCause
         : (knownOutcome ??
           computeTerminalOutcome({
-            readOnly: isReadOnlyChat(),
+            readOnly: this.isAcceptedReadOnlyTerminal(),
             finalStatus,
             budgetExceeded: this.budgetExceeded,
             lastVerifierReceipt: this.lastVerifierReceipt,
@@ -7832,7 +11448,22 @@ export class ChatEngine {
         : planCompletion
           ? 'UNVERIFIED_PATCH'
           : outcome;
-    if (kernelDecision) {
+    const terminalReason =
+      finalStatus === 'cancelled'
+        ? ({ code: 'cancelled' as const, cause_class: null } satisfies TerminalReason)
+        : this.resolveTerminalReason(
+            authoritativeOutcome ?? outcome,
+            finalBlockedReport,
+            knownReason,
+          );
+    // R0-9: keep the tuple coherent on the callback/non-stream path. As on the
+    // streaming path, `verification_failed` pairs with `UNVERIFIED_PATCH` when
+    // the gate recorded a patch, so it is not remapped to AGENT_FAILURE.
+    const projectedOutcome =
+      (terminalReason?.code && terminalReason.code !== 'verification_failed'
+        ? outcomeFromReasonCode(terminalReason.code)
+        : undefined) ?? authoritativeOutcome;
+    if (kernelDecision && !superseded) {
       this.recordCompletionDecisionOnce({
         requestedOutcome: kernelDecision.requestedOutcome,
         finalOutcome: authoritativeOutcome ?? kernelDecision.finalOutcome,
@@ -7840,6 +11471,9 @@ export class ChatEngine {
         reason: kernelDecision.reason,
         evidenceRefs: kernelDecision.evidenceRefs,
         policyVersion: kernelDecision.policyVersion,
+        ...(terminalReason !== undefined
+          ? { reasonCode: terminalReason.code, causeClass: terminalReason.cause_class }
+          : {}),
       });
     }
 
@@ -7865,15 +11499,23 @@ export class ChatEngine {
     });
 
     const terminal = projectChatTerminal({
-      ...(authoritativeOutcome !== undefined ? { outcome: authoritativeOutcome } : {}),
+      ...(projectedOutcome !== undefined ? { outcome: projectedOutcome } : {}),
       status: finalStatus,
     });
 
-    this.settleActiveExecutionForTerminal();
-    // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
-    finalizeParityTurnSync(this.parity, this.engineRunDir, terminal.outcome, terminal.status);
+    if (!superseded) {
+      this.settleActiveExecutionForTerminal();
+      // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
+      finalizeParityTurnSync(
+        this.parity,
+        this.engineRunDir,
+        terminal.outcome,
+        terminal.status,
+        terminalReason,
+      );
+    }
 
-    const runAllowance = this.assembleRunAllowance(terminal.status);
+    const runAllowance = this.assembleRunAllowance(terminal.status, !superseded);
 
     const result: ChatResult = {
       status: terminal.status,
@@ -7905,6 +11547,9 @@ export class ChatEngine {
       ...(this.lastTurnTelemetry ? { turnTelemetry: this.lastTurnTelemetry } : {}),
       ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
       runAllowance,
+      ...(terminalReason !== undefined
+        ? { reason_code: terminalReason.code, cause_class: terminalReason.cause_class }
+        : {}),
       ...observabilityResultFields(this.obsHandles()),
     };
 

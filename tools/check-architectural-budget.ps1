@@ -88,10 +88,12 @@ $processExitAllowlist = @(
     "src/daemon/main.ts",                   # daemon process entry
     "src/interactive/repl/replLifecycle.ts", # REPL lifecycle (clean shutdown)
     "src/config/envBootstrap.ts",           # env bootstrap fatal errors
+    "src/runtime/admissionRestartChild.ts", # test-only crash/restart fixture keeps SQLite open to verify durable recovery
     "src/services/cliSmokeBenchmark.ts",    # benchmark tool
     "src/services/governanceBenchmark.ts",  # benchmark tool
     "src/services/liveCliReliabilityMatrix.ts", # reliability matrix tool
-    "src/services/liteParallelReview.ts"    # lite review tool
+    "src/services/liteParallelReview.ts",   # lite review tool
+    "src/runtime/admissionRestartChild.ts"  # test fixture exits with SQLite open to simulate crash/restart
 )
 
 # Files with process.exit in ui/ that need justification:

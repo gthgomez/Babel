@@ -42,6 +42,9 @@ export function providerMessagesToChatMessages(
       content: m.content,
     };
     if (m.name) base.name = m.name;
+    if (m.provenance) base.provenance = m.provenance;
+    if (m.authoritative !== undefined) base.authoritative = m.authoritative;
+    if (m.compactionCandidate) base.compactionCandidate = true;
     return base;
   });
 }
@@ -113,7 +116,13 @@ export function createEngineFromEventLog(
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
   });
   engine.restoreEventLog(log);
+  // R1: load durable observation membership before session-event restore, which
+  // re-persists the snapshot from `parity.authorizedObservationIds`.
+  engine.loadObservationMembership();
   // W2.2: settle interrupted tools from session-events.jsonl if present.
   engine.restoreSessionEventsFromDir();
+  // R1: the primary resume path must run the same context-authority hydration
+  // as `ChatEngine.restore`, not silently skip checkpoint validation.
+  engine.hydrateInstalledContextAuthority();
   return engine;
 }

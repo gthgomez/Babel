@@ -504,6 +504,50 @@ describe('PR-C: Canonical Turn View Projection', () => {
     assert.equal(unknownView.reviewCard.status, 'failed');
   });
 
+  test('D03/F2 structured reason and cause survive durable replay', () => {
+    // completion_decision precedes turn_ended in the durable log. The later
+    // turn_ended must win the reason/cause, and a block outcome must not be
+    // rejected by the strength merge.
+    const log = createSessionEventLog('d03-f2-replay');
+    recordCompletionDecision(log, 'turn-1', {
+      requestedOutcome: 'BLOCKED_EXTERNAL',
+      finalOutcome: 'BLOCKED_EXTERNAL',
+      allowed: false,
+      reason: 'environment blocked',
+      evidenceRefs: [],
+      policyVersion: 'v1',
+      reasonCode: 'external_dependency',
+      causeClass: 'environment',
+    });
+    recordTurnEnded(log, {
+      turn_id: 'turn-1',
+      outcome: 'BLOCKED_EXTERNAL',
+      status: 'blocked',
+      reason: { code: 'external_dependency', cause_class: 'environment' },
+    });
+    const view = projectTurnViewStateFromSessionEvents(log.events);
+    assert.equal(view.reviewCard.terminalOutcome, 'BLOCKED_EXTERNAL');
+    assert.equal(view.reviewCard.reasonCode, 'external_dependency');
+    assert.equal(view.reviewCard.causeClass, 'environment');
+
+    // completion_decision alone must still preserve the cause axis (previously
+    // it persisted only reason_code).
+    const decisionOnly = createSessionEventLog('d03-f2-decision-only');
+    recordCompletionDecision(decisionOnly, 'turn-2', {
+      requestedOutcome: 'BUDGET_EXHAUSTED',
+      finalOutcome: 'BUDGET_EXHAUSTED',
+      allowed: false,
+      reason: 'wall budget',
+      evidenceRefs: [],
+      policyVersion: 'v1',
+      reasonCode: 'budget_exhausted',
+      causeClass: 'harness',
+    });
+    const decisionView = projectTurnViewStateFromSessionEvents(decisionOnly.events);
+    assert.equal(decisionView.reviewCard.reasonCode, 'budget_exhausted');
+    assert.equal(decisionView.reviewCard.causeClass, 'harness');
+  });
+
   test('unknown model fallback represents unknown truthfully without fabricating identity', () => {
     const events: CanonicalTurnEvent[] = [
       {

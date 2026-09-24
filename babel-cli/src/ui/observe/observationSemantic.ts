@@ -8,7 +8,7 @@
 import type { SessionEvent } from '../../agent/sessionEvents.js'
 import { mapOutcomeToStatus } from '../../interactive/projection/canonicalEvents.js'
 import { projectTurnViewStateFromSessionEvents } from '../../interactive/projection/turnViewProjector.js'
-import type { TerminalOutcome } from '../../schemas/agentContracts.js'
+import type { TerminalOutcome, TerminalReasonCode } from '../../schemas/agentContracts.js'
 
 export type ToolLifecycleState =
   | 'proposed'
@@ -32,6 +32,8 @@ export interface ObservationProjectionSnapshot {
   userInput: string
   assistantAnswer: string
   isTerminal: boolean
+  /** D03: structured terminal reason, when established. */
+  reasonCode?: TerminalReasonCode
 }
 
 export interface ObservationSemanticState {
@@ -73,6 +75,7 @@ interface ProjectionAccumulator {
   assistantAnswer: string
   isTerminal: boolean
   terminalOutcome: TerminalOutcome
+  reasonCode?: TerminalReasonCode
 }
 
 interface ReducerState {
@@ -234,6 +237,7 @@ function applyProjectionEvent(state: ProjectionAccumulator, ev: SessionEvent): v
         state.isTerminal = true
       }
       if (ev.reason) state.assistantAnswer = ev.reason
+      if (ev.reason_code !== undefined) state.reasonCode = ev.reason_code
       break
     }
     case 'turn_ended': {
@@ -259,6 +263,8 @@ function applyProjectionEvent(state: ProjectionAccumulator, ev: SessionEvent): v
         state.reviewStatus = status ?? mapOutcomeToStatus(outcome)
         state.isTerminal = true
       }
+      // D03: turn_ended is authoritative for the reason.
+      if (ev.reason_code !== undefined) state.reasonCode = ev.reason_code
       break
     }
     default:
@@ -300,6 +306,9 @@ function snapshot(state: ReducerState): ObservationSemanticState {
       userInput: state.projection.userInput,
       assistantAnswer: state.projection.assistantAnswer,
       isTerminal: state.projection.isTerminal,
+      ...(state.projection.reasonCode !== undefined
+        ? { reasonCode: state.projection.reasonCode }
+        : {}),
     },
   }
 }
@@ -418,6 +427,9 @@ export function reduceObservationSemantic(events: readonly SessionEvent[]): Obse
       userInput: view.transcriptCell.userInput,
       assistantAnswer: view.transcriptCell.assistantAnswer,
       isTerminal: view.isTerminal,
+      ...(view.reviewCard.reasonCode !== undefined
+        ? { reasonCode: view.reviewCard.reasonCode }
+        : {}),
     }
   } catch {
     projection = null

@@ -5,6 +5,7 @@
 
 import { join } from 'node:path';
 
+import { openAdmissionStore, type AdmissionOpenResult } from '../runtime/admission.js';
 import { BABEL_ROOT } from './constants.js';
 
 const CHAT_SESSIONS = 'chat-sessions';
@@ -26,6 +27,26 @@ export function chatSessionDir(sessionId: string): string {
 
 export function transcriptPath(sessionId: string): string {
   return join(chatSessionDir(sessionId), TRANSCRIPT_FILE);
+}
+
+/**
+ * Open (or take a shared reference to) the durable P05 admission store bound
+ * to one chat session directory. The authorized root is the runs root —
+ * `chatSessionDir` always resolves inside it — and concurrent opens of the
+ * same session share a single SQLite handle (refcounted; see
+ * `openAdmissionStore`). On failure the result is `ok:false` and callers must
+ * degrade fail-closed (no store → no owner → checkpoints stay inert).
+ *
+ * Open/close sites (host owns the lifetime): interactive fresh sessions
+ * (chatTransport), headless runs (chatCore), resume (chatSessionResume),
+ * protocol host materialization (protocol/client/host), one-shot chat
+ * (agent/session), workflow node attempts (interactive/commands/workflow).
+ */
+export function openSessionAdmissionStore(sessionId: string): AdmissionOpenResult {
+  return openAdmissionStore({
+    authorizedRoot: resolveBabelRunsDir(),
+    runDir: chatSessionDir(sessionId),
+  });
 }
 
 export function threadsDir(): string {

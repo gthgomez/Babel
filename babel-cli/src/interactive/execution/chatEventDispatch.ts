@@ -3,7 +3,7 @@
  */
 
 import type { ChatEvent, ChatResult } from '../../agent/chatEngine.js';
-import { computeTerminalOutcome } from '../../agent/chatEngineObservability.js';
+import { computeTerminalOutcome, outcomeFromReasonCode } from '../../agent/chatEngineObservability.js';
 import type { TurnRoutingReceipt } from '../../agent/turnRoutingReceipt.js';
 import type { BlockedReport, TerminalOutcome } from '../../schemas/agentContracts.js';
 import type { SessionUsageSummary } from '../../services/costTracker.js';
@@ -117,7 +117,12 @@ export function dispatchChatEvent(
   }
 
   if (event.type === 'failed') {
-    const outcome = resolveFailedEventOutcome(event.error, event.outcome);
+    // R0-9: a typed reason is authoritative for the tuple; derive the outcome
+    // from it so the forwarded reason_code can never disagree with the outcome.
+    const reasonOutcome = event.reason_code
+      ? outcomeFromReasonCode(event.reason_code)
+      : undefined;
+    const outcome = reasonOutcome ?? resolveFailedEventOutcome(event.error, event.outcome);
     const ev = event as {
       turnRouting?: TurnRoutingReceipt[];
       verifierReceipt?: ChatResult['verifierReceipt'];
@@ -141,6 +146,8 @@ export function dispatchChatEvent(
       ...(ev.turnRouting !== undefined ? { turnRouting: ev.turnRouting } : {}),
       ...(ev.verifierReceipt !== undefined ? { verifierReceipt: ev.verifierReceipt } : {}),
       ...(ev.blockedReport !== undefined ? { blockedReport: ev.blockedReport } : {}),
+      ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+      ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
     };
   }
 
@@ -158,6 +165,8 @@ export function dispatchChatEvent(
       answer: 'Cancelled',
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
+      reason_code: event.reason_code ?? 'cancelled',
+      cause_class: event.cause_class ?? null,
       ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
       ...(ev.toolCalls !== undefined ? { toolCalls: ev.toolCalls } : {}),
       ...(ev.runDir !== undefined ? { runDir: ev.runDir } : {}),
@@ -188,12 +197,22 @@ export function terminalResultFromDoneEvent(
     runAllowance?: ChatResult['runAllowance'];
     policyEvents?: ChatResult['policyEvents'];
     status?: ChatResult['status'];
+    /** D03: structured terminal reason code. */
+    reason_code?: ChatResult['reason_code'];
+    cause_class?: ChatResult['cause_class'];
   },
 ): ChatResult {
   // Prefer the engine's authoritative TerminalOutcome. Only recompute when
   // older fixtures omit it (tests / partial events).
   const budgetExceeded = opts?.budgetExceeded === true;
+  // R0-9: a typed reason is authoritative, but `verification_failed` legitimately
+  // pairs with UNVERIFIED_PATCH on the completed path, so it is not remapped.
+  const reasonOutcome =
+    opts?.reason_code && opts.reason_code !== 'verification_failed'
+      ? outcomeFromReasonCode(opts.reason_code)
+      : undefined;
   const outcome: TerminalOutcome =
+    reasonOutcome ??
     opts?.outcome ??
     computeTerminalOutcome({
       finalStatus: blockedReport ? 'blocked' : budgetExceeded ? 'budget_exhausted' : 'completed',
@@ -227,5 +246,7 @@ export function terminalResultFromDoneEvent(
     ...(opts?.costBudget ? { costBudget: opts.costBudget } : {}),
     ...(opts?.runAllowance ? { runAllowance: opts.runAllowance } : {}),
     ...(opts?.policyEvents ? { policyEvents: opts.policyEvents } : {}),
+    ...(opts?.reason_code !== undefined ? { reason_code: opts.reason_code } : {}),
+    ...(opts?.cause_class !== undefined ? { cause_class: opts.cause_class } : {}),
   };
 }
