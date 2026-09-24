@@ -173,7 +173,9 @@ test('T09: registered verifier cannot mutate source with recovery closed; scratc
       assert.equal(existsSync(join(root, 'scratch/result.txt')), false);
 
       process.env['BABEL_FIXTURE_MUTATE_SOURCE'] = '0';
-      delete closed.workingState.recoveryGate;
+      const consumedGate = closed.workingState.recoveryGate!;
+      consumedGate.permitConsumed = true;
+      consumedGate.admittedPlan = {} as NonNullable<typeof consumedGate.admittedPlan>;
       const positive = await executeAction(engine, { type: 'test_run', command: 'npm test' });
       assert.match(positive.observation, /exit_code: 0/);
       assert.equal(readFileSync(join(root, 'README.md'), 'utf8'), 'original\n');
