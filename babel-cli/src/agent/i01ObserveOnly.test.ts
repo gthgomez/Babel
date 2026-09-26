@@ -45,6 +45,7 @@ function makeI01Harness(): I01Harness {
     BABEL_COMPACTION: 'off',
     BABEL_MEMORY_WRITEBACK: '0',
     BABEL_CHAT_TASK_CLASS: 'general_swe',
+    BABEL_CHAT_MAX_COST: 'unlimited',
     BABEL_CHAT_MAX_TURNS: '40',
   };
   const previous = Object.fromEntries(Object.keys(keys).map((key) => [key, process.env[key]]));
@@ -76,13 +77,18 @@ function makeI01Harness(): I01Harness {
       task,
       projectRoot: source,
       outputFormat: 'json',
-      engineFactory: (engineOptions) =>
-        activeEngine = new ChatEngine({
-          ...engineOptions,
+      engineFactory: (engineOptions) => {
+        const testEngineOptions = { ...engineOptions };
+        delete testEngineOptions.maxCostUsd;
+        return activeEngine = new ChatEngine({
+          ...testEngineOptions,
           maxTurns: 40,
+          // The provider fixture reports token usage without per-token prices.
+          // Cost-completeness behavior is covered separately; these tests isolate I01.
           providerRunner: new OpenCodeGoApiRunner('mimo-v2.5', {}, { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' }),
           providerPolicy: babelReviewModelPolicy('mimo-v2.5', source),
-        }),
+        });
+      },
     });
     return { payload: result.payload as Record<string, unknown>, engine: activeEngine! };
   };
@@ -122,7 +128,7 @@ function answerText(payload: Record<string, unknown>): string {
   return String(answer ?? '');
 }
 
-test('baseline: general_swe hard cap terminates through the arbiter with a policy block', async () => {
+test('baseline: general_swe hard cap terminates through the arbiter with a budget outcome', async () => {
   const harness = makeI01Harness();
   try {
     const { payload } = await harness.run('Fix the defect described in fixture.txt by inspecting it first.');
@@ -132,7 +138,7 @@ test('baseline: general_swe hard cap terminates through the arbiter with a polic
       `expected early hard-cap termination, served ${harness.roundsServed.value} rounds`,
     );
     assert.match(answerText(payload), /hard cap 12/i);
-    assert.equal(payload['terminal_outcome'], 'BLOCKED_POLICY');
+    assert.equal(payload['terminal_outcome'], 'BUDGET_EXHAUSTED');
   } finally {
     harness.dispose();
   }

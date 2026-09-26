@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 
 import {
   ObservationCursorError,
@@ -17,6 +17,13 @@ import {
 } from './observationStore.js';
 
 const FIXED_CLOCK = (): string => '2026-09-19T00:00:00.000Z';
+
+function skipIfSymlinkUnavailable(t: TestContext, error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (!['EPERM', 'EACCES', 'ENOTSUP', 'EOPNOTSUPP'].includes(code ?? '')) return false;
+  t.skip(`symlink creation unavailable on this host: ${code}`);
+  return true;
+}
 
 function tempRoot(label: string): string {
   return mkdtempSync(join(tmpdir(), `babel-recall-${label}-`));
@@ -377,7 +384,7 @@ test('base64 representation returns declared binary bytes', () => {
   }
 });
 
-test('recall rejects symlinked object files and symlinked ancestor directories', () => {
+test('recall rejects symlinked object files and symlinked ancestor directories', (t) => {
   const root = tempRoot('recall-symlink');
   const outside = tempRoot('recall-symlink-outside');
   try {
@@ -390,7 +397,12 @@ test('recall rejects symlinked object files and symlinked ancestor directories',
 
     // 1) object file replaced by a symlink to an outside file.
     unlinkSync(objectPath);
-    symlinkSync(outsideFile, objectPath);
+    try {
+      symlinkSync(outsideFile, objectPath);
+    } catch (error) {
+      if (skipIfSymlinkUnavailable(t, error)) return;
+      throw error;
+    }
     const fileLink = resolveObservation(
       observation.observation_id,
       caller(observation.observation_id),
@@ -413,7 +425,12 @@ test('recall rejects symlinked object files and symlinked ancestor directories',
     rmSync(objectDir, { recursive: true, force: true });
     mkdirSync(outside, { recursive: true });
     writeFileSync(join(outside, `${payload.sha256}.bin`), 'contained recall bytes', 'utf8');
-    symlinkSync(outside, objectDir);
+    try {
+      symlinkSync(outside, objectDir);
+    } catch (error) {
+      if (skipIfSymlinkUnavailable(t, error)) return;
+      throw error;
+    }
     const dirLink = resolveObservation(
       observation.observation_id,
       caller(observation.observation_id),

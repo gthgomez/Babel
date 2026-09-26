@@ -10,8 +10,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import test from 'node:test';
+import { join, sep } from 'node:path';
+import test, { type TestContext } from 'node:test';
 
 import { sanitizeSpillId } from '../agent/codingLoop/observationCompiler.js';
 import {
@@ -29,6 +29,13 @@ import {
 } from './observationStore.js';
 
 const FIXED_CLOCK = (): string => '2026-09-19T00:00:00.000Z';
+
+function skipIfSymlinkUnavailable(t: TestContext, error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (!['EPERM', 'EACCES', 'ENOTSUP', 'EOPNOTSUPP'].includes(code ?? '')) return false;
+  t.skip(`symlink creation unavailable on this host: ${code}`);
+  return true;
+}
 
 function tempRoot(label: string): string {
   const root = mkdtempSync(join(tmpdir(), `babel-obs-${label}-`));
@@ -359,7 +366,7 @@ test('fault after a successful payload write retains the previous approved obser
     const flaky: ObservationStorageFsV1 = {
       ...base,
       writeFileExclusive(path, bytes, mode) {
-        if (path.includes('/refs/')) {
+        if (path.split(sep).includes('refs')) {
           const error = new Error('injected EACCES') as Error & { code: string };
           error.code = 'EACCES';
           throw error;
@@ -395,7 +402,7 @@ test('ENOSPC on payload write degrades and never replays the effect', () => {
     const full: ObservationStorageFsV1 = {
       ...base,
       writeFileExclusive(path, bytes, mode) {
-        if (path.includes('/objects/')) {
+        if (path.split(sep).includes('objects')) {
           const error = new Error('injected ENOSPC') as Error & { code: string };
           error.code = 'ENOSPC';
           throw error;
@@ -436,24 +443,35 @@ test('existing object with mismatching bytes fails integrity and is left untouch
   }
 });
 
-test('ancestor and root symlinks are rejected, not advertised as containment', () => {
+test('ancestor and root symlinks are rejected, not advertised as containment', (t) => {
   const root = tempRoot('symlink');
   const outside = tempRoot('symlink-outside');
+  const realRoot = tempRoot('symlink-real');
   try {
-    symlinkSync(outside, join(root, 'objects'));
+    try {
+      symlinkSync(outside, join(root, 'objects'));
+    } catch (error) {
+      if (skipIfSymlinkUnavailable(t, error)) return;
+      throw error;
+    }
     const throughAncestor = captureApprovedObservation(baseInput(), storage(root));
     assert.equal(throughAncestor.status, 'blocked');
     if (throughAncestor.status === 'blocked') assert.equal(throughAncestor.policy, 'containment');
 
-    const realRoot = tempRoot('symlink-real');
     const linkedRoot = join(realRoot, 'link');
-    symlinkSync(root, linkedRoot);
+    try {
+      symlinkSync(root, linkedRoot);
+    } catch (error) {
+      if (skipIfSymlinkUnavailable(t, error)) return;
+      throw error;
+    }
     const linked = captureApprovedObservation(baseInput(), storage(linkedRoot));
     assert.equal(linked.status, 'blocked');
     if (linked.status === 'blocked') assert.equal(linked.policy, 'containment');
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
+    rmSync(realRoot, { recursive: true, force: true });
   }
 });
 

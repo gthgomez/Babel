@@ -19,6 +19,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   closeSync,
@@ -278,6 +279,91 @@ function unavailable(detail: string): AdmissionOpenResult {
   return { ok: false, reasonCode: ADMISSION_REASONS.UNAVAILABLE, detail };
 }
 
+const WINDOWS_ACL_VERIFY_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  'try {',
+  '  $path = $env:BABEL_ADMISSION_ACL_PATH',
+  '  $isDirectory = $env:BABEL_ADMISSION_ACL_DIRECTORY -eq \'1\'',
+  '  $sid = $env:BABEL_ADMISSION_USER_SID',
+  '  $sections = [System.Security.AccessControl.AccessControlSections]::Access',
+  '  if ($isDirectory) { $acl = [System.Security.AccessControl.DirectorySecurity]::new($path, $sections) } else { $acl = [System.Security.AccessControl.FileSecurity]::new($path, $sections) }',
+  '  $rules = @($acl.Access)',
+  '  if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1) { exit 1 }',
+  '  $actual = $rules[0]',
+  '  if ($actual.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid) { exit 1 }',
+  '  if ($actual.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $actual.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) { exit 1 }',
+  '  if ($actual.IsInherited -or $actual.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) { exit 1 }',
+  '  if ($isDirectory -and ($actual.InheritanceFlags -ne ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit))) { exit 1 }',
+  '  if (-not $isDirectory -and $actual.InheritanceFlags -ne [System.Security.AccessControl.InheritanceFlags]::None) { exit 1 }',
+  '  exit 0',
+  '} catch { exit 1 }',
+].join('; ');
+
+let windowsUserSid: string | undefined;
+
+/**
+ * Apply and verify an owner-only NTFS DACL. Node's chmod mode bits do not
+ * remove inherited Windows access-control entries, so unsupported ACL hosts
+ * fail closed instead of pretending a POSIX mode protected the journal.
+ */
+function enforceOwnerOnlyWindowsAcl(path: string, directory: boolean): { ok: boolean; code: string } {
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  if (!systemRoot) return { ok: false, code: 'missing_system_root' };
+  const system32 = join(systemRoot, 'System32');
+  const safeEnvironment = {
+    SystemRoot: systemRoot,
+    WINDIR: systemRoot,
+    Path: process.env.Path ?? process.env.PATH,
+    PSModulePath: join(system32, 'WindowsPowerShell', 'v1.0', 'Modules'),
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+  };
+  if (!windowsUserSid) {
+    const identity = spawnSync(join(system32, 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], {
+      encoding: 'utf8',
+      env: safeEnvironment,
+      timeout: 5_000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const sid = identity.stdout?.match(/S-\d-(?:\d+-)*\d+/g)?.at(-1);
+    if (identity.status !== 0 || !sid) {
+      return { ok: false, code: (identity.error as NodeJS.ErrnoException | undefined)?.code ?? 'identity_unavailable' };
+    }
+    windowsUserSid = sid;
+  }
+
+  const grant = `*${windowsUserSid}:${directory ? '(OI)(CI)F' : 'F'}`;
+  const icacls = spawnSync(join(system32, 'icacls.exe'), [path, '/inheritance:r', '/grant:r', grant, '/Q'], {
+    encoding: 'utf8',
+    env: safeEnvironment,
+    timeout: 5_000,
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  if (icacls.status !== 0) {
+    return { ok: false, code: (icacls.error as NodeJS.ErrnoException | undefined)?.code ?? 'acl_apply_failed' };
+  }
+
+  const powershell = join(system32, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_ACL_VERIFY_SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...safeEnvironment,
+      BABEL_ADMISSION_ACL_PATH: path,
+      BABEL_ADMISSION_ACL_DIRECTORY: directory ? '1' : '0',
+      BABEL_ADMISSION_USER_SID: windowsUserSid,
+    },
+    timeout: 10_000,
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  return {
+    ok: result.status === 0,
+    code: (result.error as NodeJS.ErrnoException | undefined)?.code ?? 'acl_verification_failed',
+  };
+}
+
 /**
  * Resolve the run dir and prove containment inside `root` *before* creating or
  * chmod-ing anything. The deepest existing ancestor is realpath'd and checked
@@ -317,6 +403,10 @@ function resolveJailedRunDir(root: string, runDir: string): { ok: true; dir: str
     chmodSync(finalDir, 0o700);
     const dir = realpathSync(finalDir);
     if (!isWithin(root, dir)) return { ok: false, detail: 'run_dir_outside_authorized_root' };
+    if (process.platform === 'win32') {
+      const acl = enforceOwnerOnlyWindowsAcl(dir, true);
+      if (!acl.ok) return { ok: false, detail: `run_dir_private_acl_unavailable:${acl.code}` };
+    }
     return { ok: true, dir };
   } catch (error) {
     return { ok: false, detail: `run_dir_unresolvable:${errorText(error)}` };
@@ -640,6 +730,10 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
     // Harden only after the path is proven inside the authorized root, so a
     // symlink cannot be used to chmod a file outside the jail.
     chmodSync(realDb, 0o600);
+    if (process.platform === 'win32') {
+      const acl = enforceOwnerOnlyWindowsAcl(realDb, false);
+      if (!acl.ok) return unavailable(`db_private_acl_unavailable:${acl.code}`);
+    }
   } catch (error) {
     return unavailable(`db_path_unavailable:${errorText(error)}`);
   }

@@ -26,7 +26,7 @@ import { appendTurnCells, replaceThreadRecords } from '../../services/threadStor
 import { HISTORY_CELL_SCHEMA_VERSION } from '../../ui/historyCells/types.js';
 import type { HistoryCellRecord } from '../../ui/historyCells/types.js';
 import { BabelProtocolErrorCode } from '../types.js';
-import { createProtocolHostState, handleProtocolRequest } from './index.js';
+import { closeProtocolHostState, createProtocolHostState, handleProtocolRequest } from './index.js';
 
 function withTempRunsDir() {
   const root = mkdtempSync(join(tmpdir(), 'babel-protocol-prep-'));
@@ -243,8 +243,9 @@ test('P02: deep is rejected explicitly and never constructs a Chat engine', asyn
 
 test('P02: a fresh thread reports no source and remains submittable', async () => {
   const fixture = withTempRunsDir();
+  let host: ReturnType<typeof createProtocolHostState> | undefined;
   try {
-    const host = createProtocolHostState({ executeWithoutNotifications: true });
+    host = createProtocolHostState({ executeWithoutNotifications: true });
     const threadId = await createThread(host, fixture.root);
     const resumed = await handleProtocolRequest(
       { jsonrpc: '2.0', id: 2, method: 'thread.resume', params: { thread_id: threadId } },
@@ -261,6 +262,7 @@ test('P02: a fresh thread reports no source and remains submittable', async () =
     );
     assert.ok('result' in submitted);
   } finally {
+    if (host) closeProtocolHostState(host);
     fixture.cleanup();
   }
 });

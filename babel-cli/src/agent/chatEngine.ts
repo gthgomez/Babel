@@ -6260,6 +6260,14 @@ export class ChatEngine {
       yield this.streamFailed(err?.message ?? String(err));
       return null;
     }
+    const errorMessage = err?.message ?? String(err);
+    if (
+      terminalReasonFromFailureText(errorMessage)?.code ===
+      "unsupported_operation"
+    ) {
+      yield this.streamFailed(errorMessage);
+      return null;
+    }
     if (turn > 0) {
       yield this.streamFailed(err.message);
       return null;

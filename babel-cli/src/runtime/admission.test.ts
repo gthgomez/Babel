@@ -7,10 +7,11 @@
  * explicit incomplete evidence, and fail-closed open behavior.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, existsSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
@@ -39,6 +40,55 @@ interface Fixture {
 }
 
 type TestStoreOptions = Partial<Omit<AdmissionStoreOptions, 'authorizedRoot' | 'runDir'>>;
+
+function skipIfSymlinkUnavailable(t: TestContext, error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (!['EPERM', 'EACCES', 'ENOTSUP', 'EOPNOTSUPP'].includes(code ?? '')) return false;
+  t.skip(`symlink creation unavailable on this host: ${code}`);
+  return true;
+}
+
+function hasOwnerOnlyWindowsAcl(target: string, directory: boolean): boolean {
+  const systemRoot = process.env.SystemRoot;
+  if (!systemRoot) return false;
+  const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$acl = Get-Acl -LiteralPath $env:BABEL_TEST_ACL_TARGET',
+    '$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+    '$rules = @($acl.Access)',
+    '$ok = $acl.AreAccessRulesProtected -and $rules.Count -eq 1',
+    'if ($ok) {',
+    '  $rule = $rules[0]',
+    '  $ok = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sid',
+    '  $ok = $ok -and $rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow',
+    '  $ok = $ok -and $rule.FileSystemRights -eq [System.Security.AccessControl.FileSystemRights]::FullControl',
+    '  $ok = $ok -and -not $rule.IsInherited -and $rule.PropagationFlags -eq [System.Security.AccessControl.PropagationFlags]::None',
+    "  if ($env:BABEL_TEST_ACL_DIRECTORY -eq '1') {",
+    '    $ok = $ok -and $rule.InheritanceFlags.HasFlag([System.Security.AccessControl.InheritanceFlags]::ContainerInherit)',
+    '    $ok = $ok -and $rule.InheritanceFlags.HasFlag([System.Security.AccessControl.InheritanceFlags]::ObjectInherit)',
+    '  } else { $ok = $ok -and $rule.InheritanceFlags -eq [System.Security.AccessControl.InheritanceFlags]::None }',
+    '}',
+    "if ($ok) { [Console]::Out.Write('owner-only') } else { [Console]::Out.Write('not-owner-only') }",
+  ].join('; ');
+  const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8',
+    env: {
+      SystemRoot: systemRoot,
+      WINDIR: systemRoot,
+      Path: process.env.Path ?? process.env.PATH,
+      PSModulePath: join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules'),
+      TEMP: process.env.TEMP,
+      TMP: process.env.TMP,
+      BABEL_TEST_ACL_TARGET: target,
+      BABEL_TEST_ACL_DIRECTORY: directory ? '1' : '0',
+    },
+    timeout: 5_000,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  return result.status === 0 && result.stdout.trim() === 'owner-only';
+}
 
 /** Register the test-only fault hook through its opaque symbol. */
 function faultHook(hook: (point: AdmissionFaultPoint) => void): TestStoreOptions {
@@ -597,12 +647,17 @@ test('P05: a run dir outside the authorized root is refused with no side effect'
   }
 });
 
-test('P05: a symlinked intermediate that escapes the root is refused with no side effect', () => {
+test('P05: a symlinked intermediate that escapes the root is refused with no side effect', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'babel-admission-root-'));
   const outsideRoot = mkdtempSync(join(tmpdir(), 'babel-admission-outside-'));
   try {
     const link = join(root, 'escape');
-    symlinkSync(outsideRoot, link, 'dir');
+    try {
+      symlinkSync(outsideRoot, link, 'dir');
+    } catch (error) {
+      if (skipIfSymlinkUnavailable(t, error)) return;
+      throw error;
+    }
     const escapedRunDir = join(link, 'run-1');
 
     const result = openAdmissionStore({ authorizedRoot: root, runDir: escapedRunDir });
@@ -615,14 +670,19 @@ test('P05: a symlinked intermediate that escapes the root is refused with no sid
   }
 });
 
-test('P05: a dangling symlinked DB file is refused with no write outside the jail', () => {
+test('P05: a dangling symlinked DB file is refused with no write outside the jail', (t) => {
   const fixture = makeFixture();
   const outsideRoot = mkdtempSync(join(tmpdir(), 'babel-admission-outside-'));
   try {
     mkdirSync(fixture.runDir, { recursive: true, mode: 0o700 });
     const target = join(outsideRoot, 'escaped.sqlite');
     // Matches DB_FILENAME in admission.ts; the link target does not exist.
-    symlinkSync(target, join(fixture.runDir, 'runtime-facts.sqlite'));
+    try {
+      symlinkSync(target, join(fixture.runDir, 'runtime-facts.sqlite'));
+    } catch (error) {
+      if (skipIfSymlinkUnavailable(t, error)) return;
+      throw error;
+    }
 
     const result = openAdmissionStore({ authorizedRoot: fixture.root, runDir: fixture.runDir });
     assert.equal(result.ok, false);
@@ -948,14 +1008,20 @@ test('P05: a corrupt database fails closed rather than degrading', () => {
 
 test('P05: the DB file and run dir are owner-only', () => {
   const fixture = makeFixture();
+  let store: AdmissionStore | undefined;
   try {
-    const store = openStore(fixture);
-    const fileMode = statSync(store.dbPath).mode & 0o777;
-    assert.equal(fileMode, 0o600, `expected 0600 DB file, got ${fileMode.toString(8)}`);
-    const dirMode = statSync(fixture.runDir).mode & 0o777;
-    assert.equal(dirMode, 0o700, `expected 0700 run dir, got ${dirMode.toString(8)}`);
-    store.close();
+    store = openStore(fixture);
+    if (process.platform === 'win32') {
+      assert.equal(hasOwnerOnlyWindowsAcl(store.dbPath, false), true, 'expected DB DACL to allow only the current user');
+      assert.equal(hasOwnerOnlyWindowsAcl(fixture.runDir, true), true, 'expected run-dir DACL to allow only the current user');
+    } else {
+      const fileMode = statSync(store.dbPath).mode & 0o777;
+      assert.equal(fileMode, 0o600, `expected 0600 DB file, got ${fileMode.toString(8)}`);
+      const dirMode = statSync(fixture.runDir).mode & 0o777;
+      assert.equal(dirMode, 0o700, `expected 0700 run dir, got ${dirMode.toString(8)}`);
+    }
   } finally {
+    store?.close();
     fixture.cleanup();
   }
 });

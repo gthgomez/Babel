@@ -142,14 +142,14 @@ describe('budgetKillPolicy', () => {
     // Structural proof: monomorphic stream loop calls the end-of-turn helper
     // (submitMessage is a thin consumer of submitMessageStream — one body).
     const src = readFileSync(
-      new URL('./chatEngine.ts', import.meta.url),
+      new URL('./chatEngineStreamingLoop.ts', import.meta.url),
       'utf8',
     );
     assert.match(src, /evaluateTokenExplosionAfterTurn/);
     const callSites = [...src.matchAll(/evaluateTokenExplosionAfterTurn\s*\(/g)];
     assert.ok(
       callSites.length >= 1,
-      'stream loop must call end-of-turn evaluator (monomorphic submitMessage path)',
+      'streaming loop must call the end-of-turn evaluator',
     );
     // Dead pre-turn check removed
     assert.doesNotMatch(

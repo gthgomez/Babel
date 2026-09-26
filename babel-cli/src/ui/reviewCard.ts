@@ -325,7 +325,7 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   if (hasRealCost || hasRealTokens) {
     const bits: string[] = [];
     if (hasRealCost) bits.push(`$${input.costUsd!.toFixed(4)} this turn`);
-    if (hasRealTokens) bits.push(`${input.tokens} tok`);
+    if (hasRealTokens) bits.push(`${input.tokens} tok${hasRealCost ? '' : ' this turn'}`);
     const sessionTokens = input.sessionTokens;
     if (
       hasRealTokens &&

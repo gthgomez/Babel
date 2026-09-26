@@ -100,6 +100,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
 
   await t.test('thread-only resume hydrates engine and viewport from cells', async () => {
     const fixture = withTempRunsDir();
+    let ctx: ReplContext | undefined;
     try {
       const sessionId = 'chat-thread-only-int';
       appendTurnCells(sessionId, 1, [makeUserCell(sessionId, 'thread-only hello')]);
@@ -110,7 +111,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       assert.equal(entry?.hasThreadStore, true);
       assert.equal(entry?.transcriptPath, transcriptPath(sessionId));
 
-      const ctx = makeResumeCtx(target);
+      ctx = makeResumeCtx(target);
       // R0-3: this legacy fixture has no durable repository identity, so an
       // explicit rebind is required before execution is admitted.
       const outcome = await resumeChatSession(ctx, sessionId, { confirmUnknownIdentity: true });
@@ -120,12 +121,14 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       assert.match(ctx.chatEngine?.getConversation().find((m) => m.role === 'user')?.content ?? '', /thread-only hello/);
       assert.equal(ctx.screenManager?.getHistoryCellViewport()?.cellEntries.length ?? 0, 1);
     } finally {
+      ctx?.chatEngine?.closeAdmissionStore();
       fixture.cleanup();
     }
   });
 
   await t.test('transcript-only resume hydrates from transcript.jsonl', async () => {
     const fixture = withTempRunsDir();
+    let ctx: ReplContext | undefined;
     try {
       const sessionId = 'chat-transcript-only-int';
       const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
@@ -136,7 +139,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
         'utf8',
       );
 
-      const ctx = makeResumeCtx(target);
+      ctx = makeResumeCtx(target);
       // R0-3: no durable repo identity in this legacy fixture -> explicit
       // rebind required; then resumed as degraded history, never verified.
       const outcome = await resumeChatSession(ctx, sessionId, { confirmUnknownIdentity: true });
@@ -146,12 +149,14 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       assert.equal(outcome.degraded, true);
       assert.match(ctx.chatEngine?.getConversation().find((m) => m.role === 'user')?.content ?? '', /transcript-only hello/);
     } finally {
+      ctx?.chatEngine?.closeAdmissionStore();
       fixture.cleanup();
     }
   });
 
   await t.test('valid transcript plus valid event log restores normally', async () => {
     const fixture = withTempRunsDir();
+    let ctx: ReplContext | undefined;
     try {
       const sessionId = 'chat-valid-events-int';
       const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
@@ -164,11 +169,13 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
 
       // R0-3: session-events record no project_root here, so identity is
       // unknown and an explicit rebind is required.
-      const outcome = await resumeChatSession(makeResumeCtx(target), sessionId, {
+      ctx = makeResumeCtx(target);
+      const outcome = await resumeChatSession(ctx, sessionId, {
         confirmUnknownIdentity: true,
       });
       assert.equal(outcome.ok, true);
     } finally {
+      ctx?.chatEngine?.closeAdmissionStore();
       fixture.cleanup();
     }
   });
@@ -298,6 +305,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
 
   await t.test('collision: thread-store cells win over stale transcript for same id', async () => {
     const fixture = withTempRunsDir();
+    let ctx: ReplContext | undefined;
     try {
       const sessionId = 'chat-collision-int';
       const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
@@ -309,7 +317,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       );
       appendTurnCells(sessionId, 1, [makeUserCell(sessionId, 'thread store wins')]);
 
-      const ctx = makeResumeCtx(target);
+      ctx = makeResumeCtx(target);
       // R0-3: no durable identity in this fixture -> explicit rebind required.
       const outcome = await resumeChatSession(ctx, sessionId, { confirmUnknownIdentity: true });
       assert.equal(outcome.ok, true);
@@ -320,6 +328,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       assert.doesNotMatch(String(userContent), /stale transcript/);
       assert.equal(ctx.turns.find((turn) => turn.role === 'user')?.input, 'thread store wins');
     } finally {
+      ctx?.chatEngine?.closeAdmissionStore();
       fixture.cleanup();
     }
   });

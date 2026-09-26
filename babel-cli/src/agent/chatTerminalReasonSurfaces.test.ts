@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, test } from 'node:test';
+import { after, before, describe, test } from 'node:test';
 
 import {
   createParityRuntime,
@@ -35,6 +35,18 @@ import type { ToolStreamEvent } from '../runners/base.js';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+let priorCostAllowance: string | undefined;
+before(() => {
+  priorCostAllowance = process.env['BABEL_CHAT_MAX_COST'];
+  // These scripted provider fixtures omit per-token pricing; cost completeness
+  // is covered separately from terminal-reason projection.
+  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
+});
+after(() => {
+  if (priorCostAllowance === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+  else process.env['BABEL_CHAT_MAX_COST'] = priorCostAllowance;
+});
 
 function makeProgressExhaustionRuntime(id: string) {
   const rt = createParityRuntime(id);
@@ -230,7 +242,7 @@ describe('D03 protocol client and run payload carry the reason', () => {
   });
 });
 
-describe('D03 production engine: recovery exhaustion reaches every surface', () => {
+describe('D03 production engine: hard-cap reasons reach every surface', () => {
   test('the real stream loop yields corrected next-action text, not a capability block', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'd03-engine-'));
     writeFileSync(join(projectRoot, 'hello.txt'), 'hello\n', 'utf-8');
@@ -273,26 +285,25 @@ describe('D03 production engine: recovery exhaustion reaches every surface', () 
       );
 
       // Engine result carries the structured reason.
-      assert.equal(result.reason_code, 'recovery_exhausted');
-      assert.equal(result.cause_class, 'model');
-      assert.equal(result.status, 'blocked');
+      assert.equal(result.reason_code, 'budget_exhausted');
+      assert.equal(result.cause_class, 'harness');
+      assert.equal(result.status, 'budget_exhausted');
 
       // Durable session log carries it (persistence/replay).
       const log = loadSessionEventLogFromDir(chatSessionDir(engine.getEngineRunId()));
       const ended = log?.events.filter((e) => e.kind === 'turn_ended').at(-1) as
         | { reason_code?: string; cause_class?: string }
         | undefined;
-      assert.equal(ended?.reason_code, 'recovery_exhausted');
-      assert.equal(ended?.cause_class, 'model');
+      assert.equal(ended?.reason_code, 'budget_exhausted');
+      assert.equal(ended?.cause_class, 'harness');
 
       // The projected review card shows the corrected guidance.
       assert.ok(log, 'durable session log must exist');
       const state = projectTurnViewStateFromSessionEvents(log!.events);
-      assert.equal(state.reviewCard.reasonCode, 'recovery_exhausted');
+      assert.equal(state.reviewCard.reasonCode, 'budget_exhausted');
       const card = renderProjectedReviewCard(state);
-      assert.match(card.body, /No progress after recovery/);
-      assert.match(card.body, /Inspect diagnostics/);
-      assert.match(card.body, /Narrow scope/);
+      assert.match(card.body, /Budget limit reached/);
+      assert.match(card.body, /Follow-up to continue/);
       assert.doesNotMatch(card.body, /Review the blocked capability/);
       assert.doesNotMatch(card.body, /permission/i);
     } finally {
@@ -301,11 +312,9 @@ describe('D03 production engine: recovery exhaustion reaches every surface', () 
     }
   });
 
-  // D03 (I3): on the read-only synthesis-failure path the outcome, the persisted
-  // blocked report and the reason must agree. Previously the report had no
-  // reason_code and the outcome was BLOCKED_EXTERNAL while the reason said
-  // recovery_exhausted.
-  test('read-only synthesis failure reconciles outcome, report and reason', async () => {
+  // D03 (I3): on the read-only hard-cap path, the outcome, persisted report
+  // and reason must agree across durable and public surfaces.
+  test('read-only hard cap reconciles outcome and reason without a blocked report', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'd03-readonly-'));
     writeFileSync(join(projectRoot, 'hello.txt'), 'hello\n', 'utf-8');
     process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
@@ -346,30 +355,25 @@ describe('D03 production engine: recovery exhaustion reaches every surface', () 
         null,
       );
 
-      assert.equal(result.reason_code, 'recovery_exhausted');
-      assert.equal(result.cause_class, 'model');
-      // The reason and the (now reason-aware) outcome agree: a recovery
-      // exhaustion is a policy block, not an external dependency.
-      assert.equal(result.outcome, 'BLOCKED_POLICY');
-      assert.equal(result.blockedReport?.reason_code, 'recovery_exhausted');
+      assert.equal(result.reason_code, 'budget_exhausted');
+      assert.equal(result.cause_class, 'harness');
+      assert.equal(result.outcome, 'BUDGET_EXHAUSTED');
+      assert.equal(result.blockedReport, undefined);
 
       const log = loadSessionEventLogFromDir(chatSessionDir(engine.getEngineRunId()));
       const ended = log?.events.filter((e) => e.kind === 'turn_ended').at(-1) as
         | { outcome?: string; reason_code?: string }
         | undefined;
-      assert.equal(ended?.outcome, 'BLOCKED_POLICY');
-      assert.equal(ended?.reason_code, 'recovery_exhausted');
+      assert.equal(ended?.outcome, 'BUDGET_EXHAUSTED');
+      assert.equal(ended?.reason_code, 'budget_exhausted');
 
       const payload = buildChatRunPayload(result, {
         task: 'investigate hello.txt',
         projectRoot,
       });
-      assert.equal(payload['terminal_outcome'], 'BLOCKED_POLICY');
-      assert.equal(payload['reason_code'], 'recovery_exhausted');
-      assert.equal(
-        (payload['blocked_report'] as { reason_code?: string } | undefined)?.reason_code,
-        'recovery_exhausted',
-      );
+      assert.equal(payload['terminal_outcome'], 'BUDGET_EXHAUSTED');
+      assert.equal(payload['reason_code'], 'budget_exhausted');
+      assert.equal(payload['blocked_report'], undefined);
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
       delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];

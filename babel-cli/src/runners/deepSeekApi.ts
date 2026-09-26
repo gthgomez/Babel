@@ -1814,25 +1814,21 @@ export class DeepSeekApiRunner implements LlmRunner {
       // ── Yield accumulated tool calls ──────────────────────────────────
       if ((finishReason === 'tool_calls' || pendingToolCalls.size > 0) && pendingToolCalls.size > 0) {
         const seenToolIds = new Set<string>();
-        for (const [, acc] of pendingToolCalls) {
-          if (!acc.id || !acc.id.trim()) {
-            invocationFailed = true;
-            const errMessage = `[deepSeekApi] Incomplete tool call: missing id for tool ${acc.name || '<unknown>'}`;
-            notifyPhase('response_normalization_failed', undefined, 'missing_tool_id');
-            notifyCompleted('failed', outputReceipt, {
-              actualAttempt: lastAttempt,
-              details: { message: errMessage },
-              failureStage: 'response_normalization',
-              partialModelOutput,
-              toolCallCount,
-              outputMaterial: outputReceipt,
-            });
-            yield { type: 'error', message: errMessage };
-            return;
+        for (const [callIndex, acc] of pendingToolCalls) {
+          let callId = acc.id.trim();
+          if (!callId || seenToolIds.has(callId)) {
+            const baseId = `tool_call_${callIndex}`;
+            let suffix = 0;
+            callId = baseId;
+            while (seenToolIds.has(callId)) {
+              suffix += 1;
+              callId = `${baseId}_${suffix}`;
+            }
           }
+          seenToolIds.add(callId);
           if (!acc.name || !acc.name.trim()) {
             invocationFailed = true;
-            const errMessage = `[deepSeekApi] Incomplete tool call: missing name for tool call ${acc.id}`;
+            const errMessage = `[deepSeekApi] Incomplete tool call: missing name for tool call ${callId}`;
             notifyPhase('response_normalization_failed', undefined, 'missing_tool_name');
             notifyCompleted('failed', outputReceipt, {
               actualAttempt: lastAttempt,
@@ -1847,7 +1843,7 @@ export class DeepSeekApiRunner implements LlmRunner {
           }
           if (!acc.arguments || !acc.arguments.trim()) {
             invocationFailed = true;
-            const errMessage = `[deepSeekApi] Incomplete tool call: missing arguments for tool ${acc.name} (${acc.id})`;
+            const errMessage = `[deepSeekApi] Incomplete tool call: missing arguments for tool ${acc.name} (${callId})`;
             notifyPhase('response_normalization_failed', undefined, 'missing_tool_arguments');
             notifyCompleted('failed', outputReceipt, {
               actualAttempt: lastAttempt,
@@ -1860,23 +1856,6 @@ export class DeepSeekApiRunner implements LlmRunner {
             yield { type: 'error', message: errMessage };
             return;
           }
-          if (seenToolIds.has(acc.id)) {
-            invocationFailed = true;
-            const errMessage = `[deepSeekApi] Duplicate tool call id ${acc.id}`;
-            notifyPhase('response_normalization_failed', undefined, 'duplicate_tool_id');
-            notifyCompleted('failed', outputReceipt, {
-              actualAttempt: lastAttempt,
-              details: { message: errMessage },
-              failureStage: 'response_normalization',
-              partialModelOutput,
-              toolCallCount,
-              outputMaterial: outputReceipt,
-            });
-            yield { type: 'error', message: errMessage };
-            return;
-          }
-          seenToolIds.add(acc.id);
-
           let input: Record<string, unknown>;
           try {
             const parsed = JSON.parse(acc.arguments) as unknown;
@@ -1901,7 +1880,7 @@ export class DeepSeekApiRunner implements LlmRunner {
             };
             return;
           }
-          yield { type: 'tool_use', id: acc.id, name: acc.name, input };
+          yield { type: 'tool_use', id: callId, name: acc.name, input };
         }
         yield { type: 'done', finishReason: finishReason ?? 'tool_calls' };
       } else {

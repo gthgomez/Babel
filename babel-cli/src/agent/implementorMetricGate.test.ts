@@ -125,7 +125,7 @@ describe('W1 metric gate', () => {
       id: 'env',
       source: 'manual',
       toolCalls: [
-        { tool: 'str_replace', target: 'a.ts' },
+        { tool: 'str_replace', target: 'a.ts', effect_status: 'confirmed_change' },
         { tool: 'test_run', error: 'pytest: command not found' },
       ],
     });
