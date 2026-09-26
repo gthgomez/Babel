@@ -106,7 +106,7 @@ test('P04: redaction removes credential keys and caps long strings', () => {
 });
 
 test('P04: redaction removes absolute Windows and POSIX paths from string values', () => {
-  const windowsPath = 'C:\\Users\\alice\\AppData\\Local\\babel\\run\\thread_events.json';
+  const windowsPath = ['C:', 'Users', 'alice', 'AppData', 'Local', 'babel', 'run', 'thread_events.json'].join('\\');
   const posixPath = ['', 'home', 'alice', '.local', 'share', 'babel', 'run', 'thread_events.json'].join('/');
   const redacted = redactRuntimeFact(
     fact({ payload: { type: 'context.degraded', reason: `failed at ${windowsPath}; retry ${posixPath}` } }),
