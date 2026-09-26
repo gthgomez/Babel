@@ -300,6 +300,22 @@ const WINDOWS_ACL_VERIFY_SCRIPT = [
   "} catch { [Console]::Out.Write('acl_check_exception'); exit 1 }",
 ].join('; ');
 
+const WINDOWS_STANDARD_ACL_SIDS = [
+  'S-1-1-0', // Everyone
+  'S-1-5-4', // Interactive
+  'S-1-5-6', // Service
+  'S-1-5-7', // Anonymous
+  'S-1-5-11', // Authenticated Users
+  'S-1-5-18', // Local System
+  'S-1-5-19', // Local Service
+  'S-1-5-20', // Network Service
+  'S-1-5-32-544', // Administrators
+  'S-1-5-32-545', // Users
+  'S-1-5-32-546', // Guests
+  'S-1-3-0', // Creator Owner
+  'S-1-3-1', // Creator Group
+];
+
 let windowsUserSid: string | undefined;
 
 /**
@@ -338,25 +354,8 @@ function enforceOwnerOnlyWindowsAcl(path: string, directory: boolean): { ok: boo
 
   const powershell = join(system32, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const icaclsPath = join(system32, 'icacls.exe');
-  const sidQuery = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', "(Get-Acl -LiteralPath $env:BABEL_ADMISSION_ACL_PATH).Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }"], {
-    encoding: 'utf8',
-    env: {
-      ...safeEnvironment,
-      BABEL_ADMISSION_ACL_PATH: path,
-    },
-    timeout: 10_000,
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'ignore'],
-  });
-  const ruleSids = new Set((sidQuery.stdout ?? '').match(/S-\d-(?:\d+-)*\d+/g) ?? []);
-  ruleSids.add(windowsUserSid);
-  if (sidQuery.status !== 0) {
-    const queryError = sidQuery.error as NodeJS.ErrnoException | undefined;
-    const code = queryError?.code === 'ETIMEDOUT' ? 'acl_identity_query_timeout' : queryError?.code ?? 'acl_identity_query_failed';
-    return { ok: false, code };
-  }
   const grant = `*${windowsUserSid}:${directory ? '(OI)(CI)F' : 'F'}`;
-  const ruleEntries = [...ruleSids].map((sid) => `*${sid}`);
+  const ruleEntries = [...new Set([...WINDOWS_STANDARD_ACL_SIDS, windowsUserSid])].map((sid) => `*${sid}`);
   const apply = spawnSync(icaclsPath, [path, '/inheritance:r', '/remove:g', ...ruleEntries, '/remove:d', ...ruleEntries, '/grant:r', grant, '/Q'], {
     encoding: 'utf8',
     env: safeEnvironment,
