@@ -52,6 +52,16 @@ test('composer editing keys remain unhandled for PromptInput', () => {
   assert.deepEqual(result.state, base)
 })
 
+test('Ctrl+C interrupts from every surface and conversation keys scroll', () => {
+  const sessions: ShellInputState = { ...base, focus: 'sessions' }
+  assert.equal(routeShellInput(key('c', { ctrl: true }), sessions).action, 'interrupt')
+  assert.equal(routeShellInput(key('c', { ctrl: true }), base).action, 'interrupt')
+  const conversation: ShellInputState = { ...base, focus: 'conversation', leftDrawerOpen: false, rightDrawerOpen: false }
+  assert.equal(routeShellInput(key('pageup'), conversation).action, 'scroll-conversation')
+  assert.equal(routeShellInput(key('escape'), conversation).action, 'focus-changed')
+  assert.equal(routeShellInput(key('escape'), { ...base, leftDrawerOpen: false, rightDrawerOpen: false }).action, 'composer-escape')
+})
+
 test('selection keys in a drawer surface route to real actions, not silent consumption', () => {
   const drawer: ShellInputState = { ...base, focus: 'sessions' }
   assert.equal(routeShellInput(key('down'), drawer).action, 'move-selection')

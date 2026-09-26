@@ -106,6 +106,27 @@ test('ShellInspectorStore bounds buffered events', () => {
   assert.deepEqual(store.build(context).tools[0], 'Proposed (observed): b, c')
 })
 
+test('a request receipt survives after the rolling buffer drops it', () => {
+  const store = new ShellInspectorStore(2)
+  store.setActiveSession('session-1')
+  store.observe(ev('model_input_receipt', 't1', {
+    inference_id: 'i1',
+    provider: 'deepseek',
+    requested_model_id: 'req',
+    normalized_model_id: 'norm',
+    sent_model_id: 'sent-model',
+    input_digest: 'd',
+    input_ref: 'ref',
+    context_limit_tokens: 128000,
+    context_limit_source: 'provider',
+  }))
+  store.observe(ev('tool_proposed', 't1', { tool_name: 'a', tool_call_id: '1', idempotency_key: '1' }))
+  store.observe(ev('tool_proposed', 't1', { tool_name: 'b', tool_call_id: '2', idempotency_key: '2' }))
+  const view = store.build(context)
+  assert.ok(view.context.includes('Sent model: sent-model'))
+  assert.equal(store.getEvents().some((event) => event.kind === 'model_input_receipt'), false)
+})
+
 test('inspector never shows a prior session request after a session transition', () => {
   const store = new ShellInspectorStore()
   store.setActiveSession('session-old')

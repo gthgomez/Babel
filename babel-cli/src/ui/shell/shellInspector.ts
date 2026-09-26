@@ -1,18 +1,4 @@
-/**
- * Request-scoped inspector projection for the hosted North Star shell.
- *
- * The view is built only from data that was actually captured:
- *  - proposed tool names from `tool_proposed`
- *  - capability advertised/authorized/effective from `capability_binding_receipt`
- *  - request/context facts from `model_input_receipt` and ReplContext telemetry
- *
- * The exact set of tool names sent in a request is NOT present in
- * `session-events.jsonl` (the context manifest stores `tool_schema_hash`
- * only). This module therefore never claims a request-captured offered-tool
- * list; it renders an explicit "unavailable" row instead. Wiring a real
- * request-scoped offered/permitted snapshot is a later P15-adjacent engine
- * seam, deliberately out of this slice.
- */
+/** Offered-tool names are not in the event stream, so that row stays unavailable. */
 
 import {
   subscribeSessionEventObservation,
@@ -140,13 +126,20 @@ export function buildShellInspectorView(
 }
 
 /** Bounded, presentation-only buffer of canonical session events. */
+const PINNED_KINDS = new Set<SessionEvent['kind']>(['model_input_receipt', 'capability_binding_receipt'])
+
 export class ShellInspectorStore {
   private events: SessionEvent[] = []
+  private pinned: SessionEvent[] = []
   private activeSessionId: string | undefined
 
   constructor(private readonly maxEvents = 256) {}
 
   observe(event: SessionEvent): void {
+    if (PINNED_KINDS.has(event.kind)) {
+      this.pinned = this.pinned.filter((existing) => !samePinnedFact(existing, event))
+      this.pinned.push(event)
+    }
     this.events.push(event)
     if (this.events.length > this.maxEvents) {
       this.events.splice(0, this.events.length - this.maxEvents)
@@ -168,6 +161,7 @@ export class ShellInspectorStore {
 
   reset(): void {
     this.events = []
+    this.pinned = []
   }
 
   getEvents(): readonly SessionEvent[] {
@@ -191,7 +185,26 @@ export class ShellInspectorStore {
     if (this.activeSessionId === undefined) {
       return buildShellInspectorView([], context)
     }
-    const scoped = this.events.filter((event) => event.session_id === this.activeSessionId)
-    return buildShellInspectorView(scoped, context)
+    return buildShellInspectorView(this.eventsForActiveSession(), context)
   }
+
+  private eventsForActiveSession(): SessionEvent[] {
+    const sessionId = this.activeSessionId
+    const live = this.events.filter((event) => event.session_id === sessionId)
+    const liveIds = new Set(live.map((event) => event.event_id))
+    const kept = this.pinned.filter(
+      (event) => event.session_id === sessionId && !liveIds.has(event.event_id),
+    )
+    return [...kept, ...live]
+  }
+}
+
+function samePinnedFact(left: SessionEvent, right: SessionEvent): boolean {
+  if (left.kind !== right.kind || left.session_id !== right.session_id || left.turn_id !== right.turn_id) {
+    return false
+  }
+  if (left.kind === 'capability_binding_receipt' && right.kind === 'capability_binding_receipt') {
+    return left.capability === right.capability
+  }
+  return true
 }

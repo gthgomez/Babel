@@ -25,6 +25,10 @@ export interface ShellHost {
   mount(): void
   invalidate(reason: string): void
   renderNow(): void
+  /** Keep the next repaints from covering command output until the next key. */
+  holdRepaint(): void
+  /** Clear a repaint hold. Returns whether a hold was active. */
+  releaseRepaintHold(): boolean
   withExclusiveTerminal<T>(reason: string, work: () => Promise<T>): Promise<T>
   dispose(): void
 }
@@ -69,6 +73,7 @@ export function createShellHost(options: ShellHostOptions): ShellHost {
   let disposed = false
   let exclusiveDepth = 0
   let dirty = false
+  let repaintHeld = false
   let unregister: (() => void) | null = null
 
   const host: ShellHost = {
@@ -83,13 +88,23 @@ export function createShellHost(options: ShellHostOptions): ShellHost {
       if (mounted || disposed) return
       mounted = true
       unregister = scheduler.register(componentId, () => {
-        if (!mounted || disposed || exclusiveDepth > 0 || !dirty) return
+        if (!mounted || disposed || exclusiveDepth > 0 || repaintHeld || !dirty) return
         dirty = false
         host.renderNow()
       })
       host.invalidate('mount')
     },
+    holdRepaint() {
+      repaintHeld = true
+      dirty = false
+    },
+    releaseRepaintHold() {
+      const held = repaintHeld
+      repaintHeld = false
+      return held
+    },
     invalidate(_reason) {
+      if (repaintHeld) return
       if (!mounted || disposed || exclusiveDepth > 0) return
       if (dirty) return
       dirty = true

@@ -73,6 +73,7 @@ import { ShellInspectorStore } from '../ui/shell/shellInspector.js';
 import { getAvailableModels } from '../modelPolicy.js';
 import {
   createShellCommandOperations,
+  resetHostedConversation,
   runShellCommand,
   type ShellCommandOperations,
 } from '../ui/shell/shellOperations.js';
@@ -129,6 +130,9 @@ export class BabelRepl {
     source: 'provider_prompt_tokens' | 'estimated' | 'unknown';
   } | null;
   private shellKeyCleanup: (() => void) | null = null;
+  private shellKeyHost: ShellHost | null = null;
+  private shellKeyAdapter: PromptInputAdapter | null = null;
+  private shellExclusiveKeyDepth = 0;
   private legacyKeypressHandler: ((str: string, key: rl.Key) => void) | null = null;
   private shellExclusiveRunnerCleanup: (() => void) | null = null;
   private legacyExclusiveDepth = 0;
@@ -481,9 +485,9 @@ export class BabelRepl {
     this.shellExclusiveRunnerCleanup = registerExclusiveTerminalRunner((reason, work) =>
       this.withExclusiveTerminal(reason, work),
     );
-    this.shellKeyCleanup = installKeyHandler(process.stdin, (event: KeyEvent) => {
-      this.dispatchShellKey(event, host, adapter);
-    });
+    this.shellKeyHost = host;
+    this.shellKeyAdapter = adapter;
+    this.attachShellKeys();
     host.mount();
     // Responsive promotion may happen while the legacy prompt is inactive
     // because the current renderer owns raw input. Re-activate the hosted
@@ -511,8 +515,10 @@ export class BabelRepl {
       promptInput.deactivate();
     }
     adapter.setPresentationTarget?.(null);
-    this.shellKeyCleanup?.();
-    this.shellKeyCleanup = null;
+    this.detachShellKeys();
+    this.shellKeyHost = null;
+    this.shellKeyAdapter = null;
+    this.shellExclusiveKeyDepth = 0;
     this.shellHost?.dispose();
     this.shellHost = undefined;
     this.shellExclusiveRunnerCleanup?.();
@@ -532,16 +538,45 @@ export class BabelRepl {
    * Kept as an explicit method (rather than an inline closure) so the
    * move/activate invariant is testable against this exact handler path.
    */
+  private attachShellKeys(): void {
+    if (this.shellKeyCleanup || !this.shellKeyHost || !this.shellKeyAdapter) return;
+    const host = this.shellKeyHost;
+    const adapter = this.shellKeyAdapter;
+    this.shellKeyCleanup = installKeyHandler(process.stdin, (event: KeyEvent) => {
+      this.dispatchShellKey(event, host, adapter);
+    });
+  }
+
+  private detachShellKeys(): void {
+    this.shellKeyCleanup?.();
+    this.shellKeyCleanup = null;
+  }
+
   private dispatchShellKey(
     event: KeyEvent,
     host: ShellHost | undefined,
     adapter: PromptInputAdapter,
     layout: ReturnType<typeof planShellLayout> = planShellLayout(OutputBuffer.getTerminalSize()),
   ): void {
+    if (host?.releaseRepaintHold()) host.invalidate('repaint-hold');
     this.shellInputState = projectShellPresentation(layout, this.shellInputState).inputState;
     const routed = routeShellInput(event, this.shellInputState);
     this.shellInputState = routed.state;
     this.shellNavigator.setFocus(routed.state.focus);
+    if (routed.action === 'interrupt') {
+      adapter.processKey(event);
+      return;
+    }
+    if (routed.action === 'scroll-conversation') {
+      this.scrollShellConversation(event.name, layout);
+      host?.invalidate('scroll');
+      return;
+    }
+    if (routed.action === 'composer-escape') {
+      const prompt = adapter.getPromptInput?.();
+      if (prompt?.consumesEscape()) adapter.processKey(event);
+      return;
+    }
     if (routed.action === 'move-selection') {
       // Cursor-only: never changes the active thread.
       this.shellNavigator.move(routed.state.focus, event.name);
@@ -569,6 +604,26 @@ export class BabelRepl {
    * session operation. The navigator's row cursor is intentionally untouched:
    * the active thread and the selected row are separate state.
    */
+  private scrollShellConversation(
+    keyName: string,
+    layout: ReturnType<typeof planShellLayout>,
+  ): void {
+    const viewport = this.shellRuntime?.viewport;
+    if (!viewport) return;
+    const page = Math.max(1, (layout.conversationText?.height ?? layout.conversation?.height ?? 10) - 1);
+    if (keyName === 'up') viewport.scrollBy(1);
+    else if (keyName === 'down') viewport.scrollBy(-1);
+    else if (keyName === 'pageup') viewport.scrollBy(page);
+    else if (keyName === 'pagedown') viewport.scrollBy(-page);
+    else if (keyName === 'home') viewport.setScrollOffset(viewport.maxScrollOffset);
+    else viewport.scrollToBottom();
+  }
+
+  clearHostedShell(): void {
+    resetHostedConversation(this);
+    this.rebindShellRuntime(undefined);
+  }
+
   private rebindShellRuntime(threadId: string | undefined): void {
     if (this.shellRuntime) this.shellRuntime.hydrateTurns(this.turns, threadId);
     // The inspector is request-scoped: on a session/target transition it must
@@ -589,9 +644,7 @@ export class BabelRepl {
       host?.invalidate('activate-noop');
       return;
     }
-    await this.withExclusiveTerminal(`shell-${command.kind}`, () =>
-      runShellCommand(command, operations),
-    );
+    await runShellCommand(command, operations);
     if (
       command.kind === 'session.resume' ||
       command.kind === 'session.new' ||
@@ -602,7 +655,12 @@ export class BabelRepl {
       this.shellSources.ensureProjectRoot(root);
       await this.shellSources.refreshSessions().catch(() => {});
     }
-    host?.invalidate('shell-activation');
+    const prints =
+      command.kind === 'action.run' ||
+      command.kind === 'mode.set' ||
+      command.kind === 'model.set';
+    if (prints) host?.holdRepaint();
+    else host?.invalidate('shell-activation');
   }
 
   // ── Session Persistence ──────────────────────────────────────────────────
@@ -817,14 +875,22 @@ export class BabelRepl {
       }
     }
     const adapter = this.rl as unknown as PromptInputAdapter;
-    return this.shellHost.withExclusiveTerminal(reason, async () => {
-      const resumeInput = adapter.suspendInput?.();
-      try {
-        return await work();
-      } finally {
-        resumeInput?.();
-      }
-    });
+    const outer = this.shellExclusiveKeyDepth === 0;
+    if (outer) this.detachShellKeys();
+    this.shellExclusiveKeyDepth += 1;
+    const resumeInput = outer ? adapter.suspendInput?.() : undefined;
+    try {
+      return await this.shellHost.withExclusiveTerminal(reason, async () => {
+        try {
+          return await work();
+        } finally {
+          if (outer) resumeInput?.();
+        }
+      });
+    } finally {
+      this.shellExclusiveKeyDepth = Math.max(0, this.shellExclusiveKeyDepth - 1);
+      if (this.shellExclusiveKeyDepth === 0 && this.shellHost) this.attachShellKeys();
+    }
   }
 
   private deferResponsiveResize(rows: number, cols: number): void {
@@ -851,8 +917,6 @@ export class BabelRepl {
     }
 
     this.pendingResponsiveResize = null;
-    this.unregisterResponsiveLeaseRelease?.();
-    this.unregisterResponsiveLeaseRelease = null;
     this.unregisterResponsiveRendererResume?.();
     this.unregisterResponsiveRendererResume = null;
 
@@ -873,16 +937,22 @@ export class BabelRepl {
     }
     if (!this.shellHost && resizedLayout.mode !== 'linear') {
       this.startNorthStarShell();
+      return;
     }
+    this.shellHost?.invalidate('responsive-resize');
   }
 
   exit(): void {
+    this.unregisterResponsiveLeaseRelease?.();
+    this.unregisterResponsiveLeaseRelease = null;
     if (this.legacyKeypressHandler) {
       process.stdin.off('keypress', this.legacyKeypressHandler);
       this.legacyKeypressHandler = null;
     }
-    this.shellKeyCleanup?.();
-    this.shellKeyCleanup = null;
+    this.detachShellKeys();
+    this.shellKeyHost = null;
+    this.shellKeyAdapter = null;
+    this.shellExclusiveKeyDepth = 0;
     this.shellHost?.dispose();
     this.shellHost = undefined;
     this.shellExclusiveRunnerCleanup?.();

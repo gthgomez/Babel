@@ -18,6 +18,9 @@ export interface ShellInputResult {
     | 'focus-changed'
     | 'move-selection'
     | 'activate-selection'
+    | 'interrupt'
+    | 'scroll-conversation'
+    | 'composer-escape'
 }
 
 const ORDER: readonly ShellFocus[] = ['composer', 'sessions', 'project', 'actions', 'inspector', 'conversation']
@@ -65,14 +68,25 @@ export function notifyShellSurfaceReleased(): void {
   for (const listener of shellSurfaceReleaseListeners) listener()
 }
 
+const SCROLL_KEYS = new Set(['up', 'down', 'home', 'end', 'pageup', 'pagedown'])
+
 /** Route shell navigation keys without stealing composer editing bindings. */
 export function routeShellInput(event: KeyEvent, state: ShellInputState): ShellInputResult {
   if (shellInputLeaseActive()) return { handled: true, state }
+  if (event.ctrl && event.name === 'c') {
+    return { handled: true, state, action: 'interrupt' }
+  }
   if (event.name === 'f6') {
     return { handled: true, state: { ...state, focus: nextFocus(state, event.shift ? -1 : 1) }, action: 'focus-changed' }
   }
-  if (event.name === 'escape' && (state.leftDrawerOpen || state.rightDrawerOpen)) {
-    return { handled: true, state: { ...state, leftDrawerOpen: false, rightDrawerOpen: false, focus: 'composer' }, action: 'close-overlay' }
+  if (event.name === 'escape') {
+    if (state.leftDrawerOpen || state.rightDrawerOpen) {
+      return { handled: true, state: { ...state, leftDrawerOpen: false, rightDrawerOpen: false, focus: 'composer' }, action: 'close-overlay' }
+    }
+    if (state.focus !== 'composer') {
+      return { handled: true, state: { ...state, focus: 'composer' }, action: 'focus-changed' }
+    }
+    return { handled: true, state, action: 'composer-escape' }
   }
   if (event.name === 'p' && event.ctrl) {
     return { handled: true, state, action: 'open-palette' }
@@ -82,6 +96,9 @@ export function routeShellInput(event: KeyEvent, state: ShellInputState): ShellI
   }
   if (state.focus === 'composer') return { handled: false, state }
 
+  if (state.focus === 'conversation' && SCROLL_KEYS.has(event.name)) {
+    return { handled: true, state, action: 'scroll-conversation' }
+  }
   if (event.name === 'up' || event.name === 'down' || event.name === 'home' ||
     event.name === 'end' || event.name === 'pageup' || event.name === 'pagedown') {
     return { handled: true, state, action: 'move-selection' }

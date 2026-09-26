@@ -207,6 +207,30 @@ test('North Star promotion is idempotent after startup resize replay mounts the 
   assert.equal(repl.shellHost, host);
 });
 
+test('responsive replay keeps the release listener and applies a same-mode resize', () => {
+  const reasons: string[] = []
+  let unregistered = 0
+  const repl = Object.create(BabelRepl.prototype) as {
+    pendingResponsiveResize: { rows: number; cols: number } | null
+    startupHydrationComplete: boolean
+    shellHost: { invalidate: (reason: string) => void }
+    unregisterResponsiveLeaseRelease: () => void
+    unregisterResponsiveRendererResume: null
+    replayResponsiveResize: () => void
+  }
+  repl.pendingResponsiveResize = { rows: 45, cols: 160 }
+  repl.startupHydrationComplete = true
+  repl.shellHost = { invalidate: (reason) => reasons.push(reason) }
+  repl.unregisterResponsiveLeaseRelease = () => { unregistered += 1 }
+  repl.unregisterResponsiveRendererResume = null
+
+  repl.replayResponsiveResize()
+
+  assert.equal(unregistered, 0)
+  assert.equal(repl.pendingResponsiveResize, null)
+  assert.deepEqual(reasons, ['responsive-resize'])
+})
+
 test('startup responsive replay waits until session hydration completes', () => {
   const repl = Object.create(BabelRepl.prototype) as {
     pendingResponsiveResize: { rows: number; cols: number } | null;

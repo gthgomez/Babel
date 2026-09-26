@@ -1,19 +1,4 @@
-/**
- * Real, existing-backed source projections for the hosted North Star shell.
- *
- * Every row here comes from an existing runtime source:
- *  - sessions  → `listResumableSessions` (chatSessionIndex)
- *  - project   → `readShallowTargetListing` (targetResolver)
- *  - actions   → `BUILTIN_SLASH_COMMANDS` (typeaheadEngine)
- *
- * There is no second database and no fabricated row. Missing data surfaces as
- * an explicit empty/error/unknown state. These adapters are the only place the
- * shell touches those APIs; retire them through the existing deletion plan when
- * the full P15 runtime projection converges.
- *
- * The project listing is cached per target root so the render path does not
- * probe the filesystem on every frame (U02).
- */
+/** Project rows are cached per root so a frame does not stat the target. */
 
 import { join } from 'node:path'
 
@@ -27,7 +12,7 @@ import type { ShellNavigationRow } from './shellNavigation.js'
 
 const ACTION_LABELS: Record<string, string> = {
   '/clear': 'New session',
-  '/status': 'Git status',
+  '/status': 'Session status',
   '/resume': 'Resume',
   '/diff': 'Diff',
   '/model': 'Model',

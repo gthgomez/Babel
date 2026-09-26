@@ -141,9 +141,9 @@ export class HistoryCellViewport {
     const committed = transcript.getCommittedCells();
     const active = transcript.getActiveCell();
     const committedContentKeys = committed.map((cell) =>
-      this.cellContentKey(cell),
+      this.cellContentKey(cell, true),
     );
-    const activeContentKey = active ? this.cellContentKey(active) : null;
+    const activeContentKey = active ? this.cellContentKey(active, true) : null;
     if (
       committed === this.lastCommittedCells &&
       this.sameStringArray(
@@ -159,6 +159,7 @@ export class HistoryCellViewport {
     const cells = active ? [...committed, active] : committed;
     this.rebuildFromCells(cells, this.captureAnchor(), {
       resetViewport: this.shouldResetViewport(cells),
+      trustRevision: true,
     });
     this.lastCommittedCells = committed;
     this.lastCommittedContentKeys = committedContentKeys;
@@ -173,6 +174,7 @@ export class HistoryCellViewport {
       forceReflow?: boolean;
       countNewRows?: boolean;
       resetViewport?: boolean;
+      trustRevision?: boolean;
     } = {},
   ): void {
     const previousEntries = this.entries;
@@ -181,7 +183,8 @@ export class HistoryCellViewport {
     const forceReflow = options.forceReflow ?? false;
     const countNewRows = options.countNewRows ?? true;
     const resetViewport = options.resetViewport ?? false;
-    const contentKeys = cells.map((cell) => this.cellContentKey(cell));
+    const trustRevision = options.trustRevision ?? false;
+    const contentKeys = cells.map((cell) => this.cellContentKey(cell, trustRevision));
 
     let firstChanged = 0;
     if (!forceReflow) {
@@ -317,8 +320,14 @@ export class HistoryCellViewport {
     );
   }
 
-  private cellContentKey(cell: HistoryCell): string {
-    return `${cell.cacheKey()}:${JSON.stringify(cell.toRecord())}`;
+  private cellContentKey(cell: HistoryCell, trustRevision = false): string {
+    const structural = cell.cacheKey();
+    if (trustRevision) {
+      const index = this.entryIndexByCellId.get(cell.record.cell_id);
+      const prior = index !== undefined ? this.entries[index] : undefined;
+      if (prior && prior.cacheKey === structural) return prior.contentKey;
+    }
+    return `${structural}:${JSON.stringify(cell.record.payload)}`;
   }
 
   private sameStringArray(

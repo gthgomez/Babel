@@ -1,14 +1,4 @@
-/**
- * Executor for real shell selection commands.
- *
- * `runShellCommand` is the pure dispatch seam (unit-testable with injected
- * operations). `createShellCommandOperations` is the production wiring that
- * reuses existing ReplContext handlers — it re-implements no command.
- *
- * Async work is expected to be wrapped by the caller in the host's exclusive
- * terminal lease (BabelRepl.withExclusiveTerminal), matching the existing
- * palette/reverse-search path.
- */
+/** Dispatch shell selections through the existing repl handlers. */
 
 import type { ReplContext } from '../../interactive/context.js'
 import {
@@ -146,8 +136,10 @@ export function createShellCommandOperations(
     },
     newSession(): void {
       handleClear(ctx, [])
-      resetHostedConversation(ctx)
-      host.onSessionChanged(undefined)
+      if (!ctx.shellHost) {
+        resetHostedConversation(ctx)
+        host.onSessionChanged(undefined)
+      }
     },
     setTarget(root: string): void {
       handleRetarget(ctx, [root])

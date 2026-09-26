@@ -624,6 +624,13 @@ export class PromptInput {
     this.setPresentationTarget(target);
   }
 
+  /** Escape should edit or dismiss UI, not arm process exit. */
+  consumesEscape(): boolean {
+    if (this.typeahead.hasPopup()) return true
+    if (this.mode !== 'insert') return true
+    return !(this.lines.length === 1 && this.lines[0] === '')
+  }
+
   /** Return the current editor presentation without writing to the terminal. */
   getView(rect?: Rect): PromptView {
     const viewRect = rect ?? this.presentationTarget?.getRect() ?? {

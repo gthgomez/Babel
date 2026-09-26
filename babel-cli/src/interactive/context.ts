@@ -101,6 +101,7 @@ export interface ReplContext {
   ): InteractiveTurn;
   beginShellTurn?(turnId: number, input: string): void;
   settleShellTurn?(outcome?: string, sourceEpoch?: number): void;
+  clearHostedShell?(): void;
   withExclusiveTerminal?<T>(reason: string, work: () => Promise<T>): Promise<T>;
   resolveCurrentTarget(): AgentTargetContext;
   scheduleIndexWarmup(projectRoot: string): void;

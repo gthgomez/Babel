@@ -212,7 +212,10 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     saveHistory((ctx.rl as ReadlineWithHistory).history);
 
     if (input.startsWith('/')) {
-      if (ctx.withExclusiveTerminal) {
+      if (ctx.shellHost) {
+        await handleCommand(ctx, input);
+        ctx.shellHost.holdRepaint();
+      } else if (ctx.withExclusiveTerminal) {
         await ctx.withExclusiveTerminal('command', () => handleCommand(ctx, input));
       } else {
         await handleCommand(ctx, input);

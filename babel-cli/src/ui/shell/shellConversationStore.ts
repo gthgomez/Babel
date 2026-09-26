@@ -42,13 +42,7 @@ function dedupeRecords(records: readonly HistoryCellRecord[]): HistoryCellRecord
   return mergeRecords([], records);
 }
 
-/**
- * Derived session conversation state for a hosted shell.
- *
- * This store owns no persistence authority. Durable records are supplied by
- * the thread store and current-turn records are replaced or settled only
- * after the owning transport reports the corresponding outcome.
- */
+/** Presentation records only. Persistence stays with the owning transport. */
 export class ShellConversationStore {
   private committedRecords: HistoryCellRecord[] = [];
   private currentTurnRecords: HistoryCellRecord[] = [];
