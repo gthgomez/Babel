@@ -288,7 +288,8 @@ const WINDOWS_ACL_VERIFY_SCRIPT = [
   '  $sections = [System.Security.AccessControl.AccessControlSections]::Access',
   '  if ($isDirectory) { $acl = [System.Security.AccessControl.DirectorySecurity]::new($path, $sections) } else { $acl = [System.Security.AccessControl.FileSecurity]::new($path, $sections) }',
   '  $rules = @($acl.Access)',
-  "  if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1) { [Console]::Out.Write('acl_check_protection_or_rule_count'); exit 1 }",
+  "  if (-not $acl.AreAccessRulesProtected) { [Console]::Out.Write('acl_check_not_protected'); exit 1 }",
+  "  if ($rules.Count -ne 1) { [Console]::Out.Write('acl_check_rule_count_many'); exit 1 }",
   '  $actual = $rules[0]',
   "  if ($actual.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid) { [Console]::Out.Write('acl_check_owner_sid'); exit 1 }",
   "  if ($actual.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $actual.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) { [Console]::Out.Write('acl_check_allow_full_control'); exit 1 }",
@@ -359,7 +360,7 @@ function enforceOwnerOnlyWindowsAcl(path: string, directory: boolean): { ok: boo
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   const diagnostic = result.stdout?.trim();
-  const safeDiagnostic = diagnostic && /^acl_check_[a-z_]+$/.test(diagnostic) ? diagnostic : null;
+  const safeDiagnostic = diagnostic && /^acl_check_[a-z0-9_]+$/.test(diagnostic) ? diagnostic : null;
   return {
     ok: result.status === 0,
     code:
