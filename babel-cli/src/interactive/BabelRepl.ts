@@ -70,6 +70,7 @@ import { projectShellPresentation } from '../ui/shell/shellPresentation.js';
 import { ShellNavigator } from '../ui/shell/shellNavigation.js';
 import { ShellSources } from '../ui/shell/shellSources.js';
 import { ShellInspectorStore } from '../ui/shell/shellInspector.js';
+import { getAvailableModels } from '../modelPolicy.js';
 import {
   createShellCommandOperations,
   runShellCommand,
@@ -144,6 +145,7 @@ export class BabelRepl {
   private readonly shellNavigator = new ShellNavigator();
   /** Cached real source projections (sessions/project/actions). */
   private readonly shellSources = new ShellSources();
+  private shellModelChoices: { id: string; label: string }[] = [];
   /** Request-scoped inspector built from canonical session events. */
   private readonly shellInspector = new ShellInspectorStore();
   private shellInspectorCleanup: (() => void) | null = null;
@@ -363,6 +365,13 @@ export class BabelRepl {
     this.shellInspector.setActiveSession(threadId);
     this.cachedTargetRoot = this.resolveCurrentTarget().targetRoot;
     this.shellSources.ensureProjectRoot(this.cachedTargetRoot);
+    try {
+      this.shellModelChoices = getAvailableModels()
+        .slice(0, 8)
+        .map((model) => ({ id: model.key, label: model.key }));
+    } catch {
+      this.shellModelChoices = [];
+    }
     const frameSource = () => {
       const dimensions = OutputBuffer.getTerminalSize();
       const layout = planShellLayout(dimensions);
@@ -393,38 +402,50 @@ export class BabelRepl {
       this.shellNavigator.setRows('sessions', sources.sessions);
       this.shellNavigator.setRows('project', sources.projectRows);
       this.shellNavigator.setRows('actions', sources.actions);
-      const sessionRows = this.shellRowStrings('sessions');
-      const projectRows = this.shellRowStrings('project');
-      const actionRows = this.shellRowStrings('actions');
+      const modeRows = (['chat', 'plan', 'deep'] as const).map((mode) => ({
+        id: mode,
+        label: mode,
+        command: { kind: 'mode.set' as const, mode },
+      }));
+      const modelRows = this.shellModelChoices.map((choice) => ({
+        id: choice.id,
+        label: choice.label,
+        command: { kind: 'model.set' as const, model: choice.id },
+      }));
+      this.shellNavigator.setRows('inspector', [...modeRows, ...modelRows]);
       const inspector = this.shellInspector.build({
         selectedModel: this.state.resolvedModelId ?? this.state.model ?? 'auto',
         sessionTokens: this.activeContext
           ? { tokens: this.activeContext.tokens, source: this.activeContext.source }
           : null,
       });
+      const activity = runtime?.activity ?? (this.isRunning ? 'running' : 'idle');
+      const sessionLabels =
+        sources.sessionStatus === 'error'
+          ? ['Session list unavailable']
+          : sources.sessionStatus === 'loading'
+            ? ['Loading sessions…']
+            : sources.sessions.map((row) => row.label);
       return buildShellFrameInput(layout, {
         mode: this.state.mode,
         model: this.state.resolvedModelId ?? this.state.model ?? 'auto',
         project: this.state.project ?? 'global',
         conversation,
-        ...(sessionRows.length > 0
-          ? { sessions: sessionRows }
-          : sources.sessionStatus === 'error'
-            ? { sessions: ['Session list unavailable'] }
-            : sources.sessionStatus === 'loading'
-              ? { sessions: ['Loading sessions…'] }
-              : {}),
+        sessions: sessionLabels,
         projectRows:
-          projectRows.length > 0
-            ? projectRows
+          sources.projectRows.length > 0
+            ? sources.projectRows.map((row) => row.label)
             : [sources.projectRoot || this.cachedTargetRoot || 'unknown target'],
-        actions: actionRows,
+        actions: sources.actions.map((row) => row.label),
+        modelChoices: this.shellModelChoices,
+        clock: new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
         tools: inspector.tools,
+        toolStates: inspector.toolStates,
         context: inspector.context,
+        meter: inspector.meter,
         status: [
-          `Thread: ${runtime?.threadId ?? 'not loaded'}`,
-          `Activity: ${runtime?.activity ?? (this.isRunning ? 'running' : 'idle')}`,
-          `Last outcome: ${runtime?.lastOutcome ?? this.state.lastRunUserStatus ?? 'unknown'}`,
+          activity === 'idle' ? 'Ready' : activity,
+          ...(runtime?.lastOutcome ? [`Last outcome: ${runtime.lastOutcome}`] : []),
         ],
         ...(prompt ? { prompt } : {}),
         presentation,
@@ -435,6 +456,7 @@ export class BabelRepl {
     this.shellCommandOperations = createShellCommandOperations(this, {
       invalidate: (reason) => host?.invalidate(reason),
       onSessionChanged: (changedThreadId) => this.rebindShellRuntime(changedThreadId),
+      onProjectToggle: (root) => this.shellSources.toggleDirectory(root),
     });
     this.shellInspectorCleanup = this.shellInspector.attach(() =>
       host?.invalidate('session-event'),
@@ -540,16 +562,6 @@ export class BabelRepl {
       host?.invalidate(routed.action);
     }
     if (!routed.handled && routed.state.focus === 'composer') adapter.processKey(event);
-  }
-
-  /** Display strings for one selectable surface, marking the selected row. */
-  private shellRowStrings(surface: ShellFocus): string[] {
-    const selection = this.shellNavigator.getSelection();
-    return this.shellNavigator.getRows(surface).map((row, index) =>
-      selection.surface === surface && selection.index === index
-        ? `▸ ${row.label}`
-        : `  ${row.label}`,
-    );
   }
 
   /**

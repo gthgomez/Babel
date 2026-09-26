@@ -24,9 +24,16 @@ export interface ShellInspectorContext {
   readonly sessionTokens?: { readonly tokens: number; readonly source: string } | null
 }
 
+export interface ShellToolState {
+  readonly name: string
+  readonly state: 'on' | 'off' | 'unknown'
+}
+
 export interface ShellInspectorView {
   readonly tools: readonly string[]
+  readonly toolStates: readonly ShellToolState[]
   readonly context: readonly string[]
+  readonly meter: { readonly used: number; readonly limit: number } | null
 }
 
 /** Render a captured tri-state without inventing a value. */
@@ -92,6 +99,18 @@ export function buildShellInspectorView(
   }
   tools.push(UNAVAILABLE_OFFERED)
 
+  const toolStates: ShellToolState[] = []
+  for (const capability of capabilities) {
+    toolStates.push({
+      name: capability.capability,
+      state: capability.effective === true ? 'on' : capability.effective === false ? 'off' : 'unknown',
+    })
+  }
+  for (const name of proposed) {
+    if (toolStates.some((tool) => tool.name === name)) continue
+    toolStates.push({ name, state: 'unknown' })
+  }
+
   const requestContext: string[] = []
   if (receipt) {
     requestContext.push(`Sent model: ${receipt.sent_model_id}`)
@@ -111,7 +130,13 @@ export function buildShellInspectorView(
       : 'Session estimate: unknown',
   )
 
-  return { tools, context: requestContext }
+  const limit = receipt?.context_limit_tokens
+  const meter =
+    context.sessionTokens && typeof limit === 'number' && limit > 0
+      ? { used: context.sessionTokens.tokens, limit }
+      : null
+
+  return { tools, toolStates, context: requestContext, meter }
 }
 
 /** Bounded, presentation-only buffer of canonical session events. */

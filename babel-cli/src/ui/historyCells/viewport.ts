@@ -9,7 +9,7 @@
  */
 
 import type { HistoryCell } from './historyCell.js';
-import { flattenCellRows } from './layout.js';
+import { flattenCellRows, type HistoryRenderMode } from './layout.js';
 import type { HistoryTranscript } from './transcript.js';
 import {
   TranscriptSearchIndex,
@@ -53,6 +53,7 @@ export const VIEWPORT_MEASUREMENT_CACHE_LIMIT = 512;
 
 export class HistoryCellViewport {
   private width: number;
+  private renderMode: HistoryRenderMode = 'rich';
   private entries: ViewportCellEntry[] = [];
   private totalRows = 0;
   /** Rows scrolled above the live bottom (0 = pinned to latest). */
@@ -97,6 +98,17 @@ export class HistoryCellViewport {
 
   get cellEntries(): readonly ViewportCellEntry[] {
     return this.entries;
+  }
+
+  setRenderMode(mode: HistoryRenderMode): void {
+    if (mode === this.renderMode) return;
+    this.renderMode = mode;
+    this.measuredRows.clear();
+    this.rebuildFromCells(
+      this.entries.map((entry) => entry.cell),
+      this.captureAnchor(),
+      { forceReflow: true, countNewRows: false },
+    );
   }
 
   setWidth(width: number): void {
@@ -271,14 +283,14 @@ export class HistoryCellViewport {
     cell: HistoryCell,
     contentKey = this.cellContentKey(cell),
   ): string[] {
-    const cacheKey = `${this.width}:${contentKey}`;
+    const cacheKey = `${this.renderMode}:${this.width}:${contentKey}`;
     const cached = this.measuredRows.get(cacheKey);
     if (cached) {
       this.measuredRows.delete(cacheKey);
       this.measuredRows.set(cacheKey, cached);
       return cached;
     }
-    const rows = flattenCellRows(cell, this.width);
+    const rows = flattenCellRows(cell, this.width, this.renderMode);
     this.measuredRows.set(cacheKey, rows);
     while (this.measuredRows.size > VIEWPORT_MEASUREMENT_CACHE_LIMIT) {
       const oldestKey = this.measuredRows.keys().next().value as

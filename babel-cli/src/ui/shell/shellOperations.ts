@@ -15,7 +15,7 @@ import {
   resumeChatSession,
   type ResumeChatSessionOutcome,
 } from '../../interactive/chatSessionResume.js'
-import { handleClear, handleRetarget } from '../../interactive/commands/config.js'
+import { handleClear, handleMode, handleModel, handleRetarget } from '../../interactive/commands/config.js'
 import { handleCommand } from '../../interactive/commands.js'
 import type { ShellCommand } from './shellNavigation.js'
 
@@ -64,7 +64,10 @@ export interface ShellCommandOperations {
   resumeSession(id: string): Promise<ShellResumeResult>
   newSession(): void
   setTarget(root: string): void
+  toggleDirectory(root: string): void
   runAction(command: string): Promise<void>
+  setMode(mode: string): void
+  setModel(model: string): void
   toggleInspector(key: string): void
 }
 
@@ -94,6 +97,15 @@ export async function runShellCommand(
     case 'target.set':
       operations.setTarget(command.root)
       return { command: command.kind, handled: true }
+    case 'project.toggle':
+      operations.toggleDirectory(command.root)
+      return { command: command.kind, handled: true }
+    case 'mode.set':
+      operations.setMode(command.mode)
+      return { command: command.kind, handled: true }
+    case 'model.set':
+      operations.setModel(command.model)
+      return { command: command.kind, handled: true }
     case 'action.run':
       await operations.runAction(command.command)
       return { command: command.kind, handled: true }
@@ -113,6 +125,7 @@ export interface ShellOperationHost {
   readonly invalidate: (reason: string) => void
   /** Rebind the presentation runtime after the active thread changes. */
   readonly onSessionChanged: (threadId: string | undefined) => void
+  readonly onProjectToggle?: (root: string) => void
 }
 
 /** Production operations wired to existing ReplContext handlers. */
@@ -139,6 +152,18 @@ export function createShellCommandOperations(
     setTarget(root: string): void {
       handleRetarget(ctx, [root])
       host.onSessionChanged(undefined)
+    },
+    toggleDirectory(root: string): void {
+      host.onProjectToggle?.(root)
+      host.invalidate('project-toggle')
+    },
+    setMode(mode: string): void {
+      handleMode(ctx, [mode])
+      host.invalidate('mode')
+    },
+    setModel(model: string): void {
+      handleModel(ctx, [model])
+      host.invalidate('model')
     },
     async runAction(command: string): Promise<void> {
       await handleCommand(ctx, command)

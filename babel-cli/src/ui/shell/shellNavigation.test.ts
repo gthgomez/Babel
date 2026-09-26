@@ -37,6 +37,9 @@ function fakeOperations(
     },
     newSession: () => calls.push('new'),
     setTarget: (root) => calls.push(`target:${root}`),
+    toggleDirectory: (root) => calls.push(`toggle:${root}`),
+    setMode: (mode) => calls.push(`mode:${mode}`),
+    setModel: (model) => calls.push(`model:${model}`),
     runAction: async (command) => {
       calls.push(`action:${command}`)
     },

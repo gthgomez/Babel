@@ -19,6 +19,7 @@ const required = [
   'src/ui/shell/shellOperations.test.ts',
   'src/ui/shell/shellKeyHandler.test.ts',
   'src/ui/shell/shellPanels.test.ts',
+  'src/ui/shell/shellChrome.test.ts',
   'src/ui/promptInput.test.ts',
   'src/ui/promptInputAdapter.test.ts',
   'src/ui/historyCells/viewport.test.ts',

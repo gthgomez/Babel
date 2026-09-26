@@ -28,7 +28,10 @@ export type ShellCommand =
   | { readonly kind: 'session.resume'; readonly id: string }
   | { readonly kind: 'session.new' }
   | { readonly kind: 'target.set'; readonly root: string }
+  | { readonly kind: 'project.toggle'; readonly root: string }
   | { readonly kind: 'action.run'; readonly command: string }
+  | { readonly kind: 'mode.set'; readonly mode: string }
+  | { readonly kind: 'model.set'; readonly model: string }
   | { readonly kind: 'inspector.toggle'; readonly key: string }
   | { readonly kind: 'none'; readonly reason: string }
 

@@ -39,6 +39,9 @@ function createHandlerSubject() {
     },
     newSession: () => {},
     setTarget: () => {},
+    toggleDirectory: () => {},
+    setMode: () => {},
+    setModel: () => {},
     runAction: async () => {},
     toggleInspector: () => {},
   }

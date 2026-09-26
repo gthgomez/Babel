@@ -18,12 +18,12 @@ test('action rows come from the shared slash-command catalog and include a real 
   assert.equal(rows.some((row) => row.id === '/exit'), false)
 })
 
-test('project rows map directories to real target changes and keep files informational', () => {
+test('project rows map directories to in-place expansion and keep files informational', () => {
   const rows = loadShellProjectRows('/repo', () => ['[dir] src', '[file] README.md', 'plain'])
   assert.deepEqual(rows[0], {
     id: '/repo/src',
     label: '[dir] src',
-    command: { kind: 'target.set', root: '/repo/src' },
+    command: { kind: 'project.toggle', root: '/repo/src' },
   })
   assert.equal(rows[1]?.command, undefined)
   assert.equal(rows[2]?.id, 'plain')
@@ -64,7 +64,7 @@ test('ShellSources reports real empty/error state and caches the project listing
   sources.ensureProjectRoot('/repo')
   assert.equal(projectListCalls, 1)
   assert.deepEqual(sources.snapshot().projectRows[0]?.command, {
-    kind: 'target.set',
+    kind: 'project.toggle',
     root: '/repo/src',
   })
 

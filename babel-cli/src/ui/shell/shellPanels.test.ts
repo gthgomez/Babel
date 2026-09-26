@@ -51,8 +51,8 @@ test('buildShellFrameInput keeps hosted editor popups in the composer surface', 
 
   const popup = frame.surfaces.find((surface) => surface.id === 'composer-popup')!
   assert.deepEqual(popup.rect, {
-    x: layout.composer!.x,
-    y: layout.composer!.y + 1,
+    x: layout.composer!.x + 1,
+    y: layout.composer!.y + 2,
     width: 30,
     height: 2,
   })

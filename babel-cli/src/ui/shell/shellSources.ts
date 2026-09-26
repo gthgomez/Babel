@@ -25,6 +25,20 @@ import { readShallowTargetListing } from '../../services/targetResolver.js'
 import { BUILTIN_SLASH_COMMANDS, type SlashCommand } from '../typeaheadEngine.js'
 import type { ShellNavigationRow } from './shellNavigation.js'
 
+const ACTION_LABELS: Record<string, string> = {
+  '/clear': 'New session',
+  '/status': 'Git status',
+  '/resume': 'Resume',
+  '/diff': 'Diff',
+  '/model': 'Model',
+  '/mode': 'Mode',
+  '/project': 'Retarget',
+  '/review': 'Review',
+  '/doctor': 'Doctor',
+  '/theme': 'Theme',
+  '/help': 'Help',
+}
+
 /** Slash commands that are safe and meaningful to run from the shell panel. */
 export const SHELL_ACTION_COMMANDS: readonly string[] = [
   '/resume',
@@ -43,12 +57,12 @@ export const SHELL_ACTION_COMMANDS: readonly string[] = [
 export function loadShellActionRows(
   commands: readonly SlashCommand[] = BUILTIN_SLASH_COMMANDS,
 ): ShellNavigationRow[] {
-  const rows: ShellNavigationRow[] = [{ id: '/clear', label: 'New conversation', command: { kind: 'session.new' } }]
+  const rows: ShellNavigationRow[] = [{ id: '/clear', label: 'New session', command: { kind: 'session.new' } }]
   for (const command of commands) {
     if (!SHELL_ACTION_COMMANDS.includes(command.name)) continue
     rows.push({
       id: command.name,
-      label: `${command.name}  ${command.description}`,
+      label: ACTION_LABELS[command.name] ?? `${command.name}  ${command.description}`,
       command: { kind: 'action.run', command: command.name },
     })
   }
@@ -70,7 +84,7 @@ export function loadShellProjectRows(
         return {
           id: fullPath,
           label: `[dir] ${name}`,
-          command: { kind: 'target.set', root: fullPath },
+          command: { kind: 'project.toggle', root: fullPath },
         }
       }
       return { id: fullPath, label: `[file] ${name}` }
@@ -115,6 +129,7 @@ export class ShellSources {
   private sessionError: string | undefined
   private projectRoot = ''
   private projectRows: readonly ShellNavigationRow[] = []
+  private readonly expanded = new Set<string>()
   private readonly actions: readonly ShellNavigationRow[]
 
   constructor(
@@ -142,7 +157,29 @@ export class ShellSources {
   ensureProjectRoot(targetRoot: string): void {
     if (targetRoot === this.projectRoot) return
     this.projectRoot = targetRoot
-    this.projectRows = loadShellProjectRows(targetRoot, this.listProject)
+    this.expanded.clear()
+    this.projectRows = this.buildProjectRows(targetRoot, 0)
+  }
+
+  /** Open or close one directory in the shallow tree without retargeting the repo. */
+  toggleDirectory(root: string): void {
+    if (!this.projectRoot) return
+    if (this.expanded.has(root)) this.expanded.delete(root)
+    else this.expanded.add(root)
+    this.projectRows = this.buildProjectRows(this.projectRoot, 0)
+  }
+
+  private buildProjectRows(root: string, depth: number): ShellNavigationRow[] {
+    if (depth > 4) return []
+    const indent = '  '.repeat(depth)
+    const rows: ShellNavigationRow[] = []
+    for (const row of loadShellProjectRows(root, this.listProject)) {
+      rows.push(depth === 0 ? row : { ...row, label: `${indent}${row.label}` })
+      if (row.command?.kind === 'project.toggle' && this.expanded.has(row.command.root)) {
+        rows.push(...this.buildProjectRows(row.command.root, depth + 1))
+      }
+    }
+    return rows
   }
 
   snapshot(): ShellSourcesSnapshot {

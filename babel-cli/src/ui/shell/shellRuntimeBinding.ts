@@ -48,6 +48,7 @@ export class ShellRuntimeBinding {
       options.threadId !== undefined ? { threadId: options.threadId } : {},
     );
     this.viewport = new HistoryCellViewport(options.width ?? 80);
+    this.viewport.setRenderMode('shell');
     this.onChange = options.onChange;
   }
 

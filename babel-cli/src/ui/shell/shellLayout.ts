@@ -62,8 +62,9 @@ export function planShellLayout(dimensions: ShellDimensions): ShellLayout {
         ? 'medium'
         : 'narrow'
   const compact = rows < MEDIUM_ROWS
-  const headerHeight = compact ? 3 : 4
-  const footerHeight = compact ? 2 : 3
+  // One content row plus the rule, matching the mock's single header and footer bars.
+  const headerHeight = 2
+  const footerHeight = 2
   const composerHeight = compact ? 3 : 5
   const footerY = Math.max(headerHeight, rows - footerHeight)
   const bodyHeight = Math.max(0, footerY - headerHeight)
