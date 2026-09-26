@@ -329,7 +329,13 @@ export interface TaskShape {
  * path name cannot turn a read-only review into a mutation request.
  */
 function stripPathLikeTokens(text: string): string {
-  return text
+  // A slash joining the conjunctions ("and/or", "or/and") is a coordination
+  // separator, not a path. Normalize it to a word separator before the path
+  // scan so the negation grammar can consume the whole coordinated verb list;
+  // otherwise the scanner deletes the token and the surviving trailing verb is
+  // misread as positive mutation authority.
+  const normalized = text.replace(/\b(?:and|or)\s*\/\s*(?:and|or)\b/gi, ' or ');
+  return normalized
     .replace(/\b[\w.-]*[\\/][\w.-]+/g, ' ')
     .replace(/\b[\w-]+\.[a-z0-9]{1,8}\b/gi, ' ');
 }

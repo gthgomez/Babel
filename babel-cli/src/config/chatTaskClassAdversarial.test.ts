@@ -407,8 +407,9 @@ describe('S07 class regression: coordinated no-edit negations are stripped in fu
   ];
   const PREFIXES = ['do not', 'never', "don't"];
   // Includes the Oxford-comma forms (", or" / ", and") that a single-token
-  // separator misses.
-  const SEPARATORS = [' or ', ' and ', ' nor ', ', ', ', or ', ', and ', '/'];
+  // separator misses, plus the combined "and/or" / "or/and" conjunctions whose
+  // slash must not be mistaken for a path by the path-like token stripper.
+  const SEPARATORS = [' or ', ' and ', ' nor ', ', ', ', or ', ', and ', '/', ' and/or ', ' or/and '];
 
   test('every prefix x verb x separator combination stays READ_ONLY', () => {
     const failures: string[] = [];
