@@ -4,6 +4,7 @@ function Select-AgentHostReviewBundle {
   $markerV3 = '<!-- babel-controller-independent-review-v3 -->'
   $markerV2 = '<!-- babel-controller-ai-reviews-v2 -->'
   if ($PublisherId -notmatch '^[1-9][0-9]*$') { return [pscustomobject]@{ transport_error = 'host_review_publisher_unavailable' } }
+  $staleForHead = $false
   foreach ($comment in @($Comments | Sort-Object { [long](Get-AgentPropertyValue $_ 'id') } -Descending)) {
     $user = Get-AgentPropertyValue $comment 'user'
     if ([string](Get-AgentPropertyValue $user 'id') -ne $PublisherId -or [string](Get-AgentPropertyValue $user 'type') -cne 'User') { continue }
@@ -22,9 +23,16 @@ function Select-AgentHostReviewBundle {
       if ($null -eq (Get-AgentPropertyValue $handoff $field)) { return [pscustomobject]@{ transport_error = 'host_review_handoff_malformed' } }
     }
     if ([string](Get-AgentPropertyValue $handoff 'repository') -ine $Repository -or
-        [string](Get-AgentPropertyValue $handoff 'pr_number') -ne [string]$PR -or
-        [string](Get-AgentPropertyValue $handoff 'base_sha') -ine $BaseSha -or
-        [string](Get-AgentPropertyValue $handoff 'head_sha') -ine $HeadSha) { continue }
+        [string](Get-AgentPropertyValue $handoff 'pr_number') -ne [string]$PR) { continue }
+    if ([string](Get-AgentPropertyValue $handoff 'base_sha') -ine $BaseSha -or
+        [string](Get-AgentPropertyValue $handoff 'head_sha') -ine $HeadSha) {
+      # A well-formed owner round for this same PR that binds a different
+      # base/head is not this head's certification. Remember that a stale round
+      # exists for the transport taxonomy, but keep scanning so an older
+      # exact-head round can still win. A non-binding handoff is never accepted.
+      $staleForHead = $true
+      continue
+    }
     if ([string](Get-AgentPropertyValue $comment 'issue_url') -ine "https://api.github.com/repos/$Repository/issues/$PR") {
       return [pscustomobject]@{ transport_error = 'host_review_comment_pr_mismatch' }
     }
@@ -45,7 +53,8 @@ function Select-AgentHostReviewBundle {
       handoff = $handoff
     }
   }
-  return [pscustomobject]@{ transport_error = 'independent_ai_review_handoff_missing' }
+  if ($staleForHead) { return [pscustomobject]@{ transport_error = 'independent_review_stale_for_head' } }
+  return [pscustomobject]@{ transport_error = 'independent_review_handoff_not_published' }
 }
 
 function Test-AgentAutonomousReviewEvidence {

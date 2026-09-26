@@ -308,10 +308,44 @@ function Test-AgentEvidenceTransportStub {
 
 function Get-AgentEvidenceTransportError {
   param([AllowNull()][object]$Document)
+  if ($null -eq $Document -or $Document -isnot [System.Management.Automation.PSCustomObject]) { return $null }
+  $transportError = Get-AgentPropertyValue -Object $Document -Name 'transport_error'
+  if ($null -eq $transportError) { return $null }
+  # Non-lossy dispositions for the exact-head taxonomy. These remain failures;
+  # the gate treats any non-null return as unsatisfied independent review.
+  if ([string]$transportError -eq 'independent_review_stale_for_head') { return 'autonomous_review_evidence_stale_for_head' }
+  if ([string]$transportError -eq 'independent_review_handoff_not_published') { return 'autonomous_review_evidence_handoff_not_published' }
+  # Legacy transport errors keep their historical dispositions so existing
+  # fixtures and callers are unchanged.
   $disposition = Test-AgentEvidenceTransportStub -Document $Document
-  if ($disposition -eq 'missing') { return 'autonomous_review_evidence_missing' }
   if ($disposition -eq 'ambiguous') { return 'autonomous_review_evidence_ambiguous' }
-  return $null
+  return 'autonomous_review_evidence_missing'
+}
+
+function Get-AgentIndependentReviewSummary {
+  param(
+    [Parameter(Mandatory = $true)][bool]$IndependentReviewSatisfied,
+    [Parameter(Mandatory = $true)][bool]$RequiredChecksGreen,
+    [Parameter(Mandatory = $true)][int]$RequiredCheckCount,
+    [AllowEmptyCollection()][string[]]$EvidenceErrors = @()
+  )
+  # Only speak up when CI is green and the single remaining gap is the
+  # exact-head independent certification. Never changes merge readiness.
+  if ($IndependentReviewSatisfied -or -not $RequiredChecksGreen -or $RequiredCheckCount -le 0) { return $null }
+  $cause = 'the exact-head independent certification is not yet present'
+  $mapping = @(
+    @{ Error = 'autonomous_review_evidence_stale_for_head'; Text = 'the latest owner review handoff is bound to a different base/head' }
+    @{ Error = 'independent_review_stale_for_head'; Text = 'the latest owner review handoff is bound to a different base/head' }
+    @{ Error = 'autonomous_review_evidence_handoff_not_published'; Text = 'no owner review handoff has been published for this exact base/head' }
+    @{ Error = 'independent_review_handoff_not_published'; Text = 'no owner review handoff has been published for this exact base/head' }
+    @{ Error = 'controller_review_live_provenance_mismatch'; Text = 'the local review evidence does not match the live owner-authenticated handoff' }
+    @{ Error = 'autonomous_review_evidence_ambiguous'; Text = 'the independent review evidence is ambiguous' }
+    @{ Error = 'autonomous_review_evidence_missing'; Text = 'the independent review evidence is missing' }
+  )
+  foreach ($entry in $mapping) {
+    if (@($EvidenceErrors) -contains $entry.Error) { $cause = $entry.Text; break }
+  }
+  return "Implementation CI is green. Waiting for exact-head final independent certification. ($cause)"
 }
 
 function Get-AgentReviewPolicyVerdict {
@@ -330,4 +364,4 @@ function Get-AgentReviewPolicyVerdict {
   }
 }
 
-Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Get-AgentRiskLane, Test-AgentAutonomousReviewEvidence, Test-AgentControllerReviewEvidenceBundle, Test-AgentIndependentReviewEvidenceV3, Test-AgentHostReviewBundleV3, Get-AgentPropertyNames, Get-AgentRequiredCheckAuthority, Test-AgentEvidenceTransportStub, Get-AgentEvidenceTransportError, Select-AgentHostReviewBundle
+Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Get-AgentRiskLane, Test-AgentAutonomousReviewEvidence, Test-AgentControllerReviewEvidenceBundle, Test-AgentIndependentReviewEvidenceV3, Test-AgentHostReviewBundleV3, Get-AgentPropertyNames, Get-AgentRequiredCheckAuthority, Test-AgentEvidenceTransportStub, Get-AgentEvidenceTransportError, Get-AgentIndependentReviewSummary, Select-AgentHostReviewBundle

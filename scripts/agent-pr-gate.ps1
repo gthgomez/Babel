@@ -507,10 +507,18 @@ try {
     }
   }
   Add-AgentCheck -Name 'NO_UNEXPECTED_DIFF' -Passed $noUnexpectedDiff -Blocker 'unexpected_diff_scope'
+  # Operator-facing summary for the common "everything green except the
+  # exact-head independent certification" state. It is advisory only: it never
+  # changes blockers or mergeReady.
+  $independentReviewSummary = Get-AgentIndependentReviewSummary -IndependentReviewSatisfied $independentReviewSatisfied -RequiredChecksGreen $requiredChecksGreen -RequiredCheckCount $requiredChecks.Count -EvidenceErrors @($autonomousEvidenceResult.errors)
+  if (-not [string]::IsNullOrWhiteSpace($independentReviewSummary) -and -not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+    try { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $independentReviewSummary -ErrorAction Stop }
+    catch { $warnings += 'gate_step_summary_write_failed' }
+  }
   $auditPassed = $blockers.Count -eq 0
   $mergeReady = $auditPassed
   $result = [ordered]@{
-    schemaVersion = 4; kind = 'babel_agent_pr_gate'; status = if ($mergeReady) { 'MERGE_READY' } else { 'BLOCKED' }; mergeReady = $mergeReady
+    schemaVersion = 4; kind = 'babel_agent_pr_gate'; status = if ($mergeReady) { 'MERGE_READY' } else { 'BLOCKED' }; mergeReady = $mergeReady; summary = $independentReviewSummary
     repository = $ExpectedRepository; remote = $ExpectedRemote; pr = [ordered]@{ number = $PR; url = if ($prAvailable) { [string]$prView.url } else { $null } }
     sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = if ($ciHeadMatch) { $prHead } else { $null }; baseHead = $prBase; currentOriginMain = $originMain }
     branch = [ordered]@{ local = $localBranch; prHead = $prHeadBranch; prBase = $prBaseBranch }

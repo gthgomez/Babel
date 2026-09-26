@@ -21,6 +21,17 @@ substitute for the Babel reviewer. The reviewer credential is Babel-native
 (`~/.config/babel/get-auth-token.js`, overridable with
 `BABEL_OPENCODE_GO_HELPER`); the `~/.claude` helper is a deprecated fallback only.
 
+V3 (`independent_agent_review_v3` / `host_review_handoff_v3`) is the canonical
+authoritative contract and is accepted for any review engine. Execution
+independence matters more than model-family diversity: the same model/runtime is
+valid when the reviewer is a genuinely fresh execution distinct from the builder
+and from any repair producer. The production V3 producer is
+`tools/babel-pr-orchestrate.mts` (see
+[`docs/BABEL_PR_REVIEW.md`](../../docs/BABEL_PR_REVIEW.md) §Orchestrated
+certification), which launches fresh read-only subagent executions and posts the
+owner-authenticated handoff. V2 (`babel`/`chat`, `opencode-go`) remains a
+legacy/compatibility path.
+
 Use the trusted host controller described in
 [`docs/BABEL_PR_REVIEW.md`](../../docs/BABEL_PR_REVIEW.md). It invokes the actual
 Babel chat harness with source-reading tools in a fresh child context. A direct
