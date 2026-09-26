@@ -329,7 +329,9 @@ function enforceOwnerOnlyWindowsAcl(path: string, directory: boolean): { ok: boo
     });
     const sid = identity.stdout?.match(/S-\d-(?:\d+-)*\d+/g)?.at(-1);
     if (identity.status !== 0 || !sid) {
-      return { ok: false, code: (identity.error as NodeJS.ErrnoException | undefined)?.code ?? 'identity_unavailable' };
+      const identityError = identity.error as NodeJS.ErrnoException | undefined;
+      const code = identityError?.code === 'ETIMEDOUT' ? 'acl_identity_timeout' : identityError?.code ?? 'identity_unavailable';
+      return { ok: false, code };
     }
     windowsUserSid = sid;
   }
@@ -349,7 +351,9 @@ function enforceOwnerOnlyWindowsAcl(path: string, directory: boolean): { ok: boo
   const ruleSids = new Set((sidQuery.stdout ?? '').match(/S-\d-(?:\d+-)*\d+/g) ?? []);
   ruleSids.add(windowsUserSid);
   if (sidQuery.status !== 0) {
-    return { ok: false, code: (sidQuery.error as NodeJS.ErrnoException | undefined)?.code ?? 'acl_identity_query_failed' };
+    const queryError = sidQuery.error as NodeJS.ErrnoException | undefined;
+    const code = queryError?.code === 'ETIMEDOUT' ? 'acl_identity_query_timeout' : queryError?.code ?? 'acl_identity_query_failed';
+    return { ok: false, code };
   }
   const grant = `*${windowsUserSid}:${directory ? '(OI)(CI)F' : 'F'}`;
   const ruleEntries = [...ruleSids].map((sid) => `*${sid}`);
@@ -361,7 +365,9 @@ function enforceOwnerOnlyWindowsAcl(path: string, directory: boolean): { ok: boo
     stdio: 'ignore',
   });
   if (apply.status !== 0) {
-    return { ok: false, code: (apply.error as NodeJS.ErrnoException | undefined)?.code ?? 'acl_apply_failed' };
+    const applyError = apply.error as NodeJS.ErrnoException | undefined;
+    const code = applyError?.code === 'ETIMEDOUT' ? 'acl_apply_timeout' : applyError?.code ?? 'acl_apply_failed';
+    return { ok: false, code };
   }
   const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_ACL_VERIFY_SCRIPT], {
     encoding: 'utf8',
@@ -377,11 +383,14 @@ function enforceOwnerOnlyWindowsAcl(path: string, directory: boolean): { ok: boo
   });
   const diagnostic = result.stdout?.trim();
   const safeDiagnostic = diagnostic && /^acl_check_[a-z0-9_]+$/.test(diagnostic) ? diagnostic : null;
+  const verificationError = result.error as NodeJS.ErrnoException | undefined;
+  const code =
+    verificationError?.code === 'ETIMEDOUT'
+      ? 'acl_verification_timeout'
+      : verificationError?.code ?? (safeDiagnostic ? `acl_verification_failed:${safeDiagnostic}` : 'acl_verification_failed');
   return {
     ok: result.status === 0,
-    code:
-      (result.error as NodeJS.ErrnoException | undefined)?.code ??
-      (safeDiagnostic ? `acl_verification_failed:${safeDiagnostic}` : 'acl_verification_failed'),
+    code,
   };
 }
 
