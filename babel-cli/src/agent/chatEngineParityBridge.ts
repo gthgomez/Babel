@@ -5,6 +5,7 @@
  */
 
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import { classifyPolicySource, type TerminalReason } from './chatTerminalReason.js';
 import { projectChatTerminal, type ChatStatus } from './chatFailureClassification.js';
 import { classifyToolEffect } from '../executor/contracts.js';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
@@ -77,6 +78,8 @@ import {
   type FailoverDecision,
 } from './providerCapabilities.js';
 import type { PolicyEvent } from './policyEventLog.js';
+import type { ContextCheckpointV1 } from '../runtime/contextCheckpoints.js';
+import type { AdmissionStore } from '../runtime/admission.js';
 import {
   dualWriteBudgetSnapshot,
   persistLiveSessionAuthority,
@@ -121,6 +124,12 @@ export interface ParityRuntime {
   pendingTaskClarification?: { capability: import('../authority/capabilities.js').CapabilityId; options?: string[] };
   /** H2: last projected LiveSession (rebuilt on resume). */
   liveSession?: import('./liveSession.js').LiveSessionV1;
+  /** P11: the last fully prepared context generation installed atomically. */
+  contextCheckpoint?: ContextCheckpointV1;
+  /** Independent durable session membership for model-readable observations. */
+  authorizedObservationIds?: Set<string>;
+  /** P05 durable owner record; injected by the authorized host, never created here. */
+  admissionStore?: AdmissionStore;
 }
 
 export interface PersistenceReceipt {
@@ -130,6 +139,8 @@ export interface PersistenceReceipt {
   artifacts: Array<{ kind: string; path?: string; status: 'committed' | 'blocked'; error?: string }>
   error?: string
 }
+
+export const CONTEXT_CHECKPOINT_FILENAME = 'context-checkpoint.json';
 
 export function createParityRuntime(threadId: string): ParityRuntime {
   return {
@@ -142,6 +153,7 @@ export function createParityRuntime(threadId: string): ParityRuntime {
     turnId: null,
     recoveryTried: false,
     lastFailover: null,
+    authorizedObservationIds: new Set<string>(),
   };
 }
 
@@ -183,6 +195,7 @@ export function parityOnUserTurn(
     provider: input.provider,
     projectRoot: input.projectRoot,
     ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
+    ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
   });
   recordModelStarted(rt.sessionEvents, {
     turn_id: rt.turnId,
@@ -258,10 +271,16 @@ export function parityReduce(rt: ParityRuntime, event: AgentLoopEvent): AgentLoo
   return rt.loop;
 }
 
-export function parityOnCancel(rt: ParityRuntime): void {
+export function parityOnCancel(rt: ParityRuntime, reason?: TerminalReason): void {
   parityReduce(rt, { type: 'cancel' });
   if (rt.turnId) {
-    endTurn(rt.eventLog, rt.turnId, 'CANCELLED', 'cancelled');
+    endTurn(
+      rt.eventLog,
+      rt.turnId,
+      'CANCELLED',
+      'cancelled',
+      reason ?? { code: 'cancelled', cause_class: null },
+    );
   }
 }
 
@@ -472,6 +491,8 @@ export function parityRecordToolBatch(
     patchFailed?: boolean;
     verifierChanged?: boolean;
     localizedPaths?: string[];
+    /** Read-injection context epoch; advancing it invalidates retained reads. */
+    contextEpoch?: number;
     /** When true, skip propose (already done via paritySettleProposeTools). */
     settleAlreadyProposed?: boolean;
   },
@@ -597,6 +618,7 @@ export function parityRecordToolBatch(
     ...(input.patchAttempted ? { patchAttempted: true } : {}),
     ...(input.patchFailed ? { patchFailed: true } : {}),
     ...(input.verifierChanged ? { verifierChanged: true } : {}),
+    ...(input.contextEpoch !== undefined ? { contextEpoch: input.contextEpoch } : {}),
     reads: input.results
       .filter(
         (r) =>
@@ -678,6 +700,8 @@ export function parityArbitrateCycle(input: {
   policyMessage: string | null;
   policySource: string | null;
   terminalAnswer: string | null;
+  /** D03: structured reason for the selected terminal (undefined for nudges). */
+  terminalReason?: TerminalReason;
 } {
   const candidates: PolicyCandidate[] = [];
   if (input.hardCeiling) {
@@ -734,8 +758,11 @@ export function parityArbitrateCycle(input: {
         }
       : {}),
   });
-  // Skip progress thrash interventions when env, read-only inspection, or read-only hard cap active.
-  if (!input.envBlockedSignal?.trim() && !input.readOnlyHardCapTerminal?.trim() && !input.isReadOnlyInspection) {
+  // Evidence-based progress terminals/recovery still apply to read-only
+  // inspection: the receipt ledger is the task-appropriate evidence set, so
+  // genuine no-progress after recovery remains bounded. Only env blockers and
+  // an active read-only hard cap take precedence over this candidate.
+  if (!input.envBlockedSignal?.trim() && !input.readOnlyHardCapTerminal?.trim()) {
     if (progressIx.action === 'terminal') {
       candidates.push({
         source: 'progress_terminal',
@@ -835,11 +862,18 @@ export function parityArbitrateCycle(input: {
   }
 
   if (winner?.action === 'terminal') {
+    const lastReceipt = input.rt.progress.receipts.at(-1);
+    const terminalReason = classifyPolicySource(winner.source, {
+      ...(lastReceipt?.noProgressReason !== undefined
+        ? { noProgressReason: lastReceipt.noProgressReason }
+        : {}),
+    });
     return {
       intervention: progressIx,
       policyMessage: null,
       policySource: winner.source,
       terminalAnswer: winner.message,
+      ...(terminalReason !== undefined ? { terminalReason } : {}),
     };
   }
   if (progressIx.action === 'recover') {
@@ -859,6 +893,7 @@ export function parityEndTurn(
   rt: ParityRuntime,
   outcome: TerminalOutcome | undefined,
   status: string,
+  reason?: TerminalReason,
 ): void {
   const terminal = projectChatTerminal({
     ...(outcome !== undefined ? { outcome } : {}),
@@ -909,7 +944,7 @@ export function parityEndTurn(
     parityReduce(rt, event);
   }
   if (rt.turnId) {
-    endTurn(rt.eventLog, rt.turnId, terminal.outcome, terminal.status);
+    endTurn(rt.eventLog, rt.turnId, terminal.outcome, terminal.status, reason);
     // W2 PR-E: only one turn_ended per turn_id in session log.
     const already = rt.sessionEvents.events.some(
       (e) => e.kind === 'turn_ended' && e.turn_id === rt.turnId,
@@ -919,6 +954,7 @@ export function parityEndTurn(
         turn_id: rt.turnId,
         ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
         status: terminal.status,
+        ...(reason !== undefined ? { reason } : {}),
       });
     }
   }
@@ -934,8 +970,9 @@ export async function finalizeParityTurn(
   runDir: string,
   outcome: TerminalOutcome | undefined,
   status: string,
+  reason?: TerminalReason,
 ): Promise<void> {
-  parityEndTurn(rt, outcome, status);
+  parityEndTurn(rt, outcome, status, reason);
   parityPersistLiveSession(rt, runDir);
   await persistThreadEventLog(runDir, rt.eventLog);
   flushSessionEventsRequired(rt, runDir, `finalize:${outcome}`);
@@ -1020,6 +1057,7 @@ function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
     sessionLog: rt.sessionEvents,
     threadLog: rt.eventLog,
     ...(rt.liveAuthority ? { authority: rt.liveAuthority } : {}),
+    authorizedObservationIds: [...(rt.authorizedObservationIds ?? [])],
   });
   rt.liveSession = live;
   persistLiveSessionSnapshot(runDir, live);
@@ -1031,8 +1069,9 @@ export function finalizeParityTurnSync(
   runDir: string,
   outcome: TerminalOutcome | undefined,
   status: string,
+  reason?: TerminalReason,
 ): void {
-  parityEndTurn(rt, outcome, status);
+  parityEndTurn(rt, outcome, status, reason);
   parityPersistLiveSession(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
@@ -1072,7 +1111,13 @@ export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): voi
 export async function checkpointParityEventLogStrict(
   rt: ParityRuntime,
   runDir: string,
-  options?: { injectCommitFailureAfter?: number; renameOptions?: AtomicCheckpointRenameOptions; unlinkCheckpoint?: typeof unlinkSync },
+  options?: {
+    injectCommitFailureAfter?: number;
+    renameOptions?: AtomicCheckpointRenameOptions;
+    unlinkCheckpoint?: typeof unlinkSync;
+    /** P05 owner fence checked at the authority-bearing rename boundary. */
+    assertOwnerCurrent?: () => void;
+  },
 ): Promise<PersistenceReceipt> {
   const initialEventsCount = rt.sessionEvents.events.length;
   const initialNextSeq = rt.sessionEvents.nextSeq;
@@ -1122,10 +1167,11 @@ export async function checkpointParityEventLogStrict(
       sessionLog: rt.sessionEvents,
       threadLog: rt.eventLog,
       authority: rt.liveAuthority,
+      authorizedObservationIds: [...(rt.authorizedObservationIds ?? [])],
     });
 
     const targets: Array<{
-      kind: 'authority' | 'live_session' | 'thread_events' | 'session_events';
+      kind: 'authority' | 'live_session' | 'thread_events' | 'session_events' | 'context_checkpoint';
       filename: string;
       content: string;
     }> = [
@@ -1154,6 +1200,13 @@ export async function checkpointParityEventLogStrict(
         filename: SESSION_EVENTS_FILENAME,
         content: serializeSessionEventLog(rt.sessionEvents),
       },
+      ...(rt.contextCheckpoint
+        ? [{
+            kind: 'context_checkpoint' as const,
+            filename: CONTEXT_CHECKPOINT_FILENAME,
+            content: JSON.stringify(rt.contextCheckpoint, null, 2),
+          }]
+        : []),
     ];
 
     mkdirSync(runDir, { recursive: true });
@@ -1197,7 +1250,9 @@ export async function checkpointParityEventLogStrict(
     // Do not mark receipt artifacts committed until the full batch succeeds (honest blocked receipts).
     const committedIndices: number[] = [];
     try {
+      options?.assertOwnerCurrent?.();
       for (let i = 0; i < targets.length; i++) {
+        options?.assertOwnerCurrent?.();
         if (options?.injectCommitFailureAfter === i) {
           throw new Error('simulated_commit_failure');
         }
@@ -1205,6 +1260,14 @@ export async function checkpointParityEventLogStrict(
         const tmpPath = tmpPaths[i]!;
         renameCheckpointSync(tmpPath, targetPath, options?.renameOptions);
         committedIndices.push(i);
+        // Recheck after every authority-bearing rename. A rotation that lands
+        // between two renames must roll the entire batch back.
+        options?.assertOwnerCurrent?.();
+        if (targets[i]!.kind === 'context_checkpoint') {
+          // The context primary is the installed-generation linearization
+          // boundary; fence immediately before and after publishing it.
+          options?.assertOwnerCurrent?.();
+        }
       }
     } catch (commitErr) {
       // Uncommitted primaries remain intact; do not reopen the locked target.
@@ -1232,6 +1295,7 @@ export async function checkpointParityEventLogStrict(
     }
 
     // Step 5: Post-commit state advance (success only) — then drop sidecars
+    options?.assertOwnerCurrent?.();
     writeCheckpointJournal(runDir, {
       schema_version: 1,
       batch_id: batchId,
@@ -1289,7 +1353,10 @@ export function finalizeParityCancel(rt: ParityRuntime, runDir: string): void {
   ) {
     parityOnCancel(rt);
   }
-  finalizeParityTurnSync(rt, runDir, 'CANCELLED', 'cancelled');
+  finalizeParityTurnSync(rt, runDir, 'CANCELLED', 'cancelled', {
+    code: 'cancelled',
+    cause_class: null,
+  });
 }
 
 export function parityProviderMessages(
@@ -1298,6 +1365,7 @@ export function parityProviderMessages(
 ): ProviderMessage[] {
   return rebuildProviderMessagesFromEvents(rt.eventLog, {
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    ...(rt.contextCheckpoint ? { installedContextCheckpoint: rt.contextCheckpoint } : {}),
   });
 }
 

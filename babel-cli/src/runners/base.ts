@@ -229,6 +229,8 @@ export interface ProviderInvocationCompleted {
   provider: ProviderId;
   model: string;
   status: 'delivered' | 'failed';
+  /** Request-local token receipt captured before another invocation can reuse the runner. */
+  usage_metadata?: RunnerInvocationMetadata | null;
   observed_model_id?: string | null;
   /** Upstream provider identity when the gateway exposes it. */
   upstream_provider?: string | null;
@@ -342,6 +344,11 @@ export interface ProviderMessage {
   tool_calls?: ProviderToolCall[];
   /** Display name / purpose tag (e.g. "tool_calls", "sub_agent"). */
   name?: string;
+  /** Content provenance; provider roles remain the authority boundary. */
+  provenance?: 'controller' | 'model' | 'mixed';
+  authoritative?: boolean;
+  /** Candidate compaction content must be committed before provider dispatch. */
+  compactionCandidate?: true;
 }
 
 /** A single native tool call within an assistant ProviderMessage. */

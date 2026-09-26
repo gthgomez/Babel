@@ -13,6 +13,7 @@ import {
   type ChronicleBackend,
   type ChronicleStore,
 } from './chronicleStore.js';
+import { getExecutionContext, isIndexWriteDenied } from '../agent/executionContext.js';
 
 const CHRONICLE_ROOT = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -26,7 +27,8 @@ interface LoadedChronicleStore {
   store: ChronicleStore;
 }
 
-let loadedChronicleStore: LoadedChronicleStore | undefined;
+const loadedChronicleStores = new Map<string, Promise<LoadedChronicleStore>>();
+const openedChronicleStores = new Set<ChronicleStore>();
 
 function resolveChronicleSqlitePath(): string {
   return (
@@ -40,60 +42,73 @@ function resolveChronicleJsonPath(): string {
   );
 }
 
-function getJsonChronicleStore(cacheKey: string): LoadedChronicleStore {
+function getJsonChronicleStore(cacheKey: string, jsonPath: string): LoadedChronicleStore {
   return {
     backend: 'json',
     cacheKey,
-    store: new JsonChronicleStore(resolveChronicleJsonPath()),
+    store: new JsonChronicleStore(jsonPath),
   };
 }
 
 async function getChronicleStore(): Promise<LoadedChronicleStore> {
   const requestedBackend = parseChronicleBackend(process.env['BABEL_CHRONICLE_BACKEND']);
+  const sqlitePath = resolveChronicleSqlitePath();
+  const jsonPath = resolveChronicleJsonPath();
   const cacheKey = [
     requestedBackend,
-    resolveChronicleSqlitePath(),
-    resolveChronicleJsonPath(),
+    sqlitePath,
+    jsonPath,
   ].join('\0');
 
-  if (loadedChronicleStore?.cacheKey === cacheKey) {
-    return loadedChronicleStore;
-  }
-
-  loadedChronicleStore?.store.close();
-
-  if (requestedBackend === 'json') {
-    loadedChronicleStore = getJsonChronicleStore(cacheKey);
-    return loadedChronicleStore;
-  }
-
-  try {
-    const { SqliteChronicleStore } = await import('./sqliteChronicleStore.js');
-    loadedChronicleStore = {
-      backend: 'sqlite',
-      cacheKey,
-      store: new SqliteChronicleStore(resolveChronicleSqlitePath()),
-    };
-    return loadedChronicleStore;
-  } catch (err: unknown) {
-    if (requestedBackend === 'sqlite') {
-      throw err;
+  const existing = loadedChronicleStores.get(cacheKey);
+  if (existing) return existing;
+  const opening = (async (): Promise<LoadedChronicleStore> => {
+    if (requestedBackend === 'json') return getJsonChronicleStore(cacheKey, jsonPath);
+    try {
+      const { SqliteChronicleStore } = await import('./sqliteChronicleStore.js');
+      return { backend: 'sqlite', cacheKey, store: new SqliteChronicleStore(sqlitePath) };
+    } catch (err: unknown) {
+      if (requestedBackend === 'sqlite') throw err;
+      return getJsonChronicleStore(cacheKey, jsonPath);
     }
-
-    loadedChronicleStore = getJsonChronicleStore(cacheKey);
-    return loadedChronicleStore;
+  })();
+  loadedChronicleStores.set(cacheKey, opening);
+  try {
+    const loaded = await opening;
+    openedChronicleStores.add(loaded.store);
+    return loaded;
+  } catch (err) {
+    loadedChronicleStores.delete(cacheKey);
+    throw err;
   }
 }
 
 export function resetChronicleStoreForTests(): void {
-  loadedChronicleStore?.store.close();
-  loadedChronicleStore = undefined;
+  for (const store of openedChronicleStores) store.close();
+  openedChronicleStores.clear();
+  loadedChronicleStores.clear();
+}
+
+/** Capture the authorized root before any asynchronous store or index operation. */
+function toolProjectRoot(declaredRoot?: string): string {
+  const scoped = getExecutionContext()?.root;
+  if (scoped) {
+    if (declaredRoot && path.resolve(declaredRoot) !== path.resolve(scoped)) {
+      throw new Error('Tool project root differs from the authorized execution root');
+    }
+    return path.resolve(scoped);
+  }
+  // Ordinary tool dispatch passes ToolContext.projectRoot. A standalone caller
+  // must provide an explicit root instead of borrowing process-wide state.
+  if (!declaredRoot) throw new Error('Tool project root requires execution context or an explicit root');
+  return path.resolve(declaredRoot);
 }
 
 export async function handleMemoryStore(
   req: Extract<ToolCallRequest, { tool: 'memory_store' }>,
+  declaredRoot?: string,
 ): Promise<ToolResult> {
-  const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+  const projectRoot = toolProjectRoot(declaredRoot);
 
   if (isDryRunEnabled()) {
     console.log(
@@ -131,8 +146,9 @@ export async function handleMemoryStore(
 
 export async function handleMemoryQuery(
   req: Extract<ToolCallRequest, { tool: 'memory_query' }>,
+  declaredRoot?: string,
 ): Promise<ToolResult> {
-  const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+  const projectRoot = toolProjectRoot(declaredRoot);
 
   console.log(`  [CHRONICLE] memory_query -> key="${req.key}"`);
 
@@ -168,7 +184,7 @@ export async function ensureSemanticIndexForProject(
   onProgress?: (indexed: number, total: number) => void,
 ): Promise<void> {
   const root = path.resolve(projectRoot);
-  if (globalIndexer.indexedProjectRoot === root && globalIndexer.count > 0) {
+  if (globalIndexer.isReadyForRoot(root)) {
     return;
   }
   await globalIndexer.indexProject(root, onProgress ? { onProgress } : undefined);
@@ -178,23 +194,14 @@ let embeddingRegistered = false;
 
 export async function handleSemanticSearch(
   req: Extract<ToolCallRequest, { tool: 'semantic_search' }>,
+  declaredRoot?: string,
 ): Promise<ToolResult> {
   try {
-    const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
-    const readOnlyNoIndexWrites = process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] === '1';
+    const projectRoot = toolProjectRoot(declaredRoot);
+    // S04/#214: execution-scoped policy (env is only a startup/child-process seed).
+    const readOnlyNoIndexWrites = isIndexWriteDenied();
 
-    if (readOnlyNoIndexWrites) {
-      // A read-only lane may use an index that it opened and owns already,
-      // but must not create a database, walk the project, or initialize the
-      // vector extension as a side effect of answering a search request.
-      if (globalIndexer.indexedProjectRoot !== path.resolve(projectRoot)) {
-        return {
-          exit_code: 1,
-          stdout: '',
-          stderr: 'Semantic search unavailable: no already-open index for this project in the read-only lane.',
-        };
-      }
-    } else {
+    if (!readOnlyNoIndexWrites) {
       // ── Lazily register embedding function on first semantic search ──
       if (!embeddingRegistered) {
         embeddingRegistered = true;
@@ -205,12 +212,13 @@ export async function handleSemanticSearch(
           );
         }
       }
-      await ensureSemanticIndexForProject(projectRoot);
     }
 
-    const hits = readOnlyNoIndexWrites
-      ? globalIndexer.search(req.query, req.limit ?? 5)
-      : await globalIndexer.searchWithEmbedding(req.query, req.limit ?? 5);
+    const hits = await globalIndexer.withProjectIndex(projectRoot, !readOnlyNoIndexWrites, () =>
+      readOnlyNoIndexWrites
+        ? Promise.resolve(globalIndexer.search(req.query, req.limit ?? 5))
+        : globalIndexer.searchWithEmbedding(req.query, req.limit ?? 5),
+    );
 
     return {
       exit_code: 0,

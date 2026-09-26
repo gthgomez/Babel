@@ -12,8 +12,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import type { TerminalReason, TerminalReasonCode } from './chatTerminalReason.js';
 import { classifyToolEffect, type ToolEffectClass } from '../executor/contracts.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
+import type { WorkingState } from './codingLoop/workingState.js';
 import {
   buildToolLifecycleCausalityDiagnostic,
   SessionEventLifecycleCausalityError,
@@ -135,7 +137,8 @@ export type SessionEventKind =
   /** H2: approval decision boundary. */
   | 'approval_decision'
   /** H2: typed repair attempt (failure-class keyed). */
-  | 'repair_attempt';
+  | 'repair_attempt'
+  | 'working_state_snapshot';
 
 export interface SessionEventBase {
   schema_version: typeof SESSION_EVENT_SCHEMA_VERSION;
@@ -155,6 +158,7 @@ export type SessionEvent =
       provider?: string;
       project_root?: string;
       task_class?: string;
+      continued_task?: boolean;
     })
   | (SessionEventBase & {
       kind: 'model_started';
@@ -411,6 +415,10 @@ export type SessionEvent =
       reason: string;
       evidence_refs: string[];
       policy_version: string;
+      /** D03: structured reason code — `reason` stays free-text/diagnostic. */
+      reason_code?: TerminalReasonCode;
+      /** D03: separate model-vs-harness cause axis; null = not established. */
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     })
   | (SessionEventBase & {
       kind: 'model_failover';
@@ -454,6 +462,10 @@ export type SessionEvent =
       /** Omitted when the cause is not established. */
       outcome?: TerminalOutcome;
       status: string;
+      /** D03: structured terminal reason; survives persistence/replay. */
+      reason_code?: TerminalReasonCode;
+      /** D03: separate model-vs-harness cause axis; null = not established. */
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     })
   | (SessionEventBase & {
       kind: 'budget_snapshot';
@@ -477,6 +489,11 @@ export type SessionEvent =
       failure_class: string;
       attempt: number;
       detail?: string;
+    })
+  | (SessionEventBase & {
+      kind: 'working_state_snapshot';
+      state_schema_version: 1;
+      state: WorkingState;
     });
 
 /** Stable, content-free identity for matching a resumed tool request to durable evidence. */
@@ -1118,6 +1135,7 @@ export function recordUserSubmitted(
     provider?: string;
     projectRoot?: string;
     taskClass?: string;
+    continuedTask?: boolean;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -1128,6 +1146,7 @@ export function recordUserSubmitted(
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
     ...(input.projectRoot !== undefined ? { project_root: input.projectRoot } : {}),
     ...(input.taskClass !== undefined ? { task_class: input.taskClass } : {}),
+    ...(input.continuedTask !== undefined ? { continued_task: input.continuedTask } : {}),
   });
 }
 
@@ -1570,13 +1589,16 @@ export function recordVerifierAttempt(
 
 export function recordTurnEnded(
   log: SessionEventLog,
-  input: { turn_id: string; outcome?: TerminalOutcome; status: string },
+  input: { turn_id: string; outcome?: TerminalOutcome; status: string; reason?: TerminalReason },
 ): SessionEvent {
   return appendSessionEvent(log, {
     kind: 'turn_ended',
     turn_id: input.turn_id,
     ...(input.outcome !== undefined ? { outcome: input.outcome } : {}),
     status: input.status,
+    ...(input.reason !== undefined
+      ? { reason_code: input.reason.code, cause_class: input.reason.cause_class }
+      : {}),
   });
 }
 
@@ -1621,6 +1643,8 @@ export function recordCompletionDecision(
     reason: string;
     evidenceRefs: string[];
     policyVersion: string;
+    reasonCode?: TerminalReasonCode;
+    causeClass?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -1632,6 +1656,8 @@ export function recordCompletionDecision(
     reason: input.reason,
     evidence_refs: [...input.evidenceRefs],
     policy_version: input.policyVersion,
+    ...(input.reasonCode !== undefined ? { reason_code: input.reasonCode } : {}),
+    ...(input.causeClass !== undefined ? { cause_class: input.causeClass } : {}),
   });
 }
 
@@ -1826,6 +1852,16 @@ export function shortDigest(text: string): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 16);
 }
 
+/** Snapshot controller recovery state in the existing durable session envelope. */
+export function recordWorkingStateSnapshot(log: SessionEventLog, state: WorkingState, turnId: string | null): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'working_state_snapshot',
+    turn_id: turnId,
+    state_schema_version: 1,
+    state: structuredClone(state),
+  })
+}
+
 /** Serialize all events as JSONL (one object per line). */
 export function serializeSessionEventLog(log: SessionEventLog): string {
   return log.events.map((e) => JSON.stringify(e)).join('\n') + (log.events.length ? '\n' : '');
@@ -1849,7 +1885,7 @@ export function parseSessionEventLog(
     'tool_completed', 'tool_failed', 'tool_cancelled', 'recovery_reconciled', 'mutation_batch',
     'verifier_attempt', 'gate_decision', 'policy_intervened', 'progress_recovery',
     'completion_decision', 'model_failover', 'compaction_started', 'compaction_summary', 'compaction_committed', 'compaction_created', 'turn_ended',
-    'budget_snapshot', 'approval_decision', 'repair_attempt',
+    'budget_snapshot', 'approval_decision', 'repair_attempt', 'working_state_snapshot',
   ])
 
   for (const [index, line] of lines.entries()) {
@@ -1901,12 +1937,13 @@ export function parseSessionEventLog(
       completion_decision: ['requested_outcome', 'final_outcome', 'allowed', 'reason', 'evidence_refs', 'policy_version'],
       model_failover: [], compaction_started: ['operation_id', 'strategy', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count'], compaction_summary: ['operation_id', 'capsule_digest', 'raw_observation_refs', 'preserved_tool_call_ids'], compaction_committed: ['operation_id', 'thread_event_id', 'capsule_digest', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'preserved_tool_call_ids'], compaction_created: [], turn_ended: ['status'], budget_snapshot: [],
       approval_decision: ['request_id', 'decision'], repair_attempt: ['failure_class', 'attempt'],
+      working_state_snapshot: ['state_schema_version', 'state'],
     }
     const arrayFields = new Set(['paths', 'signals', 'evidence_refs', 'raw_observation_refs', 'preserved_tool_call_ids', 'delivered_tool_call_ids'])
-    const objectFields = new Set(['receipt'])
-    const booleanFields = new Set(['authoritative', 'allowed', 'advertised'])
+    const objectFields = new Set(['receipt', 'state'])
+    const booleanFields = new Set(['authoritative', 'allowed', 'advertised', 'continued_task'])
     const nullableBooleanFields = new Set(['authorized', 'effective'])
-    const numberFields = new Set(['score', 'attempt', 'backoff_ms', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'status_code'])
+    const numberFields = new Set(['score', 'attempt', 'backoff_ms', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'status_code', 'state_schema_version'])
     for (const field of required[ev.kind as SessionEventKind]) {
       if (!(field in ev)) throw new Error(`Invalid session event at line ${index + 1}: ${field} is required`)
       const fieldValue = ev[field]
@@ -1925,6 +1962,13 @@ export function parseSessionEventLog(
       if (!arrayFields.has(field) && !objectFields.has(field) && !booleanFields.has(field) && !nullableBooleanFields.has(field) && !numberFields.has(field) && typeof fieldValue !== 'string') {
         throw new Error(`Invalid session event at line ${index + 1}: ${field} must be a string`)
       }
+    }
+    if (ev.kind === 'working_state_snapshot' &&
+        (ev.state_schema_version !== 1 || typeof ev.state !== 'object' || ev.state === null || Array.isArray(ev.state))) {
+      throw new Error(`Invalid session event at line ${index + 1}: working state snapshot schema`)
+    }
+    if (ev.kind === 'user_submitted' && ev.continued_task !== undefined && typeof ev.continued_task !== 'boolean') {
+      throw new Error(`Invalid session event at line ${index + 1}: continued_task must be a boolean`)
     }
     const effectClasses: ToolEffectClass[] = [
       'read_only', 'idempotent', 'reconcilable_mutation',

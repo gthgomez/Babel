@@ -7,9 +7,10 @@
 
 import type { HistoryCellRecord } from '../ui/historyCells/types.js';
 import type { BabelMode } from '../executor/contracts.js';
+import type { RestoreReport } from '../executor/modeAdapters.js';
 import type { MutationEffectStatus } from '../agent/mutationTools.js';
 import type { ChatStatus } from '../agent/chatFailureClassification.js';
-import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import type { TerminalOutcome, TerminalReasonCode } from '../schemas/agentContracts.js';
 
 /** Wire protocol version — bump on breaking catalog changes. */
 export const BABEL_PROTOCOL_VERSION = '1.0.0' as const;
@@ -74,6 +75,12 @@ export enum BabelProtocolErrorCode {
   THREAD_EXISTS = -32003,
   PROJECT_ROOT_MISMATCH = -32004,
   CELL_NOT_FOUND = -32005,
+  /** Requested mode has no controller wired to this surface (e.g. deep). */
+  MODE_UNSUPPORTED = -32006,
+  /** Durable state could not be restored; executing would run on empty history. */
+  THREAD_NOT_RESUMABLE = -32007,
+  /** R0-3: durable history has no provable repository identity; explicit rebind required. */
+  REPO_IDENTITY_UNKNOWN = -32008,
 }
 
 /** Token/cost summary on turn completion — mirrors `SessionUsageSummary`. */
@@ -122,8 +129,25 @@ export type TurnStreamEvent =
       deletions: number;
       content?: string;
     }
-  | { type: 'done'; answer: string; usage: TurnUsageSummary; status?: ChatStatus; outcome?: TerminalOutcome }
-  | { type: 'failed'; error: string; status?: ChatStatus; outcome?: TerminalOutcome }
+  | {
+      type: 'done';
+      answer: string;
+      usage: TurnUsageSummary;
+      status?: ChatStatus;
+      outcome?: TerminalOutcome;
+      /** D03: structured terminal reason code. */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
+    }
+  | {
+      type: 'failed';
+      error: string;
+      status?: ChatStatus;
+      outcome?: TerminalOutcome;
+      /** D03: structured terminal reason code. */
+      reason_code?: TerminalReasonCode;
+      cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
+    }
   | { type: 'cancelled'; status?: 'cancelled'; outcome?: 'CANCELLED' }
   | {
       type: 'progress_recovery';
@@ -160,6 +184,13 @@ export interface TurnSubmitParams {
   message: string;
   /** Optional client idempotency key. Same id + same message hash replays the prior result. */
   command_id?: string;
+  /**
+   * R0-3: explicit rebind/confirmation that executing against this thread is
+   * intended even though its durable repository identity is unknown. Required
+   * only when a thread with durable history has no provable historical
+   * identity; never a substitute for a mismatch, which always fails closed.
+   */
+  repo_identity_confirmed?: boolean;
 }
 
 export interface TurnCancelParams {
@@ -200,6 +231,11 @@ export interface ThreadResumeResult {
   thread_id: ThreadId;
   /** Highest committed turn index, or 0 for an empty thread. */
   turn_count: number;
+  /**
+   * What durable state was found and whether execution can resume from it.
+   * Additive: older clients ignore it and keep read-only history access.
+   */
+  restore?: RestoreReport;
 }
 
 export interface TurnSubmitResult {

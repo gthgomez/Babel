@@ -799,10 +799,13 @@ describe('validateBlockedReport', () => {
     assert.equal(validateBlockedReportFn(report, toolCalls), false);
   });
 
-  test('accepts engine-synthesized text-only loop report', () => {
+  test('accepts a typed engine-synthesized text-only loop report', () => {
     const report: BlockedReport = {
       schema_version: 1,
       status: 'BLOCKED',
+      // R0-6: a synthetic harness block is trusted only when separately typed.
+      reason_code: 'recovery_exhausted',
+      cause_class: 'harness',
       reason: 'Agent produced only text responses without tool calls',
       missing: 'Unable to determine',
       checked: [
@@ -814,6 +817,16 @@ describe('validateBlockedReport', () => {
       ],
     };
     assert.equal(validateBlockedReportFn(report, []), true);
+
+    // An untyped synthetic report is not trusted.
+    const untyped = { ...report } as BlockedReport;
+    delete (untyped as { reason_code?: unknown }).reason_code;
+    delete (untyped as { cause_class?: unknown }).cause_class;
+    assert.equal(
+      validateBlockedReportFn(untyped, []),
+      false,
+      'an untyped synthetic block must not be accepted',
+    );
   });
 
   test('accepts target substring match for long run_command lines', () => {

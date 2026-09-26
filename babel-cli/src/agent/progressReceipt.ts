@@ -6,6 +6,8 @@
  * target do not. A failed patch followed by a changed hypothesis resets stall.
  */
 
+import type { ProgressSignal } from './progressController.js';
+
 export type ProgressDeltaKind =
   | 'localization'
   | 'hypothesis_change'
@@ -41,6 +43,12 @@ export interface ProgressLedger {
   lastHypothesisKey: string;
   consecutiveNoProgress: number;
   lastPatchFailed: boolean;
+  /**
+   * Context epoch the read fingerprints belong to. A compaction or context
+   * replacement invalidates retained reads, so unchanged bytes must be
+   * reacquired explicitly and count as fresh localization again.
+   */
+  readEpoch: number;
 }
 
 export function createProgressLedger(): ProgressLedger {
@@ -51,6 +59,7 @@ export function createProgressLedger(): ProgressLedger {
     lastHypothesisKey: '',
     consecutiveNoProgress: 0,
     lastPatchFailed: false,
+    readEpoch: 0,
   };
 }
 
@@ -76,6 +85,12 @@ export interface CycleObservation {
   externalBlocker?: string;
   /** Read targets this cycle with optional content hash. */
   reads?: Array<{ path: string; contentHash?: string }>;
+  /**
+   * Context epoch for this cycle (read-injection epoch). When it advances,
+   * prior read fingerprints/localization are invalidated so necessary
+   * re-reads after compaction count as progress again.
+   */
+  contextEpoch?: number;
 }
 
 /**
@@ -88,6 +103,15 @@ export function recordProgressCycle(
   const deltas: ProgressDeltaKind[] = [];
   const evidence: string[] = [];
   const targetsRead: string[] = [];
+
+  // Context replacement (compaction / branch) discards what the model retained:
+  // previously read bytes are no longer in context, so re-reads are necessary
+  // and must count as fresh localization instead of no-progress thrash.
+  if (observation.contextEpoch !== undefined && observation.contextEpoch !== ledger.readEpoch) {
+    ledger.readEpoch = observation.contextEpoch;
+    ledger.readFingerprints.clear();
+    ledger.localizedPaths.clear();
+  }
 
   // Localization only for paths never seen before (re-reads are not progress).
   if (observation.localizedPaths && observation.localizedPaths.length > 0) {
@@ -207,6 +231,40 @@ export function recordProgressCycle(
     ledger.consecutiveNoProgress += 1;
   }
   return receipt;
+}
+
+/**
+ * D02: translate an existing progress receipt into the ProgressController
+ * signal vocabulary, so the W3 scorer consumes the same evidence set as the
+ * receipt instead of scoring an empty mutation-only list. Unchanged re-reads
+ * produce no delta and therefore no signal — there is no unconditional
+ * new-read reward.
+ */
+export function progressSignalsFromReceipt(
+  receipt: ProgressReceipt | null | undefined,
+): ProgressSignal[] {
+  if (!receipt) return [];
+  const signals = new Set<ProgressSignal>();
+  for (const delta of receipt.deltas) {
+    switch (delta) {
+      case 'localization':
+      case 'target_change':
+        signals.add('new_localization');
+        break;
+      case 'hypothesis_change':
+        signals.add('changed_hypothesis');
+        break;
+      case 'reproducer':
+        signals.add('new_reproducer');
+        break;
+      case 'verifier_change':
+        signals.add('verifier_attempted');
+        break;
+      default:
+        break;
+    }
+  }
+  return [...signals];
 }
 
 /** Intervention preference after no-progress (P1-B: prefer recovery over kill). */

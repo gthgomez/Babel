@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { BABEL_ROOT, BABEL_RUNS_DIR } from '../cli/constants.js';
@@ -47,7 +47,12 @@ function toArtifactTimestamp(value: Date): string {
 
 function publicArtifactPath(path: string): string {
   const candidate = relative(BABEL_ROOT, path).replaceAll('\\', '/');
-  if (candidate && !candidate.startsWith('../') && candidate !== '..') {
+  if (
+    candidate &&
+    !isAbsolute(candidate) &&
+    !candidate.startsWith('../') &&
+    candidate !== '..'
+  ) {
     return candidate;
   }
   return `<external-output>/${basename(path)}`;

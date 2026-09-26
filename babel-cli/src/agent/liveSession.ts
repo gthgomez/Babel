@@ -68,6 +68,9 @@ export interface LiveSessionTerminalState {
   outcome: TerminalOutcome | string;
   status: string;
   reason?: string;
+  /** D03: structured reason survives projection into live-session.json. */
+  reason_code?: string;
+  cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
   evidence_refs: string[];
 }
 
@@ -97,6 +100,8 @@ export interface LiveSessionV1 {
   last_seq: number;
   /** Event ids that form the projection evidence chain. */
   evidence_event_ids: string[];
+  /** Independent durable task/session membership for model-readable observations. */
+  authorized_observation_ids: string[];
   degraded: boolean;
   degraded_reasons: string[];
 }
@@ -114,6 +119,8 @@ export interface ProjectLiveSessionInput {
   };
   /** Optional workspace revision override (e.g. from Git). */
   workspaceRevision?: string;
+  /** Independent authority source; checkpoint manifests cannot mint this set. */
+  authorizedObservationIds?: readonly string[];
 }
 
 const DEFAULT_BUDGETS: LiveSessionBudgetState = {
@@ -160,6 +167,7 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
     policy_intervention_count: 0,
     last_seq: -1,
     evidence_event_ids: [],
+    authorized_observation_ids: [...new Set(input.authorizedObservationIds ?? [])].sort(),
     degraded: false,
     degraded_reasons: [],
   };
@@ -310,6 +318,7 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
           status: e.allowed ? 'allowed' : 'denied',
           reason: e.reason,
           evidence_refs: [...e.evidence_refs],
+          ...(e.reason_code !== undefined ? { reason_code: e.reason_code } : {}),
         };
         break;
       case 'turn_ended':
@@ -318,6 +327,9 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
           outcome: e.outcome ?? 'unknown',
           status: e.status,
           evidence_refs: state.terminal?.evidence_refs ?? [],
+          ...(e.reason_code !== undefined ? { reason_code: e.reason_code } : {}),
+          ...(e.cause_class !== undefined ? { cause_class: e.cause_class } : {}),
+          ...(state.terminal?.reason !== undefined ? { reason: state.terminal.reason } : {}),
         };
         break;
       case 'progress_recovery':
@@ -470,6 +482,7 @@ export function liveSessionsEquivalentForResume(
     policy_intervention_count: session.policy_intervention_count,
     last_seq: session.last_seq,
     evidence_event_ids: [...session.evidence_event_ids],
+    authorized_observation_ids: [...(session.authorized_observation_ids ?? [])].sort(),
     degraded: session.degraded,
     degraded_reasons: [...session.degraded_reasons].sort(),
   });

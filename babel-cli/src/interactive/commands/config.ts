@@ -51,6 +51,7 @@ import {
 // ── Session control ──────────────────────────────────────────────────────────
 
 export function handleClear(ctx: ReplContext, _args: string[]): void {
+  ctx.chatEngine?.closeAdmissionStore?.();
   ctx.chatEngine = undefined;
   ctx.lastRoutingLabel = null;
   process.stdout.write('\x1bc');
@@ -131,6 +132,7 @@ export function handleMode(ctx: ReplContext, args: string[]): void {
         delete process.env['BABEL_DRY_RUN'];
       }
       // Force new engine so hard_plan / handoff options take effect.
+      ctx.chatEngine?.closeAdmissionStore?.();
       ctx.chatEngine = undefined;
       ctx.saveSessionState();
       console.log(
@@ -203,6 +205,7 @@ export function handleExecutePlan(ctx: ReplContext, args: string[]): void {
   }
   ctx.state.pendingPlanBody = body;
   ctx.state.operatorMode = 'default';
+  ctx.chatEngine?.closeAdmissionStore?.();
   ctx.chatEngine = undefined;
   if (process.env['BABEL_DRY_RUN'] === '1') {
     delete process.env['BABEL_DRY_RUN'];
@@ -223,12 +226,14 @@ export function handleProject(ctx: ReplContext, args: string[]): void {
     ctx.state.project = args[0];
     ctx.saveSessionState();
     // Invalidate stale engine so the next turn picks up the new root
+    ctx.chatEngine?.closeAdmissionStore?.();
     ctx.chatEngine = undefined;
     console.log(primary(`\n  Project set to ${accentBright(args[0])}`));
   } else {
     delete (ctx.state as any).project;
     ctx.saveSessionState();
     // Invalidate stale engine so the next turn picks up the new root
+    ctx.chatEngine?.closeAdmissionStore?.();
     ctx.chatEngine = undefined;
     console.log(primary('\n  Project cleared — auto-detect enabled'));
   }
@@ -240,6 +245,7 @@ export function handleRetarget(ctx: ReplContext, args: string[]): void {
   const target = ctx.resolveCurrentTarget();
   ctx.saveSessionState();
   // Invalidate stale engine so the next turn uses the new target root
+  ctx.chatEngine?.closeAdmissionStore?.();
   ctx.chatEngine = undefined;
   console.log(primary(`\n  Target set to ${accentBright(target.targetRoot)}`));
   if (!requested) {
@@ -297,6 +303,7 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
       resetModelSnapshotCache();
 
       // Invalidate stale engine so the next turn uses the new model/provider
+      ctx.chatEngine?.closeAdmissionStore?.();
       ctx.chatEngine = undefined;
 
       // Warn if the required API key is missing
@@ -340,6 +347,7 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
     ctx.saveSessionState();
     resetModelSnapshotCache();
     // Invalidate stale engine so the next turn uses route-selected model
+    ctx.chatEngine?.closeAdmissionStore?.();
     ctx.chatEngine = undefined;
     console.log(primary('\n  Model cleared — route-selected enabled'));
   } else {

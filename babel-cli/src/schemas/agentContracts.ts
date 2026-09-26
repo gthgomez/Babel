@@ -977,11 +977,49 @@ export type AskAnswer = z.infer<typeof AskAnswerSchema>;
 //       accepting BLOCKED as a terminal state.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * D03 — closed terminal reason taxonomy.
+ *
+ * Additive to `TerminalOutcome`: the outcome still says *how* the turn ended,
+ * the reason code says *why*. UIs branch on this; the free-text `reason` on a
+ * BlockedReport remains diagnostic only.
+ */
+export const TerminalReasonCodeSchema = z.enum([
+  'recovery_exhausted',
+  /** Bounded red-failure localization ended without a corroborated source. */
+  'localization_exhausted',
+  'permission_denied',
+  'external_dependency',
+  'provider_failure',
+  /** A current authoritative verifier ran and failed after a mutation. */
+  'verification_failed',
+  /** The requested mode/operation/tool is not supported by this runtime. */
+  'unsupported_operation',
+  'cancelled',
+  'budget_exhausted',
+  'unknown',
+]);
+export type TerminalReasonCode = z.infer<typeof TerminalReasonCodeSchema>;
+
+/** Cause axis for a terminal reason. `null` = cause not established. */
+export const FailureDomainSchema = z.enum([
+  'model',
+  'provider',
+  'environment',
+  'harness',
+  'verification',
+]);
+export type TerminalReasonCauseClass = z.infer<typeof FailureDomainSchema> | null;
+
 export const BlockedReportSchema = z.object({
   schema_version: z.literal(1),
   status: z.literal('BLOCKED'),
   /** Why the task cannot be completed — the root cause. */
   reason: z.string().min(1).describe('Root cause: why this task cannot be completed.'),
+  /** D03: machine reason code — the authority a UI may branch on. */
+  reason_code: TerminalReasonCodeSchema.optional(),
+  /** D03: separate model-vs-harness cause axis; null = not established. */
+  cause_class: FailureDomainSchema.nullable().optional(),
   /** What is missing — file, dependency, permission, API key, etc. */
   missing: z.string().min(1).describe('What specific thing is absent or unavailable.'),
   /** Evidence of what was checked before concluding blocked.

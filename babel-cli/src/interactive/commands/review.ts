@@ -16,6 +16,7 @@ function setDraft(ctx: ReplContext, text: string): void {
   const adapter = ctx.rl as unknown as {
     setInputText?: (value: string) => void;
     line?: string;
+    cursor?: number;
     write?: (data: string | null, key?: { ctrl?: boolean; name?: string }) => void;
   };
   if (adapter.setInputText) {
@@ -23,7 +24,12 @@ function setDraft(ctx: ReplContext, text: string): void {
     return;
   }
   if (adapter.write) {
-    adapter.write(null, { ctrl: true, name: 'u' });
+    if (typeof adapter.line === 'string') {
+      adapter.line = '';
+      if (typeof adapter.cursor === 'number') adapter.cursor = 0;
+    } else {
+      adapter.write(null, { ctrl: true, name: 'u' });
+    }
     adapter.write(text);
   } else {
     adapter.line = text;
@@ -37,7 +43,9 @@ export async function handleDiffReview(ctx: ReplContext): Promise<void> {
     () =>
       openLastReviewDiff({
         getComposerDraft: () => draft,
-        setComposerDraft: (text) => setDraft(ctx, text),
+        // Restore the native readline buffer after exclusive stdin reattaches
+        // its input listeners.
+        setComposerDraft: () => undefined,
         cwd: target.targetRoot,
       }),
     ctx.rl,

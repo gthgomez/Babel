@@ -448,6 +448,9 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
     assert.equal(json.costBudget?.requestedCostUsd, 4.0);
     assert.equal(json.runAllowance?.declaredCostUsd, 4.0);
     assert.equal(json.runAllowance?.childLimits.maxRounds, 4);
+    // I3: the run report now also carries the honest resolved defaults.
+    assert.equal(json.runAllowance?.childLimits.readMaxRounds, 4);
+    assert.equal(json.runAllowance?.childLimits.mutationMaxRounds, 8);
     assert.notEqual(json.runAllowance?.terminalClassification, 'success');
     const allowancePath = join(result.runDir ?? '', 'run-allowance.json');
     assert.equal(existsSync(allowancePath), true);

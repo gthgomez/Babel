@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { runLiteFeatureScorecard } from './liteFeatureScorecard.js';
-import { skipIfNoApiKeys } from '../test-helpers/apiKeyCheck.js';
+import { skipIfLiveTestsNotAuthorized } from '../test-helpers/apiKeyCheck.js';
 
-test('lite feature scorecard covers Cursor-pattern dimensions', { skip: skipIfNoApiKeys }, async () => {
+test('lite feature scorecard covers Cursor-pattern dimensions', { skip: skipIfLiveTestsNotAuthorized }, async () => {
   const report = await runLiteFeatureScorecard();
   const dimensions = report.dimensions.map((score) => score.dimension);
   assert.deepEqual(dimensions, [

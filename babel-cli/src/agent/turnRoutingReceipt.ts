@@ -29,9 +29,9 @@ export interface TurnRoutingReceipt {
   turn: number;
   phase: ChatPhase;
   model: string;
-  input_tokens: number;
-  output_tokens: number;
-  cost_usd: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
   cache_hit_tokens?: number;
   cache_miss_tokens?: number;
 
@@ -62,10 +62,12 @@ export interface TurnRoutingReceipt {
 
 export interface RoutingSummary {
   models_used: string[];
-  cost_by_model: Record<string, number>;
+  cost_by_model: Record<string, number | null>;
   phase_histogram: Record<string, number>;
-  pro_cost_share: number; // fraction of total cost from pro-tier models
-  total_cost_usd: number;
+  pro_cost_share: number | null; // unknown if any cost is unpriced
+  total_cost_usd: number | null;
+  known_total_cost_usd: number;
+  unknown_cost_turn_count: number;
   total_input_tokens: number;
   total_output_tokens: number;
   total_cache_hit_tokens: number;
@@ -97,7 +99,9 @@ export interface CellEffortSummary {
 }
 
 export interface CellCostSummary {
-  estimated_usd: number;
+  estimated_usd: number | null;
+  known_estimated_usd: number;
+  unknown_cost_turn_count: number;
   cost_basis: ReceiptCostBasis;
   pricing_verified_at: string | null;
   pricing_source_url: string | null;
@@ -163,8 +167,7 @@ export function mapCostPrecisionToBasis(
   if (precision === 'billed' || precision === 'invoice') {
     return 'provider_billed';
   }
-  // Default: usage × pinned rate when we have any estimate path
-  if (precision) return 'provider_usage_x_pinned_rate';
+  // Unrecognized precision cannot prove a pinned price.
   return 'unknown';
 }
 
@@ -272,6 +275,7 @@ export function summarizeCellCost(
   receipts: ReadonlyArray<TurnRoutingReceipt>,
 ): CellCostSummary {
   let estimated_usd = 0;
+  let unknown_cost_turn_count = 0;
   let input_tokens = 0;
   let output_tokens = 0;
   let cache_hit_tokens = 0;
@@ -281,7 +285,8 @@ export function summarizeCellCost(
   let cost_basis: ReceiptCostBasis = 'unknown';
 
   for (const r of receipts) {
-    estimated_usd += r.cost_usd ?? 0;
+    if (r.cost_usd === null) unknown_cost_turn_count++;
+    else estimated_usd += r.cost_usd;
     input_tokens += r.input_tokens ?? 0;
     output_tokens += r.output_tokens ?? 0;
     cache_hit_tokens += r.cache_hit_tokens ?? 0;
@@ -294,11 +299,13 @@ export function summarizeCellCost(
   // Floating sum: treat near-equal as reconciled
   const rounded = Math.round(estimated_usd * 1e9) / 1e9;
   const reSum = receipts.reduce((s, r) => s + (r.cost_usd ?? 0), 0);
-  const reconciled = Math.abs(rounded - reSum) < 1e-9;
+  const reconciled = unknown_cost_turn_count === 0 && Math.abs(rounded - reSum) < 1e-9;
 
   return {
-    estimated_usd: rounded,
-    cost_basis: receipts.length === 0 ? 'unknown' : cost_basis,
+    estimated_usd: unknown_cost_turn_count === 0 ? rounded : null,
+    known_estimated_usd: rounded,
+    unknown_cost_turn_count,
+    cost_basis: receipts.length === 0 || unknown_cost_turn_count > 0 ? 'unknown' : cost_basis,
     pricing_verified_at,
     pricing_source_url,
     input_tokens,
@@ -325,10 +332,11 @@ export class TurnRoutingReceiptLog {
   /** Compute a summary useful for harness rollups. */
   summarize(): RoutingSummary {
     const models = new Set<string>();
-    const costByModel: Record<string, number> = {};
+    const costByModel: Record<string, number | null> = {};
     const phaseHist: Record<string, number> = {};
     let totalCost = 0;
     let proCost = 0;
+    let unknownCostTurnCount = 0;
     let total_input_tokens = 0;
     let total_output_tokens = 0;
     let total_cache_hit_tokens = 0;
@@ -341,17 +349,23 @@ export class TurnRoutingReceiptLog {
 
     for (const r of this.receipts) {
       models.add(r.model);
-      costByModel[r.model] = (costByModel[r.model] ?? 0) + r.cost_usd;
+      if (r.cost_usd === null) {
+        unknownCostTurnCount++;
+        costByModel[r.model] = null;
+      } else if (costByModel[r.model] !== null) {
+        costByModel[r.model] = (costByModel[r.model] ?? 0) + r.cost_usd;
+        totalCost += r.cost_usd;
+        if (r.model.includes('pro')) proCost += r.cost_usd;
+      } else {
+        totalCost += r.cost_usd;
+        if (r.model.includes('pro')) proCost += r.cost_usd;
+      }
       const phaseKey = r.phase ?? 'unknown';
       phaseHist[phaseKey] = (phaseHist[phaseKey] ?? 0) + 1;
-      totalCost += r.cost_usd;
       total_input_tokens += r.input_tokens ?? 0;
       total_output_tokens += r.output_tokens ?? 0;
       total_cache_hit_tokens += r.cache_hit_tokens ?? 0;
       total_cache_miss_tokens += r.cache_miss_tokens ?? 0;
-      if (r.model.includes('pro')) {
-        proCost += r.cost_usd;
-      }
       if (r.effort_aliased) effort_aliased_any = true;
       if (r.requested_reasoning_effort != null) {
         last_requested_effort = normalizeEffortLabel(r.requested_reasoning_effort);
@@ -369,8 +383,10 @@ export class TurnRoutingReceiptLog {
       models_used: [...models].sort(),
       cost_by_model: costByModel,
       phase_histogram: phaseHist,
-      pro_cost_share: totalCost > 0 ? proCost / totalCost : 0,
-      total_cost_usd: totalCost,
+      pro_cost_share: unknownCostTurnCount > 0 ? null : totalCost > 0 ? proCost / totalCost : 0,
+      total_cost_usd: unknownCostTurnCount > 0 ? null : totalCost,
+      known_total_cost_usd: totalCost,
+      unknown_cost_turn_count: unknownCostTurnCount,
       total_input_tokens,
       total_output_tokens,
       total_cache_hit_tokens,

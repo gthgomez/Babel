@@ -5,6 +5,9 @@
 
 import * as assert from 'node:assert';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import {
   CompactionManager,
@@ -29,9 +32,13 @@ import {
 import {
   createThreadEventLog,
   rebuildProviderMessagesFromEvents,
+  recordUserMessage,
   startTurn,
+  parseThreadEventLog,
+  serializeThreadEventLog,
 } from './threadEventLog.js';
-import { createSessionEventLog } from './sessionEvents.js';
+import { createSessionEventLog, parseSessionEventLog, recordUserSubmitted, serializeSessionEventLog } from './sessionEvents.js';
+import { captureApprovedObservation, readObservationPage, resolveObservation } from '../evidence/observationStore.js';
 import {
   buildContextBudgetSnapshot,
   buildCompactionCapsule,
@@ -177,6 +184,8 @@ describe('H1 assembleCompactedConversation preserves LLM summary', () => {
     const capsules = assembled.filter((m) => m.name === 'compaction_capsule');
     assert.strictEqual(summaries.length, 1);
     assert.ok(summaries[0]!.content.includes('Node.js'));
+    assert.strictEqual(summaries[0]!.role, 'assistant');
+    assert.strictEqual(summaries[0]!.authoritative, false);
     assert.strictEqual(capsules.length, 1);
     assert.strictEqual(assembled[0]!.role, 'system');
     assert.ok(!assembled[0]!.name || assembled[0]!.name !== 'compaction_summary');
@@ -256,6 +265,39 @@ describe('H1 CompactionManager structured result + heuristic fallback', () => {
 });
 
 describe('H1 commitCompaction dual-write + resume equivalence', () => {
+  it('keeps a durable message hidden from the compactor and never fabricates it from summary text', async () => {
+    const threadLog = createThreadEventLog('thread-filtered-compactor');
+    const sessionLog = createSessionEventLog('thread-filtered-compactor');
+    const turnId = startTurn(threadLog, {
+      task: 'A visible', model: 'deepseek-chat', provider: 'deepseek',
+      projectRoot: '/tmp/proj', policyPreset: 'chat',
+    });
+    recordUserMessage(threadLog, turnId, 'B hidden from compactor');
+    recordUserMessage(threadLog, turnId, 'C visible');
+    const prior: ChatMessage[] = [
+      { role: 'system', content: 'System instructions' },
+      { role: 'user', content: 'A visible' },
+      { role: 'user', content: 'B hidden from compactor' },
+      { role: 'user', content: 'C visible' },
+    ];
+    const strategyMessages: ChatMessage[] = [
+      prior[0]!, prior[1]!, prior[3]!,
+      { role: 'assistant', name: 'compaction_summary', content: 'Summary of A and C only', provenance: 'model', authoritative: false },
+    ];
+    const hiddenRef = buildRawObservationRefs(prior, strategyMessages);
+    assert.strictEqual(hiddenRef.length, 1);
+    const result = await commitCompaction({
+      strategyMessages, priorConversation: prior, strategy: 'llm-summarize',
+      tokensBefore: 100, tokensAfter: 30, operational: { task: 'A visible' },
+      threadLog, sessionLog, turnId, modelId: 'deepseek-chat',
+    });
+    assert.strictEqual(result.status, 'committed');
+    assert.deepStrictEqual(result.capsule.rawObservationRefs, hiddenRef);
+    assert.ok(threadLog.events.some((event) => event.kind === 'user_message' && event.content === 'B hidden from compactor'));
+    assert.ok(!result.conversation.some((message) => message.content.includes('B hidden from compactor')));
+    assert.ok(!result.conversation.some((message) => message.name === 'compaction_summary' && message.content.includes('B hidden from compactor')));
+  });
+
   it('writes thread capsule + session compaction_created; live≡rebuild', async () => {
     const prior = longConversation(6, ['SECRET_FACT_ALPHA']);
     const llm = new LLMSummarizeCompaction({ keepRecentMessages: 2 });
@@ -316,9 +358,10 @@ describe('H1 commitCompaction dual-write + resume equivalence', () => {
       // Thread event written
       const capsules = threadLog.events.filter((e) => e.kind === 'compaction_capsule');
       assert.strictEqual(capsules.length, 1);
-      assert.ok(
-        (capsules[0] as { content: string }).content.includes('SECRET_FACT_ALPHA'),
-      );
+      assert.ok(!(capsules[0] as { content: string }).content.includes('SECRET_FACT_ALPHA'));
+      assert.ok(commit.conversation.some(
+        (m) => m.name === 'compaction_summary' && m.role === 'assistant' && m.content.includes('SECRET_FACT_ALPHA'),
+      ));
       // Legacy boundary remains for existing consumers; C2 additionally records a
       // linked start → summary → committed lifecycle with an auditable replacement range.
       const sess = sessionLog.events.filter((e) => e.kind === 'compaction_created');
@@ -345,10 +388,13 @@ describe('H1 commitCompaction dual-write + resume equivalence', () => {
       });
       const liveCapsule = commit.conversation.find((m) => m.name === 'compaction_capsule');
       const rebuildCapsule = rebuilt.find((m) => m.name === 'compaction_capsule');
+      const rebuiltSummary = rebuilt.find((m) => m.name === 'compaction_summary');
       assert.ok(liveCapsule);
       assert.ok(rebuildCapsule);
+      assert.ok(rebuiltSummary);
       assert.strictEqual(liveCapsule!.content, rebuildCapsule!.content);
-      assert.ok(rebuildCapsule!.content.includes('SECRET_FACT_ALPHA'));
+      assert.ok(!rebuildCapsule!.content.includes('SECRET_FACT_ALPHA'));
+      assert.ok(rebuiltSummary!.content.includes('SECRET_FACT_ALPHA'));
     } finally {
       if (savedKey) process.env['BABEL_COMPACTION_API_KEY'] = savedKey;
       else delete process.env['BABEL_COMPACTION_API_KEY'];
@@ -379,8 +425,53 @@ describe('H1 commitCompaction dual-write + resume equivalence', () => {
         throw new Error('disk full');
       },
     });
-    assert.strictEqual(commit.status, 'degraded_persistence');
+    assert.strictEqual(commit.status, 'blocked_persistence');
     assert.ok(commit.error?.includes('disk full'));
+  });
+
+  it('rollback after a failed persist keeps event-log sequence cursors contiguous', async () => {
+    const strategyMessages: ChatMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'u' },
+      { role: 'assistant', content: 'a' },
+    ];
+    const threadLog = createThreadEventLog('rollback');
+    const sessionLog = createSessionEventLog('rollback');
+    startTurn(threadLog, {
+      task: 'rollback test',
+      model: 'deepseek-chat',
+      provider: 'deepseek',
+      projectRoot: '/tmp/proj',
+      policyPreset: 'chat',
+    });
+    recordUserSubmitted(sessionLog, { turn_id: 't1', task: 'rollback test' });
+    const eventsBeforeRollback = threadLog.events.length;
+    const sessionEventsBeforeRollback = sessionLog.events.length;
+    const commit = await commitCompaction({
+      strategyMessages,
+      priorConversation: longConversation(4),
+      strategy: 'heuristic-truncation',
+      tokensBefore: 1000,
+      tokensAfter: 100,
+      operational: { task: 't' },
+      threadLog,
+      sessionLog,
+      turnId: 't1',
+      modelId: 'm',
+      persist: () => {
+        throw new Error('disk full');
+      },
+    });
+    assert.strictEqual(commit.status, 'blocked_persistence');
+    // The rolled-back appends must not advance the cursors past the retained
+    // events; both logs are strictly positional (nextSeq === events.length,
+    // thread seq/item_id === index, session seq === index).
+    assert.strictEqual(threadLog.events.length, eventsBeforeRollback);
+    assert.strictEqual(threadLog.nextSeq, threadLog.events.length);
+    assert.strictEqual(sessionLog.events.length, sessionEventsBeforeRollback);
+    assert.strictEqual(sessionLog.nextSeq, sessionLog.events.length);
+    assert.doesNotThrow(() => parseThreadEventLog(serializeThreadEventLog(threadLog)));
+    assert.doesNotThrow(() => parseSessionEventLog(serializeSessionEventLog(sessionLog)));
   });
 
   it('blocked_persistence when blockOnPersistFailure is set', async () => {
@@ -465,20 +556,28 @@ describe('H1 commitCompaction dual-write + resume equivalence', () => {
       systemPrompt: 'sys',
     });
     const capsule = rebuilt.find((m) => m.name === 'compaction_capsule');
+    const summary = rebuilt.find((m) => m.name === 'compaction_summary');
     assert.ok(capsule);
-    assert.ok(capsule!.content.includes('summary-v2-LATEST'));
-    assert.ok(!capsule!.content.includes('summary-v1'));
+    assert.ok(summary);
+    assert.ok(summary!.content.includes('summary-v2-LATEST'));
+    assert.ok(!capsule!.content.includes('summary-v2-LATEST'));
+    assert.ok(!summary!.content.includes('summary-v1'));
   });
 });
 
 describe('H1 tool pairing + observation reduction + long-session metrics', () => {
   it('preserves tool call/result ids in working set', () => {
-    const msgs: ChatMessage[] = [
+    const msgs = ([
       { role: 'system', content: 'sys' },
       {
         role: 'assistant',
         content: 'Using tools',
         name: 'tool_calls',
+        tool_calls: [{
+          id: 'call_abc',
+          type: 'function',
+          function: { name: 'read_file', arguments: '{"path":"a.ts"}' },
+        }],
       },
       {
         role: 'tool',
@@ -487,7 +586,7 @@ describe('H1 tool pairing + observation reduction + long-session metrics', () =>
         toolName: 'read_file',
       },
       { role: 'user', content: 'thanks' },
-    ];
+    ] as unknown) as ChatMessage[];
     const assembled = assembleCompactedConversation(msgs, '# capsule');
     const ids = collectPreservedToolCallIds(assembled);
     assert.deepStrictEqual(ids, ['call_abc']);
@@ -499,6 +598,14 @@ describe('H1 tool pairing + observation reduction + long-session metrics', () =>
     const refs = buildRawObservationRefs(prior, after);
     assert.ok(refs.length > 0);
     assert.ok(refs.every((r) => r.startsWith('obs:')));
+  });
+
+  it('retains the complete exact-observation manifest beyond the legacy 32-entry cap', () => {
+    const prior = longConversation(45);
+    const refs = buildRawObservationRefs(prior, [prior[0]!]);
+    assert.ok(refs.length > 32, `expected all dropped observations, got ${refs.length}`);
+    assert.equal(new Set(refs).size, refs.length);
+    assert.ok(refs.every((ref) => /^obs:[0-9a-f]{64}$/.test(ref)));
   });
 
   it('measures critical-fact retention and token reduction on long session', async () => {
@@ -559,12 +666,121 @@ describe('H1 durable capsule content helper', () => {
   it('embeds summary for rebuild path', () => {
     const content = buildDurableCapsuleContent('# cap', 'my summary body');
     assert.ok(content.includes('# cap'));
-    assert.ok(content.includes('my summary body'));
-    assert.ok(content.includes('compaction_summary'));
+    assert.ok(!content.includes('my summary body'));
+    assert.strictEqual(content, '# cap');
   });
 });
 
 describe('H1 compaction lifecycle result', () => {
+  it('PR242 keeps excluded B out of compactor input and permits only original-ID recall after restart', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-pr242-observation-restart-'));
+    try {
+      const storage = {
+        storage_root: join(root, 'observations'),
+        clock: () => '2026-09-23T00:00:00.000Z',
+        policy: { durability: 'none' as const },
+      };
+      const captured = captureApprovedObservation({
+        invocation: {
+          operation_id: 'op-B', task_id: 'task-ABC', run_id: 'run-ABC',
+          turn_id: 'turn-ABC', attempt_id: 'attempt-1',
+        },
+        sections: [{ channel: 'stdout', content: 'B excluded durable observation' }],
+        execution_status: 'succeeded',
+        permitted_principals: ['agent:main'],
+        data_policy: {
+          approved: true, policy_version: 'policy-v1', redaction_policy_version: 'redaction-v1',
+        },
+        snapshot_ref: 'snapshot-ABC', coverage_ref: 'coverage-ABC',
+      }, storage);
+      assert.strictEqual(captured.status, 'captured');
+      if (captured.status !== 'captured') return;
+
+      const threadLog = createThreadEventLog('thread-ABC');
+      const sessionLog = createSessionEventLog('thread-ABC');
+      const turnId = startTurn(threadLog, {
+        task: 'retain A and C', model: 'test-model', provider: 'deepseek',
+        projectRoot: root, policyPreset: 'chat',
+      });
+      recordUserMessage(threadLog, turnId, 'A visible');
+      recordUserMessage(threadLog, turnId, 'B excluded durable observation');
+      recordUserMessage(threadLog, turnId, 'C visible');
+      const visible: ChatMessage[] = [
+        { role: 'system', content: 'System instructions' },
+        { role: 'user', content: 'A visible' },
+        { role: 'user', content: 'C visible' },
+      ];
+      let compactorInput: ChatMessage[] = [];
+      const host: ChatEngineCompactionHost = {
+        conversation: visible,
+        compactionManager: {
+          compactWithResult: async (messages) => {
+            compactorInput = messages.map((message) => ({ ...message }));
+            return {
+              messages: [visible[0]!, visible[2]!, {
+                role: 'assistant', name: 'compaction_summary',
+                content: 'A and C remain visible', provenance: 'model', authoritative: false,
+              }],
+              strategy: 'llm-summarize', tokensBefore: 100, tokensAfter: 20, changed: true,
+            };
+          },
+        },
+        options: { task: 'retain A and C', model: 'test-model' },
+        limits: { maxEstimatedTokens: 10 },
+        abortSignal: new AbortController().signal,
+        writeCount: 0, turnIndex: 1, toolCallLog: [],
+        progress: { receipts: [], consecutiveNoProgress: 0 },
+        threadLog, sessionLog, turnId,
+        shouldUseTextTools: () => false,
+        compactHeuristic: () => { throw new Error('unexpected heuristic fallback'); },
+        checkpoint: async () => undefined,
+        reserveTokens: 0, textToolsReserve: 0, forceCompaction: true,
+        resolveModel: () => 'test-model', shouldCompactByTokens: () => true,
+        estimateTokens: (messages) => messages.length,
+      };
+      const result = await runChatEngineCompaction(host);
+      assert.ok(result?.changed);
+      assert.ok(compactorInput.some((message) => message.content === 'A visible'));
+      assert.ok(compactorInput.some((message) => message.content === 'C visible'));
+      assert.ok(!compactorInput.some((message) => message.content.includes('B excluded')));
+
+      const threadPath = join(root, 'thread.json');
+      const sessionPath = join(root, 'session.json');
+      writeFileSync(threadPath, serializeThreadEventLog(threadLog));
+      writeFileSync(sessionPath, serializeSessionEventLog(sessionLog));
+      const restoredThread = parseThreadEventLog(readFileSync(threadPath, 'utf8'));
+      const restoredSession = parseSessionEventLog(readFileSync(sessionPath, 'utf8'), 'thread-ABC');
+      assert.ok(restoredSession.events.some((event) => event.kind === 'compaction_committed'));
+      assert.ok(restoredThread.events.some((event) => event.kind === 'user_message' &&
+        event.content === 'B excluded durable observation'));
+      const provider = rebuildProviderMessagesFromEvents(restoredThread,
+        { systemPrompt: 'System instructions' });
+      assert.ok(!provider.some((message) => message.content?.includes('B excluded')));
+      const recalled = resolveObservation(captured.observation.observation_id, {
+        principal_id: 'agent:main',
+        authorized_observation_ids: [captured.observation.observation_id],
+      }, storage);
+      assert.strictEqual(recalled.status, 'resolved');
+      if (recalled.status === 'resolved') {
+        const page = readObservationPage(captured.observation.observation_id, null,
+          { max_bytes: 1024 }, {
+            principal_id: 'agent:main',
+            authorized_observation_ids: [captured.observation.observation_id],
+          }, storage);
+        assert.strictEqual(page.status, 'page');
+        if (page.status === 'page') {
+          assert.strictEqual(page.content, 'B excluded durable observation');
+        }
+      }
+      assert.notStrictEqual(resolveObservation('fabricated-B', {
+        principal_id: 'agent:main',
+        authorized_observation_ids: [captured.observation.observation_id],
+      }, storage).status, 'resolved');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('reports a changed context when compaction retains the same message count', async () => {
     const prior: ChatMessage[] = [
       { role: 'system', content: 'system' },

@@ -23,6 +23,11 @@ import type { BlockedReport } from '../../schemas/agentContracts.js';
 import { ConversationalRenderer } from '../../ui/waterfall.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import { isOperatorAbortError } from '../../agent/operatorAbort.js';
+import {
+  isInfrastructureErrorText,
+  isLocalEnvironmentErrorText,
+} from '../../agent/chatFailureClassification.js';
+import { detectAndBuildBlockedReport } from '../../agent/chatEngineSupport.js';
 import { BABEL_RUNS_DIR } from '../../cli/constants.js';
 import { getProtocolClient } from '../../protocol/client/index.js';
 import {
@@ -34,12 +39,20 @@ import {
 } from './chatEventDispatch.js';
 import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 import {
+  attachSessionAdmissionStore,
   finalizeProtocolTurn,
   getEngineThreadId,
   prepareHeadlessTurn,
   prepareRendererTurn,
   type ProtocolTurnSession,
-} from './chatTransport.js';
+} from './chatTransport.js'
+import type { BabelMode, SessionDescriptor } from '../../executor/contracts.js'
+import { buildPreparedTurn } from '../../executor/modeAdapters.js'
+import {
+  createRuntimeCoordinator,
+  isRuntimeCoordinatorEnabled,
+} from '../../runtime/coordinator.js'
+import type { RuntimeCoordinator, RuntimeExecution } from '../../runtime/contracts.js';
 import type { TurnPersistence } from './turnPersistence.js';
 import { buildAskResultPayload } from '../../cli/structuredOutput.js';
 import { runGitCommandAsync } from '../../utils/gitExec.js';
@@ -50,7 +63,12 @@ import {
   formatWorkspaceDepUnreadyNote,
   probePythonImport,
 } from '../../services/workspaceDepPreflight.js';
-import { resolveChatTaskClass, type ChatTaskClass } from '../../config/chatTaskClass.js';
+import {
+  analyzeTaskShape,
+  resolveChatTaskClass,
+  type ChatTaskClass,
+  type TaskOperation,
+} from '../../config/chatTaskClass.js';
 import { confirmedMutationPaths, isConfirmedMutation } from '../../agent/mutationTools.js';
 import { isAuthoritativeVerifierCommand } from '../../agent/completionGatePolicy.js';
 import { computeToolCallAggregates } from '../../agent/toolCallExport.js';
@@ -67,7 +85,7 @@ import {
   compileIntentPlan,
   formatIntentPlanUserMessage,
 } from '../../agent/intentCompiler.js';
-import { persistIntentPlan } from '../../agent/chatEngineObservability.js';
+import { outcomeFromReasonCode, persistIntentPlan } from '../../agent/chatEngineObservability.js';
 import {
   compileChatStack,
   resolveStackBudgetForClass,
@@ -101,9 +119,12 @@ export function compileChatStackForRun(input: {
   task: string;
   model?: string;
   babelRoot?: string;
+  /** Pre-resolved task class so preparation shares one contract. */
+  taskClass?: ChatTaskClass;
 }): ChatCompiledStack {
   // U1.4: Slim interactive stack — non-general_swe tasks get a lower budget.
-  const taskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true });
+  const taskClass =
+    input.taskClass ?? resolveChatTaskClass({ taskText: input.task, autoClassify: true });
   const budget = resolveStackBudgetForClass(taskClass);
   const stack = compileChatStack({
     projectRoot: input.projectRoot,
@@ -120,15 +141,31 @@ export function compileChatStackForRun(input: {
 }
 
 /**
+ * Explicit label for harness-generated planning guidance. It is injected as a
+ * user-role message (the provider protocol has no harness role), so the text
+ * must identify itself as guidance for the model and for any log reader. It is
+ * not user authorization and must never create mutation authority.
+ */
+export const HARNESS_GUIDANCE_LABEL =
+  '> Harness-generated planning guidance (not user authorization).';
+
+/**
  * Compile the intent-plan user message for execute tasks (heuristic, no LLM).
  * Matches the factory-path injection so reused TUI engines see the same text.
+ *
+ * S01/#211: the resolved TaskShape `operation` is authoritative. READ_ONLY
+ * submissions (greetings, explanations, read-only investigation, quoted code)
+ * get no generated edit/repair mandate at all; only execute-like operations
+ * (MUTATING/HYBRID) receive the plan + pre-loop repair template.
  */
 export function compileIntentPlanUserMessage(
   task: string,
   taskClass: ChatTaskClass,
+  operation?: string,
 ): string | undefined {
   const intentPlan = compileIntentPlan(task, {
     taskClass,
+    ...(operation !== undefined ? { operation } : {}),
   });
   if (!intentPlan) return undefined;
   let msg = formatIntentPlanUserMessage(intentPlan);
@@ -149,7 +186,7 @@ export function compileIntentPlanUserMessage(
         enforceMutateFirst: taskClass === 'general_swe',
       });
   }
-  return msg;
+  return `${HARNESS_GUIDANCE_LABEL}\n\n${msg}`;
 }
 
 export function applyEngineTurnPreparation(
@@ -300,12 +337,13 @@ export function classifyChatStreamError(err: unknown): {
     err && typeof err === 'object' && 'name' in err
       ? String((err as { name?: unknown }).name)
       : '';
-  if (
-    /^(ENOSPC|EROFS|EIO|EBUSY|EMFILE|ENFILE|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH)$/i.test(
-      code,
-    ) ||
-    name === 'RuntimeInvariantViolationError'
-  ) {
+  // Local machine/environment errnos are external environment failures, not
+  // provider infrastructure. Use the shared classifier so this fallback cannot
+  // drift from `classifyFailureText`'s message-based mapping.
+  if (isLocalEnvironmentErrorText(code)) {
+    return { status: 'blocked', outcome: 'BLOCKED_EXTERNAL' };
+  }
+  if (isInfrastructureErrorText(code) || name === 'RuntimeInvariantViolationError') {
     return { status: 'failed', outcome: 'INFRA_FAILURE' };
   }
   return { status: 'failed' };
@@ -335,7 +373,7 @@ function evidenceFields(input: {
  * Consume the streaming ChatEvent generator and dispatch each event to sinks.
  */
 export async function consumeChatStream(
-  stream: AsyncGenerator<ChatEvent, void, undefined>,
+  stream: AsyncIterable<ChatEvent>,
   convRenderer: ConversationalRenderer | null,
   onStreamEvent?: (event: ChatStreamEvent) => void,
   protocolSession?: ProtocolTurnSession | null,
@@ -356,6 +394,8 @@ export async function consumeChatStream(
   let doneCostBudget: ChatResult['costBudget'];
   let doneRunAllowance: ChatResult['runAllowance'];
   let donePolicyEvents: ChatResult['policyEvents'];
+  let doneReasonCode: ChatResult['reason_code'];
+  let doneCauseClass: ChatResult['cause_class'];
   const toolIdQueue: number[] = [];
   const toolIdsByCallId = new Map<string, number>();
   let doneStatus: ChatResult['status'] | undefined;
@@ -437,6 +477,8 @@ export async function consumeChatStream(
         doneCostBudget = event.costBudget ?? doneCostBudget;
         doneRunAllowance = event.runAllowance ?? doneRunAllowance;
         donePolicyEvents = event.policyEvents ?? donePolicyEvents;
+        doneReasonCode = event.reason_code ?? doneReasonCode;
+        doneCauseClass = event.cause_class ?? doneCauseClass;
         receivedTerminalEvent = true;
       }
 
@@ -448,6 +490,8 @@ export async function consumeChatStream(
           answer: 'Cancelled',
           usage: globalCostTracker.getSessionSummary(),
           conversation: [],
+          reason_code: event.reason_code ?? 'cancelled',
+          cause_class: event.cause_class ?? null,
           ...snapshotEvidence(),
           ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
         };
@@ -488,6 +532,8 @@ export async function consumeChatStream(
     ...(doneRunAllowance ? { runAllowance: doneRunAllowance } : {}),
     ...(donePolicyEvents ? { policyEvents: donePolicyEvents } : {}),
     ...(doneStatus !== undefined ? { status: doneStatus } : {}),
+    ...(doneReasonCode !== undefined ? { reason_code: doneReasonCode } : {}),
+    ...(doneCauseClass !== undefined ? { cause_class: doneCauseClass } : {}),
   });
 }
 
@@ -602,23 +648,32 @@ export async function runChatEngineOnce(input: {
   taskIntent?: TaskIntent;
   executionProfile?: ChatExecutionProfile;
   runtimeMode?: ChatRuntimeMode;
+  /** P03: product mode for runtime-coordinator dispatch. Defaults to chat. */
+  mode?: BabelMode;
+  /** P03: inject the shared runtime coordinator (surfaces / deterministic tests). */
+  coordinator?: RuntimeCoordinator;
 }): Promise<ChatResult> {
   const factory = input.engineFactory ?? defaultEngineFactory;
   const preflightContext =
     input.preflightContext ?? (await gatherChatPreflightContext(input.target.targetRoot));
 
-  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: false });
-  const limitsTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true });
+  // S01/#211: resolve the effective contract ONCE from the existing TaskShape
+  // machinery. Preparation, prompt compilation and limits all consume this
+  // resolution; there is no second (autoClassify:false) classifier.
+  const taskShape = analyzeTaskShape(input.task);
+  const effectiveOperation: TaskOperation = taskShape.operation;
+  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true });
   const limits = resolveChatEngineLimits(
     {},
     input.model,
-    { taskClass: limitsTaskClass, taskText: input.task },
+    { taskClass: resolvedTaskClass, taskText: input.task },
   );
 
   // Smallest compiled chat stack (identity / project / safety / provider / verifier)
   const chatStack = compileChatStackForRun({
     projectRoot: input.instructionRoot ?? input.target.targetRoot,
     task: input.task,
+    taskClass: resolvedTaskClass,
     ...(input.model !== undefined ? { model: input.model } : {}),
   });
   const stackSystemContext = [input.systemContext, chatStack.system_context]
@@ -628,10 +683,16 @@ export async function runChatEngineOnce(input: {
   // C1: Compile intent plan for execute tasks (heuristic, no LLM call).
   // Injects as a structured user message so the model sees expanded intent
   // before its first tool turn. Persisted to intent_plan.json after the run.
+  // READ_ONLY operations get no plan and no pre-loop repair template.
   const intentPlan = compileIntentPlan(input.task, {
     taskClass: resolvedTaskClass,
+    operation: effectiveOperation,
   });
-  const intentPlanUserMessage = compileIntentPlanUserMessage(input.task, resolvedTaskClass);
+  const intentPlanUserMessage = compileIntentPlanUserMessage(
+    input.task,
+    resolvedTaskClass,
+    effectiveOperation,
+  );
 
   const engine =
     input.engine ??
@@ -722,54 +783,100 @@ export async function runChatEngineOnce(input: {
     (convRenderer !== null ? isChatStreamingEnabled() : true);
   const resolvedIntent = input.taskIntent ?? ChatEngine.classifyChatTaskIntent(input.task);
 
-  let result: ChatResult;
-  if (useStreaming) {
-    result = await consumeChatStream(
-      engine.submitMessageStream(input.task, resolvedIntent),
-      convRenderer,
-      input.onStreamEvent,
-      protocolSession,
-    );
-  } else {
-    result = await engine.submitMessage(
-      input.task,
-      buildChatCallbacks(convRenderer, input.onStreamEvent, protocolSession),
-      resolvedIntent,
-    );
-    if (result.status === 'completed') {
-      protocolSession?.emitChatEvent({
-        type: 'done',
-        answer: result.answer,
-        usage: result.usage,
-        status: result.status,
-        ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
-      });
-    } else if (result.status === 'failed') {
-      protocolSession?.emitChatEvent({
-        type: 'failed',
-        error: result.answer,
-        status: result.status,
-        ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
-      });
-    } else if (result.status === 'cancelled') {
-      protocolSession?.emitChatEvent({
-        type: 'cancelled',
-        status: result.status,
-        outcome: 'CANCELLED',
-      });
-    } else {
-      protocolSession?.emitChatEvent({
-        type: 'done',
-        answer: result.answer,
-        usage: result.usage,
-        status: result.status,
-        ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
-      });
-    }
+  // P03: dispatch the controller through the shared runtime facade. For chat the
+  // adapter is a pure delegation; the coordinator contributes controller
+  // ownership while keeping UI/renderer state out of the runtime boundary.
+  const coordinator = input.coordinator ?? createRuntimeCoordinator();
+  let execution: RuntimeExecution | null = null;
+  if (isRuntimeCoordinatorEnabled()) {
+    const descriptor: SessionDescriptor = {
+      schemaVersion: 1,
+      threadId: threadId ?? '',
+      projectRoot: input.target.targetRoot,
+      mode: input.mode ?? 'chat',
+      provider: 'default',
+      model: input.model ?? 'default',
+      policyProfile: 'safe_repo',
+      createdAt: new Date().toISOString(),
+      kernelVersion: 'executor-kernel-v1',
+      contractVersion: 'executor-contract-v1',
+    };
+    execution = coordinator.beginTurn({
+      prepared: buildPreparedTurn(descriptor),
+      threadId: threadId ?? '',
+      turnId: protocolSession?.turnId !== undefined ? String(protocolSession.turnId) : '0',
+      task: input.task,
+      intent: resolvedIntent,
+      subject: engine,
+    });
   }
 
-  persistTurnAssistantCells(turnPersistence, convRenderer);
-  finalizeProtocolTurn(protocolSession);
+  let result: ChatResult;
+  try {
+    if (!input.engine) {
+      // P05/P11 headless companion: attach INSIDE the guarded region so any
+      // throw before or during the stream releases the refcounted handle in
+      // the `finally` below — a caller-supplied engine (REPL) keeps its own
+      // reference, and a throw before this point never opened a handle.
+      attachSessionAdmissionStore(engine);
+    }
+    if (useStreaming) {
+      const stream =
+        execution !== null
+          ? coordinator.submit(execution)
+          : engine.submitMessageStream(input.task, resolvedIntent);
+      result = await consumeChatStream(
+        stream,
+        convRenderer,
+        input.onStreamEvent,
+        protocolSession,
+      );
+    } else {
+      result = await engine.submitMessage(
+        input.task,
+        buildChatCallbacks(convRenderer, input.onStreamEvent, protocolSession),
+        resolvedIntent,
+      );
+      if (result.status === 'completed') {
+        protocolSession?.emitChatEvent({
+          type: 'done',
+          answer: result.answer,
+          usage: result.usage,
+          status: result.status,
+          ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+        });
+      } else if (result.status === 'failed') {
+        protocolSession?.emitChatEvent({
+          type: 'failed',
+          error: result.answer,
+          status: result.status,
+          ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+        });
+      } else if (result.status === 'cancelled') {
+        protocolSession?.emitChatEvent({
+          type: 'cancelled',
+          status: result.status,
+          outcome: 'CANCELLED',
+        });
+      } else {
+        protocolSession?.emitChatEvent({
+          type: 'done',
+          answer: result.answer,
+          usage: result.usage,
+          status: result.status,
+          ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+        });
+      }
+    }
+
+    persistTurnAssistantCells(turnPersistence, convRenderer);
+    finalizeProtocolTurn(protocolSession);
+  } finally {
+    if (execution !== null) coordinator.settle(execution);
+    // Headless run end: release this run's admission-store reference (no-op
+    // when the engine, and therefore the store, belongs to the caller).
+    if (!input.engine && typeof engine.closeAdmissionStore === 'function') engine.closeAdmissionStore();
+  }
 
   // C1: Persist intent plan to run_dir/intent_plan.json after the run
   if (intentPlan && result.runDir) {
@@ -795,6 +902,15 @@ export async function runChatEngineOnce(input: {
             estimated_tokens: chatStack.estimated_tokens,
             delivered_content_digest: chatStack.delivered_content_digest,
             content_disposition: chatStack.content_disposition,
+            // S06/#5, M2: the engine manifest may have been refreshed from a
+            // different instructionRoot than the run-level chatStack. Record
+            // the engine manifest's own hash so the two halves are
+            // attributable, and keep the disposition keyed to that manifest.
+            engine_manifest_hash: engine.getInstructionManifest()?.manifest_hash ?? null,
+            instruction_disposition:
+              engine
+                .getInstructionManifest()
+                ?.fragments.filter((fragment) => fragment.rule_id.startsWith('session:')) ?? [],
           },
           null,
           2,
@@ -873,6 +989,9 @@ export async function runChatEngineOnce(input: {
   if (acceptanceBundle && result.runDir) {
     recordAcceptanceArtifacts(result.runDir, acceptanceBundle);
   }
+
+  // Idempotent backstop for failures thrown outside the stream stage above.
+  if (!input.engine && typeof engine.closeAdmissionStore === 'function') engine.closeAdmissionStore();
 
   return result;
 }
@@ -958,6 +1077,13 @@ export function buildChatRunPayload(
   // Ensure terminal_outcome is always visible on the run payload when known.
   if (result.outcome !== undefined) {
     payload['terminal_outcome'] = result.outcome;
+  }
+  // D03: carry the structured terminal reason alongside the outcome.
+  if (result.reason_code !== undefined) {
+    payload['reason_code'] = result.reason_code;
+  }
+  if (result.cause_class !== undefined) {
+    payload['cause_class'] = result.cause_class;
   }
   payload['verification'] = result.verifierReceipt
     ? {
@@ -1243,38 +1369,41 @@ export function buildChatRunPayload(
   // BLOCKED: Surface blocked report when present
   if (result.blockedReport) {
     payload['blocked_report'] = result.blockedReport;
-  } else if (result.answer && /\bBLOCKED\b/i.test(result.answer) && Array.isArray(result.toolCalls)) {
-    // R1 fallback: detect BLOCKED in the answer text when the engine didn't
-    // produce a structured report (e.g., streaming path edge cases).
-    const investigateTools = new Set([
-      'read_file',
-      'read_range',
-      'grep',
-      'glob',
-      'list_dir',
-      'run_command',
-      'shell_exec',
-      'test_run',
-    ]);
-    const checked = (result.toolCalls as Array<Record<string, unknown>>)
-      .filter(tc => investigateTools.has(String(tc['tool'] ?? '')) && !!tc['target'])
-      .slice(-15)
-      .map(tc => ({
-        action: String(tc['tool'] ?? ''),
-        target: String(tc['target'] ?? ''),
-        finding: typeof tc['detail'] === 'string' ? tc['detail'] : 'Investigated',
-      }));
-    if (checked.length > 0) {
-      payload['blocked_report'] = {
-        schema_version: 1,
-        status: 'BLOCKED' as const,
-        reason: result.answer.slice(0, 200),
-        missing: 'External dependency not available in the execution environment',
-        checked,
-        next_steps: ['Review the blocked report and provide the missing dependencies before retrying.'],
-      };
+  } else if (
+    result.answer &&
+    /(?:^|\n)\s*BLOCKED\b/.test(result.answer) &&
+    Array.isArray(result.toolCalls)
+  ) {
+    // R1 fallback: detect a protocol-shaped BLOCKED declaration in the answer
+    // text when the engine didn't produce a structured report (e.g., streaming
+    // path edge cases). F4/R0-A: prose is a report, not authority — the
+    // synthesized report may only exist when the tool log independently proves a
+    // TYPED blocking origin via the same predicate the engine uses (R0-5). A
+    // successful read/grep, a red test, a compile error or a failed search plus
+    // a BLOCKED sentence keeps the real outcome and emits no report.
+    const toolLog = (result.toolCalls as Array<Record<string, unknown>>).map(tc => ({
+      tool: String(tc['tool'] ?? ''),
+      target: String(tc['target'] ?? ''),
+      ...(typeof tc['exit_code'] === 'number' ? { exit_code: tc['exit_code'] } : {}),
+      ...(typeof tc['error'] === 'string' ? { error: tc['error'] } : {}),
+      ...(typeof tc['stdout'] === 'string' ? { stdout: tc['stdout'] } : {}),
+      ...(typeof tc['stderr'] === 'string' ? { stderr: tc['stderr'] } : {}),
+    }));
+    const report = detectAndBuildBlockedReport(result.answer, toolLog);
+    if (report) {
+      payload['blocked_report'] = report;
       // Also update the payload status so the benchmark recognizes the BLOCKED outcome
       payload['status'] = 'BLOCKED';
+      // R0-9: keep the tuple coherent — the typed report reason drives the
+      // terminal outcome and reason fields too, not just the nested report.
+      if (report.reason_code !== undefined) {
+        payload['reason_code'] = report.reason_code;
+        const derived = outcomeFromReasonCode(report.reason_code);
+        if (derived !== undefined) payload['terminal_outcome'] = derived;
+      }
+      if (report.cause_class !== undefined) {
+        payload['cause_class'] = report.cause_class;
+      }
     }
   }
 

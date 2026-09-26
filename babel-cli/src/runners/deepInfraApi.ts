@@ -890,6 +890,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         provider: this.providerId,
         model: this.model,
         status,
+        ...(status === 'delivered' ? { usage_metadata: this.getLastInvocationMetadata() } : {}),
         observed_model_id: observedModelId,
         upstream_provider: upstreamProvider,
         output_digest: createHash('sha256').update(outputText).digest('hex'),
@@ -1012,6 +1013,12 @@ export class DeepInfraApiRunner implements LlmRunner {
       this.validateObservedModelId(streamState.observedModelId);
       this.validateObservedUpstream(streamState.upstreamProvider);
       this.validateObservedRouterMetadata(streamState.routerMetadata, streamState.observedModelId, streamState.upstreamProvider);
+      this.lastInvocationMetadata = buildInvocationMetadata(
+        this.providerId, this.model, Date.now() - startedAt,
+        streamState.usage ?? undefined, streamState.ttftMs, streamState.generationMs,
+        undefined, streamState.observedModelId, streamState.upstreamProvider,
+        streamState.routerMetadata, streamState.finishReason, this.maxTokens,
+      );
       notifyCompleted('delivered', streamState.observedModelId, text, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens);
       return { text, startedAt, streamState };
     }
@@ -1748,6 +1755,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         provider: this.providerId,
         model: this.model,
         status,
+        ...(status === 'delivered' ? { usage_metadata: this.getLastInvocationMetadata() } : {}),
         observed_model_id: observedModelId,
         upstream_provider: upstreamProvider,
         output_digest: createHash('sha256').update(outputText).digest('hex'),
@@ -2279,6 +2287,39 @@ export class DeepInfraApiRunner implements LlmRunner {
           yield { type: 'error', message: errMessage };
           return;
         }
+        invocationFailed = true;
+        this.lastInvocationMetadata = buildInvocationMetadata(
+          this.providerId,
+          this.model,
+          Date.now() - startedAt,
+          streamState.usage ?? undefined,
+          streamState.ttftMs,
+          streamState.generationMs,
+          undefined,
+          streamState.observedModelId,
+          streamState.upstreamProvider,
+          streamState.routerMetadata,
+          finishReason,
+          this.maxTokens,
+        );
+        notifyPhase('response_normalization_failed', undefined, 'output_budget_exhausted');
+        notifyCompleted(
+          'failed',
+          streamState.observedModelId,
+          outputReceipt,
+          streamState.upstreamProvider,
+          streamState.routerMetadata,
+          finishReason,
+          this.maxTokens,
+          {
+            actualAttempt: lastAttempt,
+            details: { message: '[deepInfraApi] Provider output budget exhausted.' },
+            failureStage: 'response_normalization',
+            partialModelOutput,
+            toolCallCount,
+            outputMaterial: outputReceipt,
+          },
+        );
         yield { type: 'done', finishReason: 'length' };
         return;
       }
@@ -2286,25 +2327,21 @@ export class DeepInfraApiRunner implements LlmRunner {
       // ── Yield accumulated tool calls ──────────────────────────────────
       if ((finishReason === 'tool_calls' || pendingToolCalls.size > 0) && pendingToolCalls.size > 0) {
         const seenToolIds = new Set<string>();
-        for (const [, acc] of pendingToolCalls) {
-          if (!acc.id || !acc.id.trim()) {
-            invocationFailed = true;
-            const errMessage = `[deepInfraApi] Incomplete tool call: missing id for tool ${acc.name || '<unknown>'}`;
-            notifyPhase('response_normalization_failed', undefined, 'missing_tool_id');
-            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-              actualAttempt: lastAttempt,
-              details: { message: errMessage },
-              failureStage: 'response_normalization',
-              partialModelOutput,
-              toolCallCount,
-              outputMaterial: outputReceipt,
-            });
-            yield { type: 'error', message: errMessage };
-            return;
+        for (const [callIndex, acc] of pendingToolCalls) {
+          let callId = acc.id.trim();
+          if (!callId || seenToolIds.has(callId)) {
+            const baseId = `tool_call_${callIndex}`;
+            let suffix = 0;
+            callId = baseId;
+            while (seenToolIds.has(callId)) {
+              suffix += 1;
+              callId = `${baseId}_${suffix}`;
+            }
           }
+          seenToolIds.add(callId);
           if (!acc.name || !acc.name.trim()) {
             invocationFailed = true;
-            const errMessage = `[deepInfraApi] Incomplete tool call: missing name for tool call ${acc.id}`;
+            const errMessage = `[deepInfraApi] Incomplete tool call: missing name for tool call ${callId}`;
             notifyPhase('response_normalization_failed', undefined, 'missing_tool_name');
             notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
               actualAttempt: lastAttempt,
@@ -2319,7 +2356,7 @@ export class DeepInfraApiRunner implements LlmRunner {
           }
           if (!acc.arguments || !acc.arguments.trim()) {
             invocationFailed = true;
-            const errMessage = `[deepInfraApi] Incomplete tool call: missing arguments for tool ${acc.name} (${acc.id})`;
+            const errMessage = `[deepInfraApi] Incomplete tool call: missing arguments for tool ${acc.name} (${callId})`;
             notifyPhase('response_normalization_failed', undefined, 'missing_tool_arguments');
             notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
               actualAttempt: lastAttempt,
@@ -2332,23 +2369,6 @@ export class DeepInfraApiRunner implements LlmRunner {
             yield { type: 'error', message: errMessage };
             return;
           }
-          if (seenToolIds.has(acc.id)) {
-            invocationFailed = true;
-            const errMessage = `[deepInfraApi] Duplicate tool call id ${acc.id}`;
-            notifyPhase('response_normalization_failed', undefined, 'duplicate_tool_id');
-            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-              actualAttempt: lastAttempt,
-              details: { message: errMessage },
-              failureStage: 'response_normalization',
-              partialModelOutput,
-              toolCallCount,
-              outputMaterial: outputReceipt,
-            });
-            yield { type: 'error', message: errMessage };
-            return;
-          }
-          seenToolIds.add(acc.id);
-
           let input: Record<string, unknown>;
           try {
             const parsed = JSON.parse(acc.arguments) as unknown;
@@ -2373,7 +2393,7 @@ export class DeepInfraApiRunner implements LlmRunner {
             };
             return;
           }
-          yield { type: 'tool_use', id: acc.id, name: acc.name, input };
+          yield { type: 'tool_use', id: callId, name: acc.name, input };
         }
         yield { type: 'done', finishReason: finishReason ?? 'tool_calls' };
       } else {

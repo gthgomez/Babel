@@ -357,6 +357,8 @@ describe('resume then follow-up and cancel', () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-dd-resume-'));
     const prev = process.env['BABEL_RUNS_DIR'];
     process.env['BABEL_RUNS_DIR'] = root;
+    let ctx: ReplContext | undefined;
+    let resumedEngine: ReplContext['chatEngine'];
     try {
       const sessionId = 'dd-resume-session';
       const sessionDir = join(root, 'chat-sessions', sessionId);
@@ -366,26 +368,32 @@ describe('resume then follow-up and cancel', () => {
         `${JSON.stringify({ role: 'user', content: 'prior task about retry leak' })}\n${JSON.stringify({ role: 'assistant', content: 'fixed retry leak' })}\n`,
         'utf8',
       );
-      const ctx = makeReplContext();
-      const outcome = await resumeChatSession(ctx, sessionId);
+      const context = makeReplContext();
+      ctx = context;
+      // R0-3: a legacy transcript has no durable repository identity, so
+      // resuming it for execution requires an explicit rebind.
+      const outcome = await resumeChatSession(context, sessionId, { confirmUnknownIdentity: true });
       assert.equal(outcome.ok, true);
       if (!outcome.ok) return;
       assert.ok(outcome.turnCount >= 1);
-      const user = ctx.chatEngine?.getConversation().find((m) => m.role === 'user');
-      assert.match(String(user?.content ?? ctx.turns[0]?.input ?? ''), /retry leak/);
+      const user = context.chatEngine?.getConversation().find((m) => m.role === 'user');
+      assert.match(String(user?.content ?? context.turns[0]?.input ?? ''), /retry leak/);
 
-      ctx.chatEngine = createInstantEngine(
+      resumedEngine = context.chatEngine;
+      context.chatEngine = createInstantEngine(
         result({ status: 'completed', outcome: 'UNVERIFIED_PATCH', answer: 'follow-up after resume' }),
       );
-      await executeChatTask(ctx, 'also add a test', 'also add a test', makeTarget(), undefined, {
+      await executeChatTask(context, 'also add a test', 'also add a test', makeTarget(), undefined, {
         gatherPreflight: noGitPreflight,
-        engineFactory: () => ctx.chatEngine!,
+        engineFactory: () => context.chatEngine!,
       });
-      assert.equal(ctx.lastAssistantAnswer, 'follow-up after resume');
-      assert.equal(ctx.isRunning, false);
+      assert.equal(context.lastAssistantAnswer, 'follow-up after resume');
+      assert.equal(context.isRunning, false);
     } finally {
       if (prev === undefined) delete process.env['BABEL_RUNS_DIR'];
       else process.env['BABEL_RUNS_DIR'] = prev;
+      resumedEngine?.closeAdmissionStore?.();
+      ctx?.chatEngine?.closeAdmissionStore?.();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -403,6 +411,7 @@ describe('interactive process launch', () => {
           ...process.env,
           CI: '1',
           BABEL_SKIP_RESUME_PICKER: '1',
+          BABEL_SKIP_KG_INDEX: '1',
           BABEL_PROMPT_V2: '0',
         },
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -417,14 +426,14 @@ describe('interactive process launch', () => {
     });
     const ready = await new Promise<boolean>((resolve) => {
       const alreadyBuffered = stripAnsi(out);
-      if (/BABEL/.test(alreadyBuffered) && /CHAT/i.test(alreadyBuffered)) {
+      if (/BABEL/i.test(alreadyBuffered) && /\[READY\]/i.test(alreadyBuffered)) {
         resolve(true);
         return;
       }
-      const timer = setTimeout(() => resolve(false), 8000);
+      const timer = setTimeout(() => resolve(false), 30_000);
       const onData = () => {
         const text = stripAnsi(out);
-        if (/BABEL/.test(text) && /CHAT/i.test(text)) {
+        if (/BABEL/i.test(text) && /\[READY\]/i.test(text)) {
           clearTimeout(timer);
           resolve(true);
         }

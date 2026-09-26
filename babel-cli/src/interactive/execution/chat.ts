@@ -15,6 +15,7 @@ import { updateConversationMemory } from '../turns.js';
 import { alert } from '../../ui/dialog.js';
 import { resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
 import {
+  analyzeTaskShape,
   describeInteractiveCodingProfile,
   resolveChatTaskClass,
   getChatTaskTune,
@@ -156,8 +157,13 @@ export async function executeChatTask(
       taskClass: activeProfile,
       taskText: task,
     });
-    const intentTaskClass = resolveChatTaskClass({ taskText: task, autoClassify: false });
-    const intentPlanUserMessage = compileIntentPlanUserMessage(task, intentTaskClass);
+    // S01/#211: share the one resolved contract (activeProfile above was
+    // resolved with autoClassify:true); TaskShape operation gates the plan.
+    const intentPlanUserMessage = compileIntentPlanUserMessage(
+      task,
+      activeProfile,
+      analyzeTaskShape(task).operation,
+    );
 
     if (!ctx.chatEngine) {
       const operatorMode = normalizeChatOperatorMode(ctx.state.operatorMode) ?? 'default';
@@ -293,6 +299,11 @@ export async function executeChatTask(
         ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
         status: terminal.status,
         finalAnswer: result.answer ?? '',
+        // D03: the TUI card is rendered from this synthetic event, so the
+        // structured terminal reason must be carried onto it (otherwise the
+        // card falls back to the legacy "Review the blocked capability").
+        ...(result.reason_code !== undefined ? { reason_code: result.reason_code } : {}),
+        ...(result.cause_class !== undefined ? { cause_class: result.cause_class } : {}),
       },
     ]);
 
@@ -487,6 +498,10 @@ export async function executeChatTask(
           outcome: 'CANCELLED',
           status: 'cancelled',
           finalAnswer: 'Cancelled',
+          // D03: cancellation is a structured terminal reason (self-evident, but
+          // kept explicit so clients never have to infer it from prose).
+          reason_code: 'cancelled',
+          cause_class: null,
         },
       ]);
       const review = renderProjectedReviewCard(projectedState);

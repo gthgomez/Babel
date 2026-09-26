@@ -633,3 +633,109 @@ describe('completion_verification in buildChatRunPayload', () => {
     assert.equal(cv['required'], false);
   });
 });
+
+// R0-F: the payload BLOCKED fallback may not treat model prose as authority.
+// A successful investigation plus a protocol-shaped BLOCKED line must keep the
+// real outcome and must not synthesize a blocked_report. Only genuine failure
+// evidence (error/denial/absence) may surface a truthful blocked payload.
+describe('buildChatRunPayload blocked-evidence gate (R0-A/R0-F)', () => {
+  it('successful read + BLOCKED prose keeps real outcome and emits no blocked_report', () => {
+    const payload = buildChatRunPayload(
+      {
+        status: 'completed',
+        outcome: 'NO_CHANGE_REQUIRED',
+        answer: 'I read a.txt.\nBLOCKED: I need more info.',
+        usage: EMPTY_USAGE,
+        conversation: [],
+        toolCalls: [
+          { tool: 'read_file', target: 'a.txt', detail: 'contents of a.txt' },
+        ],
+      },
+      { task: 'inspect', projectRoot: '/tmp/project' },
+    );
+
+    assert.equal(payload['status'], 'ANSWER_READY');
+    assert.equal(payload['terminal_outcome'], 'NO_CHANGE_REQUIRED');
+    assert.equal(payload['blocked_report'], undefined);
+  });
+
+  it('R0-5: a repairable failed read + BLOCKED prose emits no blocked_report', () => {
+    const payload = buildChatRunPayload(
+      {
+        status: 'completed',
+        outcome: 'NO_CHANGE_REQUIRED',
+        answer: 'Could not read a.txt.\nBLOCKED: required file is unavailable.',
+        usage: EMPTY_USAGE,
+        conversation: [],
+        toolCalls: [
+          {
+            tool: 'read_file',
+            target: 'a.txt',
+            detail: 'read failed',
+            error: 'ENOENT: no such file or directory',
+          },
+        ],
+      },
+      { task: 'inspect', projectRoot: '/tmp/project' },
+    );
+
+    assert.equal(payload['status'], 'ANSWER_READY');
+    assert.equal(payload['blocked_report'], undefined);
+  });
+
+  it('R0-5: a typed denial + BLOCKED prose surfaces a typed blocked payload', () => {
+    const payload = buildChatRunPayload(
+      {
+        status: 'completed',
+        outcome: 'NO_CHANGE_REQUIRED',
+        answer: 'Could not read a.txt.\nBLOCKED: required file is unreadable.',
+        usage: EMPTY_USAGE,
+        conversation: [],
+        toolCalls: [
+          {
+            tool: 'read_file',
+            target: 'a.txt',
+            detail: 'read failed',
+            error: 'EACCES: permission denied',
+          },
+        ],
+      },
+      { task: 'inspect', projectRoot: '/tmp/project' },
+    );
+
+    assert.equal(payload['status'], 'BLOCKED');
+    const report = payload['blocked_report'] as Record<string, unknown>;
+    assert.ok(report);
+    assert.equal(report['status'], 'BLOCKED');
+    // The controller-established origin types the report; prose does not.
+    assert.equal(report['reason_code'], 'permission_denied');
+    assert.equal(report['cause_class'], 'environment');
+    // R0-9: the top-level tuple stays coherent with the typed report.
+    assert.equal(payload['reason_code'], 'permission_denied');
+    assert.equal(payload['cause_class'], 'environment');
+    assert.equal(payload['terminal_outcome'], 'BLOCKED_POLICY');
+    const checked = report['checked'] as Array<Record<string, unknown>>;
+    assert.equal(checked.length, 1);
+    assert.equal(checked[0]!['action'], 'read_file');
+    assert.equal(checked[0]!['target'], 'a.txt');
+  });
+
+  it('successful run_command with clean exit stdout emits no blocked_report', () => {
+    const payload = buildChatRunPayload(
+      {
+        status: 'completed',
+        outcome: 'NO_CHANGE_REQUIRED',
+        answer: 'Checked the tree.\nBLOCKED: hmm.',
+        usage: EMPTY_USAGE,
+        conversation: [],
+        toolCalls: [
+          { tool: 'run_command', target: 'git status', detail: 'clean', exit_code: 0, stdout: 'clean' },
+        ] as unknown as NonNullable<ChatResult['toolCalls']>,
+      },
+      { task: 'inspect', projectRoot: '/tmp/project' },
+    );
+
+    assert.equal(payload['status'], 'ANSWER_READY');
+    assert.equal(payload['blocked_report'], undefined);
+  });
+});

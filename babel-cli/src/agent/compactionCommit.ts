@@ -2,8 +2,8 @@
  * compactionCommit.ts — H1 canonical compaction commit.
  *
  * One recoverable operation that updates:
- *   - in-memory conversation (preserves LLM summary + operational capsule)
- *   - ThreadEventLog (compaction_capsule)
+ *   - in-memory conversation (separates LLM summary from operational capsule)
+ *   - ThreadEventLog (compaction_capsule + advisory compaction_summary)
  *   - SessionEventLog (compaction_created)
  *
  * Persistence failure yields an explicit degraded/blocked status, never silent divergence.
@@ -72,6 +72,8 @@ export interface CompactionCommitInput {
   threadLog: ThreadEventLog;
   sessionLog: SessionEventLog;
   turnId: string | null;
+  /** Captured before compaction work begins; fences stale ownership on resume. */
+  ownershipGeneration?: number;
   modelId: string;
   /**
    * Optional persistence hook. Called after in-memory + event append.
@@ -80,6 +82,8 @@ export interface CompactionCommitInput {
   persist?: () => void | boolean | Promise<void | boolean>;
   /** When true, persistence failure is blocked (hard); default degraded. */
   blockOnPersistFailure?: boolean;
+  /** Ownership fence checked before any live or durable mutation. */
+  isOwnerCurrent?: () => boolean;
 }
 
 export interface CompactionCommitResult {
@@ -111,7 +115,7 @@ export function messageObservationRef(msg: ChatMessage, index: number): string {
   const h = createHash('sha256')
     .update(`${index}|${msg.role}|${msg.name ?? ''}|${msg.toolCallId ?? ''}|${msg.content}`)
     .digest('hex')
-    .slice(0, 16);
+    .toLowerCase();
   return `obs:${h}`;
 }
 
@@ -119,9 +123,16 @@ export function messageObservationRef(msg: ChatMessage, index: number): string {
  * Collect tool_call_id values still present after compaction (paired results).
  */
 export function collectPreservedToolCallIds(messages: ChatMessage[]): string[] {
+  const declared = new Set<string>();
+  for (const message of messages) {
+    const calls = (message as WorkingSetMessage).tool_calls;
+    if (message.role === 'assistant' && Array.isArray(calls)) {
+      for (const call of calls) if (call.id) declared.add(call.id);
+    }
+  }
   const ids: string[] = [];
   for (const m of messages) {
-    if (m.role === 'tool' && m.toolCallId) ids.push(m.toolCallId);
+    if (m.role === 'tool' && m.toolCallId && declared.has(m.toolCallId)) ids.push(m.toolCallId);
   }
   return ids;
 }
@@ -134,23 +145,24 @@ export function findUnpairedToolCycles(messages: ChatMessage[]): string[] {
   const assistantIds = new Set<string>();
   const resultIds = new Set<string>();
   for (const m of messages) {
-    // Assistant tool_calls may carry ids in content metadata; tool results use toolCallId.
+    const calls = (m as WorkingSetMessage).tool_calls;
+    if (m.role === 'assistant' && Array.isArray(calls)) {
+      for (const call of calls) if (call.id) assistantIds.add(call.id);
+    }
     if (m.role === 'tool' && m.toolCallId) {
       resultIds.add(m.toolCallId);
     }
   }
-  // Without structured tool_calls on assistant messages in ChatMessage, we only
-  // require that every tool result has a non-empty id (pairing within working set).
-  const unpaired: string[] = [];
-  for (const id of resultIds) {
-    if (!id) unpaired.push('(empty)');
-  }
-  void assistantIds;
-  return unpaired;
+  return [...new Set([
+    ...[...assistantIds].filter((id) => !resultIds.has(id)),
+    ...[...resultIds].filter((id) => !assistantIds.has(id)),
+  ])].sort();
 }
 
 /**
- * Assemble conversation: base system + optional LLM summary + capsule + non-system working set.
+ * Assemble conversation: controller-owned system + capsule, model summary as
+ * assistant context, and the non-system working set. The summary is never a
+ * system instruction and never part of the durable capsule.
  * Never discards a successful compaction_summary (H1 D1 fix).
  */
 export function assembleCompactedConversation(
@@ -162,27 +174,31 @@ export function assembleCompactedConversation(
   const baseSystem = systemMsgs.find(
     (m) => !m.name || !COMPACTION_SYSTEM_NAMES.has(m.name),
   );
-  const summaryFromStrategy = systemMsgs.find((m) => m.name === 'compaction_summary');
+  const summaryFromStrategy = strategyMessages.find((m) => m.name === 'compaction_summary');
   const summaryContent =
     llmSummaryContent ??
     (summaryFromStrategy ? summaryFromStrategy.content : undefined);
 
-  const nonSystem = strategyMessages.filter((m) => m.role !== 'system');
+  const nonSystem = strategyMessages.filter((m) => m.role !== 'system' && m.name !== 'compaction_summary');
 
   const out: ChatMessage[] = [];
   if (baseSystem) out.push({ ...baseSystem });
-  if (summaryContent) {
-    out.push({
-      role: 'system',
-      content: summaryContent,
-      name: 'compaction_summary',
-    });
-  }
   out.push({
     role: 'system',
     content: capsuleText,
     name: 'compaction_capsule',
+    provenance: 'controller',
+    authoritative: true,
   });
+  if (summaryContent) {
+    out.push({
+      role: 'assistant',
+      content: summaryContent,
+      name: 'compaction_summary',
+      provenance: 'model',
+      authoritative: false,
+    });
+  }
   out.push(...nonSystem.map((m) => ({ ...m })));
   return out;
 }
@@ -195,8 +211,10 @@ export function buildDurableCapsuleContent(
   capsuleText: string,
   summaryContent?: string,
 ): string {
-  if (!summaryContent) return capsuleText;
-  return `${capsuleText}\n\n--- compaction_summary ---\n${summaryContent}`;
+  // Kept as a compatibility helper for callers/tests. Model text is no longer
+  // allowed into the controller-owned durable capsule.
+  void summaryContent;
+  return capsuleText;
 }
 
 /**
@@ -206,28 +224,27 @@ export function buildRawObservationRefs(
   prior: ChatMessage[],
   afterStrategy: ChatMessage[],
 ): string[] {
-  const afterKeys = new Set(
-    afterStrategy.map(
-      (m, i) => `${m.role}|${m.name ?? ''}|${m.toolCallId ?? ''}|${m.content.slice(0, 64)}|${i}`,
-    ),
-  );
+  const retainedCounts = new Map<string, number>();
+  for (const message of afterStrategy) {
+    const key = observationIdentity(message);
+    retainedCounts.set(key, (retainedCounts.get(key) ?? 0) + 1);
+  }
   const refs: string[] = [];
   for (let i = 0; i < prior.length; i++) {
     const m = prior[i]!;
-    const key = `${m.role}|${m.name ?? ''}|${m.toolCallId ?? ''}|${m.content.slice(0, 64)}|${i}`;
-    // Prefer content-hash based membership for dropped messages
-    const contentKey = `${m.role}|${m.content}`;
-    const stillPresent = afterStrategy.some(
-      (a) => a.role === m.role && a.content === m.content && a.name === m.name,
-    );
-    if (!stillPresent && m.role !== 'system') {
+    const key = observationIdentity(m);
+    const retained = retainedCounts.get(key) ?? 0;
+    if (retained > 0) {
+      retainedCounts.set(key, retained - 1);
+    } else if (m.role !== 'system') {
       refs.push(messageObservationRef(m, i));
     }
-    void afterKeys;
-    void key;
-    void contentKey;
   }
-  return refs.slice(0, 32);
+  return refs;
+}
+
+function observationIdentity(message: ChatMessage): string {
+  return `${message.role}|${message.name ?? ''}|${message.toolCallId ?? ''}|${message.content}`;
 }
 
 /** ChatMessage plus optional native tool_calls carried by the live working set. */
@@ -242,7 +259,13 @@ type DurableToolCycle = {
 
 type RetainedAppend =
   | { kind: 'user_message'; content: string }
-  | { kind: 'assistant_message'; content: string }
+  | {
+      kind: 'assistant_message';
+      content: string;
+      name?: string;
+      provenance?: 'controller' | 'model' | 'mixed';
+      authoritative?: boolean;
+    }
   | {
       kind: 'assistant_tool_calls';
       content: string;
@@ -391,7 +414,13 @@ export function planRetainedWorkingSet(
         message.name === 'tool_calls' ||
         consecutiveTools.length > 0;
       if (!isToolAssistant) {
-        appends.push({ kind: 'assistant_message', content: message.content });
+        appends.push({
+          kind: 'assistant_message',
+          content: message.content,
+          ...(message.name !== undefined ? { name: message.name } : {}),
+          ...(message.provenance !== undefined ? { provenance: message.provenance } : {}),
+          ...(message.authoritative !== undefined ? { authoritative: message.authoritative } : {}),
+        });
         continue;
       }
 
@@ -409,23 +438,51 @@ export function planRetainedWorkingSet(
         ? cycle.assistant.tool_calls.filter((call) => {
             if (batchIds.length === 0) return !usedCallIds.has(call.id);
             return batchIds.includes(call.id) && !usedCallIds.has(call.id);
-          })
+        })
         : declaredCalls.filter((call) => !usedCallIds.has(call.id));
+      const resultById = new Map<string, WorkingSetMessage>();
+      for (const tool of consecutiveTools) {
+        if (tool.toolCallId) resultById.set(tool.toolCallId, tool);
+      }
+      // A retained assistant tool call is valid only when its result is also
+      // durable or still present in the working set. Never fabricate an empty
+      // result: an orphan call would become executable protocol history.
+      const completeToolCalls = toolCalls.filter((call) =>
+        resultById.has(call.id) ||
+        Boolean(lookupToolResult(threadLog.events, call.id)) ||
+        Boolean(cycle?.results.some((result) => result.tool_call_id === call.id)),
+      );
+      if (completeToolCalls.length === 0) {
+        appends.push({
+          kind: 'assistant_message',
+          content: message.content,
+          ...(message.name !== undefined ? { name: message.name } : {}),
+          ...(message.provenance !== undefined ? { provenance: message.provenance } : {}),
+          ...(message.authoritative !== undefined ? { authoritative: message.authoritative } : {}),
+        });
+        // The assistant declaration is incomplete.  Drop its adjacent tool
+        // results as well; retaining an orphan result would rebuild invalid
+        // protocol history that the provider could treat as executable state.
+        skipFollowingTools = consecutiveTools.length;
+        continue;
+      }
       if (toolCalls.length === 0) {
-        appends.push({ kind: 'assistant_message', content: message.content });
+        appends.push({
+          kind: 'assistant_message',
+          content: message.content,
+          ...(message.name !== undefined ? { name: message.name } : {}),
+          ...(message.provenance !== undefined ? { provenance: message.provenance } : {}),
+          ...(message.authoritative !== undefined ? { authoritative: message.authoritative } : {}),
+        });
         continue;
       }
       if (cycle) usedAssistantEventIds.add(cycle.assistant.event_id);
       appends.push({
         kind: 'assistant_tool_calls',
         content: (cycle?.assistant.content || message.content || 'Using tools…'),
-        tool_calls: toolCalls,
+        tool_calls: completeToolCalls,
       });
-      const resultById = new Map<string, WorkingSetMessage>();
-      for (const tool of consecutiveTools) {
-        if (tool.toolCallId) resultById.set(tool.toolCallId, tool);
-      }
-      for (const call of toolCalls) {
+      for (const call of completeToolCalls) {
         if (usedCallIds.has(call.id)) continue;
         usedCallIds.add(call.id);
         const kept = resultById.get(call.id);
@@ -448,18 +505,9 @@ export function planRetainedWorkingSet(
       continue;
     }
     if (message.role === 'tool') {
-      const toolCallId = message.toolCallId;
-      if (!toolCallId || usedCallIds.has(toolCallId)) continue;
-      usedCallIds.add(toolCallId);
-      const durable = lookupToolResult(threadLog.events, toolCallId);
-      appends.push({
-        kind: 'tool_result',
-        tool_call_id: toolCallId,
-        tool_name: message.toolName ?? durable?.tool_name ?? message.name ?? 'tool',
-        content: message.content,
-        ...(durable?.exit_code !== undefined ? { exit_code: durable.exit_code } : {}),
-      });
-      preservedToolCallIds.push(toolCallId);
+      // A standalone tool result has no retained assistant declaration in
+      // this pass, so it cannot be restored without inventing a call cycle.
+      continue;
     }
   }
 
@@ -470,38 +518,51 @@ function appendRetainedWorkingSet(
   threadLog: ThreadEventLog,
   turnId: string,
   plan: RetainedWorkingSetPlan,
-): void {
+): string[] {
+  const eventIds: string[] = [];
   for (const item of plan.appends) {
     if (item.kind === 'user_message') {
-      appendThreadEvent(threadLog, {
+      eventIds.push(appendThreadEvent(threadLog, {
         kind: 'user_message',
         turn_id: turnId,
         content: item.content,
-      });
+      }).event_id);
     } else if (item.kind === 'assistant_message') {
-      appendThreadEvent(threadLog, {
+      eventIds.push(appendThreadEvent(threadLog, {
         kind: 'assistant_message',
         turn_id: turnId,
         content: item.content,
-      });
+        ...(item.name !== undefined ? { name: item.name } : {}),
+        ...(item.provenance !== undefined ? { provenance: item.provenance } : {}),
+        ...(item.authoritative !== undefined ? { authoritative: item.authoritative } : {}),
+      }).event_id);
     } else if (item.kind === 'assistant_tool_calls') {
-      appendThreadEvent(threadLog, {
+      eventIds.push(appendThreadEvent(threadLog, {
         kind: 'assistant_tool_calls',
         turn_id: turnId,
         content: item.content,
         tool_calls: item.tool_calls,
-      });
+      }).event_id);
     } else {
-      appendThreadEvent(threadLog, {
+      eventIds.push(appendThreadEvent(threadLog, {
         kind: 'tool_result',
         turn_id: turnId,
         tool_call_id: item.tool_call_id,
         tool_name: item.tool_name,
         content: item.content,
         ...(item.exit_code !== undefined ? { exit_code: item.exit_code } : {}),
-      });
+      }).event_id);
     }
   }
+  return eventIds;
+}
+
+function ownershipGenerationForTurn(threadLog: ThreadEventLog, turnId: string): number | undefined {
+  const event = threadLog.events.find(
+    (candidate): candidate is Extract<ThreadEvent, { kind: 'turn_started' }> =>
+      candidate.kind === 'turn_started' && candidate.turn_id === turnId,
+  );
+  return event?.ownership_generation;
 }
 
 /**
@@ -510,6 +571,26 @@ function appendRetainedWorkingSet(
 export async function commitCompaction(
   input: CompactionCommitInput,
 ): Promise<CompactionCommitResult> {
+  if (input.isOwnerCurrent && !input.isOwnerCurrent()) {
+    return {
+      status: 'noop',
+      conversation: input.priorConversation.map((message) => ({ ...message })),
+      strategy: input.strategy,
+      tokensBefore: input.tokensBefore,
+      tokensAfter: input.tokensAfter,
+      budget: buildContextBudgetSnapshot({
+        nextRequestTokens: estimateTokens(input.priorConversation),
+        activeWindowTokens: estimateTokens(input.priorConversation),
+        canonicalStateTokens: 0,
+        contextWindow: resolveProviderCapabilities(input.modelId).contextWindow,
+        maxOutputTokens: resolveProviderCapabilities(input.modelId).maxOutputTokens,
+      }),
+      capsule: buildCompactionCapsule({ task: input.operational.task, rawObservationRefs: [] }),
+      capsuleText: '',
+      preservedToolCallIds: collectPreservedToolCallIds(input.priorConversation),
+      evidenceRefs: [],
+    };
+  }
   const summaryMsg = input.strategyMessages.find((m) => m.name === 'compaction_summary');
   const summaryContent = summaryMsg?.content;
 
@@ -591,29 +672,106 @@ export async function commitCompaction(
   const turnId = input.turnId ?? 'compaction';
   let threadEventId: string | undefined;
   let sessionEventId: string | undefined;
-  const threadEventCountBefore = input.threadLog.events.length;
-  const threadNextSeqBefore = input.threadLog.nextSeq;
+  const ownedThreadEventIds: string[] = [];
+  const ownedSessionEventIds: string[] = [];
+  const rollbackLocalEvents = (): void => {
+    const ownedThreadIds = new Set(ownedThreadEventIds);
+    const ownedSessionIds = new Set(ownedSessionEventIds);
+    input.threadLog.events.splice(
+      0,
+      input.threadLog.events.length,
+      ...input.threadLog.events.filter((event) => !ownedThreadIds.has(event.event_id)),
+    );
+    input.sessionLog.events.splice(
+      0,
+      input.sessionLog.events.length,
+      ...input.sessionLog.events.filter((event) => !ownedSessionIds.has(event.event_id)),
+    );
+    // Events are filtered by owner id rather than by position, so a removal can
+    // leave sequence gaps. Both logs are strictly positional (thread seq and
+    // item_id, and session seq, must equal the array index; nextSeq must equal
+    // events.length), and the pre-refactor rollback restored these cursors.
+    // Renumber the retained events and reset the cursors so the rolled-back log
+    // stays parseable before any subsequent append, persist, or resume.
+    for (let index = 0; index < input.threadLog.events.length; index++) {
+      const event = input.threadLog.events[index] as { seq: number; item_id: string; turn_id: string };
+      event.seq = index;
+      event.item_id = `${event.turn_id}:${index}`;
+    }
+    input.threadLog.nextSeq = input.threadLog.events.length;
+    for (let index = 0; index < input.sessionLog.events.length; index++) {
+      input.sessionLog.events[index]!.seq = index;
+    }
+    input.sessionLog.nextSeq = input.sessionLog.events.length;
+    if (input.sessionLog.flushedThroughSeq > input.sessionLog.events.length - 1) {
+      input.sessionLog.flushedThroughSeq = input.sessionLog.events.length - 1;
+    }
+  };
+  const rollbackAndPersist = async (): Promise<boolean> => {
+    rollbackLocalEvents();
+    if (!input.persist) return true;
+    try {
+      return (await input.persist()) !== false;
+    } catch {
+      return false;
+    }
+  };
 
   try {
-    recordCompactionStarted(input.sessionLog, input.turnId, {
+    if (input.isOwnerCurrent && !input.isOwnerCurrent()) {
+      return {
+        status: 'noop',
+        conversation: input.priorConversation.map((message) => ({ ...message })),
+        strategy: input.strategy,
+        tokensBefore: input.tokensBefore,
+        tokensAfter,
+        budget,
+        capsule,
+        capsuleText: durableContent,
+        preservedToolCallIds,
+        evidenceRefs: rawRefs,
+      };
+    }
+    ownedSessionEventIds.push(recordCompactionStarted(input.sessionLog, input.turnId, {
       operation_id: operationId,
       strategy: input.strategy,
       ...replacementBoundary,
-    });
-    recordCompactionSummary(input.sessionLog, input.turnId, {
+    }).event_id);
+    ownedSessionEventIds.push(recordCompactionSummary(input.sessionLog, input.turnId, {
       operation_id: operationId,
       capsule_digest: capsuleDigest,
       raw_observation_refs: rawRefs,
       preserved_tool_call_ids: preservedToolCallIds,
-    });
+    }).event_id);
     const threadEv = appendThreadEvent(input.threadLog, {
       kind: 'compaction_capsule',
       turn_id: turnId,
       content: durableContent,
       preserved_tool_call_ids: preservedToolCallIds,
+      raw_observation_refs: rawRefs,
+      ...(input.ownershipGeneration !== undefined
+        ? { ownership_generation: input.ownershipGeneration }
+        : ownershipGenerationForTurn(input.threadLog, turnId) !== undefined
+          ? { ownership_generation: ownershipGenerationForTurn(input.threadLog, turnId) }
+          : {}),
     });
     threadEventId = threadEv.event_id;
-    appendRetainedWorkingSet(input.threadLog, turnId, retained);
+    ownedThreadEventIds.push(threadEv.event_id);
+    if (summaryContent) {
+      ownedThreadEventIds.push(appendThreadEvent(input.threadLog, {
+        kind: 'compaction_summary',
+        turn_id: turnId,
+        content: summaryContent,
+        provenance: 'model',
+        authoritative: false,
+        ...(input.ownershipGeneration !== undefined
+          ? { ownership_generation: input.ownershipGeneration }
+          : ownershipGenerationForTurn(input.threadLog, turnId) !== undefined
+            ? { ownership_generation: ownershipGenerationForTurn(input.threadLog, turnId) }
+            : {}),
+      }).event_id);
+    }
+    ownedThreadEventIds.push(...appendRetainedWorkingSet(input.threadLog, turnId, retained));
 
     const sessionEv = recordCompactionCommitted(input.sessionLog, input.turnId, {
       operation_id: operationId,
@@ -623,18 +781,18 @@ export async function commitCompaction(
       preserved_tool_call_ids: preservedToolCallIds,
     });
     sessionEventId = sessionEv.event_id;
+    ownedSessionEventIds.push(sessionEv.event_id);
     // Retain the legacy boundary for current replay/live-session consumers.
-    recordCompactionCreated(input.sessionLog, input.turnId, {
+    ownedSessionEventIds.push(recordCompactionCreated(input.sessionLog, input.turnId, {
       preserved_tool_call_ids: preservedToolCallIds,
       content_preview: durableContent.slice(0, 240),
       strategy: input.strategy,
       tokens_before: input.tokensBefore,
       tokens_after: tokensAfter,
       status: 'committed',
-    });
+    }).event_id);
   } catch (err) {
-    input.threadLog.events.splice(threadEventCountBefore);
-    input.threadLog.nextSeq = threadNextSeqBefore;
+    rollbackLocalEvents();
     const msg = err instanceof Error ? err.message : String(err);
     return {
       status: input.blockOnPersistFailure ? 'blocked_persistence' : 'degraded_persistence',
@@ -656,10 +814,26 @@ export async function commitCompaction(
 
   if (input.persist) {
     try {
+      if (input.isOwnerCurrent && !input.isOwnerCurrent()) {
+        rollbackLocalEvents();
+        return {
+          status: 'noop',
+          conversation: input.priorConversation.map((message) => ({ ...message })),
+          strategy: input.strategy,
+          tokensBefore: input.tokensBefore,
+          tokensAfter,
+          budget,
+          capsule,
+          capsuleText: durableContent,
+          preservedToolCallIds,
+          evidenceRefs: rawRefs,
+        };
+      }
       const ok = await input.persist();
       if (ok === false) {
+        const rollbackPersisted = await rollbackAndPersist();
         return {
-          status: input.blockOnPersistFailure
+          status: !rollbackPersisted || input.blockOnPersistFailure
             ? 'blocked_persistence'
             : 'degraded_persistence',
           conversation,
@@ -676,13 +850,46 @@ export async function commitCompaction(
             ...(threadEventId ? [threadEventId] : []),
             ...(sessionEventId ? [sessionEventId] : []),
           ],
-          error: 'persist_returned_false',
+          error: rollbackPersisted
+            ? 'persist_returned_false'
+            : 'persist_returned_false_and_rollback_failed',
+        };
+      }
+      if (input.isOwnerCurrent && !input.isOwnerCurrent()) {
+        const rollbackPersisted = await rollbackAndPersist();
+        if (!rollbackPersisted) {
+          return {
+            status: 'blocked_persistence',
+            conversation,
+            strategy: input.strategy,
+            tokensBefore: input.tokensBefore,
+            tokensAfter,
+            budget,
+            capsule,
+            capsuleText: durableContent,
+            preservedToolCallIds,
+            evidenceRefs: rawRefs,
+            error: 'stale_compaction_rollback_persist_failed',
+          };
+        }
+        return {
+          status: 'noop',
+          conversation: input.priorConversation.map((message) => ({ ...message })),
+          strategy: input.strategy,
+          tokensBefore: input.tokensBefore,
+          tokensAfter,
+          budget,
+          capsule,
+          capsuleText: durableContent,
+          preservedToolCallIds,
+          evidenceRefs: rawRefs,
         };
       }
     } catch (err) {
+      const rollbackPersisted = await rollbackAndPersist();
       const msg = err instanceof Error ? err.message : String(err);
       return {
-        status: input.blockOnPersistFailure
+        status: !rollbackPersisted || input.blockOnPersistFailure
           ? 'blocked_persistence'
           : 'degraded_persistence',
         conversation,
@@ -699,7 +906,9 @@ export async function commitCompaction(
           ...(threadEventId ? [threadEventId] : []),
           ...(sessionEventId ? [sessionEventId] : []),
         ],
-        error: `persist_failed: ${msg}`,
+          error: rollbackPersisted
+            ? `persist_failed: ${msg}`
+            : `persist_failed_and_rollback_failed: ${msg}`,
       };
     }
   }
@@ -778,6 +987,9 @@ export interface ChatEngineCompactionHost {
   turnId: string | null;
   /** Provider lifecycle callbacks for the LLM summarizer inference. */
   providerCallbacks?: RunnerCallbacks;
+  onCompactionUsage?: (usage: {
+    inferenceId: string; modelId: string; inputTokens: number | null; outputTokens: number | null;
+  }) => void;
   shouldUseTextTools: () => boolean;
   compactHeuristic: () => void;
   checkpoint: () => Promise<void>;
@@ -792,6 +1004,7 @@ export interface ChatEngineCompactionHost {
   estimateTokens: (messages: ChatMessage[]) => number;
   /** Admission recovery may request one bounded compaction even before the normal token trigger. */
   forceCompaction?: boolean;
+  isOwnerCurrent?: () => boolean;
 }
 
 export interface ChatEngineCompactInfo {
@@ -838,12 +1051,18 @@ export async function runChatEngineCompaction(
     host.forceCompaction === true ||
     tokenTriggered ||
     tokenEstimate > host.limits.maxEstimatedTokens - reserve;
+  const ownerIsCurrent = (): boolean => !host.isOwnerCurrent || host.isOwnerCurrent();
   const applyHeuristic = async (): Promise<void> => {
+    if (!ownerIsCurrent()) return;
     const prior = [...host.conversation]
     const priorFingerprint = JSON.stringify(host.conversation);
     host.compactHeuristic();
     try {
       await host.checkpoint()
+      if (!ownerIsCurrent()) {
+        host.conversation = prior;
+        return;
+      }
       changed = JSON.stringify(host.conversation) !== priorFingerprint;
       if (changed) mode = 'heuristic';
     } catch (error) {
@@ -856,6 +1075,7 @@ export async function runChatEngineCompaction(
 
   if (host.compactionManager) {
     if (compactionNeeded) {
+      if (!ownerIsCurrent()) return null;
       try {
         const exactLockedGlm =
           host.modelPolicy?.providerModelId === LIVE_OPENROUTER_MODEL_ID;
@@ -874,13 +1094,10 @@ export async function runChatEngineCompaction(
           maxTokens: host.limits.maxEstimatedTokens,
           signal: host.abortSignal,
           ...(host.providerCallbacks ? { callbacks: host.providerCallbacks } : {}),
+          ...(host.onCompactionUsage ? { onUsageRecorded: host.onCompactionUsage } : {}),
         });
+        if (!ownerIsCurrent()) return null;
         if (mgr.changed) {
-          const threadEventCountBefore = host.threadLog.events.length;
-          const threadNextSeqBefore = host.threadLog.nextSeq;
-          const sessionEventCountBefore = host.sessionLog.events.length;
-          const sessionNextSeqBefore = host.sessionLog.nextSeq;
-          const sessionFlushedBefore = host.sessionLog.flushedThroughSeq;
           const boundRevStr = host.lastVerifierReceipt?.boundRevision?.compositeTreeHash
             ? String(host.lastVerifierReceipt.boundRevision.compositeTreeHash)
             : '';
@@ -920,17 +1137,15 @@ export async function runChatEngineCompaction(
               return true;
             },
             blockOnPersistFailure: true,
+            isOwnerCurrent: ownerIsCurrent,
           });
           if (commit.status !== 'committed') {
-            host.threadLog.events.splice(threadEventCountBefore)
-            host.threadLog.nextSeq = threadNextSeqBefore
-            host.sessionLog.events.splice(sessionEventCountBefore)
-            host.sessionLog.nextSeq = sessionNextSeqBefore
-            host.sessionLog.flushedThroughSeq = sessionFlushedBefore
+            if (commit.status === 'noop') return null;
             throw new CompactionPersistenceError(
               commit.error ?? 'Compaction persistence failed',
             )
           }
+          if (!ownerIsCurrent()) return null;
           host.conversation = commit.conversation;
           mode = strategyToCompactMode(commit.strategy);
           changed = true;
@@ -941,6 +1156,7 @@ export async function runChatEngineCompaction(
       }
     }
   } else if (compactionNeeded) {
+    if (!ownerIsCurrent()) return null;
     await applyHeuristic();
   }
 

@@ -5,7 +5,7 @@
  * (status bar, review card, transcript cells, telemetry) are projected.
  */
 
-import type { TerminalOutcome } from '../../schemas/agentContracts.js';
+import type { TerminalOutcome, TerminalReasonCode } from '../../schemas/agentContracts.js';
 import type { VerifierReceipt } from '../../agent/completionGatePolicy.js';
 import type { SessionEvent } from '../../agent/sessionEvents.js';
 import {
@@ -122,6 +122,9 @@ export interface TurnTerminalResolvedEvent {
   outcome?: TerminalOutcome;
   status: 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed';
   finalAnswer: string;
+  /** D03: structured terminal reason carried through projection. */
+  reason_code?: TerminalReasonCode;
+  cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
 }
 
 export interface ModelSwitchedEvent {
@@ -237,6 +240,8 @@ export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): Canonical
         ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
         status: terminal.status,
         finalAnswer: ev.reason,
+        ...(ev.reason_code !== undefined ? { reason_code: ev.reason_code } : {}),
+        ...(ev.cause_class !== undefined ? { cause_class: ev.cause_class } : {}),
       };
     }
     case 'turn_ended': {
@@ -255,6 +260,8 @@ export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): Canonical
         ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
         status: terminal.status,
         finalAnswer: '',
+        ...(ev.reason_code !== undefined ? { reason_code: ev.reason_code } : {}),
+        ...(ev.cause_class !== undefined ? { cause_class: ev.cause_class } : {}),
       };
     }
     default:

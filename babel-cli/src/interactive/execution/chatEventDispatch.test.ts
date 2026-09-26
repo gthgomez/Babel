@@ -175,4 +175,52 @@ describe('dispatchChatEvent cancelled telemetry threading', () => {
     assert.equal(result.outcome, 'AGENT_FAILURE');
     assert.equal(result.status, 'failed');
   });
+
+  test('R0-9: a typed failed reason drives a matching outcome, never a mismatched one', () => {
+    // Reason typed, error text unclassifiable -> the reason supplies the outcome.
+    const unclassified = dispatchChatEvent(
+      { type: 'failed', error: 'opaque transport teardown', reason_code: 'provider_failure' },
+      {},
+    );
+    assert.ok(unclassified);
+    assert.equal(unclassified.reason_code, 'provider_failure');
+    assert.equal(unclassified.outcome, 'INFRA_FAILURE');
+
+    // Reason typed, error text *classifies differently* -> the reason wins.
+    const conflicting = dispatchChatEvent(
+      { type: 'failed', error: 'permission denied by policy', reason_code: 'provider_failure' },
+      {},
+    );
+    assert.ok(conflicting);
+    assert.equal(conflicting.reason_code, 'provider_failure');
+    assert.equal(conflicting.outcome, 'INFRA_FAILURE');
+    assert.equal(conflicting.status, 'failed');
+  });
+
+  test('R0-9: terminalResultFromDoneEvent derives the outcome from a typed reason', () => {
+    const result = terminalResultFromDoneEvent(
+      'transport failed',
+      EMPTY_USAGE,
+      undefined,
+      undefined,
+      null,
+      null,
+      { reason_code: 'provider_failure' },
+    );
+    assert.equal(result.outcome, 'INFRA_FAILURE');
+    assert.equal(result.status, 'failed');
+  });
+
+  test('R0-9: verification_failed keeps its UNVERIFIED_PATCH pairing on the done path', () => {
+    const result = terminalResultFromDoneEvent(
+      'changed but the verifier is red',
+      EMPTY_USAGE,
+      undefined,
+      undefined,
+      { command: 'npm test', exit_code: 1, summary: 'fail' },
+      null,
+      { outcome: 'UNVERIFIED_PATCH', reason_code: 'verification_failed' },
+    );
+    assert.equal(result.outcome, 'UNVERIFIED_PATCH');
+  });
 });

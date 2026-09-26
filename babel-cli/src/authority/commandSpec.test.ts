@@ -703,6 +703,14 @@ const HOST_PROCESS_SURFACE = new Set([
   'services/outcomeCollector.ts',
   'agent/backgroundShell.ts',
   'agent/breakerContract.ts',
+  // Recovery identity binds the live worktree using fixed-argument Git queries.
+  'agent/codingLoop/recoveryIdentity.ts',
+  // Process-tree termination uses the fixed System32 taskkill executable on Windows.
+  'processTree.ts',
+  // Admission state applies and verifies owner-only Windows DACLs via System32 tools.
+  'runtime/admission.ts',
+  // Review workers are contained by the watchdog / Windows Job Object helper.
+  'services/reviewProcessContainment.ts',
   'bridge/workspaceChanges.ts',
   'eval/canary/liveCell.ts',
   'eval/cleanRoomGrade.ts',
@@ -738,7 +746,6 @@ const HOST_PROCESS_SURFACE = new Set([
   'stages/runtimePreflight.ts',
   'stages/runtimeVerificationRunner.ts',
   'utils/gitExec.ts',
-  'agent/agentRunCoordinator.ts',
   'services/gitMutations.ts',
   'services/governanceBenchmark.ts',
   'services/knowledgeGraphIndexer.ts',

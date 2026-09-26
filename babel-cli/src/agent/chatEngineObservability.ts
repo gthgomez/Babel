@@ -11,7 +11,7 @@ import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OllamaApiRunner } from '../runners/ollamaApi.js';
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { globalCostTracker, type SessionUsageSummary } from '../services/costTracker.js';
-import type { BlockedReport, TerminalOutcome } from '../schemas/agentContracts.js';
+import type { BlockedReport, TerminalOutcome, TerminalReasonCode } from '../schemas/agentContracts.js';
 import type {
   ChatEngineLimits,
   ChatEngineRunAllowanceReport,
@@ -169,6 +169,10 @@ export type StreamDoneEvent = {
   turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
   costBudget?: ChatEngineLimits['costBudget'];
   runAllowance?: ChatEngineRunAllowanceReport;
+  /** D03: structured terminal reason code (UI authority; prose stays diagnostic). */
+  reason_code?: TerminalReasonCode;
+  /** D03: separate model-vs-harness cause axis; null = not established. */
+  cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
 };
 
 export type StreamFailedEvent = {
@@ -182,6 +186,10 @@ export type StreamFailedEvent = {
   outcome?: TerminalOutcome;
   costBudget?: ChatEngineLimits['costBudget'];
   runAllowance?: ChatEngineRunAllowanceReport;
+  /** D03: structured terminal reason code. */
+  reason_code?: TerminalReasonCode;
+  /** D03: separate model-vs-harness cause axis; null = not established. */
+  cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
 };
 
 export interface ObservabilityHandles {
@@ -280,6 +288,8 @@ export function buildStreamDone(
     turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
     costBudget?: ChatEngineLimits['costBudget'];
     runAllowance?: ChatEngineRunAllowanceReport;
+    /** D03: structured terminal reason. */
+    reason?: import('./chatTerminalReason.js').TerminalReason;
   },
 ): StreamDoneEvent {
   if (!extra?.outcome) {
@@ -312,6 +322,10 @@ export function buildStreamDone(
   if (extra.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
   if (extra.costBudget) event.costBudget = extra.costBudget;
   if (extra.runAllowance) event.runAllowance = extra.runAllowance;
+  if (extra.reason) {
+    event.reason_code = extra.reason.code;
+    event.cause_class = extra.reason.cause_class;
+  }
   return event;
 }
 
@@ -324,6 +338,8 @@ export function buildStreamFailed(
     status?: ChatStatus;
     costBudget?: ChatEngineLimits['costBudget'];
     runAllowance?: ChatEngineRunAllowanceReport;
+    /** D03: structured terminal reason. */
+    reason?: import('./chatTerminalReason.js').TerminalReason;
   },
 ): StreamFailedEvent {
   const terminal = projectChatTerminal({
@@ -341,6 +357,10 @@ export function buildStreamFailed(
   if (extra?.outcome) event.outcome = extra.outcome;
   if (extra?.costBudget) event.costBudget = extra.costBudget;
   if (extra?.runAllowance) event.runAllowance = extra.runAllowance;
+  if (extra?.reason) {
+    event.reason_code = extra.reason.code;
+    event.cause_class = extra.reason.cause_class;
+  }
   return event;
 }
 
@@ -398,13 +418,7 @@ export function pushRoutingReceiptFromMetadata(
   phase: ChatPhase,
   metadata: RoutingReceiptMetadata,
 ): void {
-  if (
-    !metadata.provider_model_id ||
-    metadata.prompt_tokens == null ||
-    metadata.completion_tokens == null
-  ) {
-    return;
-  }
+  if (!metadata.provider_model_id) return;
 
   const requested = metadata.requested_reasoning_effort ?? null;
   const normalized = metadata.normalized_reasoning_effort ?? null;
@@ -417,15 +431,16 @@ export function pushRoutingReceiptFromMetadata(
     observed,
   });
   const effort_aliased = deriveEffortAliased(requested, sent, normalized);
-  const cost_basis = mapCostPrecisionToBasis(metadata.cost_precision);
+  const cost_basis = metadata.estimated_cost_usd === null || metadata.estimated_cost_usd === undefined
+    ? 'unknown' : mapCostPrecisionToBasis(metadata.cost_precision);
 
   const receipt: TurnRoutingReceipt = {
     turn,
     phase,
     model: metadata.provider_model_id,
-    input_tokens: metadata.prompt_tokens,
-    output_tokens: metadata.completion_tokens,
-    cost_usd: metadata.estimated_cost_usd ?? 0,
+    input_tokens: metadata.prompt_tokens ?? null,
+    output_tokens: metadata.completion_tokens ?? null,
+    cost_usd: metadata.estimated_cost_usd ?? null,
     cost_basis,
     effective_source,
     effort_aliased,
@@ -798,13 +813,46 @@ export function isVerifierCollectErrorText(text: string | null | undefined): boo
 
 /** Pure function: map final session state to honest TerminalOutcome.
  *  Extracted from ChatEngine.buildResult to keep chatEngine.ts under size ratchet. */
+/**
+ * D03/F4: deterministic blocked outcome for a typed reason code. The typed
+ * reason is authoritative across every code; free-text prose may not override
+ * it. Returns undefined only when no typed reason exists (legacy reports) or
+ * the typed reason is `unknown`.
+ */
+export function outcomeFromReasonCode(
+  code: TerminalReasonCode | undefined,
+): TerminalOutcome | undefined {
+  switch (code) {
+    case 'recovery_exhausted':
+    case 'localization_exhausted':
+    case 'permission_denied':
+    case 'unsupported_operation':
+      return 'BLOCKED_POLICY';
+    case 'external_dependency':
+      return 'BLOCKED_EXTERNAL';
+    case 'provider_failure':
+      return 'INFRA_FAILURE';
+    case 'verification_failed':
+      return 'AGENT_FAILURE';
+    case 'budget_exhausted':
+      return 'BUDGET_EXHAUSTED';
+    case 'cancelled':
+      return 'CANCELLED';
+    default:
+      return undefined;
+  }
+}
+
 export function computeTerminalOutcome(input: {
   /** Explicit read-only execution, not an inference from an empty patch. */
   readOnly?: boolean;
   finalStatus: string;
   budgetExceeded: boolean;
   lastVerifierReceipt?: { exit_code: number; command?: string; summary?: string } | null | undefined;
-  blockedReport?: { reason: string; missing?: string } | null | undefined;
+  blockedReport?:
+    | { reason: string; missing?: string; reason_code?: TerminalReasonCode | undefined }
+    | null
+    | undefined;
   /** W1 C: production writes present — collect fail is failed-with-evidence, not pure env. */
   hasAnyWrites?: boolean;
 }): TerminalOutcome {
@@ -825,6 +873,16 @@ export function computeTerminalOutcome(input: {
         ? 'VERIFIED_COMPLETE'
         : 'UNVERIFIED_PATCH';
     case 'blocked': {
+      // D03/F4: a typed reason is authoritative for the blocked outcome across
+      // every code — diagnostic prose may not override it. An explicit
+      // `unknown` means the harness did not establish a cause, so we also skip
+      // the legacy prose heuristics rather than fabricate policy/external blame.
+      const typedBlocked = outcomeFromReasonCode(input.blockedReport?.reason_code);
+      if (typedBlocked) return typedBlocked;
+      // An explicit `unknown` is a truthful "cause not established": do not
+      // fabricate external OR policy blame. A block with no established cause
+      // needs a human decision.
+      if (input.blockedReport?.reason_code === 'unknown') return 'NEEDS_HUMAN_DECISION';
       const reason = input.blockedReport?.reason ?? '';
       const missing = input.blockedReport?.missing ?? '';
       const envBlob = `${reason}\n${missing}`;

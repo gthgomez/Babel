@@ -17,7 +17,7 @@
  * | ask_approval     | (none)                              | terminal — loop should pause for user approval |
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { type FileLockContext } from '../services/editReliability.js';
 import { WorkspaceTransactionManager, type MutationBatchReceipt } from '../services/workspaceTransactions.js';
@@ -183,13 +183,13 @@ export function targetPathFromAction(action: AgentAction): string | undefined {
 
 /** Stable idempotency key for a mutating action when caller does not supply one. */
 export function defaultIdempotencyKeyForAction(action: AgentAction): string | undefined {
-  if (action.type === 'write_file') return `write_file:${action.path}`;
-  if (action.type === 'apply_patch') {
-    const h = action.patch.length;
-    return `apply_patch:len=${h}`;
+  const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+  if (action.type === 'write_file') {
+    return `write_file:v2:${digest(JSON.stringify([action.path, action.content]))}`;
   }
-  if (action.type === 'run_command') return `run_command:${action.command.slice(0, 120)}`;
-  if (action.type === 'test_run') return `test_run:${action.command.slice(0, 120)}`;
+  if (action.type === 'apply_patch') return `apply_patch:v2:${digest(action.patch)}`;
+  if (action.type === 'run_command') return `run_command:v2:${digest(action.command)}`;
+  if (action.type === 'test_run') return `test_run:v2:${digest(action.command)}`;
   return undefined;
 }
 

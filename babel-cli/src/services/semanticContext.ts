@@ -136,7 +136,7 @@ function extractTaskKeywords(task: string): string[] {
  */
 export function buildSemanticContext(
   task: string,
-  _projectRoot?: string,
+  projectRoot?: string,
   maxHits = 5,
 ): SemanticContextResult {
   const keywords = extractTaskKeywords(task);
@@ -147,6 +147,9 @@ export function buildSemanticContext(
 
   try {
     const indexer = globalIndexer;
+    if (!indexer.isReadyForRoot(projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd())) {
+      return { lines: [], hits: [], indexAvailable: false };
+    }
     if (!indexer || indexer.count === 0) {
       return { lines: [], hits: [], indexAvailable: indexer !== undefined };
     }

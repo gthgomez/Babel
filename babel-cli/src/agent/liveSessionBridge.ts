@@ -20,7 +20,9 @@ import { join } from 'node:path';
 import {
   buildInstructionManifestV1,
   validateInstructionManifestV1,
+  type IdentityDeliveredFragment,
   type InstructionManifestV1,
+  type InstructionPrecedence,
 } from './instructionManifest.js';
 import {
   projectLiveSession,
@@ -197,27 +199,65 @@ function writeJsonAtomic(path: string, value: unknown): void {
 /**
  * Resolve InstructionManifestV1 + frozen TaskContractV1 for a Chat session.
  */
+function identityFragmentPrecedence(fragment: IdentityDeliveredFragment): InstructionPrecedence {
+  switch (fragment.id) {
+    case 'session:claude':
+    case 'session:project_context':
+    case 'session:repo_map':
+      return 'project';
+    default:
+      return 'identity';
+  }
+}
+
 export function resolveLiveSessionAuthority(input: {
   mode: BabelMode;
   projectRoot: string;
+  /**
+   * Trusted instruction root. When set, compiler selection is scoped to it so
+   * candidate-controlled target instructions do not appear as manifest
+   * authority (matches the delivered stack in chatCore).
+   */
+  instructionRoot?: string;
   task: string;
   taskClass?: string;
   modelId?: string;
   verifierRequirements?: string[];
   maxTurns?: number;
   protectedPaths?: string[];
+  /**
+   * Delivered session-identity fragments (from the identity reader). When
+   * present they are recorded in the instruction manifest with their source
+   * path, tier, delivered digest, and truncation so the manifest reflects
+   * instructions actually delivered to the provider.
+   */
+  systemContextFragments?: readonly IdentityDeliveredFragment[];
 }): LiveSessionAuthority {
   const chatStack = compileChatStack({
-    projectRoot: input.projectRoot,
+    projectRoot: input.instructionRoot ?? input.projectRoot,
     task: input.task,
     ...(input.modelId ? { modelId: input.modelId } : {}),
   });
+
+  const deliveredIdentityRules = (input.systemContextFragments ?? []).map((fragment) => ({
+    rule_id: fragment.id,
+    source: fragment.source,
+    content: fragment.delivered_content,
+    precedence: identityFragmentPrecedence(fragment),
+    scope: 'session' as const,
+    selection_reason: `system_context:${fragment.tier}`,
+    policy_class: 'advisory' as const,
+    ...(fragment.source_digest ? { source_digest: fragment.source_digest } : {}),
+    delivered_content_digest: fragment.delivered_content_digest,
+    included_chars: fragment.delivered_chars,
+  }));
 
   const instructionManifest = buildInstructionManifestV1({
     mode: input.mode,
     ...(input.taskClass ? { taskClass: input.taskClass } : {}),
     chatStack,
     inlineRules: [
+      ...deliveredIdentityRules,
       {
         rule_id: 'safety:workspace-scope',
         source: 'chat-safety-adapter',
@@ -384,6 +424,7 @@ export function projectFromDurableSession(input: {
     infra_retries?: number;
   };
   workspaceRevision?: string;
+  authorizedObservationIds?: readonly string[];
 }): LiveSessionV1 {
   return projectLiveSession({
     sessionLog: input.sessionLog,
@@ -394,6 +435,9 @@ export function projectFromDurableSession(input: {
     ...(input.budgetCeilings ? { budgetCeilings: input.budgetCeilings } : {}),
     ...(input.workspaceRevision
       ? { workspaceRevision: input.workspaceRevision }
+      : {}),
+    ...(input.authorizedObservationIds !== undefined
+      ? { authorizedObservationIds: input.authorizedObservationIds }
       : {}),
   });
 }

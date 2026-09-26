@@ -5,7 +5,11 @@
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import type { BlockedReport } from '../schemas/agentContracts.js';
+import type {
+  BlockedReport,
+  TerminalReasonCauseClass,
+  TerminalReasonCode,
+} from '../schemas/agentContracts.js';
 import type { ToolCallRequest, ToolContext, ToolResult } from '../localTools.js';
 import {
   formatChatToolObservation,
@@ -291,19 +295,141 @@ export function summarizeDroppedTurns(dropped: ChatMessage[]): string {
 export type BlockedToolLogEntry = {
   tool: string;
   target: string;
+  exit_code?: number;
+  error?: string;
   stdout?: string;
   stderr?: string;
 };
 
 /**
+ * R0-5: typed, controller-established blocking origins.
+ *
+ * A failed action is evidence of FAILURE, not authority that the task cannot
+ * continue. A generic non-zero exit, a compiler error, a lint failure, a test
+ * failure, a grep miss, a wrong file, or a wrong hypothesis must drive
+ * repair/recovery — never terminal blocking. Only evidence that semantically
+ * establishes inability to continue (a denial the agent cannot grant itself, an
+ * unsupported operation, an unreachable external dependency, a provider
+ * failure, an exhausted budget) may authorize a terminal block.
+ *
+ * The vocabulary reuses the closed terminal-reason taxonomy so a UI can branch
+ * on the same codes everywhere. `verification_failed`, `recovery_exhausted`,
+ * `cancelled` and `unknown` are intentionally NOT tool-log origins: they are
+ * established by the controller at a later seam.
+ */
+export type BlockingOrigin = Extract<
+  TerminalReasonCode,
+  | 'permission_denied'
+  | 'unsupported_operation'
+  | 'external_dependency'
+  | 'provider_failure'
+  | 'budget_exhausted'
+>;
+
+// Errno / structured markers are strong: they appear only in genuine OS or
+// network failures, not in ordinary test, lint, or compiler prose.
+const ERRNO_PERMISSION_RE = /\b(?:EACCES|EPERM)\b/;
+const ERRNO_UNSUPPORTED_RE = /\b(?:ENOTSUP|EOPNOTSUPP)\b/;
+const ERRNO_EXTERNAL_RE =
+  /\b(?:ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ETIMEDOUT)\b/;
+
+// OS-level phrases. Deliberately narrow: generic words that routinely appear in
+// test/lint/compiler output ("forbidden", "unauthorized", "not supported",
+// "not implemented", "connection refused", bare "429") are NOT blocking
+// signals. A red test asserting a denial must not become terminal authority.
+const OS_PERMISSION_RE = /\bpermission denied\b/i;
+const OS_UNSUPPORTED_RE = /\bunsupported operation\b|\boperation not supported\b|\bnot supported by (?:this|the) runtime\b/i;
+// External dependency is ONLY genuine network/host unreachability. A missing
+// executable ("command not found") is repairable (install/locate) and must not
+// become terminal authority, so it is deliberately excluded.
+const OS_EXTERNAL_RE =
+  /\bnetwork is unreachable\b|\btemporary failure in name resolution\b|\bcertificate verify failed\b|\bself[- ]signed certificate\b/i;
+const PROVIDER_FAILURE_RE =
+  /\b(?:insufficient_quota|invalid_api_key|authentication_error|rate_limit_exceeded|overloaded_error)\b|\bprovider stream error\b|\binvalid api key\b|\bauthentication failed\b/i;
+const BUDGET_EXHAUSTED_RE =
+  /\b(?:budget exhausted|quota exceeded|out of credit|insufficient credit)\b/i;
+
+/**
+ * Ordinary test/lint/compiler output. A red test that *asserts* a denial must
+ * not type the run as blocked, so prose classification is skipped entirely when
+ * the failure channels look like a test/lint/compiler report.
+ */
+const TEST_OR_LINT_OUTPUT_RE =
+  /\bAssertionError\b|\berror TS\d+\b|\btypescript-eslint\b|\beslint\b|\b\d+ (?:passed|failed|failing|skipped)\b|\bFAIL\b|\b(?:expect(?:ed)?|assert)\b[^\n]*\b(?:to (?:equal|be|throw|match)|==|===)\b/i;
+
+/**
+ * Only the failure channels are trusted. A successful command's `stdout` may
+ * legitimately contain errno names or denial prose (grep results, source code,
+ * test fixtures), so `stdout` is never a blocking signal.
+ */
+function failureChannelText(entry: BlockedToolLogEntry): string {
+  return [entry.error, entry.stderr]
+    .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+    .join('\n');
+}
+
+/**
+ * Classify a tool-log entry into a blocking origin, or null when the entry is
+ * only generic failure evidence. Never infers from `exit_code` alone, never
+ * from `stdout`, and never from generic prose that ordinary test/lint/compiler
+ * output also produces.
+ */
+export function classifyBlockingOrigin(entry: BlockedToolLogEntry): BlockingOrigin | null {
+  const text = failureChannelText(entry);
+  if (text === '') return null;
+  // Errno markers are the strongest signal; still require a failure channel.
+  if (ERRNO_PERMISSION_RE.test(text)) return 'permission_denied';
+  if (ERRNO_UNSUPPORTED_RE.test(text)) return 'unsupported_operation';
+  if (ERRNO_EXTERNAL_RE.test(text)) return 'external_dependency';
+  // Prose is only trusted when the failure does not look like test/lint output.
+  if (TEST_OR_LINT_OUTPUT_RE.test(text)) return null;
+  if (OS_PERMISSION_RE.test(text)) return 'permission_denied';
+  if (OS_UNSUPPORTED_RE.test(text)) return 'unsupported_operation';
+  if (PROVIDER_FAILURE_RE.test(text)) return 'provider_failure';
+  if (BUDGET_EXHAUSTED_RE.test(text)) return 'budget_exhausted';
+  if (OS_EXTERNAL_RE.test(text)) return 'external_dependency';
+  return null;
+}
+
+/** Cause axis for a tool-log blocking origin. */
+export function blockingOriginCauseClass(origin: BlockingOrigin): TerminalReasonCauseClass {
+  switch (origin) {
+    case 'permission_denied':
+    case 'external_dependency':
+      return 'environment';
+    case 'provider_failure':
+      return 'provider';
+    case 'unsupported_operation':
+    case 'budget_exhausted':
+      return 'harness';
+  }
+}
+
+/**
+ * R0-5: a tool-log entry is blocking evidence only when it establishes a typed
+ * blocking origin. Investigation activity, a successful inspection, or a
+ * repairable failure is never proof of a block.
+ */
+export function isBlockingEvidence(entry: BlockedToolLogEntry): boolean {
+  return classifyBlockingOrigin(entry) !== null;
+}
+
+/**
  * R1: Detect BLOCKED in model answer and build a structured report from the
  * tool log. Returns null when keyword missing or no investigate evidence.
+ *
+ * F4/R0-A: the report is synthesized from model prose, so it may only exist
+ * when the tool log independently proves a blocking condition. A successful
+ * read/grep plus a BLOCKED sentence yields null — the model's belief is not
+ * blocking authority.
  */
 export function detectAndBuildBlockedReport(
   answer: string,
   toolCallLog: BlockedToolLogEntry[],
 ): BlockedReport | null {
-  if (!/\bBLOCKED\b/.test(answer)) return null;
+  // F4: only a protocol-shaped declaration (`BLOCKED` at the start of a line)
+  // counts; a stray word in prose must not synthesize a blocked report.
+  if (!/(?:^|\n)\s*BLOCKED\b/.test(answer)) return null;
 
   const reasonMatch = answer.match(/\bBLOCKED\b[:\s]+(.+?)(?:\.\s|\n|$)/);
   const reason = reasonMatch?.[1]?.trim() || 'Task is blocked and cannot be completed.';
@@ -323,32 +449,45 @@ export function detectAndBuildBlockedReport(
     'shell_exec',
     'test_run',
   ]);
-  const checked = toolCallLog
-    .filter((tc): tc is typeof tc & { target: string } => {
+  const classified = toolCallLog
+    .map((tc) => {
       try {
-        return investigateTools.has(tc.tool) && !!tc.target;
+        if (!investigateTools.has(tc.tool) || !tc.target) return null;
+        const origin = classifyBlockingOrigin(tc);
+        return origin ? { tc, origin } : null;
       } catch {
-        return false;
+        return null;
       }
     })
+    .filter((x): x is { tc: BlockedToolLogEntry & { target: string }; origin: BlockingOrigin } => x !== null)
     .slice(-15)
-    .map((tc) => ({
-      action: tc.tool,
-      target: tc.target!,
-      finding: tc.stdout
-        ? tc.stdout.length > 200
-          ? tc.stdout.slice(0, 200) + '…'
+    .map(({ tc, origin }) => {
+      // Only failure evidence reaches here; surface the failure text, not a
+      // possibly-stale stdout from a partial run.
+      const failureText = tc.error?.trim() || tc.stderr?.trim() || '';
+      const finding =
+        failureText !== ''
+          ? `Error: ${failureText.slice(0, 200)}`
           : tc.stdout
-        : tc.stderr
-          ? `Error: ${tc.stderr.slice(0, 200)}`
-          : 'Investigated — see tool call log for details.',
-    }));
+            ? tc.stdout.length > 200
+              ? tc.stdout.slice(0, 200) + '…'
+              : tc.stdout
+            : 'Investigated — see tool call log for details.';
+      return { action: tc.tool, target: tc.target, finding, origin };
+    });
 
-  if (checked.length === 0) return null;
+  if (classified.length === 0) return null;
+
+  // The controller-established origin is the authority; the model's prose is
+  // narrative only. Use the most recent typed origin when several are present.
+  const origin = classified[classified.length - 1]!.origin;
+  const checked = classified.map(({ action, target, finding }) => ({ action, target, finding }));
 
   return {
     schema_version: 1,
     status: 'BLOCKED' as const,
+    reason_code: origin,
+    cause_class: blockingOriginCauseClass(origin),
     reason,
     missing,
     checked,

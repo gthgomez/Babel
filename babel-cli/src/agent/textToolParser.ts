@@ -19,6 +19,7 @@
  */
 
 import type { ChatToolAction, ChatTurn } from './chatToolDefinitions.js';
+import { RecoveryPlanProposalSchema } from './codingLoop/recoveryPlan.js';
 
 /** The 13 tools exposed to text-tool models. */
 export const TEXT_TOOL_NAMES = new Set([
@@ -43,6 +44,7 @@ export const TEXT_TOOL_PROMPT_SECTION = [
   '- read_file: path (required) — read a file',
   '- write_file: path (required), content (required) — create/overwrite file',
   '- str_replace: file_path (required), old_str (required), new_str (required)',
+  '- After a failed repair, write_file/str_replace also need repair_plan: one-line JSON matching working_state recovery_failure, recovery_revision, recovery_observation_keys, and last_verifier.',
   '- grep: pattern (required), path (optional)',
   '- glob: pattern (required) — find files',
   '- run_command: command (required)',
@@ -138,6 +140,15 @@ function parseKeyValuePairs(body: string): Record<string, string> {
 // ─── Action builders ──────────────────────────────────────────────────────────
 
 function buildAction(toolName: string, params: Record<string, string>): ChatToolAction | null {
+  const repairPlan = (() => {
+    if (!params['repair_plan']) return undefined;
+    try {
+      const parsed = RecoveryPlanProposalSchema.safeParse(JSON.parse(params['repair_plan']));
+      return parsed.success ? parsed.data : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
   switch (toolName) {
     case 'read_file': {
       const path = params['path'];
@@ -148,14 +159,14 @@ function buildAction(toolName: string, params: Record<string, string>): ChatTool
       const path = params['path'];
       const content = params['content'];
       if (!path || content === undefined) return null;
-      return { type: 'write_file', path, content } as ChatToolAction;
+      return { type: 'write_file', path, content, ...(repairPlan ? { repair_plan: repairPlan } : {}) } as ChatToolAction;
     }
     case 'str_replace': {
       const fp = params['file_path'];
       const old = params['old_str'];
       const nw = params['new_str'] ?? '';
       if (!fp || !old) return null;
-      return { type: 'str_replace', file_path: fp, old_str: old, new_str: nw } as ChatToolAction;
+      return { type: 'str_replace', file_path: fp, old_str: old, new_str: nw, ...(repairPlan ? { repair_plan: repairPlan } : {}) } as ChatToolAction;
     }
     case 'grep': {
       const pattern = params['pattern'];
