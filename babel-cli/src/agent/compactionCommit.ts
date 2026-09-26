@@ -687,6 +687,25 @@ export async function commitCompaction(
       input.sessionLog.events.length,
       ...input.sessionLog.events.filter((event) => !ownedSessionIds.has(event.event_id)),
     );
+    // Events are filtered by owner id rather than by position, so a removal can
+    // leave sequence gaps. Both logs are strictly positional (thread seq and
+    // item_id, and session seq, must equal the array index; nextSeq must equal
+    // events.length), and the pre-refactor rollback restored these cursors.
+    // Renumber the retained events and reset the cursors so the rolled-back log
+    // stays parseable before any subsequent append, persist, or resume.
+    for (let index = 0; index < input.threadLog.events.length; index++) {
+      const event = input.threadLog.events[index] as { seq: number; item_id: string; turn_id: string };
+      event.seq = index;
+      event.item_id = `${event.turn_id}:${index}`;
+    }
+    input.threadLog.nextSeq = input.threadLog.events.length;
+    for (let index = 0; index < input.sessionLog.events.length; index++) {
+      input.sessionLog.events[index]!.seq = index;
+    }
+    input.sessionLog.nextSeq = input.sessionLog.events.length;
+    if (input.sessionLog.flushedThroughSeq > input.sessionLog.events.length - 1) {
+      input.sessionLog.flushedThroughSeq = input.sessionLog.events.length - 1;
+    }
   };
   const rollbackAndPersist = async (): Promise<boolean> => {
     rollbackLocalEvents();

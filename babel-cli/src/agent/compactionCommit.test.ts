@@ -37,7 +37,7 @@ import {
   parseThreadEventLog,
   serializeThreadEventLog,
 } from './threadEventLog.js';
-import { createSessionEventLog, parseSessionEventLog, serializeSessionEventLog } from './sessionEvents.js';
+import { createSessionEventLog, parseSessionEventLog, recordUserSubmitted, serializeSessionEventLog } from './sessionEvents.js';
 import { captureApprovedObservation, readObservationPage, resolveObservation } from '../evidence/observationStore.js';
 import {
   buildContextBudgetSnapshot,
@@ -427,6 +427,51 @@ describe('H1 commitCompaction dual-write + resume equivalence', () => {
     });
     assert.strictEqual(commit.status, 'blocked_persistence');
     assert.ok(commit.error?.includes('disk full'));
+  });
+
+  it('rollback after a failed persist keeps event-log sequence cursors contiguous', async () => {
+    const strategyMessages: ChatMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'u' },
+      { role: 'assistant', content: 'a' },
+    ];
+    const threadLog = createThreadEventLog('rollback');
+    const sessionLog = createSessionEventLog('rollback');
+    startTurn(threadLog, {
+      task: 'rollback test',
+      model: 'deepseek-chat',
+      provider: 'deepseek',
+      projectRoot: '/tmp/proj',
+      policyPreset: 'chat',
+    });
+    recordUserSubmitted(sessionLog, { turn_id: 't1', task: 'rollback test' });
+    const eventsBeforeRollback = threadLog.events.length;
+    const sessionEventsBeforeRollback = sessionLog.events.length;
+    const commit = await commitCompaction({
+      strategyMessages,
+      priorConversation: longConversation(4),
+      strategy: 'heuristic-truncation',
+      tokensBefore: 1000,
+      tokensAfter: 100,
+      operational: { task: 't' },
+      threadLog,
+      sessionLog,
+      turnId: 't1',
+      modelId: 'm',
+      persist: () => {
+        throw new Error('disk full');
+      },
+    });
+    assert.strictEqual(commit.status, 'blocked_persistence');
+    // The rolled-back appends must not advance the cursors past the retained
+    // events; both logs are strictly positional (nextSeq === events.length,
+    // thread seq/item_id === index, session seq === index).
+    assert.strictEqual(threadLog.events.length, eventsBeforeRollback);
+    assert.strictEqual(threadLog.nextSeq, threadLog.events.length);
+    assert.strictEqual(sessionLog.events.length, sessionEventsBeforeRollback);
+    assert.strictEqual(sessionLog.nextSeq, sessionLog.events.length);
+    assert.doesNotThrow(() => parseThreadEventLog(serializeThreadEventLog(threadLog)));
+    assert.doesNotThrow(() => parseSessionEventLog(serializeSessionEventLog(sessionLog)));
   });
 
   it('blocked_persistence when blockOnPersistFailure is set', async () => {
