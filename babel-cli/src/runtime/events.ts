@@ -337,6 +337,7 @@ function validateRuntimeFactInner(input: unknown): FactValidation {
 }
 
 const SECRET_KEY_PATTERN = /(pass(word)?|secret|token|api[_-]?key|authorization|credential|private[_-]?key)/i;
+const ABSOLUTE_PATH_PATTERN = /(^|[\s"'=({[])(?:[A-Za-z]:[\\/][^\s"'<>|;,!?)}\]]*|\\\\[^\s"'<>|;,!?)}\]]+|\/[^\s"'<>|;,!?)}\]]*)/g;
 const MAX_STRING_CHARS = 512;
 const MAX_REDACT_DEPTH = 12;
 const MAX_REDACT_NODES = 100_000;
@@ -355,7 +356,10 @@ function redactValue(
   budget.nodes += 1;
   if (budget.nodes > MAX_REDACT_NODES) return '[redacted:limit]';
   if (typeof value === 'string') {
-    return value.length > MAX_STRING_CHARS ? `${value.slice(0, MAX_STRING_CHARS)}…[truncated]` : value;
+    const redactedPath = value.replace(ABSOLUTE_PATH_PATTERN, '$1[redacted:path]');
+    return redactedPath.length > MAX_STRING_CHARS
+      ? `${redactedPath.slice(0, MAX_STRING_CHARS)}…[truncated]`
+      : redactedPath;
   }
   if (value === null || typeof value !== 'object') {
     return utilTypes.isProxy(value) ? '[redacted]' : value;

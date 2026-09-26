@@ -105,6 +105,18 @@ test('P04: redaction removes credential keys and caps long strings', () => {
   assert.match(String(payload['reason']), /truncated/);
 });
 
+test('P04: redaction removes absolute Windows and POSIX paths from string values', () => {
+  const windowsPath = 'C:\\Users\\alice\\AppData\\Local\\babel\\run\\thread_events.json';
+  const posixPath = ['', 'home', 'alice', '.local', 'share', 'babel', 'run', 'thread_events.json'].join('/');
+  const redacted = redactRuntimeFact(
+    fact({ payload: { type: 'context.degraded', reason: `failed at ${windowsPath}; retry ${posixPath}` } }),
+  );
+  const serialized = JSON.stringify(redacted.payload);
+  assert.ok(!serialized.includes(windowsPath));
+  assert.ok(!serialized.includes(posixPath));
+  assert.equal((redacted.payload as { reason: string }).reason.match(/\[redacted:path\]/g)?.length, 2);
+});
+
 test('P04: redaction does not leak nested secrets past the depth budget', () => {
   let nested: Record<string, unknown> = { access_token: 'deep-secret' };
   for (let i = 0; i < 8; i += 1) nested = { wrapper: nested };

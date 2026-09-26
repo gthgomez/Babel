@@ -12,6 +12,7 @@ import { estimateTokens } from './chatCompaction.js';
 import { resolveChatModelPolicy } from './chatModelPolicy.js';
 import { resolveAskModelPolicyWithLiveGate } from '../services/askAnswer.js';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
+import { hashRouteReference } from './modelRouteReceipt.js';
 
 /**
  * OpenCode Zen routing invariants.
@@ -262,7 +263,12 @@ test('exact GLM ChatEngine path streams and persists matching provider receipts'
       assert.equal(input.requested_model_id, 'z-ai/glm-5.3-flash');
       assert.equal(input.normalized_model_id, 'z-ai/glm-5.3-flash');
       assert.equal(input.sent_model_id, 'z-ai/glm-5.3-flash');
+      assert.equal(input.input_ref, 'thread_events.json');
     }
+    assert.equal(input?.kind === 'model_input_receipt' ? input.route_receipt?.run_ref : undefined,
+      hashRouteReference(join(BABEL_RUNS_DIR, 'chat-sessions', runId)));
+    assert.ok(!JSON.stringify(sessionEvents).includes(projectRoot));
+    assert.ok(!JSON.stringify(sessionEvents).includes(join(BABEL_RUNS_DIR, 'chat-sessions', runId)));
     if (result?.kind === 'model_result_delivery') {
       assert.equal(result.status, 'delivered');
       assert.equal(result.observed_model_id, 'z-ai/glm-5.3-flash');

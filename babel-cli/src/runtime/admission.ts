@@ -288,15 +288,15 @@ const WINDOWS_ACL_VERIFY_SCRIPT = [
   '  $sections = [System.Security.AccessControl.AccessControlSections]::Access',
   '  if ($isDirectory) { $acl = [System.Security.AccessControl.DirectorySecurity]::new($path, $sections) } else { $acl = [System.Security.AccessControl.FileSecurity]::new($path, $sections) }',
   '  $rules = @($acl.Access)',
-  '  if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1) { exit 1 }',
+  "  if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1) { [Console]::Out.Write('acl_check_protection_or_rule_count'); exit 1 }",
   '  $actual = $rules[0]',
-  '  if ($actual.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid) { exit 1 }',
-  '  if ($actual.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $actual.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) { exit 1 }',
-  '  if ($actual.IsInherited -or $actual.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) { exit 1 }',
-  '  if ($isDirectory -and ($actual.InheritanceFlags -ne ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit))) { exit 1 }',
-  '  if (-not $isDirectory -and $actual.InheritanceFlags -ne [System.Security.AccessControl.InheritanceFlags]::None) { exit 1 }',
+  "  if ($actual.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid) { [Console]::Out.Write('acl_check_owner_sid'); exit 1 }",
+  "  if ($actual.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $actual.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) { [Console]::Out.Write('acl_check_allow_full_control'); exit 1 }",
+  "  if ($actual.IsInherited -or $actual.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) { [Console]::Out.Write('acl_check_inheritance_or_propagation'); exit 1 }",
+  "  if ($isDirectory -and ($actual.InheritanceFlags -ne ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit))) { [Console]::Out.Write('acl_check_directory_inheritance'); exit 1 }",
+  "  if (-not $isDirectory -and $actual.InheritanceFlags -ne [System.Security.AccessControl.InheritanceFlags]::None) { [Console]::Out.Write('acl_check_file_inheritance'); exit 1 }",
   '  exit 0',
-  '} catch { exit 1 }',
+  "} catch { [Console]::Out.Write('acl_check_exception'); exit 1 }",
 ].join('; ');
 
 let windowsUserSid: string | undefined;
@@ -356,11 +356,15 @@ function enforceOwnerOnlyWindowsAcl(path: string, directory: boolean): { ok: boo
     },
     timeout: 10_000,
     windowsHide: true,
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'ignore'],
   });
+  const diagnostic = result.stdout?.trim();
+  const safeDiagnostic = diagnostic && /^acl_check_[a-z_]+$/.test(diagnostic) ? diagnostic : null;
   return {
     ok: result.status === 0,
-    code: (result.error as NodeJS.ErrnoException | undefined)?.code ?? 'acl_verification_failed',
+    code:
+      (result.error as NodeJS.ErrnoException | undefined)?.code ??
+      (safeDiagnostic ? `acl_verification_failed:${safeDiagnostic}` : 'acl_verification_failed'),
   };
 }
 

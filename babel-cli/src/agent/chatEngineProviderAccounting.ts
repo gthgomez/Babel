@@ -214,7 +214,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
         const routeReceipt = buildModelRouteReceipt({
           projectRef: hashRouteReference(host.options.projectRoot),
           taskRef: hashRouteReference(host.options.task),
-          runRef: host.engineRunDir,
+          runRef: hashRouteReference(host.engineRunDir),
           contractRef: context.contractRef ?? 'chat',
           inferenceId: event.inference_id,
           executionStage: context.executionStage ?? 'chat',
@@ -244,7 +244,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
           ...(event.accounting_kind !== undefined ? { accounting_kind: event.accounting_kind } : {}),
           ...(event.context_limit_tokens !== undefined ? { context_limit_tokens: event.context_limit_tokens } : {}),
           ...(event.context_limit_source !== undefined ? { context_limit_source: event.context_limit_source } : {}),
-          input_ref: join(host.engineRunDir, 'thread_events.json'),
+          input_ref: 'thread_events.json',
           ...(event.input_message_count !== undefined
             ? { input_message_count: event.input_message_count }
             : {}),
@@ -390,7 +390,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
           ? buildModelRouteReceipt({
               projectRef: hashRouteReference(host.options.projectRoot),
               taskRef: hashRouteReference(host.options.task),
-              runRef: host.engineRunDir,
+              runRef: hashRouteReference(host.engineRunDir),
               contractRef: context.contractRef ?? 'chat',
               inferenceId: event.inference_id,
               executionStage: context.executionStage ?? 'chat',
