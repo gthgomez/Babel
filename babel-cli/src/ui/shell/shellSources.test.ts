@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { join } from 'node:path'
 import test from 'node:test'
 
 import {
@@ -20,10 +21,11 @@ test('action rows come from the shared slash-command catalog and include a real 
 
 test('project rows map directories to in-place expansion and keep files informational', () => {
   const rows = loadShellProjectRows('/repo', () => ['[dir] src', '[file] README.md', 'plain'])
+  const srcPath = join('/repo', 'src')
   assert.deepEqual(rows[0], {
-    id: '/repo/src',
+    id: srcPath,
     label: '[dir] src',
-    command: { kind: 'project.toggle', root: '/repo/src' },
+    command: { kind: 'project.toggle', root: srcPath },
   })
   assert.equal(rows[1]?.command, undefined)
   assert.equal(rows[2]?.id, 'plain')
@@ -65,7 +67,7 @@ test('ShellSources reports real empty/error state and caches the project listing
   assert.equal(projectListCalls, 1)
   assert.deepEqual(sources.snapshot().projectRows[0]?.command, {
     kind: 'project.toggle',
-    root: '/repo/src',
+    root: join('/repo', 'src'),
   })
 
   const failing = new ShellSources(async () => {
