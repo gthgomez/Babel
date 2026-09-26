@@ -5,7 +5,7 @@ export interface HistoryCell {
   readonly kind: HistoryCellKind;
   readonly record: HistoryCellRecord;
 
-  displayLines(width: number): string[];
+  displayLines(width: number, mode?: HistoryRenderMode): string[];
   rawLines(): string[];
   transcriptLines(width: number): string[];
   desiredHeight(width: number): number;
@@ -18,8 +18,8 @@ export abstract class BaseHistoryCell implements HistoryCell {
   abstract readonly kind: HistoryCellKind;
   abstract readonly record: HistoryCellRecord;
 
-  displayLines(width: number): string[] {
-    return this.displayLinesForMode(width, 'rich');
+  displayLines(width: number, mode: HistoryRenderMode = 'rich'): string[] {
+    return this.displayLinesForMode(width, mode);
   }
 
   rawLines(): string[] {

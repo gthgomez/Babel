@@ -171,6 +171,80 @@ test('interactive transcript records user and assistant turns separately from co
   }
 });
 
+test('interactive assistant records use the accepted shell-turn epoch', () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'babel-interactive-epoch-'));
+  const observed: { epoch?: number } = {};
+  const repl = Object.create(BabelRepl.prototype) as any;
+  repl.turns = [];
+  repl.turnCounter = 0;
+  repl.interactiveTranscriptPath = join(sessionDir, 'transcript.jsonl');
+  repl.activeShellTurnEpoch = 3;
+  repl.shellRuntime = {
+    store: { epoch: 9 },
+    observeInteractiveTurn: (_record: unknown, _outcome: unknown, epoch: number) => {
+      observed.epoch = epoch;
+    },
+  };
+
+  try {
+    repl.appendTurn({ role: 'assistant', answer: 'late result' });
+    assert.equal(observed.epoch, 3);
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test('North Star promotion is idempotent after startup resize replay mounts the host', () => {
+  const host = {};
+  const repl = Object.create(BabelRepl.prototype) as {
+    shellHost: object;
+    startNorthStarShell: () => void;
+  };
+  repl.shellHost = host;
+
+  repl.startNorthStarShell();
+
+  assert.equal(repl.shellHost, host);
+});
+
+test('responsive replay keeps the release listener and applies a same-mode resize', () => {
+  const reasons: string[] = []
+  let unregistered = 0
+  const repl = Object.create(BabelRepl.prototype) as {
+    pendingResponsiveResize: { rows: number; cols: number } | null
+    startupHydrationComplete: boolean
+    shellHost: { invalidate: (reason: string) => void }
+    unregisterResponsiveLeaseRelease: () => void
+    unregisterResponsiveRendererResume: null
+    replayResponsiveResize: () => void
+  }
+  repl.pendingResponsiveResize = { rows: 45, cols: 160 }
+  repl.startupHydrationComplete = true
+  repl.shellHost = { invalidate: (reason) => reasons.push(reason) }
+  repl.unregisterResponsiveLeaseRelease = () => { unregistered += 1 }
+  repl.unregisterResponsiveRendererResume = null
+
+  repl.replayResponsiveResize()
+
+  assert.equal(unregistered, 0)
+  assert.equal(repl.pendingResponsiveResize, null)
+  assert.deepEqual(reasons, ['responsive-resize'])
+})
+
+test('startup responsive replay waits until session hydration completes', () => {
+  const repl = Object.create(BabelRepl.prototype) as {
+    pendingResponsiveResize: { rows: number; cols: number } | null;
+    startupHydrationComplete: boolean;
+    replayResponsiveResize: () => void;
+  };
+  repl.pendingResponsiveResize = { rows: 45, cols: 160 };
+  repl.startupHydrationComplete = false;
+
+  repl.replayResponsiveResize();
+
+  assert.deepEqual(repl.pendingResponsiveResize, { rows: 45, cols: 160 });
+});
+
 test('interactive follow-up prompts are resolved with previous assistant context', () => {
   const repl = Object.create(BabelRepl.prototype) as {
     lastAssistantAnswer: string | null;

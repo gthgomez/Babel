@@ -294,3 +294,33 @@ describe('createPromptInputAdapter — readline fallback', () => {
     });
   });
 });
+
+describe('PromptInputAdapter hosted presentation', () => {
+  it('exposes the hosted view and key entry point without attaching another reader', () => {
+    withEnv({ BABEL_PROMPT_V2: '1' }, () => {
+      const adapter = createPromptInputAdapter({
+        input: new PassThrough(),
+        output: new PassThrough(),
+        onSubmit: () => {},
+      }) as any;
+      const invalidations: string[] = [];
+
+      adapter.setPresentationTarget({
+        getRect: () => ({ x: 0, y: 0, width: 24, height: 5 }),
+        invalidate: (reason: string) => invalidations.push(reason),
+      });
+      adapter.prompt();
+      adapter.processKey({
+        name: 'x',
+        ctrl: false,
+        meta: false,
+        shift: false,
+        sequence: 'x',
+      });
+
+      assert.equal(adapter.getPromptInput().getState().text, 'x');
+      assert.ok(invalidations.length > 0);
+      adapter.close();
+    });
+  });
+});

@@ -142,6 +142,7 @@
     "test:chat-perf": "tsx --no-warnings=ExperimentalWarning --test src/agent/chatPerformanceScenarios.test.ts",
     "test:projection": "tsx --no-warnings=ExperimentalWarning --test src/interactive/projection/**/*.test.ts",
     "test:ui": "node scripts/run_ui_tests.mjs",
+    "test:north-star": "node scripts/run_north_star_tests.mjs",
     "test:remote-ui": "node scripts/remote_ui_visual.mjs",
     "test:ui:coverage": "node scripts/run_ui_tests.mjs --experimental-test-coverage",
     "test:ui:update": "UPDATE_SNAPSHOTS=1 npm run test:ui",

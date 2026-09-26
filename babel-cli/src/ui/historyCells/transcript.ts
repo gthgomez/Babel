@@ -122,6 +122,21 @@ export class HistoryTranscript {
     this.bumpActiveRevision();
   }
 
+  /** Stream an observational thought into the active thinking cell. */
+  onThought(text: string): void {
+    if (!text) return;
+    if (!this.active || this.active.kind !== 'thinking') {
+      this.flushActive();
+      this.active = createThinkingCell(text, this.activeRecordOptions('active'));
+      this.activeRevision = 0;
+      this.bumpActiveRevision();
+      return;
+    }
+    const payload = this.active.record.payload as ThinkingPayload;
+    payload.text = `${payload.text ?? ''}${text}`;
+    this.bumpActiveRevision();
+  }
+
   /** Register a tool call — flushes streaming answer, commits a running tool cell. */
   beginToolCall(toolId: number, tool: string, target: string): void {
     this.flushActive();

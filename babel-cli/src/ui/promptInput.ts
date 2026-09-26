@@ -76,6 +76,11 @@ import {
   DEFAULT_VOICE_HOTKEY,
 } from "../voice/voice-keybinding.js";
 import { handleNormalModeKey as dispatchNormalModeKey } from "./promptInputNormalMode.js";
+import {
+  type PromptInputPresentationTarget,
+  type PromptView,
+  type Rect,
+} from "./promptView.js";
 
 // ── Escape hatch ────────────────────────────────────────────────────────────────
 
@@ -286,6 +291,7 @@ export class PromptInput {
   private cursorVisible = true;
   private blinkKeepAlive: (() => void) | null = null;
   private renderScheduled = false;
+  private presentationTarget: PromptInputPresentationTarget | null = null;
 
   // Backward-compat popup fields (synced with TypeaheadEngine)
   private completionPopup: string[] | null = null;
@@ -419,12 +425,9 @@ export class PromptInput {
     );
     scheduler.setComponentPermanentDirty("cursor-blink", true);
 
-    // Install key handler
-    this.cleanupKeyHandler = installKeyHandler(process.stdin, (event) => {
-      // G6 — track IME composition so we can park the hardware cursor at the caret
-      this.imeComposing = event.isComposing === true;
-      this.handleKey(event);
-    });
+    // Hosted shells own raw input and route parsed events through processKey().
+    // Standalone mode keeps the legacy PromptInput reader unchanged.
+    this.installKeyHandlerIfNeeded();
 
     this.render();
   }
@@ -464,9 +467,11 @@ export class PromptInput {
       this.cleanupKeyHandler = null;
     }
 
-    // Show cursor and move to next line
-    OutputBuffer.getInstance().write("\x1b[?25h");
-    OutputBuffer.getInstance().write("\n");
+    // The root host owns cursor visibility and line settlement while hosted.
+    if (!this.presentationTarget) {
+      OutputBuffer.getInstance().write("\x1b[?25h");
+      OutputBuffer.getInstance().write("\n");
+    }
   }
 
   /** Get current input state. */
@@ -591,6 +596,149 @@ export class PromptInput {
     };
   }
 
+  /**
+   * Attach or detach a host-owned presentation target.
+   *
+   * A hosted editor never paints directly and never installs its own stdin
+   * reader. Removing the target restores the standalone behavior used by the
+   * legacy adapter and fallback path.
+   */
+  setPresentationTarget(target: PromptInputPresentationTarget | null): void {
+    if (this.presentationTarget === target) return;
+
+    if (target && this.cleanupKeyHandler) {
+      this.cleanupKeyHandler();
+      this.cleanupKeyHandler = null;
+    }
+
+    this.presentationTarget = target;
+
+    if (!target && this.active) this.installKeyHandlerIfNeeded();
+    if (this.active) this.render();
+  }
+
+  /** Compatibility spelling for hosts that name the seam explicitly. */
+  setHostedPresentationTarget(
+    target: PromptInputPresentationTarget | null,
+  ): void {
+    this.setPresentationTarget(target);
+  }
+
+  /** Escape should edit or dismiss UI, not arm process exit. */
+  consumesEscape(): boolean {
+    if (this.typeahead.hasPopup()) return true
+    if (this.mode !== 'insert') return true
+    return !(this.lines.length === 1 && this.lines[0] === '')
+  }
+
+  /** Return the current editor presentation without writing to the terminal. */
+  getView(rect?: Rect): PromptView {
+    const viewRect = rect ?? this.presentationTarget?.getRect() ?? {
+      x: 0,
+      y: 0,
+      width: this.termWidth,
+      height: this.maxInputHeight,
+    };
+    const width = Math.max(0, Math.floor(viewRect.width));
+    const height = Math.max(0, Math.floor(viewRect.height));
+    if (width === 0 || height === 0) {
+      return {
+        rows: [],
+        cursor: { row: 0, col: 0, visible: false },
+      };
+    }
+
+    const viewState = this.typeahead.getViewState();
+    const queuedMessages = this.config.getQueuedMessages?.() ?? [];
+    const queueRows = this.buildQueueViewRows(queuedMessages, width);
+    const availableEditorRows = Math.max(1, height - queueRows.length);
+    const maxEditorRows = Math.max(
+      1,
+      Math.min(this.maxInputHeight, availableEditorRows),
+    );
+    const firstLine = Math.max(
+      0,
+      Math.min(
+        this.cursorLine - maxEditorRows + 1,
+        this.lines.length - maxEditorRows,
+      ),
+    );
+    const editorLines = this.lines.slice(firstLine, firstLine + maxEditorRows);
+    const rows = [
+      ...queueRows,
+      ...editorLines.map((line, index) => {
+        const lineIndex = firstLine + index;
+        const prefix =
+          lineIndex === 0
+            ? this.config.prompt
+            : this.config.continuationPrompt;
+        const contentWidth = Math.max(0, width - visibleLength(prefix));
+        const visibleLine = sanitizeUserText(line ?? "");
+        const clippedLine = truncate(visibleLine, contentWidth);
+        const ghostText =
+          lineIndex === this.cursorLine
+            ? sanitizeUserText(this.ac.getGhostText() ?? "")
+            : "";
+        const clippedGhost = truncate(
+          ghostText,
+          Math.max(0, contentWidth - visibleLength(clippedLine)),
+        );
+        return `${activeAccent(prefix)}${primary(clippedLine)}${
+          clippedGhost ? ghost(clippedGhost) : ""
+        }`;
+      }),
+    ].slice(0, height);
+
+    const cursorRow = Math.min(
+      Math.max(0, height - 1),
+      queueRows.length + this.cursorLine - firstLine,
+    );
+    const cursorPrefix =
+      this.cursorLine === 0
+        ? this.config.prompt
+        : this.config.continuationPrompt;
+    const cursorCol = Math.min(
+      Math.max(0, width - 1),
+      visibleLength(cursorPrefix) + this.cursorCol,
+    );
+
+    const popupRows = this.buildPopupViewRows(viewState, width);
+    const popupY =
+      viewState.mode === "slash"
+        ? Math.min(height, queueRows.length)
+        : Math.min(height, rows.length);
+    const popupHeight = Math.max(
+      0,
+      Math.min(popupRows.length, height - popupY),
+    );
+    const popup = popupHeight > 0
+      ? {
+          rect: { x: 0, y: popupY, width, height: popupHeight },
+          rows: popupRows.slice(0, popupHeight),
+        }
+      : undefined;
+
+    return {
+      rows,
+      cursor: {
+        row: cursorRow,
+        col: cursorCol,
+        visible: this.active && (this.cursorVisible || this.imeComposing),
+      },
+      ...(popup ? { popup } : {}),
+    };
+  }
+
+  /** Route one already-parsed key through the existing editor state machine. */
+  processKey(event: KeyEvent): void {
+    this.handleKey(event);
+  }
+
+  /** Public entry point retained under the editor's existing terminology. */
+  handleKey(event: KeyEvent): void {
+    this.handleKeyInternal(event);
+  }
+
   // ── Key Handling ────────────────────────────────────────────────────────────
 
   private getTypeaheadContext(): TypeaheadContext {
@@ -602,7 +750,7 @@ export class PromptInput {
     };
   }
 
-  private handleKey(event: KeyEvent): void {
+  private handleKeyInternal(event: KeyEvent): void {
     if (!this.active) return;
     if (
       event.name === "ignored" ||
@@ -1832,7 +1980,17 @@ export class PromptInput {
 
     this.pasteStore.clear();
     this.addHistory(text);
-    this.deactivate();
+    // Keep the hosted composer live while a turn is already running so the
+    // user can type a follow-up and Tab-queue it. Idle submissions still
+    // release the editor exactly as before.
+    const keepActiveForQueue =
+      this.presentationTarget !== null || this.config.isTaskRunning?.() === true;
+    if (keepActiveForQueue) {
+      this.clear();
+      this.render();
+    } else {
+      this.deactivate();
+    }
 
     // Fire config onSubmit first
     try {
@@ -1938,6 +2096,74 @@ export class PromptInput {
 
   // ── Rendering ───────────────────────────────────────────────────────────────
 
+  private installKeyHandlerIfNeeded(): void {
+    if (this.presentationTarget || this.cleanupKeyHandler) return;
+    this.cleanupKeyHandler = installKeyHandler(process.stdin, (event) => {
+      // G6 — track IME composition so we can park the hardware cursor at the caret
+      this.imeComposing = event.isComposing === true;
+      this.handleKey(event);
+    });
+  }
+
+  private buildQueueViewRows(
+    queuedMessages: readonly string[],
+    width: number,
+  ): string[] {
+    if (queuedMessages.length === 0) return [];
+    const rows = [
+      this.config.isTaskRunning?.()
+        ? dim(" Queued (Tab) · runs after current turn")
+        : dim(" Queued"),
+    ];
+    const maxShow = Math.min(queuedMessages.length, 3);
+    for (let i = 0; i < maxShow; i++) {
+      const oneLine = sanitizeUserText(queuedMessages[i] ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
+      rows.push(dim(` ↳ ${truncate(oneLine, Math.max(0, width - 3))}`));
+    }
+    if (queuedMessages.length > maxShow) {
+      rows.push(ghost(`   +${queuedMessages.length - maxShow} more queued`));
+    }
+    return rows;
+  }
+
+  private buildPopupViewRows(
+    viewState: TypeaheadViewState,
+    width: number,
+  ): string[] {
+    if (viewState.mode === "none" || viewState.items.length === 0) return [];
+    const maxShow = Math.min(viewState.items.length, 5);
+    const rows: string[] = [];
+    if (viewState.mode === "slash") {
+      rows.push(border("─".repeat(Math.min(width, 40))));
+    }
+    if (viewState.mode === "mention") {
+      rows.push(
+        truncate(
+          sectionLabel(` FILES MATCHING @${viewState.mentionQuery ?? ""}`),
+          width,
+        ),
+      );
+    }
+    if (viewState.mode === "completer") {
+      rows.push(border("─".repeat(Math.min(width, 40))));
+    }
+    for (let i = 0; i < maxShow; i++) {
+      const item = viewState.items[i];
+      if (!item) continue;
+      const displayText =
+        viewState.mode === "slash"
+          ? ` ${item.label.padEnd(12)} ${item.description}`
+          : ` ${item.label}${item.description ? `  ${ghost(item.description)}` : ""}`;
+      const clipped = truncate(displayText, Math.max(0, width - 1));
+      rows.push(
+        i === viewState.selectedIndex ? bgSelected(clipped) : dim(clipped),
+      );
+    }
+    return rows;
+  }
+
   /** ConPTY cannot dock with CUP / SCO save-restore — stay on the current line. */
   private useLinearComposer(): boolean {
     return isWindowsTerminal() && process.env["BABEL_PROMPT_CUP"] !== "1";
@@ -1962,6 +2188,10 @@ export class PromptInput {
   /** Full render: write all lines and position cursor. */
   private render(): void {
     if (!this.active) return;
+    if (this.presentationTarget) {
+      this.presentationTarget.invalidate("prompt-render");
+      return;
+    }
     if (this.useLinearComposer()) {
       this.renderLinear();
       return;
@@ -2228,6 +2458,10 @@ export class PromptInput {
   /** Render only the cursor at its current position. */
   private renderCursor(): void {
     if (!this.active) return;
+    if (this.presentationTarget) {
+      this.presentationTarget.invalidate("prompt-cursor");
+      return;
+    }
     if (this.useLinearComposer()) {
       this.renderLinear();
       return;
