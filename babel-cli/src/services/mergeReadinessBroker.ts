@@ -5,6 +5,7 @@ import {
   evaluateEnsembleIndependence,
   type ReviewerIndependenceAttestation,
 } from './reviewIndependence.js';
+import { asReviewRiskLane, resolveReviewPolicy } from './reviewPolicy.js';
 import type { StructuredFinding } from './structuredFinding.js';
 
 export type { ReviewEvidenceProvenance };
@@ -104,18 +105,18 @@ export interface RequiredGatesPolicy {
 }
 
 export function resolveRequiredGates(riskTier: string): RequiredGatesPolicy {
-  switch (riskTier) {
-    case 'TRIVIAL':
-      return { codeReview: { minApprovals: 1 }, deterministicTests: false, securityScan: false, remoteCI: false };
-    case 'NORMAL':
-      return { codeReview: { minApprovals: 1 }, deterministicTests: true, securityScan: false, remoteCI: false };
-    case 'ELEVATED':
-      return { codeReview: { minApprovals: 2 }, deterministicTests: true, securityScan: true, remoteCI: true };
-    case 'CRITICAL':
-      return { codeReview: { minApprovals: 2, requireI4: true }, deterministicTests: true, securityScan: true, remoteCI: true };
-    default:
-      return { codeReview: { minApprovals: 2 }, deterministicTests: true, securityScan: true, remoteCI: true };
-  }
+  // One canonical policy: the risk lane floors come from reviewPolicy.ts so the
+  // broker and the orchestration loop cannot drift. Unknown/AMBIGUOUS lanes keep
+  // the historical ELEVATED-equivalent floor (no silent tightening).
+  const policy = resolveReviewPolicy({ riskLane: asReviewRiskLane(riskTier), requireAuthoritative: false });
+  return {
+    codeReview: policy.requiredIndependenceClass === 'I4'
+      ? { minApprovals: policy.workingReviewCount, requireI4: true }
+      : { minApprovals: policy.workingReviewCount },
+    deterministicTests: policy.deterministicTestsRequired,
+    securityScan: policy.securityRequired,
+    remoteCI: policy.remoteCIRequired,
+  };
 }
 
 export function computeCanonicalReceiptDigest(receipt: CodeReviewReceipt): string {

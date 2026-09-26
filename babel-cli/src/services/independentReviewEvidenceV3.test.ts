@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   type HostReviewHandoffV3,
   type IndependentReviewEvidenceV3,
+  type IndependentReviewRuntime,
   assertSafeChallengeId,
   publicIndependentReviewHandoffV3,
   validateHostReviewHandoffV3,
@@ -409,6 +410,65 @@ test('independentReviewEvidenceV3: mutation invalidates prior approval (approval
     () => validateIndependentReviewEvidenceV3(evidenceA, { candidate_digest: candidateBDigest }),
     /CANDIDATE_BINDING_MISMATCH: candidate_digest/
   )
+})
+
+test('independentReviewEvidenceV3: accepts optional fresh context/process runtime fields', () => {
+  const evidence = createValidEvidence({
+    runtime: {
+      agent_kind: 'codex',
+      adapter_id: 'codex-subagent-v1',
+      controller_execution_id: 'codex-exec-reviewer-2',
+      fresh_context: true,
+      fresh_process: true,
+      parent_execution_id: 'x',
+      session_id: 'y',
+    },
+  })
+
+  const validated = validateIndependentReviewEvidenceV3(evidence)
+  assert.equal(validated.runtime.fresh_context, true)
+  assert.equal(validated.runtime.fresh_process, true)
+  assert.equal(validated.runtime.parent_execution_id, 'x')
+  assert.equal(validated.runtime.session_id, 'y')
+})
+
+test('independentReviewEvidenceV3: rejects non-boolean fresh_context', () => {
+  const evidence = createValidEvidence({
+    runtime: {
+      agent_kind: 'codex',
+      adapter_id: 'codex-subagent-v1',
+      controller_execution_id: 'codex-exec-reviewer-2',
+      fresh_context: 'yes',
+    } as unknown as IndependentReviewRuntime,
+  })
+  assert.throws(() => validateIndependentReviewEvidenceV3(evidence))
+})
+
+test('independentReviewEvidenceV3: still rejects unknown runtime fields (strictness preserved)', () => {
+  const evidence = createValidEvidence({
+    runtime: {
+      agent_kind: 'codex',
+      adapter_id: 'codex-subagent-v1',
+      controller_execution_id: 'codex-exec-reviewer-2',
+      unknown_runtime_field: 'nope',
+    } as unknown as IndependentReviewRuntime,
+  })
+  assert.throws(() => validateIndependentReviewEvidenceV3(evidence))
+})
+
+test('independentReviewEvidenceV3: accepts minimal evidence without the new runtime fields', () => {
+  const evidence = createValidEvidence({
+    runtime: {
+      agent_kind: 'codex',
+      adapter_id: 'codex-subagent-v1',
+      controller_execution_id: 'codex-exec-reviewer-2',
+    },
+  })
+  const validated = validateIndependentReviewEvidenceV3(evidence)
+  assert.equal(validated.runtime.fresh_context, undefined)
+  assert.equal(validated.runtime.fresh_process, undefined)
+  assert.equal(validated.runtime.parent_execution_id, undefined)
+  assert.equal(validated.runtime.session_id, undefined)
 })
 
 
