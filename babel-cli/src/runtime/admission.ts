@@ -336,16 +336,6 @@ function enforceOwnerOnlyWindowsAcl(path: string, directory: boolean): { ok: boo
 
   const powershell = join(system32, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const icaclsPath = join(system32, 'icacls.exe');
-  const inheritance = spawnSync(icaclsPath, [path, '/inheritance:r', '/Q'], {
-    encoding: 'utf8',
-    env: safeEnvironment,
-    timeout: 5_000,
-    windowsHide: true,
-    stdio: 'ignore',
-  });
-  if (inheritance.status !== 0) {
-    return { ok: false, code: (inheritance.error as NodeJS.ErrnoException | undefined)?.code ?? 'acl_apply_failed' };
-  }
   const sidQuery = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', "(Get-Acl -LiteralPath $env:BABEL_ADMISSION_ACL_PATH).Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }"], {
     encoding: 'utf8',
     env: {
@@ -358,32 +348,20 @@ function enforceOwnerOnlyWindowsAcl(path: string, directory: boolean): { ok: boo
   });
   const ruleSids = new Set((sidQuery.stdout ?? '').match(/S-\d-(?:\d+-)*\d+/g) ?? []);
   ruleSids.add(windowsUserSid);
-  if (sidQuery.status !== 0 || ruleSids.size === 0) {
+  if (sidQuery.status !== 0) {
     return { ok: false, code: (sidQuery.error as NodeJS.ErrnoException | undefined)?.code ?? 'acl_identity_query_failed' };
   }
-  for (const ruleSid of ruleSids) {
-    const entry = `*${ruleSid}`;
-    const removal = spawnSync(icaclsPath, [path, '/remove:g', entry, '/remove:d', entry, '/Q'], {
-      encoding: 'utf8',
-      env: safeEnvironment,
-      timeout: 5_000,
-      windowsHide: true,
-      stdio: 'ignore',
-    });
-    if (removal.status !== 0) {
-      return { ok: false, code: (removal.error as NodeJS.ErrnoException | undefined)?.code ?? 'acl_rules_remove_failed' };
-    }
-  }
   const grant = `*${windowsUserSid}:${directory ? '(OI)(CI)F' : 'F'}`;
-  const grantOwner = spawnSync(icaclsPath, [path, '/grant:r', grant, '/Q'], {
+  const ruleEntries = [...ruleSids].map((sid) => `*${sid}`);
+  const apply = spawnSync(icaclsPath, [path, '/inheritance:r', '/remove:g', ...ruleEntries, '/remove:d', ...ruleEntries, '/grant:r', grant, '/Q'], {
     encoding: 'utf8',
     env: safeEnvironment,
     timeout: 5_000,
     windowsHide: true,
     stdio: 'ignore',
   });
-  if (grantOwner.status !== 0) {
-    return { ok: false, code: (grantOwner.error as NodeJS.ErrnoException | undefined)?.code ?? 'acl_apply_failed' };
+  if (apply.status !== 0) {
+    return { ok: false, code: (apply.error as NodeJS.ErrnoException | undefined)?.code ?? 'acl_apply_failed' };
   }
   const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_ACL_VERIFY_SCRIPT], {
     encoding: 'utf8',
