@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   classifyReviewRisk,
   resolveReviewAuthority,
@@ -7,6 +8,10 @@ import {
   type ReviewPolicy,
   type ReviewRiskLane,
 } from './reviewPolicy.js';
+
+const { hostProtectedPrefixes } = JSON.parse(
+  readFileSync(new URL('../../../config/review-risk-policy.json', import.meta.url), 'utf8'),
+) as { hostProtectedPrefixes: string[] };
 
 const lanes: ReviewRiskLane[] = ['TRIVIAL', 'NORMAL', 'ELEVATED', 'CRITICAL', 'AMBIGUOUS'];
 
@@ -121,4 +126,19 @@ test('resolveReviewAuthority: reviewer/gate paths require HOST_PROTECTED', () =>
   assert.equal(resolveReviewAuthority(['config/review-risk-policy.json']), 'HOST_PROTECTED');
   assert.equal(resolveReviewAuthority(['babel-cli/src/services/chatEngine.ts']), 'SESSION_ATTESTED');
   assert.equal(resolveReviewAuthority([]), 'SESSION_ATTESTED');
+});
+
+test('resolveReviewAuthority: every configured hostProtectedPrefix is protected', () => {
+  assert.ok(hostProtectedPrefixes.length > 0, 'the shared policy must declare hostProtectedPrefixes');
+  for (const prefix of hostProtectedPrefixes) {
+    const representative = prefix.endsWith('/') ? `${prefix}representative.ts` : prefix;
+    assert.equal(resolveReviewAuthority([representative]), 'HOST_PROTECTED', `prefix ${prefix}`);
+  }
+});
+
+test('resolveReviewAuthority: normalizes backslashes, case, and trailing slashes', () => {
+  assert.equal(resolveReviewAuthority(['babel-cli\\src\\services\\codexHarnessReview.ts']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['BABEL-CLI/SRC/SERVICES/HARNESSREVIEWPROTOCOL.TS']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['babel-cli/src/services/reviewPolicy/']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['BABEL-CLI\\SRC\\SERVICES\\CHATENGINE.TS']), 'SESSION_ATTESTED');
 });

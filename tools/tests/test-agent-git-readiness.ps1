@@ -63,8 +63,10 @@ function Get-FixtureExactDiffCoverage {
     [Parameter(Mandatory = $true)][string]$BaseSha,
     [Parameter(Mandatory = $true)][string]$HeadSha
   )
-  # Mirror scripts/agent-pr-gate-common.psm1 Get-AgentExactDiffCoverage byte for
-  # byte so the fixture's claimed coverage matches the gate's live diff.
+  # Mirror the hash/line computation in scripts/agent-pr-gate-common.psm1
+  # Get-AgentExactDiffCoverage so the fixture's claimed coverage matches the
+  # gate's live diff. Unlike production, this fixture copy omits the 100MB
+  # EXACT_DIFF_TOO_LARGE size guard; the byte hashing and line counting match.
   $start = [Diagnostics.ProcessStartInfo]::new()
   $start.FileName = $git
   $start.WorkingDirectory = $WorkingDirectory

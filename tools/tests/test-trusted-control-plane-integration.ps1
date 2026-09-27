@@ -323,7 +323,7 @@ exit 0
   }
 
   # 1. positive: base-derived change with controller-owned V3 reviews.
-  Invoke-Step 'red-controller-reviews-pass' {
+  Invoke-Step 'controller-reviews-pass' {
     $run = Invoke-Gate -Label 'positive' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath }
     $policy = Get-GateReviewPolicy $run
     if ($run.exitCode -ne 0) { throw "exit=$($run.exitCode) blockers=$($run.result.blockers -join ',')" }

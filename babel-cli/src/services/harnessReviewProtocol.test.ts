@@ -279,6 +279,35 @@ test('a normal scope stamps SESSION_ATTESTED and executes with a session-atteste
   } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
 })
 
+test('a legacy persisted run without authority recomputes HOST_PROTECTED from scope', async () => {
+  const f = fixture()
+  try {
+    const protectedCandidate = { ...candidate, scope: ['scripts/agent-pr-gate.ps1'], risk_tier: 'CRITICAL' as const }
+    const prepared = prepareHarnessReview({ ...f, candidate: protectedCandidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 2 })
+    const runPath = join(f.stateDir, 'harness-runs', `${prepared.run_id}.json`)
+    const run = JSON.parse(readFileSync(runPath, 'utf8')) as Record<string, unknown>
+    delete run.authority
+    writeFileSync(runPath, JSON.stringify(run))
+    const adapter = {
+      id: 'codex-native-v1', agentKind: 'codex',
+      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
+      review: async (request: (typeof prepared.requests)[number]) => result(request, f.diffSha256),
+    }
+    await assert.rejects(() => executePreparedHarnessReviewSlot(f.stateDir, prepared.run_id, 0, adapter, builder), /HARNESS_AUTHORITY_INSUFFICIENT/)
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('a host-protected request requires the observation to attest HOST_PROTECTED', () => {
+  const f = fixture()
+  try {
+    const protectedCandidate = { ...candidate, scope: ['scripts/agent-pr-gate.ps1'], risk_tier: 'CRITICAL' as const }
+    const prepared = prepareHarnessReview({ ...f, candidate: protectedCandidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 2 })
+    const missing = result(prepared.requests[0]!, f.diffSha256)
+    delete (missing.host_observation as { authority?: unknown }).authority
+    assert.throws(() => submitHarnessReview(f.stateDir, prepared.run_id, missing), /HARNESS_AUTHORITY_MISMATCH/)
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
 test('submitting a result whose observed authority disagrees with the request fails closed', () => {
   const f = fixture()
   try {

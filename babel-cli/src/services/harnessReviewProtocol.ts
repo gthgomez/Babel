@@ -173,7 +173,12 @@ function submitHarnessReviewUnlocked(
       !host.child_execution_id || !host.session_id || host.parent_execution_id !== run.builder.execution_id) {
     throw new Error('HOST_ISOLATION_ATTESTATION_REQUIRED')
   }
-  if (host.authority && host.authority !== request.authority) throw new Error('HARNESS_AUTHORITY_MISMATCH')
+  if (request.authority === 'HOST_PROTECTED') {
+    // A host-protected slot must observe the protected authority, not merely omit it.
+    if (host.authority !== 'HOST_PROTECTED') throw new Error('HARNESS_AUTHORITY_MISMATCH')
+  } else if (host.authority && host.authority !== request.authority) {
+    throw new Error('HARNESS_AUTHORITY_MISMATCH')
+  }
   if (run.candidate.repository.toLowerCase() === 'gthgomez/babel' && !/^[0-9a-f]{40}$/i.test(host.source_sha ?? '')) {
     throw new Error('TRUSTED_CONTROLLER_SOURCE_REQUIRED')
   }
@@ -362,7 +367,8 @@ export async function executePreparedHarnessReviewSlot(
   if (!capabilities.freshSubagents || !capabilities.childSessionIdentity || !capabilities.readOnlyReview) {
     throw new Error('HARNESS_REVIEW_CAPABILITIES_INSUFFICIENT')
   }
-  assertAdapterAuthority(adapter, run.authority)
+  // Legacy persisted runs predate `authority`; recompute it from the bound scope.
+  assertAdapterAuthority(adapter, run.authority ?? resolveReviewAuthority(run.candidate.scope))
   const request = run.requests[slot]
   if (!request) throw new Error('REVIEW_SLOT_NOT_FOUND')
   if (run.status !== 'PENDING' || run.reviews.some((review) => review.challenge_id === request.challenge_id)) {
