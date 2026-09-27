@@ -21,6 +21,18 @@
     "babel-cli/src/config/", "babel-cli/src/commands/", "babel-cli/src/runners/",
     "babel-cli/src/protocol/", "tools/", "scripts/"
   ],
+  "hostProtectedPrefixes": [
+    ".github/workflows/",
+    "scripts/agent-pr-gate", "scripts/agent-review-", "scripts/trusted-merge-gate",
+    "scripts/agent-pr-merge", "scripts/verify-", "scripts/materialize-independent-review",
+    "config/review-risk-policy.json",
+    "babel-cli/src/services/codexHarnessReview", "babel-cli/src/services/harnessReviewProtocol",
+    "babel-cli/src/services/reviewPolicy", "babel-cli/src/services/independentReview",
+    "babel-cli/src/services/hostReviewController", "babel-cli/src/services/mergeReadinessBroker",
+    "babel-cli/src/services/trustedReviewInstallation", "babel-cli/src/authority/",
+    "babel-cli/src/config/autonomyPolicy",
+    "tools/babel-pr-orchestrate", "tools/agent-host-review.ps1", "tools/host-review-worker.mts"
+  ],
   "finalCertificationCount": {
     "TRIVIAL": 1, "NORMAL": 1, "ELEVATED": 2, "CRITICAL": 2, "AMBIGUOUS": 2
   }

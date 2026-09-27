@@ -10,20 +10,42 @@ import { readFileSync } from 'node:fs';
 const sharedRiskPolicy = JSON.parse(readFileSync(new URL('../../../config/review-risk-policy.json', import.meta.url), 'utf8')) as {
   criticalPrefixes: string[];
   elevatedPrefixes: string[];
+  hostProtectedPrefixes?: string[];
   finalCertificationCount: Record<ReviewRiskLane, 1 | 2>;
 };
 
-export function classifyReviewRisk(scope: string[]): ReviewRiskLane {
-  if (scope.length === 0) return 'TRIVIAL';
-  const matches = (path: string, prefixes: string[]) => prefixes.some((prefix) => {
+const hostProtectedPrefixes = sharedRiskPolicy.hostProtectedPrefixes ?? [];
+
+/** Normalize a candidate path and test it against a prefix list (case-insensitive, `/`-separated, trailing-slash tolerant). */
+function matchesAnyPrefix(path: string, prefixes: string[]): boolean {
+  return prefixes.some((prefix) => {
     const value = prefix.toLowerCase();
     const normalized = path.replace(/\\/g, '/').toLowerCase();
     return normalized.startsWith(value) || normalized === value.replace(/\/$/, '');
   });
-  if (scope.some((path) => matches(path, sharedRiskPolicy.criticalPrefixes))) return 'CRITICAL';
-  if (scope.some((path) => matches(path, sharedRiskPolicy.elevatedPrefixes))) return 'ELEVATED';
+}
+
+export function classifyReviewRisk(scope: string[]): ReviewRiskLane {
+  if (scope.length === 0) return 'TRIVIAL';
+  if (scope.some((path) => matchesAnyPrefix(path, sharedRiskPolicy.criticalPrefixes))) return 'CRITICAL';
+  if (scope.some((path) => matchesAnyPrefix(path, sharedRiskPolicy.elevatedPrefixes))) return 'ELEVATED';
   if (scope.every((path) => /\.(md|txt)$/i.test(path) || path.startsWith('docs/'))) return 'TRIVIAL';
   return 'NORMAL';
+}
+
+/**
+ * Producer-side reviewer authority.
+ *
+ * `SESSION_ATTESTED` is the ordinary lane: a harness-native fresh child review
+ * with no root-owned binary required. `HOST_PROTECTED` is required when any
+ * changed path touches the reviewer/gate/authority path, where a
+ * root-owned/protected launcher must attest the review instead.
+ */
+export type ReviewAuthority = 'SESSION_ATTESTED' | 'HOST_PROTECTED';
+
+export function resolveReviewAuthority(scope: string[]): ReviewAuthority {
+  const hostProtected = scope.some((path) => matchesAnyPrefix(path, hostProtectedPrefixes));
+  return hostProtected ? 'HOST_PROTECTED' : 'SESSION_ATTESTED';
 }
 
 export type ReviewRiskLane = 'TRIVIAL' | 'NORMAL' | 'ELEVATED' | 'CRITICAL' | 'AMBIGUOUS';

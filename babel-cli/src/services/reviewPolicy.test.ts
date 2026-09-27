@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyReviewRisk,
+  resolveReviewAuthority,
   resolveReviewPolicy,
   type ReviewPolicy,
   type ReviewRiskLane,
@@ -108,4 +109,16 @@ test('requireFreshContext is always true and counts never drop below one', () =>
     assert.ok(policy.workingReviewCount >= 1, `lane ${lane} workingReviewCount`);
     assert.ok(policy.finalCertificationCount >= 1, `lane ${lane} finalCertificationCount`);
   }
+});
+
+test('resolveReviewAuthority: reviewer/gate paths require HOST_PROTECTED', () => {
+  assert.equal(resolveReviewAuthority(['docs/readme.md']), 'SESSION_ATTESTED');
+  assert.equal(resolveReviewAuthority(['scripts/agent-pr-gate.ps1']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['scripts/trusted-merge-gate.ps1']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['babel-cli/src/services/codexHarnessReview.ts']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['babel-cli/src/services/harnessReviewProtocol.ts']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['babel-cli/src/config/autonomyPolicy.ts']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['config/review-risk-policy.json']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['babel-cli/src/services/chatEngine.ts']), 'SESSION_ATTESTED');
+  assert.equal(resolveReviewAuthority([]), 'SESSION_ATTESTED');
 });
