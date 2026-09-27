@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { createOpenCodeReviewAdapter, type OpenCodeSpawnFn } from './orchestratorReviewAdapter.js'
 import type { IndependentReviewExecutionRequest } from './independentReviewController.js'
 import type { HarnessReviewAdapter } from './harnessReviewProtocol.js'
+import type { ReviewAuthority } from './reviewPolicy.js'
 
 export function createOpenCodeHarnessAdapter(options: {
   model: string
@@ -11,10 +12,14 @@ export function createOpenCodeHarnessAdapter(options: {
   agentName?: string
   spawnFn?: OpenCodeSpawnFn
   sourceSha: string
+  authority?: ReviewAuthority
 }): HarnessReviewAdapter {
+  // The OpenCode fallback runs in the coding session, so it can only ever attest
+  // SESSION_ATTESTED. A host-protected candidate must use the protected launcher.
+  if (options.authority === 'HOST_PROTECTED') throw new Error('HARNESS_AUTHORITY_INSUFFICIENT')
   return {
     id: 'opencode-native-fallback-v1', agentKind: 'opencode',
-    capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false }),
+    capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' }),
     async review(request) {
       const diff = readFileSync(join(request.snapshot_root, 'changes.diff'), 'utf8')
       const digest = createHash('sha256').update(diff).digest('hex')
@@ -48,6 +53,7 @@ export function createOpenCodeHarnessAdapter(options: {
           source_paths_opened: [], tool_calls: result.usage?.tool_calls ?? 0,
           requested_model: options.model, model_attribution: 'configured' as const,
           source_sha: options.sourceSha,
+          authority: 'SESSION_ATTESTED' as const,
         },
       }
     },

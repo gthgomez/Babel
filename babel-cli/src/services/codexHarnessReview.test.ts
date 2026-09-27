@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { createCodexHarnessAdapter, codexParentIdentity, trustedCodexExecutable } from './codexHarnessReview.js'
+import { createCodexHarnessAdapter, codexParentIdentity, trustedCodexExecutable, resolveCodexExecutable } from './codexHarnessReview.js'
 import type { HarnessReviewRequest } from './harnessReviewProtocol.js'
 
 function request(): { root: string; request: HarnessReviewRequest } {
@@ -24,14 +24,14 @@ function request(): { root: string; request: HarnessReviewRequest } {
     builder: { kind: 'codex', principal_id: 'parent', execution_id: 'parent-thread' },
     reviewer: { kind: 'codex', principal_id: 'reviewer', execution_id: 'reviewer-slot' },
     snapshot_root: snapshot, diff_sha256: createHash('sha256').update(diff).digest('hex'),
-    diff_lines_total: 2, purpose: 'FINAL_CERTIFICATION',
+    diff_lines_total: 2, purpose: 'FINAL_CERTIFICATION', authority: 'SESSION_ATTESTED',
   } }
 }
 
 test('Codex adapter requires an observed fresh thread and full-diff acknowledgement', async () => {
   const f = request()
   try {
-    const adapter = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40),
+    const adapter = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), authority: 'SESSION_ATTESTED' as const,
       spawnFn: async (_request, prompt) => {
         assert.match(prompt, /\+fixed/)
         return { exitCode: 0, events: [
@@ -73,7 +73,7 @@ test('standalone Codex launch rejects a coding-user-owned executable', () => {
 test('Codex adapter fails closed when child identity or diff acknowledgement is absent', async () => {
   const f = request()
   try {
-    const adapter = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), spawnFn: async () => ({ exitCode: 0, events: [
+    const adapter = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), authority: 'SESSION_ATTESTED' as const, spawnFn: async () => ({ exitCode: 0, events: [
       { type: 'item.completed', item: { type: 'agent_message', text: '{"verdict":"APPROVE","findings":[],"blocking_findings":[],"diff_consumed":false}' } },
       { type: 'turn.completed' },
     ] }) })
@@ -85,13 +85,13 @@ test('Codex adapter rejects a later non-JSON correction and an incomplete turn',
   const f = request()
   try {
     const approval = { type: 'item.completed', item: { type: 'agent_message', text: '{"verdict":"APPROVE","findings":[],"blocking_findings":[],"diff_consumed":true}' } }
-    const corrected = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), spawnFn: async () => ({ exitCode: 0, events: [
+    const corrected = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), authority: 'SESSION_ATTESTED' as const, spawnFn: async () => ({ exitCode: 0, events: [
       { type: 'thread.started', thread_id: 'child-thread' }, approval,
       { type: 'item.completed', item: { type: 'agent_message', text: 'I cannot approve this change.' } },
       { type: 'turn.completed' },
     ] }) })
     await assert.rejects(() => corrected.review(f.request), /CODEX_REVIEW_IDENTITY_OR_DIFF_MISSING/)
-    const incomplete = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), spawnFn: async () => ({ exitCode: 0, events: [
+    const incomplete = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), authority: 'SESSION_ATTESTED' as const, spawnFn: async () => ({ exitCode: 0, events: [
       { type: 'thread.started', thread_id: 'child-thread' }, approval,
     ] }) })
     await assert.rejects(() => incomplete.review(f.request), /CODEX_REVIEW_INCOMPLETE/)
@@ -101,14 +101,14 @@ test('Codex adapter rejects a later non-JSON correction and an incomplete turn',
 test('Codex adapter rejects tool use and a different submitting parent', async () => {
   const f = request()
   try {
-    const toolsUsed = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), spawnFn: async () => ({ exitCode: 0, events: [
+    const toolsUsed = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), authority: 'SESSION_ATTESTED' as const, spawnFn: async () => ({ exitCode: 0, events: [
       { type: 'thread.started', thread_id: 'child-thread' },
       { type: 'item.started', item: { type: 'command_execution', command: 'cat /tmp/private' } },
       { type: 'item.completed', item: { type: 'agent_message', text: '{"verdict":"APPROVE","findings":[],"blocking_findings":[],"diff_consumed":true}' } },
       { type: 'turn.completed' },
     ] }) })
     await assert.rejects(() => toolsUsed.review(f.request), /CODEX_REVIEW_TOOL_USE_DENIED/)
-    const wrongParent = createCodexHarnessAdapter({ parentExecutionId: 'other-thread', sourceSha: 'a'.repeat(40), spawnFn: async () => { throw new Error('SHOULD_NOT_SPAWN') } })
+    const wrongParent = createCodexHarnessAdapter({ parentExecutionId: 'other-thread', sourceSha: 'a'.repeat(40), authority: 'SESSION_ATTESTED' as const, spawnFn: async () => { throw new Error('SHOULD_NOT_SPAWN') } })
     await assert.rejects(() => wrongParent.review(f.request), /CODEX_PARENT_EXECUTION_MISMATCH/)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
@@ -126,10 +126,27 @@ test('Codex adapter rejects malformed, incomplete, or trailing event records', a
       [complete[0], { type: 'item.completed' }, ...complete.slice(1)],
       [...complete, { type: 'item.completed', item: { type: 'agent_message', text: 'Correction: block.' } }],
     ]) {
-      const adapter = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40),
+      const adapter = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), authority: 'SESSION_ATTESTED' as const,
         spawnFn: async () => ({ exitCode: 0, events }),
       })
       await assert.rejects(() => adapter.review(f.request), /CODEX_REVIEW_TOOL_USE_DENIED/)
     }
   } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('resolveCodexExecutable requires a protected launcher only for HOST_PROTECTED', () => {
+  if (process.platform === 'win32' || process.getuid?.() === undefined) return
+  const root = mkdtempSync(join(tmpdir(), 'codex-authority-'))
+  try {
+    writeFileSync(join(root, 'codex'), '#!/bin/sh\n', { mode: 0o755 })
+    assert.throws(() => resolveCodexExecutable('HOST_PROTECTED', root), /TRUSTED_CODEX_LAUNCHER_REQUIRED/)
+    assert.equal(resolveCodexExecutable('SESSION_ATTESTED', root), join(root, 'codex'))
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('Codex adapter reports the authority it is constructed to attest', () => {
+  for (const authority of ['SESSION_ATTESTED', 'HOST_PROTECTED'] as const) {
+    const adapter = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), authority })
+    assert.equal(adapter.capabilities().authority, authority)
+  }
 })

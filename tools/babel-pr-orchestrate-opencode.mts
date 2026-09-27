@@ -18,7 +18,7 @@ import { createOpenCodeHarnessAdapter } from '../babel-cli/src/services/openCode
 import { runHarnessReview, withHarnessReviewPublicationLock } from '../babel-cli/src/services/harnessReviewProtocol.js'
 import { publishIndependentReviewV3 } from '../babel-cli/src/services/hostReviewV3Publication.js'
 import { validateHostReviewHandoffV3, type ReviewActorIdentity } from '../babel-cli/src/services/independentReviewEvidenceV3.js'
-import { resolveReviewPolicy } from '../babel-cli/src/services/reviewPolicy.js'
+import { resolveReviewAuthority, resolveReviewPolicy } from '../babel-cli/src/services/reviewPolicy.js'
 import { assertTrustedReviewInstallation } from '../babel-cli/src/services/trustedReviewInstallation.js'
 
 const ALLOWED = new Set(['--repo-root', '--state-dir', '--pr', '--model', '--publish', '--json', '--builder-kind', '--builder-principal', '--builder-execution'])
@@ -152,6 +152,7 @@ const adapter = createOpenCodeHarnessAdapter({
   agentConfigPath,
   agentName,
   sourceSha,
+  authority: resolveReviewAuthority(candidate.scope),
 })
 
 const policy = resolveReviewPolicy({ riskLane: candidate.risk_tier, requireAuthoritative: true })

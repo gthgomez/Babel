@@ -11,7 +11,7 @@ import {
 } from '../babel-cli/src/services/harnessReviewProtocol.js'
 import { createCodexHarnessAdapter, codexParentIdentity } from '../babel-cli/src/services/codexHarnessReview.js'
 import { publishIndependentReviewV3 } from '../babel-cli/src/services/hostReviewV3Publication.js'
-import { resolveReviewPolicy } from '../babel-cli/src/services/reviewPolicy.js'
+import { resolveReviewAuthority, resolveReviewPolicy } from '../babel-cli/src/services/reviewPolicy.js'
 import { assertTrustedReviewInstallation } from '../babel-cli/src/services/trustedReviewInstallation.js'
 
 const argv = process.argv.slice(2)
@@ -80,6 +80,7 @@ if (operation === 'opencode') {
       prepared.candidate.repository.toLowerCase() === 'gthgomez/babel' ? prepared.candidate.base_sha : undefined)
     const outcome = await executePreparedHarnessReviewSlot(stateDir, runId, slot,
       createCodexHarnessAdapter({ parentExecutionId: parent.execution_id, sourceSha,
+        authority: resolveReviewAuthority(prepared.candidate.scope),
         ...(flags.get('--model') ? { model: flags.get('--model')! } : {}) }), parent)
     console.log(JSON.stringify(outcome))
     process.exitCode = outcome.status === 'MERGE_READY' ? 0 : outcome.status === 'BLOCKED' ? 2 : 3

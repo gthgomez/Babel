@@ -39,6 +39,7 @@ function result(request: ReturnType<typeof prepareHarnessReview>['requests'][num
       session_id: 'child-session', fresh_context: true, read_only_enforced: true, controller_state_isolated: true,
       diff_sha256: diffSha256, diff_lines_total: 2, diff_lines_read: 2,
       source_paths_opened: [], tool_calls: 1, source_sha: 'a'.repeat(40),
+      authority: request.authority,
     },
   }
 }
@@ -79,7 +80,7 @@ test('in-process adapter uses the same durable challenge path', async () => {
       ...f, candidate, builder, reviewCount: 1,
       adapter: {
         id: 'codex-native-v1', agentKind: 'codex',
-        capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false }),
+        capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
         review: async (request) => result(request, f.diffSha256),
       },
     })
@@ -96,7 +97,7 @@ test('one BLOCK wins a two-review round and remains publishable', async () => {
       ...f, candidate: critical, builder, reviewCount: 2,
       adapter: {
         id: 'codex-native-v1', agentKind: 'codex',
-        capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false }),
+        capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'HOST_PROTECTED' as const }),
         review: async (request) => {
           calls++
           const review = result(request, f.diffSha256)
@@ -146,7 +147,7 @@ test('prepared slot executes only the matching trusted adapter', async () => {
     const prepared = prepareHarnessReview({ ...f, candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 })
     const adapter = {
       id: 'codex-native-v1', agentKind: 'codex',
-      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false }),
+      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
       review: async (request: (typeof prepared.requests)[number]) => result(request, f.diffSha256),
     }
     await assert.rejects(() => executePreparedHarnessReviewSlot(f.stateDir, prepared.run_id, 0, { ...adapter, id: 'other' }, builder), /HARNESS_ADAPTER_MISMATCH/)
@@ -169,7 +170,7 @@ test('a pending result resumes after challenge completion without another review
     let calls = 0
     const outcome = await executePreparedHarnessReviewSlot(f.stateDir, prepared.run_id, 0, {
       id: 'codex-native-v1', agentKind: 'codex',
-      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false }),
+      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
       review: async () => { calls++; throw new Error('REVIEWER_SHOULD_NOT_RESTART') },
     }, builder)
     assert.equal(outcome.status, 'MERGE_READY')
@@ -192,7 +193,7 @@ test('a consumed challenge resumes from its journaled result', async () => {
     writeFileSync(runPath, JSON.stringify(run))
     const outcome = await executePreparedHarnessReviewSlot(f.stateDir, prepared.run_id, 0, {
       id: 'codex-native-v1', agentKind: 'codex',
-      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false }),
+      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
       review: async () => { throw new Error('REVIEWER_SHOULD_NOT_RESTART') },
     }, builder)
     assert.equal(outcome.status, 'MERGE_READY')
@@ -244,5 +245,46 @@ test('publication holds the same state lock used by submissions', async () => {
       return certified.handoff.controller_run_id
     })
     assert.equal(observed, prepared.run_id)
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('a host-protected scope stamps HOST_PROTECTED and refuses a session-attested adapter', async () => {
+  const f = fixture()
+  try {
+    const protectedCandidate = { ...candidate, scope: ['scripts/agent-pr-gate.ps1'], risk_tier: 'CRITICAL' as const }
+    const prepared = prepareHarnessReview({ ...f, candidate: protectedCandidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 2 })
+    assert.equal(prepared.requests.length, 2)
+    assert.ok(prepared.requests.every((request) => request.authority === 'HOST_PROTECTED'))
+    const adapter = {
+      id: 'codex-native-v1', agentKind: 'codex',
+      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
+      review: async (request: (typeof prepared.requests)[number]) => result(request, f.diffSha256),
+    }
+    await assert.rejects(() => executePreparedHarnessReviewSlot(f.stateDir, prepared.run_id, 0, adapter, builder), /HARNESS_AUTHORITY_INSUFFICIENT/)
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('a normal scope stamps SESSION_ATTESTED and executes with a session-attested adapter', async () => {
+  const f = fixture()
+  try {
+    const prepared = prepareHarnessReview({ ...f, candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 })
+    assert.equal(prepared.requests[0]?.authority, 'SESSION_ATTESTED')
+    const adapter = {
+      id: 'codex-native-v1', agentKind: 'codex',
+      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
+      review: async (request: (typeof prepared.requests)[number]) => result(request, f.diffSha256),
+    }
+    const submitted = await executePreparedHarnessReviewSlot(f.stateDir, prepared.run_id, 0, adapter, builder)
+    assert.equal(submitted.status, 'MERGE_READY')
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('submitting a result whose observed authority disagrees with the request fails closed', () => {
+  const f = fixture()
+  try {
+    const prepared = prepareHarnessReview({ ...f, candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 })
+    const mismatched = result(prepared.requests[0]!, f.diffSha256)
+    mismatched.host_observation.authority = 'HOST_PROTECTED'
+    assert.throws(() => submitHarnessReview(f.stateDir, prepared.run_id, mismatched), /HARNESS_AUTHORITY_MISMATCH/)
   } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
 })

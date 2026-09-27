@@ -4,6 +4,7 @@ import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { HarnessReviewAdapter, HarnessReviewRequest, HarnessReviewResult } from './harnessReviewProtocol.js'
 import type { ReviewActorIdentity } from './independentReviewEvidenceV3.js'
+import type { ReviewAuthority } from './reviewPolicy.js'
 
 export interface CodexSpawnResult { exitCode: number; events: unknown[] }
 export type CodexSpawnFn = (request: HarnessReviewRequest, prompt: string, model?: string) => Promise<CodexSpawnResult>
@@ -59,14 +60,35 @@ export function trustedCodexExecutable(pathEnv: string | undefined = process.env
   throw new Error('TRUSTED_CODEX_LAUNCHER_REQUIRED')
 }
 
-function defaultSpawn(request: HarnessReviewRequest, prompt: string, model?: string): Promise<CodexSpawnResult> {
-  return new Promise((resolve, reject) => {
+/** SESSION_ATTESTED lane: any executable named `codex` on PATH, with no root-ownership requirement. */
+export function sessionCodexExecutable(pathEnv: string | undefined = process.env.PATH): string {
+  if (process.platform === 'win32') return 'codex'
+  for (const directory of (pathEnv ?? '').split(':')) {
+    if (!directory || !isAbsolute(directory)) continue
+    const candidate = resolve(directory, 'codex')
+    try {
+      const target = realpathSync(candidate)
+      const executable = lstatSync(target)
+      if (!executable.isFile() || (executable.mode & 0o111) === 0) continue
+      return target
+    } catch { /* Try the next installed executable. */ }
+  }
+  throw new Error('CODEX_EXECUTABLE_NOT_FOUND')
+}
+
+/** HOST_PROTECTED demands the protected launcher; every other lane may use the session executable. */
+export function resolveCodexExecutable(authority: ReviewAuthority, pathEnv?: string): string {
+  return authority === 'HOST_PROTECTED' ? trustedCodexExecutable(pathEnv) : sessionCodexExecutable(pathEnv)
+}
+
+function createDefaultSpawn(authority: ReviewAuthority): CodexSpawnFn {
+  return (request: HarnessReviewRequest, prompt: string, model?: string) => new Promise<CodexSpawnResult>((resolve, reject) => {
     const args = [
       'exec', '--sandbox', 'read-only', '--ignore-user-config', '--ignore-rules',
       '--skip-git-repo-check', '--json', '--cd', request.snapshot_root,
       ...(model ? ['--model', model] : []), '-',
     ]
-    const child = spawn(trustedCodexExecutable(), args, {
+    const child = spawn(resolveCodexExecutable(authority), args, {
       cwd: request.snapshot_root, env: reviewerEnvironment(),
       stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
     })
@@ -101,11 +123,11 @@ function strictStrings(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((item) => typeof item === 'string') ? value as string[] : undefined
 }
 
-export function createCodexHarnessAdapter(options: { parentExecutionId: string; sourceSha: string; model?: string; spawnFn?: CodexSpawnFn }): HarnessReviewAdapter {
-  const spawnFn = options.spawnFn ?? defaultSpawn
+export function createCodexHarnessAdapter(options: { parentExecutionId: string; sourceSha: string; authority: ReviewAuthority; model?: string; spawnFn?: CodexSpawnFn }): HarnessReviewAdapter {
+  const spawnFn = options.spawnFn ?? createDefaultSpawn(options.authority)
   return {
     id: 'codex-native-v1', agentKind: 'codex',
-    capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false }),
+    capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: options.authority }),
     async review(request: Readonly<HarnessReviewRequest>): Promise<HarnessReviewResult> {
       if (options.parentExecutionId !== request.builder.execution_id) throw new Error('CODEX_PARENT_EXECUTION_MISMATCH')
       const diff = readFileSync(join(request.snapshot_root, 'changes.diff'), 'utf8')
@@ -168,6 +190,7 @@ export function createCodexHarnessAdapter(options: { parentExecutionId: string; 
           diff_sha256: digest, diff_lines_total: lines, diff_lines_read: lines,
           source_paths_opened: [], tool_calls: toolCalls,
           source_sha: options.sourceSha,
+          authority: options.authority,
           ...(options.model ? { requested_model: options.model, model_attribution: 'configured' as const } : { model_attribution: 'unavailable' as const }),
         },
       }

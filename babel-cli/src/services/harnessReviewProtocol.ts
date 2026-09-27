@@ -14,13 +14,15 @@ import {
   validateHostReviewHandoffV3, validateIndependentReviewEvidenceV3,
   type HostReviewHandoffV3, type IndependentReviewEvidenceV3, type ReviewActorIdentity,
 } from './independentReviewEvidenceV3.js'
-import { classifyReviewRisk, resolveReviewPolicy } from './reviewPolicy.js'
+import { classifyReviewRisk, resolveReviewAuthority, resolveReviewPolicy, type ReviewAuthority } from './reviewPolicy.js'
 
 export interface HarnessReviewCapabilities {
   freshSubagents: boolean
   childSessionIdentity: boolean
   readOnlyReview: boolean
   repairWorkers: boolean
+  /** Strongest authority this adapter can attest for a final certification. */
+  authority: ReviewAuthority
 }
 
 export interface HarnessReviewRequest {
@@ -33,6 +35,7 @@ export interface HarnessReviewRequest {
   diff_sha256: string
   diff_lines_total: number
   purpose: 'FINAL_CERTIFICATION'
+  authority: ReviewAuthority
 }
 
 export interface HarnessReviewResult {
@@ -58,6 +61,7 @@ export interface HarnessReviewResult {
     observed_model?: string | null
     model_attribution?: 'observed' | 'configured' | 'unavailable'
     source_sha?: string
+    authority?: ReviewAuthority
   }
 }
 
@@ -75,6 +79,7 @@ interface ReviewRun {
   builder: ReviewActorIdentity
   adapter_id: string
   agent_kind: string
+  authority: ReviewAuthority
   requests: HarnessReviewRequest[]
   reviews: IndependentReviewEvidenceV3[]
   pending_results?: Record<string, HarnessReviewResult>
@@ -102,6 +107,7 @@ export function prepareHarnessReview(input: {
 }): { run_id: string; requests: HarnessReviewRequest[] } {
   if (input.reviewCount !== 1 && input.reviewCount !== 2) throw new Error('INVALID_REVIEWER_COUNT')
   const derivedRisk = classifyReviewRisk(input.candidate.scope)
+  const authority = resolveReviewAuthority(input.candidate.scope)
   if (input.candidate.risk_tier !== derivedRisk) throw new Error('CANDIDATE_RISK_TIER_MISMATCH')
   const requiredCount = resolveReviewPolicy({ riskLane: derivedRisk, requireAuthoritative: true }).finalCertificationCount
   if (input.reviewCount !== requiredCount) throw new Error('REVIEWER_COUNT_POLICY_MISMATCH')
@@ -124,6 +130,7 @@ export function prepareHarnessReview(input: {
     diff_sha256: diffSha256,
     diff_lines_total: diffLinesTotal,
     purpose: 'FINAL_CERTIFICATION',
+    authority,
   }))
   for (const request of requests) {
     const challenge: PersistentReviewChallenge = {
@@ -138,7 +145,7 @@ export function prepareHarnessReview(input: {
   }
   const run: ReviewRun = {
     run_id: runId, candidate: input.candidate, builder: input.builder,
-    adapter_id: input.adapterId, agent_kind: input.agentKind, requests, reviews: [], status: 'PENDING',
+    adapter_id: input.adapterId, agent_kind: input.agentKind, authority, requests, reviews: [], status: 'PENDING',
   }
   mkdirSync(join(stateDir, 'harness-runs'), { recursive: true, mode: 0o700 })
   atomicReviewJson(runPath(stateDir, runId), run)
@@ -166,6 +173,7 @@ function submitHarnessReviewUnlocked(
       !host.child_execution_id || !host.session_id || host.parent_execution_id !== run.builder.execution_id) {
     throw new Error('HOST_ISOLATION_ATTESTATION_REQUIRED')
   }
+  if (host.authority && host.authority !== request.authority) throw new Error('HARNESS_AUTHORITY_MISMATCH')
   if (run.candidate.repository.toLowerCase() === 'gthgomez/babel' && !/^[0-9a-f]{40}$/i.test(host.source_sha ?? '')) {
     throw new Error('TRUSTED_CONTROLLER_SOURCE_REQUIRED')
   }
@@ -332,6 +340,13 @@ export function readHarnessReviewRequest(stateDir: string, runId: string, slot: 
   return request
 }
 
+/** A HOST_PROTECTED run may only be reviewed by an adapter that attests HOST_PROTECTED. */
+function assertAdapterAuthority(adapter: HarnessReviewAdapter, required: ReviewAuthority): void {
+  if (required === 'HOST_PROTECTED' && adapter.capabilities().authority !== 'HOST_PROTECTED') {
+    throw new Error('HARNESS_AUTHORITY_INSUFFICIENT')
+  }
+}
+
 /** Trusted-host entrypoint: the adapter produces the observation in this process. */
 export async function executePreparedHarnessReviewSlot(
   stateDir: string, runId: string, slot: number, adapter: HarnessReviewAdapter, parent: ReviewActorIdentity,
@@ -347,6 +362,7 @@ export async function executePreparedHarnessReviewSlot(
   if (!capabilities.freshSubagents || !capabilities.childSessionIdentity || !capabilities.readOnlyReview) {
     throw new Error('HARNESS_REVIEW_CAPABILITIES_INSUFFICIENT')
   }
+  assertAdapterAuthority(adapter, run.authority)
   const request = run.requests[slot]
   if (!request) throw new Error('REVIEW_SLOT_NOT_FOUND')
   if (run.status !== 'PENDING' || run.reviews.some((review) => review.challenge_id === request.challenge_id)) {
@@ -369,6 +385,7 @@ export async function runHarnessReview(input: {
   if (!capabilities.freshSubagents || !capabilities.childSessionIdentity || !capabilities.readOnlyReview) {
     throw new Error('HARNESS_REVIEW_CAPABILITIES_INSUFFICIENT')
   }
+  assertAdapterAuthority(input.adapter, resolveReviewAuthority(input.candidate.scope))
   const prepared = prepareHarnessReview({ ...input, agentKind: input.adapter.agentKind, adapterId: input.adapter.id })
   const settled = await Promise.allSettled(prepared.requests.map((request) => input.adapter.review(request)))
   const blocks = settled.flatMap((item) => item.status === 'fulfilled' && item.value.verdict === 'BLOCK' ? [item.value] : [])
