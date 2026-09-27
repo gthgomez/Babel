@@ -1,12 +1,14 @@
 <!--
 status: ACTIVE
-last_verified: 2026-09-26
+last_verified: 2026-09-27
 -->
 # Independent Review Routing
 
 Every PR requires V3 independent final certification of its exact current base/head.
-TRIVIAL and NORMAL require one fresh certifier. ELEVATED and CRITICAL require two fresh,
-distinct certifiers. BLACK remains an owner-decision boundary. Same-harness and same-model
+V3 (`independent_agent_review_v3` / `host_review_handoff_v3`) is the canonical
+authoritative contract, accepted for any supported review engine. TRIVIAL and NORMAL
+require one fresh certifier. ELEVATED and CRITICAL require two fresh, distinct
+certifiers. BLACK remains an owner-decision boundary. Same-harness and same-model
 reviewers are valid when their observed child executions are distinct from the builder,
 repair producer, and each other.
 
@@ -23,16 +25,19 @@ the candidate, mutate GitHub, or merge. The trusted host must restrict controlle
 reads before claiming that isolation. A repair producer cannot certify its own candidate.
 BLOCK against an unchanged candidate is retained.
 
-Review authority is scope-derived. `resolveReviewAuthority(scope)` returns `SESSION_ATTESTED` for
-ordinary PRs, where a fresh harness-native child (no root-owned binary required) is launched
-read-only with observed identity and full exact-diff delivery; it returns `HOST_PROTECTED` when any
-changed path matches `hostProtectedPrefixes` in `config/review-risk-policy.json` (the
-reviewer/gate/authority surface), where the protected installation and launcher must attest the
-review. A `HOST_PROTECTED` run fails closed when the adapter cannot attest host protection; the
-OpenCode fallback is `SESSION_ATTESTED` only. Reviewers still never merge. After the base-rooted gate
-reports `MERGE_READY` for the exact reviewed head, the orchestrator may run
-`scripts/agent-pr-merge.ps1` under the rule 05 bounded-autonomous merge contract; the executor binds
-`gh pr merge --match-head-commit` to that head and never merges on a mismatch.
+Review authority is scope-derived and vendor-neutral: it comes from an owner-authenticated
+controller handoff bound to the exact candidate, not from a specific vendor or model family.
+`resolveReviewAuthority(scope)` returns `SESSION_ATTESTED` for ordinary PRs, where a fresh
+harness-native child (no root-owned binary required) is launched read-only with observed
+identity and full exact-diff delivery; it returns `HOST_PROTECTED` when any changed path
+matches `hostProtectedPrefixes` in `config/review-risk-policy.json` (the
+reviewer/gate/authority surface), where the protected installation and launcher must attest
+the review. A `HOST_PROTECTED` run fails closed when the adapter cannot attest host
+protection; the OpenCode fallback is `SESSION_ATTESTED` only. Reviewers still never merge.
+After the base-rooted gate reports `MERGE_READY` for the exact reviewed head, the
+orchestrator may run `scripts/agent-pr-merge.ps1` under the rule 05 bounded-autonomous merge
+contract; the executor binds `gh pr merge --match-head-commit` to that head and never merges
+on a mismatch.
 
 The base-rooted merge gate accepts V3 only. It fetches the live owner comment and checks
 owner identity, exact candidate, scope, fresh independent child evidence, reviewer count,
