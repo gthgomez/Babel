@@ -49,7 +49,7 @@ if ($materializer -notmatch [regex]::Escape('per_page=100&page=')) { throw 'Evid
 foreach ($marker in @('owner.id', 'per_page=100&page=')) {
   if ($materializer -notmatch [regex]::Escape($marker)) { throw "Evidence transport is missing marker: $marker" }
 }
-foreach ($marker in @('babel-controller-ai-reviews-v2', 'github_host_review_bundle_v2')) {
+foreach ($marker in @('babel-controller-ai-reviews-v2', 'github_host_review_bundle_v3', 'host_review_handoff_v3')) {
   if ($evidenceValidator -notmatch [regex]::Escape($marker)) { throw "Immutable evidence validator is missing marker: $marker" }
 }
 $workflow = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot '.github/workflows/trusted-control-plane.yml')
