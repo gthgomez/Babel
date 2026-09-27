@@ -96,6 +96,18 @@ export function verifyAndConsumeChallenge(
     throw new Error(`CHALLENGE_NOT_COMPLETED: ${raw.status}`)
   }
 
+  assertReviewChallengeBinding(raw, challengeId, evidence)
+
+  // Atomically consume
+  const updated: PersistentReviewChallenge = {
+    ...raw,
+    status: 'CONSUMED',
+    consumed_at: new Date().toISOString(),
+  }
+  atomicReviewJson(challengePath, updated)
+}
+
+function assertReviewChallengeBinding(raw: PersistentReviewChallenge, challengeId: string, evidence: IndependentReviewEvidenceV3): void {
   // Exact bindings
   if (raw.challenge_id !== challengeId) throw new Error('CHALLENGE_ID_MISMATCH')
   if (raw.candidate_digest !== evidence.candidate_digest) throw new Error('CHALLENGE_CANDIDATE_DIGEST_MISMATCH')
@@ -115,13 +127,26 @@ export function verifyAndConsumeChallenge(
     throw new Error('CHALLENGE_REVIEWER_IDENTITY_MISMATCH')
   }
 
-  // Atomically consume
-  const updated: PersistentReviewChallenge = {
-    ...raw,
-    status: 'CONSUMED',
-    consumed_at: new Date().toISOString(),
+}
+
+/** Resume only the exact result previously journaled by a trusted host. */
+export function settleReviewChallenge(
+  stateDir: string, challengeId: string, evidence: IndependentReviewEvidenceV3, completedAt: string,
+): void {
+  assertSafeChallengeId(challengeId)
+  const path = join(stateDir, 'challenges', `${challengeId}.json`)
+  if (!existsSync(path)) throw new Error(`CHALLENGE_NOT_FOUND: ${challengeId}`)
+  let raw = JSON.parse(readFileSync(path, 'utf8')) as PersistentReviewChallenge
+  if (raw.status === 'ISSUED') {
+    completeReviewChallenge(stateDir, challengeId, { verdict: evidence.verdict, completed_at: completedAt })
+    raw = JSON.parse(readFileSync(path, 'utf8')) as PersistentReviewChallenge
   }
-  atomicReviewJson(challengePath, updated)
+  if (raw.completed_at !== completedAt) throw new Error('CHALLENGE_COMPLETION_MISMATCH')
+  if (raw.status === 'CONSUMED') {
+    assertReviewChallengeBinding(raw, challengeId, evidence)
+    return
+  }
+  verifyAndConsumeChallenge(stateDir, challengeId, evidence)
 }
 
 export interface IndependentReviewExecutionRequest {
@@ -150,6 +175,7 @@ export interface IndependentReviewExecutionResult {
   isolation?: IndependentReviewIsolationProfile
   execution_purpose?: ReviewExecutionPurpose
   usage?: IndependentReviewUsage
+  diff_consumed?: boolean
 }
 
 export interface IndependentReviewWorkerAdapter {

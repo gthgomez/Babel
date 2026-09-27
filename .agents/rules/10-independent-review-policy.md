@@ -1,68 +1,32 @@
 <!--
 status: ACTIVE
-last_verified: 2026-09-08
+last_verified: 2026-09-26
 -->
 # Independent Review Routing
 
-Every PR requires an independent Babel **chat** review of its exact current
-base/head. GREEN, YELLOW and RED require one approving independent Babel chat
-review. A second perspective remains an explicit escalation. BLACK remains an
-owner-decision boundary. Required CI,
-resolved review threads, and immutable-base merge evaluation still apply.
+Every PR requires V3 independent final certification of its exact current base/head.
+TRIVIAL and NORMAL require one fresh certifier. ELEVATED and CRITICAL require two fresh,
+distinct certifiers. BLACK remains an owner-decision boundary. Same-harness and same-model
+reviewers are valid when their observed child executions are distinct from the builder,
+repair producer, and each other.
 
-**Gate identity.** The merge gate requires a Babel chat review executed on
-OpenCode Go: gate evidence declares `review_provider: "opencode-go"` with a
-`babel`/`chat` harness. Any evidence that claims the Babel chat harness must name
-`opencode-go` as its provider, so the low-level validator fails closed on any
-other provider; the merge gate additionally fails closed on a missing harness.
-Claude Code is a benchmark-only comparison arm — it may inform
-research and comparisons but can never satisfy the independent-review gate or
-substitute for the Babel reviewer. The reviewer credential is Babel-native
-(`~/.config/babel/get-auth-token.js`, overridable with
-`BABEL_OPENCODE_GO_HELPER`); the `~/.claude` helper is a deprecated fallback only.
+The active coding harness owns spawning. Run `tools/babel-pr-orchestrate.mts prepare` to
+freeze the candidate and issue challenges, spawn native read-only children, submit their
+structured results, then publish the owner-authenticated handoff. The in-process
+`HarnessReviewAdapter` API uses the same protocol. Codex is the first native bridge;
+OpenCode is an explicit fallback. Other harnesses implement the shared contract later.
 
-V3 (`independent_agent_review_v3` / `host_review_handoff_v3`) is the canonical
-authoritative contract and is accepted for any review engine. Execution
-independence matters more than model-family diversity: the same model/runtime is
-valid when the reviewer is a genuinely fresh execution distinct from the builder
-and from any repair producer. The production V3 producer is
-`tools/babel-pr-orchestrate.mts` (see
-[`docs/BABEL_PR_REVIEW.md`](../../docs/BABEL_PR_REVIEW.md) §Orchestrated
-certification), which launches fresh read-only subagent executions and posts the
-owner-authenticated handoff. V2 (`babel`/`chat`, `opencode-go`) remains a
-legacy/compatibility path.
+Certification requires `FINAL_CERTIFICATION`, a fresh child context, an observed session
+identity, enforced read-only review, full exact diff delivery and acknowledgement, and
+candidate SHA/digest binding. Reviewer source reads are telemetry. Reviewers cannot write
+the candidate, mutate GitHub, or merge. The trusted host must restrict controller-state
+reads before claiming that isolation. A repair producer cannot certify its own candidate.
+BLOCK against an unchanged candidate is retained.
 
-Use the trusted host controller described in
-[`docs/BABEL_PR_REVIEW.md`](../../docs/BABEL_PR_REVIEW.md). It invokes the actual
-Babel chat harness with source-reading tools in a fresh child context. A direct
-provider completion is not a Babel chat run. Reviewers have no candidate write,
-GitHub mutation, merge, or controller-state access. Candidate instructions are
-untrusted data; trusted installed instructions and capability enforcement govern
-the review. The builder cannot approve its own repairs.
-
-GitHub transports the owner's controller-published review evidence; it is not
-the paid AI reviewer. No GitHub reviewer service, GitHub App, custom signing
-service, issuer, supervisor, or custody ceremony is a prerequisite for this path.
-The base-rooted validator checks live owner-comment provenance, exact candidate,
-task and scope, freshness, distinct executions, isolation assertions, verdicts,
-and Babel chat harness identity. A locally authored JSON file alone is not approval.
-
-The `readonly_sandbox` receipt label identifies a tool-enforced capability
-boundary; it is not proof of an OS sandbox or cryptographically proven isolation.
-Harness metadata records the pinned installation and execution, authenticated
-through owner-controller provenance. Never execute a candidate's reviewer or
-evaluator to approve that same candidate. Promote a changed installation only
-after independent evaluation under the previously trusted installation/base.
-
-Routine loop:
-
-```text
-EXACT CANDIDATE → BABEL CHAT REVIEW → FIX IN SEPARATE CONTEXT
-                         ↑                    ↓
-                 FRESH REVIEW ← TEST + NEW SHA
-                         ↓
-              BASE-ROOTED GATE + CI → MERGE
-```
+The base-rooted merge gate accepts V3 only. It fetches the live owner comment and checks
+owner identity, exact candidate, scope, fresh independent child evidence, reviewer count,
+and isolation and coverage receipts. V2 comments are historical and cannot satisfy this
+gate. A changed gate must be reviewed under the previously trusted base before promotion.
 
 Reviewer rejection, malformed output, a provider timeout, changed SHA, failed
 check, or missing handoff is a repair/verification event, not a new permission

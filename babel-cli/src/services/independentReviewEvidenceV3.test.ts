@@ -164,29 +164,28 @@ test('independentReviewEvidenceV3: rejects runtime controller execution ID misma
   assert.throws(() => validateIndependentReviewEvidenceV3(invalid), /RUNTIME_EXECUTION_ID_MISMATCH/)
 })
 
-test('independentReviewEvidenceV3: rejects external reviewer claiming OpenCode-Go provider or Babel adapter', () => {
-  const badProvider = createValidEvidence({
+test('independentReviewEvidenceV3: binds runtime family to reviewer family without provider preference', () => {
+  const evidence = createValidEvidence({
     runtime: {
       agent_kind: 'codex',
       adapter_id: 'codex-adapter-v1',
       controller_execution_id: 'codex-exec-reviewer-2',
-      observed_provider: 'opencode-go',
+      observed_provider: 'openai',
     },
   })
-  assert.throws(() => validateIndependentReviewEvidenceV3(badProvider), /EXTERNAL_REVIEWER_CANNOT_CLAIM_OPENCODE_GO/)
-
-  const badAdapter = createValidEvidence({
+  assert.equal(validateIndependentReviewEvidenceV3(evidence).runtime.agent_kind, 'codex')
+  const mismatched = createValidEvidence({
     runtime: {
-      agent_kind: 'codex',
-      adapter_id: 'babel-chat-v1',
+      agent_kind: 'babel',
+      adapter_id: 'babel-native-v1',
       controller_execution_id: 'codex-exec-reviewer-2',
     },
   })
-  assert.throws(() => validateIndependentReviewEvidenceV3(badAdapter), /EXTERNAL_REVIEWER_CANNOT_CLAIM_BABEL_ADAPTER/)
+  assert.throws(() => validateIndependentReviewEvidenceV3(mismatched), /REVIEWER_RUNTIME_KIND_MISMATCH/)
 })
 
-test('independentReviewEvidenceV3: rejects Babel reviewer without OpenCode-Go or invalid version', () => {
-  const badBabelProvider = createValidEvidence({
+test('independentReviewEvidenceV3: Babel reviewer may use a different native provider', () => {
+  const babelReview = createValidEvidence({
     reviewer: { kind: 'babel', principal_id: 'b-p2', execution_id: 'b-e2' },
     runtime: {
       agent_kind: 'babel',
@@ -196,19 +195,7 @@ test('independentReviewEvidenceV3: rejects Babel reviewer without OpenCode-Go or
       runtime_version: '1'.repeat(64),
     },
   })
-  assert.throws(() => validateIndependentReviewEvidenceV3(badBabelProvider), /BABEL_REVIEWER_MUST_USE_OPENCODE_GO/)
-
-  const badBabelVersion = createValidEvidence({
-    reviewer: { kind: 'babel', principal_id: 'b-p2', execution_id: 'b-e2' },
-    runtime: {
-      agent_kind: 'babel',
-      adapter_id: 'babel-chat-v1',
-      controller_execution_id: 'b-e2',
-      observed_provider: 'opencode-go',
-      runtime_version: 'short-version',
-    },
-  })
-  assert.throws(() => validateIndependentReviewEvidenceV3(badBabelVersion), /BABEL_REVIEWER_INVALID_VERSION_DIGEST/)
+  assert.equal(validateIndependentReviewEvidenceV3(babelReview).reviewer.kind, 'babel')
 })
 
 test('independentReviewEvidenceV3: rejects APPROVE verdict with blocking findings', () => {
@@ -470,5 +457,3 @@ test('independentReviewEvidenceV3: accepts minimal evidence without the new runt
   assert.equal(validated.runtime.parent_execution_id, undefined)
   assert.equal(validated.runtime.session_id, undefined)
 })
-
-

@@ -35,6 +35,8 @@ export interface OpenCodeReviewAdapterOptions {
   /** Bounded transport retries for spawn/parse failures (1..3, default 2). Never retries a verdict. */
   maxAttempts?: number
   spawnFn?: OpenCodeSpawnFn
+  /** Complete frozen diff supplied by the caller for harness-owned certification. */
+  fullDiff?: string
 }
 
 const DEFAULT_ADAPTER_ID = 'opencode-subagent-v1'
@@ -46,9 +48,10 @@ interface ParsedReview {
   blocking_findings: string[]
   reviewed_files: string[]
   summary?: string
+  diff_consumed?: boolean
 }
 
-function buildReviewPrompt(request: Readonly<IndependentReviewExecutionRequest>): string {
+function buildReviewPrompt(request: Readonly<IndependentReviewExecutionRequest>, fullDiff?: string): string {
   const candidate = request.candidate
   const context = {
     repository: candidate.repository,
@@ -72,17 +75,23 @@ function buildReviewPrompt(request: Readonly<IndependentReviewExecutionRequest>)
     JSON.stringify(context, null, 2),
     '',
     'Return ONLY a single JSON object (no prose, no markdown fences) with exactly this shape:',
-    '{"verdict":"APPROVE"|"BLOCK","findings":string[],"blocking_findings":string[],"reviewed_files":string[],"summary":string}',
+    fullDiff
+      ? '{"verdict":"APPROVE"|"BLOCK","findings":string[],"blocking_findings":string[],"reviewed_files":string[],"summary":string,"diff_consumed":true}'
+      : '{"verdict":"APPROVE"|"BLOCK","findings":string[],"blocking_findings":string[],"reviewed_files":string[],"summary":string}',
     'Use APPROVE only when blocking_findings is empty. List every reviewed path in reviewed_files.',
+    ...(fullDiff ? ['The complete frozen changes.diff follows. Return diff_consumed:true only after reviewing it.', '<changes.diff>', fullDiff, '</changes.diff>'] : []),
   ].join('\n')
 }
 
 function defaultSpawnFn(req: OpenCodeSpawnRequest): Promise<OpenCodeSpawnResult> {
   return new Promise<OpenCodeSpawnResult>((resolve, reject) => {
     // Never forward GitHub credentials to an external reviewer process.
-    const env: NodeJS.ProcessEnv = { ...process.env }
-    delete env['GH_TOKEN']
-    delete env['GITHUB_TOKEN']
+    const env: NodeJS.ProcessEnv = {}
+    for (const key of ['PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME',
+      'OPENCODE_CONFIG_DIR', 'TERM', 'LANG', 'LC_ALL', 'TMPDIR', 'SYSTEMROOT', 'COMSPEC',
+      'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY']) {
+      if (process.env[key]) env[key] = process.env[key]
+    }
     // Rely on cwd discovery of `<cwd>/opencode.json` and `<cwd>/.opencode/agents`.
     // Setting OPENCODE_CONFIG changes OpenCode's project-root resolution and
     // makes the read allow-list fail to match, so it is deliberately not set.
@@ -239,6 +248,7 @@ function parseReviewPayload(events: unknown[]): ParsedReview | undefined {
     findings,
     blocking_findings: blockingFindings,
     reviewed_files: reviewedFiles,
+    ...(record['diff_consumed'] === true ? { diff_consumed: true } : {}),
     ...(summary ? { summary } : {}),
   }
 }
@@ -274,7 +284,7 @@ export function createOpenCodeReviewAdapter(options: OpenCodeReviewAdapterOption
     agent_kind: 'opencode',
     async launch(request: Readonly<IndependentReviewExecutionRequest>): Promise<IndependentReviewExecutionResult> {
       const executionPurpose = request.purpose ?? 'FINAL_CERTIFICATION'
-      const prompt = buildReviewPrompt(request)
+      const prompt = buildReviewPrompt(request, options.fullDiff)
 
       // Bounded retries for transient transport/parse failures only. A parsed
       // verdict (APPROVE or BLOCK) is returned on the first success and is never
@@ -337,6 +347,7 @@ export function createOpenCodeReviewAdapter(options: OpenCodeReviewAdapterOption
         execution_purpose: executionPurpose,
         usage: { tool_calls: countToolCalls(spawnResult.events) },
         runtime,
+        ...(parsed.diff_consumed ? { diff_consumed: true } : {}),
       }
     },
   }

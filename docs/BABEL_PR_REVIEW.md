@@ -1,6 +1,6 @@
 <!--
 status: ACTIVE
-last_verified: 2026-09-13
+last_verified: 2026-09-26
 -->
 # Babel PR Review & Independent-Agent Review Authority
 
@@ -37,8 +37,8 @@ specific vendor or model family.
    - Challenges are completed (`COMPLETED`) upon verified review generation, and atomically marked (`CONSUMED`) when settled.
    - Challenge state lives in controller private storage outside Git worktrees; replaying consumed challenges fails closed.
 5. **Review Policy**:
-   - Default: 1 approving independent review is sufficient for normal PRs.
-   - Policy Escalation: 2 reviews required only when explicitly configured or triggered by policy rules.
+   - TRIVIAL and NORMAL: 1 approving independent certifier.
+   - ELEVATED and CRITICAL: 2 fresh, distinct certifiers. Model diversity is not required.
    - Anti-Approval Shopping: Substantive BLOCK verdicts are retained. Retrying without repairing the code is blocked.
    - Atomic Settlement: Bundles settle without partial approval.
 
@@ -86,10 +86,7 @@ The merge gate strictly rejects `DOGFOOD_REVIEW` or `REVIEW_REPAIR` as merge aut
 
 ## V2 Babel Chat Review Contract (Legacy / Compatibility)
 
-Low-level V2 validation (`<!-- babel-controller-ai-reviews-v2 -->`) remains supported alongside
-V3 (`<!-- babel-controller-independent-review-v3 -->`) for backward compatibility with existing
-candidates and historical bases. V2 evidence records `review_provider: "opencode-go"` and
-the `babel`/`chat` harness.
+V2 evidence remains documented for historical review records. The current merge gate accepts V3 only; a PR carrying only V2 evidence requires fresh V3 certification. V2 recorded `review_provider: "opencode-go"` and the `babel`/`chat` harness.
 
 
 The review/repair adapter explicitly requests `thinking: {type: "disabled"}`
@@ -136,7 +133,7 @@ Candidate Git blobs are copied to a separate inert snapshot: no candidate
 checkout hooks, dependency installation, or candidate code execution is needed
 for review. Secret scanning precedes provider exposure.
 
-Each reviewer is a fresh child process with source-reading capabilities only.
+The legacy Babel chat reviewer is a fresh child process with source-reading capabilities only.
 Writes, shell commands, subagents, shared-memory mutation, GitHub credentials,
 and controller-state reads are unavailable to it. The production reviewer's
 credential is Babel-native: the approved resolver selects the first existing
@@ -177,8 +174,7 @@ with an optional `harness` object:
 }
 ```
 
-The merge gate evaluator accepts both V3 and V2 evidence bundles, ensuring full
-backward compatibility while enabling modern controller-owned independent agent review.
+The merge gate evaluator accepts V3 evidence only. Existing V2 comments remain readable as historical records.
 A changed evaluator does not authorize itself: use the previously trusted base
 and independent reviewers, then promote the new installation.
 
@@ -193,7 +189,8 @@ node babel-cli/node_modules/tsx/dist/cli.mjs tools/babel-pr-review.mts --repo-ro
 ```
 
 The first command collects local dogfooding data without publication. The second
-discovers open PRs and publishes normalized evidence. `--task <owner-task-file>`
+discovers open PRs and publishes legacy telemetry; it does not satisfy the V3-only
+merge gate. `--task <owner-task-file>`
 supplies the current authorized objective; historical attachments are reference
 data, not a superseding mission. Keep state outside every Git worktree and away
 from candidate-readable paths. `--publish` refuses dirty trusted installations.
@@ -237,63 +234,74 @@ test success. Rejected or uncertain findings go through evidence-based
 adjudication; do not mechanically rewrite BLOCK to APPROVE or weaken a gate.
 Merge only the exact candidate accepted by CI and the base-rooted gate.
 
-## Orchestrated certification (current production V3 producer)
+## Harness-owned V3 certification
 
-`tools/babel-pr-orchestrate.mts` is the orchestrator-friendly entrypoint that
-produces authoritative V3 evidence (`independent_agent_review_v3` /
-`host_review_handoff_v3`) from fresh subagent executions, so an active coding
-agent no longer needs a separately scheduled Babel reviewer daemon:
+The current engineering harness owns reviewer spawning. Babel freezes the exact candidate,
+issues single-use challenges, validates host observations, and publishes only certified V3
+handoffs. Use the TypeScript `HarnessReviewAdapter` API in an in-process integration, or
+exchange JSON with the CLI:
 
-```powershell
-node babel-cli/node_modules/tsx/dist/cli.mjs tools/babel-pr-orchestrate.mts `
-  --repo-root <trusted-git-clone> --state-dir <private-non-git-directory> `
-  --pr <number> [--model <opencode-model>] [--publish] [--json]
+```bash
+node babel-cli/node_modules/tsx/dist/cli.mjs tools/babel-pr-orchestrate.mts prepare --repo-root <clone> --state-dir <private-dir> --pr <number> > prepared.json
+node babel-cli/node_modules/tsx/dist/cli.mjs tools/babel-pr-orchestrate.mts submit --state-dir <private-dir> --run-id <run-id> --slot 0
+node babel-cli/node_modules/tsx/dist/cli.mjs tools/babel-pr-orchestrate.mts publish --repo-root <clone> --state-dir <private-dir> --pr <number> --run-id <run-id>
 ```
 
-What it does on the exact candidate:
+For ELEVATED and CRITICAL candidates, run slots 0 and 1 with distinct fresh children and
+submit both results before publishing. The trusted Codex adapter starts a fresh `codex exec` process
+with `--sandbox read-only`, supplies the complete frozen diff in the prompt, records the
+observed child thread ID, and keeps GitHub credentials out of the reviewer environment.
+Codex final certification is text-only: any child tool use invalidates the result. When
+the diff alone lacks needed context, the child must BLOCK; source reads are unavailable in
+this first native bridge.
+The controller requires host attestation of fresh context, enforced read-only execution,
+exact diff delivery and acknowledgement, and distinct observed child identities. Targeted
+source reads are telemetry, not a per-file gate. If the child or host cannot supply this
+evidence, certification fails closed.
 
-1. Collects the candidate envelope and materializes an inert, read-only
-   snapshot of the candidate tree (no checkout hooks, no dependency install).
-2. Runs one or two fresh reviewer executions per the canonical policy
-   (`babel-cli/src/services/reviewPolicy.ts`, also consumed by
-   `mergeReadinessBroker.ts`) using `createOpenCodeReviewAdapter`
-   (`opencode run --agent babel-reviewer` against a deny-by-default read-only
-   agent config). Reviewer principals and execution ids are fresh; the runtime
-   records `fresh_context: true` / `fresh_process: true`.
-3. Requires `FINAL_CERTIFICATION`; an approve with blocking findings is never
-   emitted as approval.
-4. With `--publish`, posts the owner-authenticated V3 handoff
-   (`<!-- babel-controller-independent-review-v3 -->`) so Trusted Control Plane
-   automatically reevaluates the exact head.
+`submit` launches the pinned Codex adapter in the trusted host process. It checks the
+current Codex thread against the prepared builder and does not accept
+a reviewer-authored JSON file. In-process integrations may provide another trusted adapter;
+its host must keep controller state and publication credentials outside the reviewer's reach.
+The standalone Codex launcher accepts only a root-owned `codex` executable or symlink whose
+target and every path component are protected from the coding user. A user-writable npm
+installation fails closed. Install a pinned CLI version into a protected system prefix, then
+run the review controller from a clean, base-rooted installation; alternatively, supply a
+host-owned spawn function through the in-process API.
+The Codex CLI builder identity comes from the current `CODEX_THREAD_ID` host environment. A
+standalone same-user CLI session cannot independently prove that environment. Deploy the
+publisher, Node loader, dependencies, and private state behind a trusted host boundary. The Codex read-only sandbox
+enforces write denial; zero observed tool calls enforce the text-only read boundary.
+The host journals each validated child result before consuming its challenge. A repeated
+`submit` for a pending slot resumes that result after interruption; it never launches a
+replacement reviewer for a journaled result. A short SQLite transaction serializes
+submissions and releases its process lock when the host exits.
+The same lock rechecks unresolved BLOCK evidence when an approval is accepted and while a
+certified handoff is published, so concurrent runs cannot approve an unchanged blocked candidate.
+A BLOCK handoff can also be published; the GitHub transport selects the latest complete round,
+so a later BLOCK prevents an earlier approval from satisfying the gate.
 
-Status is machine-readable (`COLLECTED`, `REVIEWING`, `BLOCKED`, `REPAIRING`,
-`RETESTING`, `CERTIFYING`, `WAITING_FOR_CI`, `MERGE_READY`, `ESCALATED`) with
-exit codes `0` certified, `2` blocked (repair required), `3` escalated.
+OpenCode is an explicit standalone fallback: `tools/babel-pr-orchestrate.mts opencode` followed by
+the existing fallback flags plus explicit builder kind, principal, and execution ID. It
+uses the same V3 validation path and never becomes the default reviewer runtime.
 
-**Execution independence, not model diversity.** The controlling rule is that
-the reviewer is a genuinely fresh execution distinct from the builder and from
-any repair producer. The same model/runtime is allowed. The controller rejects a
-reviewer whose principal or execution equals the builder or the candidate
-producer, and `runtime.controller_execution_id` must equal the reviewer
-execution id. External adapters deliberately omit `requested_provider` /
-`observed_provider` (attribution `unavailable`) rather than claim the
-Babel-native `opencode-go` provider; model identity is recorded with the
-existing `observed | configured | unavailable` tri-state and is never
-fabricated.
+The policy table at `config/review-risk-policy.json` drives both TypeScript candidate
+classification and the installed, base-rooted PowerShell gate. CRITICAL uses two fresh,
+read-only reviewers; it does not require different models. A BLOCK is retained against
+the unchanged candidate. Repair produces a new head and requires new challenges. Native
+repair spawning is a later adapter extension.
 
-**Repair.** The bounded review → repair → fresh-certification loop
-(`babel-cli/src/services/reviewOrchestrator.ts`) supports review workers plus an
-optional repair worker (`AutonomousEngineeringWorkerAdapter.repair`), records
-producer lineage for each repair, and re-collects the new head so the prior
-approval is invalid. The CLI entrypoint is review-only: on a blocking finding it
-returns `BLOCKED` with the findings so the orchestrating agent repairs and
-re-runs certification. A BLOCK of an unchanged candidate cannot be re-reviewed
-into approval (anti-approval-shopping).
+The controller command requires a clean installation commit and rejects Git index flags that
+could hide modified tracked files. For Babel self-review, it
+also requires that commit to be an ancestor of the candidate base. V3 evidence records
+the source commit, and the base-rooted gate checks its ancestry for every Babel reviewer,
+regardless of harness. The gate also hashes the
+live Git diff and compares it with each review's coverage receipt. The candidate digest
+is checked for agreement within the handoff; base/head, scope, numstat, and the live diff
+are independently checked against Git.
 
-**Policy note.** The base-rooted PowerShell gate still enforces a floor of one
-independent review for every non-BLACK lane; `reviewPolicy.ts` is the single
-TypeScript source of truth and preserves that floor (AMBIGUOUS/unknown lanes keep
-the historical ELEVATED-equivalent strength).
+The V3-only gate must be reviewed and merged under the previously trusted base. After that
+base is active, outstanding PRs need V3 recertification before merge.
 
 ## Harness learning and operating limits
 

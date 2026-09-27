@@ -5,6 +5,26 @@
  * requires at each risk lane. `mergeReadinessBroker.resolveRequiredGates`
  * derives its gate requirements from this policy so the two cannot drift.
  */
+import { readFileSync } from 'node:fs';
+
+const sharedRiskPolicy = JSON.parse(readFileSync(new URL('../../../config/review-risk-policy.json', import.meta.url), 'utf8')) as {
+  criticalPrefixes: string[];
+  elevatedPrefixes: string[];
+  finalCertificationCount: Record<ReviewRiskLane, 1 | 2>;
+};
+
+export function classifyReviewRisk(scope: string[]): ReviewRiskLane {
+  if (scope.length === 0) return 'TRIVIAL';
+  const matches = (path: string, prefixes: string[]) => prefixes.some((prefix) => {
+    const value = prefix.toLowerCase();
+    const normalized = path.replace(/\\/g, '/').toLowerCase();
+    return normalized.startsWith(value) || normalized === value.replace(/\/$/, '');
+  });
+  if (scope.some((path) => matches(path, sharedRiskPolicy.criticalPrefixes))) return 'CRITICAL';
+  if (scope.some((path) => matches(path, sharedRiskPolicy.elevatedPrefixes))) return 'ELEVATED';
+  if (scope.every((path) => /\.(md|txt)$/i.test(path) || path.startsWith('docs/'))) return 'TRIVIAL';
+  return 'NORMAL';
+}
 
 export type ReviewRiskLane = 'TRIVIAL' | 'NORMAL' | 'ELEVATED' | 'CRITICAL' | 'AMBIGUOUS';
 
@@ -30,7 +50,7 @@ export interface ReviewPolicy {
 /** ELEVATED-equivalent policy, also used for AMBIGUOUS and any unknown lane. */
 const ELEVATED_POLICY: ReviewPolicy = {
   workingReviewCount: 2,
-  finalCertificationCount: 2,
+  finalCertificationCount: sharedRiskPolicy.finalCertificationCount.ELEVATED,
   requireFreshContext: true,
   requireRuntimeDiversity: false,
   requireModelDiversity: false,
@@ -52,7 +72,7 @@ export function resolveReviewPolicy(input: {
     case 'TRIVIAL':
       return {
         workingReviewCount: 1,
-        finalCertificationCount: 1,
+        finalCertificationCount: sharedRiskPolicy.finalCertificationCount.TRIVIAL,
         requireFreshContext: true,
         requireRuntimeDiversity: false,
         requireModelDiversity: false,
@@ -64,7 +84,7 @@ export function resolveReviewPolicy(input: {
     case 'NORMAL':
       return {
         workingReviewCount: 1,
-        finalCertificationCount: 1,
+        finalCertificationCount: sharedRiskPolicy.finalCertificationCount.NORMAL,
         requireFreshContext: true,
         requireRuntimeDiversity: false,
         requireModelDiversity: false,
@@ -76,11 +96,11 @@ export function resolveReviewPolicy(input: {
     case 'CRITICAL':
       return {
         workingReviewCount: 2,
-        finalCertificationCount: 2,
+        finalCertificationCount: sharedRiskPolicy.finalCertificationCount.CRITICAL,
         requireFreshContext: true,
         requireRuntimeDiversity: false,
         requireModelDiversity: false,
-        requiredIndependenceClass: 'I4',
+        requiredIndependenceClass: 'I2',
         deterministicTestsRequired: true,
         remoteCIRequired: true,
         securityRequired: true,

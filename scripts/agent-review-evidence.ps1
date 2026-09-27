@@ -46,12 +46,7 @@ function Select-AgentHostReviewBundle {
         handoff = $handoff
       }
     }
-    return [pscustomobject][ordered]@{
-      schema_version = 2; kind = 'github_host_review_bundle_v2'
-      repository = $Repository; pr_number = $PR; base_sha = $BaseSha; head_sha = $HeadSha
-      publisher_id = $PublisherId; comment_id = [string](Get-AgentPropertyValue $comment 'id')
-      handoff = $handoff
-    }
+    return [pscustomobject]@{ transport_error = 'legacy_v2_review_unsupported' }
   }
   if ($staleForHead) { return [pscustomobject]@{ transport_error = 'independent_review_stale_for_head' } }
   return [pscustomobject]@{ transport_error = 'independent_review_handoff_not_published' }
@@ -157,7 +152,7 @@ function Test-AgentIndependentReviewEvidenceV3 {
     [Parameter(Mandatory)][string]$ExpectedNumstatDigest,
     [string]$ExpectedCandidateDigest = '',
     [string]$TaskId = '', [string]$TaskHash = '', [string[]]$ExpectedScope = @(),
-    [string]$BuilderIdentity = ''
+    [string]$BuilderIdentity = '', [string]$ExpectedDiffSha256 = '', [int]$ExpectedDiffLines = 0
   )
   $errors = @()
   if ($Evidence -isnot [pscustomobject]) { return [pscustomobject]@{ valid = $false; errors = @('independent_evidence_malformed') } }
@@ -235,17 +230,23 @@ function Test-AgentIndependentReviewEvidenceV3 {
     if ([string]::IsNullOrWhiteSpace($ctrlExecId) -or $ctrlExecId -ne [string](Get-AgentPropertyValue $reviewer 'execution_id')) {
       $errors += 'independent_evidence_runtime_execution_mismatch'
     }
+    if ($Repository -ieq 'gthgomez/Babel' -and [string](Get-AgentPropertyValue $runtime 'source_sha') -cnotmatch '^[0-9a-f]{40}$') {
+      $errors += 'independent_evidence_trusted_source_required'
+    }
+    $observedExec = [string](Get-AgentPropertyValue $runtime 'provider_execution_id')
+    $sessionId = [string](Get-AgentPropertyValue $runtime 'session_id')
+    if ([string]::IsNullOrWhiteSpace($observedExec) -or [string]::IsNullOrWhiteSpace($sessionId) -or
+        $observedExec -ieq [string](Get-AgentPropertyValue $builder 'execution_id') -or
+        [string](Get-AgentPropertyValue $runtime 'parent_execution_id') -cne [string](Get-AgentPropertyValue $builder 'execution_id')) {
+      $errors += 'independent_evidence_observed_child_identity_invalid'
+    }
+    if ((Get-AgentPropertyValue $runtime 'fresh_context') -cne $true -or
+        (Get-AgentPropertyValue $runtime 'read_only_enforced') -cne $true) {
+      $errors += 'independent_evidence_fresh_readonly_required'
+    }
 
-    $provider = [string](Get-AgentPropertyValue $runtime 'observed_provider')
-    if ([string]::IsNullOrWhiteSpace($provider)) { $provider = [string](Get-AgentPropertyValue $runtime 'requested_provider') }
-
-    if ($agentKind -ieq 'babel') {
-      if ($provider -cne 'opencode-go') { $errors += 'independent_evidence_babel_must_use_opencode_go' }
-      $rtVersion = [string](Get-AgentPropertyValue $runtime 'runtime_version')
-      if ($rtVersion -cnotmatch '^[0-9a-f]{64}$') { $errors += 'independent_evidence_babel_version_invalid' }
-    } else {
-      if ($provider -ieq 'opencode-go') { $errors += 'independent_evidence_external_cannot_claim_opencode_go' }
-      if ($adapterId -imatch '^babel-') { $errors += 'independent_evidence_external_cannot_claim_babel_adapter' }
+    if ($agentKind -cne [string](Get-AgentPropertyValue $reviewer 'kind')) {
+      $errors += 'independent_evidence_reviewer_runtime_kind_mismatch'
     }
   }
 
@@ -307,7 +308,26 @@ function Test-AgentIndependentReviewEvidenceV3 {
     }
   }
 
-  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'candidate_digest', 'diff_numstat_digest', 'task_id', 'task_hash', 'builder', 'reviewer', 'controller_run_id', 'challenge_id', 'runtime', 'review_mode', 'execution_purpose', 'reviewed_at', 'scope', 'verdict', 'findings', 'blocking_findings', 'isolation', 'usage', 'provenance')
+  $coverage = Get-AgentPropertyValue $Evidence 'coverage'
+  $diffLinesTotal = 0
+  $diffLinesRead = 0
+  $changedPaths = 0
+  $coverageNumbersValid = $coverage -is [pscustomobject] -and
+    [int]::TryParse([string](Get-AgentPropertyValue $coverage 'diff_lines_total'), [ref]$diffLinesTotal) -and
+    [int]::TryParse([string](Get-AgentPropertyValue $coverage 'diff_lines_read'), [ref]$diffLinesRead) -and
+    [int]::TryParse([string](Get-AgentPropertyValue $coverage 'changed_paths'), [ref]$changedPaths)
+  if ($coverage -isnot [pscustomobject] -or (Get-AgentPropertyValue $coverage 'diff_consumed') -cne $true -or
+      [string](Get-AgentPropertyValue $coverage 'diff_sha256') -cnotmatch '^[0-9a-f]{64}$' -or
+      -not $coverageNumbersValid -or $diffLinesTotal -lt 1 -or
+      $diffLinesRead -ne $diffLinesTotal -or $changedPaths -ne $scope.Count) {
+    $errors += 'independent_evidence_full_diff_coverage_required'
+  }
+  if ($ExpectedDiffSha256 -and ([string](Get-AgentPropertyValue $coverage 'diff_sha256') -cne $ExpectedDiffSha256 -or
+      $diffLinesTotal -ne $ExpectedDiffLines)) {
+    $errors += 'independent_evidence_live_diff_mismatch'
+  }
+
+  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'candidate_digest', 'diff_numstat_digest', 'task_id', 'task_hash', 'builder', 'reviewer', 'controller_run_id', 'challenge_id', 'runtime', 'review_mode', 'execution_purpose', 'reviewed_at', 'scope', 'verdict', 'findings', 'blocking_findings', 'isolation', 'usage', 'coverage', 'provenance')
   foreach ($field in @(Get-AgentPropertyNames $Evidence)) {
     if ($allowed -cnotcontains $field) { $errors += "independent_evidence_unknown_field:$field" }
   }
@@ -324,7 +344,7 @@ function Test-AgentHostReviewBundleV3 {
     [Parameter(Mandatory)][int]$MinimumReviewCount, [Parameter(Mandatory)][string]$PublisherId,
     [string]$ExpectedCandidateDigest = '',
     [string[]]$ExpectedScope = @(),
-    [string]$BuilderIdentity = ''
+    [string]$BuilderIdentity = '', [string]$ExpectedDiffSha256 = '', [int]$ExpectedDiffLines = 0
   )
   $errors = @()
   if ($Bundle -isnot [pscustomobject]) { return [pscustomobject]@{ valid = $false; errors = @('controller_review_bundle_malformed'); reviewCount = 0 } }
@@ -357,14 +377,22 @@ function Test-AgentHostReviewBundleV3 {
     $errors += 'controller_review_bundle_insufficient_or_excess_reviews'
   }
 
-  $principals = @{}; $executions = @{}; $challenges = @{}
+  $principals = @{}; $executions = @{}; $challenges = @{}; $observedExecutions = @{}; $sessions = @{}
   foreach ($review in $reviews) {
-    $validation = Test-AgentIndependentReviewEvidenceV3 -Evidence $review -Repository $Repository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -ExpectedNumstatDigest $ExpectedNumstatDigest -ExpectedCandidateDigest $candidateDigest -TaskId $taskId -TaskHash $taskHash -ExpectedScope $ExpectedScope -BuilderIdentity $BuilderIdentity
+    $validation = Test-AgentIndependentReviewEvidenceV3 -Evidence $review -Repository $Repository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -ExpectedNumstatDigest $ExpectedNumstatDigest -ExpectedCandidateDigest $candidateDigest -TaskId $taskId -TaskHash $taskHash -ExpectedScope $ExpectedScope -BuilderIdentity $BuilderIdentity -ExpectedDiffSha256 $ExpectedDiffSha256 -ExpectedDiffLines $ExpectedDiffLines
     $errors += @($validation.errors)
     $reviewer = Get-AgentPropertyValue $review 'reviewer'
     $principalId = [string](Get-AgentPropertyValue $reviewer 'principal_id')
     $executionId = [string](Get-AgentPropertyValue $reviewer 'execution_id')
     $challengeId = [string](Get-AgentPropertyValue $review 'challenge_id')
+    $runtime = Get-AgentPropertyValue $review 'runtime'
+    $observedExec = [string](Get-AgentPropertyValue $runtime 'provider_execution_id')
+    $sessionId = [string](Get-AgentPropertyValue $runtime 'session_id')
+    if ($observedExecutions.ContainsKey($observedExec) -or $sessions.ContainsKey($sessionId)) {
+      $errors += 'controller_review_bundle_observed_child_not_distinct'
+    }
+    if ($observedExec) { $observedExecutions[$observedExec] = $true }
+    if ($sessionId) { $sessions[$sessionId] = $true }
     if ($principals.ContainsKey($principalId) -or $executions.ContainsKey($executionId)) {
       $errors += 'controller_review_bundle_reviewer_or_execution_not_distinct'
     }
@@ -402,51 +430,18 @@ function Test-AgentControllerReviewEvidenceBundle {
     [Parameter(Mandatory)][string]$BaseSha, [Parameter(Mandatory)][string]$HeadSha,
     [Parameter(Mandatory)][string]$BuilderIdentity, [Parameter(Mandatory)][string]$ExpectedNumstatDigest,
     [Parameter(Mandatory)][int]$MinimumReviewCount, [Parameter(Mandatory)][string]$PublisherId,
-    [string[]]$ExpectedScope = @(), [switch]$RequireBabelChat, [string]$ExpectedCandidateDigest = ''
+    [string[]]$ExpectedScope = @(), [switch]$RequireBabelChat, [string]$ExpectedCandidateDigest = '', [string]$ExpectedDiffSha256 = '', [int]$ExpectedDiffLines = 0
   )
   if ($null -ne $Bundle) {
     $sv = [string](Get-AgentPropertyValue $Bundle 'schema_version')
     $kind = [string](Get-AgentPropertyValue $Bundle 'kind')
     if ($sv -eq '3' -or $kind -eq 'github_host_review_bundle_v3') {
-      return Test-AgentHostReviewBundleV3 -Bundle $Bundle -Repository $Repository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -ExpectedNumstatDigest $ExpectedNumstatDigest -MinimumReviewCount $MinimumReviewCount -PublisherId $PublisherId -ExpectedCandidateDigest $ExpectedCandidateDigest -ExpectedScope $ExpectedScope -BuilderIdentity $BuilderIdentity
+      return Test-AgentHostReviewBundleV3 -Bundle $Bundle -Repository $Repository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -ExpectedNumstatDigest $ExpectedNumstatDigest -MinimumReviewCount $MinimumReviewCount -PublisherId $PublisherId -ExpectedCandidateDigest $ExpectedCandidateDigest -ExpectedScope $ExpectedScope -BuilderIdentity $BuilderIdentity -ExpectedDiffSha256 $ExpectedDiffSha256 -ExpectedDiffLines $ExpectedDiffLines
     }
   }
 
   $errors = @()
   if ($Bundle -isnot [pscustomobject]) { return [pscustomobject]@{ valid = $false; errors = @('controller_review_bundle_malformed'); reviewCount = 0 } }
-  $expected = @{ schema_version = '2'; kind = 'github_host_review_bundle_v2'; repository = $Repository; pr_number = [string]$PR; base_sha = $BaseSha; head_sha = $HeadSha; publisher_id = $PublisherId }
-  foreach ($field in $expected.Keys) {
-    if ([string](Get-AgentPropertyValue $Bundle $field) -cne $expected[$field]) { $errors += ('controller_review_bundle_' + $field + '_mismatch') }
-  }
-  if ([string](Get-AgentPropertyValue $Bundle 'comment_id') -notmatch '^[1-9][0-9]*$' -or $PublisherId -notmatch '^[1-9][0-9]*$') { $errors += 'controller_review_bundle_provenance_invalid' }
-  $handoff = Get-AgentPropertyValue $Bundle 'handoff'
-  $taskId = [string](Get-AgentPropertyValue $handoff 'task_id')
-  $taskHash = [string](Get-AgentPropertyValue $handoff 'task_hash')
-  if ([string]::IsNullOrWhiteSpace($taskId) -or $taskHash -cnotmatch '^[0-9a-f]{64}$' -or
-      [string]::IsNullOrWhiteSpace([string](Get-AgentPropertyValue $handoff 'controller_run_id'))) { $errors += 'controller_review_handoff_task_or_run_invalid' }
-  $handoffExpected = @{ schema_version = '2'; kind = 'host_review_handoff_v2'; repository = $Repository; pr_number = [string]$PR; base_sha = $BaseSha; head_sha = $HeadSha }
-  foreach ($field in $handoffExpected.Keys) {
-    if ([string](Get-AgentPropertyValue $handoff $field) -cne $handoffExpected[$field]) { $errors += ('controller_review_handoff_' + $field + '_mismatch') }
-  }
-  $reviews = @((Get-AgentPropertyValue $handoff 'reviews'))
-  if ($reviews.Count -lt $MinimumReviewCount -or $reviews.Count -gt 2) { $errors += 'controller_review_bundle_insufficient_or_excess_reviews' }
-  $reviewers = @{}; $executions = @{}; $babelChatReviewCount = 0
-  foreach ($review in $reviews) {
-    $validation = Test-AgentAutonomousReviewEvidence -Evidence $review -Repository $Repository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -ExpectedNumstatDigest $ExpectedNumstatDigest -TaskId $taskId -TaskHash $taskHash -ExpectedScope $ExpectedScope
-    $errors += @($validation.errors)
-    if ($validation.valid -and $null -ne (Get-AgentPropertyValue $review 'harness')) { $babelChatReviewCount++ }
-    $reviewerId = [string](Get-AgentPropertyValue $review 'reviewer_id')
-    $executionId = [string](Get-AgentPropertyValue $review 'execution_id')
-    if ($reviewers.ContainsKey($reviewerId) -or $executions.ContainsKey($executionId)) { $errors += 'controller_review_bundle_reviewer_or_execution_not_distinct' }
-    $reviewers[$reviewerId] = $true; $executions[$executionId] = $true
-  }
-  if ($RequireBabelChat -and $babelChatReviewCount -lt 1) { $errors += 'controller_review_bundle_babel_chat_required' }
-  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'publisher_id', 'comment_id', 'handoff')
-  foreach ($field in @(Get-AgentPropertyNames $Bundle)) {
-    if ($allowed -cnotcontains $field) { $errors += "controller_review_bundle_unknown_field:$field" }
-  }
-  foreach ($field in @(Get-AgentPropertyNames $handoff)) {
-    if (@('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'task_id', 'task_hash', 'controller_run_id', 'reviews') -cnotcontains $field) { $errors += "controller_review_handoff_unknown_field:$field" }
-  }
-  return [pscustomobject]@{ valid = $errors.Count -eq 0; errors = @($errors | Select-Object -Unique); reviewCount = $reviews.Count; babelChatReviewCount = $babelChatReviewCount }
+  return [pscustomobject]@{ valid = $false; errors = @('legacy_v2_review_unsupported'); reviewCount = 0 }
+
 }

@@ -251,15 +251,21 @@ function Read-AgentAutonomousReviewEvidence {
     return [pscustomobject]@{ path = $path; valid = $false; errors = @('controller_review_live_provenance_mismatch'); reviewCount = 0 }
   }
   $scopeResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('-c', 'core.quotepath=false', 'diff', '--no-ext-diff', '--no-textconv', '--name-only', "$BaseSha...$HeadSha")
+  try { $exactDiff = Get-AgentExactDiffCoverage -GitPath $GitPath -RepoRoot $resolvedRepoRoot -BaseSha $BaseSha -HeadSha $HeadSha }
+  catch { return [pscustomobject]@{ path = $path; valid = $false; errors = @('controller_review_live_diff_unavailable'); reviewCount = 0 } }
   $candidateDigest = if ($null -ne $evidence.PSObject.Properties['candidate_digest']) { [string]$evidence.candidate_digest } elseif ($null -ne $evidence.handoff.PSObject.Properties['candidate_digest']) { [string]$evidence.handoff.candidate_digest } else { '' }
-  $validation = Test-AgentControllerReviewEvidenceBundle -Bundle $evidence -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount $MinimumReviewCount -PublisherId $publisherId -ExpectedScope @($scopeResult.output) -ExpectedCandidateDigest $candidateDigest
+  $validation = Test-AgentControllerReviewEvidenceBundle -Bundle $evidence -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount $MinimumReviewCount -PublisherId $publisherId -ExpectedScope @($scopeResult.output) -ExpectedCandidateDigest $candidateDigest -ExpectedDiffSha256 $exactDiff.sha256 -ExpectedDiffLines $exactDiff.lines
   if ($validation.valid) {
-    # If any reviewer is Babel and declares a source commit, verify it is
-    # an ancestor in the immutable trusted base.
+    # Every V3 reviewer of Babel must run from a controller source commit in
+    # the immutable trusted base, independent of reviewer model or vendor.
     $sourceShas = @($evidence.handoff.reviews | ForEach-Object {
       if ($null -ne $_.PSObject.Properties['harness'] -and $_.harness.source_sha) { [string]$_.harness.source_sha }
-      elseif ($null -ne $_.PSObject.Properties['runtime'] -and $_.runtime.agent_kind -eq 'babel' -and $null -ne $_.runtime.PSObject.Properties['source_sha']) { [string]$_.runtime.source_sha }
+      elseif ($null -ne $_.PSObject.Properties['runtime'] -and $null -ne $_.runtime.PSObject.Properties['source_sha']) { [string]$_.runtime.source_sha }
     } | Where-Object { [bool]$_ } | Select-Object -Unique)
+    if ($ExpectedRepository -ieq 'gthgomez/Babel' -and $sourceShas.Count -eq 0) {
+      $validation.valid = $false
+      $validation.errors += 'autonomous_evidence_harness_source_missing'
+    }
     foreach ($sourceSha in $sourceShas) {
       $sourceType = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('--no-replace-objects', 'cat-file', '-t', $sourceSha)
       $sourceAncestry = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('--no-replace-objects', 'merge-base', '--is-ancestor', $sourceSha, $BaseSha)
@@ -404,7 +410,7 @@ try {
   $effectiveLane = if ((Get-AgentLaneRank -Lane $requestedLane) -gt (Get-AgentLaneRank -Lane $baseDerivedLane)) { $requestedLane } else { $baseDerivedLane }
   # Every mergeable lane requires one independent agent review approval.
   # BLACK remains blocked separately and cannot opt out of review.
-  $minimumReviewCount = 1
+  $minimumReviewCount = Get-AgentMinimumReviewCount -Lane $effectiveLane
   $independentRequired = $true
   $autonomousEvidenceResult = [pscustomobject]@{ path = ''; valid = $false; errors = @('autonomous_review_evidence_missing'); reviewCount = 0 }
   if ($independentRequired -and $prAvailable) {

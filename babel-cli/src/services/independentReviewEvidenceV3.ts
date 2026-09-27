@@ -46,6 +46,17 @@ export interface IndependentReviewRuntime {
   parent_execution_id?: string
   /** Controller-issued session identity for the reviewer execution. */
   session_id?: string
+  /** Host-enforced reviewer capability; independent of reviewer instructions. */
+  read_only_enforced?: boolean
+}
+
+export interface IndependentReviewCoverage {
+  diff_consumed: boolean
+  diff_sha256: string
+  diff_lines_total: number
+  diff_lines_read: number
+  changed_paths: number
+  source_paths_opened: string[]
 }
 
 export interface IndependentReviewIsolationProfile {
@@ -104,6 +115,7 @@ export interface IndependentReviewEvidenceV3 {
   isolation: IndependentReviewIsolationProfile
   execution_purpose?: ReviewExecutionPurpose
   usage?: IndependentReviewUsage
+  coverage?: IndependentReviewCoverage
 }
 
 export interface HostReviewHandoffV3 {
@@ -177,6 +189,16 @@ export const independentReviewRuntimeSchema = z.object({
   fresh_process: z.boolean().optional(),
   parent_execution_id: z.string().min(1).optional(),
   session_id: z.string().min(1).optional(),
+  read_only_enforced: z.boolean().optional(),
+}).strict()
+
+export const independentReviewCoverageSchema = z.object({
+  diff_consumed: z.boolean(),
+  diff_sha256: digest,
+  diff_lines_total: z.number().int().positive(),
+  diff_lines_read: z.number().int().nonnegative(),
+  changed_paths: z.number().int().positive(),
+  source_paths_opened: z.array(text),
 }).strict()
 
 export const independentReviewIsolationSchema = z.object({
@@ -228,6 +250,7 @@ export const independentReviewEvidenceV3Schema = z.object({
   blocking_findings: z.array(z.string()),
   isolation: independentReviewIsolationSchema,
   usage: independentReviewUsageSchema.optional(),
+  coverage: independentReviewCoverageSchema.optional(),
 }).strict()
 
 export const hostReviewHandoffV3Schema = z.object({
@@ -315,26 +338,8 @@ export function validateIndependentReviewEvidenceV3(
     throw new Error('RUNTIME_EXECUTION_ID_MISMATCH')
   }
 
-  // 2. Adapter-specific validation
-  if (parsed.runtime.agent_kind === 'babel') {
-    // Babel adapter invariants
-    const provider = parsed.runtime.observed_provider ?? parsed.runtime.requested_provider
-    if (provider !== 'opencode-go') {
-      throw new Error('BABEL_REVIEWER_MUST_USE_OPENCODE_GO')
-    }
-    if (!parsed.runtime.runtime_version || !/^[a-f0-9]{64}$/i.test(parsed.runtime.runtime_version)) {
-      throw new Error('BABEL_REVIEWER_INVALID_VERSION_DIGEST')
-    }
-  } else {
-    // External adapter invariants: must NOT claim to be Babel or use Babel-internal provider
-    const provider = parsed.runtime.observed_provider ?? parsed.runtime.requested_provider
-    if (provider === 'opencode-go') {
-      throw new Error('EXTERNAL_REVIEWER_CANNOT_CLAIM_OPENCODE_GO')
-    }
-    if (parsed.runtime.adapter_id.startsWith('babel-')) {
-      throw new Error('EXTERNAL_REVIEWER_CANNOT_CLAIM_BABEL_ADAPTER')
-    }
-  }
+  // 2. Runtime identity must agree with the observed reviewer family.
+  if (parsed.runtime.agent_kind !== parsed.reviewer.kind) throw new Error('REVIEWER_RUNTIME_KIND_MISMATCH')
 
   // 3. Verdict consistency
   if (parsed.verdict === 'APPROVE' && parsed.blocking_findings.length > 0) {

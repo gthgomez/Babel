@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  classifyReviewRisk,
   resolveReviewPolicy,
   type ReviewPolicy,
   type ReviewRiskLane,
@@ -48,7 +49,7 @@ const expectedPolicy: Record<ReviewRiskLane, ReviewPolicy> = {
     requireFreshContext: true,
     requireRuntimeDiversity: false,
     requireModelDiversity: false,
-    requiredIndependenceClass: 'I4',
+    requiredIndependenceClass: 'I2',
     deterministicTestsRequired: true,
     remoteCIRequired: true,
     securityRequired: true,
@@ -75,6 +76,12 @@ test('resolveReviewPolicy returns the full policy for every lane', () => {
   }
 });
 
+test('review control paths are critical under the shared risk table', () => {
+  assert.equal(classifyReviewRisk(['tools/babel-pr-orchestrate.mts']), 'CRITICAL');
+  assert.equal(classifyReviewRisk(['src/ordinary.ts']), 'NORMAL');
+  assert.equal(classifyReviewRisk(['docs/guide.md']), 'TRIVIAL');
+});
+
 test('resolveReviewPolicy defaults to the AMBIGUOUS (ELEVATED-equivalent) policy for any unknown lane', () => {
   const unknown = 'NOT_A_LANE' as ReviewRiskLane;
   assert.deepEqual(
@@ -87,14 +94,10 @@ test('resolveReviewPolicy defaults to the AMBIGUOUS (ELEVATED-equivalent) policy
   );
 });
 
-test('AMBIGUOUS resolves to the ELEVATED policy, not CRITICAL (strength preserved)', () => {
+test('AMBIGUOUS resolves to the ELEVATED policy', () => {
   assert.deepEqual(
     resolveReviewPolicy({ riskLane: 'AMBIGUOUS', requireAuthoritative: true }),
     resolveReviewPolicy({ riskLane: 'ELEVATED', requireAuthoritative: true }),
-  );
-  assert.notDeepEqual(
-    resolveReviewPolicy({ riskLane: 'AMBIGUOUS', requireAuthoritative: true }),
-    resolveReviewPolicy({ riskLane: 'CRITICAL', requireAuthoritative: true }),
   );
 });
 

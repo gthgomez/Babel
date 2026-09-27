@@ -27,8 +27,9 @@ $resolvedRepo = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path
 $materialized = Join-Path ([IO.Path]::GetTempPath()) ('babel-trusted-gate-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $materialized -Force | Out-Null
 try {
-  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-git-common.psm1', 'scripts/agent-review-evidence.ps1')) {
-    $target = Join-Path $materialized ([IO.Path]::GetFileName($relative))
+  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-git-common.psm1', 'scripts/agent-review-evidence.ps1', 'config/review-risk-policy.json')) {
+    $target = Join-Path $materialized $relative
+    New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
     $spec = '{0}:{1}' -f $BaseSha, $relative
     $content = & $git -C $resolvedRepo show $spec 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($content -join "`n"))) {
@@ -37,7 +38,7 @@ try {
     Set-Content -LiteralPath $target -Value ($content -join "`n") -Encoding utf8NoBOM
   }
   $args = @(
-    '-NoProfile', '-NonInteractive', '-File', (Join-Path $materialized 'agent-pr-gate.ps1'),
+    '-NoProfile', '-NonInteractive', '-File', (Join-Path $materialized 'scripts/agent-pr-gate.ps1'),
     '-PR', $PR, '-RepoRoot', $resolvedRepo, '-ReviewedHeadSha', $ReviewedHeadSha, '-RiskTier', $RiskTier,
     '-AutonomousReviewEvidencePath', $AutonomousReviewEvidencePath,
     '-BuilderIdentity', $BuilderIdentity, '-OutputFormat', $OutputFormat

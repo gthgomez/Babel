@@ -47,7 +47,7 @@ try {
   & $git -C $seedPath remote add origin $barePath
   & $git -C $seedPath commit --allow-empty -m 'previously merged installation' 2>&1 | Out-Null
   $previousInstallationSha = (& $git -C $seedPath rev-parse HEAD).Trim()
-  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-review-evidence.ps1', 'scripts/agent-git-common.psm1', 'scripts/trusted-merge-gate.ps1', 'scripts/materialize-independent-review-receipt.ps1')) {
+  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-review-evidence.ps1', 'scripts/agent-git-common.psm1', 'scripts/trusted-merge-gate.ps1', 'scripts/materialize-independent-review-receipt.ps1', 'config/review-risk-policy.json')) {
     $target = Join-Path $seedPath $relative
     New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $RepoRoot $relative) -Destination $target -Force
