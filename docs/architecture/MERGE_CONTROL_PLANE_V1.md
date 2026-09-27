@@ -1,6 +1,6 @@
 # Merge Control Plane V1
 
-Status: authorization simplification migration in progress. The base-rooted gate is authoritative; custom owner signing is no longer part of normal merges.
+Status: authorization simplification migration in progress. The base-rooted gate is authoritative; custom owner signing is no longer part of normal merges. A bounded exact-head merge executor is shipped as `scripts/agent-pr-merge.ps1`.
 
 This document defines the boundary between repository policy, technical evidence,
 and the authority to perform a public merge. No one of those dimensions can
@@ -20,7 +20,8 @@ record:
 - technical review: controller-owned exact-head independent AI evidence when
   the base-derived risk lane requires it
 - task authority: the original task authorizes routine Git/PR actions; no
-  separate per-merge switch exists
+  separate per-merge switch exists. The base-rooted `MERGE_READY` decision is
+  machine authority, not a per-merge human receipt
 - scope: exact diff paths and optional path allowlist
 
 The result is `MERGE_READY` only when every required dimension is satisfied.
@@ -141,21 +142,27 @@ Statuses distinguish `FIXED`, `MITIGATED`, `PRIMITIVE_FIXED_INTEGRATION_PENDING`
 An inherited classification is valid only when the exact command has been run on
 both the feature head and the frozen base.
 
-## Future merge-train state machine
+## Merge-train state machine
 
 ```text
 PR_HEAD_CREATED -> LOCAL_VERIFIED -> INDEPENDENT_REVIEWED
   -> CI_GREEN_EXACT_HEAD -> MERGE_GATE_READY -> PRE_MERGE_REFREEZE
   -> MERGE -> POST_MERGE_VERIFY -> COMPLETE
-                         \-> main changed: INVALIDATE / UPDATE / REVERIFY
+                         \-> main changed: INVALIDATE / UPDATE / VERIFY
 ```
+
+The bounded merge executor implements the tail of this state machine. `scripts/agent-pr-merge.ps1`
+re-runs the base-rooted gate, requires `MERGE_READY` for the exact reviewed head, re-reads live PR
+state as the pre-merge re-freeze, and then runs `gh pr merge --match-head-commit`. A SHA change
+between gate and merge fails closed and the executor never retries with a different SHA. That live
+re-read is the `PRE_MERGE_REFREEZE` step, not a new authorization switch.
 
 Every meaningful SHA change invalidates prior review and CI evidence, not the
 original task's routine-action authority. The dispatcher handles the authorized
 repair/review/merge loop; GitHub required checks remain the final enforcement.
 
-The obsolete `BootstrapRepairAuthorized` per-invocation exception is removed.
-A migration from the former signing system may use only the separately
+The obsolete `BootstrapRepairAuthorized` per-invocation exception is removed and is not replaced by
+a per-merge switch. A migration from the former signing system may use only the separately
 authorized, exact-candidate, snapshot/restore procedure. It must retain every
 unaffected check, restore the ruleset immediately, leave no standing bypass,
 and be followed by a normal protected PR. This is not a normal merge option.

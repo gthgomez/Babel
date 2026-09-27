@@ -122,7 +122,9 @@ Reviews bind repository, PR, exact base/head, task hash, changed-file scope and
 diff digest. A changed base or head invalidates the old approval. All required
 CI checks, review-thread resolution and the immutable-base merge gate must pass.
 The host workflow owns routine repairs and eligible merges within task authority;
-review rejection or another SHA does not require repeated owner approval.
+a gate-green, exact-head merge runs through `scripts/agent-pr-merge.ps1`, which re-runs the
+base-rooted gate and binds `gh pr merge --match-head-commit` to the reviewed SHA.
+Review rejection or another SHA does not require repeated owner approval.
 
 ## Trusted host installation
 
@@ -232,7 +234,9 @@ security checks, commit/push the exact candidate, and rerun independent review i
 fresh contexts. A reviewer approval without executed tests does not establish
 test success. Rejected or uncertain findings go through evidence-based
 adjudication; do not mechanically rewrite BLOCK to APPROVE or weaken a gate.
-Merge only the exact candidate accepted by CI and the base-rooted gate.
+Merge only the exact candidate accepted by CI and the base-rooted gate; run
+`scripts/agent-pr-merge.ps1 -PR <n> -ReviewedHeadSha <sha> -RepoRoot <clone>`, which re-runs the
+gate and binds `gh pr merge --match-head-commit` to that exact SHA and never retries a different SHA.
 
 ## Harness-owned V3 certification
 
@@ -263,11 +267,17 @@ evidence, certification fails closed.
 current Codex thread against the prepared builder and does not accept
 a reviewer-authored JSON file. In-process integrations may provide another trusted adapter;
 its host must keep controller state and publication credentials outside the reviewer's reach.
-The standalone Codex launcher accepts only a root-owned `codex` executable or symlink whose
-target and every path component are protected from the coding user. A user-writable npm
-installation fails closed. Install a pinned CLI version into a protected system prefix, then
-run the review controller from a clean, base-rooted installation; alternatively, supply a
-host-owned spawn function through the in-process API.
+Review authority is scope-derived. Ordinary PRs are `SESSION_ATTESTED`: the Codex adapter launches a
+fresh, read-only, observed child from the harness-native `codex` executable on `PATH` (no root-owned
+binary required) and still delivers the complete exact diff for acknowledgement. Changes to the
+reviewer, gate, or authority surface — any path matching `hostProtectedPrefixes` in
+`config/review-risk-policy.json` — require `HOST_PROTECTED`: the standalone Codex launcher then accepts
+only a root-owned `codex` executable or symlink whose target and every path component are protected
+from the coding user, and a user-writable npm installation fails closed. Install a pinned CLI version
+into a protected system prefix, then run the review controller from a clean, base-rooted installation.
+Either lane may instead supply a host-owned spawn function through the in-process API; a
+caller-supplied harness-native `spawnFn` overrides both executable paths. A `HOST_PROTECTED` run fails
+closed if the adapter cannot attest host protection (the OpenCode fallback is `SESSION_ATTESTED` only).
 The Codex CLI builder identity comes from the current `CODEX_THREAD_ID` host environment. A
 standalone same-user CLI session cannot independently prove that environment. Deploy the
 publisher, Node loader, dependencies, and private state behind a trusted host boundary. The Codex read-only sandbox

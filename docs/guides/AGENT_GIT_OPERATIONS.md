@@ -85,17 +85,21 @@ Do not infer that green CI belongs to the current work. Bind review, the remote 
 
 ## PR merge gate
 
-After review and CI are available, run:
+After review and CI are available, evaluate the exact reviewed head with the base-rooted gate:
 
 ```powershell
-.\scripts\agent-pr-gate.ps1 -PR 110 -ReviewedHeadSha <reviewed-sha> -RiskTier HIGH -IndependentReviewReceiptPath <receipt> -MergeAuthorized
-
-`-BootstrapRepairAuthorized` is reserved for the documented gate-repair self-gating transition and records its exception; it is not a general check bypass.
+.\scripts\agent-pr-gate.ps1 -PR 110 -ReviewedHeadSha <reviewed-sha> -RiskTier HIGH
 ```
 
-The result is either `MERGE_READY` or `BLOCKED` and includes the reviewed head, PR head, remote branch head, exact-head CI resolutions, PR base, current `origin/main`, active GitHub ruleset policy, independent technical review state, merge-authority state, worktree state, and blockers. Required status contexts are read from the active `protect-main` ruleset rather than assumed locally. HIGH and CRITICAL risk tiers require an exact-head independent review receipt; `-MergeAuthorized` is an explicit current-task authorization and is never inferred from CI or review evidence. Use `-AllowedPath` when an explicit changed-path allowlist is part of the review, and `-RequireIsolatedWorktree` when the gate must reject a canonical checkout.
+The result is either `MERGE_READY` or `BLOCKED` and includes the reviewed head, PR head, remote branch head, exact-head CI resolutions, PR base, current `origin/main`, active GitHub ruleset policy, independent technical review state, task-authorization state, worktree state, and blockers. Required status contexts are read from the active `protect-main` ruleset rather than assumed locally. HIGH and CRITICAL risk tiers require exact-head independent review evidence: `-AutonomousReviewEvidencePath` supplies a locally built evidence file and `-BuilderIdentity` sets the builder identity that the reviewer must differ from. Use `-AllowedPath` when an explicit changed-path allowlist is part of the review, and `-RequireIsolatedWorktree` when the gate must reject a canonical checkout. There is no per-merge authorization switch: the current task authorizes routine Git/PR actions and the gate records `taskAuthorization` from the dispatch scope.
 
-The gate uses `gh pr view` for PR metadata and the commit-scoped check-runs API for CI. It does not merge, delete branches, force-push, or rewrite history.
+When the gate reports `MERGE_READY` for the exact reviewed head, merge through the bounded executor:
+
+```powershell
+.\scripts\agent-pr-merge.ps1 -PR 110 -ReviewedHeadSha <reviewed-sha> -RepoRoot <clone>
+```
+
+The executor re-runs the base-rooted gate (`scripts/trusted-merge-gate.ps1`, materialized from the immutable base), accepts only a `MERGE_READY` whose reviewed head, PR head, remote branch head, and CI head all equal `-ReviewedHeadSha`, re-reads live PR state, and then runs `gh pr merge 110 --match-head-commit <reviewed-sha> --squash`. It derives `-BaseSha` from `gh pr view --json baseRefOid` when omitted and refuses an unattested base. It fails closed with a `BLOCKED` JSON result and a non-zero exit on any mismatch and never retries with a different SHA. It is an executor, not a merge authority: the gate does not merge, and the executor cannot merge without a gate `MERGE_READY` for that exact head. Neither tool deletes branches, force-pushes, or rewrites history.
 
 ## Review evidence transport
 

@@ -55,11 +55,13 @@ User authority is required before:
 
 - accessing a new secret, credential, private key, or protected account;
 - deploying or mutating production;
-- force-pushing, rewriting shared history, merging when organizational policy requires approval, or performing irreversible remote operations;
+- force-pushing, rewriting shared history, merging when organizational policy requires approval or when the merge touches the reviewer/gate/authority trust root, or performing irreversible remote operations;
 - deleting unrelated user work or performing destructive infrastructure/database operations without a safe rollback;
 - materially expanding privileges, scope, cost, or external side effects;
 - intentionally weakening a security, provenance, sandbox, or evidence boundary;
 - choosing between materially different product behaviors that repository evidence cannot distinguish.
+
+A bounded, gate-green, exact-head merge on the managed repository is agent-executable without a separate human approval prompt. The required checks are green, and `scripts/agent-pr-merge.ps1` merges only after the base-rooted gate reports `MERGE_READY` for the exact reviewed head and binds `gh pr merge --match-head-commit` to that head. The decision is machine-gated rather than an unreviewed remote mutation, and the runtime Class A–D taxonomy (including its protected-branch merge gate and lease authority) remains the authoritative enforcement. The trust-root and organizational-approval carve-outs above still require user authority.
 
 If authority is required, ask one consolidated question after completing all safe evidence gathering. Do not ask for permission to inspect, test, retry, resume, or make ordinary scoped engineering decisions.
 

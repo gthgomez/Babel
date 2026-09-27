@@ -23,6 +23,17 @@ the candidate, mutate GitHub, or merge. The trusted host must restrict controlle
 reads before claiming that isolation. A repair producer cannot certify its own candidate.
 BLOCK against an unchanged candidate is retained.
 
+Review authority is scope-derived. `resolveReviewAuthority(scope)` returns `SESSION_ATTESTED` for
+ordinary PRs, where a fresh harness-native child (no root-owned binary required) is launched
+read-only with observed identity and full exact-diff delivery; it returns `HOST_PROTECTED` when any
+changed path matches `hostProtectedPrefixes` in `config/review-risk-policy.json` (the
+reviewer/gate/authority surface), where the protected installation and launcher must attest the
+review. A `HOST_PROTECTED` run fails closed when the adapter cannot attest host protection; the
+OpenCode fallback is `SESSION_ATTESTED` only. Reviewers still never merge. After the base-rooted gate
+reports `MERGE_READY` for the exact reviewed head, the orchestrator may run
+`scripts/agent-pr-merge.ps1` under the rule 05 bounded-autonomous merge contract; the executor binds
+`gh pr merge --match-head-commit` to that head and never merges on a mismatch.
+
 The base-rooted merge gate accepts V3 only. It fetches the live owner comment and checks
 owner identity, exact candidate, scope, fresh independent child evidence, reviewer count,
 and isolation and coverage receipts. V2 comments are historical and cannot satisfy this
