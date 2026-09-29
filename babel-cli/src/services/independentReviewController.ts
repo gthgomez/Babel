@@ -360,6 +360,12 @@ export function createIndependentReviewController(input: {
         if (result.status !== 'COMPLETED') {
           throw new Error(`REVIEW_EXECUTION_FAILED: ${result.failure_reason || 'Unknown adapter failure'}`)
         }
+        if (result.verdict === 'BLOCK' && input.state_dir) {
+          recordUnresolvedBlock(candidate.candidate_digest, input.state_dir, {
+            verdict: 'BLOCK', challenge_id: challengeId, controller_run_id: controllerRunId,
+            provenance: 'UNVERIFIED_DIAGNOSTIC_BLOCK_SIGNAL',
+          })
+        }
 
         // Fail closed on missing/invalid verdict (Repair A)
         if (result.verdict !== 'APPROVE' && result.verdict !== 'BLOCK') {

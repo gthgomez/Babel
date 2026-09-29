@@ -202,20 +202,19 @@ function submitHarnessReviewUnlocked(
   const path = runPath(stateDir, runId)
   if (!existsSync(path)) throw new Error('REVIEW_RUN_NOT_FOUND')
   const run = JSON.parse(readFileSync(path, 'utf8')) as ReviewRun
+  if (run.status === 'PENDING' && result.verdict === 'BLOCK') {
+    // Bind a raw objection to the prepared candidate before challenge and
+    // provenance checks. A malformed challenge cannot erase a returned BLOCK.
+    recordUnresolvedBlock(run.candidate.candidate_digest, stateDir, {
+      verdict: 'BLOCK', reported_challenge_id: result.challenge_id,
+      controller_run_id: runId, provenance: 'UNVERIFIED_BLOCK_SIGNAL',
+    })
+  }
   const request = run.requests.find((item) => item.challenge_id === result.challenge_id)
   if (!request) throw new Error('CHALLENGE_NOT_IN_RUN')
   if (run.reviews.some((review) => review.challenge_id === result.challenge_id)) throw new Error('CHALLENGE_ALREADY_CONSUMED')
   if (run.status !== 'PENDING') throw new Error('REVIEW_RUN_ALREADY_SETTLED')
   if (result.verdict !== 'APPROVE' && result.verdict !== 'BLOCK') throw new Error('INVALID_REVIEW_VERDICT')
-  if (result.verdict === 'BLOCK') {
-    // Retain even an invalid BLOCK signal. Its provenance may be unusable for
-    // publication, but a later approval on this unchanged candidate must not
-    // erase the reviewer's objection.
-    recordUnresolvedBlock(run.candidate.candidate_digest, stateDir, {
-      verdict: 'BLOCK', challenge_id: result.challenge_id, controller_run_id: runId,
-      provenance: 'UNVERIFIED_BLOCK_SIGNAL',
-    })
-  }
   if (result.verdict === 'APPROVE') assertNoUnresolvedPriorBlock(run.candidate.candidate_digest, stateDir)
   if (!Array.isArray(result.findings) || !Array.isArray(result.blocking_findings) ||
       result.findings.some((v) => typeof v !== 'string') || result.blocking_findings.some((v) => typeof v !== 'string')) {

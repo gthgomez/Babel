@@ -197,6 +197,26 @@ test('an unverified BLOCK signal prevents approval shopping on the same candidat
   } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
 })
 
+test('a BLOCK with a wrong or missing challenge still blocks a same-head retry', async () => {
+  for (const challengeId of ['wrong-challenge', '']) {
+    const f = fixture()
+    try {
+      await assert.rejects(() => runHarnessReview({
+        ...f, candidate, builder, reviewCount: 1,
+        adapter: {
+          id: 'codex-native-v1', agentKind: 'codex',
+          capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
+          review: async (request) => ({
+            ...result(request, f.diffSha256), challenge_id: challengeId,
+            verdict: 'BLOCK' as const, blocking_findings: ['defect'],
+          }),
+        },
+      }), /CHALLENGE_NOT_IN_RUN/)
+      assert.throws(() => prepareHarnessReview({ ...f, candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 }), /PRIOR_BLOCKING_REVIEW_REQUIRES_REPAIR/)
+    } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+  }
+})
+
 test('prepare requires the snapshot diff instead of accepting caller supplied coverage', () => {
   const f = fixture()
   try {
