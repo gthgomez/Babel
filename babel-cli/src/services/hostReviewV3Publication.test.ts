@@ -189,6 +189,22 @@ test('LOCAL_UNAUTHENTICATED provenance is rejected', async () => {
   assert.equal(posted, false)
 })
 
+test('missing private provenance cannot be published as authoritative evidence', async () => {
+  for (const missing of ['handoff', 'review'] as const) {
+    const handoff = validHandoff()
+    if (missing === 'handoff') delete handoff.provenance
+    else delete handoff.reviews[0]!.provenance
+    let posted = false
+    const result = await publishIndependentReviewV3({
+      handoff, repository, prNumber, ownerId, actorId: ownerId,
+      listComments: async () => [],
+      postComment: async () => { posted = true; return { id: 5 } },
+    })
+    assert.deepEqual(result, { posted: false, reason: 'authoritative_provenance_required' })
+    assert.equal(posted, false)
+  }
+})
+
 test('a failed secret scan blocks publication', async () => {
   const handoff = validHandoff()
   const scanned: string[] = []

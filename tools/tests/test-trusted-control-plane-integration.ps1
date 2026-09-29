@@ -334,7 +334,8 @@ exit 0
   }
 
   foreach ($installationCase in @(
-      @{ Name = 'previously-merged-reviewer-pass'; Sha = $previousInstallationSha; Pass = $true },
+      @{ Name = 'exact-base-controller-pass'; Sha = $baseSha; Pass = $true },
+      @{ Name = 'older-controller-blocked'; Sha = $previousInstallationSha; Pass = $false },
       @{ Name = 'unmerged-candidate-ancestor-reviewer-blocked'; Sha = $unmergedInstallationSha; Pass = $false },
       @{ Name = 'missing-reviewer-source-blocked'; Sha = ('d' * 40); Pass = $false }
     )) {
@@ -352,9 +353,9 @@ exit 0
         Get-Content -Raw (Join-Path $root 'comment-102.json') | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
       }
       if ($installationCase.Pass) {
-        if ($run.exitCode -ne 0) { throw 'Previously merged reviewer installation must remain eligible.' }
-      } elseif ($run.exitCode -eq 0 -or (Get-GateReviewPolicy $run).independentReviewEvidenceErrors -notcontains 'autonomous_evidence_harness_source_not_in_trusted_base') {
-        throw 'Unmerged or unavailable installation must not satisfy trusted chat review.'
+        if ($run.exitCode -ne 0) { throw 'The exact base controller must remain eligible.' }
+      } elseif ($run.exitCode -eq 0 -or (Get-GateReviewPolicy $run).independentReviewEvidenceErrors -notcontains 'autonomous_evidence_controller_source_not_exact_base') {
+        throw 'An older, unmerged, or unavailable controller must not satisfy protected review.'
       }
     }
   }

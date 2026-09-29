@@ -256,8 +256,8 @@ function Read-AgentAutonomousReviewEvidence {
   $candidateDigest = if ($null -ne $evidence.PSObject.Properties['candidate_digest']) { [string]$evidence.candidate_digest } elseif ($null -ne $evidence.handoff.PSObject.Properties['candidate_digest']) { [string]$evidence.handoff.candidate_digest } else { '' }
   $validation = Test-AgentControllerReviewEvidenceBundle -Bundle $evidence -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount $MinimumReviewCount -PublisherId $publisherId -ExpectedScope @($scopeResult.output) -ExpectedCandidateDigest $candidateDigest -ExpectedDiffSha256 $exactDiff.sha256 -ExpectedDiffLines $exactDiff.lines
   if ($validation.valid) {
-    # Every V3 reviewer of Babel must run from a controller source commit in
-    # the immutable trusted base, independent of reviewer model or vendor.
+    # Every V3 reviewer of Babel must run from the exact previously trusted
+    # base controller, independent of reviewer model or vendor.
     $sourceShas = @($evidence.handoff.reviews | ForEach-Object {
       if ($null -ne $_.PSObject.Properties['harness'] -and $_.harness.source_sha) { [string]$_.harness.source_sha }
       elseif ($null -ne $_.PSObject.Properties['runtime'] -and $null -ne $_.runtime.PSObject.Properties['source_sha']) { [string]$_.runtime.source_sha }
@@ -268,10 +268,9 @@ function Read-AgentAutonomousReviewEvidence {
     }
     foreach ($sourceSha in $sourceShas) {
       $sourceType = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('--no-replace-objects', 'cat-file', '-t', $sourceSha)
-      $sourceAncestry = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('--no-replace-objects', 'merge-base', '--is-ancestor', $sourceSha, $BaseSha)
-      if ($sourceType.exitCode -ne 0 -or $sourceType.text.Trim() -cne 'commit' -or $sourceAncestry.exitCode -ne 0) {
+      if ($sourceType.exitCode -ne 0 -or $sourceType.text.Trim() -cne 'commit' -or $sourceSha -cne $BaseSha) {
         $validation.valid = $false
-        $validation.errors += 'autonomous_evidence_harness_source_not_in_trusted_base'
+        $validation.errors += 'autonomous_evidence_controller_source_not_exact_base'
       }
     }
   }

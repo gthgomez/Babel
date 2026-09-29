@@ -413,6 +413,26 @@ test('independentReviewEvidenceV3: rejects LOCAL_UNAUTHENTICATED when requireAut
     () => validateIndependentReviewEvidenceV3(unauthEvidence, { requireAuthoritative: true }),
     /LOCAL_UNAUTHENTICATED_EVIDENCE_CANNOT_SATISFY_AUTHORITY/
   )
+  const missingProvenance = createValidEvidence({ execution_purpose: 'FINAL_CERTIFICATION' })
+  delete missingProvenance.provenance
+  validateIndependentReviewEvidenceV3(missingProvenance)
+  assert.throws(
+    () => validateIndependentReviewEvidenceV3(missingProvenance, { requireAuthoritative: true }),
+    /AUTHORITATIVE_EVIDENCE_PROVENANCE_REQUIRED/
+  )
+  const handoff: HostReviewHandoffV3 = {
+    schema_version: 3, kind: 'host_review_handoff_v3',
+    repository: missingProvenance.repository, pr_number: missingProvenance.pr_number,
+    base_sha: missingProvenance.base_sha, head_sha: missingProvenance.head_sha,
+    candidate_digest: missingProvenance.candidate_digest,
+    diff_numstat_digest: missingProvenance.diff_numstat_digest,
+    task_id: missingProvenance.task_id, task_hash: missingProvenance.task_hash,
+    controller_run_id: missingProvenance.controller_run_id, reviews: [missingProvenance],
+  }
+  assert.throws(
+    () => validateHostReviewHandoffV3(handoff, { requireAuthoritative: true }),
+    /AUTHORITATIVE_EVIDENCE_PROVENANCE_REQUIRED/
+  )
 })
 
 test('independentReviewEvidenceV3: execution_purpose distinguishes certification from review and repair', () => {

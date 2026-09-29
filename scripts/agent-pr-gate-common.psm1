@@ -348,6 +348,7 @@ function Get-AgentEvidenceTransportError {
   # the gate treats any non-null return as unsatisfied independent review.
   if ([string]$transportError -eq 'independent_review_stale_for_head') { return 'autonomous_review_evidence_stale_for_head' }
   if ([string]$transportError -eq 'independent_review_handoff_not_published') { return 'autonomous_review_evidence_handoff_not_published' }
+  if ([string]$transportError -eq 'independent_review_unresolved_block') { return 'autonomous_review_evidence_unresolved_block' }
   # Legacy transport errors keep their historical dispositions so existing
   # fixtures and callers are unchanged.
   $disposition = Test-AgentEvidenceTransportStub -Document $Document
@@ -371,6 +372,7 @@ function Get-AgentIndependentReviewSummary {
     @{ Error = 'independent_review_stale_for_head'; Text = 'the latest owner review handoff is bound to a different base/head' }
     @{ Error = 'autonomous_review_evidence_handoff_not_published'; Text = 'no owner review handoff has been published for this exact base/head' }
     @{ Error = 'independent_review_handoff_not_published'; Text = 'no owner review handoff has been published for this exact base/head' }
+    @{ Error = 'autonomous_review_evidence_unresolved_block'; Text = 'an unresolved BLOCK exists for this exact head; repair requires a new head and fresh reviews' }
     @{ Error = 'controller_review_live_provenance_mismatch'; Text = 'the local review evidence does not match the live owner-authenticated handoff' }
     @{ Error = 'autonomous_review_evidence_ambiguous'; Text = 'the independent review evidence is ambiguous' }
     @{ Error = 'autonomous_review_evidence_missing'; Text = 'the independent review evidence is missing' }

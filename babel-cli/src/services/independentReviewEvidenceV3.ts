@@ -313,6 +313,10 @@ export function validateIndependentReviewEvidenceV3(
   if (expected?.requireAuthoritative && parsed.provenance === 'LOCAL_UNAUTHENTICATED') {
     throw new Error('LOCAL_UNAUTHENTICATED_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
   }
+  if (expected?.requireAuthoritative && parsed.provenance !== 'TRUSTED_CONTROLLER_EVIDENCE' &&
+      parsed.provenance !== 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE') {
+    throw new Error('AUTHORITATIVE_EVIDENCE_PROVENANCE_REQUIRED')
+  }
 
   // Merge gate authority strictly requires FINAL_CERTIFICATION purpose
   if (expected?.requireAuthoritative) {
@@ -448,6 +452,10 @@ export function validateHostReviewHandoffV3(
 
   if (expected?.requireAuthoritative && parsed.provenance === 'LOCAL_UNAUTHENTICATED') {
     throw new Error('LOCAL_UNAUTHENTICATED_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
+  }
+  if (expected?.requireAuthoritative && parsed.provenance !== 'TRUSTED_CONTROLLER_EVIDENCE' &&
+      parsed.provenance !== 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE') {
+    throw new Error('AUTHORITATIVE_EVIDENCE_PROVENANCE_REQUIRED')
   }
 
   if (expected?.repository && parsed.repository !== expected.repository) throw new Error('HANDOFF_REPOSITORY_MISMATCH')

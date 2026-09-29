@@ -5,6 +5,7 @@ function Select-AgentHostReviewBundle {
   $markerV2 = '<!-- babel-controller-ai-reviews-v2 -->'
   if ($PublisherId -notmatch '^[1-9][0-9]*$') { return [pscustomobject]@{ transport_error = 'host_review_publisher_unavailable' } }
   $staleForHead = $false
+  $selectedBundle = $null
   foreach ($comment in @($Comments | Sort-Object { [long](Get-AgentPropertyValue $_ 'id') } -Descending)) {
     $user = Get-AgentPropertyValue $comment 'user'
     if ([string](Get-AgentPropertyValue $user 'id') -ne $PublisherId -or [string](Get-AgentPropertyValue $user 'type') -cne 'User') { continue }
@@ -37,17 +38,28 @@ function Select-AgentHostReviewBundle {
       return [pscustomobject]@{ transport_error = 'host_review_comment_pr_mismatch' }
     }
     if ($version -eq 3) {
-      return [pscustomobject][ordered]@{
-        schema_version = 3; kind = 'github_host_review_bundle_v3'
-        repository = $Repository; pr_number = $PR; base_sha = $BaseSha; head_sha = $HeadSha
-        candidate_digest = [string](Get-AgentPropertyValue $handoff 'candidate_digest')
-        publisher_id = $PublisherId; comment_id = [string](Get-AgentPropertyValue $comment 'id')
-        provenance = 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'
-        handoff = $handoff
+      foreach ($review in @((Get-AgentPropertyValue $handoff 'reviews'))) {
+        $blocking = Get-AgentPropertyValue $review 'blocking_findings'
+        if ([string](Get-AgentPropertyValue $review 'verdict') -ceq 'BLOCK' -or
+            ($null -ne $blocking -and @($blocking).Count -gt 0)) {
+          return [pscustomobject]@{ transport_error = 'independent_review_unresolved_block' }
+        }
       }
+      if ($null -eq $selectedBundle) {
+        $selectedBundle = [pscustomobject][ordered]@{
+          schema_version = 3; kind = 'github_host_review_bundle_v3'
+          repository = $Repository; pr_number = $PR; base_sha = $BaseSha; head_sha = $HeadSha
+          candidate_digest = [string](Get-AgentPropertyValue $handoff 'candidate_digest')
+          publisher_id = $PublisherId; comment_id = [string](Get-AgentPropertyValue $comment 'id')
+          provenance = 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'
+          handoff = $handoff
+        }
+      }
+      continue
     }
     return [pscustomobject]@{ transport_error = 'legacy_v2_review_unsupported' }
   }
+  if ($null -ne $selectedBundle) { return $selectedBundle }
   if ($staleForHead) { return [pscustomobject]@{ transport_error = 'independent_review_stale_for_head' } }
   return [pscustomobject]@{ transport_error = 'independent_review_handoff_not_published' }
 }
