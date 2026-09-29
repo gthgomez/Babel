@@ -4,6 +4,7 @@ import {
   type HostReviewHandoffV3,
   type IndependentReviewEvidenceV3,
   publicIndependentReviewHandoffV3,
+  validateHostReviewHandoffV3,
 } from './independentReviewEvidenceV3.js'
 import { V3_REVIEW_MARKER, publishIndependentReviewV3 } from './hostReviewV3Publication.js'
 
@@ -12,7 +13,7 @@ const repository = 'gthgomez/Babel'
 const prNumber = 180
 
 /** Minimal structurally valid V3 review used as the publication payload. */
-function validEvidence(): IndependentReviewEvidenceV3 {
+function validEvidence(slot = 1): IndependentReviewEvidenceV3 {
   return {
     schema_version: 3,
     kind: 'independent_agent_review_v3',
@@ -26,19 +27,28 @@ function validEvidence(): IndependentReviewEvidenceV3 {
     task_id: 'task-180',
     task_hash: 'e'.repeat(64),
     builder: { kind: 'codex', principal_id: 'builder-principal', execution_id: 'builder-exec' },
-    reviewer: { kind: 'babel', principal_id: 'reviewer-principal', execution_id: 'reviewer-exec' },
+    reviewer: { kind: 'babel', principal_id: `reviewer-principal-${slot}`, execution_id: `reviewer-exec-${slot}` },
     controller_run_id: 'controller-run-180',
-    challenge_id: 'challenge-180-xyz',
+    challenge_id: `challenge-180-${slot}`,
     runtime: {
       agent_kind: 'babel',
       adapter_id: 'babel-chat-v1',
-      controller_execution_id: 'reviewer-exec',
+      controller_execution_id: `reviewer-exec-${slot}`,
       observed_provider: 'opencode-go',
       runtime_version: 'f'.repeat(64),
+      provider_execution_id: `observed-exec-${slot}`,
+      session_id: `observed-session-${slot}`,
+      parent_execution_id: 'builder-exec',
+      fresh_context: true,
+      fresh_process: true,
+      read_only_enforced: true,
+      source_sha: 'a'.repeat(40),
+      execution_purpose: 'FINAL_CERTIFICATION',
     },
     review_mode: 'exact_diff',
+    execution_purpose: 'FINAL_CERTIFICATION',
     reviewed_at: new Date().toISOString(),
-    scope: ['src/services/hostReviewV3Publication.ts'],
+    scope: ['babel-cli/src/services/hostReviewV3Publication.ts'],
     verdict: 'APPROVE',
     findings: [],
     blocking_findings: [],
@@ -47,6 +57,11 @@ function validEvidence(): IndependentReviewEvidenceV3 {
       github_mutation: false,
       merge: false,
       controller_state_access: false,
+    },
+    coverage: {
+      diff_consumed: true, diff_sha256: 'f'.repeat(64),
+      diff_lines_total: 10, diff_lines_read: 10, changed_paths: 1,
+      source_paths_opened: ['babel-cli/src/services/hostReviewV3Publication.ts'],
     },
   }
 }
@@ -66,7 +81,7 @@ function validHandoff(): HostReviewHandoffV3 {
     task_id: review.task_id,
     task_hash: review.task_hash,
     controller_run_id: review.controller_run_id,
-    reviews: [review],
+    reviews: [review, validEvidence(2)],
   }
 }
 
@@ -74,6 +89,7 @@ const issueUrl = `https://github.com/${repository}/issues/${prNumber}`
 
 test('publishes once with a marker-prefixed public V3 body', async () => {
   const handoff = validHandoff()
+  validateHostReviewHandoffV3(handoff, { requireAuthoritative: true, scope: handoff.reviews[0]!.scope })
   const posted: string[] = []
   let listCalls = 0
   const result = await publishIndependentReviewV3({
@@ -203,6 +219,19 @@ test('missing private provenance cannot be published as authoritative evidence',
     assert.deepEqual(result, { posted: false, reason: 'authoritative_provenance_required' })
     assert.equal(posted, false)
   }
+})
+
+test('invalid final certification is rejected before publication', async () => {
+  const handoff = validHandoff()
+  handoff.reviews[0]!.coverage!.diff_lines_read = 1
+  let posted = false
+  const result = await publishIndependentReviewV3({
+    handoff, repository, prNumber, ownerId, actorId: ownerId,
+    listComments: async () => [],
+    postComment: async () => { posted = true; return { id: 6 } },
+  })
+  assert.deepEqual(result, { posted: false, reason: 'invalid_authoritative_handoff' })
+  assert.equal(posted, false)
 })
 
 test('a failed secret scan blocks publication', async () => {
