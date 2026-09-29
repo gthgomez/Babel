@@ -146,12 +146,14 @@ test('one BLOCK wins a two-review round and remains publishable', async () => {
         review: async (request) => {
           calls++
           const review = result(request, f.diffSha256)
+          review.host_observation.child_execution_id = `child-${request.challenge_id}`
+          review.host_observation.session_id = `session-${request.challenge_id}`
           return calls === 2 ? { ...review, verdict: 'BLOCK' as const, blocking_findings: ['defect'] } : review
         },
       },
     })
     assert.equal(outcome.status, 'BLOCKED')
-    assert.equal(outcome.handoff?.reviews[0]?.verdict, 'BLOCK')
+    assert.ok(outcome.handoff?.reviews.some((review) => review.verdict === 'BLOCK'))
     assert.equal(readHarnessReviewHandoff(f.stateDir, outcome.handoff!.controller_run_id).status, 'BLOCKED')
   } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
 })
@@ -238,7 +240,7 @@ test('blocking findings cannot be approval-shopped when the verdict or challenge
   }
 })
 
-test('a late BLOCK invalidates an already settled same-head handoff', () => {
+test('a late BLOCK on a consumed challenge is rejected as replay without changing the published handoff', () => {
   const f = fixture()
   try {
     const prepared = prepareHarnessReview({ ...f, candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 })
@@ -246,7 +248,104 @@ test('a late BLOCK invalidates an already settled same-head handoff', () => {
     assert.equal(submitHarnessReview(f.stateDir, prepared.run_id, approved).status, 'MERGE_READY')
     const lateBlock = { ...approved, verdict: 'BLOCK' as const, blocking_findings: ['late defect'] }
     assert.throws(() => submitHarnessReview(f.stateDir, prepared.run_id, lateBlock), /CHALLENGE_ALREADY_CONSUMED/)
-    assert.throws(() => readHarnessReviewHandoff(f.stateDir, prepared.run_id), /PRIOR_BLOCKING_REVIEW_REQUIRES_REPAIR/)
+    assert.equal(readHarnessReviewHandoff(f.stateDir, prepared.run_id).status, 'MERGE_READY')
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('a prepared slot cannot launch two reviewer executions for one challenge', async () => {
+  const f = fixture()
+  try {
+    const prepared = prepareHarnessReview({ ...f, candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 })
+    let release!: () => void
+    const waiting = new Promise<void>((resolve) => { release = resolve })
+    let started!: () => void
+    const launched = new Promise<void>((resolve) => { started = resolve })
+    let calls = 0
+    const adapter = {
+      id: 'codex-native-v1', agentKind: 'codex',
+      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
+      review: async (request: (typeof prepared.requests)[number]) => {
+        calls++
+        started()
+        await waiting
+        return result(request, f.diffSha256)
+      },
+    }
+    const first = executePreparedHarnessReviewSlot(f.stateDir, prepared.run_id, 0, adapter, builder)
+    await launched
+    await assert.rejects(() => executePreparedHarnessReviewSlot(f.stateDir, prepared.run_id, 0, adapter, builder), /REVIEW_SLOT_IN_FLIGHT/)
+    release()
+    assert.equal((await first).status, 'MERGE_READY')
+    assert.equal(calls, 1)
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('an outside submit cannot settle a slot while its reviewer is still running', async () => {
+  const f = fixture()
+  try {
+    const prepared = prepareHarnessReview({ ...f, candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 })
+    let release!: () => void
+    const waiting = new Promise<void>((resolve) => { release = resolve })
+    let started!: () => void
+    const launched = new Promise<void>((resolve) => { started = resolve })
+    const adapter = {
+      id: 'codex-native-v1', agentKind: 'codex',
+      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
+      review: async (request: (typeof prepared.requests)[number]) => {
+        started()
+        await waiting
+        return { ...result(request, f.diffSha256), verdict: 'BLOCK' as const, blocking_findings: ['real defect'] }
+      },
+    }
+    const active = executePreparedHarnessReviewSlot(f.stateDir, prepared.run_id, 0, adapter, builder)
+    await launched
+    assert.throws(() => submitHarnessReview(f.stateDir, prepared.run_id, result(prepared.requests[0]!, f.diffSha256)), /REVIEW_SLOT_IN_FLIGHT/)
+    release()
+    assert.equal((await active).status, 'BLOCKED')
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('one-shot review uses the claimed slot path and cannot lose a late BLOCK', async () => {
+  const f = fixture()
+  try {
+    let release!: () => void
+    const waiting = new Promise<void>((resolve) => { release = resolve })
+    let started!: (request: ReturnType<typeof prepareHarnessReview>['requests'][number]) => void
+    const launched = new Promise<ReturnType<typeof prepareHarnessReview>['requests'][number]>((resolve) => { started = resolve })
+    const active = runHarnessReview({ ...f, candidate, builder, reviewCount: 1,
+      adapter: {
+        id: 'codex-native-v1', agentKind: 'codex',
+        capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
+        review: async (request) => {
+          started(request)
+          await waiting
+          return { ...result(request, f.diffSha256), verdict: 'BLOCK' as const, blocking_findings: ['real defect'] }
+        },
+      },
+    })
+    const request = await launched
+    assert.throws(() => submitHarnessReview(f.stateDir, request.controller_run_id, result(request, f.diffSha256)), /REVIEW_SLOT_IN_FLIGHT/)
+    release()
+    assert.equal((await active).status, 'BLOCKED')
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('one candidate cannot have overlapping or repeated final certification runs', () => {
+  const f = fixture()
+  try {
+    const input = { ...f, candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 as const }
+    const prepared = prepareHarnessReview(input)
+    assert.throws(() => prepareHarnessReview(input), /REVIEW_CANDIDATE_ALREADY_PREPARED/)
+    submitHarnessReview(f.stateDir, prepared.run_id, result(prepared.requests[0]!, f.diffSha256))
+    assert.throws(() => prepareHarnessReview(input), /REVIEW_CANDIDATE_ALREADY_PREPARED/)
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('authoritative preparation requires an explicit PR number', () => {
+  const f = fixture()
+  try {
+    assert.throws(() => prepareHarnessReview({ ...f, candidate: { ...candidate, pr_number: undefined }, builder,
+      agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 }), /AUTHORITATIVE_PR_NUMBER_REQUIRED/)
   } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
 })
 
@@ -347,25 +446,6 @@ test('a released process lock does not strand a prepared review', () => {
     db.exec('BEGIN EXCLUSIVE')
     db.close()
     assert.equal(submitHarnessReview(f.stateDir, prepared.run_id, result(prepared.requests[0]!, f.diffSha256)).status, 'MERGE_READY')
-  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
-})
-
-test('a block invalidates other prepared or certified rounds for the same candidate', () => {
-  const f = fixture()
-  try {
-    const options = { ...f, candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 as const }
-    const blockedRun = prepareHarnessReview(options)
-    const waitingRun = prepareHarnessReview(options)
-    const approvedRun = prepareHarnessReview(options)
-    assert.equal(submitHarnessReview(f.stateDir, approvedRun.run_id,
-      result(approvedRun.requests[0]!, f.diffSha256)).status, 'MERGE_READY')
-    const block = { ...result(blockedRun.requests[0]!, f.diffSha256),
-      verdict: 'BLOCK' as const, blocking_findings: ['defect'] }
-    assert.equal(submitHarnessReview(f.stateDir, blockedRun.run_id, block).status, 'BLOCKED')
-    assert.equal(readHarnessReviewHandoff(f.stateDir, blockedRun.run_id).handoff.reviews[0]?.verdict, 'BLOCK')
-    assert.throws(() => submitHarnessReview(f.stateDir, waitingRun.run_id,
-      result(waitingRun.requests[0]!, f.diffSha256)), /PRIOR_BLOCKING_REVIEW_REQUIRES_REPAIR/)
-    assert.throws(() => readHarnessReviewHandoff(f.stateDir, approvedRun.run_id), /PRIOR_BLOCKING_REVIEW_REQUIRES_REPAIR/)
   } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
 })
 
@@ -520,7 +600,7 @@ test('prepared run resumes only the failed slot after the other approval is dura
         return result(request, f.diffSha256)
       },
     }
-    await assert.rejects(() => executePreparedHarnessReviewRun(f.stateDir, prepared.run_id, adapter, builder), /REVIEW_EXECUTION_INCOMPLETE/)
+    await assert.rejects(() => executePreparedHarnessReviewRun(f.stateDir, prepared.run_id, adapter, builder), /transient reviewer failure/)
     let resumed = 0
     const retry = {
       ...adapter,

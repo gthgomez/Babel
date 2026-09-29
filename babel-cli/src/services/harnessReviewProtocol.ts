@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
@@ -99,6 +99,8 @@ interface ReviewRun {
   requests: HarnessReviewRequest[]
   reviews: IndependentReviewEvidenceV3[]
   pending_results?: Record<string, HarnessReviewResult>
+  /** Durable launch claims prevent two host executions from consuming one slot. */
+  in_flight_challenges?: string[]
   status: 'PENDING' | 'BLOCKED' | 'MERGE_READY'
   handoff?: HostReviewHandoffV3
 }
@@ -144,6 +146,9 @@ export function prepareHarnessReview(input: {
   trustedControllerRoot?: string
 }): { run_id: string; requests: HarnessReviewRequest[] } {
   if (input.reviewCount !== 1 && input.reviewCount !== 2) throw new Error('INVALID_REVIEWER_COUNT')
+  if (!Number.isSafeInteger(input.candidate.pr_number) || (input.candidate.pr_number ?? 0) <= 0) {
+    throw new Error('AUTHORITATIVE_PR_NUMBER_REQUIRED')
+  }
   const derivedRisk = classifyReviewRisk(input.candidate.scope)
   const authority = resolveReviewAuthority(input.candidate.scope)
   if (input.candidate.risk_tier !== derivedRisk) throw new Error('CANDIDATE_RISK_TIER_MISMATCH')
@@ -155,7 +160,6 @@ export function prepareHarnessReview(input: {
   if (!input.agentKind.trim() || !input.adapterId.trim()) throw new Error('HARNESS_IDENTITY_REQUIRED')
   if (!input.builder.execution_id || !input.builder.principal_id) throw new Error('AUTHORITATIVE_BUILDER_IDENTITY_REQUIRED')
   const stateDir = assertReviewStateOutsideGit(input.stateDir)
-  assertNoUnresolvedPriorBlock(input.candidate.candidate_digest, stateDir)
   const runId = randomUUID()
   const diff = readFileSync(join(input.snapshotRoot, 'changes.diff'), 'utf8')
   const diffSha256 = createHash('sha256').update(diff).digest('hex')
@@ -174,17 +178,6 @@ export function prepareHarnessReview(input: {
     authority,
     review_mission: reviewMission(input.candidate.scope, slot),
   }))
-  for (const request of requests) {
-    const challenge: PersistentReviewChallenge = {
-      challenge_id: request.challenge_id, status: 'ISSUED', candidate_digest: input.candidate.candidate_digest,
-      repository: input.candidate.repository, pr_number: input.candidate.pr_number ?? 1,
-      base_sha: input.candidate.base_sha, head_sha: input.candidate.head_sha,
-      diff_numstat_digest: input.candidate.diff_numstat_digest, scope: [...input.candidate.scope],
-      builder: input.builder, reviewer: request.reviewer, controller_run_id: runId,
-      issued_at: new Date().toISOString(),
-    }
-    issueReviewChallenge(stateDir, challenge)
-  }
   const run: ReviewRun = {
     run_id: runId, candidate: input.candidate, builder: input.builder,
     adapter_id: input.adapterId, agent_kind: input.agentKind, authority, requests, reviews: [], status: 'PENDING',
@@ -192,16 +185,58 @@ export function prepareHarnessReview(input: {
     ...(trustedControllerSourceSha ? { trusted_controller_source_sha: trustedControllerSourceSha } : {}),
   }
   mkdirSync(join(stateDir, 'harness-runs'), { recursive: true, mode: 0o700 })
-  atomicReviewJson(runPath(stateDir, runId), run)
+  const lockPath = join(stateDir, 'harness-runs', 'submit-lock.sqlite')
+  const db = new DatabaseSync(lockPath)
+  try {
+    chmodSync(lockPath, 0o600)
+    db.exec('PRAGMA busy_timeout=1000')
+    db.exec('BEGIN EXCLUSIVE')
+    try {
+      assertNoUnresolvedPriorBlock(input.candidate.candidate_digest, stateDir)
+      for (const name of readdirSync(join(stateDir, 'harness-runs'))) {
+        if (!name.endsWith('.json')) continue
+        const prior = JSON.parse(readFileSync(join(stateDir, 'harness-runs', name), 'utf8')) as ReviewRun
+        if (prior.candidate.repository.toLowerCase() === input.candidate.repository.toLowerCase() &&
+            prior.candidate.pr_number === input.candidate.pr_number &&
+            prior.candidate.head_sha.toLowerCase() === input.candidate.head_sha.toLowerCase()) {
+          throw new Error('REVIEW_CANDIDATE_ALREADY_PREPARED')
+        }
+      }
+      for (const request of requests) {
+        const challenge: PersistentReviewChallenge = {
+          challenge_id: request.challenge_id, status: 'ISSUED', candidate_digest: input.candidate.candidate_digest,
+          repository: input.candidate.repository, pr_number: input.candidate.pr_number ?? 1,
+          base_sha: input.candidate.base_sha, head_sha: input.candidate.head_sha,
+          diff_numstat_digest: input.candidate.diff_numstat_digest, scope: [...input.candidate.scope],
+          builder: input.builder, reviewer: request.reviewer, controller_run_id: runId,
+          issued_at: new Date().toISOString(),
+        }
+        issueReviewChallenge(stateDir, challenge)
+      }
+      atomicReviewJson(runPath(stateDir, runId), run)
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  } finally { db.close() }
   return { run_id: runId, requests }
 }
 
 function submitHarnessReviewUnlocked(
-  stateDir: string, runId: string, result: HarnessReviewResult,
+  stateDir: string, runId: string, result: HarnessReviewResult, claimedChallengeId?: string,
 ): { status: 'PENDING' | 'BLOCKED' | 'MERGE_READY'; handoff?: HostReviewHandoffV3 } {
   const path = runPath(stateDir, runId)
   if (!existsSync(path)) throw new Error('REVIEW_RUN_NOT_FOUND')
   const run = JSON.parse(readFileSync(path, 'utf8')) as ReviewRun
+  const request = run.requests.find((item) => item.challenge_id === result.challenge_id)
+  // A consumed or settled challenge is replay, not a new reviewer signal. In
+  // particular it cannot silently revoke an approval already published.
+  if (request && run.reviews.some((review) => review.challenge_id === result.challenge_id)) throw new Error('CHALLENGE_ALREADY_CONSUMED')
+  if (run.status !== 'PENDING') throw new Error('REVIEW_RUN_ALREADY_SETTLED')
+  if (request && run.in_flight_challenges?.includes(request.challenge_id) && !claimedChallengeId) {
+    throw new Error('REVIEW_SLOT_IN_FLIGHT')
+  }
   if (result.verdict === 'BLOCK' || (Array.isArray(result.blocking_findings) && result.blocking_findings.length > 0)) {
     // Bind a raw objection to the prepared candidate before challenge and
     // provenance checks. A malformed challenge cannot erase a returned BLOCK.
@@ -210,10 +245,11 @@ function submitHarnessReviewUnlocked(
       controller_run_id: runId, provenance: 'UNVERIFIED_BLOCK_SIGNAL',
     })
   }
-  const request = run.requests.find((item) => item.challenge_id === result.challenge_id)
   if (!request) throw new Error('CHALLENGE_NOT_IN_RUN')
-  if (run.reviews.some((review) => review.challenge_id === result.challenge_id)) throw new Error('CHALLENGE_ALREADY_CONSUMED')
-  if (run.status !== 'PENDING') throw new Error('REVIEW_RUN_ALREADY_SETTLED')
+  if (claimedChallengeId && (result.challenge_id !== claimedChallengeId ||
+      !run.in_flight_challenges?.includes(claimedChallengeId))) {
+    throw new Error('CLAIMED_REVIEW_CHALLENGE_MISMATCH')
+  }
   if (result.verdict !== 'APPROVE' && result.verdict !== 'BLOCK') throw new Error('INVALID_REVIEW_VERDICT')
   if (result.verdict === 'APPROVE') assertNoUnresolvedPriorBlock(run.candidate.candidate_digest, stateDir)
   if (!Array.isArray(result.findings) || !Array.isArray(result.blocking_findings) ||
@@ -327,8 +363,9 @@ function submitHarnessReviewUnlocked(
   return { status: run.status, handoff }
 }
 
-export function submitHarnessReview(
+function submitHarnessReviewLocked(
   stateDir: string, runId: string, result: HarnessReviewResult,
+  claimedChallengeId?: string,
 ): { status: 'PENDING' | 'BLOCKED' | 'MERGE_READY'; handoff?: HostReviewHandoffV3 } {
   const path = runPath(stateDir, runId)
   if (!existsSync(path)) throw new Error('REVIEW_RUN_NOT_FOUND')
@@ -343,7 +380,7 @@ export function submitHarnessReview(
       throw error
     }
     try {
-      const outcome = submitHarnessReviewUnlocked(stateDir, runId, result)
+      const outcome = submitHarnessReviewUnlocked(stateDir, runId, result, claimedChallengeId)
       db.exec('COMMIT')
       return outcome
     } catch (error) {
@@ -354,6 +391,12 @@ export function submitHarnessReview(
   finally { db.close() }
 }
 
+export function submitHarnessReview(
+  stateDir: string, runId: string, result: HarnessReviewResult,
+): { status: 'PENDING' | 'BLOCKED' | 'MERGE_READY'; handoff?: HostReviewHandoffV3 } {
+  return submitHarnessReviewLocked(stateDir, runId, result)
+}
+
 export function readHarnessReviewHandoff(stateDir: string, runId: string): {
   candidate: CandidateEnvelope
   status: 'BLOCKED' | 'MERGE_READY'
@@ -362,6 +405,7 @@ export function readHarnessReviewHandoff(stateDir: string, runId: string): {
   const path = runPath(stateDir, runId)
   if (!existsSync(path)) throw new Error('REVIEW_RUN_NOT_FOUND')
   const run = JSON.parse(readFileSync(path, 'utf8')) as ReviewRun
+  if (run.in_flight_challenges?.length) throw new Error('REVIEW_SLOT_IN_FLIGHT')
   if ((run.status !== 'MERGE_READY' && run.status !== 'BLOCKED') || !run.handoff) {
     throw new Error('REVIEW_RUN_NOT_CERTIFIED')
   }
@@ -371,6 +415,40 @@ export function readHarnessReviewHandoff(stateDir: string, runId: string): {
     requireAuthoritative: true, purpose: 'FINAL_CERTIFICATION',
   })
   return { candidate: run.candidate, status: run.status, handoff: run.handoff }
+}
+
+function setPreparedSlotInFlight(stateDir: string, runId: string, challengeId: string, active: boolean): void {
+  const path = runPath(stateDir, runId)
+  const lockPath = join(stateDir, 'harness-runs', 'submit-lock.sqlite')
+  const db = new DatabaseSync(lockPath)
+  try {
+    chmodSync(lockPath, 0o600)
+    db.exec('PRAGMA busy_timeout=1000')
+    try { db.exec('BEGIN EXCLUSIVE') }
+    catch (error) {
+      if ((error as Error).message.includes('database is locked')) throw new Error('REVIEW_RUN_BUSY')
+      throw error
+    }
+    try {
+      const run = JSON.parse(readFileSync(path, 'utf8')) as ReviewRun
+      const claimed = run.in_flight_challenges ?? []
+      if (active) {
+        if (run.status !== 'PENDING' || run.reviews.some((review) => review.challenge_id === challengeId)) {
+          throw new Error('REVIEW_SLOT_ALREADY_SETTLED')
+        }
+        if (run.pending_results?.[challengeId]) throw new Error('REVIEW_RESULT_PENDING')
+        if (claimed.includes(challengeId)) throw new Error('REVIEW_SLOT_IN_FLIGHT')
+        run.in_flight_challenges = [...claimed, challengeId]
+      } else {
+        run.in_flight_challenges = claimed.filter((id) => id !== challengeId)
+      }
+      atomicReviewJson(path, run)
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  } finally { db.close() }
 }
 
 /** Keep the block ledger stable while the trusted host publishes a certified handoff. */
@@ -437,7 +515,12 @@ export async function executePreparedHarnessReviewSlot(
   }
   const pending = run.pending_results?.[request.challenge_id]
   if (pending) return submitHarnessReview(stateDir, runId, pending)
-  return submitHarnessReview(stateDir, runId, await adapter.review(request))
+  setPreparedSlotInFlight(stateDir, runId, request.challenge_id, true)
+  try {
+    return submitHarnessReviewLocked(stateDir, runId, await adapter.review(request), request.challenge_id)
+  } finally {
+    setPreparedSlotInFlight(stateDir, runId, request.challenge_id, false)
+  }
 }
 
 /** Launch all prepared final slots together while keeping each durable challenge independent. */
@@ -459,7 +542,8 @@ export async function executePreparedHarnessReviewRun(
   if (blocked?.status === 'fulfilled' && blocked.value.handoff) {
     return { status: 'BLOCKED', handoff: blocked.value.handoff }
   }
-  if (settled.some((entry) => entry.status === 'rejected')) throw new Error('REVIEW_EXECUTION_INCOMPLETE')
+  const failed = settled.find((entry) => entry.status === 'rejected')
+  if (failed?.status === 'rejected') throw failed.reason
   const certified = readHarnessReviewHandoff(stateDir, runId)
   return { status: certified.status, handoff: certified.handoff }
 }
@@ -479,23 +563,5 @@ export async function runHarnessReview(input: {
   }
   assertAdapterAuthority(input.adapter, resolveReviewAuthority(input.candidate.scope))
   const prepared = prepareHarnessReview({ ...input, agentKind: input.adapter.agentKind, adapterId: input.adapter.id })
-  const settled = await Promise.allSettled(prepared.requests.map((request) => input.adapter.review(request)))
-  const blocks = settled.flatMap((item) => item.status === 'fulfilled' &&
-    (item.value.verdict === 'BLOCK' || (Array.isArray(item.value.blocking_findings) && item.value.blocking_findings.length > 0))
-    ? [item.value] : [])
-  if (blocks.length > 0) {
-    let lastError: unknown
-    for (const block of blocks) {
-      try { return submitHarnessReview(input.stateDir, prepared.run_id, block) }
-      catch (error) { lastError = error }
-    }
-    throw lastError ?? new Error('BLOCKING_REVIEW_UNVERIFIED')
-  }
-  let outcome: ReturnType<typeof submitHarnessReview> = { status: 'PENDING' }
-  for (let i = 0; i < settled.length; i++) {
-    const item = settled[i]!
-    if (item.status === 'fulfilled') outcome = submitHarnessReview(input.stateDir, prepared.run_id, item.value)
-  }
-  if (outcome.status === 'PENDING') throw new Error('REVIEW_EXECUTION_INCOMPLETE')
-  return outcome
+  return executePreparedHarnessReviewRun(input.stateDir, prepared.run_id, input.adapter, input.builder)
 }
