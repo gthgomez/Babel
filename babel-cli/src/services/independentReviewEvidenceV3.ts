@@ -499,13 +499,16 @@ export function validateHostReviewHandoffV3(
       purpose: expected?.purpose,
     })
 
-    if (reviewerPrincipals.has(review.reviewer.principal_id)) {
+    const reviewerPrincipal = review.reviewer.principal_id.toLowerCase()
+    const reviewerExecution = review.reviewer.execution_id.toLowerCase()
+    const challengeId = review.challenge_id.toLowerCase()
+    if (reviewerPrincipals.has(reviewerPrincipal)) {
       throw new Error('DUPLICATE_REVIEWER_PRINCIPAL')
     }
-    if (reviewerExecutions.has(review.reviewer.execution_id)) {
+    if (reviewerExecutions.has(reviewerExecution)) {
       throw new Error('DUPLICATE_REVIEWER_EXECUTION')
     }
-    if (challengeIds.has(review.challenge_id)) {
+    if (challengeIds.has(challengeId)) {
       throw new Error('DUPLICATE_CHALLENGE_ID')
     }
     if (expected?.requireAuthoritative) {
@@ -522,9 +525,9 @@ export function validateHostReviewHandoffV3(
       observedIdentities.add(observedExecution)
       observedIdentities.add(observedSession)
     }
-    reviewerPrincipals.add(review.reviewer.principal_id)
-    reviewerExecutions.add(review.reviewer.execution_id)
-    challengeIds.add(review.challenge_id)
+    reviewerPrincipals.add(reviewerPrincipal)
+    reviewerExecutions.add(reviewerExecution)
+    challengeIds.add(challengeId)
   }
 
   return parsed as HostReviewHandoffV3

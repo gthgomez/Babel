@@ -286,6 +286,14 @@ test('hostReviewHandoffV3: validates handoff and rejects duplicate reviewer iden
     ],
   }
   assert.throws(() => validateHostReviewHandoffV3(dupPrincipalHandoff), /DUPLICATE_REVIEWER_PRINCIPAL/)
+  assert.throws(() => validateHostReviewHandoffV3({
+    ...validHandoff,
+    reviews: [r1, createValidEvidence({
+      challenge_id: 'challenge-180-case-p',
+      reviewer: { kind: 'claude-code', principal_id: 'P-1', execution_id: 'e-3' },
+      runtime: { agent_kind: 'claude-code', adapter_id: 'a-2', controller_execution_id: 'e-3' },
+    })],
+  }), /DUPLICATE_REVIEWER_PRINCIPAL/)
 
   // Duplicate reviewer execution must throw
   const dupExecutionHandoff: HostReviewHandoffV3 = {
@@ -314,6 +322,14 @@ test('hostReviewHandoffV3: validates handoff and rejects duplicate reviewer iden
     ],
   }
   assert.throws(() => validateHostReviewHandoffV3(dupChallengeHandoff), /DUPLICATE_CHALLENGE_ID/)
+  assert.throws(() => validateHostReviewHandoffV3({
+    ...validHandoff,
+    reviews: [r1, createValidEvidence({
+      challenge_id: r1.challenge_id.toUpperCase(),
+      reviewer: { kind: 'claude-code', principal_id: 'p-4', execution_id: 'e-4' },
+      runtime: { agent_kind: 'claude-code', adapter_id: 'a-2', controller_execution_id: 'e-4' },
+    })],
+  }), /DUPLICATE_CHALLENGE_ID/)
 
   // Public projection strips provenance
   const pub = publicIndependentReviewHandoffV3(validHandoff)

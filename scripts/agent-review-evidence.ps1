@@ -249,6 +249,7 @@ function Test-AgentIndependentReviewEvidenceV3 {
     $sessionId = [string](Get-AgentPropertyValue $runtime 'session_id')
     if ([string]::IsNullOrWhiteSpace($observedExec) -or [string]::IsNullOrWhiteSpace($sessionId) -or
         $observedExec -ieq [string](Get-AgentPropertyValue $builder 'execution_id') -or
+        $sessionId -ieq [string](Get-AgentPropertyValue $builder 'execution_id') -or
         [string](Get-AgentPropertyValue $runtime 'parent_execution_id') -cne [string](Get-AgentPropertyValue $builder 'execution_id')) {
       $errors += 'independent_evidence_observed_child_identity_invalid'
     }
@@ -394,6 +395,9 @@ function Test-AgentHostReviewBundleV3 {
 
   $principals = @{}; $executions = @{}; $challenges = @{}; $observedIdentities = @{}
   foreach ($review in $reviews) {
+    if ([string](Get-AgentPropertyValue $review 'controller_run_id') -cne $controllerRunId) {
+      $errors += 'controller_review_bundle_run_id_mismatch'
+    }
     $validation = Test-AgentIndependentReviewEvidenceV3 -Evidence $review -Repository $Repository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -ExpectedNumstatDigest $ExpectedNumstatDigest -ExpectedCandidateDigest $candidateDigest -TaskId $taskId -TaskHash $taskHash -ExpectedScope $ExpectedScope -BuilderIdentity $BuilderIdentity -ExpectedDiffSha256 $ExpectedDiffSha256 -ExpectedDiffLines $ExpectedDiffLines
     $errors += @($validation.errors)
     $reviewer = Get-AgentPropertyValue $review 'reviewer'

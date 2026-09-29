@@ -333,6 +333,32 @@ exit 0
     if ($policy.observedIndependentReviewCount -ne 2) { throw 'the positive fixture must retain both valid reviews' }
   }
 
+  Invoke-Step 'review-controller-run-id-mismatch-blocked' {
+    $changed = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $changed.handoff.reviews[0].controller_run_id = 'another-controller-run'
+    $validation = Test-AgentHostReviewBundleV3 -Bundle $changed -Repository gthgomez/Babel -PR 4242 `
+      -BaseSha $baseSha -HeadSha $headSha -ExpectedNumstatDigest $numstatDigest `
+      -MinimumReviewCount $minimumIndependentReviewCount -PublisherId '91163862' `
+      -ExpectedCandidateDigest $candidateDigest -ExpectedScope $scope `
+      -ExpectedDiffSha256 $coverage.sha256 -ExpectedDiffLines $coverage.lines
+    if ($validation.valid -or $validation.errors -notcontains 'controller_review_bundle_run_id_mismatch') {
+      throw 'A review from another controller run must not join this handoff.'
+    }
+  }
+
+  Invoke-Step 'builder-session-reuse-blocked' {
+    $changed = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $changed.handoff.reviews[0].runtime.session_id = $builder.execution_id
+    $validation = Test-AgentHostReviewBundleV3 -Bundle $changed -Repository gthgomez/Babel -PR 4242 `
+      -BaseSha $baseSha -HeadSha $headSha -ExpectedNumstatDigest $numstatDigest `
+      -MinimumReviewCount $minimumIndependentReviewCount -PublisherId '91163862' `
+      -ExpectedCandidateDigest $candidateDigest -ExpectedScope $scope `
+      -ExpectedDiffSha256 $coverage.sha256 -ExpectedDiffLines $coverage.lines
+    if ($validation.valid -or $validation.errors -notcontains 'independent_evidence_observed_child_identity_invalid') {
+      throw 'The builder session cannot be the observed reviewer session.'
+    }
+  }
+
   foreach ($installationCase in @(
       @{ Name = 'exact-base-controller-pass'; Sha = $baseSha; Pass = $true },
       @{ Name = 'older-controller-blocked'; Sha = $previousInstallationSha; Pass = $false },
