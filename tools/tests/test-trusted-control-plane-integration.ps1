@@ -359,6 +359,20 @@ exit 0
     }
   }
 
+  Invoke-Step 'mixed-builder-handoff-blocked' {
+    $changed = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $changed.handoff.reviews[1].builder.execution_id = 'another-builder-execution'
+    $changed.handoff.reviews[1].runtime.parent_execution_id = 'another-builder-execution'
+    $validation = Test-AgentHostReviewBundleV3 -Bundle $changed -Repository gthgomez/Babel -PR 4242 `
+      -BaseSha $baseSha -HeadSha $headSha -ExpectedNumstatDigest $numstatDigest `
+      -MinimumReviewCount $minimumIndependentReviewCount -PublisherId '91163862' `
+      -ExpectedCandidateDigest $candidateDigest -ExpectedScope $scope `
+      -ExpectedDiffSha256 $coverage.sha256 -ExpectedDiffLines $coverage.lines
+    if ($validation.valid -or $validation.errors -notcontains 'controller_review_bundle_builder_mismatch') {
+      throw 'Reviews from different builders cannot share one controller run.'
+    }
+  }
+
   foreach ($installationCase in @(
       @{ Name = 'exact-base-controller-pass'; Sha = $baseSha; Pass = $true },
       @{ Name = 'older-controller-blocked'; Sha = $previousInstallationSha; Pass = $false },

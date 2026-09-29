@@ -324,6 +324,14 @@ test('hostReviewHandoffV3: validates handoff and rejects duplicate reviewer iden
   assert.throws(() => validateHostReviewHandoffV3(dupChallengeHandoff), /DUPLICATE_CHALLENGE_ID/)
   assert.throws(() => validateHostReviewHandoffV3({
     ...validHandoff,
+    reviews: [r1, { ...r2, builder: { ...r2.builder, execution_id: 'another-builder' } }],
+  }), /MIXED_BUILDER_IDENTITY/)
+  assert.throws(() => validateHostReviewHandoffV3({
+    ...validHandoff,
+    reviews: [r1, { ...r2, coverage: { ...r2.coverage!, diff_sha256: 'a'.repeat(64) } }],
+  }), /MIXED_DIFF_COVERAGE/)
+  assert.throws(() => validateHostReviewHandoffV3({
+    ...validHandoff,
     reviews: [r1, createValidEvidence({
       challenge_id: r1.challenge_id.toUpperCase(),
       reviewer: { kind: 'claude-code', principal_id: 'p-4', execution_id: 'e-4' },

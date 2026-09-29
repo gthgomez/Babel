@@ -479,8 +479,20 @@ export function validateHostReviewHandoffV3(
   const observedSessions = new Set<string>()
   const observedIdentities = new Set<string>()
   const challengeIds = new Set<string>()
+  const roundBuilder = parsed.reviews[0]?.builder
+  const roundCoverage = parsed.reviews[0]?.coverage
 
   for (const review of parsed.reviews) {
+    if (roundBuilder && (review.builder.kind !== roundBuilder.kind ||
+        review.builder.principal_id !== roundBuilder.principal_id ||
+        review.builder.execution_id !== roundBuilder.execution_id)) {
+      throw new Error('MIXED_BUILDER_IDENTITY')
+    }
+    if (review.coverage?.diff_sha256 !== roundCoverage?.diff_sha256 ||
+        review.coverage?.diff_lines_total !== roundCoverage?.diff_lines_total ||
+        review.coverage?.changed_paths !== roundCoverage?.changed_paths) {
+      throw new Error('MIXED_DIFF_COVERAGE')
+    }
     validateIndependentReviewEvidenceV3(review, {
       repository: parsed.repository,
       pr_number: parsed.pr_number,

@@ -394,7 +394,16 @@ function Test-AgentHostReviewBundleV3 {
   }
 
   $principals = @{}; $executions = @{}; $challenges = @{}; $observedIdentities = @{}
+  $roundBuilder = $null
   foreach ($review in $reviews) {
+    $reviewBuilder = Get-AgentPropertyValue $review 'builder'
+    if ($null -eq $roundBuilder) {
+      $roundBuilder = $reviewBuilder
+    } elseif ([string](Get-AgentPropertyValue $reviewBuilder 'kind') -cne [string](Get-AgentPropertyValue $roundBuilder 'kind') -or
+              [string](Get-AgentPropertyValue $reviewBuilder 'principal_id') -cne [string](Get-AgentPropertyValue $roundBuilder 'principal_id') -or
+              [string](Get-AgentPropertyValue $reviewBuilder 'execution_id') -cne [string](Get-AgentPropertyValue $roundBuilder 'execution_id')) {
+      $errors += 'controller_review_bundle_builder_mismatch'
+    }
     if ([string](Get-AgentPropertyValue $review 'controller_run_id') -cne $controllerRunId) {
       $errors += 'controller_review_bundle_run_id_mismatch'
     }
