@@ -84,8 +84,24 @@ test('resolveReviewPolicy returns the full policy for every lane', () => {
 
 test('review control paths are critical under the shared risk table', () => {
   assert.equal(classifyReviewRisk(['tools/babel-pr-orchestrate.mts']), 'CRITICAL');
+  assert.equal(classifyReviewRisk(['scripts/agent-pr-merge.ps1']), 'CRITICAL');
+  assert.equal(classifyReviewRisk(['babel-cli/src/services/reviewIndependence.ts']), 'CRITICAL');
   assert.equal(classifyReviewRisk(['src/ordinary.ts']), 'NORMAL');
   assert.equal(classifyReviewRisk(['docs/guide.md']), 'TRIVIAL');
+  assert.equal(classifyReviewRisk([]), 'AMBIGUOUS');
+});
+
+test('candidate identity, snapshot, and durable review state remain host-protected', () => {
+  for (const path of [
+    'babel-cli/src/services/candidateCollector.ts',
+    'babel-cli/src/services/babelReviewSnapshot.ts',
+    'babel-cli/src/services/babelReviewQueue.ts',
+    'babel-cli/src/services/babelChatReview.ts',
+    'babel-cli/src/services/babelReviewObserver.ts',
+  ]) {
+    assert.equal(classifyReviewRisk([path]), 'CRITICAL', path);
+    assert.equal(resolveReviewAuthority([path]), 'HOST_PROTECTED', path);
+  }
 });
 
 test('resolveReviewPolicy defaults to the AMBIGUOUS (ELEVATED-equivalent) policy for any unknown lane', () => {
@@ -124,8 +140,11 @@ test('resolveReviewAuthority: reviewer/gate paths require HOST_PROTECTED', () =>
   assert.equal(resolveReviewAuthority(['babel-cli/src/services/harnessReviewProtocol.ts']), 'HOST_PROTECTED');
   assert.equal(resolveReviewAuthority(['babel-cli/src/config/autonomyPolicy.ts']), 'HOST_PROTECTED');
   assert.equal(resolveReviewAuthority(['config/review-risk-policy.json']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['babel-cli/src/services/reviewIndependence.ts']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['scripts/agent-git-common.psm1']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['.agents/rules/10-independent-review-policy.md']), 'HOST_PROTECTED');
   assert.equal(resolveReviewAuthority(['babel-cli/src/services/chatEngine.ts']), 'SESSION_ATTESTED');
-  assert.equal(resolveReviewAuthority([]), 'SESSION_ATTESTED');
+  assert.equal(resolveReviewAuthority([]), 'HOST_PROTECTED');
 });
 
 test('resolveReviewAuthority: every configured hostProtectedPrefix is protected', () => {
@@ -133,6 +152,13 @@ test('resolveReviewAuthority: every configured hostProtectedPrefix is protected'
   for (const prefix of hostProtectedPrefixes) {
     const representative = prefix.endsWith('/') ? `${prefix}representative.ts` : prefix;
     assert.equal(resolveReviewAuthority([representative]), 'HOST_PROTECTED', `prefix ${prefix}`);
+  }
+});
+
+test('every host-protected control-plane path is classified CRITICAL', () => {
+  for (const prefix of hostProtectedPrefixes) {
+    const representative = prefix.endsWith('/') ? `${prefix}representative.ts` : prefix;
+    assert.equal(classifyReviewRisk([representative]), 'CRITICAL', `prefix ${prefix}`);
   }
 });
 

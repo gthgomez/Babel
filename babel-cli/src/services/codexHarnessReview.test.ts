@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { createCodexHarnessAdapter, codexParentIdentity, trustedCodexExecutable, resolveCodexExecutable } from './codexHarnessReview.js'
+import { createCodexHarnessAdapter, codexParentIdentity, resolveCodexExecutable } from './codexHarnessReview.js'
 import type { HarnessReviewRequest } from './harnessReviewProtocol.js'
 
 function request(): { root: string; request: HarnessReviewRequest } {
@@ -25,6 +25,7 @@ function request(): { root: string; request: HarnessReviewRequest } {
     reviewer: { kind: 'codex', principal_id: 'reviewer', execution_id: 'reviewer-slot' },
     snapshot_root: snapshot, diff_sha256: createHash('sha256').update(diff).digest('hex'),
     diff_lines_total: 2, purpose: 'FINAL_CERTIFICATION', authority: 'SESSION_ATTESTED',
+    review_mission: 'Inspect trust boundaries.',
   } }
 }
 
@@ -34,6 +35,7 @@ test('Codex adapter requires an observed fresh thread and full-diff acknowledgem
     const adapter = createCodexHarnessAdapter({ parentExecutionId: 'parent-thread', sourceSha: 'a'.repeat(40), authority: 'SESSION_ATTESTED' as const,
       spawnFn: async (_request, prompt) => {
         assert.match(prompt, /\+fixed/)
+        assert.match(prompt, /Inspect trust boundaries/)
         return { exitCode: 0, events: [
           { type: 'thread.started', thread_id: 'child-thread' },
           { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({
@@ -59,15 +61,6 @@ test('Codex parent identity comes from the active host thread', () => {
   })
   assert.throws(() => codexParentIdentity({ CODEX_THREAD_ID: 'forged', CODEX_SESSION_ID: thread }), /CODEX_PARENT_IDENTITY_UNAVAILABLE/)
   assert.throws(() => codexParentIdentity({ CODEX_THREAD_ID: thread, CODEX_SESSION_ID: 'different' }), /CODEX_PARENT_IDENTITY_UNAVAILABLE/)
-})
-
-test('standalone Codex launch rejects a coding-user-owned executable', () => {
-  if (process.platform === 'win32' || process.getuid?.() === undefined) return
-  const root = mkdtempSync(join(tmpdir(), 'untrusted-codex-'))
-  try {
-    writeFileSync(join(root, 'codex'), '#!/bin/sh\n', { mode: 0o755 })
-    assert.throws(() => trustedCodexExecutable(root), /TRUSTED_CODEX_LAUNCHER_REQUIRED/)
-  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 test('Codex adapter fails closed when child identity or diff acknowledgement is absent', async () => {
@@ -134,12 +127,12 @@ test('Codex adapter rejects malformed, incomplete, or trailing event records', a
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
-test('resolveCodexExecutable requires a protected launcher only for HOST_PROTECTED', () => {
+test('resolveCodexExecutable uses the same session executable when the trusted controller is protected', () => {
   if (process.platform === 'win32' || process.getuid?.() === undefined) return
   const root = mkdtempSync(join(tmpdir(), 'codex-authority-'))
   try {
     writeFileSync(join(root, 'codex'), '#!/bin/sh\n', { mode: 0o755 })
-    assert.throws(() => resolveCodexExecutable('HOST_PROTECTED', root), /TRUSTED_CODEX_LAUNCHER_REQUIRED/)
+    assert.equal(resolveCodexExecutable('HOST_PROTECTED', root), join(root, 'codex'))
     assert.equal(resolveCodexExecutable('SESSION_ATTESTED', root), join(root, 'codex'))
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

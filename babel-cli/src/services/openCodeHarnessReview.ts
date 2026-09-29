@@ -19,7 +19,10 @@ export function createOpenCodeHarnessAdapter(options: {
   if (options.authority === 'HOST_PROTECTED') throw new Error('HARNESS_AUTHORITY_INSUFFICIENT')
   return {
     id: 'opencode-native-fallback-v1', agentKind: 'opencode',
-    capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' }),
+    // OpenCode's app permissions are useful defense in depth, but this
+    // fallback does not observe an OS-enforced read-only boundary.
+    capabilities: () => ({ freshSubagents: options.spawnFn === undefined, childSessionIdentity: true,
+      readOnlyReview: false, repairWorkers: false, authority: 'SESSION_ATTESTED' }),
     async review(request) {
       const diff = readFileSync(join(request.snapshot_root, 'changes.diff'), 'utf8')
       const digest = createHash('sha256').update(diff).digest('hex')
@@ -28,6 +31,7 @@ export function createOpenCodeHarnessAdapter(options: {
       const adapter = createOpenCodeReviewAdapter({
         model: options.model, cwd: request.snapshot_root, agentConfigPath: options.agentConfigPath,
         fullDiff: diff, ...(options.agentName ? { agentName: options.agentName } : {}),
+        reviewMission: request.review_mission,
         ...(options.spawnFn ? { spawnFn: options.spawnFn } : {}),
       })
       const legacyRequest: IndependentReviewExecutionRequest = {
@@ -47,8 +51,9 @@ export function createOpenCodeHarnessAdapter(options: {
         reviewed_at: result.reviewed_at ?? new Date().toISOString(),
         host_observation: {
           child_execution_id: session, parent_execution_id: request.builder.execution_id,
-          session_id: session, fresh_context: true, fresh_process: true, read_only_enforced: true,
-          controller_state_isolated: true,
+          session_id: session, fresh_context: result.runtime?.fresh_context === true,
+          fresh_process: result.runtime?.fresh_process === true,
+          read_only_enforced: false, controller_state_isolated: false,
           diff_sha256: digest, diff_lines_total: lines, diff_lines_read: lines,
           source_paths_opened: [], tool_calls: result.usage?.tool_calls ?? 0,
           requested_model: options.model, model_attribution: 'configured' as const,

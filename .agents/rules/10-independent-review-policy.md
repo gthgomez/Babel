@@ -1,6 +1,6 @@
 <!--
 status: ACTIVE
-last_verified: 2026-09-27
+last_verified: 2026-09-29
 -->
 # Independent Review Routing
 
@@ -15,8 +15,11 @@ repair producer, and each other.
 The active coding harness owns spawning. Run `tools/babel-pr-orchestrate.mts prepare` to
 freeze the candidate and issue challenges, spawn native read-only children, submit their
 structured results, then publish the owner-authenticated handoff. The in-process
-`HarnessReviewAdapter` API uses the same protocol. Codex is the first native bridge;
-OpenCode is an explicit fallback. Other harnesses implement the shared contract later.
+`HarnessReviewAdapter` API uses the same protocol. Codex has a native bridge;
+OpenCode has a diagnostic fallback that cannot certify authoritatively without host
+isolation. The generic controller-mediated callback normalizes observations for
+OpenCode and other harnesses, but it cannot certify until a trusted supervisor
+owns and verifies the launch boundary.
 
 Certification requires `FINAL_CERTIFICATION`, a fresh child context, an observed session
 identity, enforced read-only review, full exact diff delivery and acknowledgement, and
@@ -31,9 +34,10 @@ controller handoff bound to the exact candidate, not from a specific vendor or m
 harness-native child (no root-owned binary required) is launched read-only with observed
 identity and full exact-diff delivery; it returns `HOST_PROTECTED` when any changed path
 matches `hostProtectedPrefixes` in `config/review-risk-policy.json` (the
-reviewer/gate/authority surface), where the protected installation and launcher must attest
-the review. A `HOST_PROTECTED` run fails closed when the adapter cannot attest host
-protection; the OpenCode fallback is `SESSION_ATTESTED` only. Reviewers still never merge.
+reviewer/gate/authority surface), where the executing controller must be rooted in
+the trusted base and independently protect its state and publication from the builder.
+Host observations must attest the review. A `HOST_PROTECTED` run fails closed when those
+observations are unavailable. No model or vendor is a required reviewer. Reviewers still never merge.
 After the base-rooted gate reports `MERGE_READY` for the exact reviewed head, the
 orchestrator may run `scripts/agent-pr-merge.ps1` under the rule 05 bounded-autonomous merge
 contract; the executor binds `gh pr merge --match-head-commit` to that head and never merges

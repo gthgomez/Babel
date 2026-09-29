@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync, realpathSync } from 'node:fs'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import type { HarnessReviewAdapter, HarnessReviewRequest, HarnessReviewResult } from './harnessReviewProtocol.js'
 import type { ReviewActorIdentity } from './independentReviewEvidenceV3.js'
 import type { ReviewAuthority } from './reviewPolicy.js'
@@ -30,37 +30,7 @@ function reviewerEnvironment(): NodeJS.ProcessEnv {
   return env
 }
 
-/** Standalone CLI launchers must be installed outside the coding user's write access. */
-export function trustedCodexExecutable(pathEnv: string | undefined = process.env.PATH): string {
-  if (process.platform === 'win32' || process.getuid?.() === undefined) {
-    throw new Error('TRUSTED_CODEX_LAUNCHER_REQUIRED')
-  }
-  for (const directory of (pathEnv ?? '').split(':')) {
-    if (!directory || !isAbsolute(directory)) continue
-    const candidate = resolve(directory, 'codex')
-    try {
-      const target = realpathSync(candidate)
-      for (const start of [candidate, target]) {
-        let path = start
-        while (true) {
-          const stat = lstatSync(path)
-          if (stat.uid !== 0 || stat.uid === process.getuid() ||
-              (!stat.isSymbolicLink() && (stat.mode & 0o022) !== 0)) {
-            throw new Error('UNTRUSTED_CODEX_EXECUTABLE')
-          }
-          if (path === '/') break
-          path = dirname(path)
-        }
-      }
-      const executable = lstatSync(target)
-      if (!executable.isFile() || (executable.mode & 0o111) === 0) continue
-      return target
-    } catch { /* Try the next installed executable. */ }
-  }
-  throw new Error('TRUSTED_CODEX_LAUNCHER_REQUIRED')
-}
-
-/** SESSION_ATTESTED lane: any executable named `codex` on PATH, with no root-ownership requirement. */
+/** The controller establishes authority; reviewer CLI ownership is not the trust root. */
 export function sessionCodexExecutable(pathEnv: string | undefined = process.env.PATH): string {
   if (process.platform === 'win32') return 'codex'
   for (const directory of (pathEnv ?? '').split(':')) {
@@ -76,9 +46,10 @@ export function sessionCodexExecutable(pathEnv: string | undefined = process.env
   throw new Error('CODEX_EXECUTABLE_NOT_FOUND')
 }
 
-/** HOST_PROTECTED demands the protected launcher; every other lane may use the session executable. */
+/** Resolve a reviewer binary without assigning it controller authority. */
 export function resolveCodexExecutable(authority: ReviewAuthority, pathEnv?: string): string {
-  return authority === 'HOST_PROTECTED' ? trustedCodexExecutable(pathEnv) : sessionCodexExecutable(pathEnv)
+  void authority
+  return sessionCodexExecutable(pathEnv)
 }
 
 function createDefaultSpawn(authority: ReviewAuthority): CodexSpawnFn {
@@ -141,6 +112,7 @@ export function createCodexHarnessAdapter(options: { parentExecutionId: string; 
         `Challenge: ${request.challenge_id}`,
         `Repository: ${request.candidate.repository}; base: ${request.candidate.base_sha}; head: ${request.candidate.head_sha}; digest: ${request.candidate.candidate_digest}`,
         `Scope: ${JSON.stringify(request.candidate.scope)}`,
+        `Review mission: ${request.review_mission}`,
         '<changes.diff>', diff, '</changes.diff>',
       ].join('\n')
       const run = await spawnFn(request, prompt, options.model)

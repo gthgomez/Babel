@@ -1,6 +1,6 @@
 <!--
 status: ACTIVE
-last_verified: 2026-09-26
+last_verified: 2026-09-29
 -->
 # Babel PR Review & Independent-Agent Review Authority
 
@@ -41,6 +41,10 @@ specific vendor or model family.
    - ELEVATED and CRITICAL: 2 fresh, distinct certifiers. Model diversity is not required.
    - Anti-Approval Shopping: Substantive BLOCK verdicts are retained. Retrying without repairing the code is blocked.
    - Atomic Settlement: Bundles settle without partial approval.
+   - Execution and session identities must be distinct across both final review slots.
+     Model, provider, and harness diversity remain recorded quality metadata.
+   - A control-plane change is certified by controller code installed from the
+     previously trusted base. The candidate's modified controller cannot certify itself.
 
 ### Three Distinct Stages
 
@@ -251,8 +255,9 @@ node babel-cli/node_modules/tsx/dist/cli.mjs tools/babel-pr-orchestrate.mts subm
 node babel-cli/node_modules/tsx/dist/cli.mjs tools/babel-pr-orchestrate.mts publish --repo-root <clone> --state-dir <private-dir> --pr <number> --run-id <run-id>
 ```
 
-For ELEVATED and CRITICAL candidates, run slots 0 and 1 with distinct fresh children and
-submit both results before publishing. The trusted Codex adapter starts a fresh `codex exec` process
+For ELEVATED and CRITICAL candidates, launch slots 0 and 1 concurrently with distinct fresh
+children and submit both results before publishing. A BLOCK settles the candidate as blocked;
+repair creates a new SHA and requires a new final round. The Codex adapter starts a fresh `codex exec` process
 with `--sandbox read-only`, supplies the complete frozen diff in the prompt, records the
 observed child thread ID, and keeps GitHub credentials out of the reviewer environment.
 Codex final certification is text-only: any child tool use invalidates the result. When
@@ -263,25 +268,19 @@ exact diff delivery and acknowledgement, and distinct observed child identities.
 source reads are telemetry, not a per-file gate. If the child or host cannot supply this
 evidence, certification fails closed.
 
-`submit` launches the pinned Codex adapter in the trusted host process. It checks the
-current Codex thread against the prepared builder and does not accept
-a reviewer-authored JSON file. In-process integrations may provide another trusted adapter;
-its host must keep controller state and publication credentials outside the reviewer's reach.
-Review authority is scope-derived. Ordinary PRs are `SESSION_ATTESTED`: the Codex adapter launches a
-fresh, read-only, observed child from the harness-native `codex` executable on `PATH` (no root-owned
-binary required) and still delivers the complete exact diff for acknowledgement. Changes to the
-reviewer, gate, or authority surface — any path matching `hostProtectedPrefixes` in
-`config/review-risk-policy.json` — require `HOST_PROTECTED`: the standalone Codex launcher then accepts
-only a root-owned `codex` executable or symlink whose target and every path component are protected
-from the coding user, and a user-writable npm installation fails closed. Install a pinned CLI version
-into a protected system prefix, then run the review controller from a clean, base-rooted installation.
-Either lane may instead supply a host-owned spawn function through the in-process API; a
-caller-supplied harness-native `spawnFn` overrides both executable paths. A `HOST_PROTECTED` run fails
-closed if the adapter cannot attest host protection (the OpenCode fallback is `SESSION_ATTESTED` only).
-The Codex CLI builder identity comes from the current `CODEX_THREAD_ID` host environment. A
-standalone same-user CLI session cannot independently prove that environment. Deploy the
-publisher, Node loader, dependencies, and private state behind a trusted host boundary. The Codex read-only sandbox
-enforces write denial; zero observed tool calls enforce the text-only read boundary.
+`submit` launches a controller-validated adapter in the trusted host process. The controller
+owns the snapshot, challenge, reviewer slot, identity checks, diff coverage check, and V3
+evidence construction. A reviewer-authored JSON result cannot confer provenance. The host
+keeps candidate mutation, GitHub credentials, merge capability, and controller state out of
+the reviewer execution. Ordinary PRs are `SESSION_ATTESTED`; changes to paths matching
+`hostProtectedPrefixes` in `config/review-risk-policy.json` require `HOST_PROTECTED`.
+Here protection means an executing controller rooted in the previously trusted base,
+with host-observed isolation and controller state/publication inaccessible to the builder.
+A clean checkout or owner credentials alone do not establish that boundary. It does not
+require a root-owned Codex binary. Codex, OpenCode,
+Claude Code, Grok Build, or another harness can supply the reasoning process when its adapter
+can supply host-verifiable execution and isolation observations. An unavailable
+capability fails closed. Configured provider/model values are kept separate from observed ones.
 The host journals each validated child result before consuming its challenge. A repeated
 `submit` for a pending slot resumes that result after interruption; it never launches a
 replacement reviewer for a journaled result. A short SQLite transaction serializes
@@ -291,12 +290,17 @@ certified handoff is published, so concurrent runs cannot approve an unchanged b
 A BLOCK handoff can also be published; the GitHub transport selects the latest complete round,
 so a later BLOCK prevents an earlier approval from satisfying the gate.
 
-OpenCode is an explicit standalone fallback: `tools/babel-pr-orchestrate.mts opencode` followed by
-the existing fallback flags plus explicit builder kind, principal, and execution ID. It
-uses the same V3 validation path and never becomes the default reviewer runtime.
+OpenCode has a standalone diagnostic fallback: `tools/babel-pr-orchestrate.mts opencode`
+with the existing fallback flags plus explicit builder kind, principal, and execution ID.
+Its app permissions do not enforce host read-only or controller-state isolation, so it
+cannot produce authoritative V3 evidence. The current generic callback adapter also
+remains diagnostic: a caller-supplied observation cannot prove host isolation. A future
+trusted supervisor can use this protocol with a verified launch boundary.
+The adapter boundary is extensible; no reviewer harness is the architectural trust root.
 
-The policy table at `config/review-risk-policy.json` drives both TypeScript candidate
-classification and the installed, base-rooted PowerShell gate. CRITICAL uses two fresh,
+The policy table at `config/review-risk-policy.json` drives candidate TypeScript and
+PowerShell classification. Required CI checks compatibility with the previously trusted
+base gate separately. CRITICAL uses two fresh,
 read-only reviewers; it does not require different models. A BLOCK is retained against
 the unchanged candidate. Repair produces a new head and requires new challenges. Native
 repair spawning is a later adapter extension.

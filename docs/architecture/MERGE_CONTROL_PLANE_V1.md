@@ -1,6 +1,6 @@
 # Merge Control Plane V1
 
-Status: authorization simplification migration in progress. The base-rooted gate is authoritative; custom owner signing is no longer part of normal merges. A bounded exact-head merge executor is shipped as `scripts/agent-pr-merge.ps1`.
+Status: authorization simplification migration in progress. The base-rooted gate is authoritative. A bounded exact-head merge executor is shipped as `scripts/agent-pr-merge.ps1`.
 
 This document defines the boundary between repository policy, technical evidence,
 and the authority to perform a public merge. No one of those dimensions can
@@ -17,8 +17,8 @@ record:
 - PR state: open, non-draft, same-repository, mergeable, and clean merge state
 - repository policy: the active `protect-main` ruleset read from GitHub
 - CI: required contexts resolved only from the exact head with workflow authority
-- technical review: controller-owned exact-head independent AI evidence when
-  the base-derived risk lane requires it
+- technical review: controller-owned exact-head independent AI evidence for
+  every mergeable lane, with two distinct executions for elevated and critical changes
 - task authority: the original task authorizes routine Git/PR actions; no
   separate per-merge switch exists. The base-rooted `MERGE_READY` decision is
   machine authority, not a per-merge human receipt
@@ -31,9 +31,8 @@ stale review evidence, or insufficient lane evidence produces `BLOCKED`.
 ## Risk lanes
 
 The immutable base derives a minimum path-based lane; callers may raise, never lower it.
-GREEN requires deterministic checks; YELLOW
-requires one controller-owned independent AI review; RED requires two distinct
-independent reviews; BLACK requires a real owner decision. Merge-control,
+GREEN requires one controller-owned independent AI review; YELLOW
+and RED require two distinct independent reviews; BLACK remains blocked. Merge-control,
 workflow, policy, and authority paths are RED. A trusted dispatcher classifies BLACK by action/context, not candidate path.
 A candidate cannot rewrite its own evaluator, label itself
 GREEN, or clear a trusted BLACK classification.
@@ -55,7 +54,7 @@ taskAuthorization
 
 GitHub's required approval count is discovered from the active ruleset. A ruleset
 with zero required approvals satisfies only the GitHub approval dimension; it does
-not waive Babel's independent technical review policy for high-risk changes.
+not waive Babel's independent technical review policy.
 Review-thread resolution is queried separately through GitHub's review-thread
 API. The gate never treats `reviewDecision` as a substitute for these dimensions.
 
@@ -96,20 +95,27 @@ PR-controlled code, and cannot satisfy a differently bound same-name check.
 
 ## Independent technical review evidence
 
-The existing owner-controlled host runs fresh text-only OpenCode Go AI workers.
-GitHub transports/enforces evidence; no new App, AI credits or signing keys are needed.
-Workers receive original task and exact diff; models supply findings, controllers supply provenance.
-Each `autonomous_review_evidence_v2` binds task hash, repo/PR/base/head, full scope,
-numstat digest, execution/reviewer ID, observed model/provider, isolation and timestamp.
-Invalid, stale, uncertain, blocking, self-reviewed or mismatched evidence blocks merge.
+V3 workers receive the frozen task and exact diff; models supply findings, while the
+controller issues challenges, observes execution, checks full diff coverage, and
+constructs evidence. TRIVIAL/NORMAL require one fresh reviewer execution;
+ELEVATED/CRITICAL require two distinct executions. Model/provider/harness diversity
+is retained as metadata and is not a substitute for execution independence.
 
-The host publishes one whole `host_review_handoff_v2` under `<!-- babel-controller-ai-reviews-v2 -->`.
-Immutable-base transport creates `github_host_review_bundle_v2` with actual owner/comment IDs.
-Transport and gate paginate live comments and use GitHub's numeric repository-owner User ID.
-The latest matching whole round wins, including rejection; local bundles are only untrusted caches.
-Workers have no shell, candidate-write, GitHub-write, merge or controller-state capability.
-The owner launcher/session is trusted: this is **not** isolation against malicious processes
-already holding owner credentials. Stronger principal isolation is a separate requirement.
+The host publishes one whole `host_review_handoff_v3` under
+`<!-- babel-controller-independent-review-v3 -->`. Immutable-base transport
+creates `github_host_review_bundle_v3` with actual owner/comment IDs. Transport
+and gate paginate live comments and use GitHub's numeric repository-owner User ID.
+The latest matching whole round wins, including rejection; local bundles are
+only untrusted caches. Reviewers have no candidate-write, GitHub-write, merge,
+or controller-state capability.
+
+An owner-authenticated comment authenticates the publisher, not the truth of its
+review observations. For control-plane changes, a protected controller process
+must run code from the previously trusted base and own private challenges,
+reviewer launch, observations, and publication outside candidate control. A
+same-principal caller that can edit controller state or submit arbitrary host
+observations does not satisfy `HOST_PROTECTED`, even if it points at a clean base
+checkout. If that boundary cannot be established, certification remains blocked.
 
 Privileged workflows execute immutable base only. Owner comment creation/editing reruns
 the original PR audit; a comment-workflow check cannot satisfy the required PR check.
@@ -152,7 +158,8 @@ PR_HEAD_CREATED -> LOCAL_VERIFIED -> INDEPENDENT_REVIEWED
 ```
 
 The bounded merge executor implements the tail of this state machine. `scripts/agent-pr-merge.ps1`
-re-runs the base-rooted gate, requires `MERGE_READY` for the exact reviewed head, re-reads live PR
+fetches the live PR base, runs the launcher materialized from that base, requires
+`MERGE_READY` for the exact reviewed head, re-reads live PR
 state as the pre-merge re-freeze, and then runs `gh pr merge --match-head-commit`. A SHA change
 between gate and merge fails closed and the executor never retries with a different SHA. That live
 re-read is the `PRE_MERGE_REFREEZE` step, not a new authorization switch.

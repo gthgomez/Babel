@@ -37,6 +37,8 @@ export interface OpenCodeReviewAdapterOptions {
   spawnFn?: OpenCodeSpawnFn
   /** Complete frozen diff supplied by the caller for harness-owned certification. */
   fullDiff?: string
+  /** Controller-assigned focus for this slot; every reviewer still consumes the full diff. */
+  reviewMission?: string
 }
 
 const DEFAULT_ADAPTER_ID = 'opencode-subagent-v1'
@@ -51,7 +53,7 @@ interface ParsedReview {
   diff_consumed?: boolean
 }
 
-function buildReviewPrompt(request: Readonly<IndependentReviewExecutionRequest>, fullDiff?: string): string {
+function buildReviewPrompt(request: Readonly<IndependentReviewExecutionRequest>, fullDiff?: string, reviewMission?: string): string {
   const candidate = request.candidate
   const context = {
     repository: candidate.repository,
@@ -70,6 +72,7 @@ function buildReviewPrompt(request: Readonly<IndependentReviewExecutionRequest>,
     'You are an independent, read-only code reviewer certifying an exact-diff candidate.',
     'Do not modify files, do not run mutating commands, and do not alter repository, GitHub, or controller state.',
     'Review ONLY the exact paths listed in "scope" below against the candidate identity.',
+    ...(reviewMission ? [`Review mission: ${reviewMission}`] : []),
     '',
     'Candidate:',
     JSON.stringify(context, null, 2),
@@ -284,7 +287,7 @@ export function createOpenCodeReviewAdapter(options: OpenCodeReviewAdapterOption
     agent_kind: 'opencode',
     async launch(request: Readonly<IndependentReviewExecutionRequest>): Promise<IndependentReviewExecutionResult> {
       const executionPurpose = request.purpose ?? 'FINAL_CERTIFICATION'
-      const prompt = buildReviewPrompt(request, options.fullDiff)
+      const prompt = buildReviewPrompt(request, options.fullDiff, options.reviewMission)
 
       // Bounded retries for transient transport/parse failures only. A parsed
       // verdict (APPROVE or BLOCK) is returned on the first success and is never
@@ -331,8 +334,10 @@ export function createOpenCodeReviewAdapter(options: OpenCodeReviewAdapterOption
         execution_purpose: executionPurpose,
         requested_model: model,
         model_attribution: 'configured',
-        fresh_context: true,
-        fresh_process: true,
+        // A caller-provided spawnFn may proxy or reuse a session. Only this
+        // adapter's own standalone process launch establishes these facts.
+        fresh_context: options.spawnFn === undefined,
+        fresh_process: options.spawnFn === undefined,
         ...(spawnResult.sessionId ? { session_id: spawnResult.sessionId } : {}),
       }
 

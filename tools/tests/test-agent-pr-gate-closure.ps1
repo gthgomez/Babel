@@ -51,6 +51,10 @@ try {
   Assert-ClosureGate ((Get-AgentMinimumReviewCount -Lane GREEN) -eq 1) 'normal changes require one reviewer'
   Assert-ClosureGate ((Get-AgentMinimumReviewCount -Lane YELLOW) -eq 2) 'elevated changes require two reviewers'
   Assert-ClosureGate ((Get-AgentMinimumReviewCount -Lane RED) -eq 2) 'critical changes require two reviewers'
+  Assert-ClosureGate ((Get-AgentMinimumReviewCount -Lane BLACK) -eq 2) 'blocked scope retains two-review floor'
+  $unknownLaneRejected = $false
+  try { $null = Get-AgentMinimumReviewCount -Lane UNKNOWN } catch { $unknownLaneRejected = $true }
+  Assert-ClosureGate $unknownLaneRejected 'unknown review lane must fail closed'
   Assert-ClosureGate ((Get-AgentRiskLane -ChangedPaths @('tools/babel-pr-orchestrate.mts')) -eq 'RED') 'review control paths are critical in the installed gate'
   $trustedAuthority = Get-AgentRequiredCheckAuthority -RequiredName 'trusted-control-plane'
   Assert-ClosureGate ([bool]$trustedAuthority.configured) 'trusted-control-plane must have a configured producer'
@@ -198,6 +202,7 @@ try {
       parent_execution_id = 'codex-builder-e1'
       source_sha = $base
       fresh_context = $true
+      fresh_process = $true
       read_only_enforced = $true
     }
     review_mode = 'exact_diff'
@@ -227,6 +232,29 @@ try {
   $v3Result = Test-AgentIndependentReviewEvidenceV3 -Evidence $validV3Evidence -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest -ExpectedCandidateDigest $candDigest -ExpectedScope @('scripts/agent-pr-gate.ps1')
   Assert-ClosureGate ($v3Result.valid) 'V3 must accept same agent kind when principal and execution are distinct'
 
+  $firstCross = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $firstCross.runtime.provider_execution_id = 'observed-execution-a'
+  $firstCross.runtime.session_id = 'observed-session-a'
+  $secondCross = $firstCross | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $secondCross.reviewer.principal_id = 'codex-reviewer-p3'
+  $secondCross.reviewer.execution_id = 'codex-reviewer-e3'
+  $secondCross.runtime.controller_execution_id = 'codex-reviewer-e3'
+  $secondCross.challenge_id = 'challenge-152-b'
+  $secondCross.runtime.provider_execution_id = 'observed-session-a'
+  $secondCross.runtime.session_id = 'observed-session-b'
+  $crossBundle = [pscustomobject][ordered]@{
+    schema_version = 3; kind = 'github_host_review_bundle_v3'; repository = 'gthgomez/Babel'
+    pr_number = 152; base_sha = $base; head_sha = $head; publisher_id = '91163862'; comment_id = '10'
+    handoff = [pscustomobject][ordered]@{
+      schema_version = 3; kind = 'host_review_handoff_v3'; repository = 'gthgomez/Babel'
+      pr_number = 152; base_sha = $base; head_sha = $head; candidate_digest = $candDigest
+      diff_numstat_digest = $expectedDigest; task_id = $firstCross.task_id; task_hash = $firstCross.task_hash
+      controller_run_id = $firstCross.controller_run_id; reviews = @($firstCross, $secondCross)
+    }
+  }
+  $crossResult = Test-AgentHostReviewBundleV3 -Bundle $crossBundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 2 -PublisherId '91163862' -ExpectedCandidateDigest $candDigest -ExpectedScope @('scripts/agent-pr-gate.ps1')
+  Assert-ClosureGate (-not $crossResult.valid -and @($crossResult.errors) -contains 'controller_review_bundle_observed_child_not_distinct') 'V3 must reject observed execution reused as another slot session'
+
   $missingTrustedSource = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
   $missingTrustedSource.runtime.PSObject.Properties.Remove('source_sha')
   $missingSourceResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $missingTrustedSource -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
@@ -244,6 +272,11 @@ try {
   $staleContext.runtime.fresh_context = $false
   $staleContextResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $staleContext -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
   Assert-ClosureGate (-not $staleContextResult.valid -and @($staleContextResult.errors) -contains 'independent_evidence_fresh_readonly_required') 'V3 must require observed fresh context'
+
+  $missingFreshProcess = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $missingFreshProcess.runtime.PSObject.Properties.Remove('fresh_process')
+  $missingFreshProcessResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $missingFreshProcess -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
+  Assert-ClosureGate (-not $missingFreshProcessResult.valid -and @($missingFreshProcessResult.errors) -contains 'independent_evidence_fresh_process_required') 'V3 must require observed fresh process'
 
   # Accept: different kind (Codex -> Claude)
   $claudeV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json

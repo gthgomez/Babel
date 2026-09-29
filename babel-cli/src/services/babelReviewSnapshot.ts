@@ -26,7 +26,8 @@ export function safeReviewPath(path: string): boolean {
 /** Materialize Git blobs as inert data, never checkout hooks, links, or installs. */
 export function collectBabelReviewSnapshot(input: { repoRoot: string; base: string; head: string; state: string; task: string }) {
   if (![input.base, input.head].every(v => /^[0-9a-f]{40}$/.test(v))) throw new Error('INVALID_REVIEW_SHA');
-  const git = (args: string[]) => execFileSync('git', ['-C', input.repoRoot, ...args], { encoding: 'utf8', windowsHide: true, maxBuffer: 100 * 1024 * 1024 });
+  const gitEnvironment = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' };
+  const git = (args: string[]) => execFileSync('git', ['-C', input.repoRoot, ...args], { encoding: 'utf8', windowsHide: true, maxBuffer: 100 * 1024 * 1024, env: gitEnvironment });
   const range = `${input.base}...${input.head}`;
   const scope = git(['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', range]).split('\0').filter(Boolean).sort();
   if (!scope.length || scope.some(p => !safeReviewPath(p) || secretRiskReviewPath(p))) throw new Error('UNSAFE_REVIEW_SCOPE');
@@ -42,7 +43,7 @@ export function collectBabelReviewSnapshot(input: { repoRoot: string; base: stri
   if (files.reduce((n, r) => n + r.size, 0) > 80 * 1024 * 1024) throw new Error('SNAPSHOT_SIZE_LIMIT');
   const id = randomUUID(); const root = join(assertReviewStateOutsideGit(input.state), 'snapshots', id);
   mkdirSync(root, { recursive: true, mode: 0o700 });
-  const batch = execFileSync('git', ['-C', input.repoRoot, 'cat-file', '--batch'], { input: files.map(r => r.oid).join('\n') + '\n', maxBuffer: 100 * 1024 * 1024, windowsHide: true });
+  const batch = execFileSync('git', ['-C', input.repoRoot, 'cat-file', '--batch'], { input: files.map(r => r.oid).join('\n') + '\n', maxBuffer: 100 * 1024 * 1024, windowsHide: true, env: gitEnvironment });
   let offset = 0;
   for (const file of files) {
     const end = batch.indexOf(10, offset); const header = batch.subarray(offset, end).toString('utf8').split(' ');

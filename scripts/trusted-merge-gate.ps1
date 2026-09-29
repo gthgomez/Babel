@@ -31,7 +31,7 @@ try {
     $target = Join-Path $materialized $relative
     New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
     $spec = '{0}:{1}' -f $BaseSha, $relative
-    $content = & $git -C $resolvedRepo show $spec 2>$null
+    $content = & $git -C $resolvedRepo --no-replace-objects show $spec 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($content -join "`n"))) {
       throw "Trusted gate component unavailable from base: $relative"
     }

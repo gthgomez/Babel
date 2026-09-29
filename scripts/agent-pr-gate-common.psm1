@@ -297,11 +297,13 @@ function Get-AgentExactDiffCoverage {
 function Get-AgentRiskLane {
   param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$ChangedPaths)
   # The installed base gate and TypeScript read the same risk table.
+  if ($ChangedPaths.Count -eq 0) { return 'BLACK' }
   $policyPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'config/review-risk-policy.json'
   $policy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json -Depth 10
+  $criticalPrefixes = @($policy.criticalPrefixes) + @($policy.hostProtectedPrefixes)
   foreach ($path in $ChangedPaths) {
     $normalized = $path.Replace('\', '/')
-    if (@($policy.criticalPrefixes | Where-Object { $normalized.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) -or $normalized -ieq $_.TrimEnd('/') }).Count -gt 0) { return 'RED' }
+    if (@($criticalPrefixes | Where-Object { $normalized.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) -or $normalized -ieq $_.TrimEnd('/') }).Count -gt 0) { return 'RED' }
   }
   foreach ($path in $ChangedPaths) {
     $normalized = $path.Replace('\', '/')
@@ -314,7 +316,13 @@ function Get-AgentMinimumReviewCount {
   param([Parameter(Mandatory = $true)][string]$Lane)
   $policyPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'config/review-risk-policy.json'
   $policy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json -Depth 10
-  $key = switch ($Lane) { 'RED' { 'CRITICAL' } 'YELLOW' { 'ELEVATED' } default { 'NORMAL' } }
+  $key = switch ($Lane) {
+    'RED' { 'CRITICAL' }
+    'YELLOW' { 'ELEVATED' }
+    'GREEN' { 'NORMAL' }
+    'BLACK' { 'CRITICAL' }
+    default { throw 'UNKNOWN_REVIEW_RISK_LANE' }
+  }
   $count = [int]$policy.finalCertificationCount.$key
   if ($count -ne 1 -and $count -ne 2) { throw 'INVALID_REVIEW_POLICY_COUNT' }
   return $count

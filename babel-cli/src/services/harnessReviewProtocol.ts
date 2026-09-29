@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { atomicReviewJson } from './babelReviewQueue.js'
 import { assertReviewStateOutsideGit } from './babelReviewSnapshot.js'
@@ -15,6 +16,13 @@ import {
   type HostReviewHandoffV3, type IndependentReviewEvidenceV3, type ReviewActorIdentity,
 } from './independentReviewEvidenceV3.js'
 import { classifyReviewRisk, resolveReviewAuthority, resolveReviewPolicy, type ReviewAuthority } from './reviewPolicy.js'
+import { assertTrustedReviewCodePath, assertTrustedReviewInstallation } from './trustedReviewInstallation.js'
+
+/** Bind this executing protocol module to the exact trusted base source. */
+export function assertExecutingHarnessReviewProtocol(installationRoot: string, baseSha: string): string {
+  return assertTrustedReviewCodePath(installationRoot, baseSha,
+    fileURLToPath(import.meta.url), 'babel-cli/src/services/harnessReviewProtocol.ts')
+}
 
 export interface HarnessReviewCapabilities {
   freshSubagents: boolean
@@ -36,6 +44,7 @@ export interface HarnessReviewRequest {
   diff_lines_total: number
   purpose: 'FINAL_CERTIFICATION'
   authority: ReviewAuthority
+  review_mission: string
 }
 
 export interface HarnessReviewResult {
@@ -60,6 +69,8 @@ export interface HarnessReviewResult {
     requested_model?: string
     observed_model?: string | null
     model_attribution?: 'observed' | 'configured' | 'unavailable'
+    requested_provider?: string
+    observed_provider?: string
     source_sha?: string
     authority?: ReviewAuthority
   }
@@ -80,6 +91,8 @@ interface ReviewRun {
   adapter_id: string
   agent_kind: string
   authority: ReviewAuthority
+  trusted_controller_root?: string
+  trusted_controller_source_sha?: string
   requests: HarnessReviewRequest[]
   reviews: IndependentReviewEvidenceV3[]
   pending_results?: Record<string, HarnessReviewResult>
@@ -89,6 +102,27 @@ interface ReviewRun {
 
 function countDiffLines(diff: string): number {
   return diff.length === 0 ? 0 : diff.split('\n').length - (diff.endsWith('\n') ? 1 : 0)
+}
+
+/** Deterministic complementary reviewer focus; every slot still reviews the full diff. */
+export function reviewMission(scope: readonly string[], slot: number): string {
+  if (slot !== 0 && slot !== 1) throw new Error('REVIEW_SLOT_NOT_FOUND')
+  const paths = scope.map((path) => path.toLowerCase().replaceAll('\\', '/'))
+  const trust = paths.some((path) => /(^\.github\/workflows\/|^config\/review-risk-policy|^scripts\/(agent-pr-gate|agent-review|trusted-merge-gate|agent-pr-merge)|^babel-cli\/src\/(services\/(review|independentreview|harnessreview|hostreview|mergereadiness|trustedreview|codexharnessreview|opencodeharnessreview|orchestratorreviewadapter|controllermediatedharnessreview)|authority\/))/.test(path))
+  const tui = paths.some((path) => /(^babel-cli\/src\/interactive\/|\/tui\/|\/ui\/)/.test(path))
+  const codingLoop = paths.some((path) => /(^babel-cli\/src\/(agent\/|executor\/|pipeline\/)|coding-loop)/.test(path))
+  if (trust) return slot === 0
+    ? 'Inspect trust boundaries, privilege escalation, evidence forgery, stale or replayed evidence, exact-head binding, and bypasses.'
+    : 'Inspect implementation correctness, state transitions, concurrency, crash recovery, tests, and failure modes.'
+  if (tui) return slot === 0
+    ? 'Inspect input ownership, lifecycle, terminal leases, and concurrency.'
+    : 'Inspect rendering, state projection, interactions, and user-visible regressions.'
+  if (codingLoop) return slot === 0
+    ? 'Inspect correctness, state, concurrency, and invariants.'
+    : 'Inspect regressions, tests, failure recovery, cancellation, and persistence.'
+  return slot === 0
+    ? 'Inspect correctness, security boundaries, and invariants.'
+    : 'Inspect regressions, tests, recovery, and user-visible failure modes.'
 }
 
 function runPath(stateDir: string, runId: string): string {
@@ -104,6 +138,7 @@ export function prepareHarnessReview(input: {
   reviewCount: 1 | 2
   stateDir: string
   snapshotRoot: string
+  trustedControllerRoot?: string
 }): { run_id: string; requests: HarnessReviewRequest[] } {
   if (input.reviewCount !== 1 && input.reviewCount !== 2) throw new Error('INVALID_REVIEWER_COUNT')
   const derivedRisk = classifyReviewRisk(input.candidate.scope)
@@ -111,6 +146,9 @@ export function prepareHarnessReview(input: {
   if (input.candidate.risk_tier !== derivedRisk) throw new Error('CANDIDATE_RISK_TIER_MISMATCH')
   const requiredCount = resolveReviewPolicy({ riskLane: derivedRisk, requireAuthoritative: true }).finalCertificationCount
   if (input.reviewCount !== requiredCount) throw new Error('REVIEWER_COUNT_POLICY_MISMATCH')
+  if (authority === 'HOST_PROTECTED' && !input.trustedControllerRoot) throw new Error('TRUSTED_REVIEW_CONTROLLER_REQUIRED')
+  const trustedControllerSourceSha = input.trustedControllerRoot
+    ? assertTrustedReviewInstallation(input.trustedControllerRoot, input.candidate.base_sha) : undefined
   if (!input.agentKind.trim() || !input.adapterId.trim()) throw new Error('HARNESS_IDENTITY_REQUIRED')
   if (!input.builder.execution_id || !input.builder.principal_id) throw new Error('AUTHORITATIVE_BUILDER_IDENTITY_REQUIRED')
   const stateDir = assertReviewStateOutsideGit(input.stateDir)
@@ -120,7 +158,7 @@ export function prepareHarnessReview(input: {
   const diffSha256 = createHash('sha256').update(diff).digest('hex')
   const diffLinesTotal = countDiffLines(diff)
   if (diffLinesTotal === 0) throw new Error('EMPTY_REVIEW_DIFF')
-  const requests: HarnessReviewRequest[] = Array.from({ length: input.reviewCount }, () => ({
+  const requests: HarnessReviewRequest[] = Array.from({ length: input.reviewCount }, (_, slot) => ({
     controller_run_id: runId,
     challenge_id: randomUUID(),
     candidate: input.candidate,
@@ -131,6 +169,7 @@ export function prepareHarnessReview(input: {
     diff_lines_total: diffLinesTotal,
     purpose: 'FINAL_CERTIFICATION',
     authority,
+    review_mission: reviewMission(input.candidate.scope, slot),
   }))
   for (const request of requests) {
     const challenge: PersistentReviewChallenge = {
@@ -146,6 +185,8 @@ export function prepareHarnessReview(input: {
   const run: ReviewRun = {
     run_id: runId, candidate: input.candidate, builder: input.builder,
     adapter_id: input.adapterId, agent_kind: input.agentKind, authority, requests, reviews: [], status: 'PENDING',
+    ...(input.trustedControllerRoot ? { trusted_controller_root: input.trustedControllerRoot } : {}),
+    ...(trustedControllerSourceSha ? { trusted_controller_source_sha: trustedControllerSourceSha } : {}),
   }
   mkdirSync(join(stateDir, 'harness-runs'), { recursive: true, mode: 0o700 })
   atomicReviewJson(runPath(stateDir, runId), run)
@@ -169,13 +210,18 @@ function submitHarnessReviewUnlocked(
     throw new Error('INVALID_REVIEW_FINDINGS')
   }
   const host = result.host_observation
-  if (!host || host.fresh_context !== true || host.read_only_enforced !== true || host.controller_state_isolated !== true ||
+  if (!host || host.fresh_context !== true || host.fresh_process !== true || host.read_only_enforced !== true || host.controller_state_isolated !== true ||
       !host.child_execution_id || !host.session_id || host.parent_execution_id !== run.builder.execution_id) {
     throw new Error('HOST_ISOLATION_ATTESTATION_REQUIRED')
   }
   if (request.authority === 'HOST_PROTECTED') {
     // A host-protected slot must observe the protected authority, not merely omit it.
     if (host.authority !== 'HOST_PROTECTED') throw new Error('HARNESS_AUTHORITY_MISMATCH')
+    if (!run.trusted_controller_root || !run.trusted_controller_source_sha) throw new Error('TRUSTED_REVIEW_CONTROLLER_REQUIRED')
+    const currentSourceSha = assertTrustedReviewInstallation(run.trusted_controller_root, run.candidate.base_sha)
+    if (currentSourceSha !== run.trusted_controller_source_sha || host.source_sha !== currentSourceSha) {
+      throw new Error('TRUSTED_CONTROLLER_SOURCE_MISMATCH')
+    }
   } else if (host.authority && host.authority !== request.authority) {
     throw new Error('HARNESS_AUTHORITY_MISMATCH')
   }
@@ -209,12 +255,14 @@ function submitHarnessReviewUnlocked(
       controller_execution_id: request.reviewer.execution_id,
       provider_execution_id: host.child_execution_id, session_id: host.session_id,
       parent_execution_id: host.parent_execution_id, fresh_context: true,
-      fresh_process: host.fresh_process ?? false, read_only_enforced: true,
+      fresh_process: true, read_only_enforced: true,
       execution_purpose: 'FINAL_CERTIFICATION',
       model_attribution: host.model_attribution ?? 'unavailable',
       ...(host.source_sha ? { source_sha: host.source_sha } : {}),
       ...(host.requested_model ? { requested_model: host.requested_model } : {}),
       ...(host.observed_model !== undefined ? { observed_model: host.observed_model } : {}),
+      ...(host.requested_provider ? { requested_provider: host.requested_provider } : {}),
+      ...(host.observed_provider ? { observed_provider: host.observed_provider } : {}),
     },
     review_mode: 'exact_diff', execution_purpose: 'FINAL_CERTIFICATION', reviewed_at: result.reviewed_at,
     scope: [...run.candidate.scope], verdict: result.verdict, findings: result.findings,
@@ -379,6 +427,30 @@ export async function executePreparedHarnessReviewSlot(
   return submitHarnessReview(stateDir, runId, await adapter.review(request))
 }
 
+/** Launch all prepared final slots together while keeping each durable challenge independent. */
+export async function executePreparedHarnessReviewRun(
+  stateDir: string, runId: string, adapter: HarnessReviewAdapter, parent: ReviewActorIdentity,
+): Promise<{ status: 'BLOCKED' | 'MERGE_READY'; handoff: HostReviewHandoffV3 }> {
+  const path = runPath(stateDir, runId)
+  if (!existsSync(path)) throw new Error('REVIEW_RUN_NOT_FOUND')
+  const run = JSON.parse(readFileSync(path, 'utf8')) as ReviewRun
+  if (run.status !== 'PENDING') {
+    const certified = readHarnessReviewHandoff(stateDir, runId)
+    return { status: certified.status, handoff: certified.handoff }
+  }
+  const remainingSlots = run.requests.flatMap((request, slot) =>
+    run.reviews.some((review) => review.challenge_id === request.challenge_id) ? [] : [slot])
+  const settled = await Promise.allSettled(remainingSlots.map((slot) =>
+    executePreparedHarnessReviewSlot(stateDir, runId, slot, adapter, parent)))
+  const blocked = settled.find((entry) => entry.status === 'fulfilled' && entry.value.status === 'BLOCKED')
+  if (blocked?.status === 'fulfilled' && blocked.value.handoff) {
+    return { status: 'BLOCKED', handoff: blocked.value.handoff }
+  }
+  if (settled.some((entry) => entry.status === 'rejected')) throw new Error('REVIEW_EXECUTION_INCOMPLETE')
+  const certified = readHarnessReviewHandoff(stateDir, runId)
+  return { status: certified.status, handoff: certified.handoff }
+}
+
 export async function runHarnessReview(input: {
   candidate: CandidateEnvelope
   builder: ReviewActorIdentity
@@ -386,6 +458,7 @@ export async function runHarnessReview(input: {
   snapshotRoot: string
   reviewCount: 1 | 2
   adapter: HarnessReviewAdapter
+  trustedControllerRoot?: string
 }): Promise<{ status: 'PENDING' | 'BLOCKED' | 'MERGE_READY'; handoff?: HostReviewHandoffV3 }> {
   const capabilities = input.adapter.capabilities()
   if (!capabilities.freshSubagents || !capabilities.childSessionIdentity || !capabilities.readOnlyReview) {

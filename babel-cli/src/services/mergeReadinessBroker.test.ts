@@ -156,7 +156,7 @@ test('mergeReadinessBroker: Required gate UNAVAILABLE yields INSUFFICIENT, never
   assert.ok(readiness.unresolved_blockers.includes('deterministic_tests_required_but_unavailable'));
 });
 
-test('mergeReadinessBroker: CRITICAL risk tier requires 2 distinct independent reviewer models', () => {
+test('mergeReadinessBroker: CRITICAL accepts same-model reviewers with distinct executions', () => {
   const criticalCandidate: CandidateEnvelope = {
     ...mockCandidate,
     risk_tier: 'CRITICAL',
@@ -170,7 +170,7 @@ test('mergeReadinessBroker: CRITICAL risk tier requires 2 distinct independent r
   assert.equal(r1.verdict, 'INSUFFICIENT');
   assert.ok(r1.unresolved_blockers.some((b) => b.includes('insufficient_approved_reviews')));
 
-  // 2 reviews provided, but both by the same model!
+  // 2 same-model reviews with separate sessions satisfy execution independence.
   const review2SameModel: CodeReviewReceipt = {
     ...mockPassReview,
     receipt_id: 'receipt-pass-2',
@@ -183,6 +183,7 @@ test('mergeReadinessBroker: CRITICAL risk tier requires 2 distinct independent r
         ...mockPassReview.independence.dimensions,
         reviewer_identity: 'mimo-v2.5-second-run',
         reviewer_model: 'mimo-v2.5',
+        session_id: 'session-pass-2',
       },
       attestation_digest: 'att-pass-2',
     },
@@ -191,8 +192,8 @@ test('mergeReadinessBroker: CRITICAL risk tier requires 2 distinct independent r
     candidate: criticalCandidate,
     reviews: [mockPassReview, review2SameModel],
   });
-  assert.equal(r2.verdict, 'INSUFFICIENT');
-  assert.ok(r2.unresolved_blockers.includes('critical_risk_tier_requires_distinct_independent_reviewer_models'));
+  assert.equal(r2.gate_checks.code_review.status, 'PASS');
+  assert.ok(!r2.unresolved_blockers.some((blocker) => blocker.includes('model')));
 
   // 2 reviews provided with distinct models: must pass model distinctness check
   const review2DistinctModel: CodeReviewReceipt = {
@@ -217,8 +218,7 @@ test('mergeReadinessBroker: CRITICAL risk tier requires 2 distinct independent r
     candidate: criticalCandidate,
     reviews: [mockPassReview, review2DistinctModel],
   });
-  assert.equal(r3.verdict, 'INSUFFICIENT'); // blocked only by missing tests/CI/security, not model distinctness
-  assert.ok(!r3.unresolved_blockers.includes('critical_risk_tier_requires_distinct_independent_reviewer_models'));
+  assert.equal(r3.gate_checks.code_review.status, 'PASS');
 });
 
 test('mergeReadinessBroker: rejects review receipt candidate digest mismatch', () => {
@@ -275,7 +275,7 @@ test('mergeReadinessBroker: detects conflicting review evidence for same receipt
   assert.ok(readiness.unresolved_blockers.some((b) => b.startsWith('conflicting_review_evidence_detected:receipt-conflict-1')));
 });
 
-test('mergeReadinessBroker: duplicate session IDs or duplicate attestations fail ensemble I4 requirement', () => {
+test('mergeReadinessBroker: duplicate sessions fail the execution-independence requirement', () => {
   const criticalCandidate: CandidateEnvelope = {
     ...mockCandidate,
     risk_tier: 'CRITICAL',
@@ -320,7 +320,52 @@ test('mergeReadinessBroker: duplicate session IDs or duplicate attestations fail
   });
 
   assert.equal(readiness.verdict, 'INSUFFICIENT');
-  assert.ok(readiness.unresolved_blockers.includes('critical_risk_tier_requires_ensemble_i4_independence'));
+  assert.ok(readiness.unresolved_blockers.includes('duplicate_reviewer_execution_or_session'));
+});
+
+test('mergeReadinessBroker: duplicate reviewer identity fails even with distinct receipts and sessions', () => {
+  const candidate = { ...mockCandidate, risk_tier: 'CRITICAL' as const };
+  const second: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'receipt-pass-2',
+    independence: {
+      ...mockPassReview.independence,
+      dimensions: { ...mockPassReview.independence.dimensions, session_id: 'session-pass-2' },
+      attestation_digest: 'att-2',
+    },
+  };
+  const readiness = evaluateMergeReadiness({ candidate, reviews: [mockPassReview, second] });
+  assert.equal(readiness.gate_checks.code_review.status, 'INSUFFICIENT');
+  assert.ok(readiness.unresolved_blockers.includes('duplicate_reviewer_execution_or_session'));
+});
+
+test('mergeReadinessBroker: distinct sessions from one observed process do not count as distinct executions', () => {
+  const candidate = { ...mockCandidate, risk_tier: 'CRITICAL' as const };
+  const first: CodeReviewReceipt = {
+    ...mockPassReview,
+    independence: {
+      ...mockPassReview.independence,
+      dimensions: { ...mockPassReview.independence.dimensions, process_id: 7131 },
+    },
+  };
+  const second: CodeReviewReceipt = {
+    ...mockPassReview,
+    receipt_id: 'receipt-pass-2',
+    reviewer_id: 'other-reviewer',
+    independence: {
+      ...mockPassReview.independence,
+      dimensions: {
+        ...mockPassReview.independence.dimensions,
+        reviewer_identity: 'other-reviewer',
+        session_id: 'session-pass-2',
+        process_id: 7131,
+      },
+      attestation_digest: 'att-2',
+    },
+  };
+  const readiness = evaluateMergeReadiness({ candidate, reviews: [first, second] });
+  assert.equal(readiness.gate_checks.code_review.status, 'INSUFFICIENT');
+  assert.ok(readiness.unresolved_blockers.includes('duplicate_reviewer_execution_or_session'));
 });
 
 test('mergeReadinessBroker: local unauthenticated review evidence cannot manufacture PASS readiness', () => {
@@ -406,6 +451,4 @@ test('mergeReadinessBroker: identical review receipts sharing receipt_id collaps
   assert.equal(readiness2.gate_checks.code_review.approved_reviews_count, 1);
   assert.equal(readiness2.gate_checks.code_review.receipt_ids.length, 1);
 });
-
-
 

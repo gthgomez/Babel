@@ -244,6 +244,9 @@ function Test-AgentIndependentReviewEvidenceV3 {
         (Get-AgentPropertyValue $runtime 'read_only_enforced') -cne $true) {
       $errors += 'independent_evidence_fresh_readonly_required'
     }
+    if ((Get-AgentPropertyValue $runtime 'fresh_process') -cne $true) {
+      $errors += 'independent_evidence_fresh_process_required'
+    }
 
     if ($agentKind -cne [string](Get-AgentPropertyValue $reviewer 'kind')) {
       $errors += 'independent_evidence_reviewer_runtime_kind_mismatch'
@@ -377,7 +380,7 @@ function Test-AgentHostReviewBundleV3 {
     $errors += 'controller_review_bundle_insufficient_or_excess_reviews'
   }
 
-  $principals = @{}; $executions = @{}; $challenges = @{}; $observedExecutions = @{}; $sessions = @{}
+  $principals = @{}; $executions = @{}; $challenges = @{}; $observedIdentities = @{}
   foreach ($review in $reviews) {
     $validation = Test-AgentIndependentReviewEvidenceV3 -Evidence $review -Repository $Repository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -ExpectedNumstatDigest $ExpectedNumstatDigest -ExpectedCandidateDigest $candidateDigest -TaskId $taskId -TaskHash $taskHash -ExpectedScope $ExpectedScope -BuilderIdentity $BuilderIdentity -ExpectedDiffSha256 $ExpectedDiffSha256 -ExpectedDiffLines $ExpectedDiffLines
     $errors += @($validation.errors)
@@ -388,11 +391,11 @@ function Test-AgentHostReviewBundleV3 {
     $runtime = Get-AgentPropertyValue $review 'runtime'
     $observedExec = [string](Get-AgentPropertyValue $runtime 'provider_execution_id')
     $sessionId = [string](Get-AgentPropertyValue $runtime 'session_id')
-    if ($observedExecutions.ContainsKey($observedExec) -or $sessions.ContainsKey($sessionId)) {
+    if ($observedIdentities.ContainsKey($observedExec) -or $observedIdentities.ContainsKey($sessionId)) {
       $errors += 'controller_review_bundle_observed_child_not_distinct'
     }
-    if ($observedExec) { $observedExecutions[$observedExec] = $true }
-    if ($sessionId) { $sessions[$sessionId] = $true }
+    if ($observedExec) { $observedIdentities[$observedExec] = $true }
+    if ($sessionId) { $observedIdentities[$sessionId] = $true }
     if ($principals.ContainsKey($principalId) -or $executions.ContainsKey($executionId)) {
       $errors += 'controller_review_bundle_reviewer_or_execution_not_distinct'
     }

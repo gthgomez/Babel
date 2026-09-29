@@ -44,6 +44,13 @@ function createValidEvidence(overrides?: Partial<IndependentReviewEvidenceV3>): 
       requested_model: 'gpt-5-codex',
       observed_model: 'gpt-5-codex-2026-08',
       model_attribution: 'observed',
+      provider_execution_id: 'observed-reviewer-2',
+      session_id: 'session-reviewer-2',
+      parent_execution_id: 'codex-exec-builder-1',
+      fresh_context: true,
+      fresh_process: true,
+      read_only_enforced: true,
+      source_sha: 'a'.repeat(40),
     },
     review_mode: 'exact_diff',
     reviewed_at: new Date().toISOString(),
@@ -56,6 +63,14 @@ function createValidEvidence(overrides?: Partial<IndependentReviewEvidenceV3>): 
       github_mutation: false,
       merge: false,
       controller_state_access: false,
+    },
+    coverage: {
+      diff_consumed: true,
+      diff_sha256: 'f'.repeat(64),
+      diff_lines_total: 20,
+      diff_lines_read: 20,
+      changed_paths: 2,
+      source_paths_opened: ['src/services/auth.ts'],
     },
   }
 
@@ -305,6 +320,77 @@ test('hostReviewHandoffV3: validates handoff and rejects duplicate reviewer iden
   assert.equal(pub['provenance'], undefined)
   assert.equal((pub['reviews'] as Array<Record<string, unknown>>)[0]!['provenance'], undefined)
   assert.equal((pub['reviews'] as Array<Record<string, unknown>>)[0]!['schema_version'], 3)
+})
+
+test('hostReviewHandoffV3: authoritative reviews reject duplicate observed executions and sessions', () => {
+  const first = createValidEvidence({ execution_purpose: 'FINAL_CERTIFICATION', scope: ['scripts/agent-pr-gate.ps1'],
+    coverage: { diff_consumed: true, diff_sha256: 'f'.repeat(64), diff_lines_total: 20,
+      diff_lines_read: 20, changed_paths: 1, source_paths_opened: [] } })
+  const second = createValidEvidence({
+    scope: first.scope, coverage: first.coverage!,
+    challenge_id: 'challenge-other',
+    reviewer: { kind: 'codex', principal_id: 'other-principal', execution_id: 'other-execution' },
+    runtime: { ...first.runtime, controller_execution_id: 'other-execution' },
+    execution_purpose: 'FINAL_CERTIFICATION',
+  })
+  const handoff: HostReviewHandoffV3 = {
+    schema_version: 3, kind: 'host_review_handoff_v3', provenance: 'TRUSTED_CONTROLLER_EVIDENCE',
+    repository: first.repository, pr_number: first.pr_number, base_sha: first.base_sha,
+    head_sha: first.head_sha, candidate_digest: first.candidate_digest,
+    diff_numstat_digest: first.diff_numstat_digest, task_id: first.task_id,
+    task_hash: first.task_hash, controller_run_id: first.controller_run_id,
+    reviews: [first, second],
+  }
+  assert.throws(() => validateHostReviewHandoffV3(handoff, { requireAuthoritative: true }), /DUPLICATE_OBSERVED_REVIEWER_EXECUTION|DUPLICATE_OBSERVED_REVIEWER_SESSION/)
+  const distinctExecution = { ...second, runtime: { ...second.runtime, provider_execution_id: 'other-observed-execution' } }
+  assert.throws(() => validateHostReviewHandoffV3({ ...handoff, reviews: [first, distinctExecution] }, { requireAuthoritative: true }), /DUPLICATE_OBSERVED_REVIEWER_SESSION/)
+  const crossSlotReuse = { ...second, runtime: { ...second.runtime,
+    provider_execution_id: 'other-observed-execution', session_id: first.runtime.provider_execution_id } }
+  assert.throws(() => validateHostReviewHandoffV3({ ...handoff, reviews: [first, crossSlotReuse] }, { requireAuthoritative: true }), /DUPLICATE_OBSERVED_REVIEWER_SESSION/)
+})
+
+test('independentReviewEvidenceV3: authoritative review requires observed isolation and full diff coverage', () => {
+  const valid = createValidEvidence({ execution_purpose: 'FINAL_CERTIFICATION' })
+  validateIndependentReviewEvidenceV3(valid, { requireAuthoritative: true })
+  assert.throws(() => validateIndependentReviewEvidenceV3({ ...valid, runtime: { ...valid.runtime, fresh_process: false } }, { requireAuthoritative: true }), /AUTHORITATIVE_RUNTIME_ISOLATION_REQUIRED/)
+  assert.throws(() => validateIndependentReviewEvidenceV3({ ...valid, coverage: { ...valid.coverage!, diff_lines_read: 19 } }, { requireAuthoritative: true }), /FULL_DIFF_COVERAGE_REQUIRED/)
+  assert.throws(() => validateIndependentReviewEvidenceV3({ ...valid, coverage: undefined }, { requireAuthoritative: true }), /FULL_DIFF_COVERAGE_REQUIRED/)
+})
+
+test('independentReviewEvidenceV3: protected scope requires trusted controller source attribution', () => {
+  const review = createValidEvidence({ scope: ['scripts/agent-pr-gate.ps1'], execution_purpose: 'FINAL_CERTIFICATION',
+    coverage: { diff_consumed: true, diff_sha256: 'f'.repeat(64), diff_lines_total: 20,
+      diff_lines_read: 20, changed_paths: 1, source_paths_opened: [] } })
+  const missingSource = { ...review, runtime: { ...review.runtime, source_sha: undefined } }
+  assert.throws(() => validateIndependentReviewEvidenceV3(missingSource, { requireAuthoritative: true }), /TRUSTED_CONTROLLER_SOURCE_REQUIRED/)
+  assert.throws(() => validateIndependentReviewEvidenceV3({ ...review, runtime: { ...review.runtime, source_sha: 'b'.repeat(40) } }, { requireAuthoritative: true }), /TRUSTED_CONTROLLER_SOURCE_MISMATCH/)
+})
+
+test('hostReviewHandoffV3: authoritative critical scope requires two final reviewers', () => {
+  const review = createValidEvidence({ scope: ['scripts/agent-pr-gate.ps1'], execution_purpose: 'FINAL_CERTIFICATION',
+    coverage: { diff_consumed: true, diff_sha256: 'f'.repeat(64), diff_lines_total: 20,
+      diff_lines_read: 20, changed_paths: 1, source_paths_opened: [] } })
+  const handoff: HostReviewHandoffV3 = {
+    schema_version: 3, kind: 'host_review_handoff_v3', provenance: 'TRUSTED_CONTROLLER_EVIDENCE',
+    repository: review.repository, pr_number: review.pr_number, base_sha: review.base_sha,
+    head_sha: review.head_sha, candidate_digest: review.candidate_digest,
+    diff_numstat_digest: review.diff_numstat_digest, task_id: review.task_id,
+    task_hash: review.task_hash, controller_run_id: review.controller_run_id,
+    reviews: [review],
+  }
+  assert.throws(() => validateHostReviewHandoffV3(handoff, { requireAuthoritative: true, scope: review.scope }), /INSUFFICIENT_FINAL_REVIEWERS/)
+  const blocked = { ...review, verdict: 'BLOCK' as const, blocking_findings: ['Concrete invariant violation'] }
+  assert.equal(validateHostReviewHandoffV3({ ...handoff, reviews: [blocked] }, {
+    requireAuthoritative: true, scope: review.scope,
+  }).reviews.length, 1)
+})
+
+test('independentReviewEvidenceV3: model attribution cannot claim an unobserved model', () => {
+  const review = createValidEvidence({ runtime: {
+    agent_kind: 'codex', adapter_id: 'codex-native', controller_execution_id: 'codex-exec-reviewer-2',
+    model_attribution: 'observed', requested_model: 'requested-only',
+  } })
+  assert.throws(() => validateIndependentReviewEvidenceV3(review), /MODEL_ATTRIBUTION_MISMATCH/)
 })
 
 test('independentReviewEvidenceV3: enforces safe challenge ID rules', () => {

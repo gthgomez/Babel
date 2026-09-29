@@ -120,7 +120,7 @@ try {
         agent_kind = 'babel'; adapter_id = 'babel-chat-v1'
         controller_execution_id = "reviewer-e-$Suffix"; provider_execution_id = "child-$Suffix"; session_id = "child-$Suffix"
         parent_execution_id = 'codex-builder-e1'; fresh_context = $true; read_only_enforced = $true
-        source_sha = $baseSha; execution_purpose = 'FINAL_CERTIFICATION'
+        source_sha = $baseSha; execution_purpose = 'FINAL_CERTIFICATION'; fresh_process = $true
       }
       review_mode = 'exact_diff'; execution_purpose = 'FINAL_CERTIFICATION'
       reviewed_at = $reviewedAt

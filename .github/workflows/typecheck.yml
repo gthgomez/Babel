@@ -61,6 +61,51 @@ jobs:
       - name: Public policy runtime matrix
         run: pwsh -NoProfile -ExecutionPolicy Bypass -Command "& './tools/tests/test-public-content-policy-runtime.ps1'"
 
+  review-control-plane-contract:
+    name: review-control-plane-contract
+    runs-on: ubuntu-latest
+    env:
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - name: Test trusted merge and evidence contracts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($test in @(
+            'tools/tests/test-agent-pr-gate-closure.ps1',
+            'tools/tests/test-review-evidence-taxonomy.ps1',
+            'tools/tests/test-agent-pr-merge.ps1'
+          )) {
+            pwsh -NoProfile -NonInteractive -File $test
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Test review policy, provenance, and merge-readiness contracts
+        run: >
+          npx tsx --no-warnings=ExperimentalWarning --test
+          src/services/reviewControlPlaneParity.test.ts
+          src/services/reviewPolicy.test.ts
+          src/services/babelReviewSnapshot.test.ts
+          src/services/mergeReadinessBroker.test.ts
+          src/services/reviewIndependence.test.ts
+          src/services/harnessReviewProtocol.test.ts
+          src/services/independentReviewEvidenceV3.test.ts
+          src/services/codexHarnessReview.test.ts
+          src/services/openCodeHarnessReview.test.ts
+          src/services/controllerMediatedHarnessReview.test.ts
+          src/services/trustedReviewInstallation.test.ts
+        working-directory: babel-cli
+
   public-pr-metadata-tests:
     name: public-pr-metadata-tests
     if: github.event_name == 'pull_request'
@@ -74,12 +119,25 @@ jobs:
     name: linux-validation
     needs: [security, public-content-policy]
     runs-on: ubuntu-latest
+    env:
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Test merge-control closure regression matrix
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-agent-pr-gate-closure.ps1
-      - name: Test review-evidence failure taxonomy
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-review-evidence-taxonomy.ps1
+        with:
+          fetch-depth: 0
+      - name: Run required review control-plane PowerShell contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($test in @(
+            'tools/tests/test-agent-pr-gate-closure.ps1',
+            'tools/tests/test-review-evidence-taxonomy.ps1',
+            'tools/tests/test-agent-pr-merge.ps1',
+            'tools/tests/test-trusted-control-plane-integration.ps1'
+          )) {
+            pwsh -NoProfile -NonInteractive -File $test
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "22"
@@ -87,6 +145,21 @@ jobs:
           cache-dependency-path: babel-cli/package-lock.json
       - name: Install dependencies
         run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Run required review control-plane TypeScript contract
+        run: >
+          npx tsx --no-warnings=ExperimentalWarning --test
+          src/services/reviewControlPlaneParity.test.ts
+          src/services/reviewPolicy.test.ts
+          src/services/babelReviewSnapshot.test.ts
+          src/services/mergeReadinessBroker.test.ts
+          src/services/reviewIndependence.test.ts
+          src/services/harnessReviewProtocol.test.ts
+          src/services/independentReviewEvidenceV3.test.ts
+          src/services/codexHarnessReview.test.ts
+          src/services/openCodeHarnessReview.test.ts
+          src/services/controllerMediatedHarnessReview.test.ts
+          src/services/trustedReviewInstallation.test.ts
         working-directory: babel-cli
       - name: Typecheck CLI
         run: npm run typecheck

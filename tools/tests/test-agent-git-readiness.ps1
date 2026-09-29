@@ -229,7 +229,7 @@ try {
       requested_model = 'gpt-5-codex'; observed_model = 'gpt-5-codex'; model_attribution = 'observed'
       provider_execution_id = 'codex-child-session-1'; session_id = 'codex-child-session-1'
       parent_execution_id = 'codex-builder-e1'; source_sha = $mainSha
-      fresh_context = $true; read_only_enforced = $true
+      fresh_context = $true; fresh_process = $true; read_only_enforced = $true
     }
     review_mode = 'exact_diff'; execution_purpose = 'FINAL_CERTIFICATION'
     reviewed_at = [DateTimeOffset]::UtcNow.ToString('o'); scope = @('change.txt')

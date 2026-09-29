@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import type { CandidateEnvelope } from './hostReviewController.js'
-import { prepareHarnessReview, submitHarnessReview, runHarnessReview, executePreparedHarnessReviewSlot, readHarnessReviewHandoff, withHarnessReviewPublicationLock } from './harnessReviewProtocol.js'
+import { prepareHarnessReview, submitHarnessReview, runHarnessReview, executePreparedHarnessReviewSlot, executePreparedHarnessReviewRun, readHarnessReviewHandoff, withHarnessReviewPublicationLock, reviewMission } from './harnessReviewProtocol.js'
 import { completeReviewChallenge } from './independentReviewController.js'
 
 const builder = { kind: 'codex', principal_id: 'builder', execution_id: 'parent-thread' }
@@ -27,6 +28,23 @@ function fixture() {
   return { stateDir, snapshotRoot, diff, diffSha256: createHash('sha256').update(diff).digest('hex') }
 }
 
+function protectedFixture() {
+  const f = fixture()
+  const trustedControllerRoot = join(f.stateDir, 'trusted-controller')
+  mkdirSync(trustedControllerRoot)
+  const git = (args: string[]) => execFileSync('git', ['-C', trustedControllerRoot, ...args], { encoding: 'utf8' }).trim()
+  git(['init', '-q'])
+  git(['config', 'user.email', 'test@example.com'])
+  git(['config', 'user.name', 'Test'])
+  writeFileSync(join(trustedControllerRoot, 'controller.txt'), 'trusted')
+  git(['add', 'controller.txt'])
+  git(['commit', '-qm', 'trusted controller'])
+  const baseSha = git(['rev-parse', 'HEAD'])
+  return { ...f, trustedControllerRoot, protectedCandidate: {
+    ...candidate, base_sha: baseSha, scope: ['scripts/agent-pr-gate.ps1'], risk_tier: 'CRITICAL' as const,
+  } }
+}
+
 function result(request: ReturnType<typeof prepareHarnessReview>['requests'][number], diffSha256: string) {
   return {
     challenge_id: request.challenge_id,
@@ -36,9 +54,9 @@ function result(request: ReturnType<typeof prepareHarnessReview>['requests'][num
     reviewed_at: new Date().toISOString(),
     host_observation: {
       child_execution_id: 'child-thread', parent_execution_id: 'parent-thread',
-      session_id: 'child-session', fresh_context: true, read_only_enforced: true, controller_state_isolated: true,
+      session_id: 'child-session', fresh_context: true, fresh_process: true, read_only_enforced: true, controller_state_isolated: true,
       diff_sha256: diffSha256, diff_lines_total: 2, diff_lines_read: 2,
-      source_paths_opened: [], tool_calls: 1, source_sha: 'a'.repeat(40),
+      source_paths_opened: [], tool_calls: 1, source_sha: request.candidate.base_sha,
       authority: request.authority,
     },
   }
@@ -66,6 +84,9 @@ test('submit rejects unobserved full diff and builder self-review', () => {
     const unisolated = result(prepared.requests[0]!, f.diffSha256)
     unisolated.host_observation.controller_state_isolated = false
     assert.throws(() => submitHarnessReview(f.stateDir, prepared.run_id, unisolated), /HOST_ISOLATION_ATTESTATION_REQUIRED/)
+    const reusedProcess = result(prepared.requests[0]!, f.diffSha256)
+    reusedProcess.host_observation.fresh_process = false
+    assert.throws(() => submitHarnessReview(f.stateDir, prepared.run_id, reusedProcess), /HOST_ISOLATION_ATTESTATION_REQUIRED/)
     const selfReview = result(prepared.requests[0]!, f.diffSha256)
     selfReview.host_observation.child_execution_id = builder.execution_id
     assert.throws(() => submitHarnessReview(f.stateDir, prepared.run_id, selfReview), /OBSERVED_REVIEWER_NOT_INDEPENDENT/)
@@ -89,9 +110,9 @@ test('in-process adapter uses the same durable challenge path', async () => {
 })
 
 test('one BLOCK wins a two-review round and remains publishable', async () => {
-  const f = fixture()
+  const f = protectedFixture()
   try {
-    const critical = { ...candidate, scope: ['scripts/agent-pr-gate.ps1'], risk_tier: 'CRITICAL' as const }
+    const critical = f.protectedCandidate
     let calls = 0
     const outcome = await runHarnessReview({
       ...f, candidate: critical, builder, reviewCount: 2,
@@ -249,9 +270,9 @@ test('publication holds the same state lock used by submissions', async () => {
 })
 
 test('a host-protected scope stamps HOST_PROTECTED and refuses a session-attested adapter', async () => {
-  const f = fixture()
+  const f = protectedFixture()
   try {
-    const protectedCandidate = { ...candidate, scope: ['scripts/agent-pr-gate.ps1'], risk_tier: 'CRITICAL' as const }
+    const protectedCandidate = f.protectedCandidate
     const prepared = prepareHarnessReview({ ...f, candidate: protectedCandidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 2 })
     assert.equal(prepared.requests.length, 2)
     assert.ok(prepared.requests.every((request) => request.authority === 'HOST_PROTECTED'))
@@ -280,9 +301,9 @@ test('a normal scope stamps SESSION_ATTESTED and executes with a session-atteste
 })
 
 test('a legacy persisted run without authority recomputes HOST_PROTECTED from scope', async () => {
-  const f = fixture()
+  const f = protectedFixture()
   try {
-    const protectedCandidate = { ...candidate, scope: ['scripts/agent-pr-gate.ps1'], risk_tier: 'CRITICAL' as const }
+    const protectedCandidate = f.protectedCandidate
     const prepared = prepareHarnessReview({ ...f, candidate: protectedCandidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 2 })
     const runPath = join(f.stateDir, 'harness-runs', `${prepared.run_id}.json`)
     const run = JSON.parse(readFileSync(runPath, 'utf8')) as Record<string, unknown>
@@ -298,9 +319,9 @@ test('a legacy persisted run without authority recomputes HOST_PROTECTED from sc
 })
 
 test('a host-protected request requires the observation to attest HOST_PROTECTED', () => {
-  const f = fixture()
+  const f = protectedFixture()
   try {
-    const protectedCandidate = { ...candidate, scope: ['scripts/agent-pr-gate.ps1'], risk_tier: 'CRITICAL' as const }
+    const protectedCandidate = f.protectedCandidate
     const prepared = prepareHarnessReview({ ...f, candidate: protectedCandidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 2 })
     const missing = result(prepared.requests[0]!, f.diffSha256)
     delete (missing.host_observation as { authority?: unknown }).authority
@@ -315,5 +336,87 @@ test('submitting a result whose observed authority disagrees with the request fa
     const mismatched = result(prepared.requests[0]!, f.diffSha256)
     mismatched.host_observation.authority = 'HOST_PROTECTED'
     assert.throws(() => submitHarnessReview(f.stateDir, prepared.run_id, mismatched), /HARNESS_AUTHORITY_MISMATCH/)
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('a protected review requires a verified base controller and matching source observation', () => {
+  const f = protectedFixture()
+  try {
+    const input = { ...f, candidate: f.protectedCandidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 2 as const }
+    const { trustedControllerRoot: _root, ...withoutRoot } = input
+    assert.throws(() => prepareHarnessReview(withoutRoot), /TRUSTED_REVIEW_CONTROLLER_REQUIRED/)
+    const prepared = prepareHarnessReview(input)
+    const wrongSource = result(prepared.requests[0]!, f.diffSha256)
+    wrongSource.host_observation.source_sha = 'a'.repeat(40)
+    assert.throws(() => submitHarnessReview(f.stateDir, prepared.run_id, wrongSource), /TRUSTED_CONTROLLER_SOURCE_MISMATCH/)
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('prepared two-slot certification launches both reviewers concurrently', async () => {
+  const f = protectedFixture()
+  try {
+    const prepared = prepareHarnessReview({ ...f, candidate: f.protectedCandidate, builder,
+      agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 2 })
+    let started = 0
+    let release!: () => void
+    const bothStarted = new Promise<void>((resolve) => { release = resolve })
+    const adapter = {
+      id: 'codex-native-v1', agentKind: 'codex',
+      capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'HOST_PROTECTED' as const }),
+      review: async (request: (typeof prepared.requests)[number]) => {
+        started++
+        if (started === 2) release()
+        await bothStarted
+        const completed = result(request, f.diffSha256)
+        completed.host_observation.child_execution_id = request.challenge_id
+        completed.host_observation.session_id = request.challenge_id
+        return completed
+      },
+    }
+    const outcome = await executePreparedHarnessReviewRun(f.stateDir, prepared.run_id, adapter, builder)
+    assert.equal(started, 2)
+    assert.equal(outcome.status, 'MERGE_READY')
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('review missions specialize trust, coding loop, and TUI slots deterministically', () => {
+  assert.match(reviewMission(['babel-cli/src/services/codexHarnessReview.ts'], 0), /trust boundaries/)
+  assert.match(reviewMission(['babel-cli/src/services/codexHarnessReview.ts'], 1), /state transitions/)
+  assert.match(reviewMission(['babel-cli/src/agent/chatEngine.ts'], 0), /correctness, state, concurrency/)
+  assert.match(reviewMission(['babel-cli/src/interactive/foo.ts'], 1), /rendering/)
+  assert.throws(() => reviewMission(['src/a.ts'], 2), /REVIEW_SLOT_NOT_FOUND/)
+})
+
+test('prepared run resumes only the failed slot after the other approval is durable', async () => {
+  const f = protectedFixture()
+  try {
+    const prepared = prepareHarnessReview({ ...f, candidate: f.protectedCandidate, builder,
+      agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 2 })
+    const capabilities = () => ({ freshSubagents: true, childSessionIdentity: true,
+      readOnlyReview: true, repairWorkers: false, authority: 'HOST_PROTECTED' as const })
+    const first = prepared.requests[0]!
+    const adapter = {
+      id: 'codex-native-v1', agentKind: 'codex', capabilities,
+      review: async (request: (typeof prepared.requests)[number]) => {
+        if (request.challenge_id !== first.challenge_id) throw new Error('transient reviewer failure')
+        return result(request, f.diffSha256)
+      },
+    }
+    await assert.rejects(() => executePreparedHarnessReviewRun(f.stateDir, prepared.run_id, adapter, builder), /REVIEW_EXECUTION_INCOMPLETE/)
+    let resumed = 0
+    const retry = {
+      ...adapter,
+      review: async (request: (typeof prepared.requests)[number]) => {
+        resumed++
+        assert.notEqual(request.challenge_id, first.challenge_id)
+        const completed = result(request, f.diffSha256)
+        completed.host_observation.child_execution_id = 'retry-child'
+        completed.host_observation.session_id = 'retry-session'
+        return completed
+      },
+    }
+    const outcome = await executePreparedHarnessReviewRun(f.stateDir, prepared.run_id, retry, builder)
+    assert.equal(resumed, 1)
+    assert.equal(outcome.status, 'MERGE_READY')
   } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
 })

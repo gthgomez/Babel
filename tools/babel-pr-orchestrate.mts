@@ -7,12 +7,13 @@ import { collectBabelReviewSnapshot, assertReviewStateOutsideGit } from '../babe
 import { collectCandidateEnvelope } from '../babel-cli/src/services/candidateCollector.js'
 import {
   prepareHarnessReview, readHarnessReviewHandoff, readHarnessReviewRequest, executePreparedHarnessReviewSlot,
+  executePreparedHarnessReviewRun, assertExecutingHarnessReviewProtocol,
   withHarnessReviewPublicationLock,
 } from '../babel-cli/src/services/harnessReviewProtocol.js'
 import { createCodexHarnessAdapter, codexParentIdentity } from '../babel-cli/src/services/codexHarnessReview.js'
 import { publishIndependentReviewV3 } from '../babel-cli/src/services/hostReviewV3Publication.js'
 import { resolveReviewAuthority, resolveReviewPolicy } from '../babel-cli/src/services/reviewPolicy.js'
-import { assertTrustedReviewInstallation } from '../babel-cli/src/services/trustedReviewInstallation.js'
+import { assertTrustedReviewCodePath } from '../babel-cli/src/services/trustedReviewInstallation.js'
 
 const argv = process.argv.slice(2)
 const operation = argv.shift()
@@ -20,8 +21,8 @@ if (operation === 'opencode') {
   process.argv.splice(2, 1)
   await import('./babel-pr-orchestrate-opencode.mts')
 } else {
-  if (!['prepare', 'submit', 'publish'].includes(operation ?? '')) {
-    throw new Error('USAGE: babel-pr-orchestrate <prepare|submit|publish|opencode> [flags]')
+  if (!['prepare', 'submit', 'submit-all', 'publish'].includes(operation ?? '')) {
+    throw new Error('USAGE: babel-pr-orchestrate <prepare|submit|submit-all|publish|opencode> [flags]')
   }
   const allowed = new Set([
     '--repo-root', '--state-dir', '--pr',
@@ -47,6 +48,12 @@ if (operation === 'opencode') {
     repoRoot, pr, task: TASK, taskId: `pr-${pr}`,
   })
   const installationRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  const assertExecutingController = (baseSha: string): string => {
+    const sourceSha = assertTrustedReviewCodePath(installationRoot, baseSha,
+      fileURLToPath(import.meta.url), 'tools/babel-pr-orchestrate.mts')
+    assertExecutingHarnessReviewProtocol(installationRoot, baseSha)
+    return sourceSha
+  }
 
   if (operation === 'prepare') {
     const repoRoot = resolve(required('--repo-root'))
@@ -54,8 +61,7 @@ if (operation === 'opencode') {
     if (!Number.isInteger(pr) || pr < 1) throw new Error('PR_REQUIRED')
     const builder = codexParentIdentity(process.env)
     const candidate = await candidateForPr(repoRoot, pr)
-    assertTrustedReviewInstallation(installationRoot,
-      candidate.repository.toLowerCase() === 'gthgomez/babel' ? candidate.base_sha : undefined)
+    assertExecutingController(candidate.base_sha)
     const snapshot = collectBabelReviewSnapshot({
       repoRoot, base: candidate.base_sha, head: candidate.head_sha, state: stateDir, task: TASK,
     })
@@ -68,20 +74,22 @@ if (operation === 'opencode') {
     const prepared = prepareHarnessReview({
       candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1',
       reviewCount: policy.finalCertificationCount, stateDir, snapshotRoot: snapshot.root,
+      trustedControllerRoot: installationRoot,
     })
     console.log(JSON.stringify(prepared))
-  } else if (operation === 'submit') {
-    const slot = Number(required('--slot'))
+  } else if (operation === 'submit' || operation === 'submit-all') {
+    const slot = operation === 'submit' ? Number(required('--slot')) : 0
     if (!Number.isInteger(slot) || slot < 0) throw new Error('REVIEW_SLOT_NOT_FOUND')
     const parent = codexParentIdentity(process.env)
     const runId = required('--run-id')
     const prepared = readHarnessReviewRequest(stateDir, runId, slot)
-    const sourceSha = assertTrustedReviewInstallation(installationRoot,
-      prepared.candidate.repository.toLowerCase() === 'gthgomez/babel' ? prepared.candidate.base_sha : undefined)
-    const outcome = await executePreparedHarnessReviewSlot(stateDir, runId, slot,
-      createCodexHarnessAdapter({ parentExecutionId: parent.execution_id, sourceSha,
-        authority: resolveReviewAuthority(prepared.candidate.scope),
-        ...(flags.get('--model') ? { model: flags.get('--model')! } : {}) }), parent)
+    const sourceSha = assertExecutingController(prepared.candidate.base_sha)
+    const adapter = createCodexHarnessAdapter({ parentExecutionId: parent.execution_id, sourceSha,
+      authority: resolveReviewAuthority(prepared.candidate.scope),
+      ...(flags.get('--model') ? { model: flags.get('--model')! } : {}) })
+    const outcome = operation === 'submit-all'
+      ? await executePreparedHarnessReviewRun(stateDir, runId, adapter, parent)
+      : await executePreparedHarnessReviewSlot(stateDir, runId, slot, adapter, parent)
     console.log(JSON.stringify(outcome))
     process.exitCode = outcome.status === 'MERGE_READY' ? 0 : outcome.status === 'BLOCKED' ? 2 : 3
   } else {
@@ -89,8 +97,7 @@ if (operation === 'opencode') {
     const pr = Number(required('--pr'))
     if (!Number.isInteger(pr) || pr < 1) throw new Error('PR_REQUIRED')
     const certified = readHarnessReviewHandoff(stateDir, required('--run-id'))
-    const sourceSha = assertTrustedReviewInstallation(installationRoot,
-      certified.candidate.repository.toLowerCase() === 'gthgomez/babel' ? certified.candidate.base_sha : undefined)
+    const sourceSha = assertExecutingController(certified.candidate.base_sha)
     if (certified.handoff.reviews.some((review) => review.runtime.source_sha !== sourceSha)) {
       throw new Error('REVIEW_CONTROLLER_SOURCE_CHANGED')
     }

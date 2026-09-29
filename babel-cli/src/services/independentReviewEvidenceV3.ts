@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { classifyReviewRisk, resolveReviewAuthority, resolveReviewPolicy } from './reviewPolicy.js'
 
 export type ReviewEvidenceProvenance =
   | 'LOCAL_UNAUTHENTICATED'
@@ -299,6 +300,16 @@ export function validateIndependentReviewEvidenceV3(
 ): IndependentReviewEvidenceV3 {
   const parsed = independentReviewEvidenceV3Schema.parse(value)
 
+  if (parsed.runtime.model_attribution === 'observed' && !parsed.runtime.observed_model?.trim()) {
+    throw new Error('MODEL_ATTRIBUTION_MISMATCH')
+  }
+  if (parsed.runtime.model_attribution === 'configured' && !parsed.runtime.requested_model?.trim()) {
+    throw new Error('MODEL_ATTRIBUTION_MISMATCH')
+  }
+  if (parsed.runtime.model_attribution === 'unavailable' && parsed.runtime.observed_model) {
+    throw new Error('MODEL_ATTRIBUTION_MISMATCH')
+  }
+
   if (expected?.requireAuthoritative && parsed.provenance === 'LOCAL_UNAUTHENTICATED') {
     throw new Error('LOCAL_UNAUTHENTICATED_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
   }
@@ -307,6 +318,24 @@ export function validateIndependentReviewEvidenceV3(
   if (expected?.requireAuthoritative) {
     if (parsed.execution_purpose !== 'FINAL_CERTIFICATION') {
       throw new Error('NON_CERTIFICATION_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
+    }
+    if (parsed.runtime.fresh_context !== true || parsed.runtime.fresh_process !== true ||
+        parsed.runtime.read_only_enforced !== true || !parsed.runtime.provider_execution_id ||
+        !parsed.runtime.session_id || parsed.runtime.parent_execution_id !== parsed.builder.execution_id ||
+        parsed.runtime.provider_execution_id.toLowerCase() === parsed.builder.execution_id.toLowerCase() ||
+        parsed.runtime.session_id.toLowerCase() === parsed.builder.execution_id.toLowerCase()) {
+      throw new Error('AUTHORITATIVE_RUNTIME_ISOLATION_REQUIRED')
+    }
+    if (!parsed.coverage || parsed.coverage.diff_consumed !== true ||
+        parsed.coverage.diff_lines_total !== parsed.coverage.diff_lines_read ||
+        parsed.coverage.changed_paths !== parsed.scope.length) {
+      throw new Error('FULL_DIFF_COVERAGE_REQUIRED')
+    }
+    if (resolveReviewAuthority(parsed.scope) === 'HOST_PROTECTED' && !parsed.runtime.source_sha) {
+      throw new Error('TRUSTED_CONTROLLER_SOURCE_REQUIRED')
+    }
+    if (resolveReviewAuthority(parsed.scope) === 'HOST_PROTECTED' && parsed.runtime.source_sha !== parsed.base_sha) {
+      throw new Error('TRUSTED_CONTROLLER_SOURCE_MISMATCH')
     }
   }
 
@@ -428,8 +457,19 @@ export function validateHostReviewHandoffV3(
   if (expected?.candidateDigest && parsed.candidate_digest !== expected.candidateDigest) throw new Error('HANDOFF_CANDIDATE_DIGEST_MISMATCH')
   if (expected?.controllerRunId && parsed.controller_run_id !== expected.controllerRunId) throw new Error('HANDOFF_RUN_ID_MISMATCH')
 
+  if (expected?.requireAuthoritative) {
+    const scope = expected.scope ?? parsed.reviews[0]?.scope ?? []
+    const required = resolveReviewPolicy({ riskLane: classifyReviewRisk(scope), requireAuthoritative: true }).finalCertificationCount
+    if (parsed.reviews.every((review) => review.verdict === 'APPROVE') && parsed.reviews.length !== required) {
+      throw new Error('INSUFFICIENT_FINAL_REVIEWERS')
+    }
+  }
+
   const reviewerPrincipals = new Set<string>()
   const reviewerExecutions = new Set<string>()
+  const observedExecutions = new Set<string>()
+  const observedSessions = new Set<string>()
+  const observedIdentities = new Set<string>()
   const challengeIds = new Set<string>()
 
   for (const review of parsed.reviews) {
@@ -459,6 +499,20 @@ export function validateHostReviewHandoffV3(
     }
     if (challengeIds.has(review.challenge_id)) {
       throw new Error('DUPLICATE_CHALLENGE_ID')
+    }
+    if (expected?.requireAuthoritative) {
+      const observedExecution = review.runtime.provider_execution_id!.toLowerCase()
+      const observedSession = review.runtime.session_id!.toLowerCase()
+      if (observedExecutions.has(observedExecution) || observedIdentities.has(observedExecution)) {
+        throw new Error('DUPLICATE_OBSERVED_REVIEWER_EXECUTION')
+      }
+      if (observedSessions.has(observedSession) || observedIdentities.has(observedSession)) {
+        throw new Error('DUPLICATE_OBSERVED_REVIEWER_SESSION')
+      }
+      observedExecutions.add(observedExecution)
+      observedSessions.add(observedSession)
+      observedIdentities.add(observedExecution)
+      observedIdentities.add(observedSession)
     }
     reviewerPrincipals.add(review.reviewer.principal_id)
     reviewerExecutions.add(review.reviewer.execution_id)

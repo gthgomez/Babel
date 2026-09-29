@@ -8,8 +8,7 @@ param(
   [string]$MergeMethod = 'squash',
   [string]$RiskTier = 'GREEN',
   [string]$AutonomousReviewEvidencePath = '',
-  [string]$BuilderIdentity = '',
-  [string]$GateRunner = (Join-Path $RepoRoot 'scripts/trusted-merge-gate.ps1')
+  [string]$BuilderIdentity = ''
 )
 
 # Bounded exact-head merge executor. It never decides merge readiness itself:
@@ -80,56 +79,25 @@ function Write-BabelBlocked {
   exit 1
 }
 
+$priorNoReplaceObjects = [Environment]::GetEnvironmentVariable('GIT_NO_REPLACE_OBJECTS', 'Process')
 try {
+  # The base launcher uses git show internally. Keep local replace refs out of
+  # every nested Git invocation, including previously trusted base scripts.
+  $env:GIT_NO_REPLACE_OBJECTS = '1'
   if ($MergeMethod -notin @('merge', 'squash', 'rebase')) { Write-BabelBlocked @('merge_method_invalid') }
   if ($ReviewedHeadSha -notmatch '^[0-9a-fA-F]{40}$') { Write-BabelBlocked @('reviewed_head_sha_invalid') }
 
   $resolvedRepo = $null
   try { $resolvedRepo = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path } catch { Write-BabelBlocked @('repo_root_invalid') }
 
-  # The gate runner is only trusted when it resolves to a regular file whose
-  # parent directory is exactly $RepoRoot/scripts. Symlinks are rejected outright
-  # because a link inside scripts/ could target a file outside it (Resolve-Path
-  # does not dereference links on Unix). The path comparison follows the host
-  # filesystem's case sensitivity: Ordinal on case-sensitive platforms, and
-  # OrdinalIgnoreCase on Windows.
-  $isWindowsHost = $false
-  $isWindowsVariable = Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue
-  if ($null -ne $isWindowsVariable) { $isWindowsHost = [bool]$isWindowsVariable.Value }
-  $pathComparison = if ($isWindowsHost) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
-
-  $scriptsDir = $null
-  try { $scriptsDir = (Resolve-Path -LiteralPath (Join-Path $resolvedRepo 'scripts') -ErrorAction Stop).Path } catch { Write-BabelBlocked @('merge_gate_runner_invalid') }
-  $gateFull = $null
-  try { $gateFull = (Resolve-Path -LiteralPath $GateRunner -ErrorAction Stop).Path } catch { Write-BabelBlocked @('merge_gate_runner_invalid') }
-  $gateItem = $null
-  try { $gateItem = Get-Item -LiteralPath $gateFull -Force -ErrorAction Stop } catch { Write-BabelBlocked @('merge_gate_runner_invalid') }
-  if ($gateItem.PSIsContainer) { Write-BabelBlocked @('merge_gate_runner_invalid') }
-  $isLink = $false
-  $linkProperty = $gateItem.PSObject.Properties['LinkType']
-  if ($null -ne $linkProperty -and -not [string]::IsNullOrWhiteSpace([string]$linkProperty.Value)) { $isLink = $true }
-  if (-not $isLink) {
-    $resolveMethod = $gateItem.GetType().GetMethod('ResolveLinkTarget', [type[]]@([bool]))
-    if ($null -ne $resolveMethod) {
-      try { if ($null -ne $gateItem.ResolveLinkTarget($true)) { $isLink = $true } } catch { $isLink = $true }
-    }
-  }
-  if ($isLink) { Write-BabelBlocked @('merge_gate_runner_invalid') }
-  $gateDir = Split-Path -Parent $gateFull
-  if (-not [string]::Equals($gateDir, $scriptsDir, $pathComparison)) { Write-BabelBlocked @('merge_gate_runner_invalid') }
-
-  # Resolve the trusted base commit. The base-rooted gate is materialized from
-  # this exact commit, so an unattested base must never be invented. When the
-  # caller omits it, read the PR's baseRefOid and fail closed if it is not an
-  # exact commit SHA.
-  $resolvedBaseSha = $BaseSha
-  if (-not [string]::IsNullOrWhiteSpace($resolvedBaseSha)) {
-    if ($resolvedBaseSha -notmatch '^[0-9a-fA-F]{40}$') { Write-BabelBlocked @('merge_base_sha_invalid') }
-  } else {
+  # Bind the controller source to the live PR base, even when the caller supplied
+  # a base SHA. A syntactically valid candidate SHA is not a trusted base.
+  if (-not [string]::IsNullOrWhiteSpace($BaseSha) -and $BaseSha -notmatch '^[0-9a-fA-F]{40}$') { Write-BabelBlocked @('merge_base_sha_invalid') }
+  $resolvedBaseSha = ''
     $baseViewText = ''
     $baseViewExit = 0
     try {
-      $baseViewCaptured = & $GhPath pr view ([string]$PR) --json 'baseRefOid' 2>&1
+      $baseViewCaptured = & $GhPath pr view ([string]$PR) --repo 'gthgomez/Babel' --json 'baseRefOid' 2>&1
       $baseViewExit = Get-BabelLastExitCode
       $baseViewText = (@($baseViewCaptured) | ForEach-Object { [string]$_ }) -join "`n"
     } catch {
@@ -142,7 +110,24 @@ try {
     try { $baseView = $baseViewJsonText | ConvertFrom-Json -ErrorAction Stop } catch { Write-BabelBlocked @('merge_base_sha_unavailable') }
     $resolvedBaseSha = [string](Get-BabelJsonProperty -Object $baseView -Name 'baseRefOid')
     if ($resolvedBaseSha -notmatch '^[0-9a-fA-F]{40}$') { Write-BabelBlocked @('merge_base_sha_unavailable') }
-  }
+  if (-not [string]::IsNullOrWhiteSpace($BaseSha) -and -not [string]::Equals($BaseSha, $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { Write-BabelBlocked @('merge_base_sha_mismatch') }
+
+  # The launcher itself must come from the previously trusted base. Never run
+  # a candidate checkout's launcher or a caller-selected script.
+  $gitPath = (Get-Command git -ErrorAction Stop).Source
+  $trustedLauncher = Join-Path ([IO.Path]::GetTempPath()) ('babel-merge-launcher-' + [guid]::NewGuid().ToString('N') + '.ps1')
+  try {
+    $baseType = & $gitPath -C $resolvedRepo --no-replace-objects cat-file -t $resolvedBaseSha 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]($baseType -join "`n").Trim() -cne 'commit') {
+      & $gitPath -C $resolvedRepo fetch --no-tags origin $resolvedBaseSha 2>$null | Out-Null
+      if ($LASTEXITCODE -ne 0) { Write-BabelBlocked @('trusted_merge_base_unavailable') }
+      $baseType = & $gitPath -C $resolvedRepo --no-replace-objects cat-file -t $resolvedBaseSha 2>$null
+      if ($LASTEXITCODE -ne 0 -or [string]($baseType -join "`n").Trim() -cne 'commit') { Write-BabelBlocked @('trusted_merge_base_unavailable') }
+    }
+    $launcherContent = & $gitPath -C $resolvedRepo --no-replace-objects show ("{0}:scripts/trusted-merge-gate.ps1" -f $resolvedBaseSha) 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($launcherContent -join "`n"))) { Write-BabelBlocked @('trusted_merge_launcher_unavailable') }
+    Set-Content -LiteralPath $trustedLauncher -Value ($launcherContent -join "`n") -Encoding utf8NoBOM
+  } catch { Write-BabelBlocked @('trusted_merge_launcher_unavailable') }
 
   $gateParameters = @{
     PR                          = [int]$PR
@@ -157,7 +142,7 @@ try {
   $gateOutput = ''
   $gateExit = 0
   try {
-    $captured = & $gateFull @gateParameters 2>&1
+    $captured = & $trustedLauncher @gateParameters 2>&1
     $gateExit = Get-BabelLastExitCode
     $gateOutput = (@($captured) | ForEach-Object { [string]$_ }) -join "`n"
   } catch {
@@ -177,6 +162,10 @@ try {
   if ($gateExit -ne 0) { $gateBlockers += 'merge_gate_failed' }
   if ($gateStatus -ne 'MERGE_READY') { $gateBlockers += 'merge_gate_not_ready' }
   if ($gateMergeReady -ne $true) { $gateBlockers += 'merge_gate_not_ready' }
+  if (-not [string]::Equals([string](Get-BabelJsonProperty -Object $gate -Name 'repository'), 'gthgomez/Babel', [StringComparison]::OrdinalIgnoreCase)) { $gateBlockers += 'merge_gate_repository_mismatch' }
+  $gatePr = Get-BabelJsonProperty -Object $gate -Name 'pr'
+  if ([string](Get-BabelJsonProperty -Object $gatePr -Name 'number') -ne [string]$PR) { $gateBlockers += 'merge_gate_pr_mismatch' }
+  if (-not [string]::Equals([string](Get-BabelJsonProperty -Object $sha -Name 'baseHead'), $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $gateBlockers += 'merge_gate_base_mismatch' }
   foreach ($gateSha in @(
       (Get-BabelJsonProperty -Object $sha -Name 'reviewedHead'),
       (Get-BabelJsonProperty -Object $sha -Name 'prHead'),
@@ -195,7 +184,7 @@ try {
   $viewExit = 0
   $viewText = ''
   try {
-    $viewCaptured = & $GhPath pr view ([string]$PR) --json 'headRefOid,isDraft,mergeable,mergeStateStatus' 2>&1
+    $viewCaptured = & $GhPath pr view ([string]$PR) --repo 'gthgomez/Babel' --json 'state,headRefOid,baseRefOid,isDraft,mergeable,mergeStateStatus' 2>&1
     $viewExit = Get-BabelLastExitCode
     $viewText = (@($viewCaptured) | ForEach-Object { [string]$_ }) -join "`n"
   } catch {
@@ -208,16 +197,21 @@ try {
   try { $view = $viewJsonText | ConvertFrom-Json -ErrorAction Stop } catch { Write-BabelBlocked @('pr_view_unreadable') }
   $viewBlockers = @()
   $liveHead = [string](Get-BabelJsonProperty -Object $view -Name 'headRefOid')
+  $liveState = [string](Get-BabelJsonProperty -Object $view -Name 'state')
   $isDraft = Get-BabelJsonProperty -Object $view -Name 'isDraft'
   $mergeable = [string](Get-BabelJsonProperty -Object $view -Name 'mergeable')
+  $mergeState = [string](Get-BabelJsonProperty -Object $view -Name 'mergeStateStatus')
+  if ($liveState -ne 'OPEN') { $viewBlockers += 'pr_not_open' }
   if (-not [string]::Equals($liveHead, [string]$ReviewedHeadSha, [StringComparison]::OrdinalIgnoreCase)) { $viewBlockers += 'pr_head_mismatch' }
+  if (-not [string]::Equals([string](Get-BabelJsonProperty -Object $view -Name 'baseRefOid'), $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $viewBlockers += 'pr_base_mismatch' }
   if ($isDraft -ne $false) { $viewBlockers += 'pr_is_draft' }
   if ($mergeable -ne 'MERGEABLE') { $viewBlockers += 'pr_not_mergeable' }
+  if ($mergeState -ne 'CLEAN') { $viewBlockers += 'pr_merge_state_not_clean' }
   if ($viewBlockers.Count -gt 0) { Write-BabelBlocked @($viewBlockers | Select-Object -Unique) }
 
   $mergeExit = 0
   try {
-    & $GhPath pr merge ([string]$PR) --match-head-commit $ReviewedHeadSha "--$MergeMethod" | Out-Null
+    & $GhPath pr merge ([string]$PR) --repo 'gthgomez/Babel' --match-head-commit $ReviewedHeadSha "--$MergeMethod" | Out-Null
     $mergeExit = Get-BabelLastExitCode
   } catch {
     Write-BabelBlocked @('merge_failed')
@@ -229,4 +223,9 @@ try {
   exit 0
 } catch {
   Write-BabelBlocked @('merge_executor_exception')
+} finally {
+  [Environment]::SetEnvironmentVariable('GIT_NO_REPLACE_OBJECTS', $priorNoReplaceObjects, 'Process')
+  if ($null -ne (Get-Variable -Name trustedLauncher -ErrorAction SilentlyContinue)) {
+    Remove-Item -LiteralPath $trustedLauncher -Force -ErrorAction SilentlyContinue
+  }
 }

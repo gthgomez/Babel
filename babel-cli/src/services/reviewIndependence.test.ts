@@ -5,6 +5,7 @@ import {
   evaluateReviewerIndependence,
   evaluateEnsembleIndependence,
   compareModelLineage,
+  computeExecutionIndependenceClass,
   type IndependenceDimensions,
 } from './reviewIndependence.js';
 
@@ -74,6 +75,7 @@ test('reviewIndependence: fresh process + read-only sandbox yields I2 or I3', ()
   };
 
   assert.equal(computeIndependenceClass(dimsI2), 'I2');
+  assert.equal(computeExecutionIndependenceClass(dimsI2), 'I2');
 
   const dimsI3: IndependenceDimensions = {
     ...dimsI2,
@@ -85,6 +87,24 @@ test('reviewIndependence: fresh process + read-only sandbox yields I2 or I3', ()
   };
 
   assert.equal(computeIndependenceClass(dimsI3), 'I3');
+  assert.equal(computeExecutionIndependenceClass(dimsI3), 'I2');
+});
+
+test('reviewIndependence: model and provider attribution are optional diversity metadata', () => {
+  const isolated: IndependenceDimensions = {
+    fresh_context: true,
+    fresh_process: true,
+    read_only_capability: true,
+    controller_state_isolated: true,
+    builder_identity: 'builder',
+    reviewer_identity: 'reviewer',
+    trusted_harness: true,
+    trusted_source_sha: '0'.repeat(40),
+    installation_digest: '1'.repeat(64),
+  };
+  assert.equal(computeExecutionIndependenceClass(isolated), 'I2');
+  assert.equal(computeIndependenceClass(isolated), 'I2');
+  assert.deepEqual(evaluateEnsembleIndependence({ reviews: [evaluateReviewerIndependence(isolated)] }).distinct_models, []);
 });
 
 test('reviewIndependence: multi-agent + verified findings yields I4', () => {
@@ -315,5 +335,4 @@ test('reviewIndependence: same-family models or duplicate sessions fail to earn 
   });
   assert.equal(ensembleDuplicateSession.computed_class, 'I3');
 });
-
 
