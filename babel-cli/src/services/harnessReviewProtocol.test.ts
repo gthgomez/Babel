@@ -344,7 +344,8 @@ test('one candidate cannot have overlapping or repeated final certification runs
 test('authoritative preparation requires an explicit PR number', () => {
   const f = fixture()
   try {
-    assert.throws(() => prepareHarnessReview({ ...f, candidate: { ...candidate, pr_number: undefined }, builder,
+    const { pr_number: _ignored, ...withoutPrNumber } = candidate
+    assert.throws(() => prepareHarnessReview({ ...f, candidate: withoutPrNumber, builder,
       agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 }), /AUTHORITATIVE_PR_NUMBER_REQUIRED/)
   } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
 })
