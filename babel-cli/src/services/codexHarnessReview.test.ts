@@ -48,9 +48,10 @@ test('Codex adapter requires an observed fresh thread and full-diff acknowledgem
     const result = await adapter.review(f.request)
     assert.equal(result.verdict, 'APPROVE')
     assert.equal(result.host_observation.child_execution_id, 'child-thread')
-    assert.equal(result.host_observation.read_only_enforced, true)
-    assert.equal(result.host_observation.controller_state_isolated, true)
-    assert.equal(result.host_observation.diff_lines_read, 2)
+    assert.equal(adapter.capabilities().readOnlyReview, false)
+    assert.equal(result.host_observation.read_only_enforced, false)
+    assert.equal(result.host_observation.controller_state_isolated, false)
+    assert.equal(result.host_observation.diff_lines_read, 0)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 

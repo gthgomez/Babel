@@ -4,7 +4,6 @@ param(
   [Parameter(Mandatory = $true)][string]$ReviewedHeadSha,
   [Parameter(Mandatory = $true)][string]$RepoRoot,
   [string]$BaseSha = '',
-  [string]$GhPath = 'gh',
   [string]$MergeMethod = 'squash',
   [string]$RiskTier = 'GREEN',
   [string]$AutonomousReviewEvidencePath = '',
@@ -19,6 +18,7 @@ param(
 # retried with a different SHA.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$ghCommand = (Get-Command gh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 
 function Get-BabelJsonProperty {
   param([AllowNull()][object]$Object, [Parameter(Mandatory = $true)][string]$Name)
@@ -97,7 +97,7 @@ try {
     $baseViewText = ''
     $baseViewExit = 0
     try {
-      $baseViewCaptured = & $GhPath pr view ([string]$PR) --repo 'gthgomez/Babel' --json 'baseRefOid' 2>&1
+      $baseViewCaptured = & $ghCommand pr view ([string]$PR) --repo 'gthgomez/Babel' --json 'baseRefOid' 2>&1
       $baseViewExit = Get-BabelLastExitCode
       $baseViewText = (@($baseViewCaptured) | ForEach-Object { [string]$_ }) -join "`n"
     } catch {
@@ -184,7 +184,7 @@ try {
   $viewExit = 0
   $viewText = ''
   try {
-    $viewCaptured = & $GhPath pr view ([string]$PR) --repo 'gthgomez/Babel' --json 'state,headRefOid,baseRefOid,isDraft,mergeable,mergeStateStatus' 2>&1
+    $viewCaptured = & $ghCommand pr view ([string]$PR) --repo 'gthgomez/Babel' --json 'state,headRefOid,baseRefOid,isDraft,mergeable,mergeStateStatus' 2>&1
     $viewExit = Get-BabelLastExitCode
     $viewText = (@($viewCaptured) | ForEach-Object { [string]$_ }) -join "`n"
   } catch {
@@ -211,7 +211,7 @@ try {
 
   $mergeExit = 0
   try {
-    & $GhPath pr merge ([string]$PR) --repo 'gthgomez/Babel' --match-head-commit $ReviewedHeadSha "--$MergeMethod" | Out-Null
+    & $ghCommand pr merge ([string]$PR) --repo 'gthgomez/Babel' --match-head-commit $ReviewedHeadSha "--$MergeMethod" | Out-Null
     $mergeExit = Get-BabelLastExitCode
   } catch {
     Write-BabelBlocked @('merge_failed')

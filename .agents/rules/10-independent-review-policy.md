@@ -12,10 +12,10 @@ certifiers. BLACK remains an owner-decision boundary. Same-harness and same-mode
 reviewers are valid when their observed child executions are distinct from the builder,
 repair producer, and each other.
 
-The active coding harness owns spawning. Run `tools/babel-pr-orchestrate.mts prepare` to
-freeze the candidate and issue challenges, spawn native read-only children, submit their
-structured results, then publish the owner-authenticated handoff. The in-process
-`HarnessReviewAdapter` API uses the same protocol. Codex has a native bridge;
+The trusted controller owns spawning and state. The orchestrator has prepare, submit,
+and publish commands for a controller installation that meets the isolation contract.
+The in-process `HarnessReviewAdapter` API uses the same protocol. Codex has a diagnostic
+native bridge that cannot certify without a host supervisor;
 OpenCode has a diagnostic fallback that cannot certify authoritatively without host
 isolation. The generic controller-mediated callback normalizes observations for
 OpenCode and other harnesses, but it cannot certify until a trusted supervisor

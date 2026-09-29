@@ -26,7 +26,9 @@ if ($BaseSha -notmatch '^[0-9a-fA-F]{40}$') { throw 'BaseSha must be an exact co
 $resolvedRepo = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path
 $materialized = Join-Path ([IO.Path]::GetTempPath()) ('babel-trusted-gate-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $materialized -Force | Out-Null
+$priorNoReplaceObjects = [Environment]::GetEnvironmentVariable('GIT_NO_REPLACE_OBJECTS', 'Process')
 try {
+  $env:GIT_NO_REPLACE_OBJECTS = '1'
   foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-git-common.psm1', 'scripts/agent-review-evidence.ps1', 'config/review-risk-policy.json')) {
     $target = Join-Path $materialized $relative
     New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
@@ -48,6 +50,8 @@ try {
   & $pwsh @args
   exit $LASTEXITCODE
 } finally {
+  if ($null -eq $priorNoReplaceObjects) { Remove-Item Env:GIT_NO_REPLACE_OBJECTS -ErrorAction SilentlyContinue }
+  else { $env:GIT_NO_REPLACE_OBJECTS = $priorNoReplaceObjects }
   try { Remove-Item -LiteralPath $materialized -Recurse -Force -ErrorAction Stop } catch { # best-effort cleanup; never mask the audit result
   }
 }

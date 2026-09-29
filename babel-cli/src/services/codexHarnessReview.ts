@@ -98,7 +98,10 @@ export function createCodexHarnessAdapter(options: { parentExecutionId: string; 
   const spawnFn = options.spawnFn ?? createDefaultSpawn(options.authority)
   return {
     id: 'codex-native-v1', agentKind: 'codex',
-    capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: options.authority }),
+    // The CLI's sandbox flag and JSON thread ID do not attest an OS isolation
+    // boundary or that the entire prompt reached model context. A trusted
+    // supervisor must provide those observations before this can certify.
+    capabilities: () => ({ freshSubagents: false, childSessionIdentity: true, readOnlyReview: false, repairWorkers: false, authority: options.authority }),
     async review(request: Readonly<HarnessReviewRequest>): Promise<HarnessReviewResult> {
       if (options.parentExecutionId !== request.builder.execution_id) throw new Error('CODEX_PARENT_EXECUTION_MISMATCH')
       const diff = readFileSync(join(request.snapshot_root, 'changes.diff'), 'utf8')
@@ -157,9 +160,9 @@ export function createCodexHarnessAdapter(options: { parentExecutionId: string; 
         blocking_findings: blockingFindings, reviewed_at: new Date().toISOString(),
         host_observation: {
           child_execution_id: threadId, parent_execution_id: options.parentExecutionId,
-          session_id: threadId, fresh_context: true, fresh_process: true, read_only_enforced: true,
-          controller_state_isolated: true,
-          diff_sha256: digest, diff_lines_total: lines, diff_lines_read: lines,
+          session_id: threadId, fresh_context: true, fresh_process: false, read_only_enforced: false,
+          controller_state_isolated: false,
+          diff_sha256: digest, diff_lines_total: lines, diff_lines_read: 0,
           source_paths_opened: [], tool_calls: toolCalls,
           source_sha: options.sourceSha,
           authority: options.authority,

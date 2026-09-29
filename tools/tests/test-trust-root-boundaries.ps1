@@ -3,7 +3,8 @@ param([string]$RepoRoot = (Join-Path $PSScriptRoot '..\..'))
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $launcher = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'scripts/trusted-merge-gate.ps1')
-if ($launcher -notmatch '-C \$resolvedRepo show') { throw 'Trusted launcher does not materialize from git objects.' }
+if ($launcher -notmatch '-C \$resolvedRepo --no-replace-objects show') { throw 'Trusted launcher does not materialize from replacement-safe git objects.' }
+if ($launcher -notmatch "GIT_NO_REPLACE_OBJECTS = '1'") { throw 'Trusted launcher does not protect nested Git commands from replacement refs.' }
 foreach ($component in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-review-evidence.ps1', 'scripts/agent-git-common.psm1')) {
   if ($launcher -notmatch [regex]::Escape($component)) { throw "Trusted launcher omits $component" }
 }

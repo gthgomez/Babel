@@ -15,6 +15,9 @@ $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('babel-agent-pr-merge-' + [gui
 $repoRoot = Join-Path $tempRoot 'repo'
 $scriptsDir = Join-Path $repoRoot 'scripts'
 $ghShim = Join-Path $tempRoot 'gh-shim.ps1'
+$ghBin = Join-Path $tempRoot 'bin'
+$ghExecutable = Join-Path $ghBin $(if ($IsWindows) { 'gh.cmd' } else { 'gh' })
+$priorPath = $env:PATH
 $ghLog = Join-Path $tempRoot 'gh.log'
 $launcherLog = Join-Path $tempRoot 'launcher.log'
 $head = 'a' * 40
@@ -73,7 +76,7 @@ function Invoke-MergeFixture {
   $env:BABEL_MERGE_TEST_GH_LOG = $ghLog
   $env:BABEL_MERGE_TEST_LAUNCHER_LOG = $launcherLog
   $arguments = @('-NoProfile', '-NonInteractive', '-File', $mergeScript, '-PR', '42',
-    '-ReviewedHeadSha', $head, '-RepoRoot', $repoRoot, '-GhPath', $ghShim,
+    '-ReviewedHeadSha', $head, '-RepoRoot', $repoRoot,
     '-MergeMethod', $MergeMethod)
   if ($SuppliedBase) { $arguments += @('-BaseSha', $SuppliedBase) }
   $output = & $pwshPath @arguments 2>&1
@@ -90,8 +93,16 @@ function Invoke-MergeFixture {
 
 try {
   New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+  New-Item -ItemType Directory -Path $ghBin -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $scriptsDir 'trusted-merge-gate.ps1') -Value $trustedGate -Encoding utf8NoBOM
   Set-Content -LiteralPath $ghShim -Value $ghScript -Encoding utf8NoBOM
+  if ($IsWindows) {
+    Set-Content -LiteralPath $ghExecutable -Value "@echo off`r`npwsh -NoProfile -NonInteractive -File `"$ghShim`" %*`r`nexit /b %ERRORLEVEL%`r`n" -Encoding ascii
+  } else {
+    Set-Content -LiteralPath $ghExecutable -Value "#!/bin/sh`nexec pwsh -NoProfile -NonInteractive -File '$ghShim' `"`$@`"`n" -Encoding utf8NoBOM
+    & chmod +x $ghExecutable
+  }
+  $env:PATH = "$ghBin$([IO.Path]::PathSeparator)$priorPath"
   & git -C $repoRoot init --quiet
   & git -C $repoRoot config user.name 'Babel test'
   & git -C $repoRoot config user.email 'babel-test@example.invalid'
@@ -107,7 +118,7 @@ try {
     mergeable = 'MERGEABLE'; mergeStateStatus = 'CLEAN' } | ConvertTo-Json -Compress
 
   $happy = Invoke-MergeFixture -GateJson $ready -ViewJson $view -SuppliedBase $base
-  Assert-MergeTest ($happy.exitCode -eq 0 -and $happy.json.status -eq 'MERGED') "exact-head merge must succeed: $($happy.text)"
+  Assert-MergeTest ($happy.exitCode -eq 0 -and $happy.json.status -eq 'MERGED') "exact-head merge must succeed: $($happy.text); gh: $($happy.gh)"
   Assert-MergeTest ($happy.launcher.Contains("trusted_base=$base")) 'gate launcher must come from trusted base commit'
   Assert-MergeTest ($happy.gh.Contains("pr merge 42 --repo gthgomez/Babel --match-head-commit $head --squash")) 'merge must bind repository and exact head'
 
@@ -165,6 +176,7 @@ try {
   $badMethod = Invoke-MergeFixture -GateJson $ready -ViewJson $view -MergeMethod 'invalid'
   Assert-MergeTest ($badMethod.exitCode -ne 0 -and @($badMethod.json.blockers) -contains 'merge_method_invalid') 'invalid merge method must block'
 } finally {
+  $env:PATH = $priorPath
   foreach ($name in @('BABEL_MERGE_TEST_BASE', 'BABEL_MERGE_TEST_GATE_JSON', 'BABEL_MERGE_TEST_PR_VIEW',
       'BABEL_MERGE_TEST_GATE_EXIT', 'BABEL_MERGE_TEST_MERGE_EXIT', 'BABEL_MERGE_TEST_GH_LOG',
       'BABEL_MERGE_TEST_LAUNCHER_LOG')) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }

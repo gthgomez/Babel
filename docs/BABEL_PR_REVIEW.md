@@ -260,9 +260,11 @@ children and submit both results before publishing. A BLOCK settles the candidat
 repair creates a new SHA and requires a new final round. The Codex adapter starts a fresh `codex exec` process
 with `--sandbox read-only`, supplies the complete frozen diff in the prompt, records the
 observed child thread ID, and keeps GitHub credentials out of the reviewer environment.
-Codex final certification is text-only: any child tool use invalidates the result. When
+The Codex diagnostic review is text-only: any child tool use invalidates the result. When
 the diff alone lacks needed context, the child must BLOCK; source reads are unavailable in
-this first native bridge.
+this first native bridge. The current Codex CLI sandbox and thread events do not attest
+host isolation or full model-context consumption, so the bridge reports unavailable
+authoritative capability until a trusted supervisor supplies those observations.
 The controller requires host attestation of fresh context, enforced read-only execution,
 exact diff delivery and acknowledgement, and distinct observed child identities. Targeted
 source reads are telemetry, not a per-file gate. If the child or host cannot supply this
