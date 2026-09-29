@@ -202,11 +202,11 @@ function submitHarnessReviewUnlocked(
   const path = runPath(stateDir, runId)
   if (!existsSync(path)) throw new Error('REVIEW_RUN_NOT_FOUND')
   const run = JSON.parse(readFileSync(path, 'utf8')) as ReviewRun
-  if (run.status === 'PENDING' && result.verdict === 'BLOCK') {
+  if (result.verdict === 'BLOCK' || (Array.isArray(result.blocking_findings) && result.blocking_findings.length > 0)) {
     // Bind a raw objection to the prepared candidate before challenge and
     // provenance checks. A malformed challenge cannot erase a returned BLOCK.
     recordUnresolvedBlock(run.candidate.candidate_digest, stateDir, {
-      verdict: 'BLOCK', reported_challenge_id: result.challenge_id,
+      verdict: 'BLOCK', reported_verdict: result.verdict, reported_challenge_id: result.challenge_id,
       controller_run_id: runId, provenance: 'UNVERIFIED_BLOCK_SIGNAL',
     })
   }
@@ -480,7 +480,9 @@ export async function runHarnessReview(input: {
   assertAdapterAuthority(input.adapter, resolveReviewAuthority(input.candidate.scope))
   const prepared = prepareHarnessReview({ ...input, agentKind: input.adapter.agentKind, adapterId: input.adapter.id })
   const settled = await Promise.allSettled(prepared.requests.map((request) => input.adapter.review(request)))
-  const blocks = settled.flatMap((item) => item.status === 'fulfilled' && item.value.verdict === 'BLOCK' ? [item.value] : [])
+  const blocks = settled.flatMap((item) => item.status === 'fulfilled' &&
+    (item.value.verdict === 'BLOCK' || (Array.isArray(item.value.blocking_findings) && item.value.blocking_findings.length > 0))
+    ? [item.value] : [])
   if (blocks.length > 0) {
     let lastError: unknown
     for (const block of blocks) {

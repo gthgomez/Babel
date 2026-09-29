@@ -367,6 +367,29 @@ test('independentReviewController: malformed diagnostic BLOCK still prevents sam
   } finally { rmSync(tempDir, { recursive: true, force: true }) }
 })
 
+test('independentReviewController: contradictory diagnostic approval retains blocking findings', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'babel-ctrl-test-'))
+  try {
+    const controller = createIndependentReviewController({
+      controller_id: 'contradictory-diagnostic-review', state_dir: tempDir,
+      adapter: {
+        adapter_id: 'mock-subagent-v1', agent_kind: 'codex',
+        async launch(req) {
+          return {
+            status: 'COMPLETED', verdict: 'APPROVE', blocking_findings: ['defect'],
+            reviewed_at: new Date().toISOString(), scope: [...req.candidate.scope],
+            isolation: req.required_isolation,
+            runtime: { agent_kind: 'codex', adapter_id: 'mock-subagent-v1', controller_execution_id: req.reviewer.execution_id },
+          }
+        },
+      },
+    })
+    const candidate = createSampleCandidate()
+    await assert.rejects(() => controller.review(candidate, { builder: sampleBuilder }), /APPROVE_VERDICT_CANNOT_HAVE_BLOCKING_FINDINGS/)
+    await assert.rejects(() => controller.review(candidate, { builder: sampleBuilder }), /PRIOR_BLOCKING_REVIEW_REQUIRES_REPAIR/)
+  } finally { rmSync(tempDir, { recursive: true, force: true }) }
+})
+
 test('independentReviewController: multi-review round settles BLOCK even when peer reviewer fails', async () => {
   const tempDir = mkdtempSync(join(tmpdir(), 'babel-ctrl-test-'))
   try {

@@ -360,9 +360,11 @@ export function createIndependentReviewController(input: {
         if (result.status !== 'COMPLETED') {
           throw new Error(`REVIEW_EXECUTION_FAILED: ${result.failure_reason || 'Unknown adapter failure'}`)
         }
-        if (result.verdict === 'BLOCK' && input.state_dir) {
+        if (input.state_dir && (result.verdict === 'BLOCK' ||
+            (Array.isArray(result.blocking_findings) && result.blocking_findings.length > 0))) {
           recordUnresolvedBlock(candidate.candidate_digest, input.state_dir, {
             verdict: 'BLOCK', challenge_id: challengeId, controller_run_id: controllerRunId,
+            reported_verdict: result.verdict,
             provenance: 'UNVERIFIED_DIAGNOSTIC_BLOCK_SIGNAL',
           })
         }
