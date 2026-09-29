@@ -111,7 +111,7 @@ function withStateDir(fn: (stateDir: string) => Promise<void>): Promise<void> {
   return fn(stateDir).finally(() => rmSync(stateDir, { recursive: true, force: true }))
 }
 
-test('approves at the first round and returns certified V3 evidence', async () => {
+test('diagnostic approval cannot produce merge-ready certification', async () => {
   await withStateDir(async (stateDir) => {
     const { adapter, launches } = makeAdapter({ verdicts: ['APPROVE'] })
     const collected: CollectCandidateOptions[] = []
@@ -124,7 +124,9 @@ test('approves at the first round and returns certified V3 evidence', async () =
         return makeCandidate(headSha(1))
       },
     })
-    assert.equal(result.status, 'MERGE_READY')
+    assert.equal(result.status, 'ESCALATED')
+    assert.equal(result.message, 'legacy_controller_diagnostic_only')
+    assert.equal(result.handoff?.provenance, 'LOCAL_UNAUTHENTICATED')
     assert.equal(result.repairRounds, 0)
     assert.equal(result.handoff?.reviews.length, 1)
     assert.equal(result.handoff?.reviews[0]!.head_sha, headSha(1))
@@ -133,7 +135,7 @@ test('approves at the first round and returns certified V3 evidence', async () =
   })
 })
 
-test('blocks, repairs, and fresh-certifies the new head (prior approval not reused)', async () => {
+test('blocks, repairs, and reviews the new head without granting certification', async () => {
   await withStateDir(async (stateDir) => {
     const { adapter, launches } = makeAdapter({
       verdicts: ['BLOCK', 'APPROVE'],
@@ -161,7 +163,9 @@ test('blocks, repairs, and fresh-certifies the new head (prior approval not reus
         return makeCandidate(head, opts.lineage, opts.producerExecutionId)
       },
     })
-    assert.equal(result.status, 'MERGE_READY')
+    assert.equal(result.status, 'ESCALATED')
+    assert.equal(result.message, 'legacy_controller_diagnostic_only')
+    assert.equal(result.handoff?.provenance, 'LOCAL_UNAUTHENTICATED')
     assert.equal(result.repairRounds, 1)
     assert.equal(result.headSha, headSha(2))
     assert.equal(result.handoff?.reviews[0]!.head_sha, headSha(2))
@@ -396,7 +400,8 @@ test('a policy escalation runs two independent reviewers per round', async () =>
         return { ...candidate, risk_tier: 'CRITICAL' } as CandidateEnvelope
       },
     })
-    assert.equal(result.status, 'MERGE_READY')
+    assert.equal(result.status, 'ESCALATED')
+    assert.equal(result.message, 'legacy_controller_diagnostic_only')
     assert.equal(result.handoff?.reviews.length, 2)
     assert.equal(launches.length, 2)
     assert.notEqual(launches[0]!.reviewer.principal_id, launches[1]!.reviewer.principal_id)

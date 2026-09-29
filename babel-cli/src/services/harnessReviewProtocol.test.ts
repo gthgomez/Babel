@@ -156,6 +156,47 @@ test('one BLOCK wins a two-review round and remains publishable', async () => {
   } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
 })
 
+test('a malformed BLOCK cannot hide a second valid BLOCK or enable a same-head retry', async () => {
+  const f = protectedFixture()
+  try {
+    const critical = f.protectedCandidate
+    let calls = 0
+    const outcome = await runHarnessReview({
+      ...f, candidate: critical, builder, reviewCount: 2,
+      adapter: {
+        id: 'codex-native-v1', agentKind: 'codex',
+        capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'HOST_PROTECTED' as const }),
+        review: async (request) => {
+          const block = { ...result(request, f.diffSha256), verdict: 'BLOCK' as const, blocking_findings: ['defect'] }
+          if (++calls === 1) block.host_observation.fresh_process = false
+          return block
+        },
+      },
+    })
+    assert.equal(outcome.status, 'BLOCKED')
+    assert.throws(() => prepareHarnessReview({ ...f, candidate: critical, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 2 }), /PRIOR_BLOCKING_REVIEW_REQUIRES_REPAIR/)
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
+test('an unverified BLOCK signal prevents approval shopping on the same candidate', async () => {
+  const f = fixture()
+  try {
+    await assert.rejects(() => runHarnessReview({
+      ...f, candidate, builder, reviewCount: 1,
+      adapter: {
+        id: 'codex-native-v1', agentKind: 'codex',
+        capabilities: () => ({ freshSubagents: true, childSessionIdentity: true, readOnlyReview: true, repairWorkers: false, authority: 'SESSION_ATTESTED' as const }),
+        review: async (request) => {
+          const block = { ...result(request, f.diffSha256), verdict: 'BLOCK' as const, blocking_findings: ['defect'] }
+          block.host_observation.fresh_process = false
+          return block
+        },
+      },
+    }), /HOST_ISOLATION_ATTESTATION_REQUIRED/)
+    assert.throws(() => prepareHarnessReview({ ...f, candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 }), /PRIOR_BLOCKING_REVIEW_REQUIRES_REPAIR/)
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
+
 test('prepare requires the snapshot diff instead of accepting caller supplied coverage', () => {
   const f = fixture()
   try {

@@ -79,11 +79,11 @@ test('independentReviewController: executes review with challenge lifecycle (ISS
     const handoff = await controller.review(candidate, { builder: sampleBuilder })
 
     assert.equal(handoff.schema_version, 3)
-    assert.equal(handoff.provenance, 'TRUSTED_CONTROLLER_EVIDENCE')
+    assert.equal(handoff.provenance, 'LOCAL_UNAUTHENTICATED')
     assert.equal(handoff.reviews.length, 1)
     const review = handoff.reviews[0]!
     assert.equal(review.verdict, 'APPROVE')
-    assert.equal(review.provenance, 'TRUSTED_CONTROLLER_EVIDENCE')
+    assert.equal(review.provenance, 'LOCAL_UNAUTHENTICATED')
     assert.notEqual(review.reviewer.principal_id, review.builder.principal_id)
     assert.notEqual(review.reviewer.execution_id, review.builder.execution_id)
 
@@ -606,5 +606,4 @@ test('independentReviewController: rejects certifier from candidate producer lin
     rmSync(tempDir, { recursive: true, force: true })
   }
 })
-
 

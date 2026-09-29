@@ -207,6 +207,15 @@ function submitHarnessReviewUnlocked(
   if (run.reviews.some((review) => review.challenge_id === result.challenge_id)) throw new Error('CHALLENGE_ALREADY_CONSUMED')
   if (run.status !== 'PENDING') throw new Error('REVIEW_RUN_ALREADY_SETTLED')
   if (result.verdict !== 'APPROVE' && result.verdict !== 'BLOCK') throw new Error('INVALID_REVIEW_VERDICT')
+  if (result.verdict === 'BLOCK') {
+    // Retain even an invalid BLOCK signal. Its provenance may be unusable for
+    // publication, but a later approval on this unchanged candidate must not
+    // erase the reviewer's objection.
+    recordUnresolvedBlock(run.candidate.candidate_digest, stateDir, {
+      verdict: 'BLOCK', challenge_id: result.challenge_id, controller_run_id: runId,
+      provenance: 'UNVERIFIED_BLOCK_SIGNAL',
+    })
+  }
   if (result.verdict === 'APPROVE') assertNoUnresolvedPriorBlock(run.candidate.candidate_digest, stateDir)
   if (!Array.isArray(result.findings) || !Array.isArray(result.blocking_findings) ||
       result.findings.some((v) => typeof v !== 'string') || result.blocking_findings.some((v) => typeof v !== 'string')) {
@@ -473,7 +482,14 @@ export async function runHarnessReview(input: {
   const prepared = prepareHarnessReview({ ...input, agentKind: input.adapter.agentKind, adapterId: input.adapter.id })
   const settled = await Promise.allSettled(prepared.requests.map((request) => input.adapter.review(request)))
   const blocks = settled.flatMap((item) => item.status === 'fulfilled' && item.value.verdict === 'BLOCK' ? [item.value] : [])
-  if (blocks.length > 0) return submitHarnessReview(input.stateDir, prepared.run_id, blocks[0]!)
+  if (blocks.length > 0) {
+    let lastError: unknown
+    for (const block of blocks) {
+      try { return submitHarnessReview(input.stateDir, prepared.run_id, block) }
+      catch (error) { lastError = error }
+    }
+    throw lastError ?? new Error('BLOCKING_REVIEW_UNVERIFIED')
+  }
   let outcome: ReturnType<typeof submitHarnessReview> = { status: 'PENDING' }
   for (let i = 0; i < settled.length; i++) {
     const item = settled[i]!

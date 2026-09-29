@@ -290,7 +290,9 @@ export function createIndependentReviewController(input: {
         execution_id: `unauth-builder-${createId()}`,
       }
 
-      const provenance = input.state_dir ? 'TRUSTED_CONTROLLER_EVIDENCE' : 'LOCAL_UNAUTHENTICATED'
+      // This legacy adapter sees worker claims, not host-observed isolation or
+      // exact diff coverage. Durable challenge state alone grants no authority.
+      const provenance = 'LOCAL_UNAUTHENTICATED'
 
       const usedPrincipals = new Set<string>()
       const usedExecutions = new Set<string>()
@@ -444,7 +446,7 @@ export function createIndependentReviewController(input: {
         validateIndependentReviewEvidenceV3(evidence, {
           candidateScope: candidate.scope,
           now: now(),
-          requireAuthoritative: Boolean(input.state_dir),
+          requireAuthoritative: false,
           producerExecutionId: candidateProducer,
           lineage: (candidate as { lineage?: CandidateProducerLineage }).lineage,
           purpose,
@@ -497,7 +499,7 @@ export function createIndependentReviewController(input: {
         candidateDigest: candidate.candidate_digest,
         scope: candidate.scope,
         now: now(),
-        requireAuthoritative: Boolean(input.state_dir),
+        requireAuthoritative: false,
         producerExecutionId: candidateProducer,
         lineage: (candidate as { lineage?: CandidateProducerLineage }).lineage,
         purpose,
