@@ -138,6 +138,7 @@ export function createControllerMediatedHarnessAdapter(options: ControllerMediat
           // The callback may report these observations, but this factory has
           // no independent way to verify its launcher or isolation boundary.
           fresh_context: false, fresh_process: false, read_only_enforced: false, controller_state_isolated: false,
+          github_mutation_enabled: true, merge_enabled: true, forbidden_tool_calls: 1,
           diff_sha256: digest, diff_lines_total: lines, diff_lines_read: 0,
           source_paths_opened: observed.source_paths_opened, tool_calls: observed.tool_calls as number,
           source_sha: sourceSha, authority: 'SESSION_ATTESTED',

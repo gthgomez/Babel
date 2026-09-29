@@ -61,6 +61,9 @@ export interface HarnessReviewResult {
     fresh_process?: boolean
     read_only_enforced: boolean
     controller_state_isolated: boolean
+    github_mutation_enabled: boolean
+    merge_enabled: boolean
+    forbidden_tool_calls: number
     diff_sha256: string
     diff_lines_total: number
     diff_lines_read: number
@@ -211,6 +214,7 @@ function submitHarnessReviewUnlocked(
   }
   const host = result.host_observation
   if (!host || host.fresh_context !== true || host.fresh_process !== true || host.read_only_enforced !== true || host.controller_state_isolated !== true ||
+      host.github_mutation_enabled !== false || host.merge_enabled !== false || host.forbidden_tool_calls !== 0 ||
       !host.child_execution_id || !host.session_id || host.parent_execution_id !== run.builder.execution_id) {
     throw new Error('HOST_ISOLATION_ATTESTATION_REQUIRED')
   }
@@ -232,8 +236,9 @@ function submitHarnessReviewUnlocked(
     run.candidate.lineage?.producer.execution_id].filter(Boolean).map((v) => v!.toLowerCase())
   const used = run.reviews.flatMap((review) => [review.runtime.provider_execution_id, review.runtime.session_id])
     .filter(Boolean).map((v) => v!.toLowerCase())
-  if (forbidden.includes(host.child_execution_id.toLowerCase()) || used.includes(host.child_execution_id.toLowerCase()) ||
-      used.includes(host.session_id.toLowerCase()) || host.session_id.toLowerCase() === host.parent_execution_id.toLowerCase()) {
+  if (forbidden.includes(host.child_execution_id.toLowerCase()) || forbidden.includes(host.session_id.toLowerCase()) ||
+      used.includes(host.child_execution_id.toLowerCase()) || used.includes(host.session_id.toLowerCase()) ||
+      host.session_id.toLowerCase() === host.parent_execution_id.toLowerCase()) {
     throw new Error('OBSERVED_REVIEWER_NOT_INDEPENDENT')
   }
   if (host.diff_sha256 !== request.diff_sha256 || host.diff_lines_total !== request.diff_lines_total ||

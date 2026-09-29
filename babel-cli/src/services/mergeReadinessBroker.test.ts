@@ -73,6 +73,7 @@ const mockPassReview: CodeReviewReceipt = {
   blocking_findings: [],
   certified_at: new Date().toISOString(),
   receipt_hash: 'hash-pass-1',
+  provenance: 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE',
 };
 
 test('mergeReadinessBroker: CodeReview=PASS + CI=FAIL -> Readiness=REPAIR (Review PASS preserved, merge blocked)', () => {
@@ -390,6 +391,13 @@ test('mergeReadinessBroker: local unauthenticated review evidence cannot manufac
   );
 });
 
+test('mergeReadinessBroker: absent provenance cannot manufacture READY', () => {
+  const { provenance: _provenance, ...unproven } = mockPassReview;
+  const readiness = evaluateMergeReadiness({ candidate: mockCandidate, reviews: [unproven] });
+  assert.equal(readiness.gate_checks.code_review.status, 'INSUFFICIENT');
+  assert.equal(readiness.verdict, 'INSUFFICIENT');
+});
+
 test('mergeReadinessBroker: conflicting review receipts sharing receipt_id fail closed regardless of arrival order', () => {
   const receiptA: CodeReviewReceipt = {
     ...mockPassReview,
@@ -451,4 +459,3 @@ test('mergeReadinessBroker: identical review receipts sharing receipt_id collaps
   assert.equal(readiness2.gate_checks.code_review.approved_reviews_count, 1);
   assert.equal(readiness2.gate_checks.code_review.receipt_ids.length, 1);
 });
-

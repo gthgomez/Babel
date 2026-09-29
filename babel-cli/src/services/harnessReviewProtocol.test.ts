@@ -55,12 +55,36 @@ function result(request: ReturnType<typeof prepareHarnessReview>['requests'][num
     host_observation: {
       child_execution_id: 'child-thread', parent_execution_id: 'parent-thread',
       session_id: 'child-session', fresh_context: true, fresh_process: true, read_only_enforced: true, controller_state_isolated: true,
+      github_mutation_enabled: false, merge_enabled: false, forbidden_tool_calls: 0,
       diff_sha256: diffSha256, diff_lines_total: 2, diff_lines_read: 2,
       source_paths_opened: [], tool_calls: 1, source_sha: request.candidate.base_sha,
       authority: request.authority,
     },
   }
 }
+
+test('submit rejects reviewer GitHub mutation or merge capability', () => {
+  for (const forbidden of ['github_mutation_enabled', 'merge_enabled'] as const) {
+    const f = fixture()
+    try {
+      const prepared = prepareHarnessReview({ ...f, candidate, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 })
+      const observed = result(prepared.requests[0]!, f.diffSha256)
+      observed.host_observation[forbidden] = true
+      assert.throws(() => submitHarnessReview(f.stateDir, prepared.run_id, observed), /HOST_ISOLATION_ATTESTATION_REQUIRED/)
+    } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+  }
+})
+
+test('submit rejects an observed session reused from the repair producer', () => {
+  const f = fixture()
+  try {
+    const repaired = { ...candidate, producer_execution_id: 'repair-producer' }
+    const prepared = prepareHarnessReview({ ...f, candidate: repaired, builder, agentKind: 'codex', adapterId: 'codex-native-v1', reviewCount: 1 })
+    const observed = result(prepared.requests[0]!, f.diffSha256)
+    observed.host_observation.session_id = 'repair-producer'
+    assert.throws(() => submitHarnessReview(f.stateDir, prepared.run_id, observed), /OBSERVED_REVIEWER_NOT_INDEPENDENT/)
+  } finally { rmSync(f.stateDir, { recursive: true, force: true }) }
+})
 
 test('prepare and submit produces one authoritative handoff and rejects replay', () => {
   const f = fixture()

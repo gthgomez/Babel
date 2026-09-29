@@ -199,7 +199,7 @@ export function evaluateMergeReadiness(input: {
       r.verdict === 'APPROVE' &&
       r.coverage.is_sufficient &&
       r.blocking_findings.length === 0 &&
-      r.provenance !== 'LOCAL_UNAUTHENTICATED'
+      (r.provenance === 'TRUSTED_CONTROLLER_EVIDENCE' || r.provenance === 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE')
   );
   const reviewSessions = approvedReviews.map((review) => review.independence.dimensions.session_id?.trim().toLowerCase());
   const reviewIdentities = approvedReviews.map((review) => review.independence.dimensions.reviewer_identity.trim().toLowerCase());

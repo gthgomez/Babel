@@ -162,6 +162,7 @@ export function createCodexHarnessAdapter(options: { parentExecutionId: string; 
           child_execution_id: threadId, parent_execution_id: options.parentExecutionId,
           session_id: threadId, fresh_context: true, fresh_process: false, read_only_enforced: false,
           controller_state_isolated: false,
+          github_mutation_enabled: true, merge_enabled: true, forbidden_tool_calls: toolCalls,
           diff_sha256: digest, diff_lines_total: lines, diff_lines_read: 0,
           source_paths_opened: [], tool_calls: toolCalls,
           source_sha: options.sourceSha,
