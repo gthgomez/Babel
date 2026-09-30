@@ -364,6 +364,61 @@ export function terminateChildTree(child: ChildProcessWithoutNullStreams): void 
 export const PROCESS_ABORT_SETTLE_MS = 500;
 
 /**
+ * Deferred child-tree terminations requested by aborted async spawns.
+ *
+ * Cancel settles the tool result before the tree kill so Windows cancel latency
+ * is not dominated by `taskkill`. A caller that immediately removes the child's
+ * working tree must first await this latch, otherwise the still-live child can
+ * hold the directory on Windows and fail the delete with EBUSY.
+ */
+export class ProcessTerminationError extends Error {
+  readonly code = 'PROCESS_TERMINATION_FAILED';
+
+  constructor(readonly ownerId: string, readonly executionId: string, cause: unknown) {
+    super(`Process ${executionId} for ${ownerId} did not terminate cleanly`, { cause });
+    this.name = 'ProcessTerminationError';
+  }
+}
+
+const pendingProcessTerminations = new Map<number, { ownerId: string; promise: Promise<void> }>();
+const failedProcessTerminations = new Map<number, ProcessTerminationError>();
+let processTerminationSequence = 0;
+
+/** Retain a deferred closure result until the initiating owner acknowledges it. */
+export function registerPendingProcessTermination(
+  termination: Promise<void>,
+  ownerId: string,
+  executionId: string,
+): void {
+  const id = ++processTerminationSequence;
+  pendingProcessTerminations.set(id, { ownerId, promise: termination });
+  void termination.then(
+    () => { pendingProcessTerminations.delete(id); },
+    (cause: unknown) => {
+      pendingProcessTerminations.delete(id);
+      failedProcessTerminations.set(id, new ProcessTerminationError(ownerId, executionId, cause));
+    },
+  );
+}
+
+/** Resolve once every deferred abort-path child-tree termination has closed. */
+export async function awaitPendingProcessTerminations(ownerId?: string): Promise<void> {
+  await Promise.allSettled(
+    [...pendingProcessTerminations.values()]
+      .filter((pending) => ownerId === undefined || pending.ownerId === ownerId)
+      .map((pending) => pending.promise),
+  );
+  const failures = [...failedProcessTerminations.entries()]
+    .filter(([, failure]) => ownerId === undefined || failure.ownerId === ownerId);
+  for (const [id] of failures) failedProcessTerminations.delete(id);
+  if (failures.length === 1) throw failures[0]![1];
+  if (failures.length > 1) {
+    throw new AggregateError(failures.map(([, failure]) => failure),
+      'Multiple deferred process terminations failed');
+  }
+}
+
+/**
  * W0.1 Process supervisor — async spawn with AbortSignal, output caps, tree kill.
  * Used by SafeExecutor.shellExecAsync (chat/REPL foreground path).
  */
@@ -442,15 +497,13 @@ export function spawnCommandAsync(
     let timedOut = false;
     let aborted = false;
     let settled = false;
+    let witnessTerminalRecorded = false;
     let timeout: NodeJS.Timeout | null = null;
     let abortSettle: NodeJS.Timeout | null = null;
 
-    const finish = (status: number | null, error?: Error) => {
-      if (settled) return;
-      settled = true;
-      if (timeout) clearTimeout(timeout);
-      if (abortSettle) clearTimeout(abortSettle);
-      options.signal?.removeEventListener('abort', onAbort);
+    const recordWitnessTerminal = (status: number | null, error?: Error) => {
+      if (witnessTerminalRecorded || !executionId) return;
+      witnessTerminalRecorded = true;
       if (executionId) {
         if (!processStarted && error) options.processWitness?.failedToStart(processInput, executionId, error);
         else options.processWitness?.exited(processInput, executionId, {
@@ -462,6 +515,14 @@ export function spawnCommandAsync(
           ...(error ? { error: error.message } : {}),
         });
       }
+    };
+
+    const finish = (status: number | null, error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      if (abortSettle) clearTimeout(abortSettle);
+      options.signal?.removeEventListener('abort', onAbort);
       resolveResult({
         status,
         stdout: Buffer.concat(stdoutChunks).toString('utf8'),
@@ -481,10 +542,47 @@ export function spawnCommandAsync(
       // queue — otherwise Windows cancel latency is dominated by taskkill, not
       // by AbortSignal delivery.
       finish(1, new Error(`spawn ${executable} aborted`));
-      setImmediate(() => {
-        terminateChildTree(child);
-        if (executionId) options.processWitness?.killed(processInput, executionId);
+      const termination = new Promise<void>((resolveTermination, rejectTermination) => {
+        let killIssued = false;
+        let childClosed = false;
+        let complete = false;
+        const finishTermination = () => {
+          if (complete || !killIssued || !childClosed) return;
+          complete = true;
+          clearTimeout(closeTimeout);
+          if (executionId) options.processWitness?.killed(processInput, executionId);
+          resolveTermination();
+        };
+        const onClose = () => {
+          childClosed = true;
+          finishTermination();
+        };
+        const closeTimeout = setTimeout(() => {
+          if (complete) return;
+          complete = true;
+          child.removeListener('close', onClose);
+          rejectTermination(new Error(`Aborted process ${executable} did not close after tree termination`));
+        }, 5_000);
+        child.once('close', onClose);
+        setImmediate(() => {
+          try {
+            terminateChildTree(child);
+            killIssued = true;
+            finishTermination();
+          } catch (error) {
+            if (complete) return;
+            complete = true;
+            clearTimeout(closeTimeout);
+            child.removeListener('close', onClose);
+            rejectTermination(error);
+          }
+        });
       });
+      registerPendingProcessTermination(
+        termination,
+        options.processContext?.sessionId ?? 'unscoped',
+        executionId ?? `${executable}:${child.pid ?? 'unknown'}`,
+      );
     };
 
     if (options.timeoutMs > 0) {
@@ -516,13 +614,19 @@ export function spawnCommandAsync(
       stderrTruncated ||= update.truncated;
     });
 
-    child.once('error', (err) => finish(1, err));
+    child.once('error', (err) => {
+      if (!processStarted) recordWitnessTerminal(1, err);
+      finish(1, err);
+    });
     child.once('close', (code) => {
       if (aborted) {
+        recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} aborted`));
         finish(code ?? 1, new Error(`spawn ${executable} aborted`));
       } else if (timedOut) {
+        recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} ETIMEDOUT`));
         finish(code ?? 1, new Error(`spawn ${executable} ETIMEDOUT`));
       } else {
+        recordWitnessTerminal(code);
         finish(code);
       }
     });

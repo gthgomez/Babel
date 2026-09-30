@@ -23,6 +23,7 @@ import {
   type BabelMode,
 } from "./contracts.js";
 import { createExecutorKernel } from "./kernel.js";
+import { createRuntimeCoordinator } from "../runtime/coordinator.js";
 import {
   evaluateExecuteCompletionHonesty,
   parseStructuredVerifierCommand,
@@ -75,6 +76,46 @@ test("H3 chat, plan, deep receive fixed distinct mode policies", () => {
   // Controllers remain distinct
   assert.notDeepEqual(policies.chat, policies.plan);
   assert.notDeepEqual(policies.plan, policies.deep);
+});
+
+// ── Proxy/runtime facade (P03) ─────────────────────────────────────────────
+
+// ── Recovery (P06) ─────────────────────────────────────────────────────────
+
+test("P06 recovery disables automatic resume and never auto-retries ambiguous effects", async () => {
+  const { buildRestoreReport } = await import("../runtime/restoreReport.js");
+  const report = buildRestoreReport({
+    threadId: "thread-1",
+    interruptionClass: "process_restart",
+    operations: [
+      {
+        operationId: "op-external",
+        effectClass: "external_side_effect",
+        effectState: "intent",
+        reconciliation: "manual_review",
+      },
+    ],
+  });
+  assert.equal(report.automaticResume, false);
+  assert.equal(report.operations[0]!.automaticRetryAllowed, false);
+  assert.equal(report.operations[0]!.action, "operator_reconciliation_required");
+});
+
+test("P03 runtime coordinator keeps controllers distinct behind one facade", () => {
+  const coordinator = createRuntimeCoordinator();
+  assert.equal(coordinator.capabilities("chat").controller, "chat_engine");
+  assert.equal(coordinator.capabilities("plan").controller, "chat_engine");
+  assert.equal(coordinator.capabilities("deep").controller, "v9_pipeline");
+  assert.equal(
+    coordinator.capabilities("deep").submission,
+    false,
+    "deep must stay explicitly unsupported until the V9 adapter is wired",
+  );
+  // A shared facade must not collapse mode policy.
+  assert.notDeepEqual(modePolicyFor("chat"), modePolicyFor("plan"));
+  assert.notDeepEqual(modePolicyFor("plan"), modePolicyFor("deep"));
+  assert.equal(modePolicyFor("plan").mutationPolicy, "read_only");
+  assert.equal(modePolicyFor("deep").completionPolicy, "proof_carrying");
 });
 
 // ── Completion authority (H2, H5, H6) ──────────────────────────────────────
@@ -260,6 +301,17 @@ test("architecture source-map paths resolve", () => {
     "babel-cli/src/agent/completionGatePolicy.ts",
     "babel-cli/src/executor/kernel.ts",
     "babel-cli/src/executor/contracts.ts",
+    "babel-cli/src/executor/modeAdapters.ts",
+    "babel-cli/src/runtime/coordinator.ts",
+    "babel-cli/src/runtime/contracts.ts",
+    "babel-cli/src/runtime/events.ts",
+    "babel-cli/src/runtime/projection.ts",
+    "babel-cli/src/runtime/legacyEventAdapters.ts",
+    "babel-cli/src/runtime/recovery.ts",
+    "babel-cli/src/runtime/restoreReport.ts",
+    "babel-cli/src/runtime/adapters/chat.ts",
+    "babel-cli/src/runtime/adapters/plan.ts",
+    "babel-cli/src/runtime/adapters/deep.ts",
     "babel-cli/src/interactive/execution/chatCore.ts",
     "babel-cli/src/pipeline.ts",
     "babel-cli/src/sandbox.ts",

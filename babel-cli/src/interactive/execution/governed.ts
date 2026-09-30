@@ -2,7 +2,6 @@
 // Extracted from interactive.ts — full governed pipeline: orchestrate → plan →
 // review → execute, with waterfall or conversational rendering.
 
-import * as path from 'node:path';
 import type { ReplContext } from '../context.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { runBabelPipeline, BabelEventBus } from '../../pipeline.js';
@@ -148,7 +147,8 @@ export async function executeGovernedTask(
     (waterfall as any).setTaskLabel(task);
   }
 
-  const preRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
+  const preRunSummary = globalCostTracker.getSessionSummary();
+  const preRunCost = preRunSummary.totalCostUSD;
   try {
     waterfall.start();
     const contextInjection = prepareContextInjection(task, { projectRoot });
@@ -201,7 +201,7 @@ export async function executeGovernedTask(
     eventStream?.write('babel.run.result', { run_dir: result.runDir, status: result.status });
 
     // Update project-level financials
-    globalCostTracker.saveToProjectStats(path.basename(result.runDir));
+    globalCostTracker.saveToProjectStats(globalCostTracker.getProjectSessionId(), preRunSummary, projectRoot);
 
     const isConversational = waterfall instanceof ConversationalRenderer;
     if (isConversational) {

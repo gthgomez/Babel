@@ -9,10 +9,13 @@ export {
 } from './client.js';
 export {
   assertSuccess,
+  closeProtocolHostState,
   createProtocolHostState,
   formatCellCommittedNotification,
   formatTurnEventNotification,
   handleProtocolRequest,
   parseProtocolRequest,
+  releaseLaunchOwnership,
+  type ActiveLaunch,
   type ProtocolHostState,
 } from './host.js';

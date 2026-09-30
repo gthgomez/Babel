@@ -22,9 +22,17 @@ export function updateCostTotals(ctx: ReplContext): void {
   const summary = globalCostTracker.getSessionSummary();
   ctx.state.costTotals = {
     totalCostUSD: summary.totalCostUSD,
+    completeCostUSD: summary.completeCostUSD ?? null,
+    unknownChargeCount: summary.unknownChargeCount ?? 0,
     totalInputTokens: summary.totalInputTokens,
     totalOutputTokens: summary.totalOutputTokens,
     totalTokens: summary.totalTokens,
+    projectSessionId: globalCostTracker.getProjectSessionId(),
+    ...(globalCostTracker.isSessionProjectionComplete()
+      ? {
+          accountedChargeIds: globalCostTracker.getSessionChargeIds(),
+          chargeObservations: globalCostTracker.getSessionChargeObservations(),
+        } : {}),
   };
 }
 
@@ -84,9 +92,10 @@ export function restoreSessionState(ctx: ReplContext, saved: SessionState): void
   if (saved.costTotals) {
     globalCostTracker.restoreSessionCost(saved.costTotals);
   }
-  console.log(
-    `\n  Session restored — ${saved.turnCount ?? 0} turns, $${(saved.costTotals?.totalCostUSD ?? 0).toFixed(4)} cumulative cost.\n`,
-  );
+  const costText = saved.costTotals?.unknownChargeCount
+    ? `$${(saved.costTotals.totalCostUSD ?? 0).toFixed(4)} known subtotal; ${saved.costTotals.unknownChargeCount} unpriced charge(s)`
+    : `$${(saved.costTotals?.totalCostUSD ?? 0).toFixed(4)} cumulative cost`;
+  console.log(`\n  Session restored — ${saved.turnCount ?? 0} turns, ${costText}.\n`);
 }
 
 export function resolveSessionModel(ctx: ReplContext): void {

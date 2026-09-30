@@ -7,9 +7,10 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
+import type { ContextCheckpointV1 } from '../runtime/contextCheckpoints.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { writeCheckpointFileSync } from '../utils/atomicCheckpointFile.js';
 
@@ -32,6 +33,7 @@ export type ThreadEventKind =
   | 'assistant_tool_calls'
   | 'tool_result'
   | 'compaction_capsule'
+  | 'compaction_summary'
   | 'policy_decision'
   | 'approval'
   | 'progress'
@@ -66,9 +68,17 @@ export type ThreadEvent =
       submissionIndex?: number;
       /** P0-C: whether counters continued from prior task. */
       continuedTask?: boolean;
+      /** Durable ownership generation used to fence stale compaction. */
+      ownership_generation?: number;
     })
   | (ThreadEventBase & { kind: 'user_message'; content: string })
-  | (ThreadEventBase & { kind: 'assistant_message'; content: string })
+  | (ThreadEventBase & {
+      kind: 'assistant_message';
+      content: string;
+      name?: string;
+      provenance?: 'controller' | 'model' | 'mixed';
+      authoritative?: boolean;
+    })
   | (ThreadEventBase & {
       kind: 'assistant_tool_calls';
       content: string;
@@ -85,6 +95,17 @@ export type ThreadEvent =
       kind: 'compaction_capsule';
       content: string;
       preserved_tool_call_ids: string[];
+      raw_observation_refs?: string[];
+      /** Compactions from an older owner are ignored on cold resume. */
+      ownership_generation?: number;
+    })
+  | (ThreadEventBase & {
+      kind: 'compaction_summary';
+      content: string;
+      provenance: 'model';
+      authoritative: false;
+      /** Summary belongs to the same durable owner generation as its capsule. */
+      ownership_generation?: number;
     })
   | (ThreadEventBase & {
       kind: 'policy_decision';
@@ -108,11 +129,24 @@ export type ThreadEvent =
       /** Omitted when the cause is not established. */
       outcome?: TerminalOutcome;
       status: string;
+      /** D03: structured terminal reason survives thread-log persistence/replay. */
+      reason_code?: string;
+      cause_class?: string | null;
     })
   | (ThreadEventBase & {
       kind: 'repo_identity';
       projectRoot: string;
       gitHead?: string;
+      /**
+       * R0-4: advisory filesystem fingerprint of the repository root directory,
+       * when the platform exposes one. A DIFFERENCE is strong evidence of a
+       * different directory and fails closed; a MATCH is not proof of the same
+       * physical repository, because filesystems may reuse an inode after a
+       * delete/recreate. The authoritative claim remains canonical-root
+       * continuity, not physical identity.
+       */
+      rootDevice?: number;
+      rootInode?: number;
     });
 
 export interface TurnSnapshot {
@@ -191,6 +225,10 @@ export function startTurn(
   },
 ): string {
   const turnId = randomUUID();
+  const priorGenerations = log.events
+    .filter((event): event is Extract<ThreadEvent, { kind: 'turn_started' }> => event.kind === 'turn_started')
+    .map((event) => event.ownership_generation ?? 0);
+  const ownershipGeneration = Math.max(0, ...priorGenerations) + 1;
   appendThreadEvent(log, {
     kind: 'turn_started',
     turn_id: turnId,
@@ -204,11 +242,16 @@ export function startTurn(
     ...(input.gatePolicy !== undefined ? { gatePolicy: input.gatePolicy } : {}),
     ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
+    ownership_generation: ownershipGeneration,
   });
+  const rootFingerprint = repoRootFingerprint(input.projectRoot);
   appendThreadEvent(log, {
     kind: 'repo_identity',
     turn_id: turnId,
     projectRoot: input.projectRoot,
+    ...(rootFingerprint !== null
+      ? { rootDevice: rootFingerprint.device, rootInode: rootFingerprint.inode }
+      : {}),
   });
   appendThreadEvent(log, {
     kind: 'user_message',
@@ -223,12 +266,16 @@ export function endTurn(
   turnId: string,
   outcome: TerminalOutcome | undefined,
   status: string,
+  reason?: { code: string; cause_class: string | null },
 ): void {
   appendThreadEvent(log, {
     kind: 'turn_ended',
     turn_id: turnId,
     ...(outcome !== undefined ? { outcome } : {}),
     status,
+    ...(reason !== undefined
+      ? { reason_code: reason.code, cause_class: reason.cause_class }
+      : {}),
   });
 }
 
@@ -250,11 +297,19 @@ export function recordAssistantMessage(
   log: ThreadEventLog,
   turnId: string,
   content: string,
+  options: {
+    name?: string;
+    provenance?: 'controller' | 'model' | 'mixed';
+    authoritative?: boolean;
+  } = {},
 ): void {
   appendThreadEvent(log, {
     kind: 'assistant_message',
     turn_id: turnId,
     content,
+    ...(options.name !== undefined ? { name: options.name } : {}),
+    ...(options.provenance !== undefined ? { provenance: options.provenance } : {}),
+    ...(options.authoritative !== undefined ? { authoritative: options.authoritative } : {}),
   });
 }
 
@@ -298,25 +353,77 @@ export function recordToolResult(
  */
 export function rebuildProviderMessagesFromEvents(
   log: ThreadEventLog,
-  options: { systemPrompt?: string; upToSeq?: number } = {},
+  options: {
+    systemPrompt?: string;
+    upToSeq?: number;
+    /** Production reconstruction must name the durably installed context root. */
+    installedContextCheckpoint?: ContextCheckpointV1;
+  } = {},
 ): ProviderMessage[] {
   const events =
     options.upToSeq === undefined
       ? log.events
       : log.events.filter((e) => e.seq <= options.upToSeq!);
 
-  // Find last compaction capsule — history before it is replaced by capsule content.
+  // Find the latest durable ownership generation. A capsule from an older
+  // owner may remain on disk after a failed compensating checkpoint, but it
+  // must not regain authority during cold resume.
+  const currentOwnershipGeneration = Math.max(
+    -1,
+    ...events
+      .filter((event): event is Extract<ThreadEvent, { kind: 'turn_started' }> => event.kind === 'turn_started')
+      .map((event) => event.ownership_generation ?? -1),
+  );
+  const currentOwnerTurnId = [...events]
+    .reverse()
+    .find(
+      (event): event is Extract<ThreadEvent, { kind: 'turn_started' }> =>
+        event.kind === 'turn_started' &&
+        (event.ownership_generation ?? -1) === currentOwnershipGeneration,
+    )?.turn_id;
+
+  // Find last non-stale compaction capsule — history before it is replaced by capsule content.
   let startIdx = 0;
   let capsuleContent: string | null = null;
+  let summaryContent: string | null = null;
   let lastCapsuleEvent: Extract<ThreadEvent, { kind: 'compaction_capsule' }> | null = null;
   let lastCapsuleIdx = -1;
   for (let i = 0; i < events.length; i++) {
-    if (events[i]!.kind === 'compaction_capsule') {
+    if (
+      events[i]!.kind === 'compaction_capsule' &&
+      isCurrentCompactionGeneration(
+        events[i] as Extract<ThreadEvent, { kind: 'compaction_capsule' }>,
+        currentOwnershipGeneration,
+        currentOwnerTurnId,
+        options.installedContextCheckpoint,
+      )
+    ) {
       startIdx = i + 1;
       lastCapsuleIdx = i;
       lastCapsuleEvent = events[i] as Extract<ThreadEvent, { kind: 'compaction_capsule' }>;
       capsuleContent = lastCapsuleEvent.content;
     }
+  }
+
+  // New logs carry the summary as a sibling advisory event. Legacy logs may
+  // contain the old combined marker; split it into assistant context so old
+  // model text is never re-promoted to system authority on resume.
+  const summaryEvent = events
+    .slice(lastCapsuleIdx + 1)
+    .find((event): event is Extract<ThreadEvent, { kind: 'compaction_summary' }> =>
+      event.kind === 'compaction_summary' &&
+      (lastCapsuleIdx >= 0
+        ? event.ownership_generation === undefined ||
+          event.ownership_generation === lastCapsuleEvent?.ownership_generation
+        : event.ownership_generation === currentOwnershipGeneration),
+    );
+  if (summaryEvent) {
+    summaryContent = summaryEvent.content;
+  } else if (capsuleContent?.includes('\n\n--- compaction_summary ---\n')) {
+    const marker = '\n\n--- compaction_summary ---\n';
+    const splitAt = capsuleContent.indexOf(marker);
+    summaryContent = capsuleContent.slice(splitAt + marker.length);
+    capsuleContent = capsuleContent.slice(0, splitAt);
   }
 
   const messages: ProviderMessage[] = [];
@@ -328,6 +435,17 @@ export function rebuildProviderMessagesFromEvents(
       role: 'system',
       content: capsuleContent,
       name: 'compaction_capsule',
+      provenance: 'controller',
+      authoritative: true,
+    });
+  }
+  if (summaryContent) {
+    messages.push({
+      role: 'assistant',
+      content: summaryContent,
+      name: 'compaction_summary',
+      provenance: 'model',
+      authoritative: false,
     });
   }
 
@@ -370,6 +488,18 @@ export function rebuildProviderMessagesFromEvents(
     }
   }
 
+  // WorkingState is a replaceable advisory snapshot. Keep every revision in
+  // the durable log for auditability, but project only the latest revision so
+  // a live request and a cold reconstruction name the same model-visible
+  // snapshot rather than accumulating stale copies.
+  let latestWorkingStateIndex = -1;
+  for (let i = startIdx; i < events.length; i++) {
+    const event = events[i]!;
+    if (event.kind === 'assistant_message' && event.name === 'working_state') {
+      latestWorkingStateIndex = i;
+    }
+  }
+
   for (let i = startIdx; i < events.length; i++) {
     const e = events[i]!;
     switch (e.kind) {
@@ -377,7 +507,14 @@ export function rebuildProviderMessagesFromEvents(
         messages.push({ role: 'user', content: e.content });
         break;
       case 'assistant_message':
-        messages.push({ role: 'assistant', content: e.content });
+        if (e.name === 'working_state' && i !== latestWorkingStateIndex) break;
+        messages.push({
+          role: 'assistant',
+          content: e.content,
+          ...(e.name !== undefined ? { name: e.name } : {}),
+          ...(e.provenance !== undefined ? { provenance: e.provenance } : {}),
+          ...(e.authoritative !== undefined ? { authoritative: e.authoritative } : {}),
+        });
         break;
       case 'assistant_tool_calls': {
         const msg: ProviderMessage = {
@@ -405,32 +542,225 @@ export function rebuildProviderMessagesFromEvents(
   return messages;
 }
 
+function isCurrentCompactionGeneration(
+  event: Extract<ThreadEvent, { kind: 'compaction_capsule' }>,
+  currentOwnershipGeneration: number,
+  currentOwnerTurnId: string | undefined,
+  installedContextCheckpoint?: ContextCheckpointV1,
+): boolean {
+  if (installedContextCheckpoint !== undefined) {
+    const lineage = installedContextCheckpoint.installed_lineage;
+    if (!lineage || lineage.checkpoint_id !== installedContextCheckpoint.checkpointId) return false;
+    if (lineage.compaction_event_id !== event.event_id) return false;
+    if (lineage.compaction_digest !== createHash('sha256').update(event.content).digest('hex')) return false;
+    if (
+      lineage.thread_event_boundary_seq !== null &&
+      lineage.thread_event_boundary_seq !== event.seq
+    ) return false;
+    return true;
+  }
+  return (
+    currentOwnershipGeneration < 0 ||
+    (event.ownership_generation !== undefined
+      ? event.ownership_generation <= currentOwnershipGeneration
+      : event.turn_id === currentOwnerTurnId)
+  );
+}
+
+/** Windows filesystems are case-insensitive; POSIX is (normally) case-sensitive. */
+const CASE_INSENSITIVE_FS = process.platform === 'win32';
+
 /**
- * Validate repository identity on resume. Returns ok or a required ask reason.
+ * Physical identity of a repository root, or `null` when it cannot be
+ * established (missing, dangling symlink, permission error, race).
  */
-export function validateRepoIdentityOnResume(
-  log: ThreadEventLog,
-  currentRoot: string,
-): { ok: true } | { ok: false; reason: string; savedRoot: string } {
+function physicalRootIdentity(path: string): string | null {
+  const resolved = resolve(path);
+  if (!existsSync(resolved)) return null;
+  try {
+    const real = realpathSync(resolved);
+    return CASE_INSENSITIVE_FS ? real.toLowerCase() : real;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * R0-4: filesystem fingerprint of the repository root directory.
+ *
+ * Returns `dev`/`ino` of the resolved root when the platform exposes a stable
+ * value. Windows and some network filesystems report inode 0 / unstable values;
+ * those return null so the caller falls back to canonical-path continuity
+ * rather than claiming a stronger proof than it has.
+ */
+export function repoRootFingerprint(
+  path: string,
+): { device: number; inode: number } | null {
+  const resolved = resolve(path);
+  if (!existsSync(resolved)) return null;
+  try {
+    const real = realpathSync(resolved);
+    const stat = statSync(real);
+    if (CASE_INSENSITIVE_FS) return null;
+    if (!Number.isFinite(stat.dev) || !Number.isFinite(stat.ino) || stat.ino === 0) {
+      return null;
+    }
+    return { device: stat.dev, inode: stat.ino };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * D04 resume-identity outcome.
+ *
+ * - `verified`: the saved and current roots resolve to the same canonical root
+ *   (and, when a durable filesystem fingerprint exists, it matches). This is
+ *   canonical-root CONTINUITY, not proof of the same physical repository — an
+ *   inode can be reused after a delete/recreate.
+ * - `mismatch`: a durable identity exists and provably points at a different
+ *   repository (or only one side resolves); callers must fail closed.
+ * - `unknown`: no durable identity was recorded, or neither root could be
+ *   resolved physically. Identity is NOT proven — never treat as verified.
+ */
+export type RepoIdentityResumeResult =
+  | { ok: true; status: 'verified' }
+  | { ok: false; status: 'mismatch'; reason: string; savedRoot: string }
+  | { ok: false; status: 'unknown'; reason: string; savedRoot: string | null };
+
+const IDENTITY_UNPROVEN_REASON =
+  'No durable repository identity was recorded for this session; physical repository identity is unproven and resume requires confirmation';
+const IDENTITY_CHANGED_REASON = 'Repository root changed since last turn; confirm before resume';
+const IDENTITY_UNRESOLVABLE_REASON =
+  'Repository root changed or could not be verified since last turn; physical identity cannot be established, so identity is not claimed (confirm before resume)';
+const IDENTITY_REPLACED_REASON =
+  'The repository at the recorded root appears to have been replaced since last turn (filesystem identity changed); confirm before resume';
+
+/** Last durable repository root recorded in the thread event log, or null. */
+export function resolveSavedRepoRootFromLog(log: ThreadEventLog | null): string | null {
+  if (!log) return null;
   const last = [...log.events]
     .reverse()
-    .find((e) => e.kind === 'repo_identity' || e.kind === 'turn_started');
-  if (!last) return { ok: true };
-  const savedRoot =
-    last.kind === 'repo_identity'
-      ? last.projectRoot
-      : last.kind === 'turn_started'
-        ? last.projectRoot
-        : currentRoot;
-  const normalize = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-  if (normalize(savedRoot) !== normalize(currentRoot)) {
+    .find(
+      (e): e is Extract<ThreadEvent, { kind: 'repo_identity' | 'turn_started' }> =>
+        e.kind === 'repo_identity' || e.kind === 'turn_started',
+    );
+  return last ? last.projectRoot : null;
+}
+
+/**
+ * Physical-identity check for a saved root against the current root.
+ *
+ * D04: compare physical identity, not case-folded strings. Two distinct
+ * case-sensitive directories (`.../Repo` vs `.../repo`) are different
+ * repositories. A saved root that cannot be established is never assumed
+ * equal: one-sided resolution fails closed as a mismatch, and two-sided
+ * non-resolution returns `unknown` rather than falling back to lexical
+ * equality (which would falsely claim physical identity).
+ */
+export function resolveRepoIdentityOnResume(
+  savedRoot: string | null,
+  currentRoot: string,
+  savedFingerprint: { device?: number; inode?: number } | null = null,
+): RepoIdentityResumeResult {
+  if (savedRoot === null) {
+    return { ok: false, status: 'unknown', reason: IDENTITY_UNPROVEN_REASON, savedRoot: null };
+  }
+  const savedIdentity = physicalRootIdentity(savedRoot);
+  const currentIdentity = physicalRootIdentity(currentRoot);
+  if (savedIdentity !== null && currentIdentity !== null) {
+    if (savedIdentity !== currentIdentity) {
+      return {
+        ok: false,
+        status: 'mismatch',
+        reason: IDENTITY_CHANGED_REASON,
+        savedRoot,
+      };
+    }
+    // R0-4: the canonical path matches. When a durable filesystem fingerprint
+    // was recorded, a DIFFERENCE fails closed (a different directory). A match
+    // is only advisory: an inode can be reused after delete/recreate, so the
+    // `verified` status here means canonical-root continuity, NOT proven
+    // physical-repository identity.
+    if (
+      savedFingerprint &&
+      (savedFingerprint.device !== undefined || savedFingerprint.inode !== undefined)
+    ) {
+      const currentFingerprint = repoRootFingerprint(currentRoot);
+      if (currentFingerprint === null) {
+        return {
+          ok: false,
+          status: 'unknown',
+          reason: IDENTITY_UNRESOLVABLE_REASON,
+          savedRoot,
+        };
+      }
+      if (
+        currentFingerprint.device !== savedFingerprint.device ||
+        currentFingerprint.inode !== savedFingerprint.inode
+      ) {
+        return {
+          ok: false,
+          status: 'mismatch',
+          reason: IDENTITY_REPLACED_REASON,
+          savedRoot,
+        };
+      }
+    }
+    return { ok: true, status: 'verified' };
+  }
+  if (savedIdentity === null && currentIdentity === null) {
     return {
       ok: false,
-      reason: 'Repository root changed since last turn; confirm before resume',
+      status: 'unknown',
+      reason: IDENTITY_UNRESOLVABLE_REASON,
       savedRoot,
     };
   }
-  return { ok: true };
+  // Exactly one side resolved: identity cannot be established -> fail closed.
+  return {
+    ok: false,
+    status: 'mismatch',
+    reason: IDENTITY_CHANGED_REASON,
+    savedRoot,
+  };
+}
+
+/**
+ * Validate repository identity on resume. The saved root is read from the
+ * durable thread event log, falling back to a caller-supplied root (e.g.
+ * `session-events.jsonl` `user_submitted.project_root`) for cells-only or
+ * legacy transcript sessions whose event log is absent.
+ */
+export function validateRepoIdentityOnResume(
+  log: ThreadEventLog | null,
+  currentRoot: string,
+  fallbackSavedRoot: string | null = null,
+): RepoIdentityResumeResult {
+  const savedRoot = resolveSavedRepoRootFromLog(log) ?? fallbackSavedRoot;
+  return resolveRepoIdentityOnResume(savedRoot, currentRoot, resolveSavedRepoFingerprintFromLog(log));
+}
+
+/**
+ * R0-4: last durable filesystem fingerprint recorded in the thread event log,
+ * or null when none was recorded (legacy session / platform without one).
+ */
+export function resolveSavedRepoFingerprintFromLog(
+  log: ThreadEventLog | null,
+): { device?: number; inode?: number } | null {
+  if (!log) return null;
+  const last = [...log.events]
+    .reverse()
+    .find(
+      (e): e is Extract<ThreadEvent, { kind: 'repo_identity' }> =>
+        e.kind === 'repo_identity',
+    );
+  if (!last) return null;
+  if (last.rootDevice === undefined && last.rootInode === undefined) return null;
+  return {
+    ...(last.rootDevice !== undefined ? { device: last.rootDevice } : {}),
+    ...(last.rootInode !== undefined ? { inode: last.rootInode } : {}),
+  };
 }
 
 export function latestTurnSnapshot(log: ThreadEventLog): TurnSnapshot | null {
@@ -532,10 +862,14 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
       for (const key of ['verifier', 'taskClass', 'gatePolicy']) requireOptionalString(event, key, context);
       requireOptionalInteger(event, 'submissionIndex', context);
       requireOptionalBoolean(event, 'continuedTask', context);
+      requireOptionalInteger(event, 'ownership_generation', context);
       return;
     case 'user_message':
     case 'assistant_message':
       requireString(event, 'content', context);
+      requireOptionalString(event, 'name', context);
+      requireOptionalString(event, 'provenance', context);
+      requireOptionalBoolean(event, 'authoritative', context);
       return;
     case 'assistant_tool_calls':
       requireString(event, 'content', context);
@@ -558,6 +892,18 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
       if (!Array.isArray(event['preserved_tool_call_ids']) || !event['preserved_tool_call_ids'].every((id) => typeof id === 'string')) {
         throw new Error(`${context} preserved_tool_call_ids must be a string array`);
       }
+      if (event['raw_observation_refs'] !== undefined &&
+        (!Array.isArray(event['raw_observation_refs']) || !event['raw_observation_refs'].every((ref) => typeof ref === 'string'))) {
+        throw new Error(`${context} raw_observation_refs must be a string array`);
+      }
+      requireOptionalInteger(event, 'ownership_generation', context);
+      return;
+    case 'compaction_summary':
+      requireString(event, 'content', context);
+      if (event['provenance'] !== 'model' || event['authoritative'] !== false) {
+        throw new Error(`${context} model summary must remain non-authoritative`);
+      }
+      requireOptionalInteger(event, 'ownership_generation', context);
       return;
     case 'policy_decision':
       for (const key of ['source', 'action', 'message']) requireString(event, key, context);

@@ -1,0 +1,593 @@
+/**
+ * Runtime facts v1 — a versioned semantic event contract.
+ *
+ * P04 defines the durable-fact vocabulary and a pure projection boundary
+ * *without* replacing any historical store. Facts are a shadow model: existing
+ * thread/session/episode readers remain authoritative until parity is proven
+ * (P05 owns durable admission; P21 retires duplicate producers).
+ *
+ * Distinct from:
+ *   - wire `TurnEventParams.seq` (per-turn, ephemeral),
+ *   - history `cursor` (a `cell_id`),
+ *   - `sessionEvents.nextSeq` / `LiveSessionV1.last_seq`.
+ * `EventCursor` is its own address space.
+ *
+ * Never executes tools, replays provider calls, or re-derives authority.
+ */
+
+import { types as utilTypes } from 'node:util';
+
+import type { TerminalOutcome } from '../schemas/agentContracts.js';
+
+/** Version of the runtime-fact event schema. */
+export const RUNTIME_FACT_SCHEMA_VERSION = 1 as const;
+
+/** Version of the pure task projection derived from facts. */
+export const RUNTIME_FACT_PROJECTION_VERSION = 1 as const;
+
+/** Durable fact stream identity. */
+export type RuntimeFactStream = 'runtime-facts';
+
+/**
+ * Opaque position in a fact stream. Deliberately not interchangeable with the
+ * protocol `seq`, a history `cell_id` cursor, or a session-event `seq`.
+ */
+export interface EventCursor {
+  readonly stream: RuntimeFactStream;
+  readonly sequence: number;
+}
+
+/** Producer class of a fact. Observations never mint authority. */
+export type RuntimeFactProducer =
+  | 'runtime_coordinator'
+  | 'chat_engine'
+  | 'pipeline'
+  | 'legacy_adapter';
+
+/** Whether a fact carries authority or is an observation. */
+export type FactAuthority = 'authoritative' | 'observation';
+
+/**
+ * Semantic payload union. Payloads carry execution/turn identity so a reducer
+ * never has to infer it, but they never contain a raw secret.
+ */
+export type FactPayload =
+  | { readonly type: 'turn.admitted'; readonly commandId: string; readonly snapshotId?: string }
+  | { readonly type: 'run.started'; readonly ownerGeneration: number }
+  | { readonly type: 'run.cancel_requested'; readonly commandId?: string }
+  | {
+      readonly type: 'run.settled';
+      /** Terminal status observed at the run boundary (not itself authority). */
+      readonly status: string;
+    }
+  | {
+      readonly type: 'operation.prepared';
+      readonly operationDigest: string;
+      readonly operationId?: string;
+      readonly toolName?: string;
+      readonly effectClass?: string;
+    }
+  | {
+      readonly type: 'operation.settled';
+      readonly receiptId: string;
+      readonly operationId?: string;
+      readonly status?: string;
+    }
+  | {
+      readonly type: 'operation.indeterminate';
+      readonly operationDigest: string;
+      readonly reason: string;
+      readonly operationId?: string;
+    }
+  | { readonly type: 'context.committed'; readonly checkpointId: string }
+  | { readonly type: 'context.degraded'; readonly reason: string }
+  | { readonly type: 'verification.recorded'; readonly receiptId: string; readonly authoritative: boolean }
+  | { readonly type: 'completion.decided'; readonly decision: RuntimeCompletionDecision }
+  | {
+      readonly type: 'permission.decided';
+      readonly decision: 'allow' | 'ask' | 'deny';
+      readonly reason?: string;
+    };
+
+/** Minimal completion decision mirrored from the executor contract (no new authority). */
+export interface RuntimeCompletionDecision {
+  readonly requestedOutcome: string;
+  readonly finalOutcome: string;
+  readonly allowed: boolean;
+  readonly reason: string;
+  readonly evidenceRefs: readonly string[];
+  readonly policyVersion: string;
+}
+
+/** Durable semantic fact envelope. */
+export interface RuntimeFactV1 {
+  readonly schemaVersion: typeof RUNTIME_FACT_SCHEMA_VERSION;
+  readonly id: string;
+  readonly cursor: EventCursor;
+  /** Thread/session identity the fact belongs to. */
+  readonly threadId: string;
+  /** Task identity; empty when the surface has not frozen a task. */
+  readonly taskId: string;
+  readonly turnId: string;
+  readonly runId: string;
+  readonly sequence: number;
+  readonly causationId: string;
+  readonly producer: RuntimeFactProducer;
+  readonly authority: FactAuthority;
+  readonly timestamp: string;
+  readonly payload: FactPayload;
+}
+
+/** Fact payload types this schema understands. */
+export const KNOWN_FACT_TYPES: ReadonlySet<FactPayload['type']> = new Set([
+  'turn.admitted',
+  'run.started',
+  'run.cancel_requested',
+  'run.settled',
+  'operation.prepared',
+  'operation.settled',
+  'operation.indeterminate',
+  'context.committed',
+  'context.degraded',
+  'verification.recorded',
+  'completion.decided',
+  'permission.decided',
+]);
+
+/**
+ * Fact types that may carry authority. `run.settled` is deliberately excluded:
+ * only `completion.decided` is the authoritative terminal fact (one producer).
+ */
+export const AUTHORITATIVE_FACT_TYPES: ReadonlySet<string> = new Set([
+  'completion.decided',
+  'verification.recorded',
+]);
+
+export type FactTypeClassification = FactAuthority | 'unknown';
+
+/** Classify a payload type, including unknown types from a newer schema. */
+export function classifyFactType(type: string): FactTypeClassification {
+  if (!KNOWN_FACT_TYPES.has(type as FactPayload['type'])) return 'unknown';
+  return AUTHORITATIVE_FACT_TYPES.has(type) ? 'authoritative' : 'observation';
+}
+
+export interface ValidatedFact {
+  readonly ok: true;
+  readonly fact: RuntimeFactV1;
+}
+export interface InvalidFact {
+  readonly ok: false;
+  readonly reason: string;
+  /** Whether the rejected fact claimed authority (fail closed). */
+  readonly authority: FactAuthority;
+  readonly id?: string;
+}
+export type FactValidation = ValidatedFact | InvalidFact;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/** Required payload fields per fact type, used for ingress validation. */
+const REQUIRED_PAYLOAD_FIELDS: Record<string, readonly string[]> = {
+  'turn.admitted': ['commandId'],
+  'run.started': ['ownerGeneration'],
+  'run.cancel_requested': [],
+  'run.settled': ['status'],
+  'operation.prepared': ['operationDigest'],
+  'operation.settled': ['receiptId'],
+  'operation.indeterminate': ['operationDigest', 'reason'],
+  'context.committed': ['checkpointId'],
+  'context.degraded': ['reason'],
+  'verification.recorded': ['receiptId', 'authoritative'],
+  'completion.decided': ['decision'],
+  'permission.decided': ['decision'],
+};
+
+/**
+ * Validate an untrusted fact at ingress. Unknown authority-bearing schema is
+ * rejected fail-closed; unknown observation schema may be preserved by callers.
+ */
+/** Bound evidence reference arrays so a hostile/endless array cannot run forever. */
+const MAX_EVIDENCE_REFS = 10_000;
+
+function isBoundedStringArray(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  const length = value.length;
+  if (length > MAX_EVIDENCE_REFS) return false;
+  for (let index = 0; index < length; index += 1) {
+    if (typeof value[index] !== 'string') return false;
+  }
+  return true;
+}
+
+/** Type-check a known payload's fields; returns a reason when malformed. */
+function payloadTypeError(type: string, payload: Record<string, unknown>): string | null {
+  const isString = (value: unknown): boolean => typeof value === 'string';
+  const optionalString = (value: unknown): boolean => value === undefined || isString(value);
+  switch (type) {
+    case 'turn.admitted':
+      return isString(payload['commandId']) ? null : 'invalid_commandId';
+    case 'run.started':
+      return typeof payload['ownerGeneration'] === 'number' ? null : 'invalid_ownerGeneration';
+    case 'run.cancel_requested':
+      return optionalString(payload['commandId']) ? null : 'invalid_commandId';
+    case 'run.settled':
+      return isString(payload['status']) ? null : 'invalid_status';
+    case 'operation.prepared':
+      return isString(payload['operationDigest']) &&
+        optionalString(payload['operationId']) &&
+        optionalString(payload['toolName']) &&
+        optionalString(payload['effectClass'])
+        ? null
+        : 'invalid_operation_prepared';
+    case 'operation.settled':
+      return isString(payload['receiptId']) &&
+        optionalString(payload['operationId']) &&
+        optionalString(payload['status'])
+        ? null
+        : 'invalid_operation_settled';
+    case 'operation.indeterminate':
+      return isString(payload['operationDigest']) &&
+        isString(payload['reason']) &&
+        optionalString(payload['operationId'])
+        ? null
+        : 'invalid_operation_indeterminate';
+    case 'context.committed':
+      return isString(payload['checkpointId']) ? null : 'invalid_checkpointId';
+    case 'context.degraded':
+      return isString(payload['reason']) ? null : 'invalid_reason';
+    case 'verification.recorded':
+      return isString(payload['receiptId']) && typeof payload['authoritative'] === 'boolean'
+        ? null
+        : 'invalid_verification_recorded';
+    case 'permission.decided':
+      return payload['decision'] === 'allow' ||
+        payload['decision'] === 'ask' ||
+        payload['decision'] === 'deny'
+        ? null
+        : 'invalid_permission_decision';
+    default:
+      return null;
+  }
+}
+
+/** Total ingress validator: hostile or revoked input fails closed, never throws. */
+export function validateRuntimeFact(input: unknown): FactValidation {
+  try {
+    return validateRuntimeFactInner(input);
+  } catch {
+    return { ok: false, reason: 'inaccessible_fact', authority: 'authoritative' };
+  }
+}
+
+function validateRuntimeFactInner(input: unknown): FactValidation {
+  if (!isRecord(input)) {
+    return { ok: false, reason: 'fact_not_object', authority: 'authoritative' };
+  }
+  const authorityRaw = input['authority'];
+  const authority: FactAuthority = authorityRaw === 'observation' ? 'observation' : 'authoritative';
+  const id = typeof input['id'] === 'string' ? input['id'] : undefined;
+  const fail = (reason: string): InvalidFact => ({
+    ok: false,
+    reason,
+    authority,
+    ...(id !== undefined ? { id } : {}),
+  });
+
+  if (authorityRaw !== 'authoritative' && authorityRaw !== 'observation') {
+    return fail('invalid_authority');
+  }
+  if (input['schemaVersion'] !== RUNTIME_FACT_SCHEMA_VERSION) {
+    return fail(`unsupported_fact_schema:${String(input['schemaVersion'])}`);
+  }
+  for (const field of ['id', 'threadId', 'taskId', 'turnId', 'runId', 'causationId', 'timestamp', 'producer']) {
+    if (typeof input[field] !== 'string') return fail(`missing_${field}`);
+  }
+  if (typeof input['sequence'] !== 'number' || !Number.isInteger(input['sequence'])) {
+    return fail('invalid_sequence');
+  }
+  const cursor = input['cursor'];
+  if (
+    !isRecord(cursor) ||
+    cursor['stream'] !== 'runtime-facts' ||
+    typeof cursor['sequence'] !== 'number' ||
+    !Number.isInteger(cursor['sequence'])
+  ) {
+    return fail('invalid_cursor');
+  }
+  const payload = input['payload'];
+  if (!isRecord(payload) || typeof payload['type'] !== 'string') {
+    return fail('invalid_payload');
+  }
+  const type = payload['type'];
+  if (!KNOWN_FACT_TYPES.has(type as FactPayload['type'])) {
+    return fail(`unknown_fact_type:${type}`);
+  }
+  for (const field of REQUIRED_PAYLOAD_FIELDS[type] ?? []) {
+    if (payload[field] === undefined || payload[field] === null) {
+      return fail(`payload_missing_${field}`);
+    }
+  }
+  if (type === 'completion.decided') {
+    const decision = payload['decision'];
+    if (
+      !isRecord(decision) ||
+      typeof decision['finalOutcome'] !== 'string' ||
+      typeof decision['allowed'] !== 'boolean' ||
+      !isBoundedStringArray(decision['evidenceRefs']) ||
+      typeof decision['reason'] !== 'string' ||
+      typeof decision['requestedOutcome'] !== 'string' ||
+      typeof decision['policyVersion'] !== 'string'
+    ) {
+      return fail('invalid_completion_decision');
+    }
+  }
+  if (type === 'operation.indeterminate' || type === 'context.degraded') {
+    if (typeof payload['reason'] !== 'string') {
+      return fail(`invalid_${type}_reason`);
+    }
+  }
+  if (type === 'verification.recorded' && typeof payload['authoritative'] !== 'boolean') {
+    return fail('invalid_verification_authoritative');
+  }
+  const typeError = payloadTypeError(type, payload);
+  if (typeError) return fail(typeError);
+  return { ok: true, fact: input as unknown as RuntimeFactV1 };
+}
+
+const SECRET_KEY_PATTERN = /(pass(word)?|secret|token|api[_-]?key|authorization|credential|private[_-]?key)/i;
+const ABSOLUTE_PATH_PATTERN = /(^|[\s"'=({[])(?:[A-Za-z]:[\\/][^\s"'<>|;,!?)}\]]*|\\\\[^\s"'<>|;,!?)}\]]+|\/[^\s"'<>|;,!?)}\]]*)/g;
+const MAX_STRING_CHARS = 512;
+const MAX_REDACT_DEPTH = 12;
+const MAX_REDACT_NODES = 100_000;
+
+/**
+ * Redact a value without throwing and without unbounded work. Cycle-aware,
+ * node-bounded, and guarded against hostile accessors, so a shared-reference
+ * DAG cannot amplify and a throwing/revoked object cannot escape.
+ */
+function redactValue(
+  value: unknown,
+  path: WeakSet<object> = new WeakSet(),
+  budget: { nodes: number } = { nodes: 0 },
+  depth = 0,
+): unknown {
+  budget.nodes += 1;
+  if (budget.nodes > MAX_REDACT_NODES) return '[redacted:limit]';
+  if (typeof value === 'string') {
+    const redactedPath = value.replace(ABSOLUTE_PATH_PATTERN, '$1[redacted:path]');
+    return redactedPath.length > MAX_STRING_CHARS
+      ? `${redactedPath.slice(0, MAX_STRING_CHARS)}…[truncated]`
+      : redactedPath;
+  }
+  if (value === null || typeof value !== 'object') {
+    return utilTypes.isProxy(value) ? '[redacted]' : value;
+  }
+  if (utilTypes.isProxy(value)) return '[redacted]';
+  if (depth >= MAX_REDACT_DEPTH) return '[redacted:depth]';
+  const object = value as object;
+  if (path.has(object)) return '[redacted:circular]';
+  path.add(object);
+  try {
+    if (Array.isArray(object)) {
+      const out: unknown[] = [];
+      const length = object.length;
+      for (let index = 0; index < length; index += 1) {
+        if (budget.nodes > MAX_REDACT_NODES) {
+          out.push('[redacted:limit]');
+          break;
+        }
+        out.push(redactValue(object[index], path, budget, depth + 1));
+      }
+      return out;
+    }
+    const out = Object.create(null) as Record<string, unknown>;
+    for (const key of Object.keys(object)) {
+      if (budget.nodes > MAX_REDACT_NODES) {
+        out['[redacted]'] = '[redacted:limit]';
+        break;
+      }
+      let entry: unknown;
+      try {
+        entry = (object as Record<string, unknown>)[key];
+      } catch {
+        entry = '[redacted:error]';
+      }
+      out[key] = SECRET_KEY_PATTERN.test(key) ? '[redacted]' : redactValue(entry, path, budget, depth + 1);
+    }
+    return out;
+  } catch {
+    return '[redacted:error]';
+  } finally {
+    path.delete(object);
+  }
+}
+
+/** Fail-closed placeholder returned if a fact envelope itself is inaccessible. */
+const REDACTION_FAILURE_FACT: RuntimeFactV1 = Object.freeze<RuntimeFactV1>({
+  schemaVersion: RUNTIME_FACT_SCHEMA_VERSION,
+  id: 'redaction-failed',
+  cursor: { stream: 'runtime-facts', sequence: -1 },
+  threadId: '',
+  taskId: '',
+  turnId: '',
+  runId: '',
+  sequence: -1,
+  causationId: 'redaction-failed',
+  producer: 'legacy_adapter',
+  authority: 'observation',
+  timestamp: '1970-01-01T00:00:00.000Z',
+  payload: { type: 'context.degraded', reason: 'redaction_failed' },
+});
+
+/** Redact a fact for persistence or publication. Never weakens authority; never throws. */
+export function redactRuntimeFact(fact: RuntimeFactV1): RuntimeFactV1 {
+  try {
+    return { ...fact, payload: redactValue(fact.payload) as FactPayload };
+  } catch {
+    return REDACTION_FAILURE_FACT;
+  }
+}
+
+/** Order two cursors; total for hostile/stateful/null input, each field read once. */
+export function compareFactCursors(a: EventCursor, b: EventCursor): number {
+  let aStreamRaw: unknown;
+  let bStreamRaw: unknown;
+  let aSeqRaw: unknown;
+  let bSeqRaw: unknown;
+  try {
+    aStreamRaw = a ? (a as { stream?: unknown }).stream : undefined;
+    bStreamRaw = b ? (b as { stream?: unknown }).stream : undefined;
+    aSeqRaw = a ? (a as { sequence?: unknown }).sequence : undefined;
+    bSeqRaw = b ? (b as { sequence?: unknown }).sequence : undefined;
+  } catch {
+    return 0;
+  }
+  const aStream = typeof aStreamRaw === 'string' ? aStreamRaw : '';
+  const bStream = typeof bStreamRaw === 'string' ? bStreamRaw : '';
+  if (aStream !== bStream) return aStream < bStream ? -1 : 1;
+  const aSeq = typeof aSeqRaw === 'number' ? aSeqRaw : 0;
+  const bSeq = typeof bSeqRaw === 'number' ? bSeqRaw : 0;
+  if (aSeq === bSeq) return 0;
+  return aSeq < bSeq ? -1 : 1;
+}
+
+/** Whether `later` is strictly newer than `earlier`; total, each field read once. */
+export function isFactAfter(later: EventCursor, earlier: EventCursor): boolean {
+  let laterStreamRaw: unknown;
+  let earlierStreamRaw: unknown;
+  let laterSeqRaw: unknown;
+  let earlierSeqRaw: unknown;
+  try {
+    laterStreamRaw = later ? (later as { stream?: unknown }).stream : undefined;
+    earlierStreamRaw = earlier ? (earlier as { stream?: unknown }).stream : undefined;
+    laterSeqRaw = later ? (later as { sequence?: unknown }).sequence : undefined;
+    earlierSeqRaw = earlier ? (earlier as { sequence?: unknown }).sequence : undefined;
+  } catch {
+    return false;
+  }
+  return (
+    laterStreamRaw === earlierStreamRaw &&
+    typeof laterSeqRaw === 'number' &&
+    typeof earlierSeqRaw === 'number' &&
+    laterSeqRaw > earlierSeqRaw
+  );
+}
+
+// ─── Ephemeral stream envelope ──────────────────────────────────────────────
+
+/**
+ * Ephemeral, non-durable delta (e.g. a model token chunk). Ephemeral data may
+ * drive client animation but never authorizes state or completion.
+ */
+export interface EphemeralStreamEnvelope<T = unknown> {
+  readonly kind: 'ephemeral';
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly sequence: number;
+  readonly payload: T;
+}
+
+export function makeEphemeralEvent<T>(input: {
+  threadId: string;
+  turnId: string;
+  sequence: number;
+  payload: T;
+}): EphemeralStreamEnvelope<T> {
+  try {
+    // `kind` is set last so a caller-supplied `kind` cannot make an ephemeral
+    // envelope claim durability.
+    return { ...input, kind: 'ephemeral' };
+  } catch {
+    return { kind: 'ephemeral', threadId: '', turnId: '', sequence: 0, payload: undefined as unknown as T };
+  }
+}
+
+// ─── Bounded fact bus ───────────────────────────────────────────────────────
+
+export interface FactBusSubscription {
+  readonly id: number;
+  drain(): void;
+  queued(): number;
+  dropped(): number;
+  close(): void;
+}
+
+export interface FactBus {
+  subscribe(handler: (fact: RuntimeFactV1) => void): FactBusSubscription;
+  publish(fact: RuntimeFactV1): void;
+  subscriberCount(): number;
+}
+
+/** Hard ceiling on a subscriber queue regardless of caller configuration. */
+const MAX_FACT_QUEUE = 10_000;
+
+/**
+ * Bounded in-memory observation bus. Slow subscribers drop the oldest queued
+ * facts instead of holding the process alive; `dropped()` is observable.
+ */
+export function createFactBus(options: { maxQueue?: number } | null = {}): FactBus {
+  let requested: unknown;
+  try {
+    requested = options?.maxQueue;
+  } catch {
+    requested = undefined;
+  }
+  const maxQueue =
+    typeof requested === 'number' && Number.isFinite(requested)
+      ? Math.min(MAX_FACT_QUEUE, Math.max(1, Math.floor(requested)))
+      : 256;
+  interface Entry {
+    handler: (fact: RuntimeFactV1) => void;
+    queue: RuntimeFactV1[];
+    dropped: number;
+    open: boolean;
+  }
+  const subscribers = new Map<number, Entry>();
+  let nextId = 0;
+
+  return {
+    subscribe(handler) {
+      const id = ++nextId;
+      const entry: Entry = { handler, queue: [], dropped: 0, open: true };
+      subscribers.set(id, entry);
+      return {
+        id,
+        drain() {
+          if (!entry.open) return;
+          const pending = entry.queue;
+          entry.queue = [];
+          for (const fact of pending) {
+            try {
+              entry.handler(fact);
+            } catch {
+              /* isolate a faulty subscriber; keep delivering the batch */
+            }
+          }
+        },
+        queued: () => entry.queue.length,
+        dropped: () => entry.dropped,
+        close() {
+          entry.open = false;
+          entry.queue = [];
+          subscribers.delete(id);
+        },
+      };
+    },
+    publish(fact) {
+      for (const entry of subscribers.values()) {
+        if (!entry.open) continue;
+        entry.queue.push(fact);
+        while (entry.queue.length > maxQueue) {
+          entry.queue.shift();
+          entry.dropped += 1;
+        }
+      }
+    },
+    subscriberCount: () => subscribers.size,
+  };
+}
+
+/** Terminal outcomes accepted by the fact model (mirrors the executor vocabulary). */
+export type RuntimeTerminalOutcome = TerminalOutcome | 'PLAN_COMPLETE' | 'UNKNOWN';

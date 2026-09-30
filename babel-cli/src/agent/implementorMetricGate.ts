@@ -429,7 +429,7 @@ export function defaultInteractiveTtfSamples(): ImplementorMetricSample[] {
       toolCalls: [
         { tool: 'grep', target: 'parseToken' },
         { tool: 'read_file', target: 'src/parser.ts' },
-        { tool: 'str_replace', target: 'src/parser.ts' },
+        { tool: 'str_replace', target: 'src/parser.ts', effect_status: 'confirmed_change' },
         { tool: 'test_run', target: 'src/parser.test.ts', detail: 'exit 0' },
       ],
       notes: 'Interactive-shaped single-file fix (fixture ledger v1)',
@@ -441,7 +441,7 @@ export function defaultInteractiveTtfSamples(): ImplementorMetricSample[] {
       task_label: 'single-file: off-by-one in slice',
       toolCalls: [
         { tool: 'read_file', target: 'src/range.ts' },
-        { tool: 'str_replace', target: 'src/range.ts' },
+        { tool: 'str_replace', target: 'src/range.ts', effect_status: 'confirmed_change' },
       ],
     }),
     sampleFromToolLog({
@@ -453,7 +453,7 @@ export function defaultInteractiveTtfSamples(): ImplementorMetricSample[] {
         { tool: 'grep', target: 'E_INVALID' },
         { tool: 'read_file', target: 'src/errors.ts' },
         { tool: 'read_range', target: 'src/errors.ts' },
-        { tool: 'str_replace', target: 'src/errors.ts' },
+        { tool: 'str_replace', target: 'src/errors.ts', effect_status: 'confirmed_change' },
       ],
     }),
     sampleFromToolLog({
@@ -463,8 +463,8 @@ export function defaultInteractiveTtfSamples(): ImplementorMetricSample[] {
       task_label: 'single-file: rename export',
       toolCalls: [
         { tool: 'grep', target: 'oldName' },
-        { tool: 'str_replace', target: 'src/api.ts' },
-        { tool: 'str_replace', target: 'src/api.ts' },
+        { tool: 'str_replace', target: 'src/api.ts', effect_status: 'confirmed_change' },
+        { tool: 'str_replace', target: 'src/api.ts', effect_status: 'confirmed_change' },
       ],
     }),
     sampleFromToolLog({
@@ -476,7 +476,7 @@ export function defaultInteractiveTtfSamples(): ImplementorMetricSample[] {
         { tool: 'list_dir', target: 'src' },
         { tool: 'grep', target: 'timeout' },
         { tool: 'read_file', target: 'src/client.ts' },
-        { tool: 'str_replace', target: 'src/client.ts' },
+        { tool: 'str_replace', target: 'src/client.ts', effect_status: 'confirmed_change' },
         { tool: 'test_run', target: 'src/client.test.ts', detail: 'exit 0' },
       ],
     }),

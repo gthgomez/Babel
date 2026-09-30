@@ -81,6 +81,7 @@ describe('mapCostPrecisionToBasis', () => {
     assert.equal(mapCostPrecisionToBasis('exact'), 'provider_usage_x_pinned_rate');
     assert.equal(mapCostPrecisionToBasis('conservative'), 'provider_usage_x_pinned_rate');
     assert.equal(mapCostPrecisionToBasis('invoice'), 'provider_billed');
+    assert.equal(mapCostPrecisionToBasis('unknown'), 'unknown');
     assert.equal(mapCostPrecisionToBasis(null), 'unknown');
   });
 });
@@ -149,6 +150,24 @@ describe('summarizeCellCost', () => {
     assert.equal(s.cost_basis, 'provider_usage_x_pinned_rate');
     assert.equal(s.pricing_verified_at, '2026-08-02');
   });
+
+  test('keeps an unpriced turn null while preserving the known subtotal', () => {
+    const receipts = [
+      receipt({ turn: 0, model: 'known-model', cost_usd: 0.02 }),
+      receipt({ turn: 1, model: 'unknown-model', cost_usd: null }),
+    ];
+    const summary = summarizeCellCost(receipts);
+    assert.equal(summary.estimated_usd, null);
+    assert.equal(summary.known_estimated_usd, 0.02);
+    assert.equal(summary.unknown_cost_turn_count, 1);
+    assert.equal(summary.reconciled, false);
+    const log = new TurnRoutingReceiptLog();
+    for (const entry of receipts) log.push(entry);
+    const rollup = log.summarize();
+    assert.equal(rollup.total_cost_usd, null);
+    assert.equal(rollup.known_total_cost_usd, 0.02);
+    assert.equal(rollup.unknown_cost_turn_count, 1);
+  });
 });
 
 describe('TurnRoutingReceiptLog.summarize', () => {
@@ -180,8 +199,8 @@ describe('TurnRoutingReceiptLog.summarize', () => {
     const s = log.summarize();
     assert.ok(s.models_used.includes('deepseek-v4-flash'));
     assert.ok(s.models_used.includes('deepseek-v4-pro'));
-    assert.ok(Math.abs(s.total_cost_usd - 0.3) < 1e-9);
-    assert.ok(s.pro_cost_share > 0);
+    assert.ok(s.total_cost_usd !== null && Math.abs(s.total_cost_usd - 0.3) < 1e-9);
+    assert.ok(s.pro_cost_share !== null && s.pro_cost_share > 0);
     assert.equal(s.effort_aliased_any, true);
     assert.equal(s.last_sent_effort, 'high');
     assert.equal(s.last_observed_effort, 'high');

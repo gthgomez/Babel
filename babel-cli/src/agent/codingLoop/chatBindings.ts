@@ -6,9 +6,13 @@ import { classifyFailureSurface } from './failureSurface.js'
 import { compileObservation } from './observationCompiler.js'
 import {
   applyWorkingStateEvent,
+  sameRecoveryBinding,
   type WorkingState,
+  type RecoveryCandidateBinding,
 } from './workingState.js'
 import { rememberReadInjection, selectReadWindow } from './readWindow.js'
+import { recoveryTargetIdentity } from './recoveryIdentity.js'
+import { captureLocalizationCandidates, captureLocalizationTestHints, startFailureLocalization } from './failureLocalization.js'
 import type { ReadInjectionCache } from './readWindow.js'
 
 /**
@@ -22,6 +26,11 @@ export function ingestVerifierResult(input: {
   stdout: string
   stderr: string
   summary: string
+  knownBaselineSignature?: string
+  verifierId?: string
+  workspaceRevision?: string
+  recoveryBinding?: RecoveryCandidateBinding
+  recoveryProjectRoot?: string
 }): { state: WorkingState; lastVerifierFailed: boolean } {
   let state = applyWorkingStateEvent(input.state, {
     type: 'verifier',
@@ -40,8 +49,80 @@ export function ingestVerifierResult(input: {
     })
     state = applyWorkingStateEvent(state, {
       type: 'failure_surface',
-      surface: classifyFailureSurface({ observation: compiled }),
+      surface: classifyFailureSurface({
+        observation: compiled,
+        ...(state.failureSurface?.errorSignature !== undefined
+          ? { previousSignature: state.failureSurface.errorSignature }
+          : {}),
+        ...(state.baselineFailureSignature !== undefined
+          ? { knownBaselineSignature: state.baselineFailureSignature }
+          : {}),
+        ...(input.knownBaselineSignature !== undefined
+          ? { knownBaselineSignature: input.knownBaselineSignature }
+          : {}),
+        ...(input.verifierId !== undefined ? { verifierId: input.verifierId } : {}),
+        ...(input.workspaceRevision !== undefined ? { workspaceRevision: input.workspaceRevision } : {}),
+      }),
     })
+    if (
+      state.failureSurface &&
+      ['TEST_FAILURE', 'TYPECHECK_FAILURE', 'BUILD_FAILURE', 'LINT_FAILURE', 'RUNTIME_FAILURE', 'UNKNOWN_FAILURE'].includes(state.failureSurface.kind)
+    ) {
+      const rawTargets = [
+        ...state.failureSurface.failingFiles,
+        ...(state.lastMutation?.path ? [state.lastMutation.path] : []),
+      ].filter((value) => value.trim().length > 0)
+      const failingTargets = input.recoveryProjectRoot
+        ? rawTargets.map((value) => recoveryTargetIdentity(input.recoveryProjectRoot!, value)).filter((value): value is string => value !== null)
+        : rawTargets
+      // A controller-observed prior edit is an implicated target. A path in
+      // diagnostic output alone is only a localization candidate.
+      const mutationTarget = state.lastMutation?.path && input.recoveryProjectRoot
+        ? recoveryTargetIdentity(input.recoveryProjectRoot, state.lastMutation.path)
+        : state.lastMutation?.path ?? null
+      const trustedTargets = mutationTarget ? failingTargets : []
+      const failureSignature = state.failureSurface.errorSignature
+      const previousGate = input.state.recoveryGate
+      const sameFailedCandidate = previousGate?.binding && input.recoveryBinding &&
+        previousGate.failureSignature === failureSignature &&
+        sameRecoveryBinding(previousGate.binding, input.recoveryBinding)
+      if (sameFailedCandidate) {
+        // Re-running the same red verifier observes the same episode. It cannot
+        // replenish a spent localization allowance or a consumed repair permit.
+        if (input.state.localization) state = applyWorkingStateEvent(state, {
+          type: 'localization_update', localization: input.state.localization,
+        })
+      } else {
+        state = applyWorkingStateEvent(state, {
+          type: 'recovery_gate',
+          failureSignature,
+          ...(input.recoveryBinding ? { binding: input.recoveryBinding } : {}),
+          requiredEvidence: 'Acquire discriminating evidence before another mutation: reread the failing assertion and inspect the relevant caller/callee boundary.',
+          ...(state.lastMutation?.fingerprint ? { mutationFingerprint: state.lastMutation.fingerprint } : {}),
+          ...(trustedTargets.length > 0 ? { failingTargets: trustedTargets } : {}),
+          hypothesisAtFailure: state.currentHypothesis,
+        })
+        if (trustedTargets.length === 0 && input.recoveryBinding && input.recoveryProjectRoot) {
+          state = applyWorkingStateEvent(state, {
+            type: 'localization_begin',
+            localization: startFailureLocalization(
+              failureSignature,
+              input.recoveryBinding,
+              captureLocalizationCandidates({
+                projectRoot: input.recoveryProjectRoot,
+                stdout: input.stdout,
+                stderr: input.stderr,
+                tool: input.tool,
+                command: input.target,
+              }),
+              captureLocalizationTestHints({
+                stdout: input.stdout, stderr: input.stderr, tool: input.tool, command: input.target,
+              }),
+            ),
+          })
+        }
+      }
+    }
   }
   return { state, lastVerifierFailed: input.exitCode !== 0 }
 }

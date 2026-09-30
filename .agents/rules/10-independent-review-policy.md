@@ -4,22 +4,33 @@ last_verified: 2026-09-08
 -->
 # Independent Review Routing
 
-Every PR requires an independent Babel **chat** review of its exact current
-base/head. GREEN, YELLOW and RED require one approving independent Babel chat
-review. A second perspective remains an explicit escalation. BLACK remains an
-owner-decision boundary. Required CI,
-resolved review threads, and immutable-base merge evaluation still apply.
+Every PR requires an independent review of its exact current base/head. V3
+(`independent_agent_review_v3` / `host_review_handoff_v3`) is the canonical
+authoritative contract and is accepted for any supported review engine. GREEN,
+YELLOW and RED require one approving independent review; a second perspective
+remains an explicit escalation. BLACK remains an owner-decision boundary.
+Required CI, resolved review threads, and immutable-base merge evaluation still
+apply.
 
-**Gate identity.** The merge gate requires a Babel chat review executed on
-OpenCode Go: gate evidence declares `review_provider: "opencode-go"` with a
-`babel`/`chat` harness. Any evidence that claims the Babel chat harness must name
-`opencode-go` as its provider, so the low-level validator fails closed on any
-other provider; the merge gate additionally fails closed on a missing harness.
-Claude Code is a benchmark-only comparison arm — it may inform
-research and comparisons but can never satisfy the independent-review gate or
-substitute for the Babel reviewer. The reviewer credential is Babel-native
+**Gate identity.** Authority comes from an owner-authenticated controller
+handoff bound to the exact candidate, not from a specific vendor or model family.
+For legacy V2 compatibility, evidence that claims the Babel chat harness
+(`babel`/`chat`) must name `opencode-go` as its provider, so the low-level
+validator fails closed on any other provider, and the merge gate fails closed on
+a missing harness. The V2 reviewer credential is Babel-native
 (`~/.config/babel/get-auth-token.js`, overridable with
 `BABEL_OPENCODE_GO_HELPER`); the `~/.claude` helper is a deprecated fallback only.
+
+V3 (`independent_agent_review_v3` / `host_review_handoff_v3`) is the canonical
+authoritative contract and is accepted for any review engine. Execution
+independence matters more than model-family diversity: the same model/runtime is
+valid when the reviewer is a genuinely fresh execution distinct from the builder
+and from any repair producer. The production V3 producer is
+`tools/babel-pr-orchestrate.mts` (see
+[`docs/BABEL_PR_REVIEW.md`](../../docs/BABEL_PR_REVIEW.md) §Orchestrated
+certification), which launches fresh read-only subagent executions and posts the
+owner-authenticated handoff. V2 (`babel`/`chat`, `opencode-go`) remains a
+legacy/compatibility path.
 
 Use the trusted host controller described in
 [`docs/BABEL_PR_REVIEW.md`](../../docs/BABEL_PR_REVIEW.md). It invokes the actual

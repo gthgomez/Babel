@@ -237,6 +237,64 @@ test success. Rejected or uncertain findings go through evidence-based
 adjudication; do not mechanically rewrite BLOCK to APPROVE or weaken a gate.
 Merge only the exact candidate accepted by CI and the base-rooted gate.
 
+## Orchestrated certification (current production V3 producer)
+
+`tools/babel-pr-orchestrate.mts` is the orchestrator-friendly entrypoint that
+produces authoritative V3 evidence (`independent_agent_review_v3` /
+`host_review_handoff_v3`) from fresh subagent executions, so an active coding
+agent no longer needs a separately scheduled Babel reviewer daemon:
+
+```powershell
+node babel-cli/node_modules/tsx/dist/cli.mjs tools/babel-pr-orchestrate.mts `
+  --repo-root <trusted-git-clone> --state-dir <private-non-git-directory> `
+  --pr <number> [--model <opencode-model>] [--publish] [--json]
+```
+
+What it does on the exact candidate:
+
+1. Collects the candidate envelope and materializes an inert, read-only
+   snapshot of the candidate tree (no checkout hooks, no dependency install).
+2. Runs one or two fresh reviewer executions per the canonical policy
+   (`babel-cli/src/services/reviewPolicy.ts`, also consumed by
+   `mergeReadinessBroker.ts`) using `createOpenCodeReviewAdapter`
+   (`opencode run --agent babel-reviewer` against a deny-by-default read-only
+   agent config). Reviewer principals and execution ids are fresh; the runtime
+   records `fresh_context: true` / `fresh_process: true`.
+3. Requires `FINAL_CERTIFICATION`; an approve with blocking findings is never
+   emitted as approval.
+4. With `--publish`, posts the owner-authenticated V3 handoff
+   (`<!-- babel-controller-independent-review-v3 -->`) so Trusted Control Plane
+   automatically reevaluates the exact head.
+
+Status is machine-readable (`COLLECTED`, `REVIEWING`, `BLOCKED`, `REPAIRING`,
+`RETESTING`, `CERTIFYING`, `WAITING_FOR_CI`, `MERGE_READY`, `ESCALATED`) with
+exit codes `0` certified, `2` blocked (repair required), `3` escalated.
+
+**Execution independence, not model diversity.** The controlling rule is that
+the reviewer is a genuinely fresh execution distinct from the builder and from
+any repair producer. The same model/runtime is allowed. The controller rejects a
+reviewer whose principal or execution equals the builder or the candidate
+producer, and `runtime.controller_execution_id` must equal the reviewer
+execution id. External adapters deliberately omit `requested_provider` /
+`observed_provider` (attribution `unavailable`) rather than claim the
+Babel-native `opencode-go` provider; model identity is recorded with the
+existing `observed | configured | unavailable` tri-state and is never
+fabricated.
+
+**Repair.** The bounded review → repair → fresh-certification loop
+(`babel-cli/src/services/reviewOrchestrator.ts`) supports review workers plus an
+optional repair worker (`AutonomousEngineeringWorkerAdapter.repair`), records
+producer lineage for each repair, and re-collects the new head so the prior
+approval is invalid. The CLI entrypoint is review-only: on a blocking finding it
+returns `BLOCKED` with the findings so the orchestrating agent repairs and
+re-runs certification. A BLOCK of an unchanged candidate cannot be re-reviewed
+into approval (anti-approval-shopping).
+
+**Policy note.** The base-rooted PowerShell gate still enforces a floor of one
+independent review for every non-BLACK lane; `reviewPolicy.ts` is the single
+TypeScript source of truth and preserves that floor (AMBIGUOUS/unknown lanes keep
+the historical ELEVATED-equivalent strength).
+
 ## Harness learning and operating limits
 
 Owner-authorized Babel PR review has no dollar cap. Retain wall-clock, turn,

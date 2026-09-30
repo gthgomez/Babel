@@ -19,6 +19,7 @@ import {
   resolveChatTaskClass,
   analyzeTaskShape,
   type ChatTaskClass,
+  type TaskOperation,
   type VerificationPolicy,
   type TaskShape,
 } from '../config/chatTaskClass.js';
@@ -47,6 +48,13 @@ export interface TurnRuntimeSnapshot extends TurnRuntimeCounters {
   taskIntent: TurnTaskIntent;
   taskClass: ChatTaskClass;
   taskShape?: TaskShape;
+  /**
+   * D01: effective operation for this accepted submission, derived from the
+   * same TaskShape machinery that resolves taskClass. Read-only gating,
+   * preparation fuses, progress policy and finalization consume this one
+   * policy instead of re-deriving intent from a second classifier.
+   */
+  effectiveOperation?: TaskOperation;
   escalationReason?: string;
   gatePolicy: VerificationPolicy | null;
   /** Last sticky intent retained for explicit continuation. */
@@ -90,19 +98,38 @@ export function emptyTurnCounters(): TurnRuntimeCounters {
 }
 
 /**
+ * Bare continuation gestures carry no operation signal of their own. They are
+ * not the task text; they mean "keep doing what we were doing". Production
+ * callers do not set `continueTask`, so this is the reachable continuation
+ * contract: carry the prior submission's operation/class forward rather than
+ * re-deriving READ_ONLY from a verb-less prompt (I3). Explicit operation text
+ * ("continue and fix X") does not match and is classified on its own merits.
+ */
+const CONTINUATION_PROMPT_RE =
+  /^(?:(?:please|ok(?:ay)?|alright)\s+)?(?:continue|keep\s+going|go\s+on|carry\s+on|proceed|do\s+it|go\s+ahead|next)(?:\s+(?:please|now|with\s+(?:it|that|the(?:\s+\w+)?\s+task)))?[.!]?$/i;
+
+export function isContinuationPrompt(taskText: string): boolean {
+  return CONTINUATION_PROMPT_RE.test(taskText.trim());
+}
+
+/**
  * Build the TurnRuntime for a new user submission.
  * Isolates counters by default; only continues when continueTask is true.
  */
 export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntimeSnapshot {
   const prev = input.previous ?? null;
   const continueTask = input.continueTask === true && prev != null;
+  const continuationGesture = !continueTask && prev != null && isContinuationPrompt(input.userInput);
+  // Operation/class freeze for explicit continuation and bare continuation
+  // gestures; counters still isolate unless continueTask is true.
+  const carryOperation = continueTask || continuationGesture;
   const submissionIndex = (prev?.submissionIndex ?? 0) + 1;
 
   const taskIntent: TurnTaskIntent =
     input.taskIntent ??
     (continueTask && prev?.stickyIntent ? prev.stickyIntent : input.classifyIntent(input.userInput));
 
-  const taskClass = continueTask && prev
+  const taskClass = carryOperation && prev
     ? prev.taskClass
     : resolveChatTaskClass({
         taskText: input.userInput,
@@ -127,6 +154,12 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
     : emptyTurnCounters();
 
   const taskShape = analyzeTaskShape(input.userInput);
+  // Continuation (explicit or bare gesture) keeps the frozen operation from the
+  // prior submission; isolated submissions derive it fresh from TaskShape.
+  const effectiveOperation: TaskOperation =
+    carryOperation && prev?.effectiveOperation
+      ? prev.effectiveOperation
+      : taskShape.operation;
 
   return {
     submissionIndex,
@@ -134,6 +167,7 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
     taskIntent,
     taskClass,
     taskShape,
+    effectiveOperation,
     gatePolicy,
     stickyIntent: taskIntent,
     continuedTask: continueTask,

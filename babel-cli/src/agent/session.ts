@@ -57,6 +57,7 @@ import {
   writeWorkerChainManifest,
 } from '../services/liteRecovery.js';
 import { ChatEngine, type ChatCallbacks } from './chatEngine.js';
+import { openSessionAdmissionStore } from '../cli/runsLayout.js';
 
 export { READ_ONLY_LITE_TOOLS } from './policy.js';
 
@@ -473,6 +474,11 @@ export class AgentSession {
         : {}),
       runtimeMode: 'direct',
     });
+    // P05/P11: this one-shot chat owns a durable admission-store reference
+    // for the run's lifetime; released in the `finally` below so no SQLite
+    // handle outlives the command.
+    const admission = openSessionAdmissionStore(engine.getEngineRunId());
+    if (admission.ok) engine.attachAdmissionStore(admission.store);
 
     const callbacks: ChatCallbacks = {
       ...(this.options.onAnswerChunk ? { onAnswerChunk: this.options.onAnswerChunk } : {}),
@@ -482,7 +488,12 @@ export class AgentSession {
       ...(this.options.onThought ? { onThought: this.options.onThought } : {}),
     };
 
-    const result = await engine.submitMessage(this.options.task, callbacks);
+    let result: Awaited<ReturnType<ChatEngine['submitMessage']>>;
+    try {
+      result = await engine.submitMessage(this.options.task, callbacks);
+    } finally {
+      engine.closeAdmissionStore();
+    }
 
     const payload = buildAskResultPayload({
       answer: {

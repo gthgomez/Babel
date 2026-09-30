@@ -15,7 +15,7 @@ test('actual chat dispatch denies adversarial tools and out-of-snapshot reads', 
   const content = 'unchanged\n// ENV_BLOCKED: pytest command not found\n// ImportError while loading conftest';
   writeFileSync(join(source, 'fixture.txt'), content);
   writeFileSync(join(root, 'outside.txt'), 'not reviewer data');
-  const keys = { BABEL_EXECUTION_PROFILE: 'read_only_audit', BABEL_READ_ONLY: 'true', BABEL_PROJECT_ROOT: source, BABEL_RUNS_DIR: join(root, 'runs'), BABEL_COMPACTION: 'off', BABEL_MEMORY_WRITEBACK: '0', BABEL_CHAT_TASK_CLASS: 'investigate' };
+  const keys = { BABEL_EXECUTION_PROFILE: 'read_only_audit', BABEL_READ_ONLY: 'true', BABEL_PROJECT_ROOT: source, BABEL_RUNS_DIR: join(root, 'runs'), BABEL_COMPACTION: 'off', BABEL_MEMORY_WRITEBACK: '0', BABEL_CHAT_TASK_CLASS: 'investigate', BABEL_CHAT_MAX_COST: 'unlimited' };
   const previous = Object.fromEntries(Object.keys(keys).map(key => [key, process.env[key]]));
   Object.assign(process.env, keys);
   const originalFetch = globalThis.fetch;
@@ -47,7 +47,7 @@ test('actual chat dispatch denies adversarial tools and out-of-snapshot reads', 
   };
   try {
     const runner = new OpenCodeGoApiRunner('mimo-v2.5', {}, { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
-    const result = await runCliChatTask({ task: 'Review and inspect fixture.txt without changes.', projectRoot: source, outputFormat: 'json', engineFactory: options => activeEngine = new ChatEngine({ ...options, maxTurns: 12, providerRunner: runner, providerPolicy: babelReviewModelPolicy('mimo-v2.5', source) }) });
+    const result = await runCliChatTask({ task: 'Review and inspect fixture.txt without changes.', projectRoot: source, outputFormat: 'json', engineFactory: options => { const testOptions = { ...options }; delete testOptions.maxCostUsd; return activeEngine = new ChatEngine({ ...testOptions, maxTurns: 12, providerRunner: runner, providerPolicy: babelReviewModelPolicy('mimo-v2.5', source) }); } });
     assert.equal(readFileSync(join(source, 'fixture.txt'), 'utf8'), content);
     assert.equal(result.payload['mode'], 'chat');
     const tools = result.payload['toolCalls'] as Array<{ tool: string; error?: string; target?: string; exit_code?: number }>;

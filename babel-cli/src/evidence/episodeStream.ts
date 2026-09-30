@@ -174,6 +174,8 @@ export function mapSessionKindToEpisode(
       return { kind: 'session', type: 'approval_decision' };
     case 'repair_attempt':
       return { kind: 'recovery', type: 'repair_attempt' };
+    case 'working_state_snapshot':
+      return { kind: 'recovery', type: 'working_state_snapshot' };
     default: {
       const _exhaustive: never = kind;
       return { kind: 'session', type: String(_exhaustive) };

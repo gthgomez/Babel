@@ -490,6 +490,10 @@ describe('LLMSummarizeCompaction', () => {
     const summaries = result.filter((m) => m.name === 'compaction_summary');
     assert.strictEqual(summaries.length, 1);
     assert.ok(summaries[0]!.content.includes('KEY_DECISIONS'));
+    assert.strictEqual(summaries[0]!.role, 'assistant');
+    assert.strictEqual(summaries[0]!.provenance, 'model');
+    assert.strictEqual(summaries[0]!.authoritative, false);
+    assert.strictEqual(summaries[0]!.compactionCandidate, true);
 
     // Restore env
     if (savedKey) {
@@ -593,6 +597,7 @@ describe('CompactionManager integration', () => {
     const originalFetch = globalThis.fetch;
     const phases: string[] = [];
     const completions: Array<{ status: string; observed: string | null | undefined }> = [];
+    const usage: Array<{ modelId: string; inputTokens: number | null; outputTokens: number | null }> = [];
     process.env['BABEL_COMPACTION_API_KEY'] = 'synthetic-router-key';
     process.env['BABEL_COMPACTION_API_BASE'] = 'https://openrouter.ai/api/v1/chat/completions';
     process.env['BABEL_COMPACTION_MODEL'] = 'z-ai/glm-5.3-flash';
@@ -611,6 +616,11 @@ describe('CompactionManager integration', () => {
       const result = await strategy.compact(messages, {
         model: 'z-ai/glm-5.3-flash',
         maxTokens: 100,
+        onUsageRecorded: (charge) => usage.push({
+          modelId: charge.modelId,
+          inputTokens: charge.inputTokens,
+          outputTokens: charge.outputTokens,
+        }),
         callbacks: {
           onInvocationPhase: (event) => phases.push(event.phase),
           onInvocationCompleted: (event) =>
@@ -623,6 +633,7 @@ describe('CompactionManager integration', () => {
       assert.deepStrictEqual(completions, [
         { status: 'delivered', observed: 'z-ai/glm-5.3-flash' },
       ]);
+      assert.deepStrictEqual(usage, [{ modelId: 'z-ai/glm-5.3-flash', inputTokens: 8, outputTokens: 4 }]);
     } finally {
       globalThis.fetch = originalFetch;
       if (savedKey === undefined) delete process.env['BABEL_COMPACTION_API_KEY'];

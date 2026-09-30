@@ -5,7 +5,6 @@
   "babel-cli/src/daemon/main.ts": 4,
   "babel-cli/src/interactive/execution/chat.ts": 1,
   "babel-cli/src/commands/coreCommands.ts": 2,
-  "babel-cli/src/agent/agentRunCoordinator.ts": 1,
   "babel-cli/src/agent/textToolParser.ts": 6,
   "babel-cli/src/utils/secretRedaction.ts": 1,
   "babel-cli/src/localTools.ts": 2,

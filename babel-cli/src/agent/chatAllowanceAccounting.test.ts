@@ -8,7 +8,7 @@ import type { RunnerInvocationMetadata } from '../runners/base.js'
 import { CostTracker, globalCostTracker } from '../services/costTracker.js'
 import { chatSessionDir } from '../cli/runsLayout.js'
 import { ChatEngine } from './chatEngine.js'
-import { deriveChildAllowance } from './childBudget.js'
+import { deriveChildAllowance, inheritedChildBudgetLimiter } from './childBudget.js'
 
 function usageMetadata(inputTokens: number, outputTokens: number): RunnerInvocationMetadata {
   return {
@@ -68,7 +68,7 @@ function allowanceAccess(engine: ChatEngine): {
     wallCapMs: number
     turnCap: number
   }) => void
-  checkBudgets: () => { ok: boolean; limiter?: string }
+  checkBudgets: () => { ok: boolean; limiter?: string; reason?: string }
   consumeTaskTurn: () => void
   beginActiveExecution: () => void
   pauseActiveExecution: () => void
@@ -84,7 +84,7 @@ function allowanceAccess(engine: ChatEngine): {
       wallCapMs: number
       turnCap: number
     }) => void
-    checkBudgets: () => { ok: boolean; limiter?: string }
+    checkBudgets: () => { ok: boolean; limiter?: string; reason?: string }
     consumeTaskTurn: () => void
     beginActiveExecution: () => void
     pauseActiveExecution: () => void
@@ -149,6 +149,8 @@ test('A-2: task-indexed usage sums to the independent global aggregate', () => {
     chargeId: 'charge-b',
   })
 
+  assert.ok(first !== null && second !== null)
+
   assert.equal(tracker.getTaskSummary('task-a').totalCostUSD, first)
   assert.equal(tracker.getTaskSummary('task-b').totalCostUSD, second)
   assert.equal(tracker.getSessionSummary().totalCostUSD, first + second)
@@ -184,6 +186,94 @@ test('A-3: delegated child usage charges the child and its parent exactly once',
   assert.equal(tracker.getSessionSummary().totalCostUSD, cost)
 })
 
+test('late provider usage remains billed to the cancelled owner after a new task starts', () => {
+  const runsRoot = mkdtempSync(join(tmpdir(), 'babel-chat-late-usage-'))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-chat-late-project-'))
+  const previousRunsDir = process.env['BABEL_RUNS_DIR']
+  const previousUsage = globalCostTracker.getSessionSummary()
+  process.env['BABEL_RUNS_DIR'] = runsRoot
+  globalCostTracker.resetSession()
+  try {
+    const engine = new ChatEngine({ task: 'task A', projectRoot, model: 'deepseek-v4-flash' })
+    engine.applyUserSubmission({ userInput: 'start task A' })
+    const ownerA = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
+    const scope = {
+      taskOwnerId: ownerA,
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      turnId: null,
+      chargeId: 'late-A-charge',
+    }
+    engine.applyUserSubmission({ userInput: 'start task B' })
+    const ownerB = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
+    assert.notEqual(ownerA, ownerB)
+    const tracker = engine as unknown as {
+      trackRunnerUsage: (runner: { getLastInvocationMetadata: () => RunnerInvocationMetadata }, usageScope: typeof scope) => void
+    }
+    tracker.trackRunnerUsage({ getLastInvocationMetadata: () => usageMetadata(10_000, 1_000) }, scope)
+    assert.ok(globalCostTracker.getTaskSummary(ownerA).totalCostUSD > 0)
+    assert.equal(globalCostTracker.getTaskSummary(ownerB).totalCostUSD, 0)
+    assert.deepEqual(globalCostTracker.getTaskChargeIds(ownerA), ['late-A-charge'])
+    assert.equal(accountingAccess(engine).currentTaskCostUsd(), 0)
+  } finally {
+    globalCostTracker.resetSession()
+    globalCostTracker.restoreSessionCost({
+      totalCostUSD: previousUsage.totalCostUSD,
+      totalInputTokens: previousUsage.totalInputTokens,
+      totalOutputTokens: previousUsage.totalOutputTokens,
+      totalTokens: previousUsage.totalTokens,
+    })
+    if (previousRunsDir === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRunsDir
+    rmSync(runsRoot, { recursive: true, force: true })
+    rmSync(projectRoot, { recursive: true, force: true })
+  }
+})
+
+test('finite task dollar cap refuses another request after unknown-price usage', () => {
+  const runsRoot = mkdtempSync(join(tmpdir(), 'babel-chat-unknown-cost-'))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-chat-unknown-project-'))
+  const previousRunsDir = process.env['BABEL_RUNS_DIR']
+  const previousUsage = globalCostTracker.getSessionSummary()
+  process.env['BABEL_RUNS_DIR'] = runsRoot
+  globalCostTracker.resetSession()
+  try {
+    const engine = new ChatEngine({ task: 'finite cap task', projectRoot, model: 'deepseek-v4-flash' })
+    engine.applyUserSubmission({ userInput: 'start finite cap task' })
+    const owner = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
+    globalCostTracker.recordUnknownCharge('unlisted-provider-model', { taskOwnerId: owner, chargeId: 'unknown-priced-request' })
+    const summary = globalCostTracker.getTaskSummary(owner)
+    assert.equal(summary.completeCostUSD, null)
+    assert.equal(summary.unknownChargeCount, 1)
+    const budget = allowanceAccess(engine).checkBudgets()
+    assert.equal(budget.ok, false)
+    assert.equal(budget.limiter, 'cost')
+    assert.match(budget.reason ?? '', /unknown pricing/)
+  } finally {
+    globalCostTracker.resetSession()
+    globalCostTracker.restoreSessionCost({
+      totalCostUSD: previousUsage.totalCostUSD,
+      totalInputTokens: previousUsage.totalInputTokens,
+      totalOutputTokens: previousUsage.totalOutputTokens,
+      totalTokens: previousUsage.totalTokens,
+    })
+    if (previousRunsDir === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRunsDir
+    rmSync(runsRoot, { recursive: true, force: true })
+    rmSync(projectRoot, { recursive: true, force: true })
+  }
+})
+
+test('finite child cost allowance without an owner fails closed despite unrelated session spend', () => {
+  const allowance = deriveChildAllowance({
+    parentTaskBaselineUsd: 0,
+    parentEffectiveCostCapUsd: 1,
+    parentDeadlineAtMs: null,
+    childMaxRounds: 2,
+  })
+  assert.equal(allowance.remainingCostUsd, 0)
+  assert.equal(inheritedChildBudgetLimiter(allowance), 'cost')
+})
+
 test('A-4: provider retry attempts retain task identity and dedupe only the same attempt', () => {
   const tracker = new CostTracker()
   const first = tracker.trackUsage('deepseek-v4-flash', 5_000, 500, null, null, {
@@ -194,6 +284,7 @@ test('A-4: provider retry attempts retain task identity and dedupe only the same
     taskOwnerId: 'retry-owner',
     chargeId: 'request-1:attempt-2',
   })
+  assert.ok(first !== null && retry !== null)
   const replay = tracker.trackUsage('deepseek-v4-flash', 6_000, 600, null, null, {
     taskOwnerId: 'retry-owner',
     chargeId: 'request-1:attempt-2',
@@ -355,7 +446,7 @@ test('A-8: a new task receives a fresh owner and grant with zero consumed allowa
     assert.equal(isolated.continuedTask, false)
     assert.notEqual(second.taskOwnerId, first.taskOwnerId)
     assert.notEqual(second.grant.grantId, first.grant.grantId)
-    assert.deepEqual(second.consumed, { costUsd: 0, activeWallMs: 0, turns: 0 })
+    assert.deepEqual(second.consumed, { costUsd: 0, unknownChargeCount: 0, activeWallMs: 0, turns: 0 })
   } finally {
     rmSync(projectRoot, { recursive: true, force: true })
   }

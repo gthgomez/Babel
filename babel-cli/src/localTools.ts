@@ -1125,7 +1125,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'mocked',
     policyTags: ['memory', 'write'],
     input: { required: ['key', 'value'], optional: [] },
-    handler: (req) => handleMemoryStore(req as Extract<ToolCallRequest, { tool: 'memory_store' }>),
+    handler: (req, context) => handleMemoryStore(req as Extract<ToolCallRequest, { tool: 'memory_store' }>, context.projectRoot),
   },
   {
     name: 'memory_query',
@@ -1135,7 +1135,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'live',
     policyTags: ['memory', 'read'],
     input: { required: ['key'], optional: [] },
-    handler: (req) => handleMemoryQuery(req as Extract<ToolCallRequest, { tool: 'memory_query' }>),
+    handler: (req, context) => handleMemoryQuery(req as Extract<ToolCallRequest, { tool: 'memory_query' }>, context.projectRoot),
   },
   {
     name: 'enter_plan_mode',
@@ -1165,8 +1165,8 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'live',
     policyTags: ['search', 'read'],
     input: { required: ['query'], optional: ['limit'] },
-    handler: (req) =>
-      handleSemanticSearch(req as Extract<ToolCallRequest, { tool: 'semantic_search' }>),
+    handler: (req, context) =>
+      handleSemanticSearch(req as Extract<ToolCallRequest, { tool: 'semantic_search' }>, context.projectRoot),
   },
   {
     name: 'grep',

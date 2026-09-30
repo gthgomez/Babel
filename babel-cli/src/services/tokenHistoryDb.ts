@@ -38,6 +38,7 @@ const SCHEMA_SQL = `
     total_input_tokens INTEGER NOT NULL DEFAULT 0,
     total_output_tokens INTEGER NOT NULL DEFAULT 0,
     total_cost REAL NOT NULL DEFAULT 0,
+    unknown_charge_count INTEGER NOT NULL DEFAULT 0,
     turn_count INTEGER NOT NULL DEFAULT 0,
     project_root TEXT NOT NULL
   );
@@ -74,6 +75,7 @@ export interface SessionSummaryRow {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCost: number;
+  unknownChargeCount: number;
   turnCount: number;
   projectRoot: string;
 }
@@ -84,6 +86,7 @@ export interface SessionUpsertData {
   totalInputTokens?: number;
   totalOutputTokens?: number;
   totalCost?: number;
+  unknownChargeCount?: number;
   turnCount?: number;
   projectRoot: string;
 }
@@ -162,6 +165,10 @@ export class TokenHistoryDb {
       this.db.exec('PRAGMA journal_mode=WAL');
       this.db.exec('PRAGMA synchronous=NORMAL');
       this.db.exec(SCHEMA_SQL);
+      const columns = new Set((this.db.prepare('PRAGMA table_info(session_summary)').all() as Array<{ name: string }>).map((column) => column.name));
+      if (!columns.has('unknown_charge_count')) {
+        this.db.exec('ALTER TABLE session_summary ADD COLUMN unknown_charge_count INTEGER NOT NULL DEFAULT 0');
+      }
     } catch {
       // Database unavailable — all operations become no-ops
       this.db = null;
@@ -368,6 +375,7 @@ export class TokenHistoryDb {
                    total_input_tokens = ?,
                    total_output_tokens = ?,
                    total_cost = ?,
+                   unknown_charge_count = ?,
                    turn_count = ?,
                    project_root = ?
              WHERE session_id = ?
@@ -382,6 +390,7 @@ export class TokenHistoryDb {
               ? data.totalOutputTokens
               : (existing['total_output_tokens'] as number) ?? 0,
             data.totalCost !== undefined ? data.totalCost : (existing['total_cost'] as number) ?? 0,
+            data.unknownChargeCount !== undefined ? data.unknownChargeCount : (existing['unknown_charge_count'] as number) ?? 0,
             data.turnCount !== undefined ? data.turnCount : (existing['turn_count'] as number) ?? 0,
             data.projectRoot,
             sessionId,
@@ -391,8 +400,8 @@ export class TokenHistoryDb {
         this.db
           .prepare(
             `
-            INSERT INTO session_summary (session_id, started_at, ended_at, total_input_tokens, total_output_tokens, total_cost, turn_count, project_root)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO session_summary (session_id, started_at, ended_at, total_input_tokens, total_output_tokens, total_cost, unknown_charge_count, turn_count, project_root)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           `,
           )
           .run(
@@ -402,6 +411,7 @@ export class TokenHistoryDb {
             data.totalInputTokens ?? 0,
             data.totalOutputTokens ?? 0,
             data.totalCost ?? 0,
+            data.unknownChargeCount ?? 0,
             data.turnCount ?? 0,
             data.projectRoot,
           );
@@ -423,7 +433,7 @@ export class TokenHistoryDb {
         .prepare(
           `
           SELECT session_id, started_at, ended_at,
-                 total_input_tokens, total_output_tokens, total_cost,
+                 total_input_tokens, total_output_tokens, total_cost, unknown_charge_count,
                  turn_count, project_root
             FROM session_summary
            WHERE session_id = ?
@@ -440,6 +450,7 @@ export class TokenHistoryDb {
         totalInputTokens: Number(row['total_input_tokens'] ?? 0),
         totalOutputTokens: Number(row['total_output_tokens'] ?? 0),
         totalCost: Number(row['total_cost'] ?? 0),
+        unknownChargeCount: Number(row['unknown_charge_count'] ?? 0),
         turnCount: Number(row['turn_count'] ?? 0),
         projectRoot: String(row['project_root'] ?? ''),
       };
@@ -458,6 +469,22 @@ export class TokenHistoryDb {
     return stats.totalCost;
   }
 
+  /** Return a session-upserted cost projection, or null if the store is unavailable. */
+  getProjectCostSummary(projectRoot: string): { knownCostUSD: number; unknownChargeCount: number } | null {
+    this.ensureOpen();
+    if (!this.db) return null;
+    try {
+      const row = this.db.prepare(`
+        SELECT COALESCE(SUM(total_cost), 0) AS known_cost,
+               COALESCE(SUM(unknown_charge_count), 0) AS unknown_charges
+          FROM session_summary WHERE project_root = ?
+      `).get(projectRoot) as { known_cost: number; unknown_charges: number };
+      return { knownCostUSD: row.known_cost, unknownChargeCount: row.unknown_charges };
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Get session summaries for a project, ordered by start time descending.
    */
@@ -470,7 +497,7 @@ export class TokenHistoryDb {
         .prepare(
           `
           SELECT session_id, started_at, ended_at,
-                 total_input_tokens, total_output_tokens, total_cost,
+                 total_input_tokens, total_output_tokens, total_cost, unknown_charge_count,
                  turn_count, project_root
             FROM session_summary
            WHERE project_root = ?
@@ -487,6 +514,7 @@ export class TokenHistoryDb {
         totalInputTokens: Number(row['total_input_tokens'] ?? 0),
         totalOutputTokens: Number(row['total_output_tokens'] ?? 0),
         totalCost: Number(row['total_cost'] ?? 0),
+        unknownChargeCount: Number(row['unknown_charge_count'] ?? 0),
         turnCount: Number(row['turn_count'] ?? 0),
         projectRoot: String(row['project_root'] ?? ''),
       }));

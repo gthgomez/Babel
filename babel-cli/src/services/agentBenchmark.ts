@@ -43,6 +43,7 @@ import {
   computeVerifierDependencyHashes,
   hasVerifierDependencyTamper,
 } from '../agent/verifierIntegrity.js';
+import { detectAndBuildBlockedReport, isBlockingEvidence } from '../agent/chatEngineSupport.js';
 import { isCodingTaskSuccess } from './codingTaskSuccess.js';
 
 export { resolveBenchmarkDeepSeekModel } from './agentBenchmarkHarness.js';
@@ -646,28 +647,34 @@ function classifyFailure(
  * Validate a BlockedReport against the tool-call log.
  *
  * Accepts:
- * - Engine-synthesized blocks (text-only loop / per-round ceiling) with synthetic checked entries
+ * - Engine-synthesized blocks (text-only loop / per-round ceiling / tamper) with
+ *   synthetic checked entries AND a separately typed harness origin (R0-6).
  * - Strict tool+target matches (including target substring for long command lines)
  *
- * Soft accept when top-level status is BLOCKED is handled by
- * {@link extractBlockedReportFromPayload}, not here.
+ * R0-6: unrelated tool activity never validates a report, and a synthetic
+ * harness block is trusted only when the harness typed its origin. There is no
+ * soft-accept on top-level status.
  */
 export function validateBlockedReport(
   blockedReport: BlockedReport,
   toolCallLog: Array<{ tool: string; target: string }>,
 ): boolean {
-  if (!blockedReport.checked || blockedReport.checked.length === 0) {
-    return toolCallLog.length > 0;
-  }
+  const checked = blockedReport.checked;
+  // The schema already requires >= 1 checked entry; never accept on the mere
+  // presence of unrelated tool activity.
+  if (!checked || checked.length === 0) return false;
 
-  const allSynthetic = blockedReport.checked.every(
+  const allSynthetic = checked.every(
     (e) =>
       e.action === 'chat_turn' ||
       e.target === 'text_only_loop' ||
       e.target === 'per_round_limit' ||
       e.target.includes('tamper'),
   );
-  if (allSynthetic) return true;
+  if (allSynthetic) {
+    // Trusted harness-origin block: the harness must have typed the origin.
+    return blockedReport.reason_code !== undefined && blockedReport.cause_class === 'harness';
+  }
 
   if (toolCallLog.length === 0) return false;
 
@@ -678,7 +685,7 @@ export function validateBlockedReport(
       entryTarget.includes(tcTarget);
   };
 
-  return blockedReport.checked.every((entry) =>
+  return checked.every((entry) =>
     toolCallLog.some(
       (tc) => tc.tool === entry.action && targetMatches(tc.target, entry.target),
     ),
@@ -700,14 +707,79 @@ export function extractBlockedReportFromPayload(
         target: String(tc['target'] ?? ''),
       }))
     : [];
+  // R0-6: no soft accept. A report is accepted only when it matches actual
+  // evidence, or is a typed harness-origin block. Unrelated tool activity and a
+  // top-level status token cannot validate a report.
   if (validateBlockedReport(parsed.data, toolCalls)) {
     return parsed.data;
   }
-  // Soft accept: top-level status BLOCKED + schema-valid report + any tool activity
-  if (payload['status'] === 'BLOCKED' && toolCalls.length > 0) {
-    return parsed.data;
-  }
   return null;
+}
+
+/**
+ * R0-F: synthesize a declared-BLOCKED report from tool-call evidence.
+ *
+ * Prose is a report, not authority. A model `BLOCKED` line may only produce a
+ * report when the tool log independently proves an actual failure / denial /
+ * absence via {@link isBlockingEvidence} — the same predicate the chat engine
+ * uses. A successful investigation plus a BLOCKED sentence yields `null`, so
+ * investigation activity is never treated as proof of a block and the harness
+ * never fabricates external-dependency blame.
+ */
+const INVESTIGATE_TOOLS = new Set([
+  'read_file', 'read_range', 'grep', 'glob', 'list_dir',
+  'run_command', 'shell_exec', 'test_run',
+]);
+
+function blockingEvidenceEntries(
+  toolCalls: Array<Record<string, unknown>>,
+): Array<{
+  tool: string;
+  target: string;
+  exit_code?: number;
+  error?: string;
+  stdout?: string;
+  stderr?: string;
+}> {
+  return toolCalls
+    .map((tc) => ({
+      tool: String(tc['tool'] ?? ''),
+      target: String(tc['target'] ?? ''),
+      ...(typeof tc['exit_code'] === 'number' ? { exit_code: tc['exit_code'] } : {}),
+      ...(typeof tc['error'] === 'string' ? { error: tc['error'] } : {}),
+      ...(typeof tc['stdout'] === 'string' ? { stdout: tc['stdout'] } : {}),
+      ...(typeof tc['stderr'] === 'string' ? { stderr: tc['stderr'] } : {}),
+    }))
+    .filter((tc) => tc.target !== '' && INVESTIGATE_TOOLS.has(tc.tool) && isBlockingEvidence(tc));
+}
+
+/**
+ * R0-F: true only when the payload's tool log independently proves a blocking
+ * condition. Model prose (`BLOCKED` in the answer) is not sufficient.
+ */
+export function hasBlockingToolEvidence(
+  payload: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!payload || !Array.isArray(payload['toolCalls'])) return false;
+  return blockingEvidenceEntries(payload['toolCalls'] as Array<Record<string, unknown>>).length > 0;
+}
+
+export function synthesizeDeclaredBlockedReport(
+  toolCalls: Array<Record<string, unknown>>,
+  answerText: string,
+): BlockedReport | null {
+  // R0-5: delegate to the single engine predicate. A report may exist only when
+  // the tool log establishes a TYPED blocking origin; the origin — not the
+  // model's prose — types the reason_code/cause_class.
+  const entries = toolCalls.map((tc) => ({
+    tool: String(tc['tool'] ?? ''),
+    target: String(tc['target'] ?? ''),
+    ...(typeof tc['exit_code'] === 'number' ? { exit_code: tc['exit_code'] } : {}),
+    ...(typeof tc['error'] === 'string' ? { error: tc['error'] } : {}),
+    ...(typeof tc['stdout'] === 'string' ? { stdout: tc['stdout'] } : {}),
+    ...(typeof tc['stderr'] === 'string' ? { stderr: tc['stderr'] } : {}),
+  }));
+  return detectAndBuildBlockedReport(answerText, entries);
 }
 
 /** Whether a blocked cell stayed under the token budget. */
@@ -988,12 +1060,10 @@ async function runParityAgentCell(
       typeof (cli.payload?.['answer'] as Record<string, unknown> | undefined)?.['answer'] === 'string'
         ? String((cli.payload?.['answer'] as Record<string, unknown>)['answer'])
         : '';
-    // R12: If the agent's answer mentions BLOCKED, don't auto-continue —
-    // the engine or agent declared the task impossible.
-    if (/\bBLOCKED\b/i.test(answerText)) {
-      continueNotes.push(`auto_continue_round_${continueRounds}: agent declared BLOCKED, stopping`);
-      break;
-    }
+    // R0-6: a bare `BLOCKED` token in prose must not alter benchmark lifecycle.
+    // The trusted structured blocked decision (declaredBlocked / the validated
+    // blocked_report) already gates the loop condition above; prose alone is
+    // narrative and must not stop auto-continue.
     // If the previous round made zero tool calls, refuse to
     // auto-continue — the model is in a text-only loop and restarting
     // would just re-trigger the same R11 guard.
@@ -1211,11 +1281,13 @@ async function runGovernanceAgentCell(
     statusText === 'ANSWER_READY' ||
     statusText === 'FIX_COMPLETE' ||
     statusText === 'COMPLETE';
-  // Never treat BLOCKED as a pass; stop auto-continue on honest exits
+  // Never treat BLOCKED as a pass; stop auto-continue on honest exits.
+  // R0-F: prose `BLOCKED` is only "declared" when the tool log independently
+  // proves a blocking condition; a successful investigation is not authority.
   let declaredBlocked =
     statusText === 'BLOCKED' ||
     extractBlockedReportFromPayload(cli.payload) != null ||
-    /\bBLOCKED\b/i.test(answerText);
+    (/\bBLOCKED\b/i.test(answerText) && hasBlockingToolEvidence(cli.payload));
   let falseComplete = claimedComplete && !verifierOk && !declaredBlocked;
   let success = verifierOk && !agentBlocked && !declaredBlocked;
   let continueRounds = 0;
@@ -1286,7 +1358,7 @@ async function runGovernanceAgentCell(
     declaredBlocked =
       statusText === 'BLOCKED' ||
       extractBlockedReportFromPayload(cli.payload) != null ||
-      /\bBLOCKED\b/i.test(answerText);
+      (/\bBLOCKED\b/i.test(answerText) && hasBlockingToolEvidence(cli.payload));
     falseComplete =
       (statusText === 'ANSWER_READY' || statusText === 'FIX_COMPLETE' || statusText === 'COMPLETE') &&
       !verifierOk &&
@@ -1326,34 +1398,13 @@ async function runGovernanceAgentCell(
   // Extract and validate BLOCKED report from final CLI payload
   let blockedReport = extractBlockedReportFromPayload(cli.payload);
   if (!blockedReport && declaredBlocked && Array.isArray(cli.payload?.['toolCalls'])) {
-    // Synthesize minimal report so diagnosis is preserved when status was BLOCKED
-    // but structured field failed soft validation.
-    const toolCalls = (cli.payload!['toolCalls'] as Array<Record<string, unknown>>).map((tc) => ({
-      tool: String(tc['tool'] ?? ''),
-      target: String(tc['target'] ?? ''),
-    }));
-    const investigateTools = new Set([
-      'read_file', 'read_range', 'grep', 'glob', 'list_dir',
-      'run_command', 'shell_exec', 'test_run',
-    ]);
-    if (toolCalls.length > 0) {
-      blockedReport = {
-        schema_version: 1,
-        status: 'BLOCKED',
-        reason: answerText.slice(0, 200) || 'Agent declared BLOCKED',
-        missing: 'External dependency or precondition not available',
-        checked: toolCalls.slice(-10)
-          .filter((tc) => investigateTools.has(tc.tool))
-          .map((tc) => ({
-            action: tc.tool,
-            target: tc.target,
-            finding: 'Investigated — see tool call log',
-          })),
-        next_steps: [
-          'Provide the missing proprietary binary or environment before retrying.',
-        ],
-      };
-    }
+    // R0-F: prose is a report, not authority. Synthesize only from tool calls
+    // that independently prove a blocking condition; a successful investigation
+    // plus a BLOCKED sentence yields null and keeps the real outcome.
+    blockedReport = synthesizeDeclaredBlockedReport(
+      cli.payload!['toolCalls'] as Array<Record<string, unknown>>,
+      answerText,
+    );
   }
 
   const blockedWithinBudget = isBlockedWithinBudget(usage.token_count, blockedReport);

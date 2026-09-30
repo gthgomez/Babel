@@ -519,6 +519,9 @@ export class WorkflowEngine {
 
       return { result: baseResult, events };
     } finally {
+      // P05/P11: the attempt's engine is discarded here — release its durable
+      // admission-store reference so node retries never leak SQLite handles.
+      if (typeof engine.closeAdmissionStore === 'function') engine.closeAdmissionStore();
       signal?.removeEventListener('abort', cancelEngine);
     }
   }

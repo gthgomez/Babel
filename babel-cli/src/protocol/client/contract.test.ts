@@ -76,9 +76,11 @@ test('thread.create roundtrips through JSON-RPC host', async () => {
 
 test('turn.submit and history.lookup roundtrip', async () => {
   const fixture = withTempRunsDir();
+  const client = new BabelProtocolClient();
+  let threadId: string | undefined;
   try {
-    const client = new BabelProtocolClient();
     const created = await client.threadCreate({ project_root: fixture.root, task: 'hello' });
+    threadId = created.thread_id;
     const submitted = await client.turnSubmit({
       thread_id: created.thread_id,
       message: 'hello',
@@ -104,6 +106,7 @@ test('turn.submit and history.lookup roundtrip', async () => {
     assert.equal(history.cells.length, 1);
     assert.equal(history.cells[0]?.cell_id, 'cell-u1');
   } finally {
+    if (threadId) client.getEngine(threadId)?.closeAdmissionStore();
     fixture.cleanup();
   }
 });

@@ -3,7 +3,7 @@
 // session. Lists available sessions when called without arguments.
 
 import type { ReplContext } from '../context.js';
-import { resumeChatSession } from '../chatSessionResume.js';
+import { resumeChatSession, type ResumeChatSessionOptions } from '../chatSessionResume.js';
 import { accentBright, muted, primary, error } from '../../ui/theme.js';
 import { listResumableSessions } from '../../services/chatSessionIndex.js';
 import { SessionPicker } from '../../ui/sessionPicker.js';
@@ -12,7 +12,10 @@ import { OutputBuffer } from '../../ui/outputBuffer.js';
 // ─── Handler ────────────────────────────────────────────────────────────────
 
 export async function handleResume(ctx: ReplContext, args: string[]): Promise<void> {
-  const sessionId = args[0];
+  // R0-3: explicit rebind for a session whose durable repository identity is
+  // unknown. Without it, resume refuses to admit execution.
+  const confirmUnknownIdentity = args.includes('--confirm-repo-identity');
+  const sessionId = args.find((arg) => !arg.startsWith('--'));
 
   if (!sessionId) {
     if (process.stdout.isTTY && !process.env['CI']) {
@@ -29,7 +32,7 @@ export async function handleResume(ctx: ReplContext, args: string[]): Promise<vo
         const restored = notifyOverlayClosed();
         if (restored) adapter.setInputText?.(restored);
         if (choice.action === 'resume') {
-          await resumeSession(ctx, choice.sessionId);
+          await resumeSession(ctx, choice.sessionId, { confirmUnknownIdentity });
         }
         return;
       }
@@ -38,16 +41,22 @@ export async function handleResume(ctx: ReplContext, args: string[]): Promise<vo
     return;
   }
 
-  await resumeSession(ctx, sessionId);
+  await resumeSession(ctx, sessionId, { confirmUnknownIdentity });
 }
 
 // ─── Resume a specific session ──────────────────────────────────────────────
 
-async function resumeSession(ctx: ReplContext, sessionId: string): Promise<void> {
-  const outcome = await resumeChatSession(ctx, sessionId);
+async function resumeSession(
+  ctx: ReplContext,
+  sessionId: string,
+  options: ResumeChatSessionOptions = {},
+): Promise<void> {
+  const outcome = await resumeChatSession(ctx, sessionId, options);
   const buf = OutputBuffer.getInstance();
   if (!outcome.ok) {
     if (outcome.reason === 'missing') {
+      buf.write(error(`\n  ${outcome.message}\n`));
+    } else if (outcome.reason === 'repo_identity_unknown') {
       buf.write(error(`\n  ${outcome.message}\n`));
     } else {
       buf.write(error(`\n  Failed to resume session "${sessionId}": ${outcome.message}\n`));

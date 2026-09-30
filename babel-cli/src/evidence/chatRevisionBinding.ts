@@ -76,6 +76,7 @@ export async function bindChatVerifierReceipt(input: {
   exit_code: number;
   summary: string;
   mutationPaths: string[];
+  scopeKind?: 'files' | 'repository';
   structured?: {
     verifierId: string;
     authoritySource: VerifierAuthoritySource;
@@ -86,6 +87,7 @@ export async function bindChatVerifierReceipt(input: {
   const boundRevision = await RevisionManager.computeRevision(
     input.projectRoot,
     input.mutationPaths,
+    { scope_kind: input.scopeKind ?? 'files' },
   );
   const now = Date.now();
   return {

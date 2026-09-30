@@ -792,7 +792,7 @@ describe('H7 model-fixed eval substrate', () => {
     assert.notStrictEqual(m.infrastructure_failure_rate, m.agent_failure_rate);
   });
 
-  it('single-trial paired deltas disclose zero measured uncertainty', () => {
+  it('single-trial paired deltas report insufficient replicates, never a false zero', () => {
     const base: EvalTaskResult[] = [
       {
         task_id: 't1',
@@ -814,7 +814,10 @@ describe('H7 model-fixed eval substrate', () => {
     const deltas = computePairedDeltas(base, cand, 'tokens');
     assert.strictEqual(deltas.length, 1);
     assert.strictEqual(deltas[0]!.delta, -200);
-    assert.strictEqual(deltas[0]!.uncertainty, 0);
+    assert.strictEqual(deltas[0]!.valid, true);
+    assert.strictEqual(deltas[0]!.uncertainty, null);
+    assert.strictEqual(deltas[0]!.uncertainty_status, 'insufficient_replicates');
+    assert.notStrictEqual(deltas[0]!.uncertainty, 0);
   });
 
   it('repeated paired trials report measured uncertainty', () => {
@@ -827,7 +830,12 @@ describe('H7 model-fixed eval substrate', () => {
       { ...base[1]!, variant: 'candidate', tokens: 60 },
     ];
     const deltas = computePairedDeltas(base, candidate, 'tokens');
-    assert.ok(deltas.every((delta) => delta.uncertainty > 0));
+    assert.ok(
+      deltas.every(
+        (delta) =>
+          delta.valid && delta.uncertainty !== null && delta.uncertainty > 0,
+      ),
+    );
   });
 
   it('promotion requires pre-fail, post-pass, held-out, rollback', () => {
@@ -886,7 +894,12 @@ describe('H7 model-fixed eval substrate', () => {
     assert.strictEqual(report.experimental_evidence, true);
     assert.ok(report.notes.some((n) => /NOT same-model Chat\/Deep LLM/i.test(n)));
     assert.ok(report.paired_deltas.length >= 1);
-    assert.strictEqual(report.paired_deltas[0]!.uncertainty, 0);
+    assert.strictEqual(report.paired_deltas[0]!.valid, true);
+    assert.strictEqual(report.paired_deltas[0]!.uncertainty, null);
+    assert.strictEqual(
+      report.paired_deltas[0]!.uncertainty_status,
+      'insufficient_replicates',
+    );
     assert.strictEqual(
       report.metrics.infrastructure_failure_rate !== undefined &&
         report.metrics.agent_failure_rate !== undefined,

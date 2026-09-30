@@ -231,6 +231,35 @@ describe("ProgressController", () => {
     assert.strictEqual(nonShell.isShellTool, false);
     assert.strictEqual(nonShell.isRecursiveEnum, false);
   });
+
+  // ── #216 fresh-task recovery primitive ──────────────────────────────────
+
+  it("#216 resetTaskLocal clears task-local punishment and preserves capability health", () => {
+    const pc = new ProgressController();
+    for (let i = 0; i < 12; i += 1) pc.scoreTurn([], false, 0);
+    pc.recordFailure({
+      tool: "run_command",
+      commandSnippet: "find . -type f",
+      exitCode: 1,
+    });
+    pc.recordFailure({
+      tool: "run_command",
+      commandSnippet: "find . -type f",
+      exitCode: 1,
+    });
+    assert.strictEqual(pc.InterventionLevel, "terminal_blocked");
+    assert.strictEqual(pc.TotalScore, 0);
+    assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
+
+    pc.resetTaskLocal();
+
+    assert.strictEqual(pc.InterventionLevel, "none");
+    assert.strictEqual(pc.TotalScore, 0);
+    // Task-local punishment is cleared: one productive turn now reaches none.
+    assert.strictEqual(pc.scoreTurn(["new_localization"], false, 0).intervention, "none");
+    // Environment/provider capability health deliberately survives.
+    assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
+  });
 });
 
 describe("ConversationalRenderer - ProgressRecovery", () => {

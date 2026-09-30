@@ -12,7 +12,7 @@ for (const entrypoint of ['submitMessage', 'submitMessageStream'] as const) {
     const root = mkdtempSync(join(tmpdir(), 'babel-wire-observations-'))
     const source = join(root, 'source'); mkdirSync(source)
     for (const name of ['alpha', 'beta']) writeFileSync(join(source, `${name}.txt`), Array.from({ length: 650 }, (_, index) => `${name}_seeded_line_${index + 1}`).join('\n'))
-    const environment = { BABEL_EXECUTION_PROFILE: 'read_only_audit', BABEL_READ_ONLY: 'true', BABEL_PROJECT_ROOT: source, BABEL_RUNS_DIR: join(root, 'runs'), BABEL_COMPACTION: 'off', BABEL_MEMORY_WRITEBACK: '0', BABEL_CHAT_TASK_CLASS: 'investigate' }
+    const environment = { BABEL_EXECUTION_PROFILE: 'read_only_audit', BABEL_READ_ONLY: 'true', BABEL_PROJECT_ROOT: source, BABEL_RUNS_DIR: join(root, 'runs'), BABEL_COMPACTION: 'off', BABEL_MEMORY_WRITEBACK: '0', BABEL_CHAT_TASK_CLASS: 'investigate', BABEL_CHAT_MAX_COST: 'unlimited' }
     const prior = Object.fromEntries(Object.keys(environment).map(key => [key, process.env[key]]))
     Object.assign(process.env, environment)
     const originalFetch = globalThis.fetch
@@ -34,7 +34,8 @@ for (const entrypoint of ['submitMessage', 'submitMessageStream'] as const) {
       const engine = new ChatEngine({ task: 'Review the seeded source ranges.', projectRoot: source, model: 'mimo-v2.5', maxTurns: 4, providerRunner: runner, providerPolicy: babelReviewModelPolicy('mimo-v2.5', source) })
       if (entrypoint === 'submitMessage') await engine.submitMessage('Inspect the source ranges.', {})
       else for await (const _event of engine.submitMessageStream('Inspect the source ranges.')) { /* consume real stream */ }
-      assert.equal(requests.length, 2)
+      const terminalEvent = engine.getParityEventLog().events.filter(event => event.kind === 'turn_ended').at(-1)
+      assert.equal(requests.length, 2, `expected a second provider request; terminal=${JSON.stringify(terminalEvent)}`)
       const messages = requests[1]!.messages
       const advertisedCalls = messages.filter(message => message.role === 'assistant').flatMap(message => message.tool_calls?.map(call => call.id) ?? [])
       assert.deepEqual(advertisedCalls, ids)

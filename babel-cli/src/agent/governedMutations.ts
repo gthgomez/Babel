@@ -46,6 +46,8 @@ export interface GovernedStrReplaceResult {
   postBatchHash?: Record<string, string> | undefined;
   mutationReceipt?: MutationBatchReceipt | undefined;
   effectTransaction?: PolicyGatedExecutionResult['effectTransaction'];
+  /** Exact edit validation failed before any executor dispatch. */
+  preDispatchNoEffect?: boolean;
 }
 
 function resolveProjectPath(projectRoot: string, filePath: string): string {
@@ -116,6 +118,7 @@ export async function governedStrReplace(
         policyBlocked: false,
         terminal: false,
         absolutePath,
+        preDispatchNoEffect: true,
       };
     }
     const newContent = applied.content;

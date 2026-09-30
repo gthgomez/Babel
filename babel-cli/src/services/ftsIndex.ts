@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, extname, join } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from 'node:fs';
+import { basename, dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -15,6 +15,8 @@ export interface FtsSearchHit {
 export interface FtsIndexStats {
   totalFiles: number;
   totalBytes: number;
+  indexedBytes: number;
+  incompleteFiles: number;
   dbPath: string;
   hasFts5: boolean;
 }
@@ -51,9 +53,18 @@ export class FtsSearchIndex {
         extension TEXT NOT NULL DEFAULT '',
         content_hash TEXT NOT NULL DEFAULT '',
         size_bytes INTEGER NOT NULL DEFAULT 0,
+        indexed_bytes INTEGER NOT NULL DEFAULT 0,
+        content_complete INTEGER NOT NULL DEFAULT 0,
         indexed_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
+    const columns = new Set((this.db.prepare('PRAGMA table_info(fts_files)').all() as Array<{ name: string }>).map((column) => column.name));
+    for (const [name, declaration] of ([
+      ['indexed_bytes', 'INTEGER NOT NULL DEFAULT 0'],
+      ['content_complete', 'INTEGER NOT NULL DEFAULT 0'],
+    ] as const)) {
+      if (!columns.has(name)) this.db.exec(`ALTER TABLE fts_files ADD COLUMN ${name} ${declaration}`);
+    }
 
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_fts_files_path ON fts_files(path)
@@ -96,15 +107,51 @@ export class FtsSearchIndex {
    */
   static readFileContent(
     filePath: string,
-  ): { content: string; hash: string; sizeBytes: number } | null {
+    rootPath?: string,
+  ): { content: string; hash: string; sizeBytes: number; indexedBytes: number; complete: boolean } | null {
+    let fd: number | undefined;
     try {
-      const stat = statSync(filePath);
-      const sizeBytes = stat.size;
-      const raw = readFileSync(filePath, 'utf-8');
-      const content = raw.length > MAX_CONTENT_BYTES ? raw.slice(0, MAX_CONTENT_BYTES) : raw;
-      return { content, hash: FtsSearchIndex.hashContent(content), sizeBytes };
+      const withinRoot = (): boolean => {
+        if (!rootPath) return true;
+        const rel = relative(realpathSync(rootPath), realpathSync(filePath));
+        return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+      };
+      const before = lstatSync(filePath);
+      if (!before.isFile()) return null;
+      if (!withinRoot()) return null;
+      fd = openSync(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      const opened = fstatSync(fd);
+      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) return null;
+      const buffer = Buffer.allocUnsafe(Math.min(opened.size, MAX_CONTENT_BYTES));
+      let indexedBytes = 0;
+      while (indexedBytes < buffer.length) {
+        const bytesRead = readSync(fd, buffer, indexedBytes, buffer.length - indexedBytes, indexedBytes);
+        if (bytesRead === 0) break;
+        indexedBytes += bytesRead;
+      }
+      const after = fstatSync(fd);
+      const pathAfter = lstatSync(filePath);
+      if (
+        !pathAfter.isFile() || !withinRoot() ||
+        after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size ||
+        after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs ||
+        pathAfter.dev !== opened.dev || pathAfter.ino !== opened.ino || pathAfter.size !== opened.size ||
+        pathAfter.mtimeMs !== opened.mtimeMs || pathAfter.ctimeMs !== opened.ctimeMs
+      ) return null;
+      const complete = indexedBytes === opened.size;
+      const decoder = new TextDecoder('utf-8', { fatal: false });
+      const content = decoder.decode(buffer.subarray(0, indexedBytes), { stream: !complete });
+      return {
+        content,
+        hash: FtsSearchIndex.hashContent(content),
+        sizeBytes: opened.size,
+        indexedBytes,
+        complete,
+      };
     } catch {
       return null;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
     }
   }
 
@@ -127,7 +174,7 @@ export class FtsSearchIndex {
     if (!fileData) return false;
 
     const storedHash = this.getStoredHash(relativePath);
-    if (storedHash === fileData.hash) {
+    if (fileData.complete && storedHash === fileData.hash) {
       // Content unchanged — skip reindexing
       return false;
     }
@@ -138,11 +185,11 @@ export class FtsSearchIndex {
     this.db
       .prepare(
         `
-        INSERT OR REPLACE INTO fts_files (path, name, content, extension, content_hash, size_bytes, indexed_at)
-        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        INSERT OR REPLACE INTO fts_files (path, name, content, extension, content_hash, size_bytes, indexed_bytes, content_complete, indexed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       `,
       )
-      .run(relativePath, name, fileData.content, ext, fileData.hash, fileData.sizeBytes);
+      .run(relativePath, name, fileData.content, ext, fileData.hash, fileData.sizeBytes, fileData.indexedBytes, fileData.complete ? 1 : 0);
 
     return true;
   }
@@ -153,8 +200,9 @@ export class FtsSearchIndex {
    */
   private indexSingleFile(
     filePath: string,
-  ): { content: string; hash: string; sizeBytes: number; name: string; ext: string } | null {
-    const fileData = FtsSearchIndex.readFileContent(filePath);
+    rootPath?: string,
+  ): { content: string; hash: string; sizeBytes: number; indexedBytes: number; complete: boolean; name: string; ext: string } | null {
+    const fileData = FtsSearchIndex.readFileContent(filePath, rootPath);
     if (!fileData) return null;
     return {
       ...fileData,
@@ -171,29 +219,31 @@ export class FtsSearchIndex {
    */
   async indexFiles(
     files: Array<{ filePath: string; relativePath: string }>,
-    options?: { force?: boolean; onProgress?: (indexed: number, total: number) => void },
+    options?: { force?: boolean; onProgress?: (indexed: number, total: number) => void; onReadFile?: (relativePath: string) => void; shouldContinue?: () => boolean; rootPath?: string },
   ): Promise<number> {
     const BATCH_SIZE = 50;
     const total = files.length;
 
     const insert = this.db.prepare(`
-      INSERT OR REPLACE INTO fts_files (path, name, content, extension, content_hash, size_bytes, indexed_at)
-      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      INSERT OR REPLACE INTO fts_files (path, name, content, extension, content_hash, size_bytes, indexed_bytes, content_complete, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     `);
 
     let indexed = 0;
     let batchCount = 0;
 
     for (const { filePath, relativePath } of files) {
-      const data = this.indexSingleFile(filePath);
+      if (options?.shouldContinue && !options.shouldContinue()) throw new Error('Semantic index lifetime retired');
+      const data = this.indexSingleFile(filePath, options?.rootPath);
       if (!data) continue;
+      options?.onReadFile?.(relativePath);
 
       if (!options?.force) {
         const storedHash = this.getStoredHash(relativePath);
-        if (storedHash === data.hash) continue;
+        if (data.complete && storedHash === data.hash) continue;
       }
 
-      insert.run(relativePath, data.name, data.content, data.ext, data.hash, data.sizeBytes);
+      insert.run(relativePath, data.name, data.content, data.ext, data.hash, data.sizeBytes, data.indexedBytes, data.complete ? 1 : 0);
       indexed++;
       batchCount++;
 
@@ -203,6 +253,7 @@ export class FtsSearchIndex {
         batchCount = 0;
         options?.onProgress?.(indexed, total);
         await new Promise((resolve) => setImmediate(resolve));
+        if (options?.shouldContinue && !options.shouldContinue()) throw new Error('Semantic index lifetime retired');
       }
     }
 
@@ -216,7 +267,7 @@ export class FtsSearchIndex {
    * Remove files from the index that no longer exist on disk.
    * Yields to the event loop periodically to avoid blocking the REPL.
    */
-  async pruneMissing(rootPath: string): Promise<number> {
+  async pruneMissing(rootPath: string, readablePaths?: ReadonlySet<string>, shouldContinue?: () => boolean): Promise<number> {
     const BATCH_SIZE = 100;
 
     const allPaths = this.db.prepare('SELECT path FROM fts_files').all() as Array<{ path: string }>;
@@ -226,8 +277,18 @@ export class FtsSearchIndex {
     const del = this.db.prepare('DELETE FROM fts_files WHERE path = ?');
 
     for (const row of allPaths) {
+      if (shouldContinue && !shouldContinue()) throw new Error('Semantic index lifetime retired');
       const absPath = join(rootPath, row.path);
-      if (!existsSync(absPath)) {
+      let isFile = true;
+      try {
+        isFile = lstatSync(absPath).isFile();
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        // Only proven absence is a deletion. A permission or I/O error leaves
+        // membership uncertain, so retain the earlier row.
+        isFile = code !== 'ENOENT' && code !== 'ENOTDIR';
+      }
+      if (!isFile || (readablePaths && !readablePaths.has(row.path))) {
         del.run(row.path);
         removed++;
       }
@@ -392,12 +453,14 @@ export class FtsSearchIndex {
    */
   getStats(): FtsIndexStats {
     const countRow = this.db
-      .prepare('SELECT COUNT(*) as cnt, COALESCE(SUM(size_bytes), 0) as total_bytes FROM fts_files')
-      .get() as { cnt: number; total_bytes: number };
+      .prepare('SELECT COUNT(*) as cnt, COALESCE(SUM(size_bytes), 0) as total_bytes, COALESCE(SUM(indexed_bytes), 0) as indexed_bytes, COALESCE(SUM(CASE WHEN content_complete = 0 THEN 1 ELSE 0 END), 0) as incomplete_files FROM fts_files')
+      .get() as { cnt: number; total_bytes: number; indexed_bytes: number; incomplete_files: number };
 
     return {
       totalFiles: countRow.cnt,
       totalBytes: countRow.total_bytes,
+      indexedBytes: countRow.indexed_bytes,
+      incompleteFiles: countRow.incomplete_files,
       dbPath: this.dbPath,
       hasFts5: this.fts5Available,
     };

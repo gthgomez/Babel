@@ -134,6 +134,8 @@ export interface IndependentReviewExecutionRequest {
   review_mode: 'exact_diff'
   required_isolation: IndependentReviewIsolationProfile
   purpose?: ReviewExecutionPurpose
+  /** Blocking findings the repair worker must address (repair only). */
+  findings?: string[]
 }
 
 export interface IndependentReviewExecutionResult {

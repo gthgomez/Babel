@@ -84,6 +84,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     BABEL_COMPACTION: options.maxEstimatedTokens ? 'on' : 'off',
     BABEL_MEMORY_WRITEBACK: '0',
     BABEL_CHAT_TASK_CLASS: 'investigate',
+    BABEL_CHAT_MAX_COST: 'unlimited',
   };
   const previous = Object.fromEntries(Object.keys(keys).map((key) => [key, process.env[key]]));
   Object.assign(process.env, keys);
@@ -112,14 +113,17 @@ function makeHarness(options: HarnessOptions = {}): Harness {
       task,
       projectRoot: source,
       outputFormat: 'json',
-      engineFactory: (engineOptions) =>
-        activeEngine = new ChatEngine({
-          ...engineOptions,
+      engineFactory: (engineOptions) => {
+        const testEngineOptions = { ...engineOptions };
+        delete testEngineOptions.maxCostUsd;
+        return activeEngine = new ChatEngine({
+          ...testEngineOptions,
           maxTurns: options.maxTurns ?? 8,
           ...(options.maxEstimatedTokens ? { maxEstimatedTokens: options.maxEstimatedTokens } : {}),
           providerRunner: runner,
           providerPolicy: babelReviewModelPolicy('mimo-v2.5', source),
-        }),
+        });
+      },
     });
     return { payload: result.payload as Record<string, unknown> };
   };
@@ -191,12 +195,16 @@ test('provider tool_call with empty id is repaired and results stay paired', asy
   const harness = makeHarness();
   try {
     harness.respond.push(() => sseResponse(toolCallDelta('', 'read_file', { path: join(harness.source, 'fixture.txt') }), 'tool_calls'));
-    await harness.run('Read the fixture file.');
+    const { payload } = await harness.run('Read the fixture file.');
     assert.ok(harness.captures.length >= 2);
     const after = harness.captures[1]!.messages;
     assert.deepEqual(hardIssues(after), [], `protocol issues: ${JSON.stringify(hardIssues(after))}`);
     const declared = callsDeclared(after);
-    assert.equal(declared.length, 1);
+    assert.equal(
+      declared.length,
+      1,
+      `expected one repaired tool call in ${JSON.stringify(after)}; payload=${JSON.stringify(payload)}`,
+    );
     assert.ok(declared[0]!.id.length > 0, 'engine must synthesize a non-empty id for a missing provider id');
     assert.equal(toolResultsFor(after, declared[0]!.id).length, 1, 'synthesized id must be answered by exactly one result');
   } finally {
@@ -220,8 +228,13 @@ test('duplicate provider call ids do not produce duplicate or orphaned wire resu
     ));
     await harness.run('Inspect with duplicate ids.');
     assert.ok(harness.captures.length >= 2);
-    for (const capture of harness.captures.slice(1)) {
-      assert.deepEqual(hardIssues(capture.messages), [], `protocol issues: ${JSON.stringify(hardIssues(capture.messages))}`);
+    const after = harness.captures[harness.captures.length - 1]!.messages;
+    assert.deepEqual(hardIssues(after), [], `protocol issues: ${JSON.stringify(hardIssues(after))}`);
+    const declared = callsDeclared(after);
+    assert.equal(declared.length, 2, 'both provider tool calls must reach the wire boundary');
+    assert.notEqual(declared[0]!.id, declared[1]!.id, 'duplicate provider ids must be disambiguated');
+    for (const call of declared) {
+      assert.equal(toolResultsFor(after, call.id).length, 1, `${call.id} must have exactly one result`);
     }
   } finally {
     harness.dispose();

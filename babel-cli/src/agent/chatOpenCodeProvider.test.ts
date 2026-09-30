@@ -12,6 +12,7 @@ import { estimateTokens } from './chatCompaction.js';
 import { resolveChatModelPolicy } from './chatModelPolicy.js';
 import { resolveAskModelPolicyWithLiveGate } from '../services/askAnswer.js';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
+import { hashRouteReference } from './modelRouteReceipt.js';
 
 /**
  * OpenCode Zen routing invariants.
@@ -262,7 +263,12 @@ test('exact GLM ChatEngine path streams and persists matching provider receipts'
       assert.equal(input.requested_model_id, 'z-ai/glm-5.3-flash');
       assert.equal(input.normalized_model_id, 'z-ai/glm-5.3-flash');
       assert.equal(input.sent_model_id, 'z-ai/glm-5.3-flash');
+      assert.equal(input.input_ref, 'thread_events.json');
     }
+    assert.equal(input?.kind === 'model_input_receipt' ? input.route_receipt?.run_ref : undefined,
+      hashRouteReference(join(BABEL_RUNS_DIR, 'chat-sessions', runId)));
+    assert.ok(!JSON.stringify(sessionEvents).includes(projectRoot));
+    assert.ok(!JSON.stringify(sessionEvents).includes(join(BABEL_RUNS_DIR, 'chat-sessions', runId)));
     if (result?.kind === 'model_result_delivery') {
       assert.equal(result.status, 'delivered');
       assert.equal(result.observed_model_id, 'z-ai/glm-5.3-flash');
@@ -291,6 +297,7 @@ test('exact GLM ChatEngine path streams and persists matching provider receipts'
 test('exact GLM ChatEngine C2/C3 path executes one read-only tool and correlates its continuation', async () => {
   const previousOffline = process.env['BABEL_OFFLINE'];
   const previousCompaction = process.env['BABEL_COMPACTION'];
+  const previousCostAllowance = process.env['BABEL_CHAT_MAX_COST'];
   const previousRouterKey = process.env['OPENROUTER_API_KEY'];
   const originalFetch = globalThis.fetch;
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-glm-c2-'));
@@ -301,6 +308,7 @@ test('exact GLM ChatEngine C2/C3 path executes one read-only tool and correlates
   writeFileSync(fixturePath, 'fixture contents for glm c2\n', 'utf8');
   delete process.env['BABEL_OFFLINE'];
   process.env['BABEL_COMPACTION'] = 'off';
+  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
   process.env['OPENROUTER_API_KEY'] = 'fixture-router-key';
   globalThis.fetch = (async (_input, init) => {
     requestCount += 1;
@@ -426,6 +434,8 @@ test('exact GLM ChatEngine C2/C3 path executes one read-only tool and correlates
     else process.env['BABEL_OFFLINE'] = previousOffline;
     if (previousCompaction === undefined) delete process.env['BABEL_COMPACTION'];
     else process.env['BABEL_COMPACTION'] = previousCompaction;
+    if (previousCostAllowance === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previousCostAllowance;
     if (previousRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
     else process.env['OPENROUTER_API_KEY'] = previousRouterKey;
     rmSync(projectRoot, { recursive: true, force: true });

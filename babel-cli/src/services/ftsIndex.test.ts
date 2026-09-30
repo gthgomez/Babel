@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -58,6 +59,71 @@ test('indexes files and returns search hits', async () => {
     assert.match(debounceHits[0]!.path, /utils\.ts/);
 
     idx.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('bounded file read reports an incomplete UTF-8 prefix without a replacement character', () => {
+  const root = tempDir();
+  try {
+    const path = join(root, 'large.ts');
+    writeFileSync(path, `${'a'.repeat(128 * 1024 - 1)}é`);
+    const result = FtsSearchIndex.readFileContent(path);
+    assert.ok(result);
+    assert.equal(Buffer.byteLength(result.content, 'utf-8'), 128 * 1024 - 1);
+    assert.equal(result.content.endsWith('�'), false);
+    assert.equal(result.sizeBytes, 128 * 1024 + 1);
+    assert.equal(result.complete, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the file descriptor never requests or reads beyond the 128 KiB byte cap', () => {
+  const root = tempDir();
+  const nativeFs = createRequire(import.meta.url)('node:fs') as {
+    readSync: (...args: unknown[]) => number;
+  };
+  const original = nativeFs.readSync;
+  let requestedBytes = 0;
+  let readBytes = 0;
+  try {
+    const path = join(root, 'large.ts');
+    writeFileSync(path, 'a'.repeat(2 * 1024 * 1024));
+    nativeFs.readSync = (...args: unknown[]) => {
+      requestedBytes += Number(args[3]);
+      const count = Reflect.apply(original, nativeFs, args) as number;
+      readBytes += count;
+      return count;
+    };
+    syncBuiltinESMExports();
+    const result = FtsSearchIndex.readFileContent(path);
+    assert.ok(result);
+    assert.equal(result.indexedBytes, 128 * 1024);
+    assert.ok(requestedBytes <= 128 * 1024, `requested ${requestedBytes} bytes`);
+    assert.ok(readBytes <= 128 * 1024, `read ${readBytes} bytes`);
+  } finally {
+    nativeFs.readSync = original;
+    syncBuiltinESMExports();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('index statistics retain coverage for content beyond the byte budget', async () => {
+  const root = tempDir();
+  try {
+    const path = join(root, 'large.ts');
+    writeFileSync(path, `${'a'.repeat(128 * 1024)}TailOnlyNeedle`);
+    const index = new FtsSearchIndex(join(root, 'index.db'));
+    try {
+      await index.indexFiles([{ filePath: path, relativePath: 'large.ts' }]);
+      assert.equal(index.search('TailOnlyNeedle').length, 0);
+      assert.equal(index.getStats().incompleteFiles, 1);
+      assert.equal(index.getStats().indexedBytes, 128 * 1024);
+    } finally {
+      index.close();
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

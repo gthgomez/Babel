@@ -3,7 +3,12 @@
  * Never paints unverified or failed verification as verified success.
  */
 
-import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import type {
+  TerminalOutcome,
+  TerminalReasonCauseClass,
+  TerminalReasonCode,
+} from '../schemas/agentContracts.js';
+import { terminalReasonGuidance } from '../agent/chatTerminalReason.js';
 import { dim, error, muted, success, warning } from './theme.js';
 
 export type ReviewCardKind =
@@ -42,6 +47,15 @@ export interface ReviewCardInput {
   sessionTokens?: number | undefined;
   mutated?: boolean | undefined;
   nextActions?: string[] | undefined;
+  /**
+   * D03: structured terminal reason. When present, next-action guidance is
+   * reason-first; the free-text `summary` is never used as authority.
+   */
+  reasonCode?: TerminalReasonCode | undefined;
+  /** D03: separate model-vs-harness cause axis. */
+  causeClass?: TerminalReasonCauseClass | undefined;
+  /** D03: precise machine note (e.g. `zero_write_hard_stop`). */
+  reasonDetail?: string | undefined;
   /** Only for SESSION_EVENT_LIFECYCLE_CAUSALITY — not every AGENT_FAILURE. */
   sessionConsistencyFailure?: boolean | undefined;
 }
@@ -188,6 +202,12 @@ export function getContextualNextActions(
   input: ReviewCardInput,
 ): string[] {
   if (input.nextActions) return input.nextActions;
+  // D03: reason code is authoritative over the coarse kind. `cancelled` keeps
+  // the existing changed-files-aware behavior (empty guidance falls through).
+  if (input.reasonCode) {
+    const reasoned = terminalReasonGuidance(input.reasonCode, input.reasonDetail);
+    if (reasoned.nextActions.length > 0) return reasoned.nextActions;
+  }
   const hasFiles = (input.changedFiles ?? []).length > 0 || input.mutated === true;
   const hasVerifier = Boolean(
     input.verification?.command ||
@@ -292,12 +312,20 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
     lines.push(`  ${summaryText}`);
   }
 
+  // D03: surface the structured reason so a no-progress terminal never reads as
+  // a missing capability. Cancelled is already self-evident from the title.
+  if (input.reasonCode && input.reasonCode !== 'cancelled') {
+    const reasonText = terminalReasonGuidance(input.reasonCode, input.reasonDetail).message;
+    lines.push(dim('Reason'));
+    lines.push(`  ${reasonText}`);
+  }
+
   const hasRealCost = input.costUsd !== undefined && input.costUsd > 0;
   const hasRealTokens = input.tokens !== undefined && input.tokens > 0;
   if (hasRealCost || hasRealTokens) {
     const bits: string[] = [];
     if (hasRealCost) bits.push(`$${input.costUsd!.toFixed(4)} this turn`);
-    if (hasRealTokens) bits.push(`${input.tokens} tok`);
+    if (hasRealTokens) bits.push(`${input.tokens} tok${hasRealCost ? '' : ' this turn'}`);
     const sessionTokens = input.sessionTokens;
     if (
       hasRealTokens &&

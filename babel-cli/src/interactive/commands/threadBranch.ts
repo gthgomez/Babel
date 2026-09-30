@@ -17,6 +17,7 @@ import {
   loadThreadCells,
   threadStoreExists,
 } from '../../services/threadStore/index.js';
+import { openSessionAdmissionStore } from '../../cli/runsLayout.js';
 import type { HistoryCellRecord } from '../../ui/historyCells/types.js';
 import { hydrateReplTurnsFromCells } from '../chatTranscriptHydration.js';
 
@@ -53,7 +54,11 @@ async function rebindActiveThread(
   if (options.resyncExisting && ctx.chatEngine) {
     resyncEngineToThreadCells(ctx.chatEngine, cells);
   } else {
-    ctx.chatEngine = createEngineFromThreadCells(
+    // P05/P11: a forked/rewound thread executes real authorized chat
+    // commands — the replaced engine releases its store reference and the
+    // new engine opens one for the new thread's session dir.
+    ctx.chatEngine?.closeAdmissionStore?.();
+    const engine = createEngineFromThreadCells(
       threadId,
       {
         task: options.task,
@@ -63,6 +68,9 @@ async function rebindActiveThread(
       },
       cells,
     );
+    const admission = openSessionAdmissionStore(threadId);
+    if (admission.ok) engine.attachAdmissionStore(admission.store);
+    ctx.chatEngine = engine;
   }
 
   hydrateResumedThreadToScreen(ctx, threadId);

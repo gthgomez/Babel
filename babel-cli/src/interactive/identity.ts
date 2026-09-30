@@ -2,34 +2,47 @@
 // Extracted from interactive.ts — session identity file loading with the
 // 4-tier fallback hierarchy: project-local → workspace-meta → sibling examples → shipped defaults.
 
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadCachedRepoMap } from '../services/indexer.js';
 import { formatRepoMapPromptSection, trimForPrompt } from '../services/liteProjectContext.js';
+import type {
+  IdentityDeliveredFragment,
+  IdentityInstructionTier,
+} from '../agent/instructionManifest.js';
 import type { ReplContext } from './context.js';
 
-export async function findSiblingExamples(
+/**
+ * Deterministic (non-yielding) sibling scan, used by the synchronous
+ * delivered-fragment resolver so the instruction manifest can record what was
+ * actually delivered without introducing an async initialization step. This is
+ * the single sibling-selection reader; the old async copy was removed so the
+ * two readers cannot drift.
+ */
+function findSiblingExamplesSync(
   searchRoot: string,
   ownRoot: string,
   names: string[],
   limit: number,
-): Promise<string[]> {
+): string[] {
   const results: string[] = [];
+  // M1: this reader is synchronous (the manifest is built in a constructor and
+  // in applyTurnPreparation), so it cannot yield. Bound the directory scan
+  // instead of scanning an unbounded workspace synchronously on every turn.
+  const MAX_DIRS_SCANNED = 200;
+  let dirsScanned = 0;
   try {
     if (!fs.existsSync(searchRoot)) return results;
     const entries = fs.readdirSync(searchRoot, { withFileTypes: true });
-    let batchCount = 0;
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
+      if (dirsScanned >= MAX_DIRS_SCANNED) break;
+      dirsScanned += 1;
       const dirPath = path.join(searchRoot, entry.name);
       if (path.resolve(dirPath) === path.resolve(ownRoot)) continue;
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-
-      if (++batchCount >= 30) {
-        batchCount = 0;
-        await new Promise((resolve) => setImmediate(resolve));
-      }
 
       for (const name of names) {
         const filePath = path.join(dirPath, name);
@@ -52,25 +65,42 @@ export async function findSiblingExamples(
   return results;
 }
 
-export async function loadIdentityFile(
+export interface SessionIdentityWithDisposition {
+  systemContext: string;
+  fragments: IdentityDeliveredFragment[];
+}
+
+interface LoadedIdentitySection {
+  path: string;
+  tier: IdentityInstructionTier;
+  content: string;
+  rawContent: string | null;
+  truncated: boolean;
+}
+
+function sha256Text(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+function readProjectOrWorkspaceIdentityFile(
   projectRoot: string,
   workspaceRoot: string,
   names: string[],
-  title: string,
   maxChars: number,
-  findSiblings: (
-    searchRoot: string,
-    ownRoot: string,
-    names: string[],
-    limit: number,
-  ) => Promise<string[]>,
-): Promise<[string, string] | null> {
+): LoadedIdentitySection | null {
   // Tier 1: Project-local
   for (const name of names) {
     const localPath = path.join(projectRoot, name);
     if (fs.existsSync(localPath)) {
       try {
-        return [title, trimForPrompt(fs.readFileSync(localPath, 'utf-8'), maxChars)];
+        const raw = fs.readFileSync(localPath, 'utf-8');
+        return {
+          path: localPath,
+          tier: 'project',
+          content: trimForPrompt(raw, maxChars),
+          rawContent: raw,
+          truncated: raw.length > maxChars,
+        };
       } catch {
         continue;
       }
@@ -83,7 +113,8 @@ export async function loadIdentityFile(
       const metaPath = path.join(workspaceRoot, name);
       if (fs.existsSync(metaPath)) {
         try {
-          const metaContent = trimForPrompt(fs.readFileSync(metaPath, 'utf-8'), 2500);
+          const raw = fs.readFileSync(metaPath, 'utf-8');
+          const metaContent = trimForPrompt(raw, 2500);
           const projectName = path.basename(projectRoot);
           const adversarial = [
             `[No ${name} found in this project.]`,
@@ -101,7 +132,13 @@ export async function loadIdentityFile(
             metaContent,
             '```',
           ].join('\n');
-          return [title, adversarial];
+          return {
+            path: metaPath,
+            tier: 'workspace',
+            content: adversarial,
+            rawContent: raw,
+            truncated: raw.length > 2500,
+          };
         } catch {
           continue;
         }
@@ -109,18 +146,33 @@ export async function loadIdentityFile(
     }
   }
 
+  return null;
+}
+
+function loadIdentityFileSectionSync(
+  projectRoot: string,
+  workspaceRoot: string,
+  names: string[],
+  maxChars: number,
+): LoadedIdentitySection | null {
+  const direct = readProjectOrWorkspaceIdentityFile(projectRoot, workspaceRoot, names, maxChars);
+  if (direct) return direct;
+
   // Tier 3: Sibling examples
   const primaryName = names[0] ?? 'this file';
-  const examples = await findSiblings(workspaceRoot, projectRoot, names, 3);
+  const examples = findSiblingExamplesSync(workspaceRoot, projectRoot, names, 3);
   if (examples.length > 0) {
     const hint =
       primaryName === 'ENGINEERING.md'
         ? 'Reference examples from similar projects (use these patterns to suggest one):'
         : 'Reference examples from similar projects:';
-    return [
-      title,
-      `[No ${primaryName} found in this project.]\n\n## ${hint}\n${examples.join('\n\n')}`,
-    ];
+    return {
+      path: `(sibling examples in ${workspaceRoot})`,
+      tier: 'sibling',
+      content: `[No ${primaryName} found in this project.]\n\n## ${hint}\n${examples.join('\n\n')}`,
+      rawContent: null,
+      truncated: false,
+    };
   }
 
   return null;
@@ -145,11 +197,10 @@ function getBabelDefaultsDir(): string {
  * Called after all 3 tiers (project-local, workspace-meta, sibling examples)
  * have returned nothing.
  */
-function loadBabelDefaultIdentityFile(
+function loadBabelDefaultIdentitySection(
   names: string[],
-  title: string,
   maxChars: number,
-): [string, string] | null {
+): LoadedIdentitySection | null {
   try {
     const defaultsDir = getBabelDefaultsDir();
     if (!fs.existsSync(defaultsDir)) return null;
@@ -161,7 +212,13 @@ function loadBabelDefaultIdentityFile(
         const trimmed = trimForPrompt(content, maxChars);
         const primaryName = names[0] ?? name;
         const prefixed = `*(Using Babel's shipped default — create a project-local ${primaryName} to override)*\n\n${trimmed}`;
-        return [title, prefixed];
+        return {
+          path: defaultPath,
+          tier: 'shipped_default',
+          content: prefixed,
+          rawContent: content,
+          truncated: content.length > maxChars,
+        };
       }
     }
   } catch {
@@ -170,99 +227,134 @@ function loadBabelDefaultIdentityFile(
   return null;
 }
 
-export async function loadProjectSessionIdentity(
+/**
+ * Resolve the delivered session identity together with a per-fragment
+ * disposition (source path, tier, delivered digest, truncation). This is the
+ * single reader behind `loadProjectSessionIdentity`; callers that build the
+ * instruction manifest use the fragments so delivered identity files are
+ * reported instead of silently omitted.
+ */
+export function loadProjectSessionIdentityDispositionSync(
   projectRoot: string,
   workspaceRoot?: string | null,
-): Promise<string> {
-  const sections: string[] = [];
+): SessionIdentityWithDisposition {
   const workspace = workspaceRoot ?? path.dirname(projectRoot);
+  const fragments: IdentityDeliveredFragment[] = [];
+
+  const add = (
+    id: string,
+    title: string,
+    section: LoadedIdentitySection,
+  ): void => {
+    const delivered = title + '\n' + section.content;
+    fragments.push({
+      id,
+      source: section.path,
+      tier: section.tier,
+      delivered_content: delivered,
+      delivered_chars: delivered.length,
+      delivered_content_digest: sha256Text(delivered),
+      source_digest: section.rawContent === null ? null : sha256Text(section.rawContent),
+      source_length: section.rawContent === null ? null : section.rawContent.length,
+      truncated: section.truncated,
+    });
+  };
 
   // ── SOUL.md — critical identity (Tier 0: shipped defaults) ──
   const soulSection =
-    (await loadIdentityFile(
-      projectRoot,
-      workspace,
-      ['SOUL.md', 'soul.md'],
-      '# Agent Soul',
-      1500,
-      findSiblingExamples,
-    )) ??
-    loadBabelDefaultIdentityFile(['SOUL.md', 'soul.md'], '# Agent Soul', 1500);
-  if (soulSection) sections.push(soulSection[0] + '\n' + soulSection[1]);
+    loadIdentityFileSectionSync(projectRoot, workspace, ['SOUL.md', 'soul.md'], 1500) ??
+    loadBabelDefaultIdentitySection(['SOUL.md', 'soul.md'], 1500);
+  if (soulSection) add('session:soul', '# Agent Soul', soulSection);
 
   // ── AGENT_IDENTITY.md — critical identity (Tier 0: shipped defaults) ──
   const identitySection =
-    (await loadIdentityFile(
+    loadIdentityFileSectionSync(
       projectRoot,
       workspace,
       ['AGENT_IDENTITY.md', 'agent_identity.md', '.agent-identity'],
-      '# Agent Identity',
       1500,
-      findSiblingExamples,
-    )) ??
-    loadBabelDefaultIdentityFile(
+    ) ?? loadBabelDefaultIdentitySection(
       ['AGENT_IDENTITY.md', 'agent_identity.md', '.agent-identity'],
-      '# Agent Identity',
       1500,
     );
-  if (identitySection) sections.push(identitySection[0] + '\n' + identitySection[1]);
+  if (identitySection) add('session:agent_identity', '# Agent Identity', identitySection);
 
   // ── AGENTS.md — agent instructions ──
-  const agentSection = await loadIdentityFile(
+  const agentSection = loadIdentityFileSectionSync(
     projectRoot,
     workspace,
     ['AGENTS.md', 'Agent.md'],
-    '# Agent Instructions',
     3000,
-    findSiblingExamples,
   );
-  if (agentSection) sections.push(agentSection[0] + '\n' + agentSection[1]);
+  if (agentSection) add('session:agents', '# Agent Instructions', agentSection);
 
   // ── CLAUDE.md — project instructions ──
-  const claudeSection = await loadIdentityFile(
+  const claudeSection = loadIdentityFileSectionSync(
     projectRoot,
     workspace,
     ['CLAUDE.md'],
-    '# Project Instructions',
     3000,
-    findSiblingExamples,
   );
-  if (claudeSection) sections.push(claudeSection[0] + '\n' + claudeSection[1]);
+  if (claudeSection) add('session:claude', '# Project Instructions', claudeSection);
 
   // ── ENGINEERING.md — engineering standards (Tier 0: shipped defaults) ──
   const engSection =
-    (await loadIdentityFile(
-      projectRoot,
-      workspace,
-      ['ENGINEERING.md'],
-      '# Engineering Standards',
-      2500,
-      findSiblingExamples,
-    )) ??
-    loadBabelDefaultIdentityFile(['ENGINEERING.md'], '# Engineering Standards', 2500);
-  if (engSection) sections.push(engSection[0] + '\n' + engSection[1]);
+    loadIdentityFileSectionSync(projectRoot, workspace, ['ENGINEERING.md'], 2500) ??
+    loadBabelDefaultIdentitySection(['ENGINEERING.md'], 2500);
+  if (engSection) add('session:engineering', '# Engineering Standards', engSection);
 
   // ── PROJECT_CONTEXT.md — project context ──
-  const ctxSection = await loadIdentityFile(
+  const ctxSection = loadIdentityFileSectionSync(
     projectRoot,
     workspace,
     ['PROJECT_CONTEXT.md'],
-    '# Project Context',
     3000,
-    findSiblingExamples,
   );
-  if (ctxSection) sections.push(ctxSection[0] + '\n' + ctxSection[1]);
+  if (ctxSection) add('session:project_context', '# Project Context', ctxSection);
 
   try {
     const repoMap = loadCachedRepoMap(projectRoot);
     if (repoMap && repoMap.entries.length > 0) {
-      sections.push(formatRepoMapPromptSection(repoMap, 40));
+      const delivered = formatRepoMapPromptSection(repoMap, 40);
+      fragments.push({
+        id: 'session:repo_map',
+        source: '(cached repo map)',
+        tier: 'repo_map',
+        delivered_content: delivered,
+        delivered_chars: delivered.length,
+        delivered_content_digest: sha256Text(delivered),
+        source_digest: null,
+        source_length: null,
+        truncated: false,
+      });
     }
   } catch {
     // Non-fatal
   }
 
-  return sections.join('\n\n');
+  return {
+    systemContext: fragments.map((fragment) => fragment.delivered_content).join('\n\n'),
+    fragments,
+  };
+}
+
+/**
+ * Async facade kept for callers that prefer a promise and for the byte-identity
+ * guard in `instructionDisposition.test.ts`. It delegates to the single sync
+ * reader; it is not a second implementation.
+ */
+export async function loadProjectSessionIdentityWithDisposition(
+  projectRoot: string,
+  workspaceRoot?: string | null,
+): Promise<SessionIdentityWithDisposition> {
+  return loadProjectSessionIdentityDispositionSync(projectRoot, workspaceRoot);
+}
+
+export async function loadProjectSessionIdentity(
+  projectRoot: string,
+  workspaceRoot?: string | null,
+): Promise<string> {
+  return loadProjectSessionIdentityDispositionSync(projectRoot, workspaceRoot).systemContext;
 }
 
 export async function loadSessionIdentity(ctx: ReplContext, projectRoot: string): Promise<string> {

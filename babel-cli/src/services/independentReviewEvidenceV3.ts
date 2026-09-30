@@ -38,6 +38,14 @@ export interface IndependentReviewRuntime {
   model_attribution?: ModelAttribution
   provider_execution_id?: string
   provider_session_id?: string
+  /** Controller-asserted freshness: reviewer ran in a fresh context. */
+  fresh_context?: boolean
+  /** Controller-asserted freshness: reviewer ran in a fresh process. */
+  fresh_process?: boolean
+  /** Parent controller execution that spawned this reviewer execution. */
+  parent_execution_id?: string
+  /** Controller-issued session identity for the reviewer execution. */
+  session_id?: string
 }
 
 export interface IndependentReviewIsolationProfile {
@@ -165,6 +173,10 @@ export const independentReviewRuntimeSchema = z.object({
   model_attribution: z.enum(['observed', 'configured', 'unavailable']).optional(),
   provider_execution_id: z.string().min(1).optional(),
   provider_session_id: z.string().min(1).optional(),
+  fresh_context: z.boolean().optional(),
+  fresh_process: z.boolean().optional(),
+  parent_execution_id: z.string().min(1).optional(),
+  session_id: z.string().min(1).optional(),
 }).strict()
 
 export const independentReviewIsolationSchema = z.object({

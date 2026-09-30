@@ -411,7 +411,8 @@ describe('Canary F: Subagent Truthfulness', () => {
     assert.equal(result.success, false);
     assert.equal(result.inheritedBudgetExceeded, true);
     assert.equal(result.inheritedBudgetLimiter, 'wall');
-    assert.equal(result.attribution, 'child_round_exhaustion');
+    // T04: a wall stop is not round exhaustion.
+    assert.equal(result.attribution, 'child_wall_exhaustion');
   });
 
   it('D1-setup: an already-expired worktree child does not create a worktree', async () => {
@@ -434,7 +435,8 @@ describe('Canary F: Subagent Truthfulness', () => {
       },
     );
     assert.equal(result.success, false);
-    assert.equal(result.attribution, 'child_round_exhaustion');
+    // T04: an expired wall allowance is a wall stop, not round exhaustion.
+    assert.equal(result.attribution, 'child_wall_exhaustion');
     assert.equal(result.inheritedBudgetExceeded, true);
     assert.equal(existsSync(join(root, '.babel', 'worktrees')), false);
   });
@@ -444,6 +446,7 @@ describe('Canary F: Subagent Truthfulness', () => {
     const previous = globalCostTracker.getSessionSummary();
     globalCostTracker.resetSession();
     const unitCost = globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+    assert.ok(unitCost !== null);
     globalCostTracker.resetSession();
     let resolverCalls = 0;
     try {
@@ -455,6 +458,8 @@ describe('Canary F: Subagent Truthfulness', () => {
         maxRounds: 4,
         toolContext: toolContext(root, 'child-inherited-cost'),
         inheritedAllowance: {
+          taskOwnerId: 'child-inherited-cost-owner',
+          parentTaskOwnerId: 'parent-inherited-cost-owner',
           costBaselineUsd: 0,
           remainingCostUsd: unitCost,
           deadlineAtMs: null,
@@ -463,7 +468,11 @@ describe('Canary F: Subagent Truthfulness', () => {
         executor: mockExecutor({}),
         actionResolver: async () => {
           resolverCalls += 1;
-          globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+          globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000, null, null, {
+            taskOwnerId: 'child-inherited-cost-owner',
+            parentTaskOwnerId: 'parent-inherited-cost-owner',
+            chargeId: 'child-inherited-cost-charge',
+          });
           return [{ type: 'read_file', path: 'src/index.ts' }];
         },
       });
@@ -539,6 +548,7 @@ describe('Canary F: Subagent Truthfulness', () => {
     const previous = globalCostTracker.getSessionSummary();
     globalCostTracker.resetSession();
     const unitCost = globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+    assert.ok(unitCost !== null);
     globalCostTracker.resetSession();
     let round = 0;
     try {
@@ -550,6 +560,8 @@ describe('Canary F: Subagent Truthfulness', () => {
         maxRounds: 4,
         toolContext: toolContext(root, 'child-effect-before-budget'),
         inheritedAllowance: {
+          taskOwnerId: 'child-effect-budget-owner',
+          parentTaskOwnerId: 'parent-effect-budget-owner',
           costBaselineUsd: 0,
           remainingCostUsd: unitCost,
           deadlineAtMs: null,
@@ -565,12 +577,17 @@ describe('Canary F: Subagent Truthfulness', () => {
           if (round === 1) {
             return [{ type: 'write_file', path: 'src/confirmed.ts', content: 'export const confirmed = true;\n' }];
           }
-          globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+          globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000, null, null, {
+            taskOwnerId: 'child-effect-budget-owner',
+            parentTaskOwnerId: 'parent-effect-budget-owner',
+            chargeId: 'child-effect-budget-charge',
+          });
           return [{ type: 'read_file', path: 'src/index.ts' }];
         },
       });
       assert.equal(result.success, false);
-      assert.equal(result.attribution, 'child_round_exhaustion');
+      // T04: a cost stop is not round exhaustion.
+      assert.equal(result.attribution, 'child_cost_exhaustion');
       assert.equal(result.inheritedBudgetExceeded, true);
       assert.ok(result.changedFiles.some((file) => file.path === 'src/confirmed.ts'));
       assert.equal(readFileSync(join(root, 'src', 'confirmed.ts'), 'utf8'), 'export const confirmed = true;\n');
@@ -591,16 +608,21 @@ describe('Canary F: Subagent Truthfulness', () => {
     globalCostTracker.resetSession();
     try {
       const unitCost = globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+      assert.ok(unitCost !== null);
       globalCostTracker.resetSession();
       const first = deriveChildAllowance({
+        parentTaskOwnerId: 'parent-budget-owner',
         parentTaskBaselineUsd: 0,
         parentEffectiveCostCapUsd: unitCost,
         parentDeadlineAtMs: null,
         childMaxRounds: 4,
       });
       assert.equal(first.remainingCostUsd, unitCost);
-      globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000);
+      globalCostTracker.trackUsage('deepseek-v4-flash', 1_000, 2_000, null, null, {
+        taskOwnerId: 'parent-budget-owner', chargeId: 'parent-budget-charge',
+      });
       const second = deriveChildAllowance({
+        parentTaskOwnerId: 'parent-budget-owner',
         parentTaskBaselineUsd: 0,
         parentEffectiveCostCapUsd: unitCost,
         parentDeadlineAtMs: null,

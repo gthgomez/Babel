@@ -1,6 +1,8 @@
 /**
  * Verifier preparation and required-command resolution helper for ChatEngine.
  */
+import path from 'node:path';
+
 import {
   bindChatVerifierReceipt,
   toExecutorVerifierReceipt,
@@ -36,18 +38,29 @@ export async function captureChatVerifierReceipt(input: {
   exitCode: number;
   summary: string;
   mutationPaths: string[];
+  /** Explicit red-only baseline route; cannot satisfy a green completion. */
+  allowRepositoryScopeForRedRecovery?: boolean;
 }): Promise<BoundChatVerifierReceipt | null> {
   if (!isAuthoritativeVerifierCommand(input.command)) return null;
   const parsed = parseStructuredVerifierCommand(input.command, {
     authoritySource: 'built_in_runner',
   });
   if (!parsed || !isVerifierAuthoritySource(parsed.authoritySource)) return null;
-  return bindChatVerifierReceipt({
+  // The revision binding requires repository-relative scope paths, but the
+  // governed mutation path reports absolute paths. Canonicalize here so a
+  // successful write + authoritative verifier can bind its revision instead
+  // of throwing and corrupting the loop.
+  const mutationPaths = toRepositoryRelativePaths(input.projectRoot, input.mutationPaths);
+  if (mutationPaths === null) return null;
+  const repositoryScopedRed = input.allowRepositoryScopeForRedRecovery === true &&
+    input.exitCode !== 0 && mutationPaths.length === 0;
+  const receipt = await bindChatVerifierReceipt({
     projectRoot: input.projectRoot,
     command: input.command,
     exit_code: input.exitCode,
     summary: input.summary,
-    mutationPaths: input.mutationPaths,
+    mutationPaths,
+    ...(repositoryScopedRed ? { scopeKind: 'repository' as const } : {}),
     structured: {
       verifierId: parsed.verifierId,
       authoritySource: parsed.authoritySource,
@@ -55,6 +68,37 @@ export async function captureChatVerifierReceipt(input: {
       args: parsed.args,
     },
   });
+  // Repository scope falls back to a root-path digest without a Git commit.
+  // That is insufficient evidence for a red baseline repair candidate.
+  if (repositoryScopedRed && !receipt.boundRevision?.gitCommitHash) return null;
+  return receipt;
+}
+
+/**
+ * Normalize scope paths to a POSIX repository-relative form. Already-relative
+ * paths pass through. Returns null when any path escapes the project root, so
+ * the caller fails closed (no receipt) rather than minting a misleading scope.
+ */
+function toRepositoryRelativePaths(
+  projectRoot: string,
+  values: readonly string[],
+): string[] | null {
+  const root = path.resolve(projectRoot).replaceAll('\\', '/').replace(/\/+$/, '');
+  const out: string[] = [];
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const slash = value.replaceAll('\\', '/').trim();
+    if (!slash) continue;
+    if (!/^(?:[A-Za-z]:|\/)/.test(slash)) {
+      out.push(slash);
+      continue;
+    }
+    const absolute = path.resolve(value).replaceAll('\\', '/');
+    if (absolute === root) continue;
+    if (!absolute.startsWith(`${root}/`)) return null;
+    out.push(absolute.slice(root.length + 1));
+  }
+  return [...new Set(out)].sort();
 }
 
 /** Replace the latest ledger entry for a structural verifier identity. */
@@ -92,6 +136,7 @@ export async function captureAndRecordVerifierReceipt(input: {
   exitCode: number;
   summary: string;
   mutationPaths: string[];
+  allowRepositoryScopeForRedRecovery?: boolean;
   sessionEvents: SessionEventLog;
   turnId: string;
   ledger: BoundChatVerifierReceipt[];
