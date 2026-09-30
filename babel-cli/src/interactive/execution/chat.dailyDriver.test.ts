@@ -182,6 +182,12 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
     const target = makeTarget();
     const { engine, started } = createCancellableEngine();
     ctx.chatEngine = engine;
+    const shellOutcomes: Array<string | undefined> = [];
+    const appendTurn = ctx.appendTurn;
+    ctx.appendTurn = (turn, outcome) => {
+      shellOutcomes.push(outcome);
+      return appendTurn(turn, outcome);
+    };
     const logs = captureLogs();
     try {
       const pending = executeChatTask(ctx, 'long task', 'long task', target, undefined, {
@@ -219,6 +225,7 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
       assert.equal(ctx.isRunning, false, 'session should remain alive after cancel');
       assert.equal(ctx.state.lastRunUserStatus, 'cancelled');
       assert.equal(ctx.lastAssistantStatus, 'CANCELLED');
+      assert.equal(shellOutcomes[0]?.toLowerCase(), 'cancelled');
       assert.match(painted, /■ Cancelled|Cancelled/);
       assert.doesNotMatch(painted, /REVIEW_KIND:/);
       assert.doesNotMatch(painted, /Verified complete/);

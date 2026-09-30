@@ -3,6 +3,7 @@ import type { CandidateEnvelope, ReviewEvidenceProvenance } from './hostReviewCo
 import type { ReviewCoverageReceipt } from './reviewCoverage.js';
 import {
   evaluateEnsembleIndependence,
+  computeExecutionIndependenceClass,
   type ReviewerIndependenceAttestation,
 } from './reviewIndependence.js';
 import { asReviewRiskLane, resolveReviewPolicy } from './reviewPolicy.js';
@@ -198,8 +199,20 @@ export function evaluateMergeReadiness(input: {
       r.verdict === 'APPROVE' &&
       r.coverage.is_sufficient &&
       r.blocking_findings.length === 0 &&
-      r.provenance !== 'LOCAL_UNAUTHENTICATED'
+      (r.provenance === 'TRUSTED_CONTROLLER_EVIDENCE' || r.provenance === 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE')
   );
+  const reviewSessions = approvedReviews.map((review) => review.independence.dimensions.session_id?.trim().toLowerCase());
+  const reviewIdentities = approvedReviews.map((review) => review.independence.dimensions.reviewer_identity.trim().toLowerCase());
+  const observedProcessIds = approvedReviews
+    .map((review) => review.independence.dimensions.process_id)
+    .filter((processId): processId is number => Number.isSafeInteger(processId) && (processId ?? 0) > 0);
+  const hasDistinctExecutions = reviewSessions.every(Boolean) &&
+    new Set(reviewSessions).size === reviewSessions.length &&
+    new Set(reviewIdentities).size === reviewIdentities.length &&
+    new Set(observedProcessIds).size === observedProcessIds.length &&
+    approvedReviews.every((review) => review.reviewer_id.toLowerCase() === review.independence.dimensions.reviewer_identity.toLowerCase());
+  const hasExecutionIsolation = approvedReviews.every((review) =>
+    computeExecutionIndependenceClass(review.independence.dimensions) === 'I2');
 
   const requiredGates = resolveRequiredGates(input.candidate.risk_tier);
   const minRequiredReviews = requiredGates.codeReview.minApprovals;
@@ -215,6 +228,12 @@ export function evaluateMergeReadiness(input: {
   } else if (headReviews.some((r) => !r.coverage.is_sufficient)) {
     codeReviewStatus = 'INSUFFICIENT';
     blockers.push('insufficient_review_coverage');
+  } else if (!hasExecutionIsolation) {
+    codeReviewStatus = 'INSUFFICIENT';
+    blockers.push('reviewer_execution_isolation_required');
+  } else if (!hasDistinctExecutions) {
+    codeReviewStatus = 'INSUFFICIENT';
+    blockers.push('duplicate_reviewer_execution_or_session');
   } else if (approvedReviews.length < minRequiredReviews) {
     codeReviewStatus = 'INSUFFICIENT';
     blockers.push(`insufficient_approved_reviews:have_${approvedReviews.length}_need_${minRequiredReviews}`);

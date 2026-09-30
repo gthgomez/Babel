@@ -150,3 +150,50 @@ test('harness runtime selection captures the exact expanded file inventory and h
   assert.equal(new Set(selection.files.map((file: { path: string }) => file.path)).size, selection.files.length)
   assert.ok(selection.files.every((file: { sha256: string }) => /^[a-f0-9]{64}$/.test(file.sha256)))
 }))
+
+// Deliberately restricted to the reporting conditions used here, not a general
+// replacement for the GitHub Actions expression engine.
+function reportingCondition(expression: string, outcome: string): boolean {
+  const match = expression.match(/^always\(\) && steps\.([a-z_]+)\.outcome != 'skipped' && steps\.([a-z_]+)\.outcome != ''$/)
+  assert.ok(match, expression)
+  assert.equal(match[1], match[2])
+  return outcome !== 'skipped' && outcome !== ''
+}
+
+function assertWorkflowReporting(workflow: string): void {
+  const jobs = workflow.replace(/\r\n/g, '\n').split(/^  (?=[a-z-]+:)/m)
+  for (const jobName of ['linux-validation', 'windows-portability']) {
+    const job = jobs.find((block) => block.startsWith(`${jobName}:`))
+    assert.ok(job, jobName)
+    const steps = job.split(/^      - name: /m).slice(1)
+    for (const [label, id] of [['harness runtime', 'harness_runtime'], ['Chat truth', 'chat_truth']]) {
+      const run = steps.find((step) => step.startsWith(`Run required ${label} suite\n`))
+      assert.ok(run, `${jobName}: ${label} run`)
+      assert.match(run, new RegExp(`^        id: ${id}$`, 'm'))
+      const reports = steps.filter((step) => step.startsWith(`Summarize ${label}`) || step.startsWith(`Upload ${label}`))
+      assert.equal(reports.length, 2, `${jobName}: ${label} summary and upload`)
+      for (const report of reports) {
+        const condition = report.match(/^        if: (.+)$/m)?.[1]
+        assert.ok(condition)
+        assert.ok(condition.includes(`steps.${id}.outcome`))
+        for (const outcome of ['', 'skipped']) assert.equal(reportingCondition(condition, outcome), false)
+        for (const outcome of ['success', 'failure', 'cancelled']) assert.equal(reportingCondition(condition, outcome), true)
+      }
+    }
+  }
+}
+
+for (const [format, newline] of [['LF', '\n'], ['CRLF', '\r\n']] as const) {
+  test(`Linux and Windows TAP reports retain attempted suites with ${format} checkout line endings`, () => {
+    const workflow = readFileSync(new URL('../../../.github/workflows/typecheck.yml', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n').replace(/\n/g, newline)
+    assertWorkflowReporting(workflow)
+  })
+}
+
+test('attempted failure with missing TAP still invokes the real summarizer and exits nonzero', () => withDirectory((directory) => {
+  assert.equal(reportingCondition("always() && steps.chat_truth.outcome != 'skipped' && steps.chat_truth.outcome != ''", 'failure'), true)
+  const result = tapResult(directory, null)
+  assert.equal(result.status, 1)
+  assert.ok(result.summary.errors.includes('missing_full_tap'))
+}))

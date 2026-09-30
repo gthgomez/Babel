@@ -110,6 +110,7 @@ Most coding agents expose a model and a tool loop. Babel also exposes the harnes
 
 - **Permissions and execution profiles** — host vs isolated defaults you can reason about
 - **Inspectable Prompt OS** — modular instructions you can preview and validate before a model runs
+- [Policy integrity](./docs/guides/POLICY_INTEGRITY.md) — verify drift across the registered policy and gate text
 - **Evidence** — checkpoints, artifacts, diagnostics, recovery tools such as `undo`
 
 You should be able to **use Babel before you understand Babel's architecture**. Deeper design lives under [docs/architecture](./docs/architecture/ARCHITECTURE.md).

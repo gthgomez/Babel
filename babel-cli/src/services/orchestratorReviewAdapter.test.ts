@@ -94,8 +94,8 @@ test('orchestratorReviewAdapter: maps a successful spawn to COMPLETED evidence w
   assert.equal(runtime.controller_execution_id, req.reviewer.execution_id)
   assert.equal(runtime.requested_model, 'opencode-go/glm-5')
   assert.equal(runtime.model_attribution, 'configured')
-  assert.equal(runtime.fresh_context, true)
-  assert.equal(runtime.fresh_process, true)
+  assert.equal(runtime.fresh_context, false)
+  assert.equal(runtime.fresh_process, false)
   assert.equal(runtime.session_id, 'sess-abc')
 
   // External adapter must not claim a provider it cannot observe/attribute.

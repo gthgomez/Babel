@@ -376,6 +376,7 @@ export async function consumeChatStream(
   stream: AsyncIterable<ChatEvent>,
   convRenderer: ConversationalRenderer | null,
   onStreamEvent?: (event: ChatStreamEvent) => void,
+  onChatEvent?: (event: ChatEvent) => void,
   protocolSession?: ProtocolTurnSession | null,
 ): Promise<ChatResult> {
   let answer = '';
@@ -433,6 +434,7 @@ export async function consumeChatStream(
       const terminalFromDispatch = dispatchChatEvent(event, {
         convRenderer,
         ...(onStreamEvent ? { onStreamEvent } : {}),
+        ...(onChatEvent ? { onChatEvent } : {}),
         ...(protocolSession ? { protocolSession } : {}),
         toolIdQueue,
         toolIdsByCallId,
@@ -540,11 +542,13 @@ export async function consumeChatStream(
 function buildChatCallbacks(
   convRenderer: ConversationalRenderer | null,
   onStreamEvent?: (event: ChatStreamEvent) => void,
+  onChatEvent?: (event: ChatEvent) => void,
   protocolSession?: ProtocolTurnSession | null,
 ): ChatCallbacks {
   const sinks = {
     convRenderer,
     ...(onStreamEvent ? { onStreamEvent } : {}),
+    ...(onChatEvent ? { onChatEvent } : {}),
     ...(protocolSession ? { protocolSession } : {}),
   };
 
@@ -557,6 +561,7 @@ function buildChatCallbacks(
       dispatchChatEvent({ type: 'answer_chunk', text: chunk }, sinks);
     },
     onToolStart: (tool: string, label: string) => {
+      onChatEvent?.({ type: 'tool_start', tool, target: label });
       const id = convRenderer?.onToolCallStart(tool, label) ?? ++toolIdCounter;
       toolMetadata.set(id, { tool, target: label });
       protocolSession?.emitChatEvent({ type: 'tool_start', tool, target: label });
@@ -564,6 +569,16 @@ function buildChatCallbacks(
     },
     onToolComplete: (id: number, detail?: string, error?: string, exitCode?: number) => {
       const meta = toolMetadata.get(id);
+      onChatEvent?.({
+        type: error !== undefined || (exitCode !== undefined && exitCode !== 0)
+          ? 'tool_failed'
+          : 'tool_complete',
+        tool: meta?.tool ?? 'tool',
+        target: meta?.target ?? String(id),
+        ...(detail !== undefined ? { detail } : {}),
+        ...(error !== undefined ? { error } : {}),
+        ...(exitCode !== undefined ? { exitCode } : {}),
+      });
       protocolSession?.emitChatEvent({
         type: error !== undefined || (exitCode !== undefined && exitCode !== 0)
           ? 'tool_failed'
@@ -644,6 +659,7 @@ export async function runChatEngineOnce(input: {
   convRenderer?: ConversationalRenderer | null;
   useStreaming?: boolean;
   onStreamEvent?: (event: ChatStreamEvent) => void;
+  onChatEvent?: (event: ChatEvent) => void;
   onCancel?: () => void;
   taskIntent?: TaskIntent;
   executionProfile?: ChatExecutionProfile;
@@ -829,15 +845,23 @@ export async function runChatEngineOnce(input: {
         stream,
         convRenderer,
         input.onStreamEvent,
+        input.onChatEvent,
         protocolSession,
       );
     } else {
       result = await engine.submitMessage(
         input.task,
-        buildChatCallbacks(convRenderer, input.onStreamEvent, protocolSession),
+        buildChatCallbacks(convRenderer, input.onStreamEvent, input.onChatEvent, protocolSession),
         resolvedIntent,
       );
       if (result.status === 'completed') {
+        input.onChatEvent?.({
+          type: 'done',
+          answer: result.answer,
+          usage: result.usage,
+          status: result.status,
+          ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+        });
         protocolSession?.emitChatEvent({
           type: 'done',
           answer: result.answer,
@@ -846,6 +870,12 @@ export async function runChatEngineOnce(input: {
           ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
         });
       } else if (result.status === 'failed') {
+        input.onChatEvent?.({
+          type: 'failed',
+          error: result.answer,
+          status: result.status,
+          ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+        });
         protocolSession?.emitChatEvent({
           type: 'failed',
           error: result.answer,
@@ -853,12 +883,24 @@ export async function runChatEngineOnce(input: {
           ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
         });
       } else if (result.status === 'cancelled') {
+        input.onChatEvent?.({
+          type: 'cancelled',
+          status: result.status,
+          outcome: 'CANCELLED',
+        });
         protocolSession?.emitChatEvent({
           type: 'cancelled',
           status: result.status,
           outcome: 'CANCELLED',
         });
       } else {
+        input.onChatEvent?.({
+          type: 'done',
+          answer: result.answer,
+          usage: result.usage,
+          status: result.status,
+          ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+        });
         protocolSession?.emitChatEvent({
           type: 'done',
           answer: result.answer,

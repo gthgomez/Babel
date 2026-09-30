@@ -113,6 +113,19 @@ try {
   Assert-Taxonomy ((Get-TaxonomyProperty $selected 'kind') -eq 'github_host_review_bundle_v3') 'an exactly binding marker must still return a bundle'
   Assert-Taxonomy ($null -eq (Get-TaxonomyProperty $selected 'transport_error')) 'a binding bundle must not carry a transport_error'
 
+  # A BLOCK on the same exact head survives a later approval marker. Repair
+  # requires a new candidate SHA and a fresh final review round.
+  $blockedHandoff = $binding.body.Substring($markerV3.Length).Trim() | ConvertFrom-Json
+  $blockedHandoff.reviews = @([pscustomobject]@{ verdict = 'BLOCK'; blocking_findings = @('P1: unresolved defect') })
+  $blocked = New-OwnerMarkerComment -Id 41 -Body ($markerV3 + "`n" + ($blockedHandoff | ConvertTo-Json -Depth 20))
+  $laterApproval = New-OwnerMarkerComment -Id 42
+  $selected = Select-AgentHostReviewBundle -Comments @($blocked, $laterApproval) -Repository $repo -PR $pr -BaseSha $base -HeadSha $head -PublisherId '91163862'
+  Assert-Taxonomy ((Get-TaxonomyProperty $selected 'transport_error') -eq 'independent_review_unresolved_block') 'same-head BLOCK must prevent approval shopping'
+  $blockedHandoff.head_sha = $otherHead
+  $priorHeadBlock = New-OwnerMarkerComment -Id 43 -Body ($markerV3 + "`n" + ($blockedHandoff | ConvertTo-Json -Depth 20))
+  $selected = Select-AgentHostReviewBundle -Comments @($priorHeadBlock, $laterApproval) -Repository $repo -PR $pr -BaseSha $base -HeadSha $head -PublisherId '91163862'
+  Assert-Taxonomy ((Get-TaxonomyProperty $selected 'kind') -eq 'github_host_review_bundle_v3') 'prior-head BLOCK must not poison a repaired exact head'
+
   # A newer stale marker must not displace an older exact-head marker: the gate
   # keeps accepting the comment that actually binds the reviewed head.
   $newerStale = New-OwnerMarkerComment -Id 60 -HeadSha $otherHead
@@ -133,6 +146,7 @@ try {
   # --- Transport-error disposition mapping ----------------------------------
   Assert-Taxonomy ((Get-AgentEvidenceTransportError -Document ([pscustomobject]@{ transport_error = 'independent_review_stale_for_head' })) -eq 'autonomous_review_evidence_stale_for_head') 'stale transport must map to a distinct failure disposition'
   Assert-Taxonomy ((Get-AgentEvidenceTransportError -Document ([pscustomobject]@{ transport_error = 'independent_review_handoff_not_published' })) -eq 'autonomous_review_evidence_handoff_not_published') 'not-published transport must map to a distinct failure disposition'
+  Assert-Taxonomy ((Get-AgentEvidenceTransportError -Document ([pscustomobject]@{ transport_error = 'independent_review_unresolved_block' })) -eq 'autonomous_review_evidence_unresolved_block') 'unresolved BLOCK must retain a distinct failure disposition'
   Assert-Taxonomy ((Get-AgentEvidenceTransportError -Document ([pscustomobject]@{ transport_error = 'independent_ai_review_handoff_missing' })) -eq 'autonomous_review_evidence_missing') 'legacy missing transport must keep its old disposition'
   Assert-Taxonomy ((Get-AgentEvidenceTransportError -Document ([pscustomobject]@{ transport_error = 'host_review_handoff_malformed' })) -eq 'autonomous_review_evidence_missing') 'legacy malformed transport must keep its old disposition'
   Assert-Taxonomy ((Get-AgentEvidenceTransportError -Document ([pscustomobject]@{ transport_error = 'autonomous_review_evidence_handoff_ambiguous' })) -eq 'autonomous_review_evidence_ambiguous') 'legacy ambiguous transport must keep its old disposition'

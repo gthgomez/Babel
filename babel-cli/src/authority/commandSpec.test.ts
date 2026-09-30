@@ -698,6 +698,10 @@ const HOST_PROCESS_SURFACE = new Set([
   'services/babelReviewQueue.ts',
   'services/babelReviewRepair.ts',
   'services/babelReviewSnapshot.ts',
+  // Reviewer launch and trusted-source checks execute fixed-argument host commands.
+  'services/codexHarnessReview.ts',
+  'services/orchestratorReviewAdapter.ts',
+  'services/trustedReviewInstallation.ts',
   'services/nativeEngineeringAdapter.ts',
   'services/candidateCollector.ts',
   'services/outcomeCollector.ts',

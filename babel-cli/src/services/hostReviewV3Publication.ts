@@ -1,5 +1,5 @@
 import type { HostReviewHandoffV3 } from './independentReviewEvidenceV3.js'
-import { publicIndependentReviewHandoffV3 } from './independentReviewEvidenceV3.js'
+import { publicIndependentReviewHandoffV3, validateHostReviewHandoffV3 } from './independentReviewEvidenceV3.js'
 
 /** Marks the PR issue comment that carries a host_review_handoff_v3 bundle. */
 export const V3_REVIEW_MARKER = '<!-- babel-controller-independent-review-v3 -->'
@@ -38,13 +38,27 @@ export async function publishIndependentReviewV3(
   options: PublishIndependentReviewV3Options,
 ): Promise<{ posted: boolean; commentId?: string; reason?: string }> {
   const { handoff, repository, prNumber, ownerId, actorId, listComments, postComment, scanBody } = options
-  const body = `${V3_REVIEW_MARKER}\n${JSON.stringify(publicIndependentReviewHandoffV3(handoff))}`
 
   if (isLocalUnauthenticated(handoff)) return { posted: false, reason: 'local_unauthenticated_evidence' }
+  const trusted = (provenance: HostReviewHandoffV3['provenance']) =>
+    provenance === 'TRUSTED_CONTROLLER_EVIDENCE' || provenance === 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'
+  if (!trusted(handoff.provenance) || handoff.reviews.some(review => !trusted(review.provenance))) {
+    return { posted: false, reason: 'authoritative_provenance_required' }
+  }
   if (actorId !== ownerId) return { posted: false, reason: 'owner_identity_required' }
   if (handoff.repository !== repository || handoff.pr_number !== prNumber) {
     return { posted: false, reason: 'handoff_candidate_mismatch' }
   }
+  try {
+    validateHostReviewHandoffV3(handoff, {
+      repository, prNumber, baseSha: handoff.base_sha, headSha: handoff.head_sha,
+      candidateDigest: handoff.candidate_digest, scope: handoff.reviews[0]?.scope,
+      requireAuthoritative: true, purpose: 'FINAL_CERTIFICATION',
+    })
+  } catch {
+    return { posted: false, reason: 'invalid_authoritative_handoff' }
+  }
+  const body = `${V3_REVIEW_MARKER}\n${JSON.stringify(publicIndependentReviewHandoffV3(handoff))}`
 
   const comments = await listComments()
   const duplicate = comments.find(

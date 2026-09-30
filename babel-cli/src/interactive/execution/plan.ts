@@ -21,12 +21,22 @@ import { openEditor } from '../openEditor.js';
 import { updateConversationMemory } from '../turns.js';
 import { alert } from '../../ui/dialog.js';
 
+export function planDecisionShellOutcome(decision: PlanDecision | null): string {
+  return decision === null ? 'cancelled' : 'blocked';
+}
+
 export async function executePlanTask(
   ctx: ReplContext,
   input: string,
   task: string,
   target: AgentTargetContext,
 ): Promise<void> {
+  const withExclusiveTerminal = <T>(
+    reason: string,
+    work: () => Promise<T>,
+  ): Promise<T> =>
+    ctx.withExclusiveTerminal ? ctx.withExclusiveTerminal(reason, work) : work();
+
   ctx.isRunning = true;
   stdinCoordinatorPauseForRun(ctx.rl);
   const bus = new BabelEventBus();
@@ -34,6 +44,7 @@ export async function executePlanTask(
   ctx.lastTargetRoot = target.targetRoot;
   ctx.lastWorkspaceRoot = target.workspaceRoot;
   ctx.state.lastRunTargetRoot = target.targetRoot;
+  const shellTurnEpoch = ctx.shellRuntime?.store.epoch;
 
   try {
     process.stdout.write(primary(`\n  Planning: ${task.slice(0, 80)}\n`));
@@ -62,7 +73,10 @@ export async function executePlanTask(
       runDir: result.runDir,
     };
 
-    const decision: PlanDecision | null = await renderInteractivePlan(displayPlan);
+    const decision: PlanDecision | null = await withExclusiveTerminal(
+      'plan-review',
+      () => renderInteractivePlan(displayPlan),
+    );
 
     if (decision === 'approve') {
       // Promote to Deep: re-run with same task + plan handoff
@@ -93,37 +107,45 @@ export async function executePlanTask(
         changed_files: (payload as any).changed_files ?? [],
         verification: 'not required - plan-then-execute',
         next: ctx.lastAssistantNext,
-      });
+      }, String(deepResult.status ?? 'completed'));
       console.log(`\n${human}\n`);
     } else if (decision === 'edit') {
       process.stdout.write(primary('\n  Opening editor to refine the task prompt…\n'));
-      const edited = await openEditor({ rl: ctx.rl });
+      const edited = await withExclusiveTerminal('external-editor', () =>
+        openEditor({ rl: ctx.rl }),
+      );
       if (edited) {
         // Re-plan with edited prompt
         process.stdout.write(muted('  Re-planning with edited prompt…\n'));
         await executePlanTask(ctx, input, edited.trim(), target);
       } else {
         ctx.state.lastRunUserStatus = 'blocked';
+        ctx.settleShellTurn?.('cancelled', shellTurnEpoch);
         console.log(muted('\n  Plan cancelled — editor returned empty.\n'));
       }
     } else {
       // Rejected or cancelled
       ctx.state.lastRunUserStatus = 'blocked';
+      ctx.settleShellTurn?.(planDecisionShellOutcome(decision), shellTurnEpoch);
       console.log(
         muted(
           '\n  Plan rejected. Refine your task and try again, or switch to /mode deep for governed execution.\n',
         ),
       );
     }
-  } catch (error: any) {
-    ctx.state.lastRunUserStatus = 'failed';
+    } catch (error: any) {
+      ctx.state.lastRunUserStatus = 'failed';
+      ctx.settleShellTurn?.('failed', shellTurnEpoch);
     console.error(accentBright(`\n  Plan failed: ${error.message ?? String(error)}\n`));
     if (process.stdout.isTTY && !process.env['CI']) {
       try {
-        await alert({
-          title: 'Planning Failed',
-          message: error.message ?? String(error),
-        });
+        const showAlert = () =>
+          alert({
+            title: 'Planning Failed',
+            message: error.message ?? String(error),
+          });
+        if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('error-alert', showAlert);
+        else await showAlert();
         (error as any)[Symbol.for('babel.error.alerted')] = true;
       } catch {
         // alert() itself failed — already logged via console.error above

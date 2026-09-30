@@ -4,7 +4,9 @@ import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
 import { handleDiffReview } from './review.js'
-test('the production /diff path isolates a real readline interface from pager input', async () => {
+import { withExclusiveStdin } from '../../ui/inputCoordinator.js'
+test('the production /diff path preserves readline draft with fallback and shell leases', async () => {
+for (const shellLease of [false, true]) {
   const originalStdin = process.stdin
   const originalWrite = process.stdout.write.bind(process.stdout)
   const stdin = new PassThrough() as PassThrough & {
@@ -27,6 +29,10 @@ test('the production /diff path isolates a real readline interface from pager in
   const ctx = {
     rl,
     resolveCurrentTarget: () => ({ targetRoot: process.cwd() }),
+    ...(shellLease ? { withExclusiveTerminal: async <T>(reason: string, run: () => Promise<T>) => {
+      assert.equal(reason, 'diff-review')
+      return await withExclusiveStdin(run, rl)
+    } } : {}),
   }
 
   process.stdout.write = ((chunk: string | Uint8Array) => {
@@ -53,4 +59,5 @@ test('the production /diff path isolates a real readline interface from pager in
   assert.equal(lineAfterPager, draft, 'pager bytes must not enter readline internal line state')
   assert.equal(stdin.read(), null, 'pager bytes must not remain buffered for readline')
   assert.equal(rl.line, draft, 'the exact prior readline draft must be restored')
+}
 })

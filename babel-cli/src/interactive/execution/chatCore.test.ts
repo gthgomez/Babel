@@ -191,6 +191,7 @@ test('runChatEngineOnce uses injected engineFactory and submitMessage', async ()
   const target = makeTarget('/tmp/project');
   let factoryCalled = false;
   let submitCalled = false;
+  const chatEvents: ChatEvent[] = [];
 
   const mockEngine = {
     submitMessage: async () => {
@@ -213,6 +214,7 @@ test('runChatEngineOnce uses injected engineFactory and submitMessage', async ()
   const result = await runChatEngineOnce({
     task: 'hello task',
     target,
+    onChatEvent: (event) => chatEvents.push(event),
     engineFactory,
     useStreaming: false,
     preflightContext: '',
@@ -222,11 +224,13 @@ test('runChatEngineOnce uses injected engineFactory and submitMessage', async ()
   assert.equal(submitCalled, true);
   assert.equal(result.status, 'completed');
   assert.equal(result.answer, 'mock answer');
+  assert.equal(chatEvents.filter((event) => event.type === 'done').length, 1);
 });
 
 test('runChatEngineOnce streaming path uses submitMessageStream via engineFactory', async () => {
   const target = makeTarget('/tmp/project');
   let streamCalled = false;
+  const chatEvents: ChatEvent[] = [];
 
   const mockEngine = {
     submitMessage: async () => completedResult('callback path'),
@@ -241,6 +245,7 @@ test('runChatEngineOnce streaming path uses submitMessageStream via engineFactor
   const result = await runChatEngineOnce({
     task: 'stream task',
     target,
+    onChatEvent: (event) => chatEvents.push(event),
     engineFactory: () => mockEngine,
     useStreaming: true,
     preflightContext: '',
@@ -249,6 +254,7 @@ test('runChatEngineOnce streaming path uses submitMessageStream via engineFactor
   assert.equal(streamCalled, true);
   assert.equal(result.status, 'completed');
   assert.equal(result.answer, 'partial answer');
+  assert.deepEqual(chatEvents.map((event) => event.type), ['answer_chunk', 'done']);
 });
 
 test('runChatEngineOnce headless defaults to streaming when BABEL_STREAM_TOOLS=0', async () => {
