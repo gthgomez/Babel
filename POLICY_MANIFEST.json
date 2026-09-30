@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "algorithm": "sha256",
+  "purpose": "drift_detection_not_authorization",
+  "policy_bundle_id": "27374184a36e29951e5542d72f3bb91e6b0e0e93617dc2a4c9ec5dcab5e7e40f",
+  "files": {
+    "AGENTS.md": "64d4cd8f987cbed3cdb53513a68c11f43b0adab76d61bf9f84b83efd038aec1c",
+    "docs/AUTONOMY_POLICY.md": "4013f261ae1312f53f16c087403c69d92c395db6e5bdcc6554c4862ee6a9b6f2",
+    "docs/AUTONOMY_POLICY_CHANGELOG.md": "24441db937e714358f251f057fd3e0ae115891e48bb9985ee83e46ba1c95a190",
+    "docs/guides/AGENT_GIT_OPERATIONS.md": "7fbb6656bf45a56442474eee84976183848b7520f0be08725aff9b77fc11536a",
+    "scripts/agent-pr-gate.ps1": "d9842767ca11667e3a47aaf1af55fb770d2d6029081d5bf6acb5e583512641be",
+    "scripts/agent-pr-gate-common.psm1": "474adcb8e501227ac1c0ae03f198a07ea9451bab6702699a5538619ccb6dc547",
+    "scripts/agent-review-evidence.ps1": "e9ee3ae67be2fe73110747df71ffabd84047a3b7624f2d7c9a2087d7dde4eddd",
+    "scripts/trusted-merge-gate.ps1": "73ca1c9b0cbdc34fa426e7baf0bc768645152e82db1127a5afdad5ade2e1e747",
+    "babel-cli/src/authority/lease.ts": "f925ef398ff8ae7ce0304aaeedc9a8071be6aa8ae76a4268915cf2f30e6eeed3",
+    "babel-cli/src/config/autonomyPolicy.ts": "2570340cf00f6403a23d4edf6f36d44f341b6da990ed526d317b2219ddde6f01",
+    "babel-cli/src/agent/autonomyEnforcement.ts": "48a487784b9c7c9e1f397760b5875cb2811be8ca787e7177d86365d44757f36f"
+  }
+}

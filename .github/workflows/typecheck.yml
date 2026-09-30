@@ -61,6 +61,19 @@ jobs:
       - name: Public policy runtime matrix
         run: pwsh -NoProfile -ExecutionPolicy Bypass -Command "& './tools/tests/test-public-content-policy-runtime.ps1'"
 
+  policy-integrity:
+    name: policy-integrity
+    runs-on: ubuntu-latest
+    # Drift detection for the policy/trust-surface text (rules, autonomy policy,
+    # gate scripts, authority runtime). Advisory on PRs while PR #271 is in
+    # flight (it touches covered paths); blocking on main so merged drift is
+    # always caught. Flip the continue-on-error off once the open policy PRs land.
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Verify policy integrity manifest
+        run: node tools/policy-integrity-manifest.mjs verify
+
   public-pr-metadata-tests:
     name: public-pr-metadata-tests
     if: github.event_name == 'pull_request'
