@@ -528,22 +528,28 @@ export async function handleScrollback(ctx: ReplContext, _args: string[]): Promi
   const cellViewport =
     conv?.getHistoryCellViewport() ?? ctx.screenManager.getHistoryCellViewport();
 
-  if (cellViewport && cellViewport.totalRowCount > 0) {
-    await PagerOverlay.showFromViewport(cellViewport);
-    ctx.printIdleHeader();
-    return;
-  }
+  const showPager = async (): Promise<void> => {
+    if (cellViewport && cellViewport.totalRowCount > 0) {
+      await PagerOverlay.showFromViewport(cellViewport);
+      return;
+    }
 
-  const buffer = ctx.screenManager.getScrollback();
-  if (!buffer || buffer.totalLines === 0) {
-    console.log(
-      muted(
-        '\n  Scrollback buffer is empty. Output must be written through ScreenManager to be captured.\n',
-      ),
-    );
-    return;
+    const buffer = ctx.screenManager!.getScrollback();
+    if (!buffer || buffer.totalLines === 0) {
+      console.log(
+        muted(
+          '\n  Scrollback buffer is empty. Output must be written through ScreenManager to be captured.\n',
+        ),
+      );
+      return;
+    }
+    await PagerOverlay.show(buffer);
+  };
+  if (ctx.withExclusiveTerminal) {
+    await ctx.withExclusiveTerminal('scrollback-pager', showPager);
+  } else {
+    await showPager();
   }
-  await PagerOverlay.show(buffer);
   // After the pager exits, redraw the REPL prompt
   ctx.printIdleHeader();
 }
@@ -652,5 +658,10 @@ export function reverseHistorySearch(rl: readline.Interface, history: string[]):
 /** Command handler: wraps reverseHistorySearch with the ReplContext interface. */
 export async function handleReverseSearch(ctx: ReplContext): Promise<void> {
   const history = (ctx.rl as any).history as string[];
-  await reverseHistorySearch(ctx.rl, history);
+  const runSearch = () => reverseHistorySearch(ctx.rl, history);
+  if (ctx.withExclusiveTerminal) {
+    await ctx.withExclusiveTerminal('reverse-history', runSearch);
+  } else {
+    await runSearch();
+  }
 }

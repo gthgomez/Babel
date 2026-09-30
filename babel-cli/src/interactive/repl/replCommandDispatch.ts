@@ -13,10 +13,13 @@ export async function executeReplTask(ctx: ReplContext, input: string): Promise<
     const message = err instanceof Error ? err.message : String(err);
     if (process.stdout.isTTY && !process.env['CI']) {
       try {
-        await alert({
-          title: 'Execution Error',
-          message: `A fatal error occurred during execution:\n\n${message}`,
-        });
+        const showAlert = () =>
+          alert({
+            title: 'Execution Error',
+            message: `A fatal error occurred during execution:\n\n${message}`,
+          });
+        if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('error-alert', showAlert);
+        else await showAlert();
       } catch {
         console.error(`\nExecution Error: ${message}\n`);
       }

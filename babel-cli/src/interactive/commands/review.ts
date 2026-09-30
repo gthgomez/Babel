@@ -23,6 +23,11 @@ function setDraft(ctx: ReplContext, text: string): void {
     adapter.setInputText(text);
     return;
   }
+  if (typeof adapter.line === 'string') {
+    adapter.line = text;
+    (adapter as { cursor?: number }).cursor = text.length;
+    return;
+  }
   if (adapter.write) {
     if (typeof adapter.line === 'string') {
       adapter.line = '';
@@ -39,17 +44,16 @@ function setDraft(ctx: ReplContext, text: string): void {
 export async function handleDiffReview(ctx: ReplContext): Promise<void> {
   const draft = getDraft(ctx);
   const target = ctx.resolveCurrentTarget();
-  const result = await withExclusiveStdin(
-    () =>
-      openLastReviewDiff({
-        getComposerDraft: () => draft,
-        // Restore the native readline buffer after exclusive stdin reattaches
-        // its input listeners.
-        setComposerDraft: () => undefined,
-        cwd: target.targetRoot,
-      }),
-    ctx.rl,
-  );
+  const runReview = () =>
+    openLastReviewDiff({
+      getComposerDraft: () => draft,
+      // Restore only after the exclusive terminal lease reattaches input.
+      setComposerDraft: () => undefined,
+      cwd: target.targetRoot,
+    });
+  const result = ctx.withExclusiveTerminal
+    ? await ctx.withExclusiveTerminal('diff-review', runReview)
+    : await withExclusiveStdin(runReview, ctx.rl);
   setDraft(ctx, result.restoredDraft);
 }
 

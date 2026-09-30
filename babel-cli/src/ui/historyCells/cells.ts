@@ -14,6 +14,7 @@ import {
 import { wrapPrefixedBlock } from '../textLayout.js';
 import type { HistoryCell } from './historyCell.js';
 import { conversationalToolLabel } from '../toolDisplay.js';
+import { formatShellSpeaker, formatShellTool } from '../shell/shellTranscript.js';
 import { renderUnseenDividerPill } from '../unseenDivider.js';
 import type { HistoryRenderMode } from './layout.js';
 import { BaseHistoryCell } from './historyCell.js';
@@ -103,6 +104,7 @@ export class UserMessageCell extends BaseHistoryCell {
 
   protected displayLinesForMode(width: number, mode: HistoryRenderMode): string[] {
     const payload = this.record.payload as UserMessagePayload;
+    if (mode === 'shell') return formatShellSpeaker('YOU', payload.message, width);
     return wrapPrefixedBody(payload.message, 'You', width, mode);
   }
 }
@@ -121,6 +123,7 @@ export class AssistantMessageCell extends BaseHistoryCell {
 
   protected displayLinesForMode(width: number, mode: HistoryRenderMode): string[] {
     const payload = this.record.payload as AssistantMessagePayload;
+    if (mode === 'shell') return formatShellSpeaker('BABEL', payload.message, width);
     return wrapPrefixedBody(payload.message, 'Babel', width, mode);
   }
 }
@@ -140,6 +143,7 @@ export class ToolCallCell extends BaseHistoryCell {
   protected displayLinesForMode(width: number, mode: HistoryRenderMode): string[] {
     if (width <= 0) return [];
     const payload = this.record.payload as ToolCallPayload;
+    if (mode === 'shell') return formatShellTool(payload, width);
     const label =
       mode === 'raw'
         ? `${payload.tool} ${payload.target}`
@@ -299,7 +303,7 @@ export class CompositeHistoryCell extends BaseHistoryCell {
     const out: string[] = [];
     let first = true;
     for (const part of this.parts) {
-      const lines = mode === 'raw' ? part.rawLines() : part.displayLines(width);
+      const lines = mode === 'raw' ? part.rawLines() : part.displayLines(width, mode);
       if (lines.length === 0) continue;
       if (!first) out.push('');
       out.push(...lines);

@@ -18,6 +18,7 @@ export type ChatStreamEvent =
 export interface ChatEventDispatchSinks {
   convRenderer?: ConversationalRenderer | null;
   onStreamEvent?: (event: ChatStreamEvent) => void;
+  onChatEvent?: (event: ChatEvent) => void;
   protocolSession?: ProtocolTurnSession | null;
   toolIdQueue?: number[];
   toolIdsByCallId?: Map<string, number>;
@@ -50,6 +51,7 @@ export function dispatchChatEvent(
   event: ChatEvent,
   sinks: ChatEventDispatchSinks,
 ): ChatResult | null {
+  sinks.onChatEvent?.(event);
   sinks.protocolSession?.emitChatEvent(event);
 
   switch (event.type) {

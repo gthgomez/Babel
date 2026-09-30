@@ -106,6 +106,20 @@ jobs:
           src/services/trustedReviewInstallation.test.ts
         working-directory: babel-cli
 
+  policy-integrity:
+    name: policy-integrity
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # Verify the manifest against the combined policy and runtime changes.
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Test policy integrity verifier
+        run: node --test tools/tests/policy-integrity-manifest.test.mjs
+      - name: Verify policy integrity manifest
+        run: node tools/policy-integrity-manifest.mjs verify
+
   public-pr-metadata-tests:
     name: public-pr-metadata-tests
     if: github.event_name == 'pull_request'

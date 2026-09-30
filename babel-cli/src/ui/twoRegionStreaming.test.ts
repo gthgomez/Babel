@@ -11,6 +11,7 @@ import { TwoRegionStreaming } from './twoRegionStreaming.js';
 import { OutputBuffer } from './outputBuffer.js';
 import { resetTerminalProbe } from './terminalProbe.js';
 import { withEnv } from './testUtils.js';
+import { suspendActiveRendererForExclusiveSurface } from './rendererFence.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -117,6 +118,68 @@ describe('Lifecycle', () => {
     const trs = new TwoRegionStreaming();
     trs.commitStreaming(); // should not throw
     assert.equal(trs.isActive, false);
+  });
+});
+
+describe('exclusive presentation fencing', () => {
+  it('defers resize and commit terminal writes until the lease is released', () => {
+    withEnv({ BABEL_SCROLL_REGIONS: '1' }, () => {
+      const trs = new TwoRegionStreaming();
+      trs.setup(50, 12, 80);
+      const output = OutputBuffer.getInstance();
+      const methods = ['resetScrollRegion', 'setScrollRegion', 'moveCursor', 'writeLine', 'write'] as const;
+      const originals = new Map<string, (...args: any[]) => any>();
+      let mutations = 0;
+      for (const method of methods) {
+        const original = (output as any)[method].bind(output);
+        originals.set(method, original);
+        (output as any)[method] = (...args: any[]) => {
+          mutations += 1;
+          return original(...args);
+        };
+      }
+      try {
+        mutations = 0;
+        const release = suspendActiveRendererForExclusiveSurface();
+        trs.writeStreaming('answer while overlay is open');
+        trs.onResize(45, 100);
+        trs.commitStreaming();
+        assert.equal(mutations, 0);
+        assert.equal(trs.isActive, true);
+        release();
+        assert.equal(trs.isActive, false);
+        assert.ok(mutations > 0);
+      } finally {
+        for (const method of methods) (output as any)[method] = originals.get(method);
+        if (trs.isActive) trs.teardown();
+      }
+    });
+  });
+
+  it('defers teardown and resets the scroll region after renderer stop', () => {
+    withEnv({ BABEL_SCROLL_REGIONS: '1' }, () => {
+      const trs = new TwoRegionStreaming();
+      trs.setup(50, 12, 80);
+      const output = OutputBuffer.getInstance();
+      const original = output.resetScrollRegion;
+      let resets = 0;
+      output.resetScrollRegion = (() => {
+        resets += 1;
+        return original.call(output);
+      }) as typeof output.resetScrollRegion;
+      try {
+        const release = suspendActiveRendererForExclusiveSurface();
+        trs.teardown();
+        assert.equal(resets, 0);
+        assert.equal(trs.isActive, true);
+        release();
+        assert.equal(trs.isActive, false);
+        assert.ok(resets > 0);
+      } finally {
+        output.resetScrollRegion = original;
+        if (trs.isActive) trs.teardown();
+      }
+    });
   });
 });
 

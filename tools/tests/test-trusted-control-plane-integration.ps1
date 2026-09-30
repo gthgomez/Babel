@@ -9,7 +9,7 @@
 # Coverage:
 #   1. RED control-plane change + two controller-owned V3 reviews -> audit passes
 #   2. one exact Babel chat review satisfies GREEN/NORMAL; RED/CRITICAL needs two
-#   3. missing review evidence blocks deterministically
+#   3. missing or invalid optional evidence remains visibly invalid and advisory
 #   4. dirty candidate worktree blocks
 [CmdletBinding()]
 param(
@@ -82,6 +82,7 @@ try {
   # ---- candidate commit changes the RED control plane (main stays at base) ----
   if ($CandidateLane -eq 'RED') {
     Add-Content -LiteralPath (Join-Path $seedPath 'scripts/agent-git-common.psm1') -Value '# candidate control-plane change' -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $seedPath 'scripts/agent-pr-gate.ps1') -Value "throw 'CANDIDATE_GATE_MUST_NOT_EXECUTE'" -Encoding utf8NoBOM
   }
   Set-Content -LiteralPath (Join-Path $seedPath 'feature.txt') -Value 'candidate feature' -Encoding utf8NoBOM
   & $git -C $seedPath add -A

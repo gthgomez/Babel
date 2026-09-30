@@ -514,9 +514,7 @@ try {
     }
   }
   Add-AgentCheck -Name 'NO_UNEXPECTED_DIFF' -Passed $noUnexpectedDiff -Blocker 'unexpected_diff_scope'
-  # Operator-facing summary for the common "everything green except the
-  # exact-head independent certification" state. It is advisory only: it never
-  # changes blockers or mergeReady.
+  # Report missing/invalid advisory evidence without affecting readiness.
   $independentReviewSummary = Get-AgentIndependentReviewSummary -IndependentReviewSatisfied $independentReviewSatisfied -RequiredChecksGreen $requiredChecksGreen -RequiredCheckCount $requiredChecks.Count -EvidenceErrors @($autonomousEvidenceResult.errors) -IndependentRequired $independentRequired
   if (-not [string]::IsNullOrWhiteSpace($independentReviewSummary) -and -not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
     try { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $independentReviewSummary -ErrorAction Stop }

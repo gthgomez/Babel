@@ -54,7 +54,7 @@ export function printRunSummary(
     changed_files: changedFiles,
     verification,
     next: ctx.lastAssistantNext,
-  });
+  }, String(result.status ?? ctx.state.lastRunUserStatus ?? 'completed'));
   console.log(`\n${human}\n`);
   const note = formatHumanOutputReviewNote(review);
   if (note) {

@@ -30,6 +30,12 @@ import { OutputBuffer } from './outputBuffer.js';
 import { supportsColor } from './theme.js';
 import { isLegacyWindowsConsole } from './terminalProbe.js';
 import { handleInteractiveInterrupt } from './interruptHost.js';
+import type { KeyEvent } from './keyInput.js';
+import type {
+  PromptInputPresentationTarget,
+  PromptView,
+  Rect,
+} from './promptView.js';
 
 // ── Detection ───────────────────────────────────────────────────────────────────
 
@@ -91,6 +97,12 @@ export interface PromptInputAdapter {
   getPromptInput(): PromptInput | null;
   /** Temporarily detach the internal readline surface during an exclusive overlay. */
   suspendInput(): () => void;
+  /** Attach a host-owned presentation target without adding a stdin reader. */
+  setPresentationTarget(target: PromptInputPresentationTarget | null): void;
+  /** Return the embedded editor view in host-local coordinates. */
+  getView(rect: Rect): PromptView | null;
+  /** Route one parsed key through the embedded editor. */
+  processKey(event: KeyEvent): void;
 }
 
 /**
@@ -116,6 +128,7 @@ export function createPromptInputAdapter(config: {
   isTaskRunning?: () => boolean;
   /** Voice dictation toggle (Ctrl+Shift+V). Returns true if the key was consumed. */
   onVoiceToggle?: () => boolean;
+  presentationTarget?: PromptInputPresentationTarget;
 }): Interface {
   if (!shouldUsePromptInputV2()) {
     // Fallback to standard readline
@@ -147,6 +160,19 @@ class PromptInputAdapterImpl implements PromptInputAdapter {
   suspendInput(): () => void {
     return suspendReadlineInput(this.internalRl);
   }
+
+  setPresentationTarget(target: PromptInputPresentationTarget | null): void {
+    this.promptInput?.setPresentationTarget(target);
+  }
+
+  getView(rect: Rect): PromptView | null {
+    return this.promptInput?.getView(rect) ?? null;
+  }
+
+  processKey(event: KeyEvent): void {
+    this.promptInput?.processKey(event);
+  }
+
   private lineCallbacks: LineCallback[] = [];
   private sigintCallbacks: SigintCallback[] = [];
   private currentPrompt: string;
@@ -175,6 +201,7 @@ class PromptInputAdapterImpl implements PromptInputAdapter {
     vimMode?: boolean;
     isTaskRunning?: () => boolean;
     onVoiceToggle?: () => boolean;
+    presentationTarget?: PromptInputPresentationTarget;
   }) {
     this.currentPrompt = config.prompt ?? '› ';
     this.completer = config.completer;
@@ -257,6 +284,9 @@ class PromptInputAdapterImpl implements PromptInputAdapter {
       getQueuedMessages: getComposerQueueSnapshot,
       onQueue: enqueueComposerMessage,
     });
+    if (config.presentationTarget) {
+      this.promptInput.setPresentationTarget(config.presentationTarget);
+    }
 
     // Register line callbacks via the public onSubmit listener API
     this.promptInput.onSubmit((text: string) => {

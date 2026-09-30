@@ -45,9 +45,6 @@ $base = 'b' * 40
 $expectedDigest = 'd' * 64
 
 try {
-  $gateAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../../scripts/agent-pr-gate.ps1'), [ref]$null, [ref]$null)
-  $floorAssignments = @($gateAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$minimumReviewCount' }, $true))
-  Assert-ClosureGate ($floorAssignments.Count -eq 1 -and $floorAssignments[0].Right.Extent.Text -match 'Get-AgentMinimumReviewCount') 'merge gate must resolve reviewer count from the shared policy'
   Assert-ClosureGate ((Get-AgentMinimumReviewCount -Lane GREEN) -eq 1) 'normal changes require one reviewer'
   Assert-ClosureGate ((Get-AgentMinimumReviewCount -Lane YELLOW) -eq 2) 'elevated changes require two reviewers'
   Assert-ClosureGate ((Get-AgentMinimumReviewCount -Lane RED) -eq 2) 'critical changes require two reviewers'

@@ -93,7 +93,11 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
 import { Writable } from 'node:stream';
-import { InputCoordinator, captureRawKeypress } from './ui/inputCoordinator.js';
+import {
+  InputCoordinator,
+  captureRawKeypress,
+  withExclusiveTerminalSurface,
+} from './ui/inputCoordinator.js';
 import { getActiveRenderer } from './ui/waterfall.js';
 import { ConfirmDialog } from './ui/dialog.js';
 import { isRunningInDaemon } from './daemon/client.js';
@@ -1598,7 +1602,9 @@ export async function promptUserJit(question: string): Promise<boolean> {
     renderer?.pauseTicks();
     coordinator.startBuffering();
     try {
-      return await captureRawKeypress(question);
+      return await withExclusiveTerminalSurface('approval-dialog', () =>
+        captureRawKeypress(question),
+      );
     } finally {
       const flushed = coordinator.stopBuffering();
       if (flushed) {
@@ -1747,11 +1753,13 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
         if (req.tool === 'file_write') {
           const diff = renderGitDiff(req, context);
           if (isInteractive) {
-            approved = await ConfirmDialog.show({
-              title: 'Confirm File Write',
-              message: `Do you want to allow writing changes to:\n  ${req.path}\n\n${diff || '(No differences detected or empty file)'}`,
-              danger: false,
-            });
+            approved = await withExclusiveTerminalSurface('approval-dialog', () =>
+              ConfirmDialog.show({
+                title: 'Confirm File Write',
+                message: `Do you want to allow writing changes to:\n  ${req.path}\n\n${diff || '(No differences detected or empty file)'}`,
+                danger: false,
+              }),
+            );
           } else {
             let card = `\nProposed changes to ${req.path}:\n`;
             if (diff) {
@@ -1778,22 +1786,26 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
                   ? `Git Push: ${(req as any).target ?? 'remote'}`
                   : `Command:   ${req.command}\n  Directory: ${req.working_directory ?? process.cwd()}`;
           if (isInteractive) {
-            approved = await ConfirmDialog.show({
-              title: `Confirm ${req.tool}`,
-              message: `Proposed dangerous tool execution:\n\n  ${detail}`,
-              danger: true,
-            });
+            approved = await withExclusiveTerminalSurface('approval-dialog', () =>
+              ConfirmDialog.show({
+                title: `Confirm ${req.tool}`,
+                message: `Proposed dangerous tool execution:\n\n  ${detail}`,
+                danger: true,
+              }),
+            );
           } else {
             process.stdout.write(`\n${detail}\n`);
             approved = await promptUserJit(`Allow this? [y/N]: `);
           }
         } else {
           if (isInteractive) {
-            approved = await ConfirmDialog.show({
-              title: `Confirm Tool: ${req.tool}`,
-              message: `Proposed tool execution of "${req.tool}" with arguments:\n\n${JSON.stringify(req, null, 2)}`,
-              danger: true,
-            });
+            approved = await withExclusiveTerminalSurface('approval-dialog', () =>
+              ConfirmDialog.show({
+                title: `Confirm Tool: ${req.tool}`,
+                message: `Proposed tool execution of "${req.tool}" with arguments:\n\n${JSON.stringify(req, null, 2)}`,
+                danger: true,
+              }),
+            );
           } else {
             process.stdout.write(
               `\nProposed tool execution of "${req.tool}" with arguments:\n${JSON.stringify(req, null, 2)}\n`,
