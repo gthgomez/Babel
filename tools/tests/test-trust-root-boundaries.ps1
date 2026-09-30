@@ -53,7 +53,7 @@ foreach ($marker in @('babel-controller-ai-reviews-v2', 'github_host_review_bund
   if ($evidenceValidator -notmatch [regex]::Escape($marker)) { throw "Immutable evidence validator is missing marker: $marker" }
 }
 $workflow = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot '.github/workflows/trusted-control-plane.yml')
-if ($workflow -notmatch [regex]::Escape('materialize-independent-review-receipt.ps1')) { throw 'Trusted workflow is missing the evidence transport step.' }
+if ($workflow -match [regex]::Escape('materialize-independent-review-receipt.ps1')) { throw 'Advisory certification must not be a workflow prerequisite.' }
 if ($workflow -match 'BABEL_REVIEW_CONTROLLER_(LOGIN|APP_ID)') { throw 'Trusted workflow must not retain App-controller configuration.' }
 if ($workflow -notmatch [regex]::Escape('github.event.repository.owner.id')) { throw 'Trusted workflow is missing owner-controller provenance binding.' }
 if ($workflow -match [regex]::Escape('persist-credentials: true')) { throw 'Trusted workflow must not persist credentials.' }
