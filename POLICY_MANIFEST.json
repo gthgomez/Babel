@@ -1,19 +1,22 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
-  "policy_bundle_id": "27374184a36e29951e5542d72f3bb91e6b0e0e93617dc2a4c9ec5dcab5e7e40f",
+  "normalization": "utf8_crlf_to_lf",
+  "policy_bundle_id": "8c41cf4ea2a97fea9679e349bafe095b15f9ad2ee7e88655a1e6ddc31cf0ce1c",
   "files": {
+    ".agents/rules/10-independent-review-policy.md": "501b2aebfbfa8e15d28730ee774fc26d5af1b51c4d680438f5a628f805770e7f",
     "AGENTS.md": "64d4cd8f987cbed3cdb53513a68c11f43b0adab76d61bf9f84b83efd038aec1c",
+    "babel-cli/src/agent/autonomyEnforcement.ts": "48a487784b9c7c9e1f397760b5875cb2811be8ca787e7177d86365d44757f36f",
+    "babel-cli/src/authority/lease.ts": "f925ef398ff8ae7ce0304aaeedc9a8071be6aa8ae76a4268915cf2f30e6eeed3",
+    "babel-cli/src/config/autonomyPolicy.ts": "2570340cf00f6403a23d4edf6f36d44f341b6da990ed526d317b2219ddde6f01",
     "docs/AUTONOMY_POLICY.md": "4013f261ae1312f53f16c087403c69d92c395db6e5bdcc6554c4862ee6a9b6f2",
     "docs/AUTONOMY_POLICY_CHANGELOG.md": "24441db937e714358f251f057fd3e0ae115891e48bb9985ee83e46ba1c95a190",
     "docs/guides/AGENT_GIT_OPERATIONS.md": "7fbb6656bf45a56442474eee84976183848b7520f0be08725aff9b77fc11536a",
-    "scripts/agent-pr-gate.ps1": "d9842767ca11667e3a47aaf1af55fb770d2d6029081d5bf6acb5e583512641be",
     "scripts/agent-pr-gate-common.psm1": "474adcb8e501227ac1c0ae03f198a07ea9451bab6702699a5538619ccb6dc547",
-    "scripts/agent-review-evidence.ps1": "e9ee3ae67be2fe73110747df71ffabd84047a3b7624f2d7c9a2087d7dde4eddd",
-    "scripts/trusted-merge-gate.ps1": "73ca1c9b0cbdc34fa426e7baf0bc768645152e82db1127a5afdad5ade2e1e747",
-    "babel-cli/src/authority/lease.ts": "f925ef398ff8ae7ce0304aaeedc9a8071be6aa8ae76a4268915cf2f30e6eeed3",
-    "babel-cli/src/config/autonomyPolicy.ts": "2570340cf00f6403a23d4edf6f36d44f341b6da990ed526d317b2219ddde6f01",
-    "babel-cli/src/agent/autonomyEnforcement.ts": "48a487784b9c7c9e1f397760b5875cb2811be8ca787e7177d86365d44757f36f"
+    "scripts/agent-pr-gate.ps1": "718ab786f4ed4ad0fcaff87d63320d17f0c99fcc9d7e838b459559a5b68dc0d0",
+    "scripts/agent-review-evidence.ps1": "7fe7d61328bbd4fea1980642e1d0e0fcd92739c7da76d48c84f8346893af0f71",
+    "scripts/trusted-merge-gate.ps1": "40617944a57524e90dae7474d81c7abf399fa03d3ca6d98728eb68d68d641942",
+    "tools/policy-integrity-manifest.mjs": "e08333e712525118bc4ea1a094402df6f6625da091ac18a4835e9c99d8d5d647"
   }
 }

@@ -1,34 +1,19 @@
 #!/usr/bin/env node
-// Policy integrity manifest for gthgomez/Babel — drift detection, not authorization.
-//
-// Detects post-hoc drift between the reviewed policy/trust surface text and the
-// files on disk (the "prompt-to-runtime debt" recorded in
-// docs/AUTONOMY_POLICY_CHANGELOG.md). It is NOT a signing root and grants no
-// authority; the runtime enforcement and the base-rooted merge gate remain the
-// authoritative trust anchors. Integration of verify into
-// scripts/trusted-merge-gate.ps1 is a deliberate follow-up so this change does
-// not touch the hostProtected trust root while #271 is in flight.
-//
-// Usage:
-//   node tools/policy-integrity-manifest.mjs verify    # exit 1 on drift
-//   node tools/policy-integrity-manifest.mjs generate  # rewrite the manifest
-
+// Drift detection only. Runtime enforcement and the base-rooted merge gate
+// remain authoritative; this manifest grants no authorization.
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = join(repoRoot, "POLICY_MANIFEST.json");
-
-// The covered trust surface: policy text, rules, review/authority config, and
-// the gate scripts. Paths are repo-relative POSIX.
+// Deliberately bounded snapshot, not the complete host-protected surface.
+// Reconcile with the promoted PR271 policy before combining or merging.
 const coveredPaths = [
   "AGENTS.md",
   "docs/AUTONOMY_POLICY.md",
   "docs/AUTONOMY_POLICY_CHANGELOG.md",
   "docs/guides/AGENT_GIT_OPERATIONS.md",
-  // "config/review-risk-policy.json", // added by PR #271 — register when it merges
   "scripts/agent-pr-gate.ps1",
   "scripts/agent-pr-gate-common.psm1",
   "scripts/agent-review-evidence.ps1",
@@ -36,85 +21,140 @@ const coveredPaths = [
   "babel-cli/src/authority/lease.ts",
   "babel-cli/src/config/autonomyPolicy.ts",
   "babel-cli/src/agent/autonomyEnforcement.ts",
-];
-
+  ".agents/rules/10-independent-review-policy.md",
+  "tools/policy-integrity-manifest.mjs",
+].sort();
+const hashPattern = /^[a-f0-9]{64}$/;
+const isObject = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+const sha256 = (text) =>
+  createHash("sha256").update(text, "utf8").digest("hex");
+// Preserve BOM, lone CR, whitespace and final-newline distinctions. Only CRLF
+// varies legitimately across clean checkouts, including *.ps1 eol=crlf.
 function hashFile(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+  const text = new TextDecoder("utf-8", {
+    fatal: true,
+    ignoreBOM: true,
+  }).decode(readFileSync(path));
+  return sha256(text.replace(/\r\n/g, "\n"));
 }
-
+function bundleId(files) {
+  return sha256(
+    Object.keys(files)
+      .sort()
+      .map((path) => `${path}:${files[path]}`)
+      .join("\n"),
+  );
+}
+function failure(problems) {
+  console.log(JSON.stringify({ status: "FAIL", problems }));
+  process.exitCode = 1;
+}
 function buildManifest() {
   const files = {};
-  const bundleLines = [];
-  for (const rel of coveredPaths) {
-    const hash = hashFile(join(repoRoot, rel));
-    files[rel] = hash;
-    bundleLines.push(`${rel}:${hash}`);
+  const problems = [];
+  for (const path of coveredPaths) {
+    try {
+      files[path] = hashFile(join(repoRoot, path));
+    } catch {
+      problems.push(`file_unreadable_or_invalid_utf8:${path}`);
+    }
   }
-  const policyBundleId = createHash("sha256")
-    .update(bundleLines.sort().join("\n"))
-    .digest("hex");
+  if (problems.length) {
+    failure(problems);
+    return null;
+  }
   return {
-    schema_version: 1,
+    schema_version: 2,
     algorithm: "sha256",
     purpose: "drift_detection_not_authorization",
-    policy_bundle_id: policyBundleId,
+    normalization: "utf8_crlf_to_lf",
+    policy_bundle_id: bundleId(files),
     files,
   };
 }
-
-const mode = process.argv[2] ?? "verify";
-if (mode === "generate") {
-  writeFileSync(manifestPath, JSON.stringify(buildManifest(), null, 2) + "\n");
-  console.log(
-    JSON.stringify({ status: "GENERATED", manifest: "POLICY_MANIFEST.json", covered: coveredPaths.length }),
-  );
-  process.exit(0);
-}
-
-if (mode !== "verify") {
-  console.error(`unknown mode: ${mode} (use verify or generate)`);
-  process.exit(2);
-}
-
-const problems = [];
-let manifest;
-try {
-  manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-} catch (error) {
-  console.log(JSON.stringify({ status: "FAIL", reason: "manifest_unreadable", error: String(error) }));
-  process.exit(1);
-}
-if (manifest.schema_version !== 1) problems.push("schema_version_mismatch");
-
-for (const rel of coveredPaths) {
-  if (!manifest.files?.[rel]) {
-    problems.push(`unregistered:${rel}`);
-    continue;
-  }
-  let actual;
+function verify() {
+  let manifest;
   try {
-    actual = hashFile(join(repoRoot, rel));
+    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   } catch {
-    problems.push(`missing:${rel}`);
-    continue;
+    failure(["manifest_unreadable"]);
+    return;
   }
-  if (actual !== manifest.files[rel]) problems.push(`drift:${rel}`);
-}
-for (const rel of Object.keys(manifest.files ?? {})) {
-  if (!coveredPaths.includes(rel)) problems.push(`stale_registration:${rel}`);
-}
-
-if (problems.length > 0) {
+  if (!isObject(manifest)) {
+    failure(["manifest_shape_invalid"]);
+    return;
+  }
+  const problems = [];
+  for (const [key, expected] of Object.entries({
+    schema_version: 2,
+    algorithm: "sha256",
+    purpose: "drift_detection_not_authorization",
+    normalization: "utf8_crlf_to_lf",
+  })) {
+    if (manifest[key] !== expected) problems.push(`${key}_mismatch`);
+  }
+  if (
+    typeof manifest.policy_bundle_id !== "string" ||
+    !hashPattern.test(manifest.policy_bundle_id)
+  )
+    problems.push("policy_bundle_id_invalid");
+  if (!isObject(manifest.files)) problems.push("files_shape_invalid");
+  else {
+    const files = manifest.files;
+    let validHashes = true;
+    for (const path of Object.keys(files)) {
+      if (!coveredPaths.includes(path))
+        problems.push(`stale_registration:${path}`);
+      if (typeof files[path] !== "string" || !hashPattern.test(files[path])) {
+        problems.push(`hash_invalid:${path}`);
+        validHashes = false;
+      }
+    }
+    for (const path of coveredPaths) {
+      if (!Object.hasOwn(files, path)) problems.push(`unregistered:${path}`);
+      try {
+        const actual = hashFile(join(repoRoot, path));
+        if (Object.hasOwn(files, path) && actual !== files[path])
+          problems.push(`drift:${path}`);
+      } catch {
+        problems.push(`file_unreadable_or_invalid_utf8:${path}`);
+      }
+    }
+    if (validHashes && manifest.policy_bundle_id !== bundleId(files))
+      problems.push("policy_bundle_id_mismatch");
+  }
+  if (problems.length) {
+    failure(problems);
+    return;
+  }
   console.log(
     JSON.stringify({
-      status: "FAIL",
+      status: "VERIFIED",
       policy_bundle_id: manifest.policy_bundle_id,
-      problems,
-      remediation: "node tools/policy-integrity-manifest.mjs generate  # then commit after the change is reviewed",
+      covered: coveredPaths.length,
     }),
   );
-  process.exit(1);
 }
-console.log(
-  JSON.stringify({ status: "VERIFIED", policy_bundle_id: manifest.policy_bundle_id, covered: coveredPaths.length }),
-);
+const mode = process.argv[2] ?? "verify";
+if (mode === "generate") {
+  const manifest = buildManifest();
+  if (manifest) {
+    try {
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+      console.log(
+        JSON.stringify({
+          status: "GENERATED",
+          manifest: "POLICY_MANIFEST.json",
+          covered: coveredPaths.length,
+        }),
+      );
+    } catch {
+      failure(["manifest_write_failed"]);
+    }
+  }
+} else if (mode === "verify") verify();
+else {
+  console.log(JSON.stringify({ status: "FAIL", problems: ["unknown_mode"] }));
+  process.exitCode = 2;
+}

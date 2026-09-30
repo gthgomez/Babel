@@ -47,6 +47,7 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 | Debugging observation contract | `docs/architecture/BDNS_ARCHITECTURE_V1.md` + `BDNS_INVENTORY_V1.md` + `BDNS_FAULT_MATRIX_V1.md` + `BDNS_HARDENING_V1.md` |
 | Executable Acceptance V0 (local experimental recording) | `docs/architecture/EXECUTABLE_ACCEPTANCE_V0.md` |
 | **PR review and merge evidence** | `docs/BABEL_PR_REVIEW.md`, `.agents/rules/10-independent-review-policy.md` (Babel chat, owner-controller provenance; no custom signing prerequisite) |
+| Policy text drift detection | `docs/guides/POLICY_INTEGRITY.md`, `tools/policy-integrity-manifest.mjs` |
 | Portable workflow contract (proposed, non-normative) | `docs/guides/PORTABLE_AGENT_WORKFLOW_PLAN.md` |
 | Prompt OS layers + catalog + V9 pipeline | `docs/architecture/ARCHITECTURE.md` |
 | babel-cli package ops (CLI coding / routing pointer) | `babel-cli/CLAUDE.md` |
