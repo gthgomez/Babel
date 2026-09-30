@@ -17,25 +17,21 @@ record:
 - PR state: open, non-draft, same-repository, mergeable, and clean merge state
 - repository policy: the active `protect-main` ruleset read from GitHub
 - CI: required contexts resolved only from the exact head with workflow authority
-- technical review: controller-owned exact-head independent AI evidence when
-  the base-derived risk lane requires it
+- technical review: optional advisory evidence from any harness; no custom certificate grants merge permission
 - task authority: the original task authorizes routine Git/PR actions; no
   separate per-merge switch exists
 - scope: exact diff paths and optional path allowlist
 
 The result is `MERGE_READY` only when every required dimension is satisfied.
-Unreadable policy, missing provenance, pending checks, ambiguous check lineage,
-stale review evidence, or insufficient lane evidence produces `BLOCKED`.
+Unreadable policy, pending required checks, ambiguous check lineage, or a stale
+verified head produces `BLOCKED`. Optional review evidence never becomes a false approval.
 
 ## Risk lanes
 
 The immutable base derives a minimum path-based lane; callers may raise, never lower it.
-GREEN requires deterministic checks; YELLOW
-requires one controller-owned independent AI review; RED requires two distinct
-independent reviews; BLACK requires a real owner decision. Merge-control,
-workflow, policy, and authority paths are RED. A trusted dispatcher classifies BLACK by action/context, not candidate path.
-A candidate cannot rewrite its own evaluator, label itself
-GREEN, or clear a trusted BLACK classification.
+Risk lanes guide review effort and diagnostics. They do not require a vendor,
+supervisor or custom certificate for GitHub merge authorization. BLACK remains
+an owner-decision boundary for a genuinely unclassified action or scope.
 
 ## GitHub policy versus Babel policy
 
@@ -52,11 +48,10 @@ independentReviewEvidence
 taskAuthorization
 ```
 
-GitHub's required approval count is discovered from the active ruleset. A ruleset
-with zero required approvals satisfies only the GitHub approval dimension; it does
-not waive Babel's independent technical review policy for high-risk changes.
-Review-thread resolution is queried separately through GitHub's review-thread
-API. The gate never treats `reviewDecision` as a substitute for these dimensions.
+GitHub's required approval count is discovered from the active ruleset. Custom
+Babel independent evidence is advisory. The gate reports evidence validity
+truthfully and queries review-thread resolution separately. Actual merge
+permission is enforced by GitHub, not inferred from CI or metadata access.
 
 ## Exact-head CI resolution
 
@@ -93,29 +88,18 @@ The ordinary validation workflow owns `pull_request`. The privileged workflows
 check out the default branch, have distinct workflow names, do not execute
 PR-controlled code, and cannot satisfy a differently bound same-name check.
 
-## Independent technical review evidence
+## Independent technical review
 
-The existing owner-controlled host runs fresh text-only OpenCode Go AI workers.
-GitHub transports/enforces evidence; no new App, AI credits or signing keys are needed.
-Workers receive original task and exact diff; models supply findings, controllers supply provenance.
-Each `autonomous_review_evidence_v2` binds task hash, repo/PR/base/head, full scope,
-numstat digest, execution/reviewer ID, observed model/provider, isolation and timestamp.
-Invalid, stale, uncertain, blocking, self-reviewed or mismatched evidence blocks merge.
+Use a reviewer from any harness and publish actual findings against the exact
+head in a normal comment or native review. Separate executions improve review
+quality; no supervisor or custom receipt is an authorization prerequisite.
+Optional V3 certification continues to validate its own stronger assertions.
+Missing or invalid custom evidence remains visible and does not block readiness.
 
-The host publishes one whole `host_review_handoff_v2` under `<!-- babel-controller-ai-reviews-v2 -->`.
-Immutable-base transport creates `github_host_review_bundle_v2` with actual owner/comment IDs.
-Transport and gate paginate live comments and use GitHub's numeric repository-owner User ID.
-The latest matching whole round wins, including rejection; local bundles are only untrusted caches.
-Workers have no shell, candidate-write, GitHub-write, merge or controller-state capability.
-The owner launcher/session is trusted: this is **not** isolation against malicious processes
-already holding owner credentials. Stronger principal isolation is a separate requirement.
-
-Privileged workflows execute immutable base only. Owner comment creation/editing reruns
-the original PR audit; a comment-workflow check cannot satisfy the required PR check.
-GitHub must require an up-to-date branch, closing the base-change race after an audit.
-Task authority survives repairs; changed base/head still requires fresh checks and review.
-Use one task-wide spend ledger, retain unknown-usage reservations, scan sources before
-transmission, and recheck PR identity before publication.
+Privileged workflows execute immutable base only and do not require the optional
+evidence materializer. GitHub requires an up-to-date branch, closing the
+base-change race after an audit. Task authority survives repairs; changed heads
+require fresh checks.
 
 ## Trusted execution ownership
 
@@ -154,8 +138,7 @@ Every meaningful SHA change invalidates prior review and CI evidence, not the
 original task's routine-action authority. The dispatcher handles the authorized
 repair/review/merge loop; GitHub required checks remain the final enforcement.
 
-The obsolete `BootstrapRepairAuthorized` per-invocation exception is removed.
-A migration from the former signing system may use only the separately
-authorized, exact-candidate, snapshot/restore procedure. It must retain every
-unaffected check, restore the ruleset immediately, leave no standing bypass,
-and be followed by a normal protected PR. This is not a normal merge option.
+The older main workflow still enforces the previous custom-certification policy
+until this change is promoted. Its replacement is a deliberate maintainer policy
+migration, not a claim that a candidate can change the immutable evaluator.
+Normal merge paths never use admin bypass or skip required implementation CI.

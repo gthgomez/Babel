@@ -327,7 +327,8 @@ function Get-AgentIndependentReviewSummary {
     [Parameter(Mandatory = $true)][bool]$IndependentReviewSatisfied,
     [Parameter(Mandatory = $true)][bool]$RequiredChecksGreen,
     [Parameter(Mandatory = $true)][int]$RequiredCheckCount,
-    [AllowEmptyCollection()][string[]]$EvidenceErrors = @()
+    [AllowEmptyCollection()][string[]]$EvidenceErrors = @(),
+    [bool]$IndependentRequired = $true
   )
   # Only speak up when CI is green and the single remaining gap is the
   # exact-head independent certification. Never changes merge readiness.
@@ -345,6 +346,7 @@ function Get-AgentIndependentReviewSummary {
   foreach ($entry in $mapping) {
     if (@($EvidenceErrors) -contains $entry.Error) { $cause = $entry.Text; break }
   }
+  if (-not $IndependentRequired) { return "Implementation CI is green. Custom independent review evidence is advisory and does not block readiness. ($cause)" }
   return "Implementation CI is green. Waiting for exact-head final independent certification. ($cause)"
 }
 

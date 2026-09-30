@@ -85,29 +85,24 @@ Do not infer that green CI belongs to the current work. Bind review, the remote 
 
 ## PR merge gate
 
-After review and CI are available, run:
+After verification, run:
 
 ```powershell
-.\scripts\agent-pr-gate.ps1 -PR 110 -ReviewedHeadSha <reviewed-sha> -RiskTier HIGH -IndependentReviewReceiptPath <receipt> -MergeAuthorized
-
-`-BootstrapRepairAuthorized` is reserved for the documented gate-repair self-gating transition and records its exception; it is not a general check bypass.
+.\scripts\agent-pr-gate.ps1 -PR 110 -ReviewedHeadSha <verified-sha> -RiskTier HIGH
 ```
 
-The result is either `MERGE_READY` or `BLOCKED` and includes the reviewed head, PR head, remote branch head, exact-head CI resolutions, PR base, current `origin/main`, active GitHub ruleset policy, independent technical review state, merge-authority state, worktree state, and blockers. Required status contexts are read from the active `protect-main` ruleset rather than assumed locally. HIGH and CRITICAL risk tiers require an exact-head independent review receipt; `-MergeAuthorized` is an explicit current-task authorization and is never inferred from CI or review evidence. Use `-AllowedPath` when an explicit changed-path allowlist is part of the review, and `-RequireIsolatedWorktree` when the gate must reject a canonical checkout.
+The result is `MERGE_READY` or `BLOCKED`, with exact head/base, current remote
+state, live GitHub ruleset, required check producer/conclusion, thread resolution
+and optional review diagnostics. The gate reads policy from GitHub; it does not
+grant merge permission. The actual merging account must have permission and
+current task authorization. Use an expected-head merge; never use admin bypass.
 
-The gate uses `gh pr view` for PR metadata and the commit-scoped check-runs API for CI. It does not merge, delete branches, force-push, or rewrite history.
+## Review sources
 
-## Review evidence transport
-
-HIGH and CRITICAL tier PRs that do not modify protected trust-root paths satisfy the gate's independent-review check with `autonomous_review_evidence_v1` evidence bound to the exact base, head, and diff digest. Build, validate, and post it with the dedicated tool instead of hand-writing the JSON:
-
-```powershell
-.\scripts\agent-pr-evidence.ps1 -PR 147 -ReviewerId <isolated-reviewer-id> `
-  -Scope @('Full diff <base>...<head> (…): <files>') [-Findings @('…')] `
-  [-Retrigger]
-```
-
-The tool derives the repository and PR base/head from live state, computes the numstat digest with the gate's own module, runs the gate-identical validator before posting (failing closed on any error, including blocking findings, a non-`APPROVE` verdict, or a reviewer matching the builder identity), posts the marker-delimited comment the evidence transport expects, keeps the same-head case idempotent (identical bodies skip; differing bodies refuse rather than create ambiguity), and with `-Retrigger` performs the evidence → close/reopen sequence so a fresh `pull_request_target` run re-materializes evidence at execution time (mark the PR ready first; the tool refuses to transport evidence for a draft). Use `-WhatIfOnly -OutFile <file>` to build and validate offline. Setting the repository variable `BABEL_REQUIRE_SIGNED_REVIEW=1` overrides the autonomous tier for all PRs and requires the signed CERTIFIED receipt instead. After #144's comment-triggered re-evaluation merges, `-Retrigger` becomes a fallback rather than the normal lifecycle.
+Reviewers can run in any harness. Publish actual findings in a PR comment or
+native GitHub review and identify the reviewed SHA. Custom V3 receipts and Babel
+supervisor capability are optional advisory tooling. Unknown provider or process
+attribution remains unknown. Missing receipts are not false approvals.
 
 ## Troubleshooting hangs
 

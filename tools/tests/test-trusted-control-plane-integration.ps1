@@ -9,7 +9,7 @@
 # Coverage:
 #   1. RED control-plane change + controller-owned reviews -> audit passes
 #   2. one exact Babel chat review satisfies every mergeable lane
-#   3. missing review evidence blocks deterministically
+#   3. missing or invalid custom evidence remains advisory and visibly invalid
 #   4. dirty candidate worktree blocks
 [CmdletBinding()]
 param(
@@ -67,6 +67,8 @@ try {
   # ---- candidate commit changes the RED control plane (main stays at base) ----
   if ($CandidateLane -eq 'RED') {
     Add-Content -LiteralPath (Join-Path $seedPath 'scripts/agent-git-common.psm1') -Value '# candidate control-plane change' -Encoding utf8NoBOM
+    # The launcher must ignore candidate gate policy/code until base promotion.
+    Set-Content -LiteralPath (Join-Path $seedPath 'scripts/agent-pr-gate.ps1') -Value "throw 'CANDIDATE_GATE_MUST_NOT_EXECUTE'" -Encoding utf8NoBOM
   }
   Set-Content -LiteralPath (Join-Path $seedPath 'feature.txt') -Value 'candidate feature' -Encoding utf8NoBOM
   & $git -C $seedPath add -A
@@ -103,7 +105,7 @@ try {
     review_provider = 'opencode-go'
     reviewer_model = 'deepseek-v4-flash'
     reviewed_at = $reviewedAt
-    scope = @(if ($CandidateLane -eq 'RED') { 'scripts/agent-git-common.psm1'; 'feature.txt' } else { 'feature.txt' })
+    scope = @(if ($CandidateLane -eq 'RED') { 'scripts/agent-git-common.psm1'; 'scripts/agent-pr-gate.ps1'; 'feature.txt' } else { 'feature.txt' })
     findings = @('example non-blocking finding')
     blocking_findings = @()
     verdict = 'APPROVE'
@@ -199,6 +201,11 @@ exit 0
   Set-Content -LiteralPath (Join-Path $shimDir 'gh.ps1') -Value $shimScript -Encoding utf8NoBOM
   # Batch wrapper so PATH resolution finds `gh` on Windows.
   Set-Content -LiteralPath (Join-Path $shimDir 'gh.cmd') -Value ('@echo off' + "`r`n" + 'pwsh -NoProfile -NonInteractive -File "%~dp0gh.ps1" %*') -Encoding ascii
+  if (-not $IsWindows) {
+    $unixGh = Join-Path $shimDir 'gh'
+    Set-Content -LiteralPath $unixGh -Value ("#!/bin/sh`nexec pwsh -NoProfile -NonInteractive -File '$shimDir/gh.ps1' " + '"$@"') -Encoding utf8NoBOM
+    & chmod +x $unixGh
+  }
   $prView = [ordered]@{
     number = 4242; url = 'https://github.com/gthgomez/Babel/pull/4242'; state = 'OPEN'; isDraft = $false
     baseRefName = 'main'; baseRefOid = $baseSha; headRefName = 'candidate-head'; headRefOid = $headSha
@@ -223,7 +230,7 @@ exit 0
     foreach ($key in $Extra.Keys) { $argumentList += $key; $argumentList += $Extra[$key] }
     $env:TCP_TEST_ROOT = $root
     $previousPath = $env:PATH
-    $env:PATH = "$shimDir;$previousPath"
+    $env:PATH = $shimDir + [IO.Path]::PathSeparator + $previousPath
     # Mirror the trusted workflow environment so the gate's self-check
     # deferral for trusted-control-plane activates exactly as in CI.
     $env:GITHUB_ACTIONS = 'true'
@@ -255,7 +262,7 @@ exit 0
   function Invoke-Transport {
     $previousPath = $env:PATH
     $previousTestRoot = $env:TCP_TEST_ROOT
-    $env:PATH = "$shimDir;$previousPath"
+    $env:PATH = $shimDir + [IO.Path]::PathSeparator + $previousPath
     $env:TCP_TEST_ROOT = $root
     try {
       $transportDirectory = Join-Path $root 'transport'
@@ -298,14 +305,15 @@ exit 0
     if ($run.result.blockers.Count -ne 0) { throw "unexpected blockers: $($run.result.blockers -join ',')" }
     if ($run.result.reviewPolicy.effectiveRiskLane -ne $CandidateLane) { throw "unexpected lane: $($run.result.reviewPolicy.effectiveRiskLane)" }
     $minimum = 1
-    if (-not $run.result.reviewPolicy.independentReviewRequired -or $run.result.reviewPolicy.minimumIndependentReviewCount -ne $minimum) { throw 'Every PR must require proportionate independent chat review.' }
+    if ($run.result.reviewPolicy.independentReviewRequired -or $run.result.reviewPolicy.minimumIndependentReviewCount -ne $minimum) { throw 'Custom review validation must remain advisory with its existing evidence floor.' }
+    if (-not $run.result.reviewPolicy.independentReviewSatisfied) { throw 'Positive evidence must still be validated as valid.' }
     if ($run.result.reviewPolicy.observedIndependentReviewCount -ne 2) { throw 'the positive fixture must retain both valid reviews' }
   }
 
   foreach ($installationCase in @(
       @{ Name = 'previously-merged-reviewer-pass'; Sha = $previousInstallationSha; Pass = $true },
-      @{ Name = 'unmerged-candidate-ancestor-reviewer-blocked'; Sha = $unmergedInstallationSha; Pass = $false },
-      @{ Name = 'missing-reviewer-source-blocked'; Sha = ('d' * 40); Pass = $false }
+      @{ Name = 'unmerged-candidate-ancestor-reviewer-invalid-advisory'; Sha = $unmergedInstallationSha; Pass = $false },
+      @{ Name = 'missing-reviewer-source-invalid-advisory'; Sha = ('d' * 40); Pass = $false }
     )) {
     Invoke-Step $installationCase.Name {
       $sourceBundle = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
@@ -322,7 +330,7 @@ exit 0
       }
       if ($installationCase.Pass) {
         if ($run.exitCode -ne 0) { throw 'Previously merged reviewer installation must remain eligible.' }
-      } elseif ($run.exitCode -eq 0 -or $run.result.reviewPolicy.independentReviewEvidenceErrors -notcontains 'autonomous_evidence_harness_source_not_in_trusted_base') {
+      } elseif ($run.exitCode -ne 0 -or $run.result.reviewPolicy.independentReviewSatisfied -or $run.result.reviewPolicy.independentReviewEvidenceErrors -notcontains 'autonomous_evidence_harness_source_not_in_trusted_base') {
         throw 'Unmerged or unavailable installation must not satisfy trusted chat review.'
       }
     }
@@ -367,31 +375,28 @@ exit 0
   }
 
   # 3. A local bundle from a different owner cannot impersonate the live owner handoff.
-  Invoke-Step 'wrong-owner-bundle-blocked' {
+  Invoke-Step 'wrong-owner-bundle-invalid-advisory' {
     $wrongControllerPath = Join-Path $root 'ai-review-wrong-controller.json'
     $wrongControllerBundle = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $wrongControllerBundle.publisher_id = '15368'
     $wrongControllerBundle | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $wrongControllerPath -Encoding utf8NoBOM
     $run = Invoke-Gate -Label 'wrong-controller' -Extra @{ '-AutonomousReviewEvidencePath' = $wrongControllerPath }
-    if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-    if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
+    if ($run.exitCode -ne 0 -or $run.result.reviewPolicy.independentReviewSatisfied) { throw 'Invalid advisory evidence must remain invalid without blocking audit.' }
   }
 
-  Invoke-Step 'forged-local-review-body-blocked' {
+  Invoke-Step 'forged-local-review-body-invalid-advisory' {
     $forgedPath = Join-Path $root 'forged-reviews.json'
     $forged = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $forged.handoff.reviews[0].scope = @('forged local scope')
     $forged | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $forgedPath -Encoding utf8NoBOM
     $run = Invoke-Gate -Label 'forged-body' -Extra @{ '-AutonomousReviewEvidencePath' = $forgedPath }
-    if ($run.exitCode -eq 0 -or $run.result.reviewPolicy.independentReviewEvidenceErrors -notcontains 'controller_review_live_provenance_mismatch') { throw 'Forged review body was not rejected by live provenance validation.' }
+    if ($run.exitCode -ne 0 -or $run.result.reviewPolicy.independentReviewSatisfied -or $run.result.reviewPolicy.independentReviewEvidenceErrors -notcontains 'controller_review_live_provenance_mismatch') { throw 'Forged review body was not rejected by live provenance validation.' }
   }
 
-  # 4. Missing controller evidence fails closed.
-  Invoke-Step 'missing-review-blocked' {
+  # 4. Missing custom evidence is visibly invalid and advisory.
+  Invoke-Step 'missing-review-advisory' {
     $run = Invoke-Gate -Label 'missing-review' -Extra @{}
-    if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-    if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
-    if (-not $run.result.reviewPolicy.independentReviewRequired) { throw "$CandidateLane PR skipped independent review." }
+    if ($run.exitCode -ne 0 -or $run.result.reviewPolicy.independentReviewSatisfied -or $run.result.reviewPolicy.independentReviewRequired) { throw 'Missing custom evidence must remain invalid/advisory while required GitHub checks pass.' }
   }
 
   # 5. dirty candidate worktree
