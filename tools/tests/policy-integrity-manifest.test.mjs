@@ -141,7 +141,7 @@ const paths = [
   "tools/babel-pr-orchestrate.mts",
   "tools/host-review-worker.mts"
 ];
-function fixture(t) {
+function fixture(t, verifierSource = source) {
   const root = mkdtempSync(join(tmpdir(), "babel-policy-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const path of paths) {
@@ -149,7 +149,7 @@ function fixture(t) {
     writeFileSync(join(root, path), "fixture text\n");
   }
   mkdirSync(join(root, "tools"), { recursive: true });
-  writeFileSync(join(root, "tools/policy-integrity-manifest.mjs"), source);
+  writeFileSync(join(root, "tools/policy-integrity-manifest.mjs"), verifierSource);
   const run = (mode = "verify") => {
     const r = spawnSync(
       process.execPath,
@@ -235,13 +235,15 @@ test("covered content drift", (t) => {
   writeFileSync(join(f.root, "AGENTS.md"), "changed\n");
   fail(f.run());
 });
-test("CRLF equivalence and substantive mutation", (t) => {
-  const f = fixture(t);
+for (const checkoutEnding of ["LF", "CRLF"])
+test(`CRLF equivalence and substantive mutation from ${checkoutEnding} checkout`, (t) => {
+  const checkoutSource = source.replace(/\r\n/g, "\n");
+  const f = fixture(t, checkoutEnding === "CRLF" ? checkoutSource.replace(/\n/g, "\r\n") : checkoutSource);
   const before = readFileSync(f.manifestPath);
   for (const p of [...paths, "tools/policy-integrity-manifest.mjs"])
     writeFileSync(
       join(f.root, p),
-      readFileSync(join(f.root, p), "utf8").replace(/\n/g, "\r\n"),
+      readFileSync(join(f.root, p), "utf8").replace(/\r\n/g, "\n").replace(/\n/g, "\r\n"),
     );
   assert.equal(f.run().status, 0);
   assert.equal(f.run("generate").status, 0);
