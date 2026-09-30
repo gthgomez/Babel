@@ -1,6 +1,6 @@
 # Merge Control Plane V1
 
-Status: authorization simplification migration in progress. The base-rooted gate is authoritative. A bounded exact-head merge executor is shipped as `scripts/agent-pr-merge.ps1`.
+Status: authorization simplification migration in progress. The base-rooted gate is authoritative; custom owner signing is no longer part of normal merges.
 
 This document defines the boundary between repository policy, technical evidence,
 and the authority to perform a public merge. No one of those dimensions can
@@ -17,25 +17,21 @@ record:
 - PR state: open, non-draft, same-repository, mergeable, and clean merge state
 - repository policy: the active `protect-main` ruleset read from GitHub
 - CI: required contexts resolved only from the exact head with workflow authority
-- technical review: controller-owned exact-head independent AI evidence for
-  every mergeable lane, with two distinct executions for elevated and critical changes
+- technical review: optional advisory evidence from any harness; no custom certificate grants merge permission
 - task authority: the original task authorizes routine Git/PR actions; no
-  separate per-merge switch exists. The base-rooted `MERGE_READY` decision is
-  machine authority, not a per-merge human receipt
+  separate per-merge switch exists
 - scope: exact diff paths and optional path allowlist
 
 The result is `MERGE_READY` only when every required dimension is satisfied.
-Unreadable policy, missing provenance, pending checks, ambiguous check lineage,
-stale review evidence, or insufficient lane evidence produces `BLOCKED`.
+Unreadable policy, pending required checks, ambiguous check lineage, or a stale
+verified head produces `BLOCKED`. Optional review evidence never becomes a false approval.
 
 ## Risk lanes
 
 The immutable base derives a minimum path-based lane; callers may raise, never lower it.
-GREEN requires one controller-owned independent AI review; YELLOW
-and RED require two distinct independent reviews; BLACK remains blocked. Merge-control,
-workflow, policy, and authority paths are RED. A trusted dispatcher classifies BLACK by action/context, not candidate path.
-A candidate cannot rewrite its own evaluator, label itself
-GREEN, or clear a trusted BLACK classification.
+Risk lanes guide review effort and diagnostics. They do not require a vendor,
+supervisor or custom certificate for GitHub merge authorization. BLACK remains
+an owner-decision boundary for a genuinely unclassified action or scope.
 
 ## GitHub policy versus Babel policy
 
@@ -52,11 +48,10 @@ independentReviewEvidence
 taskAuthorization
 ```
 
-GitHub's required approval count is discovered from the active ruleset. A ruleset
-with zero required approvals satisfies only the GitHub approval dimension; it does
-not waive Babel's independent technical review policy.
-Review-thread resolution is queried separately through GitHub's review-thread
-API. The gate never treats `reviewDecision` as a substitute for these dimensions.
+GitHub's required approval count is discovered from the active ruleset. Custom
+Babel independent evidence is advisory. The gate reports evidence validity
+truthfully and queries review-thread resolution separately. Actual merge
+permission is enforced by GitHub, not inferred from CI or metadata access.
 
 ## Exact-head CI resolution
 
@@ -93,36 +88,18 @@ The ordinary validation workflow owns `pull_request`. The privileged workflows
 check out the default branch, have distinct workflow names, do not execute
 PR-controlled code, and cannot satisfy a differently bound same-name check.
 
-## Independent technical review evidence
+## Independent technical review
 
-V3 workers receive the frozen task and exact diff; models supply findings, while the
-controller issues challenges, observes execution, checks full diff coverage, and
-constructs evidence. TRIVIAL/NORMAL require one fresh reviewer execution;
-ELEVATED/CRITICAL require two distinct executions. Model/provider/harness diversity
-is retained as metadata and is not a substitute for execution independence.
+Use a reviewer from any harness and publish actual findings against the exact
+head in a normal comment or native review. Separate executions improve review
+quality; no supervisor or custom receipt is an authorization prerequisite.
+Optional V3 certification continues to validate its own stronger assertions.
+Missing or invalid custom evidence remains visible and does not block readiness.
 
-The host publishes one whole `host_review_handoff_v3` under
-`<!-- babel-controller-independent-review-v3 -->`. Immutable-base transport
-creates `github_host_review_bundle_v3` with actual owner/comment IDs. Transport
-and gate paginate live comments and use GitHub's numeric repository-owner User ID.
-The latest matching whole round wins, including rejection; local bundles are
-only untrusted caches. Reviewers have no candidate-write, GitHub-write, merge,
-or controller-state capability.
-
-An owner-authenticated comment authenticates the publisher, not the truth of its
-review observations. For control-plane changes, a protected controller process
-must run code from the previously trusted base and own private challenges,
-reviewer launch, observations, and publication outside candidate control. A
-same-principal caller that can edit controller state or submit arbitrary host
-observations does not satisfy `HOST_PROTECTED`, even if it points at a clean base
-checkout. If that boundary cannot be established, certification remains blocked.
-
-Privileged workflows execute immutable base only. Owner comment creation/editing reruns
-the original PR audit; a comment-workflow check cannot satisfy the required PR check.
-GitHub must require an up-to-date branch, closing the base-change race after an audit.
-Task authority survives repairs; changed base/head still requires fresh checks and review.
-Use one task-wide spend ledger, retain unknown-usage reservations, scan sources before
-transmission, and recheck PR identity before publication.
+Privileged workflows execute immutable base only and do not require the optional
+evidence materializer. GitHub requires an up-to-date branch, closing the
+base-change race after an audit. Task authority survives repairs; changed heads
+require fresh checks.
 
 ## Trusted execution ownership
 
@@ -148,28 +125,20 @@ Statuses distinguish `FIXED`, `MITIGATED`, `PRIMITIVE_FIXED_INTEGRATION_PENDING`
 An inherited classification is valid only when the exact command has been run on
 both the feature head and the frozen base.
 
-## Merge-train state machine
+## Future merge-train state machine
 
 ```text
 PR_HEAD_CREATED -> LOCAL_VERIFIED -> INDEPENDENT_REVIEWED
   -> CI_GREEN_EXACT_HEAD -> MERGE_GATE_READY -> PRE_MERGE_REFREEZE
   -> MERGE -> POST_MERGE_VERIFY -> COMPLETE
-                         \-> main changed: INVALIDATE / UPDATE / VERIFY
+                         \-> main changed: INVALIDATE / UPDATE / REVERIFY
 ```
-
-The bounded merge executor implements the tail of this state machine. `scripts/agent-pr-merge.ps1`
-fetches the live PR base, runs the launcher materialized from that base, requires
-`MERGE_READY` for the exact reviewed head, re-reads live PR
-state as the pre-merge re-freeze, and then runs `gh pr merge --match-head-commit`. A SHA change
-between gate and merge fails closed and the executor never retries with a different SHA. That live
-re-read is the `PRE_MERGE_REFREEZE` step, not a new authorization switch.
 
 Every meaningful SHA change invalidates prior review and CI evidence, not the
 original task's routine-action authority. The dispatcher handles the authorized
 repair/review/merge loop; GitHub required checks remain the final enforcement.
 
-The obsolete `BootstrapRepairAuthorized` per-invocation exception is removed and is not replaced by
-a per-merge switch. A migration from the former signing system may use only the separately
-authorized, exact-candidate, snapshot/restore procedure. It must retain every
-unaffected check, restore the ruleset immediately, leave no standing bypass,
-and be followed by a normal protected PR. This is not a normal merge option.
+The older main workflow still enforces the previous custom-certification policy
+until this change is promoted. Its replacement is a deliberate maintainer policy
+migration, not a claim that a candidate can change the immutable evaluator.
+Normal merge paths never use admin bypass or skip required implementation CI.

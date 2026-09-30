@@ -361,7 +361,8 @@ function Get-AgentIndependentReviewSummary {
     [Parameter(Mandatory = $true)][bool]$IndependentReviewSatisfied,
     [Parameter(Mandatory = $true)][bool]$RequiredChecksGreen,
     [Parameter(Mandatory = $true)][int]$RequiredCheckCount,
-    [AllowEmptyCollection()][string[]]$EvidenceErrors = @()
+    [AllowEmptyCollection()][string[]]$EvidenceErrors = @(),
+    [bool]$IndependentRequired = $true
   )
   # Only speak up when CI is green and the single remaining gap is the
   # exact-head independent certification. Never changes merge readiness.
@@ -372,7 +373,6 @@ function Get-AgentIndependentReviewSummary {
     @{ Error = 'independent_review_stale_for_head'; Text = 'the latest owner review handoff is bound to a different base/head' }
     @{ Error = 'autonomous_review_evidence_handoff_not_published'; Text = 'no owner review handoff has been published for this exact base/head' }
     @{ Error = 'independent_review_handoff_not_published'; Text = 'no owner review handoff has been published for this exact base/head' }
-    @{ Error = 'autonomous_review_evidence_unresolved_block'; Text = 'an unresolved BLOCK exists for this exact head; repair requires a new head and fresh reviews' }
     @{ Error = 'controller_review_live_provenance_mismatch'; Text = 'the local review evidence does not match the live owner-authenticated handoff' }
     @{ Error = 'autonomous_review_evidence_ambiguous'; Text = 'the independent review evidence is ambiguous' }
     @{ Error = 'autonomous_review_evidence_missing'; Text = 'the independent review evidence is missing' }
@@ -380,6 +380,7 @@ function Get-AgentIndependentReviewSummary {
   foreach ($entry in $mapping) {
     if (@($EvidenceErrors) -contains $entry.Error) { $cause = $entry.Text; break }
   }
+  if (-not $IndependentRequired) { return "Implementation CI is green. Custom independent review evidence is advisory and does not block readiness. ($cause)" }
   return "Implementation CI is green. Waiting for exact-head final independent certification. ($cause)"
 }
 

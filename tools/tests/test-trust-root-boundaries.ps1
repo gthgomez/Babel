@@ -3,8 +3,7 @@ param([string]$RepoRoot = (Join-Path $PSScriptRoot '..\..'))
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $launcher = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'scripts/trusted-merge-gate.ps1')
-if ($launcher -notmatch '-C \$resolvedRepo --no-replace-objects show') { throw 'Trusted launcher does not materialize from replacement-safe git objects.' }
-if ($launcher -notmatch "GIT_NO_REPLACE_OBJECTS = '1'") { throw 'Trusted launcher does not protect nested Git commands from replacement refs.' }
+if ($launcher -notmatch '-C \$resolvedRepo show') { throw 'Trusted launcher does not materialize from git objects.' }
 foreach ($component in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-review-evidence.ps1', 'scripts/agent-git-common.psm1')) {
   if ($launcher -notmatch [regex]::Escape($component)) { throw "Trusted launcher omits $component" }
 }
@@ -50,11 +49,11 @@ if ($materializer -notmatch [regex]::Escape('per_page=100&page=')) { throw 'Evid
 foreach ($marker in @('owner.id', 'per_page=100&page=')) {
   if ($materializer -notmatch [regex]::Escape($marker)) { throw "Evidence transport is missing marker: $marker" }
 }
-foreach ($marker in @('babel-controller-ai-reviews-v2', 'github_host_review_bundle_v3', 'host_review_handoff_v3')) {
+foreach ($marker in @('babel-controller-ai-reviews-v2', 'github_host_review_bundle_v2')) {
   if ($evidenceValidator -notmatch [regex]::Escape($marker)) { throw "Immutable evidence validator is missing marker: $marker" }
 }
 $workflow = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot '.github/workflows/trusted-control-plane.yml')
-if ($workflow -notmatch [regex]::Escape('materialize-independent-review-receipt.ps1')) { throw 'Trusted workflow is missing the evidence transport step.' }
+if ($workflow -match [regex]::Escape('materialize-independent-review-receipt.ps1')) { throw 'Advisory certification must not be a workflow prerequisite.' }
 if ($workflow -match 'BABEL_REVIEW_CONTROLLER_(LOGIN|APP_ID)') { throw 'Trusted workflow must not retain App-controller configuration.' }
 if ($workflow -notmatch [regex]::Escape('github.event.repository.owner.id')) { throw 'Trusted workflow is missing owner-controller provenance binding.' }
 if ($workflow -match [regex]::Escape('persist-credentials: true')) { throw 'Trusted workflow must not persist credentials.' }

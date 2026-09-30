@@ -407,17 +407,19 @@ try {
   $baseDerivedLane = Get-AgentRiskLane -ChangedPaths $diffPaths
   $requestedLane = ConvertTo-AgentRiskLane -Lane $RiskTier
   $effectiveLane = if ((Get-AgentLaneRank -Lane $requestedLane) -gt (Get-AgentLaneRank -Lane $baseDerivedLane)) { $requestedLane } else { $baseDerivedLane }
-  # Every mergeable lane requires one independent agent review approval.
-  # BLACK remains blocked separately and cannot opt out of review.
+  # Custom Babel evidence is advisory. GitHub permission and live branch rules
+  # govern the eventual merge; this read-only gate does not grant merge authority.
   $minimumReviewCount = Get-AgentMinimumReviewCount -Lane $effectiveLane
-  $independentRequired = $true
+  $independentRequired = $false
   $autonomousEvidenceResult = [pscustomobject]@{ path = ''; valid = $false; errors = @('autonomous_review_evidence_missing'); reviewCount = 0 }
-  if ($independentRequired -and $prAvailable) {
-    $autonomousEvidenceResult = Read-AgentAutonomousReviewEvidence -BaseSha $prBase -HeadSha $prHead -MinimumReviewCount $minimumReviewCount
+  if ($prAvailable -and -not [string]::IsNullOrWhiteSpace($AutonomousReviewEvidencePath)) {
+    try { $autonomousEvidenceResult = Read-AgentAutonomousReviewEvidence -BaseSha $prBase -HeadSha $prHead -MinimumReviewCount $minimumReviewCount }
+    catch { $autonomousEvidenceResult = [pscustomobject]@{ path = $AutonomousReviewEvidencePath; valid = $false; errors = @('advisory_review_validation_failed'); reviewCount = 0 } }
   }
-  $independentReviewTier = 'CONTROLLER_OWNED_INDEPENDENT_AGENT'
-  $independentReviewSatisfied = (-not $independentRequired) -or $autonomousEvidenceResult.valid
-  Add-AgentCheck -Name 'INDEPENDENT_REVIEW_SATISFIED' -Passed $independentReviewSatisfied -Blocker 'independent_review_not_satisfied'
+  $independentReviewTier = 'ADVISORY_INDEPENDENT_AGENT'
+  $independentReviewSatisfied = [bool]$autonomousEvidenceResult.valid
+  # Invalid or missing advisory evidence remains visible in reviewPolicy without
+  # becoming a custom merge blocker or being reported as a valid review.
   Add-AgentCheck -Name 'RISK_LANE_NOT_BLACK' -Passed ($effectiveLane -ne 'BLACK') -Blocker 'black_scope_requires_owner_decision'
   $reviewPolicy = Get-AgentReviewPolicyVerdict -RequiredApprovalCount $githubApprovalCount -ObservedApprovalCount $observedApprovalCount -ThreadsRequired ([bool]$rulesetPolicy.required_review_thread_resolution) -ThreadsResolved ([bool]$threads.resolved) -IndependentRequired $independentRequired -IndependentSatisfied $independentReviewSatisfied
   Add-AgentCheck -Name 'GITHUB_APPROVAL_SATISFIED' -Passed ($rulesetPolicy.available -and $reviewPolicy.github_approval_satisfied) -Blocker 'github_required_approval_not_satisfied'
@@ -515,7 +517,7 @@ try {
   # Operator-facing summary for the common "everything green except the
   # exact-head independent certification" state. It is advisory only: it never
   # changes blockers or mergeReady.
-  $independentReviewSummary = Get-AgentIndependentReviewSummary -IndependentReviewSatisfied $independentReviewSatisfied -RequiredChecksGreen $requiredChecksGreen -RequiredCheckCount $requiredChecks.Count -EvidenceErrors @($autonomousEvidenceResult.errors)
+  $independentReviewSummary = Get-AgentIndependentReviewSummary -IndependentReviewSatisfied $independentReviewSatisfied -RequiredChecksGreen $requiredChecksGreen -RequiredCheckCount $requiredChecks.Count -EvidenceErrors @($autonomousEvidenceResult.errors) -IndependentRequired $independentRequired
   if (-not [string]::IsNullOrWhiteSpace($independentReviewSummary) -and -not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
     try { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $independentReviewSummary -ErrorAction Stop }
     catch { $warnings += 'gate_step_summary_write_failed' }
@@ -529,7 +531,7 @@ try {
     branch = [ordered]@{ local = $localBranch; prHead = $prHeadBranch; prBase = $prBaseBranch }
     worktree = [ordered]@{ clean = $status.clean; dirtyPaths = @($status.dirtyPaths); isolated = $topology.isolated }
     repositoryPolicy = [ordered]@{ source = 'github_ruleset'; rulesetId = if ($rulesetPolicy.available) { $rulesetPolicy.id } else { $null }; name = if ($rulesetPolicy.available) { $rulesetPolicy.name } else { $null }; enforcement = if ($rulesetPolicy.available) { $rulesetPolicy.enforcement } else { $null }; githubRequiredApprovalCount = $githubApprovalCount; requiredReviewThreadResolution = if ($rulesetPolicy.available) { $rulesetPolicy.required_review_thread_resolution } else { $null }; requiredStatusChecks = @($requiredChecks); requiredStatusCheckProducers = @($requiredCheckPolicies); requiredStatusCheckProducersBound = [bool]$producerBindingsComplete; strictRequiredStatusChecksPolicy = if ($rulesetPolicy.available) { $rulesetPolicy.strict_required_status_checks_policy } else { $null } }
-    reviewPolicy = [ordered]@{ requestedRiskLane = $requestedLane; baseDerivedRiskLane = $baseDerivedLane; effectiveRiskLane = $effectiveLane; githubApprovalSatisfied = [bool]$reviewPolicy.github_approval_satisfied; observedApprovalCount = $observedApprovalCount; reviewThreadsRequired = if ($rulesetPolicy.available) { [bool]$rulesetPolicy.required_review_thread_resolution } else { $null }; reviewThreadsSatisfied = [bool]$reviewPolicy.review_threads_satisfied; independentReviewRequired = $independentRequired; minimumIndependentReviewCount = $minimumReviewCount; independentReviewSatisfied = $independentReviewSatisfied; independentReviewTier = $independentReviewTier; independentReviewEvidence = $autonomousEvidenceResult.path; independentReviewEvidenceErrors = @($autonomousEvidenceResult.errors); observedIndependentReviewCount = $autonomousEvidenceResult.reviewCount; taskAuthorization = 'dispatch_scope'; auditOnly = [bool]$AuditOnly }
+    reviewPolicy = [ordered]@{ requestedRiskLane = $requestedLane; baseDerivedRiskLane = $baseDerivedLane; effectiveRiskLane = $effectiveLane; githubApprovalSatisfied = [bool]$reviewPolicy.github_approval_satisfied; observedApprovalCount = $observedApprovalCount; reviewThreadsRequired = if ($rulesetPolicy.available) { [bool]$rulesetPolicy.required_review_thread_resolution } else { $null }; reviewThreadsSatisfied = [bool]$reviewPolicy.review_threads_satisfied; independentReviewRequired = $independentRequired; independentReviewMode = 'ADVISORY'; mergeAuthorizationSource = 'GITHUB_SERVER'; minimumIndependentReviewCount = $minimumReviewCount; independentReviewSatisfied = $independentReviewSatisfied; independentReviewTier = $independentReviewTier; independentReviewEvidence = $autonomousEvidenceResult.path; independentReviewEvidenceErrors = @($autonomousEvidenceResult.errors); observedIndependentReviewCount = $autonomousEvidenceResult.reviewCount; taskAuthorization = 'dispatch_scope'; auditOnly = [bool]$AuditOnly }
     checks = $checks; requiredChecks = @($requiredResults); diff = [ordered]@{ scopeBasis = 'reviewed_head_exact'; paths = @($diffPaths) }; environment = $envState; blockers = @($blockers | Select-Object -Unique); warnings = @($warnings | Select-Object -Unique)
   }
   Write-AgentResult -Result $result -OutputFormat $OutputFormat

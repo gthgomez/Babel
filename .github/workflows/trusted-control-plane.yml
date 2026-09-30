@@ -35,18 +35,6 @@ jobs:
         run: |
           git fetch --no-tags origin $env:HEAD_SHA
           git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:HEAD_SHA
-      - name: Stage controller-owned independent AI reviews
-        shell: pwsh
-        env:
-          # Only the trusted base-rooted transport receives the GitHub token.
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          pwsh -NoProfile -NonInteractive -File scripts/materialize-independent-review-receipt.ps1 `
-            -PR ([int]$env:PR_NUMBER) `
-            -Repository "$env:GITHUB_REPOSITORY" `
-            -BaseSha $env:BASE_SHA `
-            -HeadSha $env:HEAD_SHA `
-            -EvidenceDirectory "$env:RUNNER_TEMP/review-evidence"
       - name: Run base-rooted merge audit
         shell: pwsh
         env:
@@ -58,7 +46,6 @@ jobs:
             -BaseSha $env:BASE_SHA `
             -RepoRoot "$env:GITHUB_WORKSPACE/candidate" `
             -ReviewedHeadSha $env:HEAD_SHA `
-            -AutonomousReviewEvidencePath "$env:RUNNER_TEMP/review-evidence/ai-reviews.json" `
             -AuditOnly `
             -RequireIsolatedWorktree `
             -OutputFormat json

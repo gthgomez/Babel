@@ -1,62 +1,33 @@
 <!--
 status: ACTIVE
-last_verified: 2026-09-29
+last_verified: 2026-09-30
 -->
 # Independent Review Routing
 
-Every PR requires V3 independent final certification of its exact current base/head.
-V3 (`independent_agent_review_v3` / `host_review_handoff_v3`) is the canonical
-authoritative contract, accepted for any supported review engine. TRIVIAL and NORMAL
-require one fresh certifier. ELEVATED and CRITICAL require two fresh, distinct
-certifiers. BLACK remains an owner-decision boundary. Same-harness and same-model
-reviewers are valid when their observed child executions are distinct from the builder,
-repair producer, and each other.
+Reviewers may run in any harness or model: Codex, Claude Code, Grok Build,
+Antigravity, OpenCode, Babel, or another engine. No Babel supervisor, vendor
+allowlist, provider identity, signing key, or custom certification is required
+to authorize a GitHub merge.
 
-The trusted controller owns spawning and state. The orchestrator has prepare, submit,
-and publish commands for a controller installation that meets the isolation contract.
-The in-process `HarnessReviewAdapter` API uses the same protocol. Codex has a diagnostic
-native bridge that cannot certify without a host supervisor;
-OpenCode has a diagnostic fallback that cannot certify authoritatively without host
-isolation. The generic controller-mediated callback normalizes observations for
-OpenCode and other harnesses, but it cannot certify until a trusted supervisor
-owns and verifies the launch boundary.
+Use a separate reviewer execution when the harness supports it. Give the
+reviewer the exact base/head, complete diff, relevant source, and verification
+results. Record the reviewed commit, findings, unresolved issues, and limitations
+in a normal PR comment or native GitHub review. Label unknown attribution as
+unknown. Never turn instructions for read-only behavior into a claim of enforced
+sandbox isolation or fresh-process execution.
 
-Certification requires `FINAL_CERTIFICATION`, a fresh child context, an observed session
-identity, enforced read-only review, full exact diff delivery and acknowledgement, and
-candidate SHA/digest binding. Reviewer source reads are telemetry. Reviewers cannot write
-the candidate, mutate GitHub, or merge. The trusted host must restrict controller-state
-reads before claiming that isolation. A repair producer cannot certify its own candidate.
-BLOCK against an unchanged candidate is retained.
+Review findings guide repairs. Preserve rejections and do not describe an
+unresolved finding as fixed. Custom Babel review receipts are optional advisory
+telemetry, not an additional merge-permission system. Existing V3 validators
+retain their stronger evidence semantics for callers that choose that subsystem.
 
-Review authority is scope-derived and vendor-neutral: it comes from an owner-authenticated
-controller handoff bound to the exact candidate, not from a specific vendor or model family.
-`resolveReviewAuthority(scope)` returns `SESSION_ATTESTED` for ordinary PRs, where a fresh
-harness-native child (no root-owned binary required) is launched read-only with observed
-identity and full exact-diff delivery; it returns `HOST_PROTECTED` when any changed path
-matches `hostProtectedPrefixes` in `config/review-risk-policy.json` (the
-reviewer/gate/authority surface), where the executing controller must be rooted in
-the trusted base and independently protect its state and publication from the builder.
-Host observations must attest the review. A `HOST_PROTECTED` run fails closed when those
-observations are unavailable. No model or vendor is a required reviewer. Reviewers still never merge.
-After the base-rooted gate reports `MERGE_READY` for the exact reviewed head, the
-orchestrator may run `scripts/agent-pr-merge.ps1` under the rule 05 bounded-autonomous merge
-contract; the executor binds `gh pr merge --match-head-commit` to that head and never merges
-on a mismatch.
+The authorized merging agent must have actual GitHub merge permission. GitHub
+enforces the live branch rules, required CI, approvals when configured, resolved
+threads, and branch freshness. Bind the merge to the exact verified SHA. A local
+readiness result or review comment cannot grant permission. Do not use admin
+bypass, force push, fabricated reviews, or stale check results.
 
-The base-rooted merge gate accepts V3 only. It fetches the live owner comment and checks
-owner identity, exact candidate, scope, fresh independent child evidence, reviewer count,
-and isolation and coverage receipts. V2 comments are historical and cannot satisfy this
-gate. A changed gate must be reviewed under the previously trusted base before promotion.
-
-Reviewer rejection, malformed output, a provider timeout, changed SHA, failed
-check, or missing handoff is a repair/verification event, not a new permission
-request. Preserve the failed run, classify its cause, make a bounded safe repair,
-and obtain fresh evidence. Escalate only for unresolved product intent, new
-credential trust boundaries, nondelegable account actions, or consequences
-outside the owner's task authority.
-
-For owner-authorized Babel PR reviews, there is no monetary cap. Record usage
-and uncertainty; do not convert unknown cost to zero. Wall-clock, turn, stall,
-concurrency, duplicate-effect, and bounded-retry controls still apply. Retain
-private raw telemetry and failed attempts so harness defects can become tested
-regressions; do not publish raw transcripts or credentials in PR comments.
+Routine loop: inspect exact candidate, obtain useful independent review, repair
+findings, verify the resulting head, inspect GitHub rules and CI, then merge the
+expected SHA within the owner's task authorization. A changed head invalidates
+the earlier review's coverage and check results.

@@ -110,7 +110,7 @@ try {
   $mainSha = Invoke-TestGit -WorkingDirectory $fixture -Arguments @('rev-parse', 'HEAD')
   Copy-Item -Path (Join-Path $fixture '.git\objects\*') -Destination (Join-Path $remote 'objects') -Recurse -Force
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('remote', 'add', 'origin', 'https://github.com/gthgomez/Babel.git') | Out-Null
-  $mappedRemote = 'file:///' + ([IO.Path]::GetFullPath($remote)).Replace('\', '/')
+  $mappedRemote = if ($IsWindows) { 'file:///' + ([IO.Path]::GetFullPath($remote)).Replace('\', '/') } else { 'file://' + [IO.Path]::GetFullPath($remote) }
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', "url.$mappedRemote.insteadOf", 'https://github.com/gthgomez/Babel.git') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--add', "url.$mappedRemote.insteadOf", 'https://github.com/gthgomez/Babel') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', 'protocol.file.allow', 'always') | Out-Null
@@ -298,13 +298,28 @@ try {
   Assert-AgentTest ([bool]$gate.checks.CI_HEAD_MATCH) 'PR gate should bind CI to PR head'
   Assert-AgentTest ([bool]$gate.checks.REQUIRED_CHECKS_GREEN) 'PR gate should require all configured checks'
   Assert-AgentTest ([bool]$gate.checks.BASE_NOT_INVALIDATED) 'PR gate should verify the base SHA'
-  Assert-AgentTest ([bool]$gate.reviewPolicy.independentReviewRequired -and $gate.reviewPolicy.minimumIndependentReviewCount -eq 1) 'GREEN PRs must require independent chat review'
+  Assert-AgentTest (-not [bool]$gate.reviewPolicy.independentReviewRequired -and $gate.reviewPolicy.minimumIndependentReviewCount -eq 1) 'custom review evidence is advisory; its validator retains one-review floor'
   Assert-AgentTest ([bool]$gate.reviewPolicy.independentReviewSatisfied -and $gate.reviewPolicy.observedIndependentReviewCount -eq 1) 'PR gate should accept the owner-provenance chat fixture'
 
   $missingEvidenceRun = Invoke-TestScript -Script $prGateScript -Arguments $gateArguments
-  Assert-AgentTest ($missingEvidenceRun.exitCode -eq 1) 'GREEN PR without evidence must remain blocked'
+  Assert-AgentTest ($missingEvidenceRun.exitCode -eq 0) 'a green exact-head PR without custom evidence must be ready'
   $missingEvidence = $missingEvidenceRun.text | ConvertFrom-Json
-  Assert-AgentTest (@($missingEvidence.blockers) -contains 'independent_review_not_satisfied') 'missing evidence must identify the independent-review blocker'
+  Assert-AgentTest ($missingEvidence.status -eq 'MERGE_READY' -and -not [bool]$missingEvidence.reviewPolicy.independentReviewSatisfied) 'missing advisory evidence stays invalid without blocking readiness'
+  Assert-AgentTest (@($missingEvidence.reviewPolicy.independentReviewEvidenceErrors) -contains 'autonomous_review_evidence_missing') 'missing evidence diagnostic must remain visible'
+
+  $fakeGhHealthy = Get-Content -Raw -LiteralPath $fakeGh
+  try {
+    $fakeGhHealthy.Replace('"conclusion":"success"', '"conclusion":"failure"') | Set-Content -LiteralPath $fakeGh -Encoding utf8
+    $failedCiRun = Invoke-TestScript -Script $prGateScript -Arguments $gateArguments
+    $failedCi = $failedCiRun.text | ConvertFrom-Json
+    Assert-AgentTest ($failedCiRun.exitCode -eq 1 -and $failedCi.status -eq 'BLOCKED') 'failed required CI remains blocking without custom evidence'
+    Assert-AgentTest (-not [bool]$failedCi.checks.REQUIRED_CHECKS_GREEN) 'failed CI cannot be reported green'
+  } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
+  $malformedPath = Join-Path $tempRoot 'malformed-review.json'
+  '{malformed' | Set-Content -LiteralPath $malformedPath -Encoding utf8
+  $malformedRun = Invoke-TestScript -Script $prGateScript -Arguments ($gateArguments + @('-AutonomousReviewEvidencePath', $malformedPath))
+  $malformed = $malformedRun.text | ConvertFrom-Json
+  Assert-AgentTest ($malformedRun.exitCode -eq 0 -and -not [bool]$malformed.reviewPolicy.independentReviewSatisfied) 'malformed advisory evidence stays invalid without blocking green readiness'
 
   $zeroSha = [string]::new('0', 40)
   $blockedRun = Invoke-TestScript -Script $prGateScript -Arguments @(

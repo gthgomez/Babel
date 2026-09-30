@@ -160,9 +160,8 @@ function reportingCondition(expression: string, outcome: string): boolean {
   return outcome !== 'skipped' && outcome !== ''
 }
 
-test('Linux and Windows TAP reports require an attempted suite and retain failed attempts', () => {
-  const workflow = readFileSync(new URL('../../../.github/workflows/typecheck.yml', import.meta.url), 'utf8')
-  const jobs = workflow.split(/^  (?=[a-z-]+:)/m)
+function assertWorkflowReporting(workflow: string): void {
+  const jobs = workflow.replace(/\r\n/g, '\n').split(/^  (?=[a-z-]+:)/m)
   for (const jobName of ['linux-validation', 'windows-portability']) {
     const job = jobs.find((block) => block.startsWith(`${jobName}:`))
     assert.ok(job, jobName)
@@ -182,7 +181,15 @@ test('Linux and Windows TAP reports require an attempted suite and retain failed
       }
     }
   }
-})
+}
+
+for (const [format, newline] of [['LF', '\n'], ['CRLF', '\r\n']] as const) {
+  test(`Linux and Windows TAP reports retain attempted suites with ${format} checkout line endings`, () => {
+    const workflow = readFileSync(new URL('../../../.github/workflows/typecheck.yml', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n').replace(/\n/g, newline)
+    assertWorkflowReporting(workflow)
+  })
+}
 
 test('attempted failure with missing TAP still invokes the real summarizer and exits nonzero', () => withDirectory((directory) => {
   assert.equal(reportingCondition("always() && steps.chat_truth.outcome != 'skipped' && steps.chat_truth.outcome != ''", 'failure'), true)
