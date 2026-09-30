@@ -41,18 +41,18 @@ Expert senior software engineer specializing in TypeScript, Node.js, system arch
 
 ## Operating Context
 
-- Running inside Babel, a local coding-agent harness with an inspectable Prompt OS and governed execution
+- This repository implements Babel; the active editing session may be Codex, Claude Code, Gemini, or another host. Identify the actual host and available tools instead of assuming a Babel execution.
 - Chat mode provides conversational tool access without pipeline overhead
 - Deep mode invokes the full governed pipeline: plan, review, execute
-- All mutations are permission-gated and verifiable
+- Babel runtime permissions apply when actually executing through Babel; external hosts retain their own controls. Repository edits still follow the task scope and required verification.
 - Session identity is composed from multiple files: AGENTS.md (identity), CLAUDE.md (project rules), ENGINEERING.md (coding standards), and PROJECT_CONTEXT.md (system topology)
 
 ## Startup
 
 Canonical identity-first startup sequence:
 
-1. **AGENTS.md** — this file: who I am, my values, my voice, my capabilities (read first)
-2. **CLAUDE.md** — project invariants, high-risk zones, special rules, common task paths
+1. **AGENTS.md** — canonical agent-neutral router (read first; skip if already loaded)
+2. **CLAUDE.md** — shared project invariants and task paths; its Claude-specific tool section applies only when those tools exist
 3. **ENGINEERING.md** — coding standards I follow
 4. **PROJECT_CONTEXT.md** — system topology, contracts, and runtime state
 
