@@ -329,7 +329,8 @@ exit 0
     if ($run.exitCode -ne 0) { throw "exit=$($run.exitCode) blockers=$($run.result.blockers -join ',')" }
     if ($run.result.blockers.Count -ne 0) { throw "unexpected blockers: $($run.result.blockers -join ',')" }
     if ($policy.effectiveRiskLane -ne $CandidateLane) { throw "unexpected lane: $($policy.effectiveRiskLane)" }
-    if (-not $policy.independentReviewRequired -or $policy.minimumIndependentReviewCount -ne $minimumIndependentReviewCount) { throw 'Every PR must require proportionate independent chat review.' }
+    if ($policy.independentReviewRequired -or $policy.minimumIndependentReviewCount -ne $minimumIndependentReviewCount) { throw 'Custom certification must be advisory while retaining its optional validation floor.' }
+    if (-not $policy.independentReviewSatisfied) { throw 'Valid supplied evidence must remain valid.' }
     if ($policy.observedIndependentReviewCount -ne 2) { throw 'the positive fixture must retain both valid reviews' }
   }
 
@@ -375,9 +376,9 @@ exit 0
 
   foreach ($installationCase in @(
       @{ Name = 'exact-base-controller-pass'; Sha = $baseSha; Pass = $true },
-      @{ Name = 'older-controller-blocked'; Sha = $previousInstallationSha; Pass = $false },
-      @{ Name = 'unmerged-candidate-ancestor-reviewer-blocked'; Sha = $unmergedInstallationSha; Pass = $false },
-      @{ Name = 'missing-reviewer-source-blocked'; Sha = ('d' * 40); Pass = $false }
+      @{ Name = 'older-controller-invalid-advisory'; Sha = $previousInstallationSha; Pass = $false },
+      @{ Name = 'unmerged-candidate-ancestor-reviewer-invalid-advisory'; Sha = $unmergedInstallationSha; Pass = $false },
+      @{ Name = 'missing-reviewer-source-invalid-advisory'; Sha = ('d' * 40); Pass = $false }
     )) {
     Invoke-Step $installationCase.Name {
       $sourceBundle = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
@@ -394,7 +395,7 @@ exit 0
       }
       if ($installationCase.Pass) {
         if ($run.exitCode -ne 0) { throw 'The exact base controller must remain eligible.' }
-      } elseif ($run.exitCode -eq 0 -or (Get-GateReviewPolicy $run).independentReviewEvidenceErrors -notcontains 'autonomous_evidence_controller_source_not_exact_base') {
+      } elseif ($run.exitCode -ne 0 -or (Get-GateReviewPolicy $run).independentReviewSatisfied -or (Get-GateReviewPolicy $run).independentReviewEvidenceErrors -notcontains 'autonomous_evidence_controller_source_not_exact_base') {
         throw 'An older, unmerged, or unavailable controller must not satisfy protected review.'
       }
     }
@@ -420,7 +421,7 @@ exit 0
   }
 
   # 2. One exact Babel chat review satisfies GREEN/NORMAL; RED/CRITICAL requires
-  #    two independent certifications.
+  #    two reviews only to validate optional certification evidence.
   Invoke-Step 'one-review-pass' {
     $oneReviewPath = Join-Path $root 'ai-review-one.json'
     $oneReviewBundle = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
@@ -437,7 +438,7 @@ exit 0
       Get-Content -Raw (Join-Path $root 'comment-102.json') | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
     }
     if ($CandidateLane -eq 'RED') {
-      if ($run.exitCode -eq 0) { throw 'RED/CRITICAL candidate must require two independent reviews.' }
+      if ($run.exitCode -ne 0 -or (Get-GateReviewPolicy $run).independentReviewSatisfied) { throw 'Insufficient optional evidence must remain invalid without blocking readiness.' }
       $policy = Get-GateReviewPolicy $run
       if ($policy.independentReviewEvidenceErrors -notcontains 'controller_review_bundle_insufficient_or_excess_reviews') {
         throw "blockers=$($run.result.blockers -join ',') errors=$($policy.independentReviewEvidenceErrors -join ',')"
@@ -448,32 +449,30 @@ exit 0
   }
 
   # 3. A local bundle from a different owner cannot impersonate the live owner handoff.
-  Invoke-Step 'wrong-owner-bundle-blocked' {
+  Invoke-Step 'wrong-owner-bundle-invalid-advisory' {
     $wrongControllerPath = Join-Path $root 'ai-review-wrong-controller.json'
     $wrongControllerBundle = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $wrongControllerBundle.publisher_id = '15368'
     $wrongControllerBundle | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $wrongControllerPath -Encoding utf8NoBOM
     $run = Invoke-Gate -Label 'wrong-controller' -Extra @{ '-AutonomousReviewEvidencePath' = $wrongControllerPath }
-    if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-    if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
+    if ($run.exitCode -ne 0 -or (Get-GateReviewPolicy $run).independentReviewSatisfied) { throw 'Invalid advisory evidence must remain invalid without blocking readiness.' }
   }
 
-  Invoke-Step 'forged-local-review-body-blocked' {
+  Invoke-Step 'forged-local-review-body-invalid-advisory' {
     $forgedPath = Join-Path $root 'forged-reviews.json'
     $forged = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $forged.handoff.reviews[0].scope = @('forged local scope')
     $forged | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $forgedPath -Encoding utf8NoBOM
     $run = Invoke-Gate -Label 'forged-body' -Extra @{ '-AutonomousReviewEvidencePath' = $forgedPath }
-    if ($run.exitCode -eq 0 -or (Get-GateReviewPolicy $run).independentReviewEvidenceErrors -notcontains 'controller_review_live_provenance_mismatch') { throw 'Forged review body was not rejected by live provenance validation.' }
+    if ($run.exitCode -ne 0 -or (Get-GateReviewPolicy $run).independentReviewSatisfied -or (Get-GateReviewPolicy $run).independentReviewEvidenceErrors -notcontains 'controller_review_live_provenance_mismatch') { throw 'Forged review body was not rejected by live provenance validation.' }
   }
 
-  # 4. Missing controller evidence fails closed.
-  Invoke-Step 'missing-review-blocked' {
+  # 4. Missing custom evidence remains invalid and advisory.
+  Invoke-Step 'missing-review-invalid-advisory' {
     $run = Invoke-Gate -Label 'missing-review' -Extra @{}
     $policy = Get-GateReviewPolicy $run
-    if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-    if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
-    if (-not $policy.independentReviewRequired) { throw "$CandidateLane PR skipped independent review." }
+    if ($run.exitCode -ne 0 -or (Get-GateReviewPolicy $run).independentReviewSatisfied) { throw 'Invalid advisory evidence must remain invalid without blocking readiness.' }
+    if ($policy.independentReviewRequired) { throw 'Missing custom evidence must be advisory.' }
   }
 
   # 5. dirty candidate worktree
