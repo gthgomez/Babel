@@ -3,7 +3,31 @@ param([string]$RepoRoot = (Join-Path $PSScriptRoot '..\..'))
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $launcher = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'scripts/trusted-merge-gate.ps1')
-if ($launcher -notmatch '-C \$resolvedRepo show') { throw 'Trusted launcher does not materialize from git objects.' }
+function Assert-TrustedMaterialization {
+  param([string]$Source)
+  if ($Source -notmatch '-C\s+\$resolvedRepo\s+--no-replace-objects\s+show\s+\$spec\b') {
+    throw 'Trusted launcher must materialize exact base objects without replace refs.'
+  }
+  foreach ($required in @(
+      "GetEnvironmentVariable('GIT_NO_REPLACE_OBJECTS', 'Process')",
+      '$env:GIT_NO_REPLACE_OBJECTS = ''1''',
+      'Remove-Item Env:GIT_NO_REPLACE_OBJECTS',
+      '$env:GIT_NO_REPLACE_OBJECTS = $priorNoReplaceObjects')) {
+    if (-not $Source.Contains($required)) { throw "Trusted launcher omits replace-ref environment protection: $required" }
+  }
+}
+Assert-TrustedMaterialization -Source $launcher
+foreach ($unsafeLauncher in @(
+    $launcher.Replace('--no-replace-objects show', 'show'),
+    $launcher.Replace('-C $resolvedRepo', '-C $candidateRepo'),
+    $launcher.Replace('show $spec', 'Get-Content $candidateFile'),
+    $launcher.Replace('$env:GIT_NO_REPLACE_OBJECTS = ''1''', ''),
+    $launcher.Replace('$env:GIT_NO_REPLACE_OBJECTS = $priorNoReplaceObjects', ''),
+    $launcher.Replace('Remove-Item Env:GIT_NO_REPLACE_OBJECTS', ''))) {
+  $rejected = $false
+  try { Assert-TrustedMaterialization -Source $unsafeLauncher } catch { $rejected = $true }
+  if (-not $rejected) { throw 'Trusted materialization assertion accepted an unsafe launcher mutation.' }
+}
 foreach ($component in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-review-evidence.ps1', 'scripts/agent-git-common.psm1')) {
   if ($launcher -notmatch [regex]::Escape($component)) { throw "Trusted launcher omits $component" }
 }
@@ -49,7 +73,7 @@ if ($materializer -notmatch [regex]::Escape('per_page=100&page=')) { throw 'Evid
 foreach ($marker in @('owner.id', 'per_page=100&page=')) {
   if ($materializer -notmatch [regex]::Escape($marker)) { throw "Evidence transport is missing marker: $marker" }
 }
-foreach ($marker in @('babel-controller-ai-reviews-v2', 'github_host_review_bundle_v2')) {
+foreach ($marker in @('babel-controller-ai-reviews-v2', 'github_host_review_bundle_v3', 'legacy_v2_review_unsupported')) {
   if ($evidenceValidator -notmatch [regex]::Escape($marker)) { throw "Immutable evidence validator is missing marker: $marker" }
 }
 $workflow = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot '.github/workflows/trusted-control-plane.yml')
