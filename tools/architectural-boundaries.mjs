@@ -31,9 +31,16 @@ export function inspectSource(source, path = 'source.ts') {
   const implicitGlobals = new Map([['process', globalProcessSymbol], ['global', globalObjectSymbol], ['globalThis', globalObjectSymbol]]);
   let hasBindOverrides = false;
   linkSymbols(globalProcessSymbol, globalObjectSymbol);
+  function isAmbientDeclaration(node) {
+    for (let owner = node; owner && !ts.isSourceFile(owner); owner = owner.parent) {
+      if (owner.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword)) return true;
+    }
+    return false;
+  }
   function identifierSymbol(node) {
     const symbol = ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
-    return !symbol?.declarations?.length && implicitGlobals.has(node.text) ? implicitGlobals.get(node.text) : symbol;
+    const runtimeShadow = symbol?.declarations?.some(declaration => !isAmbientDeclaration(declaration));
+    return !runtimeShadow && implicitGlobals.has(node.text) ? implicitGlobals.get(node.text) : symbol;
   }
   function unwrap(node) {
     while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node))) node = node.expression;
@@ -204,6 +211,13 @@ export function inspectSource(source, path = 'source.ts') {
     if (new Set(recognized.map(route => route.join('.'))).size > 1) return ['process', '*'];
     return recognized[0] ?? null;
   }
+  function unresolvedInvocation(route) {
+    if (route?.[0] !== 'process') return false;
+    if (route.includes('*')) return true;
+    let suffixes = 0;
+    for (let index = route.length - 1; index > 0 && ['bind', 'call', 'apply'].includes(route[index]); index--) suffixes++;
+    return suffixes > 1;
+  }
   function access(node, seen = new Set()) {
     if (!node || seen.has(node)) return null;
     seen = new Set(seen).add(node);
@@ -227,6 +241,7 @@ export function inspectSource(source, path = 'source.ts') {
       if (((ts.isIdentifier(node.expression) && node.expression.text === 'require') || node.expression.kind === ts.SyntaxKind.ImportKeyword) &&
           ts.isStringLiteralLike(node.arguments[0]) && ['node:process', 'process'].includes(node.arguments[0].text)) return ['process'];
       const callee = access(node.expression, seen);
+      if (unresolvedInvocation(callee)) return ['process', '*'];
       if (callee?.at(-1) === 'bind') return callee.slice(0, -1);
     }
     if (!ts.isIdentifier(node)) return null;
@@ -291,11 +306,12 @@ export function inspectSource(source, path = 'source.ts') {
       // Intrinsic bind creates a function; invocation of that result is counted
       // separately. Explicit or dynamic local overrides retain ambiguity.
       if (route?.at(-1) === 'bind' && !hasBindOverrides) route = null;
+      if (unresolvedInvocation(route)) route = ['process', '*'];
       if (['call', 'apply'].includes(route?.at(-1))) route = route.slice(0, -1);
       const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
       if (route?.join('.') === 'process.exit') exits.push(line);
       if (route?.join('.') === 'process.stdout.write') stdout.push(line);
-      if (route?.[0] === 'process' && (route[1] === '*' || (route[1] === 'stdout' && route[2] === '*'))) ambiguous.push(line);
+      if (unresolvedInvocation(route)) ambiguous.push(line);
     }
     ts.forEachChild(node, visit);
   }

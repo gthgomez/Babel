@@ -208,6 +208,23 @@ test('binding a host method does not invoke it, including capture and restore', 
     'const obj={[key]:process.exit}; obj.bind(7)',
   ]) assert.equal(inspectSource(source).ambiguous.length, 1, source);
 });
+test('unresolved nested and dynamic host invocation suffixes fail closed', () => {
+  for (const source of [
+    'process.exit.call.call(process.exit,process,7)',
+    'process.exit.apply.call(process.exit,process,[7])',
+    'const quit=process.exit.bind.call(process.exit,process,7); quit()',
+    'process.stdout.write.call.call(process.stdout.write,process.stdout,"x")',
+    'const method="call"; process.exit[method](process,7)',
+    'const method="call"; process.stdout.write[method](process.stdout,"x")',
+  ]) assert.ok(inspectSource(source).ambiguous.length > 0, source);
+  assert.deepEqual(inspectSource('process.env[method].trim(); const formatter={call:()=>{}}; formatter.call()'), {exits:[], stdout:[], ambiguous:[]});
+});
+test('ambient declarations do not create runtime shadows of host globals', () => {
+  assert.equal(inspectSource('declare const process:any; process.exit(1)').exits.length, 1);
+  assert.equal(inspectSource('declare var global:any; global.process.exit(1)').exits.length, 1);
+  assert.equal(inspectSource('declare const globalThis:any; globalThis.process.stdout.write("x")').stdout.length, 1);
+  assert.deepEqual(inspectSource('const process={exit:()=>{}}; process.exit(1)'), {exits:[], stdout:[], ambiguous:[]});
+});
 test('process data in arrays and alternative environment keys do not create host boundaries', () => {
   assert.equal(inspectSource('const args = [process.execPath, "--flag"]; args.map(String).join(" "); const roots = process.env["ROOT_A"] || process.env["ROOT_B"] || ""; roots.split(",")').ambiguous.length, 0);
 });
