@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { classifyReviewRisk, resolveReviewAuthority, resolveReviewPolicy } from './reviewPolicy.js'
 
 export type ReviewEvidenceProvenance =
   | 'LOCAL_UNAUTHENTICATED'
@@ -46,6 +47,17 @@ export interface IndependentReviewRuntime {
   parent_execution_id?: string
   /** Controller-issued session identity for the reviewer execution. */
   session_id?: string
+  /** Host-enforced reviewer capability; independent of reviewer instructions. */
+  read_only_enforced?: boolean
+}
+
+export interface IndependentReviewCoverage {
+  diff_consumed: boolean
+  diff_sha256: string
+  diff_lines_total: number
+  diff_lines_read: number
+  changed_paths: number
+  source_paths_opened: string[]
 }
 
 export interface IndependentReviewIsolationProfile {
@@ -104,6 +116,7 @@ export interface IndependentReviewEvidenceV3 {
   isolation: IndependentReviewIsolationProfile
   execution_purpose?: ReviewExecutionPurpose
   usage?: IndependentReviewUsage
+  coverage?: IndependentReviewCoverage
 }
 
 export interface HostReviewHandoffV3 {
@@ -177,6 +190,16 @@ export const independentReviewRuntimeSchema = z.object({
   fresh_process: z.boolean().optional(),
   parent_execution_id: z.string().min(1).optional(),
   session_id: z.string().min(1).optional(),
+  read_only_enforced: z.boolean().optional(),
+}).strict()
+
+export const independentReviewCoverageSchema = z.object({
+  diff_consumed: z.boolean(),
+  diff_sha256: digest,
+  diff_lines_total: z.number().int().positive(),
+  diff_lines_read: z.number().int().nonnegative(),
+  changed_paths: z.number().int().positive(),
+  source_paths_opened: z.array(text),
 }).strict()
 
 export const independentReviewIsolationSchema = z.object({
@@ -228,6 +251,7 @@ export const independentReviewEvidenceV3Schema = z.object({
   blocking_findings: z.array(z.string()),
   isolation: independentReviewIsolationSchema,
   usage: independentReviewUsageSchema.optional(),
+  coverage: independentReviewCoverageSchema.optional(),
 }).strict()
 
 export const hostReviewHandoffV3Schema = z.object({
@@ -276,14 +300,46 @@ export function validateIndependentReviewEvidenceV3(
 ): IndependentReviewEvidenceV3 {
   const parsed = independentReviewEvidenceV3Schema.parse(value)
 
+  if (parsed.runtime.model_attribution === 'observed' && !parsed.runtime.observed_model?.trim()) {
+    throw new Error('MODEL_ATTRIBUTION_MISMATCH')
+  }
+  if (parsed.runtime.model_attribution === 'configured' && !parsed.runtime.requested_model?.trim()) {
+    throw new Error('MODEL_ATTRIBUTION_MISMATCH')
+  }
+  if (parsed.runtime.model_attribution === 'unavailable' && parsed.runtime.observed_model) {
+    throw new Error('MODEL_ATTRIBUTION_MISMATCH')
+  }
+
   if (expected?.requireAuthoritative && parsed.provenance === 'LOCAL_UNAUTHENTICATED') {
     throw new Error('LOCAL_UNAUTHENTICATED_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
+  }
+  if (expected?.requireAuthoritative && parsed.provenance !== 'TRUSTED_CONTROLLER_EVIDENCE' &&
+      parsed.provenance !== 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE') {
+    throw new Error('AUTHORITATIVE_EVIDENCE_PROVENANCE_REQUIRED')
   }
 
   // Merge gate authority strictly requires FINAL_CERTIFICATION purpose
   if (expected?.requireAuthoritative) {
     if (parsed.execution_purpose !== 'FINAL_CERTIFICATION') {
       throw new Error('NON_CERTIFICATION_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
+    }
+    if (parsed.runtime.fresh_context !== true || parsed.runtime.fresh_process !== true ||
+        parsed.runtime.read_only_enforced !== true || !parsed.runtime.provider_execution_id ||
+        !parsed.runtime.session_id || parsed.runtime.parent_execution_id !== parsed.builder.execution_id ||
+        parsed.runtime.provider_execution_id.toLowerCase() === parsed.builder.execution_id.toLowerCase() ||
+        parsed.runtime.session_id.toLowerCase() === parsed.builder.execution_id.toLowerCase()) {
+      throw new Error('AUTHORITATIVE_RUNTIME_ISOLATION_REQUIRED')
+    }
+    if (!parsed.coverage || parsed.coverage.diff_consumed !== true ||
+        parsed.coverage.diff_lines_total !== parsed.coverage.diff_lines_read ||
+        parsed.coverage.changed_paths !== parsed.scope.length) {
+      throw new Error('FULL_DIFF_COVERAGE_REQUIRED')
+    }
+    if (resolveReviewAuthority(parsed.scope) === 'HOST_PROTECTED' && !parsed.runtime.source_sha) {
+      throw new Error('TRUSTED_CONTROLLER_SOURCE_REQUIRED')
+    }
+    if (resolveReviewAuthority(parsed.scope) === 'HOST_PROTECTED' && parsed.runtime.source_sha !== parsed.base_sha) {
+      throw new Error('TRUSTED_CONTROLLER_SOURCE_MISMATCH')
     }
   }
 
@@ -315,26 +371,8 @@ export function validateIndependentReviewEvidenceV3(
     throw new Error('RUNTIME_EXECUTION_ID_MISMATCH')
   }
 
-  // 2. Adapter-specific validation
-  if (parsed.runtime.agent_kind === 'babel') {
-    // Babel adapter invariants
-    const provider = parsed.runtime.observed_provider ?? parsed.runtime.requested_provider
-    if (provider !== 'opencode-go') {
-      throw new Error('BABEL_REVIEWER_MUST_USE_OPENCODE_GO')
-    }
-    if (!parsed.runtime.runtime_version || !/^[a-f0-9]{64}$/i.test(parsed.runtime.runtime_version)) {
-      throw new Error('BABEL_REVIEWER_INVALID_VERSION_DIGEST')
-    }
-  } else {
-    // External adapter invariants: must NOT claim to be Babel or use Babel-internal provider
-    const provider = parsed.runtime.observed_provider ?? parsed.runtime.requested_provider
-    if (provider === 'opencode-go') {
-      throw new Error('EXTERNAL_REVIEWER_CANNOT_CLAIM_OPENCODE_GO')
-    }
-    if (parsed.runtime.adapter_id.startsWith('babel-')) {
-      throw new Error('EXTERNAL_REVIEWER_CANNOT_CLAIM_BABEL_ADAPTER')
-    }
-  }
+  // 2. Runtime identity must agree with the observed reviewer family.
+  if (parsed.runtime.agent_kind !== parsed.reviewer.kind) throw new Error('REVIEWER_RUNTIME_KIND_MISMATCH')
 
   // 3. Verdict consistency
   if (parsed.verdict === 'APPROVE' && parsed.blocking_findings.length > 0) {
@@ -415,6 +453,10 @@ export function validateHostReviewHandoffV3(
   if (expected?.requireAuthoritative && parsed.provenance === 'LOCAL_UNAUTHENTICATED') {
     throw new Error('LOCAL_UNAUTHENTICATED_EVIDENCE_CANNOT_SATISFY_AUTHORITY')
   }
+  if (expected?.requireAuthoritative && parsed.provenance !== 'TRUSTED_CONTROLLER_EVIDENCE' &&
+      parsed.provenance !== 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE') {
+    throw new Error('AUTHORITATIVE_EVIDENCE_PROVENANCE_REQUIRED')
+  }
 
   if (expected?.repository && parsed.repository !== expected.repository) throw new Error('HANDOFF_REPOSITORY_MISMATCH')
   if (expected?.prNumber && parsed.pr_number !== expected.prNumber) throw new Error('HANDOFF_PR_MISMATCH')
@@ -423,11 +465,34 @@ export function validateHostReviewHandoffV3(
   if (expected?.candidateDigest && parsed.candidate_digest !== expected.candidateDigest) throw new Error('HANDOFF_CANDIDATE_DIGEST_MISMATCH')
   if (expected?.controllerRunId && parsed.controller_run_id !== expected.controllerRunId) throw new Error('HANDOFF_RUN_ID_MISMATCH')
 
+  if (expected?.requireAuthoritative) {
+    const scope = expected.scope ?? parsed.reviews[0]?.scope ?? []
+    const required = resolveReviewPolicy({ riskLane: classifyReviewRisk(scope), requireAuthoritative: true }).finalCertificationCount
+    if (parsed.reviews.every((review) => review.verdict === 'APPROVE') && parsed.reviews.length !== required) {
+      throw new Error('INSUFFICIENT_FINAL_REVIEWERS')
+    }
+  }
+
   const reviewerPrincipals = new Set<string>()
   const reviewerExecutions = new Set<string>()
+  const observedExecutions = new Set<string>()
+  const observedSessions = new Set<string>()
+  const observedIdentities = new Set<string>()
   const challengeIds = new Set<string>()
+  const roundBuilder = parsed.reviews[0]?.builder
+  const roundCoverage = parsed.reviews[0]?.coverage
 
   for (const review of parsed.reviews) {
+    if (roundBuilder && (review.builder.kind !== roundBuilder.kind ||
+        review.builder.principal_id !== roundBuilder.principal_id ||
+        review.builder.execution_id !== roundBuilder.execution_id)) {
+      throw new Error('MIXED_BUILDER_IDENTITY')
+    }
+    if (review.coverage?.diff_sha256 !== roundCoverage?.diff_sha256 ||
+        review.coverage?.diff_lines_total !== roundCoverage?.diff_lines_total ||
+        review.coverage?.changed_paths !== roundCoverage?.changed_paths) {
+      throw new Error('MIXED_DIFF_COVERAGE')
+    }
     validateIndependentReviewEvidenceV3(review, {
       repository: parsed.repository,
       pr_number: parsed.pr_number,
@@ -446,18 +511,35 @@ export function validateHostReviewHandoffV3(
       purpose: expected?.purpose,
     })
 
-    if (reviewerPrincipals.has(review.reviewer.principal_id)) {
+    const reviewerPrincipal = review.reviewer.principal_id.toLowerCase()
+    const reviewerExecution = review.reviewer.execution_id.toLowerCase()
+    const challengeId = review.challenge_id.toLowerCase()
+    if (reviewerPrincipals.has(reviewerPrincipal)) {
       throw new Error('DUPLICATE_REVIEWER_PRINCIPAL')
     }
-    if (reviewerExecutions.has(review.reviewer.execution_id)) {
+    if (reviewerExecutions.has(reviewerExecution)) {
       throw new Error('DUPLICATE_REVIEWER_EXECUTION')
     }
-    if (challengeIds.has(review.challenge_id)) {
+    if (challengeIds.has(challengeId)) {
       throw new Error('DUPLICATE_CHALLENGE_ID')
     }
-    reviewerPrincipals.add(review.reviewer.principal_id)
-    reviewerExecutions.add(review.reviewer.execution_id)
-    challengeIds.add(review.challenge_id)
+    if (expected?.requireAuthoritative) {
+      const observedExecution = review.runtime.provider_execution_id!.toLowerCase()
+      const observedSession = review.runtime.session_id!.toLowerCase()
+      if (observedExecutions.has(observedExecution) || observedIdentities.has(observedExecution)) {
+        throw new Error('DUPLICATE_OBSERVED_REVIEWER_EXECUTION')
+      }
+      if (observedSessions.has(observedSession) || observedIdentities.has(observedSession)) {
+        throw new Error('DUPLICATE_OBSERVED_REVIEWER_SESSION')
+      }
+      observedExecutions.add(observedExecution)
+      observedSessions.add(observedSession)
+      observedIdentities.add(observedExecution)
+      observedIdentities.add(observedSession)
+    }
+    reviewerPrincipals.add(reviewerPrincipal)
+    reviewerExecutions.add(reviewerExecution)
+    challengeIds.add(challengeId)
   }
 
   return parsed as HostReviewHandoffV3

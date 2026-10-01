@@ -54,6 +54,10 @@ export function handleClear(ctx: ReplContext, _args: string[]): void {
   ctx.chatEngine?.closeAdmissionStore?.();
   ctx.chatEngine = undefined;
   ctx.lastRoutingLabel = null;
+  if (ctx.shellHost && ctx.clearHostedShell) {
+    ctx.clearHostedShell();
+    return;
+  }
   process.stdout.write('\x1bc');
 }
 

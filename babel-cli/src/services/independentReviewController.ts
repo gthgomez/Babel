@@ -96,6 +96,18 @@ export function verifyAndConsumeChallenge(
     throw new Error(`CHALLENGE_NOT_COMPLETED: ${raw.status}`)
   }
 
+  assertReviewChallengeBinding(raw, challengeId, evidence)
+
+  // Atomically consume
+  const updated: PersistentReviewChallenge = {
+    ...raw,
+    status: 'CONSUMED',
+    consumed_at: new Date().toISOString(),
+  }
+  atomicReviewJson(challengePath, updated)
+}
+
+function assertReviewChallengeBinding(raw: PersistentReviewChallenge, challengeId: string, evidence: IndependentReviewEvidenceV3): void {
   // Exact bindings
   if (raw.challenge_id !== challengeId) throw new Error('CHALLENGE_ID_MISMATCH')
   if (raw.candidate_digest !== evidence.candidate_digest) throw new Error('CHALLENGE_CANDIDATE_DIGEST_MISMATCH')
@@ -115,13 +127,26 @@ export function verifyAndConsumeChallenge(
     throw new Error('CHALLENGE_REVIEWER_IDENTITY_MISMATCH')
   }
 
-  // Atomically consume
-  const updated: PersistentReviewChallenge = {
-    ...raw,
-    status: 'CONSUMED',
-    consumed_at: new Date().toISOString(),
+}
+
+/** Resume only the exact result previously journaled by a trusted host. */
+export function settleReviewChallenge(
+  stateDir: string, challengeId: string, evidence: IndependentReviewEvidenceV3, completedAt: string,
+): void {
+  assertSafeChallengeId(challengeId)
+  const path = join(stateDir, 'challenges', `${challengeId}.json`)
+  if (!existsSync(path)) throw new Error(`CHALLENGE_NOT_FOUND: ${challengeId}`)
+  let raw = JSON.parse(readFileSync(path, 'utf8')) as PersistentReviewChallenge
+  if (raw.status === 'ISSUED') {
+    completeReviewChallenge(stateDir, challengeId, { verdict: evidence.verdict, completed_at: completedAt })
+    raw = JSON.parse(readFileSync(path, 'utf8')) as PersistentReviewChallenge
   }
-  atomicReviewJson(challengePath, updated)
+  if (raw.completed_at !== completedAt) throw new Error('CHALLENGE_COMPLETION_MISMATCH')
+  if (raw.status === 'CONSUMED') {
+    assertReviewChallengeBinding(raw, challengeId, evidence)
+    return
+  }
+  verifyAndConsumeChallenge(stateDir, challengeId, evidence)
 }
 
 export interface IndependentReviewExecutionRequest {
@@ -150,6 +175,7 @@ export interface IndependentReviewExecutionResult {
   isolation?: IndependentReviewIsolationProfile
   execution_purpose?: ReviewExecutionPurpose
   usage?: IndependentReviewUsage
+  diff_consumed?: boolean
 }
 
 export interface IndependentReviewWorkerAdapter {
@@ -264,7 +290,9 @@ export function createIndependentReviewController(input: {
         execution_id: `unauth-builder-${createId()}`,
       }
 
-      const provenance = input.state_dir ? 'TRUSTED_CONTROLLER_EVIDENCE' : 'LOCAL_UNAUTHENTICATED'
+      // This legacy adapter sees worker claims, not host-observed isolation or
+      // exact diff coverage. Durable challenge state alone grants no authority.
+      const provenance = 'LOCAL_UNAUTHENTICATED'
 
       const usedPrincipals = new Set<string>()
       const usedExecutions = new Set<string>()
@@ -331,6 +359,14 @@ export function createIndependentReviewController(input: {
         const result = await input.adapter.launch(request)
         if (result.status !== 'COMPLETED') {
           throw new Error(`REVIEW_EXECUTION_FAILED: ${result.failure_reason || 'Unknown adapter failure'}`)
+        }
+        if (input.state_dir && (result.verdict === 'BLOCK' ||
+            (Array.isArray(result.blocking_findings) && result.blocking_findings.length > 0))) {
+          recordUnresolvedBlock(candidate.candidate_digest, input.state_dir, {
+            verdict: 'BLOCK', challenge_id: challengeId, controller_run_id: controllerRunId,
+            reported_verdict: result.verdict,
+            provenance: 'UNVERIFIED_DIAGNOSTIC_BLOCK_SIGNAL',
+          })
         }
 
         // Fail closed on missing/invalid verdict (Repair A)
@@ -418,7 +454,7 @@ export function createIndependentReviewController(input: {
         validateIndependentReviewEvidenceV3(evidence, {
           candidateScope: candidate.scope,
           now: now(),
-          requireAuthoritative: Boolean(input.state_dir),
+          requireAuthoritative: false,
           producerExecutionId: candidateProducer,
           lineage: (candidate as { lineage?: CandidateProducerLineage }).lineage,
           purpose,
@@ -471,7 +507,7 @@ export function createIndependentReviewController(input: {
         candidateDigest: candidate.candidate_digest,
         scope: candidate.scope,
         now: now(),
-        requireAuthoritative: Boolean(input.state_dir),
+        requireAuthoritative: false,
         producerExecutionId: candidateProducer,
         lineage: (candidate as { lineage?: CandidateProducerLineage }).lineage,
         purpose,

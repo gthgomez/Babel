@@ -1,7 +1,7 @@
 import { stripAnsi, wrapText } from '../theme.js';
 import type { HistoryCell } from './historyCell.js';
 
-export type HistoryRenderMode = 'rich' | 'raw';
+export type HistoryRenderMode = 'rich' | 'raw' | 'shell';
 
 /** Measure how many terminal rows logical lines occupy at a given width. */
 export function measureDisplayHeight(lines: string[], width: number): number {
@@ -30,8 +30,12 @@ export function flattenDisplayRows(lines: string[], width: number): string[] {
 }
 
 /** Flatten a cell's display output to physical rows at a terminal width. */
-export function flattenCellRows(cell: HistoryCell, width: number): string[] {
-  return flattenDisplayRows(cell.displayLines(width), width);
+export function flattenCellRows(
+  cell: HistoryCell,
+  width: number,
+  mode: HistoryRenderMode = 'rich',
+): string[] {
+  return flattenDisplayRows(cell.displayLines(width, mode), width);
 }
 
 export function plainLines(lines: string[]): string[] {

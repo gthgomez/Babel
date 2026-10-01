@@ -31,7 +31,7 @@ export interface OrchestrationResult {
   status: OrchestrationStatus
   headSha: string
   candidateDigest: string
-  /** Present when a round produced authoritative V3 evidence. */
+  /** Diagnostic review handoff; its provenance determines whether it can certify. */
   handoff?: HostReviewHandoffV3
   blockingFindings: string[]
   repairRounds: number
@@ -54,14 +54,15 @@ const REQUIRED_ISOLATION: IndependentReviewIsolationProfile = Object.freeze({
 })
 
 /**
- * Bounded review -> repair -> fresh-certification loop.
+ * Bounded diagnostic review -> repair loop for the legacy worker adapter.
  *
- * The certifying review for a head is always a fresh controller execution: when
+ * Each review for a head uses a fresh controller execution: when
  * a round blocks and a repair produces a new head, the previous round's approval
  * (and its challenge) is never reused, and the next round launches new reviewer
  * executions against the new candidate. The controller rejects a reviewer that
  * is the builder or the candidate producer (repair lineage), so a fixer cannot
- * certify the candidate it produced.
+ * review the candidate it produced. These adapters do not supply host-observed
+ * isolation or exact-diff coverage, so approval never returns MERGE_READY.
  */
 export async function runReviewOrchestration(options: {
   adapter: AutonomousEngineeringWorkerAdapter
@@ -132,15 +133,17 @@ export async function runReviewOrchestration(options: {
     )
     const allApproved = handoff.reviews.every((review) => review.verdict === 'APPROVE')
     if (allApproved && blocking.length === 0) {
-      emit('MERGE_READY', candidate.head_sha)
+      // The legacy worker adapter has no host-observed process isolation or
+      // exact diff receipt. Its approvals can guide repairs but cannot merge.
+      emit('ESCALATED', 'legacy_controller_diagnostic_only')
       return {
-        status: 'MERGE_READY',
+        status: 'ESCALATED',
         headSha: candidate.head_sha,
         candidateDigest: candidate.candidate_digest,
         handoff,
         blockingFindings: [],
         repairRounds,
-        message: 'certified',
+        message: 'legacy_controller_diagnostic_only',
       }
     }
 

@@ -118,6 +118,15 @@ describe('terminalResultFromDoneEvent (P0-D lossless)', () => {
 });
 
 describe('dispatchChatEvent cancelled telemetry threading', () => {
+  test('publishes the same canonical event to the hosted shell sink', () => {
+    const events: string[] = [];
+    dispatchChatEvent(
+      { type: 'answer_chunk', text: 'live' },
+      { onChatEvent: (event) => events.push(event.type) },
+    );
+    assert.deepEqual(events, ['answer_chunk']);
+  });
+
   test('cancelled result carries the event turn telemetry', () => {
     const turnTelemetry = {
       turnId: 'turn-7',

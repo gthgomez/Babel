@@ -256,43 +256,76 @@ function Get-AgentNumstatDigest {
   return ([BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant()
 }
 
+function Get-AgentExactDiffCoverage {
+  param(
+    [Parameter(Mandatory = $true)][string]$GitPath,
+    [Parameter(Mandatory = $true)][string]$RepoRoot,
+    [Parameter(Mandatory = $true)][string]$BaseSha,
+    [Parameter(Mandatory = $true)][string]$HeadSha
+  )
+  $start = [Diagnostics.ProcessStartInfo]::new()
+  $start.FileName = $GitPath
+  $start.WorkingDirectory = $RepoRoot
+  $start.UseShellExecute = $false
+  $start.RedirectStandardOutput = $true
+  $start.RedirectStandardError = $true
+  foreach ($arg in @('diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', "$BaseSha...$HeadSha")) {
+    [void]$start.ArgumentList.Add($arg)
+  }
+  $process = [Diagnostics.Process]::Start($start)
+  try {
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $buffer = [IO.MemoryStream]::new()
+    try {
+      $process.StandardOutput.BaseStream.CopyTo($buffer)
+      $process.WaitForExit()
+      if ($process.ExitCode -ne 0) { throw "EXACT_DIFF_UNAVAILABLE: $($stderr.GetAwaiter().GetResult())" }
+      if ($buffer.Length -gt 100MB) { throw 'EXACT_DIFF_TOO_LARGE' }
+      $bytes = $buffer.ToArray()
+      $hash = [Security.Cryptography.SHA256]::HashData($bytes)
+      $lines = 0
+      foreach ($byte in $bytes) { if ($byte -eq 10) { $lines++ } }
+      if ($bytes.Length -gt 0 -and $bytes[$bytes.Length - 1] -ne 10) { $lines++ }
+      return [pscustomobject]@{
+        sha256 = ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+        lines = $lines
+      }
+    } finally { $buffer.Dispose() }
+  } finally { $process.Dispose() }
+}
+
 function Get-AgentRiskLane {
   param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$ChangedPaths)
-
-  # This table runs from the immutable base gate. Callers may request a higher
-  # lane, but can never downgrade a lane derived from the candidate's paths.
-  $redPrefixes = @(
-    '.github/', '.agents/', 'config/', 'AGENTS.md', 'CLAUDE.md', 'ENGINEERING.md',
-    'docs/AUTONOMY_POLICY.md', 'LLM_COLLABORATION_SYSTEM/', '01_Behavioral_OS/',
-    'docs/architecture/MERGE_CONTROL', 'docs/architecture/TRUST_',
-    'scripts/agent-pr-gate', 'scripts/agent-git-common', 'scripts/trusted-merge-gate',
-    'scripts/materialize-independent-review', 'scripts/agent-review-', 'scripts/verify-',
-    'tools/agent-host-review.ps1', 'tools/host-review-worker.mts',
-    'tools/babel-pr-review.mts', 'tools/babel-chat-review-worker.mts', 'tools/babel-pr-repair.mts',
-    'babel-cli/src/services/babelReview', 'babel-cli/src/services/babelChatReview',
-    'babel-cli/src/agent/chatReadOnly',
-    'babel-cli/src/agent/chatEngine.ts', 'babel-cli/src/agent/chatEngineObservability.ts',
-    'babel-cli/src/agent/implementorPolicy.ts', 'babel-cli/src/config/chatEngineLimits.ts',
-    'babel-cli/src/interactive/execution/chatCore.ts',
-    'babel-cli/src/authority/', 'babel-cli/src/evidence/',
-    'babel-cli/src/services/review', 'babel-cli/src/services/hostReview',
-    'babel-cli/src/services/independentReview', 'babel-cli/src/config/autonomyPolicy',
-    'babel-cli/src/runners/openCodeGo'
-  )
-  $yellowPrefixes = @(
-    'babel-cli/src/agent/', 'babel-cli/src/sandbox',
-    'babel-cli/src/services/', 'babel-cli/src/config/',
-    'babel-cli/src/commands/', 'babel-cli/src/runners/'
-  )
+  # The installed base gate and TypeScript read the same risk table.
+  if ($ChangedPaths.Count -eq 0) { return 'BLACK' }
+  $policyPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'config/review-risk-policy.json'
+  $policy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json -Depth 10
+  $criticalPrefixes = @($policy.criticalPrefixes) + @($policy.hostProtectedPrefixes)
   foreach ($path in $ChangedPaths) {
     $normalized = $path.Replace('\', '/')
-    if (@($redPrefixes | Where-Object { $normalized.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) { return 'RED' }
+    if (@($criticalPrefixes | Where-Object { $normalized.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) -or $normalized -ieq $_.TrimEnd('/') }).Count -gt 0) { return 'RED' }
   }
   foreach ($path in $ChangedPaths) {
     $normalized = $path.Replace('\', '/')
-    if (@($yellowPrefixes | Where-Object { $normalized.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) { return 'YELLOW' }
+    if (@($policy.elevatedPrefixes | Where-Object { $normalized.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) -or $normalized -ieq $_.TrimEnd('/') }).Count -gt 0) { return 'YELLOW' }
   }
   return 'GREEN'
+}
+
+function Get-AgentMinimumReviewCount {
+  param([Parameter(Mandatory = $true)][string]$Lane)
+  $policyPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'config/review-risk-policy.json'
+  $policy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json -Depth 10
+  $key = switch ($Lane) {
+    'RED' { 'CRITICAL' }
+    'YELLOW' { 'ELEVATED' }
+    'GREEN' { 'NORMAL' }
+    'BLACK' { 'CRITICAL' }
+    default { throw 'UNKNOWN_REVIEW_RISK_LANE' }
+  }
+  $count = [int]$policy.finalCertificationCount.$key
+  if ($count -ne 1 -and $count -ne 2) { throw 'INVALID_REVIEW_POLICY_COUNT' }
+  return $count
 }
 
 . (Join-Path $PSScriptRoot 'agent-review-evidence.ps1')
@@ -315,6 +348,7 @@ function Get-AgentEvidenceTransportError {
   # the gate treats any non-null return as unsatisfied independent review.
   if ([string]$transportError -eq 'independent_review_stale_for_head') { return 'autonomous_review_evidence_stale_for_head' }
   if ([string]$transportError -eq 'independent_review_handoff_not_published') { return 'autonomous_review_evidence_handoff_not_published' }
+  if ([string]$transportError -eq 'independent_review_unresolved_block') { return 'autonomous_review_evidence_unresolved_block' }
   # Legacy transport errors keep their historical dispositions so existing
   # fixtures and callers are unchanged.
   $disposition = Test-AgentEvidenceTransportStub -Document $Document
@@ -327,7 +361,8 @@ function Get-AgentIndependentReviewSummary {
     [Parameter(Mandatory = $true)][bool]$IndependentReviewSatisfied,
     [Parameter(Mandatory = $true)][bool]$RequiredChecksGreen,
     [Parameter(Mandatory = $true)][int]$RequiredCheckCount,
-    [AllowEmptyCollection()][string[]]$EvidenceErrors = @()
+    [AllowEmptyCollection()][string[]]$EvidenceErrors = @(),
+    [bool]$IndependentRequired = $true
   )
   # Only speak up when CI is green and the single remaining gap is the
   # exact-head independent certification. Never changes merge readiness.
@@ -345,6 +380,7 @@ function Get-AgentIndependentReviewSummary {
   foreach ($entry in $mapping) {
     if (@($EvidenceErrors) -contains $entry.Error) { $cause = $entry.Text; break }
   }
+  if (-not $IndependentRequired) { return "Implementation CI is green. Custom independent review evidence is advisory and does not block readiness. ($cause)" }
   return "Implementation CI is green. Waiting for exact-head final independent certification. ($cause)"
 }
 
@@ -364,4 +400,4 @@ function Get-AgentReviewPolicyVerdict {
   }
 }
 
-Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Get-AgentRiskLane, Test-AgentAutonomousReviewEvidence, Test-AgentControllerReviewEvidenceBundle, Test-AgentIndependentReviewEvidenceV3, Test-AgentHostReviewBundleV3, Get-AgentPropertyNames, Get-AgentRequiredCheckAuthority, Test-AgentEvidenceTransportStub, Get-AgentEvidenceTransportError, Get-AgentIndependentReviewSummary, Select-AgentHostReviewBundle
+Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Get-AgentExactDiffCoverage, Get-AgentRiskLane, Get-AgentMinimumReviewCount, Test-AgentAutonomousReviewEvidence, Test-AgentControllerReviewEvidenceBundle, Test-AgentIndependentReviewEvidenceV3, Test-AgentHostReviewBundleV3, Get-AgentPropertyNames, Get-AgentRequiredCheckAuthority, Test-AgentEvidenceTransportStub, Get-AgentEvidenceTransportError, Get-AgentIndependentReviewSummary, Select-AgentHostReviewBundle

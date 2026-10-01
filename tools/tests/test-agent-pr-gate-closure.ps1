@@ -45,9 +45,14 @@ $base = 'b' * 40
 $expectedDigest = 'd' * 64
 
 try {
-  $gateAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../../scripts/agent-pr-gate.ps1'), [ref]$null, [ref]$null)
-  $floorAssignments = @($gateAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$minimumReviewCount' }, $true))
-  Assert-ClosureGate ($floorAssignments.Count -eq 1 -and $floorAssignments[0].Right.Extent.Text -eq '1') 'all mergeable risk lanes require one independent review'
+  Assert-ClosureGate ((Get-AgentMinimumReviewCount -Lane GREEN) -eq 1) 'normal changes require one reviewer'
+  Assert-ClosureGate ((Get-AgentMinimumReviewCount -Lane YELLOW) -eq 2) 'elevated changes require two reviewers'
+  Assert-ClosureGate ((Get-AgentMinimumReviewCount -Lane RED) -eq 2) 'critical changes require two reviewers'
+  Assert-ClosureGate ((Get-AgentMinimumReviewCount -Lane BLACK) -eq 2) 'blocked scope retains two-review floor'
+  $unknownLaneRejected = $false
+  try { $null = Get-AgentMinimumReviewCount -Lane UNKNOWN } catch { $unknownLaneRejected = $true }
+  Assert-ClosureGate $unknownLaneRejected 'unknown review lane must fail closed'
+  Assert-ClosureGate ((Get-AgentRiskLane -ChangedPaths @('tools/babel-pr-orchestrate.mts')) -eq 'RED') 'review control paths are critical in the installed gate'
   $trustedAuthority = Get-AgentRequiredCheckAuthority -RequiredName 'trusted-control-plane'
   Assert-ClosureGate ([bool]$trustedAuthority.configured) 'trusted-control-plane must have a configured producer'
   Assert-ClosureGate ($trustedAuthority.event -eq 'pull_request_target') 'trusted-control-plane must use pull_request_target'
@@ -125,53 +130,10 @@ try {
     schema_version = 2; kind = 'github_host_review_bundle_v2'
     repository = 'gthgomez/Babel'; pr_number = 152; base_sha = $base; head_sha = $head
     publisher_id = '91163862'; comment_id = '42'
-    handoff = [pscustomobject][ordered]@{
-      schema_version = 2; kind = 'host_review_handoff_v2'; repository = 'gthgomez/Babel'; pr_number = 152; base_sha = $base; head_sha = $head
-      task_id = 'task-152'; task_hash = ('e' * 64); controller_run_id = 'controller-run-152'; reviews = @($validEvidence)
-    }
+    handoff = [pscustomobject]@{ schema_version = 2; kind = 'host_review_handoff_v2' }
   }
-  $bundleResult = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 1 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')
-  Assert-ClosureGate ([bool]$bundleResult.valid -and $bundleResult.reviewCount -eq 1) 'YELLOW review must require controller-owned exact-head evidence'
-  $redBundle = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 2 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')
-  Assert-ClosureGate (-not [bool]$redBundle.valid -and @($redBundle.errors) -contains 'controller_review_bundle_insufficient_or_excess_reviews') 'the evidence validator must enforce its caller-selected review minimum'
-
-  $chatArgs = @{ Repository = 'gthgomez/Babel'; PR = 152; BaseSha = $base; HeadSha = $head; BuilderIdentity = 'codex-implementation'; ExpectedNumstatDigest = $expectedDigest; MinimumReviewCount = 1; PublisherId = '91163862'; ExpectedScope = @('scripts/agent-pr-gate.ps1'); RequireBabelChat = $true }
-  $noChat = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle @chatArgs
-  Assert-ClosureGate (-not $noChat.valid -and $noChat.errors -contains 'controller_review_bundle_babel_chat_required') 'legacy text-only review cannot satisfy the new chat gate'
-  $chatBundle = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-  $chatBundle.handoff.reviews[0].isolation.mode = 'readonly_sandbox'
-  $chatBundle.handoff.reviews[0] | Add-Member harness ([pscustomobject]@{ name = 'babel'; mode = 'chat'; version = ('f' * 64); source_sha = $base; execution_id = 'execution-152-a' })
-  $chatResult = Test-AgentControllerReviewEvidenceBundle -Bundle $chatBundle @chatArgs
-  Assert-ClosureGate ($chatResult.valid -and $chatResult.babelChatReviewCount -eq 1) 'one valid Babel chat review must satisfy the ordinary PR floor'
-  # The base gate must pin the provider, not just require a non-empty one: a
-  # claude-code review wearing a Babel harness block is still not Babel chat.
-  $claudeProvider = $chatBundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-  $claudeProvider.handoff.reviews[0].review_provider = 'claude-code'
-  $claudeProviderResult = Test-AgentControllerReviewEvidenceBundle -Bundle $claudeProvider @chatArgs
-  Assert-ClosureGate (-not $claudeProviderResult.valid -and @($claudeProviderResult.errors) -contains 'autonomous_evidence_review_provider_not_babel') 'a non-OpenCode-Go provider cannot claim the Babel chat harness'
-  Assert-ClosureGate ($claudeProviderResult.babelChatReviewCount -eq 0) 'a rejected non-Babel provider must not count as Babel chat evidence'
-  foreach ($mutation in @(
-      @{ Field = 'mode'; Value = 'deep' }, @{ Field = 'name'; Value = 'direct-api' },
-      @{ Field = 'version'; Value = 'UNKNOWN' }, @{ Field = 'source_sha'; Value = 'main' },
-      @{ Field = 'source_sha'; Value = $head },
-      @{ Field = 'execution_id'; Value = 'another-execution' }, @{ Field = 'invented'; Value = 'field' }
-    )) {
-    $invalid = $chatBundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-    $invalid.handoff.reviews[0].harness | Add-Member -Force $mutation.Field $mutation.Value
-    $invalidResult = Test-AgentControllerReviewEvidenceBundle -Bundle $invalid @chatArgs
-    Assert-ClosureGate (-not $invalidResult.valid -and $invalidResult.babelChatReviewCount -eq 0) "invalid harness $($mutation.Field) must not count as chat evidence"
-  }
-  $invalidIsolation = $chatBundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-  $invalidIsolation.handoff.reviews[0].isolation.mode = 'text_only_no_tools'
-  Assert-ClosureGate (-not (Test-AgentControllerReviewEvidenceBundle -Bundle $invalidIsolation @chatArgs).valid) 'text-only isolation cannot claim a chat harness run'
-  $missing = $chatBundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-  $missing.handoff.reviews = @()
-  Assert-ClosureGate (-not (Test-AgentControllerReviewEvidenceBundle -Bundle $missing @chatArgs).valid) 'zero reviews must fail even for ordinary GREEN PRs'
-  $second = $validEvidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-  $second.execution_id = 'execution-152-b'; $second.reviewer_id = 'second-independent-perspective'
-  $chatBundle.handoff.reviews += $second
-  $chatArgs.MinimumReviewCount = 2
-  Assert-ClosureGate ((Test-AgentControllerReviewEvidenceBundle -Bundle $chatBundle @chatArgs).valid) 'RED may combine one Babel chat review with a distinct independent perspective'
+  $legacyResult = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 1 -PublisherId '91163862'
+  Assert-ClosureGate (-not $legacyResult.valid -and @($legacyResult.errors) -contains 'legacy_v2_review_unsupported') 'V2 cannot satisfy the V3-only merge gate'
 
   $evidenceCases = @(
     @{ Name = 'null evidence'; Value = $null; Error = 'autonomous_evidence_malformed' }
@@ -232,6 +194,13 @@ try {
       requested_model = 'gpt-5-codex'
       observed_model = 'gpt-5-codex'
       model_attribution = 'observed'
+      provider_execution_id = 'codex-child-session-1'
+      session_id = 'codex-child-session-1'
+      parent_execution_id = 'codex-builder-e1'
+      source_sha = $base
+      fresh_context = $true
+      fresh_process = $true
+      read_only_enforced = $true
     }
     review_mode = 'exact_diff'
     execution_purpose = 'FINAL_CERTIFICATION'
@@ -240,6 +209,14 @@ try {
     verdict = 'APPROVE'
     findings = @()
     blocking_findings = @()
+    coverage = [pscustomobject][ordered]@{
+      diff_consumed = $true
+      diff_sha256 = ('f' * 64)
+      diff_lines_total = 2
+      diff_lines_read = 2
+      changed_paths = 1
+      source_paths_opened = @()
+    }
     isolation = [pscustomobject][ordered]@{
       candidate_write = $false
       github_mutation = $false
@@ -251,6 +228,52 @@ try {
   # Accept: same kind (Codex A -> Codex B) with distinct principal and execution
   $v3Result = Test-AgentIndependentReviewEvidenceV3 -Evidence $validV3Evidence -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest -ExpectedCandidateDigest $candDigest -ExpectedScope @('scripts/agent-pr-gate.ps1')
   Assert-ClosureGate ($v3Result.valid) 'V3 must accept same agent kind when principal and execution are distinct'
+
+  $firstCross = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $firstCross.runtime.provider_execution_id = 'observed-execution-a'
+  $firstCross.runtime.session_id = 'observed-session-a'
+  $secondCross = $firstCross | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $secondCross.reviewer.principal_id = 'codex-reviewer-p3'
+  $secondCross.reviewer.execution_id = 'codex-reviewer-e3'
+  $secondCross.runtime.controller_execution_id = 'codex-reviewer-e3'
+  $secondCross.challenge_id = 'challenge-152-b'
+  $secondCross.runtime.provider_execution_id = 'observed-session-a'
+  $secondCross.runtime.session_id = 'observed-session-b'
+  $crossBundle = [pscustomobject][ordered]@{
+    schema_version = 3; kind = 'github_host_review_bundle_v3'; repository = 'gthgomez/Babel'
+    pr_number = 152; base_sha = $base; head_sha = $head; publisher_id = '91163862'; comment_id = '10'
+    handoff = [pscustomobject][ordered]@{
+      schema_version = 3; kind = 'host_review_handoff_v3'; repository = 'gthgomez/Babel'
+      pr_number = 152; base_sha = $base; head_sha = $head; candidate_digest = $candDigest
+      diff_numstat_digest = $expectedDigest; task_id = $firstCross.task_id; task_hash = $firstCross.task_hash
+      controller_run_id = $firstCross.controller_run_id; reviews = @($firstCross, $secondCross)
+    }
+  }
+  $crossResult = Test-AgentHostReviewBundleV3 -Bundle $crossBundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 2 -PublisherId '91163862' -ExpectedCandidateDigest $candDigest -ExpectedScope @('scripts/agent-pr-gate.ps1')
+  Assert-ClosureGate (-not $crossResult.valid -and @($crossResult.errors) -contains 'controller_review_bundle_observed_child_not_distinct') 'V3 must reject observed execution reused as another slot session'
+
+  $missingTrustedSource = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $missingTrustedSource.runtime.PSObject.Properties.Remove('source_sha')
+  $missingSourceResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $missingTrustedSource -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
+  Assert-ClosureGate (-not $missingSourceResult.valid -and @($missingSourceResult.errors) -contains 'independent_evidence_trusted_source_required') 'V3 must require trusted controller source for Babel'
+
+  $wrongLiveDiff = Test-AgentIndependentReviewEvidenceV3 -Evidence $validV3Evidence -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest -ExpectedDiffSha256 ('0' * 64) -ExpectedDiffLines 2
+  Assert-ClosureGate (-not $wrongLiveDiff.valid -and @($wrongLiveDiff.errors) -contains 'independent_evidence_live_diff_mismatch') 'V3 must bind coverage to the live exact diff'
+
+  $invalidCoverage = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $invalidCoverage.coverage.diff_lines_total = 'not-a-number'
+  $invalidCoverageResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $invalidCoverage -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
+  Assert-ClosureGate (-not $invalidCoverageResult.valid -and @($invalidCoverageResult.errors) -contains 'independent_evidence_full_diff_coverage_required') 'V3 must reject malformed diff coverage without throwing'
+
+  $staleContext = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $staleContext.runtime.fresh_context = $false
+  $staleContextResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $staleContext -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
+  Assert-ClosureGate (-not $staleContextResult.valid -and @($staleContextResult.errors) -contains 'independent_evidence_fresh_readonly_required') 'V3 must require observed fresh context'
+
+  $missingFreshProcess = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $missingFreshProcess.runtime.PSObject.Properties.Remove('fresh_process')
+  $missingFreshProcessResult = Test-AgentIndependentReviewEvidenceV3 -Evidence $missingFreshProcess -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest
+  Assert-ClosureGate (-not $missingFreshProcessResult.valid -and @($missingFreshProcessResult.errors) -contains 'independent_evidence_fresh_process_required') 'V3 must require observed fresh process'
 
   # Accept: different kind (Codex -> Claude)
   $claudeV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
@@ -287,8 +310,8 @@ try {
 
   # Reject: external agent claiming opencode-go
   $forgedProvider = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-  $forgedProvider.runtime.observed_provider = 'opencode-go'
-  Assert-ClosureGate (-not (Test-AgentIndependentReviewEvidenceV3 -Evidence $forgedProvider -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest).valid) 'V3 must reject external agent claiming opencode-go'
+  $forgedProvider.runtime.agent_kind = 'babel'
+  Assert-ClosureGate (-not (Test-AgentIndependentReviewEvidenceV3 -Evidence $forgedProvider -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -ExpectedNumstatDigest $expectedDigest).valid) 'V3 must reject runtime family mismatch'
 
   # Reject: APPROVE with blocking findings
   $blockApproval = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
@@ -360,10 +383,13 @@ try {
   $secondV3 = $validV3Evidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
   $secondV3.reviewer.principal_id = 'claude-p2'
   $secondV3.reviewer.execution_id = 'claude-e2'
+  $secondV3.reviewer.kind = 'claude-code'
   $secondV3.challenge_id = 'challenge-152-b'
   $secondV3.runtime.agent_kind = 'claude-code'
   $secondV3.runtime.adapter_id = 'claude-cli-v1'
   $secondV3.runtime.controller_execution_id = 'claude-e2'
+  $secondV3.runtime.provider_execution_id = 'claude-child-session-2'
+  $secondV3.runtime.session_id = 'claude-child-session-2'
   $secondV3.runtime.observed_provider = 'anthropic'
   $v3BundleEscalated = $v3Bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
   $v3BundleEscalated.handoff.reviews += $secondV3
@@ -374,6 +400,9 @@ try {
   $dupBundle = $v3BundleEscalated | ConvertTo-Json -Depth 30 | ConvertFrom-Json
   $dupBundle.handoff.reviews[1].reviewer.principal_id = $dupBundle.handoff.reviews[0].reviewer.principal_id
   Assert-ClosureGate (-not (Test-AgentControllerReviewEvidenceBundle -Bundle $dupBundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 2 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')).valid) 'V3 bundle must reject duplicate reviewer principal in 2-review escalation'
+  $sameObserved = $v3BundleEscalated | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $sameObserved.handoff.reviews[1].runtime.provider_execution_id = $sameObserved.handoff.reviews[0].runtime.provider_execution_id
+  Assert-ClosureGate (-not (Test-AgentControllerReviewEvidenceBundle -Bundle $sameObserved -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 2 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')).valid) 'V3 bundle must reject reused observed child execution'
 
   # Public comment handoff (provenance stripped per publicIndependentReviewHandoffV3)
   $publicHandoff = $v3Bundle.handoff | ConvertTo-Json -Depth 30 | ConvertFrom-Json

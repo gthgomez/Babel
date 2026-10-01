@@ -47,6 +47,7 @@ Read these **after** you can start a session — or when integrating/contributin
 - [Autonomy policy changelog](./AUTONOMY_POLICY_CHANGELOG.md) — policy refactor review record
 - [Portable agent workflow plan](./guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) — proposed cross-harness contract; subordinate to `harness-v1`
 - [Agent Git operations](./guides/AGENT_GIT_OPERATIONS.md) — worktrees, exact-SHA PR gate, non-interactive `gh`
+- [Policy integrity](./guides/POLICY_INTEGRITY.md) — bounded text drift detection, manifest schema and checkout normalization
 - [CONTRIBUTING.md](../CONTRIBUTING.md)
 
 ## Campaigns & stewardship

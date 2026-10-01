@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
 
 import {
+  registerExclusiveTerminalRunner,
   registerReadlineInterface,
   stdinCoordinatorPauseForRun,
   stdinCoordinatorResumeAfterRun,
@@ -70,6 +71,33 @@ test('withPausedStdin pauses and resumes a registered readline', async () => {
   assert.equal(result, 42);
   assert.equal(sawPaused, true);
   assert.equal(mock.isPaused(), false);
+});
+
+test('exclusive terminal surfaces delegate to the hosted shell boundary', async () => {
+  const { withExclusiveTerminalSurface } = await import('./inputCoordinator.js');
+  let active = false;
+  let reason = '';
+  const cleanup = registerExclusiveTerminalRunner(async (surfaceReason, work) => {
+    active = true;
+    reason = surfaceReason;
+    try {
+      return await work();
+    } finally {
+      active = false;
+    }
+  });
+
+  try {
+    const result = await withExclusiveTerminalSurface('approval-dialog', async () => {
+      assert.equal(active, true);
+      return 42;
+    });
+    assert.equal(result, 42);
+    assert.equal(reason, 'approval-dialog');
+    assert.equal(active, false);
+  } finally {
+    cleanup();
+  }
 });
 
 test('drainStdinResiduals is safe to call when stdin has no buffered data', async () => {

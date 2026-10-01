@@ -13,7 +13,8 @@ $env:GIT_ALLOW_PROTOCOL = 'file'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
-$git = Join-Path $env:ProgramFiles 'Git\cmd\git.exe'
+$gitCandidate = 'C:\Program Files\Git\cmd\git.exe'
+$git = if (Test-Path -LiteralPath $gitCandidate -PathType Leaf) { $gitCandidate } else { (Get-Command git -ErrorAction Stop).Source }
 $tempRoot = Join-Path $repoRoot ('.tmp-agent-git-readiness-' + [Guid]::NewGuid().ToString('N'))
 $fakeGh = Join-Path $tempRoot 'fake-gh.ps1'
 $fakeGhAuthFailure = Join-Path $tempRoot 'fake-gh-auth-failure.ps1'
@@ -56,6 +57,46 @@ function Invoke-TestScript {
   }
 }
 
+function Get-FixtureExactDiffCoverage {
+  param(
+    [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+    [Parameter(Mandatory = $true)][string]$BaseSha,
+    [Parameter(Mandatory = $true)][string]$HeadSha
+  )
+  # Mirror the hash/line computation in scripts/agent-pr-gate-common.psm1
+  # Get-AgentExactDiffCoverage so the fixture's claimed coverage matches the
+  # gate's live diff. Unlike production, this fixture copy omits the 100MB
+  # EXACT_DIFF_TOO_LARGE size guard; the byte hashing and line counting match.
+  $start = [Diagnostics.ProcessStartInfo]::new()
+  $start.FileName = $git
+  $start.WorkingDirectory = $WorkingDirectory
+  $start.UseShellExecute = $false
+  $start.RedirectStandardOutput = $true
+  $start.RedirectStandardError = $true
+  foreach ($arg in @('diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', "$BaseSha...$HeadSha")) {
+    [void]$start.ArgumentList.Add($arg)
+  }
+  $process = [Diagnostics.Process]::Start($start)
+  try {
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $buffer = [IO.MemoryStream]::new()
+    try {
+      $process.StandardOutput.BaseStream.CopyTo($buffer)
+      $process.WaitForExit()
+      if ($process.ExitCode -ne 0) { throw "EXACT_DIFF_UNAVAILABLE: $($stderr.GetAwaiter().GetResult())" }
+      $bytes = $buffer.ToArray()
+      $hash = [Security.Cryptography.SHA256]::HashData($bytes)
+      $lines = 0
+      foreach ($byte in $bytes) { if ($byte -eq 10) { $lines++ } }
+      if ($bytes.Length -gt 0 -and $bytes[$bytes.Length - 1] -ne 10) { $lines++ }
+      return [pscustomobject]@{
+        sha256 = ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+        lines = $lines
+      }
+    } finally { $buffer.Dispose() }
+  } finally { $process.Dispose() }
+}
+
 try {
   New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
   Invoke-TestGit -WorkingDirectory $tempRoot -Arguments @('init', '--bare', '--initial-branch=main', $remote) | Out-Null
@@ -69,7 +110,7 @@ try {
   $mainSha = Invoke-TestGit -WorkingDirectory $fixture -Arguments @('rev-parse', 'HEAD')
   Copy-Item -Path (Join-Path $fixture '.git\objects\*') -Destination (Join-Path $remote 'objects') -Recurse -Force
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('remote', 'add', 'origin', 'https://github.com/gthgomez/Babel.git') | Out-Null
-  $mappedRemote = 'file:///' + ([IO.Path]::GetFullPath($remote)).Replace('\', '/')
+  $mappedRemote = if ($IsWindows) { 'file:///' + ([IO.Path]::GetFullPath($remote)).Replace('\', '/') } else { 'file://' + [IO.Path]::GetFullPath($remote) }
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', "url.$mappedRemote.insteadOf", 'https://github.com/gthgomez/Babel.git') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--add', "url.$mappedRemote.insteadOf", 'https://github.com/gthgomez/Babel') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', 'protocol.file.allow', 'always') | Out-Null
@@ -166,32 +207,59 @@ try {
   $numstat = Invoke-TestGit -WorkingDirectory $fixture -Arguments @('diff', '--no-ext-diff', '--no-textconv', '--numstat', "$mainSha...$headSha")
   $canonicalNumstat = (($numstat -split '\r?\n' | Sort-Object) -join "`n")
   $numstatDigest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($canonicalNumstat))).ToLowerInvariant()
+  # V3 independent-agent review evidence. The owner-authenticated host handoff
+  # wraps one independent_agent_review_v3 that binds the exact diff, and the
+  # cached bundle must byte-match what Select-AgentHostReviewBundle reconstructs
+  # from the live owner comment.
+  $candidateDigest = ('c' * 64)
+  $exactDiff = Get-FixtureExactDiffCoverage -WorkingDirectory $fixture -BaseSha $mainSha -HeadSha $headSha
   $review = [ordered]@{
-    schema_version = 2; kind = 'autonomous_review_evidence_v2'
+    schema_version = 3; kind = 'independent_agent_review_v3'
+    provenance = 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'
     repository = 'gthgomez/Babel'; pr_number = 42; base_sha = $mainSha; head_sha = $headSha
-    task_id = 'fixture-task-42'; task_hash = ('a' * 64); builder_id = 'codex-implementation'
-    diff_numstat_digest = $numstatDigest; reviewer_id = 'babel-chat-fixture-independent-reviewer'
-    reviewer_class = 'independent_readonly_ai'; execution_id = 'fixture-review-42'
-    review_provider = 'opencode-go'; reviewer_model = 'mimo-v2.5'; review_mode = 'exact_diff'
+    candidate_digest = $candidateDigest; diff_numstat_digest = $numstatDigest
+    task_id = 'fixture-task-42'; task_hash = ('a' * 64)
+    builder = [ordered]@{ kind = 'codex'; principal_id = 'codex-builder-p1'; execution_id = 'codex-builder-e1' }
+    reviewer = [ordered]@{ kind = 'codex'; principal_id = 'codex-reviewer-p2'; execution_id = 'codex-reviewer-e2' }
+    controller_run_id = 'fixture-controller-42'; challenge_id = 'challenge-42-a'
+    runtime = [ordered]@{
+      agent_kind = 'codex'; adapter_id = 'codex-subagent-v1'
+      controller_execution_id = 'codex-reviewer-e2'; execution_purpose = 'FINAL_CERTIFICATION'
+      requested_provider = 'openai'; observed_provider = 'openai'
+      requested_model = 'gpt-5-codex'; observed_model = 'gpt-5-codex'; model_attribution = 'observed'
+      provider_execution_id = 'codex-child-session-1'; session_id = 'codex-child-session-1'
+      parent_execution_id = 'codex-builder-e1'; source_sha = $mainSha
+      fresh_context = $true; fresh_process = $true; read_only_enforced = $true
+    }
+    review_mode = 'exact_diff'; execution_purpose = 'FINAL_CERTIFICATION'
     reviewed_at = [DateTimeOffset]::UtcNow.ToString('o'); scope = @('change.txt')
     verdict = 'APPROVE'; findings = @(); blocking_findings = @()
-    isolation = [ordered]@{ mode = 'readonly_sandbox'; candidate_write = $false; github_mutation = $false; merge = $false; controller_state_access = $false }
-    harness = [ordered]@{ name = 'babel'; mode = 'chat'; version = ('b' * 64); source_sha = $mainSha; execution_id = 'fixture-review-42' }
+    coverage = [ordered]@{
+      diff_consumed = $true; diff_sha256 = $exactDiff.sha256
+      diff_lines_total = $exactDiff.lines; diff_lines_read = $exactDiff.lines
+      changed_paths = 1; source_paths_opened = @()
+    }
+    isolation = [ordered]@{ candidate_write = $false; github_mutation = $false; merge = $false; controller_state_access = $false }
   }
   $handoff = [ordered]@{
-    schema_version = 2; kind = 'host_review_handoff_v2'; repository = 'gthgomez/Babel'; pr_number = 42
-    base_sha = $mainSha; head_sha = $headSha; task_id = 'fixture-task-42'; task_hash = ('a' * 64)
+    schema_version = 3; kind = 'host_review_handoff_v3'
+    provenance = 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'
+    repository = 'gthgomez/Babel'; pr_number = 42; base_sha = $mainSha; head_sha = $headSha
+    candidate_digest = $candidateDigest; diff_numstat_digest = $numstatDigest
+    task_id = 'fixture-task-42'; task_hash = ('a' * 64)
     controller_run_id = 'fixture-controller-42'; reviews = @($review)
   }
   $evidencePath = Join-Path $tempRoot 'pr-42.ai-reviews.json'
   [ordered]@{
-    schema_version = 2; kind = 'github_host_review_bundle_v2'; repository = 'gthgomez/Babel'; pr_number = 42
-    base_sha = $mainSha; head_sha = $headSha; publisher_id = '91163862'; comment_id = '4242'; handoff = $handoff
-  } | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $evidencePath -Encoding utf8
+    schema_version = 3; kind = 'github_host_review_bundle_v3'
+    repository = 'gthgomez/Babel'; pr_number = 42; base_sha = $mainSha; head_sha = $headSha
+    candidate_digest = $candidateDigest; publisher_id = '91163862'; comment_id = '4242'
+    provenance = 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'; handoff = $handoff
+  } | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $evidencePath -Encoding utf8
   $reviewComment = [ordered]@{
     id = 4242; user = [ordered]@{ id = 91163862; type = 'User'; login = 'gthgomez' }
     issue_url = 'https://api.github.com/repos/gthgomez/Babel/issues/42'
-    body = '<!-- babel-controller-ai-reviews-v2 -->' + ($handoff | ConvertTo-Json -Depth 30 -Compress)
+    body = '<!-- babel-controller-independent-review-v3 -->' + ($handoff | ConvertTo-Json -Depth 40 -Compress)
   }
   $commentsPath = Join-Path $tempRoot 'pr-42-comments.json'
   ConvertTo-Json -InputObject @($reviewComment) -Depth 40 | Set-Content -LiteralPath $commentsPath -Encoding utf8
@@ -230,13 +298,28 @@ try {
   Assert-AgentTest ([bool]$gate.checks.CI_HEAD_MATCH) 'PR gate should bind CI to PR head'
   Assert-AgentTest ([bool]$gate.checks.REQUIRED_CHECKS_GREEN) 'PR gate should require all configured checks'
   Assert-AgentTest ([bool]$gate.checks.BASE_NOT_INVALIDATED) 'PR gate should verify the base SHA'
-  Assert-AgentTest ([bool]$gate.reviewPolicy.independentReviewRequired -and $gate.reviewPolicy.minimumIndependentReviewCount -eq 1) 'GREEN PRs must require independent chat review'
+  Assert-AgentTest (-not [bool]$gate.reviewPolicy.independentReviewRequired -and $gate.reviewPolicy.minimumIndependentReviewCount -eq 1) 'custom review evidence is advisory; its validator retains one-review floor'
   Assert-AgentTest ([bool]$gate.reviewPolicy.independentReviewSatisfied -and $gate.reviewPolicy.observedIndependentReviewCount -eq 1) 'PR gate should accept the owner-provenance chat fixture'
 
   $missingEvidenceRun = Invoke-TestScript -Script $prGateScript -Arguments $gateArguments
-  Assert-AgentTest ($missingEvidenceRun.exitCode -eq 1) 'GREEN PR without evidence must remain blocked'
+  Assert-AgentTest ($missingEvidenceRun.exitCode -eq 0) 'a green exact-head PR without custom evidence must be ready'
   $missingEvidence = $missingEvidenceRun.text | ConvertFrom-Json
-  Assert-AgentTest (@($missingEvidence.blockers) -contains 'independent_review_not_satisfied') 'missing evidence must identify the independent-review blocker'
+  Assert-AgentTest ($missingEvidence.status -eq 'MERGE_READY' -and -not [bool]$missingEvidence.reviewPolicy.independentReviewSatisfied) 'missing advisory evidence stays invalid without blocking readiness'
+  Assert-AgentTest (@($missingEvidence.reviewPolicy.independentReviewEvidenceErrors) -contains 'autonomous_review_evidence_missing') 'missing evidence diagnostic must remain visible'
+
+  $fakeGhHealthy = Get-Content -Raw -LiteralPath $fakeGh
+  try {
+    $fakeGhHealthy.Replace('"conclusion":"success"', '"conclusion":"failure"') | Set-Content -LiteralPath $fakeGh -Encoding utf8
+    $failedCiRun = Invoke-TestScript -Script $prGateScript -Arguments $gateArguments
+    $failedCi = $failedCiRun.text | ConvertFrom-Json
+    Assert-AgentTest ($failedCiRun.exitCode -eq 1 -and $failedCi.status -eq 'BLOCKED') 'failed required CI remains blocking without custom evidence'
+    Assert-AgentTest (-not [bool]$failedCi.checks.REQUIRED_CHECKS_GREEN) 'failed CI cannot be reported green'
+  } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
+  $malformedPath = Join-Path $tempRoot 'malformed-review.json'
+  '{malformed' | Set-Content -LiteralPath $malformedPath -Encoding utf8
+  $malformedRun = Invoke-TestScript -Script $prGateScript -Arguments ($gateArguments + @('-AutonomousReviewEvidencePath', $malformedPath))
+  $malformed = $malformedRun.text | ConvertFrom-Json
+  Assert-AgentTest ($malformedRun.exitCode -eq 0 -and -not [bool]$malformed.reviewPolicy.independentReviewSatisfied) 'malformed advisory evidence stays invalid without blocking green readiness'
 
   $zeroSha = [string]::new('0', 40)
   $blockedRun = Invoke-TestScript -Script $prGateScript -Arguments @(

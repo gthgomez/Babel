@@ -11,9 +11,9 @@ export interface IndependenceDimensions {
   builder_identity: string;
   reviewer_identity: string;
   builder_model?: string;
-  reviewer_model: string;
+  reviewer_model?: string;
   builder_provider?: string;
-  reviewer_provider: string;
+  reviewer_provider?: string;
   trusted_harness: boolean;
   trusted_source_sha: string;
   installation_digest: string;
@@ -62,8 +62,8 @@ export function compareProviderLineage(builderProvider?: string, reviewerProvide
   return 'DIFFERENT';
 }
 
-export function computeIndependenceClass(dimensions: IndependenceDimensions): IndependenceClass {
-  // If builder and reviewer are identical or same non-isolated session/context: I0
+/** Execution isolation is the authority floor; model/provider lineage does not affect it. */
+export function computeExecutionIndependenceClass(dimensions: IndependenceDimensions): 'I0' | 'I1' | 'I2' {
   if (
     !dimensions.fresh_context ||
     !dimensions.read_only_capability ||
@@ -71,6 +71,13 @@ export function computeIndependenceClass(dimensions: IndependenceDimensions): In
   ) {
     return 'I0';
   }
+
+  return dimensions.fresh_process && dimensions.controller_state_isolated ? 'I2' : 'I1';
+}
+
+export function computeIndependenceClass(dimensions: IndependenceDimensions): IndependenceClass {
+  const executionClass = computeExecutionIndependenceClass(dimensions);
+  if (executionClass !== 'I2') return executionClass;
 
   const modelComp = compareModelLineage(dimensions.builder_model, dimensions.reviewer_model);
   const providerComp = compareProviderLineage(dimensions.builder_provider, dimensions.reviewer_provider);
@@ -102,13 +109,7 @@ export function computeIndependenceClass(dimensions: IndependenceDimensions): In
     return 'I3';
   }
 
-  // I2: Fresh process + read-only sandbox + independent review prompt
-  if (dimensions.fresh_process && dimensions.controller_state_isolated) {
-    return 'I2';
-  }
-
-  // I1: Fresh context, same general model family or non-isolated process
-  return 'I1';
+  return 'I2';
 }
 
 export function evaluateReviewerIndependence(
@@ -149,8 +150,8 @@ export function evaluateEnsembleIndependence(input: {
     };
   }
 
-  const distinctModels = [...new Set(reviews.map((r) => r.dimensions.reviewer_model))];
-  const distinctProviders = [...new Set(reviews.map((r) => r.dimensions.reviewer_provider))];
+  const distinctModels = [...new Set(reviews.map((r) => r.dimensions.reviewer_model).filter((value): value is string => !!value))];
+  const distinctProviders = [...new Set(reviews.map((r) => r.dimensions.reviewer_provider).filter((value): value is string => !!value))];
   const verifiedCount = input.verifiedFindingsCount ?? 0;
 
   const sessionIds = reviews.map((r) => r.dimensions.session_id?.trim()).filter((s): s is string => !!s);

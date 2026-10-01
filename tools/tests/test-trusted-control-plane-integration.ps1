@@ -7,9 +7,9 @@
 # executable so no network access is needed.
 #
 # Coverage:
-#   1. RED control-plane change + controller-owned reviews -> audit passes
-#   2. one exact Babel chat review satisfies every mergeable lane
-#   3. missing review evidence blocks deterministically
+#   1. RED control-plane change + two controller-owned V3 reviews -> audit passes
+#   2. one exact Babel chat review satisfies GREEN/NORMAL; RED/CRITICAL needs two
+#   3. missing or invalid optional evidence remains visibly invalid and advisory
 #   4. dirty candidate worktree blocks
 [CmdletBinding()]
 param(
@@ -21,6 +21,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $git = (Get-Command git -ErrorAction Stop).Source
+# Reuse the production coverage/digest/policy helpers so the fixture builds the
+# exact V3 shape the gate recomputes from live history.
+Import-Module (Join-Path $RepoRoot 'scripts/agent-pr-gate-common.psm1') -Force
+$minimumIndependentReviewCount = Get-AgentMinimumReviewCount -Lane $CandidateLane
 $root = Join-Path ([IO.Path]::GetTempPath()) ('babel-tcp-integration-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 $candidatePath = Join-Path $root 'candidate'
@@ -30,6 +34,17 @@ function Invoke-Step {
   param([string]$Name, [scriptblock]$Action)
   try { & $Action; Write-Output "ok $Name" }
   catch { $script:failures += $Name; Write-Output "FAIL $Name : $($_.Exception.Message)" }
+}
+
+# The gate's catch-all fallback omits reviewPolicy. Under StrictMode a direct
+# read masks the real failure, so surface the gate's own error instead.
+function Get-GateReviewPolicy {
+  param([Parameter(Mandatory = $true)]$Run)
+  if ($null -eq $Run.result -or -not $Run.result.PSObject.Properties['reviewPolicy']) {
+    $message = if ($null -ne $Run.result) { [string]$Run.result.errorMessage } else { 'no JSON result' }
+    throw "gate aborted: $message"
+  }
+  return $Run.result.reviewPolicy
 }
 
 try {
@@ -47,7 +62,7 @@ try {
   & $git -C $seedPath remote add origin $barePath
   & $git -C $seedPath commit --allow-empty -m 'previously merged installation' 2>&1 | Out-Null
   $previousInstallationSha = (& $git -C $seedPath rev-parse HEAD).Trim()
-  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-review-evidence.ps1', 'scripts/agent-git-common.psm1', 'scripts/trusted-merge-gate.ps1', 'scripts/materialize-independent-review-receipt.ps1')) {
+  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-review-evidence.ps1', 'scripts/agent-git-common.psm1', 'scripts/trusted-merge-gate.ps1', 'scripts/materialize-independent-review-receipt.ps1', 'config/review-risk-policy.json')) {
     $target = Join-Path $seedPath $relative
     New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $RepoRoot $relative) -Destination $target -Force
@@ -67,6 +82,7 @@ try {
   # ---- candidate commit changes the RED control plane (main stays at base) ----
   if ($CandidateLane -eq 'RED') {
     Add-Content -LiteralPath (Join-Path $seedPath 'scripts/agent-git-common.psm1') -Value '# candidate control-plane change' -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $seedPath 'scripts/agent-pr-gate.ps1') -Value "throw 'CANDIDATE_GATE_MUST_NOT_EXECUTE'" -Encoding utf8NoBOM
   }
   Set-Content -LiteralPath (Join-Path $seedPath 'feature.txt') -Value 'candidate feature' -Encoding utf8NoBOM
   & $git -C $seedPath add -A
@@ -77,61 +93,62 @@ try {
   & $git -C $seedPath checkout --detach HEAD 2>&1 | Out-Null
 
   # ---- controller review evidence computed against the fixture history ----
-  $sha256 = [System.Security.Cryptography.SHA256]::Create()
-
-  $numstat = @(& $git -C $seedPath diff --numstat ('{0}...{1}' -f $baseSha, $headSha) | ForEach-Object { [string]$_ })
-  $numstatCanonical = (($numstat | Sort-Object) -join "`n")
-  $numstatDigest = ([BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($numstatCanonical))) -replace '-', '').ToLowerInvariant()
+  # The gate recomputes scope, numstat digest and exact-diff coverage from the
+  # live candidate history, so build the fixture with the same helpers.
+  $scope = @(& $git -C $seedPath -c core.quotepath=false diff --no-ext-diff --no-textconv --name-only ('{0}...{1}' -f $baseSha, $headSha) |
+      ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $numstat = @(& $git -C $seedPath diff --no-ext-diff --no-textconv --numstat ('{0}...{1}' -f $baseSha, $headSha) | ForEach-Object { [string]$_ })
+  $numstatDigest = Get-AgentNumstatDigest -NumstatLines $numstat
+  $coverage = Get-AgentExactDiffCoverage -GitPath $git -RepoRoot $seedPath -BaseSha $baseSha -HeadSha $headSha
 
   $evidencePath = Join-Path $root 'ai-reviews.json'
 
   $taskHash = 'a' * 64
+  $candidateDigest = 'c' * 64
   $reviewedAt = [DateTimeOffset]::UtcNow.ToString('o')
-  $evidence = [ordered]@{
-    schema_version = 2
-    kind = 'autonomous_review_evidence_v2'
-    repository = 'gthgomez/Babel'
-    pr_number = 4242
-    base_sha = $baseSha
-    head_sha = $headSha
-    task_id = 'task-4242'
-    task_hash = $taskHash
-    reviewer_id = 'isolated-ai-reviewer'
-    reviewer_class = 'independent_readonly_ai'
-    review_mode = 'exact_diff'
-    execution_id = 'execution-101'
-    review_provider = 'opencode-go'
-    reviewer_model = 'deepseek-v4-flash'
-    reviewed_at = $reviewedAt
-    scope = @(if ($CandidateLane -eq 'RED') { 'scripts/agent-git-common.psm1'; 'feature.txt' } else { 'feature.txt' })
-    findings = @('example non-blocking finding')
-    blocking_findings = @()
-    verdict = 'APPROVE'
-    builder_id = 'codex-implementation'
-    diff_numstat_digest = $numstatDigest
-    isolation = [ordered]@{ mode = 'readonly_sandbox'; candidate_write = $false; github_mutation = $false; merge = $false; controller_state_access = $false }
-    harness = [ordered]@{ name = 'babel'; mode = 'chat'; version = ('c' * 64); source_sha = $baseSha; execution_id = 'execution-101' }
+  $builder = [ordered]@{ kind = 'codex'; principal_id = 'codex-builder-p1'; execution_id = 'codex-builder-e1' }
+  function New-V3Review {
+    param([string]$Suffix)
+    [ordered]@{
+      schema_version = 3; kind = 'independent_agent_review_v3'
+      repository = 'gthgomez/Babel'; pr_number = 4242; base_sha = $baseSha; head_sha = $headSha
+      candidate_digest = $candidateDigest; diff_numstat_digest = $numstatDigest
+      task_id = 'task-4242'; task_hash = $taskHash
+      builder = $builder
+      reviewer = [ordered]@{ kind = 'babel'; principal_id = "reviewer-$Suffix"; execution_id = "reviewer-e-$Suffix" }
+      controller_run_id = 'controller-run-4242'; challenge_id = "challenge-$Suffix"
+      runtime = [ordered]@{
+        agent_kind = 'babel'; adapter_id = 'babel-chat-v1'
+        controller_execution_id = "reviewer-e-$Suffix"; provider_execution_id = "child-$Suffix"; session_id = "child-$Suffix"
+        parent_execution_id = 'codex-builder-e1'; fresh_context = $true; read_only_enforced = $true
+        source_sha = $baseSha; execution_purpose = 'FINAL_CERTIFICATION'; fresh_process = $true
+      }
+      review_mode = 'exact_diff'; execution_purpose = 'FINAL_CERTIFICATION'
+      reviewed_at = $reviewedAt
+      scope = @($scope)
+      verdict = 'APPROVE'; findings = @(); blocking_findings = @()
+      isolation = [ordered]@{ candidate_write = $false; github_mutation = $false; merge = $false; controller_state_access = $false }
+      coverage = [ordered]@{ diff_consumed = $true; diff_sha256 = $coverage.sha256; diff_lines_total = $coverage.lines; diff_lines_read = $coverage.lines; changed_paths = @($scope).Count; source_paths_opened = @() }
+    }
   }
-  $secondEvidence = $evidence | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-  $secondEvidence.reviewer_id = 'isolated-adversarial-reviewer'
-  $secondEvidence.execution_id = 'execution-102'
-  $secondEvidence.harness.execution_id = 'execution-102'
   $handoff = [ordered]@{
-    schema_version = 2; kind = 'host_review_handoff_v2'
+    schema_version = 3; kind = 'host_review_handoff_v3'
     repository = 'gthgomez/Babel'; pr_number = 4242; base_sha = $baseSha; head_sha = $headSha
+    candidate_digest = $candidateDigest; diff_numstat_digest = $numstatDigest
     task_id = 'task-4242'; task_hash = $taskHash; controller_run_id = 'controller-run-4242'
-    reviews = @($evidence, $secondEvidence)
+    reviews = @((New-V3Review 'a'), (New-V3Review 'b'))
   }
   $bundle = [ordered]@{
-    schema_version = 2; kind = 'github_host_review_bundle_v2'
+    schema_version = 3; kind = 'github_host_review_bundle_v3'
     repository = 'gthgomez/Babel'; pr_number = 4242; base_sha = $baseSha; head_sha = $headSha
-    publisher_id = '91163862'; comment_id = '102'; handoff = $handoff
+    candidate_digest = $candidateDigest; publisher_id = '91163862'; comment_id = '102'
+    provenance = 'OWNER_AUTHENTICATED_GITHUB_EVIDENCE'; handoff = $handoff
   }
-  $bundle | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $evidencePath -Encoding utf8NoBOM
+  $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $evidencePath -Encoding utf8NoBOM
   @{ id = 102; user = @{ id = 91163862; login = 'gthgomez'; type = 'User' }
      issue_url = 'https://api.github.com/repos/gthgomez/Babel/issues/4242'
-     body = '<!-- babel-controller-ai-reviews-v2 -->' + ($handoff | ConvertTo-Json -Depth 20 -Compress)
-  } | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $root 'comment-102.json') -Encoding utf8NoBOM
+     body = '<!-- babel-controller-independent-review-v3 -->' + ($handoff | ConvertTo-Json -Depth 30 -Compress)
+  } | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath (Join-Path $root 'comment-102.json') -Encoding utf8NoBOM
 
   # ---- gh shim ----
   $shimDir = Join-Path $root 'shim'
@@ -197,8 +214,23 @@ Write-Output '{"message":"shim-default"}'
 exit 0
 '@
   Set-Content -LiteralPath (Join-Path $shimDir 'gh.ps1') -Value $shimScript -Encoding utf8NoBOM
-  # Batch wrapper so PATH resolution finds `gh` on Windows.
-  Set-Content -LiteralPath (Join-Path $shimDir 'gh.cmd') -Value ('@echo off' + "`r`n" + 'pwsh -NoProfile -NonInteractive -File "%~dp0gh.ps1" %*') -Encoding ascii
+  if ($IsWindows) {
+    # Batch wrapper so PATH resolution finds `gh` on Windows.
+    Set-Content -LiteralPath (Join-Path $shimDir 'gh.cmd') -Value ('@echo off' + "`r`n" + 'pwsh -NoProfile -NonInteractive -File "%~dp0gh.ps1" %*') -Encoding ascii
+  } else {
+    # POSIX wrapper so `Get-Command gh` resolves this shim ahead of any system
+    # gh, and so the shim runs as a child process (its `exit` must not end the
+    # gate). Build with explicit LF: this file may use CRLF, and a CR in the
+    # shebang makes the kernel fail to exec the shim.
+    $posixShim = @(
+      '#!/bin/sh'
+      'exec pwsh -NoProfile -NonInteractive -File "$(dirname "$0")/gh.ps1" "$@"'
+    ) -join "`n"
+    $posixShimPath = Join-Path $shimDir 'gh'
+    Set-Content -LiteralPath $posixShimPath -Value $posixShim -Encoding utf8NoBOM
+    & chmod +x $posixShimPath
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to mark the gh shim executable.' }
+  }
   $prView = [ordered]@{
     number = 4242; url = 'https://github.com/gthgomez/Babel/pull/4242'; state = 'OPEN'; isDraft = $false
     baseRefName = 'main'; baseRefOid = $baseSha; headRefName = 'candidate-head'; headRefOid = $headSha
@@ -223,7 +255,7 @@ exit 0
     foreach ($key in $Extra.Keys) { $argumentList += $key; $argumentList += $Extra[$key] }
     $env:TCP_TEST_ROOT = $root
     $previousPath = $env:PATH
-    $env:PATH = "$shimDir;$previousPath"
+    $env:PATH = "$shimDir$([IO.Path]::PathSeparator)$previousPath"
     # Mirror the trusted workflow environment so the gate's self-check
     # deferral for trusted-control-plane activates exactly as in CI.
     $env:GITHUB_ACTIONS = 'true'
@@ -255,7 +287,7 @@ exit 0
   function Invoke-Transport {
     $previousPath = $env:PATH
     $previousTestRoot = $env:TCP_TEST_ROOT
-    $env:PATH = "$shimDir;$previousPath"
+    $env:PATH = "$shimDir$([IO.Path]::PathSeparator)$previousPath"
     $env:TCP_TEST_ROOT = $root
     try {
       $transportDirectory = Join-Path $root 'transport'
@@ -278,7 +310,7 @@ exit 0
     $malformed = $validComment | ConvertTo-Json -Depth 30 | ConvertFrom-Json
     $malformed.id = 104
     $malformed.user = @{ id = 15368; login = 'github-actions[bot]'; type = 'Bot' }
-    $malformed.body = '<!-- babel-controller-ai-reviews-v2 -->{"head_sha":"missing-base"}'
+    $malformed.body = '<!-- babel-controller-independent-review-v3 -->{"head_sha":"missing-base"}'
     $stale = $validComment | ConvertTo-Json -Depth 30 | ConvertFrom-Json
     $stale.id = 105
     $stale.body = $stale.body.Replace($headSha, ('0' * 40))
@@ -291,29 +323,71 @@ exit 0
     if ($run.exitCode -ne 0) { throw "Transported evidence did not pass gate: $($run.result.blockers -join ',')" }
   }
 
-  # 1. positive: base-derived RED change with controller-owned reviews.
-  Invoke-Step 'red-controller-reviews-pass' {
+  # 1. positive: base-derived change with controller-owned V3 reviews.
+  Invoke-Step 'controller-reviews-pass' {
     $run = Invoke-Gate -Label 'positive' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath }
+    $policy = Get-GateReviewPolicy $run
     if ($run.exitCode -ne 0) { throw "exit=$($run.exitCode) blockers=$($run.result.blockers -join ',')" }
     if ($run.result.blockers.Count -ne 0) { throw "unexpected blockers: $($run.result.blockers -join ',')" }
-    if ($run.result.reviewPolicy.effectiveRiskLane -ne $CandidateLane) { throw "unexpected lane: $($run.result.reviewPolicy.effectiveRiskLane)" }
-    $minimum = 1
-    if (-not $run.result.reviewPolicy.independentReviewRequired -or $run.result.reviewPolicy.minimumIndependentReviewCount -ne $minimum) { throw 'Every PR must require proportionate independent chat review.' }
-    if ($run.result.reviewPolicy.observedIndependentReviewCount -ne 2) { throw 'the positive fixture must retain both valid reviews' }
+    if ($policy.effectiveRiskLane -ne $CandidateLane) { throw "unexpected lane: $($policy.effectiveRiskLane)" }
+    if ($policy.independentReviewRequired -or $policy.minimumIndependentReviewCount -ne $minimumIndependentReviewCount) { throw 'Custom certification must be advisory while retaining its optional validation floor.' }
+    if (-not $policy.independentReviewSatisfied) { throw 'Valid supplied evidence must remain valid.' }
+    if ($policy.observedIndependentReviewCount -ne 2) { throw 'the positive fixture must retain both valid reviews' }
+  }
+
+  Invoke-Step 'review-controller-run-id-mismatch-blocked' {
+    $changed = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $changed.handoff.reviews[0].controller_run_id = 'another-controller-run'
+    $validation = Test-AgentHostReviewBundleV3 -Bundle $changed -Repository gthgomez/Babel -PR 4242 `
+      -BaseSha $baseSha -HeadSha $headSha -ExpectedNumstatDigest $numstatDigest `
+      -MinimumReviewCount $minimumIndependentReviewCount -PublisherId '91163862' `
+      -ExpectedCandidateDigest $candidateDigest -ExpectedScope $scope `
+      -ExpectedDiffSha256 $coverage.sha256 -ExpectedDiffLines $coverage.lines
+    if ($validation.valid -or $validation.errors -notcontains 'controller_review_bundle_run_id_mismatch') {
+      throw 'A review from another controller run must not join this handoff.'
+    }
+  }
+
+  Invoke-Step 'builder-session-reuse-blocked' {
+    $changed = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $changed.handoff.reviews[0].runtime.session_id = $builder.execution_id
+    $validation = Test-AgentHostReviewBundleV3 -Bundle $changed -Repository gthgomez/Babel -PR 4242 `
+      -BaseSha $baseSha -HeadSha $headSha -ExpectedNumstatDigest $numstatDigest `
+      -MinimumReviewCount $minimumIndependentReviewCount -PublisherId '91163862' `
+      -ExpectedCandidateDigest $candidateDigest -ExpectedScope $scope `
+      -ExpectedDiffSha256 $coverage.sha256 -ExpectedDiffLines $coverage.lines
+    if ($validation.valid -or $validation.errors -notcontains 'independent_evidence_observed_child_identity_invalid') {
+      throw 'The builder session cannot be the observed reviewer session.'
+    }
+  }
+
+  Invoke-Step 'mixed-builder-handoff-blocked' {
+    $changed = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $changed.handoff.reviews[1].builder.execution_id = 'another-builder-execution'
+    $changed.handoff.reviews[1].runtime.parent_execution_id = 'another-builder-execution'
+    $validation = Test-AgentHostReviewBundleV3 -Bundle $changed -Repository gthgomez/Babel -PR 4242 `
+      -BaseSha $baseSha -HeadSha $headSha -ExpectedNumstatDigest $numstatDigest `
+      -MinimumReviewCount $minimumIndependentReviewCount -PublisherId '91163862' `
+      -ExpectedCandidateDigest $candidateDigest -ExpectedScope $scope `
+      -ExpectedDiffSha256 $coverage.sha256 -ExpectedDiffLines $coverage.lines
+    if ($validation.valid -or $validation.errors -notcontains 'controller_review_bundle_builder_mismatch') {
+      throw 'Reviews from different builders cannot share one controller run.'
+    }
   }
 
   foreach ($installationCase in @(
-      @{ Name = 'previously-merged-reviewer-pass'; Sha = $previousInstallationSha; Pass = $true },
-      @{ Name = 'unmerged-candidate-ancestor-reviewer-blocked'; Sha = $unmergedInstallationSha; Pass = $false },
-      @{ Name = 'missing-reviewer-source-blocked'; Sha = ('d' * 40); Pass = $false }
+      @{ Name = 'exact-base-controller-pass'; Sha = $baseSha; Pass = $true },
+      @{ Name = 'older-controller-invalid-advisory'; Sha = $previousInstallationSha; Pass = $false },
+      @{ Name = 'unmerged-candidate-ancestor-reviewer-invalid-advisory'; Sha = $unmergedInstallationSha; Pass = $false },
+      @{ Name = 'missing-reviewer-source-invalid-advisory'; Sha = ('d' * 40); Pass = $false }
     )) {
     Invoke-Step $installationCase.Name {
       $sourceBundle = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-      foreach ($review in $sourceBundle.handoff.reviews) { $review.harness.source_sha = $installationCase.Sha }
+      foreach ($review in $sourceBundle.handoff.reviews) { $review.runtime.source_sha = $installationCase.Sha }
       $sourcePath = Join-Path $root ('{0}.json' -f $installationCase.Name)
       $sourceBundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $sourcePath -Encoding utf8NoBOM
       $sourceComment = Get-Content -Raw (Join-Path $root 'comment-102.json') | ConvertFrom-Json
-      $sourceComment.body = '<!-- babel-controller-ai-reviews-v2 -->' + ($sourceBundle.handoff | ConvertTo-Json -Depth 30 -Compress)
+      $sourceComment.body = '<!-- babel-controller-independent-review-v3 -->' + ($sourceBundle.handoff | ConvertTo-Json -Depth 30 -Compress)
       $sourceComment | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
       try {
         $run = Invoke-Gate -Label $installationCase.Name -Extra @{ '-AutonomousReviewEvidencePath' = $sourcePath }
@@ -321,9 +395,9 @@ exit 0
         Get-Content -Raw (Join-Path $root 'comment-102.json') | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
       }
       if ($installationCase.Pass) {
-        if ($run.exitCode -ne 0) { throw 'Previously merged reviewer installation must remain eligible.' }
-      } elseif ($run.exitCode -eq 0 -or $run.result.reviewPolicy.independentReviewEvidenceErrors -notcontains 'autonomous_evidence_harness_source_not_in_trusted_base') {
-        throw 'Unmerged or unavailable installation must not satisfy trusted chat review.'
+        if ($run.exitCode -ne 0) { throw 'The exact base controller must remain eligible.' }
+      } elseif ($run.exitCode -ne 0 -or (Get-GateReviewPolicy $run).independentReviewSatisfied -or (Get-GateReviewPolicy $run).independentReviewEvidenceErrors -notcontains 'autonomous_evidence_controller_source_not_exact_base') {
+        throw 'An older, unmerged, or unavailable controller must not satisfy protected review.'
       }
     }
   }
@@ -347,51 +421,59 @@ exit 0
     if ($run.exitCode -eq 0) { throw 'Comment event unexpectedly satisfied the PR check.' }
   }
 
-  # 2. One exact Babel chat review satisfies every mergeable lane.
+  # 2. One exact Babel chat review satisfies GREEN/NORMAL; RED/CRITICAL requires
+  #    two reviews only to validate optional certification evidence.
   Invoke-Step 'one-review-pass' {
     $oneReviewPath = Join-Path $root 'ai-review-one.json'
-    $oneReviewBundle = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $oneReviewBundle = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
     $oneReviewBundle.comment_id = '106'
     $oneReviewBundle.handoff.reviews = @($oneReviewBundle.handoff.reviews[0])
-    $oneReviewBundle | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $oneReviewPath -Encoding utf8NoBOM
+    $oneReviewBundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $oneReviewPath -Encoding utf8NoBOM
     @{ id = 106; user = @{ id = 91163862; login = 'gthgomez'; type = 'User' }
        issue_url = 'https://api.github.com/repos/gthgomez/Babel/issues/4242'
-       body = '<!-- babel-controller-ai-reviews-v2 -->' + ($oneReviewBundle.handoff | ConvertTo-Json -Depth 20 -Compress)
-    } | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
+       body = '<!-- babel-controller-independent-review-v3 -->' + ($oneReviewBundle.handoff | ConvertTo-Json -Depth 30 -Compress)
+    } | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
     try {
       $run = Invoke-Gate -Label 'one-review' -Extra @{ '-AutonomousReviewEvidencePath' = $oneReviewPath }
     } finally {
       Get-Content -Raw (Join-Path $root 'comment-102.json') | Set-Content -LiteralPath (Join-Path $root 'comments.json') -Encoding utf8NoBOM
     }
-    if ($run.exitCode -ne 0) { throw 'One valid Babel chat review must satisfy every mergeable review lane.' }
+    if ($CandidateLane -eq 'RED') {
+      if ($run.exitCode -ne 0 -or (Get-GateReviewPolicy $run).independentReviewSatisfied) { throw 'Insufficient optional evidence must remain invalid without blocking readiness.' }
+      $policy = Get-GateReviewPolicy $run
+      if ($policy.independentReviewEvidenceErrors -notcontains 'controller_review_bundle_insufficient_or_excess_reviews') {
+        throw "blockers=$($run.result.blockers -join ',') errors=$($policy.independentReviewEvidenceErrors -join ',')"
+      }
+    } elseif ($run.exitCode -ne 0) {
+      throw "One valid Babel chat review must satisfy every mergeable review lane: $($run.result.blockers -join ',')"
+    }
   }
 
   # 3. A local bundle from a different owner cannot impersonate the live owner handoff.
-  Invoke-Step 'wrong-owner-bundle-blocked' {
+  Invoke-Step 'wrong-owner-bundle-invalid-advisory' {
     $wrongControllerPath = Join-Path $root 'ai-review-wrong-controller.json'
     $wrongControllerBundle = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $wrongControllerBundle.publisher_id = '15368'
     $wrongControllerBundle | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $wrongControllerPath -Encoding utf8NoBOM
     $run = Invoke-Gate -Label 'wrong-controller' -Extra @{ '-AutonomousReviewEvidencePath' = $wrongControllerPath }
-    if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-    if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
+    if ($run.exitCode -ne 0 -or (Get-GateReviewPolicy $run).independentReviewSatisfied) { throw 'Invalid advisory evidence must remain invalid without blocking readiness.' }
   }
 
-  Invoke-Step 'forged-local-review-body-blocked' {
+  Invoke-Step 'forged-local-review-body-invalid-advisory' {
     $forgedPath = Join-Path $root 'forged-reviews.json'
     $forged = $bundle | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $forged.handoff.reviews[0].scope = @('forged local scope')
     $forged | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $forgedPath -Encoding utf8NoBOM
     $run = Invoke-Gate -Label 'forged-body' -Extra @{ '-AutonomousReviewEvidencePath' = $forgedPath }
-    if ($run.exitCode -eq 0 -or $run.result.reviewPolicy.independentReviewEvidenceErrors -notcontains 'controller_review_live_provenance_mismatch') { throw 'Forged review body was not rejected by live provenance validation.' }
+    if ($run.exitCode -ne 0 -or (Get-GateReviewPolicy $run).independentReviewSatisfied -or (Get-GateReviewPolicy $run).independentReviewEvidenceErrors -notcontains 'controller_review_live_provenance_mismatch') { throw 'Forged review body was not rejected by live provenance validation.' }
   }
 
-  # 4. Missing controller evidence fails closed.
-  Invoke-Step 'missing-review-blocked' {
+  # 4. Missing custom evidence remains invalid and advisory.
+  Invoke-Step 'missing-review-invalid-advisory' {
     $run = Invoke-Gate -Label 'missing-review' -Extra @{}
-    if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-    if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
-    if (-not $run.result.reviewPolicy.independentReviewRequired) { throw "$CandidateLane PR skipped independent review." }
+    $policy = Get-GateReviewPolicy $run
+    if ($run.exitCode -ne 0 -or (Get-GateReviewPolicy $run).independentReviewSatisfied) { throw 'Invalid advisory evidence must remain invalid without blocking readiness.' }
+    if ($policy.independentReviewRequired) { throw 'Missing custom evidence must be advisory.' }
   }
 
   # 5. dirty candidate worktree

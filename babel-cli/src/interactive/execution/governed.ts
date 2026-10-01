@@ -242,7 +242,7 @@ export async function executeGovernedTask(
         changed_files: changedFiles,
         verification,
         next: ctx.lastAssistantNext,
-      });
+      }, String(result.status ?? 'completed'));
       // Compact cost footer only (no structured output dump)
       const convSessionCost = globalCostTracker.getSessionSummary();
       const costLine =
@@ -328,14 +328,17 @@ export async function executeGovernedTask(
       changed_files: [],
       verification: 'failed',
       next: ctx.lastAssistantNext,
-    });
+    }, 'failed');
     console.error(`\n${human}\n`);
     if (process.stdout.isTTY && !process.env['CI']) {
       try {
-        await alert({
-          title: 'Task Execution Failed',
-          message: caughtError.message ?? String(caughtError),
-        });
+        const showAlert = () =>
+          alert({
+            title: 'Task Execution Failed',
+            message: caughtError.message ?? String(caughtError),
+          });
+        if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('error-alert', showAlert);
+        else await showAlert();
         (caughtError as any)[Symbol.for('babel.error.alerted')] = true;
       } catch {
         // alert() itself failed (e.g. terminal disconnect) — already logged above

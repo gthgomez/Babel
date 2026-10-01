@@ -8,6 +8,7 @@ import {
   computeCandidateDigest,
 } from './hostReviewController.js';
 import { safeReviewPath, secretRiskReviewPath } from './babelReviewSnapshot.js';
+import { classifyReviewRisk } from './reviewPolicy.js';
 
 export interface CollectCandidateOptions {
   repoRoot?: string | undefined;
@@ -66,44 +67,7 @@ export function parseRepositorySlug(remoteUrl: string): string {
 }
 
 export function determineRiskTier(scope: string[]): RiskTier {
-  if (scope.length === 0) return 'TRIVIAL';
-
-  const redPrefixes = [
-    '.github/', '.agents/', 'config/', 'AGENTS.md', 'CLAUDE.md', 'ENGINEERING.md',
-    'docs/AUTONOMY_POLICY.md', 'LLM_COLLABORATION_SYSTEM/', '01_Behavioral_OS/',
-    'scripts/agent-pr-gate', 'scripts/trusted-merge-gate', 'scripts/materialize-independent-review',
-    'tools/babel-pr-review', 'tools/babel-chat-review-worker', 'tools/babel-pr-repair',
-    'babel-cli/src/services/babelReview', 'babel-cli/src/services/babelChatReview',
-    'babel-cli/src/services/hostReview', 'babel-cli/src/services/independentReview',
-    'babel-cli/src/authority/', 'babel-cli/src/config/autonomyPolicy',
-  ];
-
-  const yellowPrefixes = [
-    'babel-cli/src/services/', 'babel-cli/src/config/', 'babel-cli/src/commands/',
-    'babel-cli/src/runners/', 'babel-cli/src/agent/', 'babel-cli/src/protocol/',
-    'tools/', 'scripts/',
-  ];
-
-  const isAllDocs = scope.every((path) =>
-    path.endsWith('.md') || path.endsWith('.txt') || path.startsWith('docs/')
-  );
-
-  for (const file of scope) {
-    const norm = file.replace(/\\/g, '/');
-    if (redPrefixes.some((prefix) => norm.startsWith(prefix) || norm === prefix.replace(/\/$/, ''))) {
-      return 'CRITICAL';
-    }
-  }
-
-  for (const file of scope) {
-    const norm = file.replace(/\\/g, '/');
-    if (yellowPrefixes.some((prefix) => norm.startsWith(prefix))) {
-      return 'ELEVATED';
-    }
-  }
-
-  if (isAllDocs) return 'TRIVIAL';
-  return 'NORMAL';
+  return classifyReviewRisk(scope);
 }
 
 export function determineTrustMode(repositorySlug: string): ReviewTrustMode {

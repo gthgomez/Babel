@@ -79,11 +79,11 @@ test('independentReviewController: executes review with challenge lifecycle (ISS
     const handoff = await controller.review(candidate, { builder: sampleBuilder })
 
     assert.equal(handoff.schema_version, 3)
-    assert.equal(handoff.provenance, 'TRUSTED_CONTROLLER_EVIDENCE')
+    assert.equal(handoff.provenance, 'LOCAL_UNAUTHENTICATED')
     assert.equal(handoff.reviews.length, 1)
     const review = handoff.reviews[0]!
     assert.equal(review.verdict, 'APPROVE')
-    assert.equal(review.provenance, 'TRUSTED_CONTROLLER_EVIDENCE')
+    assert.equal(review.provenance, 'LOCAL_UNAUTHENTICATED')
     assert.notEqual(review.reviewer.principal_id, review.builder.principal_id)
     assert.notEqual(review.reviewer.execution_id, review.builder.execution_id)
 
@@ -336,6 +336,58 @@ test('independentReviewController: records block and prevents approval shopping 
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
   }
+})
+
+test('independentReviewController: malformed diagnostic BLOCK still prevents same-head retry', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'babel-ctrl-test-'))
+  try {
+    let blocked = true
+    const controller = createIndependentReviewController({
+      controller_id: 'diagnostic-block-controller', state_dir: tempDir,
+      adapter: {
+        adapter_id: 'mock-subagent-v1', agent_kind: 'codex',
+        async launch(req) {
+          return {
+            status: 'COMPLETED', verdict: blocked ? 'BLOCK' : 'APPROVE',
+            reviewed_at: new Date().toISOString(), scope: [...req.candidate.scope],
+            isolation: req.required_isolation,
+            // Missing runtime invalidates the first review after its BLOCK signal.
+            ...(blocked ? {} : { runtime: {
+              agent_kind: 'codex', adapter_id: 'mock-subagent-v1',
+              controller_execution_id: req.reviewer.execution_id,
+            } }),
+          }
+        },
+      },
+    })
+    const candidate = createSampleCandidate()
+    await assert.rejects(() => controller.review(candidate, { builder: sampleBuilder }), /Missing review runtime/)
+    blocked = false
+    await assert.rejects(() => controller.review(candidate, { builder: sampleBuilder }), /PRIOR_BLOCKING_REVIEW_REQUIRES_REPAIR/)
+  } finally { rmSync(tempDir, { recursive: true, force: true }) }
+})
+
+test('independentReviewController: contradictory diagnostic approval retains blocking findings', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'babel-ctrl-test-'))
+  try {
+    const controller = createIndependentReviewController({
+      controller_id: 'contradictory-diagnostic-review', state_dir: tempDir,
+      adapter: {
+        adapter_id: 'mock-subagent-v1', agent_kind: 'codex',
+        async launch(req) {
+          return {
+            status: 'COMPLETED', verdict: 'APPROVE', blocking_findings: ['defect'],
+            reviewed_at: new Date().toISOString(), scope: [...req.candidate.scope],
+            isolation: req.required_isolation,
+            runtime: { agent_kind: 'codex', adapter_id: 'mock-subagent-v1', controller_execution_id: req.reviewer.execution_id },
+          }
+        },
+      },
+    })
+    const candidate = createSampleCandidate()
+    await assert.rejects(() => controller.review(candidate, { builder: sampleBuilder }), /APPROVE_VERDICT_CANNOT_HAVE_BLOCKING_FINDINGS/)
+    await assert.rejects(() => controller.review(candidate, { builder: sampleBuilder }), /PRIOR_BLOCKING_REVIEW_REQUIRES_REPAIR/)
+  } finally { rmSync(tempDir, { recursive: true, force: true }) }
 })
 
 test('independentReviewController: multi-review round settles BLOCK even when peer reviewer fails', async () => {
@@ -606,5 +658,3 @@ test('independentReviewController: rejects certifier from candidate producer lin
     rmSync(tempDir, { recursive: true, force: true })
   }
 })
-
-
