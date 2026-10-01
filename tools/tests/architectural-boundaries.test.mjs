@@ -101,6 +101,15 @@ test('nested binding and static iteration preserve container ownership', () => {
   assert.equal(inspectSource('for (const {p} of [{p: process}]) p.exit(1)').ambiguous.length, 1);
   assert.equal(inspectSource('for (const [p] of [[process]]) p.exit(1)').ambiguous.length, 1);
 });
+test('member assignments and default bindings preserve reverse container ownership', () => {
+  assert.equal(inspectSource('const original = {}; const box = {}; box.original = original; box.original.quit = process.exit; original.quit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('const original = {}; const {alias = original} = {}; alias.write = process.stdout.write; original.write("x")').ambiguous.length, 1);
+  assert.equal(inspectSource('const original = {}; const [alias = original] = []; alias.quit = process.exit; original.quit(1)').ambiguous.length, 1);
+});
+test('static iteration into existing bindings preserves process and container ownership', () => {
+  assert.equal(inspectSource('let p; for (p of [process]) p.exit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('const original = {}; let alias; for (alias of [original]) alias.quit = process.exit; original.quit(1)').ambiguous.length, 1);
+});
 test('computed object overrides and stdout spreads cannot obtain false clearance', () => {
   assert.equal(inspectSource('const {quit} = {quit: () => {}, [name]: process.exit}; quit(1)').ambiguous.length, 1);
   assert.equal(inspectSource('const {write} = {write: () => {}, ...{write: process.stdout.write}}; write("x")').stdout.length, 1);
