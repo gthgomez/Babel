@@ -16,7 +16,10 @@ last_verified: 2026-07-03
 
 ## Startup
 
-[CLAUDE.md](./CLAUDE.md) is the canonical entry point. It owns the startup sequence, invariants, and high-risk zones. For Babel Local Mode, see [CLAUDE.md](./CLAUDE.md) §Babel Local Mode.
+[AGENTS.md](./AGENTS.md) is the canonical agent-neutral router. Follow its
+task-specific loading rules and use [PROJECT_CONTEXT.md](./PROJECT_CONTEXT.md)
+for product facts. Claude-specific tools are not Gemini prerequisites. Runtime
+modes and launch commands live in [INTEGRATION.md](./INTEGRATION.md).
 
 ## Operating Style (Gemini-specific)
 

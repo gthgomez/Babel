@@ -1,6 +1,8 @@
+@AGENTS.md
+
 # CLAUDE.md — Babel (Public Canonical Source)
 
-> **Role**: Entry point for AI sessions in the Babel public repo (`gthgomez/Babel`). This is the **canonical OSS source of truth** for the Babel coding agent. Startup sequence, repo architecture, invariants, high-risk zones, and common task paths.
+> **Role**: Claude host adapter for the Babel public repo (`gthgomez/Babel`). AGENTS.md is the contributor router; PROJECT_CONTEXT.md supplies product facts. This adapter records project pointers and Claude-specific tool guidance.
 > For what Babel is and how to invoke it, see [INTEGRATION.md](./INTEGRATION.md).
 > For deep technical architecture, see [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md).
 
@@ -85,7 +87,10 @@ For the full layer model description and interpretation rules, see [INTEGRATION.
 
 ## Startup Sequence
 
-**On every session start**, this file (CLAUDE.md) is your entry point — it covers invariants, high-risk zones, and common task paths.
+`AGENTS.md` is the canonical agent-neutral startup router. Claude sessions import
+it above, then use this file for project invariants, high-risk zones, and task paths.
+Do not reread instructions already loaded. Other hosts follow the root router and
+their own available tools; this file does not change runtime capabilities.
 
 **When Babel control-plane work is requested** (`use Babel`, prompt-stack assembly, routing, catalog changes), load:
 1. `INTEGRATION.md` — entrypoint, layer model, workflow
@@ -159,8 +164,8 @@ These are the most frequent tool failures observed across sessions. Follow them 
 1. **Always use absolute, forward-slash paths in Bash commands.** Windows backslash paths get their backslashes stripped inside bash (`C:\MyProject\...` becomes `C:MyProject...`). Use `C:/MyProject/...` or `/c/MyProject/...`.
 2. **Know where you are before `cd babel-cli`.** The npm workspace lives at `<repo-root>/babel-cli/`. `cd babel-cli` fails when the shell is already inside `babel-cli/` or anywhere other than repo root, and produces doubled paths like `babel-cli/babel-cli/src/...`. Prefer absolute paths: `cd <repo-root>/babel-cli`.
 3. **Scope searches — unscoped `rg`/Grep over the repo root times out.** Default to `babel-cli/src/` for runtime code, the specific prompt-layer directory for control-plane work. Never search `runs/`, `artifacts/`, `runtime/`, `node_modules/`, or `dist/`. The `.rgignore` file at repo root enforces these exclusions for ripgrep-based tools.
-4. **Run the File Size Ratchet check before committing** (it is part of CI and fails late otherwise): run `pwsh tools/check-architectural-budget.ps1` before pushing when you touched large files.
-5. **Fanning out subagents that edit files: partition file ownership first.** Concurrent subagents editing the same file (historically `babel-cli/src/agent/chatEngine.ts`) cause "File has been modified since read" errors and merge conflicts. Assign each subagent a disjoint set of files, and confirm the worktree is clean before fan-out.
+4. **Check the architectural budget before committing large-file changes.** Run `pwsh tools/check-architectural-budget.ps1`. Distinguish task regressions from failures reproduced on unchanged base, preserve the baselines, and report both; required GitHub checks remain separate.
+5. **Fanning out subagents that edit files: partition file ownership first.** Concurrent subagents editing the same file (historically `babel-cli/src/agent/chatEngine.ts`) cause "File has been modified since read" errors and merge conflicts. Assign disjoint file ownership, preserve existing dirty work, and isolate actual overlapping writers before fan-out. A dirty tree alone is not a conflict.
 6. **CI/PR checks via `gh`:** `gh pr view --json statusChecks` is invalid — the field is `statusCheckRollup`. `gh pr checks` exits 8 while checks are *pending*; that is not a failure. A brand-new branch may report "no checks reported" until the first workflow starts — wait and retry rather than diagnosing.
 7. **Scrub config regex escaping**: PowerShell/JSON escaping layers can turn `\\b` (word boundary) into literal `b`. When editing scrub rules, verify regex escaping survives the double-layer (JSON parse → PS string).
 
@@ -169,7 +174,7 @@ These are the most frequent tool failures observed across sessions. Follow them 
 | Task | Entry point |
 |------|------------|
 | Run the CLI tests | `cd babel-cli && npm test` |
-| Type-check the CLI | `cd babel-cli && npx tsc --noEmit` |
+| Type-check the CLI | `npm --prefix babel-cli run typecheck` |
 | Build the CLI | `cd babel-cli && npm run build` |
 | Validate catalog + audit + domain policy (all 3) | `pwsh tools/validate-all.ps1` |
 | Validate prompt catalog | `pwsh tools/validate-catalog.ps1` |
@@ -201,9 +206,13 @@ From session retrospective analysis: all 10 reviewed sessions deferred testing e
 | `/catalog-validate-all` | After catalog/routing changes — run the validation trio |
 | `/branch-stack` | Working on sequential dependent feature branches |
 
-## Tool-Use Patterns (learned from session data)
+## Claude Code tool patterns (capability-scoped)
 
-These patterns are observed to be effective in this repo. Prefer them over alternatives:
+These observations apply only when the named tools exist in the active Claude Code
+session. They are adapter hints, not universal project requirements. Other hosts
+use their exposed equivalents; scoped `rg` / `rg --files` and direct file reads are
+valid shell fallbacks. Do not invent `parallel()`, `TaskOutput`, or `Monitor` APIs.
+For every host, scope searches and exclude generated/runtime directories.
 
 - **Use `Grep` for content search, not `Bash` + `grep`/`rg`.** Grep produces cleaner context entries without shell overhead. Always provide an explicit `path` to scope the search.
 - **Use `Glob` with an explicit `path` parameter.** Unscoped Glob calls timeout on this repo (20s default). Always provide a subdirectory: `babel-cli/src/`, `docs/`, `.github/`, etc.
