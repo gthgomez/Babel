@@ -123,6 +123,12 @@ test('shorthand assignment defaults resolve their own value symbols', () => {
   assert.equal(inspectSource('const emit = process.stdout.write; let write; ({write = emit} = {}); write("x")').stdout.length, 1);
   assert.equal(inspectSource('const original = {}; let alias; ({alias = original} = {}); alias.quit = process.exit; original.quit(1)').ambiguous.length, 1);
 });
+test('enclosing binding defaults preserve process projections and reverse aliases', () => {
+  assert.equal(inspectSource('const {p: {exit: quit} = process} = {}; quit(1)').exits.length, 1);
+  assert.equal(inspectSource('const [{exit: quit} = process] = []; quit(1)').exits.length, 1);
+  assert.equal(inspectSource('const {p: {stdout: {write: emit}} = process} = {}; emit("x")').stdout.length, 1);
+  assert.equal(inspectSource('const original = {}; const {nested: {alias} = {alias: original}} = {}; alias.quit = process.exit; original.quit(1)').ambiguous.length, 1);
+});
 test('unknown dynamic process access fails closed', () => {
   assert.equal(inspectSource('process[name](1)').ambiguous.length, 1);
 });

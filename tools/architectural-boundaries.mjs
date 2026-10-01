@@ -100,7 +100,10 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) linkAliases(checker.getSymbolAtLocation(node.name), declarationSource(node));
     if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) {
       let owner = node.parent.parent;
-      while (ts.isBindingElement(owner)) owner = owner.parent.parent;
+      while (ts.isBindingElement(owner)) {
+        linkAliases(checker.getSymbolAtLocation(node.name), owner.initializer);
+        owner = owner.parent.parent;
+      }
       linkAliases(checker.getSymbolAtLocation(node.name), declarationSource(owner));
       linkAliases(checker.getSymbolAtLocation(node.name), node.initializer);
     }
@@ -235,13 +238,15 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isArrayBindingPattern(element.parent)) {
       const index = element.parent.elements.indexOf(element);
       const key = element.dotDotDotToken ? '*' : String(index);
-      return ts.isBindingElement(owner) ? member(bindingAccess(owner, seen), key) : projectionAccess(declarationSource(owner), [key], seen);
+      const projected = ts.isBindingElement(owner) ? member(bindingAccess(owner, seen), key) : projectionAccess(declarationSource(owner), [key], seen);
+      return mergeAccess([projected, access(element.initializer, seen)]);
     }
     const base = ts.isBindingElement(owner) ? bindingAccess(owner, seen) : access(declarationSource(owner), seen);
-    if (element.dotDotDotToken) return base;
+    if (element.dotDotDotToken) return mergeAccess([base, access(element.initializer, seen)]);
     const key = element.propertyName ?? element.name;
     const name = ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*';
-    return ts.isBindingElement(owner) ? member(base, name) : projectionAccess(declarationSource(owner), [name], seen);
+    const projected = ts.isBindingElement(owner) ? member(base, name) : projectionAccess(declarationSource(owner), [name], seen);
+    return mergeAccess([projected, access(element.initializer, seen)]);
   }
   const exits = [], stdout = [], ambiguous = [];
   function visit(node) {
