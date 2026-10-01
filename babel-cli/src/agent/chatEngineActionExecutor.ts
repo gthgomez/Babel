@@ -1,131 +1,60 @@
 import { readFile } from "node:fs/promises";
 import { resolveClassCGateDecision } from "./autonomyEnforcement.js";
-import {
-  evaluatePlanThenExecuteGate,
-  shouldRequireTodoPlan,
-} from "./planThenExecute.js";
-import {
-  evaluateHardPlanModeGate,
-  formatPlanHandoffUserMessage,
-  operatorModeIsHardPlan,
-  resolveForceMutateTurnsForHandoff,
-  type ChatOperatorMode,
-  type ChatPlanExecuteHandoff,
-} from "./planExecuteMode.js";
+import { evaluatePlanThenExecuteGate } from "./planThenExecute.js";
+import { evaluateHardPlanModeGate } from "./planExecuteMode.js";
 import { evaluatePhaseToolGate } from "./phaseToolPolicy.js";
-import {
-  applyHonestTaskOutcomeToCompletion,
-  createFailureBudgetTrackerFromContract,
-  makeFailureCapsule,
-  type FailureClassBudgetTracker,
-  type FailureCapsuleV1,
-} from "./taskContract.js";
-import {
-  resolveChatTaskClass,
-  getChatTaskTune,
-  type ChatTaskClass,
-  type TaskOperation,
-  type VerificationPolicy,
-} from "../config/chatTaskClass.js";
+import { makeFailureCapsule } from "./taskContract.js";
+import { getChatTaskTune } from "../config/chatTaskClass.js";
 import { appendPatchRecovery } from "./patchRecovery.js";
 import {
   buildFullRereadSkipObservation,
-  isExplorationBudgetTool,
-  normalizeReadCacheKey,
   shouldSkipFullReread,
 } from "./readThrashPolicy.js";
 import {
   applyWorkingStateEvent,
-  createWorkingState,
   decideReadInjection,
   evaluateReadRequest,
   formatReadFailureObservation,
   formatReadObservation,
   formatVerifierReceiptSummary,
-  formatWorkingStateBlock,
   invalidateReadCacheForPath,
   recordControllerRecoveryStrategy,
-  recoveryEvidenceKey,
-  restoreWorkingStateSnapshot,
   sameRecoveryBinding,
-  RECOVERY_EVIDENCE_TOOLS,
-  resetOneShotSnapshot,
-  targetMatchesGate,
-  type RecoveryEvidenceProvenance,
   type RecoveryCandidateBinding,
-  resolveNextTurnToolAccess,
   selectReadWindow,
-  snapshotOnce,
-  upsertWorkingStateMessage,
-  type ReadInjectionCache,
-  type WorkingState,
 } from "./codingLoop/index.js";
 import {
   ingestVerifierResult,
   rememberFullReadWindow,
 } from "./codingLoop/chatBindings.js";
-import {
-  recoveryTargetIdentity,
-  recoveryWorkspaceRevision,
-} from "./codingLoop/recoveryIdentity.js";
+import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
 import {
   actualRecoveryEdit,
   admitRecoveryPlan,
 } from "./codingLoop/recoveryPlan.js";
 import {
-  ChatTurnSchema,
-  buildAnswerSynthesisPrompt,
   mapChatActionToAgentAction,
   isMcpChatAction,
   mapChatMcpActionToToolRequest,
   formatChatToolObservation,
-  formatSubAgentFindings,
   mapChatWebActionToToolRequest,
   chatActionToolName,
   chatActionTarget,
-  type ChatMessage,
   type ChatToolAction,
-  type ChatTurn,
-  type ChatRuntimeMode,
 } from "./chatToolDefinitions.js";
-import {
-  evaluateChatCompletionProof,
-  mutationPathsFromSessionEvents,
-  refreshChatVerifierReceiptStalenessSync,
-  toGateToolLog,
-  type BoundChatVerifierReceipt,
-} from "../evidence/chatRevisionBinding.js";
+import { mutationPathsFromSessionEvents } from "../evidence/chatRevisionBinding.js";
 import {
   executeActionWithPolicy,
   defaultToolExecutor,
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
 import { governedStrReplace } from "./governedMutations.js";
-import {
-  loadSessionEventLogForResume,
-  loadSessionEventLogIfPresentForResume,
-  interruptedToolRecoveries,
-  recordCompletionDecision,
-  recordCapabilityBindingReceipt,
-  recordModelInputReceipt,
-  recordModelInvocationPhase,
-  recordModelResultDelivery,
-  recordModelFailover,
-  recordMutationBatch,
-  recordPolicyIntervened,
-  recordProgressRecovery,
-  recordWorkingStateSnapshot,
-  flushSessionEventLogStrict,
-  resumedToolRecoveryGuidance,
-  operationFingerprint,
-  requiresRecoveredOutcomeReconciliation,
-  type SessionEventLog,
-} from "./sessionEvents.js";
+import { recordMutationBatch, operationFingerprint } from "./sessionEvents.js";
 import {
   remoteMcpFailClosedObservation,
   remoteMcpIsFailClosed,
 } from "../bridge/remoteApproval.js";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   executeAwaitCommandAction,
   executeBackgroundRunCommandAction,
@@ -136,22 +65,11 @@ import {
 } from "./chatEngineChildExecution.js";
 import { executeTool, renderGitDiff, type ToolContext } from "../localTools.js";
 import { classifyShellCapability } from "./progressController.js";
+import { assessMutationEffect } from "./mutationTools.js";
 import {
-  assessMutationEffect,
-  confirmedMutationPaths,
-  isConfirmedMutation,
-  isSuccessfulDirectMutation,
-  type MutationEffectStatus,
-} from "./mutationTools.js";
-import {
-  detectAndBuildBlockedReport as detectBlockedReportFromAnswer,
-  runPostEditStaticCheck as runPostEditStaticCheckFn,
-  summarizeDroppedTurns as summarizeDroppedTurnsFn,
-  compactHeuristicConversation,
   pinProjectRootEnv,
   noteChatWorkspaceMutation,
   invalidateVerifierLedger,
-  nativeToolUseToChatAction,
   formatResultDetail,
   countPatchStats,
   primaryPatchPath,
@@ -161,19 +79,20 @@ import {
   isFatalWindowsProcessExit,
   logPlatformUnusableResult,
 } from "./verifierFailFast.js";
-import {
-  prepareKernelVerifierInput,
-  captureAndRecordVerifierReceipt,
-  resolveEngineRequiredVerifiers,
-  restorePersistedVerifierEvidence,
-} from "./chatEngineVerifierAdapter.js";
+import { captureAndRecordVerifierReceipt } from "./chatEngineVerifierAdapter.js";
 import {
   deniesReadOnlyChatAction,
-  filterReadOnlyChatTools,
   isReadOnlyChat,
   resolveChatRangePath,
 } from "./chatReadOnly.js";
-import { isDiscriminatingInspectionEvidence, wrapPresentationCallbacks, type ChatCallbacks, type ChatEngineActionExecutorHost } from './chatEngine.js';
+import {
+  isDiscriminatingInspectionEvidence,
+  wrapPresentationCallbacks,
+} from "./chatEngineHelpers.js";
+import type { ChatCallbacks } from "./chatEngineContracts.js";
+
+import type { ChatEngineActionExecutorHost } from "./chatEngineContracts.js";
+export type { ChatEngineActionExecutorHost } from "./chatEngineContracts.js";
 
 export class ChatEngineActionExecutor {
   constructor(private readonly host: ChatEngineActionExecutorHost) {}
@@ -183,7 +102,7 @@ export class ChatEngineActionExecutor {
     toolContext: ToolContext,
     callbacks: ChatCallbacks,
     meta: { index: number; idempotencyKey?: string; ownerGeneration?: number },
-  ): Promise<{ index: number; observation: string; stop?: boolean }>{
+  ): Promise<{ index: number; observation: string; stop?: boolean }> {
     // R0-10: a throwing presentation callback must not unwind settlement or
     // duplicate execution truth. All callbacks below are the safe wrappers.
     callbacks = wrapPresentationCallbacks(callbacks);
@@ -220,10 +139,10 @@ export class ChatEngineActionExecutor {
               "Read-only chat policy denied this tool; use only read_file/read_range/list_dir/grep/glob inspection.",
           }
         : evaluateHardPlanModeGate({
-        toolName: tool,
-        hardPlanMode: this.host.hardPlanMode,
-        isMutationSubAgent,
-      });
+            toolName: tool,
+            hardPlanMode: this.host.hardPlanMode,
+            isMutationSubAgent,
+          });
       if (hardPlanGate.blocked) {
         this.host.policyEventLog.record({
           at_turn: this.host._turnIndex,
@@ -319,9 +238,12 @@ export class ChatEngineActionExecutor {
           !currentBinding ||
           !sameRecoveryBinding(recoveryGate.binding, currentBinding)
         ) {
-          this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-            type: "recovery_candidate_drift",
-          });
+          this.host.workingState = applyWorkingStateEvent(
+            this.host.workingState,
+            {
+              type: "recovery_candidate_drift",
+            },
+          );
           this.host.persistRecoveryWorkingState();
           recoveryGate = this.host.workingState.recoveryGate;
           driftedCandidate = true;
@@ -332,8 +254,8 @@ export class ChatEngineActionExecutor {
         (action.type === "write_file" ||
           action.type === "str_replace" ||
           action.type === "apply_patch")
-        ? actualRecoveryEdit(action, this.host.options.projectRoot)
-        : null;
+          ? actualRecoveryEdit(action, this.host.options.projectRoot)
+          : null;
       let admittedThisAction = false;
       if (
         recoveryGate?.satisfied &&
@@ -395,7 +317,7 @@ export class ChatEngineActionExecutor {
               ? "The proposed edit repeats the failed operation."
               : planRequired
                 ? "Submit a scoped repair plan supported by current observation IDs and the actual edit."
-            : recoveryGate.requiredEvidence,
+                : recoveryGate.requiredEvidence,
         ].join(" ");
         this.host.toolCallLog.push({
           tool,
@@ -405,47 +327,50 @@ export class ChatEngineActionExecutor {
           index: meta.index,
           exit_code: 1,
         });
-              callbacks?.onToolComplete?.(
-                toolId,
+        callbacks?.onToolComplete?.(
+          toolId,
           "recovery-evidence-required",
           "blocked",
           1,
-              );
-              return {
-                index: meta.index,
+        );
+        return {
+          index: meta.index,
           observation: `### ${tool} ${target}\nexit_code: 1\n${detail}`,
-              };
-            }
+        };
+      }
       if (admittedThisAction) {
-              this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-          type: "recovery_plan_consumed",
-            });
+        this.host.workingState = applyWorkingStateEvent(
+          this.host.workingState,
+          {
+            type: "recovery_plan_consumed",
+          },
+        );
         this.host.persistRecoveryWorkingState();
-              }
+      }
       if (
         this.host.recoveryStatePersistenceUnavailable &&
         (mutationAttempt || shellMutationAttempt)
       ) {
         const detail =
           "[RECOVERY_STATE_PERSISTENCE_UNAVAILABLE] Recovery state could not be saved before mutation.";
-          this.host.toolCallLog.push({
-            tool,
-            target,
+        this.host.toolCallLog.push({
+          tool,
+          target,
           detail,
           error: "blocked",
-            index: meta.index,
+          index: meta.index,
           exit_code: 1,
-          });
-          callbacks?.onToolComplete?.(
-            toolId,
+        });
+        callbacks?.onToolComplete?.(
+          toolId,
           "recovery-state-persistence-unavailable",
           "blocked",
           1,
-            );
-          return {
-            index: meta.index,
+        );
+        return {
+          index: meta.index,
           observation: `### ${tool} ${target}\nexit_code: 1\n${detail}`,
-          };
+        };
       }
 
       const localizationInspection =
@@ -473,8 +398,8 @@ export class ChatEngineActionExecutor {
               ? "[LOCALIZATION_EXHAUSTED] The four-call or two-scope localization allowance is spent."
               : "[RECOVERY_CANDIDATE_DRIFT] Rerun the verifier before localization.";
           this.host.toolCallLog.push({
-              tool,
-              target,
+            tool,
+            target,
             detail,
             error: "blocked",
             index: meta.index,
@@ -485,37 +410,37 @@ export class ChatEngineActionExecutor {
             "localization-blocked",
             "blocked",
             1,
-            );
+          );
           return {
             index: meta.index,
             observation: `### ${tool} ${target}\nexit_code: 1\n${detail}`,
           };
-          }
+        }
       }
 
       const recoveredAuthorization =
         this.host.recoveredOperationDispatchAuthorization(action);
       if (!recoveredAuthorization.allowed) {
         const detail = `[RECOVERY_RECONCILIATION_REQUIRED] ${recoveredAuthorization.message ?? "Reconcile the prior unknown effect before retrying"}`;
-          this.host.toolCallLog.push({
-            tool,
-            target,
+        this.host.toolCallLog.push({
+          tool,
+          target,
           detail,
           error: "blocked",
-            index: meta.index,
-            exit_code: 1,
-          });
+          index: meta.index,
+          exit_code: 1,
+        });
         callbacks?.onToolComplete?.(
           toolId,
           "reconciliation-required",
           "blocked",
           1,
         );
-          return {
-            index: meta.index,
+        return {
+          index: meta.index,
           observation: `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n${detail}\n\`\`\``,
-          };
-        }
+        };
+      }
 
       if (action.type === "sub_agent") {
         return await executeSubAgentAction({
@@ -559,7 +484,7 @@ export class ChatEngineActionExecutor {
         const mcpResult = await executeTool(
           mapChatMcpActionToToolRequest(action),
           {
-          ...toolContext,
+            ...toolContext,
             onBeforeDispatch: () =>
               this.host.persistToolStartedAtExecutorDispatch(action, meta),
           },
@@ -607,7 +532,7 @@ export class ChatEngineActionExecutor {
         const webResult = await executeTool(
           mapChatWebActionToToolRequest(action),
           {
-          ...toolContext,
+            ...toolContext,
             onBeforeDispatch: () =>
               this.host.persistToolStartedAtExecutorDispatch(action, meta),
           },
@@ -709,7 +634,9 @@ export class ChatEngineActionExecutor {
         if (isReadOnlyChat())
           resolveChatRangePath(this.host.options.projectRoot, action.path);
         const pathKey = this.host.readCacheKey(action.path);
-        const maxFull = getChatTaskTune(this.host.taskClass).maxFullReadsPerFile;
+        const maxFull = getChatTaskTune(
+          this.host.taskClass,
+        ).maxFullReadsPerFile;
         const priorFull = this.host.fullReadCounts.get(pathKey) ?? 0;
         if (
           shouldSkipFullReread({
@@ -819,22 +746,22 @@ export class ChatEngineActionExecutor {
             this.host.parity.sessionEvents,
             dispatchTurnId ?? "unknown",
             {
-            paths: gov.mutationPaths,
+              paths: gov.mutationPaths,
               pre_hash: Object.values(gov.preBatchHash ?? {}).join(","),
               post_hash: Object.values(gov.postBatchHash ?? {}).join(","),
-            ...(gov.mutationReceipt
-              ? {
-                  batch_id: gov.mutationReceipt.batchId,
-                  starting_revision: gov.mutationReceipt.startingRevision,
-                  ...(gov.mutationReceipt.endingRevision
-                    ? { ending_revision: gov.mutationReceipt.endingRevision }
-                    : {}),
-                  changed_bytes: gov.mutationReceipt.changedBytes,
-                  status: gov.mutationReceipt.status,
-                  pre_image_hashes: gov.mutationReceipt.preImageHashes,
-                  post_image_hashes: gov.mutationReceipt.postImageHashes,
-                }
-              : {}),
+              ...(gov.mutationReceipt
+                ? {
+                    batch_id: gov.mutationReceipt.batchId,
+                    starting_revision: gov.mutationReceipt.startingRevision,
+                    ...(gov.mutationReceipt.endingRevision
+                      ? { ending_revision: gov.mutationReceipt.endingRevision }
+                      : {}),
+                    changed_bytes: gov.mutationReceipt.changedBytes,
+                    status: gov.mutationReceipt.status,
+                    pre_image_hashes: gov.mutationReceipt.preImageHashes,
+                    post_image_hashes: gov.mutationReceipt.postImageHashes,
+                  }
+                : {}),
             },
           );
         }
@@ -855,10 +782,13 @@ export class ChatEngineActionExecutor {
           strReplaceEffect.status === "confirmed_no_change" &&
           this.host.isSubmissionCurrent(ownerGeneration)
         ) {
-          this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-            type: "recovery_proven_no_effect",
-            fingerprint: proposedEdit.exactFingerprint,
-          });
+          this.host.workingState = applyWorkingStateEvent(
+            this.host.workingState,
+            {
+              type: "recovery_proven_no_effect",
+              fingerprint: proposedEdit.exactFingerprint,
+            },
+          );
           this.host.persistRecoveryWorkingState();
         }
 
@@ -876,18 +806,27 @@ export class ChatEngineActionExecutor {
             this.host.fullReadCounts.delete(effectKey);
           }
           if (strReplaceEffect.status === "indeterminate") {
-            invalidateVerifierLedger(this.host as never, strReplaceEffect.reason);
+            invalidateVerifierLedger(
+              this.host as never,
+              strReplaceEffect.reason,
+            );
           }
           if (strReplaceEffect.status === "confirmed_change") {
-            const edit = actualRecoveryEdit(action, this.host.options.projectRoot);
-            this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-              type: "mutation",
-              path: gov.absolutePath,
-              fingerprint:
-                edit?.exactFingerprint ??
-                operationFingerprint(chatActionToolName(action), action),
-              ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
-            });
+            const edit = actualRecoveryEdit(
+              action,
+              this.host.options.projectRoot,
+            );
+            this.host.workingState = applyWorkingStateEvent(
+              this.host.workingState,
+              {
+                type: "mutation",
+                path: gov.absolutePath,
+                fingerprint:
+                  edit?.exactFingerprint ??
+                  operationFingerprint(chatActionToolName(action), action),
+                ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
+              },
+            );
             noteChatWorkspaceMutation(this.host as never);
             callbacks?.onFileChanged?.(
               gov.absolutePath,
@@ -926,9 +865,14 @@ export class ChatEngineActionExecutor {
             this.host.readCache,
             this.host.readCacheKey(gov.absolutePath),
           );
-          this.host.fullReadCounts.delete(this.host.readCacheKey(gov.absolutePath));
+          this.host.fullReadCounts.delete(
+            this.host.readCacheKey(gov.absolutePath),
+          );
           if (strReplaceEffect.status === "indeterminate") {
-            invalidateVerifierLedger(this.host as never, strReplaceEffect.reason);
+            invalidateVerifierLedger(
+              this.host as never,
+              strReplaceEffect.reason,
+            );
           }
           this.host.toolCallLog.push({
             tool,
@@ -953,16 +897,21 @@ export class ChatEngineActionExecutor {
           this.host.readCache,
           this.host.readCacheKey(gov.absolutePath),
         );
-        this.host.fullReadCounts.delete(this.host.readCacheKey(gov.absolutePath));
+        this.host.fullReadCounts.delete(
+          this.host.readCacheKey(gov.absolutePath),
+        );
         const edit = actualRecoveryEdit(action, this.host.options.projectRoot);
-        this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-          type: "mutation",
-          path: gov.absolutePath,
-          fingerprint:
-            edit?.exactFingerprint ??
-            operationFingerprint(chatActionToolName(action), action),
-          ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
-        });
+        this.host.workingState = applyWorkingStateEvent(
+          this.host.workingState,
+          {
+            type: "mutation",
+            path: gov.absolutePath,
+            fingerprint:
+              edit?.exactFingerprint ??
+              operationFingerprint(chatActionToolName(action), action),
+            ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
+          },
+        );
         noteChatWorkspaceMutation(this.host as never);
         const lineNumber = gov.lineNumber ?? 0;
         this.host.toolCallLog.push({
@@ -1084,7 +1033,10 @@ export class ChatEngineActionExecutor {
           const discrimination = isDiscriminatingInspectionEvidence(
             this.host.workingState,
             action,
-            recoveryTargetIdentity(this.host.options.projectRoot, action.file_path),
+            recoveryTargetIdentity(
+              this.host.options.projectRoot,
+              action.file_path,
+            ),
             this.host.workingState.recoveryGate
               ? this.host.currentRecoveryBinding()
               : null,
@@ -1094,21 +1046,24 @@ export class ChatEngineActionExecutor {
                   .digest("hex")
               : "",
           );
-          this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-            type: "add_evidence",
-            evidence,
-            file: action.file_path,
-            discriminating: discrimination.discriminating,
-            ...(discrimination.provenance
-              ? { provenance: discrimination.provenance }
-              : {}),
-          });
+          this.host.workingState = applyWorkingStateEvent(
+            this.host.workingState,
+            {
+              type: "add_evidence",
+              evidence,
+              file: action.file_path,
+              discriminating: discrimination.discriminating,
+              ...(discrimination.provenance
+                ? { provenance: discrimination.provenance }
+                : {}),
+            },
+          );
           if (discrimination.discriminating) {
             this.host.workingState = recordControllerRecoveryStrategy(
               this.host.workingState,
               {
-              target,
-              evidence,
+                target,
+                evidence,
               },
             );
             this.host.persistRecoveryWorkingState();
@@ -1337,7 +1292,9 @@ export class ChatEngineActionExecutor {
             this.host._streamNativeToolCallIds[meta.index] ??
             `tool_call_${this.host._turnIndex}_${meta.index}`,
           ...(this.host.parity.liveAuthority?.taskContract.contract_id
-            ? { taskId: this.host.parity.liveAuthority.taskContract.contract_id }
+            ? {
+                taskId: this.host.parity.liveAuthority.taskContract.contract_id,
+              }
             : {}),
           ...(this.host.parity.liveAuthority?.taskContract.protected_paths
             ? {
@@ -1375,22 +1332,22 @@ export class ChatEngineActionExecutor {
           this.host.parity.sessionEvents,
           dispatchTurnId ?? "unknown",
           {
-          paths: result.mutationPaths,
+            paths: result.mutationPaths,
             pre_hash: Object.values(result.preBatchHash ?? {}).join(","),
             post_hash: Object.values(result.postBatchHash ?? {}).join(","),
-          ...(result.mutationReceipt
-            ? {
-                batch_id: result.mutationReceipt.batchId,
-                starting_revision: result.mutationReceipt.startingRevision,
-                ...(result.mutationReceipt.endingRevision
-                  ? { ending_revision: result.mutationReceipt.endingRevision }
-                  : {}),
-                changed_bytes: result.mutationReceipt.changedBytes,
-                status: result.mutationReceipt.status,
-                pre_image_hashes: result.mutationReceipt.preImageHashes,
-                post_image_hashes: result.mutationReceipt.postImageHashes,
-              }
-            : {}),
+            ...(result.mutationReceipt
+              ? {
+                  batch_id: result.mutationReceipt.batchId,
+                  starting_revision: result.mutationReceipt.startingRevision,
+                  ...(result.mutationReceipt.endingRevision
+                    ? { ending_revision: result.mutationReceipt.endingRevision }
+                    : {}),
+                  changed_bytes: result.mutationReceipt.changedBytes,
+                  status: result.mutationReceipt.status,
+                  pre_image_hashes: result.mutationReceipt.preImageHashes,
+                  post_image_hashes: result.mutationReceipt.postImageHashes,
+                }
+              : {}),
           },
         );
       }
@@ -1491,10 +1448,13 @@ export class ChatEngineActionExecutor {
         mutationEffect.status === "confirmed_no_change" &&
         this.host.isSubmissionCurrent(ownerGeneration)
       ) {
-        this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-          type: "recovery_proven_no_effect",
-          fingerprint: proposedEdit.exactFingerprint,
-        });
+        this.host.workingState = applyWorkingStateEvent(
+          this.host.workingState,
+          {
+            type: "recovery_proven_no_effect",
+            fingerprint: proposedEdit.exactFingerprint,
+          },
+        );
         this.host.persistRecoveryWorkingState();
       }
       const confirmedDirectMutation =
@@ -1574,15 +1534,21 @@ export class ChatEngineActionExecutor {
           const dels = (diff.match(/^-[^-]/gm) ?? []).length;
           callbacks.onFileChanged?.(action.path, adds, dels, diff);
           this.host.fullReadCounts.delete(this.host.readCacheKey(action.path));
-          const edit = actualRecoveryEdit(action, this.host.options.projectRoot);
-          this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-            type: "mutation",
-            path: action.path,
-            fingerprint:
-              edit?.exactFingerprint ??
-              operationFingerprint(chatActionToolName(action), action),
-            ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
-          });
+          const edit = actualRecoveryEdit(
+            action,
+            this.host.options.projectRoot,
+          );
+          this.host.workingState = applyWorkingStateEvent(
+            this.host.workingState,
+            {
+              type: "mutation",
+              path: action.path,
+              fingerprint:
+                edit?.exactFingerprint ??
+                operationFingerprint(chatActionToolName(action), action),
+              ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
+            },
+          );
           noteChatWorkspaceMutation(this.host as never);
           // Crash-safe: persist patch to recovery log
           appendPatchRecovery(
@@ -1595,15 +1561,21 @@ export class ChatEngineActionExecutor {
           const { adds, dels } = countPatchStats(action.patch);
           const path = primaryPatchPath(action.patch);
           callbacks.onFileChanged?.(path, adds, dels, action.patch);
-          const edit = actualRecoveryEdit(action, this.host.options.projectRoot);
-          this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-            type: "mutation",
-            path,
-            fingerprint:
-              edit?.exactFingerprint ??
-              operationFingerprint(chatActionToolName(action), action),
-            ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
-          });
+          const edit = actualRecoveryEdit(
+            action,
+            this.host.options.projectRoot,
+          );
+          this.host.workingState = applyWorkingStateEvent(
+            this.host.workingState,
+            {
+              type: "mutation",
+              path,
+              fingerprint:
+                edit?.exactFingerprint ??
+                operationFingerprint(chatActionToolName(action), action),
+              ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
+            },
+          );
           noteChatWorkspaceMutation(this.host as never);
           // Crash-safe: persist patch to recovery log
           appendPatchRecovery(
@@ -1626,14 +1598,17 @@ export class ChatEngineActionExecutor {
             mutationEffect.status === "confirmed_change";
           const mutationPaths = result.mutationPaths ?? [];
           if (confirmedShellMutation) {
-            this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-              type: "mutation",
-              path: mutationPaths[0] ?? target,
-              fingerprint: operationFingerprint(
-                chatActionToolName(action),
-                action,
-              ),
-            });
+            this.host.workingState = applyWorkingStateEvent(
+              this.host.workingState,
+              {
+                type: "mutation",
+                path: mutationPaths[0] ?? target,
+                fingerprint: operationFingerprint(
+                  chatActionToolName(action),
+                  action,
+                ),
+              },
+            );
             noteChatWorkspaceMutation(this.host as never);
           }
 
@@ -1713,7 +1688,9 @@ export class ChatEngineActionExecutor {
             const previousFailureSignature =
               this.host.workingState.failureSurface?.errorSignature;
             const recoveryBinding =
-              lastResult.exit_code !== 0 ? this.host.currentRecoveryBinding() : null;
+              lastResult.exit_code !== 0
+                ? this.host.currentRecoveryBinding()
+                : null;
             const ingested = ingestVerifierResult({
               state: this.host.workingState,
               tool: action.type,
@@ -1750,15 +1727,16 @@ export class ChatEngineActionExecutor {
             if (
               implementationRepairSurface &&
               this.host.workingState.failureSurface &&
-              this.host.workingState.failureSurface.causality !== "pre_existing" &&
+              this.host.workingState.failureSurface.causality !==
+                "pre_existing" &&
               this.host.workingState.failureSurface.errorSignature !==
                 previousFailureSignature
             ) {
               this.host.consumeFailureBudget(
                 makeFailureCapsule(
                   "implementation",
-                this.host.workingState.failureSurface.kind,
-                this.host.workingState.failureSurface.errorSignature,
+                  this.host.workingState.failureSurface.kind,
+                  this.host.workingState.failureSurface.errorSignature,
                   {
                     evidence_refs:
                       this.host.workingState.failureSurface.evidenceRefs,
@@ -1773,12 +1751,15 @@ export class ChatEngineActionExecutor {
             // A red command without a durable verifier receipt cannot grant
             // recovery authority. Keep the failed candidate closed until an
             // authoritative verifier can bind a fresh failure and revision.
-            this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-              type: "recovery_gate",
-              failureSignature: "unbound-red-verifier",
-              requiredEvidence:
-                "Rerun an authoritative verifier to bind this failure to the current candidate.",
-            });
+            this.host.workingState = applyWorkingStateEvent(
+              this.host.workingState,
+              {
+                type: "recovery_gate",
+                failureSignature: "unbound-red-verifier",
+                requiredEvidence:
+                  "Rerun an authoritative verifier to bind this failure to the current candidate.",
+              },
+            );
             this.host.persistRecoveryWorkingState();
             this.host.lastVerifierFailed = true;
           } else if (lastResult.exit_code === 0 && !confirmedShellMutation) {
@@ -1865,21 +1846,24 @@ export class ChatEngineActionExecutor {
               ? createHash("sha256").update(lastResult.stdout).digest("hex")
               : "",
           );
-          this.host.workingState = applyWorkingStateEvent(this.host.workingState, {
-            type: "add_evidence",
-            evidence,
-            discriminating: discrimination.discriminating,
-            ...(discrimination.provenance
-              ? { provenance: discrimination.provenance }
-              : {}),
-            ...(action.type === "read_file" ? { file: action.path } : {}),
-          });
+          this.host.workingState = applyWorkingStateEvent(
+            this.host.workingState,
+            {
+              type: "add_evidence",
+              evidence,
+              discriminating: discrimination.discriminating,
+              ...(discrimination.provenance
+                ? { provenance: discrimination.provenance }
+                : {}),
+              ...(action.type === "read_file" ? { file: action.path } : {}),
+            },
+          );
           if (discrimination.discriminating) {
             this.host.workingState = recordControllerRecoveryStrategy(
               this.host.workingState,
               {
-              target,
-              evidence,
+                target,
+                evidence,
               },
             );
             this.host.persistRecoveryWorkingState();

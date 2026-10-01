@@ -1,9 +1,8 @@
 import type {
   ChatEvent,
-  ChatEngineStreamingLoopHost,
   SubmitMessageOptions,
   TaskIntent,
-} from "./chatEngine.js";
+} from "./chatEngineContracts.js";
 import {
   canonicalizeToolCallId,
   reconcileStreamedAnswer,
@@ -12,7 +11,7 @@ import { prepareStreamingSubmission } from "./chatEngineStreamingPreparation.js"
 import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
 import { realpathSync } from "node:fs";
-import { isBabelHeadlessEnv } from "../utils/envFlags.js";
+
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { endSpan } from "../telemetry/tracing.js";
 import { globalCostTracker } from "../services/costTracker.js";
@@ -24,7 +23,7 @@ import {
 } from "./implementorPolicy.js";
 
 import { nativeTurnFromStream } from "./chatNativeTurn.js";
-import { getChatTaskTune } from "../config/chatTaskClass.js";
+
 import {
   applyWorkingStateEvent,
   formatWorkingStateBlock,
@@ -87,6 +86,9 @@ import {
 } from "./chatEngineObservability.js";
 import { nativeToolUseToChatAction } from "./chatEngineSupport.js";
 import { filterReadOnlyChatTools, isReadOnlyChat } from "./chatReadOnly.js";
+
+import type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
+export type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
 
 export class ChatEngineStreamingLoop {
   constructor(private readonly host: ChatEngineStreamingLoopHost) {}
@@ -1947,7 +1949,6 @@ export class ChatEngineStreamingLoop {
         });
         if (disposition === "continue") continue;
         return;
-
       }
     }
 
