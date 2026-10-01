@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { OutputBuffer } from './outputBuffer.js';
 import { withRawStdinPrompt } from './inputCoordinator.js';
 import { installKeyHandler, type KeyEvent } from './keyInput.js';
 import { accentBright, muted, primary, bold, dim, ghost } from './theme.js';
@@ -17,14 +18,14 @@ export async function renderInteractiveChecklist(steps: any[]): Promise<any[] | 
   let cursorIdx = 0;
   const selected = new Set(steps.map((_, i) => i));
   const stdin = process.stdin;
-  const stdout = process.stdout;
+  const stdout = OutputBuffer.getInstance();
 
   return withRawStdinPrompt(
     () =>
       new Promise((resolve) => {
         const render = () => {
-          stdout.write('[s'); // save
-          stdout.write('[J'); // clear below
+          stdout.writeControl('[s'); // save
+          stdout.writeControl('[J'); // clear below
 
           stdout.write(`\n  ${primary('Review Implementation Plan')}\n`);
           stdout.write(
@@ -76,7 +77,8 @@ export async function renderInteractiveChecklist(steps: any[]): Promise<any[] | 
             }
           }
 
-          stdout.write('\n[u'); // restore
+          stdout.write('\n');
+          stdout.writeControl('[u'); // restore
         };
 
         // migrated from readline.emitKeypressEvents to installKeyHandler
@@ -96,12 +98,12 @@ export async function renderInteractiveChecklist(steps: any[]): Promise<any[] | 
             render();
           } else if (event.name === 'enter') {
             cleanupKeys();
-            stdout.write('[J'); // clear menu
+            stdout.writeControl('[J'); // clear menu
             const result = steps.filter((_, i) => selected.has(i));
             resolve(result);
           } else if (event.name === 'escape' || (event.name === 'c' && event.ctrl)) {
             cleanupKeys();
-            stdout.write('[J'); // clear menu
+            stdout.writeControl('[J'); // clear menu
             resolve(null);
           }
         });

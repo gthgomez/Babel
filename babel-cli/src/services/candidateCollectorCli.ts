@@ -41,5 +41,5 @@ async function main() {
 
 main().catch((err) => {
   process.stderr.write(`ERROR: ${err instanceof Error ? err.message : String(err)}\n`);
-  process.exit(1);
+  process.exitCode = 1;
 });

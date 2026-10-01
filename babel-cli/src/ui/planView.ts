@@ -6,6 +6,7 @@
  * Mirrors Claude Code's plan mode: review → approve → execute (or edit/reject).
  */
 
+import { OutputBuffer } from './outputBuffer.js';
 import { withRawStdinPrompt } from './inputCoordinator.js';
 import { installKeyHandler, type KeyEvent } from './keyInput.js';
 import {
@@ -87,11 +88,11 @@ export async function renderInteractivePlan(plan: DisplayPlan): Promise<PlanDeci
     () =>
       new Promise((resolve) => {
         const stdin = process.stdin;
-        const stdout = process.stdout;
+        const stdout = OutputBuffer.getInstance();
         const steps = plan.steps;
 
         const render = () => {
-          stdout.write('[2J[H'); // clear screen, cursor home
+          stdout.writeControl('[2J[H'); // clear screen, cursor home
           stdout.write(
             `\n  ${bold(primary('Babel Plan'))} ${muted('·')} ${accentBright(plan.planType ?? 'IMPLEMENTATION_PLAN')}\n`,
           );

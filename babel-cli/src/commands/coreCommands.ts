@@ -13,7 +13,7 @@ import { z } from "zod";
 
 import { registerEvidenceProductSubcommands } from "./evidenceProductCommands.js";
 import { registerRunIntelligenceCommands } from './runIntelligenceCommands.js';
-import { registerInspectTuiCommand } from "../ui/observe/inspectTui.js";
+import { registerInspectTuiCommand } from "./inspectTuiCommands.js";
 import { registerMaintenanceCommands } from "./maintenanceCommands.js";
 import { printJsonErrorAndExit, printJsonOrHuman } from "./output.js";
 import { registerShipCommand } from "./shipCommands.js";
