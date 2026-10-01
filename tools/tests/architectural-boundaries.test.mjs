@@ -281,7 +281,7 @@ test('static class and namespace containers preserve host routes', () => {
     'class C { static quit=process.exit } class D extends C {} D.quit(7)',
     'class C { static quit=process.exit; static { this.quit(7) } }',
     'class C { static { this.quit=process.exit; this.quit(7) } }',
-  ]) assert.ok(inspectSource(source).ambiguous.length > 0, source);
+  ]) { const result = inspectSource(source); assert.ok(result.ambiguous.length + result.exits.length + result.stdout.length > 0, source); }
   assert.deepEqual(inspectSource('class C { static run=()=>{} } C.run(); namespace M { export const run=()=>{} } M.run()'), {exits:[], stdout:[], ambiguous:[]});
 });
 test('static class and namespace aliases retain reverse mutation ownership', () => {
@@ -303,7 +303,7 @@ test('local class instances retain field routes without counting construction', 
     'class C {constructor(){this.quit=process.exit;this.quit(7)}} new C()',
     'class C extends process.exit {} new C(7)',
     'class C {static quit=process.exit} let ctor:any=C; ctor=process.exit.bind(process,7); new ctor()',
-  ]) assert.ok(inspectSource(source).ambiguous.length > 0 || inspectSource(source).exits.length > 0, source);
+  ]) { const result = inspectSource(source); assert.ok(result.ambiguous.length + result.exits.length + result.stdout.length > 0, source); }
   for (const source of [
     'class C {static quit=process.exit} new C()',
     'class C {static quit=process.exit} const ctor=C; new ctor()',
@@ -318,6 +318,31 @@ test('instance field aliases preserve reverse mutation ownership', () => {
     'class C {p=process} const c=new C(); c.p.quit=c.p.exit; process.quit(7)',
     'const original:any={}; class C {alias=original} class D extends C {} const c=new D(); c.alias.quit=process.exit; original.quit(7)',
   ]) assert.ok(inspectSource(source).ambiguous.length > 0, source);
+});
+test('recursive class field graphs terminate and retain host ownership', () => {
+  assert.deepEqual(inspectSource('class C {child=flag ? new C() : null}'), {exits:[], stdout:[], ambiguous:[]});
+  assert.deepEqual(inspectSource('class A {child=flag ? new B() : null} class B {child=flag ? new A() : null}'), {exits:[], stdout:[], ambiguous:[]});
+  assert.equal(inspectSource('class C {child=flag ? new C() : null; quit=process.exit} new C().quit(7)').exits.length, 1);
+});
+test('local constructor ownership survives members and transparent aliases', () => {
+  for (const source of [
+    'namespace M {export class C {quit=process.exit}} new M.C().quit(7)',
+    'class C {quit=process.exit} const box={C}; new box.C().quit(7)',
+    'class C {quit=process.exit} let ctor; ctor=C; new ctor().quit(7)',
+    'class C {quit=process.exit} const ctor=(0,C); new ctor().quit(7)',
+    'class C {quit=process.exit} const ctor=await C; new ctor().quit(7)',
+    'class C {quit=process.exit} const [ctor]=[C]; new ctor().quit(7)',
+    'class C {quit=process.exit} const {ctor}={ctor:C}; new ctor().quit(7)',
+    'class C {quit=process.exit} const box={C}; new box["C"]().quit(7)',
+    'namespace M {export class C {out=process.stdout}} class D extends M.C {} new D().out.write("x")',
+  ]) { const result = inspectSource(source); assert.ok(result.ambiguous.length + result.exits.length + result.stdout.length > 0, source); }
+  assert.deepEqual(inspectSource('namespace M {export class C {static quit=process.exit}} new M.C()'), {exits:[], stdout:[], ambiguous:[]});
+});
+test('class writer capture and restoration do not taint unrelated methods or process data', () => {
+  assert.deepEqual(inspectSource('class C {original=process.stdout.write; capture(){this.original=process.stdout.write} restore(){process.stdout.write=this.original} run(){const self=this; self.resize(); this.resize(); process.stdin.resume(); process.stdout.on("resize",()=>{})} resize(){} } new C().run()'), {exits:[], stdout:[], ambiguous:[]});
+  assert.deepEqual(inspectSource('class C {cols=process.stdout.columns; run(){this.resize(); process.stdout.on("resize",()=>{})} resize(){} } new C().run()'), {exits:[], stdout:[], ambiguous:[]});
+  assert.equal(inspectSource('class C {original=process.stdout.write; run(){this.original("x")} } new C()').stdout.length, 1);
+  assert.ok(inspectSource('process.stdout.write=process.exit; process.stdout.write(7)').ambiguous.length > 0);
 });
 test('malformed source cannot produce clearance', () => {
   assert.throws(() => inspectSource('function broken( { process.exit(1)'));

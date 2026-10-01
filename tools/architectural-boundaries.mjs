@@ -28,6 +28,8 @@ export function inspectSource(source, path = 'source.ts') {
   const mutationComponents = new Map();
   const carrierSymbols = new WeakMap();
   const instanceSymbols = new WeakMap();
+  const classFields = new Map();
+  const resolvingClassExpressions = new Set();
   const globalProcessSymbol = Symbol('unshadowed global process');
   const globalObjectSymbol = Symbol('unshadowed global object');
   const implicitGlobals = new Map([['process', globalProcessSymbol], ['global', globalObjectSymbol], ['globalThis', globalObjectSymbol]]);
@@ -68,19 +70,51 @@ export function inspectSource(source, path = 'source.ts') {
   }
   function localClasses(expression, seen = new Set()) {
     expression = unwrap(expression);
+    if (!expression || resolvingClassExpressions.has(expression)) return null;
+    resolvingClassExpressions.add(expression);
+    try { return resolveLocalClasses(expression, seen); }
+    finally { resolvingClassExpressions.delete(expression); }
+  }
+  function resolveLocalClasses(expression, seen) {
+    expression = unwrap(expression);
     if (!expression || seen.has(expression)) return null;
     seen = new Set(seen).add(expression);
     if (ts.isClassDeclaration(expression) || ts.isClassExpression(expression)) return [expression];
+    if (ts.isAwaitExpression(expression)) return localClasses(expression.expression, seen);
+    if (ts.isBinaryExpression(expression) && [ts.SyntaxKind.CommaToken, ts.SyntaxKind.EqualsToken].includes(expression.operatorToken.kind)) return localClasses(expression.right, seen);
     if (ts.isConditionalExpression(expression)) {
       const left = localClasses(expression.whenTrue, seen), right = localClasses(expression.whenFalse, seen);
       return left && right ? [...left, ...right] : null;
     }
-    if (!ts.isIdentifier(expression)) return null;
-    const symbol = identifierSymbol(expression);
+    let symbol;
+    if (ts.isIdentifier(expression)) symbol = identifierSymbol(expression);
+    else if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression) || ts.isQualifiedName(expression)) {
+      const receiver = ts.isQualifiedName(expression) ? expression.left : expression.expression;
+      if (aliasRoots(receiver).some(hasHostMutation)) return null;
+      symbol = checker.getSymbolAtLocation(ts.isPropertyAccessExpression(expression) ? expression.name : ts.isQualifiedName(expression) ? expression.right : expression);
+      if (!symbol) return classProjection(receiver, [ts.isPropertyAccessExpression(expression) ? expression.name.text : ts.isQualifiedName(expression) ? expression.right.text : ts.isStringLiteralLike(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression) ? expression.argumentExpression.text : '*'], seen);
+    } else return null;
     const values = [];
     for (const declaration of symbol?.declarations ?? []) {
       if (ts.isClassDeclaration(declaration) || ts.isClassExpression(declaration)) values.push(declaration);
-      else if (ts.isVariableDeclaration(declaration) && declaration.initializer) values.push(declaration.initializer);
+      else if (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration) || ts.isPropertyAssignment(declaration) || ts.isPropertyDeclaration(declaration)) { if (declaration.initializer) values.push(declaration.initializer); }
+      else if (ts.isShorthandPropertyAssignment(declaration)) values.push(declaration.name);
+      else if (ts.isImportEqualsDeclaration(declaration) && !ts.isExternalModuleReference(declaration.moduleReference)) values.push(declaration.moduleReference);
+      else if (ts.isBindingElement(declaration)) {
+        let element = declaration, keys = [];
+        while (ts.isBindingElement(element)) {
+          if (element.initializer) {
+            const defaults = classProjection(element.initializer, keys, seen);
+            if (defaults === null) return null;
+            values.push(...defaults);
+          }
+          keys.unshift(ts.isArrayBindingPattern(element.parent) ? String(element.parent.elements.indexOf(element)) : propertyKey(element.propertyName ?? element.name));
+          element = element.parent.parent;
+        }
+        const projected = classProjection(declarationSource(element), keys, seen);
+        if (projected === null) return null;
+        values.push(...projected);
+      }
       else return null;
     }
     for (const assigned of assignments.get(symbol) ?? []) {
@@ -89,6 +123,31 @@ export function inspectSource(source, path = 'source.ts') {
     }
     const resolved = values.map(value => localClasses(value, seen));
     return resolved.length && resolved.every(Boolean) ? resolved.flat() : null;
+  }
+  function classProjection(expression, keys, seen) {
+    expression = unwrap(expression);
+    if (!expression) return [];
+    if (!keys.length) return localClasses(expression, seen);
+    if (seen.has(expression)) return null;
+    seen = new Set(seen).add(expression);
+    const [key, ...rest] = keys;
+    let candidates;
+    if (ts.isObjectLiteralExpression(expression)) {
+      candidates = expression.properties.filter(property => !ts.isSpreadAssignment(property) && (key === '*' || propertyKey(property.name) === key)).map(property => ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : undefined);
+      if (expression.properties.some(ts.isSpreadAssignment)) return null;
+    } else if (ts.isArrayLiteralExpression(expression)) {
+      const elements = literalArrayElements(expression);
+      if (!elements) return null;
+      candidates = key === '*' ? elements : [elements[Number(key)]].filter(Boolean);
+    } else if (ts.isIdentifier(expression)) {
+      const symbol = identifierSymbol(expression);
+      const sources = (symbol?.declarations ?? []).filter(ts.isVariableDeclaration).map(declaration => declaration.initializer).filter(Boolean);
+      sources.push(...(assignments.get(symbol) ?? []).filter(value => !value.keys.length).map(value => value.expression));
+      const routes = sources.map(source => classProjection(source, keys, seen));
+      return routes.length && routes.every(route => route !== null) ? routes.flat() : null;
+    } else return null;
+    const routes = candidates.map(candidate => classProjection(candidate, rest, seen));
+    return routes.every(route => route !== null) ? routes.flat() : null;
   }
   const baseExpressions = node => (node.heritageClauses ?? []).filter(clause => clause.token === ts.SyntaxKind.ExtendsKeyword).flatMap(clause => clause.types.map(type => type.expression));
   function instanceValues(node, seen = new Set()) {
@@ -124,27 +183,58 @@ export function inspectSource(source, path = 'source.ts') {
     }
     return null;
   }
-  function aliasRoots(expression) {
+  function instanceOwners(expression, seen = new Set()) {
     expression = unwrap(expression);
-    if (!expression) return [];
+    if (!expression || seen.has(expression)) return null;
+    seen = new Set(seen).add(expression);
+    if (expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const owner = thisOwner(expression);
+      return owner && !owner.static ? [owner.node] : null;
+    }
+    if (ts.isNewExpression(expression)) return localClasses(expression.expression);
+    if (ts.isAwaitExpression(expression)) return instanceOwners(expression.expression, seen);
+    if (!ts.isIdentifier(expression)) return null;
+    const symbol = identifierSymbol(expression);
+    const values = (symbol?.declarations ?? []).filter(ts.isVariableDeclaration).map(declaration => declaration.initializer).filter(Boolean);
+    values.push(...(assignments.get(symbol) ?? []).filter(value => !value.keys.length).map(value => value.expression));
+    const owners = values.map(value => instanceOwners(value, seen));
+    return owners.length && owners.every(Boolean) ? owners.flat() : null;
+  }
+  function classMemberAccess(owner, isStatic, key, seen, bases = new Set()) {
+    if (bases.has(owner)) return ['process', '*'];
+    bases = new Set(bases).add(owner);
+    const symbol = isStatic ? carrierSymbol(owner) : instanceSymbol(owner);
+    if (hasHostMutation(symbol)) return ['process', '*'];
+    const fields = owner.members.filter(field => ts.isPropertyDeclaration(field) && Boolean(hasStatic(field)) === isStatic && (key === '*' || propertyKey(field.name) === key));
+    const stored = classFields.get(symbol);
+    const values = [...fields.map(field => field.initializer), ...(key === '*' ? [...(stored?.values() ?? [])].flat() : stored?.get(key) ?? [])];
+    const routes = values.map(value => access(value, seen));
+    for (const base of baseExpressions(owner)) for (const parent of localClasses(base) ?? []) routes.push(classMemberAccess(parent, isStatic, key, seen, bases));
+    return key === '*' ? routes.some(Boolean) ? ['process', '*'] : null : mergeAccess(routes);
+  }
+  function aliasRoots(expression, seen = new Set()) {
+    expression = unwrap(expression);
+    if (!expression || seen.has(expression)) return [];
+    seen = new Set(seen).add(expression);
+    const roots = value => aliasRoots(value, seen);
     if (ts.isIdentifier(expression)) return [identifierSymbol(expression)].filter(Boolean);
-    if (ts.isClassDeclaration(expression) || ts.isClassExpression(expression) || ts.isModuleDeclaration(expression)) return [carrierSymbol(expression), ...carrierValues(expression).flatMap(aliasRoots)];
-    if (ts.isNewExpression(expression)) return (localClasses(expression.expression) ?? []).flatMap(owner => [instanceSymbol(owner), ...instanceValues(owner).flatMap(aliasRoots)]);
+    if (ts.isClassDeclaration(expression) || ts.isClassExpression(expression) || ts.isModuleDeclaration(expression)) return [carrierSymbol(expression), ...carrierValues(expression).flatMap(roots)];
+    if (ts.isNewExpression(expression)) return (localClasses(expression.expression) ?? []).flatMap(owner => [instanceSymbol(owner), ...instanceValues(owner).flatMap(roots)]);
     if (expression.kind === ts.SyntaxKind.ThisKeyword) {
       const owner = thisOwner(expression);
       return owner ? [owner.static ? carrierSymbol(owner.node) : instanceSymbol(owner.node)] : [];
     }
     if (ts.isCallExpression(expression) && ((ts.isIdentifier(expression.expression) && expression.expression.text === 'require') || expression.expression.kind === ts.SyntaxKind.ImportKeyword) && ts.isStringLiteralLike(expression.arguments[0]) && ['process', 'node:process'].includes(expression.arguments[0].text)) return [globalProcessSymbol];
-    if (ts.isAwaitExpression(expression)) return aliasRoots(expression.expression);
-    if (ts.isQualifiedName(expression)) return aliasRoots(expression.left);
-    if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) return aliasRoots(expression.expression);
-    if (ts.isConditionalExpression(expression)) return [...aliasRoots(expression.whenTrue), ...aliasRoots(expression.whenFalse)];
+    if (ts.isAwaitExpression(expression)) return roots(expression.expression);
+    if (ts.isQualifiedName(expression)) return roots(expression.left);
+    if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) return roots(expression.expression);
+    if (ts.isConditionalExpression(expression)) return [...roots(expression.whenTrue), ...roots(expression.whenFalse)];
     if (ts.isBinaryExpression(expression)) {
-      if ([ts.SyntaxKind.EqualsToken, ts.SyntaxKind.CommaToken].includes(expression.operatorToken.kind)) return aliasRoots(expression.right);
-      if ([ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(expression.operatorToken.kind)) return [...aliasRoots(expression.left), ...aliasRoots(expression.right)];
+      if ([ts.SyntaxKind.EqualsToken, ts.SyntaxKind.CommaToken].includes(expression.operatorToken.kind)) return roots(expression.right);
+      if ([ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(expression.operatorToken.kind)) return [...roots(expression.left), ...roots(expression.right)];
     }
-    if (ts.isArrayLiteralExpression(expression)) return expression.elements.flatMap(element => aliasRoots(ts.isSpreadElement(element) ? element.expression : element));
-    if (ts.isObjectLiteralExpression(expression)) return expression.properties.flatMap(property => aliasRoots(ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : ts.isSpreadAssignment(property) ? property.expression : null));
+    if (ts.isArrayLiteralExpression(expression)) return expression.elements.flatMap(element => roots(ts.isSpreadElement(element) ? element.expression : element));
+    if (ts.isObjectLiteralExpression(expression)) return expression.properties.flatMap(property => roots(ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : ts.isSpreadAssignment(property) ? property.expression : null));
     return [];
   }
   function linkSymbols(symbol, other) {
@@ -173,7 +263,12 @@ export function inspectSource(source, path = 'source.ts') {
     const component = mutationsFor(symbol);
     if (component.recognized === undefined && !component.evaluating) {
       component.evaluating = true;
-      try { component.recognized = component.mutations.some(value => access(value)); }
+      try { component.recognized = component.mutations.some(({ expression, target }) => {
+        const route = access(expression);
+        if (!route) return (localClasses(expression) ?? []).some(owner => instanceValues(owner).some(value => access(value)));
+        // Restoring the same known host method does not introduce a new route.
+        return !['process.exit', 'process.stdout.write'].includes(route.join('.')) || access(target)?.join('.') !== route.join('.');
+      }); }
       finally { component.evaluating = false; }
     }
     return component.recognized;
@@ -208,8 +303,18 @@ export function inspectSource(source, path = 'source.ts') {
     } else if (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) {
       const key = ts.isPropertyAccessExpression(target) ? target.name.text : ts.isStringLiteralLike(target.argumentExpression) ? target.argumentExpression.text : '*';
       if (key === 'bind' || key === '*') hasBindOverrides = true;
+      const receiver = unwrap(target.expression);
+      const owner = receiver.kind === ts.SyntaxKind.ThisKeyword && thisOwner(receiver);
+      if (owner && key !== '*') {
+        const symbol = owner.static ? carrierSymbol(owner.node) : instanceSymbol(owner.node);
+        if (!classFields.has(symbol)) classFields.set(symbol, new Map());
+        const fields = classFields.get(symbol);
+        fields.set(key, [...(fields.get(key) ?? []), expression]);
+        linkAliases(symbol, expression);
+        return;
+      }
       for (const symbol of aliasRoots(target.expression)) {
-        containerMutations.set(symbol, [...(containerMutations.get(symbol) ?? []), expression]);
+        containerMutations.set(symbol, [...(containerMutations.get(symbol) ?? []), { expression, target }]);
         linkAliases(symbol, expression);
       }
     }
@@ -242,6 +347,7 @@ export function inspectSource(source, path = 'source.ts') {
     return owner && ts.isForOfStatement(owner) && owner.initializer === declaration.parent ? owner.expression : declaration.initializer;
   }
   collectAssignments(sf);
+  mutationComponents.clear();
   const member = (base, key) => {
     if (!base) return null;
     if (base.join('.') === 'process') {
@@ -249,6 +355,7 @@ export function inspectSource(source, path = 'source.ts') {
       // Process data and unrelated methods cannot become exit/stdout boundaries.
       if (!['exit', 'stdout', '*'].includes(key)) return null;
     }
+    if (base.join('.') === 'process.stdout' && !['write', '*'].includes(key)) return null;
     return [...base, key];
   };
   function assignedAccess(value, seen) {
@@ -332,12 +439,23 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isArrayLiteralExpression(node)) return node.elements.some(element => access(ts.isSpreadElement(element) ? element.expression : element, seen)) ? ['process', '*'] : null;
     if (ts.isObjectLiteralExpression(node)) return node.properties.some(property => access(ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : ts.isSpreadAssignment(property) ? property.expression : null, seen)) ? ['process', '*'] : null;
     if (ts.isPropertyAccessExpression(node)) {
+      const receiver = unwrap(node.expression);
+      const owner = receiver.kind === ts.SyntaxKind.ThisKeyword && thisOwner(receiver);
+      if (owner) return classMemberAccess(owner.node, Boolean(owner.static), node.name.text, seen);
+      const instances = instanceOwners(receiver);
+      if (instances) return mergeAccess(instances.map(instance => classMemberAccess(instance, false, node.name.text, seen)));
       const base = access(node.expression, seen);
       return member(base, node.name.text);
     }
     if (ts.isElementAccessExpression(node)) {
+      const receiver = unwrap(node.expression);
+      const key = ts.isStringLiteralLike(node.argumentExpression) ? node.argumentExpression.text : '*';
+      const owner = receiver.kind === ts.SyntaxKind.ThisKeyword && thisOwner(receiver);
+      if (owner) return classMemberAccess(owner.node, Boolean(owner.static), key, seen);
+      const instances = instanceOwners(receiver);
+      if (instances) return mergeAccess(instances.map(instance => classMemberAccess(instance, false, key, seen)));
       const base = access(node.expression, seen);
-      return member(base, ts.isStringLiteralLike(node.argumentExpression) ? node.argumentExpression.text : '*');
+      return member(base, key);
     }
     if (ts.isCallExpression(node)) {
       if (((ts.isIdentifier(node.expression) && node.expression.text === 'require') || node.expression.kind === ts.SyntaxKind.ImportKeyword) &&
