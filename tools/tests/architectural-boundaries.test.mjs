@@ -171,6 +171,19 @@ test('numeric destructuring keys preserve literal-object host boundaries', () =>
   assert.equal(inspectSource('const {0:emit} = {0:process.stdout.write}; emit("x")').stdout.length, 1);
   assert.equal(inspectSource('let emit; ({0:emit} = {0:process.stdout.write}); emit("x")').stdout.length, 1);
 });
+test('tagged templates account for executable bound host methods', () => {
+  assert.equal(inspectSource('const quit=process.exit.bind(process,7); quit`x`').exits.length, 1);
+  assert.equal(inspectSource('const emit=process.stdout.write.bind(process.stdout,"x",undefined,()=>{}); emit`y`').stdout.length, 1);
+  assert.deepEqual(inspectSource('const render=(parts)=>parts.join(""); render`x`'), {exits:[], stdout:[], ambiguous:[]});
+});
+test('direct global process member transfers cannot obtain clearance', () => {
+  for (const source of [
+    'process["quit"]=process.exit; process["quit"](7)',
+    'process.stdout.emit=process.stdout.write; process.stdout.emit("x")',
+    'const p=process; process.quit=process.exit; p.quit(1)',
+  ]) assert.equal(inspectSource(source).ambiguous.length, 1, source);
+  assert.deepEqual(inspectSource('process.exitCode=1; process.stdout.columns=80; process.cwd()'), {exits:[], stdout:[], ambiguous:[]});
+});
 test('process data in arrays and alternative environment keys do not create host boundaries', () => {
   assert.equal(inspectSource('const args = [process.execPath, "--flag"]; args.map(String).join(" "); const roots = process.env["ROOT_A"] || process.env["ROOT_B"] || ""; roots.split(",")').ambiguous.length, 0);
 });

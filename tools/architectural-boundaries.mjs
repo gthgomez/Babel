@@ -26,6 +26,11 @@ export function inspectSource(source, path = 'source.ts') {
   const containerMutations = new Map();
   const containerAliases = new Map();
   const mutationComponents = new Map();
+  const globalProcessSymbol = Symbol('unshadowed global process');
+  function identifierSymbol(node) {
+    const symbol = ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
+    return symbol ?? (node.text === 'process' ? globalProcessSymbol : undefined);
+  }
   function unwrap(node) {
     while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node))) node = node.expression;
     return node;
@@ -40,7 +45,7 @@ export function inspectSource(source, path = 'source.ts') {
   function aliasRoots(expression) {
     expression = unwrap(expression);
     if (!expression) return [];
-    if (ts.isIdentifier(expression)) return [ts.isShorthandPropertyAssignment(expression.parent) && expression.parent.name === expression ? checker.getShorthandAssignmentValueSymbol(expression.parent) : checker.getSymbolAtLocation(expression)].filter(Boolean);
+    if (ts.isIdentifier(expression)) return [identifierSymbol(expression)].filter(Boolean);
     if (ts.isAwaitExpression(expression)) return aliasRoots(expression.expression);
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) return aliasRoots(expression.expression);
     if (ts.isConditionalExpression(expression)) return [...aliasRoots(expression.whenTrue), ...aliasRoots(expression.whenFalse)];
@@ -77,7 +82,7 @@ export function inspectSource(source, path = 'source.ts') {
     target = unwrap(target);
     if (!target) return;
     if (ts.isIdentifier(target)) {
-      const symbol = bindingSymbol ?? checker.getSymbolAtLocation(target);
+      const symbol = bindingSymbol ?? identifierSymbol(target);
       if (!symbol) return;
       const values = assignments.get(symbol) ?? [];
       values.push({ expression, keys });
@@ -215,7 +220,7 @@ export function inspectSource(source, path = 'source.ts') {
       if (callee?.at(-1) === 'bind') return callee.slice(0, -1);
     }
     if (!ts.isIdentifier(node)) return null;
-    const symbol = ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
+    const symbol = identifierSymbol(node);
     const declarations = symbol?.declarations ?? [];
     const component = mutationsFor(symbol);
     // Every alias in a component shares its mutation seeds. Evaluate those seeds
@@ -271,8 +276,8 @@ export function inspectSource(source, path = 'source.ts') {
   }
   const exits = [], stdout = [], ambiguous = [];
   function visit(node) {
-    if (ts.isCallExpression(node)) {
-      let route = access(node.expression);
+    if (ts.isCallExpression(node) || ts.isTaggedTemplateExpression(node)) {
+      let route = access(ts.isTaggedTemplateExpression(node) ? node.tag : node.expression);
       if (['call', 'apply'].includes(route?.at(-1))) route = route.slice(0, -1);
       const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
       if (route?.join('.') === 'process.exit') exits.push(line);
