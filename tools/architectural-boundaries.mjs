@@ -36,18 +36,26 @@ export function inspectSource(source, path = 'source.ts') {
         else if (ts.isPropertyAssignment(property)) {
           const key = property.name;
           collectTarget(property.initializer, expression, [...keys, ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*']);
-        }
+        } else if (ts.isSpreadAssignment(property)) collectTarget(property.expression, expression, keys);
       }
+    } else if (ts.isArrayLiteralExpression(target)) {
+      target.elements.forEach((element, index) => collectTarget(ts.isSpreadElement(element) ? element.expression : element, expression, [...keys, ts.isSpreadElement(element) ? '*' : String(index)]));
     }
   }
   function collectAssignments(node) {
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) collectTarget(node.left, node.right);
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.EqualsToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(node.operatorToken.kind)) collectTarget(node.left, node.right);
     ts.forEachChild(node, collectAssignments);
   }
   collectAssignments(sf);
   const member = (base, key) => base && (base.join('.') === 'process' && key === 'default' ? base : [...base, key]);
   function assignedAccess(value, seen) {
-    return value.keys.reduce(member, access(value.expression, seen));
+    return projectionAccess(value.expression, value.keys, seen);
+  }
+  function projectionAccess(expression, keys, seen) {
+    if (!keys.length) return access(expression, seen);
+    while (expression && (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) || ts.isNonNullExpression(expression))) expression = expression.expression;
+    if (expression && ts.isArrayLiteralExpression(expression) && /^\d+$/.test(keys[0])) return projectionAccess(expression.elements[Number(keys[0])], keys.slice(1), seen);
+    return keys.reduce(member, access(expression, seen));
   }
   function moduleOf(node) {
     while (node && !ts.isImportDeclaration(node)) node = node.parent;
@@ -64,9 +72,10 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node) || ts.isAwaitExpression(node)) return access(node.expression, seen);
     if (ts.isConditionalExpression(node)) return mergeAccess([access(node.whenTrue, seen), access(node.whenFalse, seen)]);
     if (ts.isBinaryExpression(node)) {
-      if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken) return access(node.right, seen);
+      if ([ts.SyntaxKind.EqualsToken, ts.SyntaxKind.CommaToken].includes(node.operatorToken.kind)) return access(node.right, seen);
       if ([ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken].includes(node.operatorToken.kind)) return mergeAccess([access(node.left, seen), access(node.right, seen)]);
     }
+    if (ts.isArrayLiteralExpression(node)) return node.elements.some(element => access(ts.isSpreadElement(element) ? element.expression : element, seen)) ? ['process', '*'] : null;
     if (ts.isPropertyAccessExpression(node)) {
       const base = access(node.expression, seen);
       return member(base, node.name.text);
@@ -99,7 +108,7 @@ export function inspectSource(source, path = 'source.ts') {
         if (new Set(candidates.map(route => route.join('.'))).size > 1) return ['process', '*'];
         if (candidates.length) return candidates[0];
       }
-      if (ts.isBindingElement(declaration) && ts.isObjectBindingPattern(declaration.parent)) {
+      if (ts.isBindingElement(declaration) && (ts.isObjectBindingPattern(declaration.parent) || ts.isArrayBindingPattern(declaration.parent))) {
         const candidates = [bindingAccess(declaration, seen), ...(assignments.get(symbol) ?? []).map(value => assignedAccess(value, seen))].filter(Boolean);
         if (new Set(candidates.map(route => route.join('.'))).size > 1) return ['process', '*'];
         if (candidates.length) return candidates[0];
@@ -113,7 +122,13 @@ export function inspectSource(source, path = 'source.ts') {
   }
   function bindingAccess(element, seen) {
     const owner = element.parent.parent;
+    if (ts.isArrayBindingPattern(element.parent)) {
+      const index = element.parent.elements.indexOf(element);
+      const key = element.dotDotDotToken ? '*' : String(index);
+      return ts.isBindingElement(owner) ? member(bindingAccess(owner, seen), key) : projectionAccess(owner.initializer, [key], seen);
+    }
     const base = ts.isBindingElement(owner) ? bindingAccess(owner, seen) : access(owner.initializer, seen);
+    if (element.dotDotDotToken) return base;
     const key = element.propertyName ?? element.name;
     return member(base, ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*');
   }

@@ -11,6 +11,14 @@ for (const source of [
   'const p = flag ? process : {}; p.exit(1)',
   'const p = replacement || process; p.exit(1)',
   'const p = replacement ?? process; p.exit(1)',
+  'let quit; quit ||= process.exit; quit(1)',
+  'let quit; quit ??= process.exit; quit(1)',
+  'let quit; quit &&= process.exit; quit(1)',
+  'const [quit] = [process.exit]; quit(1)',
+  'let quit; [quit] = [process.exit]; quit(1)',
+  'const {...p} = process; p.exit(1)',
+  'let p; ({...p} = process); p.exit(1)',
+  '(0, process.exit)(1)',
   "const {default: p} = await import('node:process'); p.exit(1)",
   "const p = await import('node:process'); p['default'].exit(1)",
   "import { default as process } from 'node:process'; process.exit(1)",
@@ -39,6 +47,13 @@ test('nested destructuring and global stdout retain output ownership', () => {
 });
 test('shorthand destructuring assignments retain output ownership', () => {
   assert.equal(inspectSource('let write; ({stdout: {write}} = process); write("x")').stdout.length, 1);
+});
+test('array destructuring and logical assignments retain output ownership', () => {
+  assert.equal(inspectSource('let write; [write] = [process.stdout.write]; write("x"); let out; out ??= process.stdout; out.write("y")').stdout.length, 2);
+});
+test('array aliases and rest bindings cannot obtain false clearance', () => {
+  assert.equal(inspectSource('const values = [process]; const [p] = values; p.exit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('const [...values] = [process]; values[0].exit(1)').ambiguous.length, 1);
 });
 test('unknown dynamic process access fails closed', () => {
   assert.equal(inspectSource('process[name](1)').ambiguous.length, 1);
