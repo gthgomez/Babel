@@ -32,10 +32,16 @@ export function inspectSource(source, path = 'source.ts') {
   function aliasRoots(expression) {
     expression = unwrap(expression);
     if (!expression) return [];
-    if (ts.isIdentifier(expression)) return [checker.getSymbolAtLocation(expression)].filter(Boolean);
+    if (ts.isIdentifier(expression)) return [ts.isShorthandPropertyAssignment(expression.parent) ? checker.getShorthandAssignmentValueSymbol(expression.parent) : checker.getSymbolAtLocation(expression)].filter(Boolean);
+    if (ts.isAwaitExpression(expression)) return aliasRoots(expression.expression);
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) return aliasRoots(expression.expression);
     if (ts.isConditionalExpression(expression)) return [...aliasRoots(expression.whenTrue), ...aliasRoots(expression.whenFalse)];
-    if (ts.isBinaryExpression(expression) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken].includes(expression.operatorToken.kind)) return [...aliasRoots(expression.left), ...aliasRoots(expression.right)];
+    if (ts.isBinaryExpression(expression)) {
+      if ([ts.SyntaxKind.EqualsToken, ts.SyntaxKind.CommaToken].includes(expression.operatorToken.kind)) return aliasRoots(expression.right);
+      if ([ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(expression.operatorToken.kind)) return [...aliasRoots(expression.left), ...aliasRoots(expression.right)];
+    }
+    if (ts.isArrayLiteralExpression(expression)) return expression.elements.flatMap(element => aliasRoots(ts.isSpreadElement(element) ? element.expression : element));
+    if (ts.isObjectLiteralExpression(expression)) return expression.properties.flatMap(property => aliasRoots(ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : ts.isSpreadAssignment(property) ? property.expression : null));
     return [];
   }
   function linkAliases(symbol, expression) {
@@ -93,14 +99,18 @@ export function inspectSource(source, path = 'source.ts') {
     }
   }
   function collectAssignments(node) {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) linkAliases(checker.getSymbolAtLocation(node.name), node.initializer);
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) linkAliases(checker.getSymbolAtLocation(node.name), declarationSource(node));
     if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) {
       let owner = node.parent.parent;
       while (ts.isBindingElement(owner)) owner = owner.parent.parent;
-      linkAliases(checker.getSymbolAtLocation(node.name), owner.initializer);
+      linkAliases(checker.getSymbolAtLocation(node.name), declarationSource(owner));
     }
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.EqualsToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(node.operatorToken.kind)) collectTarget(node.left, node.right);
     ts.forEachChild(node, collectAssignments);
+  }
+  function declarationSource(declaration) {
+    const owner = declaration.parent?.parent;
+    return owner && ts.isForOfStatement(owner) && owner.initializer === declaration.parent ? owner.expression : declaration.initializer;
   }
   collectAssignments(sf);
   const member = (base, key) => {
@@ -204,7 +214,7 @@ export function inspectSource(source, path = 'source.ts') {
         if (ts.isImportClause(declaration) || ts.isNamespaceImport(declaration)) return ['process'];
       }
       if (ts.isVariableDeclaration(declaration)) {
-        const candidates = [access(declaration.initializer, seen), ...(assignments.get(symbol) ?? []).map(value => assignedAccess(value, seen))].filter(Boolean);
+        const candidates = [access(declarationSource(declaration), seen), ...(assignments.get(symbol) ?? []).map(value => assignedAccess(value, seen))].filter(Boolean);
         if (new Set(candidates.map(route => route.join('.'))).size > 1) return ['process', '*'];
         if (candidates.length) return candidates[0];
       }
@@ -225,13 +235,13 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isArrayBindingPattern(element.parent)) {
       const index = element.parent.elements.indexOf(element);
       const key = element.dotDotDotToken ? '*' : String(index);
-      return ts.isBindingElement(owner) ? member(bindingAccess(owner, seen), key) : projectionAccess(owner.initializer, [key], seen);
+      return ts.isBindingElement(owner) ? member(bindingAccess(owner, seen), key) : projectionAccess(declarationSource(owner), [key], seen);
     }
-    const base = ts.isBindingElement(owner) ? bindingAccess(owner, seen) : access(owner.initializer, seen);
+    const base = ts.isBindingElement(owner) ? bindingAccess(owner, seen) : access(declarationSource(owner), seen);
     if (element.dotDotDotToken) return base;
     const key = element.propertyName ?? element.name;
     const name = ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*';
-    return ts.isBindingElement(owner) ? member(base, name) : projectionAccess(owner.initializer, [name], seen);
+    return ts.isBindingElement(owner) ? member(base, name) : projectionAccess(declarationSource(owner), [name], seen);
   }
   const exits = [], stdout = [], ambiguous = [];
   function visit(node) {

@@ -87,6 +87,20 @@ test('wrapped container assignment receivers cannot obtain false clearance', () 
   assert.equal(inspectSource('const box = {}; (box).quit = process.exit; box.quit(1)').ambiguous.length, 1);
   assert.equal(inspectSource('const box = {}; (box as any).write = process.stdout.write; box.write("x")').ambiguous.length, 1);
 });
+for (const container of ['{original}', '[original]', '{nested: {alias: original}}']) test('literal containers preserve reverse mutation ownership: ' + container, () => {
+  const receiver = container === '[original]' ? 'box[0]' : container.includes('nested') ? 'box.nested.alias' : 'box.original';
+  assert.equal(inspectSource(`const original = {}; const box = ${container}; ${receiver}.quit = process.exit; original.quit(1)`).ambiguous.length, 1);
+});
+for (const value of ['(0, original)', 'await original', '(other = original)', '(other ??= original)']) test('transparent local values preserve reverse mutation ownership: ' + value, () => {
+  assert.equal(inspectSource(`const original = {}; let other; const alias = ${value}; alias.write = process.stdout.write; original.write("x")`).ambiguous.length, 1);
+});
+test('nested binding and static iteration preserve container ownership', () => {
+  assert.equal(inspectSource('const original = {}; const {nested: {alias}} = {nested: {alias: original}}; alias.quit = process.exit; original.quit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('const original = {}; for (const alias of [original]) alias.quit = process.exit; original.quit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('for (const p of [process]) p.exit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('for (const {p} of [{p: process}]) p.exit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('for (const [p] of [[process]]) p.exit(1)').ambiguous.length, 1);
+});
 test('computed object overrides and stdout spreads cannot obtain false clearance', () => {
   assert.equal(inspectSource('const {quit} = {quit: () => {}, [name]: process.exit}; quit(1)').ambiguous.length, 1);
   assert.equal(inspectSource('const {write} = {write: () => {}, ...{write: process.stdout.write}}; write("x")').stdout.length, 1);
