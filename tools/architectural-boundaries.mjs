@@ -73,6 +73,11 @@ export function inspectSource(source, path = 'source.ts') {
       const elements = literalArrayElements(expression);
       return elements ? projectionAccess(elements[Number(keys[0])], keys.slice(1), seen) : access(expression, seen);
     }
+    if (expression && ts.isObjectLiteralExpression(expression)) {
+      const property = expression.properties.find(property => (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) &&
+        (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)) && property.name.text === keys[0]);
+      if (property) return projectionAccess(ts.isPropertyAssignment(property) ? property.initializer : property.name, keys.slice(1), seen);
+    }
     return keys.reduce(member, access(expression, seen));
   }
   function literalArrayElements(expression) {
@@ -109,6 +114,7 @@ export function inspectSource(source, path = 'source.ts') {
       if ([ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(node.operatorToken.kind)) return mergeAccess([access(node.left, seen), access(node.right, seen)]);
     }
     if (ts.isArrayLiteralExpression(node)) return node.elements.some(element => access(ts.isSpreadElement(element) ? element.expression : element, seen)) ? ['process', '*'] : null;
+    if (ts.isObjectLiteralExpression(node)) return node.properties.some(property => access(ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : ts.isSpreadAssignment(property) ? property.expression : null, seen)) ? ['process', '*'] : null;
     if (ts.isPropertyAccessExpression(node)) {
       const base = access(node.expression, seen);
       return member(base, node.name.text);
@@ -124,7 +130,7 @@ export function inspectSource(source, path = 'source.ts') {
       if (callee?.at(-1) === 'bind') return callee.slice(0, -1);
     }
     if (!ts.isIdentifier(node)) return null;
-    const symbol = checker.getSymbolAtLocation(node);
+    const symbol = ts.isShorthandPropertyAssignment(node.parent) ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
     const declarations = symbol?.declarations ?? [];
     if (node.text === 'process' && declarations.length === 0) return ['process'];
     if (['globalThis', 'global'].includes(node.text) && declarations.length === 0) return [];
@@ -163,7 +169,8 @@ export function inspectSource(source, path = 'source.ts') {
     const base = ts.isBindingElement(owner) ? bindingAccess(owner, seen) : access(owner.initializer, seen);
     if (element.dotDotDotToken) return base;
     const key = element.propertyName ?? element.name;
-    return member(base, ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*');
+    const name = ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*';
+    return ts.isBindingElement(owner) ? member(base, name) : projectionAccess(owner.initializer, [name], seen);
   }
   const exits = [], stdout = [], ambiguous = [];
   function visit(node) {
