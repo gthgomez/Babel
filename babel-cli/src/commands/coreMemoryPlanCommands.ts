@@ -191,9 +191,9 @@ historyCommand
       try {
         const task = taskParts.join(" ");
         const { runBabelPipeline } = await import("../pipeline.js");
-        const pipelineOptions: Record<string, unknown> = { mode: "plan" };
+        const pipelineOptions: Parameters<typeof runBabelPipeline>[1] = { mode: "plan" };
         if (options.project) pipelineOptions["project"] = options.project;
-        const result = await runBabelPipeline(task, pipelineOptions as any);
+        const result = await runBabelPipeline(task, pipelineOptions);
         console.log(`Plan created. Run directory: ${result.runDir}`);
         if (result.manualPromptPath) {
           console.log(`Manual prompt: ${result.manualPromptPath}`);
@@ -256,12 +256,12 @@ program
     .action(async (planDir: string, options: { lock?: string }) => {
       try {
         const { runBabelPipeline } = await import("../pipeline.js");
-        const pipelineOptions: Record<string, unknown> = { mode: "deep" };
+        const pipelineOptions: Parameters<typeof runBabelPipeline>[1] = { mode: "deep" };
         if (options.lock)
           pipelineOptions["lockedFiles"] = options.lock
             .split(",")
             .map((f) => f.trim());
-        const result = await runBabelPipeline(planDir, pipelineOptions as any);
+        const result = await runBabelPipeline(planDir, pipelineOptions);
         console.log(`Plan applied. Status: ${result.status}`);
         console.log(`Run directory: ${result.runDir}`);
       } catch (error: any) {
