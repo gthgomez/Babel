@@ -154,10 +154,10 @@ export function inspectSource(source, path = 'source.ts') {
         else if (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) {
           const value = ts.isPropertyAssignment(property) ? property.initializer : property.name;
           const name = property.name;
-          if ((ts.isIdentifier(name) || ts.isStringLiteralLike(name)) && name.text === keys[0]) routes.push(projectionAccess(value, keys.slice(1), seen));
+          if (!ts.isComputedPropertyName(name) && propertyKey(name) === keys[0]) routes.push(projectionAccess(value, keys.slice(1), seen));
           else if (ts.isComputedPropertyName(name)) {
-            if (ts.isStringLiteralLike(name.expression) && name.expression.text === keys[0]) routes.push(projectionAccess(value, keys.slice(1), seen));
-            else if (!ts.isStringLiteralLike(name.expression) && access(value, seen)) routes.push(['process', '*']);
+            if (propertyKey(name) === keys[0]) routes.push(projectionAccess(value, keys.slice(1), seen));
+            else if (propertyKey(name) === '*' && access(value, seen)) routes.push(['process', '*']);
           }
         }
       }

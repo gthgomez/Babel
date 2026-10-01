@@ -160,6 +160,17 @@ test('computed destructuring keys preserve literal-object host boundaries', () =
 test('calls on environment values are not dynamic process methods', () => {
   assert.equal(inspectSource('process.env[name].trim()').ambiguous.length, 0);
 });
+test('numeric destructuring keys preserve literal-object host boundaries', () => {
+  for (const source of [
+    'const {0: quit} = {0:process.exit}; quit(1)',
+    'const {[0]: quit} = {0:process.exit}; quit(1)',
+    'let quit; ({0:quit} = {0:process.exit}); quit(1)',
+    'let quit; ({[0]:quit} = {0:process.exit}); quit(1)',
+    'const {16:quit} = {0x10:process.exit}; quit(1)',
+  ]) assert.equal(inspectSource(source).exits.length, 1, source);
+  assert.equal(inspectSource('const {0:emit} = {0:process.stdout.write}; emit("x")').stdout.length, 1);
+  assert.equal(inspectSource('let emit; ({0:emit} = {0:process.stdout.write}); emit("x")').stdout.length, 1);
+});
 test('process data in arrays and alternative environment keys do not create host boundaries', () => {
   assert.equal(inspectSource('const args = [process.execPath, "--flag"]; args.map(String).join(" "); const roots = process.env["ROOT_A"] || process.env["ROOT_B"] || ""; roots.split(",")').ambiguous.length, 0);
 });
