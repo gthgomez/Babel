@@ -90,14 +90,9 @@ export function inspectSource(source, path = 'source.ts') {
       collectTarget(target.left, expression, keys);
       collectTarget(target.left, target.right);
     } else if (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) {
-      let container = unwrap(target.expression);
-      while (ts.isPropertyAccessExpression(container) || ts.isElementAccessExpression(container)) container = unwrap(container.expression);
-      if (ts.isIdentifier(container)) {
-        const symbol = checker.getSymbolAtLocation(container);
-        if (symbol) {
-          containerMutations.set(symbol, [...(containerMutations.get(symbol) ?? []), expression]);
-          linkAliases(symbol, expression);
-        }
+      for (const symbol of aliasRoots(target.expression)) {
+        containerMutations.set(symbol, [...(containerMutations.get(symbol) ?? []), expression]);
+        linkAliases(symbol, expression);
       }
     }
   }
