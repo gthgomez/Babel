@@ -145,6 +145,18 @@ test('enclosing binding defaults preserve process projections and reverse aliase
 test('unknown dynamic process access fails closed', () => {
   assert.equal(inspectSource('process[name](1)').ambiguous.length, 1);
 });
+test('computed destructuring keys preserve literal-object host boundaries', () => {
+  for (const source of [
+    'const {["quit"]: quit} = {quit:process.exit}; quit(1)',
+    'const {["p"]: p} = {p:process}; p.exit(1)',
+    'let quit; ({["quit"]: quit} = {quit:process.exit}); quit(1)',
+  ]) assert.equal(inspectSource(source).exits.length, 1, source);
+  assert.equal(inspectSource('const {nested: {["quit"]: quit}} = {nested:{quit:process.exit}}; quit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('let emit; ({["emit"]: emit} = {emit:process.stdout.write}); emit("x")').stdout.length, 1);
+  assert.equal(inspectSource('const {[name]: quit} = {quit:process.exit}; quit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('let quit; ({[name]: quit} = {quit:process.exit}); quit(1)').ambiguous.length, 1);
+  assert.deepEqual(inspectSource('const {[name]: run} = {run:()=>{}}; run()'), {exits:[], stdout:[], ambiguous:[]});
+});
 test('calls on environment values are not dynamic process methods', () => {
   assert.equal(inspectSource('process.env[name].trim()').ambiguous.length, 0);
 });

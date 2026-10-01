@@ -30,6 +30,13 @@ export function inspectSource(source, path = 'source.ts') {
     while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node))) node = node.expression;
     return node;
   }
+  function propertyKey(name) {
+    if (ts.isComputedPropertyName(name)) {
+      const expression = unwrap(name.expression);
+      return ts.isStringLiteralLike(expression) || ts.isNumericLiteral(expression) ? expression.text : '*';
+    }
+    return ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name) ? name.text : '*';
+  }
   function aliasRoots(expression) {
     expression = unwrap(expression);
     if (!expression) return [];
@@ -85,7 +92,7 @@ export function inspectSource(source, path = 'source.ts') {
         }
         else if (ts.isPropertyAssignment(property)) {
           const key = property.name;
-          collectTarget(property.initializer, expression, [...keys, ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*']);
+          collectTarget(property.initializer, expression, [...keys, propertyKey(key)]);
         } else if (ts.isSpreadAssignment(property)) collectTarget(property.expression, expression, keys);
       }
     } else if (ts.isArrayLiteralExpression(target)) {
@@ -134,6 +141,7 @@ export function inspectSource(source, path = 'source.ts') {
   }
   function projectionAccess(expression, keys, seen) {
     if (!keys.length) return access(expression, seen);
+    if (keys[0] === '*') return access(expression, seen) ? ['process', '*'] : null;
     while (expression && (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) || ts.isNonNullExpression(expression))) expression = expression.expression;
     if (expression && ts.isArrayLiteralExpression(expression) && /^\d+$/.test(keys[0])) {
       const elements = literalArrayElements(expression);
@@ -257,7 +265,7 @@ export function inspectSource(source, path = 'source.ts') {
     const base = ts.isBindingElement(owner) ? bindingAccess(owner, seen) : access(declarationSource(owner), seen);
     if (element.dotDotDotToken) return mergeAccess([base, access(element.initializer, seen)]);
     const key = element.propertyName ?? element.name;
-    const name = ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*';
+    const name = propertyKey(key);
     const projected = ts.isBindingElement(owner) ? member(base, name) : projectionAccess(declarationSource(owner), [name], seen);
     return mergeAccess([projected, access(element.initializer, seen)]);
   }
