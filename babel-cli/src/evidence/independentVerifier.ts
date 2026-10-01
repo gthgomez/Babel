@@ -5,7 +5,7 @@
  * Enable via:
  * - BABEL_INDEPENDENT_VERIFIER=1 (env always wins when set), or
  * - high-assurance execution profiles with independentVerifierDefault: true
- *   (benchmark_container, babel_research, opencalw_manager) when env is unset.
+ *   (benchmark_container, babel_research, workspace_manager) when env is unset.
  * Env explicit OFF (0/false/no/off) disables even for high-assurance profiles.
  */
 

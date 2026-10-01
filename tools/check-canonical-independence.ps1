@@ -30,7 +30,7 @@ foreach ($entry in @($config.temporary_exceptions)) {
   }
   $expiry = [datetime]::MinValue
   if ($isValid) {
-    if (-not [datetime]::TryParseExact([string]$entry.expires, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$expiry)) { $isValid = $false }
+    if (-not [datetime]::TryParseExact([string]$entry.expires, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, ([Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal), [ref]$expiry)) { $isValid = $false }
     elseif ($expiry.Date -lt [datetime]::UtcNow.Date) { $isValid = $false }
   }
   if ($isValid) { $validTemporaryExceptions += $entry }

@@ -2459,7 +2459,7 @@ Notes:
     .option(
       "--execution-profile <profile>",
       "Execution profile scope",
-      "opencalw_manager",
+      "workspace_manager",
     )
     .option("--json", "Emit structured JSON only")
     .action(
@@ -2473,7 +2473,7 @@ Notes:
           const request = requestDependencyInstallApproval({
             command: options.command ?? "",
             projectRoot: options.projectRoot ?? null,
-            executionProfile: options.executionProfile ?? "opencalw_manager",
+            executionProfile: options.executionProfile ?? "workspace_manager",
           });
           printApprovalRequestRequired(
             request.created ? "approval_requested" : "approval_existing",
@@ -2544,7 +2544,7 @@ Examples:
   $ babel jobs report job-20260428T010000Z
 
 Notes:
-  - Jobs default to execution profile opencalw_manager.
+  - Jobs default to execution profile workspace_manager.
   - Hard-task escalation rules create exact approval requests before expensive model use.
   - Completed OpenClaw manager jobs must pass local verification before they are marked complete.
 `,
@@ -2563,7 +2563,7 @@ Notes:
     .option(
       "--execution-profile <profile>",
       "Execution profile",
-      "opencalw_manager",
+      "workspace_manager",
     )
     .option(
       "--mode <mode>",
@@ -2598,7 +2598,7 @@ Notes:
             ...(options.id ? { id: options.id } : {}),
             task: taskParts.join(" "),
             mode: parseValidMode(options.mode),
-            executionProfile: options.executionProfile ?? "opencalw_manager",
+            executionProfile: options.executionProfile ?? "workspace_manager",
             ...(options.projectRoot
               ? { projectRoot: options.projectRoot }
               : {}),

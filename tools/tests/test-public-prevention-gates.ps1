@@ -17,6 +17,10 @@ $pcontFixtureRoot = Join-Path $repoRoot 'tools/tests/fixtures/pcont007'
 $pwshCandidate = 'C:\Program Files\PowerShell\7\pwsh.exe'
 $shell = if (Test-Path -LiteralPath $pwshCandidate -PathType Leaf) { $pwshCandidate } else { (Get-Command pwsh -ErrorAction Stop).Source }
 $tempRoot = Join-Path $repoRoot (".codex-public-gates-{0}" -f [guid]::NewGuid().ToString('N'))
+$fixturePolicy = Get-Content -Raw -LiteralPath $contentPolicy | ConvertFrom-Json
+$fixturePolicy.temporary_exceptions = @()
+$fixturePolicy.canonical_independence.temporary_exceptions = @()
+$fixturePolicyJson = $fixturePolicy | ConvertTo-Json -Depth 20
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) { throw "ASSERTION FAILED: $Message" }
@@ -26,7 +30,7 @@ function Initialize-Fixture([string]$Name) {
   New-Item -ItemType Directory -Path (Join-Path $root 'tools/security') -Force | Out-Null
   Copy-Item -LiteralPath $contentScript -Destination (Join-Path $root 'tools/check-public-content-policy.ps1')
   Copy-Item -LiteralPath $canonicalScript -Destination (Join-Path $root 'tools/check-canonical-independence.ps1')
-  Copy-Item -LiteralPath $contentPolicy -Destination (Join-Path $root 'tools/security/public-content-policy.json')
+  Set-Content -LiteralPath (Join-Path $root 'tools/security/public-content-policy.json') -Value $fixturePolicyJson
   Copy-Item -LiteralPath $commonModule -Destination (Join-Path $root 'tools/security/tracked-scan-common.psm1')
   @('INTEGRATION.md', 'PROJECT_CONTEXT.md', 'README.md', 'prompt_catalog.yaml') | ForEach-Object {
     Set-Content -LiteralPath (Join-Path $root $_) -Value ("# {0}`n" -f $_)
@@ -99,7 +103,71 @@ try {
   $invalidConfig = Invoke-Gate (Join-Path $positive 'tools/check-public-content-policy.ps1') $positive
   Assert-True ($invalidConfig.ExitCode -eq 1) 'invalid temporary exception metadata unexpectedly passed'
   Assert-True (@((ConvertFrom-Json $invalidConfig.Text).findings.id) -contains 'PCFG001') 'invalid temporary exception did not produce PCFG001'
-  Copy-Item -LiteralPath $contentPolicy -Destination $fixturePolicyPath -Force
+  Set-Content -LiteralPath $fixturePolicyPath -Value $fixturePolicyJson
+
+  # Exercise expiry boundaries independently of production migration deadlines.
+  foreach ($case in @(
+    @{ Name = 'expired'; Expiry = [datetime]::UtcNow.Date.AddDays(-1).ToString('yyyy-MM-dd'); Exit = 1 },
+    @{ Name = 'today'; Expiry = [datetime]::UtcNow.Date.ToString('yyyy-MM-dd'); Exit = 0 },
+    @{ Name = 'future'; Expiry = [datetime]::UtcNow.Date.AddDays(2).ToString('yyyy-MM-dd'); Exit = 0 },
+    @{ Name = 'malformed'; Expiry = 'not-a-date'; Exit = 1 }
+  )) {
+    $expiryRoot = Initialize-Fixture ("exception-{0}" -f $case.Name)
+    $expiryPolicyPath = Join-Path $expiryRoot 'tools/security/public-content-policy.json'
+    $expiryPolicy = Get-Content -Raw -LiteralPath $expiryPolicyPath | ConvertFrom-Json
+    $expiryPolicy.temporary_exceptions = @([pscustomobject]@{
+      id = 'TEST-EXPIRY'; rule_id = 'PCONT005'; path = 'sample.md'; pattern = '^stub:'
+      rationale = 'Controlled expiry fixture'; evidence = 'Expiry boundary test'
+      expires = $case.Expiry; replacement_pr = 'fixture-migration'
+    })
+    $expiryPolicy.canonical_independence.temporary_exceptions = @($expiryPolicy.temporary_exceptions)
+    Set-Content -LiteralPath $expiryPolicyPath -Value ($expiryPolicy | ConvertTo-Json -Depth 20)
+    Set-Content -LiteralPath (Join-Path $expiryRoot 'sample.md') -Value '# Expiry fixture'
+    & $git -C $expiryRoot add .
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to stage expiry fixture' }
+    $expiryResult = Invoke-Gate (Join-Path $expiryRoot 'tools/check-public-content-policy.ps1') $expiryRoot
+    Assert-True ($expiryResult.ExitCode -eq $case.Exit) "exception $($case.Name) had unexpected result: $($expiryResult.Text)"
+    $expiryIds = @((ConvertFrom-Json $expiryResult.Text).findings | ForEach-Object { $_.id })
+    Assert-True (($expiryIds -contains 'PCFG001') -eq ($case.Exit -eq 1)) "exception $($case.Name) configuration finding mismatch"
+    $canonicalExpiryResult = Invoke-Gate (Join-Path $expiryRoot 'tools/check-canonical-independence.ps1') $expiryRoot
+    Assert-True ($canonicalExpiryResult.ExitCode -eq $case.Exit) "canonical exception $($case.Name) had unexpected result: $($canonicalExpiryResult.Text)"
+    Assert-True ((@((ConvertFrom-Json $canonicalExpiryResult.Text).findings | ForEach-Object { $_.id }) -contains 'CCFG001') -eq ($case.Exit -eq 1)) "canonical exception $($case.Name) configuration finding mismatch"
+    Set-Content -LiteralPath (Join-Path $expiryRoot 'sample.md') -Value "# Expiry fixture`nstub: deliberate negative content"
+    $contentResult = Invoke-Gate (Join-Path $expiryRoot 'tools/check-public-content-policy.ps1') $expiryRoot
+    Assert-True ($contentResult.ExitCode -eq $case.Exit) "exception $($case.Name) failed to enforce content: $($contentResult.Text)"
+    Assert-True ((@((ConvertFrom-Json $contentResult.Text).findings | ForEach-Object { $_.id }) -contains 'PCONT005') -eq ($case.Exit -eq 1)) "exception $($case.Name) content finding mismatch"
+  }
+
+  # Compatibility is confined to an exact alias declaration, never runtime output.
+  $aliasRoot = Initialize-Fixture 'legacy-profile-alias'
+  $aliasSource = Join-Path $aliasRoot 'babel-cli/src/config/executionProfiles.ts'
+  New-Item -ItemType Directory -Path (Split-Path -Parent $aliasSource) -Force | Out-Null
+  Set-Content -LiteralPath $aliasSource -Value "  opencalw_manager: 'workspace_manager',"
+  $aliasPolicyPath = Join-Path $aliasRoot 'tools/security/public-content-policy.json'
+  $aliasPolicy = Get-Content -Raw -LiteralPath $aliasPolicyPath | ConvertFrom-Json
+  $aliasPolicy | Add-Member -NotePropertyName compatibility_exceptions -NotePropertyValue @([pscustomobject]@{
+    id = 'TEST-LEGACY-ALIAS'; rule_id = 'PCONT004'; path = 'babel-cli/src/config/executionProfiles.ts'
+    pattern = "^\s*opencalw_manager: 'workspace_manager',\s*$"
+    rationale = 'Legacy input only'; evidence = 'Canonical profile normalization test'
+  }) -Force
+  Set-Content -LiteralPath $aliasPolicyPath -Value ($aliasPolicy | ConvertTo-Json -Depth 20)
+  & $git -C $aliasRoot add .
+  if ($LASTEXITCODE -ne 0) { throw 'Unable to stage compatibility fixture' }
+  $aliasPass = Invoke-Gate (Join-Path $aliasRoot 'tools/check-public-content-policy.ps1') $aliasRoot
+  Assert-True ($aliasPass.ExitCode -eq 0) "explicit compatibility alias failed: $($aliasPass.Text)"
+  Set-Content -LiteralPath $aliasSource -Value "  name: 'opencalw_manager',"
+  $aliasOutputFail = Invoke-Gate (Join-Path $aliasRoot 'tools/check-public-content-policy.ps1') $aliasRoot
+  Assert-True (@((ConvertFrom-Json $aliasOutputFail.Text).findings.id) -contains 'PCONT004') 'legacy output escaped compatibility boundary'
+  Set-Content -LiteralPath $aliasSource -Value "  opencalw_manager: 'workspace_manager',"
+  Set-Content -LiteralPath (Join-Path $aliasRoot 'other.ts') -Value "  opencalw_manager: 'workspace_manager',"
+  & $git -C $aliasRoot add other.ts
+  if ($LASTEXITCODE -ne 0) { throw 'Unable to stage unrelated compatibility fixture' }
+  $aliasPathFail = Invoke-Gate (Join-Path $aliasRoot 'tools/check-public-content-policy.ps1') $aliasRoot
+  Assert-True (@((ConvertFrom-Json $aliasPathFail.Text).findings | Where-Object { $_.id -eq 'PCONT004' -and $_.path -eq 'other.ts' }).Count -eq 1) 'compatibility exception escaped its exact source path'
+  $aliasPolicy.compatibility_exceptions[0].path = 'babel-cli/src/*'
+  Set-Content -LiteralPath $aliasPolicyPath -Value ($aliasPolicy | ConvertTo-Json -Depth 20)
+  $aliasConfigFail = Invoke-Gate (Join-Path $aliasRoot 'tools/check-public-content-policy.ps1') $aliasRoot
+  Assert-True (@((ConvertFrom-Json $aliasConfigFail.Text).findings.id) -contains 'PCFG003') 'broad compatibility exception did not fail closed'
 
   # GPCGuard allowed-in-docs test: per OSS Foundation Q3, product names (e.g. GPCGuard)
   # may appear in public docs/examples but remain forbidden as dependency fingerprints.

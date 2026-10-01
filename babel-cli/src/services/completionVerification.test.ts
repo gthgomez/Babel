@@ -8,11 +8,19 @@ import { evaluateCompletionVerification } from './completionVerification.js';
 import { validateEvidenceBundleRun } from './evidenceValidation.js';
 import type { WorkspaceVerifyReport } from './workspaceManager.js';
 
+test('legacy manager inputs cannot bypass completion verification', () => {
+  const gate = evaluateCompletionVerification({
+    pipelineStatus: 'COMPLETE', executionProfile: 'openclaw_manager', projectRoot: '/tmp/demo',
+  });
+  assert.equal(gate.required, true);
+  assert.equal(gate.status, 'fail');
+});
+
 function report(status: WorkspaceVerifyReport['status']): WorkspaceVerifyReport {
   return {
     status,
     project_root: '/tmp/scratch\\demo',
-    execution_profile: 'opencalw_manager',
+    execution_profile: 'workspace_manager',
     onboarding: {
       schema_version: 1,
       generated_at: '2026-04-28T00:00:00.000Z',
@@ -34,7 +42,7 @@ function report(status: WorkspaceVerifyReport['status']): WorkspaceVerifyReport 
 test('completion verification is required for completed OpenClaw manager jobs', () => {
   const gate = evaluateCompletionVerification({
     pipelineStatus: 'COMPLETE',
-    executionProfile: 'opencalw_manager',
+    executionProfile: 'workspace_manager',
     projectRoot: '/tmp/scratch\\demo',
     verification: report('pass'),
   });
@@ -46,7 +54,7 @@ test('completion verification is required for completed OpenClaw manager jobs', 
 test('completion verification fails when no commands are available', () => {
   const gate = evaluateCompletionVerification({
     pipelineStatus: 'COMPLETE',
-    executionProfile: 'opencalw_manager',
+    executionProfile: 'workspace_manager',
     projectRoot: '/tmp/scratch\\demo',
     verification: report('no_commands'),
   });

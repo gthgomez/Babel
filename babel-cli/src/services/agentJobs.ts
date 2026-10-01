@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join, resolve } from 'node:path';
 
 import { BABEL_RUNS_DIR, type ValidMode } from '../cli/constants.js';
+import { normalizeExecutionProfile } from '../config/executionProfiles.js';
 import {
   approveApproval,
   inspectApproval,
@@ -109,7 +110,12 @@ function readRegistry(path: string): AgentJobRegistry {
             typeof job === 'object' &&
             typeof (job as AgentJob).id === 'string' &&
             typeof (job as AgentJob).task === 'string',
-        )
+        ).map((job) => ({
+          ...job,
+          execution_profile: job.execution_profile
+            ? normalizeExecutionProfile(job.execution_profile) ?? job.execution_profile
+            : job.execution_profile,
+        }))
       : [],
   };
 }
@@ -183,9 +189,10 @@ export function createAgentJob(options: CreateAgentJobOptions & AgentJobServiceO
     throw new Error(`Job already exists: ${id}`);
   }
 
-  const executionProfile = options.executionProfile ?? 'opencalw_manager';
+  const requestedProfile = options.executionProfile ?? 'workspace_manager';
+  const executionProfile = normalizeExecutionProfile(requestedProfile) ?? requestedProfile;
   const resolvedProject = options.projectRoot
-    ? executionProfile === 'opencalw_manager'
+    ? executionProfile === 'workspace_manager'
       ? resolveApprovedWorkspacePath(options.projectRoot)
       : { path: resolve(options.projectRoot), approvedRoots: [] }
     : { path: null, approvedRoots: [] };

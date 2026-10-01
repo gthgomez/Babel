@@ -4,7 +4,7 @@ export const EXECUTION_PROFILE_NAMES = [
   'benchmark_container',
   'read_only_audit',
   'scaffold',
-  'opencalw_manager',
+  'workspace_manager',
   'babel_research',
   'bench_local',
 ] as const;
@@ -241,8 +241,8 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
       ],
     },
   },
-  opencalw_manager: {
-    name: 'opencalw_manager',
+  workspace_manager: {
+    name: 'workspace_manager',
     dockerSandbox: true,
     independentVerifierDefault: true,
     description:
@@ -260,11 +260,11 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
     disallowedTools: WEB_TOOLS,
     promptLines: {
       orchestrator: [
-        'Use opencalw_manager only for approved local workspace project maintenance.',
+        'Use workspace_manager only for approved local workspace project maintenance.',
         'Resolve project roots through the approved workspace path policy before execution.',
       ],
       swe: [
-        'opencalw_manager may use local verification commands for known workspace projects.',
+        'workspace_manager may use local verification commands for known workspace projects.',
         'Dependency installation requires explicit approval unless already granted by the approval queue.',
         'Do not use web_search or web_fetch from this profile; local files and explicit user-provided context are the authority.',
       ],
@@ -365,12 +365,14 @@ const ALIASES: Record<string, ExecutionProfileName> = {
   'read-only-audit': 'read_only_audit',
   scaffold: 'scaffold',
   scaffolding: 'scaffold',
-  opencalw: 'opencalw_manager',
-  opencalw_manager: 'opencalw_manager',
-  'opencalw-manager': 'opencalw_manager',
-  openclaw: 'opencalw_manager',
-  openclaw_manager: 'opencalw_manager',
-  'openclaw-manager': 'opencalw_manager',
+  opencalw: 'workspace_manager',
+  opencalw_manager: 'workspace_manager',
+  workspace_manager: 'workspace_manager',
+  'workspace-manager': 'workspace_manager',
+  'opencalw-manager': 'workspace_manager',
+  openclaw: 'workspace_manager',
+  openclaw_manager: 'workspace_manager',
+  'openclaw-manager': 'workspace_manager',
   babel: 'babel_research',
   research: 'babel_research',
   babel_research: 'babel_research',
@@ -385,13 +387,26 @@ function normalizeToken(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, '_');
 }
 
+let warnedLegacyWorkspaceProfile = false;
+
 export function normalizeExecutionProfile(
   value: string | null | undefined,
 ): ExecutionProfileName | null {
   if (value === null || value === undefined || value.trim().length === 0) {
     return DEFAULT_EXECUTION_PROFILE;
   }
-  return ALIASES[normalizeToken(value)] ?? null;
+  const token = normalizeToken(value);
+  const normalized = ALIASES[token] ?? null;
+  if (
+    normalized === 'workspace_manager' && token !== 'workspace_manager' &&
+    token !== 'workspace-manager' && !warnedLegacyWorkspaceProfile
+  ) {
+    warnedLegacyWorkspaceProfile = true;
+    process.emitWarning('Legacy workspace profile aliases are deprecated; use workspace_manager.', {
+      code: 'BABEL_DEPRECATED_EXECUTION_PROFILE',
+    });
+  }
+  return normalized;
 }
 
 export function resolveExecutionProfile(value: string | null | undefined): ExecutionProfile {

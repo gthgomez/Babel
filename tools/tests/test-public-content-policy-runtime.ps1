@@ -13,6 +13,10 @@ $pwsh = if (Test-Path -LiteralPath $pwshCandidate -PathType Leaf) { $pwshCandida
 $gitCandidate = 'C:\Program Files\Git\cmd\git.exe'
 $git = if (Test-Path -LiteralPath $gitCandidate -PathType Leaf) { $gitCandidate } else { (Get-Command git -ErrorAction Stop).Source }
 $tempRoot = Join-Path $repoRoot (".codex-public-policy-runtime-{0}" -f [guid]::NewGuid().ToString('N'))
+$fixturePolicy = Get-Content -Raw -LiteralPath $contentPolicy | ConvertFrom-Json
+$fixturePolicy.temporary_exceptions = @()
+$fixturePolicy.canonical_independence.temporary_exceptions = @()
+$fixturePolicyJson = $fixturePolicy | ConvertTo-Json -Depth 20
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) { throw "ASSERTION FAILED: $Message" }
@@ -21,7 +25,7 @@ function Initialize-RuntimeFixture([string]$Name, [bool]$MalformedPolicy) {
   $root = Join-Path $tempRoot $Name
   New-Item -ItemType Directory -Path (Join-Path $root 'tools/security') -Force | Out-Null
   Copy-Item -LiteralPath $contentScript -Destination (Join-Path $root 'tools/check-public-content-policy.ps1')
-  Copy-Item -LiteralPath $contentPolicy -Destination (Join-Path $root 'tools/security/public-content-policy.json')
+  Set-Content -LiteralPath (Join-Path $root 'tools/security/public-content-policy.json') -Value $fixturePolicyJson
   Copy-Item -LiteralPath $commonModule -Destination (Join-Path $root 'tools/security/tracked-scan-common.psm1')
   Set-Content -LiteralPath (Join-Path $root 'README.md') -Value "# Runtime fixture`n"
   Set-Content -LiteralPath (Join-Path $root 'sample.md') -Value "# Runtime sample`nMeasured evidence only.`n"
