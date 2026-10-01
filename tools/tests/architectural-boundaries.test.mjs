@@ -6,6 +6,9 @@ for (const source of [
   'process.exit(1)', 'process.exit (1)', "process['exit']?.(1)",
   'globalThis.process.exit(1)', '(process as any).exit(1)',
   'global.process.exit(1)', 'let p; p = process; p.exit(1)',
+  'let quit; ({exit: quit} = process); quit(1)',
+  "const {default: p} = await import('node:process'); p.exit(1)",
+  "const p = await import('node:process'); p['default'].exit(1)",
   "import { default as process } from 'node:process'; process.exit(1)",
   "const process = await import('node:process'); process.exit(1)",
   "const { exit } = await import('node:process'); exit(1)",
@@ -41,6 +44,7 @@ test('malformed source cannot produce clearance', () => {
 });
 test('a mutable alias changing process roles cannot evade clearance', () => {
   assert.equal(inspectSource('let p = process.stdout; p = process; p.exit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('let {stdout: p} = process; p = process; p.exit(1)').ambiguous.length, 1);
 });
 for (const entry of [
   { path: 'src/../other.ts' }, { maxCalls: -1 }, { maxCalls: 1.5 },
