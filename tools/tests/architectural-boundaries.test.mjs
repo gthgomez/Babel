@@ -1,0 +1,42 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
+
+for (const source of [
+  'process.exit(1)', 'process.exit (1)', "process['exit']?.(1)",
+  'globalThis.process.exit(1)', '(process as any).exit(1)',
+  "import { exit as quit } from 'node:process'; quit(1)",
+  "import p from 'node:process'; p.exit(1)",
+  "import * as p from 'node:process'; p.exit(1)",
+  'const {exit: quit} = process; quit(1)',
+  'const quit = process.exit; quit(1)',
+  "const p = require('node:process'); p.exit(1)",
+  'const quit = process.exit.bind(process); quit(1)',
+  'process.exit.call(process, 1)', 'process.exit.apply(process, [1])',
+]) test('recognizes executable exit: ' + source, () => {
+  assert.equal(inspectSource(source, 'C:\\fixture\\source.ts').exits.length, 1);
+});
+
+test('strings, comments and locally shadowed objects do not exit the host', () => {
+  assert.equal(inspectSource('// process.exit(1)\nconst s = `process.exit(1)`; function f(process) { process.exit(1) }').exits.length, 0);
+});
+test('aliased stdout write retains output ownership', () => {
+  assert.equal(inspectSource('const out = process.stdout; const write = out.write; write("x")').stdout.length, 1);
+});
+test('unknown dynamic process access fails closed', () => {
+  assert.equal(inspectSource('process[name](1)').ambiguous.length, 1);
+});
+test('calls on environment values are not dynamic process methods', () => {
+  assert.equal(inspectSource('process.env[name].trim()').ambiguous.length, 0);
+});
+test('malformed source cannot produce clearance', () => {
+  assert.throws(() => inspectSource('function broken( { process.exit(1)'));
+});
+for (const entry of [
+  { path: 'src/../other.ts' }, { maxCalls: -1 }, { maxCalls: 1.5 },
+  { reason: '' }, { kind: 'unreviewed' },
+]) test('rejects invalid boundary grant: ' + JSON.stringify(entry), () => {
+  assert.throws(() => validateRegistry({ schemaVersion: 1, stdout: [], exits: [
+    { path: 'src/entry.ts', maxCalls: 1, reason: 'Explicit CLI entrypoint', kind: 'cli', ...entry },
+  ] }));
+});

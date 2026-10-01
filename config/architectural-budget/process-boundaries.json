@@ -1,0 +1,187 @@
+{
+  "schemaVersion": 1,
+  "stdout": [
+    {
+      "path": "src/ui/terminalRestoreGuard.ts",
+      "kind": "terminal",
+      "maxCalls": 8,
+      "reason": "crash-time terminal restore"
+    },
+    {
+      "path": "src/ui/outputBuffer.ts",
+      "kind": "terminal",
+      "maxCalls": 3,
+      "reason": "canonical buffered output path"
+    },
+    {
+      "path": "src/ui/inputCoordinator.ts",
+      "kind": "terminal",
+      "maxCalls": 4,
+      "reason": "emergencyRestore() crash handler"
+    },
+    {
+      "path": "src/ui/a11y.ts",
+      "kind": "terminal",
+      "maxCalls": 1,
+      "reason": "accessibility sanitization"
+    },
+    {
+      "path": "src/ui/chunkCoalescer.ts",
+      "kind": "terminal",
+      "maxCalls": 0,
+      "reason": "low-level chunk assembly"
+    },
+    {
+      "path": "src/ui/terminalDetection.ts",
+      "kind": "terminal",
+      "maxCalls": 1,
+      "reason": "terminal capability probing"
+    },
+    {
+      "path": "src/ui/tokenHistory.ts",
+      "kind": "terminal",
+      "maxCalls": 0,
+      "reason": "token usage display"
+    },
+    {
+      "path": "src/ui/latencyProbe.ts",
+      "kind": "terminal",
+      "maxCalls": 1,
+      "reason": "latency measurement bypass"
+    },
+    {
+      "path": "src/ui/focusTracker.ts",
+      "kind": "terminal",
+      "maxCalls": 2,
+      "reason": "focus event VT sequences"
+    },
+    {
+      "path": "src/ui/clipboard.ts",
+      "kind": "terminal",
+      "maxCalls": 6,
+      "reason": "Existing OSC52 clipboard copy/query protocol writes, gated by explicit copy actions and terminal capability checks; not renderer text"
+    }
+  ],
+  "exits": [
+    {
+      "path": "src/commands/coreCommands.ts",
+      "kind": "cli",
+      "maxCalls": 54,
+      "reason": "CLI command leaves"
+    },
+    {
+      "path": "src/commands/workflowCommands.ts",
+      "kind": "cli",
+      "maxCalls": 31,
+      "reason": "CLI command leaves"
+    },
+    {
+      "path": "src/commands/skillCommands.ts",
+      "kind": "cli",
+      "maxCalls": 4,
+      "reason": "CLI command leaves"
+    },
+    {
+      "path": "src/commands/maintenanceCommands.ts",
+      "kind": "cli",
+      "maxCalls": 3,
+      "reason": "CLI command leaves"
+    },
+    {
+      "path": "src/commands/projectCommands.ts",
+      "kind": "cli",
+      "maxCalls": 2,
+      "reason": "CLI command leaves"
+    },
+    {
+      "path": "src/commands/liteCommands.ts",
+      "kind": "cli",
+      "maxCalls": 1,
+      "reason": "CLI command leaves"
+    },
+    {
+      "path": "src/commands/output.ts",
+      "kind": "cli",
+      "maxCalls": 1,
+      "reason": "CLI output formatting"
+    },
+    {
+      "path": "src/cli/deprecation.ts",
+      "kind": "cli",
+      "maxCalls": 1,
+      "reason": "CLI deprecation warnings"
+    },
+    {
+      "path": "src/cli/structuredOutput.ts",
+      "kind": "cli",
+      "maxCalls": 0,
+      "reason": "CLI structured output"
+    },
+    {
+      "path": "src/daemon/main.ts",
+      "kind": "process_entry",
+      "maxCalls": 3,
+      "reason": "daemon process entry"
+    },
+    {
+      "path": "src/interactive/repl/replLifecycle.ts",
+      "kind": "process_entry",
+      "maxCalls": 1,
+      "reason": "REPL lifecycle (clean shutdown)"
+    },
+    {
+      "path": "src/config/envBootstrap.ts",
+      "kind": "process_entry",
+      "maxCalls": 1,
+      "reason": "env bootstrap fatal errors"
+    },
+    {
+      "path": "src/runtime/admissionRestartChild.ts",
+      "kind": "fixture",
+      "maxCalls": 1,
+      "reason": "test-only crash/restart fixture keeps SQLite open to verify durable recovery"
+    },
+    {
+      "path": "src/services/cliSmokeBenchmark.ts",
+      "kind": "process_entry",
+      "maxCalls": 0,
+      "reason": "benchmark tool"
+    },
+    {
+      "path": "src/services/governanceBenchmark.ts",
+      "kind": "process_entry",
+      "maxCalls": 0,
+      "reason": "benchmark tool"
+    },
+    {
+      "path": "src/services/liveCliReliabilityMatrix.ts",
+      "kind": "process_entry",
+      "maxCalls": 0,
+      "reason": "reliability matrix tool"
+    },
+    {
+      "path": "src/services/liteParallelReview.ts",
+      "kind": "process_entry",
+      "maxCalls": 0,
+      "reason": "lite review tool"
+    },
+    {
+      "path": "src/ui/inputCoordinator.ts",
+      "kind": "process_entry",
+      "maxCalls": 5,
+      "reason": "emergencyRestore() crash handler (raw exit)"
+    },
+    {
+      "path": "src/ui/terminalRestoreGuard.ts",
+      "kind": "process_entry",
+      "maxCalls": 2,
+      "reason": "terminal restore guard (raw exit)"
+    },
+    {
+      "path": "src/ui/waterfall.ts",
+      "kind": "process_entry",
+      "maxCalls": 0,
+      "reason": "renderer fatal error paths"
+    }
+  ]
+}

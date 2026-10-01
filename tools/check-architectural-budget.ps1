@@ -9,7 +9,7 @@ Enforces four non-regression rules:
   2. Cast ratchet: `as any` count per file may only decrease.
   3. Output-path allowlist: `process.stdout.write` in src/ui/ only in the
      documented emergency-restore allowlist.
-  4. Exit allowlist: `process.exit` only in files allowlisted below.
+  4. Exit allowlist: `process.exit` only within reviewed, count-bounded host boundaries.
 
 .PARAMETER Root
 Repo root. Defaults to parent of this script's directory.
@@ -55,52 +55,12 @@ $baselineDir = Join-Path $Root "config\architectural-budget"
 
 $fileSizeBaselinePath  = Join-Path $baselineDir "file-sizes.json"
 $castBaselinePath      = Join-Path $baselineDir "as-any-counts.json"
-$stdoutAllowlistPath   = Join-Path $baselineDir "stdout-write-allowlist.json"
-$exitAllowlistPath     = Join-Path $baselineDir "process-exit-allowlist.json"
 
-# ─── Allowlists ───────────────────────────────────────────────────────────────
-
-# Files allowed to call process.stdout.write in src/ui/
-# These are emergency/restore paths that MUST write raw to stdout.
-$stdoutWriteAllowlist = @(
-    "src/ui/terminalRestoreGuard.ts",   # crash-time terminal restore
-    "src/ui/outputBuffer.ts",           # canonical buffered output path
-    "src/ui/inputCoordinator.ts",       # emergencyRestore() crash handler
-    "src/ui/a11y.ts",                   # accessibility sanitization
-    "src/ui/chunkCoalescer.ts",         # low-level chunk assembly
-    "src/ui/terminalDetection.ts",      # terminal capability probing
-    "src/ui/tokenHistory.ts",           # token usage display
-    "src/ui/latencyProbe.ts",           # latency measurement bypass
-    "src/ui/focusTracker.ts"            # focus event VT sequences
-)
-
-# Files allowed to call process.exit in non-test source.
-$processExitAllowlist = @(
-    "src/commands/coreCommands.ts",         # CLI command leaves
-    "src/commands/workflowCommands.ts",     # CLI command leaves
-    "src/commands/skillCommands.ts",        # CLI command leaves
-    "src/commands/maintenanceCommands.ts",  # CLI command leaves
-    "src/commands/projectCommands.ts",      # CLI command leaves
-    "src/commands/liteCommands.ts",         # CLI command leaves
-    "src/commands/output.ts",              # CLI output formatting
-    "src/cli/deprecation.ts",              # CLI deprecation warnings
-    "src/cli/structuredOutput.ts",          # CLI structured output
-    "src/daemon/main.ts",                   # daemon process entry
-    "src/interactive/repl/replLifecycle.ts", # REPL lifecycle (clean shutdown)
-    "src/config/envBootstrap.ts",           # env bootstrap fatal errors
-    "src/runtime/admissionRestartChild.ts", # test-only crash/restart fixture keeps SQLite open to verify durable recovery
-    "src/services/cliSmokeBenchmark.ts",    # benchmark tool
-    "src/services/governanceBenchmark.ts",  # benchmark tool
-    "src/services/liveCliReliabilityMatrix.ts", # reliability matrix tool
-    "src/services/liteParallelReview.ts"    # lite review tool
-)
-
-# Files with process.exit in ui/ that need justification:
-$uiProcessExitAllowlist = @(
-    "src/ui/inputCoordinator.ts",           # emergencyRestore() crash handler (raw exit)
-    "src/ui/terminalRestoreGuard.ts",       # terminal restore guard (raw exit)
-    "src/ui/waterfall.ts"                   # renderer fatal error paths
-)
+# Process boundary grants live only in process-boundaries.json.
+$boundaryScanner = Join-Path $PSScriptRoot "architectural-boundaries.mjs"
+$boundaryOutput = & node $boundaryScanner $Root
+if ($LASTEXITCODE -ne 0) { throw "Architectural boundary scan failed; no clearance granted." }
+$boundaries = ($boundaryOutput -join "`n") | ConvertFrom-Json
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -139,8 +99,8 @@ foreach ($file in $allSourceFiles) {
 
     # Hard cap: new files must not exceed 2,000 lines
     if (-not $fileSizeBaseline.ContainsKey($relativePath)) {
-        if ($lineCount -gt 2000 -and -not $UpdateBaseline) {
-            $sizeErrors.Add("NEW FILE $relativePath = $lineCount lines (hard cap: 2000)")
+        if ($lineCount -gt 2000) {
+            $sizeErrors.Add("UNBASELINED $relativePath = $lineCount lines (hard cap: 2000)")
         }
         continue
     }
@@ -160,7 +120,7 @@ foreach ($file in $allSourceFiles) {
 }
 
 Write-Host "  Tracked files: $($currentFileSizes.Count)"
-Write-Host "  Files >2,000 lines: $(($currentFileSizes.GetEnumerator() | Where-Object { $_.Value -gt 2000 }).Count)"
+Write-Host "  Files >2,000 lines: $(@($currentFileSizes.GetEnumerator() | Where-Object { $_.Value -gt 2000 }).Count)"
 
 if ($sizeErrors.Count -gt 0) {
     Write-Host "  File size errors: $($sizeErrors.Count)" -ForegroundColor Red
@@ -225,17 +185,7 @@ Write-Host "`n=== Output-Path Allowlist ===" -ForegroundColor Cyan
 
 $stdoutErrors = New-Object System.Collections.Generic.List[string]
 
-$uiFiles = Get-ChildItem -Path (Join-Path $srcDir "ui") -Recurse -Filter "*.ts" -File |
-    Where-Object { $_.Name -notmatch '\.test\.ts$' }
-
-foreach ($file in $uiFiles) {
-    $relativePath = $file.FullName.Substring($Root.Length + 1).Replace('\', '/')
-    $shortPath = $relativePath -replace '^babel-cli/', ''
-    $count = (Select-String -Path $file.FullName -Pattern 'process\.stdout\.write\(' | Measure-Object).Count
-    if ($count -gt 0 -and $stdoutWriteAllowlist -notcontains $shortPath) {
-        $stdoutErrors.Add("$shortPath has $count process.stdout.write() call(s) — NOT in allowlist")
-    }
-}
+foreach ($failure in @($boundaries.failures.stdout)) { $stdoutErrors.Add([string]$failure) }
 
 if ($stdoutErrors.Count -gt 0) {
     Write-Host "  stdout write errors: $($stdoutErrors.Count)" -ForegroundColor Red
@@ -248,19 +198,7 @@ if ($stdoutErrors.Count -gt 0) {
 Write-Host "`n=== Exit Allowlist ===" -ForegroundColor Cyan
 
 $exitErrors = New-Object System.Collections.Generic.List[string]
-$combinedExitAllowlist = $processExitAllowlist + $uiProcessExitAllowlist
-
-$allNonTestFiles = Get-ChildItem -Path $srcDir -Recurse -Filter "*.ts" -File |
-    Where-Object { $_.Name -notmatch '\.test\.ts$' }
-
-foreach ($file in $allNonTestFiles) {
-    $relativePath = $file.FullName.Substring($Root.Length + 1).Replace('\', '/')
-    $shortPath = $relativePath -replace '^babel-cli/', ''
-    $count = (Select-String -Path $file.FullName -Pattern 'process\.exit\(' | Measure-Object).Count
-    if ($count -gt 0 -and $combinedExitAllowlist -notcontains $shortPath) {
-        $exitErrors.Add("$shortPath has $count process.exit() call(s) — NOT in allowlist")
-    }
-}
+foreach ($failure in @($boundaries.failures.exits)) { $exitErrors.Add([string]$failure) }
 
 if ($exitErrors.Count -gt 0) {
     Write-Host "  exit errors: $($exitErrors.Count)" -ForegroundColor Red
@@ -271,6 +209,9 @@ if ($exitErrors.Count -gt 0) {
 # ─── Baseline Update Mode ─────────────────────────────────────────────────────
 
 if ($UpdateBaseline) {
+    if ($sizeErrors.Count -gt 0 -or $castErrors.Count -gt 0 -or $stdoutErrors.Count -gt 0 -or $exitErrors.Count -gt 0) {
+        throw "Baseline updates may only record verified reductions; repair regressions first."
+    }
     Write-Host "`n=== Updating Baselines ===" -ForegroundColor Yellow
 
     if (-not (Test-Path $baselineDir)) {
@@ -291,11 +232,7 @@ if ($UpdateBaseline) {
     $currentCasts | ConvertTo-Json | Set-Content $castBaselinePath -Encoding UTF8
     Write-Host "  Cast baseline: $($currentCasts.Count) files -> $castBaselinePath"
 
-    # Allowlists are hand-maintained — only update the JSON mirrors for reference
-    $stdoutWriteAllowlist | ConvertTo-Json | Set-Content $stdoutAllowlistPath -Encoding UTF8
-    $exitAllowlistFull = $combinedExitAllowlist | Sort-Object | Select-Object -Unique
-    $exitAllowlistFull | ConvertTo-Json | Set-Content $exitAllowlistPath -Encoding UTF8
-    Write-Host "  Allowlist mirrors updated."
+    # The reviewed process boundary registry is never rewritten by this helper.
     Write-Host "  Baseline update complete. Commit the changed files in config/architectural-budget/."
 }
 
@@ -317,7 +254,7 @@ Write-Host ""
 
 if ($totalErrors -gt 0) {
     Write-Host "Architectural budget FAILED ($totalErrors regression(s))." -ForegroundColor Red
-    Write-Host "Run with -UpdateBaseline to commit intentional reductions, then re-run." -ForegroundColor Yellow
+    Write-Host "Repair violations first. -UpdateBaseline records reductions only." -ForegroundColor Yellow
     exit 1
 }
 
