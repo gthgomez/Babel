@@ -783,9 +783,9 @@ function runRuntimeChecks(
       join(babelRoot, 'tools', 'resolve-local-stack.ps1'),
     ],
     [
-      'runtime.export_manifest',
-      'Export manifest found',
-      join(babelRoot, 'tools', 'public-export', 'manifest.json'),
+      'runtime.public_release_gate',
+      'Canonical release gate found',
+      join(babelRoot, 'tools', 'validate-public-release.ps1'),
     ],
   ] as const;
 

@@ -23,19 +23,25 @@
     "docs/guides/PARITY_BENCHMARK.md",
     "docs/OSS_DOCS_CRITIQUE_2026-08-01.md"
   ],
-  "temporary_exceptions": [
+  "temporary_exceptions": [],
+  "compatibility_exceptions": [
     {
-      "id": "TEMP-RUNTIME-PROFILE-001",
+      "id": "COMPAT-WORKSPACE-PROFILE-ALIAS",
       "rule_id": "PCONT004",
-      "path": "babel-cli/src/*",
-      "pattern": "(?i)\\bopencalw_manager\\b",
-      "rationale": "The legacy execution-profile spelling remains accepted for one minor release while the runtime canonical-independence migration adds workspace_manager compatibility handling.",
-      "evidence": "Runtime Canonical-Independence PR acceptance: deprecated profile aliases warn once and canonical output uses workspace_manager.",
-      "expires": "2026-09-30",
-      "replacement_pr": "runtime-canonical-independence"
+      "path": "babel-cli/src/config/executionProfiles.ts",
+      "pattern": "^\\s*opencalw_manager: 'workspace_manager',\\s*$",
+      "rationale": "This exact alias accepts persisted legacy input and normalizes it to the canonical workspace_manager profile; runtime outputs use the canonical name.",
+      "evidence": "babel-cli/src/config/executionProfiles.test.ts"
     }
   ],
   "fixture_exceptions": [
+    {
+      "id": "FIXTURE-LEGACY-PROFILE-INPUT",
+      "rule_id": "PCONT004",
+      "path": "babel-cli/src/config/executionProfiles.test.ts",
+      "pattern": "^\\s*'opencalw_manager',\\s*$",
+      "rationale": "An exact legacy input fixture verifies canonical normalization and retained sandbox policy."
+    },
     {
       "id": "FIXTURE-CONTENT-POLICY-ESCAPED-PATH",
       "rule_id": "PCONT002",
@@ -322,28 +328,7 @@
         "rationale": "Negative project-root-inference fixture."
       }
     ],
-    "temporary_exceptions": [
-      {
-        "id": "TEMP-RUNTIME-ROOT-001",
-        "rule_id": "CANON001",
-        "path": "babel-cli/src/cli/helpers.ts",
-        "pattern": "(?i)resolvePath\\(parent\\s*,",
-        "rationale": "Legacy catalog preview still maps semantic project IDs through a sibling root until the approved runtime canonical-independence migration separates IDs from execution roots.",
-        "evidence": "Runtime Canonical-Independence PR acceptance: preview uses project IDs only and execution uses current or explicit --project-root.",
-        "expires": "2026-09-30",
-        "replacement_pr": "runtime-canonical-independence"
-      },
-      {
-        "id": "TEMP-RUNTIME-EXPORT-001",
-        "rule_id": "CANON002",
-        "path": "babel-cli/src/doctor.ts",
-        "pattern": "(?i)export_manifest",
-        "rationale": "The legacy doctor diagnostic remains until the approved runtime canonical-independence migration replaces export checks with canonical release checks.",
-        "evidence": "Runtime Canonical-Independence PR acceptance: doctor --scope all no longer requires an export manifest or exporter.",
-        "expires": "2026-09-30",
-        "replacement_pr": "runtime-canonical-independence"
-      }
-    ],
+    "temporary_exceptions": [],
     "rules": [
       {
         "id": "CANON001",

@@ -145,7 +145,7 @@ Examples:
   $ babel verify /tmp/example_game_suite\\MyGame --commands "npm test;npm run build" --json
 
 Notes:
-  - Uses execution profile opencalw_manager.
+  - Uses execution profile workspace_manager.
   - Repos under /tmp are approved by default; set BABEL_OPENCLAW_APPROVED_ROOTS for a tighter allowlist.
   - Dependency installs are blocked unless explicitly approved outside this command.
 `,

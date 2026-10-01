@@ -102,66 +102,18 @@ function resolveCanonicalDirName(name: string): string {
 }
 
 /**
- * Scan workspace roots for a directory matching the given project name.
- * Replaces the old switch/case hardcoded map with dynamic filesystem scanning.
+ * Resolve an explicit existing path or the named current project.
+ * Semantic catalog IDs do not imply sibling repositories or private workspace roots.
  */
 export function resolveProjectRoot(projectName: string): string | null {
-  if (!projectName || projectName.length === 0) return null;
-
-  // If it's already an absolute path that exists, return it directly
-  if (isAbsolute(projectName) && existsSync(projectName)) {
-    return projectName;
-  }
-
-  const parent = dirname(BABEL_ROOT);
-  const canonicalName = resolveCanonicalDirName(projectName);
-
-  // Build scan list: family directories + workspace root
-  const scanRoots: string[] = [];
-  for (const family of FAMILY_DIRECTORIES) {
-    const familyPath = join(parent, family);
-    if (existsSync(familyPath)) {
-      scanRoots.push(familyPath);
-    }
-  }
-  scanRoots.push(parent);
-
-  // Search for matching directory (case-insensitive)
-  for (const scanRoot of scanRoots) {
-    try {
-      const entries = readdirSync(scanRoot, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-
-        const nameMatch =
-          entry.name.toLowerCase() === projectName.toLowerCase() ||
-          entry.name.toLowerCase() === canonicalName.toLowerCase();
-
-        if (nameMatch) {
-          const entryPath = join(scanRoot, entry.name);
-          if (hasProjectMarker(entryPath) || existsSync(entryPath)) {
-            return entryPath;
-          }
-        }
-      }
-    } catch {
-      continue;
-    }
-  }
-
-  // Special case: app_test_babel has multiple fallback candidates
-  if (projectName === 'app_test_babel') {
-    for (const candidate of [
-      join('example_mobile_suite', 'example_finance_forecast'),
-      'App-test-Babel',
-    ]) {
-      const resolved = resolvePath(parent, candidate);
-      if (existsSync(resolved)) return resolved;
-    }
-  }
-
-  return null;
+  if (!projectName) return null;
+  if (isAbsolute(projectName) && existsSync(projectName)) return projectName;
+  const currentRoot = process.cwd();
+  const currentName = basename(currentRoot).toLowerCase();
+  return currentName === projectName.toLowerCase() ||
+    currentName === resolveCanonicalDirName(projectName).toLowerCase()
+    ? currentRoot
+    : null;
 }
 
 /**

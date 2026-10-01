@@ -179,7 +179,7 @@ test('workspace file list/read stay inside approved roots', () => {
   }
 });
 
-test('workspace verify runs explicit commands through opencalw_manager', () => {
+test('workspace verify runs explicit commands through workspace_manager', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-opencalw-verify-'));
   try {
     writeFileSync(
@@ -194,7 +194,7 @@ test('workspace verify runs explicit commands through opencalw_manager', () => {
         timeoutSeconds: 30,
       });
       assert.equal(report.status, 'pass');
-      assert.equal(report.execution_profile, 'opencalw_manager');
+      assert.equal(report.execution_profile, 'workspace_manager');
       assert.equal(report.command_results[0]?.exit_code, 0);
     });
   } finally {

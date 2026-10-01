@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
+import { normalizeExecutionProfile } from '../config/executionProfiles.js';
 
 export const APPROVAL_KINDS = ['dependency_install', 'model_escalation'] as const;
 export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
@@ -98,12 +99,19 @@ function stableJson(value: unknown): string {
     .join(',')}}`;
 }
 
-function fingerprintApproval(input: ApprovalRequestInput): string {
+function canonicalApprovalProfile(profile: string | null | undefined): string | null {
+  if (profile == null) return null;
+  return normalizeExecutionProfile(profile) === 'workspace_manager' ? 'workspace_manager' : profile;
+}
+
+function fingerprintApproval(input: ApprovalRequestInput, canonicalize = true): string {
   const canonical = {
     kind: input.kind,
     scope: {
       project_root: normalizeProjectRoot(input.scope?.projectRoot ?? null),
-      execution_profile: input.scope?.executionProfile ?? null,
+      execution_profile: canonicalize
+        ? canonicalApprovalProfile(input.scope?.executionProfile)
+        : input.scope?.executionProfile ?? null,
     },
     payload: normalizePayload(input.payload),
   };
@@ -127,9 +135,23 @@ function computedStatus(record: ApprovalRecord, now = new Date()): ApprovalStatu
 }
 
 function normalizeRecord(record: ApprovalRecord): ApprovalRecord {
+  const profile = canonicalApprovalProfile(record.scope.execution_profile);
+  const input: ApprovalRequestInput = {
+    kind: record.kind,
+    summary: record.summary,
+    reason: record.reason,
+    scope: { projectRoot: record.scope.project_root, executionProfile: record.scope.execution_profile },
+    payload: record.payload,
+  };
+  // Migrate only an intact legacy fingerprint; preserve grant IDs, decisions and scope.
+  const migrate = profile !== record.scope.execution_profile &&
+    record.fingerprint === fingerprintApproval(input, false);
   return {
     ...record,
     status: computedStatus(record),
+    ...(migrate
+      ? { fingerprint: fingerprintApproval(input), scope: { ...record.scope, execution_profile: profile } }
+      : {}),
   };
 }
 
@@ -207,7 +229,7 @@ export function createOrReuseApprovalRequest(input: ApprovalRequestInput): Appro
     expires_at: null,
     scope: {
       project_root: normalizeProjectRoot(input.scope?.projectRoot ?? null),
-      execution_profile: input.scope?.executionProfile ?? null,
+      execution_profile: canonicalApprovalProfile(input.scope?.executionProfile),
     },
     payload: normalizePayload(input.payload),
   };
@@ -291,7 +313,7 @@ export function dependencyInstallApprovalInput(
       'Dependency installation can mutate the workspace and download code; OpenClaw manager requires explicit approval.',
     scope: {
       projectRoot: input.projectRoot ?? null,
-      executionProfile: input.executionProfile ?? 'opencalw_manager',
+      executionProfile: input.executionProfile ?? 'workspace_manager',
     },
     payload: {
       command,
@@ -332,7 +354,7 @@ export function modelEscalationApprovalInput(
       'Model escalation can increase cost and autonomy. Interactive CLI model flags approve one run; queued approvals are for unattended or repeated escalation.',
     scope: {
       projectRoot: input.projectRoot ?? null,
-      executionProfile: 'opencalw_manager',
+      executionProfile: 'workspace_manager',
     },
     payload: {
       task,

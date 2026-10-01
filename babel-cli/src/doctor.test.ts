@@ -1,10 +1,23 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import { runDoctor } from './doctor.js';
+
+test('runtime doctor checks the canonical release gate without requiring an exporter', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-canonical-doctor-'));
+  mkdirSync(join(root, 'tools'), { recursive: true });
+  writeFileSync(join(root, 'tools', 'validate-public-release.ps1'), '# Release validation');
+  try {
+    const result = await runDoctor({ babelRoot: root, scope: 'workspace', verbose: false, strict: false });
+    assert.equal(result.checks.find((check) => check.id === 'runtime.public_release_gate')?.status, 'pass');
+    assert.equal(result.checks.some((check) => check.section === 'Runtime' && /export/i.test(check.id)), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('doctor --strict-enterprise fails when no enterprise policy exists', async () => {
   const previousPolicyPath = process.env['BABEL_ENTERPRISE_POLICY_PATH'];
@@ -569,6 +582,7 @@ function makeDoctorWorkspace(options: { validCatalog: boolean; dist: boolean }):
   mkdirSync(join(root, 'tools', 'public-export'), { recursive: true });
   mkdirSync(join(workspace, 'config'), { recursive: true });
   writeFileSync(join(root, 'tools', 'resolve-local-stack.ps1'), 'Write-Output "{}"\n', 'utf8');
+  writeFileSync(join(root, 'tools', 'validate-public-release.ps1'), '# Canonical release gate', 'utf8');
   writeFileSync(join(root, 'package.json'), '{}\n', 'utf8');
   writeFileSync(join(root, 'tools', 'public-export', 'manifest.json'), '{}\n', 'utf8');
   if (options.validCatalog) {

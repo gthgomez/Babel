@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
@@ -63,6 +63,24 @@ test('agent jobs create queued records for simple manager tasks', () => {
     assert.equal(job.project_root, resolve(scratch));
     assert.deepEqual(job.verify_commands, ['npm test']);
     assert.equal(listAgentJobs().jobs.length, 1);
+  });
+});
+
+test('legacy job profiles normalize without bypassing approved-root checks', () => {
+  withJobState(({ scratch, workspace, registryPath }) => {
+    const job = createAgentJob({
+      id: 'legacy-profile', task: 'Update README title', projectRoot: scratch,
+      executionProfile: 'openclaw_manager', registryPath,
+    });
+    assert.equal(job.execution_profile, 'workspace_manager');
+    const persisted = JSON.parse(readFileSync(registryPath, 'utf-8'));
+    persisted.jobs[0].execution_profile = 'openclaw_manager';
+    writeFileSync(registryPath, JSON.stringify(persisted));
+    assert.equal(listAgentJobs({ registryPath }).jobs[0]?.execution_profile, 'workspace_manager');
+    assert.throws(() => createAgentJob({
+      id: 'outside-legacy-profile', task: 'Update README title', projectRoot: workspace,
+      executionProfile: 'openclaw_manager', registryPath,
+    }), /approved/i);
   });
 });
 
