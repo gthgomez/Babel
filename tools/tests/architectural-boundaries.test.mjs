@@ -19,6 +19,13 @@ for (const source of [
   'const {...p} = process; p.exit(1)',
   'let p; ({...p} = process); p.exit(1)',
   '(0, process.exit)(1)',
+  'let quit; (quit ??= process.exit)(1)',
+  'let quit; (quit ||= process.exit)(1)',
+  'const [quit = process.exit] = []; quit(1)',
+  'const {quit = process.exit} = {}; quit(1)',
+  'let quit; ({quit = process.exit} = {}); quit(1)',
+  'const [quit] = [...[process.exit]]; quit(1)',
+  'const [x, quit] = [0, ...[process.exit]]; quit(1)',
   "const {default: p} = await import('node:process'); p.exit(1)",
   "const p = await import('node:process'); p['default'].exit(1)",
   "import { default as process } from 'node:process'; process.exit(1)",
@@ -55,11 +62,17 @@ test('array aliases and rest bindings cannot obtain false clearance', () => {
   assert.equal(inspectSource('const values = [process]; const [p] = values; p.exit(1)').ambiguous.length, 1);
   assert.equal(inspectSource('const [...values] = [process]; values[0].exit(1)').ambiguous.length, 1);
 });
+test('default and spread aliases preserve stdout ownership', () => {
+  assert.equal(inspectSource('const [write = process.stdout.write] = []; write("x"); const {emit = process.stdout.write} = {}; emit("y"); const [out] = [...[process.stdout]]; out.write("z"); let send; (send ??= process.stdout.write)("s")').stdout.length, 4);
+});
 test('unknown dynamic process access fails closed', () => {
   assert.equal(inspectSource('process[name](1)').ambiguous.length, 1);
 });
 test('calls on environment values are not dynamic process methods', () => {
   assert.equal(inspectSource('process.env[name].trim()').ambiguous.length, 0);
+});
+test('process data in arrays and alternative environment keys do not create host boundaries', () => {
+  assert.equal(inspectSource('const args = [process.execPath, "--flag"]; args.map(String).join(" "); const roots = process.env["ROOT_A"] || process.env["ROOT_B"] || ""; roots.split(",")').ambiguous.length, 0);
 });
 test('malformed source cannot produce clearance', () => {
   assert.throws(() => inspectSource('function broken( { process.exit(1)'));

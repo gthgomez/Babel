@@ -32,7 +32,11 @@ export function inspectSource(source, path = 'source.ts') {
       assignments.set(symbol, values);
     } else if (ts.isObjectLiteralExpression(target)) {
       for (const property of target.properties) {
-        if (ts.isShorthandPropertyAssignment(property)) collectTarget(property.name, expression, [...keys, property.name.text], checker.getShorthandAssignmentValueSymbol(property));
+        if (ts.isShorthandPropertyAssignment(property)) {
+          const symbol = checker.getShorthandAssignmentValueSymbol(property);
+          collectTarget(property.name, expression, [...keys, property.name.text], symbol);
+          if (property.objectAssignmentInitializer) collectTarget(property.name, property.objectAssignmentInitializer, [], symbol);
+        }
         else if (ts.isPropertyAssignment(property)) {
           const key = property.name;
           collectTarget(property.initializer, expression, [...keys, ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*']);
@@ -40,6 +44,9 @@ export function inspectSource(source, path = 'source.ts') {
       }
     } else if (ts.isArrayLiteralExpression(target)) {
       target.elements.forEach((element, index) => collectTarget(ts.isSpreadElement(element) ? element.expression : element, expression, [...keys, ts.isSpreadElement(element) ? '*' : String(index)]));
+    } else if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      collectTarget(target.left, expression, keys);
+      collectTarget(target.left, target.right);
     }
   }
   function collectAssignments(node) {
@@ -47,15 +54,41 @@ export function inspectSource(source, path = 'source.ts') {
     ts.forEachChild(node, collectAssignments);
   }
   collectAssignments(sf);
-  const member = (base, key) => base && (base.join('.') === 'process' && key === 'default' ? base : [...base, key]);
+  const member = (base, key) => {
+    if (!base) return null;
+    if (base.join('.') === 'process') {
+      if (key === 'default') return base;
+      // Process data and unrelated methods cannot become exit/stdout boundaries.
+      if (!['exit', 'stdout', '*'].includes(key)) return null;
+    }
+    return [...base, key];
+  };
   function assignedAccess(value, seen) {
     return projectionAccess(value.expression, value.keys, seen);
   }
   function projectionAccess(expression, keys, seen) {
     if (!keys.length) return access(expression, seen);
     while (expression && (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) || ts.isNonNullExpression(expression))) expression = expression.expression;
-    if (expression && ts.isArrayLiteralExpression(expression) && /^\d+$/.test(keys[0])) return projectionAccess(expression.elements[Number(keys[0])], keys.slice(1), seen);
+    if (expression && ts.isArrayLiteralExpression(expression) && /^\d+$/.test(keys[0])) {
+      const elements = literalArrayElements(expression);
+      return elements ? projectionAccess(elements[Number(keys[0])], keys.slice(1), seen) : access(expression, seen);
+    }
     return keys.reduce(member, access(expression, seen));
+  }
+  function literalArrayElements(expression) {
+    const elements = [];
+    for (const element of expression.elements) {
+      if (!ts.isSpreadElement(element)) elements.push(element);
+      else {
+        let spread = element.expression;
+        while (ts.isParenthesizedExpression(spread)) spread = spread.expression;
+        if (!ts.isArrayLiteralExpression(spread)) return null;
+        const nested = literalArrayElements(spread);
+        if (!nested) return null;
+        elements.push(...nested);
+      }
+    }
+    return elements;
   }
   function moduleOf(node) {
     while (node && !ts.isImportDeclaration(node)) node = node.parent;
@@ -73,7 +106,7 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isConditionalExpression(node)) return mergeAccess([access(node.whenTrue, seen), access(node.whenFalse, seen)]);
     if (ts.isBinaryExpression(node)) {
       if ([ts.SyntaxKind.EqualsToken, ts.SyntaxKind.CommaToken].includes(node.operatorToken.kind)) return access(node.right, seen);
-      if ([ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken].includes(node.operatorToken.kind)) return mergeAccess([access(node.left, seen), access(node.right, seen)]);
+      if ([ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(node.operatorToken.kind)) return mergeAccess([access(node.left, seen), access(node.right, seen)]);
     }
     if (ts.isArrayLiteralExpression(node)) return node.elements.some(element => access(ts.isSpreadElement(element) ? element.expression : element, seen)) ? ['process', '*'] : null;
     if (ts.isPropertyAccessExpression(node)) {
@@ -99,7 +132,7 @@ export function inspectSource(source, path = 'source.ts') {
       if (['node:process', 'process'].includes(moduleOf(declaration))) {
         if (ts.isImportSpecifier(declaration)) {
           const name = declaration.propertyName?.text ?? declaration.name.text;
-          return name === 'default' ? ['process'] : ['process', name];
+          return name === 'default' ? ['process'] : member(['process'], name);
         }
         if (ts.isImportClause(declaration) || ts.isNamespaceImport(declaration)) return ['process'];
       }
@@ -109,7 +142,7 @@ export function inspectSource(source, path = 'source.ts') {
         if (candidates.length) return candidates[0];
       }
       if (ts.isBindingElement(declaration) && (ts.isObjectBindingPattern(declaration.parent) || ts.isArrayBindingPattern(declaration.parent))) {
-        const candidates = [bindingAccess(declaration, seen), ...(assignments.get(symbol) ?? []).map(value => assignedAccess(value, seen))].filter(Boolean);
+        const candidates = [bindingAccess(declaration, seen), access(declaration.initializer, seen), ...(assignments.get(symbol) ?? []).map(value => assignedAccess(value, seen))].filter(Boolean);
         if (new Set(candidates.map(route => route.join('.'))).size > 1) return ['process', '*'];
         if (candidates.length) return candidates[0];
       }
