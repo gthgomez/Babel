@@ -23,6 +23,7 @@ export function inspectSource(source, path = 'source.ts') {
   const program = ts.createProgram([path], { noLib: true, noResolve: true }, host);
   const checker = program.getTypeChecker();
   const assignments = new Map();
+  const containerMutations = new Map();
   function collectTarget(target, expression, keys = [], bindingSymbol) {
     if (ts.isIdentifier(target)) {
       const symbol = bindingSymbol ?? checker.getSymbolAtLocation(target);
@@ -47,6 +48,13 @@ export function inspectSource(source, path = 'source.ts') {
     } else if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
       collectTarget(target.left, expression, keys);
       collectTarget(target.left, target.right);
+    } else if (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) {
+      let container = target.expression;
+      while (ts.isPropertyAccessExpression(container) || ts.isElementAccessExpression(container)) container = container.expression;
+      if (ts.isIdentifier(container)) {
+        const symbol = checker.getSymbolAtLocation(container);
+        if (symbol) containerMutations.set(symbol, [...(containerMutations.get(symbol) ?? []), expression]);
+      }
     }
   }
   function collectAssignments(node) {
@@ -74,9 +82,20 @@ export function inspectSource(source, path = 'source.ts') {
       return elements ? projectionAccess(elements[Number(keys[0])], keys.slice(1), seen) : access(expression, seen);
     }
     if (expression && ts.isObjectLiteralExpression(expression)) {
-      const property = expression.properties.find(property => (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) &&
-        (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)) && property.name.text === keys[0]);
-      if (property) return projectionAccess(ts.isPropertyAssignment(property) ? property.initializer : property.name, keys.slice(1), seen);
+      const routes = [];
+      for (const property of expression.properties) {
+        if (ts.isSpreadAssignment(property)) routes.push(projectionAccess(property.expression, keys, seen));
+        else if (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) {
+          const value = ts.isPropertyAssignment(property) ? property.initializer : property.name;
+          const name = property.name;
+          if ((ts.isIdentifier(name) || ts.isStringLiteralLike(name)) && name.text === keys[0]) routes.push(projectionAccess(value, keys.slice(1), seen));
+          else if (ts.isComputedPropertyName(name)) {
+            if (ts.isStringLiteralLike(name.expression) && name.expression.text === keys[0]) routes.push(projectionAccess(value, keys.slice(1), seen));
+            else if (!ts.isStringLiteralLike(name.expression) && access(value, seen)) routes.push(['process', '*']);
+          }
+        }
+      }
+      return mergeAccess(routes);
     }
     return keys.reduce(member, access(expression, seen));
   }
@@ -132,6 +151,7 @@ export function inspectSource(source, path = 'source.ts') {
     if (!ts.isIdentifier(node)) return null;
     const symbol = ts.isShorthandPropertyAssignment(node.parent) ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
     const declarations = symbol?.declarations ?? [];
+    if ((containerMutations.get(symbol) ?? []).some(value => access(value, seen))) return ['process', '*'];
     if (node.text === 'process' && declarations.length === 0) return ['process'];
     if (['globalThis', 'global'].includes(node.text) && declarations.length === 0) return [];
     for (const declaration of declarations) {

@@ -28,6 +28,9 @@ for (const source of [
   'const [x, quit] = [0, ...[process.exit]]; quit(1)',
   'const {quit} = {quit: process.exit}; quit(1)',
   'let quit; ({quit} = {quit: process.exit}); quit(1)',
+  'const {exit} = {exit: () => {}, ...process}; exit(1)',
+  'const {quit} = {quit: () => {}, ...{quit: process.exit}}; quit(1)',
+  'const {quit} = {quit: () => {}, quit: process.exit}; quit(1)',
   "const {default: p} = await import('node:process'); p.exit(1)",
   "const p = await import('node:process'); p['default'].exit(1)",
   "import { default as process } from 'node:process'; process.exit(1)",
@@ -70,6 +73,14 @@ test('default and spread aliases preserve stdout ownership', () => {
 test('object containers retain boundary ownership conservatively', () => {
   assert.equal(inspectSource('const host = {quit: process.exit}; host.quit(1)').ambiguous.length, 1);
   assert.equal(inspectSource('const {write} = {write: process.stdout.write}; write("x")').stdout.length, 1);
+});
+test('container property mutations cannot obtain false clearance', () => {
+  assert.equal(inspectSource('const box = {quit: () => {}}; box.quit = process.exit; box.quit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('const box = {}; box["write"] ??= process.stdout.write; box.write("x")').ambiguous.length, 1);
+});
+test('computed object overrides and stdout spreads cannot obtain false clearance', () => {
+  assert.equal(inspectSource('const {quit} = {quit: () => {}, [name]: process.exit}; quit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('const {write} = {write: () => {}, ...{write: process.stdout.write}}; write("x")').stdout.length, 1);
 });
 test('unknown dynamic process access fails closed', () => {
   assert.equal(inspectSource('process[name](1)').ambiguous.length, 1);
