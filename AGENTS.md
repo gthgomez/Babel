@@ -45,16 +45,25 @@ Expert senior software engineer specializing in TypeScript, Node.js, system arch
 - Chat mode provides conversational tool access without pipeline overhead
 - Deep mode invokes the full governed pipeline: plan, review, execute
 - Babel runtime permissions apply when actually executing through Babel; external hosts retain their own controls. Repository edits still follow the task scope and required verification.
-- Session identity is composed from multiple files: AGENTS.md (identity), CLAUDE.md (project rules), ENGINEERING.md (coding standards), and PROJECT_CONTEXT.md (system topology)
+- The active host supplies session identity, capabilities, and permissions. This router supplies contributor guidance; PROJECT_CONTEXT.md supplies product facts and ENGINEERING.md supplies coding standards.
 
 ## Startup
 
-Canonical identity-first startup sequence:
+Read this agent-neutral router first, skipping material already loaded. For
+repository work, then read PROJECT_CONTEXT.md for product facts and contracts.
+Ordinary conversation does not require repository inspection unless the answer
+depends on repository evidence. Load additional material by task:
 
-1. **AGENTS.md** — canonical agent-neutral router (read first; skip if already loaded)
-2. **CLAUDE.md** — shared project invariants and task paths; its Claude-specific tool section applies only when those tools exist
-3. **ENGINEERING.md** — coding standards I follow
-4. **PROJECT_CONTEXT.md** — system topology, contracts, and runtime state
+| Task | Load before acting |
+|---|---|
+| Code or package changes | ENGINEERING.md and affected package instructions |
+| Babel invocation or prompt-stack assembly | INTEGRATION.md, prompt_catalog.yaml, and selected layers |
+| Router, Behavioral OS, catalog, or compiled-memory changes | Relevant contracts and LLM_COLLABORATION_SYSTEM/RULES_CORE.md / RULES_GUARD.md |
+| GitHub delivery | .agents/rules/05-github-workflow.md |
+| Independent review or merge evidence | .agents/rules/10-independent-review-policy.md and docs/BABEL_PR_REVIEW.md |
+
+CLAUDE.md and GEMINI.md are host adapters. Read one when its host guidance
+applies; neither replaces this contributor router or the active host's controls.
 
 If Babel control-plane work is requested (`use Babel`, prompt-stack assembly, routing, catalog changes), follow the Babel invocation sequence in [INTEGRATION.md](./INTEGRATION.md).
 
@@ -96,7 +105,7 @@ Default stance:
 
 ## How To Work Here
 
-- Before changing routers, behavioral rules, catalog entries, or compiled-memory tooling: read [CLAUDE.md](./CLAUDE.md) §Critical Invariants and §High-Risk Zones.
+- Before changing routers, behavioral rules, catalog entries, or compiled-memory tooling: read PROJECT_CONTEXT.md and the relevant cataloged contracts and high-risk instructions.
 - For all non-trivial work: follow the PLAN → verify → ACT discipline in [RULES_CORE.md](./LLM_COLLABORATION_SYSTEM/RULES_CORE.md) and [RULES_GUARD.md](./LLM_COLLABORATION_SYSTEM/RULES_GUARD.md).
 - Follow specialized execution protocols under `.agents/rules/`:
   - `05-github-workflow.md` — End-to-end GitHub workflow rules

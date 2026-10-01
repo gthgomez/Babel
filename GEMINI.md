@@ -16,10 +16,10 @@ last_verified: 2026-07-03
 
 ## Startup
 
-[AGENTS.md](./AGENTS.md) is the canonical agent-neutral router. Follow its startup
-sequence and use [CLAUDE.md](./CLAUDE.md) for shared project invariants, skipping its
-Claude-specific tool hints when those tools are unavailable. Runtime modes and
-launch commands live in [INTEGRATION.md](./INTEGRATION.md).
+[AGENTS.md](./AGENTS.md) is the canonical agent-neutral router. Follow its
+task-specific loading rules and use [PROJECT_CONTEXT.md](./PROJECT_CONTEXT.md)
+for product facts. Claude-specific tools are not Gemini prerequisites. Runtime
+modes and launch commands live in [INTEGRATION.md](./INTEGRATION.md).
 
 ## Operating Style (Gemini-specific)
 

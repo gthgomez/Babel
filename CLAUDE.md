@@ -2,7 +2,7 @@
 
 # CLAUDE.md — Babel (Public Canonical Source)
 
-> **Role**: Entry point for AI sessions in the Babel public repo (`gthgomez/Babel`). This is the **canonical OSS source of truth** for the Babel coding agent. Startup sequence, repo architecture, invariants, high-risk zones, and common task paths.
+> **Role**: Claude host adapter for the Babel public repo (`gthgomez/Babel`). AGENTS.md is the contributor router; PROJECT_CONTEXT.md supplies product facts. This adapter records project pointers and Claude-specific tool guidance.
 > For what Babel is and how to invoke it, see [INTEGRATION.md](./INTEGRATION.md).
 > For deep technical architecture, see [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md).
 
