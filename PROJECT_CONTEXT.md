@@ -51,12 +51,12 @@ harness surfaces. Technical flows may still inspect a resolved stack before
 governed execution; that is a control-plane invariant, not the product
 category.
 
-## Required Startup Order
+## Contributor Startup
 
-1. Read `INTEGRATION.md`
-2. Read `PROJECT_CONTEXT.md`
-3. Read `README.md`
-4. Read `prompt_catalog.yaml`
+Follow `AGENTS.md`: read this facts file, then load the additional material
+required for the task. For Babel invocation or Prompt OS stack assembly, read
+`INTEGRATION.md`, `prompt_catalog.yaml`, and the selected layers. `README.md`
+provides optional product orientation.
 
 Consumer repositories may provide optional repo-local rules or project overlays.
 Those files are external inputs, not prerequisites for understanding, validating,
@@ -81,7 +81,7 @@ repository, or safety instructions and is never automatically published.
 - **05_Project_Overlays:** Public example overlays only.
 - **06_Task_Overlays:** Public reusable task overlays and public example deltas.
 - **babel-cli:** Public runtime harness for the interactive coding agent (chat, plan, deep), resolver preview, read-only MCP, and governed pipeline execution.
-- **AGENTS.md / `.agents/`:** Public agent identity, goal-clearance and GitHub workflow rules, and repo-local skills for stack assembly, code review, and control-plane validation.
+- **AGENTS.md / `.agents/`:** Contributor routing, goal-clearance and GitHub workflow rules, and repo-local skills for stack assembly, code review, and control-plane validation.
 
 ## Key Contracts
 
