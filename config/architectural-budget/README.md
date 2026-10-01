@@ -19,6 +19,8 @@ and local aliases. Unknown computed process methods fail closed. Comments and
 string literals are not executable host calls. Embedded child programs and
 oracle fixtures retain their own process-lifecycle and evaluation tests; this
 scan does not certify generated programs or dynamically evaluated code.
+Alias accounting is conservative: a mutable alias that may refer to a process
+method is counted even if a particular runtime path would overwrite it.
 
 Keep the terminal output owner and process entrypoints small. A boundary grant
 does not authorize unrelated output, a new network surface, or a privilege

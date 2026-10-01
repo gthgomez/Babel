@@ -209,6 +209,9 @@ if ($exitErrors.Count -gt 0) {
 # ─── Baseline Update Mode ─────────────────────────────────────────────────────
 
 if ($UpdateBaseline) {
+    foreach ($path in $currentCasts.Keys) {
+        if (-not $castBaseline.ContainsKey($path)) { throw "Cannot adopt unbaselined type casts: $path" }
+    }
     if ($sizeErrors.Count -gt 0 -or $castErrors.Count -gt 0 -or $stdoutErrors.Count -gt 0 -or $exitErrors.Count -gt 0) {
         throw "Baseline updates may only record verified reductions; repair regressions first."
     }
@@ -229,7 +232,12 @@ if ($UpdateBaseline) {
     Write-Host "  File size baseline: $($oversizedFiles.Count) files >2,000 lines -> $fileSizeBaselinePath"
 
     # Cast counts: only store files with at least one as any
-    $currentCasts | ConvertTo-Json | Set-Content $castBaselinePath -Encoding UTF8
+    # Retain zero ceilings so an eliminated cast cannot be reintroduced later.
+    $reducedCasts = @{}
+    foreach ($path in $castBaseline.Keys) {
+        $reducedCasts[$path] = if ($currentCasts.ContainsKey($path)) { $currentCasts[$path] } else { 0 }
+    }
+    $reducedCasts | ConvertTo-Json | Set-Content $castBaselinePath -Encoding UTF8
     Write-Host "  Cast baseline: $($currentCasts.Count) files -> $castBaselinePath"
 
     # The reviewed process boundary registry is never rewritten by this helper.

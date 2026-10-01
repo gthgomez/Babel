@@ -82,3 +82,19 @@ test('duplicate boundary grants fail closed', t => {
   const f = fixture(t, 'process.stdout.write("ok");\n', 'ui/probe.ts', { stdout: [grant, grant] });
   assert.notEqual(f.run().code, 0);
 });
+test('baseline update cannot adopt unbaselined type casts', t => {
+  const f = fixture(t, 'const value = unknownValue as any;\n');
+  const result = f.run('-UpdateBaseline');
+  assert.notEqual(result.code, 0);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, 'config/architectural-budget/as-any-counts.json'), 'utf8')), {});
+});
+test('eliminated cast ceilings remain zero and reject reintroduction', t => {
+  const f = fixture(t, 'const value = 1;\n');
+  const baseline = join(f.root, 'config/architectural-budget/as-any-counts.json');
+  writeFileSync(baseline, JSON.stringify({ 'babel-cli/src/ui/probe.ts': 1 }));
+  const result = f.run('-UpdateBaseline');
+  assert.equal(result.code, 0, result.output);
+  assert.equal(JSON.parse(readFileSync(baseline, 'utf8'))['babel-cli/src/ui/probe.ts'], 0);
+  writeFileSync(join(f.root, 'babel-cli/src/ui/probe.ts'), 'const value = unknownValue as any;\n');
+  assert.notEqual(f.run().code, 0);
+});

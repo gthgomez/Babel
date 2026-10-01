@@ -5,6 +5,10 @@ import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs
 for (const source of [
   'process.exit(1)', 'process.exit (1)', "process['exit']?.(1)",
   'globalThis.process.exit(1)', '(process as any).exit(1)',
+  'global.process.exit(1)', 'let p; p = process; p.exit(1)',
+  "import { default as process } from 'node:process'; process.exit(1)",
+  "const process = await import('node:process'); process.exit(1)",
+  "const { exit } = await import('node:process'); exit(1)",
   "import { exit as quit } from 'node:process'; quit(1)",
   "import p from 'node:process'; p.exit(1)",
   "import * as p from 'node:process'; p.exit(1)",
@@ -23,6 +27,9 @@ test('strings, comments and locally shadowed objects do not exit the host', () =
 test('aliased stdout write retains output ownership', () => {
   assert.equal(inspectSource('const out = process.stdout; const write = out.write; write("x")').stdout.length, 1);
 });
+test('nested destructuring and global stdout retain output ownership', () => {
+  assert.equal(inspectSource('const {stdout: {write: emit}} = process; emit("x"); global.process.stdout.write("x")').stdout.length, 2);
+});
 test('unknown dynamic process access fails closed', () => {
   assert.equal(inspectSource('process[name](1)').ambiguous.length, 1);
 });
@@ -31,6 +38,9 @@ test('calls on environment values are not dynamic process methods', () => {
 });
 test('malformed source cannot produce clearance', () => {
   assert.throws(() => inspectSource('function broken( { process.exit(1)'));
+});
+test('a mutable alias changing process roles cannot evade clearance', () => {
+  assert.equal(inspectSource('let p = process.stdout; p = process; p.exit(1)').ambiguous.length, 1);
 });
 for (const entry of [
   { path: 'src/../other.ts' }, { maxCalls: -1 }, { maxCalls: 1.5 },
