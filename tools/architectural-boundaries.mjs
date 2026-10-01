@@ -282,11 +282,7 @@ export function inspectSource(source, path = 'source.ts') {
         if (candidates.length) return candidates[0];
       }
     }
-    for (const assigned of assignments.get(symbol) ?? []) {
-      const route = assignedAccess(assigned, seen);
-      if (route) return route;
-    }
-    return null;
+    return mergeAccess((assignments.get(symbol) ?? []).map(assigned => assignedAccess(assigned, seen)));
   }
   function bindingAccess(element, seen) {
     const owner = element.parent.parent;

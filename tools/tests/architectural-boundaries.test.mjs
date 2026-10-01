@@ -243,6 +243,17 @@ test('internal import-equals qualified aliases preserve local host routes', () =
   assert.equal(inspectSource('import p = global.process; p.quit=p.exit; process.quit(7)').ambiguous.length, 1);
   assert.deepEqual(inspectSource('namespace local { export function run() {} } import run = local.run; run()'), {exits:[], stdout:[], ambiguous:[]});
 });
+test('assignment-backed parameter bindings merge possible host roles', () => {
+  for (const source of [
+    'function f(p:any) { p=process.stdout; p=process; p.exit(1) } f(null)',
+    'function f(p:any) { p=process; p=process.stdout; p.write("x") } f(null)',
+    'function f(p:any) { p=process.stdout; p=process; const quit=p.exit; quit(1) } f(null)',
+    'function f(p:any) { p=process; p=process.stdout; const emit=p.write; emit("x") } f(null)',
+  ]) assert.equal(inspectSource(source).ambiguous.length, 1, source);
+  assert.equal(inspectSource('function f(p:any) { p=process; p.exit(1) } f(null)').exits.length, 1);
+  assert.equal(inspectSource('function f(p:any) { p=process.stdout; p.write("x") } f(null)').stdout.length, 1);
+  assert.deepEqual(inspectSource('function f(p:any) { p={run:()=>{}}; p.run() } f(null)'), {exits:[], stdout:[], ambiguous:[]});
+});
 test('malformed source cannot produce clearance', () => {
   assert.throws(() => inspectSource('function broken( { process.exit(1)'));
 });
