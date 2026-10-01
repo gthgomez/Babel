@@ -25,6 +25,7 @@ export function inspectSource(source, path = 'source.ts') {
   const assignments = new Map();
   const containerMutations = new Map();
   const containerAliases = new Map();
+  const mutationComponents = new Map();
   function unwrap(node) {
     while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node))) node = node.expression;
     return node;
@@ -52,6 +53,7 @@ export function inspectSource(source, path = 'source.ts') {
     }
   }
   function mutationsFor(symbol) {
+    if (mutationComponents.has(symbol)) return mutationComponents.get(symbol);
     const visited = new Set(), pending = [symbol], mutations = [];
     while (pending.length) {
       const current = pending.pop();
@@ -60,7 +62,9 @@ export function inspectSource(source, path = 'source.ts') {
       mutations.push(...(containerMutations.get(current) ?? []));
       pending.push(...(containerAliases.get(current) ?? []));
     }
-    return mutations;
+    const component = { mutations, evaluating: false, recognized: undefined };
+    for (const member of visited) mutationComponents.set(member, component);
+    return component;
   }
   function collectTarget(target, expression, keys = [], bindingSymbol) {
     target = unwrap(target);
@@ -205,7 +209,16 @@ export function inspectSource(source, path = 'source.ts') {
     if (!ts.isIdentifier(node)) return null;
     const symbol = ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
     const declarations = symbol?.declarations ?? [];
-    if (mutationsFor(symbol).some(value => access(value, seen))) return ['process', '*'];
+    const component = mutationsFor(symbol);
+    // Every alias in a component shares its mutation seeds. Evaluate those seeds
+    // once, independently of the caller's path; reentry follows declarations and
+    // assignments without recursively expanding the same component again.
+    if (component.recognized === undefined && !component.evaluating) {
+      component.evaluating = true;
+      try { component.recognized = component.mutations.some(value => access(value)); }
+      finally { component.evaluating = false; }
+    }
+    if (component.recognized) return ['process', '*'];
     if (node.text === 'process' && declarations.length === 0) return ['process'];
     if (['globalThis', 'global'].includes(node.text) && declarations.length === 0) return [];
     for (const declaration of declarations) {
