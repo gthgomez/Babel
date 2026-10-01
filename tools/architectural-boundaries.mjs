@@ -23,15 +23,16 @@ export function inspectSource(source, path = 'source.ts') {
   const program = ts.createProgram([path], { noLib: true, noResolve: true }, host);
   const checker = program.getTypeChecker();
   const assignments = new Map();
-  function collectTarget(target, expression, keys = []) {
+  function collectTarget(target, expression, keys = [], bindingSymbol) {
     if (ts.isIdentifier(target)) {
-      const symbol = checker.getSymbolAtLocation(target);
+      const symbol = bindingSymbol ?? checker.getSymbolAtLocation(target);
+      if (!symbol) return;
       const values = assignments.get(symbol) ?? [];
       values.push({ expression, keys });
       assignments.set(symbol, values);
     } else if (ts.isObjectLiteralExpression(target)) {
       for (const property of target.properties) {
-        if (ts.isShorthandPropertyAssignment(property)) collectTarget(property.name, expression, [...keys, property.name.text]);
+        if (ts.isShorthandPropertyAssignment(property)) collectTarget(property.name, expression, [...keys, property.name.text], checker.getShorthandAssignmentValueSymbol(property));
         else if (ts.isPropertyAssignment(property)) {
           const key = property.name;
           collectTarget(property.initializer, expression, [...keys, ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*']);
@@ -52,10 +53,20 @@ export function inspectSource(source, path = 'source.ts') {
     while (node && !ts.isImportDeclaration(node)) node = node.parent;
     return node?.moduleSpecifier?.text;
   }
+  function mergeAccess(candidates) {
+    const recognized = candidates.filter(Boolean);
+    if (new Set(recognized.map(route => route.join('.'))).size > 1) return ['process', '*'];
+    return recognized[0] ?? null;
+  }
   function access(node, seen = new Set()) {
     if (!node || seen.has(node)) return null;
     seen = new Set(seen).add(node);
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node) || ts.isAwaitExpression(node)) return access(node.expression, seen);
+    if (ts.isConditionalExpression(node)) return mergeAccess([access(node.whenTrue, seen), access(node.whenFalse, seen)]);
+    if (ts.isBinaryExpression(node)) {
+      if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken) return access(node.right, seen);
+      if ([ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken].includes(node.operatorToken.kind)) return mergeAccess([access(node.left, seen), access(node.right, seen)]);
+    }
     if (ts.isPropertyAccessExpression(node)) {
       const base = access(node.expression, seen);
       return member(base, node.name.text);

@@ -19,6 +19,10 @@ and local aliases. Unknown computed process methods fail closed. Comments and
 string literals are not executable host calls. Embedded child programs and
 oracle fixtures retain their own process-lifecycle and evaluation tests; this
 scan does not certify generated programs or dynamically evaluated code.
+It follows local declarations and assignments, including destructuring and
+conditional aliases; it does not propagate values through arbitrary function
+parameters, returned objects, or cross-file calls. It is an architectural lint
+check, not a proof of process isolation.
 Alias accounting is conservative: a mutable alias that may refer to a process
 method is counted even if a particular runtime path would overwrite it.
 

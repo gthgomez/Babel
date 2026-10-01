@@ -7,6 +7,10 @@ for (const source of [
   'globalThis.process.exit(1)', '(process as any).exit(1)',
   'global.process.exit(1)', 'let p; p = process; p.exit(1)',
   'let quit; ({exit: quit} = process); quit(1)',
+  'let exit; ({exit} = process); exit(1)',
+  'const p = flag ? process : {}; p.exit(1)',
+  'const p = replacement || process; p.exit(1)',
+  'const p = replacement ?? process; p.exit(1)',
   "const {default: p} = await import('node:process'); p.exit(1)",
   "const p = await import('node:process'); p['default'].exit(1)",
   "import { default as process } from 'node:process'; process.exit(1)",
@@ -32,6 +36,9 @@ test('aliased stdout write retains output ownership', () => {
 });
 test('nested destructuring and global stdout retain output ownership', () => {
   assert.equal(inspectSource('const {stdout: {write: emit}} = process; emit("x"); global.process.stdout.write("x")').stdout.length, 2);
+});
+test('shorthand destructuring assignments retain output ownership', () => {
+  assert.equal(inspectSource('let write; ({stdout: {write}} = process); write("x")').stdout.length, 1);
 });
 test('unknown dynamic process access fails closed', () => {
   assert.equal(inspectSource('process[name](1)').ambiguous.length, 1);
