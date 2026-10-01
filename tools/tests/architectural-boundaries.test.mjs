@@ -110,6 +110,10 @@ test('static iteration into existing bindings preserves process and container ow
   assert.equal(inspectSource('let p; for (p of [process]) p.exit(1)').ambiguous.length, 1);
   assert.equal(inspectSource('const original = {}; let alias; for (alias of [original]) alias.quit = process.exit; original.quit(1)').ambiguous.length, 1);
 });
+for (const receiver of ['(flag ? box : other)', '(box || other)', '(0, box)', '({box}).box']) test('value-bearing mutation receivers retain container ownership: ' + receiver, () => {
+  assert.equal(inspectSource(`const box = {}, other = {}; ${receiver}.quit = process.exit; box.quit(1)`).ambiguous.length, 1);
+  assert.equal(inspectSource(`const box = {}, other = {}; ${receiver}.write = process.stdout.write; box.write("x")`).ambiguous.length, 1);
+});
 test('computed object overrides and stdout spreads cannot obtain false clearance', () => {
   assert.equal(inspectSource('const {quit} = {quit: () => {}, [name]: process.exit}; quit(1)').ambiguous.length, 1);
   assert.equal(inspectSource('const {write} = {write: () => {}, ...{write: process.stdout.write}}; write("x")').stdout.length, 1);
