@@ -254,6 +254,21 @@ test('assignment-backed parameter bindings merge possible host roles', () => {
   assert.equal(inspectSource('function f(p:any) { p=process.stdout; p.write("x") } f(null)').stdout.length, 1);
   assert.deepEqual(inspectSource('function f(p:any) { p={run:()=>{}}; p.run() } f(null)'), {exits:[], stdout:[], ambiguous:[]});
 });
+test('identifier parameter defaults preserve host routes and mutation identity', () => {
+  assert.equal(inspectSource('function f(quit=process.exit){quit(7)} f()').exits.length, 1);
+  assert.equal(inspectSource('function f(out=process.stdout){out.write("x")} f()').stdout.length, 1);
+  assert.equal(inspectSource('function f(p=process){p.quit=p.exit; process.quit(7)} f()').ambiguous.length, 1);
+  assert.equal(inspectSource('function f(p:any=process.stdout){p=process; p.exit(7)} f()').ambiguous.length, 1);
+  assert.deepEqual(inspectSource('function f(run=()=>{}){run()} f()'), {exits:[], stdout:[], ambiguous:[]});
+});
+test('assignments to implicit globals preserve replacement host routes', () => {
+  for (const source of [
+    'global=process; global.exit(7)',
+    'globalThis=process; globalThis.exit(7)',
+    'process=process.stdout; process.write("x")',
+    'global=process.stdout; const emit=global.write; emit("x")',
+  ]) assert.equal(inspectSource(source).ambiguous.length, 1, source);
+});
 test('malformed source cannot produce clearance', () => {
   assert.throws(() => inspectSource('function broken( { process.exit(1)'));
 });

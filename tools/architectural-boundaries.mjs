@@ -132,7 +132,7 @@ export function inspectSource(source, path = 'source.ts') {
     if ((ts.isImportClause(node) || ts.isNamespaceImport(node) || ts.isImportSpecifier(node) || ts.isImportEqualsDeclaration(node)) && ['process', 'node:process'].includes(moduleOf(node))) linkSymbols(node.name && checker.getSymbolAtLocation(node.name), globalProcessSymbol);
     if (ts.isImportEqualsDeclaration(node) && !ts.isExternalModuleReference(node.moduleReference)) collectTarget(node.name, node.moduleReference);
     if ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node) || ts.isMethodDeclaration(node)) && ['bind', '*'].includes(propertyKey(node.name))) hasBindOverrides = true;
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) linkAliases(checker.getSymbolAtLocation(node.name), declarationSource(node));
+    if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && ts.isIdentifier(node.name)) linkAliases(checker.getSymbolAtLocation(node.name), declarationSource(node));
     if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) {
       let owner = node.parent.parent;
       while (ts.isBindingElement(owner)) {
@@ -261,8 +261,10 @@ export function inspectSource(source, path = 'source.ts') {
       finally { component.evaluating = false; }
     }
     if (component.recognized) return ['process', '*'];
-    if (node.text === 'process' && declarations.length === 0) return ['process'];
-    if (['globalThis', 'global'].includes(node.text) && declarations.length === 0) return [];
+    if (implicitGlobals.has(node.text) && declarations.length === 0) {
+      const initial = node.text === 'process' ? ['process'] : [];
+      return mergeAccess([initial, ...(assignments.get(symbol) ?? []).map(assigned => assignedAccess(assigned, seen))]);
+    }
     for (const declaration of declarations) {
       if (['node:process', 'process'].includes(moduleOf(declaration))) {
         if (ts.isImportSpecifier(declaration)) {
@@ -271,7 +273,7 @@ export function inspectSource(source, path = 'source.ts') {
         }
         if (ts.isImportClause(declaration) || ts.isNamespaceImport(declaration) || ts.isImportEqualsDeclaration(declaration)) return ['process'];
       }
-      if (ts.isVariableDeclaration(declaration)) {
+      if (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration)) {
         const candidates = [access(declarationSource(declaration), seen), ...(assignments.get(symbol) ?? []).map(value => assignedAccess(value, seen))].filter(Boolean);
         if (new Set(candidates.map(route => route.join('.'))).size > 1) return ['process', '*'];
         if (candidates.length) return candidates[0];
