@@ -118,6 +118,11 @@ test('computed object overrides and stdout spreads cannot obtain false clearance
   assert.equal(inspectSource('const {quit} = {quit: () => {}, [name]: process.exit}; quit(1)').ambiguous.length, 1);
   assert.equal(inspectSource('const {write} = {write: () => {}, ...{write: process.stdout.write}}; write("x")').stdout.length, 1);
 });
+test('shorthand assignment defaults resolve their own value symbols', () => {
+  assert.equal(inspectSource('const exit = process.exit; let quit; ({quit = exit} = {}); quit(1)').exits.length, 1);
+  assert.equal(inspectSource('const emit = process.stdout.write; let write; ({write = emit} = {}); write("x")').stdout.length, 1);
+  assert.equal(inspectSource('const original = {}; let alias; ({alias = original} = {}); alias.quit = process.exit; original.quit(1)').ambiguous.length, 1);
+});
 test('unknown dynamic process access fails closed', () => {
   assert.equal(inspectSource('process[name](1)').ambiguous.length, 1);
 });

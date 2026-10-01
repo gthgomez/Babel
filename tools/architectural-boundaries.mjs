@@ -32,7 +32,7 @@ export function inspectSource(source, path = 'source.ts') {
   function aliasRoots(expression) {
     expression = unwrap(expression);
     if (!expression) return [];
-    if (ts.isIdentifier(expression)) return [ts.isShorthandPropertyAssignment(expression.parent) ? checker.getShorthandAssignmentValueSymbol(expression.parent) : checker.getSymbolAtLocation(expression)].filter(Boolean);
+    if (ts.isIdentifier(expression)) return [ts.isShorthandPropertyAssignment(expression.parent) && expression.parent.name === expression ? checker.getShorthandAssignmentValueSymbol(expression.parent) : checker.getSymbolAtLocation(expression)].filter(Boolean);
     if (ts.isAwaitExpression(expression)) return aliasRoots(expression.expression);
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) return aliasRoots(expression.expression);
     if (ts.isConditionalExpression(expression)) return [...aliasRoots(expression.whenTrue), ...aliasRoots(expression.whenFalse)];
@@ -200,7 +200,7 @@ export function inspectSource(source, path = 'source.ts') {
       if (callee?.at(-1) === 'bind') return callee.slice(0, -1);
     }
     if (!ts.isIdentifier(node)) return null;
-    const symbol = ts.isShorthandPropertyAssignment(node.parent) ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
+    const symbol = ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
     const declarations = symbol?.declarations ?? [];
     if (mutationsFor(symbol).some(value => access(value, seen))) return ['process', '*'];
     if (node.text === 'process' && declarations.length === 0) return ['process'];
