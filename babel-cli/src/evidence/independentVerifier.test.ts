@@ -15,7 +15,7 @@ import {
 const HIGH_ASSURANCE = [
   'benchmark_container',
   'babel_research',
-  'opencalw_manager',
+  'workspace_manager',
 ] as const;
 
 const EVERYDAY_OFF = [
@@ -117,7 +117,7 @@ test('isIndependentVerifierOptIn explicit profile arg beats BABEL_EXECUTION_PROF
   assert.equal(
     isIndependentVerifierOptIn(
       { BABEL_EXECUTION_PROFILE: 'safe_repo' },
-      'opencalw_manager',
+      'workspace_manager',
     ),
     true,
   );

@@ -10,10 +10,35 @@ import {
   resolveExecutionProfile,
 } from './executionProfiles.js';
 
+test('legacy workspace inputs normalize to a secure canonical profile and warn once', (t) => {
+  const warning = t.mock.method(process, 'emitWarning', () => undefined);
+  for (const input of [
+    'opencalw_manager',
+    'opencalw-manager',
+    'opencalw',
+    'openclaw_manager',
+    'openclaw-manager',
+    'openclaw',
+  ]) {
+    assert.equal(normalizeExecutionProfile(input), 'workspace_manager');
+    const profile = resolveExecutionProfile(input);
+    assert.equal(profile.name, 'workspace_manager');
+    assert.equal(profile.dockerSandbox, true);
+    assert.equal(profile.independentVerifierDefault, true);
+    assert.ok(profile.commandAdditions.includes('cargo'));
+    assert.ok(profile.disallowedTools.includes('web_search'));
+    assert.ok(profile.disallowedTools.includes('web_fetch'));
+    assert.match(buildExecutionProfilePromptLines(input).join('\n'), /workspace_manager/);
+  }
+  assert.equal(warning.mock.callCount(), 1);
+  assert.equal(normalizeExecutionProfile('workspace-manager'), 'workspace_manager');
+  assert.equal(warning.mock.callCount(), 1);
+});
+
 test('execution profile names normalize common spelling variants', () => {
   assert.equal(normalizeExecutionProfile('dev-local'), 'dev_local');
   assert.equal(normalizeExecutionProfile('BENCHMARK_CONTAINER'), 'benchmark_container');
-  assert.equal(normalizeExecutionProfile('opencalw-manager'), 'opencalw_manager');
+  assert.equal(normalizeExecutionProfile('opencalw-manager'), 'workspace_manager');
   assert.equal(normalizeExecutionProfile('nope'), null);
 });
 
@@ -44,13 +69,13 @@ test('read_only_audit constrains mutating executor tools', () => {
   assert.ok(policy.disallowedTools.includes('test_run'));
 });
 
-test('opencalw_manager allows local verification commands and denies web tools', () => {
-  const additions = getExecutionProfileCommandAdditions('opencalw_manager');
+test('workspace_manager allows local verification commands and denies web tools', () => {
+  const additions = getExecutionProfileCommandAdditions('workspace_manager');
   assert.ok(additions.includes('cargo'));
   assert.ok(additions.includes('dotnet'));
   assert.ok(additions.includes('go'));
   assert.ok(additions.includes('mvn'));
-  const policy = getExecutionProfileToolPolicy('opencalw_manager');
+  const policy = getExecutionProfileToolPolicy('workspace_manager');
   assert.ok(policy.disallowedTools.includes('web_search'));
   assert.ok(policy.disallowedTools.includes('web_fetch'));
 });
@@ -72,7 +97,7 @@ test('high-assurance profiles default IndependentVerifier on; everyday stay off'
   const onByDefault = new Set([
     'benchmark_container',
     'babel_research',
-    'opencalw_manager',
+    'workspace_manager',
   ]);
   for (const name of EXECUTION_PROFILE_NAMES) {
     const profile = resolveExecutionProfile(name);
@@ -93,7 +118,7 @@ test('high-assurance profiles default IndependentVerifier on; everyday stay off'
 });
 
 test('high-assurance profile descriptions note clean-room IndependentVerifier', () => {
-  for (const name of ['benchmark_container', 'babel_research', 'opencalw_manager'] as const) {
+  for (const name of ['benchmark_container', 'babel_research', 'workspace_manager'] as const) {
     const description = resolveExecutionProfile(name).description;
     assert.match(description, /IndependentVerifier/i, name);
   }

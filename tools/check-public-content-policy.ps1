@@ -182,7 +182,7 @@ foreach ($entry in @($policy.temporary_exceptions)) {
   }
   $expiry = [datetime]::MinValue
   if ($isValid) {
-    if (-not [datetime]::TryParseExact([string]$entry.expires, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$expiry)) { $isValid = $false }
+    if (-not [datetime]::TryParseExact([string]$entry.expires, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, ([Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal), [ref]$expiry)) { $isValid = $false }
     elseif ($expiry.Date -lt [datetime]::UtcNow.Date) { $isValid = $false }
   }
   if ($isValid) { $validTemporaryExceptions += $entry }
@@ -196,6 +196,20 @@ function Test-IsTemporarilyExcepted {
   return $false
 }
 $validFixtureExceptions = @()
+$compatibilityEntries = if ($policy.PSObject.Properties.Name -contains 'compatibility_exceptions') { @($policy.compatibility_exceptions) } else { @() }
+foreach ($entry in $compatibilityEntries) {
+  $isValid = $null -ne $entry
+  foreach ($name in @('id', 'rule_id', 'path', 'pattern', 'rationale', 'evidence')) {
+    if ($null -eq $entry -or -not ($entry.PSObject.Properties.Name -contains $name) -or [string]::IsNullOrWhiteSpace([string]$entry.$name)) { $isValid = $false }
+  }
+  if ($isValid) {
+    $isValid = [string]$entry.rule_id -eq 'PCONT004' -and
+      [string]$entry.path -match '^babel-cli/src/[A-Za-z0-9_/-]+\.ts$' -and
+      ([string]$entry.pattern).StartsWith('^') -and ([string]$entry.pattern).EndsWith('$')
+  }
+  if ($isValid) { $validFixtureExceptions += $entry }
+  else { Add-Finding -Id 'PCFG003' -Category 'invalid-compatibility-exception' -Path 'tools/security/public-content-policy.json' -Line 0 }
+}
 foreach ($entry in @($policy.fixture_exceptions)) {
   if (-not [string]::IsNullOrWhiteSpace([string]$entry.id) -and -not [string]::IsNullOrWhiteSpace([string]$entry.rule_id) -and
       -not [string]::IsNullOrWhiteSpace([string]$entry.path) -and -not [string]::IsNullOrWhiteSpace([string]$entry.pattern) -and

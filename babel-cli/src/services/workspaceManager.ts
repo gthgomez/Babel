@@ -14,9 +14,9 @@ export interface ApprovedWorkspaceRoot {
 export interface WorkspacePolicyStatus {
   readonly status: 'ok';
   readonly approved_roots: ApprovedWorkspaceRoot[];
-  readonly web_policy: 'denied_for_opencalw_manager';
+  readonly web_policy: 'denied_for_workspace_manager';
   readonly dependency_install_policy: 'ask_first';
-  readonly execution_profile: 'opencalw_manager';
+  readonly execution_profile: 'workspace_manager';
 }
 
 export interface WorkspaceFileEntry {
@@ -53,7 +53,7 @@ export interface WorkspaceCommandResult {
 export interface WorkspaceVerifyReport {
   readonly status: 'pass' | 'fail' | 'no_commands';
   readonly project_root: string;
-  readonly execution_profile: 'opencalw_manager';
+  readonly execution_profile: 'workspace_manager';
   readonly onboarding: ProjectOnboardingReport;
   readonly selected_commands: string[];
   readonly command_results: WorkspaceCommandResult[];
@@ -99,9 +99,9 @@ export function getWorkspacePolicyStatus(): WorkspacePolicyStatus {
   return {
     status: 'ok',
     approved_roots: getOpenClawApprovedRoots(),
-    web_policy: 'denied_for_opencalw_manager',
+    web_policy: 'denied_for_workspace_manager',
     dependency_install_policy: 'ask_first',
-    execution_profile: 'opencalw_manager',
+    execution_profile: 'workspace_manager',
   };
 }
 
@@ -329,7 +329,7 @@ function withManagerEnv<T>(projectRoot: string, approvedRoots: string[], fn: () 
   const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
   const previousAllowedRoots = process.env['BABEL_ALLOWED_ROOTS'];
 
-  process.env['BABEL_EXECUTION_PROFILE'] = 'opencalw_manager';
+  process.env['BABEL_EXECUTION_PROFILE'] = 'workspace_manager';
   process.env['BABEL_PROJECT_ROOT'] = projectRoot;
   process.env['BABEL_ALLOWED_ROOTS'] = approvedRoots.join(',');
 
@@ -403,7 +403,7 @@ export function verifyWorkspaceProject(
   return {
     status,
     project_root: resolved.path,
-    execution_profile: 'opencalw_manager',
+    execution_profile: 'workspace_manager',
     onboarding,
     selected_commands: selectedCommands,
     command_results: commandResults,

@@ -490,7 +490,7 @@ function buildCompletionVerificationForRun(input: {
 }) {
   const verification =
     input.pipelineStatus === 'COMPLETE' &&
-    input.executionProfile === 'opencalw_manager' &&
+    input.executionProfile === 'workspace_manager' &&
     input.projectRoot
       ? verifyWorkspaceProject(input.projectRoot)
       : null;
@@ -1165,7 +1165,7 @@ async function runLiteCommand(
   let resolvedWorkspaceRoot: string | null = null;
   let resolvedAllowedRoots: string[] = [];
   if (options.projectRoot !== undefined) {
-    if (executionProfile === 'opencalw_manager') {
+    if (executionProfile === 'workspace_manager') {
       const resolved = resolveApprovedWorkspacePath(options.projectRoot);
       resolvedProjectRoot = resolved.path;
       resolvedAllowedRoots = resolved.approvedRoots;
@@ -2005,7 +2005,7 @@ Examples:
   $ babel run "Fix lint" --output-format stream-json
   $ babel run "Audit only" --allowed-tools directory_list,file_read,semantic_search
   $ babel run "Fix tests" --execution-profile dev_local
-  $ babel run "Fix tests" --execution-profile opencalw_manager --project-root /tmp/example_game_suite\\MyGame
+  $ babel run "Fix tests" --execution-profile workspace_manager --project-root /tmp/example_game_suite\\MyGame
   $ babel run "Solve task" --execution-profile benchmark_container --mode deep
 
 Notes:
@@ -2136,7 +2136,7 @@ Notes:
 
         if (options.projectRoot !== undefined) {
           try {
-            if (executionProfile === 'opencalw_manager') {
+            if (executionProfile === 'workspace_manager') {
               const resolved = resolveApprovedWorkspacePath(options.projectRoot);
               resolvedProjectRoot = resolved.path;
               resolvedAllowedRoots = resolved.approvedRoots;

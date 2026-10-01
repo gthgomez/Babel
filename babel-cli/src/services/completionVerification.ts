@@ -1,4 +1,5 @@
 import type { WorkspaceVerifyReport } from './workspaceManager.js';
+import { normalizeExecutionProfile } from '../config/executionProfiles.js';
 
 export type CompletionVerificationStatus = 'not_required' | 'pass' | 'fail';
 
@@ -18,7 +19,7 @@ export function evaluateCompletionVerification(input: {
 }): CompletionVerificationGate {
   const required =
     input.pipelineStatus === 'COMPLETE' &&
-    input.executionProfile === 'opencalw_manager' &&
+    normalizeExecutionProfile(input.executionProfile) === 'workspace_manager' &&
     Boolean(input.projectRoot);
 
   if (!required) {
