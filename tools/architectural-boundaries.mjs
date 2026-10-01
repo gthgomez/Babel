@@ -25,6 +25,7 @@ export function inspectSource(source, path = 'source.ts') {
   const assignments = new Map();
   const containerMutations = new Map();
   const containerAliases = new Map();
+  const mutationComponents = new Map();
   function unwrap(node) {
     while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node))) node = node.expression;
     return node;
@@ -52,6 +53,7 @@ export function inspectSource(source, path = 'source.ts') {
     }
   }
   function mutationsFor(symbol) {
+    if (mutationComponents.has(symbol)) return mutationComponents.get(symbol);
     const visited = new Set(), pending = [symbol], mutations = [];
     while (pending.length) {
       const current = pending.pop();
@@ -60,7 +62,9 @@ export function inspectSource(source, path = 'source.ts') {
       mutations.push(...(containerMutations.get(current) ?? []));
       pending.push(...(containerAliases.get(current) ?? []));
     }
-    return mutations;
+    const component = { mutations, evaluating: false, recognized: undefined };
+    for (const member of visited) mutationComponents.set(member, component);
+    return component;
   }
   function collectTarget(target, expression, keys = [], bindingSymbol) {
     target = unwrap(target);
@@ -100,7 +104,10 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) linkAliases(checker.getSymbolAtLocation(node.name), declarationSource(node));
     if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) {
       let owner = node.parent.parent;
-      while (ts.isBindingElement(owner)) owner = owner.parent.parent;
+      while (ts.isBindingElement(owner)) {
+        linkAliases(checker.getSymbolAtLocation(node.name), owner.initializer);
+        owner = owner.parent.parent;
+      }
       linkAliases(checker.getSymbolAtLocation(node.name), declarationSource(owner));
       linkAliases(checker.getSymbolAtLocation(node.name), node.initializer);
     }
@@ -202,7 +209,16 @@ export function inspectSource(source, path = 'source.ts') {
     if (!ts.isIdentifier(node)) return null;
     const symbol = ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
     const declarations = symbol?.declarations ?? [];
-    if (mutationsFor(symbol).some(value => access(value, seen))) return ['process', '*'];
+    const component = mutationsFor(symbol);
+    // Every alias in a component shares its mutation seeds. Evaluate those seeds
+    // once, independently of the caller's path; reentry follows declarations and
+    // assignments without recursively expanding the same component again.
+    if (component.recognized === undefined && !component.evaluating) {
+      component.evaluating = true;
+      try { component.recognized = component.mutations.some(value => access(value)); }
+      finally { component.evaluating = false; }
+    }
+    if (component.recognized) return ['process', '*'];
     if (node.text === 'process' && declarations.length === 0) return ['process'];
     if (['globalThis', 'global'].includes(node.text) && declarations.length === 0) return [];
     for (const declaration of declarations) {
@@ -235,13 +251,15 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isArrayBindingPattern(element.parent)) {
       const index = element.parent.elements.indexOf(element);
       const key = element.dotDotDotToken ? '*' : String(index);
-      return ts.isBindingElement(owner) ? member(bindingAccess(owner, seen), key) : projectionAccess(declarationSource(owner), [key], seen);
+      const projected = ts.isBindingElement(owner) ? member(bindingAccess(owner, seen), key) : projectionAccess(declarationSource(owner), [key], seen);
+      return mergeAccess([projected, access(element.initializer, seen)]);
     }
     const base = ts.isBindingElement(owner) ? bindingAccess(owner, seen) : access(declarationSource(owner), seen);
-    if (element.dotDotDotToken) return base;
+    if (element.dotDotDotToken) return mergeAccess([base, access(element.initializer, seen)]);
     const key = element.propertyName ?? element.name;
     const name = ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*';
-    return ts.isBindingElement(owner) ? member(base, name) : projectionAccess(declarationSource(owner), [name], seen);
+    const projected = ts.isBindingElement(owner) ? member(base, name) : projectionAccess(declarationSource(owner), [name], seen);
+    return mergeAccess([projected, access(element.initializer, seen)]);
   }
   const exits = [], stdout = [], ambiguous = [];
   function visit(node) {
