@@ -94,7 +94,10 @@ export function inspectSource(source, path = 'source.ts') {
       while (ts.isPropertyAccessExpression(container) || ts.isElementAccessExpression(container)) container = unwrap(container.expression);
       if (ts.isIdentifier(container)) {
         const symbol = checker.getSymbolAtLocation(container);
-        if (symbol) containerMutations.set(symbol, [...(containerMutations.get(symbol) ?? []), expression]);
+        if (symbol) {
+          containerMutations.set(symbol, [...(containerMutations.get(symbol) ?? []), expression]);
+          linkAliases(symbol, expression);
+        }
       }
     }
   }
@@ -104,8 +107,10 @@ export function inspectSource(source, path = 'source.ts') {
       let owner = node.parent.parent;
       while (ts.isBindingElement(owner)) owner = owner.parent.parent;
       linkAliases(checker.getSymbolAtLocation(node.name), declarationSource(owner));
+      linkAliases(checker.getSymbolAtLocation(node.name), node.initializer);
     }
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.EqualsToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(node.operatorToken.kind)) collectTarget(node.left, node.right);
+    if (ts.isForOfStatement(node) && !ts.isVariableDeclarationList(node.initializer)) collectTarget(node.initializer, node.expression);
     ts.forEachChild(node, collectAssignments);
   }
   function declarationSource(declaration) {
