@@ -184,6 +184,30 @@ test('direct global process member transfers cannot obtain clearance', () => {
   ]) assert.equal(inspectSource(source).ambiguous.length, 1, source);
   assert.deepEqual(inspectSource('process.exitCode=1; process.stdout.columns=80; process.cwd()'), {exits:[], stdout:[], ambiguous:[]});
 });
+test('constructor syntax accounts for executable bound host methods', () => {
+  assert.equal(inspectSource('new (process.exit.bind(process,7))()').exits.length, 1);
+  assert.equal(inspectSource('const quit=process.exit.bind(process,7); new quit()').exits.length, 1);
+  assert.deepEqual(inspectSource('class Widget {} new Widget()'), {exits:[], stdout:[], ambiguous:[]});
+});
+test('known global and imported process identities share mutation ownership', () => {
+  for (const source of [
+    'global.process.quit=process.exit; global.process.quit(7)',
+    'const out=globalThis.process.stdout; out.emit=out.write; process.stdout.emit("x")',
+    'const p=process; p.quit=process.exit; global.process.quit(7)',
+    'const g=globalThis; g.process.quit=g.process.exit; process.quit(7)',
+    'import p from "node:process"; p.quit=p.exit; process.quit(7)',
+    'const p=require("node:process"); p.quit=p.exit; process.quit(7)',
+  ]) assert.equal(inspectSource(source).ambiguous.length, 1, source);
+  assert.deepEqual(inspectSource('const process={quit:()=>{}}; process.quit(); const global={process:{quit:()=>{}}}; global.process.quit()'), {exits:[], stdout:[], ambiguous:[]});
+});
+test('binding a host method does not invoke it, including capture and restore', () => {
+  assert.deepEqual(inspectSource('const original=process.stdout.write.bind(process.stdout); process.stdout.write=original'), {exits:[], stdout:[], ambiguous:[]});
+  for (const source of [
+    'process.stdout.write.bind=process.exit; process.stdout.write.bind(7)',
+    'const obj={bind:process.exit}; obj.bind(7)',
+    'const obj={[key]:process.exit}; obj.bind(7)',
+  ]) assert.equal(inspectSource(source).ambiguous.length, 1, source);
+});
 test('process data in arrays and alternative environment keys do not create host boundaries', () => {
   assert.equal(inspectSource('const args = [process.execPath, "--flag"]; args.map(String).join(" "); const roots = process.env["ROOT_A"] || process.env["ROOT_B"] || ""; roots.split(",")').ambiguous.length, 0);
 });

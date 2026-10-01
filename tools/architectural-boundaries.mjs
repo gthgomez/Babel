@@ -27,9 +27,13 @@ export function inspectSource(source, path = 'source.ts') {
   const containerAliases = new Map();
   const mutationComponents = new Map();
   const globalProcessSymbol = Symbol('unshadowed global process');
+  const globalObjectSymbol = Symbol('unshadowed global object');
+  const implicitGlobals = new Map([['process', globalProcessSymbol], ['global', globalObjectSymbol], ['globalThis', globalObjectSymbol]]);
+  let hasBindOverrides = false;
+  linkSymbols(globalProcessSymbol, globalObjectSymbol);
   function identifierSymbol(node) {
     const symbol = ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
-    return symbol ?? (node.text === 'process' ? globalProcessSymbol : undefined);
+    return !symbol?.declarations?.length && implicitGlobals.has(node.text) ? implicitGlobals.get(node.text) : symbol;
   }
   function unwrap(node) {
     while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node))) node = node.expression;
@@ -46,6 +50,7 @@ export function inspectSource(source, path = 'source.ts') {
     expression = unwrap(expression);
     if (!expression) return [];
     if (ts.isIdentifier(expression)) return [identifierSymbol(expression)].filter(Boolean);
+    if (ts.isCallExpression(expression) && ((ts.isIdentifier(expression.expression) && expression.expression.text === 'require') || expression.expression.kind === ts.SyntaxKind.ImportKeyword) && ts.isStringLiteralLike(expression.arguments[0]) && ['process', 'node:process'].includes(expression.arguments[0].text)) return [globalProcessSymbol];
     if (ts.isAwaitExpression(expression)) return aliasRoots(expression.expression);
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) return aliasRoots(expression.expression);
     if (ts.isConditionalExpression(expression)) return [...aliasRoots(expression.whenTrue), ...aliasRoots(expression.whenFalse)];
@@ -57,12 +62,13 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isObjectLiteralExpression(expression)) return expression.properties.flatMap(property => aliasRoots(ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : ts.isSpreadAssignment(property) ? property.expression : null));
     return [];
   }
+  function linkSymbols(symbol, other) {
+    if (!symbol || !other) return;
+    containerAliases.set(symbol, new Set([...(containerAliases.get(symbol) ?? []), other]));
+    containerAliases.set(other, new Set([...(containerAliases.get(other) ?? []), symbol]));
+  }
   function linkAliases(symbol, expression) {
-    if (!symbol) return;
-    for (const other of aliasRoots(expression)) {
-      containerAliases.set(symbol, new Set([...(containerAliases.get(symbol) ?? []), other]));
-      containerAliases.set(other, new Set([...(containerAliases.get(other) ?? []), symbol]));
-    }
+    for (const other of aliasRoots(expression)) linkSymbols(symbol, other);
   }
   function mutationsFor(symbol) {
     if (mutationComponents.has(symbol)) return mutationComponents.get(symbol);
@@ -106,6 +112,8 @@ export function inspectSource(source, path = 'source.ts') {
       collectTarget(target.left, expression, keys);
       collectTarget(target.left, target.right);
     } else if (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) {
+      const key = ts.isPropertyAccessExpression(target) ? target.name.text : ts.isStringLiteralLike(target.argumentExpression) ? target.argumentExpression.text : '*';
+      if (key === 'bind' || key === '*') hasBindOverrides = true;
       for (const symbol of aliasRoots(target.expression)) {
         containerMutations.set(symbol, [...(containerMutations.get(symbol) ?? []), expression]);
         linkAliases(symbol, expression);
@@ -113,6 +121,8 @@ export function inspectSource(source, path = 'source.ts') {
     }
   }
   function collectAssignments(node) {
+    if ((ts.isImportClause(node) || ts.isNamespaceImport(node) || ts.isImportSpecifier(node)) && ['process', 'node:process'].includes(moduleOf(node))) linkSymbols(node.name && checker.getSymbolAtLocation(node.name), globalProcessSymbol);
+    if ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node) || ts.isMethodDeclaration(node)) && ['bind', '*'].includes(propertyKey(node.name))) hasBindOverrides = true;
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) linkAliases(checker.getSymbolAtLocation(node.name), declarationSource(node));
     if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) {
       let owner = node.parent.parent;
@@ -276,8 +286,11 @@ export function inspectSource(source, path = 'source.ts') {
   }
   const exits = [], stdout = [], ambiguous = [];
   function visit(node) {
-    if (ts.isCallExpression(node) || ts.isTaggedTemplateExpression(node)) {
+    if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) {
       let route = access(ts.isTaggedTemplateExpression(node) ? node.tag : node.expression);
+      // Intrinsic bind creates a function; invocation of that result is counted
+      // separately. Explicit or dynamic local overrides retain ambiguity.
+      if (route?.at(-1) === 'bind' && !hasBindOverrides) route = null;
       if (['call', 'apply'].includes(route?.at(-1))) route = route.slice(0, -1);
       const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
       if (route?.join('.') === 'process.exit') exits.push(line);
