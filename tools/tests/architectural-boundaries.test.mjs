@@ -1,6 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
+
+test('cyclic container aliases terminate and preserve host mutation detection', () => {
+  const moduleUrl = new URL('../architectural-boundaries.mjs', import.meta.url).href;
+  const graph = 'const c0 = {};\n' + Array.from({length: 22}, (_, i) => `const c${i+1} = c${i}; c${i}.next = c${i+1};`).join('\n');
+  const code = `import {inspectSource} from ${JSON.stringify(moduleUrl)}; const graph=${JSON.stringify(graph)}; console.log(JSON.stringify([inspectSource(graph+' c0.run()'),inspectSource(graph+' c22.quit=process.exit; c0.quit(1)')]))`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', timeout: 4000 });
+  assert.equal(result.error, undefined, String(result.error));
+  assert.equal(result.status, 0, result.stderr);
+  const [ordinary, host] = JSON.parse(result.stdout);
+  assert.deepEqual(ordinary, {exits: [], stdout: [], ambiguous: []});
+  assert.equal(host.ambiguous.length, 1);
+});
 
 for (const source of [
   'process.exit(1)', 'process.exit (1)', "process['exit']?.(1)",
@@ -122,6 +135,12 @@ test('shorthand assignment defaults resolve their own value symbols', () => {
   assert.equal(inspectSource('const exit = process.exit; let quit; ({quit = exit} = {}); quit(1)').exits.length, 1);
   assert.equal(inspectSource('const emit = process.stdout.write; let write; ({write = emit} = {}); write("x")').stdout.length, 1);
   assert.equal(inspectSource('const original = {}; let alias; ({alias = original} = {}); alias.quit = process.exit; original.quit(1)').ambiguous.length, 1);
+});
+test('enclosing binding defaults preserve process projections and reverse aliases', () => {
+  assert.equal(inspectSource('const {p: {exit: quit} = process} = {}; quit(1)').exits.length, 1);
+  assert.equal(inspectSource('const [{exit: quit} = process] = []; quit(1)').exits.length, 1);
+  assert.equal(inspectSource('const {p: {stdout: {write: emit}} = process} = {}; emit("x")').stdout.length, 1);
+  assert.equal(inspectSource('const original = {}; const {nested: {alias} = {alias: original}} = {}; alias.quit = process.exit; original.quit(1)').ambiguous.length, 1);
 });
 test('unknown dynamic process access fails closed', () => {
   assert.equal(inspectSource('process[name](1)').ambiguous.length, 1);
