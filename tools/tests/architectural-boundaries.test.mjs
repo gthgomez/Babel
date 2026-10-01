@@ -228,6 +228,21 @@ test('ambient declarations do not create runtime shadows of host globals', () =>
 test('process data in arrays and alternative environment keys do not create host boundaries', () => {
   assert.equal(inspectSource('const args = [process.execPath, "--flag"]; args.map(String).join(" "); const roots = process.env["ROOT_A"] || process.env["ROOT_B"] || ""; roots.split(",")').ambiguous.length, 0);
 });
+test('external import-equals process aliases preserve host calls and mutation ownership', () => {
+  for (const module of ['process', 'node:process']) {
+    assert.equal(inspectSource(`import p = require('${module}'); p.exit(7)`).exits.length, 1);
+    assert.equal(inspectSource(`import p = require('${module}'); p.stdout.write('x')`).stdout.length, 1);
+    assert.equal(inspectSource(`import p = require('${module}'); p.quit=p.exit; process.quit(7)`).ambiguous.length, 1);
+  }
+  assert.deepEqual(inspectSource("import fs = require('node:fs'); fs.readFileSync('x')"), {exits:[], stdout:[], ambiguous:[]});
+});
+test('internal import-equals qualified aliases preserve local host routes', () => {
+  assert.equal(inspectSource('import p = globalThis.process; p.exit(7)').exits.length, 1);
+  assert.equal(inspectSource('import quit = process.exit; quit(7)').exits.length, 1);
+  assert.equal(inspectSource('import emit = process.stdout.write; emit("x")').stdout.length, 1);
+  assert.equal(inspectSource('import p = global.process; p.quit=p.exit; process.quit(7)').ambiguous.length, 1);
+  assert.deepEqual(inspectSource('namespace local { export function run() {} } import run = local.run; run()'), {exits:[], stdout:[], ambiguous:[]});
+});
 test('malformed source cannot produce clearance', () => {
   assert.throws(() => inspectSource('function broken( { process.exit(1)'));
 });

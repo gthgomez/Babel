@@ -59,6 +59,7 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isIdentifier(expression)) return [identifierSymbol(expression)].filter(Boolean);
     if (ts.isCallExpression(expression) && ((ts.isIdentifier(expression.expression) && expression.expression.text === 'require') || expression.expression.kind === ts.SyntaxKind.ImportKeyword) && ts.isStringLiteralLike(expression.arguments[0]) && ['process', 'node:process'].includes(expression.arguments[0].text)) return [globalProcessSymbol];
     if (ts.isAwaitExpression(expression)) return aliasRoots(expression.expression);
+    if (ts.isQualifiedName(expression)) return aliasRoots(expression.left);
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) return aliasRoots(expression.expression);
     if (ts.isConditionalExpression(expression)) return [...aliasRoots(expression.whenTrue), ...aliasRoots(expression.whenFalse)];
     if (ts.isBinaryExpression(expression)) {
@@ -128,7 +129,8 @@ export function inspectSource(source, path = 'source.ts') {
     }
   }
   function collectAssignments(node) {
-    if ((ts.isImportClause(node) || ts.isNamespaceImport(node) || ts.isImportSpecifier(node)) && ['process', 'node:process'].includes(moduleOf(node))) linkSymbols(node.name && checker.getSymbolAtLocation(node.name), globalProcessSymbol);
+    if ((ts.isImportClause(node) || ts.isNamespaceImport(node) || ts.isImportSpecifier(node) || ts.isImportEqualsDeclaration(node)) && ['process', 'node:process'].includes(moduleOf(node))) linkSymbols(node.name && checker.getSymbolAtLocation(node.name), globalProcessSymbol);
+    if (ts.isImportEqualsDeclaration(node) && !ts.isExternalModuleReference(node.moduleReference)) collectTarget(node.name, node.moduleReference);
     if ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node) || ts.isMethodDeclaration(node)) && ['bind', '*'].includes(propertyKey(node.name))) hasBindOverrides = true;
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) linkAliases(checker.getSymbolAtLocation(node.name), declarationSource(node));
     if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) {
@@ -203,8 +205,9 @@ export function inspectSource(source, path = 'source.ts') {
     return elements;
   }
   function moduleOf(node) {
-    while (node && !ts.isImportDeclaration(node)) node = node.parent;
-    return node?.moduleSpecifier?.text;
+    while (node && !ts.isImportDeclaration(node) && !ts.isImportEqualsDeclaration(node)) node = node.parent;
+    const expression = node && ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) ? node.moduleReference.expression : node?.moduleSpecifier;
+    return expression && ts.isStringLiteralLike(expression) ? expression.text : undefined;
   }
   function mergeAccess(candidates) {
     const recognized = candidates.filter(Boolean);
@@ -221,6 +224,7 @@ export function inspectSource(source, path = 'source.ts') {
   function access(node, seen = new Set()) {
     if (!node || seen.has(node)) return null;
     seen = new Set(seen).add(node);
+    if (ts.isQualifiedName(node)) return member(access(node.left, seen), node.right.text);
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node) || ts.isAwaitExpression(node)) return access(node.expression, seen);
     if (ts.isConditionalExpression(node)) return mergeAccess([access(node.whenTrue, seen), access(node.whenFalse, seen)]);
     if (ts.isBinaryExpression(node)) {
@@ -265,7 +269,7 @@ export function inspectSource(source, path = 'source.ts') {
           const name = declaration.propertyName?.text ?? declaration.name.text;
           return name === 'default' ? ['process'] : member(['process'], name);
         }
-        if (ts.isImportClause(declaration) || ts.isNamespaceImport(declaration)) return ['process'];
+        if (ts.isImportClause(declaration) || ts.isNamespaceImport(declaration) || ts.isImportEqualsDeclaration(declaration)) return ['process'];
       }
       if (ts.isVariableDeclaration(declaration)) {
         const candidates = [access(declarationSource(declaration), seen), ...(assignments.get(symbol) ?? []).map(value => assignedAccess(value, seen))].filter(Boolean);
