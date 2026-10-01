@@ -78,6 +78,15 @@ test('container property mutations cannot obtain false clearance', () => {
   assert.equal(inspectSource('const box = {quit: () => {}}; box.quit = process.exit; box.quit(1)').ambiguous.length, 1);
   assert.equal(inspectSource('const box = {}; box["write"] ??= process.stdout.write; box.write("x")').ambiguous.length, 1);
 });
+test('mutations through container aliases taint every local view of that object', () => {
+  assert.equal(inspectSource('const box = {}; const alias = box; alias.quit = process.exit; box.quit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('const box = {nested: {}}; const alias = box.nested; alias.quit = process.exit; box.nested.quit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('const box = {}; let alias; alias = box; alias.write = process.stdout.write; box.write("x")').ambiguous.length, 1);
+});
+test('wrapped container assignment receivers cannot obtain false clearance', () => {
+  assert.equal(inspectSource('const box = {}; (box).quit = process.exit; box.quit(1)').ambiguous.length, 1);
+  assert.equal(inspectSource('const box = {}; (box as any).write = process.stdout.write; box.write("x")').ambiguous.length, 1);
+});
 test('computed object overrides and stdout spreads cannot obtain false clearance', () => {
   assert.equal(inspectSource('const {quit} = {quit: () => {}, [name]: process.exit}; quit(1)').ambiguous.length, 1);
   assert.equal(inspectSource('const {write} = {write: () => {}, ...{write: process.stdout.write}}; write("x")').stdout.length, 1);

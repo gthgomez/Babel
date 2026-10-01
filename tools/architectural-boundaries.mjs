@@ -24,13 +24,48 @@ export function inspectSource(source, path = 'source.ts') {
   const checker = program.getTypeChecker();
   const assignments = new Map();
   const containerMutations = new Map();
+  const containerAliases = new Map();
+  function unwrap(node) {
+    while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node))) node = node.expression;
+    return node;
+  }
+  function aliasRoots(expression) {
+    expression = unwrap(expression);
+    if (!expression) return [];
+    if (ts.isIdentifier(expression)) return [checker.getSymbolAtLocation(expression)].filter(Boolean);
+    if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) return aliasRoots(expression.expression);
+    if (ts.isConditionalExpression(expression)) return [...aliasRoots(expression.whenTrue), ...aliasRoots(expression.whenFalse)];
+    if (ts.isBinaryExpression(expression) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken].includes(expression.operatorToken.kind)) return [...aliasRoots(expression.left), ...aliasRoots(expression.right)];
+    return [];
+  }
+  function linkAliases(symbol, expression) {
+    if (!symbol) return;
+    for (const other of aliasRoots(expression)) {
+      containerAliases.set(symbol, new Set([...(containerAliases.get(symbol) ?? []), other]));
+      containerAliases.set(other, new Set([...(containerAliases.get(other) ?? []), symbol]));
+    }
+  }
+  function mutationsFor(symbol) {
+    const visited = new Set(), pending = [symbol], mutations = [];
+    while (pending.length) {
+      const current = pending.pop();
+      if (!current || visited.has(current)) continue;
+      visited.add(current);
+      mutations.push(...(containerMutations.get(current) ?? []));
+      pending.push(...(containerAliases.get(current) ?? []));
+    }
+    return mutations;
+  }
   function collectTarget(target, expression, keys = [], bindingSymbol) {
+    target = unwrap(target);
+    if (!target) return;
     if (ts.isIdentifier(target)) {
       const symbol = bindingSymbol ?? checker.getSymbolAtLocation(target);
       if (!symbol) return;
       const values = assignments.get(symbol) ?? [];
       values.push({ expression, keys });
       assignments.set(symbol, values);
+      linkAliases(symbol, expression);
     } else if (ts.isObjectLiteralExpression(target)) {
       for (const property of target.properties) {
         if (ts.isShorthandPropertyAssignment(property)) {
@@ -49,8 +84,8 @@ export function inspectSource(source, path = 'source.ts') {
       collectTarget(target.left, expression, keys);
       collectTarget(target.left, target.right);
     } else if (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) {
-      let container = target.expression;
-      while (ts.isPropertyAccessExpression(container) || ts.isElementAccessExpression(container)) container = container.expression;
+      let container = unwrap(target.expression);
+      while (ts.isPropertyAccessExpression(container) || ts.isElementAccessExpression(container)) container = unwrap(container.expression);
       if (ts.isIdentifier(container)) {
         const symbol = checker.getSymbolAtLocation(container);
         if (symbol) containerMutations.set(symbol, [...(containerMutations.get(symbol) ?? []), expression]);
@@ -58,6 +93,12 @@ export function inspectSource(source, path = 'source.ts') {
     }
   }
   function collectAssignments(node) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) linkAliases(checker.getSymbolAtLocation(node.name), node.initializer);
+    if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) {
+      let owner = node.parent.parent;
+      while (ts.isBindingElement(owner)) owner = owner.parent.parent;
+      linkAliases(checker.getSymbolAtLocation(node.name), owner.initializer);
+    }
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.EqualsToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(node.operatorToken.kind)) collectTarget(node.left, node.right);
     ts.forEachChild(node, collectAssignments);
   }
@@ -151,7 +192,7 @@ export function inspectSource(source, path = 'source.ts') {
     if (!ts.isIdentifier(node)) return null;
     const symbol = ts.isShorthandPropertyAssignment(node.parent) ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
     const declarations = symbol?.declarations ?? [];
-    if ((containerMutations.get(symbol) ?? []).some(value => access(value, seen))) return ['process', '*'];
+    if (mutationsFor(symbol).some(value => access(value, seen))) return ['process', '*'];
     if (node.text === 'process' && declarations.length === 0) return ['process'];
     if (['globalThis', 'global'].includes(node.text) && declarations.length === 0) return [];
     for (const declaration of declarations) {
