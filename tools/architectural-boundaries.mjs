@@ -26,6 +26,8 @@ export function inspectSource(source, path = 'source.ts') {
   const containerMutations = new Map();
   const containerAliases = new Map();
   const mutationComponents = new Map();
+  const carrierSymbols = new WeakMap();
+  const instanceSymbols = new WeakMap();
   const globalProcessSymbol = Symbol('unshadowed global process');
   const globalObjectSymbol = Symbol('unshadowed global object');
   const implicitGlobals = new Map([['process', globalProcessSymbol], ['global', globalObjectSymbol], ['globalThis', globalObjectSymbol]]);
@@ -53,10 +55,85 @@ export function inspectSource(source, path = 'source.ts') {
     }
     return ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name) ? name.text : '*';
   }
+  function carrierSymbol(node) {
+    const named = node.name && checker.getSymbolAtLocation(node.name);
+    if (named) return named;
+    if (!carrierSymbols.has(node)) carrierSymbols.set(node, Symbol('anonymous class owner'));
+    return carrierSymbols.get(node);
+  }
+  const hasStatic = node => node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.StaticKeyword);
+  function instanceSymbol(node) {
+    if (!instanceSymbols.has(node)) instanceSymbols.set(node, Symbol('local class instance owner'));
+    return instanceSymbols.get(node);
+  }
+  function localClasses(expression, seen = new Set()) {
+    expression = unwrap(expression);
+    if (!expression || seen.has(expression)) return null;
+    seen = new Set(seen).add(expression);
+    if (ts.isClassDeclaration(expression) || ts.isClassExpression(expression)) return [expression];
+    if (ts.isConditionalExpression(expression)) {
+      const left = localClasses(expression.whenTrue, seen), right = localClasses(expression.whenFalse, seen);
+      return left && right ? [...left, ...right] : null;
+    }
+    if (!ts.isIdentifier(expression)) return null;
+    const symbol = identifierSymbol(expression);
+    const values = [];
+    for (const declaration of symbol?.declarations ?? []) {
+      if (ts.isClassDeclaration(declaration) || ts.isClassExpression(declaration)) values.push(declaration);
+      else if (ts.isVariableDeclaration(declaration) && declaration.initializer) values.push(declaration.initializer);
+      else return null;
+    }
+    for (const assigned of assignments.get(symbol) ?? []) {
+      if (assigned.keys.length) return null;
+      values.push(assigned.expression);
+    }
+    const resolved = values.map(value => localClasses(value, seen));
+    return resolved.length && resolved.every(Boolean) ? resolved.flat() : null;
+  }
+  const baseExpressions = node => (node.heritageClauses ?? []).filter(clause => clause.token === ts.SyntaxKind.ExtendsKeyword).flatMap(clause => clause.types.map(type => type.expression));
+  function instanceValues(node, seen = new Set()) {
+    if (seen.has(node)) return [];
+    seen = new Set(seen).add(node);
+    return [...node.members.filter(member => ts.isPropertyDeclaration(member) && !hasStatic(member)).map(member => member.initializer).filter(Boolean),
+      ...baseExpressions(node).flatMap(base => (localClasses(base) ?? []).flatMap(owner => instanceValues(owner, seen)))];
+  }
+  function hasHostBase(node, seen = new Set()) {
+    if (seen.has(node)) return true;
+    seen = new Set(seen).add(node);
+    return baseExpressions(node).some(base => {
+      const owners = localClasses(base);
+      return owners ? owners.some(owner => hasHostBase(owner, seen)) : Boolean(access(base));
+    });
+  }
+  function carrierValues(node) {
+    if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) return [
+      ...node.members.filter(member => ts.isPropertyDeclaration(member) && hasStatic(member)).map(member => member.initializer).filter(Boolean),
+      ...baseExpressions(node),
+    ];
+    if (!ts.isModuleDeclaration(node) || !node.body) return [];
+    if (ts.isModuleDeclaration(node.body)) return [node.body];
+    return node.body.statements.filter(statement => statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)).flatMap(statement =>
+      ts.isVariableStatement(statement) ? statement.declarationList.declarations.map(declaration => declaration.initializer).filter(Boolean) : ts.isModuleDeclaration(statement) || ts.isClassDeclaration(statement) ? [statement] : []);
+  }
+  function thisOwner(node) {
+    for (let owner = node.parent; owner; owner = owner.parent) {
+      if (ts.isClassStaticBlockDeclaration(owner)) return { node: owner.parent, static: true };
+      if (ts.isConstructorDeclaration(owner)) return { node: owner.parent, static: false };
+      if (ts.isPropertyDeclaration(owner) || ts.isMethodDeclaration(owner) || ts.isGetAccessorDeclaration(owner) || ts.isSetAccessorDeclaration(owner)) return ts.isClassDeclaration(owner.parent) || ts.isClassExpression(owner.parent) ? { node: owner.parent, static: hasStatic(owner) } : null;
+      if (ts.isFunctionDeclaration(owner) || ts.isFunctionExpression(owner)) return null;
+    }
+    return null;
+  }
   function aliasRoots(expression) {
     expression = unwrap(expression);
     if (!expression) return [];
     if (ts.isIdentifier(expression)) return [identifierSymbol(expression)].filter(Boolean);
+    if (ts.isClassDeclaration(expression) || ts.isClassExpression(expression) || ts.isModuleDeclaration(expression)) return [carrierSymbol(expression), ...carrierValues(expression).flatMap(aliasRoots)];
+    if (ts.isNewExpression(expression)) return (localClasses(expression.expression) ?? []).flatMap(owner => [instanceSymbol(owner), ...instanceValues(owner).flatMap(aliasRoots)]);
+    if (expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const owner = thisOwner(expression);
+      return owner ? [owner.static ? carrierSymbol(owner.node) : instanceSymbol(owner.node)] : [];
+    }
     if (ts.isCallExpression(expression) && ((ts.isIdentifier(expression.expression) && expression.expression.text === 'require') || expression.expression.kind === ts.SyntaxKind.ImportKeyword) && ts.isStringLiteralLike(expression.arguments[0]) && ['process', 'node:process'].includes(expression.arguments[0].text)) return [globalProcessSymbol];
     if (ts.isAwaitExpression(expression)) return aliasRoots(expression.expression);
     if (ts.isQualifiedName(expression)) return aliasRoots(expression.left);
@@ -91,6 +168,15 @@ export function inspectSource(source, path = 'source.ts') {
     const component = { mutations, evaluating: false, recognized: undefined };
     for (const member of visited) mutationComponents.set(member, component);
     return component;
+  }
+  function hasHostMutation(symbol) {
+    const component = mutationsFor(symbol);
+    if (component.recognized === undefined && !component.evaluating) {
+      component.evaluating = true;
+      try { component.recognized = component.mutations.some(value => access(value)); }
+      finally { component.evaluating = false; }
+    }
+    return component.recognized;
   }
   function collectTarget(target, expression, keys = [], bindingSymbol) {
     target = unwrap(target);
@@ -129,6 +215,11 @@ export function inspectSource(source, path = 'source.ts') {
     }
   }
   function collectAssignments(node) {
+    if (ts.isClassDeclaration(node) || ts.isClassExpression(node) || ts.isModuleDeclaration(node)) for (const value of carrierValues(node)) linkAliases(carrierSymbol(node), value);
+    if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
+      for (const value of instanceValues(node)) linkAliases(instanceSymbol(node), value);
+      for (const base of baseExpressions(node)) for (const owner of localClasses(base) ?? []) linkSymbols(instanceSymbol(node), instanceSymbol(owner));
+    }
     if ((ts.isImportClause(node) || ts.isNamespaceImport(node) || ts.isImportSpecifier(node) || ts.isImportEqualsDeclaration(node)) && ['process', 'node:process'].includes(moduleOf(node))) linkSymbols(node.name && checker.getSymbolAtLocation(node.name), globalProcessSymbol);
     if (ts.isImportEqualsDeclaration(node) && !ts.isExternalModuleReference(node.moduleReference)) collectTarget(node.name, node.moduleReference);
     if ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node) || ts.isMethodDeclaration(node)) && ['bind', '*'].includes(propertyKey(node.name))) hasBindOverrides = true;
@@ -224,6 +315,13 @@ export function inspectSource(source, path = 'source.ts') {
   function access(node, seen = new Set()) {
     if (!node || seen.has(node)) return null;
     seen = new Set(seen).add(node);
+    if (ts.isClassDeclaration(node) || ts.isClassExpression(node) || ts.isModuleDeclaration(node)) return hasHostMutation(carrierSymbol(node)) || carrierValues(node).some(value => access(value, seen)) ? ['process', '*'] : null;
+    if (node.kind === ts.SyntaxKind.ThisKeyword) {
+      const owner = thisOwner(node);
+      if (!owner) return null;
+      return owner.static ? access(owner.node, seen) : hasHostMutation(instanceSymbol(owner.node)) || instanceValues(owner.node).some(value => access(value, seen)) ? ['process', '*'] : null;
+    }
+    if (ts.isNewExpression(node)) return (localClasses(node.expression) ?? []).some(owner => hasHostMutation(instanceSymbol(owner)) || instanceValues(owner).some(value => access(value, seen))) ? ['process', '*'] : null;
     if (ts.isQualifiedName(node)) return member(access(node.left, seen), node.right.text);
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node) || ts.isAwaitExpression(node)) return access(node.expression, seen);
     if (ts.isConditionalExpression(node)) return mergeAccess([access(node.whenTrue, seen), access(node.whenFalse, seen)]);
@@ -251,21 +349,19 @@ export function inspectSource(source, path = 'source.ts') {
     if (!ts.isIdentifier(node)) return null;
     const symbol = identifierSymbol(node);
     const declarations = symbol?.declarations ?? [];
-    const component = mutationsFor(symbol);
     // Every alias in a component shares its mutation seeds. Evaluate those seeds
     // once, independently of the caller's path; reentry follows declarations and
     // assignments without recursively expanding the same component again.
-    if (component.recognized === undefined && !component.evaluating) {
-      component.evaluating = true;
-      try { component.recognized = component.mutations.some(value => access(value)); }
-      finally { component.evaluating = false; }
-    }
-    if (component.recognized) return ['process', '*'];
+    if (hasHostMutation(symbol)) return ['process', '*'];
     if (implicitGlobals.has(node.text) && declarations.length === 0) {
       const initial = node.text === 'process' ? ['process'] : [];
       return mergeAccess([initial, ...(assignments.get(symbol) ?? []).map(assigned => assignedAccess(assigned, seen))]);
     }
     for (const declaration of declarations) {
+      if (ts.isClassDeclaration(declaration) || ts.isClassExpression(declaration) || ts.isModuleDeclaration(declaration)) {
+        const route = access(declaration, seen);
+        if (route) return route;
+      }
       if (['node:process', 'process'].includes(moduleOf(declaration))) {
         if (ts.isImportSpecifier(declaration)) {
           const name = declaration.propertyName?.text ?? declaration.name.text;
@@ -305,6 +401,10 @@ export function inspectSource(source, path = 'source.ts') {
   function visit(node) {
     if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) {
       let route = access(ts.isTaggedTemplateExpression(node) ? node.tag : node.expression);
+      if (ts.isNewExpression(node)) {
+        const owners = localClasses(node.expression);
+        if (owners && !owners.some(owner => hasHostBase(owner))) route = null;
+      }
       // Intrinsic bind creates a function; invocation of that result is counted
       // separately. Explicit or dynamic local overrides retain ambiguity.
       if (route?.at(-1) === 'bind' && !hasBindOverrides) route = null;

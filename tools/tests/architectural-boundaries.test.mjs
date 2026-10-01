@@ -269,6 +269,56 @@ test('assignments to implicit globals preserve replacement host routes', () => {
     'global=process.stdout; const emit=global.write; emit("x")',
   ]) assert.equal(inspectSource(source).ambiguous.length, 1, source);
 });
+test('static class and namespace containers preserve host routes', () => {
+  for (const source of [
+    'class C { static quit=process.exit } C.quit(7)',
+    'const C=class Named { static quit=process.exit }; C.quit(7)',
+    'const C=class { static out=process.stdout }; C.out.write("x")',
+    'namespace M { export const quit=process.exit } M.quit(7)',
+    'namespace M { export const out=process.stdout } M.out.write("x")',
+    'namespace M.N { export const quit=process.exit } M.N.quit(7)',
+    'namespace M { export class C { static quit=process.exit } } M.C.quit(7)',
+    'class C { static quit=process.exit } class D extends C {} D.quit(7)',
+    'class C { static quit=process.exit; static { this.quit(7) } }',
+    'class C { static { this.quit=process.exit; this.quit(7) } }',
+  ]) assert.ok(inspectSource(source).ambiguous.length > 0, source);
+  assert.deepEqual(inspectSource('class C { static run=()=>{} } C.run(); namespace M { export const run=()=>{} } M.run()'), {exits:[], stdout:[], ambiguous:[]});
+});
+test('static class and namespace aliases retain reverse mutation ownership', () => {
+  for (const source of [
+    'const original:any={}; class C {static alias=original}; C.alias.quit=process.exit; original.quit(7)',
+    'class C {static p=process}; C.p.quit=C.p.exit; process.quit(7)',
+    'const original:any={}; const C=class {static alias=original}; C.alias.quit=process.exit; original.quit(7)',
+    'const original:any={}; namespace M {export const alias=original}; M.alias.quit=process.exit; original.quit(7)',
+    'namespace M {export const p=process}; M.p.quit=M.p.exit; process.quit(7)',
+  ]) assert.ok(inspectSource(source).ambiguous.length > 0, source);
+});
+test('local class instances retain field routes without counting construction', () => {
+  for (const source of [
+    'class C {quit=process.exit} const c=new C(); c.quit(7)',
+    'class C {out=process.stdout} const c=new C(); c.out.write("x")',
+    'class C {quit=process.exit} const {quit}=new C(); quit(7)',
+    'class C {quit=process.exit} class D extends C {} new D().quit(7)',
+    'class C {quit=process.exit; constructor(){this.quit(7)}} new C()',
+    'class C {constructor(){this.quit=process.exit;this.quit(7)}} new C()',
+    'class C extends process.exit {} new C(7)',
+    'class C {static quit=process.exit} let ctor:any=C; ctor=process.exit.bind(process,7); new ctor()',
+  ]) assert.ok(inspectSource(source).ambiguous.length > 0 || inspectSource(source).exits.length > 0, source);
+  for (const source of [
+    'class C {static quit=process.exit} new C()',
+    'class C {static quit=process.exit} const ctor=C; new ctor()',
+    'class C {quit=process.exit} new C()',
+    'class C {out=process.stdout} class D extends C {} new D()',
+  ]) assert.deepEqual(inspectSource(source), {exits:[], stdout:[], ambiguous:[]}, source);
+  assert.equal(inspectSource('class C {quit=process.exit(7)} new C()').exits.length, 1);
+});
+test('instance field aliases preserve reverse mutation ownership', () => {
+  for (const source of [
+    'const original:any={}; class C {alias=original} const c=new C(); c.alias.quit=process.exit; original.quit(7)',
+    'class C {p=process} const c=new C(); c.p.quit=c.p.exit; process.quit(7)',
+    'const original:any={}; class C {alias=original} class D extends C {} const c=new D(); c.alias.quit=process.exit; original.quit(7)',
+  ]) assert.ok(inspectSource(source).ambiguous.length > 0, source);
+});
 test('malformed source cannot produce clearance', () => {
   assert.throws(() => inspectSource('function broken( { process.exit(1)'));
 });
