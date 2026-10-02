@@ -416,33 +416,58 @@ export function inspectSource(source, path = 'source.ts') {
     const expression = node && ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) ? node.moduleReference.expression : node?.moduleSpecifier;
     return expression && ts.isStringLiteralLike(expression) ? expression.text : undefined;
   }
-  function isNodeLoaderFactory(expression, seen = new Set()) {
-    expression = unwrap(expression);
-    if (!expression || seen.has(expression)) return false;
-    seen = new Set(seen).add(expression);
-    const symbol = ts.isIdentifier(expression) ? checker.getSymbolAtLocation(expression) : ts.isPropertyAccessExpression(expression) ? checker.getSymbolAtLocation(expression.expression) : null;
-    return (symbol?.declarations ?? []).some(declaration =>
-      ['node:module', 'module'].includes(moduleOf(declaration)) &&
-        (ts.isImportSpecifier(declaration) && (declaration.propertyName?.text ?? declaration.name.text) === 'createRequire' ||
-          (ts.isNamespaceImport(declaration) || ts.isImportClause(declaration)) && ts.isPropertyAccessExpression(expression) && expression.name.text === 'createRequire') ||
-      (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration)) && isNodeLoaderFactory(declaration.initializer, seen)) ||
-      (assignments.get(symbol) ?? []).some(value => !value.keys.length && isNodeLoaderFactory(value.expression, seen));
+  function projectNativeOrigin(kind, keys) {
+    for (const key of keys) {
+      if (kind === 'module' && key === 'default') continue;
+      kind = kind === 'module' && key === 'createRequire' ? 'factory' : kind === 'factory' && ['bind', 'call', 'apply'].includes(key) ? 'factory-' + key : null;
+    }
+    return kind;
   }
-  function isNodeLoader(expression, seen = new Set()) {
+  function nativeLoaderOrigin(expression, keys = [], seen = new Set()) {
     expression = unwrap(expression);
-    if (!expression || seen.has(expression)) return false;
+    if (!expression || seen.has(expression)) return null;
     seen = new Set(seen).add(expression);
-    if (ts.isCallExpression(expression)) return isNodeLoaderFactory(expression.expression);
-    if (!ts.isIdentifier(expression)) return false;
-    const symbol = checker.getSymbolAtLocation(expression);
+    const resolve = (value, path = keys) => nativeLoaderOrigin(value, path, seen);
+    const combine = routes => { const kinds = [...new Set(routes.filter(Boolean))]; return kinds.length === 1 ? kinds[0] : null; };
+    if (ts.isAwaitExpression(expression)) return resolve(expression.expression);
+    if (ts.isBinaryExpression(expression) && [ts.SyntaxKind.CommaToken, ts.SyntaxKind.EqualsToken].includes(expression.operatorToken.kind)) return resolve(expression.right);
+    if (ts.isConditionalExpression(expression)) return combine([resolve(expression.whenTrue), resolve(expression.whenFalse)]);
+    if (ts.isPropertyAccessExpression(expression)) return resolve(expression.expression, [expression.name.text, ...keys]);
+    if (ts.isElementAccessExpression(expression)) return ts.isStringLiteralLike(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression) ? resolve(expression.expression, [expression.argumentExpression.text, ...keys]) : null;
+    if (ts.isCallExpression(expression)) {
+      const callee = nativeLoaderOrigin(expression.expression, [], seen);
+      const kind = callee === 'factory-bind' ? 'factory' : ['factory', 'factory-call', 'factory-apply'].includes(callee) ? 'loader' :
+        (callee === 'loader' || expression.expression.kind === ts.SyntaxKind.ImportKeyword) && expression.arguments[0] && ts.isStringLiteralLike(expression.arguments[0]) && ['node:module', 'module'].includes(expression.arguments[0].text) ? 'module' : null;
+      return projectNativeOrigin(kind, keys);
+    }
+    if (keys.length && ts.isObjectLiteralExpression(expression)) return combine(expression.properties.flatMap(property =>
+      ts.isSpreadAssignment(property) ? [resolve(property.expression)] : (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) && propertyKey(property.name) === keys[0] ? [resolve(ts.isPropertyAssignment(property) ? property.initializer : property.name, keys.slice(1))] : []));
+    if (keys.length && ts.isArrayLiteralExpression(expression)) return resolve(literalArrayElements(expression)?.[Number(keys[0])], keys.slice(1));
+    if (!ts.isIdentifier(expression)) return null;
+    const symbol = identifierSymbol(expression);
     const declarations = (symbol?.declarations ?? []).filter(declaration => !isAmbientDeclaration(declaration));
-    if (expression.text === 'require' && !declarations.length) return true;
-    return declarations.some(declaration => ts.isVariableDeclaration(declaration) && isNodeLoader(declaration.initializer, seen)) ||
-      (assignments.get(symbol) ?? []).some(value => !value.keys.length && isNodeLoader(value.expression, seen));
+    const routes = expression.text === 'require' && !declarations.length ? [projectNativeOrigin('loader', keys)] : [];
+    for (const declaration of declarations) {
+      if (['node:module', 'module'].includes(moduleOf(declaration))) {
+        if (ts.isImportSpecifier(declaration)) routes.push(projectNativeOrigin((declaration.propertyName?.text ?? declaration.name.text) === 'createRequire' ? 'factory' : null, keys));
+        else if (ts.isNamespaceImport(declaration) || ts.isImportClause(declaration) || ts.isImportEqualsDeclaration(declaration)) routes.push(projectNativeOrigin('module', keys));
+      }
+      if (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration)) routes.push(resolve(declaration.initializer));
+      if (ts.isBindingElement(declaration)) {
+        let element = declaration, path = keys;
+        while (ts.isBindingElement(element)) {
+          path = [ts.isArrayBindingPattern(element.parent) ? String(element.parent.elements.indexOf(element)) : propertyKey(element.propertyName ?? element.name), ...path];
+          element = element.parent.parent;
+        }
+        routes.push(resolve(declarationSource(element), path));
+      }
+    }
+    routes.push(...(assignments.get(symbol) ?? []).map(value => resolve(value.expression, [...value.keys, ...keys])));
+    return combine(routes);
   }
   function isProcessImport(node) {
     if (!ts.isCallExpression(node) || !node.arguments[0] || !ts.isStringLiteralLike(node.arguments[0]) || !['node:process', 'process'].includes(node.arguments[0].text)) return false;
-    return node.expression.kind === ts.SyntaxKind.ImportKeyword || isNodeLoader(node.expression);
+    return node.expression.kind === ts.SyntaxKind.ImportKeyword || nativeLoaderOrigin(node.expression) === 'loader';
   }
   function boundReflectionAccess(callee, args, seen) {
     const adapter = callee.slice(0, -1).join('.');

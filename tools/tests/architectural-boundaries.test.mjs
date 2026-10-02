@@ -86,6 +86,37 @@ test('Node createRequire aliases retain host process ownership', () => {
   ]) assert.equal(inspectSource(source).exits.length, 1, source);
 });
 
+for (const factory of [
+  'const N=M; const factory=N.createRequire',
+  'const {createRequire:factory}=M',
+  'const factory=M["createRequire"]',
+  'const box={M}; const {M:N}=box; const factory=N.createRequire',
+  'const [N]=[M]; const factory=N.createRequire',
+  'let N; N=M; let factory; ({createRequire:factory}=N)',
+  'const factory=M.createRequire.bind(null)',
+]) test('native module factory projection retains exit and stdout: ' + factory, () => {
+  for (const suffix of ['exit(1)', 'stdout.write("x")']) {
+    const result=inspectSource('import * as M from "node:module"; '+factory+'; const load=factory(import.meta.url); load("node:process").'+suffix);
+    assert.equal(result.exits.length + result.stdout.length + result.ambiguous.length, 1, suffix);
+  }
+});
+
+test('native factory invocation adapters retain loader identity', () => {
+  for (const source of [
+    'import {createRequire} from "node:module"; const load=createRequire.call(null,import.meta.url); load("process").exit(1)',
+    'import {createRequire} from "node:module"; const load=createRequire.apply(null,[import.meta.url]); load("process").exit(1)',
+  ]) assert.equal(inspectSource(source).exits.length, 1, source);
+});
+
+test('factory namespace and bind controls do not imply a native loader', () => {
+  for (const source of [
+    'import * as M from "./fake.js"; const N=M; const load=N.createRequire("x"); load("process").exit(1)',
+    'const M={createRequire:()=>()=>({exit:()=>{}})}; const {createRequire:factory}=M; const load=factory("x"); load("process").exit(1)',
+    'import * as M from "node:module"; function f(M){const load=M["createRequire"]("x"); load("process").exit(1)}',
+    'import {createRequire} from "node:module"; const factory=createRequire.bind(null,import.meta.url); factory("process").exit(1)',
+  ]) assert.deepEqual(inspectSource(source), {exits:[], stdout:[], ambiguous:[]});
+});
+
 test('Reflect property mutation shares the global object identity', () => {
   assert.equal(inspectSource('globalThis.Reflect.apply=process.exit; Reflect.apply(1)').ambiguous.length, 1);
 });
