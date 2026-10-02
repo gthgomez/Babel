@@ -457,7 +457,7 @@ export function inspectSource(source, path = 'source.ts') {
       if (origin.kind === 'module' && key === 'createRequire') origin = nativeOrigin('factory');
       else if (origin.kind === 'global' && key === 'Reflect') origin = nativeOrigin('reflect');
       else if (origin.kind === 'reflect' && key === 'apply') origin = nativeOrigin('reflection');
-      else if (['factory', 'loader', 'reflection', 'host'].includes(origin.kind) && ['bind', 'call', 'apply'].includes(key)) origin = { ...origin, operations: [...origin.operations, key] };
+      else if (['factory', 'loader', 'reflection', 'host', 'ordinary'].includes(origin.kind) && ['bind', 'call', 'apply'].includes(key)) origin = { ...origin, operations: [...origin.operations, key] };
       else origin = key === '*' ? nativeOrigin('ambiguous') : null;
     }
     return origin;
@@ -466,10 +466,10 @@ export function inspectSource(source, path = 'source.ts') {
     const origin = nativeLoaderOrigin(expression, [], seen);
     if (origin && ['factory', 'loader', 'reflection', 'host', 'ambiguous'].includes(origin.kind)) return origin;
     const route = access(expression);
-    return route?.[0] === 'process' ? { ...nativeOrigin('host'), route } : null;
+    return route?.[0] === 'process' ? { ...nativeOrigin('host'), route } : origin?.kind === 'ordinary' ? origin : null;
   }
   function invokeNativeOrigin(origin, arguments_, seen, receiver) {
-    if (!origin || !['factory', 'loader', 'reflection', 'host', 'ambiguous'].includes(origin.kind)) return null;
+    if (!origin || !['factory', 'loader', 'reflection', 'host', 'ordinary', 'ambiguous'].includes(origin.kind)) return null;
     if (origin.kind === 'ambiguous') return origin;
     let args = [...arguments_];
     const operations = [...origin.operations];
@@ -505,6 +505,9 @@ export function inspectSource(source, path = 'source.ts') {
       }
     }
     if (origin.kind === 'host') return { ...origin, kind: 'hostInvocation', operations: [] };
+    // Known local callbacks are identities only: their bodies are inspected by
+    // the normal AST walk, and their arguments/return values are not evaluated.
+    if (origin.kind === 'ordinary') return nativeOrigin('ordinaryInvocation');
     if (origin.kind === 'factory') return nativeOrigin('loader');
     if (origin.kind === 'reflection') {
       const target = nativeLoaderOrigin(args[0], [], seen);
@@ -531,6 +534,7 @@ export function inspectSource(source, path = 'source.ts') {
     seen = new Set(seen).add(expression);
     const resolve = (value, path = keys) => nativeLoaderOrigin(value, path, seen);
     const combine = mergeNativeOrigins;
+    if (ts.isArrowFunction(expression) || ts.isFunctionExpression(expression) || ts.isFunctionDeclaration(expression)) return projectNativeOrigin(nativeOrigin('ordinary'), keys);
     if (ts.isAwaitExpression(expression)) return resolve(expression.expression);
     if (ts.isBinaryExpression(expression)) {
       if ([ts.SyntaxKind.CommaToken, ts.SyntaxKind.EqualsToken].includes(expression.operatorToken.kind)) return resolve(expression.right);
@@ -573,6 +577,7 @@ export function inspectSource(source, path = 'source.ts') {
       if (ts.isImportEqualsDeclaration(declaration) && !ts.isExternalModuleReference(declaration.moduleReference)) routes.push(resolve(declaration.moduleReference));
       if (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration)) routes.push(nativeTransferredOrigin(declarationSource(declaration), keys, seen));
       if (ts.isClassDeclaration(declaration) || ts.isModuleDeclaration(declaration)) routes.push(resolve(declaration));
+      if (ts.isFunctionDeclaration(declaration)) routes.push(resolve(declaration));
       if (ts.isBindingElement(declaration)) {
         let element = declaration, path = keys, excluded = false;
         while (ts.isBindingElement(element)) {
@@ -746,6 +751,9 @@ export function inspectSource(source, path = 'source.ts') {
       if (ts.isCallExpression(node)) {
         const native = nativeInvocationOrigin(node);
         if (native?.kind === 'hostInvocation') route = native.route;
+        // A resolved local receiver supersedes the generic Reflect fallback.
+        // Keep existing conservative host-mutation routes when present.
+        if (native?.kind === 'ordinaryInvocation' && route?.[0] !== 'process') route = null;
       }
       if (ts.isNewExpression(node)) {
         const owners = localClasses(node.expression);
