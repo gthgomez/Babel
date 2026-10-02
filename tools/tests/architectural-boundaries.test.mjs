@@ -4,6 +4,56 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
 
+for(const target of ['process.exit','process.stdout.write']) for(const wrapper of [
+  `Reflect.apply.call.call(fake,null,${target})`,
+  `Reflect.apply.call.apply(fake,[null,${target}])`,
+  `Reflect.apply.apply.call(fake,null,[${target}])`,
+  `Reflect.apply.apply.apply(fake,[null,[${target}]])`,
+  `const invoke=Reflect.apply.call.bind(fake,null); invoke(${target})`,
+  `const invoke=Reflect.apply.apply.bind(fake,null); invoke([${target}])`,
+  `const {apply}=Reflect; const invoke=apply.call.bind(fake,null); invoke(${target})`,
+  `const R=Reflect; const invoke=R.apply.apply.bind(fake,null); invoke([${target}])`,
+]) test('intrinsic wrapper uses the harmless actual receiver: '+wrapper,()=>{
+  assert.deepEqual(inspectSource('const fake:any=(...values:any[])=>{}; '+wrapper),{exits:[],stdout:[],ambiguous:[]});
+});
+test('intrinsic local receiver identity survives aliases and carriers',()=>{
+  for(const declaration of [
+    'function fake(...values:any[]){}',
+    'const fake=function(...values:any[]){}',
+    'const original=(...values:any[])=>{}; const fake=original',
+    'const box={fake:(...values:any[])=>{}}; const fake=box.fake',
+    'namespace N {export const fake=(...values:any[])=>{}} const fake=N.fake',
+    'class C {static fake=(...values:any[])=>{}} const fake=C.fake',
+    'class C {fake=(...values:any[])=>{}} const fake=new C().fake',
+  ]) for(const target of ['process.exit','process.stdout.write']) {
+    const source=declaration+'; const invoke=Reflect.apply.call.bind(fake,null); invoke('+target+')';
+    assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+  }
+});
+test('Reflect this arguments do not replace genuine host targets',()=>{
+  for(const [target,receiver,arg] of [['process.exit','process','1'],['process.stdout.write','process.stdout','"x"']]) for(const wrapper of [
+    `Reflect.apply.call(fake,${target},${receiver},[${arg}])`,
+    `Reflect.apply.apply(fake,[${target},${receiver},[${arg}]])`,
+    `const invoke=Reflect.apply.bind(fake,${target},${receiver}); invoke([${arg}])`,
+    `Reflect.apply.call.call(Reflect.apply,Reflect,${target},${receiver},[${arg}])`,
+  ]) {
+    const source='const fake:any=()=>{}; '+wrapper,result=inspectSource(source);
+    assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+  }
+});
+test('local intrinsic receivers retain host mutations and host bodies',()=>{
+  for(const source of [
+    'const fake:any=()=>{}; fake.call=process.exit; Reflect.apply.call.call(fake,null,1)',
+    'const fake:any=()=>{}; fake.apply=process.stdout.write; Reflect.apply.apply.call(fake,null,["x"])',
+    'const fake:any=()=>{}; fake.call=process.exit; const invoke=Reflect.apply.call.bind(fake,null); invoke(1)',
+    'function fake(){process.exit(1)} const invoke=Reflect.apply.call.bind(fake,null); invoke()',
+    'const fake=()=>{process.stdout.write("x")}; Reflect.apply.call.call(fake,null)',
+  ]) {
+    const result=inspectSource(source);
+    assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+  }
+});
+
 const namespaceAliasSeeds = [
   ['globalThis.process', '.exit(1)'],
   ['globalThis.process.stdout', '.write("x")'],
