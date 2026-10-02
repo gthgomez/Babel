@@ -68,11 +68,20 @@ export function inspectSource(source, path = 'source.ts') {
     return node;
   }
   function propertyKey(name) {
+    if (ts.isPrivateIdentifier(name)) return checker.getSymbolAtLocation(name) ?? name;
     if (ts.isComputedPropertyName(name)) {
       const expression = unwrap(name.expression);
       return ts.isStringLiteralLike(expression) || ts.isNumericLiteral(expression) ? expression.text : '*';
     }
     return ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name) ? name.text : '*';
+  }
+  function classKeyMatches(name, key) {
+    const declared = propertyKey(name);
+    return declared === key || typeof declared === 'string' && typeof key === 'string' && (declared === '*' || key === '*');
+  }
+  function storedClassValues(stored, key) {
+    if (!stored) return [];
+    return [...stored].filter(([declared]) => declared === key || typeof declared === 'string' && typeof key === 'string' && (declared === '*' || key === '*')).flatMap(([declared, values]) => values.map(expression => ({ declared, expression })));
   }
   function carrierSymbol(node) {
     const named = node.name && checker.getSymbolAtLocation(node.name);
@@ -236,15 +245,36 @@ export function inspectSource(source, path = 'source.ts') {
     const owners = values.map(value => instanceOwners(value, seen));
     return owners.length && owners.every(Boolean) ? owners.flat() : null;
   }
+  function staticOwners(expression, seen = new Set()) {
+    expression = unwrap(expression);
+    if (!expression || seen.has(expression)) return null;
+    seen = new Set(seen).add(expression);
+    if (expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const owner = thisOwner(expression);
+      return owner?.static ? [owner.node] : null;
+    }
+    const classes = localClasses(expression);
+    if (classes) return classes;
+    if (ts.isAwaitExpression(expression)) return staticOwners(expression.expression, seen);
+    if (!ts.isIdentifier(expression)) return null;
+    const symbol = identifierSymbol(expression);
+    const values = (symbol?.declarations ?? []).filter(ts.isVariableDeclaration).map(declaration => declaration.initializer).filter(Boolean);
+    values.push(...(assignments.get(symbol) ?? []).filter(value => !value.keys.length).map(value => value.expression));
+    const owners = values.map(value => staticOwners(value, seen));
+    return owners.length && owners.every(Boolean) ? owners.flat() : null;
+  }
   function classMemberAccess(owner, isStatic, key, seen, bases = new Set()) {
     if (bases.has(owner)) return ['process', '*'];
     bases = new Set(bases).add(owner);
     const symbol = isStatic ? carrierSymbol(owner) : instanceSymbol(owner);
     if (hasHostMutation(symbol)) return ['process', '*'];
-    const fields = (isStatic ? owner.members.filter(field => ts.isPropertyDeclaration(field) && hasStatic(field)) : instanceFields(owner)).filter(field => key === '*' || propertyKey(field.name) === key);
+    const fields = (isStatic ? owner.members.filter(field => ts.isPropertyDeclaration(field) && hasStatic(field)) : instanceFields(owner)).filter(field => classKeyMatches(field.name, key));
     const stored = classFields.get(symbol);
-    const values = [...fields.map(field => field.initializer), ...(key === '*' ? [...(stored?.values() ?? [])].flat() : stored?.get(key) ?? [])];
-    const routes = values.map(value => access(value, seen));
+    const values = [...fields.map(field => ({ declared: propertyKey(field.name), expression: field.initializer })), ...storedClassValues(stored, key)];
+    const routes = values.map(value => {
+      const route = access(value.expression, seen);
+      return value.declared === '*' && route ? ['process', '*'] : route;
+    });
     for (const base of baseExpressions(owner)) for (const parent of localClasses(base) ?? []) routes.push(classMemberAccess(parent, isStatic, key, seen, bases));
     return key === '*' ? routes.some(Boolean) ? ['process', '*'] : null : mergeAccess(routes);
   }
@@ -342,11 +372,11 @@ export function inspectSource(source, path = 'source.ts') {
       collectTarget(target.left, expression, keys);
       collectTarget(target.left, target.right);
     } else if (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) {
-      const key = ts.isPropertyAccessExpression(target) ? target.name.text : ts.isStringLiteralLike(target.argumentExpression) ? target.argumentExpression.text : '*';
+      const key = ts.isPropertyAccessExpression(target) ? propertyKey(target.name) : ts.isStringLiteralLike(target.argumentExpression) ? target.argumentExpression.text : '*';
       if (key === 'bind' || key === '*') hasBindOverrides = true;
       const receiver = unwrap(target.expression);
-      const owner = receiver.kind === ts.SyntaxKind.ThisKeyword && thisOwner(receiver);
-      if (owner && key !== '*') {
+      const owner = [ts.SyntaxKind.ThisKeyword, ts.SyntaxKind.SuperKeyword].includes(receiver.kind) && thisOwner(receiver);
+      if (owner) {
         const symbol = owner.static ? carrierSymbol(owner.node) : instanceSymbol(owner.node);
         if (!classFields.has(symbol)) classFields.set(symbol, new Map());
         const fields = classFields.get(symbol);
@@ -535,10 +565,13 @@ export function inspectSource(source, path = 'source.ts') {
     isStatic = Boolean(isStatic);
     bases = new Set(bases).add(owner);
     const [key, ...rest] = keys;
-    const fields = [...(isStatic ? owner.members.filter(field => ts.isPropertyDeclaration(field) && hasStatic(field)) : instanceFields(owner)), ...owner.members.filter(member => ts.isMethodDeclaration(member) && Boolean(hasStatic(member)) === isStatic)].filter(field => key === '*' || propertyKey(field.name) === key);
+    const fields = [...(isStatic ? owner.members.filter(field => ts.isPropertyDeclaration(field) && hasStatic(field)) : instanceFields(owner)), ...owner.members.filter(member => ts.isMethodDeclaration(member) && Boolean(hasStatic(member)) === isStatic)].filter(field => classKeyMatches(field.name, key));
     const stored = classFields.get(isStatic ? carrierSymbol(owner) : instanceSymbol(owner));
-    const values = [...fields.map(field => ts.isMethodDeclaration(field) ? field : field.initializer), ...(key === '*' ? [...(stored?.values() ?? [])].flat() : stored?.get(key) ?? [])];
-    return mergeNativeOrigins([...values.map(value => nativeLoaderOrigin(value, rest, seen)), ...baseExpressions(owner).flatMap(base => (localClasses(base) ?? []).map(parent => nativeClassProjection(parent, isStatic, keys, seen, bases)))]);
+    const values = [...fields.map(field => ({ declared: propertyKey(field.name), expression: ts.isMethodDeclaration(field) ? field : field.initializer })), ...storedClassValues(stored, key)];
+    return mergeNativeOrigins([...values.map(value => {
+      const origin = nativeLoaderOrigin(value.expression, rest, seen);
+      return value.declared === '*' && origin && !['ordinary', 'ordinaryInvocation'].includes(origin.kind) ? nativeOrigin('ambiguous') : origin;
+    }), ...baseExpressions(owner).flatMap(base => (localClasses(base) ?? []).map(parent => nativeClassProjection(parent, isStatic, keys, seen, bases)))]);
   }
   function nativeLoaderOrigin(expression, keys = [], seen = new Set()) {
     expression = unwrap(expression);
@@ -554,7 +587,7 @@ export function inspectSource(source, path = 'source.ts') {
     }
     if (ts.isConditionalExpression(expression)) return combine([resolve(expression.whenTrue), resolve(expression.whenFalse)]);
     if (ts.isQualifiedName(expression)) return resolve(expression.left, [expression.right.text, ...keys]);
-    if (ts.isPropertyAccessExpression(expression)) return resolve(expression.expression, [expression.name.text, ...keys]);
+    if (ts.isPropertyAccessExpression(expression)) return resolve(expression.expression, [propertyKey(expression.name), ...keys]);
     if (ts.isElementAccessExpression(expression)) return resolve(expression.expression, [ts.isStringLiteralLike(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression) ? expression.argumentExpression.text : '*', ...keys]);
     if (ts.isCallExpression(expression)) {
       const callee = expression.expression.kind === ts.SyntaxKind.ImportKeyword ? nativeOrigin('loader') : nativeLoaderOrigin(expression.expression, [], seen);
@@ -612,7 +645,7 @@ export function inspectSource(source, path = 'source.ts') {
       const targetKeys = [];
       let target = unwrap(mutation.target);
       while (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) {
-        targetKeys.unshift(ts.isPropertyAccessExpression(target) ? target.name.text : ts.isStringLiteralLike(target.argumentExpression) ? target.argumentExpression.text : '*');
+        targetKeys.unshift(ts.isPropertyAccessExpression(target) ? propertyKey(target.name) : ts.isStringLiteralLike(target.argumentExpression) ? target.argumentExpression.text : '*');
         target = unwrap(target.expression);
       }
       if (targetKeys.length <= keys.length && targetKeys.every((key, index) => key === '*' || keys[index] === '*' || key === keys[index])) routes.push(resolve(mutation.expression, keys.slice(targetKeys.length)));
@@ -684,13 +717,16 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isObjectLiteralExpression(node)) return node.properties.some(property => access(ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : ts.isSpreadAssignment(property) ? property.expression : null, seen)) ? ['process', '*'] : null;
     if (ts.isPropertyAccessExpression(node)) {
       const receiver = unwrap(node.expression);
-      if (receiver.kind === ts.SyntaxKind.SuperKeyword) return superMemberAccess(receiver, node.name.text, seen);
+      const key = propertyKey(node.name);
+      if (receiver.kind === ts.SyntaxKind.SuperKeyword) return superMemberAccess(receiver, key, seen);
       const owner = receiver.kind === ts.SyntaxKind.ThisKeyword && thisOwner(receiver);
-      if (owner) return classMemberAccess(owner.node, Boolean(owner.static), node.name.text, seen);
+      if (owner) return classMemberAccess(owner.node, Boolean(owner.static), key, seen);
       const instances = instanceOwners(receiver);
-      if (instances) return mergeAccess(instances.map(instance => classMemberAccess(instance, false, node.name.text, seen)));
+      if (instances) return mergeAccess(instances.map(instance => classMemberAccess(instance, false, key, seen)));
+      const classes = staticOwners(receiver);
+      if (classes) return mergeAccess(classes.map(owner => classMemberAccess(owner, true, key, seen)));
       const base = access(node.expression, seen);
-      return member(base, node.name.text);
+      return member(base, key);
     }
     if (ts.isElementAccessExpression(node)) {
       const receiver = unwrap(node.expression);
@@ -700,6 +736,8 @@ export function inspectSource(source, path = 'source.ts') {
       if (owner) return classMemberAccess(owner.node, Boolean(owner.static), key, seen);
       const instances = instanceOwners(receiver);
       if (instances) return mergeAccess(instances.map(instance => classMemberAccess(instance, false, key, seen)));
+      const classes = staticOwners(receiver);
+      if (classes) return mergeAccess(classes.map(owner => classMemberAccess(owner, true, key, seen)));
       const base = access(node.expression, seen);
       return member(base, key);
     }
