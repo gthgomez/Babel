@@ -4,6 +4,76 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
 
+const namespaceAliasSeeds = [
+  ['globalThis.process', '.exit(1)'],
+  ['globalThis.process.stdout', '.write("x")'],
+  ['globalThis.process.exit', '(1)'],
+  ['globalThis.process.stdout.write', '("x")'],
+  ['M.createRequire', '(import.meta.url)("process").exit(1)'],
+  ['M.Module.createRequire', '(import.meta.url)("process").stdout.write("x")'],
+  ['globalThis.Reflect', '.apply(process.exit,process,[1])'],
+  ['globalThis.Reflect.apply', '(process.stdout.write,process.stdout,["x"])'],
+];
+for (const [seed, invoke] of namespaceAliasSeeds) for (const namespace of ['N', 'N.Inner']) for (const project of [
+  name => `${name}.value${invoke}`,
+  name => `const alias=${name}.value; alias${invoke}`,
+  name => `const {value:alias}=${name}; alias${invoke}`,
+  name => `for(const alias of [${name}.value]) alias${invoke}`,
+  name => `class Carrier {static value=${name}.value} Carrier.value${invoke}`,
+]) {
+  const source=`import * as M from "node:module"; namespace ${namespace} {export import value=${seed}} ${project(namespace)}`;
+  test('exported namespace import aliases retain host routes: '+source, () => {
+    const result=inspectSource(source);
+    assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+  });
+}
+for (const use of [
+  'new N.C().quit(1)',
+  'const C=N.C; new C().quit(1)',
+  'const {C}=N; new C().quit(1)',
+  'class Derived extends N.C {} new Derived().quit(1)',
+  'const box={C:N.C}; new box.C().quit(1)',
+]) test('qualified exported constructor aliases retain instance ownership: '+use, () => {
+  const source=`namespace Holder {export class Local {quit=process.exit}} namespace N {export import C=Holder.Local} ${use}`;
+  const result=inspectSource(source);
+  assert.ok(result.exits.length+result.ambiguous.length>0,source);
+});
+test('namespace import aliases retain reverse mutation ownership', () => {
+  const source='namespace Holder {export const original:any={}} namespace N {export import value=Holder.original} N.value.quit=process.exit; Holder.original.quit(1)';
+  assert.ok(inspectSource(source).ambiguous.length>0,source);
+});
+const sharedDeclarationSeeds=[['process.stdout','process','.exit(1)'],['process','process.stdout','.write("x")'],['process.exit','process.stdout.write','("x")'],['process.stdout.write','process.exit','(1)']];
+for(const [first,last,invoke] of sharedDeclarationSeeds) for(const declarations of [
+  `var p:any=${first}; var p:any=${last}; p${invoke}`,
+  `var p:any=${first},p:any=${last}; p${invoke}`,
+  `function f(p:any=${first}){var p:any=${last}; p${invoke}}`,
+  `function f(){var p:any=${first}; {var p:any=${last}} p${invoke}}`,
+  `class C {constructor(public p:any=${first}){var p:any=${last}; p${invoke}}}`,
+]) test('all shared symbol declarations participate in host ownership: '+declarations,()=>{
+  const result=inspectSource(declarations);
+  assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,declarations);
+});
+for(const source of [
+  'var p:any=process.stdout; var {exit:p}=process; p(1)',
+  'var p:any=process; var {write:p}=process.stdout; p("x")',
+  'var p:any=process.stdout; var [p]=[process.exit]; p(1)',
+  'function f(p:any=process.stdout){var {exit:p}=process; p(1)}',
+]) test('shared destructured declarations retain host ownership: '+source,()=>{
+  const result=inspectSource(source);
+  assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+});
+test('namespace aliases and repeated local declarations remain clear for local functions',()=>{
+  for(const source of [
+    'namespace Holder {export const p={exit(){},stdout:{write(){}}}} namespace N {export import value=Holder.p} N.value.exit(1); N.value.stdout.write("x")',
+    'namespace Holder {export class Local {quit(){}}} namespace N {export import C=Holder.Local} new N.C().quit()',
+    'namespace Holder {export const Reflect={apply(){}}} namespace N {export import R=Holder.Reflect} N.R.apply(()=>{},null,[])',
+    'var p:any={exit(){}}; var p:any={stdout:{write(){}}}; p.exit(1)',
+    'function f(p:any={exit(){}}){var p:any={exit(){}}; p.exit(1)}',
+    'class C {constructor(public p:any={exit(){}}){var p:any={exit(){}}; p.exit(1)}}',
+    'namespace Holder {export const original:any={}} namespace N {export import value=Holder.original} N.value.quit=()=>{}; Holder.original.quit()',
+  ]) assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+});
+
 test('recursive terminal parser data completes without inventing host boundaries', () => {
   const source=readFileSync(new URL('../../babel-cli/src/ui/keyInput.ts',import.meta.url),'utf8');
   assert.deepEqual(inspectSource(source), {exits:[], stdout:[], ambiguous:[]});

@@ -152,9 +152,17 @@ export function inspectSource(source, path = 'source.ts') {
       const elements = literalArrayElements(expression);
       if (!elements) return null;
       candidates = key === '*' ? elements : [elements[Number(key)]].filter(Boolean);
+    } else if (ts.isModuleDeclaration(expression)) {
+      candidates = namespaceDeclarations(expression).filter(declaration => key === '*' || propertyKey(declaration.name) === key).map(namespaceValue);
+    } else if (ts.isQualifiedName(expression)) {
+      return classProjection(expression.left, [expression.right.text, ...keys], seen);
+    } else if (ts.isPropertyAccessExpression(expression)) {
+      return classProjection(expression.expression, [expression.name.text, ...keys], seen);
+    } else if (ts.isElementAccessExpression(expression)) {
+      return classProjection(expression.expression, [ts.isStringLiteralLike(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression) ? expression.argumentExpression.text : '*', ...keys], seen);
     } else if (ts.isIdentifier(expression)) {
       const symbol = identifierSymbol(expression);
-      const sources = (symbol?.declarations ?? []).filter(ts.isVariableDeclaration).map(declaration => declaration.initializer).filter(Boolean);
+      const sources = (symbol?.declarations ?? []).flatMap(declaration => ts.isVariableDeclaration(declaration) ? [declaration.initializer].filter(Boolean) : ts.isModuleDeclaration(declaration) ? [declaration] : ts.isImportEqualsDeclaration(declaration) && !ts.isExternalModuleReference(declaration.moduleReference) ? [declaration.moduleReference] : []);
       sources.push(...(assignments.get(symbol) ?? []).filter(value => !value.keys.length).map(value => value.expression));
       const routes = sources.map(source => classProjection(source, keys, seen));
       return routes.length && routes.every(route => route !== null) ? routes.flat() : null;
@@ -187,10 +195,16 @@ export function inspectSource(source, path = 'source.ts') {
       ...node.members.filter(member => ts.isPropertyDeclaration(member) && hasStatic(member)).map(member => member.initializer).filter(Boolean),
       ...baseExpressions(node),
     ];
+    return namespaceDeclarations(node).map(namespaceValue).filter(Boolean);
+  }
+  function namespaceDeclarations(node) {
     if (!ts.isModuleDeclaration(node) || !node.body) return [];
     if (ts.isModuleDeclaration(node.body)) return [node.body];
     return node.body.statements.filter(statement => statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)).flatMap(statement =>
-      ts.isVariableStatement(statement) ? statement.declarationList.declarations.map(declaration => declaration.initializer).filter(Boolean) : ts.isModuleDeclaration(statement) || ts.isClassDeclaration(statement) ? [statement] : []);
+      ts.isVariableStatement(statement) ? [...statement.declarationList.declarations] : ts.isModuleDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isImportEqualsDeclaration(statement) && !statement.isTypeOnly && !ts.isExternalModuleReference(statement.moduleReference) ? [statement] : []);
+  }
+  function namespaceValue(declaration) {
+    return ts.isVariableDeclaration(declaration) ? declaration.initializer : ts.isImportEqualsDeclaration(declaration) ? declaration.moduleReference : declaration;
   }
   function thisOwner(node) {
     for (let owner = node.parent; owner; owner = owner.parent) {
@@ -537,8 +551,7 @@ export function inspectSource(source, path = 'source.ts') {
       return owner ? nativeClassProjection(owner.node, owner.static, keys, seen) : null;
     }
     if (ts.isModuleDeclaration(expression) && keys.length && expression.body) {
-      const declarations = ts.isModuleDeclaration(expression.body) ? [expression.body] : expression.body.statements.filter(statement => statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)).flatMap(statement => ts.isVariableStatement(statement) ? statement.declarationList.declarations : [statement]);
-      return combine(declarations.filter(declaration => declaration.name && (keys[0] === '*' || propertyKey(declaration.name) === keys[0])).map(declaration => resolve(ts.isVariableDeclaration(declaration) ? declaration.initializer : declaration, keys.slice(1))));
+      return combine(namespaceDeclarations(expression).filter(declaration => declaration.name && (keys[0] === '*' || propertyKey(declaration.name) === keys[0])).map(declaration => resolve(namespaceValue(declaration), keys.slice(1))));
     }
     if (keys.length && ts.isObjectLiteralExpression(expression)) return combine(expression.properties.flatMap(property =>
       ts.isSpreadAssignment(property) ? [resolve(property.expression)] : (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) && (keys[0] === '*' || propertyKey(property.name) === '*' || propertyKey(property.name) === keys[0]) ? [resolve(ts.isPropertyAssignment(property) ? property.initializer : property.name, keys.slice(1))] : []));
@@ -690,30 +703,26 @@ export function inspectSource(source, path = 'source.ts') {
       const initial = node.text === 'process' ? ['process'] : node.text === 'Reflect' ? ['reflect'] : [];
       return mergeAccess([initial, ...(assignments.get(symbol) ?? []).map(assigned => assignedAccess(assigned, seen))]);
     }
+    const routes = [];
     for (const declaration of declarations) {
       if (ts.isClassDeclaration(declaration) || ts.isClassExpression(declaration) || ts.isModuleDeclaration(declaration)) {
-        const route = access(declaration, seen);
-        if (route) return route;
+        routes.push(access(declaration, seen));
       }
       if (['node:process', 'process'].includes(moduleOf(declaration))) {
         if (ts.isImportSpecifier(declaration)) {
           const name = declaration.propertyName?.text ?? declaration.name.text;
-          return name === 'default' ? ['process'] : member(['process'], name);
+          routes.push(name === 'default' ? ['process'] : member(['process'], name));
         }
-        if (ts.isImportClause(declaration) || ts.isNamespaceImport(declaration) || ts.isImportEqualsDeclaration(declaration)) return ['process'];
+        if (ts.isImportClause(declaration) || ts.isNamespaceImport(declaration) || ts.isImportEqualsDeclaration(declaration)) routes.push(['process']);
       }
       if (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration)) {
-        const candidates = [access(declarationSource(declaration), seen), ...(assignments.get(symbol) ?? []).map(value => assignedAccess(value, seen))].filter(Boolean);
-        if (new Set(candidates.map(route => route.join('.'))).size > 1) return ['process', '*'];
-        if (candidates.length) return candidates[0];
+        routes.push(access(declarationSource(declaration), seen));
       }
       if (ts.isBindingElement(declaration) && (ts.isObjectBindingPattern(declaration.parent) || ts.isArrayBindingPattern(declaration.parent))) {
-        const candidates = [bindingAccess(declaration, seen), access(declaration.initializer, seen), ...(assignments.get(symbol) ?? []).map(value => assignedAccess(value, seen))].filter(Boolean);
-        if (new Set(candidates.map(route => route.join('.'))).size > 1) return ['process', '*'];
-        if (candidates.length) return candidates[0];
+        routes.push(bindingAccess(declaration, seen), access(declaration.initializer, seen));
       }
     }
-    return mergeAccess((assignments.get(symbol) ?? []).map(assigned => assignedAccess(assigned, seen)));
+    return mergeAccess([...routes, ...(assignments.get(symbol) ?? []).map(assigned => assignedAccess(assigned, seen))]);
   }
   function bindingAccess(element, seen) {
     const owner = element.parent.parent;
