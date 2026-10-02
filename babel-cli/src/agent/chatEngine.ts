@@ -4,25 +4,54 @@
  * Compaction: chatCompaction.ts. Critic/budget: chatEngineCriticBudget.ts.
  */
 
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+  completeChatStream,
+  failChatStream,
+  cancelChatStream,
+  assembleChatResult,
+  type ChatTerminalInput,
+  type ChatStreamDoneExtra,
+} from "./chatEngineTerminalRuntime.js";
+import {
+  resolveChatDeliberationRunner,
+  resolveChatFallbackRunner,
+  resolveChatSynthesisRunner,
+  synthesizeChatAnswer,
+  executeChatRunnerWithTimeout,
+  shouldUseChatNativeTools,
+  shouldUseChatTextTools,
+  deliberateChatTurn,
+  resolveChatFallbackOrFail,
+  type ChatProviderRunner,
+  type ChatProviderUsageEffects,
+} from "./chatEngineProviderRuntime.js";
+import type {
+  TaskIntent,
+  ChatAllowanceGrant,
+  ChatTaskAllowanceSnapshot,
+  SubmitMessageOptions,
+  ChatEngineOptions,
+  ChatEngineTurnPreparation,
+  ContextCompactedInfo,
+  ChatCallbacks,
+  ChatEvent,
+  ChatResult,
+} from "./chatEngineContracts.js";
+import {
+  deriveChildDelegationId,
+  formatTextToolResults,
+  parseChatTurnLenient,
+} from "./chatEngineHelpers.js";
+import { classifyChatTaskIntent } from "./chatEngineTaskIntent.js";
+
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
-import { isBabelHeadlessEnv } from "../utils/envFlags.js";
-import { resolveClassCGateDecision } from "./autonomyEnforcement.js";
 import { resolveProjectPath } from "../utils/projectPath.js";
 
-import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
+import { trace } from "@opentelemetry/api";
 
-import { endSpan } from "../telemetry/tracing.js";
 import {
   chatSessionDir,
   transcriptPath as layoutTranscriptPath,
@@ -31,65 +60,35 @@ import { allocateThreadId } from "../services/threadStore/threadIds.js";
 import { DeepInfraApiRunner } from "../runners/deepInfraApi.js";
 import { DeepSeekApiRunner } from "../runners/deepSeekApi.js";
 import { OllamaApiRunner } from "../runners/ollamaApi.js";
-import { OpenCodeApiRunner } from "../runners/openCodeApi.js";
+
 import { OpenRouterApiRunner } from "../runners/openRouterApi.js";
-import type {
-  ProviderInvocationStarted,
-  ProviderMessage,
-  RunnerCallbacks,
-  RunnerInvocationMetadata,
-} from "../runners/base.js";
+import type { ProviderMessage, RunnerCallbacks } from "../runners/base.js";
 import { mapProviderMessagesToWire } from "../runners/providerMessages.js";
 import {
   assertLiveModelId,
-  LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS,
   LIVE_OPENROUTER_MODEL_ID,
-  resolveOpenRouterDeepSeekModelId,
   type ResolvedModelPolicy,
 } from "../modelPolicy.js";
 import {
   isOfflineChatMode,
   resolveChatModelPolicy,
-  resolveFallbackModelId,
 } from "./chatModelPolicy.js";
-import {
-  captureCostBaselineUsd,
-  globalCostTracker,
-} from "../services/costTracker.js";
-import type {
-  ChargeReceipt,
-  SessionUsageSummary,
-  UsageAttribution,
-} from "../services/costTracker.js";
-import {
-  proposeProjectMemoryWriteback,
-  readProjectMemory,
-  readProjectMemoryStructured,
-} from "../services/projectMemory.js";
+import { globalCostTracker } from "../services/costTracker.js";
+
+import { readProjectMemoryStructured } from "../services/projectMemory.js";
 import {
   buildPlaybookPrompt,
   selectPlaybookForChatTask,
   type PlaybookDefinition,
 } from "../services/playbooks/playbookService.js";
+import { shouldRequireTodoPlan } from "./planThenExecute.js";
 import {
-  evaluatePlanThenExecuteGate,
-  shouldRequireTodoPlan,
-} from "./planThenExecute.js";
-import {
-  evaluateHardPlanModeGate,
-  formatPlanHandoffUserMessage,
   operatorModeIsHardPlan,
   resolveForceMutateTurnsForHandoff,
   type ChatOperatorMode,
   type ChatPlanExecuteHandoff,
 } from "./planExecuteMode.js";
-import {
-  detectEnvBlockedFromText,
-  extractToolEnvBlockedSignal,
-  evaluateCompletionPrefersPatch,
-} from "./implementorPolicy.js";
-import { evaluatePhaseToolGate } from "./phaseToolPolicy.js";
-import { extractJson } from "../utils/extractJson.js";
+
 import type {
   BlockedReport,
   TerminalOutcome,
@@ -109,11 +108,9 @@ import {
   refreshEngineInstructionManifest,
   restoreEngineSessionEvents,
   engineCanMutateKey,
-  evaluateSubmitTaskAuthorityHalt,
 } from "./chatEngineLiveSession.js";
 import {
   AUTHORITY_SESSION_FILENAME,
-  establishAuthoritySession,
   restoreAuthoritySession,
 } from "../authority/sessionContext.js";
 import {
@@ -123,134 +120,74 @@ import {
 } from "./liveSessionBridge.js";
 import type { LiveSessionV1 } from "./liveSession.js";
 import {
-  applyHonestTaskOutcomeToCompletion,
   createFailureBudgetTrackerFromContract,
-  makeFailureCapsule,
   type FailureClassBudgetTracker,
   type FailureCapsuleV1,
 } from "./taskContract.js";
-import { getGlobalTokenTracker } from "../ui/tokenHistory.js";
+
 import {
-  classifyTerminalLimiter,
-  createRunAllowanceReport,
   explicitFiniteCostOverride,
   resolveChatEngineLimits,
   shouldShrinkWallForPostWriteRepair,
   type ChatEngineLimits,
-  type ChatEngineRunAllowanceReport,
   type ChatRunLimiter,
 } from "../config/chatEngineLimits.js";
 import {
   classifyFailureText,
-  isProviderOutputLimitText,
   projectChatTerminal,
-  type ChatStatus,
 } from "./chatFailureClassification.js";
-import {
-  nativeTurnFromStream,
-  ProviderOutputTruncatedError,
-} from "./chatNativeTurn.js";
+
 import {
   resolveChatTaskClass,
   getChatTaskTune,
   type ChatTaskClass,
-  type TaskOperation,
   type VerificationPolicy,
 } from "../config/chatTaskClass.js";
 import {
-  AUTO_CONTINUE_REFUSAL_MSG,
-  buildAutoContinueBlockedReport,
   buildGateRejectUserMessageForEngine,
   evaluateCompletionGateForEngine,
   isAuthoritativeVerifierCommand,
-  parseStructuredVerifierCommand,
-  planCompletionGateReject,
-  resolveVerificationPolicy,
 } from "./completionGatePolicy.js";
 import {
   formatTestCommandsForGate,
   type DiscoveredTestCommand,
   discoverProjectTestCommands,
 } from "./projectTestDiscovery.js";
-import { appendPatchRecovery } from "./patchRecovery.js";
+
 import {
-  buildFullRereadSkipObservation,
   isExplorationBudgetTool,
   normalizeReadCacheKey,
-  shouldSkipFullReread,
 } from "./readThrashPolicy.js";
 import {
   applyWorkingStateEvent,
   createWorkingState,
-  decideReadInjection,
-  evaluateReadRequest,
-  formatReadFailureObservation,
-  formatReadObservation,
-  formatVerifierReceiptSummary,
-  formatWorkingStateBlock,
-  invalidateReadCacheForPath,
-  recordControllerRecoveryStrategy,
-  recoveryEvidenceKey,
   restoreWorkingStateSnapshot,
   sameRecoveryBinding,
-  RECOVERY_EVIDENCE_TOOLS,
   resetOneShotSnapshot,
-  targetMatchesGate,
-  type RecoveryEvidenceProvenance,
   type RecoveryCandidateBinding,
   resolveNextTurnToolAccess,
-  selectReadWindow,
   snapshotOnce,
-  upsertWorkingStateMessage,
   type ReadInjectionCache,
   type WorkingState,
 } from "./codingLoop/index.js";
-import {
-  ingestVerifierResult,
-  rememberFullReadWindow,
-} from "./codingLoop/chatBindings.js";
-import {
-  recoveryTargetIdentity,
-  recoveryWorkspaceRevision,
-} from "./codingLoop/recoveryIdentity.js";
-import {
-  actualRecoveryEdit,
-  admitRecoveryPlan,
-} from "./codingLoop/recoveryPlan.js";
+
+import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
+
 import {
   beginLocalizationCall,
   discoverTestCandidates,
   finishLocalizationCall,
 } from "./codingLoop/failureLocalization.js";
-import { canonicalizeContained } from "../bridge/workspaceBound.js";
 
-import { parseTextToolTurn } from "./textToolParser.js";
 import {
-  ChatTurnSchema,
   buildAnswerSynthesisPrompt,
-  mapChatActionToAgentAction,
-  isMcpChatAction,
-  mapChatMcpActionToToolRequest,
-  formatChatToolObservation,
-  formatSubAgentFindings,
-  mapChatWebActionToToolRequest,
   chatActionToolName,
   chatActionTarget,
   type ChatMessage,
   type ChatToolAction,
   type ChatTurn,
-  type ChatRuntimeMode,
 } from "./chatToolDefinitions.js";
-import {
-  buildReadOnlyChildResult,
-  renderReadOnlyChildResultSection,
-} from "./childConclusion.js";
-import {
-  CHILD_MUTATION_DEFAULT_ROUNDS,
-  CHILD_READ_DEFAULT_ROUNDS,
-  formatChildSpecReceipt,
-  resolveChildSpec,
-} from "./childSpec.js";
+
 import {
   type ChatEngineServices,
   type ChatExecutionProfile,
@@ -267,14 +204,8 @@ import {
   type BoundChatVerifierReceipt,
 } from "../evidence/chatRevisionBinding.js";
 import { RevisionManager } from "../evidence/revisionBoundReceipt.js";
-import { resolveIsolationBrokerFlags, type IsolationBrokerFlags } from "./chatEngineIsolationFlags.js";
+import { resolveIsolationBrokerFlags } from "./chatEngineIsolationFlags.js";
 
-import {
-  executeActionWithPolicy,
-  defaultToolExecutor,
-  type PolicyGatedExecutionResult,
-} from "./toolExecutor.js";
-import { governedStrReplace } from "./governedMutations.js";
 import {
   planToolBatches,
   orderChatToolActions,
@@ -282,42 +213,22 @@ import {
 } from "./agentLoopReducer.js";
 import {
   createParityRuntime,
-  parityOnUserTurn,
-  parityRecordProviderRetry,
-  paritySettleProviderRetry,
-  parityRecordToolBatch,
-  paritySettleProposeTools,
   paritySettleToolStarted,
   paritySettleToolNotStarted,
   parityAuthorizeRecoveredOutcomeRetry,
-  parityArbitrateCycle,
   parityShouldCompact,
   parityTryFailover,
   finalizeParityTurnSync,
   finalizeParityCancel,
-  checkpointParityEventLog,
   checkpointParityEventLogStrict,
   type ParityRuntime,
 } from "./chatEngineParityBridge.js";
-import {
-  loadThreadEventLogFromDir,
-  recordUserMessage,
-  repoRootFingerprint,
-} from "./threadEventLog.js";
+import { loadThreadEventLogFromDir } from "./threadEventLog.js";
 import { isOperatorAbortError } from "./operatorAbort.js";
 import {
   loadSessionEventLogForResume,
   loadSessionEventLogIfPresentForResume,
-  interruptedToolRecoveries,
-  recordCompletionDecision,
-  recordCapabilityBindingReceipt,
-  recordModelInputReceipt,
-  recordModelInvocationPhase,
-  recordModelResultDelivery,
   recordModelFailover,
-  recordMutationBatch,
-  recordPolicyIntervened,
-  recordProgressRecovery,
   recordWorkingStateSnapshot,
   flushSessionEventLogStrict,
   resumedToolRecoveryGuidance,
@@ -325,34 +236,19 @@ import {
   requiresRecoveredOutcomeReconciliation,
   type SessionEventLog,
 } from "./sessionEvents.js";
+import { type ObservationRefV1 } from "../evidence/observationStore.js";
 import {
-  captureApprovedObservation,
-  type ObservationRefV1,
-} from "../evidence/observationStore.js";
-import {
-  installContextCheckpoint,
-  prepareContextCheckpoint,
-  type ContextCheckpointInstalledLineageV1,
   type ContextCheckpointOwnerV1,
-  type ContextCheckpointPreparationInputV1,
   type ContextCheckpointPreparationResultV1,
   type LiveOperationalSourcesV1,
 } from "../runtime/contextCheckpoints.js";
 import type { AdmissionStore } from "../runtime/admission.js";
-import { ADMISSION_REASONS } from "../runtime/admissionContracts.js";
-import { projectDurableToolBatch } from "./toolExecutionIdentity.js";
+
 import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
 import { buildRepoMapPreamble } from "./repoMapPreamble.js";
 import { getChatApprovalSession } from "./chatApproval.js";
+
 import {
-  remoteMcpFailClosedObservation,
-  remoteMcpIsFailClosed,
-} from "../bridge/remoteApproval.js";
-import { deriveSubagentApprovalSession } from "./approvalRequests.js";
-import {
-  assertChildApprovalWithinParent,
-  getExecutionContext,
-  runWithExecutionContext,
   scopeAsyncGenerator,
   type ExecutionContext,
 } from "./executionContext.js";
@@ -368,25 +264,12 @@ import {
   resolveRuntimeInvariantMode,
   RuntimeInvariantRegistry,
   type RequestReconstructionContext,
-  type RuntimeInvariantMode,
 } from "./runtimeInvariants.js";
 import { validateProviderMessageProtocol } from "../runners/providerMessages.js";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  buildContextManifest,
-  type ContextDeliveryMode,
-} from "./contextManifest.js";
-import {
-  buildModelRouteReceipt,
-  hashRouteReference,
-  type ModelRouteStage,
-} from "./modelRouteReceipt.js";
-import {
-  executeAwaitCommandAction,
-  executeBackgroundRunCommandAction,
-} from "./chatBackgroundShell.js";
+import { type ContextDeliveryMode } from "./contextManifest.js";
+import { type ModelRouteStage } from "./modelRouteReceipt.js";
 
-import { runReadOnlyAgentLoop } from "./lanes/readOnlyAgentLoop.js";
 import {
   buildProviderRetryCallbacks,
   captureUsageAttribution,
@@ -399,69 +282,44 @@ import {
   type ChatEngineAdmissionClaim,
   type ChatEngineP11Host,
 } from "./chatEngineP11Authority.js";
-import {
-  executeSubAgentAction,
-  type ChatEngineChildExecutionHost,
-} from "./chatEngineChildExecution.js";
+
 export { childAttemptDir } from "./chatEngineChildExecution.js";
 import {
   ChatEngineOwnerAccounting,
-  parseOwnerAccountingFaults,
   type OwnerAccountingFault,
   type ChatEngineOwnerAccountingHost,
 } from "./chatEngineOwnerAccounting.js";
 import {
   allowanceCostCapUsd,
+  parseTaskAllowance,
   ChatEngineTaskAllowance,
   type ChatTaskAllowanceHost,
 } from "./chatEngineTaskAllowance.js";
-import { ChatEngineActionExecutor } from "./chatEngineActionExecutor.js";
-import { ChatEngineStreamingLoop } from "./chatEngineStreamingLoop.js";
+import {
+  ChatEngineActionExecutor,
+  type ChatEngineActionExecutorHost,
+} from "./chatEngineActionExecutor.js";
+import {
+  ChatEngineStreamingLoop,
+  type ChatEngineStreamingLoopHost,
+} from "./chatEngineStreamingLoop.js";
 export { reconcileStreamedAnswer } from "./chatEngineStreamingProtocol.js";
 import {
-  deriveChildAllowance,
-  inheritedChildBudgetLimiter,
   type ChildBudgetLimiter,
   type InheritedChildAllowance,
 } from "./childBudget.js";
-import {
-  childBudgetAttribution,
-  classifySubagentFailure,
-  runMutationAgentLoop,
-  subagentFinishedCleanly,
-  type SubagentAttribution,
-} from "./lanes/runMutationAgentLoop.js";
-import { runImplementWorktreeAgent } from "./implementWorktreeAgent.js";
-import { executeTool, renderGitDiff, type ToolContext } from "../localTools.js";
+import { childBudgetAttribution } from "./lanes/runMutationAgentLoop.js";
+
+import { type ToolContext } from "../localTools.js";
 import {
   createStallDetector,
-  updateStallState,
   getStallInterventionMessage,
-  isTextOnlyLoop,
-  buildTextOnlyLoopIntervention,
-  buildTextOnlyLoopBlockedMessage,
-  TEXT_ONLY_FORCE_BLOCKED_THRESHOLD,
 } from "./stallDetector.js";
 import type { StallState, StallIntervention } from "./stallDetector.js";
-import type {
-  ProgressController,
-  ProgressSignal,
-} from "./progressController.js";
-import { classifyShellCapability } from "./progressController.js";
+import type { ProgressController } from "./progressController.js";
+
+import { type ChatPhase } from "./chatPhaseNudge.js";
 import {
-  progressSignalsFromReceipt,
-  type ProgressReceipt,
-} from "./progressReceipt.js";
-import {
-  classifyPhase,
-  buildPhaseNudge,
-  shouldNudge,
-  type ChatPhase,
-} from "./chatPhaseNudge.js";
-import {
-  assessMutationEffect,
-  confirmedMutationPaths,
-  isConfirmedMutation,
   isSuccessfulDirectMutation,
   type MutationEffectStatus,
 } from "./mutationTools.js";
@@ -470,56 +328,28 @@ import {
   type ChatTurnTelemetryRecord,
 } from "./chatTurnTelemetry.js";
 import type { DiffCriticVerdict } from "./diffCritic.js";
-import { evaluateTokenExplosionAfterTurn } from "./budgetKillPolicy.js";
+
 import {
   applyExploreFuses as applyExploreFusesPolicy,
-  attachTerminalReason,
-  buildPolicyTerminalBlockedReport,
-  resolveInvestigateHardCapObserveOnly,
   type ExploreFuseResult,
 } from "./chatZeroWritePolicy.js";
-import { PolicyEventLog, type PolicyEvent } from "./policyEventLog.js";
+import { PolicyEventLog } from "./policyEventLog.js";
+import { type TerminalReason } from "./chatTerminalReason.js";
 import {
-  terminalReasonFromClassification,
-  terminalReasonFromFailureText,
-  terminalReasonFromOutcome,
-  terminalReasonFromVerifierFailure,
-  type TerminalReason,
-} from "./chatTerminalReason.js";
-import {
-  evaluateZeroWriteWithShadow,
-  recordPolicyShadowSessionOutcome,
   resolveStallInterventionsEnabled,
   resolveStallShadowMode,
 } from "./policyShadow.js";
-import { isCodingTaskSuccess } from "../services/codingTaskSuccess.js";
+
 import { BlockedAttemptLedger } from "./blockedAttemptLedger.js";
-import {
-  TurnRoutingReceiptLog,
-  type TurnRoutingReceipt,
-} from "./turnRoutingReceipt.js";
+import { TurnRoutingReceiptLog } from "./turnRoutingReceipt.js";
 import { resolvePhaseModelName } from "./phaseModelRouting.js";
 import {
   ObservationTailBuffer,
   resolveObservationTailChars,
 } from "./observationTails.js";
 import {
-  buildPromptFingerprint,
-  buildStreamDone,
-  buildStreamFailed,
-  computeTerminalOutcome,
   makeChatRunner,
-  observabilityResultFields,
-  outcomeFromReasonCode,
-  persistPolicyEventsJsonl,
-  persistTranscriptToDisk,
-  pushProviderTurnMessages,
-  pushRoutingReceiptFromMetadata,
-  recordPolicyEvent,
-  recordTurnToolObservability,
-  stashEngineFingerprint,
   type ObservabilityHandles,
-  type PromptFingerprint,
 } from "./chatEngineObservability.js";
 
 import {
@@ -544,14 +374,6 @@ import {
   runPostEditStaticCheck as runPostEditStaticCheckFn,
   summarizeDroppedTurns as summarizeDroppedTurnsFn,
   compactHeuristicConversation,
-  pinProjectRootEnv,
-  noteChatWorkspaceMutation,
-  invalidateVerifierLedger,
-  nativeToolUseToChatAction,
-  formatResultDetail,
-  countPatchStats,
-  primaryPatchPath,
-  executeLspChatToolAction,
 } from "./chatEngineSupport.js";
 import {
   applyTamperEscalation as applyTamperEscalationFn,
@@ -560,15 +382,11 @@ import {
   hashContent as hashContentFn,
   initializeVerifierDependencyHashes,
 } from "./chatEngineVerifierSession.js";
-import {
-  isFatalWindowsProcessExit,
-  logPlatformUnusableResult,
-} from "./verifierFailFast.js";
+
 import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
 import {
   prepareKernelVerifierInput,
-  captureAndRecordVerifierReceipt,
   resolveEngineRequiredVerifiers,
   restorePersistedVerifierEvidence,
 } from "./chatEngineVerifierAdapter.js";
@@ -577,239 +395,7 @@ import {
   type TurnRuntimeSnapshot,
 } from "./turnRuntime.js";
 
-// ─── Types ────────────────────────────────────────────────────────────────
-
-/** Classifies the user's intent for a chat turn.
- *  'execute' = user wants code changes → gate active in headless mode
- *  'explain' = user wants information → gate bypassed */
-export type TaskIntent = "execute" | "explain";
-
-function isPersistedTurnRuntime(value: unknown): value is TurnRuntimeSnapshot {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value as Record<string, unknown>;
-  const numericKeys = [
-    "submissionIndex",
-    "writeCount",
-    "gateStrikes",
-    "criticStrikes",
-    "turnsWithoutWrite",
-    "consecutiveReadOnlyTools",
-    "consecutiveNonMutatingShells",
-    "toolsWithoutWrite",
-  ];
-  if (
-    numericKeys.some(
-      (key) =>
-        typeof candidate[key] !== "number" || !Number.isFinite(candidate[key]),
-    )
-  ) {
-    return false;
-  }
-  const booleanKeys = [
-    "midLoopCriticFired",
-    "budgetExceeded",
-    "budgetLastChanceDone",
-    "restrictToolsNextTurn",
-    "continuedTask",
-  ];
-  if (booleanKeys.some((key) => typeof candidate[key] !== "boolean"))
-    return false;
-  if (
-    typeof candidate.taskText !== "string" ||
-    (candidate.taskIntent !== "execute" &&
-      candidate.taskIntent !== "explain") ||
-    typeof candidate.taskClass !== "string" ||
-    typeof candidate.projectRoot !== "string" ||
-    (candidate.stickyIntent !== null &&
-      candidate.stickyIntent !== "execute" &&
-      candidate.stickyIntent !== "explain") ||
-    (candidate.gatePolicy !== null &&
-      candidate.gatePolicy !== "none" &&
-      candidate.gatePolicy !== "required" &&
-      candidate.gatePolicy !== "strict")
-  ) {
-    return false;
-  }
-  return true;
-}
-
-export type ChatAllowanceCostCap =
-  | { kind: "finite"; usd: number }
-  | { kind: "unlimited" };
-
-export interface ChatAllowanceGrant {
-  grantId: string;
-  provenance: string;
-  costCapUsd: number;
-  wallCapMs: number;
-  turnCap: number;
-}
-
-export interface ChatTaskAllowanceSnapshot {
-  schemaVersion: 2;
-  taskOwnerId: string;
-  accountingEpoch: string;
-  grant: {
-    grantId: string;
-    provenance: string;
-    costCap: ChatAllowanceCostCap;
-    wallCapMs: number;
-    turnCap: number;
-  };
-  consumed: {
-    costUsd: number;
-    unknownChargeCount?: number;
-    activeWallMs: number;
-    turns: number;
-  };
-  repair: {
-    criticRepairCostCapUsd: number | null;
-    postWriteRepairWallCapMs: number | null;
-    postWriteRepairRestrict: boolean;
-  };
-  accountedChargeIds: string[];
-  activeExecution: boolean;
-  taskCostBaselineUsd: number;
-  /** Owner-scoped faults mirrored when an owner-receipt write fails. */
-  accountingFaults?: OwnerAccountingFault[];
-  lastTurnRuntime?: TurnRuntimeSnapshot;
-}
-
-function isNonNegativeFinite(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-function parseTaskAllowance(value: unknown): ChatTaskAllowanceSnapshot | null {
-  if (value === null || typeof value !== "object") return null;
-  const candidate = value as Record<string, unknown>;
-  if (candidate["schemaVersion"] !== 2) return null;
-  if (
-    typeof candidate["taskOwnerId"] !== "string" ||
-    candidate["taskOwnerId"].length === 0 ||
-    typeof candidate["accountingEpoch"] !== "string"
-  )
-    return null;
-  const grant = candidate["grant"];
-  const consumed = candidate["consumed"];
-  const repair = candidate["repair"];
-  if (
-    grant === null ||
-    typeof grant !== "object" ||
-    consumed === null ||
-    typeof consumed !== "object" ||
-    repair === null ||
-    typeof repair !== "object"
-  )
-    return null;
-  const grantRecord = grant as Record<string, unknown>;
-  const consumedRecord = consumed as Record<string, unknown>;
-  const repairRecord = repair as Record<string, unknown>;
-  const rawCostCap = grantRecord["costCap"];
-  if (rawCostCap === null || typeof rawCostCap !== "object") return null;
-  const costCapRecord = rawCostCap as Record<string, unknown>;
-  const costCap: ChatAllowanceCostCap | null =
-    costCapRecord["kind"] === "unlimited"
-      ? { kind: "unlimited" }
-      : costCapRecord["kind"] === "finite" &&
-          isNonNegativeFinite(costCapRecord["usd"])
-        ? { kind: "finite", usd: costCapRecord["usd"] }
-        : null;
-  if (
-    costCap === null ||
-    typeof grantRecord["grantId"] !== "string" ||
-    grantRecord["grantId"].length === 0 ||
-    typeof grantRecord["provenance"] !== "string" ||
-    grantRecord["provenance"].length === 0 ||
-    !isNonNegativeFinite(grantRecord["wallCapMs"]) ||
-    !Number.isInteger(grantRecord["turnCap"]) ||
-    (grantRecord["turnCap"] as number) < 1 ||
-    !isNonNegativeFinite(consumedRecord["costUsd"]) ||
-    !isNonNegativeFinite(consumedRecord["activeWallMs"]) ||
-    !Number.isInteger(consumedRecord["turns"]) ||
-    (consumedRecord["turns"] as number) < 0 ||
-    (repairRecord["criticRepairCostCapUsd"] !== null &&
-      !isNonNegativeFinite(repairRecord["criticRepairCostCapUsd"])) ||
-    (repairRecord["postWriteRepairWallCapMs"] !== null &&
-      !isNonNegativeFinite(repairRecord["postWriteRepairWallCapMs"])) ||
-    typeof repairRecord["postWriteRepairRestrict"] !== "boolean" ||
-    !Array.isArray(candidate["accountedChargeIds"]) ||
-    !(candidate["accountedChargeIds"] as unknown[]).every(
-      (id) => typeof id === "string",
-    ) ||
-    typeof candidate["activeExecution"] !== "boolean" ||
-    !isNonNegativeFinite(candidate["taskCostBaselineUsd"])
-  )
-    return null;
-  const accountingFaults =
-    candidate["accountingFaults"] === undefined
-    ? []
-      : parseOwnerAccountingFaults(candidate["accountingFaults"]);
-  if (accountingFaults === null) return null;
-  const parsed: ChatTaskAllowanceSnapshot = {
-    schemaVersion: 2,
-    taskOwnerId: candidate["taskOwnerId"],
-    accountingEpoch: candidate["accountingEpoch"],
-    grant: {
-      grantId: grantRecord["grantId"],
-      provenance: grantRecord["provenance"],
-      costCap,
-      wallCapMs: grantRecord["wallCapMs"],
-      turnCap: grantRecord["turnCap"] as number,
-    },
-    consumed: {
-      costUsd: consumedRecord["costUsd"],
-      unknownChargeCount: isNonNegativeFinite(
-        consumedRecord["unknownChargeCount"],
-      )
-        ? consumedRecord["unknownChargeCount"]
-        : 1,
-      activeWallMs: consumedRecord["activeWallMs"],
-      turns: consumedRecord["turns"] as number,
-    },
-    repair: {
-      criticRepairCostCapUsd: repairRecord["criticRepairCostCapUsd"] as
-        | number
-        | null,
-      postWriteRepairWallCapMs: repairRecord["postWriteRepairWallCapMs"] as
-        | number
-        | null,
-      postWriteRepairRestrict: repairRecord["postWriteRepairRestrict"],
-    },
-    accountedChargeIds: [...(candidate["accountedChargeIds"] as string[])],
-    // A crashed active marker is cleared on restore; downtime is not execution.
-    activeExecution: false,
-    taskCostBaselineUsd: candidate["taskCostBaselineUsd"],
-    ...(accountingFaults.length > 0 ? { accountingFaults } : {}),
-    ...(isPersistedTurnRuntime(candidate["lastTurnRuntime"])
-      ? { lastTurnRuntime: candidate["lastTurnRuntime"] }
-      : {}),
-  };
-  return parsed;
-}
-
-/** Options for a single user submission (W0.3 TurnRuntime). */
-export interface SubmitMessageOptions {
-  /**
-   * Explicit continuation linkage: preserve write/gate counters from the
-   * prior submission. Default false — isolate so prior writes cannot satisfy
-   * a new task's completion gate.
-   */
-  continueTask?: boolean;
-  /**
-   * Internal: the submission generation already assigned by the caller
-   * (`submitMessage`). The stream body adopts it instead of incrementing so
-   * the non-streaming presentation guards and the ownership guards agree on
-   * one generation. Not part of the public contract.
-   */
-  submissionGeneration?: number;
-}
-
-import {
-  deniesReadOnlyChatAction,
-  filterReadOnlyChatTools,
-  isReadOnlyChat,
-  resolveChatRangePath,
-} from "./chatReadOnly.js";
+import { isReadOnlyChat } from "./chatReadOnly.js";
 
 /**
  * Version label for the chat tool surface offered to admitted commands. Part
@@ -829,909 +415,10 @@ const CHAT_ADMISSION_TOOL_SCHEMA_VERSION = "chat-tools-v1";
  */
 const PENDING_COMPILED_REQUEST_IDENTITY = "pending-compiled-request-identity";
 
-/**
- * P05: this engine's admitted command claim. `settled` flips at command
- * settlement (terminal stream, cancellation, replacement, or session close);
- * a live (unsettled) claim matching the durable owner row is the ONLY
- * authority under which this engine may install a P11 checkpoint.
- */
-
-export interface ChatEngineOptions {
-  instructionRoot?: string;
-  /** Trusted embedding seam: pins all inference phases to one observed runner. */
-  providerRunner?: DeepInfraApiRunner;
-  /** Immutable policy for a trusted embedded provider, never model-supplied. */
-  providerPolicy?: ResolvedModelPolicy;
-  task: string;
-  projectRoot: string;
-  runId?: string;
-  /** Existing P05 durable owner/fencing authority supplied by the host. */
-  admissionStore?: AdmissionStore;
-  resumeExisting?: boolean;
-  systemContext?: string;
-  /** Appended system prompt fragments (plugins, skills, project memory).
-   *  Injected after the base system prompt for layered context assembly. */
-  appendSystemPrompt?: string;
-  /** Pre-flight context injected into the system prompt (git state, session info, etc.).
-   *  Gathered once per engine session and appended after appendSystemPrompt. */
-  preflightContext?: string;
-  model?: string;
-  modelTier?: string;
-  provider?: string;
-  maxTurns?: number;
-  maxConversationMessages?: number;
-  maxEstimatedTokens?: number;
-  /** R11: Per-round token ceiling — a single turn exceeding this with zero
-   *  tool calls is force-BLOCKED. Default 200_000. */
-  maxTokensPerRound?: number;
-  /** Explicit wall-budget request. Still clamped by the resolver's ceiling
-   *  (one hour, or LONG_TASK ceiling when BABEL_CHAT_LONG_TASK is authorized);
-   *  requested vs effective stays observable via limits.wallBudget. */
-  maxWallMs?: number;
-  /** Explicit cost-budget request. Marks costBudget.explicitCostCeiling. */
-  maxCostUsd?: number;
-  allowExpensive?: boolean;
-  workspaceRoot?: string | null;
-  fallbackModel?: string;
-  /** C1: Structured intent plan user message injected at session start
-   *  for execute tasks when the intent compiler is enabled. */
-  intentPlanUserMessage?: string;
-  /**
-   * Implementor W1.3: hard plan mode — block all mutations until /execute-plan.
-   * Also implied by operatorMode === 'hard_plan'.
-   */
-  hardPlanMode?: boolean;
-  /** Implementor W1.4 operator policy (orthogonal to chat/plan/deep ValidMode). */
-  operatorMode?: import("./planExecuteMode.js").ChatOperatorMode;
-  /** Implementor W1.3: plan→execute handoff injected at first user turn. */
-  planHandoff?: import("./planExecuteMode.js").ChatPlanExecuteHandoff;
-  /** Shared kernel profile. Plan is read-only; deep retains governed writes. */
-  executionProfile?: ChatExecutionProfile;
-  /** Externally supplied required verifier commands for completion gate scope. */
-  requiredVerifierCommands?: readonly string[] | null;
-  /** C1/B7 rollout: enforce in development/CI, shadow in production by default. */
-  runtimeInvariantMode?: RuntimeInvariantMode;
-  /** Test-only: explicit live workspace revision hash for gate freshness tests. */
-  testWorkspaceRevisionHash?: string | null;
-  /**
-   * Test-only: deterministic overrides threaded into the child sub-agent
-   * lanes so lifecycle races can be driven through the real child
-   * dispatch/completion/application seam without a live provider. Production
-   * callers never set this.
-   */
-  testChildLaneOverrides?: {
-    useDeterministicMock?: boolean;
-    actionResolver?: (
-      prompt: string,
-      round: number,
-    ) => Promise<import("./actions.js").AgentAction[]>;
-    executor?: import("./toolExecutor.js").ToolExecutor;
-  };
-  /** Truthful delivery surface for the model-visible runtime metadata. */
-  runtimeMode?: ChatRuntimeMode;
-}
-
-/** Shared TUI/headless/direct preparation applied to a live or reused engine. */
-export interface ChatEngineTurnPreparation {
-  task: string;
-  projectRoot?: string | undefined;
-  instructionRoot?: string | undefined;
-  systemContext?: string | undefined;
-  appendSystemPrompt?: string | undefined;
-  preflightContext?: string | undefined;
-  model?: string | undefined;
-  intentPlanUserMessage?: string | undefined;
-  limits?: ChatEngineLimits;
-  executionProfile?: ChatExecutionProfile;
-  runtimeMode?: ChatRuntimeMode;
-}
-
-export interface ContextCompactedInfo {
-  mode: "llm" | "heuristic";
-  beforeMessages: number;
-  afterMessages: number;
-  message: string;
-}
-
-export interface ChatCallbacks {
-  onAnswerChunk?: (chunk: string) => void;
-  onToolStart?: (tool: string, target: string) => number;
-  onToolComplete?: (
-    id: number,
-    detail?: string,
-    error?: string,
-    exitCode?: number,
-  ) => void;
-  onFileChanged?: (
-    path: string,
-    additions: number,
-    deletions: number,
-    content?: string,
-  ) => void;
-  onThought?: (thought: string) => void;
-  /**
-   * A new model generation is starting (engine 'thinking' event). Consumers
-   * must commit any in-flight streamed answer instead of concatenating onto
-   * it — keeps streaming and non-streaming presentation semantically equal.
-   */
-  onGenerationBoundary?: () => void;
-  onContextCompacted?: (info: ContextCompactedInfo) => void;
-  onSubAgentStart?: (info: {
-    id: string;
-    label: string;
-    model?: string;
-  }) => void;
-  onSubAgentComplete?: (info: {
-    id: string;
-    summary: string;
-    tokens?: number;
-  }) => void;
-  onSubAgentFailed?: (info: { id: string; error: string }) => void;
-}
-
-// ─── #5 Typed streaming events ───────────────────────────────────────────
-
-/** Events yielded by executeRawStream() — the runner layer. */
-export type StreamEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "thought_delta"; text: string }
-  | {
-      type: "tool_use";
-      id: string;
-      name: string;
-      input: Record<string, unknown>;
-    }
-  | { type: "done"; finishReason: string }
-  | { type: "error"; message: string };
-
-/** Events yielded by submitMessageStream() — the ChatEngine layer. */
-export type ChatEvent =
-  | { type: "thinking" }
-  | { type: "answer_chunk"; text: string }
-  | { type: "tool_start"; toolCallId?: string; tool: string; target: string }
-  | {
-      type: "tool_complete";
-      toolCallId?: string;
-      tool: string;
-      target: string;
-      detail?: string;
-      error?: string;
-      exitCode?: number;
-      effect_status?: MutationEffectStatus;
-      mutation_paths?: string[];
-    }
-  | {
-      type: "tool_failed";
-      toolCallId?: string;
-      tool: string;
-      target: string;
-      detail?: string;
-      error?: string;
-      exitCode?: number;
-      effect_status?: MutationEffectStatus;
-      mutation_paths?: string[];
-    }
-  | { type: "thought"; text: string }
-  | {
-      type: "context_compacted";
-      mode: "llm" | "heuristic";
-      beforeMessages: number;
-      afterMessages: number;
-      message: string;
-    }
-  | { type: "sub_agent_start"; id: string; label: string; model?: string }
-  | { type: "sub_agent_complete"; id: string; summary: string; tokens?: number }
-  | { type: "sub_agent_failed"; id: string; error: string }
-  | {
-      type: "file_changed";
-      path: string;
-      additions: number;
-      deletions: number;
-      content?: string;
-    }
-  | {
-      type: "done";
-      answer: string;
-      usage: SessionUsageSummary;
-      /** Canonical legacy status derived from outcome when known. */
-      status?: ChatStatus;
-      /** Authoritative terminal outcome from the engine (P0-D lossless). */
-      outcome?: TerminalOutcome;
-      planOutcome?: "PLAN_COMPLETE";
-      budgetExceeded?: boolean;
-      toolCalls?: Array<{
-        toolCallId?: string;
-        tool: string;
-        target: string;
-        detail?: string;
-        error?: string;
-        effect_status?: MutationEffectStatus;
-        mutation_paths?: string[];
-      }>;
-      runDir?: string;
-      verifierReceipt?: {
-        command: string;
-        exit_code: number;
-        summary: string;
-      } | null;
-      blockedReport?: BlockedReport | null;
-      /** R9: Whether the agent modified a verifier dependency file. */
-      verifierTampered?: boolean;
-      /** Idea 14: asymmetric diff critic receipt. */
-      criticReceipt?: DiffCriticVerdict | null;
-      policyEvents?: PolicyEvent[];
-      turnRouting?: TurnRoutingReceipt[];
-      observationTails?: Array<{
-        tool: string;
-        target: string;
-        exit_code?: number;
-        tail: string;
-      }>;
-      blockedAttempts?: import("./blockedAttemptLedger.js").BlockedAttempt[];
-      turnTelemetry?: ChatTurnTelemetryRecord;
-      costBudget?: ChatEngineLimits["costBudget"];
-      runAllowance?: ChatEngineRunAllowanceReport;
-      /** D03: structured terminal reason code (additive; outcome unchanged). */
-      reason_code?: TerminalReasonCode;
-      cause_class?:
-        | "model"
-        | "provider"
-        | "environment"
-        | "harness"
-        | "verification"
-        | null;
-    }
-  | {
-      type: "failed";
-      error: string;
-      status?: ChatStatus;
-      /** Present when tools ran before failure (turn-limit / stall kill / etc.). */
-      toolCalls?: Array<{
-        toolCallId?: string;
-        tool: string;
-        target: string;
-        detail?: string;
-        error?: string;
-        effect_status?: MutationEffectStatus;
-        mutation_paths?: string[];
-      }>;
-      runDir?: string;
-      /** Preserve INFRA_FAILURE vs AGENT_FAILURE when the engine already classified. */
-      outcome?: import("../schemas/agentContracts.js").TerminalOutcome;
-      turnTelemetry?: ChatTurnTelemetryRecord;
-      costBudget?: ChatEngineLimits["costBudget"];
-      runAllowance?: ChatEngineRunAllowanceReport;
-      /** D03: structured terminal reason code. */
-      reason_code?: TerminalReasonCode;
-      cause_class?:
-        | "model"
-        | "provider"
-        | "environment"
-        | "harness"
-        | "verification"
-        | null;
-    }
-  | {
-      type: "cancelled";
-      status?: ChatStatus;
-      outcome?: "CANCELLED";
-      turnTelemetry?: ChatTurnTelemetryRecord;
-      /** D03: cancelled is a structured terminal reason too. */
-      reason_code?: TerminalReasonCode;
-      cause_class?:
-        | "model"
-        | "provider"
-        | "environment"
-        | "harness"
-        | "verification"
-        | null;
-    }
-  | {
-      type: "progress_recovery";
-      intervention: import("./progressController.js").ProgressInterventionLevel;
-      source: string;
-      score: number;
-      message?: string;
-    };
-
-export interface ChatResult {
-  status: ChatStatus;
-  /** Honest terminal outcome — semantically precise, never conflated.
-   *  Optional for backward compatibility with test fixtures that omit it. */
-  outcome?: TerminalOutcome;
-  /** Separate plan-mode completion result; never an executor terminal. */
-  planOutcome?: "PLAN_COMPLETE";
-  answer: string;
-  usage: SessionUsageSummary;
-  conversation: ChatMessage[];
-  toolCalls?: Array<{
-    toolCallId?: string;
-    tool: string;
-    target: string;
-    detail?: string;
-    error?: string;
-    effect_status?: MutationEffectStatus;
-    mutation_paths?: string[];
-  }>;
-  runDir?: string;
-  verifierReceipt?: {
-    command: string;
-    exit_code: number;
-    summary: string;
-  } | null;
-  blockedReport?: BlockedReport | null;
-  dedupeHitCount?: number;
-  verifierTampered?: boolean;
-  criticReceipt?: DiffCriticVerdict | null;
-  budgetExceeded?: boolean;
-  gatePolicy?: VerificationPolicy;
-  /** Tier A2: Policy events emitted during the session. */
-  policyEvents?: PolicyEvent[];
-  /** Tier A3: Per-turn routing receipts. */
-  turnRouting?: TurnRoutingReceipt[];
-  /** Tier A5: Last-N tool observation tails. */
-  observationTails?: Array<{
-    tool: string;
-    target: string;
-    exit_code?: number;
-    tail: string;
-  }>;
-  /** Tier A1: Aggregate counts derived from the tool call log. */
-  toolCallAggregates?: {
-    tool_call_count: number;
-    write_count: number;
-    verifier_attempt_count: number;
-  };
-  promptFingerprint?: PromptFingerprint;
-  /** Active input prompt tokens from latest single model invocation */
-  lastRequestPromptTokens?: number | null;
-  /** Active completion output tokens from latest single model invocation */
-  lastRequestCompletionTokens?: number | null;
-  /** Structured active context telemetry from latest provider invocation */
-  activeContext?: {
-    tokens: number;
-    modelId: string;
-    source: "provider_prompt_tokens" | "estimated" | "unknown";
-  } | null;
-  turnTelemetry?: ChatTurnTelemetryRecord;
-  /** Enumerable cost-budget provenance — survives JSON / spreads / manifests. */
-  costBudget?: ChatEngineLimits["costBudget"];
-  /** Enumerable declared vs effective run allowance + terminating limiter. */
-  runAllowance?: ChatEngineRunAllowanceReport;
-  /** D03: structured terminal reason code; survives engine → payload → clients. */
-  reason_code?: TerminalReasonCode;
-  /** D03: separate model-vs-harness cause axis; null = not established. */
-  cause_class?:
-    | "model"
-    | "provider"
-    | "environment"
-    | "harness"
-    | "verification"
-    | null;
-}
-
 // ─── Constants ────────────────────────────────────────────────────────────
 
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
-const MAX_TOOL_CONCURRENCY = 6; // Prevent exhausting connection pools
-/**
- * I1: text-tools cap for the bounded child section. The section is already
- * bounded by childConclusion (2 KB conclusion + 0.5 KB error + 12 evidence
- * refs), so this is comfortably above its worst case and keeps the provenance
- * `authority` line and evidence tail visible on the text path.
- */
-const SUB_AGENT_TEXT_MAX_CHARS = 6000;
-
-/**
- * S03/#213 slice 2: stable child delegation id bound to the parent operation
- * (run + turn + batch + action index + operation fingerprint), not a batch-local
- * counter. Distinct batches -> distinct ids; same delegation -> same id.
- */
-export function deriveChildDelegationId(input: {
-  parentRunId: string;
-  turnId: string;
-  batchId: string;
-  actionIndex: number;
-  fingerprint: string;
-}): string {
-  const digest = createHash("sha256")
-    .update(
-      [
-        input.parentRunId,
-        input.turnId,
-        input.batchId,
-        String(input.actionIndex),
-        input.fingerprint,
-      ].join("|"),
-    )
-    .digest("hex")
-    .slice(0, 12);
-  return `chat-sub-${digest}`;
-}
-
-/** S02: minimal shape of a text-tools log entry (see ChatEngine.toolCallLog). */
-export interface TextToolResultEntry {
-  tool: string;
-  target: string;
-  detail?: string;
-  error?: string;
-  exit_code?: number;
-  stdout?: string;
-  stderr?: string;
-}
-
-/**
- * S02/#212: text-tools rendering was rebuilt from `toolCallLog` and only
- * surfaced read/grep/glob/list_dir/run_command stdout, so a read-only child
- * conclusion never reached the model on the text path. Extracted pure so both
- * delivery modes can be asserted directly.
- */
-export function formatTextToolResults(
-  entries: readonly TextToolResultEntry[],
-): string {
-  const parts: string[] = [];
-  for (const entry of entries) {
-    if (entry.error === "blocked") {
-      parts.push(`[ERROR] ${entry.tool}:${entry.target} blocked`);
-      continue;
-    }
-    // S02/I1: sub_agent handoff (conclusion + status + evidence refs) before the
-    // generic exit-code branch, so failed/policy-denied children still surface
-    // their bounded result instead of a 500-char error slice. The child section
-    // is self-bounded by childConclusion (conclusion/error/evidence caps), so it
-    // gets a larger explicit cap than generic tool output — otherwise the
-    // provenance `authority` line and evidence tail would be truncated away.
-    if (entry.tool === "sub_agent" && entry.stdout) {
-      const out =
-        entry.stdout.length > SUB_AGENT_TEXT_MAX_CHARS
-          ? entry.stdout.slice(0, SUB_AGENT_TEXT_MAX_CHARS) +
-            "\n... [truncated]"
-          : entry.stdout;
-      parts.push(
-        `[RESULT] ${entry.tool}:${entry.target}\n${entry.detail ? entry.detail + "\n" : ""}${out}`,
-      );
-      continue;
-    }
-    if (entry.exit_code !== undefined && entry.exit_code !== 0) {
-      const err = (entry.stderr || entry.stdout || "").slice(0, 500);
-      parts.push(
-        `[ERROR] ${entry.tool}:${entry.target} exit ${entry.exit_code}: ${err}`,
-      );
-      continue;
-    }
-    // Tools whose output content the model needs to ingest
-    if (
-      entry.stdout &&
-      ["read_file", "read_range", "grep", "glob", "list_dir"].includes(
-        entry.tool,
-      )
-    ) {
-      const truncated =
-        entry.stdout.length > 3000
-          ? entry.stdout.slice(0, 3000) + "\n... [truncated]"
-          : entry.stdout;
-      parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${truncated}`);
-      continue;
-    }
-    // run_command: include output
-    if (entry.tool === "run_command" && entry.stdout) {
-      const out = entry.stdout.slice(0, 1000);
-      parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${out}`);
-      continue;
-    }
-    // Default: simple [OK] summary
-    const detail = entry.detail ? ` (${entry.detail})` : "";
-    parts.push(`[OK] ${entry.tool}:${entry.target}${detail}`);
-  }
-  return parts.join("\n\n");
-}
-
-// ─── Conversational-turn detection ────────────────────────────────────────
-// Pure greetings / acknowledgements / punctuation-only turns ('?', 'hello',
-// 'thanks') carry no task content. They must not take the execute path:
-// execute-intent classification makes the zero-write completion refusal
-// re-query trivial turns until the turn budget is exhausted. Whole-input
-// match keeps action-bearing requests ('hi — fix the bug') on execute via
-// the verb checks in classifyChatTaskIntent.
-const CONVERSATIONAL_TURN_RE =
-  /^(?:(?:hi+|hello+|hey+|yo|sup|howdy|greetings|good\s*(?:morning|afternoon|evening|day)|hi\s+there|hello\s+there|thanks|thank\s*you|thankyou|thx|ty|ok(?:ay)?|cool|nice|great|awesome|perfect|got\s*it|sounds\s+good|bye|goodbye|see\s*ya)(?:[!,.?;:\s]+|$))+$/i;
-const PUNCTUATION_ONLY_TURN_RE = /^[\s\p{P}\p{S}\p{C}]*$/u;
-
-function isConversationalTurnText(task: string): boolean {
-  const t = task.trim();
-  if (!t || t.length > 32) return false;
-  return PUNCTUATION_ONLY_TURN_RE.test(t) || CONVERSATIONAL_TURN_RE.test(t);
-}
-
-/** Only these tools carry inspectable content that can localize a failure. */
-const CONTENT_BEARING_INSPECTION_TOOLS = new Set<string>(
-  RECOVERY_EVIDENCE_TOOLS,
-);
-
-/**
- * A discriminating observation is not a boolean claim. It must be
- * content-bearing, must localize a target already implicated by the failure
- * (or by the mutation that preceded it), and must not repeat an observation the
- * gate has already consumed. A directory listing or a pattern-only search can
- * never clear the gate.
- */
-export function isDiscriminatingInspectionEvidence(
-  state: WorkingState,
-  action: {
-    type: string;
-    path?: string | undefined;
-    pattern?: string | undefined;
-    file_path?: string | undefined;
-  },
-  physicalTarget: string | null,
-  binding: RecoveryCandidateBinding | null,
-  observationDigest: string,
-): { discriminating: boolean; provenance?: RecoveryEvidenceProvenance } {
-  const gate = state.recoveryGate;
-  if (!gate || gate.satisfied) return { discriminating: false };
-  if (!gate.binding || !binding || !sameRecoveryBinding(gate.binding, binding))
-    return { discriminating: false };
-  if (!CONTENT_BEARING_INSPECTION_TOOLS.has(action.type))
-    return { discriminating: false };
-  if (!physicalTarget || !observationDigest) return { discriminating: false };
-  // Require a concrete inspected path. A `grep` without an explicit path is a
-  // repository-wide search and cannot localize the failure.
-  const candidate =
-    action.type === "read_range" ? action.file_path : action.path;
-  if (!candidate) return { discriminating: false };
-  const failingTargets =
-    gate.failingTargets ?? state.failureSurface?.failingFiles ?? [];
-  if (!targetMatchesGate(physicalTarget, failingTargets))
-    return { discriminating: false };
-  const provenance: RecoveryEvidenceProvenance = {
-    tool: action.type,
-    target: physicalTarget,
-    failureSignature: gate.failureSignature,
-    binding,
-    observationDigest,
-  };
-  const key = recoveryEvidenceKey(provenance, gate.failureSignature);
-  if (
-    !key ||
-    (gate.observedKeys ?? []).includes(key) ||
-    state.consumedRecoveryEvidence.includes(key)
-  ) {
-    return { discriminating: false };
-  }
-  return {
-    discriminating: true,
-    provenance,
-  };
-}
-
-/**
- * R0-10: presentation callbacks are an observational side channel. A throwing
- * host callback must never unwind the settlement path — that would both skip
- * real execution bookkeeping and let the settlement catch append a duplicate
- * execution-truth row. Wrap every callback so a throw is logged and ignored.
- */
-const PRESENTATION_CALLBACK_KEYS = [
-  "onToolStart",
-  "onToolComplete",
-  "onFileChanged",
-  "onSubAgentStart",
-  "onSubAgentComplete",
-  "onSubAgentFailed",
-] as const;
-
-export function wrapPresentationCallbacks(
-  callbacks: ChatCallbacks,
-): ChatCallbacks {
-  const wrapped: Record<string, unknown> = { ...callbacks };
-  for (const key of PRESENTATION_CALLBACK_KEYS) {
-    const fn = (callbacks as unknown as Record<string, unknown>)[key];
-    if (typeof fn === "function") {
-      wrapped[key] = (...args: unknown[]): unknown => {
-        try {
-          return (fn as (...a: unknown[]) => unknown)(...args);
-        } catch (err) {
-          console.error(
-            `[chatEngine] presentation callback ${key} failed (ignored):`,
-            err,
-          );
-          return undefined;
-        }
-      };
-    }
-  }
-  return wrapped as unknown as ChatCallbacks;
-}
-
-// ─── ChatEngine ───────────────────────────────────────────────────────────
-
-/** @internal Host port for single-action execution lifecycle. */
-export interface ChatEngineActionExecutorHost {
-  "_lastPhase": ChatPhase | null;
-  "_streamNativeToolCallIds": string[];
-  "_turnIndex": number;
-  "activeSubmissionGeneration": number;
-  "beginRecoveryLocalizationInspection": (tool: string, rawTarget: string) => boolean;
-  "checkVerifierTamper": (filePath: string) => string | null;
-  "consumeFailureBudget": (failure: FailureCapsuleV1) => boolean;
-  "currentRecoveryBinding": () => RecoveryCandidateBinding | null;
-  "currentTurnTelemetry": ChatTurnTelemetryCollector | null;
-  "dedupeHitCount": number;
-  "engineRunDir": string;
-  "engineRunId": string;
-  "executedVerifierLedger": BoundChatVerifierReceipt[];
-  "executionProfile": ChatExecutionProfile;
-  "finishRecoveryLocalizationInspection": (input: { tool: string; rawTarget: string; content?: string; succeeded: boolean; startLine?: number; pattern?: string; }) => void;
-  "fullReadCounts": Map<string, number>;
-  "getLiveSession": (c?: { turns?: number; tokens?: number; repair_attempts?: number; infra_retries?: number; } | undefined) => LiveSessionV1;
-  "hardPlanMode": boolean;
-  "hashContent": (content: string) => string;
-  "hashFilePath": (filePath: string) => Promise<string>;
-  "isSubmissionCurrent": (ownerGeneration: number) => boolean;
-  "isolationBrokerFlags": () => IsolationBrokerFlags;
-  "lastVerifierFailed": boolean;
-  "lastVerifierReceipt": BoundChatVerifierReceipt | null;
-  "noteToolForReadThrash": (tool: string, opts?: { error?: string; detail?: string; } | undefined) => void;
-  "options": ChatEngineOptions;
-  "parity": ParityRuntime;
-  "patchRecoveryPath": string | null;
-  "persistRecoveryWorkingState": () => void;
-  "persistToolStartedAtExecutorDispatch": (action: { type: "read_file"; path: string; } | { type: "list_dir"; path: string; } | { type: "grep"; pattern: string; path?: string | undefined; } | { type: "glob"; pattern: string; } | { type: "write_file"; path: string; content: string; repair_plan?: { schemaVersion: 1; failureSignature: string; workspaceRevision: string; hypothesisClass: "logic" | "data_flow" | "interface" | "test_expectation" | "configuration"; targetIdentities: string[]; actionFamily: "write_file" | "str_replace" | "apply_patch"; criterionId: string; supportingObservationIds: string[]; } | undefined; } | { type: "apply_patch"; patch: string; repair_plan?: { schemaVersion: 1; failureSignature: string; workspaceRevision: string; hypothesisClass: "logic" | "data_flow" | "interface" | "test_expectation" | "configuration"; targetIdentities: string[]; actionFamily: "write_file" | "str_replace" | "apply_patch"; criterionId: string; supportingObservationIds: string[]; } | undefined; } | { type: "run_command"; command: string; cwd?: string | undefined; background?: boolean | undefined; detached?: boolean | undefined; } | { type: "await_command"; task_id: string; timeout_seconds?: number | undefined; } | { type: "semantic_search"; query: string; limit?: number | undefined; } | { type: "git_context"; format?: "summary" | "files" | "diff" | undefined; path?: string | undefined; max_lines?: number | undefined; } | { type: "test_run"; command: string; cwd?: string | undefined; timeout_seconds?: number | undefined; } | { type: "mcp_tool_search"; server: string; query?: string | undefined; } | { type: "mcp_request"; server: string; query: string; } | { type: "str_replace"; file_path: string; old_str: string; new_str: string; repair_plan?: { schemaVersion: 1; failureSignature: string; workspaceRevision: string; hypothesisClass: "logic" | "data_flow" | "interface" | "test_expectation" | "configuration"; targetIdentities: string[]; actionFamily: "write_file" | "str_replace" | "apply_patch"; criterionId: string; supportingObservationIds: string[]; } | undefined; } | { type: "read_range"; file_path: string; start_line: number; end_line: number; } | { type: "todo_write"; todos: { id: string; content: string; status: "pending" | "in_progress" | "completed"; }[]; } | { type: "web_search"; query: string; } | { type: "web_fetch"; url: string; } | { type: "finish"; } | { type: "lsp"; operation: "goToDefinition" | "findReferences" | "hover" | "documentSymbol" | "workspaceSymbol" | "goToImplementation" | "prepareCallHierarchy" | "incomingCalls" | "outgoingCalls"; filePath: string; line?: number | undefined; character?: number | undefined; query?: string | undefined; } | { type: "sub_agent"; task: string; mutation: boolean; instructions?: string | undefined; write_scope?: string[] | undefined; model?: string | undefined; max_rounds?: number | undefined; }, meta: { index: number; idempotencyKey?: string; }) => void;
-  "platformUnusableVerifiers": Set<string>;
-  "policyEventLog": PolicyEventLog;
-  "progressController": ProgressController;
-  "readCache": ReadInjectionCache;
-  "readCacheKey": (filePath: string) => string;
-  "readContextEpoch": number;
-  "recoveredOperationDispatchAuthorization": (action: { type: "read_file"; path: string; } | { type: "list_dir"; path: string; } | { type: "grep"; pattern: string; path?: string | undefined; } | { type: "glob"; pattern: string; } | { type: "write_file"; path: string; content: string; repair_plan?: { schemaVersion: 1; failureSignature: string; workspaceRevision: string; hypothesisClass: "logic" | "data_flow" | "interface" | "test_expectation" | "configuration"; targetIdentities: string[]; actionFamily: "write_file" | "str_replace" | "apply_patch"; criterionId: string; supportingObservationIds: string[]; } | undefined; } | { type: "apply_patch"; patch: string; repair_plan?: { schemaVersion: 1; failureSignature: string; workspaceRevision: string; hypothesisClass: "logic" | "data_flow" | "interface" | "test_expectation" | "configuration"; targetIdentities: string[]; actionFamily: "write_file" | "str_replace" | "apply_patch"; criterionId: string; supportingObservationIds: string[]; } | undefined; } | { type: "run_command"; command: string; cwd?: string | undefined; background?: boolean | undefined; detached?: boolean | undefined; } | { type: "await_command"; task_id: string; timeout_seconds?: number | undefined; } | { type: "semantic_search"; query: string; limit?: number | undefined; } | { type: "git_context"; format?: "summary" | "files" | "diff" | undefined; path?: string | undefined; max_lines?: number | undefined; } | { type: "test_run"; command: string; cwd?: string | undefined; timeout_seconds?: number | undefined; } | { type: "mcp_tool_search"; server: string; query?: string | undefined; } | { type: "mcp_request"; server: string; query: string; } | { type: "str_replace"; file_path: string; old_str: string; new_str: string; repair_plan?: { schemaVersion: 1; failureSignature: string; workspaceRevision: string; hypothesisClass: "logic" | "data_flow" | "interface" | "test_expectation" | "configuration"; targetIdentities: string[]; actionFamily: "write_file" | "str_replace" | "apply_patch"; criterionId: string; supportingObservationIds: string[]; } | undefined; } | { type: "read_range"; file_path: string; start_line: number; end_line: number; } | { type: "todo_write"; todos: { id: string; content: string; status: "pending" | "in_progress" | "completed"; }[]; } | { type: "web_search"; query: string; } | { type: "web_fetch"; url: string; } | { type: "finish"; } | { type: "lsp"; operation: "goToDefinition" | "findReferences" | "hover" | "documentSymbol" | "workspaceSymbol" | "goToImplementation" | "prepareCallHierarchy" | "incomingCalls" | "outgoingCalls"; filePath: string; line?: number | undefined; character?: number | undefined; query?: string | undefined; } | { type: "sub_agent"; task: string; mutation: boolean; instructions?: string | undefined; write_scope?: string[] | undefined; model?: string | undefined; max_rounds?: number | undefined; }) => { allowed: boolean; message?: string; };
-  "recoveryStatePersistenceUnavailable": boolean;
-  "requireTodoBeforeMutate": boolean;
-  "runPostEditStaticCheck": (filePath: string) => Promise<string | null>;
-  "settleStaleActionResult": (tool: string, target: string, index: number, reason: string) => { index: number; observation: string; };
-  "taskClass": ChatTaskClass;
-  "todos": Map<string, { content: string; status: string; }>;
-  "toolCallLog": { toolCallId?: string; tool: string; target: string; detail?: string; error?: string; index: number; exit_code?: number; stdout?: string; stderr?: string; verified?: boolean; mutation_paths?: string[]; effect_status?: MutationEffectStatus; }[];
-  "verifierReceiptCache": Map<string, { receipt: BoundChatVerifierReceipt; writeCountAtCache: number; }>;
-  "workingState": WorkingState;
-  "writeCount": number;
-}
-export interface ChatEngineStreamingLoopHost {
-  _activeToolBatchId: string | null;
-  _cancelled: boolean;
-  _hadToolCallsThisTurn: boolean;
-  _lastPhase: ChatPhase | null;
-  _sessionStartTime: number;
-  _streamNativeToolCallIds: string[];
-  _turnIndex: number;
-  _turnToolCallLogStart: number;
-  readonly abortController: AbortController;
-  activeSubmissionGeneration: number;
-  readonly apiTokenCount: number;
-  apiTokenCountAtTurnStart: number;
-  readonly applyCriticRepairCostBudget: () => void;
-  readonly applyExploreFuses: (
-    executeIntent: boolean,
-    readOnlyOperation: boolean,
-  ) => ExploreFuseResult;
-  readonly applyPostWriteRepairBudget: () => void;
-  readonly applyTamperEscalation: () => string | null;
-  readonly applyUserSubmission: (input: {
-    userInput: string;
-    taskIntent?: TaskIntent;
-    continueTask?: boolean;
-  }) => TurnRuntimeSnapshot;
-  readonly assertNativeRequestMatchesDurable: (
-    outbound: readonly ProviderMessage[],
-    systemPrompt: string,
-    systemPromptOverride: string | undefined,
-  ) => void;
-  readonly beginActiveExecution: () => void;
-  readonly buildCriticBlockedAnswer: (report: BlockedReport) => string;
-  readonly buildCriticBlockedReport: (
-    verdict: DiffCriticVerdict,
-  ) => BlockedReport;
-  readonly buildGateRejectUserMessage: () => string;
-  readonly buildRejectionMessage: () => string;
-  readonly buildTamperBlockedReport: () => BlockedReport;
-  readonly buildTextToolResults: (startIndex: number) => string;
-  readonly buildVerifierBlockedReport: (reason: string) => BlockedReport;
-  readonly checkBudgets: (skipTurnLimit?: boolean) => {
-    ok: boolean;
-    reason?: string;
-    limiter?: ChatRunLimiter;
-  };
-  readonly checkPerRoundTokenCeiling: (hadToolCalls: boolean) => string | null;
-  readonly checkStallIntervention: (
-    isReadOnlyInspection: boolean,
-  ) => StallIntervention | null;
-  readonly compactIfNeeded: (
-    callbacks?: ChatCallbacks,
-    forceCompaction?: boolean,
-    ownerGeneration?: number,
-  ) => Promise<ContextCompactedInfo | null>;
-  readonly computeVerifierChanged: (
-    results: ReadonlyArray<{
-      tool_name: string;
-      content?: string;
-      exit_code?: number;
-    }>,
-  ) => boolean;
-  consecutiveNonMutatingShells: number;
-  consecutiveReadOnlyTools: number;
-  readonly consumeTaskTurn: () => void;
-  conversation: ChatMessage[];
-  readonly criticRepairCostCapUsd: number | null;
-  criticStrikes: number;
-  readonly currentTurnHasMutation: () => boolean;
-  currentTurnTelemetry: ChatTurnTelemetryCollector | null;
-  readonly detectAndBuildBlockedReport: (
-    answer: string,
-  ) => BlockedReport | null;
-  readonly emitCancelledIfOperatorAbort: (err?: unknown) => ChatEvent | null;
-  readonly engineRunDir: string;
-  readonly evaluateCompletionGate: (
-    turnResult: ChatTurn,
-    taskIntent: TaskIntent,
-  ) => "allow" | "reject";
-  readonly executeActions: (
-    actions: ChatToolAction[],
-    callbacks: ChatCallbacks,
-    ownerGeneration?: number,
-  ) => Promise<{
-    observations: string;
-    observationList: string[];
-    count: number;
-  }>;
-  gatePolicy: VerificationPolicy | null;
-  gateStrikes: number;
-  readonly generateRepoMap: () => Promise<string>;
-  generationCounter: number;
-  readonly getOrBuildSystemPrompt: (
-    mode?: "native" | "legacy" | "text",
-  ) => string;
-  readonly handleBudgetKill: (
-    reason: string,
-    callbacks: ChatCallbacks,
-    taskIntent: TaskIntent,
-    ownerGeneration?: number,
-  ) => Promise<ChatResult | null>;
-  readonly hasAnyWrites: () => boolean;
-  readonly hasPendingCompactionAuthority: () => boolean;
-  readonly installP11ContextCheckpoint: (
-    routeOverride?: NonNullable<LiveOperationalSourcesV1["route"]>,
-  ) => Promise<boolean>;
-  investigateSoftNudgeDone: boolean;
-  readonly isSubmissionCurrent: (ownerGeneration: number) => boolean;
-  readonly lastCriticReceipt: DiffCriticVerdict | null;
-  lastRequestCompletionTokens: number | null;
-  lastRequestModelId: string | null;
-  lastRequestPromptTokens: number | null;
-  readonly lastVerifierReceipt: BoundChatVerifierReceipt | null;
-  readonly limits: ChatEngineLimits;
-  readonly logicalTurnToolPolicy: import("./codingLoop/index.js").OneShotPolicySnapshot<
-    import("./codingLoop/index.js").NextTurnToolPolicy
-  >;
-  readonly maybeInjectMidLoopHeuristicCritic: (
-    callbacks: ChatCallbacks,
-    taskIntent: TaskIntent,
-  ) => void;
-  midLoopCriticFired: boolean;
-  readonly modelPolicy: ResolvedModelPolicy | undefined;
-  readonly nextTurnToolPolicy: () => import("./codingLoop/index.js").NextTurnToolPolicy;
-  readonly obsHandles: () => ObservabilityHandles;
-  readonly options: ChatEngineOptions;
-  readonly parity: ParityRuntime;
-  readonly parseChatTurnLenient: (rawText: string) => ChatTurn;
-  readonly planHandoff: ChatPlanExecuteHandoff | null;
-  readonly policyEventLog: PolicyEventLog;
-  readonly prepareP11ContextCheckpointCandidate: (route: {
-    tool_profile: string;
-    model_route: string;
-  }) => ContextCheckpointPreparationResultV1 | null;
-  preparedAdmissionCompactionAttempts: number;
-  readonly progressController: ProgressController;
-  readonly providerRetryCallbacks: (context?: {
-    deliveryMode?: ContextDeliveryMode;
-    conversationState?: unknown;
-    systemPolicyPrompt?: unknown;
-    userTaskPrompt?: unknown;
-    toolSchema?: unknown;
-    promptInputTokenCount?: number | null;
-    contextTruncated?: boolean | null;
-    expectedPriorEventIds?: readonly string[];
-    deliveredPriorEventIds?: readonly string[];
-    executionStage?: ModelRouteStage;
-    contractRef?: string;
-    substitutionOrFallback?: boolean;
-    isOwnerCurrent?: () => boolean;
-    usageScope?: ChatUsageScope;
-  }) => RunnerCallbacks;
-  readonly readContextEpoch: number;
-  readonly recoverPreparedRequestAdmission: (
-    error: unknown,
-    ownerGeneration?: number,
-  ) => Promise<ContextCompactedInfo | null>;
-  readonly repetitionDetector: RepetitionDetector;
-  repoMapCache: string | null;
-  readonly resolveDeliberationRunner: () =>
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner;
-  readonly resolveFallbackOrFail: (
-    err: any,
-    turn: number,
-    ownerGeneration?: number,
-  ) => AsyncGenerator<
-    ChatEvent,
-    DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | null,
-    undefined
-  >;
-  readonly resolveRoutedRunner: () =>
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner;
-  restrictToolsNextTurn: boolean;
-  readonly runAsymmetricDiffCritic: (
-    answer: string,
-    callbacks: ChatCallbacks,
-    taskIntent: TaskIntent,
-    opts?: { terminal?: boolean },
-  ) => Promise<"allow" | "reject" | "block">;
-  readonly services: ChatEngineServices;
-  readonly shouldUseNativeTools: (
-    runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner,
-  ) => boolean;
-  readonly shouldUseTextTools: () => boolean;
-  stallState: StallState;
-  readonly streamCancelled: () => ChatEvent;
-  readonly streamDone: (
-    answer: string,
-    extra?: {
-      blockedReport?: BlockedReport | null;
-      verifierTampered?: boolean;
-      criticReceipt?: DiffCriticVerdict | null;
-      reason?: TerminalReason;
-    },
-  ) => ChatEvent;
-  readonly streamFailed: (error: string) => ChatEvent;
-  readonly synthesizeAnswer: (
-    toolObservations: string,
-    callbacks: ChatCallbacks,
-  ) => Promise<string>;
-  readonly tamperCount: number;
-  tamperedThisTurn: boolean;
-  readonly taskAllowance: ChatTaskAllowanceSnapshot | null;
-  readonly taskClass: ChatTaskClass;
-  terminalLimiterReason: string | null;
-  terminatingLimiter: ChatRunLimiter | null;
-  readonly toolCallLog: {
-    toolCallId?: string;
-    tool: string;
-    target: string;
-    detail?: string;
-    error?: string;
-    index: number;
-    exit_code?: number;
-    stdout?: string;
-    stderr?: string;
-    verified?: boolean;
-    mutation_paths?: string[];
-    effect_status?: MutationEffectStatus;
-  }[];
-  toolsWithoutWrite: number;
-  readonly trackRunnerUsage: (
-    runner:
-      | DeepInfraApiRunner
-      | DeepSeekApiRunner
-      | OllamaApiRunner
-      | OpenRouterApiRunner,
-    usageScope?: ChatUsageScope,
-  ) => void;
-  turnsWithoutWrite: number;
-  readonly updateTodoSystemMessage: () => void;
-  readonly verifierTampered: boolean;
-  workingState: WorkingState;
-}
+const MAX_TOOL_CONCURRENCY = 6;
 
 export class ChatEngine {
   // TODO: once ProviderMessage[] path is stable, remove legacy ChatMessage[]
@@ -2058,7 +745,7 @@ export class ChatEngine {
     runDir = this.engineRunDir,
   ): void {
     this.ownerAccounting.persistOwnerCharges(ownerId, runDir);
-    }
+  }
 
   private restoreOwnerCharges(runDir: string): boolean {
     return this.ownerAccounting.restoreOwnerCharges(runDir);
@@ -2091,7 +778,7 @@ export class ChatEngine {
 
   private currentTaskActiveWallMs(nowMs = Date.now()): number {
     return this.taskAllowanceOwner.currentTaskActiveWallMs(nowMs);
-    }
+  }
 
   private restorePersistedTaskBudget(
     persisted: ChatTaskAllowanceSnapshot | null,
@@ -2151,7 +838,9 @@ export class ChatEngine {
     this.taskAllowanceOwner = new ChatEngineTaskAllowance(
       this as unknown as ChatTaskAllowanceHost,
     );
-    this.actionExecutor = new ChatEngineActionExecutor(this as unknown as ChatEngineActionExecutorHost);
+    this.actionExecutor = new ChatEngineActionExecutor(
+      this as unknown as ChatEngineActionExecutorHost,
+    );
     this.streamingLoop = new ChatEngineStreamingLoop(
       this as unknown as ChatEngineStreamingLoopHost,
     );
@@ -2309,7 +998,7 @@ export class ChatEngine {
       options.providerPolicy && options.providerRunner
         ? { policy: options.providerPolicy, offline: false }
         : resolveChatModelPolicy({
-      ...(options.model !== undefined ? { model: options.model } : {}),
+            ...(options.model !== undefined ? { model: options.model } : {}),
             ...(options.modelTier !== undefined
               ? { modelTier: options.modelTier }
               : {}),
@@ -2319,7 +1008,7 @@ export class ChatEngine {
             ...(process.env["BABEL_ROOT"]
               ? { babelRoot: process.env["BABEL_ROOT"] }
               : {}),
-    });
+          });
     this.modelPolicy = modelPolicy;
     if (options.providerRunner) {
       this.deliberationRunner =
@@ -2361,87 +1050,8 @@ export class ChatEngine {
       tailChars: resolveObservationTailChars(),
     });
   }
-
-  // ── Public API ──────────────────────────────────────────────────────────
-
-  /** Classify user intent from the task text.
-   *  Used to determine whether the execution gate should be active. */
   static classifyChatTaskIntent(task: string): TaskIntent {
-    // Conversational / non-actionable turns ('?', 'hello') are never execute
-    // tasks — there is nothing to mutate, and execute classification makes
-    // the implementor zero-write refusal loop re-query them until maxTurns.
-    if (isConversationalTurnText(task)) return "explain";
-
-    // Explicit read-only / no-edit directives → explain.
-    // MUST be checked before fenced code and execute verb patterns: evidence
-    // content (a pasted snippet, diff, or a path named "repair"/"write") is
-    // never mutation authority, and "fix this without editing files" routes to
-    // explain rather than execute.
-    if (
-      /\b(without\s+(editing|modifying|changing|writing|touching)|read[- ]only|do\s+not\s+(edit|modify|change|write|delete|remove))\b/i.test(
-        task,
-      )
-    )
-      return "explain";
-
-    // Explicit markdown fenced code blocks or diff/patch snippets → execute
-    if (/```(?:diff|patch|javascript|typescript|python|go|rust)\b/.test(task))
-      return "execute";
-
-    // Review/audit prompts are read-only even when their evidence contains
-    // mutation-shaped words such as "repair" in a path or diff description.
-    // A paired edit directive remains executable (for example, "review and
-    // fix it"). Keeping this before the generic mutation verbs prevents the
-    // trusted reviewer from entering the coding zero-write recovery loop.
-    if (
-      /\b(review|audit|analyze|diagnose|inspect|investigate|research|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and|then)\s+(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update|create|write|edit|modify|change|remove|delete|revert|rewrite|replace)\b)(?!.*\bfix\s+it\b)/i.test(
-        task,
-      )
-    )
-      return "explain";
-
-    // Fix/implement/create verbs → execute
-    if (
-      /\b(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update\s+dependency)\b/i.test(
-        task,
-      )
-    )
-      return "execute";
-    if (/\b(create|write|build|add|make)\s+(a|the|this|an?)\b/i.test(task))
-      return "execute";
-    if (/\b(run|execute)\s+(npm\s+test|pytest|tests?|the\s+test)\b/i.test(task))
-      return "execute";
-    if (
-      /\b(change|modify|edit|rewrite|replace|remove|delete|revert|apply|set\s+up)\b/i.test(
-        task,
-      )
-    )
-      return "execute";
-
-    // Question/understanding patterns → explain
-    if (
-      /^(what|how|why|does|can\s+you\s+explain|describe|tell\s+me\s+about|show\s+me\s+how)\b/i.test(
-        task,
-      )
-    )
-      return "explain";
-    if (
-      /\b(explain|what\s+does|how\s+does|what\s+is|document|summarize)\b/i.test(
-        task,
-      )
-    )
-      return "explain";
-    // Read-only file inspection verbs → explain (unless paired with edit intent)
-    if (
-      /\b(read|list|show|cat|head|tail|display|print|output)\b/i.test(task) &&
-      !/\b(and\s+(fix|edit|modify|change|update|write|patch|repair)|then\s+(fix|edit|modify)|fix\s+it)\b/i.test(
-        task,
-      )
-    )
-      return "explain";
-
-    // Default: peer-engineer posture — assume user wants execution
-    return "execute";
+    return classifyChatTaskIntent(task);
   }
 
   private evaluateCompletionGate(
@@ -3240,7 +1850,7 @@ export class ChatEngine {
         userInput,
         taskIntent,
         {
-        submissionGeneration: generation,
+          submissionGeneration: generation,
         },
       )) {
         switch (event.type) {
@@ -3526,8 +2136,8 @@ export class ChatEngine {
       userInput,
       taskIntent,
       submitOpts,
-      );
-    }
+    );
+  }
 
   /**
    * Map operator abort / in-flight cancel to a cancelled stream event.
@@ -3543,9 +2153,9 @@ export class ChatEngine {
       this._cancelled = true;
       finalizeParityCancel(this.parity, this.engineRunDir);
       return this.streamCancelled();
-              }
-    return null;
     }
+    return null;
+  }
 
   /**
    * Abort the in-flight turn without touching the input arbiter.
@@ -3563,15 +2173,15 @@ export class ChatEngine {
     } catch {
       // Best-effort: session must remain usable after cancel.
     }
-        finalizeParityCancel(this.parity, this.engineRunDir);
+    finalizeParityCancel(this.parity, this.engineRunDir);
     this.abortController = new AbortController();
-      }
+  }
 
   cancel(): void {
     // Compatibility alias for non-UI callers. Ctrl+C arbitration belongs to
     // the interactive host so runtime cancellation cannot change UI state.
     this.abortTurn();
-      }
+  }
 
   /** Expose durable event log for resume / tests. */
   getParityEventLog() {
@@ -3580,14 +2190,14 @@ export class ChatEngine {
 
   getParityRuntime(): ParityRuntime {
     return this.parity;
-      }
+  }
 
   /** Content-free invariant mismatch count for shadow-mode telemetry consumers. */
   getRuntimeInvariantViolationCount(
     invariantId = MODEL_VISIBLE_EQUALS_PERSISTED,
   ): number {
     return this.runtimeInvariants.getViolationCount(invariantId);
-      }
+  }
 
   /** Assert native wire reconstruction equality and provider protocol validity. */
   private assertNativeRequestMatchesDurable(
@@ -3596,14 +2206,14 @@ export class ChatEngine {
     systemPromptOverride: string | undefined,
   ): void {
     const reconstructed = this.services.conversation.rebuildProviderMessages(
-          this.parity.eventLog,
-          {
+      this.parity.eventLog,
+      {
         systemPrompt,
         ...(this.parity.contextCheckpoint
           ? { installedContextCheckpoint: this.parity.contextCheckpoint }
           : {}),
-          },
-        );
+      },
+    );
     // Native runners share this deterministic final serializer. Compare its
     // exact output rather than neutral messages so committed capsules cannot
     // disappear between C1 and the provider POST body.
@@ -3766,7 +2376,7 @@ export class ChatEngine {
             input.pattern,
             input.content,
           )
-      : localization;
+        : localization;
     const updated = finishLocalizationCall(withCandidates, {
       type: input.tool,
       succeeded: input.succeeded,
@@ -3819,14 +2429,14 @@ export class ChatEngine {
           event.kind === "verifier_attempt" &&
           event.authoritative &&
           event.exit_code !== undefined,
-    );
+      );
     const latestSubmission = [...log.events]
       .reverse()
       .find((event) => event.kind === "user_submitted");
     if (
       latestSubmission?.kind === "user_submitted" &&
       latestSubmission.continued_task === false &&
-        (!latestSnapshot || latestSnapshot.seq < latestSubmission.seq) &&
+      (!latestSnapshot || latestSnapshot.seq < latestSubmission.seq) &&
       (!latestVerifier || latestVerifier.seq < latestSubmission.seq)
     ) {
       this.workingState = createWorkingState(latestSubmission.task_preview);
@@ -4014,235 +2624,14 @@ export class ChatEngine {
             },
     });
   }
-
-  /**
-   * Stream terminal helper — AC3: always finalizeParityTurn (memory + disk).
-   * Every streaming exit must go through streamDone/streamFailed, not raw yields.
-   */
-  private streamDone(
-    answer: string,
-    extra?: {
-      blockedReport?: BlockedReport | null;
-      verifierTampered?: boolean;
-      criticReceipt?: DiffCriticVerdict | null;
-      /** D03: explicit structured reason from the arbiter. */
-      reason?: TerminalReason;
-    },
-  ) {
-    this.settleActiveExecutionForTerminal();
-    const hasMutation = this.hasAnyWrites();
-    let requestedOutcome = computeTerminalOutcome({
-      readOnly: this.isAcceptedReadOnlyTerminal(),
-      finalStatus: extra?.blockedReport
-        ? "blocked"
-        : this.budgetExceeded
-          ? "budget_exhausted"
-          : "completed",
-      budgetExceeded: this.budgetExceeded,
-      lastVerifierReceipt: this.lastVerifierReceipt,
-      blockedReport: extra?.blockedReport,
-      hasAnyWrites: hasMutation,
-    });
-    requestedOutcome = applyHonestTaskOutcomeToCompletion({
-      contract: this.parity.liveAuthority?.taskContract,
-      requestedOutcome,
-      hasMutation,
-      planMode: this.executionProfile === "plan",
-    });
-    const planCompletion =
-      this.executionProfile === "plan" &&
-      !extra?.blockedReport &&
-      !this.budgetExceeded;
-    const decision = this.decideCompletion(
-      planCompletion ? "PLAN_COMPLETE" : requestedOutcome,
-      hasMutation,
-    );
-    const decisionOutcome =
-      decision.finalOutcome === "PLAN_COMPLETE"
-        ? "UNVERIFIED_PATCH"
-        : decision.finalOutcome;
-    const terminalReason = this.resolveTerminalReason(
-      decisionOutcome,
-      extra?.blockedReport,
-      extra?.reason,
-    );
-    // R0-9: keep the tuple coherent. A read-only hard-cap that resolves a
-    // `budget_exhausted` reason must not project `NO_CHANGE_REQUIRED` alongside
-    // it. Exception: `verification_failed` legitimately pairs with
-    // `UNVERIFIED_PATCH` on the completed path (the patch is recorded but not
-    // verified); `outcomeFromReasonCode` carries the failed-path mapping
-    // (AGENT_FAILURE), so the gate decision stays authoritative there.
-    const reasonOutcome =
-      terminalReason?.code && terminalReason.code !== "verification_failed"
-        ? outcomeFromReasonCode(terminalReason.code)
-        : undefined;
-    const outcome = reasonOutcome ?? decisionOutcome;
-    {
-      this.recordCompletionDecisionOnce({
-        requestedOutcome: decision.requestedOutcome,
-        finalOutcome: outcome,
-        allowed: decision.allowed,
-        reason: decision.reason,
-        evidenceRefs: decision.evidenceRefs,
-        policyVersion: decision.policyVersion,
-        ...(terminalReason !== undefined
-          ? {
-              reasonCode: terminalReason.code,
-              causeClass: terminalReason.cause_class,
-            }
-          : {}),
-      });
-    }
-    // P0-E: attach shadow later-succeeded summary before export (idempotent with buildResult).
-    // P0-F: wire the derived OutcomeDimensions — the real receipt (its `stale`
-    // flag was just refreshed against the live workspace by decideCompletion)
-    // and the completion-gate result (the final outcome IS the gate decision).
-    recordPolicyShadowSessionOutcome(this.policyEventLog, {
-      atTurn: this._turnIndex,
-      hasSuccessfulMutation: hasMutation,
-      codingTaskPassed: isCodingTaskSuccess({
-        terminalOutcome: outcome,
-        hasSuccessfulMutation: hasMutation,
-        verifierOk: this.lastVerifierReceipt?.exit_code === 0,
-        requireVerifier: false,
-        declaredBlocked: Boolean(extra?.blockedReport),
-        verifierReceipt: this.lastVerifierReceipt ?? null,
-        contractChecksPass: outcome === "VERIFIED_COMPLETE" ? true : null,
-      }),
-      terminalOutcome: outcome,
-    });
-    // Sync flush before process exit — required for campaign shadow scoreboard.
-    persistPolicyEventsJsonl(this.engineRunDir, this.policyEventLog);
-    const terminal = projectChatTerminal({
-      outcome,
-      status: extra?.blockedReport
-        ? "blocked"
-        : this.budgetExceeded
-          ? "budget_exhausted"
-          : "completed",
-    });
-    finalizeParityTurnSync(
-      this.parity,
-      this.engineRunDir,
-      terminal.outcome,
-      terminal.status,
-      terminalReason,
-    );
-    const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
-      turnId: String(this.parity.turnId ?? this._turnIndex),
-      taskClass: this.taskClass,
-      promptTokens: this.lastRequestPromptTokens,
-      completionTokens: this.lastRequestCompletionTokens,
-      cumulativeSessionTokens:
-        globalCostTracker.getSessionSummary().totalTokens,
-    });
-    this.lastTurnTelemetry = finalizedTelemetry ?? null;
-    const runAllowance = this.assembleRunAllowance(terminal.status);
-    return buildStreamDone(this.obsHandles(), answer, {
-      outcome: terminal.outcome!,
-      status: terminal.status,
-      ...(decision.finalOutcome === "PLAN_COMPLETE"
-        ? { planOutcome: "PLAN_COMPLETE" as const }
-        : {}),
-      ...(this.budgetExceeded ? { budgetExceeded: true as const } : {}),
-      ...(extra ?? {}),
-      ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
-      runAllowance,
-      ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
-      ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
-    });
+  private streamDone(answer: string, extra?: ChatStreamDoneExtra): ChatEvent {
+    return completeChatStream(this.terminalRuntimeInput(), answer, extra);
   }
-
-  private streamFailed(error: string) {
-    this.settleActiveExecutionForTerminal();
-    const providerOutputLimit = isProviderOutputLimitText(error);
-    if (providerOutputLimit && this.terminatingLimiter == null) {
-      this.terminatingLimiter = "tokens";
-      this.terminalLimiterReason = error;
-    }
-    const limiterOutcome: TerminalOutcome | undefined =
-      this.terminatingLimiter === "turns" ||
-      this.terminatingLimiter === "wall" ||
-      this.terminatingLimiter === "cost" ||
-      this.terminatingLimiter === "tokens" ||
-      this.terminatingLimiter === "child_exhaustion"
-        ? "BUDGET_EXHAUSTED"
-        : this.terminatingLimiter === "stall"
-          ? "BLOCKED_POLICY"
-          : undefined;
-    // Preserve an unknown terminal cause when no classifier or limiter proves
-    // one. Durable validation accepts this explicit absence; guessing would
-    // make the model-visible outcome less truthful.
-    const classifiedOutcome = classifyFailureText(error) ?? limiterOutcome;
-    const terminalReason =
-      terminalReasonFromFailureText(error) ??
-      this.resolveTerminalReason(classifiedOutcome);
-    // R0-9: status/outcome/reason_code/cause_class must form one coherent tuple.
-    // The typed reason is the single authority; when it maps to an outcome, that
-    // outcome wins over an independent text classifier that may disagree (e.g.
-    // an unsupported-operation message that also matches an infra pattern).
-    const outcome =
-      (terminalReason?.code
-        ? outcomeFromReasonCode(terminalReason.code)
-        : undefined) ?? classifiedOutcome;
-    if (outcome === "BUDGET_EXHAUSTED") this.budgetExceeded = true;
-    const terminal = projectChatTerminal({
-      ...(outcome !== undefined ? { outcome } : {}),
-      status: "failed",
-    });
-    const runAllowance = this.assembleRunAllowance(terminal.status);
-    finalizeParityTurnSync(
-      this.parity,
-      this.engineRunDir,
-      terminal.outcome,
-      terminal.status,
-      terminalReason,
-    );
-    const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
-      turnId: String(this.parity.turnId ?? this._turnIndex),
-      taskClass: this.taskClass,
-      promptTokens: this.lastRequestPromptTokens,
-      completionTokens: this.lastRequestCompletionTokens,
-      cumulativeSessionTokens:
-        globalCostTracker.getSessionSummary().totalTokens,
-    });
-    this.lastTurnTelemetry = finalizedTelemetry ?? null;
-    return buildStreamFailed(this.obsHandles(), error, {
-      ...(outcome !== undefined ? { outcome } : {}),
-      status: terminal.status,
-      ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
-      runAllowance,
-      ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
-      ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
-    });
+  private streamFailed(error: string): ChatEvent {
+    return failChatStream(this.terminalRuntimeInput(), error);
   }
-
-  /**
-   * Stream cancel helper — mirrors streamDone/streamFailed telemetry
-   * finalization. Without this, a cancelled turn reports no per-turn
-   * telemetry at all (first turn) or the PREVIOUS turn's stale record via
-   * buildResult, while session token totals still include the rounds that
-   * already ran — internally inconsistent cost/token reporting.
-   */
   private streamCancelled(): ChatEvent {
-    this.settleActiveExecutionForTerminal();
-    const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
-      turnId: String(this.parity.turnId ?? this._turnIndex),
-      taskClass: this.taskClass,
-      promptTokens: this.lastRequestPromptTokens,
-      completionTokens: this.lastRequestCompletionTokens,
-      cumulativeSessionTokens:
-        globalCostTracker.getSessionSummary().totalTokens,
-    });
-    this.lastTurnTelemetry = finalizedTelemetry ?? null;
-    return {
-      type: "cancelled",
-      status: "cancelled",
-      outcome: "CANCELLED",
-      reason_code: "cancelled",
-      cause_class: null,
-      ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
-    };
+    return cancelChatStream(this.terminalRuntimeInput());
   }
 
   getConversation(): ChatMessage[] {
@@ -4333,9 +2722,9 @@ export class ChatEngine {
     return this.services.conversation.rebuildProviderMessages(
       this.parity.eventLog,
       {
-      ...(this.parity.contextCheckpoint
-        ? { installedContextCheckpoint: this.parity.contextCheckpoint }
-        : {}),
+        ...(this.parity.contextCheckpoint
+          ? { installedContextCheckpoint: this.parity.contextCheckpoint }
+          : {}),
       },
     );
   }
@@ -4816,7 +3205,10 @@ export class ChatEngine {
     this.p11Authority.loadObservationMembership(sessionDir);
   }
 
-  hydrateInstalledContextAuthority(sessionDir: string = this.engineRunDir): { applied: boolean; issues: string[] } {
+  hydrateInstalledContextAuthority(sessionDir: string = this.engineRunDir): {
+    applied: boolean;
+    issues: string[];
+  } {
     return this.p11Authority.hydrateInstalledContextAuthority(sessionDir);
   }
 
@@ -4826,7 +3218,7 @@ export class ChatEngine {
     routeOverride?: NonNullable<LiveOperationalSourcesV1["route"]>,
   ): LiveOperationalSourcesV1 | null {
     return this.p11Authority.buildP11Sources(routeOverride);
-    }
+  }
 
   private currentP11Owner(): ContextCheckpointOwnerV1 | null {
     return this.p11Authority.currentP11Owner();
@@ -4837,7 +3229,7 @@ export class ChatEngine {
     userInput: string,
   ): ChatEngineAdmissionClaim | null {
     return this.p11Authority.admitCurrentSubmission(
-          submissionGeneration,
+      submissionGeneration,
       userInput,
     );
   }
@@ -4877,7 +3269,7 @@ export class ChatEngine {
     routeOverride?: NonNullable<LiveOperationalSourcesV1["route"]>,
   ): Promise<boolean> {
     return this.p11Authority.installP11ContextCheckpoint(routeOverride);
-        }
+  }
 
   private captureP11Observation(
     action: ChatToolAction,
@@ -4951,9 +3343,9 @@ export class ChatEngine {
               toolContext,
               callbacks,
               {
-              index,
-              ownerGeneration,
-              idempotencyKey:
+                index,
+                ownerGeneration,
+                idempotencyKey:
                   this._streamNativeToolCallIds[index] ??
                   `tool_call_${this._turnIndex}_${index}`,
               },
@@ -4979,16 +3371,16 @@ export class ChatEngine {
             break;
           const chunk = batch.indices.slice(c, c + MAX_TOOL_CONCURRENCY);
           const parallelResults = await Promise.all(
-              chunk.map((index) =>
-                this.executeOneAction(actions[index]!, toolContext, callbacks, {
-                  index,
-                  ownerGeneration,
-                  idempotencyKey:
+            chunk.map((index) =>
+              this.executeOneAction(actions[index]!, toolContext, callbacks, {
+                index,
+                ownerGeneration,
+                idempotencyKey:
                   this._streamNativeToolCallIds[index] ??
                   `tool_call_${this._turnIndex}_${index}`,
-                }),
-              ),
-            );
+              }),
+            ),
+          );
           allResults.push(...parallelResults);
           for (const index of chunk) {
             const result = parallelResults.find((item) => item.index === index);
@@ -5009,11 +3401,11 @@ export class ChatEngine {
           toolContext,
           callbacks,
           {
-          index: batch.index,
-          ownerGeneration,
-          idempotencyKey:
-            this._streamNativeToolCallIds[batch.index] ??
-            `tool_call_${this._turnIndex}_${batch.index}`,
+            index: batch.index,
+            ownerGeneration,
+            idempotencyKey:
+              this._streamNativeToolCallIds[batch.index] ??
+              `tool_call_${this._turnIndex}_${batch.index}`,
           },
         );
         allResults.push(result);
@@ -5301,7 +3693,12 @@ export class ChatEngine {
     callbacks: ChatCallbacks,
     meta: { index: number; idempotencyKey?: string; ownerGeneration?: number },
   ): Promise<{ index: number; observation: string; stop?: boolean }> {
-    return this.actionExecutor.executeOneAction(action, toolContext, callbacks, meta);
+    return this.actionExecutor.executeOneAction(
+      action,
+      toolContext,
+      callbacks,
+      meta,
+    );
   }
 
   /**
@@ -5326,124 +3723,28 @@ export class ChatEngine {
   private async generateRepoMap(): Promise<string> {
     return buildRepoMapPreamble(this.options.projectRoot);
   }
-
-  /**
-   * Synthesize the final natural-language answer from investigation results.
-   * Uses executeRaw for streaming raw text — no JSON extraction, no Zod validation.
-   */
   private async synthesizeAnswer(
     toolObservations: string,
     callbacks: ChatCallbacks,
   ): Promise<string> {
-    // R0-8: bind this synthesis to the submission that started it, so a late
-    // completion cannot charge the task that now owns the engine.
     const ownerGeneration = this.activeSubmissionGeneration;
     const prompt = buildAnswerSynthesisPrompt({
       conversation: this.conversation,
       task: this.options.task,
       toolObservations,
     });
-
-    // Lazily resolve and cache the synthesis runner — model/policy is stable
-    // across the engine's lifetime. Uses same fallback logic as deliberation.
-    if (!this.synthesisRunner) {
-      const provider = this.modelPolicy?.provider;
-      const modelId = this.modelPolicy?.providerModelId;
-      const offline = isOfflineChatMode();
-      if (provider === "ollama" && modelId) {
-        if (!offline)
-          throw new Error(
-            "[LIVE_MODEL_POLICY] Ollama is not a valid live chat provider.",
-          );
-        try {
-          this.synthesisRunner = new OllamaApiRunner(modelId);
-        } catch {
-          this.synthesisRunner = new DeepInfraApiRunner(
-            resolveFallbackModelId(),
-          );
-        }
-      } else if (provider === "deepseek" && modelId) {
-        if (!offline) {
-          throw new Error(
-            "[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.",
-          );
-        }
-        try {
-          this.synthesisRunner = new DeepSeekApiRunner(modelId);
-        } catch {
-          if (!offline)
-            throw new Error(
-              "Cannot start live chat synthesis: DeepSeek runner is unavailable. Set DEEPSEEK_API_KEY in your environment.",
-            );
-          this.synthesisRunner = new DeepInfraApiRunner(
-            resolveFallbackModelId(),
-            );
-        }
-      } else if (provider === "opencode" && modelId) {
-        this.synthesisRunner = new OpenCodeApiRunner(modelId);
-      } else if (provider === "openrouter" && modelId) {
-        try {
-          this.synthesisRunner = new OpenRouterApiRunner(modelId);
-        } catch {
-          throw new Error(
-            "Cannot start live chat synthesis: OpenRouter runner is unavailable. Set OPENROUTER_API_KEY in your environment.",
-          );
-        }
-      } else if (modelId) {
-        if (!offline) {
-          assertLiveModelId(modelId, "live chat synthesis");
-          const routedModel = resolveOpenRouterDeepSeekModelId(modelId);
-          if (!routedModel) {
-            throw new Error(
-              "[LIVE_MODEL_POLICY] Live chat synthesis requires an OpenRouter-approved model route.",
-            );
-          }
-          this.synthesisRunner = new OpenRouterApiRunner(routedModel);
-        } else {
-          this.synthesisRunner = new DeepInfraApiRunner(modelId);
-        }
-      } else {
-        this.synthesisRunner = offline
-          ? new DeepInfraApiRunner(resolveFallbackModelId())
-          : new OpenRouterApiRunner(LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0]);
-      }
-    }
-
-    const usageScope = {
-      taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
-      projectRoot: realpathSync(this.options.projectRoot),
-      accountingEpoch: globalCostTracker.getAccountingEpoch(),
-      turnId: this.parity.turnId,
-      chargeId: null as string | null,
-      ownerGeneration,
-      isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
-    };
-    const runnerCallbacks: RunnerCallbacks | undefined = callbacks.onAnswerChunk
-      ? {
-          ...this.providerRetryCallbacks({
-            deliveryMode: "text",
-            conversationState: prompt,
-            executionStage: "synthesis",
-            usageScope,
-            isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
-          }),
-          onChunk: callbacks.onAnswerChunk,
-          ...(callbacks.onThought ? { onThought: callbacks.onThought } : {}),
-        }
-      : this.providerRetryCallbacks({
-          deliveryMode: "text",
-          conversationState: prompt,
-          executionStage: "synthesis",
-          usageScope,
-          isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
-        });
-    const answer = await this.executeWithTimeout(
+    this.synthesisRunner = resolveChatSynthesisRunner(
+      this.synthesisRunner,
+      this.modelPolicy,
+    );
+    const usageScope = this.captureProviderUsageScope(ownerGeneration);
+    return synthesizeChatAnswer(
       this.synthesisRunner,
       prompt,
-      runnerCallbacks,
+      callbacks,
+      usageScope,
+      this.providerUsageEffects(),
     );
-    this.trackRunnerUsage(this.synthesisRunner, usageScope);
-    return answer;
   }
 
   /** Record token usage from a runner invocation into the global cost tracker.
@@ -5657,168 +3958,17 @@ export class ChatEngine {
   private summarizeDroppedTurns(dropped: ChatMessage[]): string {
     return summarizeDroppedTurnsFn(dropped);
   }
-
-  /**
-   * Lenient chat-turn parser that never throws. Unlike the strict
-   * parseChatTurn() in chatToolDefinitions.ts, this gracefully degrades
-   * when the model returns prose, malformed JSON, or an empty response —
-   * treating everything as a natural-language completion.
-   */
   private parseChatTurnLenient(rawText: string): ChatTurn {
-    try {
-      const parsed = extractJson(rawText);
-      const result = ChatTurnSchema.safeParse(parsed);
-      if (result.success) return result.data;
-      // JSON found but schema mismatch — could be a close miss.
-      // If it has an "answer" field, treat it as completion directly.
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        typeof (parsed as Record<string, unknown>)["answer"] === "string"
-      ) {
-        return {
-          type: "completion",
-          answer: (parsed as Record<string, unknown>)["answer"] as string,
-        };
-      }
-    } catch {
-      // No parseable JSON — model responded in prose. That's fine.
-    }
-    // Fallback: treat the entire raw response as a natural-language answer.
-    const answer = rawText.trim();
-    if (answer.length === 0) {
-      return {
-        type: "completion",
-        answer:
-          "I could not produce a valid response. Please try rephrasing your request.",
-      };
-    }
-    return { type: "completion", answer };
+    return parseChatTurnLenient(rawText);
   }
-
-  /** Lazily resolve the deliberation runner from modelPolicy.
-   *  When no model is configured, uses the policy default tier instead of
-   *  a hardcoded fallback. Surfaces missing-API-key errors with clear
-   *  diagnostics and falls back across providers when possible. */
   private resolveDeliberationRunner():
     | DeepInfraApiRunner
     | DeepSeekApiRunner
     | OllamaApiRunner {
-    if (!this.deliberationRunner) {
-      const provider = this.modelPolicy?.provider;
-      const modelId = this.modelPolicy?.providerModelId;
-      if (provider === "ollama" && modelId) {
-        try {
-          this.deliberationRunner = new OllamaApiRunner(modelId);
-        } catch (err) {
-          throw new Error(
-            `Cannot start chat: Ollama runner failed to initialize.\n` +
-              `  ${err instanceof Error ? err.message : String(err)}\n` +
-              `  Is Ollama running? Start it with: ollama serve\n` +
-              `  Then pull a model: ollama pull gemma3:4b`,
-          );
-        }
-      } else if (provider === "deepseek" && modelId) {
-        if (!isOfflineChatMode()) {
-          throw new Error(
-            "[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.",
-          );
-        }
-        try {
-          this.deliberationRunner = new DeepSeekApiRunner(modelId);
-        } catch (err) {
-          if (!isOfflineChatMode()) {
-            throw new Error(
-              "Cannot start live chat: DeepSeek runner is unavailable. " +
-                "Set DEEPSEEK_API_KEY in your environment.",
-            );
-          }
-          // Fall back to DeepSeek Flash if v4 Pro is unavailable
-          try {
-            this.deliberationRunner = new DeepSeekApiRunner(
-              "deepseek-v4-flash",
-            );
-          } catch (fallbackErr) {
-            throw new Error(
-              `Cannot start chat: DeepSeek runner failed to initialize.\n` +
-                `  v4 Pro: ${err instanceof Error ? err.message : String(err)}\n` +
-                `  v4 Flash: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}\n` +
-                `  Set DEEPSEEK_API_KEY in your environment.\n` +
-                `  Use /model to see available providers.`,
-            );
-          }
-        }
-      } else if (provider === "opencode" && modelId) {
-        // OpenCode Zen (e.g. ox-alpha-free): explicit backend-key opt-in.
-        try {
-          this.deliberationRunner = new OpenCodeApiRunner(modelId);
-        } catch (err) {
-          throw new Error(
-            `Cannot start chat: OpenCode runner failed to initialize.\n` +
-              `  ${err instanceof Error ? err.message : String(err)}\n` +
-              `  Set OPENCODE_API_KEY in your environment.\n` +
-              `  Use /model to see available providers.`,
-          );
-        }
-      } else if (provider === "openrouter" && modelId) {
-        try {
-          this.deliberationRunner = new OpenRouterApiRunner(modelId);
-        } catch (err) {
-          throw new Error(
-            `Cannot start chat: OpenRouter runner failed to initialize.\n` +
-              `  ${err instanceof Error ? err.message : String(err)}\n` +
-              `  Set OPENROUTER_API_KEY in your environment.\n` +
-              `  Use /model to see available models.`,
-          );
-        }
-      } else if (modelId) {
-        const offline = isOfflineChatMode();
-        if (!offline) {
-          assertLiveModelId(modelId, "live chat");
-          const routedModel = resolveOpenRouterDeepSeekModelId(modelId);
-          if (!routedModel) {
-            throw new Error(
-              "[LIVE_MODEL_POLICY] Live chat requires an OpenRouter-approved model route.",
-            );
-          }
-          this.deliberationRunner = new OpenRouterApiRunner(routedModel);
-          return this.deliberationRunner;
-        }
-        try {
-          this.deliberationRunner = offline
-            ? new DeepInfraApiRunner(modelId)
-            : new DeepSeekApiRunner(modelId);
-        } catch (err) {
-          throw new Error(
-            `Cannot start chat: ${offline ? "DeepInfra" : "DeepSeek"} runner failed to initialize.\n  ${err instanceof Error ? err.message : String(err)}\n  Set ${offline ? "DEEPINFRA_API_KEY" : "DEEPSEEK_API_KEY"} in your environment.\n  Use /model to see available providers.`,
-          );
-        }
-      } else {
-        // No model configured — resolve from policy default tier.
-        const fallbackId = resolveFallbackModelId();
-        try {
-          this.deliberationRunner = isOfflineChatMode()
-            ? new DeepSeekApiRunner(fallbackId)
-            : new OpenRouterApiRunner(LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0]);
-        } catch {
-          if (!isOfflineChatMode()) {
-            throw new Error(
-              "Cannot start live chat: OpenRouter DeepSeek runner is unavailable. Set OPENROUTER_API_KEY in your environment.",
-            );
-          }
-          try {
-            this.deliberationRunner = new DeepInfraApiRunner(fallbackId);
-          } catch (err) {
-            throw new Error(
-              `Cannot start chat: no LLM runner is available.\n` +
-                `  ${err instanceof Error ? err.message : String(err)}\n` +
-                `  Set DEEPSEEK_API_KEY in your environment.\n` +
-                `  Use /model to see available providers.`,
-            );
-          }
-        }
-      }
-    }
+    this.deliberationRunner = resolveChatDeliberationRunner(
+      this.deliberationRunner,
+      this.modelPolicy,
+    );
     return this.deliberationRunner;
   }
 
@@ -5905,332 +4055,77 @@ export class ChatEngine {
 
   private providerRetryCallbacks(
     context: {
-    deliveryMode?: ContextDeliveryMode;
-    conversationState?: unknown;
-    systemPolicyPrompt?: unknown;
-    userTaskPrompt?: unknown;
-    toolSchema?: unknown;
-    promptInputTokenCount?: number | null;
-    contextTruncated?: boolean | null;
-    expectedPriorEventIds?: readonly string[];
-    deliveredPriorEventIds?: readonly string[];
-    executionStage?: ModelRouteStage;
-    contractRef?: string;
-    substitutionOrFallback?: boolean;
-    isOwnerCurrent?: () => boolean;
-    usageScope?: ChatUsageScope;
+      deliveryMode?: ContextDeliveryMode;
+      conversationState?: unknown;
+      systemPolicyPrompt?: unknown;
+      userTaskPrompt?: unknown;
+      toolSchema?: unknown;
+      promptInputTokenCount?: number | null;
+      contextTruncated?: boolean | null;
+      expectedPriorEventIds?: readonly string[];
+      deliveredPriorEventIds?: readonly string[];
+      executionStage?: ModelRouteStage;
+      contractRef?: string;
+      substitutionOrFallback?: boolean;
+      isOwnerCurrent?: () => boolean;
+      usageScope?: ChatUsageScope;
     } = {},
   ): RunnerCallbacks {
     return buildProviderRetryCallbacks(this.providerAccountingHost(), context);
   }
   private async executeWithTimeout(
-    runner:
-      | DeepInfraApiRunner
-      | DeepSeekApiRunner
-      | OllamaApiRunner
-      | OpenRouterApiRunner,
+    runner: ChatProviderRunner,
     prompt: string,
     callbacks: RunnerCallbacks | undefined,
     systemPrompt?: string,
   ): Promise<string> {
-    const execPromise = runner.executeRaw(
+    return executeChatRunnerWithTimeout(
+      runner,
       prompt,
       callbacks,
+      () => this.abortController,
       systemPrompt,
-      this.abortController.signal,
     );
-
-    // Capture the controller reference so the timeout always aborts the
-    // controller that was active when this turn started, even if cancel()
-    // replaces this.abortController mid-flight (it creates a fresh one).
-    const turnController = this.abortController;
-
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => {
-        turnController.abort();
-        reject(
-          new Error(
-            `Turn timed out after ${TURN_TIMEOUT_MS / 1000}s without a response`,
-          ),
-        );
-      }, TURN_TIMEOUT_MS);
-    });
-
-    try {
-      const result = await Promise.race([execPromise, timeoutPromise]);
-      return result;
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-      // Prevent unhandled rejection: if the timeout fires,
-      // abortController.abort() causes execPromise to reject but
-      // Promise.race has already settled with TimeoutError, leaving
-      // an orphaned rejection.  Swallow it here.
-      execPromise.catch(() => {});
-    }
   }
-
-  private resolveFallbackRunner():
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
-    | null {
+  private resolveFallbackRunner(): ChatProviderRunner | null {
     if (this.options.providerRunner) return this.options.providerRunner;
-    if (
-      !isOfflineChatMode() &&
-      this.modelPolicy?.provider === "openrouter" &&
-      this.modelPolicy.providerModelId
-    ) {
-      if (!this.fallbackRunner) {
-        try {
-          // Campaign invariant: an exact GLM run may retry the same model, but
-          // may not silently fail over to a different provider/model.
-          this.fallbackRunner = new OpenRouterApiRunner(
-            this.modelPolicy.providerModelId,
-          );
-        } catch {
-          return null;
-        }
-      }
-      return this.fallbackRunner;
-    }
-    if (!this.options.fallbackModel) return null;
-    if (!isOfflineChatMode()) {
-      assertLiveModelId(this.options.fallbackModel, "live chat fallback");
-      const routedModel = resolveOpenRouterDeepSeekModelId(
-        this.options.fallbackModel,
-      );
-      if (!routedModel) {
-        return null;
-      }
-      if (!this.fallbackRunner) {
-        try {
-          this.fallbackRunner = new OpenRouterApiRunner(routedModel);
-        } catch {
-          return null;
-        }
-      }
-      return this.fallbackRunner;
-    }
-    if (!this.fallbackRunner) {
-      try {
-        this.fallbackRunner = new OllamaApiRunner(this.options.fallbackModel);
-      } catch {
-        try {
-          this.fallbackRunner = new DeepInfraApiRunner(
-            this.options.fallbackModel,
-          );
-        } catch {
-          try {
-            this.fallbackRunner = new DeepSeekApiRunner(
-              this.options.fallbackModel,
-            );
-          } catch {
-            return null;
-          }
-        }
-      }
-    }
-    return this.fallbackRunner;
-  }
-
-  /**
-   * #27: Build the assembled system prompt, using the session-level cache
-   * to avoid reconstructing it on every turn. The cache is keyed implicitly
-   * by the options that never change within an engine session (systemContext,
-   * appendSystemPrompt, projectRoot).
-   */
-  private shouldUseNativeTools(
-    runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner,
-  ): boolean {
-    // Ollama models generally don't support native OpenAI tool calling.
-    // The legacy JSON path handles tool use via prompt formatting instead.
-    if (runner instanceof OllamaApiRunner) return false;
-    return (
-      process.env["BABEL_NATIVE_TOOLS"] !== "disabled" &&
-      typeof runner.executeWithToolsStream === "function"
+    const runner = resolveChatFallbackRunner(
+      this.fallbackRunner,
+      this.options,
+      this.modelPolicy,
     );
+    if (runner) this.fallbackRunner = runner;
+    return runner;
   }
-
-  /**
-   * Whether to use the simplified text-tool format for small local models.
-   * Auto-detects Ollama models unless explicitly overridden via BABEL_TOOL_PROFILE.
-   */
+  private shouldUseNativeTools(runner: ChatProviderRunner): boolean {
+    return shouldUseChatNativeTools(runner);
+  }
   private shouldUseTextTools(): boolean {
-    if (process.env["BABEL_TOOL_PROFILE"] === "legacy") return false;
-    if (process.env["BABEL_TOOL_PROFILE"] === "text") return true;
-    if (process.env["BABEL_TOOL_PROFILE"] === "native") return false;
-    const runner = this.resolveDeliberationRunner();
-    return runner instanceof OllamaApiRunner;
+    return shouldUseChatTextTools(() => this.resolveDeliberationRunner());
   }
-
-  /**
-   * Single-turn deliberation — native tool_use when supported, else legacy JSON parse.
-   */
   private async deliberateTurn(
-    runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner,
+    runner: ChatProviderRunner,
     promptOrMessages: string | ProviderMessage[],
     useNativeTools: boolean,
     callbacks: ChatCallbacks,
     hooks: { onStreamedChunks?: (text: string) => void } = {},
   ): Promise<ChatTurn> {
     resetOneShotSnapshot(this.logicalTurnToolPolicy);
-    const usageGeneration = this.activeSubmissionGeneration;
-    const usageScope = {
-      taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
-      projectRoot: realpathSync(this.options.projectRoot),
-      accountingEpoch: globalCostTracker.getAccountingEpoch(),
-      turnId: this.parity.turnId,
-      chargeId: null as string | null,
-      ownerGeneration: usageGeneration,
-      isOwnerCurrent: () => this.isSubmissionCurrent(usageGeneration),
-    };
-    if (useNativeTools && typeof runner.executeWithToolsStream === "function") {
-      const nextTools = this.nextTurnToolPolicy();
-      const restrictTools = nextTools.restrict && !isReadOnlyChat();
-      const toolDefs = filterReadOnlyChatTools(
-        restrictTools
-        ? this.services.tools.buildRestrictedDefinitions(
-              nextTools.mode === "full" ? "act_or_verify" : nextTools.mode,
-          )
-          : this.services.tools.buildDefinitions(),
-      );
-      const nativeActions: ChatToolAction[] = [];
-      let answerText = "";
-      let nativeFinishReason: string | undefined;
-      const systemPrompt = this.getOrBuildSystemPrompt("native");
-
-      for await (const event of runner.executeWithToolsStream(
-        Array.isArray(promptOrMessages)
-          ? promptOrMessages
-          : ([
-              { role: "user", content: promptOrMessages },
-            ] as ProviderMessage[]),
-        toolDefs,
-        systemPrompt,
-        this.abortController.signal,
-        restrictTools ? "required" : "auto",
-        this.providerRetryCallbacks({
-          deliveryMode: "native",
-          conversationState: promptOrMessages,
-          systemPolicyPrompt: systemPrompt,
-          toolSchema: toolDefs,
-          executionStage: "chat",
-          usageScope,
-        }),
-      )) {
-        switch (event.type) {
-          case "text_delta":
-            answerText += event.text;
-            hooks.onStreamedChunks?.(answerText);
-            callbacks.onAnswerChunk?.(event.text);
-            break;
-          case "thought_delta":
-            callbacks.onThought?.(event.text);
-            break;
-          case "tool_use": {
-            const action = nativeToolUseToChatAction(event.name, event.input);
-            nativeActions.push(action);
-            callbacks.onToolStart?.(
-              chatActionToolName(action),
-              chatActionTarget(action),
-            );
-            break;
-          }
-          case "error":
-            throw new Error(event.message);
-          case "done":
-            nativeFinishReason = event.finishReason;
-            break;
-          default: {
-            const _exhaustive: never = event;
-            throw new Error(
-              `Unknown stream event: ${(_exhaustive as any).type}`,
-            );
-          }
-        }
-      }
-      this.trackRunnerUsage(runner, usageScope);
-      return nativeTurnFromStream({
-        answerText,
-        actions: nativeActions,
-        finishReason: nativeFinishReason,
-      });
-    }
-
-    // ── Text-tools path — simplified format for small local models ──────────
-    if (this.shouldUseTextTools()) {
-      const systemPrompt = this.getOrBuildSystemPrompt("text");
-      const rawText = await this.executeWithTimeout(
-        runner,
-        promptOrMessages as string,
-        this.providerRetryCallbacks({
-          deliveryMode: "text",
-          conversationState: promptOrMessages,
-          systemPolicyPrompt: systemPrompt,
-          executionStage: "chat",
-          usageScope,
-        }),
-        systemPrompt,
-      );
-      const turn = parseTextToolTurn(rawText);
-      this.trackRunnerUsage(runner, usageScope);
-      return turn;
-    }
-
-    let streamedChunks = "";
-    let looksLikeJson = false;
-    const deliberationCallbacks: RunnerCallbacks = {
-      ...this.providerRetryCallbacks({
-        deliveryMode: "text",
-        conversationState: promptOrMessages,
-        executionStage: "chat",
-        usageScope,
-      }),
-      ...(callbacks.onThought || callbacks.onAnswerChunk
-        ? {
-            onChunk: (chunk: string) => {
-              streamedChunks += chunk;
-              hooks.onStreamedChunks?.(streamedChunks);
-              if (!looksLikeJson && streamedChunks.length >= 3) {
-                const head = streamedChunks.trimStart();
-                looksLikeJson =
-                  head.startsWith("{") ||
-                  head.startsWith("```json") ||
-                  head.startsWith("```");
-              }
-              if (!looksLikeJson && chunk.trim()) {
-                callbacks.onAnswerChunk?.(chunk);
-              }
-            },
-            ...(callbacks.onThought
-              ? {
-                  onThought: (thought: string) =>
-                    callbacks.onThought?.(thought),
-                }
-              : {}),
-          }
-        : {}),
-    };
-
-    const rawText = await this.executeWithTimeout(
+    const usageScope = this.captureProviderUsageScope();
+    return deliberateChatTurn({
       runner,
-      promptOrMessages as string,
-      deliberationCallbacks,
-    );
-    this.trackRunnerUsage(runner, usageScope);
-    return this.parseChatTurnLenient(rawText);
+      promptOrMessages,
+      useNativeTools,
+      callbacks,
+      hooks,
+      usageScope,
+      tools: this.services.tools,
+      takeToolPolicy: () => this.nextTurnToolPolicy(),
+      systemPrompt: (mode) => this.getOrBuildSystemPrompt(mode),
+      useTextTools: () => this.shouldUseTextTools(),
+      effects: this.providerUsageEffects(),
+    });
   }
-
-  /**
-   * Resolve a fallback runner and emit the "Retrying with fallback model" thought,
-   * or yield a failed event and return null if the error is not recoverable.
-   *
-   * Extracted from submitMessageStream() to deduplicate the turn-gating +
-   * fallback-resolution skeleton that appears identically in both the native
-   * tools and legacy JSON error paths.
-   */
   private async *resolveFallbackOrFail(
     err: any,
     turn: number,
@@ -6240,90 +4135,36 @@ export class ChatEngine {
     DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | null,
     undefined
   > {
-    // R0-8: a superseded generator must not resolve a fallback or emit a
-    // terminal for the task that now owns the engine.
-    if (
-      ownerGeneration !== undefined &&
-      !this.isSubmissionCurrent(ownerGeneration)
-    ) {
-      return null;
-    }
-    const cancelled = this.emitCancelledIfOperatorAbort(err);
-    if (cancelled) {
-      yield cancelled;
-      return null;
-    }
-    if (
-      err instanceof ProviderOutputTruncatedError ||
-      /finish_reason: length/i.test(err?.message ?? "")
-    ) {
-      yield this.streamFailed(err?.message ?? String(err));
-      return null;
-    }
-    const errorMessage = err?.message ?? String(err);
-    if (
-      terminalReasonFromFailureText(errorMessage)?.code ===
-      "unsupported_operation"
-    ) {
-      yield this.streamFailed(errorMessage);
-      return null;
-    }
-    if (turn > 0) {
-      yield this.streamFailed(err.message);
-      return null;
-    }
-    // Runtime Pro → Flash failover with visible reason (not verification)
-    const modelId = this.options.model ?? "deepseek-v4-pro";
-    const decision = parityTryFailover(this.parity, modelId, err);
-    const exactGlmLocked =
-      this.modelPolicy?.provider === "openrouter" &&
-      this.modelPolicy.providerModelId === LIVE_OPENROUTER_MODEL_ID;
-    if (exactGlmLocked && decision) {
-      // The exact GLM campaign is provider/model locked. A generic Pro→Flash
-      // decision must never cross that boundary into DeepSeek.
-      yield this.streamFailed(
-        `${err.message} [LIVE_MODEL_POLICY] exact GLM route refuses provider substitution`,
-      );
-      return null;
-    }
-    let fb = this.resolveFallbackRunner();
-    if (!fb && decision) {
-      const routedModel = resolveOpenRouterDeepSeekModelId(decision.toModel);
-      if (!routedModel) {
-        yield this.streamFailed(
-          `${err.message} [LIVE_MODEL_POLICY] failover route is not OpenRouter-approved`,
+    return yield* resolveChatFallbackOrFail({
+      err,
+      turn,
+      ownerGeneration,
+      options: this.options,
+      modelPolicy: this.modelPolicy,
+      isSubmissionCurrent: (generation) => this.isSubmissionCurrent(generation),
+      cancelled: (error) => this.emitCancelledIfOperatorAbort(error),
+      failed: (error) => this.streamFailed(error),
+      tryFailover: (modelId, error) =>
+        parityTryFailover(this.parity, modelId, error),
+      resolveFallback: () => this.resolveFallbackRunner(),
+      installFailover: (runner, decision) => {
+        this.fallbackRunner = runner;
+        this.policyEventLog.record({
+          at_turn: this._turnIndex,
+          kind: "failover",
+          detail: decision.reason,
+        });
+        recordModelFailover(
+          this.parity.sessionEvents,
+          this.parity.turnId || "",
+          {
+            original_model: decision.fromModel,
+            new_model: decision.toModel,
+            reason: decision.reason,
+          },
         );
-        return null;
-      }
-      fb = new OpenRouterApiRunner(routedModel);
-      this.fallbackRunner = fb;
-      this.policyEventLog.record({
-        at_turn: this._turnIndex,
-        kind: "failover",
-        detail: decision.reason,
-      });
-      recordModelFailover(this.parity.sessionEvents, this.parity.turnId || "", {
-        original_model: decision.fromModel,
-        new_model: decision.toModel,
-        reason: decision.reason,
-      });
-      yield {
-        type: "thought",
-        text: `[Failover] ${decision.reason} (not independent verification)`,
-      };
-      return fb;
-    }
-    if (!fb) {
-      yield this.streamFailed(err.message);
-      return null;
-    }
-    yield {
-      type: "thought",
-      text: decision
-        ? `[Failover] ${decision.reason}`
-        : "Retrying with fallback model…",
-    };
-    return fb;
+      },
+    });
   }
 
   private getOrBuildSystemPrompt(
@@ -6463,8 +4304,8 @@ export class ChatEngine {
         checked: [
           {
             action: "localize_failure",
-          target: localization.failureSignature.slice(0, 180),
-          finding: `${localization.calls} inspection call(s), ${localization.rounds} candidate scope(s); no accepted target`,
+            target: localization.failureSignature.slice(0, 180),
+            finding: `${localization.calls} inspection call(s), ${localization.rounds} candidate scope(s); no accepted target`,
           },
         ],
       };
@@ -6602,140 +4443,6 @@ export class ChatEngine {
   private detectAndBuildBlockedReport(answer: string): BlockedReport | null {
     return detectBlockedReportFromAnswer(answer, this.toolCallLog);
   }
-
-  /**
-   * D03: single resolution point for the structured terminal reason. Explicit
-   * arbiter reason wins; then a reason already on the blocked report; then the
-   * limiter classification; then the outcome fallback.
-   */
-  private resolveTerminalReason(
-    outcome: TerminalOutcome | undefined,
-    blockedReport?: BlockedReport | null,
-    explicit?: TerminalReason,
-  ): TerminalReason | undefined {
-    if (explicit) return explicit;
-    if (blockedReport?.reason_code !== undefined) {
-      return {
-        code: blockedReport.reason_code,
-        cause_class: blockedReport.cause_class ?? null,
-      };
-    }
-    const verificationFailure = this.resolveVerificationFailureReason(outcome);
-    if (verificationFailure) return verificationFailure;
-    return (
-      terminalReasonFromClassification(
-        this.terminatingLimiter
-          ? classifyTerminalLimiter(
-              this.terminatingLimiter,
-              this.terminalLimiterReason ?? undefined,
-            )
-          : null,
-      ) ?? terminalReasonFromOutcome(outcome)
-    );
-  }
-
-  /**
-   * D03/S07: a mutation that ended without success while a *current*
-   * authoritative verifier receipt is red is a verification failure — distinct
-   * from "no verifier was run" (which stays unknown). Stale receipts cannot
-   * establish this cause.
-   */
-  private resolveVerificationFailureReason(
-    outcome: TerminalOutcome | undefined,
-  ): TerminalReason | undefined {
-    return terminalReasonFromVerifierFailure({
-      hasMutation: this.hasAnyWrites(),
-      outcome,
-      receipt: this.lastVerifierReceipt,
-    });
-  }
-
-  /** Persist exactly one authoritative completion decision for this turn. */
-  private recordCompletionDecisionOnce(decision: {
-    requestedOutcome: string;
-    finalOutcome: string;
-    allowed: boolean;
-    reason: string;
-    evidenceRefs: string[];
-    policyVersion: string;
-    reasonCode?: TerminalReasonCode;
-    causeClass?:
-      | "model"
-      | "provider"
-      | "environment"
-      | "harness"
-      | "verification"
-      | null;
-  }): void {
-    const turnId = String(this.parity.turnId ?? this._turnIndex);
-    if (
-      this.parity.sessionEvents.events.some(
-        (event) =>
-          event.kind === "completion_decision" && event.turn_id === turnId,
-      )
-    )
-      return;
-    recordCompletionDecision(this.parity.sessionEvents, turnId, decision);
-  }
-
-  private assembleRunAllowance(
-    finalStatus: ChatResult["status"],
-    persist = true,
-  ): ChatEngineRunAllowanceReport {
-    const runAllowance = createRunAllowanceReport(this.limits, {
-      postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
-      criticRepairCostCapUsd: this.criticRepairCostCapUsd,
-      terminatingLimiter: this.terminatingLimiter,
-      terminalClassification: this.terminatingLimiter
-        ? classifyTerminalLimiter(
-            this.terminatingLimiter,
-            this.terminalLimiterReason ?? undefined,
-          )
-        : finalStatus === "cancelled"
-          ? "cancelled"
-          : null,
-      terminalReason: this.terminalLimiterReason,
-      // I3: coarse run-level child defaults; effective rounds are resolved at
-      // dispatch (read 4 / mutation 8, clamped 1-20).
-      childLimits: {
-        maxRounds: CHILD_READ_DEFAULT_ROUNDS,
-        readMaxRounds: CHILD_READ_DEFAULT_ROUNDS,
-        mutationMaxRounds: CHILD_MUTATION_DEFAULT_ROUNDS,
-      },
-      taskCostBaselineUsd: this.taskCostBaselineUsd,
-      taskCostSpentUsd: this.currentTaskCostUsd(),
-    });
-    if (
-      runAllowance.terminatingLimiter === "none" ||
-      runAllowance.terminatingLimiter == null
-    ) {
-      if (runAllowance.terminalClassification === "success") {
-        runAllowance.terminalClassification = "no_limit_triggered";
-      }
-    }
-    if (!persist) {
-      // R0-8: a superseded caller computes its own (obsolete) report but must
-      // not overwrite the live task's run-allowance artifact or cost baseline.
-      return runAllowance;
-    }
-    this.limits.runAllowance = runAllowance;
-    this.policyEventLog.record({
-      at_turn: this._turnIndex,
-      kind: "progress_policy",
-      detail: `run_allowance ${JSON.stringify(runAllowance)}`,
-    });
-    try {
-      writeFileSync(
-        join(this.engineRunDir, "run-allowance.json"),
-        JSON.stringify(runAllowance),
-      );
-    } catch {
-      /* evidence write must not fail the turn */
-    }
-    this.persistTaskCostBaseline();
-    return runAllowance;
-  }
-
   private buildResult(
     status: ChatResult["status"],
     callbacks: ChatCallbacks,
@@ -6745,250 +4452,143 @@ export class ChatEngine {
     knownReason?: TerminalReason,
     ownerGeneration?: number,
   ): ChatResult {
-    // R0-8: a superseded caller must not finalize the task that now owns the
-    // engine. It still receives a truthful result for its own (obsolete)
-    // submission, but no completion decision, wall settlement or durable turn
-    // finalization is applied to the live task.
-    const superseded =
-      ownerGeneration !== undefined &&
-      !this.isSubmissionCurrent(ownerGeneration);
-    // R1: If the answer explicitly declares BLOCKED but no blockedReport was
-    // provided (e.g., the detection ran in a code path that didn't provide it),
-    // promote the status to 'blocked' and generate the report here.
-    // F4: only a protocol-shaped declaration (`BLOCKED` at the start of a line)
-    // is even considered, and promotion to a blocked terminal requires an actual
-    // evidence-backed report (harness-provided, or synthesized only when real
-    // investigate tool calls exist). Model prose alone cannot create a block —
-    // this keeps the callback surface consistent with the streaming surface.
-    const declaredBlocked = !!(answer && /(?:^|\n)\s*BLOCKED\b/.test(answer));
-    const synthesizedReport =
-      declaredBlocked && !blockedReport
-        ? this.detectAndBuildBlockedReport(answer ?? "")
-        : null;
-    const finalBlockedReport = blockedReport ?? synthesizedReport;
-    const finalStatus =
-      (status === "completed" || status === "failed") && finalBlockedReport
-        ? ("blocked" as const)
-        : status;
-
-    if (this.cachedSystemPromptNative)
-      stashEngineFingerprint(
-        this.engineRunId,
-        buildPromptFingerprint({
-          systemPrompt: this.cachedSystemPromptNative,
-          taskClass: this.taskClass,
-          tune: getChatTaskTune(this.taskClass),
-          playbookId: this.activePlaybook?.id ?? null,
-        }),
-      );
-
-    // Compute truthful TerminalOutcome from status and runtime state.
-    const hasMutation = this.hasAnyWrites();
-    const failedCause =
-      finalStatus === "failed"
-        ? (knownOutcome ?? classifyFailureText(answer ?? ""))
-        : undefined;
-    let outcome: TerminalOutcome | undefined =
-      finalStatus === "failed"
-        ? failedCause
-        : (knownOutcome ??
-          computeTerminalOutcome({
-            readOnly: this.isAcceptedReadOnlyTerminal(),
-            finalStatus,
-            budgetExceeded: this.budgetExceeded,
-            lastVerifierReceipt: this.lastVerifierReceipt,
-            blockedReport: finalBlockedReport,
-            hasAnyWrites: hasMutation,
-          }));
-    if (outcome !== undefined && finalStatus !== "failed") {
-      outcome = applyHonestTaskOutcomeToCompletion({
-        contract: this.parity.liveAuthority?.taskContract,
-        requestedOutcome: outcome,
-        hasMutation,
-        planMode: this.executionProfile === "plan",
-      });
-    }
-    const planCompletion =
-      this.executionProfile === "plan" && finalStatus === "completed";
-    const kernelDecision =
-      outcome !== undefined && finalStatus !== "failed"
-        ? this.decideCompletion(
-            planCompletion ? "PLAN_COMPLETE" : outcome,
-            hasMutation,
-          )
-        : null;
-    const authoritativeOutcome: TerminalOutcome | undefined =
-      kernelDecision && kernelDecision.finalOutcome !== "PLAN_COMPLETE"
-        ? kernelDecision.finalOutcome
-        : planCompletion
-          ? "UNVERIFIED_PATCH"
-          : outcome;
-    const terminalReason =
-      finalStatus === "cancelled"
-        ? ({
-            code: "cancelled" as const,
-            cause_class: null,
-          } satisfies TerminalReason)
-        : this.resolveTerminalReason(
-            authoritativeOutcome ?? outcome,
-            finalBlockedReport,
-            knownReason,
-          );
-    // R0-9: keep the tuple coherent on the callback/non-stream path. As on the
-    // streaming path, `verification_failed` pairs with `UNVERIFIED_PATCH` when
-    // the gate recorded a patch, so it is not remapped to AGENT_FAILURE.
-    const projectedOutcome =
-      (terminalReason?.code && terminalReason.code !== "verification_failed"
-        ? outcomeFromReasonCode(terminalReason.code)
-        : undefined) ?? authoritativeOutcome;
-    if (kernelDecision && !superseded) {
-      this.recordCompletionDecisionOnce({
-        requestedOutcome: kernelDecision.requestedOutcome,
-        finalOutcome: authoritativeOutcome ?? kernelDecision.finalOutcome,
-        allowed: kernelDecision.allowed,
-        reason: kernelDecision.reason,
-        evidenceRefs: kernelDecision.evidenceRefs,
-        policyVersion: kernelDecision.policyVersion,
-        ...(terminalReason !== undefined
-          ? {
-              reasonCode: terminalReason.code,
-              causeClass: terminalReason.cause_class,
-            }
-          : {}),
-      });
-    }
-
-    // P0-E: if any kill-switch ran in shadow mode, record whether the task
-    // later succeeded (mutation / coding-task gate) for precision/recall.
-    // P0-F: wire the derived OutcomeDimensions — the real receipt (its `stale`
-    // flag was just refreshed against the live workspace by decideCompletion)
-    // and the completion-gate result (authoritativeOutcome IS the gate decision).
-    const codingPassed = isCodingTaskSuccess({
-      terminalOutcome: authoritativeOutcome ?? null,
-      hasSuccessfulMutation: hasMutation,
-      verifierOk: this.lastVerifierReceipt?.exit_code === 0,
-      requireVerifier: false,
-      declaredBlocked: Boolean(finalBlockedReport),
-      verifierReceipt: this.lastVerifierReceipt ?? null,
-      contractChecksPass:
-        authoritativeOutcome === "VERIFIED_COMPLETE" ? true : null,
-    });
-    recordPolicyShadowSessionOutcome(this.policyEventLog, {
-      atTurn: this._turnIndex,
-      hasSuccessfulMutation: hasMutation,
-      codingTaskPassed: codingPassed,
-      terminalOutcome: authoritativeOutcome ?? "unknown",
-    });
-
-    const terminal = projectChatTerminal({
-      ...(projectedOutcome !== undefined ? { outcome: projectedOutcome } : {}),
-      status: finalStatus,
-    });
-
-    if (!superseded) {
-      this.settleActiveExecutionForTerminal();
-      // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
-      finalizeParityTurnSync(
-        this.parity,
-        this.engineRunDir,
-        terminal.outcome,
-        terminal.status,
-        terminalReason,
-      );
-    }
-
-    const runAllowance = this.assembleRunAllowance(
-      terminal.status,
-      !superseded,
+    return assembleChatResult(
+      this.terminalRuntimeInput(),
+      status,
+      callbacks,
+      answer,
+      blockedReport,
+      knownOutcome,
+      knownReason,
+      ownerGeneration,
     );
-
-    const result: ChatResult = {
-      status: terminal.status,
-      ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
-      ...(kernelDecision?.finalOutcome === "PLAN_COMPLETE"
-        ? { planOutcome: "PLAN_COMPLETE" as const }
-        : {}),
-      answer: answer ?? "",
-      usage: globalCostTracker.getSessionSummary(),
-      lastRequestPromptTokens: this.lastRequestPromptTokens,
-      lastRequestCompletionTokens: this.lastRequestCompletionTokens,
-      activeContext:
-        this.lastRequestPromptTokens !== null &&
-        this.lastRequestPromptTokens !== undefined
-          ? {
-              tokens: this.lastRequestPromptTokens,
-              modelId:
-                this.lastRequestModelId ?? this.options.model ?? "default",
-              source: "provider_prompt_tokens" as const,
-            }
-          : null,
-      conversation: this.conversation,
-      runDir: this.engineRunDir,
-      verifierReceipt: this.lastVerifierReceipt,
-      dedupeHitCount: this.dedupeHitCount,
-      ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
-      ...(finalBlockedReport ? { blockedReport: finalBlockedReport } : {}),
-      ...(this.lastCriticReceipt
-        ? { criticReceipt: this.lastCriticReceipt }
-        : {}),
-      ...(this.budgetExceeded ? { budgetExceeded: true as const } : {}),
-      ...(this.gatePolicy ? { gatePolicy: this.gatePolicy } : {}),
-      ...(this.lastTurnTelemetry
-        ? { turnTelemetry: this.lastTurnTelemetry }
-        : {}),
-      ...(this.limits.costBudget ? { costBudget: this.limits.costBudget } : {}),
-      runAllowance,
-      ...(terminalReason !== undefined
-        ? {
-            reason_code: terminalReason.code,
-            cause_class: terminalReason.cause_class,
-          }
-        : {}),
-      ...observabilityResultFields(this.obsHandles()),
-    };
-
-    // Persist conversation transcript to disk for session resume.
-    // Write is fire-and-forget — failure must not block the turn result.
-    persistTranscriptToDisk(this.engineRunDir, result.conversation).catch(
-      () => {},
-    );
-
-    // Tier A2: Persist policy event log alongside transcript (sync — no exit race)
-    persistPolicyEventsJsonl(this.engineRunDir, this.policyEventLog);
-    // Event log disk flush is owned solely by finalizeParityTurn / checkpointParityEventLog
-
-    // Propose BABEL.md learnings after successful runs with writes only.
-    if (terminal.status === "completed" && this.writeCount > 0) {
-      try {
-        const changed = this.toolCallLog
-          .flatMap((t) =>
-            confirmedMutationPaths({
-            tool: t.tool,
-            target: t.target,
-            error: t.error,
-            effectStatus: t.effect_status,
-            mutationPaths: t.mutation_paths,
-            }),
-          )
-          .filter((p, i, arr) => p && arr.indexOf(p) === i)
-          .slice(0, 20);
-        proposeProjectMemoryWriteback({
-          projectRoot: this.options.projectRoot,
-          taskSummary: this.options.task,
-          changedFiles: changed,
-          verifierSummary: this.lastVerifierReceipt
-            ? `${this.lastVerifierReceipt.command} → exit ${this.lastVerifierReceipt.exit_code}`
-            : null,
-        });
-      } catch {
-        /* write-back must never fail the turn */
-      }
-    }
-
-    return result;
   }
 
   public resetCompactionCircuitBreaker(): void {
     this.compactionConsecutiveFailures = 0;
   }
+  /** Capture provider ownership once before an inference suspension point. */
+  private captureProviderUsageScope(
+    ownerGeneration = this.activeSubmissionGeneration,
+  ): ChatUsageScope {
+    return {
+      taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
+      projectRoot: realpathSync(this.options.projectRoot),
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      turnId: this.parity.turnId,
+      chargeId: null,
+      ownerGeneration,
+      isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
+    };
+  }
+  private providerUsageEffects(): ChatProviderUsageEffects {
+    return {
+      retryCallbacks: (context) => this.providerRetryCallbacks(context),
+      settleUsage: (runner, scope) => this.trackRunnerUsage(runner, scope),
+      getAbortController: () => this.abortController,
+    };
+  }
+
+  /** Supply terminal evidence and explicit effects without exposing the engine to the result owner. */
+  private terminalRuntimeInput(): ChatTerminalInput {
+    return {
+      snapshot: {
+        context: {
+          options: this.options,
+          executionProfile: this.executionProfile,
+          taskClass: this.taskClass,
+          engineRunId: this.engineRunId,
+          engineRunDir: this.engineRunDir,
+          turnIndex: this._turnIndex,
+          turnId: this.parity.turnId,
+          taskContract: this.parity.liveAuthority?.taskContract,
+        },
+        outcome: {
+          hasMutation: this.hasAnyWrites(),
+          readOnly: this.isAcceptedReadOnlyTerminal(),
+          budgetExceeded: this.budgetExceeded,
+          terminatingLimiter: this.terminatingLimiter,
+          terminalLimiterReason: this.terminalLimiterReason,
+          lastVerifierReceipt: this.lastVerifierReceipt,
+          gatePolicy: this.gatePolicy,
+          lastCriticReceipt: this.lastCriticReceipt,
+          verifierTampered: this.verifierTampered,
+          writeCount: this.writeCount,
+        },
+        presentation: {
+          conversation: this.conversation,
+          cachedSystemPromptNative: this.cachedSystemPromptNative,
+          playbookId: this.activePlaybook?.id ?? null,
+          dedupeHitCount: this.dedupeHitCount,
+          lastRequestPromptTokens: this.lastRequestPromptTokens,
+          lastRequestCompletionTokens: this.lastRequestCompletionTokens,
+          lastRequestModelId: this.lastRequestModelId,
+          currentTurnTelemetry: this.currentTurnTelemetry,
+          lastTurnTelemetry: this.lastTurnTelemetry,
+        },
+        evidence: {
+          sessionEvents: this.parity.sessionEvents,
+          policyEventLog: this.policyEventLog,
+          observability: this.obsHandles(),
+        },
+        allowance: {
+          limits: this.limits,
+          postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
+          criticRepairCostCapUsd: this.criticRepairCostCapUsd,
+          taskCostBaselineUsd: this.taskCostBaselineUsd,
+        },
+      },
+      effects: {
+        decideCompletion: (requested, hasMutation) =>
+          this.decideCompletion(requested, hasMutation),
+        settleActiveExecution: () => this.settleActiveExecutionForTerminal(),
+        finalizeTurn: (outcome, status, reason) =>
+          finalizeParityTurnSync(
+            this.parity,
+            this.engineRunDir,
+            outcome,
+            status,
+            reason,
+          ),
+        storeTelemetry: (record) => {
+          this.lastTurnTelemetry = record;
+        },
+        setLimiter: (limiter, reason) => {
+          this.terminatingLimiter = limiter;
+          this.terminalLimiterReason = reason;
+        },
+        setBudgetExceeded: () => {
+          this.budgetExceeded = true;
+        },
+        isSubmissionCurrent: (generation) =>
+          this.isSubmissionCurrent(generation),
+        currentTaskCostUsd: () => this.currentTaskCostUsd(),
+        persistTaskCostBaseline: () => this.persistTaskCostBaseline(),
+      },
+    };
+  }
 }
+
+export type {
+  TaskIntent,
+  ChatAllowanceCostCap,
+  ChatAllowanceGrant,
+  ChatTaskAllowanceSnapshot,
+  SubmitMessageOptions,
+  ChatEngineOptions,
+  ChatEngineTurnPreparation,
+  ContextCompactedInfo,
+  ChatCallbacks,
+  StreamEvent,
+  ChatEvent,
+  ChatResult,
+} from "./chatEngineContracts.js";
+export type { ChatEngineActionExecutorHost } from "./chatEngineActionExecutor.js";
+export type { ChatEngineStreamingLoopHost } from "./chatEngineStreamingLoop.js";
+export {
+  deriveChildDelegationId,
+  formatTextToolResults,
+  isDiscriminatingInspectionEvidence,
+  wrapPresentationCallbacks,
+} from "./chatEngineHelpers.js";
+export type { TextToolResultEntry } from "./chatEngineHelpers.js";

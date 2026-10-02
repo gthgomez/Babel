@@ -1,6 +1,6 @@
 # Standard hosted workloads; stable required names aggregate every dependency fail closed.
-# Full architecture ratchet activates with PR288's combined split; intermediate debt remains
-# explicit in integration evidence. No baseline or process-boundary grant is increased.
+# Full architecture budgets are enforced on both operating systems after the combined owner split.
+# No baseline or process-boundary grant is increased.
 name: Public Release Gate
 'on':
   pull_request: null
@@ -171,6 +171,8 @@ jobs:
           exit $LASTEXITCODE
       - name: Verify architecture boundary registry
         run: pwsh -NoProfile -File tools/tests/test-architectural-budget-allowlist.ps1
+      - name: Enforce full combined architecture budget
+        run: pwsh -NoProfile -File tools/check-architectural-budget.ps1
       - name: Upload architecture regression evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

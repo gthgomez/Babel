@@ -328,8 +328,14 @@ test('transport: transports only EMIT tool_use events — the agent lane execute
     );
   }
   const chatEngine = readFileSync(path.join(SRC_DIR, 'agent', 'chatEngine.ts'), 'utf8');
-  assert.match(chatEngine, /case ["']tool_use["']/, 'agent lane consumes tool_use events');
-  assert.match(chatEngine, /executeActionWithPolicy/, 'agent lane dispatches through the boundary');
+  const providerRuntime = readFileSync(path.join(SRC_DIR, 'agent', 'chatEngineProviderRuntime.ts'), 'utf8');
+  const actionExecutor = readFileSync(path.join(SRC_DIR, 'agent', 'chatEngineActionExecutor.ts'), 'utf8');
+  assert.match(chatEngine, /return executeChatRunnerWithTimeout\(/, 'agent lane delegates provider event handling');
+  assert.match(providerRuntime, /case ["']tool_use["']/, 'agent provider owner consumes tool_use events');
+  assert.match(providerRuntime, /nativeActions\.push\(action\)/, 'agent provider owner retains actions for execution');
+  assert.match(chatEngine, /new ChatEngineActionExecutor\(/, 'agent lane retains its governed action executor');
+  assert.match(chatEngine, /return this\.actionExecutor\.executeOneAction\(/, 'agent lane forwards actions to its governed owner');
+  assert.match(actionExecutor, /await executeActionWithPolicy\(/, 'agent action owner dispatches through the boundary');
 });
 
 // ─── Registry ↔ implementation coherence ────────────────────────────────────
