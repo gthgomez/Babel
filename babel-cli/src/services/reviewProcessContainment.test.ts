@@ -5,7 +5,29 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
-import { attachWindowsReviewJobObject } from './reviewProcessContainment.js'
+import { attachWindowsReviewJobObject, resolveWindowsReviewHost } from './reviewProcessContainment.js'
+
+test('Windows review host uses only the standard absolute system runtime', () => {
+  const probes: string[] = []
+  const host = resolveWindowsReviewHost({ SystemRoot: 'C:\\Windows', PATH: 'C:\\candidate', ProgramFiles: 'C:\\candidate' }, path => {
+    probes.push(path)
+    return true
+  })
+  assert.deepEqual(probes, ['C:\\Program Files\\PowerShell\\7\\pwsh.exe'])
+  assert.equal(host, 'C:\\Program Files\\PowerShell\\7\\pwsh.exe')
+})
+
+test('Windows review host preserves legacy absence fallback without PATH lookup', () => {
+  assert.equal(resolveWindowsReviewHost({ SYSTEMROOT: 'D:\\Windows', PATH: 'C:\\candidate' }, () => false),
+    'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+})
+
+test('Windows review host rejects relative and UNC system roots without probing them', () => {
+  for (const SystemRoot of ['candidate', '\\\\server\\candidate', 'C:relative']) {
+    assert.throws(() => resolveWindowsReviewHost({ SystemRoot }, () => { throw new Error('Unexpected probe') }),
+      /WINDOWS_JOB_SYSTEM_ROOT_INVALID/)
+  }
+})
 
 test('Windows assignment failures retain only bounded helper stage diagnostics', async t => {
   if (process.platform !== 'win32') return t.skip('Windows helper diagnostic')
