@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,16 @@ const components = pkg.scripts.test.split(/\s*&&\s*/).map(command => {
   const match = /^npm run ([a-z0-9:-]+)$/.exec(command);
   assert.ok(match, `Unrecognized canonical package component: ${command}`);
   return match[1];
+});
+
+test('canonical components have real package-owned entrypoints', () => {
+  for (const component of components) {
+    assert.equal(typeof pkg.scripts[component], 'string', `Missing script ${component}`);
+    if (component === 'test:unit') continue; // Exhaustive globs are checked by unit-sharding regressions.
+    const entrypoints = [...pkg.scripts[component].matchAll(/\b(?:scripts|src)\/[\w./-]+\.(?:ts|mjs|js)\b/g)];
+    assert.ok(entrypoints.length > 0, `No reviewed entrypoint for ${component}`);
+    for (const [path] of entrypoints) assert.ok(existsSync(new URL('babel-cli/' + path, root)), `Missing entrypoint for ${component}`);
+  }
 });
 
 test('every canonical package component runs on Linux; all portable components also run on Windows', () => {

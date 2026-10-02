@@ -18,6 +18,8 @@ const POSIX_WATCHDOG_START_TIMEOUT_MS = 5_000
 
 function windowsJobHelperScript(workerPid: number, controllerPid: number): string {
   return `$ErrorActionPreference = 'Stop'
+[Console]::Out.WriteLine('BABEL_JOB_STAGE=STARTED')
+[Console]::Out.Flush()
 $source = @'
 using System;
 using System.ComponentModel;
@@ -93,6 +95,8 @@ public static class BabelReviewJob {
   }
 
   public static void Hold(int workerPid, int controllerPid) {
+    Console.Out.WriteLine("BABEL_JOB_STAGE=CREATING_JOB");
+    Console.Out.Flush();
     IntPtr job = CreateJobObject(IntPtr.Zero, null);
     if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
     IntPtr process = IntPtr.Zero;
@@ -106,12 +110,16 @@ public static class BabelReviewJob {
       if (!SetInformationJobObject(job, 9, infoPointer, (uint)infoLength)) {
         throw new Win32Exception(Marshal.GetLastWin32Error());
       }
+      Console.Out.WriteLine("BABEL_JOB_STAGE=OPENING_WORKER");
+      Console.Out.Flush();
       process = OpenProcess(
         PROCESS_TERMINATE | PROCESS_SET_QUOTA | PROCESS_QUERY_LIMITED_INFORMATION,
         false,
         workerPid
       );
       if (process == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+      Console.Out.WriteLine("BABEL_JOB_STAGE=ASSIGNING_JOB");
+      Console.Out.Flush();
       if (!AssignProcessToJobObject(job, process)) {
         throw new Win32Exception(Marshal.GetLastWin32Error());
       }
@@ -126,7 +134,11 @@ public static class BabelReviewJob {
   }
 }
 '@
+[Console]::Out.WriteLine('BABEL_JOB_STAGE=COMPILING')
+[Console]::Out.Flush()
 Add-Type -TypeDefinition $source
+[Console]::Out.WriteLine('BABEL_JOB_STAGE=COMPILED')
+[Console]::Out.Flush()
 [BabelReviewJob]::Hold(${workerPid}, ${controllerPid})`
 }
 
@@ -265,12 +277,13 @@ export async function attachWindowsReviewJobObject(
     let settled = false
     let stdout = ''
     let stderr = ''
+    let stage = 'SPAWNED'
     const settle = (assigned: boolean, reason: string): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       resolveAssigned({ assigned, ...(!assigned ? {
-        error: `WINDOWS_JOB_ASSIGNMENT_${reason};elapsedMs=${Date.now() - startedAt};stderrPresent=${stderr.trim().length > 0}`,
+        error: `WINDOWS_JOB_ASSIGNMENT_${reason};elapsedMs=${Date.now() - startedAt};stage=${stage};stdoutPresent=${stdout.length > 0};stderrPresent=${stderr.trim().length > 0}`,
       } : {}) })
     }
     const timer = setTimeout(() => settle(false, 'TIMEOUT'), WINDOWS_JOB_HELPER_TIMEOUT_MS)
@@ -278,6 +291,10 @@ export async function attachWindowsReviewJobObject(
     helper.stdout?.setEncoding('utf8')
     helper.stdout?.on('data', (chunk: string) => {
       stdout += chunk
+      for (const line of stdout.split(/\r?\n/)) {
+        const marker = /^BABEL_JOB_STAGE=(STARTED|COMPILING|COMPILED|CREATING_JOB|OPENING_WORKER|ASSIGNING_JOB)$/.exec(line)
+        if (marker) stage = marker[1]!
+      }
       if (stdout.split(/\r?\n/).includes('ASSIGNED')) settle(true, 'ASSIGNED')
     })
     helper.stderr?.setEncoding('utf8')

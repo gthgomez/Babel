@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const checker = fileURLToPath(new URL('../check-architectural-budget.ps1', import.meta.url));
+// cmd may echo a quoted path; spawnSync's native argument array must not retain
+// those shell delimiters. Preserve the actual path, including interior spaces.
+const nativeAliasPath = output => output.trim().replace(/^"(.*)"$/, '$1');
 function fixture(t, source, path = 'ui/probe.ts', policy = {}) {
   const root = mkdtempSync(join(tmpdir(), 'babel-budget-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -33,6 +36,12 @@ function fixture(t, source, path = 'ui/probe.ts', policy = {}) {
   }};
 }
 
+test('quoted Windows alias output reaches the checker as a native path argument', t => {
+  const f = fixture(t, 'const value = 1;\n');
+  const result = f.runRoot(nativeAliasPath(`"${f.root}"\r\n`));
+  assert.equal(result.code, 0, result.output);
+});
+
 test('Windows short-path roots preserve file and zero-cast baseline identities', t => {
   if (process.platform !== 'win32') return t.skip('Windows 8.3 alias regression');
   const f = fixture(t, 'const value = 1;\n');
@@ -40,7 +49,7 @@ test('Windows short-path roots preserve file and zero-cast baseline identities',
   const alias = spawnSync('cmd.exe', ['/d', '/c', `for %I in ("${f.root}") do @echo %~sI`], { encoding: 'utf8' });
   assert.ifError(alias.error);
   assert.equal(alias.status, 0, alias.stderr);
-  const shortRoot = alias.stdout.trim();
+  const shortRoot = nativeAliasPath(alias.stdout);
   if (!shortRoot.includes('~')) return t.skip('This volume has no 8.3 fixture alias');
   const clean = f.runRoot(shortRoot);
   assert.equal(clean.code, 0, clean.output);
