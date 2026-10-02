@@ -294,6 +294,10 @@ export function inspectSource(source, path = 'source.ts') {
       const owner = thisOwner(expression);
       return owner ? [owner.static ? carrierSymbol(owner.node) : instanceSymbol(owner.node)] : [];
     }
+    if (expression.kind === ts.SyntaxKind.SuperKeyword) {
+      const owner = thisOwner(expression);
+      return owner?.static ? baseExpressions(owner.node).flatMap(base => (localClasses(base) ?? []).map(carrierSymbol)) : [];
+    }
     if (isProcessImport(expression)) return [globalProcessSymbol];
     if (ts.isAwaitExpression(expression)) return roots(expression.expression);
     if (ts.isQualifiedName(expression)) return roots(expression.left);
@@ -459,6 +463,10 @@ export function inspectSource(source, path = 'source.ts') {
       }
       return mergeAccess(routes);
     }
+    const instances = instanceOwners(expression);
+    if (instances) return keys.slice(1).reduce(member, mergeAccess(instances.map(owner => classMemberAccess(owner, false, keys[0], seen))));
+    const classes = staticOwners(expression);
+    if (classes) return keys.slice(1).reduce(member, mergeAccess(classes.map(owner => classMemberAccess(owner, true, keys[0], seen))));
     return keys.reduce(member, access(expression, seen));
   }
   function literalArrayElements(expression) {
