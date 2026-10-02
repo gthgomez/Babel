@@ -4,11 +4,15 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
 
-for (const [field, value, invocation] of [['quit', 'process.exit', '(1)'], ['out', 'process.stdout', '.write("x")']]) for (const base of ['Base', 'Alias', 'N.Base']) for (const context of ['static {BODY}', 'static run(){BODY}', 'static result=(()=>{BODY})()']) for (const projection of [`super.${field}`, `super["${field}"]`, `const alias=super.${field}; alias`]) {
-  const source=`class Base {static ${field}=${value}} const Alias=Base; namespace N {export const Base=Alias} class C extends ${base} {${context.replace('BODY',projection+invocation)}} C.run?.()`;
+for (const [field, value, member, receiver, argument, boundary] of [['quit', 'process.exit', '', 'process', '1', 'exits'], ['out', 'process.stdout', '.write', 'TARGET', '"x"', 'stdout']]) for (const base of ['Base', 'Alias', 'N.Base']) for (const context of ['static {BODY}', 'static run(){BODY}', 'static result=(()=>{BODY})()']) for (const [setup, target] of [['',`super.${field}`], ['',`super["${field}"]`], [`const alias=super.${field}; `,'alias']]) for (const adapter of ['direct', 'call', 'apply', 'bind', 'reflect']) {
+  const hostReceiver=receiver==='TARGET'?target:receiver;
+  const callable=target+member;
+  const invocation=adapter==='direct'?`${callable}(${argument})`:adapter==='call'?`${callable}.call(${hostReceiver},${argument})`:adapter==='apply'?`${callable}.apply(${hostReceiver},[${argument}])`:adapter==='bind'?`${callable}.bind(${hostReceiver})(${argument})`:`Reflect.apply(${callable},${hostReceiver},[${argument}])`;
+  const source=`class Base {static ${field}=${value}} const Alias=Base; namespace N {export const Base=Alias} class C extends ${base} {${context.replace('BODY',setup+invocation)}}`;
   test('super preserves known static host fields: '+source,()=>{
     const result=inspectSource(source);
-    assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+    assert.equal(result[boundary].length,1,source);
+    assert.equal(result.ambiguous.length,0,source);
     const shadow='const process={exit(){},stdout:{write(){}}}; '+source;
     assert.deepEqual(inspectSource(shadow),{exits:[],stdout:[],ambiguous:[]},shadow);
   });

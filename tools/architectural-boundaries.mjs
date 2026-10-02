@@ -248,6 +248,10 @@ export function inspectSource(source, path = 'source.ts') {
     for (const base of baseExpressions(owner)) for (const parent of localClasses(base) ?? []) routes.push(classMemberAccess(parent, isStatic, key, seen, bases));
     return key === '*' ? routes.some(Boolean) ? ['process', '*'] : null : mergeAccess(routes);
   }
+  function superMemberAccess(receiver, key, seen) {
+    const owner = thisOwner(receiver);
+    return owner ? mergeAccess(baseExpressions(owner.node).flatMap(base => (localClasses(base) ?? []).map(parent => classMemberAccess(parent, Boolean(owner.static), key, seen)))) : null;
+  }
   function aliasRoots(expression, seen = new Set()) {
     expression = unwrap(expression);
     if (!expression || seen.has(expression)) return [];
@@ -680,6 +684,7 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isObjectLiteralExpression(node)) return node.properties.some(property => access(ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : ts.isSpreadAssignment(property) ? property.expression : null, seen)) ? ['process', '*'] : null;
     if (ts.isPropertyAccessExpression(node)) {
       const receiver = unwrap(node.expression);
+      if (receiver.kind === ts.SyntaxKind.SuperKeyword) return superMemberAccess(receiver, node.name.text, seen);
       const owner = receiver.kind === ts.SyntaxKind.ThisKeyword && thisOwner(receiver);
       if (owner) return classMemberAccess(owner.node, Boolean(owner.static), node.name.text, seen);
       const instances = instanceOwners(receiver);
@@ -690,6 +695,7 @@ export function inspectSource(source, path = 'source.ts') {
     if (ts.isElementAccessExpression(node)) {
       const receiver = unwrap(node.expression);
       const key = ts.isStringLiteralLike(node.argumentExpression) ? node.argumentExpression.text : '*';
+      if (receiver.kind === ts.SyntaxKind.SuperKeyword) return superMemberAccess(receiver, key, seen);
       const owner = receiver.kind === ts.SyntaxKind.ThisKeyword && thisOwner(receiver);
       if (owner) return classMemberAccess(owner.node, Boolean(owner.static), key, seen);
       const instances = instanceOwners(receiver);
