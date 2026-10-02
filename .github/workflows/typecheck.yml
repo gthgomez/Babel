@@ -129,9 +129,157 @@ jobs:
       - name: Test public PR metadata policy
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-pr-metadata.ps1
 
+  architecture-regressions:
+    name: architecture-regressions (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Record candidate identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts/architecture-regressions | Out-Null
+          $head = '${{ github.event.pull_request.head.sha || github.sha }}'
+          $checkout = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git merge-base --is-ancestor $head HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @{ candidateHead = $head; checkout = $checkout; runId = '${{ github.run_id }}'; os = '${{ matrix.os }}' } | ConvertTo-Json > artifacts/architecture-regressions/identity.json
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Test scanner, real budget checker, and CI coverage contracts
+        shell: pwsh
+        run: |
+          node --test --test-reporter=tap tools/tests/architectural-boundaries.test.mjs tools/tests/architectural-budget.test.mjs tools/tests/ci-package-coverage.test.mjs 2>&1 | Tee-Object artifacts/architecture-regressions/full.tap
+          exit $LASTEXITCODE
+      - name: Verify architecture boundary registry
+        run: pwsh -NoProfile -File tools/tests/test-architectural-budget-allowlist.ps1
+      # The full size/cast ratchet is enabled with PR288's combined owner split.
+      # Intermediate PR285-287 size debt is reported in their integration evidence;
+      # the committed baselines and process-boundary grants are never increased.
+      - name: Upload architecture regression evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: architecture-regressions-${{ matrix.os }}
+          path: artifacts/architecture-regressions
+          if-no-files-found: error
+          retention-days: 7
+
+  package-components:
+    name: package-components (${{ matrix.os }}, ${{ matrix.suite }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        suite:
+          - test:unit
+          - test:resolver
+          - test:pipeline-v9
+          - test:mcp-adapter
+          - test:smoke-fixtures
+          - test:parity-audit
+          - test:otel-tracing
+          - test:android-warning-cleanup
+          - test:bounded-contract
+          - test:orchestrator-routing
+          - test:portable-workflow
+        exclude:
+          - os: windows-latest
+            suite: test:smoke-fixtures
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      FORCE_COLOR: "1"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Record candidate identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts/ci-package | Out-Null
+          $head = '${{ github.event.pull_request.head.sha || github.sha }}'
+          $checkout = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git merge-base --is-ancestor $head HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @{ candidateHead = $head; checkout = $checkout; runId = '${{ github.run_id }}'; os = '${{ matrix.os }}'; suite = '${{ matrix.suite }}' } | ConvertTo-Json > artifacts/ci-package/identity.json
+          Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue
+          if (Test-Path Env:BABEL_ALLOW_HOST_FALLBACK) { throw 'Host fallback must remain unset' }
+          if (Test-Path Env:BABEL_DOCKER_DISABLE) { throw 'Docker disable must remain unset' }
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Prepare isolated Ubuntu Docker smoke
+        id: docker_prepare
+        if: matrix.suite == 'test:smoke-fixtures'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker info
+          docker pull node@sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
+      - name: Run isolated Ubuntu smoke fixtures
+        id: docker_smoke
+        if: matrix.suite == 'test:smoke-fixtures'
+        env:
+          BABEL_BENCHMARK_DOCKER_IMAGE: node@sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
+        shell: pwsh
+        run: |
+          npm run test:smoke-fixtures 2>&1 | Tee-Object ../artifacts/ci-package/full.log
+          exit $LASTEXITCODE
+        working-directory: babel-cli
+      - name: Run package component
+        id: package_component
+        if: matrix.suite != 'test:smoke-fixtures'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue
+          $suite = '${{ matrix.suite }}'
+          if ($suite -eq 'test:unit') {
+            $package = Get-Content package.json -Raw | ConvertFrom-Json
+            $unit = [string]$package.scripts.'test:unit'
+            if (-not $unit.StartsWith('tsx ') -or -not $unit.Contains(' --test ')) { throw 'Unexpected canonical unit command' }
+            $unit = $unit.Replace(' --test ', ' --test-reporter=tap --test-concurrency=1 --test ')
+            $unitArgs = @(($unit -split '\s+' | Select-Object -Skip 1) | ForEach-Object { $_.Trim('"') })
+            $unit | Set-Content ../artifacts/ci-package/unit-command.txt
+            node node_modules/tsx/dist/cli.mjs @unitArgs 2>&1 | Tee-Object ../artifacts/ci-package/full.log
+          } else {
+            npm run $suite 2>&1 | Tee-Object ../artifacts/ci-package/full.log
+          }
+          exit $LASTEXITCODE
+        working-directory: babel-cli
+      - name: Upload package component evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: package-${{ matrix.os }}-${{ strategy.job-index }}
+          path: artifacts/ci-package
+          if-no-files-found: error
+          retention-days: 7
+
   linux-validation:
     name: linux-validation
-    needs: [security, public-content-policy]
+    needs: [security, public-content-policy, package-components, architecture-regressions]
     runs-on: ubuntu-latest
     env:
       BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -257,7 +405,7 @@ jobs:
 
   windows-portability:
     name: windows-portability
-    needs: [security, public-content-policy]
+    needs: [security, public-content-policy, package-components, architecture-regressions]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
