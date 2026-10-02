@@ -136,7 +136,7 @@ test('scanner and real budget checker regressions run on both standard platforms
   assert.ok(job, 'Missing scanner regression coverage');
   assert.deepEqual(job.strategy.matrix.os, ['ubuntu-latest', 'windows-latest']);
   const commands = job.steps.map(step => step.run ?? '').join('\n');
-  for (const path of ['tools/tests/architectural-boundaries.test.mjs', 'tools/tests/architectural-budget.test.mjs', 'tools/tests/test-architectural-budget-allowlist.ps1', 'tools/tests/ci-package-coverage.test.mjs']) {
+  for (const path of ['tools/tests/architectural-boundaries.test.mjs', 'tools/tests/architectural-budget.test.mjs', 'tools/tests/test-architectural-budget-allowlist.ps1', 'tools/tests/ci-package-coverage.test.mjs', 'tools/tests/package-scripts-and-tests.test.mjs']) {
     assert.ok(commands.includes(path), `Missing ${path}`);
   }
 });

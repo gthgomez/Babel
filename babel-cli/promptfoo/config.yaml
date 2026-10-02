@@ -1,0 +1,11 @@
+description: "Babel prompt evaluation configuration"
+prompts:
+  - "Summarize the following code task: {{task}}"
+providers:
+  - "echo"
+tests:
+  - vars:
+      task: "Fix type error in index.ts"
+    assert:
+      - type: contains
+        value: "Fix"

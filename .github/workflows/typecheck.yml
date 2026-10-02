@@ -165,7 +165,8 @@ jobs:
         run: >
           node --test --test-reporter=tap tools/tests/architectural-boundaries.test.mjs
           tools/tests/architectural-budget.test.mjs tools/tests/ci-package-coverage.test.mjs
-          tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-unit-sharding.test.mjs tools/tests/ci-workflow-coverage.test.mjs 2>&1 | Tee-Object
+          tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-unit-sharding.test.mjs tools/tests/ci-workflow-coverage.test.mjs
+          tools/tests/package-scripts-and-tests.test.mjs 2>&1 | Tee-Object
           artifacts/architecture-regressions/full.tap
 
           exit $LASTEXITCODE
