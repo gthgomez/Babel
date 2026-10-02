@@ -64,12 +64,6 @@
   ],
   "exits": [
     {
-      "path": "src/commands/coreCommands.ts",
-      "kind": "cli",
-      "maxCalls": 54,
-      "reason": "CLI command leaves"
-    },
-    {
       "path": "src/commands/workflowCommands.ts",
       "kind": "cli",
       "maxCalls": 31,
@@ -182,6 +176,66 @@
       "kind": "process_entry",
       "maxCalls": 0,
       "reason": "renderer fatal error paths"
+    },
+    {
+      "path": "src/commands/coreAutomationCommands.ts",
+      "kind": "cli",
+      "maxCalls": 1,
+      "reason": "Existing CLI command termination moved from coreCommands.ts; preserves the original bounded host-exit total"
+    },
+    {
+      "path": "src/commands/coreBenchmarkCommands.ts",
+      "kind": "cli",
+      "maxCalls": 9,
+      "reason": "Existing CLI command termination moved from coreCommands.ts; preserves the original bounded host-exit total"
+    },
+    {
+      "path": "src/commands/coreCommandSupport.ts",
+      "kind": "cli",
+      "maxCalls": 1,
+      "reason": "Existing CLI command termination moved from coreCommands.ts; preserves the original bounded host-exit total"
+    },
+    {
+      "path": "src/commands/coreExecutionCommands.ts",
+      "kind": "cli",
+      "maxCalls": 8,
+      "reason": "Existing CLI command termination moved from coreCommands.ts; preserves the original bounded host-exit total"
+    },
+    {
+      "path": "src/commands/coreExtensionCommands.ts",
+      "kind": "cli",
+      "maxCalls": 13,
+      "reason": "Existing CLI command termination moved from coreCommands.ts; preserves the original bounded host-exit total"
+    },
+    {
+      "path": "src/commands/coreGitCommands.ts",
+      "kind": "cli",
+      "maxCalls": 3,
+      "reason": "Existing CLI command termination moved from coreCommands.ts; preserves the original bounded host-exit total"
+    },
+    {
+      "path": "src/commands/coreInspectionCommands.ts",
+      "kind": "cli",
+      "maxCalls": 5,
+      "reason": "Existing CLI command termination moved from coreCommands.ts; preserves the original bounded host-exit total"
+    },
+    {
+      "path": "src/commands/coreLearningCommands.ts",
+      "kind": "cli",
+      "maxCalls": 1,
+      "reason": "Existing CLI command termination moved from coreCommands.ts; preserves the original bounded host-exit total"
+    },
+    {
+      "path": "src/commands/coreMemoryPlanCommands.ts",
+      "kind": "cli",
+      "maxCalls": 4,
+      "reason": "Existing CLI command termination moved from coreCommands.ts; preserves the original bounded host-exit total"
+    },
+    {
+      "path": "src/commands/coreStartupCommands.ts",
+      "kind": "cli",
+      "maxCalls": 9,
+      "reason": "Existing CLI command termination moved from coreCommands.ts; preserves the original bounded host-exit total"
     }
   ]
 }
