@@ -108,6 +108,85 @@ test('native factory invocation adapters retain loader identity', () => {
   ]) assert.equal(inspectSource(source).exits.length, 1, source);
 });
 
+for (const factory of [
+  'const factory=M.createRequire || other',
+  'const factory=other && M.createRequire',
+  'const factory=M.createRequire ?? other',
+  'let factory; factory ||= M.createRequire',
+  'const {factory=M.createRequire}={}',
+  'const [factory=M.createRequire]=[]',
+  'const {...N}=M; const factory=N.createRequire',
+  'const {default:ignored,...N}=M; const factory=N.createRequire',
+  'const box={}; box.factory=M.createRequire; const factory=box.factory',
+  'const box={}; const alias=box; alias.factory=M.createRequire; const factory=box.factory',
+  'const box={nested:{}}; box.nested.factory=M.createRequire; const factory=box.nested.factory',
+  'const box={}; box["factory"]=M.createRequire; const factory=box["factory"]',
+  'const box={}; box[key]=M.createRequire; const factory=box.factory',
+  'const box={factory:M.createRequire}; const factory=box[key]',
+  'const factory=M.createRequire.bind(null,import.meta.url)',
+  'const {nested:{factory}={factory:M.createRequire}}={}',
+  'const [[factory]=[M.createRequire]]=[]',
+  'class C {static factory=M.createRequire} const factory=C.factory',
+  'class C {factory=M.createRequire} const factory=new C().factory',
+  'class C {constructor(public factory=M.createRequire){}} const factory=new C().factory',
+  'class C {factory=M.createRequire} class D extends C {} const {factory}=new D()',
+  'namespace N {export const factory=M.createRequire} const factory=N.factory',
+]) test('bounded native factory routes retain exit and stdout: ' + factory, () => {
+  for (const suffix of ['exit(1)', 'stdout.write("x")']) {
+    const result=inspectSource('import * as M from "node:module"; '+factory+'; const load=factory(import.meta.url); load("node:process").'+suffix);
+    assert.ok(result.exits.length + result.stdout.length + result.ambiguous.length > 0, suffix);
+  }
+});
+
+for (const invocation of [
+  'const load=native.bind(null); load("node:process")',
+  'const load=native.bind(null,"node:process"); load()',
+  'native.call(null,"node:process")',
+  'native.apply(null,["node:process"])',
+  'const invoke=native.call.bind(native,null); invoke("node:process")',
+  'const invoke=native.apply.bind(native,null); invoke(["node:process"])',
+  'const load=native.bind(null,"node:module"); load().createRequire(import.meta.url)("node:process")',
+  'native.call.call(native,null,"node:process")',
+  'native.call.apply(native,[null,"node:process"])',
+  'class C {static load=native} C.load("node:process")',
+  'const {load=native}={}; load("node:process")',
+  'const load=native || other; load("node:process")',
+]) test('native loader adapters retain host calls: ' + invocation, () => {
+  for (const suffix of ['exit(1)', 'stdout.write("x")']) {
+    const result=inspectSource('import {createRequire} from "node:module"; const native=createRequire(import.meta.url); '+invocation+'.'+suffix);
+    assert.ok(result.exits.length + result.stdout.length + result.ambiguous.length > 0, suffix);
+  }
+});
+
+test('native loader route controls retain local functions and unrelated modules', () => {
+  for (const source of [
+    'const M={createRequire:()=>()=>({exit(){}})}; const factory=M.createRequire || other; factory("x")("process").exit(1)',
+    'const factory=()=>()=>({exit(){}}); const box={}; box.factory=factory; box.factory("x")("process").exit(1)',
+    'const load=()=>({exit(){}}); const invoke=load.bind(null,"process"); invoke().exit(1)',
+    'const load=()=>({exit(){}}); load.call(null,"process").exit(1); load.apply(null,["process"]).exit(1)',
+    'import {createRequire} from "node:module"; const native=createRequire(import.meta.url); const load=native.bind(null,"node:fs"); load().exit(1)',
+    'import * as M from "node:module"; const {createRequire:ignored,...N}=M; N.createRequire(import.meta.url)("process").exit(1)',
+    'import * as M from "node:module"; const box={factory:M.createRequire,run:()=>()=>({exit(){}})}; box.run("x")("process").exit(1)',
+    'import {createRequire} from "node:module"; createRequire.apply(null,args)',
+    'import {createRequire} from "node:module"; const native=createRequire(import.meta.url); native.bind(null,"process")',
+  ]) assert.deepEqual(inspectSource(source), {exits:[], stdout:[], ambiguous:[]}, source);
+});
+
+test('Reflect invocation of native loaders and factories retains the returned process', () => {
+  for (const expression of [
+    'Reflect.apply(native,null,["process"])',
+    'const apply=Reflect.apply; apply(native,null,["process"])',
+    'globalThis.Reflect.apply(native,null,["process"])',
+    'Reflect.apply.call(null,native,null,["process"])',
+    'const load=Reflect.apply.bind(Reflect,native,null); load(["process"])',
+    'Reflect.apply(createRequire,null,[import.meta.url])("process")',
+  ]) {
+    const result=inspectSource('import {createRequire} from "node:module"; const native=createRequire(import.meta.url); '+expression+'.exit(1)');
+    assert.ok(result.exits.length + result.ambiguous.length > 0, expression);
+  }
+  assert.deepEqual(inspectSource('const Reflect={apply:()=>({exit(){}})}; Reflect.apply(require,null,["process"]).exit(1)'), {exits:[], stdout:[], ambiguous:[]});
+});
+
 test('factory namespace and bind controls do not imply a native loader', () => {
   for (const source of [
     'import * as M from "./fake.js"; const N=M; const load=N.createRequire("x"); load("process").exit(1)',

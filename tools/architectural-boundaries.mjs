@@ -416,58 +416,138 @@ export function inspectSource(source, path = 'source.ts') {
     const expression = node && ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) ? node.moduleReference.expression : node?.moduleSpecifier;
     return expression && ts.isStringLiteralLike(expression) ? expression.text : undefined;
   }
-  function projectNativeOrigin(kind, keys) {
+  function nativeOrigin(kind) { return kind ? { kind, operations: [] } : null; }
+  function mergeNativeOrigins(routes) {
+    const recognized = routes.filter(Boolean);
+    const identity = origin => origin.kind + JSON.stringify(origin.operations.map(operation => typeof operation === 'string' ? operation : operation.map(argument => argument.pos)));
+    return new Set(recognized.map(identity)).size > 1 ? nativeOrigin('ambiguous') : recognized[0] ?? null;
+  }
+  function projectNativeOrigin(origin, keys) {
     for (const key of keys) {
-      if (kind === 'module' && key === 'default') continue;
-      kind = kind === 'module' && key === 'createRequire' ? 'factory' : kind === 'factory' && ['bind', 'call', 'apply'].includes(key) ? 'factory-' + key : null;
+      if (!origin) return null;
+      if (origin.kind === 'ambiguous') continue;
+      if (origin.kind === 'module' && key === 'default') continue;
+      if (origin.kind === 'module' && key === 'createRequire') origin = nativeOrigin('factory');
+      else if (origin.kind === 'global' && key === 'Reflect') origin = nativeOrigin('reflect');
+      else if (origin.kind === 'reflect' && key === 'apply') origin = nativeOrigin('reflection');
+      else if (['factory', 'loader', 'reflection'].includes(origin.kind) && ['bind', 'call', 'apply'].includes(key)) origin = { ...origin, operations: [...origin.operations, key] };
+      else origin = key === '*' ? nativeOrigin('ambiguous') : null;
     }
-    return kind;
+    return origin;
+  }
+  function invokeNativeOrigin(origin, arguments_, seen) {
+    if (!origin || !['factory', 'loader', 'reflection', 'ambiguous'].includes(origin.kind)) return null;
+    if (origin.kind === 'ambiguous') return origin;
+    let args = [...arguments_];
+    const operations = [...origin.operations];
+    // Reverse adapter application preserves both pre-bound arguments and later
+    // call/apply wrappers; only known intrinsic operations are interpreted.
+    while (operations.length) {
+      const operation = operations.pop();
+      if (Array.isArray(operation)) args = [...operation, ...args];
+      else if (operation === 'bind') return { ...origin, operations: [...operations, args.slice(1)] };
+      else if (operation === 'call') args = args.slice(1);
+      else {
+        const array = unwrap(args[1]);
+        if (!array || !ts.isArrayLiteralExpression(array)) return nativeOrigin(origin.kind === 'factory' ? 'loader' : 'ambiguous');
+        args = literalArrayElements(array);
+        if (!args) return nativeOrigin('ambiguous');
+      }
+    }
+    if (origin.kind === 'factory') return nativeOrigin('loader');
+    if (origin.kind === 'reflection') {
+      const target = nativeLoaderOrigin(args[0], [], seen);
+      const array = unwrap(args[2]);
+      if (!target) return null;
+      return array && ts.isArrayLiteralExpression(array) ? invokeNativeOrigin(target, literalArrayElements(array) ?? [], seen) : nativeOrigin(target.kind === 'factory' ? 'loader' : 'ambiguous');
+    }
+    const name = unwrap(args[0]);
+    if (!name || !ts.isStringLiteralLike(name)) return null;
+    return nativeOrigin(['process', 'node:process'].includes(name.text) ? 'process' : ['module', 'node:module'].includes(name.text) ? 'module' : null);
+  }
+  function nativeClassProjection(owner, isStatic, keys, seen, bases = new Set()) {
+    if (!keys.length || bases.has(owner)) return null;
+    bases = new Set(bases).add(owner);
+    const [key, ...rest] = keys;
+    const fields = (isStatic ? owner.members.filter(field => ts.isPropertyDeclaration(field) && hasStatic(field)) : instanceFields(owner)).filter(field => key === '*' || propertyKey(field.name) === key);
+    const stored = classFields.get(isStatic ? carrierSymbol(owner) : instanceSymbol(owner));
+    const values = [...fields.map(field => field.initializer), ...(key === '*' ? [...(stored?.values() ?? [])].flat() : stored?.get(key) ?? [])];
+    return mergeNativeOrigins([...values.map(value => nativeLoaderOrigin(value, rest, seen)), ...baseExpressions(owner).flatMap(base => (localClasses(base) ?? []).map(parent => nativeClassProjection(parent, isStatic, keys, seen, bases)))]);
   }
   function nativeLoaderOrigin(expression, keys = [], seen = new Set()) {
     expression = unwrap(expression);
     if (!expression || seen.has(expression)) return null;
     seen = new Set(seen).add(expression);
     const resolve = (value, path = keys) => nativeLoaderOrigin(value, path, seen);
-    const combine = routes => { const kinds = [...new Set(routes.filter(Boolean))]; return kinds.length === 1 ? kinds[0] : null; };
+    const combine = mergeNativeOrigins;
     if (ts.isAwaitExpression(expression)) return resolve(expression.expression);
-    if (ts.isBinaryExpression(expression) && [ts.SyntaxKind.CommaToken, ts.SyntaxKind.EqualsToken].includes(expression.operatorToken.kind)) return resolve(expression.right);
+    if (ts.isBinaryExpression(expression)) {
+      if ([ts.SyntaxKind.CommaToken, ts.SyntaxKind.EqualsToken].includes(expression.operatorToken.kind)) return resolve(expression.right);
+      if ([ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(expression.operatorToken.kind)) return combine([resolve(expression.left), resolve(expression.right)]);
+    }
     if (ts.isConditionalExpression(expression)) return combine([resolve(expression.whenTrue), resolve(expression.whenFalse)]);
     if (ts.isPropertyAccessExpression(expression)) return resolve(expression.expression, [expression.name.text, ...keys]);
-    if (ts.isElementAccessExpression(expression)) return ts.isStringLiteralLike(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression) ? resolve(expression.expression, [expression.argumentExpression.text, ...keys]) : null;
+    if (ts.isElementAccessExpression(expression)) return resolve(expression.expression, [ts.isStringLiteralLike(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression) ? expression.argumentExpression.text : '*', ...keys]);
     if (ts.isCallExpression(expression)) {
-      const callee = nativeLoaderOrigin(expression.expression, [], seen);
-      const kind = callee === 'factory-bind' ? 'factory' : ['factory', 'factory-call', 'factory-apply'].includes(callee) ? 'loader' :
-        (callee === 'loader' || expression.expression.kind === ts.SyntaxKind.ImportKeyword) && expression.arguments[0] && ts.isStringLiteralLike(expression.arguments[0]) && ['node:module', 'module'].includes(expression.arguments[0].text) ? 'module' : null;
-      return projectNativeOrigin(kind, keys);
+      const callee = expression.expression.kind === ts.SyntaxKind.ImportKeyword ? nativeOrigin('loader') : nativeLoaderOrigin(expression.expression, [], seen);
+      return projectNativeOrigin(invokeNativeOrigin(callee, expression.arguments, seen), keys);
+    }
+    if (ts.isClassDeclaration(expression) || ts.isClassExpression(expression)) return nativeClassProjection(expression, true, keys, seen);
+    if (ts.isNewExpression(expression)) return combine((localClasses(expression.expression) ?? []).map(owner => nativeClassProjection(owner, false, keys, seen)));
+    if (expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const owner = thisOwner(expression);
+      return owner ? nativeClassProjection(owner.node, owner.static, keys, seen) : null;
+    }
+    if (ts.isModuleDeclaration(expression) && keys.length && expression.body) {
+      const declarations = ts.isModuleDeclaration(expression.body) ? [expression.body] : expression.body.statements.filter(statement => statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)).flatMap(statement => ts.isVariableStatement(statement) ? statement.declarationList.declarations : [statement]);
+      return combine(declarations.filter(declaration => declaration.name && (keys[0] === '*' || propertyKey(declaration.name) === keys[0])).map(declaration => resolve(ts.isVariableDeclaration(declaration) ? declaration.initializer : declaration, keys.slice(1))));
     }
     if (keys.length && ts.isObjectLiteralExpression(expression)) return combine(expression.properties.flatMap(property =>
-      ts.isSpreadAssignment(property) ? [resolve(property.expression)] : (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) && propertyKey(property.name) === keys[0] ? [resolve(ts.isPropertyAssignment(property) ? property.initializer : property.name, keys.slice(1))] : []));
-    if (keys.length && ts.isArrayLiteralExpression(expression)) return resolve(literalArrayElements(expression)?.[Number(keys[0])], keys.slice(1));
+      ts.isSpreadAssignment(property) ? [resolve(property.expression)] : (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) && (keys[0] === '*' || propertyKey(property.name) === '*' || propertyKey(property.name) === keys[0]) ? [resolve(ts.isPropertyAssignment(property) ? property.initializer : property.name, keys.slice(1))] : []));
+    if (keys.length && ts.isArrayLiteralExpression(expression)) {
+      const elements = literalArrayElements(expression) ?? [];
+      return keys[0] === '*' ? combine(elements.map(element => resolve(element, keys.slice(1)))) : resolve(elements[Number(keys[0])], keys.slice(1));
+    }
     if (!ts.isIdentifier(expression)) return null;
     const symbol = identifierSymbol(expression);
     const declarations = (symbol?.declarations ?? []).filter(declaration => !isAmbientDeclaration(declaration));
-    const routes = expression.text === 'require' && !declarations.length ? [projectNativeOrigin('loader', keys)] : [];
+    const routes = expression.text === 'require' && !declarations.length ? [projectNativeOrigin(nativeOrigin('loader'), keys)] : [];
+    if (!declarations.length && implicitGlobals.get(expression.text) === globalReflectSymbol) routes.push(projectNativeOrigin(nativeOrigin('reflect'), keys));
+    if (!declarations.length && implicitGlobals.get(expression.text) === globalObjectSymbol) routes.push(projectNativeOrigin(nativeOrigin('global'), keys));
     for (const declaration of declarations) {
       if (['node:module', 'module'].includes(moduleOf(declaration))) {
-        if (ts.isImportSpecifier(declaration)) routes.push(projectNativeOrigin((declaration.propertyName?.text ?? declaration.name.text) === 'createRequire' ? 'factory' : null, keys));
-        else if (ts.isNamespaceImport(declaration) || ts.isImportClause(declaration) || ts.isImportEqualsDeclaration(declaration)) routes.push(projectNativeOrigin('module', keys));
+        if (ts.isImportSpecifier(declaration)) routes.push(projectNativeOrigin(nativeOrigin((declaration.propertyName?.text ?? declaration.name.text) === 'createRequire' ? 'factory' : (declaration.propertyName?.text ?? declaration.name.text) === 'default' ? 'module' : null), keys));
+        else if (ts.isNamespaceImport(declaration) || ts.isImportClause(declaration) || ts.isImportEqualsDeclaration(declaration)) routes.push(projectNativeOrigin(nativeOrigin('module'), keys));
       }
       if (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration)) routes.push(resolve(declaration.initializer));
+      if (ts.isClassDeclaration(declaration) || ts.isModuleDeclaration(declaration)) routes.push(resolve(declaration));
       if (ts.isBindingElement(declaration)) {
-        let element = declaration, path = keys;
+        let element = declaration, path = keys, excluded = false;
         while (ts.isBindingElement(element)) {
-          path = [ts.isArrayBindingPattern(element.parent) ? String(element.parent.elements.indexOf(element)) : propertyKey(element.propertyName ?? element.name), ...path];
+          if (element.initializer) routes.push(resolve(element.initializer, path));
+          if (element.dotDotDotToken) {
+            if (ts.isObjectBindingPattern(element.parent)) excluded ||= element.parent.elements.some(sibling => sibling !== element && !sibling.dotDotDotToken && propertyKey(sibling.propertyName ?? sibling.name) === path[0]);
+            else if (/^\d+$/.test(path[0] ?? '')) path = [String(Number(path[0]) + element.parent.elements.indexOf(element)), ...path.slice(1)];
+          } else path = [ts.isArrayBindingPattern(element.parent) ? String(element.parent.elements.indexOf(element)) : propertyKey(element.propertyName ?? element.name), ...path];
           element = element.parent.parent;
         }
-        routes.push(resolve(declarationSource(element), path));
+        if (!excluded) routes.push(resolve(declarationSource(element), path));
       }
     }
     routes.push(...(assignments.get(symbol) ?? []).map(value => resolve(value.expression, [...value.keys, ...keys])));
+    if (keys.length) for (const mutation of mutationsFor(symbol).mutations) {
+      const targetKeys = [];
+      let target = unwrap(mutation.target);
+      while (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) {
+        targetKeys.unshift(ts.isPropertyAccessExpression(target) ? target.name.text : ts.isStringLiteralLike(target.argumentExpression) ? target.argumentExpression.text : '*');
+        target = unwrap(target.expression);
+      }
+      if (targetKeys.length <= keys.length && targetKeys.every((key, index) => key === '*' || keys[index] === '*' || key === keys[index])) routes.push(resolve(mutation.expression, keys.slice(targetKeys.length)));
+    }
     return combine(routes);
   }
   function isProcessImport(node) {
-    if (!ts.isCallExpression(node) || !node.arguments[0] || !ts.isStringLiteralLike(node.arguments[0]) || !['node:process', 'process'].includes(node.arguments[0].text)) return false;
-    return node.expression.kind === ts.SyntaxKind.ImportKeyword || nativeLoaderOrigin(node.expression) === 'loader';
+    return ts.isCallExpression(node) && ['process', 'ambiguous'].includes(nativeLoaderOrigin(node)?.kind);
   }
   function boundReflectionAccess(callee, args, seen) {
     const adapter = callee.slice(0, -1).join('.');
@@ -531,7 +611,7 @@ export function inspectSource(source, path = 'source.ts') {
       return member(base, key);
     }
     if (ts.isCallExpression(node)) {
-      if (isProcessImport(node)) return ['process'];
+      if (isProcessImport(node)) return nativeLoaderOrigin(node)?.kind === 'process' ? ['process'] : ['process', '*'];
       const callee = access(node.expression, seen);
       if (unresolvedInvocation(callee)) return ['process', '*'];
       if (callee?.[0] === 'reflect' && callee.at(-1) === 'bind') return boundReflectionAccess(callee, node.arguments, seen);
