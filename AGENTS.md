@@ -26,6 +26,8 @@ contracts. Load additional material only when the task needs it:
 | Task | Load before acting |
 |---|---|
 | Code or package changes | [ENGINEERING.md](./ENGINEERING.md) and the affected package instructions |
+| Runtime ownership or architectural-budget work | The affected package's implementation map; [HARNESS_OVERVIEW.md](./docs/architecture/HARNESS_OVERVIEW.md) for explanatory ownership and source pointers; [architectural-budget baselines](./config/architectural-budget/) and [their checker](./tools/check-architectural-budget.ps1) when relevant |
+| Repository layout or CI changes | [STRUCTURE.md](./STRUCTURE.md) for repository and CI locations, then the affected workflow and its invoked checks |
 | Babel invocation or Prompt OS stack assembly | [INTEGRATION.md](./INTEGRATION.md), `prompt_catalog.yaml`, and the selected layers |
 | Router, Behavioral OS, catalog, or compiled-memory changes | `PROJECT_CONTEXT.md`, the relevant cataloged contract, and [RULES_CORE.md](./LLM_COLLABORATION_SYSTEM/RULES_CORE.md) / [RULES_GUARD.md](./LLM_COLLABORATION_SYSTEM/RULES_GUARD.md) |
 | GitHub delivery | `.agents/rules/05-github-workflow.md` before staging, committing, pushing, or opening a PR |
@@ -37,6 +39,11 @@ contracts. Load additional material only when the task needs it:
 Read one only when its host-specific guidance applies. Ordinary conversation
 does not require repository inspection unless the answer depends on repository
 evidence.
+
+For CLI implementation work, follow [babel-cli/AGENTS.md](./babel-cli/AGENTS.md)
+and its [implementation context](./babel-cli/PROJECT_CONTEXT.md). Ownership and
+source maps help locate code; the applicable normative contract and executable
+checks determine behavior. Load only the pointers relevant to the task.
 
 Managed local workspaces may contain `WORKSPACE_CONTEXT.local.md` for
 cross-repository routing. It is optional, gitignored, non-authoritative, and
