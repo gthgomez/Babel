@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,17 @@ const checker = fileURLToPath(new URL('../check-architectural-budget.ps1', impor
 // cmd may echo a quoted path; spawnSync's native argument array must not retain
 // those shell delimiters. Preserve the actual path, including interior spaces.
 const nativeAliasPath = output => output.trim().replace(/^"(.*)"$/, '$1');
+function windowsShortRoot(root) {
+  // cmd consumes a command string rather than the usual native argv quoting.
+  // Expand the owned path as quoted data, without interpolating it into code.
+  const alias = spawnSync('cmd.exe', ['/d', '/c', 'for %I in ("%BABEL_BUDGET_FIXTURE_ROOT%") do @echo %~sI'], {
+    encoding: 'utf8', windowsVerbatimArguments: true,
+    env: { ...process.env, BABEL_BUDGET_FIXTURE_ROOT: root },
+  });
+  assert.ifError(alias.error);
+  assert.equal(alias.status, 0, alias.stderr);
+  return nativeAliasPath(alias.stdout);
+}
 function fixture(t, source, path = 'ui/probe.ts', policy = {}) {
   const root = mkdtempSync(join(tmpdir(), 'babel-budget-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -46,10 +57,8 @@ test('Windows short-path roots preserve file and zero-cast baseline identities',
   if (process.platform !== 'win32') return t.skip('Windows 8.3 alias regression');
   const f = fixture(t, 'const value = 1;\n');
   // Read the actual NTFS alias; this command only expands a generated fixture path.
-  const alias = spawnSync('cmd.exe', ['/d', '/c', `for %I in ("${f.root}") do @echo %~sI`], { encoding: 'utf8' });
-  assert.ifError(alias.error);
-  assert.equal(alias.status, 0, alias.stderr);
-  const shortRoot = nativeAliasPath(alias.stdout);
+  const shortRoot = windowsShortRoot(f.root);
+  assert.equal(realpathSync.native(shortRoot), realpathSync.native(f.root));
   if (!shortRoot.includes('~')) return t.skip('This volume has no 8.3 fixture alias');
   const clean = f.runRoot(shortRoot);
   assert.equal(clean.code, 0, clean.output);
@@ -58,6 +67,16 @@ test('Windows short-path roots preserve file and zero-cast baseline identities',
   const regression = f.runRoot(shortRoot);
   assert.notEqual(regression.code, 0, regression.output);
   assert.match(regression.output, /babel-cli\/src\/ui\/probe\.ts.*grew from 0 to 1/);
+});
+
+test('Windows alias query resolves native paths before checking 8.3 availability', t => {
+  if (process.platform !== 'win32') return t.skip('Windows native argument regression');
+  const f = fixture(t, 'const value = 1;\n');
+  const dataPath = join(f.root, 'space & literal%name');
+  mkdirSync(dataPath);
+  for (const root of [f.root, dataPath]) {
+    assert.equal(realpathSync.native(windowsShortRoot(root)), realpathSync.native(root));
+  }
 });
 
 test('comments and generated script data are not host process exits/output', t => {
