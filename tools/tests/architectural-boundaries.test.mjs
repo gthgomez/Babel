@@ -3,6 +3,75 @@ import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
 
+for (const source of [
+  'Reflect.apply(process.exit, process, [1])',
+  'globalThis.Reflect.apply(process.exit, process, [1])',
+  'const invoke=Reflect.apply; invoke(process.exit, process, [1])',
+  'const R=Reflect; R["apply"](process.exit, process, [1])',
+  'const {apply: invoke}=Reflect; const quit=process.exit; invoke(quit, process, [1])',
+  'const invoke=Reflect.apply.bind(Reflect); invoke(process.exit, process, [1])',
+  'Reflect.apply.call(Reflect, process.exit, process, [1])',
+  'Reflect.apply.apply(Reflect, [process.exit, process, [1]])',
+]) test('Reflect invocation retains exit ownership: ' + source, () => {
+  assert.deepEqual(inspectSource(source), {exits:[1], stdout:[], ambiguous:[]});
+});
+
+for (const source of [
+  'Reflect.apply(process.stdout.write, process.stdout, ["x"])',
+  'const {apply}=globalThis.Reflect; const emit=process.stdout.write; apply(emit, null, ["x"])',
+]) test('Reflect invocation retains stdout ownership: ' + source, () => {
+  assert.deepEqual(inspectSource(source), {exits:[], stdout:[1], ambiguous:[]});
+});
+
+test('dynamic Reflect invocation cannot clear a possible host target', () => {
+  assert.equal(inspectSource('Reflect[key](process.exit, process, [1])').ambiguous.length, 1);
+});
+
+test('nested Reflect invokers cannot clear a possible host target', () => {
+  assert.equal(inspectSource('Reflect.apply(Reflect.apply, Reflect, [process.exit, process, [1]])').ambiguous.length, 1);
+  assert.equal(inspectSource('Reflect.apply(Reflect.apply, Reflect, [process.stdout.write, process.stdout, ["x"]])').ambiguous.length, 1);
+  assert.deepEqual(inspectSource('Reflect.apply(Reflect.apply, Reflect, [()=>{}, null, []])'), {exits:[], stdout:[], ambiguous:[]});
+});
+
+for (const source of [
+  'function f(Reflect) { Reflect.apply(process.exit, process, [1]) }',
+  'const Reflect={apply:()=>{}}; Reflect.apply(process.exit, process, [1])',
+  'Reflect.apply(()=>{}, null, [])',
+  'const invoke=Reflect.apply; invoke(()=>{}, null, [])',
+  'const R={apply:()=>{}}; R.apply(process.exit, process, [1])',
+  'Reflect.apply(process.cwd, process, [])',
+  'const invoke=Reflect.apply.bind(Reflect)',
+]) test('ordinary or shadowed Reflect operations do not count: ' + source, () => {
+  assert.deepEqual(inspectSource(source), {exits:[], stdout:[], ambiguous:[]});
+});
+
+for (const source of [
+  'class C {constructor(public quit=process.exit){}} new C().quit(1)',
+  'class C {constructor(readonly quit=process.exit){}} const c=new C(); c.quit(1)',
+  'class C {constructor(private quit=process.exit){} run(){this.quit(1)}} new C().run()',
+  'class C {constructor(protected quit=process.exit){}} class D extends C {run(){this.quit(1)}} new D().run()',
+  'const end=process.exit; class C {constructor(public quit=end){}} new C().quit(1)',
+  'class C {constructor(public quit=process.exit){}} const {quit}=new C(); quit(1)',
+]) test('initialized parameter property retains exit ownership: ' + source, () => {
+  const result=inspectSource(source);
+  assert.equal(result.exits.length + result.ambiguous.length, 1);
+});
+
+test('initialized parameter properties retain stdout and reverse mutation ownership', () => {
+  assert.equal(inspectSource('class C {constructor(public out=process.stdout){}} new C().out.write("x")').stdout.length, 1);
+  assert.equal(inspectSource('class C {constructor(public p=process){}} const c=new C(); c.p.quit=c.p.exit; process.quit(1)').ambiguous.length, 1);
+});
+
+for (const source of [
+  'class C {constructor(public quit=process.exit){}} new C()',
+  'class C {constructor(quit=process.exit){}} new C().quit(1)',
+  'class C {constructor(public quit=()=>{}){}} new C().quit()',
+  'function f(process) {class C {constructor(public quit=process.exit){}} new C().quit(1)}',
+  'class C {constructor(public quit=process.exit){} run(){this.resize()} resize(){}} new C().run()',
+]) test('parameter property controls preserve ordinary construction and shadowing: ' + source, () => {
+  assert.deepEqual(inspectSource(source), {exits:[], stdout:[], ambiguous:[]});
+});
+
 test('cyclic container aliases terminate and preserve host mutation detection', () => {
   const moduleUrl = new URL('../architectural-boundaries.mjs', import.meta.url).href;
   const graph = 'const c0 = {};\n' + Array.from({length: 22}, (_, i) => `const c${i+1} = c${i}; c${i}.next = c${i+1};`).join('\n');

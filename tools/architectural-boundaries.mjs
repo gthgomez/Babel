@@ -32,7 +32,8 @@ export function inspectSource(source, path = 'source.ts') {
   const resolvingClassExpressions = new Set();
   const globalProcessSymbol = Symbol('unshadowed global process');
   const globalObjectSymbol = Symbol('unshadowed global object');
-  const implicitGlobals = new Map([['process', globalProcessSymbol], ['global', globalObjectSymbol], ['globalThis', globalObjectSymbol]]);
+  const globalReflectSymbol = Symbol('unshadowed global Reflect');
+  const implicitGlobals = new Map([['process', globalProcessSymbol], ['global', globalObjectSymbol], ['globalThis', globalObjectSymbol], ['Reflect', globalReflectSymbol]]);
   let hasBindOverrides = false;
   linkSymbols(globalProcessSymbol, globalObjectSymbol);
   function isAmbientDeclaration(node) {
@@ -150,10 +151,15 @@ export function inspectSource(source, path = 'source.ts') {
     return routes.every(route => route !== null) ? routes.flat() : null;
   }
   const baseExpressions = node => (node.heritageClauses ?? []).filter(clause => clause.token === ts.SyntaxKind.ExtendsKeyword).flatMap(clause => clause.types.map(type => type.expression));
+  function instanceFields(node) {
+    return node.members.flatMap(member => ts.isConstructorDeclaration(member)
+      ? member.parameters.filter(parameter => ts.isParameterPropertyDeclaration(parameter, member))
+      : ts.isPropertyDeclaration(member) && !hasStatic(member) ? [member] : []);
+  }
   function instanceValues(node, seen = new Set()) {
     if (seen.has(node)) return [];
     seen = new Set(seen).add(node);
-    return [...node.members.filter(member => ts.isPropertyDeclaration(member) && !hasStatic(member)).map(member => member.initializer).filter(Boolean),
+    return [...instanceFields(node).map(member => member.initializer).filter(Boolean),
       ...baseExpressions(node).flatMap(base => (localClasses(base) ?? []).flatMap(owner => instanceValues(owner, seen)))];
   }
   function hasHostBase(node, seen = new Set()) {
@@ -205,7 +211,7 @@ export function inspectSource(source, path = 'source.ts') {
     bases = new Set(bases).add(owner);
     const symbol = isStatic ? carrierSymbol(owner) : instanceSymbol(owner);
     if (hasHostMutation(symbol)) return ['process', '*'];
-    const fields = owner.members.filter(field => ts.isPropertyDeclaration(field) && Boolean(hasStatic(field)) === isStatic && (key === '*' || propertyKey(field.name) === key));
+    const fields = (isStatic ? owner.members.filter(field => ts.isPropertyDeclaration(field) && hasStatic(field)) : instanceFields(owner)).filter(field => key === '*' || propertyKey(field.name) === key);
     const stored = classFields.get(symbol);
     const values = [...fields.map(field => field.initializer), ...(key === '*' ? [...(stored?.values() ?? [])].flat() : stored?.get(key) ?? [])];
     const routes = values.map(value => access(value, seen));
@@ -350,6 +356,8 @@ export function inspectSource(source, path = 'source.ts') {
   mutationComponents.clear();
   const member = (base, key) => {
     if (!base) return null;
+    if (!base.length && key === 'Reflect') return ['reflect'];
+    if (base.join('.') === 'reflect' && !['apply', '*'].includes(key)) return null;
     if (base.join('.') === 'process') {
       if (key === 'default') return base;
       // Process data and unrelated methods cannot become exit/stdout boundaries.
@@ -472,7 +480,7 @@ export function inspectSource(source, path = 'source.ts') {
     // assignments without recursively expanding the same component again.
     if (hasHostMutation(symbol)) return ['process', '*'];
     if (implicitGlobals.has(node.text) && declarations.length === 0) {
-      const initial = node.text === 'process' ? ['process'] : [];
+      const initial = node.text === 'process' ? ['process'] : node.text === 'Reflect' ? ['reflect'] : [];
       return mergeAccess([initial, ...(assignments.get(symbol) ?? []).map(assigned => assignedAccess(assigned, seen))]);
     }
     for (const declaration of declarations) {
@@ -526,6 +534,17 @@ export function inspectSource(source, path = 'source.ts') {
       // Intrinsic bind creates a function; invocation of that result is counted
       // separately. Explicit or dynamic local overrides retain ambiguity.
       if (route?.at(-1) === 'bind' && !hasBindOverrides) route = null;
+      // Reflect.apply invokes its target argument, including transparent aliases
+      // and the intrinsic's call/apply adapters. Unknown adapters fail closed
+      // when their arguments carry a host boundary.
+      if (route?.[0] === 'reflect') {
+        const adapter = route.join('.');
+        if (ts.isCallExpression(node) && adapter === 'reflect.apply') route = access(node.arguments[0]);
+        else if (ts.isCallExpression(node) && adapter === 'reflect.apply.call') route = access(node.arguments[1]);
+        else if (ts.isCallExpression(node) && adapter === 'reflect.apply.apply') route = projectionAccess(node.arguments[1], ['0'], new Set());
+        else route = null;
+        if (route?.[0] === 'reflect' || !['reflect.apply', 'reflect.apply.call', 'reflect.apply.apply'].includes(adapter)) route = ts.isCallExpression(node) && node.arguments.some(argument => access(argument)?.[0] === 'process') ? ['process', '*'] : null;
+      }
       if (unresolvedInvocation(route)) route = ['process', '*'];
       if (['call', 'apply'].includes(route?.at(-1))) route = route.slice(0, -1);
       const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
