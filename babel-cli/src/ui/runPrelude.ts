@@ -2,6 +2,7 @@ import type { ValidMode } from '../cli/constants.js';
 import { readRuntimeMode } from '../config/runtimeMode.js';
 import { printBanner } from '../commands/coreCommands.js';
 import { renderPlanModeWarning, renderRunPrelude } from './renderers.js';
+import { OutputBuffer } from './outputBuffer.js';
 
 export interface TextRunPreludeContext {
   task: string;
@@ -61,8 +62,8 @@ export function renderTextRunPrelude(context: TextRunPreludeContext): string {
 
 export function writeTextRunPrelude(
   context: TextRunPreludeContext,
-  stream: NodeJS.WriteStream = process.stdout,
+  stream?: NodeJS.WriteStream,
 ): void {
   printBanner();
-  stream.write(renderTextRunPrelude(context));
+  (stream ?? OutputBuffer.getInstance()).write(renderTextRunPrelude(context));
 }
