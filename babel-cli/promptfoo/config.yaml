@@ -1,0 +1,15 @@
+# Offline configuration smoke test for promptfoo CLI runner and schema resolution.
+# Uses the built-in 'echo' provider without paid inference, remote LLM access, or API keys.
+# Does NOT evaluate prompt quality, token efficiency, or agent task performance.
+# Substantive evaluations are deferred to dedicated benchmark suites and replay harnesses.
+description: "Babel promptfoo runner configuration smoke test (offline echo provider only; not quality evidence)"
+prompts:
+  - "Summarize the following code task: {{task}}"
+providers:
+  - "echo"
+tests:
+  - vars:
+      task: "Fix type error in index.ts"
+    assert:
+      - type: contains
+        value: "Fix"
