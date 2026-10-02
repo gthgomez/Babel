@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
@@ -19,14 +21,35 @@ test('every canonical package component runs on Linux; all portable components a
   const job = workflow.jobs['package-components'];
   assert.ok(job, 'Missing hosted package component coverage');
   const matrix = job.strategy.matrix;
-  assert.deepEqual([...matrix.suite].sort(), [...components].sort());
   assert.deepEqual(matrix.os, ['ubuntu-latest', 'windows-latest']);
-  assert.deepEqual(matrix.exclude, [{ os: 'windows-latest', suite: 'test:smoke-fixtures' }]);
   assert.equal(job.strategy['fail-fast'], false);
-  const unit = job.steps.find(step => step.id === 'package_component');
-  assert.match(unit.run, /test-concurrency=1/);
-  assert.match(unit.run, /matrix\.suite/);
-  assert.match(unit.run, /exit \$LASTEXITCODE/);
+  const portable = job.steps.find(step => step.id === 'package_component');
+  assert.match(portable.run, /package\.scripts\.test/);
+  assert.match(portable.run, /npm run \$suite/);
+  assert.deepEqual(workflow.jobs['unit-shards'].strategy.matrix.os, matrix.os);
+  assert.equal(workflow.jobs['docker-smoke']['runs-on'], 'ubuntu-latest');
+  assert.ok(components.includes('test:unit') && components.includes('test:smoke-fixtures'));
+});
+
+test('portable execution follows future canonical components and stops on an actual failing subprocess status', t => {
+  const base = mkdtempSync(join(tmpdir(), 'babel-ci-components-'));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const packageRoot = join(base, 'package');
+  mkdirSync(packageRoot);
+  mkdirSync(join(base, 'artifacts', 'ci-package'), { recursive: true });
+  writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ scripts: { test: 'npm run test:unit && npm run test:future-one && npm run test:smoke-fixtures && npm run test:future-two' } }));
+  const script = workflow.jobs['package-components'].steps.find(step => step.id === 'package_component').run;
+  // A controlled executable stand-in records selection without running the heavy suites.
+  const npm = `function npm { param($verb, $suite)\nif ($verb -ne 'run') { throw 'Unexpected invocation' }\nWrite-Output "selected:$suite"\n$global:LASTEXITCODE = if ($suite -eq $env:BABEL_CI_PROBE_FAILURE) { 7 } else { 0 }\n}\n`;
+  for (const failed of ['', 'test:future-one']) {
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', npm + script], {
+      cwd: packageRoot, env: { ...process.env, BABEL_CI_PROBE_FAILURE: failed }, encoding: 'utf8', timeout: 15000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, failed ? 7 : 0, result.stderr);
+    const selected = [...result.stdout.matchAll(/selected:([a-z0-9:-]+)/g)].map(match => match[1]);
+    assert.deepEqual(selected, failed ? ['test:future-one'] : ['test:future-one', 'test:future-two']);
+  }
 });
 
 test('both protected platform checks depend on package and architecture coverage', () => {
@@ -65,11 +88,12 @@ test('real protected-job dependency guards reject failure, cancellation, skipped
 });
 
 test('Docker image is immutable and scoped to the Ubuntu smoke step with no host fallback', () => {
-  const job = workflow.jobs['package-components'];
+  const job = workflow.jobs['docker-smoke'];
   assert.ok(job, 'Missing isolated hosted smoke job');
   const smoke = job.steps.find(step => step.id === 'docker_smoke');
   assert.ok(smoke);
-  assert.match(smoke.if, /matrix\.suite == 'test:smoke-fixtures'/);
+  assert.equal(job['runs-on'], 'ubuntu-latest');
+  assert.equal(smoke.if, undefined, 'Dedicated smoke job always executes its smoke step');
   assert.match(smoke.env.BABEL_BENCHMARK_DOCKER_IMAGE, /^node@sha256:[a-f0-9]{64}$/);
   assert.equal(job.env?.BABEL_BENCHMARK_DOCKER_IMAGE, undefined);
   assert.equal(workflow.env?.BABEL_BENCHMARK_DOCKER_IMAGE, undefined);
