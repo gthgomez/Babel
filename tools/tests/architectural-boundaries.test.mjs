@@ -4,6 +4,35 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
 
+for(const isStatic of [false,true]) for(const capture of ['process.exit','process.stdout']) for(const binding of ['const {run}=OWNER;run()', 'let run;({run}=OWNER);run()', 'const owner=OWNER;const {run}=owner;run()', 'const {run}=OWNER;const alias=run;alias()']) {
+  const prefix=isStatic?'static ':'',owner=isStatic?'C':'new C()';
+  const source=`class C {${prefix}capture=${capture};${prefix}run(){}} ${binding.replaceAll('OWNER',owner)}`;
+  test('class destructuring keeps unrelated captured host data clear: '+source,()=>{
+    assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+  });
+}
+for(const receiver of ['super.p','super["p"]','super.out','super["out"]']) for(const aliased of [false,true]) {
+  const output=receiver.includes('out'),field=output?'out':'p',value=output?'process.stdout':'process',target=aliased?'alias':receiver;
+  const source=`class B {static ${field}=${value}} class C extends B {static run(){${aliased?`const alias=${receiver};`:''}${target}.moved=${target}.${output?'write':'exit'};${value}.moved(${output?'"x"':'1'})}}`;
+  test('static super host aliases retain reverse mutation ownership: '+source,()=>{
+    assert.ok(inspectSource(source).ambiguous.length>0,source);
+    assert.deepEqual(inspectSource('const process={exit(){},stdout:{write(){}}}; '+source),{exits:[],stdout:[],ambiguous:[]},source);
+  });
+}
+test('class destructuring retains host fields and mutations while super captures stay harmless',()=>{
+  for(const source of [
+    'class C {static quit=process.exit} const {quit}=C;quit(1)',
+    'class C {out=process.stdout} const {out}=new C();out.write("x")',
+    'class C {static run(){}} C.run=process.exit;const {run}=C;run(1)',
+    'class B {static out=process.stdout} class C extends B {static run(){const out=super.out;out.moved=out.write;process.stdout.moved("x")}}',
+  ]) {const result=inspectSource(source);assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);}
+  for(const source of [
+    'class B {static p=process}class C extends B {static run(){const quit=super.p.exit;const cwd=super.p.cwd}}',
+    'class B {static out=process.stdout}class C extends B {static run(){const original=super.out.write;process.stdout.write=original}}',
+    'class B {static p={exit(){}}}class C extends B {static run(){super.p.moved=super.p.exit;super.p.moved()}}',
+  ]) assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+});
+
 const classHostCases=[['quit','process.exit','','process','1'],['out','process.stdout','.write','TARGET','"x"']];
 const classHostInvocation=(target,member,receiver,argument,adapter)=>{
   const callable=target+member,hostReceiver=receiver==='TARGET'?target:receiver;
