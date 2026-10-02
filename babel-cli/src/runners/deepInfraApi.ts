@@ -21,10 +21,9 @@
  *   jittered backoff. Schema and JSON failures are not retried here because
  *   they need prompt/schema repair, not another identical provider call.
  */
-
 import { createHash, randomUUID } from 'node:crypto';
 import type { ZodType } from 'zod';
-import { parseRetryAfterHeader, isRetryableStatus, normalizeFinishReason } from './providerNormalize.js';
+import { isRetryableStatus, normalizeFinishReason } from './providerNormalize.js';
 import {
   type LlmRunner,
   type ProviderMessage,
@@ -35,19 +34,17 @@ import {
   type ToolStreamEvent,
   buildStructuredOutputError,
 } from './base.js';
-import { hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
+import { hardProviderProtocolIssues } from './providerMessages.js';
 import {
   assertPreparedProviderRequestAdmissible,
   prepareProviderRequest,
 } from './preparedProviderRequest.js';
-import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js';
 import { extractJson } from '../utils/extractJson.js';
-import { createVcrRecorder, createVcrPlayer, type VcrRecorder } from '../services/streamingVcr.js';
+import { createVcrRecorder, createVcrPlayer } from '../services/streamingVcr.js';
 import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
 import { resolveProviderCredential } from './credentialHub.js';
 import type { ProviderId } from './providerRegistry.js';
 import { buildWireRequestFromEnvelope, hashWirePolicy, type WireRequest } from '../intelligence/wire.js';
-import { hashCanonical } from '../intelligence/hash.js';
 import { normalizeBabelFinishReason } from '../intelligence/attribution.js';
 import type { ResolvedExecutionEnvelope } from '../intelligence/types.js';
 import {
@@ -56,22 +53,44 @@ import {
   providerRequestIdFromResponse,
   type ProviderFailureDetails,
 } from './providerFailureReceipt.js';
+import {
+  REQUEST_MAX_RETRIES,
+  getRequestMaxRetries,
+  getRequestTimeoutMs,
+  isAbortError,
+  isCallerCancelError,
+  retryDelayMs,
+  sleep,
+  type FetchRedirectPolicy,
+} from './providerResponsePolicy.js';
+import {
+  getStreamIdleTimeoutMs,
+  getStreamMaxRetries,
+  isStreamIdleTimeoutError,
+  mapProviderMessages,
+  parseSseLine,
+  readErrorBody,
+  readStreamWithLimits,
+  readStreamingResponse,
+  recordStreamingOutput,
+  type StreamingState,
+} from './providerResponseStream.js';
+import {
+  buildInvocationMetadata,
+  routerMetadataProvenance,
+  type ChatResponse,
+  type OpenRouterResponseMetadata,
+  upstreamProviderFromResponse,
+} from './providerResponseMetadata.js';
+export type { OpenRouterResponseMetadata } from './providerResponseMetadata.js';
+export type { FetchRedirectPolicy } from './providerResponsePolicy.js';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
 const _rawTokens = Number(process.env['BABEL_DEEPINFRA_TOKENS'] ?? '32000');
+
 const MAX_TOKENS = Number.isFinite(_rawTokens) && _rawTokens > 0 ? _rawTokens : 32000;
-const _rawRequestTimeoutMs = Number(process.env['BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS'] ?? '120000');
-const REQUEST_TIMEOUT_MS =
-  Number.isFinite(_rawRequestTimeoutMs) && _rawRequestTimeoutMs > 0 ? _rawRequestTimeoutMs : 120000;
-const _rawRequestMaxRetries = Number(process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES'] ?? '4');
-const REQUEST_MAX_RETRIES =
-  Number.isFinite(_rawRequestMaxRetries) && _rawRequestMaxRetries > 0
-    ? Math.min(Math.floor(_rawRequestMaxRetries), 10)
-    : 4;
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000;
-const DEFAULT_STREAM_MAX_RETRIES = 1;
-const RETRY_BASE_DELAY_MS = 200;
+
 // Base URL is now per-instance via `this.apiUrl` getter (supports subclasses like OpenRouter).
 
 const SYSTEM_PROMPT =
@@ -87,525 +106,6 @@ const CHAT_SYSTEM_PROMPT =
   'Use tools to read files and gather context as needed. ' +
   'Be concise but thorough. Use markdown for formatting. ' +
   'Do NOT output JSON — respond in plain natural language.';
-
-// ─── Response shape (OpenAI-compatible subset) ────────────────────────────────
-
-interface ChatChoice {
-  message?: { content?: string | null };
-  finish_reason?: string | null;
-}
-
-interface ChatResponse {
-  model?: string;
-  /** OpenRouter may expose the concrete upstream provider in this field. */
-  provider?: string;
-  openrouter_metadata?: OpenRouterResponseMetadata;
-  choices?: ChatChoice[];
-  usage?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    total_tokens?: number;
-    reasoning_tokens?: number;
-    completion_tokens_details?: { reasoning_tokens?: number };
-  };
-}
-
-export interface OpenRouterResponseMetadata {
-  endpoints?: {
-    available?: Array<{
-      provider?: string;
-      model?: string;
-      selected?: boolean;
-      endpoint?: string;
-    }>;
-  };
-  attempts?: Array<{ provider?: string; model?: string; status?: number; endpoint?: string }>;
-  context_transformation?: boolean;
-  route?: unknown;
-  pipeline?: unknown;
-}
-
-interface RouterMetadataProvenance {
-  hash: string;
-  attemptCount: number;
-  fallbackOccurred: boolean;
-  selectedEndpoint: string | null;
-  contextTransformationOccurred: boolean;
-}
-
-function routerMetadataProvenance(metadata: OpenRouterResponseMetadata | null | undefined): RouterMetadataProvenance | null {
-  if (!metadata) return null;
-  const attempts = metadata.attempts ?? [];
-  const selected = metadata.endpoints?.available?.find((endpoint) => endpoint.selected === true);
-  return {
-    hash: hashCanonical({
-      endpoints: metadata.endpoints?.available ?? [],
-      attempts,
-      context_transformation: metadata.context_transformation ?? false,
-      route: metadata.route,
-      pipeline: metadata.pipeline,
-    }),
-    attemptCount: attempts.length,
-    fallbackOccurred: attempts.length > 1 || attempts.some((attempt) => attempt.status !== undefined && attempt.status !== 200),
-    selectedEndpoint: selected?.endpoint ?? null,
-    contextTransformationOccurred: metadata.context_transformation === true,
-  };
-}
-
-function upstreamProviderFromResponse(value: {
-  provider?: string;
-  openrouter_metadata?: OpenRouterResponseMetadata;
-}): string | null {
-  if (typeof value.provider === 'string' && value.provider.length > 0) return value.provider;
-  const selected = value.openrouter_metadata?.endpoints?.available?.find(
-    (endpoint) => endpoint.selected === true && typeof endpoint.provider === 'string',
-  );
-  if (selected?.provider) return selected.provider;
-  const successful = value.openrouter_metadata?.attempts?.find(
-    (attempt) => attempt.status === 200 && typeof attempt.provider === 'string',
-  );
-  return successful?.provider ?? null;
-}
-
-function normalizeTokenCount(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function buildInvocationMetadata(
-  provider: ProviderId,
-  model: string,
-  latencyMs: number,
-  usage?: ChatResponse['usage'],
-  ttftMs?: number | null,
-  generationMs?: number | null,
-  validationMs?: number | null,
-  observedModelId?: string | null,
-  upstreamProvider?: string | null,
-  routerMetadata?: OpenRouterResponseMetadata | null,
-  finishReason?: string | null,
-  configuredOutputBudget?: number | null,
-): RunnerInvocationMetadata {
-  const promptTokens = normalizeTokenCount(usage?.prompt_tokens);
-  const completionTokens = normalizeTokenCount(usage?.completion_tokens);
-  const totalTokens =
-    normalizeTokenCount(usage?.total_tokens) ??
-    (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null);
-  const estimate = estimateProviderUsageCost({
-    provider,
-    modelId: model,
-    promptTokens,
-    completionTokens,
-  });
-  const router = routerMetadataProvenance(routerMetadata);
-  const reasoningTokens =
-    normalizeTokenCount(usage?.reasoning_tokens) ??
-    normalizeTokenCount(usage?.completion_tokens_details?.reasoning_tokens);
-  const finish =
-    finishReason === undefined
-      ? null
-      : normalizeBabelFinishReason({
-          raw: finishReason,
-          ...(configuredOutputBudget === undefined ? {} : { configuredOutputBudget }),
-          actualCompletionTokens: completionTokens,
-        });
-
-  return {
-    provider,
-    provider_model_id: model,
-    requested_model_id: model,
-    normalized_model_id: model,
-    sent_model_id: model,
-    observed_model_id: observedModelId ?? null,
-    upstream_provider: upstreamProvider ?? null,
-    ...(finish === null
-      ? {}
-      : {
-          normalized_finish_reason: finish.normalized,
-          failure_attribution: finish.attribution.kind,
-        }),
-    ...(router === null ? {} : {
-      router_metadata_hash: router.hash,
-      openrouter_router_attempt: router.attemptCount,
-      actual_endpoint_id: router.selectedEndpoint,
-      fallback_status: router.fallbackOccurred ? 'occurred' as const : 'none' as const,
-      context_transformation_occurred: router.contextTransformationOccurred,
-    }),
-    latency_ms: latencyMs,
-    prompt_tokens: promptTokens,
-    completion_tokens: completionTokens,
-    total_tokens: totalTokens,
-    actual_reasoning_tokens: reasoningTokens,
-    estimated_cost_usd: estimate.estimatedCostUsd,
-    cost_precision: estimate.precision,
-    pricing_source_url: estimate.pricingSourceUrl,
-    pricing_verified_at: estimate.pricingVerifiedAt,
-    input_cost_per_1m: estimate.inputCostPer1M,
-    output_cost_per_1m: estimate.outputCostPer1M,
-    input_cache_hit_cost_per_1m: estimate.inputCacheHitCostPer1M,
-    input_cache_miss_cost_per_1m: estimate.inputCacheMissCostPer1M,
-    ttft_ms: ttftMs ?? null,
-    generation_ms: generationMs ?? null,
-    validation_ms: validationMs ?? null,
-  };
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) return Promise.reject(new DOMException('Request cancelled', 'AbortError'));
-  return new Promise((resolveSleep, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolveSleep();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new DOMException('Request cancelled', 'AbortError'));
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-function readPositiveIntEnv(name: string, fallback: number, max?: number): number {
-  const parsed = Number(process.env[name] ?? '');
-  const value = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-  return max ? Math.min(value, max) : value;
-}
-
-function getRequestTimeoutMs(): number {
-  return readPositiveIntEnv('BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS', REQUEST_TIMEOUT_MS);
-}
-
-function getRequestMaxRetries(): number {
-  return readPositiveIntEnv('BABEL_DEEPINFRA_REQUEST_MAX_RETRIES', REQUEST_MAX_RETRIES, 10);
-}
-
-/** Node's fetch redirect values, kept local because this project omits DOM lib types. */
-export type FetchRedirectPolicy = 'follow' | 'error' | 'manual';
-
-function getStreamIdleTimeoutMs(): number {
-  return readPositiveIntEnv(
-    'BABEL_DEEPINFRA_STREAM_IDLE_TIMEOUT_MS',
-    DEFAULT_STREAM_IDLE_TIMEOUT_MS,
-  );
-}
-
-function getStreamMaxRetries(): number {
-  const parsed = Number(process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES'] ?? '');
-  const value =
-    Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : DEFAULT_STREAM_MAX_RETRIES;
-  return Math.min(value, 5);
-}
-
-function retryDelayMs(attempt: number, response?: Response): number {
-  const retryAfter = parseRetryAfterHeader(response?.headers.get('retry-after'));
-  if (retryAfter !== null) {
-    return Math.min(retryAfter * 1000, 30_000);
-  }
-  const exponential = RETRY_BASE_DELAY_MS * 2 ** Math.max(attempt - 1, 0);
-  const jitter = Math.floor(Math.random() * RETRY_BASE_DELAY_MS);
-  return Math.min(exponential + jitter, 5_000);
-}
-
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
-}
-
-function isCallerCancelError(error: unknown, signal?: AbortSignal): boolean {
-  if (signal?.aborted) return true;
-  if (!isAbortError(error)) return false;
-  const msg = error instanceof Error ? error.message : String(error);
-  return /request cancelled/i.test(msg) && !/request timeout/i.test(msg);
-}
-
-function readStreamWithLimits(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  opts: {
-    idleTimeoutMs: number;
-    deadlineAt: number;
-    requestTimeoutMs: number;
-    signal?: AbortSignal;
-    idleMessage: string;
-    deadlineMessage: string;
-  },
-): Promise<{ done: boolean; value: Uint8Array | undefined }> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const onAbort = () => {
-      finish(() => {
-        reader.cancel().catch(() => {});
-        reject(new DOMException('Request cancelled', 'AbortError'));
-      });
-    };
-    const finish = (action: () => void) => {
-      if (settled) return;
-      settled = true;
-      for (const timer of timers) clearTimeout(timer);
-      opts.signal?.removeEventListener('abort', onAbort);
-      action();
-    };
-    if (opts.signal?.aborted) {
-      onAbort();
-      return;
-    }
-    opts.signal?.addEventListener('abort', onAbort, { once: true });
-    const remainingDeadline = opts.deadlineAt - Date.now();
-    if (remainingDeadline <= 0) {
-      finish(() => {
-        reader.cancel().catch(() => {});
-        reject(new Error(opts.deadlineMessage));
-      });
-      return;
-    }
-    timers.push(
-      setTimeout(() => {
-        finish(() => {
-          reader.cancel().catch(() => {});
-          reject(new Error(opts.idleMessage));
-        });
-      }, opts.idleTimeoutMs),
-    );
-    timers.push(
-      setTimeout(() => {
-        finish(() => {
-          reader.cancel().catch(() => {});
-          reject(new Error(opts.deadlineMessage));
-        });
-      }, remainingDeadline),
-    );
-    reader.read().then(
-      (result) => finish(() => resolve({ done: result.done, value: result.value })),
-      (err: unknown) => finish(() => reject(err)),
-    );
-  });
-}
-
-function isStreamIdleTimeoutError(error: unknown): boolean {
-  return error instanceof Error && /stream idle timeout/i.test(error.message);
-}
-
-async function readErrorBody(response: Response): Promise<string> {
-  return (await response.text().catch(() => '')).slice(0, 200);
-}
-
-/** Map ProviderMessage[] to the OpenAI-compatible wire format (shared P0-B mapper). */
-function mapProviderMessages(
-  messages: ProviderMessage[],
-  defaultSystemPrompt: string,
-  systemPromptOverride?: string,
-) {
-  return mapProviderMessagesToWire(messages, defaultSystemPrompt, systemPromptOverride);
-}
-
-interface SseLineResult {
-  delta: string;
-  reasoning: string;
-  usage: ChatResponse['usage'] | null;
-  observedModelId: string | null;
-  upstreamProvider: string | null;
-  routerMetadata: OpenRouterResponseMetadata | null;
-  finishReason: string | null;
-  isDone: boolean;
-  malformed?: string;
-}
-
-interface StreamingState {
-  ttftMs: number | null;
-  generationMs: number | null;
-  usage: ChatResponse['usage'] | null;
-  observedModelId: string | null;
-  upstreamProvider: string | null;
-  routerMetadata: OpenRouterResponseMetadata | null;
-  finishReason: string | null;
-  /** True after any model-generated material becomes observable to the caller. */
-  partialModelOutput: boolean;
-  /** Local, non-durable material used to produce a truthful failure digest. */
-  outputReceipt: string;
-  sawDone: boolean;
-}
-
-function recordStreamingOutput(state: StreamingState, kind: string, value: string): void {
-  if (!value) return;
-  state.partialModelOutput = true;
-  state.outputReceipt += `${kind}:${value}\n`;
-}
-
-function parseSseLine(line: string): SseLineResult {
-  if (!line.startsWith('data: ')) {
-    return { delta: '', reasoning: '', usage: null, observedModelId: null, upstreamProvider: null, routerMetadata: null, finishReason: null, isDone: false };
-  }
-  const data = line.slice(6).trim();
-  if (data === '[DONE]') {
-    return { delta: '', reasoning: '', usage: null, observedModelId: null, upstreamProvider: null, routerMetadata: null, finishReason: null, isDone: true };
-  }
-  try {
-    const json = JSON.parse(data) as {
-      model?: string;
-      provider?: string;
-      openrouter_metadata?: OpenRouterResponseMetadata;
-      choices?: Array<{ delta?: { content?: string; reasoning_content?: string }; finish_reason?: string | null }>;
-      usage?: ChatResponse['usage'];
-    };
-    const delta = json.choices?.[0]?.delta?.content || '';
-    const reasoning = json.choices?.[0]?.delta?.reasoning_content || '';
-    return {
-      delta,
-      reasoning,
-      usage: json.usage ?? null,
-      observedModelId: json.model ?? null,
-      upstreamProvider: upstreamProviderFromResponse(json),
-      routerMetadata: json.openrouter_metadata ?? null,
-      finishReason: json.choices?.[0]?.finish_reason ?? null,
-      isDone: false,
-    };
-  } catch {
-    return {
-      delta: '',
-      reasoning: '',
-      usage: null,
-      observedModelId: null,
-      upstreamProvider: null,
-      routerMetadata: null,
-      finishReason: null,
-      isDone: false,
-      malformed: `[deepInfraApi] Malformed SSE event chunk: ${data.slice(0, 100)}`,
-    };
-  }
-}
-
-async function readStreamingResponse(
-  response: Response,
-  callbacks: RunnerCallbacks | undefined,
-  idleTimeoutMs: number,
-  startedAt: number,
-  state: StreamingState,
-  vcrRecorder?: VcrRecorder,
-  onFirstByte?: () => void,
-  onStreamProgress?: (bytes: number) => void,
-): Promise<string> {
-  if (!response.body) {
-    throw new Error('[deepInfraApi] Streaming response had no body.');
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let text = '';
-  let raw = '';
-  let buffer = '';
-  let firstChunkReceived = false;
-  let totalBytes = 0;
-  const processLine = async (line: string): Promise<boolean> => {
-    const normalizedLine = line.replace(/\r$/, '').trim();
-    if (!normalizedLine.startsWith('data:')) return false;
-    vcrRecorder?.record(normalizedLine);
-    const parsed = parseSseLine(`data: ${normalizedLine.slice(5).trimStart()}`);
-    if (parsed.malformed) throw new Error(parsed.malformed);
-    if (parsed.observedModelId) state.observedModelId = parsed.observedModelId;
-    if (parsed.upstreamProvider) state.upstreamProvider = parsed.upstreamProvider;
-    if (parsed.routerMetadata) state.routerMetadata = parsed.routerMetadata;
-    if (parsed.finishReason) state.finishReason = parsed.finishReason;
-    if (parsed.isDone) {
-      state.sawDone = true;
-      state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
-      return true;
-    }
-    if (parsed.delta) {
-      text += parsed.delta;
-      recordStreamingOutput(state, 'text', parsed.delta);
-      if (callbacks?.onChunk) await callbacks.onChunk(parsed.delta);
-    }
-    if (parsed.reasoning) {
-      recordStreamingOutput(state, 'reasoning', parsed.reasoning);
-      callbacks?.onThought?.(parsed.reasoning);
-    }
-    if (parsed.usage) state.usage = parsed.usage;
-    return false;
-  };
-
-  while (true) {
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-    const read = reader.read();
-    const idle = new Promise<never>((_, reject) => {
-      timeout = setTimeout(() => {
-        // Reject before cancelling. Some ReadableStream implementations
-        // resolve the pending read as `done` synchronously during cancel;
-        // that must not turn an idle timeout into a misleading clean EOF.
-        reject(new Error(`[deepInfraApi] stream idle timeout after ${idleTimeoutMs}ms`));
-        reader.cancel().catch(() => {});
-      }, idleTimeoutMs);
-    });
-    const { done, value } = await Promise.race([read, idle]).finally(() => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    });
-    if (done) {
-      const flushed = decoder.decode();
-      raw += flushed;
-      buffer += flushed;
-      if (buffer.length > 0 && await processLine(buffer)) return text;
-      break;
-    }
-
-    totalBytes += value?.byteLength ?? 0;
-    onStreamProgress?.(totalBytes);
-
-    if (!firstChunkReceived) {
-      firstChunkReceived = true;
-      state.ttftMs = Date.now() - startedAt;
-      onFirstByte?.();
-      if (callbacks?.onProgress) {
-        callbacks.onProgress({ state: 'Receiving response' });
-      }
-    }
-
-    const chunk = decoder.decode(value, { stream: true });
-    raw += chunk;
-    buffer += chunk;
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (await processLine(line)) return text;
-    }
-  }
-
-  // A few OpenAI-compatible gateways return one ordinary JSON response even
-  // when stream=true. Accept that only as a complete response; an SSE stream
-  // that closes without [DONE] is a truthful truncated-stream failure.
-  const rawTrimmed = raw.trim();
-  if (!state.sawDone && rawTrimmed.startsWith('{')) {
-    try {
-      const json = JSON.parse(rawTrimmed) as ChatResponse;
-      const content = json.choices?.[0]?.message?.content ?? '';
-      if (content) {
-        text += content;
-        recordStreamingOutput(state, 'text', content);
-        if (callbacks?.onChunk) await callbacks.onChunk(content);
-      }
-      const reasoning = (json as ChatResponse & { reasoning_content?: string }).reasoning_content;
-      if (reasoning) {
-        recordStreamingOutput(state, 'reasoning', reasoning);
-        callbacks?.onThought?.(reasoning);
-      }
-      state.observedModelId = json.model ?? state.observedModelId;
-      state.upstreamProvider = upstreamProviderFromResponse(json) ?? state.upstreamProvider;
-      state.routerMetadata = json.openrouter_metadata ?? state.routerMetadata;
-      state.finishReason = json.choices?.[0]?.finish_reason ?? state.finishReason;
-      state.usage = json.usage ?? state.usage;
-      state.sawDone = true;
-      state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
-      return text;
-    } catch {
-      // Fall through to the truncated-stream error below.
-    }
-  }
-  if (state.generationMs === null && state.ttftMs !== null) {
-    state.generationMs = Date.now() - startedAt - state.ttftMs;
-  }
-  if (!state.sawDone) {
-    throw new Error('[deepInfraApi] stream closed before terminal [DONE] marker');
-  }
-  return text;
-}
 
 // ─── Runner implementation ────────────────────────────────────────────────────
 

@@ -14,29 +14,20 @@
  *   Override with the BABEL_ROOT environment variable.
  */
 
-import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   writeFileSync,
   createWriteStream,
-  statSync,
   type WriteStream,
-  rmSync,
-  promises as fsPromises,
 } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
-import { getWorkspaceLockPath, readLock, isLockActive } from './utils/locking.js';
+import { dirname, join, resolve } from 'node:path';
 import { runSwarmPipeline } from './runners/swarmRunner.js';
 import { runAdversarialQaGate } from './pipeline/qaStage.js';
 import { runChatExecutorLoop, formatToolCallForDisplay } from './pipeline/chatExecutorLoop.js';
-
-import { spawnSync } from 'node:child_process';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { z } from 'zod';
-
 import { getHighestBudgetSeverity } from './budgetPolicy.js';
 import { compileContext, resolveInstructionStackManifest } from './compiler.js';
 import {
@@ -45,47 +36,29 @@ import {
   isConfidenceGateEnabled,
 } from './confidenceGate.js';
 import { runWithFallback, clearRoutingCache } from './execute.js';
-import {
-  IncrementalToolDetector,
-  computeFingerprint,
-  JitDenialError,
-  PolicyBlockedDuplicateError,
-} from './ui/incrementalToolDetector.js';
-import { InputCoordinator, withExclusiveTerminalSurface } from './ui/inputCoordinator.js';
-import { getActiveRenderer } from './ui/waterfall.js';
+import { withExclusiveTerminalSurface } from './ui/inputCoordinator.js';
 import { resolveMode, type ValidMode } from './cli/constants.js';
 import {
-  buildExecutionProfilePromptLines,
   DEFAULT_EXECUTION_PROFILE,
   normalizeExecutionProfile,
   resolveExecutionProfile,
   type ExecutionProfileName,
 } from './config/executionProfiles.js';
-import {
-  formatBenchmarkRuntimeInventoryPromptLines,
-  getBenchmarkRuntimeCommandUsability,
-  getCachedBenchmarkContainerRuntimeInventory,
-  inspectBenchmarkContainerRuntime,
-  type BenchmarkRuntimeInventory,
-} from './config/benchmarkContainer.js';
-import {
-  buildToolCapabilityPromptLines,
-  formatToolCapabilityResolutionForFeedback,
-  resolveToolCapabilityForCommand,
-} from './config/toolCapabilities.js';
 import { resolveFamilyModelPolicy, loadModelPolicyConfig } from './modelPolicy.js';
 import { connect } from 'node:net';
 import { confirmCost, ConfirmDialog } from './ui/dialog.js';
 import { isRunningInDaemon } from './daemon/client.js';
 import { assessPlanningComplexity } from './services/plannerRouter.js';
 import { EvidenceBundle } from './evidence.js';
-import { createEpisodeLifecycleForEvidence, recordExecutorToolLog, type PipelineEpisodeSink } from './pipeline/pipelineEpisodeLifecycle.js';
-import { getAllowedShellCommands, validateExecutorShellCommand } from './sandbox.js';
+import {
+  createEpisodeLifecycleForEvidence,
+  recordExecutorToolLog,
+  type PipelineEpisodeSink,
+} from './pipeline/pipelineEpisodeLifecycle.js';
 import { collectHarnessMetadata } from './telemetry/metadata.js';
 import { PipelineTrace, endSpan } from './telemetry/tracing.js';
-import { runPreToolUseHooks, type RuntimeHookTraceEvent } from './runtime/hooks.js';
-import { ToolCallRequestSchema, promptUserJit, DRY_RUN } from './localTools.js';
-import type { ToolCallRequest, ToolResult, ToolContext } from './localTools.js';
+import { promptUserJit, DRY_RUN } from './localTools.js';
+import type { ToolContext } from './localTools.js';
 import { executeExecutorTool } from './pipeline/executorToolDispatch.js';
 import {
   buildGroundingQaReject,
@@ -93,25 +66,15 @@ import {
   classifyTaskContract,
   collectPlanGroundingViolations,
   formatGroundingContext,
-  hasPlaceholderProjectPath,
   normalizePlanTargetsAgainstGrounding,
 } from './taskCompletion.js';
-import {
-  OrchestratorManifestSchema,
-  OrchestratorErrorHaltSchema,
-  SwePlanSchema,
-  QaVerdictSchema,
-  ExecutorTurnSchema,
-  ExecutorReportSchema,
-  PipelineErrorSchema,
-} from './schemas/agentContracts.js';
+import { OrchestratorManifestSchema, SwePlanSchema, QaVerdictSchema } from './schemas/agentContracts.js';
 import {
   loadTaskEnvelope,
   setActiveTaskEnvelope,
   resetFileWriteCount,
   clearActiveTaskEnvelope,
 } from './schemas/taskEnvelope.js';
-import { autoCompactIfNeeded } from './services/compaction.js';
 import { globalCostTracker } from './services/costTracker.js';
 import { buildCostLedger, usageSummaryFromCostLedger } from './services/costLedger.js';
 import { extractAndSaveMemories } from './services/memoryExtraction.js';
@@ -123,21 +86,11 @@ import {
 import { runPluginHooks } from './services/plugins.js';
 import { analyzeAndPruneContext, isContextPruningEnabled } from './services/pruning.js';
 import { buildLiteTaskContract, type LiteTaskContract } from './lite/contract.js';
-import { writeExecutorSessionContext } from './services/sessionContext.js';
 import {
-  buildFailureCapsule,
-  formatFailureCapsuleForPrompt,
-  maxAttemptsForRepairMode,
-  type FailureCapsule,
-} from './services/repairGovernance.js';
-import {
-  buildAttemptSafetySummary,
   buildTerminalStatusSummary,
   isReadOnlyNoModificationRequest,
   isVerifierCommand,
   type AttemptSafetySummary,
-  type ProjectSafetySnapshot,
-  type RollbackMode,
   type TerminalStatus,
   type TerminalStatusSummary,
 } from './services/terminalStatus.js';
@@ -146,70 +99,21 @@ import {
   type VerifierContractSummary,
 } from './services/requiredVerifierContract.js';
 import {
-  createWorktreeSafetyController,
-  type WorktreeRollbackSummary,
-  type WorktreeRollbackStatus,
-  type WorktreeSafetySummary,
-} from './services/worktreeSafety.js';
-import type {
-  AutonomousRepairProofAttemptEvidence,
-  AutonomousRepairProofTimeline,
-  CompletionGuardEvidence,
-  RepairProofFileHash,
-} from './services/autonomousRepairProofEvidence.js';
-import {
   getAllowedToolsFromEnv,
-  getDisallowedToolsFromEnv,
-  getNpmWrongWorkingDirectoryHint,
   inferCommandOnlyNoModificationRequest,
-  inferVerifierCommandFromTask,
-  isExecutorCommandPlaceholder,
-  isFileWriteToolAvailable,
   isOptionalVerifierRequest,
   isShellExecutionToolAvailable,
   isVerifierNotFoundFailure,
-  shouldRecoverCommandFailure,
-  extractMissingNpmScript,
-  findDescendantPackageScriptCwd,
 } from './pipeline/executorRecovery.js';
-import { hasMeaningfulRepairDiff } from './pipeline/repairProof.js';
+import { BabelEventBus, log, logDetail, runWithPipelineLogContext } from './pipeline/logging.js';
 import {
-  BabelEventBus,
-  emitRuntimeEvent,
-  log,
-  logDetail,
-  runWithPipelineLogContext,
-} from './pipeline/logging.js';
-export { BabelEventBus } from './pipeline/logging.js';
-import {
-  inferProjectRoot,
-  normalizeManifestProjectRoot,
-  readSessionStartProjectPath,
-  resolveConcreteProjectRoot,
-} from './pipeline/manifestContext.js';
-export {
   inferProjectRoot,
   normalizeManifestProjectRoot,
   readSessionStartProjectPath,
   resolveConcreteProjectRoot,
 } from './pipeline/manifestContext.js';
 import { isEvidenceRequestPlanSatisfied } from './pipeline/executorEvidenceRequests.js';
-export { isEvidenceRequestPlanSatisfied } from './pipeline/executorEvidenceRequests.js';
 import {
-  benchmarkTaskExplicitlyAllowsDependencyInstall,
-  getBenchmarkDependencyInstallPlanReject,
-  getBenchmarkInstallRecoveryBlockReason,
-  getBenchmarkProtectedWriteReason,
-  getExternalBenchmarkDefaultLockedFiles,
-  getExternalRepairRerunLimit,
-  isBenchmarkDependencyInstallCommand,
-  isExternalBenchmarkTask,
-  isInvalidGitBundleArchiveCommand,
-  normalizeShellCommandForComparison,
-  shouldEnforceBoundedPlanActivationContract,
-  shouldHaltExternalRepairRerun,
-} from './pipeline/benchmarkTasks.js';
-export {
   benchmarkTaskExplicitlyAllowsDependencyInstall,
   getBenchmarkDependencyInstallPlanReject,
   getBenchmarkInstallRecoveryBlockReason,
@@ -221,18 +125,8 @@ export {
   shouldEnforceBoundedPlanActivationContract,
   shouldHaltExternalRepairRerun,
 } from './pipeline/benchmarkTasks.js';
-import {
-  isExecutorToolShapePlaceholder,
-  replaceExecutorRequestTarget,
-} from './pipeline/executorToolShape.js';
-export { isExecutorToolShapePlaceholder } from './pipeline/executorToolShape.js';
-import {
-  getBenchmarkRuntimeInventoryLines,
-  getBenchmarkRuntimeInventoryForProfile,
-  resolveShellCommandCapability,
-  shouldApplyHostWindowsExecutorNotes,
-} from './pipeline/benchmarkRuntime.js';
-export { shouldApplyHostWindowsExecutorNotes } from './pipeline/benchmarkRuntime.js';
+import { isExecutorToolShapePlaceholder } from './pipeline/executorToolShape.js';
+import { shouldApplyHostWindowsExecutorNotes } from './pipeline/benchmarkRuntime.js';
 import {
   collectExecutorSafetyViolations,
   collectRuntimePrerequisiteViolations,
@@ -240,10 +134,6 @@ import {
   collectAndroidVerificationCoverageViolations,
   collectReferenceSourceShapeViolations,
 } from './pipeline/executorSafety.js';
-export {
-  collectExecutorSafetyViolations,
-  collectAndroidVerificationCoverageViolations,
-} from './pipeline/executorSafety.js';
 import {
   shouldHaltWithoutApprovedPlan,
   shouldRefuseWriteRequestForMode,
@@ -259,30 +149,7 @@ import {
   repairExactOutputSchemaArtifacts,
   assertBoundedPlanActivationContract,
 } from './pipeline/contractEnforcement.js';
-export {
-  shouldHaltWithoutApprovedPlan,
-  shouldRefuseWriteRequestForMode,
-  resolveCompletionStatusAfterExactInvariantCheck,
-  evaluateExactInstructionInvariants,
-  isReadOnlyEvidenceRequestPlan,
-  checkWorkspaceLocks,
-  extractWindowsAbsolutePaths,
-  collectBoundedContractViolations,
-  parseLockedFilesEnv,
-  mergeLockedFiles,
-  verifyExactOutputSchemaArtifacts,
-  repairExactOutputSchemaArtifacts,
-  assertBoundedPlanActivationContract,
-} from './pipeline/contractEnforcement.js';
 import {
-  planStepString,
-  buildCounterAgentCritiqueArtifact,
-  buildAcceptedRevisedPlanArtifact,
-  type CriticVerdict,
-  type CriticSeverity,
-  type CounterAgentCritiqueArtifact,
-} from './pipeline/grounding.js';
-export {
   planStepString,
   buildCounterAgentCritiqueArtifact,
   buildAcceptedRevisedPlanArtifact,
@@ -299,15 +166,17 @@ import { splitChainedShellSteps } from './pipeline/executorPlanNormalize.js';
 import {
   hasImplementationVerificationStrategy,
   injectVerificationStepsIntoPlan,
-  plannedVerificationCommandsFromPlan,
 } from './pipeline/planVerifierInjection.js';
 import { buildOrchestratorTask } from './pipeline/orchestratorTask.js';
 import { writeLatestRunPointers } from './pipeline/runPointers.js';
 import { buildSweTask } from './pipeline/sweTask.js';
 import { buildQaTask } from './pipeline/qaTask.js';
 import { buildPipelineFinalTerminalState } from './pipeline/finalization.js';
-import { finalizeV9LiveSessionForPipeline, maybeInitializeV9LiveSession, type V9LiveSessionRuntime } from './pipeline/liveSessionParity.js';
-import { validatePlanTargetsWithinEffectiveRoots } from './pipeline/targetConsistency.js';
+import {
+  finalizeV9LiveSessionForPipeline,
+  maybeInitializeV9LiveSession,
+  type V9LiveSessionRuntime,
+} from './pipeline/liveSessionParity.js';
 import { runPreExecutorSafetyGates } from './pipeline/preExecutorGates.js';
 import {
   assertManifest,
@@ -320,128 +189,40 @@ import {
   buildBlockedRunSummaryArtifact,
   buildManualPlanRepairPrompt,
   OrchestratorOutputSchema,
-  type ParsedOrchestratorOutput,
 } from './pipeline/sweUtils.js';
-import { inferIntentContract, type BabelIntentContract } from './services/liteFullRouter.js';
+import { inferIntentContract } from './services/liteFullRouter.js';
 import { renderInteractiveChecklist } from './ui/checklist.js';
 import { globalIndexer } from './services/indexer.js';
 import { backgroundTaskRegistry } from './services/backgroundTaskRegistry.js';
 import {
-  buildDeterministicRootBuildGradleKtsContent,
-  buildLocalPropertiesSdkLine,
   detectAndroidSdkStatus,
   detectCommandOnPath,
-  detectGradleBinaryFromExtractedRoot,
-  detectGradleInstallCandidate,
   detectJavaRuntimeStatus,
-  ensureAndroidSdkEnvironment,
-  isGradleProvisioningStep,
-  isJavaProvisioningStep,
-  parseGradleDistributionUrl,
-  prependProcessPath,
-  repairSettingsGradleKtsContent,
   shouldUseDeterministicAndroidSdkBootstrapLane,
   shouldUseDeterministicGradleBootstrapLane,
-  usesGradleLikeCommand,
-  type AndroidSdkStatus,
-  type CommandRuntimeStatus,
-  type JavaRuntimeStatus,
 } from './stages/runtimePreflight.js';
 import {
   runDeterministicAndroidSdkBootstrapLane,
   runDeterministicGradleBootstrapLane,
 } from './pipeline/bootstrapLanes.js';
 import {
-  assertExecutorGate,
-  buildExecutorRepairPrompt,
-  buildExecutorTask,
-  buildExecutorTurnPromptLegacy,
   buildHaltReport,
   buildTerminalReport,
-  canonicalizeExecutorTargetForLog,
-  classifyRunnerExhaustionHaltTag,
   formatExecutionResults,
-  formatHistoryEntry,
   getExecutorProjectRoot,
-  getTarget,
-  isSameRecoverableCommandRetry,
-  isWithinProjectRootPath,
-  shouldForceRecoverableCommandRerun,
-  resolveStepTargetPath,
-  type PendingRecoverableCommandRetry,
-  RELIABILITY_REPAIR_PROOF_MARKER,
   collectTerminalContext,
-  getReliabilityRepairProofMaxFailures,
-  hashAbsoluteFileForSafety,
-  hashProjectFileForEvidence,
-  isReliabilityRepairProofEnabled,
-  readJsonArtifact,
-  saveSessionState,
-  snapshotProjectFilesForSafety,
   summarizeVerifierStreamForEvidence,
   writeValidatedExecutionReport,
 } from './stages/executorHelpers.js';
 import {
-  extractRequestedFileTargets,
-  getBoundedExecutorContractLines,
-  getBoundedTaskPlanningLines,
-  getBoundedTaskQaLines,
   getRequestedTargetContract,
-  isAndroidUtilityFileRequest,
-  isAndroidWarningCleanupRequest,
-  isWriteReportTarget,
   maybeApplyManifestTaskShapeProfile,
   mergeTaskContext,
-  normalizePathForComparison,
-  normalizeRequestedFileTargetsForBoundedContract,
-  uniqueStrings,
-  type BoundedTaskContract,
-  type SemanticExpectation,
 } from './stages/taskShape.js';
-import {
-  maybeHandleNewFilePreflightFastPath,
-  normalizePlanTargetsAgainstRequestedOutputs,
-  verifyBoundedTaskArtifacts,
-  verifySuccessfulTextWriteTarget,
-} from './stages/verification.js';
-import {
-  getDeterministicSimpleRepairWrite,
-  getDirectBoundedWritePlan,
-  getNextDeterministicSimpleWrite,
-} from './stages/simpleArtifactFallback.js';
-import {
-  buildBenchmarkVerificationPromptLines,
-  collectBenchmarkRiskPlanViolations,
-  type BenchmarkVerificationResult,
-} from './stages/benchmarkVerification.js';
-import { classifyBenchmarkTaskRisk } from './stages/benchmarkTaskRisk.js';
-import {
-  createRepairState,
-  formatFailureFingerprint,
-  recordRepairFailure,
-  type RepairState,
-} from './stages/executorRepairState.js';
-import { evaluatePreCompleteGuards } from './stages/preCompleteGuards.js';
-import {
-  evaluateRunnableArtifactGate,
-  runnableArtifactGateBlocksCompletion,
-  runnableArtifactGateHaltDecision,
-} from './stages/runnableArtifactGate.js';
-import { runRuntimeVerification } from './stages/runtimeVerificationRunner.js';
-import { runGodotArtifactRepairLoop } from './stages/godotArtifactRepair.js';
+import { normalizePlanTargetsAgainstRequestedOutputs } from './stages/verification.js';
 import { seedGodotMobileScaffold } from './stages/godotScaffoldSeeder.js';
-import {
-  AMBIGUOUS_LITERAL_BINDING_STATUS,
-  EXACT_INSTRUCTION_DRIFT_STATUS,
-  summarizeExactInvariantFailure,
-  verifyExactInvariants,
-  type ExactInvariantRegistry,
-} from './stages/exactInvariants.js';
-
 import type {
-  BudgetDiagnostic,
   HaltTag,
-  OrchestratorErrorHalt,
   OrchestratorManifest,
   PipelineMode,
   RuntimeTelemetry,
@@ -449,29 +230,105 @@ import type {
   QaVerdictReject,
   ToolCallLog,
 } from './schemas/agentContracts.js';
-
 import type { TargetModel } from './execute.js';
 import type { ResolvedModelPolicy } from './modelPolicy.js';
 import type { SessionUsageSummary } from './services/costTracker.js';
-
 // ─── Constants (canonical source: ./pipeline/paths.ts) ────────────────────────
-
 import {
   BABEL_ROOT,
   BABEL_RUNS_DIR,
-  GRADLE_CACHE_DIR,
   MAX_SWE_QA_LOOPS,
-  MAX_EXECUTOR_TURNS,
   MAX_EVIDENCE_LOOPS,
-  DEFAULT_ORCHESTRATOR_VERSION,
-  BENCHMARK_INSTALL_RECOVERY_TAG,
   QA_PATHS,
-  EXECUTOR_PATHS,
   abs,
   resolveOrchestratorVersion,
   getOrchestratorPaths,
   type OrchestratorRuntimeVersion,
 } from './pipeline/paths.js';
+import type { ExecutorLoopResult } from './pipeline/executorLoopTypes.js';
+import type { RuntimeCompiledArtifacts } from './pipeline/runtimeTelemetry.js';
+import {
+  buildV9StackTelemetry,
+  writeRuntimeTelemetrySnapshot,
+  mergeExecutorJitTelemetry,
+  markRuntimeTelemetryQaPass,
+  markRuntimeTelemetryQaReject,
+  markRuntimeTelemetryOutcome,
+} from './pipeline/runtimeTelemetry.js';
+import {
+  maybeApplyDeterministicDomainOverride,
+  maybeApplyBenchmarkRoutingIsolation,
+  maybeApplyModelAdapterFallback,
+  maybeApplyBenchmarkHarnessOverlay,
+  maybeEnrichPipelineStageIds,
+} from './pipeline/manifestPatching.js';
+import {
+  sanitizeQaVerdictForDeterministicGradleBootstrapLane,
+  sanitizeWindowsGradlewPermissionQaVerdict,
+  sanitizeExistingWrapperQaVerdict,
+  sanitizeGroundingViolationsForAndroidSdkLane,
+} from './pipeline/qaVerdictSanitizers.js';
+import { runExecutorLoop } from './pipeline/executorLoop.js';
+import { createExecutorKernel } from './executor/kernel.js';
+import { resolveExecutorHaltStatus } from './pipelineHaltStatus.js';
+
+export { BabelEventBus } from './pipeline/logging.js';
+
+export {
+  inferProjectRoot,
+  normalizeManifestProjectRoot,
+  readSessionStartProjectPath,
+  resolveConcreteProjectRoot,
+} from './pipeline/manifestContext.js';
+
+export { isEvidenceRequestPlanSatisfied } from './pipeline/executorEvidenceRequests.js';
+
+export {
+  benchmarkTaskExplicitlyAllowsDependencyInstall,
+  getBenchmarkDependencyInstallPlanReject,
+  getBenchmarkInstallRecoveryBlockReason,
+  getBenchmarkProtectedWriteReason,
+  getExternalBenchmarkDefaultLockedFiles,
+  getExternalRepairRerunLimit,
+  isBenchmarkDependencyInstallCommand,
+  isInvalidGitBundleArchiveCommand,
+  shouldEnforceBoundedPlanActivationContract,
+  shouldHaltExternalRepairRerun,
+} from './pipeline/benchmarkTasks.js';
+
+export { isExecutorToolShapePlaceholder } from './pipeline/executorToolShape.js';
+
+export { shouldApplyHostWindowsExecutorNotes } from './pipeline/benchmarkRuntime.js';
+
+export {
+  collectExecutorSafetyViolations,
+  collectAndroidVerificationCoverageViolations,
+} from './pipeline/executorSafety.js';
+
+export {
+  shouldHaltWithoutApprovedPlan,
+  shouldRefuseWriteRequestForMode,
+  resolveCompletionStatusAfterExactInvariantCheck,
+  evaluateExactInstructionInvariants,
+  isReadOnlyEvidenceRequestPlan,
+  checkWorkspaceLocks,
+  extractWindowsAbsolutePaths,
+  collectBoundedContractViolations,
+  parseLockedFilesEnv,
+  mergeLockedFiles,
+  verifyExactOutputSchemaArtifacts,
+  repairExactOutputSchemaArtifacts,
+  assertBoundedPlanActivationContract,
+} from './pipeline/contractEnforcement.js';
+
+export {
+  planStepString,
+  buildCounterAgentCritiqueArtifact,
+  buildAcceptedRevisedPlanArtifact,
+  type CriticVerdict,
+  type CriticSeverity,
+  type CounterAgentCritiqueArtifact,
+} from './pipeline/grounding.js';
 
 /** Enable Smart Planner: skip weak models for hard tasks. */
 const SMART_PLANNER_ENABLED = process.env['BABEL_SMART_PLANNER'] === 'true';
@@ -535,23 +392,6 @@ export interface PipelineResult {
   verifierContractSummary?: VerifierContractSummary; episodePersistenceStatus?: 'active' | 'degraded'; episodePersistenceWarning?: string;
 }
 
-type ExecutorTerminalStatus =
-  | 'EXECUTION_COMPLETE'
-  | 'EXECUTION_HALTED'
-  | 'ACTIVATION_REFUSED'
-  | 'PARTIAL';
-
-import type { ExecutorLoopResult } from './pipeline/executorLoopTypes.js';
-import type { RuntimeCompiledArtifacts } from './pipeline/runtimeTelemetry.js';
-import {
-  buildV9StackTelemetry,
-  writeRuntimeTelemetrySnapshot,
-  mergeExecutorJitTelemetry,
-  markRuntimeTelemetryQaPass,
-  markRuntimeTelemetryQaReject,
-  markRuntimeTelemetryOutcome,
-} from './pipeline/runtimeTelemetry.js';
-
 /**
  * Checks if any planned mutating actions conflict with existing workspace locks.
  */
@@ -562,14 +402,6 @@ function configureToolProjectRoot(manifest: OrchestratorManifest): void {
   logDetail(`Tool project root: ${root}`);
 }
 
-import {
-  maybeApplyDeterministicDomainOverride,
-  maybeApplyBenchmarkRoutingIsolation,
-  maybeApplyModelAdapterFallback,
-  maybeApplyBenchmarkHarnessOverlay,
-  maybeEnrichPipelineStageIds,
-  isAndroidSourceOnlyWorkspace,
-} from './pipeline/manifestPatching.js';
 export {
   inferDeterministicDomainId,
   maybeApplyDeterministicDomainOverride,
@@ -578,71 +410,6 @@ export {
   maybeEnrichPipelineStageIds,
   maybeApplyBenchmarkRoutingIsolation,
 } from './pipeline/manifestPatching.js';
-import {
-  sanitizeQaVerdictForDeterministicGradleBootstrapLane,
-  sanitizeWindowsGradlewPermissionQaVerdict,
-  sanitizeExistingWrapperQaVerdict,
-  sanitizeGroundingViolationsForAndroidSdkLane,
-} from './pipeline/qaVerdictSanitizers.js';
-import { runExecutorLoop } from './pipeline/executorLoop.js';
-import { createExecutorKernel } from './executor/kernel.js';
-
-// ─── Executor halt resolution ──────────────────────────────────────────────────
-
-interface ExecutorHaltResolution {
-  haltedStatus: TerminalStatus;
-  matchedConditions: string[];
-}
-
-function resolveExecutorHaltStatus(
-  haltCondition: string,
-  haltTag: string | undefined,
-): ExecutorHaltResolution {
-  const matchedConditions: string[] = [];
-  let haltedStatus: TerminalStatus = 'EXECUTOR_HALTED';
-
-  if (/\[ROLLBACK_FAILED\]/.test(haltCondition)) {
-    haltedStatus = 'ROLLBACK_FAILED';
-    matchedConditions.push('ROLLBACK_FAILED');
-  }
-  if (/\[ROLLBACK_APPLIED\]/.test(haltCondition)) {
-    if (haltedStatus === 'EXECUTOR_HALTED') haltedStatus = 'ROLLBACK_APPLIED';
-    matchedConditions.push('ROLLBACK_APPLIED');
-  }
-  if (/\[WORKTREE_DIRTY_UNSAFE\]/.test(haltCondition)) {
-    if (haltedStatus === 'EXECUTOR_HALTED') haltedStatus = 'WORKTREE_DIRTY_UNSAFE';
-    matchedConditions.push('WORKTREE_DIRTY_UNSAFE');
-  }
-  if (/\[VERIFIER_NOT_FOUND\]/.test(haltCondition)) {
-    if (haltedStatus === 'EXECUTOR_HALTED') haltedStatus = 'VERIFIER_NOT_FOUND';
-    matchedConditions.push('VERIFIER_NOT_FOUND');
-  }
-  if (/\[REPAIR_REPEATED_FAILURE\]/.test(haltCondition)) {
-    if (haltedStatus === 'EXECUTOR_HALTED') haltedStatus = 'REPAIR_REPEATED_FAILURE';
-    matchedConditions.push('REPAIR_REPEATED_FAILURE');
-  }
-  if (
-    haltTag === 'REPAIR_BUDGET_EXCEEDED' ||
-    /\[REPAIR_MAX_ATTEMPTS_REACHED\]/.test(haltCondition)
-  ) {
-    if (haltedStatus === 'EXECUTOR_HALTED') haltedStatus = 'REPAIR_MAX_ATTEMPTS_REACHED';
-    matchedConditions.push('REPAIR_MAX_ATTEMPTS_REACHED');
-  }
-  if (/\[SHELL_COMMAND_DENIED\]/.test(haltCondition)) {
-    if (haltedStatus === 'EXECUTOR_HALTED') haltedStatus = 'SHELL_COMMAND_DENIED';
-    matchedConditions.push('SHELL_COMMAND_DENIED');
-  }
-  if (/\[SHELL_COMMAND_FAILED\]/.test(haltCondition)) {
-    if (haltedStatus === 'EXECUTOR_HALTED') haltedStatus = 'SHELL_COMMAND_FAILED';
-    matchedConditions.push('SHELL_COMMAND_FAILED');
-  }
-  if (/\[VERIFIER_FAILED\]/.test(haltCondition)) {
-    if (haltedStatus === 'EXECUTOR_HALTED') haltedStatus = 'VERIFIER_FAILED';
-    matchedConditions.push('VERIFIER_FAILED');
-  }
-
-  return { haltedStatus, matchedConditions };
-}
 
 // ─── Chat mode pipeline ────────────────────────────────────────────────────────
 
