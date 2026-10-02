@@ -177,14 +177,10 @@ if (Test-RepoFile 'babel-cli/package.json') {
 
 $workflowRel = '.github/workflows/typecheck.yml'
 if (Test-RepoFile $workflowRel) {
-  $wf = Get-RepoText $workflowRel
-  $acceptanceHits = [regex]::Matches($wf, 'test:harness-acceptance').Count
-  if ($acceptanceHits -lt 2) {
-    Add-Fail "$workflowRel must run test:harness-acceptance in both linux-validation and windows-portability"
-  }
-  $checkerHits = [regex]::Matches($wf, 'check-harness-architecture\.ps1').Count
-  if ($checkerHits -lt 2) {
-    Add-Fail "$workflowRel must run check-harness-architecture.ps1 in both linux-validation and windows-portability"
+  $coverageChecker = Join-Path $PSScriptRoot 'ci-workflow-coverage.mjs'
+  $coverageOutput = & node $coverageChecker (Join-Path $RepoRoot $workflowRel) 'npm run test:harness-acceptance' 'check-harness-architecture.ps1' 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    Add-Fail "$workflowRel must gate actual harness acceptance and checker execution on both Linux and Windows"
   }
 }
 

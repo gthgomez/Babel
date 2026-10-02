@@ -14,12 +14,14 @@ describe('runPlanLane', { concurrency: false }, () => {
     const source = join(repo, 'sample.txt');
     const originalFetch = globalThis.fetch;
     const originalDeepSeekKey = process.env['DEEPSEEK_API_KEY'];
+    const originalRouterKey = process.env['OPENROUTER_API_KEY'];
     const originalDeepInfraKey = process.env['DEEPINFRA_API_KEY'];
     writeFileSync(source, 'before\n', 'utf-8');
     const beforeHash = createHash('sha256').update(readFileSync(source)).digest('hex');
     let requestedModel = '';
     try {
       process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+      process.env['OPENROUTER_API_KEY'] = 'fixture-openrouter-key';
       process.env['DEEPINFRA_API_KEY'] = 'test-key';
       globalThis.fetch = (async (_input, init) => {
         const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string };
@@ -79,6 +81,8 @@ describe('runPlanLane', { concurrency: false }, () => {
       assert.equal(existsSync(join(result.payload.run_dir ?? '', 'cost_ledger.json')), true);
     } finally {
       globalThis.fetch = originalFetch;
+      if (originalRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+      else process.env['OPENROUTER_API_KEY'] = originalRouterKey;
       if (originalDeepSeekKey === undefined) {
         delete process.env['DEEPSEEK_API_KEY'];
       } else {
@@ -131,9 +135,11 @@ describe('runPlanLane', { concurrency: false }, () => {
     writeFileSync(join(repo, 'README.md'), '# Sample\nA tiny repo.\n', 'utf-8');
     const originalFetch = globalThis.fetch;
     const originalDeepSeekKey = process.env['DEEPSEEK_API_KEY'];
+    const originalRouterKey = process.env['OPENROUTER_API_KEY'];
     const originalDeepInfraKey = process.env['DEEPINFRA_API_KEY'];
     try {
       process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+      process.env['OPENROUTER_API_KEY'] = 'fixture-openrouter-key';
       process.env['DEEPINFRA_API_KEY'] = 'test-key';
       globalThis.fetch = (async () =>
         new Response(
@@ -175,6 +181,8 @@ describe('runPlanLane', { concurrency: false }, () => {
       );
     } finally {
       globalThis.fetch = originalFetch;
+      if (originalRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+      else process.env['OPENROUTER_API_KEY'] = originalRouterKey;
       if (originalDeepSeekKey === undefined) {
         delete process.env['DEEPSEEK_API_KEY'];
       } else {
@@ -194,10 +202,12 @@ describe('runPlanLane', { concurrency: false }, () => {
     const source = join(repo, 'sample.txt');
     const originalFetch = globalThis.fetch;
     const originalDeepSeekKey = process.env['DEEPSEEK_API_KEY'];
+    const originalRouterKey = process.env['OPENROUTER_API_KEY'];
     const originalDeepInfraKey = process.env['DEEPINFRA_API_KEY'];
     writeFileSync(source, 'before\n', 'utf-8');
     try {
       process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+      process.env['OPENROUTER_API_KEY'] = 'fixture-openrouter-key';
       process.env['DEEPINFRA_API_KEY'] = 'test-key';
       globalThis.fetch = (async () =>
         new Response(
@@ -270,6 +280,8 @@ describe('runPlanLane', { concurrency: false }, () => {
       assert.deepEqual(modelPlan.next, ['Produce a findings report.']);
     } finally {
       globalThis.fetch = originalFetch;
+      if (originalRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+      else process.env['OPENROUTER_API_KEY'] = originalRouterKey;
       if (originalDeepSeekKey === undefined) {
         delete process.env['DEEPSEEK_API_KEY'];
       } else {

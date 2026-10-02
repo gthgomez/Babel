@@ -99,29 +99,40 @@ setInterval(() => {}, 100);
     stdio: 'ignore',
     windowsHide: true,
   })
+  const closed = new Promise<void>(resolve => controller.once('close', () => resolve()))
   let workerPid = 0
   let grandchildPid = 0
   try {
-    const started = await waitForJson(state)
     const containment = await waitForJson(containmentState)
-    workerPid = Number(started['workerPid'])
-    grandchildPid = Number(started['grandchildPid'])
-    assert.ok(workerPid > 0 && grandchildPid > 0)
     assert.equal(
       containment['kind'],
       process.platform === 'win32' ? 'windows_job_object' : 'posix_process_group',
       String(containment['error'] ?? ''),
     )
+    const started = await waitForJson(state)
+    workerPid = Number(started['workerPid'])
+    grandchildPid = Number(started['grandchildPid'])
+    assert.ok(workerPid > 0 && grandchildPid > 0)
 
     controller.kill('SIGKILL')
+    await closed
     assert.equal(await waitUntilDead(workerPid), true, 'worker must die after its controller process dies')
     assert.equal(await waitUntilDead(grandchildPid), true, 'grandchild must die after its controller process dies')
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_700))
     assert.equal(existsSync(marker), false, 'contained descendant must not perform a delayed write')
   } finally {
+    // Recover tracked descendants if containment failed before the state read.
+    if (existsSync(state)) {
+      const current = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>
+      workerPid ||= Number(current['workerPid'])
+      grandchildPid ||= Number(current['grandchildPid'])
+    }
     forceCleanup(workerPid)
     forceCleanup(grandchildPid)
     if (isAlive(controller.pid ?? 0)) controller.kill('SIGKILL')
+    await closed
+    if (workerPid > 0) assert.ok(await waitUntilDead(workerPid), 'worker must exit before fixture deletion')
+    if (grandchildPid > 0) assert.ok(await waitUntilDead(grandchildPid), 'descendant must exit before fixture deletion')
     rmSync(root, { recursive: true, force: true })
   }
 })

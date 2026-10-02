@@ -48,6 +48,14 @@ if ([string]::IsNullOrWhiteSpace($Root)) {
     $Root = (Resolve-Path $Root).Path
 }
 
+# Resolve Windows 8.3 aliases before deriving paths from Get-ChildItem.FullName.
+# Resolve-Path can retain RUNNER~1 while enumeration expands it to runneradmin.
+$canonicalRoot = & node -e 'process.stdout.write(require("node:fs").realpathSync.native(process.argv[1]))' $Root
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($canonicalRoot)) {
+    throw 'Cannot canonicalize architectural budget root; no clearance granted.'
+}
+$Root = $canonicalRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+
 $srcDir    = Join-Path $Root "babel-cli\src"
 $baselineDir = Join-Path $Root "config\architectural-budget"
 
@@ -93,7 +101,7 @@ $allSourceFiles = Get-ChildItem -Path $srcDir -Recurse -Filter "*.ts" -File |
     Sort-Object FullName
 
 foreach ($file in $allSourceFiles) {
-    $relativePath = $file.FullName.Substring($Root.Length + 1).Replace('\', '/')
+    $relativePath = [IO.Path]::GetRelativePath($Root, $file.FullName).Replace('\', '/')
     $lineCount = (Get-Content $file.FullName | Measure-Object -Line).Lines
     $currentFileSizes[$relativePath] = $lineCount
 
@@ -141,7 +149,7 @@ $currentCasts = @{}
 $castErrors = New-Object System.Collections.Generic.List[string]
 
 foreach ($file in $allSourceFiles) {
-    $relativePath = $file.FullName.Substring($Root.Length + 1).Replace('\', '/')
+    $relativePath = [IO.Path]::GetRelativePath($Root, $file.FullName).Replace('\', '/')
     $count = (Select-String -Path $file.FullName -Pattern 'as any' -SimpleMatch | Measure-Object).Count
     if ($count -gt 0) {
         $currentCasts[$relativePath] = $count

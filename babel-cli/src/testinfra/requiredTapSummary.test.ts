@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import test from 'node:test'
 
 const script = fileURLToPath(new URL('../../scripts/summarize_required_tap.mjs', import.meta.url))
@@ -153,31 +154,48 @@ test('harness runtime selection captures the exact expanded file inventory and h
 
 // Deliberately restricted to the reporting conditions used here, not a general
 // replacement for the GitHub Actions expression engine.
-function reportingCondition(expression: string, outcome: string): boolean {
-  const match = expression.match(/^always\(\) && steps\.([a-z_]+)\.outcome != 'skipped' && steps\.([a-z_]+)\.outcome != ''$/)
+function reportingCondition(expression: string, outcome: string, os?: string): boolean {
+  const platform = expression.match(/^matrix\.os == '(ubuntu-latest|windows-latest)' && \((.+)\)$/)
+  const condition = platform?.[2] ?? expression
+  const match = condition.match(/^always\(\) && steps\.([a-z_]+)\.outcome != 'skipped' && steps\.([a-z_]+)\.outcome != ''$/)
   assert.ok(match, expression)
   assert.equal(match[1], match[2])
-  return outcome !== 'skipped' && outcome !== ''
+  return (!platform || platform[1] === os) && outcome !== 'skipped' && outcome !== ''
 }
 
 function assertWorkflowReporting(workflow: string): void {
-  const jobs = workflow.replace(/\r\n/g, '\n').split(/^  (?=[a-z-]+:)/m)
-  for (const jobName of ['linux-validation', 'windows-portability']) {
-    const job = jobs.find((block) => block.startsWith(`${jobName}:`))
+  type Step = { name?: string; id?: string; if?: string; run?: string; uses?: string }
+  type Workflow = { jobs: Record<string, { strategy: { matrix: { os: string[] } }; steps: Step[] }> }
+  const { load } = createRequire(import.meta.url)('js-yaml') as { load(text: string): Workflow }
+  const jobs = load(workflow).jobs
+  const coverage = spawnSync(process.execPath, [
+    fileURLToPath(new URL('../../../tools/ci-workflow-coverage.mjs', import.meta.url)), '-',
+    'npm run test:harness-runtime', 'npm run test:chat-truth',
+  ], { input: workflow, encoding: 'utf8' })
+  assert.ifError(coverage.error)
+  assert.equal(coverage.status, 0, coverage.stderr)
+  for (const [jobName, label, id] of [['harness-runtime', 'harness runtime', 'harness_runtime'], ['chat-truth', 'Chat truth', 'chat_truth']]) {
+    const job = jobs[jobName!]
     assert.ok(job, jobName)
-    const steps = job.split(/^      - name: /m).slice(1)
-    for (const [label, id] of [['harness runtime', 'harness_runtime'], ['Chat truth', 'chat_truth']]) {
-      const run = steps.find((step) => step.startsWith(`Run required ${label} suite\n`))
-      assert.ok(run, `${jobName}: ${label} run`)
-      assert.match(run, new RegExp(`^        id: ${id}$`, 'm'))
-      const reports = steps.filter((step) => step.startsWith(`Summarize ${label}`) || step.startsWith(`Upload ${label}`))
-      assert.equal(reports.length, 2, `${jobName}: ${label} summary and upload`)
+    assert.deepEqual(job.strategy.matrix.os, ['ubuntu-latest', 'windows-latest'])
+    const run = job.steps.find(step => step.id === id)
+    assert.ok(run)
+    assert.equal(run.if, undefined)
+    const reports = job.steps.filter(step => step.name?.startsWith(`Summarize ${label}`) || step.name?.startsWith(`Upload ${label}`))
+    assert.equal(reports.length, 4, `${jobName}: both platforms need summary and upload`)
+    for (const os of job.strategy.matrix.os) {
+      const active = reports.filter(report => reportingCondition(report.if ?? '', 'failure', os))
+      assert.equal(active.length, 2, `${os}: summary and upload must report attempted failures`)
+      assert.ok(active.some(report => report.run?.includes(`summarize_required_tap.mjs ${jobName}`)))
+      assert.ok(active.some(report => report.uses?.startsWith('actions/upload-artifact@')))
       for (const report of reports) {
-        const condition = report.match(/^        if: (.+)$/m)?.[1]
+        const condition = report.if
         assert.ok(condition)
         assert.ok(condition.includes(`steps.${id}.outcome`))
-        for (const outcome of ['', 'skipped']) assert.equal(reportingCondition(condition, outcome), false)
-        for (const outcome of ['success', 'failure', 'cancelled']) assert.equal(reportingCondition(condition, outcome), true)
+        for (const outcome of ['', 'skipped']) assert.equal(reportingCondition(condition, outcome, os), false)
+        for (const outcome of ['success', 'failure', 'cancelled']) {
+          assert.equal(reportingCondition(condition, outcome, os), active.includes(report))
+        }
       }
     }
   }

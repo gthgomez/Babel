@@ -260,27 +260,30 @@ export async function attachWindowsReviewJobObject(
     },
   )
 
+  const startedAt = Date.now()
   const assignment = await new Promise<{ assigned: boolean; error?: string }>((resolveAssigned) => {
     let settled = false
     let stdout = ''
     let stderr = ''
-    const settle = (assigned: boolean): void => {
+    const settle = (assigned: boolean, reason: string): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolveAssigned({ assigned, ...(stderr.trim() ? { error: stderr.trim().slice(-2_000) } : {}) })
+      resolveAssigned({ assigned, ...(!assigned ? {
+        error: `WINDOWS_JOB_ASSIGNMENT_${reason};elapsedMs=${Date.now() - startedAt};stderrPresent=${stderr.trim().length > 0}`,
+      } : {}) })
     }
-    const timer = setTimeout(() => settle(false), WINDOWS_JOB_HELPER_TIMEOUT_MS)
+    const timer = setTimeout(() => settle(false, 'TIMEOUT'), WINDOWS_JOB_HELPER_TIMEOUT_MS)
     timer.unref?.()
     helper.stdout?.setEncoding('utf8')
     helper.stdout?.on('data', (chunk: string) => {
       stdout += chunk
-      if (stdout.split(/\r?\n/).includes('ASSIGNED')) settle(true)
+      if (stdout.split(/\r?\n/).includes('ASSIGNED')) settle(true, 'ASSIGNED')
     })
     helper.stderr?.setEncoding('utf8')
     helper.stderr?.on('data', (chunk: string) => { stderr += chunk })
-    helper.once('error', () => settle(false))
-    helper.once('close', () => settle(false))
+    helper.once('error', () => settle(false, 'SPAWN_ERROR'))
+    helper.once('close', (code, signal) => settle(false, `HELPER_EXIT_${code ?? signal ?? 'UNKNOWN'}`))
   })
 
   if (!assignment.assigned) {
