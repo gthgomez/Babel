@@ -14,8 +14,19 @@ import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { TurnRoutingReceiptLog } from './turnRoutingReceipt.js';
 
 test('GLM backend key creates the exact OpenRouter phase runner', () => {
-  const runner = makeChatRunner('glm-5.3-flash');
-  assert.ok(runner instanceof OpenRouterApiRunner);
+  const previousOffline = process.env['BABEL_OFFLINE'];
+  const previousKey = process.env['OPENROUTER_API_KEY'];
+  delete process.env['BABEL_OFFLINE'];
+  process.env['OPENROUTER_API_KEY'] = 'test-openrouter-key';
+  try {
+    const runner = makeChatRunner('glm-5.3-flash');
+    assert.ok(runner instanceof OpenRouterApiRunner);
+  } finally {
+    if (previousOffline === undefined) delete process.env['BABEL_OFFLINE'];
+    else process.env['BABEL_OFFLINE'] = previousOffline;
+    if (previousKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+    else process.env['OPENROUTER_API_KEY'] = previousKey;
+  }
 });
 
 test('phase runner uses OpenRouter for the exact GLM live route', () => {

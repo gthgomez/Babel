@@ -24,14 +24,32 @@ function fixture(t, source, path = 'ui/probe.ts', policy = {}) {
   writeFileSync(join(root, 'config/architectural-budget/process-boundaries.json'), JSON.stringify({
     schemaVersion: 1, stdout: [], exits: [], ...policy,
   }));
-  return { root, run(...args) {
-    const result = spawnSync('pwsh', ['-NoProfile', '-File', checker, '-Root', root, ...args], { encoding: 'utf8', timeout: 30_000 });
+  return { root, run(...args) { return this.runRoot(root, ...args); }, runRoot(rootPath, ...args) {
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', checker, '-Root', rootPath, ...args], { encoding: 'utf8', timeout: 30_000 });
     assert.ifError(result.error);
     const output = result.stdout + result.stderr;
     assert.doesNotMatch(output, /property 'Count' cannot be found/);
     return { code: result.status, output };
   }};
 }
+
+test('Windows short-path roots preserve file and zero-cast baseline identities', t => {
+  if (process.platform !== 'win32') return t.skip('Windows 8.3 alias regression');
+  const f = fixture(t, 'const value = 1;\n');
+  // Read the actual NTFS alias; this command only expands a generated fixture path.
+  const alias = spawnSync('cmd.exe', ['/d', '/c', `for %I in ("${f.root}") do @echo %~sI`], { encoding: 'utf8' });
+  assert.ifError(alias.error);
+  assert.equal(alias.status, 0, alias.stderr);
+  const shortRoot = alias.stdout.trim();
+  if (!shortRoot.includes('~')) return t.skip('This volume has no 8.3 fixture alias');
+  const clean = f.runRoot(shortRoot);
+  assert.equal(clean.code, 0, clean.output);
+  writeFileSync(join(f.root, 'config/architectural-budget/as-any-counts.json'), JSON.stringify({ 'babel-cli/src/ui/probe.ts': 0 }));
+  writeFileSync(join(f.root, 'babel-cli/src/ui/probe.ts'), 'const value = source as any;\n');
+  const regression = f.runRoot(shortRoot);
+  assert.notEqual(regression.code, 0, regression.output);
+  assert.match(regression.output, /babel-cli\/src\/ui\/probe\.ts.*grew from 0 to 1/);
+});
 
 test('comments and generated script data are not host process exits/output', t => {
   const f = fixture(t, '// process.exit(1)\nconst oracle = `process.exit(1)`;\nconst child = "process.stdout.write(\'ready\')";\n');

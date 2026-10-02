@@ -165,7 +165,7 @@ jobs:
         run: >
           node --test --test-reporter=tap tools/tests/architectural-boundaries.test.mjs
           tools/tests/architectural-budget.test.mjs tools/tests/ci-package-coverage.test.mjs
-          tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-unit-sharding.test.mjs 2>&1 | Tee-Object
+          tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-unit-sharding.test.mjs tools/tests/ci-workflow-coverage.test.mjs 2>&1 | Tee-Object
           artifacts/architecture-regressions/full.tap
 
           exit $LASTEXITCODE
@@ -250,17 +250,19 @@ jobs:
 
           $results = @()
 
+          $failure = 0
+
           foreach ($suite in $portable) {
             $started = Get-Date
             $log = '../artifacts/ci-package/' + $suite.Replace(':', '-') + '.log'
             npm run $suite 2>&1 | Tee-Object $log
             $code = $LASTEXITCODE
             $results += @{ suite = $suite; exitCode = $code; elapsedSeconds = ((Get-Date) - $started).TotalSeconds }
-            $results | ConvertTo-Json | Set-Content ../artifacts/ci-package/results.json
-            if ($code -ne 0) { exit $code }
+            ConvertTo-Json -InputObject @($results) | Set-Content ../artifacts/ci-package/results.json
+            if ($code -ne 0 -and $failure -eq 0) { $failure = $code }
           }
 
-          exit $LASTEXITCODE
+          exit $failure
         working-directory: babel-cli
       - name: Upload portable package evidence
         if: always()
@@ -780,10 +782,13 @@ jobs:
           set -euo pipefail
           docker info
           docker pull node@sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
+          echo "uid=$(id -u)" >> "$GITHUB_OUTPUT"
+          echo "gid=$(id -g)" >> "$GITHUB_OUTPUT"
       - name: Run isolated Ubuntu smoke fixtures
         id: docker_smoke
         env:
           BABEL_BENCHMARK_DOCKER_IMAGE: node@sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
+          BABEL_BENCHMARK_DOCKER_EXTRA_ARGS: --user ${{ steps.docker_prepare.outputs.uid }}:${{ steps.docker_prepare.outputs.gid }}
         shell: pwsh
         run: |
           npm run test:smoke-fixtures 2>&1 | Tee-Object ../artifacts/ci-package/full.log

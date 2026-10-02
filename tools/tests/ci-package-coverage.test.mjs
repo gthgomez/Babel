@@ -31,7 +31,7 @@ test('every canonical package component runs on Linux; all portable components a
   assert.ok(components.includes('test:unit') && components.includes('test:smoke-fixtures'));
 });
 
-test('portable execution follows future canonical components and stops on an actual failing subprocess status', t => {
+test('portable execution runs every selected component and retains any failing subprocess status', t => {
   const base = mkdtempSync(join(tmpdir(), 'babel-ci-components-'));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const packageRoot = join(base, 'package');
@@ -48,7 +48,10 @@ test('portable execution follows future canonical components and stops on an act
     assert.ifError(result.error);
     assert.equal(result.status, failed ? 7 : 0, result.stderr);
     const selected = [...result.stdout.matchAll(/selected:([a-z0-9:-]+)/g)].map(match => match[1]);
-    assert.deepEqual(selected, failed ? ['test:future-one'] : ['test:future-one', 'test:future-two']);
+    assert.deepEqual(selected, ['test:future-one', 'test:future-two']);
+    const results = JSON.parse(readFileSync(join(base, 'artifacts', 'ci-package', 'results.json'), 'utf8').replace(/^\uFEFF/, ''));
+    assert.deepEqual(results.map(result => result.suite), ['test:future-one', 'test:future-two']);
+    assert.deepEqual(results.map(result => result.exitCode), failed ? [7, 0] : [0, 0]);
   }
 });
 
@@ -103,6 +106,16 @@ test('Docker image is immutable and scoped to the Ubuntu smoke step with no host
   const prepare = job.steps.find(step => step.id === 'docker_prepare');
   assert.match(prepare.run, /docker info/);
   assert.match(prepare.run, /docker pull node@sha256:[a-f0-9]{64}/);
+  assert.match(prepare.run, /echo "uid=\$\(id -u\)" >> "\$GITHUB_OUTPUT"/);
+  assert.match(prepare.run, /echo "gid=\$\(id -g\)" >> "\$GITHUB_OUTPUT"/);
+  assert.equal(smoke.env.BABEL_BENCHMARK_DOCKER_EXTRA_ARGS,
+    '--user ${{ steps.docker_prepare.outputs.uid }}:${{ steps.docker_prepare.outputs.gid }}');
+  for (const other of Object.values(workflow.jobs)) {
+    assert.equal(other.env?.BABEL_BENCHMARK_DOCKER_EXTRA_ARGS, undefined);
+    for (const step of other.steps ?? []) {
+      if (step !== smoke) assert.equal(step.env?.BABEL_BENCHMARK_DOCKER_EXTRA_ARGS, undefined);
+    }
+  }
   const text = readFileSync(new URL('.github/workflows/typecheck.yml', root), 'utf8');
   assert.doesNotMatch(text, /BABEL_ALLOW_HOST_FALLBACK\s*[:=]\s*['"]?1/);
   assert.doesNotMatch(text, /BABEL_DOCKER_DISABLE\s*[:=]\s*['"]?true/);

@@ -54,7 +54,8 @@ function hasOwnerOnlyWindowsAcl(target: string, directory: boolean): boolean {
   const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    '$acl = Get-Acl -LiteralPath $env:BABEL_TEST_ACL_TARGET',
+    '$sections = [System.Security.AccessControl.AccessControlSections]::Access',
+    "if ($env:BABEL_TEST_ACL_DIRECTORY -eq '1') { $acl = [System.Security.AccessControl.DirectorySecurity]::new($env:BABEL_TEST_ACL_TARGET, $sections) } else { $acl = [System.Security.AccessControl.FileSecurity]::new($env:BABEL_TEST_ACL_TARGET, $sections) }",
     '$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     '$rules = @($acl.Access)',
     '$ok = $acl.AreAccessRulesProtected -and $rules.Count -eq 1',
@@ -85,8 +86,10 @@ function hasOwnerOnlyWindowsAcl(target: string, directory: boolean): boolean {
     },
     timeout: 5_000,
     windowsHide: true,
-    stdio: ['ignore', 'pipe', 'ignore'],
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, 'Independent Windows ACL observer failed');
   return result.status === 0 && result.stdout.trim() === 'owner-only';
 }
 
