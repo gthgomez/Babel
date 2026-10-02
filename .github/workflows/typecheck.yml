@@ -280,10 +280,23 @@ jobs:
   linux-validation:
     name: linux-validation
     needs: [security, public-content-policy, package-components, architecture-regressions]
+    if: always()
     runs-on: ubuntu-latest
     env:
       BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
+      - name: Require every coverage dependency to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $results = $env:NEEDS_JSON | ConvertFrom-Json
+          $dependencies = @($results.PSObject.Properties)
+          if ($dependencies.Count -eq 0) { throw 'Required CI dependencies are missing' }
+          foreach ($dependency in $dependencies) {
+            if ($dependency.Value.result -ne 'success') { throw "Required CI dependency $($dependency.Name) concluded $($dependency.Value.result)" }
+          }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
@@ -406,8 +419,21 @@ jobs:
   windows-portability:
     name: windows-portability
     needs: [security, public-content-policy, package-components, architecture-regressions]
+    if: always()
     runs-on: windows-latest
     steps:
+      - name: Require every coverage dependency to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $results = $env:NEEDS_JSON | ConvertFrom-Json
+          $dependencies = @($results.PSObject.Properties)
+          if ($dependencies.Count -eq 0) { throw 'Required CI dependencies are missing' }
+          foreach ($dependency in $dependencies) {
+            if ($dependency.Value.result -ne 'success') { throw "Required CI dependency $($dependency.Name) concluded $($dependency.Value.result)" }
+          }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Test merge control and Git readiness
         shell: pwsh

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
@@ -35,7 +36,31 @@ test('both protected platform checks depend on package and architecture coverage
       assert.ok(job.needs.includes(dependency), `${name} must gate ${dependency}`);
     }
     assert.equal(job['continue-on-error'], undefined);
-    assert.equal(job.if, undefined, 'Default dependency success must remain fail closed');
+    assert.equal(job.if, 'always()', 'Required jobs must run and explicitly reject failed/skipped dependencies');
+    const guard = job.steps[0];
+    assert.equal(guard.env.NEEDS_JSON, '${{ toJSON(needs) }}');
+    assert.equal(guard.name, 'Require every coverage dependency to succeed');
+  }
+});
+
+test('real protected-job dependency guards reject failure, cancellation, skipped and missing results', () => {
+  for (const name of ['linux-validation', 'windows-portability']) {
+    const guard = workflow.jobs[name].steps[0];
+    assert.equal(guard.name, 'Require every coverage dependency to succeed');
+    for (const result of ['success', 'failure', 'cancelled', 'skipped', null]) {
+      const dependencies = Object.fromEntries(workflow.jobs[name].needs.map(dependency => [dependency, { result: 'success' }]));
+      dependencies['package-components'].result = result;
+      const processResult = spawnSync('pwsh', ['-NoProfile', '-Command', guard.run], {
+        env: { ...process.env, NEEDS_JSON: JSON.stringify(dependencies) }, encoding: 'utf8', timeout: 15000,
+      });
+      assert.ifError(processResult.error);
+      assert.equal(processResult.status === 0, result === 'success', `${name}: ${result}: ${processResult.stderr}`);
+    }
+    const empty = spawnSync('pwsh', ['-NoProfile', '-Command', guard.run], {
+      env: { ...process.env, NEEDS_JSON: '{}' }, encoding: 'utf8', timeout: 15000,
+    });
+    assert.ifError(empty.error);
+    assert.notEqual(empty.status, 0, `${name}: missing dependencies must fail`);
   }
 });
 
