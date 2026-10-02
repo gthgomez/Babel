@@ -4,11 +4,88 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
 
-for (const [field, value, invocation] of [['quit', 'process.exit', '(1)'], ['out', 'process.stdout', '.write("x")']]) for (const base of ['Base', 'Alias', 'N.Base']) for (const context of ['static {BODY}', 'static run(){BODY}', 'static result=(()=>{BODY})()']) for (const projection of [`super.${field}`, `super["${field}"]`, `const alias=super.${field}; alias`]) {
-  const source=`class Base {static ${field}=${value}} const Alias=Base; namespace N {export const Base=Alias} class C extends ${base} {${context.replace('BODY',projection+invocation)}} C.run?.()`;
-  test('super preserves known static host fields: '+source,()=>{
+const classHostCases=[['quit','process.exit','','process','1'],['out','process.stdout','.write','TARGET','"x"']];
+const classHostInvocation=(target,member,receiver,argument,adapter)=>{
+  const callable=target+member,hostReceiver=receiver==='TARGET'?target:receiver;
+  return adapter==='direct'?`${callable}(${argument})`:adapter==='call'?`${callable}.call(${hostReceiver},${argument})`:adapter==='apply'?`${callable}.apply(${hostReceiver},[${argument}])`:adapter==='bind'?`${callable}.bind(${hostReceiver})(${argument})`:`Reflect.apply(${callable},${hostReceiver},[${argument}])`;
+};
+for(const [field,value,member,receiver,argument] of classHostCases) for(const isStatic of [false,true]) for(const aliased of [false,true]) for(const adapter of ['direct','call','apply','bind','reflect']) {
+  const prefix=isStatic?'static ':'',target=aliased?'alias':`this.#${field}`;
+  const source=`class C {${prefix}#${field}=${value}; ${prefix}run(){${aliased?`const alias=this.#${field}; `:''}${classHostInvocation(target,member,receiver,argument,adapter)}}}`;
+  test('private class host fields retain lexical origins: '+source,()=>{
     const result=inspectSource(source);
     assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+    assert.deepEqual(inspectSource('const process={exit(){},stdout:{write(){}}}; '+source),{exits:[],stdout:[],ambiguous:[]},source);
+  });
+}
+for(const isStatic of [false,true]) for(const [target,receiver,argument] of [['process.exit','process','1'],['process.stdout.write','process.stdout','"x"']]) for(const aliased of [false,true]) for(const adapter of ['call.call','call.apply','apply.call','apply.apply','call.bind','apply.bind']) {
+  const prefix=isStatic?'static ':'',fake=aliased?'alias':'this.#fake';
+  const invocation=adapter==='call.call'?`${fake}.call.call(${target},${receiver},${argument})`:adapter==='call.apply'?`${fake}.call.apply(${target},[${receiver},${argument}])`:adapter==='apply.call'?`${fake}.apply.call(${target},${receiver},[${argument}])`:adapter==='apply.apply'?`${fake}.apply.apply(${target},[${receiver},[${argument}]])`:adapter==='call.bind'?`${fake}.call.bind(${target},${receiver})(${argument})`:`${fake}.apply.bind(${target},${receiver})([${argument}])`;
+  const source=`class C {${prefix}#fake(...args:any[]){} ${prefix}run(){${aliased?'const alias=this.#fake; ':''}${invocation}}}`;
+  test('private methods retain borrowed intrinsic targets: '+source,()=>{
+    const result=inspectSource(source);
+    assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+    assert.deepEqual(inspectSource('const process={exit(){},stdout:{write(){}}}; '+source),{exits:[],stdout:[],ambiguous:[]},source);
+  });
+}
+for(const [field,value,member,receiver,argument] of classHostCases) for(const owner of ['instance','static','super']) for(const adapter of ['direct','call','apply','bind','reflect']) {
+  const target=`${owner==='super'?'super':'this'}.${field}`,prefix=owner==='instance'?'':'static ';
+  const body=classHostInvocation(target,member,receiver,argument,adapter);
+  const source=owner==='super'?`const key='${field}'; class Base {static [key]=${value}} class C extends Base {static run(){${body}}}`:`const key='${field}'; class C {${prefix}[key]=${value}; ${prefix}run(){${body}}}`;
+  test('unknown public computed class host keys fail closed: '+source,()=>{
+    const result=inspectSource(source);
+    assert.ok(result.ambiguous.length>0,source);
+    assert.deepEqual(inspectSource('const process={exit(){},stdout:{write(){}}}; '+source),{exits:[],stdout:[],ambiguous:[]},source);
+  });
+}
+for(const [field,value,member,receiver,argument] of classHostCases) for(const isStatic of [false,true]) for(const computed of [false,true]) for(const adapter of ['direct','call','apply','bind','reflect']) {
+  const prefix=isStatic?'static ':'',target=`this.${field}`,assignment=computed?`super["${field}"]`:`super.${field}`;
+  const source=`class Base {} class C extends Base {${prefix}run(){${assignment}=${value}; ${classHostInvocation(target,member,receiver,argument,adapter)}}}`;
+  test('super writes retain the actual lexical receiver: '+source,()=>{
+    const result=inspectSource(source);
+    assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+    assert.deepEqual(inspectSource('const process={exit(){},stdout:{write(){}}}; '+source),{exits:[],stdout:[],ambiguous:[]},source);
+  });
+}
+test('class key matching preserves private brands, public strings and harmless captures',()=>{
+  for(const source of [
+    'class Base {#quit=process.exit} class C extends Base {#quit=()=>{};run(){this.#quit()}}',
+    'class Base {static #quit=process.exit} class C extends Base {static #quit=()=>{};static run(){this.#quit()}}',
+    'class C {#quit=process.exit; ["#quit"]=()=>{};run(){this["#quit"]()}}',
+    'class C {["#quit"]=process.exit; #quit=()=>{};run(){this.#quit()}}',
+    'class C {#quit=process.exit; run(){const original=this.#quit.bind(process)}}',
+    'class C {#out=process.stdout; run(){const columns=this.#out.columns}}',
+    'class C {#fake(...args:any[]){} run(){this.#fake.call.call(this.#fake,null,process.exit)}}',
+    'const key="fake";class C {[key]=(...args:any[])=>{};run(){this.fake.call(null,process.exit)}}',
+    'const key="data";class C {[key]=process.stdout.columns;run(){this.resize()}resize(){}}',
+    'class Base {} class C extends Base {run(){super.quit=process.exit;const original=this.quit}}',
+    'class Base {} class C extends Base {static run(){super.quit=()=>{};this.quit()}}',
+  ]) assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+});
+test('known static class aliases do not turn captured host data into unrelated calls',()=>{
+  for(const source of [
+    'class C {static #quit=process.exit;static #fake(){};static run(){const self=this;self.#fake()}}',
+    'class C {static quit=process.exit;static fake(){};static run(){const self=this;self.fake()}}',
+    'class C {static quit=process.exit;static run(){}} C.run()',
+    'class C {static quit=process.exit;static run(){}} const alias=C;alias.run()',
+    'class Base {static quit=process.exit;static run(){}} class C extends Base {} C.run()',
+  ]) assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+  for(const source of [
+    'class C {static #out=process.stdout;static run(){const self=this;self.#out.write("x")}}',
+    'class C {static run(){};static {this.run=process.exit;this.run(1)}}',
+    'class C {static run(){}} const alias=C;alias.run=process.exit;alias.run(1)',
+  ]) {const result=inspectSource(source);assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);}
+});
+
+for (const [field, value, member, receiver, argument, boundary] of [['quit', 'process.exit', '', 'process', '1', 'exits'], ['out', 'process.stdout', '.write', 'TARGET', '"x"', 'stdout']]) for (const base of ['Base', 'Alias', 'N.Base']) for (const context of ['static {BODY}', 'static run(){BODY}', 'static result=(()=>{BODY})()']) for (const [setup, target] of [['',`super.${field}`], ['',`super["${field}"]`], [`const alias=super.${field}; `,'alias']]) for (const adapter of ['direct', 'call', 'apply', 'bind', 'reflect']) {
+  const hostReceiver=receiver==='TARGET'?target:receiver;
+  const callable=target+member;
+  const invocation=adapter==='direct'?`${callable}(${argument})`:adapter==='call'?`${callable}.call(${hostReceiver},${argument})`:adapter==='apply'?`${callable}.apply(${hostReceiver},[${argument}])`:adapter==='bind'?`${callable}.bind(${hostReceiver})(${argument})`:`Reflect.apply(${callable},${hostReceiver},[${argument}])`;
+  const source=`class Base {static ${field}=${value}} const Alias=Base; namespace N {export const Base=Alias} class C extends ${base} {${context.replace('BODY',setup+invocation)}}`;
+  test('super preserves known static host fields: '+source,()=>{
+    const result=inspectSource(source);
+    assert.equal(result[boundary].length,1,source);
+    assert.equal(result.ambiguous.length,0,source);
     const shadow='const process={exit(){},stdout:{write(){}}}; '+source;
     assert.deepEqual(inspectSource(shadow),{exits:[],stdout:[],ambiguous:[]},shadow);
   });
