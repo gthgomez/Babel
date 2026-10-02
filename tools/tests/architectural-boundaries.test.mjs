@@ -4,6 +4,52 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
 
+for (const [field, value, invocation] of [['quit', 'process.exit', '(1)'], ['out', 'process.stdout', '.write("x")']]) for (const base of ['Base', 'Alias', 'N.Base']) for (const context of ['static {BODY}', 'static run(){BODY}', 'static result=(()=>{BODY})()']) for (const projection of [`super.${field}`, `super["${field}"]`, `const alias=super.${field}; alias`]) {
+  const source=`class Base {static ${field}=${value}} const Alias=Base; namespace N {export const Base=Alias} class C extends ${base} {${context.replace('BODY',projection+invocation)}} C.run?.()`;
+  test('super preserves known static host fields: '+source,()=>{
+    const result=inspectSource(source);
+    assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+    const shadow='const process={exit(){},stdout:{write(){}}}; '+source;
+    assert.deepEqual(inspectSource(shadow),{exits:[],stdout:[],ambiguous:[]},shadow);
+  });
+}
+test('super static projections keep host captures and ordinary calls clear',()=>{
+  for(const source of [
+    'class Base {static quit=process.exit} class C extends Base {static {const quit=super.quit}}',
+    'class Base {static out=process.stdout} class C extends Base {static {const width=super.out.columns}}',
+    'class Base {static quit=()=>{}} class C extends Base {static {super.quit()}}',
+  ]) assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+});
+
+for(const [context,member,method,construction] of [
+  ['class C {fake(...args:any[]){} run(){BODY}}','this','','new C().run()'],
+  ['class C {static fake(...args:any[]){} static run(){BODY}}','this','static','C.run()'],
+  ['class Base {fake(...args:any[]) {}} class C extends Base {run(){BODY}}','super','','new C().run()'],
+  ['class Base {static fake(...args:any[]) {}} class C extends Base {static run(){BODY}}','super','static','C.run()'],
+]) for(const [target,receiver,arg] of [['process.exit','process','1'],['process.stdout.write','process.stdout','"x"']]) for(const projection of [`${member}.fake`,`${member}["fake"]`,'const alias='+member+'.fake; alias']) for(const adapter of [
+  `.call.call(${target},${receiver},${arg})`,
+  `.call.apply(${target},[${receiver},${arg}])`,
+  `.apply.call(${target},${receiver},[${arg}])`,
+  `.apply.apply(${target},[${receiver},[${arg}]])`,
+  `.call.bind(${target},${receiver})(${arg})`,
+  `.apply.bind(${target},${receiver})([${arg}])`,
+]) {
+  const source=context.replace('BODY',projection+adapter)+' '+construction;
+  test('this/super method identities retain borrowed host targets: '+method+source,()=>{
+    const result=inspectSource(source);
+    assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+    const shadow='const process={exit(){},stdout:{write(){}}}; '+source;
+    assert.deepEqual(inspectSource(shadow),{exits:[],stdout:[],ambiguous:[]},shadow);
+  });
+}
+test('this/super methods keep harmless host-function data and ordinary bodies clear',()=>{
+  for(const source of [
+    'class C {fake(...args:any[]){} run(){this.fake.call.call(this.fake,null,process.exit)}} new C().run()',
+    'class Base {fake(...args:any[]) {}} class C extends Base {run(){super.fake.call.call(super.fake,null,process.exit)}} new C().run()',
+    'class Base {static fake(...args:any[]) {}} class C extends Base {static run(){super.fake.apply.call(super.fake,null,[process.stdout.write])}} C.run()',
+  ]) assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+});
+
 const methodCarrierDeclarations=[
   'namespace N {export function fake(...args:any[]) {}} const fake:any=N.fake',
   'const box={fake(...args:any[]) {}}; const fake:any=box.fake',

@@ -528,6 +528,7 @@ export function inspectSource(source, path = 'source.ts') {
   }
   function nativeClassProjection(owner, isStatic, keys, seen, bases = new Set()) {
     if (!keys.length || bases.has(owner)) return null;
+    isStatic = Boolean(isStatic);
     bases = new Set(bases).add(owner);
     const [key, ...rest] = keys;
     const fields = [...(isStatic ? owner.members.filter(field => ts.isPropertyDeclaration(field) && hasStatic(field)) : instanceFields(owner)), ...owner.members.filter(member => ts.isMethodDeclaration(member) && Boolean(hasStatic(member)) === isStatic)].filter(field => key === '*' || propertyKey(field.name) === key);
@@ -560,6 +561,10 @@ export function inspectSource(source, path = 'source.ts') {
     if (expression.kind === ts.SyntaxKind.ThisKeyword) {
       const owner = thisOwner(expression);
       return owner ? nativeClassProjection(owner.node, owner.static, keys, seen) : null;
+    }
+    if (expression.kind === ts.SyntaxKind.SuperKeyword) {
+      const owner = thisOwner(expression);
+      return owner ? combine(baseExpressions(owner.node).flatMap(base => (localClasses(base) ?? []).map(parent => nativeClassProjection(parent, owner.static, keys, seen)))) : null;
     }
     if (ts.isModuleDeclaration(expression) && keys.length && expression.body) {
       return combine(namespaceDeclarations(expression).filter(declaration => declaration.name && (keys[0] === '*' || propertyKey(declaration.name) === keys[0])).map(declaration => resolve(namespaceValue(declaration), keys.slice(1))));

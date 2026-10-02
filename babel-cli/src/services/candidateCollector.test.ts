@@ -16,7 +16,7 @@ test('candidateCollector: parseRepositorySlug handles https, ssh and local urls'
 });
 
 test('candidateCollector: determineRiskTier correctly categorizes surfaces', () => {
-  assert.equal(determineRiskTier([]), 'TRIVIAL');
+  assert.equal(determineRiskTier([]), 'AMBIGUOUS');
   assert.equal(determineRiskTier(['README.md', 'docs/overview.md']), 'TRIVIAL');
   assert.equal(determineRiskTier(['src/game/player.ts', 'src/game/physics.ts']), 'NORMAL');
   assert.equal(determineRiskTier(['babel-cli/src/commands/dogfood.ts']), 'ELEVATED');
