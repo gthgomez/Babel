@@ -23,6 +23,8 @@ for (const [label, change] of [
   ['unreachable command', w => { w.jobs['platform-core'].steps.find(s => s.run === command).run = `if ($false) {\n  ${command}\n}`; }],
   ['different script with shared prefix', w => { w.jobs['platform-core'].steps.find(s => s.run === command).run = `${command}-different`; }],
   ['early exit before command', w => { w.jobs['platform-core'].steps.find(s => s.run === command).run = `exit $LASTEXITCODE\n${command}`; }],
+  ['later success masks command failure', w => { w.jobs['platform-core'].steps.find(s => s.run === command).run = `${command}\nnpm run typecheck`; }],
+  ['custom shell only prints the script', w => { w.jobs['platform-core'].steps.find(s => s.run === command).shell = 'pwsh -NoProfile -Command "Get-Content {0}"'; }],
   ['skippable aggregate', w => { delete w.jobs['windows-portability'].if; }],
   ['missing dependency guard', w => { w.jobs['linux-validation'].steps = []; }],
 ]) {
