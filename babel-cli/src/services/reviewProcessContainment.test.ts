@@ -5,6 +5,17 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
+import { attachWindowsReviewJobObject } from './reviewProcessContainment.js'
+
+test('Windows assignment failures retain only bounded helper stage diagnostics', async t => {
+  if (process.platform !== 'win32') return t.skip('Windows helper diagnostic')
+  const containment = await attachWindowsReviewJobObject(2_147_483_647)
+  t.after(() => containment.release())
+  assert.equal(containment.kind, 'windows_taskkill_fallback')
+  assert.match(containment.error ?? '', /;stage=OPENING_WORKER(?:;|$)/)
+  assert.match(containment.error ?? '', /;stdoutPresent=true(?:;|$)/)
+  assert.doesNotMatch(containment.error ?? '', /kernel32|Win32Exception|\\Users\\|ErrorActionPreference/)
+})
 
 async function waitForJson(path: string, timeoutMs = 10_000): Promise<Record<string, unknown>> {
   const started = Date.now()
