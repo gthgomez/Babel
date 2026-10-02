@@ -1,7 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
+
+test('recursive terminal parser data completes without inventing host boundaries', () => {
+  const source=readFileSync(new URL('../../babel-cli/src/ui/keyInput.ts',import.meta.url),'utf8');
+  assert.deepEqual(inspectSource(source), {exits:[], stdout:[], ambiguous:[]});
+});
+
+test('escaped native identifiers and module literals retain AST origin identity', () => {
+  for (const source of [
+    String.raw`\u0072equire("process").exit(1)`,
+    String.raw`import {createRequire} from "node:\u006dodule"; createRequire(import.meta.url)("process").exit(1)`,
+    String.raw`\u0052eflect.apply(process.exit,process,[1])`,
+  ]) assert.equal(inspectSource(source).exits.length,1,source);
+});
+
+test('normalized source identity retains imported and local host aliases', () => {
+  for (const path of ['./source.ts','directory/../source.ts','.\\source.ts']) {
+    assert.equal(inspectSource('import {exit as quit} from "node:process"; const invoke=quit; invoke(1)',path).exits.length,1,path);
+    assert.equal(inspectSource('const quit=process.exit; quit(1)',path).exits.length,1,path);
+  }
+});
 
 for (const source of [
   'Reflect.apply(process.exit, process, [1])',
@@ -194,6 +215,83 @@ test('factory namespace and bind controls do not imply a native loader', () => {
     'import * as M from "node:module"; function f(M){const load=M["createRequire"]("x"); load("process").exit(1)}',
     'import {createRequire} from "node:module"; const factory=createRequire.bind(null,import.meta.url); factory("process").exit(1)',
   ]) assert.deepEqual(inspectSource(source), {exits:[], stdout:[], ambiguous:[]});
+});
+
+for (const statement of [
+  'namespace N {export const load=require} import load=N.load; load("process")',
+  'namespace N {export const factory=M.createRequire} import factory=N.factory; factory(import.meta.url)("process")',
+  'for (const load of [require]) load("process")',
+  'let load; for (load of [require]) load("process")',
+  'for (const factory of [M.createRequire]) factory(import.meta.url)("process")',
+  'let factory; for (factory of [M.createRequire]) factory(import.meta.url)("process")',
+  'for (const {factory} of [{factory:M.createRequire}]) factory(import.meta.url)("process")',
+  'for (const [factory] of [[M.createRequire]]) factory(import.meta.url)("process")',
+  'let factory; for ({factory} of [{factory:M.createRequire}]) factory(import.meta.url)("process")',
+  'const values=[M.createRequire]; for (const factory of values) factory(import.meta.url)("process")',
+]) test('native identity survives qualified aliases and static iteration: '+statement, () => {
+  for (const suffix of ['exit(1)', 'stdout.write("x")']) {
+    const result=inspectSource('import * as M from "node:module"; '+statement+'.'+suffix);
+    assert.ok(result.exits.length + result.stdout.length + result.ambiguous.length > 0, suffix);
+  }
+});
+
+test('native Module exports preserve the exact createRequire factory alias', () => {
+  for (const source of [
+    'import {Module} from "node:module"; Module',
+    'import * as M from "node:module"; M.Module',
+    'const M=require("node:module"); M.Module',
+    'import {Module as Native} from "node:module"; const {createRequire:factory}=Native; ({createRequire:factory})',
+  ]) {
+    for (const suffix of ['exit(1)', 'stdout.write("x")']) {
+      const result=inspectSource(source+'.createRequire(import.meta.url)("process").'+suffix);
+      assert.ok(result.exits.length + result.stdout.length + result.ambiguous.length > 0, source);
+    }
+  }
+});
+
+test('nested native adapters preserve the actual factory or loader receiver', () => {
+  for (const expression of [
+    'M.createRequire.call.call(require,null,"process")',
+    'M.createRequire.call.apply(require,[null,"process"])',
+    'M.createRequire.apply.call(require,null,["process"])',
+    'const load=M.createRequire.call.bind(require,null); load("process")',
+    'native.call.call(M.createRequire,null,import.meta.url)("process")',
+    'native.call.apply(M.createRequire,[null,import.meta.url])("process")',
+    'native.apply.call(M.createRequire,null,[import.meta.url])("process")',
+  ]) {
+    for (const suffix of ['exit(1)', 'stdout.write("x")']) {
+      const result=inspectSource('import * as M from "node:module"; const native=M.createRequire(import.meta.url); '+expression+'.'+suffix);
+      assert.ok(result.exits.length + result.stdout.length + result.ambiguous.length > 0, expression);
+    }
+  }
+});
+
+test('nested native adapters invoking host functions retain exits and stdout', () => {
+  for (const base of ['M.createRequire', 'native']) for (const [target,receiver,args] of [['process.exit','process','1'], ['process.stdout.write','process.stdout','"x"']]) {
+    for (const expression of [
+      `${base}.call.call(${target},${receiver},${args})`,
+      `${base}.call.apply(${target},[${receiver},${args}])`,
+      `${base}.apply.call(${target},${receiver},[${args}])`,
+      `const invoke=${base}.call.bind(${target},${receiver}); invoke(${args})`,
+      `const invoke=${base}.apply.bind(${target},${receiver}); invoke([${args}])`,
+    ]) {
+      const result=inspectSource('import * as M from "node:module"; const native=M.createRequire(import.meta.url); '+expression);
+      assert.ok(result.exits.length + result.stdout.length + result.ambiguous.length > 0, expression);
+    }
+  }
+});
+
+test('qualified and iteration fake loaders and nested fake receivers remain controls', () => {
+  for (const source of [
+    'namespace N {export const load=()=>({exit(){}})} import load=N.load; load("process").exit(1)',
+    'for (const load of [()=>({exit(){}})]) load("process").exit(1)',
+    'let load; for (load of [()=>({exit(){}})]) load("process").exit(1)',
+    'import {Module} from "./fake.js"; Module.createRequire("x")("process").exit(1)',
+    'import * as M from "node:module"; const native=M.createRequire(import.meta.url); const fake=()=>({exit(){}}); native.call.call(fake,null,"process").exit(1)',
+    'import * as M from "node:module"; const fake=()=>({exit(){}}); M.createRequire.call.apply(fake,[null,"process"]).exit(1)',
+    'import * as M from "node:module"; const fake=()=>({exit(){}}); const run=M.createRequire.call.bind(fake,null); run("process").exit(1)',
+    'import * as M from "node:module"; const fake=()=>{}; M.createRequire.call.call(fake,null,process.exit)',
+  ]) assert.deepEqual(inspectSource(source), {exits:[], stdout:[], ambiguous:[]}, source);
 });
 
 test('Reflect property mutation shares the global object identity', () => {

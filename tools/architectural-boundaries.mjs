@@ -9,9 +9,17 @@ const ts = require('typescript');
 /** Inspect executable host calls. Strings containing child programs are data,
  * not host exits; their lifecycle is covered by process-containment tests. */
 export function inspectSource(source, path = 'source.ts') {
-  path = path.replaceAll('\\', '/');
+  path = ts.normalizePath(path);
   const sf = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
   if (sf.parseDiagnostics.length) throw new Error(`Cannot parse source for boundary inspection: ${path}`);
+  function hasNativeSeed(node) {
+    if (ts.isIdentifier(node) && ['require', 'Reflect', 'global', 'globalThis'].includes(node.text) ||
+        ts.isStringLiteralLike(node) && ['module', 'node:module'].includes(node.text) || node.kind === ts.SyntaxKind.ImportKeyword) return true;
+    return Boolean(ts.forEachChild(node, hasNativeSeed));
+  }
+  // Every supported native origin derives from one of these AST seeds. Avoid
+  // repeatedly exploring unrelated recursive data aliases when none exists.
+  const hasNativeOrigins = hasNativeSeed(sf);
   const host = {
     getSourceFile: name => name === path ? sf : undefined,
     getDefaultLibFileName: () => '', writeFile() {}, getCurrentDirectory: () => '',
@@ -30,6 +38,9 @@ export function inspectSource(source, path = 'source.ts') {
   const instanceSymbols = new WeakMap();
   const classFields = new Map();
   const resolvingClassExpressions = new Set();
+  const nativeInvocations = new WeakMap();
+  const resolvingNativeInvocations = new WeakSet();
+  let nativeOriginsReady = false, mutationDepth = 0;
   const globalProcessSymbol = Symbol('unshadowed global process');
   const globalObjectSymbol = Symbol('unshadowed global object');
   const globalReflectSymbol = Symbol('unshadowed global Reflect');
@@ -270,13 +281,14 @@ export function inspectSource(source, path = 'source.ts') {
     const component = mutationsFor(symbol);
     if (component.recognized === undefined && !component.evaluating) {
       component.evaluating = true;
+      mutationDepth++;
       try { component.recognized = component.mutations.some(({ expression, target }) => {
         const route = access(expression);
         if (!route) return (localClasses(expression) ?? []).some(owner => instanceValues(owner).some(value => access(value)));
         // Restoring the same known host method does not introduce a new route.
         return !['process.exit', 'process.stdout.write'].includes(route.join('.')) || access(target)?.join('.') !== route.join('.');
       }); }
-      finally { component.evaluating = false; }
+      finally { component.evaluating = false; mutationDepth--; }
     }
     return component.recognized;
   }
@@ -355,7 +367,8 @@ export function inspectSource(source, path = 'source.ts') {
   }
   collectAssignments(sf);
   mutationComponents.clear();
-  const member = (base, key) => {
+  nativeOriginsReady = true;
+  function member(base, key) {
     if (!base) return null;
     if (!base.length && key === 'Reflect') return ['reflect'];
     if (base.join('.') === 'reflect' && !['apply', '*'].includes(key)) return null;
@@ -366,7 +379,7 @@ export function inspectSource(source, path = 'source.ts') {
     }
     if (base.join('.') === 'process.stdout' && !['write', '*'].includes(key)) return null;
     return [...base, key];
-  };
+  }
   function assignedAccess(value, seen) {
     return projectionAccess(value.expression, value.keys, seen);
   }
@@ -419,47 +432,71 @@ export function inspectSource(source, path = 'source.ts') {
   function nativeOrigin(kind) { return kind ? { kind, operations: [] } : null; }
   function mergeNativeOrigins(routes) {
     const recognized = routes.filter(Boolean);
-    const identity = origin => origin.kind + JSON.stringify(origin.operations.map(operation => typeof operation === 'string' ? operation : operation.map(argument => argument.pos)));
+    const identity = origin => origin.kind + (origin.route?.join('.') ?? '') + JSON.stringify(origin.operations.map(operation => typeof operation === 'string' ? operation : operation.map(argument => argument.pos)));
     return new Set(recognized.map(identity)).size > 1 ? nativeOrigin('ambiguous') : recognized[0] ?? null;
   }
   function projectNativeOrigin(origin, keys) {
     for (const key of keys) {
       if (!origin) return null;
       if (origin.kind === 'ambiguous') continue;
-      if (origin.kind === 'module' && key === 'default') continue;
+      if (origin.kind === 'module' && ['default', 'Module'].includes(key)) continue;
       if (origin.kind === 'module' && key === 'createRequire') origin = nativeOrigin('factory');
       else if (origin.kind === 'global' && key === 'Reflect') origin = nativeOrigin('reflect');
       else if (origin.kind === 'reflect' && key === 'apply') origin = nativeOrigin('reflection');
-      else if (['factory', 'loader', 'reflection'].includes(origin.kind) && ['bind', 'call', 'apply'].includes(key)) origin = { ...origin, operations: [...origin.operations, key] };
+      else if (['factory', 'loader', 'reflection', 'host'].includes(origin.kind) && ['bind', 'call', 'apply'].includes(key)) origin = { ...origin, operations: [...origin.operations, key] };
       else origin = key === '*' ? nativeOrigin('ambiguous') : null;
     }
     return origin;
   }
-  function invokeNativeOrigin(origin, arguments_, seen) {
-    if (!origin || !['factory', 'loader', 'reflection', 'ambiguous'].includes(origin.kind)) return null;
+  function callableNativeOrigin(expression, seen) {
+    const origin = nativeLoaderOrigin(expression, [], seen);
+    if (origin && ['factory', 'loader', 'reflection', 'host', 'ambiguous'].includes(origin.kind)) return origin;
+    const route = access(expression);
+    return route?.[0] === 'process' ? { ...nativeOrigin('host'), route } : null;
+  }
+  function invokeNativeOrigin(origin, arguments_, seen, receiver) {
+    if (!origin || !['factory', 'loader', 'reflection', 'host', 'ambiguous'].includes(origin.kind)) return null;
     if (origin.kind === 'ambiguous') return origin;
     let args = [...arguments_];
     const operations = [...origin.operations];
+    function redirectReceiver(expression) {
+      if (typeof operations.at(-1) !== 'string') return true;
+      const adapter = operations.at(-1);
+      const actual = callableNativeOrigin(expression, seen);
+      if (!actual) return false;
+      origin = actual;
+      operations.splice(0, operations.length, ...actual.operations, adapter);
+      return true;
+    }
+    if (receiver && !redirectReceiver(receiver)) return null;
     // Reverse adapter application preserves both pre-bound arguments and later
     // call/apply wrappers; only known intrinsic operations are interpreted.
     while (operations.length) {
       const operation = operations.pop();
       if (Array.isArray(operation)) args = [...operation, ...args];
-      else if (operation === 'bind') return { ...origin, operations: [...operations, args.slice(1)] };
-      else if (operation === 'call') args = args.slice(1);
+      else if (operation === 'bind') {
+        if (!redirectReceiver(args[0])) return null;
+        return { ...origin, operations: [...operations, args.slice(1)] };
+      }
+      else if (operation === 'call') {
+        if (!redirectReceiver(args[0])) return null;
+        args = args.slice(1);
+      }
       else {
+        if (!redirectReceiver(args[0])) return null;
         const array = unwrap(args[1]);
         if (!array || !ts.isArrayLiteralExpression(array)) return nativeOrigin(origin.kind === 'factory' ? 'loader' : 'ambiguous');
         args = literalArrayElements(array);
         if (!args) return nativeOrigin('ambiguous');
       }
     }
+    if (origin.kind === 'host') return { ...origin, kind: 'hostInvocation', operations: [] };
     if (origin.kind === 'factory') return nativeOrigin('loader');
     if (origin.kind === 'reflection') {
       const target = nativeLoaderOrigin(args[0], [], seen);
       const array = unwrap(args[2]);
       if (!target) return null;
-      return array && ts.isArrayLiteralExpression(array) ? invokeNativeOrigin(target, literalArrayElements(array) ?? [], seen) : nativeOrigin(target.kind === 'factory' ? 'loader' : 'ambiguous');
+      return array && ts.isArrayLiteralExpression(array) ? invokeNativeOrigin(target, literalArrayElements(array) ?? [], seen, args[1]) : nativeOrigin(target.kind === 'factory' ? 'loader' : 'ambiguous');
     }
     const name = unwrap(args[0]);
     if (!name || !ts.isStringLiteralLike(name)) return null;
@@ -486,6 +523,7 @@ export function inspectSource(source, path = 'source.ts') {
       if ([ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(expression.operatorToken.kind)) return combine([resolve(expression.left), resolve(expression.right)]);
     }
     if (ts.isConditionalExpression(expression)) return combine([resolve(expression.whenTrue), resolve(expression.whenFalse)]);
+    if (ts.isQualifiedName(expression)) return resolve(expression.left, [expression.right.text, ...keys]);
     if (ts.isPropertyAccessExpression(expression)) return resolve(expression.expression, [expression.name.text, ...keys]);
     if (ts.isElementAccessExpression(expression)) return resolve(expression.expression, [ts.isStringLiteralLike(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression) ? expression.argumentExpression.text : '*', ...keys]);
     if (ts.isCallExpression(expression)) {
@@ -516,10 +554,11 @@ export function inspectSource(source, path = 'source.ts') {
     if (!declarations.length && implicitGlobals.get(expression.text) === globalObjectSymbol) routes.push(projectNativeOrigin(nativeOrigin('global'), keys));
     for (const declaration of declarations) {
       if (['node:module', 'module'].includes(moduleOf(declaration))) {
-        if (ts.isImportSpecifier(declaration)) routes.push(projectNativeOrigin(nativeOrigin((declaration.propertyName?.text ?? declaration.name.text) === 'createRequire' ? 'factory' : (declaration.propertyName?.text ?? declaration.name.text) === 'default' ? 'module' : null), keys));
+        if (ts.isImportSpecifier(declaration)) routes.push(projectNativeOrigin(nativeOrigin((declaration.propertyName?.text ?? declaration.name.text) === 'createRequire' ? 'factory' : ['default', 'Module'].includes(declaration.propertyName?.text ?? declaration.name.text) ? 'module' : null), keys));
         else if (ts.isNamespaceImport(declaration) || ts.isImportClause(declaration) || ts.isImportEqualsDeclaration(declaration)) routes.push(projectNativeOrigin(nativeOrigin('module'), keys));
       }
-      if (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration)) routes.push(resolve(declaration.initializer));
+      if (ts.isImportEqualsDeclaration(declaration) && !ts.isExternalModuleReference(declaration.moduleReference)) routes.push(resolve(declaration.moduleReference));
+      if (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration)) routes.push(nativeTransferredOrigin(declarationSource(declaration), keys, seen));
       if (ts.isClassDeclaration(declaration) || ts.isModuleDeclaration(declaration)) routes.push(resolve(declaration));
       if (ts.isBindingElement(declaration)) {
         let element = declaration, path = keys, excluded = false;
@@ -531,10 +570,10 @@ export function inspectSource(source, path = 'source.ts') {
           } else path = [ts.isArrayBindingPattern(element.parent) ? String(element.parent.elements.indexOf(element)) : propertyKey(element.propertyName ?? element.name), ...path];
           element = element.parent.parent;
         }
-        if (!excluded) routes.push(resolve(declarationSource(element), path));
+        if (!excluded) routes.push(nativeTransferredOrigin(declarationSource(element), path, seen));
       }
     }
-    routes.push(...(assignments.get(symbol) ?? []).map(value => resolve(value.expression, [...value.keys, ...keys])));
+    routes.push(...(assignments.get(symbol) ?? []).map(value => nativeTransferredOrigin(value.expression, [...value.keys, ...keys], seen)));
     if (keys.length) for (const mutation of mutationsFor(symbol).mutations) {
       const targetKeys = [];
       let target = unwrap(mutation.target);
@@ -546,8 +585,26 @@ export function inspectSource(source, path = 'source.ts') {
     }
     return combine(routes);
   }
+  function nativeTransferredOrigin(expression, keys, seen) {
+    const owner = expression?.parent;
+    const iterated = owner && ts.isForOfStatement(owner) && owner.expression === expression;
+    return nativeLoaderOrigin(expression, iterated ? ['*', ...keys] : keys, seen);
+  }
   function isProcessImport(node) {
-    return ts.isCallExpression(node) && ['process', 'ambiguous'].includes(nativeLoaderOrigin(node)?.kind);
+    return ts.isCallExpression(node) && ['process', 'ambiguous'].includes(nativeInvocationOrigin(node)?.kind);
+  }
+  function nativeInvocationOrigin(node) {
+    if (!hasNativeOrigins) return null;
+    if (nativeOriginsReady && mutationDepth === 0 && nativeInvocations.has(node)) return nativeInvocations.get(node);
+    if (resolvingNativeInvocations.has(node)) return nativeOrigin('ambiguous');
+    resolvingNativeInvocations.add(node);
+    try {
+      const origin = nativeLoaderOrigin(node);
+      // Reuse only complete root queries after alias collection; mutation
+      // evaluation and path-dependent recursive queries remain uncached.
+      if (nativeOriginsReady && mutationDepth === 0) nativeInvocations.set(node, origin);
+      return origin;
+    } finally { resolvingNativeInvocations.delete(node); }
   }
   function boundReflectionAccess(callee, args, seen) {
     const adapter = callee.slice(0, -1).join('.');
@@ -611,7 +668,7 @@ export function inspectSource(source, path = 'source.ts') {
       return member(base, key);
     }
     if (ts.isCallExpression(node)) {
-      if (isProcessImport(node)) return nativeLoaderOrigin(node)?.kind === 'process' ? ['process'] : ['process', '*'];
+      if (isProcessImport(node)) return nativeInvocationOrigin(node)?.kind === 'process' ? ['process'] : ['process', '*'];
       const callee = access(node.expression, seen);
       if (unresolvedInvocation(callee)) return ['process', '*'];
       if (callee?.[0] === 'reflect' && callee.at(-1) === 'bind') return boundReflectionAccess(callee, node.arguments, seen);
@@ -620,6 +677,11 @@ export function inspectSource(source, path = 'source.ts') {
     if (!ts.isIdentifier(node)) return null;
     const symbol = identifierSymbol(node);
     const declarations = symbol?.declarations ?? [];
+    // All initializer and assignment routes for this symbol are explored below.
+    // A back edge to that same symbol cannot add a new seed to the current path.
+    if (symbol && seen.has(symbol)) return implicitGlobals.has(node.text) && declarations.length === 0
+      ? node.text === 'process' ? ['process'] : node.text === 'Reflect' ? ['reflect'] : [] : null;
+    if (symbol) seen = new Set(seen).add(symbol);
     // Every alias in a component shares its mutation seeds. Evaluate those seeds
     // once, independently of the caller's path; reentry follows declarations and
     // assignments without recursively expanding the same component again.
@@ -672,6 +734,10 @@ export function inspectSource(source, path = 'source.ts') {
   function visit(node) {
     if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) {
       let route = access(ts.isTaggedTemplateExpression(node) ? node.tag : node.expression);
+      if (ts.isCallExpression(node)) {
+        const native = nativeInvocationOrigin(node);
+        if (native?.kind === 'hostInvocation') route = native.route;
+      }
       if (ts.isNewExpression(node)) {
         const owners = localClasses(node.expression);
         if (owners && !owners.some(owner => hasHostBase(owner))) route = null;
