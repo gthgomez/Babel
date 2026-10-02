@@ -243,7 +243,7 @@ describe('D03 protocol client and run payload carry the reason', () => {
 });
 
 describe('D03 production engine: hard-cap reasons reach every surface', () => {
-  for (const terminal of ['budget', 'recovery'] as const) {
+  for (const terminal of ['budget', 'recovery', 'recovery_without_reads'] as const) {
   test(`the real stream loop preserves ${terminal} exhaustion across durable and review surfaces`, async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'd03-engine-'));
     for (let i = 1; i <= 3; i++) writeFileSync(join(projectRoot, `hello_${i}.txt`), `hello ${i}\n`, 'utf-8');
@@ -251,12 +251,12 @@ describe('D03 production engine: hard-cap reasons reach every surface', () => {
     const priorTaskClass = process.env['BABEL_CHAT_TASK_CLASS'];
     const priorMessages = process.env['BABEL_CHAT_MAX_MESSAGES'];
     process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
-    process.env['BABEL_CHAT_TASK_CLASS'] = terminal === 'recovery' ? 'investigate' : 'quick_fix';
+    process.env['BABEL_CHAT_TASK_CLASS'] = terminal === 'budget' ? 'quick_fix' : 'investigate';
     process.env['BABEL_CHAT_MAX_MESSAGES'] = '100';
     const reason = terminal === 'budget' ? 'budget_exhausted' : 'recovery_exhausted';
-    // Re-read suppression leaves this real-loop recovery cause unclassified;
-    // the explicit unchanged-read receipt/model classification is covered above.
-    const cause = terminal === 'budget' ? 'harness' : undefined;
+    // The recovery fixture distinguishes unchanged read evidence from a cycle
+    // with no read evidence; neither result may invent a cause from prose.
+    const cause = terminal === 'budget' ? 'harness' : terminal === 'recovery' ? 'model' : undefined;
     try {
       const engine = new ChatEngine({
         task: 'Fix hello.txt',
@@ -278,8 +278,12 @@ describe('D03 production engine: hard-cap reasons reach every surface', () => {
             yield {
               type: 'tool_use',
               id: `read_${++reads}`,
-              name: 'read_file',
-              input: { path: `hello_${terminal === 'recovery' ? 1 : reads}.txt` },
+              name: terminal === 'recovery' ? 'read_range' : terminal === 'budget' ? 'read_file' : 'todo_write',
+              input: terminal === 'recovery'
+                ? { file_path: 'hello_1.txt', start_line: 1, end_line: 1 }
+                : terminal === 'budget'
+                  ? { path: `hello_${reads}.txt` }
+                  : { todos: [{ id: 'same', content: 'Inspect hello', status: 'pending' }] },
             };
             yield { type: 'done', finishReason: 'tool_calls' };
           },
@@ -295,6 +299,12 @@ describe('D03 production engine: hard-cap reasons reach every surface', () => {
         engine.submitMessageStream('Fix hello.txt'),
         null,
       );
+
+      if (terminal !== 'budget') {
+        const receipt = (engine as unknown as { parity: { progress: { receipts: Array<{ noProgressReason?: string; targetsRead: string[] }> } } }).parity.progress.receipts.at(-1);
+        assert.equal(receipt?.noProgressReason, terminal === 'recovery' ? 'repeated_unchanged_reads' : 'no_semantic_delta');
+        assert.deepEqual(receipt?.targetsRead, terminal === 'recovery' ? ['hello_1.txt'] : []);
+      }
 
       // Engine result carries the structured reason.
       assert.equal(result.reason_code, reason);
@@ -317,6 +327,7 @@ describe('D03 production engine: hard-cap reasons reach every surface', () => {
       assert.ok(log, 'durable session log must exist');
       const state = projectTurnViewStateFromSessionEvents(log!.events);
       assert.equal(state.reviewCard.reasonCode, reason);
+      assert.equal(state.reviewCard.causeClass ?? null, cause ?? null);
       const card = renderProjectedReviewCard(state);
       if (terminal === 'budget') {
         assert.match(card.body, /Budget limit reached/);
