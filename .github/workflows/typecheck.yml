@@ -1,24 +1,23 @@
+# Standard hosted workloads; stable required names aggregate every dependency fail closed.
+# Full architecture ratchet activates with PR288's combined split; intermediate debt remains
+# explicit in integration evidence. No baseline or process-boundary grant is increased.
 name: Public Release Gate
-
-on:
-  pull_request:
+'on':
+  pull_request: null
   push:
     branches:
       - main
-
 permissions:
   contents: read
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
-
 jobs:
   security:
     name: security
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Run local public scrub
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-scrub.ps1 -Strict
       - name: Install pinned gitleaks
@@ -43,13 +42,14 @@ jobs:
           "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           & (Join-Path $installDir $executableName) version
       - name: Run required public secret scan
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/run-public-secret-scan.ps1 -RepoRoot . -Strict -RequireExternalScanner
-
+        run: >-
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tools/run-public-secret-scan.ps1 -RepoRoot . -Strict
+          -RequireExternalScanner
   public-content-policy:
     name: public-content-policy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Test public prevention gates
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-prevention-gates.ps1
       - name: Check public content policy
@@ -60,14 +60,13 @@ jobs:
         run: node tools/check-campaign-status.mjs
       - name: Public policy runtime matrix
         run: pwsh -NoProfile -ExecutionPolicy Bypass -Command "& './tools/tests/test-public-content-policy-runtime.ps1'"
-
   review-control-plane-contract:
     name: review-control-plane-contract
     runs-on: ubuntu-latest
     env:
       BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           fetch-depth: 0
       - name: Test trusted merge and evidence contracts
@@ -82,9 +81,9 @@ jobs:
             pwsh -NoProfile -NonInteractive -File $test
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: "22"
+          node-version: '22'
           cache: npm
           cache-dependency-path: babel-cli/package-lock.json
       - name: Install dependencies
@@ -92,53 +91,285 @@ jobs:
         working-directory: babel-cli
       - name: Test review policy, provenance, and merge-readiness contracts
         run: >
-          npx tsx --no-warnings=ExperimentalWarning --test
-          src/services/reviewControlPlaneParity.test.ts
-          src/services/reviewPolicy.test.ts
-          src/services/babelReviewSnapshot.test.ts
-          src/services/mergeReadinessBroker.test.ts
-          src/services/reviewIndependence.test.ts
-          src/services/harnessReviewProtocol.test.ts
-          src/services/independentReviewEvidenceV3.test.ts
-          src/services/codexHarnessReview.test.ts
-          src/services/openCodeHarnessReview.test.ts
-          src/services/controllerMediatedHarnessReview.test.ts
-          src/services/trustedReviewInstallation.test.ts
+          npx tsx --no-warnings=ExperimentalWarning --test src/services/reviewControlPlaneParity.test.ts
+          src/services/reviewPolicy.test.ts src/services/babelReviewSnapshot.test.ts
+          src/services/mergeReadinessBroker.test.ts src/services/reviewIndependence.test.ts
+          src/services/harnessReviewProtocol.test.ts src/services/independentReviewEvidenceV3.test.ts
+          src/services/codexHarnessReview.test.ts src/services/openCodeHarnessReview.test.ts
+          src/services/controllerMediatedHarnessReview.test.ts src/services/trustedReviewInstallation.test.ts
         working-directory: babel-cli
-
   policy-integrity:
     name: policy-integrity
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os:
+          - ubuntu-latest
+          - windows-latest
     runs-on: ${{ matrix.os }}
-    # Verify the manifest against the combined policy and runtime changes.
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Test policy integrity verifier
         run: node --test tools/tests/policy-integrity-manifest.test.mjs
       - name: Verify policy integrity manifest
         run: node tools/policy-integrity-manifest.mjs verify
-
   public-pr-metadata-tests:
     name: public-pr-metadata-tests
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Test public PR metadata policy
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-pr-metadata.ps1
+  architecture-regressions:
+    name: architecture-regressions (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Record candidate identity
+        shell: pwsh
+        run: >
+          $ErrorActionPreference = 'Stop'
 
+          New-Item -ItemType Directory -Force artifacts/architecture-regressions | Out-Null
+
+          $head = '${{ github.event.pull_request.head.sha || github.sha }}'
+
+          $checkout = git rev-parse HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git merge-base --is-ancestor $head HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @{ candidateHead = $head; checkout = $checkout; runId = '${{ github.run_id }}'; os = '${{ matrix.os }}' } |
+          ConvertTo-Json > artifacts/architecture-regressions/identity.json
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Test scanner, real budget checker, and CI coverage contracts
+        shell: pwsh
+        run: >
+          node --test --test-reporter=tap tools/tests/architectural-boundaries.test.mjs
+          tools/tests/architectural-budget.test.mjs tools/tests/ci-package-coverage.test.mjs
+          tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-unit-sharding.test.mjs 2>&1 | Tee-Object
+          artifacts/architecture-regressions/full.tap
+
+          exit $LASTEXITCODE
+      - name: Verify architecture boundary registry
+        run: pwsh -NoProfile -File tools/tests/test-architectural-budget-allowlist.ps1
+      - name: Upload architecture regression evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: architecture-regressions-${{ matrix.os }}
+          path: artifacts/architecture-regressions
+          if-no-files-found: error
+          retention-days: 7
+  package-components:
+    name: package-components (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      FORCE_COLOR: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Record candidate identity
+        shell: pwsh
+        run: >
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Force artifacts/ci-validation | Out-Null
+
+          $head = '${{ github.event.pull_request.head.sha || github.sha }}'
+
+          $checkout = git rev-parse HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git merge-base --is-ancestor $head HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @{ candidateHead = $head; checkout = $checkout; runId = '${{ github.run_id }}'; os = '${{ runner.os }}'; role
+          = 'package-components' } | ConvertTo-Json > artifacts/ci-validation/identity.json
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Prepare package component artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/ci-package | Out-Null
+      - name: Run portable package components
+        id: package_component
+        shell: pwsh
+        run: >
+          $ErrorActionPreference = 'Stop'
+
+          Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue
+
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+
+          $components = @($package.scripts.test -split '\s*&&\s*' | ForEach-Object {
+            if ($_ -notmatch '^npm run ([a-z0-9:-]+)$') { throw 'Unexpected canonical package component' }
+            $Matches[1]
+          })
+
+          if ($components -notcontains 'test:unit' -or $components -notcontains 'test:smoke-fixtures') { throw
+          'Canonical unit/smoke components are missing' }
+
+          $portable = @($components | Where-Object { $_ -notin @('test:unit', 'test:smoke-fixtures') })
+
+          if ($portable.Count -eq 0) { throw 'Portable package component selection is empty' }
+
+          $results = @()
+
+          foreach ($suite in $portable) {
+            $started = Get-Date
+            $log = '../artifacts/ci-package/' + $suite.Replace(':', '-') + '.log'
+            npm run $suite 2>&1 | Tee-Object $log
+            $code = $LASTEXITCODE
+            $results += @{ suite = $suite; exitCode = $code; elapsedSeconds = ((Get-Date) - $started).TotalSeconds }
+            $results | ConvertTo-Json | Set-Content ../artifacts/ci-package/results.json
+            if ($code -ne 0) { exit $code }
+          }
+
+          exit $LASTEXITCODE
+        working-directory: babel-cli
+      - name: Upload portable package evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: package-${{ matrix.os }}
+          path: |-
+            artifacts/ci-package
+            artifacts/ci-validation
+          if-no-files-found: error
+          retention-days: 7
   linux-validation:
     name: linux-validation
-    needs: [security, public-content-policy]
+    if: always()
     runs-on: ubuntu-latest
+    needs:
+      - security
+      - public-content-policy
+      - architecture-regressions
+      - package-components
+      - unit-shards
+      - docker-smoke
+      - platform-core
+      - harness-runtime
+      - chat-truth
+      - remote-ui-browser
+    steps:
+      - name: Require every coverage dependency to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $results = $env:NEEDS_JSON | ConvertFrom-Json
+          $dependencies = @($results.PSObject.Properties)
+          if ($dependencies.Count -eq 0) { throw 'Required CI dependencies are missing' }
+          foreach ($dependency in $dependencies) {
+            if ($dependency.Value.result -ne 'success') { throw "Required CI dependency $($dependency.Name) concluded $($dependency.Value.result)" }
+          }
+  windows-portability:
+    name: windows-portability
+    if: always()
+    runs-on: windows-latest
+    needs:
+      - security
+      - public-content-policy
+      - architecture-regressions
+      - package-components
+      - unit-shards
+      - docker-smoke
+      - platform-core
+      - harness-runtime
+      - chat-truth
+      - windows-policy
+    steps:
+      - name: Require every coverage dependency to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $results = $env:NEEDS_JSON | ConvertFrom-Json
+          $dependencies = @($results.PSObject.Properties)
+          if ($dependencies.Count -eq 0) { throw 'Required CI dependencies are missing' }
+          foreach ($dependency in $dependencies) {
+            if ($dependency.Value.result -ne 'success') { throw "Required CI dependency $($dependency.Name) concluded $($dependency.Value.result)" }
+          }
+  platform-core:
+    name: platform-core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
     env:
       BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Record candidate identity
+        shell: pwsh
+        run: >
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Force artifacts/ci-validation | Out-Null
+
+          $head = '${{ github.event.pull_request.head.sha || github.sha }}'
+
+          $checkout = git rev-parse HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git merge-base --is-ancestor $head HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @{ candidateHead = $head; checkout = $checkout; runId = '${{ github.run_id }}'; os = '${{ runner.os }}'; role
+          = 'platform-core' } | ConvertTo-Json > artifacts/ci-validation/identity.json
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
       - name: Run required review control-plane PowerShell contract
         shell: pwsh
         run: |
@@ -152,31 +383,275 @@ jobs:
             pwsh -NoProfile -NonInteractive -File $test
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        if: matrix.os == 'ubuntu-latest'
+      - name: Test merge control and Git readiness
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tools/tests/test-agent-pr-gate.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tools/tests/test-agent-git-readiness.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tools/tests/test-trusted-control-plane-integration.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        if: matrix.os == 'windows-latest'
+      - name: Run required review control-plane TypeScript contract
+        run: >
+          npx tsx --no-warnings=ExperimentalWarning --test src/services/reviewControlPlaneParity.test.ts
+          src/services/reviewPolicy.test.ts src/services/babelReviewSnapshot.test.ts
+          src/services/mergeReadinessBroker.test.ts src/services/reviewIndependence.test.ts
+          src/services/harnessReviewProtocol.test.ts src/services/independentReviewEvidenceV3.test.ts
+          src/services/codexHarnessReview.test.ts src/services/openCodeHarnessReview.test.ts
+          src/services/controllerMediatedHarnessReview.test.ts src/services/trustedReviewInstallation.test.ts
+        working-directory: babel-cli
+        if: matrix.os == 'ubuntu-latest'
+      - name: Typecheck CLI
+        run: npm run typecheck
+        working-directory: babel-cli
+      - name: Build CLI
+        run: npm run build
+        working-directory: babel-cli
+      - name: Check harness architecture package
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1
+      - name: Run required UI test suite
+        run: npm run test:ui
+        working-directory: babel-cli
+      - name: Run required harness acceptance suite
+        run: npm run test:harness-acceptance
+        working-directory: babel-cli
+      - name: Run required Acceptance V0 suite
+        run: npm run test:acceptance-v0
+        working-directory: babel-cli
+      - name: Run required benchmark/eval suite
+        run: npm run test:benchmark-eval
+        working-directory: babel-cli
+      - name: Validate catalog
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1
+      - name: Upload candidate identity
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          node-version: "22"
+          name: candidate-platform-core-${{ runner.os }}
+          path: artifacts/ci-validation
+          if-no-files-found: error
+          retention-days: 7
+  harness-runtime:
+    name: harness-runtime (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
           cache: npm
           cache-dependency-path: babel-cli/package-lock.json
+      - name: Record candidate identity
+        shell: pwsh
+        run: >
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Force artifacts/ci-validation | Out-Null
+
+          $head = '${{ github.event.pull_request.head.sha || github.sha }}'
+
+          $checkout = git rev-parse HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git merge-base --is-ancestor $head HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @{ candidateHead = $head; checkout = $checkout; runId = '${{ github.run_id }}'; os = '${{ runner.os }}'; role
+          = 'harness-runtime' } | ConvertTo-Json > artifacts/ci-validation/identity.json
       - name: Install dependencies
         run: npm ci --ignore-scripts
         working-directory: babel-cli
-      - name: Run required review control-plane TypeScript contract
-        run: >
-          npx tsx --no-warnings=ExperimentalWarning --test
-          src/services/reviewControlPlaneParity.test.ts
-          src/services/reviewPolicy.test.ts
-          src/services/babelReviewSnapshot.test.ts
-          src/services/mergeReadinessBroker.test.ts
-          src/services/reviewIndependence.test.ts
-          src/services/harnessReviewProtocol.test.ts
-          src/services/independentReviewEvidenceV3.test.ts
-          src/services/codexHarnessReview.test.ts
-          src/services/openCodeHarnessReview.test.ts
-          src/services/controllerMediatedHarnessReview.test.ts
-          src/services/trustedReviewInstallation.test.ts
+      - name: Capture required harness runtime selection
+        run: node scripts/capture_required_tap_selection.mjs harness-runtime
         working-directory: babel-cli
-      - name: Typecheck CLI
-        run: npm run typecheck
+      - name: Run required harness runtime suite
+        id: harness_runtime
+        timeout-minutes: 15
+        shell: pwsh
+        run: >
+          New-Item -ItemType Directory -Force artifacts/harness-runtime | Out-Null
+
+          npm run test:harness-runtime -- --test-timeout=60000 2>&1 | Tee-Object -FilePath
+          artifacts/harness-runtime/full.tap
+
+          exit $LASTEXITCODE
+        working-directory: babel-cli
+      - name: Summarize harness runtime TAP (Linux)
+        if: >-
+          matrix.os == 'ubuntu-latest' && (always() && steps.harness_runtime.outcome != 'skipped' &&
+          steps.harness_runtime.outcome != '')
+        run: node scripts/summarize_required_tap.mjs harness-runtime
+        working-directory: babel-cli
+      - name: Upload harness runtime TAP (Linux)
+        if: >-
+          matrix.os == 'ubuntu-latest' && (always() && steps.harness_runtime.outcome != 'skipped' &&
+          steps.harness_runtime.outcome != '')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: harness-runtime-linux
+          path: babel-cli/artifacts/harness-runtime
+          if-no-files-found: warn
+      - name: Summarize harness runtime TAP (Windows)
+        if: >-
+          matrix.os == 'windows-latest' && (always() && steps.harness_runtime.outcome != 'skipped' &&
+          steps.harness_runtime.outcome != '')
+        run: node scripts/summarize_required_tap.mjs harness-runtime
+        working-directory: babel-cli
+      - name: Upload harness runtime TAP (Windows)
+        if: >-
+          matrix.os == 'windows-latest' && (always() && steps.harness_runtime.outcome != 'skipped' &&
+          steps.harness_runtime.outcome != '')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: harness-runtime-windows
+          path: babel-cli/artifacts/harness-runtime
+          if-no-files-found: warn
+      - name: Upload candidate identity
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-harness-runtime-${{ runner.os }}
+          path: artifacts/ci-validation
+          if-no-files-found: error
+          retention-days: 7
+  chat-truth:
+    name: chat-truth (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Record candidate identity
+        shell: pwsh
+        run: >
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Force artifacts/ci-validation | Out-Null
+
+          $head = '${{ github.event.pull_request.head.sha || github.sha }}'
+
+          $checkout = git rev-parse HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git merge-base --is-ancestor $head HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @{ candidateHead = $head; checkout = $checkout; runId = '${{ github.run_id }}'; os = '${{ runner.os }}'; role
+          = 'chat-truth' } | ConvertTo-Json > artifacts/ci-validation/identity.json
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Capture Chat truth test selection
+        run: node scripts/capture_required_tap_selection.mjs chat-truth
+        working-directory: babel-cli
+      - name: Run required Chat truth suite
+        id: chat_truth
+        shell: pwsh
+        run: |
+          npm run test:chat-truth 2>&1 | Tee-Object -FilePath artifacts/chat-truth/full.tap
+          exit $LASTEXITCODE
+        working-directory: babel-cli
+      - name: Summarize Chat truth TAP (Linux)
+        if: >-
+          matrix.os == 'ubuntu-latest' && (always() && steps.chat_truth.outcome != 'skipped' && steps.chat_truth.outcome
+          != '')
+        run: node scripts/summarize_required_tap.mjs chat-truth
+        working-directory: babel-cli
+      - name: Upload Chat truth selection and TAP (Linux)
+        if: >-
+          matrix.os == 'ubuntu-latest' && (always() && steps.chat_truth.outcome != 'skipped' && steps.chat_truth.outcome
+          != '')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: chat-truth-linux
+          path: babel-cli/artifacts/chat-truth
+          if-no-files-found: warn
+      - name: Summarize Chat truth TAP (Windows)
+        if: >-
+          matrix.os == 'windows-latest' && (always() && steps.chat_truth.outcome != 'skipped' &&
+          steps.chat_truth.outcome != '')
+        run: node scripts/summarize_required_tap.mjs chat-truth
+        working-directory: babel-cli
+      - name: Upload Chat truth selection and TAP (Windows)
+        if: >-
+          matrix.os == 'windows-latest' && (always() && steps.chat_truth.outcome != 'skipped' &&
+          steps.chat_truth.outcome != '')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: chat-truth-windows
+          path: babel-cli/artifacts/chat-truth
+          if-no-files-found: warn
+      - name: Upload candidate identity
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-chat-truth-${{ runner.os }}
+          path: artifacts/ci-validation
+          if-no-files-found: error
+          retention-days: 7
+  remote-ui-browser:
+    name: remote-ui-browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Record candidate identity
+        shell: pwsh
+        run: >
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Force artifacts/ci-validation | Out-Null
+
+          $head = '${{ github.event.pull_request.head.sha || github.sha }}'
+
+          $checkout = git rev-parse HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git merge-base --is-ancestor $head HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @{ candidateHead = $head; checkout = $checkout; runId = '${{ github.run_id }}'; os = '${{ runner.os }}'; role
+          = 'remote-ui-browser' } | ConvertTo-Json > artifacts/ci-validation/identity.json
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
         working-directory: babel-cli
       - name: Build CLI
         run: npm run build
@@ -189,161 +664,53 @@ jobs:
         working-directory: babel-cli
       - name: Upload Remote UI screenshots
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: remote-ui-screenshots-linux
           path: artifacts/remote-ui
           if-no-files-found: ignore
-      - name: Check harness architecture package
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1
-      - name: Run required UI test suite
-        run: npm run test:ui
-        working-directory: babel-cli
-      - name: Run required harness acceptance suite
-        run: npm run test:harness-acceptance
-        working-directory: babel-cli
-      - name: Run required Acceptance V0 suite
-        run: npm run test:acceptance-v0
-        working-directory: babel-cli
-      - name: Capture required harness runtime selection
-        run: node scripts/capture_required_tap_selection.mjs harness-runtime
-        working-directory: babel-cli
-      - name: Run required harness runtime suite
-        id: harness_runtime
-        timeout-minutes: 15
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force artifacts/harness-runtime | Out-Null
-          npm run test:harness-runtime -- --test-timeout=60000 2>&1 | Tee-Object -FilePath artifacts/harness-runtime/full.tap
-          exit $LASTEXITCODE
-        working-directory: babel-cli
-      - name: Summarize harness runtime TAP (Linux)
-        if: always() && steps.harness_runtime.outcome != 'skipped' && steps.harness_runtime.outcome != ''
-        run: node scripts/summarize_required_tap.mjs harness-runtime
-        working-directory: babel-cli
-      - name: Upload harness runtime TAP (Linux)
-        if: always() && steps.harness_runtime.outcome != 'skipped' && steps.harness_runtime.outcome != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Upload candidate identity
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: harness-runtime-linux
-          path: babel-cli/artifacts/harness-runtime
-          if-no-files-found: warn
-      - name: Capture Chat truth test selection
-        run: node scripts/capture_required_tap_selection.mjs chat-truth
-        working-directory: babel-cli
-      - name: Run required Chat truth suite
-        id: chat_truth
-        shell: pwsh
-        run: |
-          npm run test:chat-truth 2>&1 | Tee-Object -FilePath artifacts/chat-truth/full.tap
-          exit $LASTEXITCODE
-        working-directory: babel-cli
-      - name: Summarize Chat truth TAP (Linux)
-        if: always() && steps.chat_truth.outcome != 'skipped' && steps.chat_truth.outcome != ''
-        run: node scripts/summarize_required_tap.mjs chat-truth
-        working-directory: babel-cli
-      - name: Upload Chat truth selection and TAP (Linux)
-        if: always() && steps.chat_truth.outcome != 'skipped' && steps.chat_truth.outcome != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: chat-truth-linux
-          path: babel-cli/artifacts/chat-truth
-          if-no-files-found: warn
-      - name: Run required benchmark/eval suite
-        run: npm run test:benchmark-eval
-        working-directory: babel-cli
-      - name: Validate catalog
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1
-
-  windows-portability:
-    name: windows-portability
-    needs: [security, public-content-policy]
+          name: candidate-remote-ui-browser-${{ runner.os }}
+          path: artifacts/ci-validation
+          if-no-files-found: error
+          retention-days: 7
+  windows-policy:
+    name: windows-policy
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Test merge control and Git readiness
-        shell: pwsh
-        run: |
-          pwsh -NoProfile -File tools/tests/test-agent-pr-gate.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          pwsh -NoProfile -File tools/tests/test-agent-git-readiness.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          pwsh -NoProfile -File tools/tests/test-trusted-control-plane-integration.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          node-version: "22"
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
           cache: npm
           cache-dependency-path: babel-cli/package-lock.json
+      - name: Record candidate identity
+        shell: pwsh
+        run: >
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Force artifacts/ci-validation | Out-Null
+
+          $head = '${{ github.event.pull_request.head.sha || github.sha }}'
+
+          $checkout = git rev-parse HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git merge-base --is-ancestor $head HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @{ candidateHead = $head; checkout = $checkout; runId = '${{ github.run_id }}'; os = '${{ runner.os }}'; role
+          = 'windows-policy' } | ConvertTo-Json > artifacts/ci-validation/identity.json
       - name: Install dependencies
         run: npm ci --ignore-scripts
         working-directory: babel-cli
-      - name: Typecheck CLI
-        run: npm run typecheck
-        working-directory: babel-cli
-      - name: Build CLI
-        run: npm run build
-        working-directory: babel-cli
-      - name: Check harness architecture package
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1
-      - name: Run required UI test suite
-        run: npm run test:ui
-        working-directory: babel-cli
-      - name: Run required harness acceptance suite
-        run: npm run test:harness-acceptance
-        working-directory: babel-cli
-      - name: Run required Acceptance V0 suite
-        run: npm run test:acceptance-v0
-        working-directory: babel-cli
-      - name: Capture required harness runtime selection
-        run: node scripts/capture_required_tap_selection.mjs harness-runtime
-        working-directory: babel-cli
-      - name: Run required harness runtime suite
-        id: harness_runtime
-        timeout-minutes: 15
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force artifacts/harness-runtime | Out-Null
-          npm run test:harness-runtime -- --test-timeout=60000 2>&1 | Tee-Object -FilePath artifacts/harness-runtime/full.tap
-          exit $LASTEXITCODE
-        working-directory: babel-cli
-      - name: Summarize harness runtime TAP (Windows)
-        if: always() && steps.harness_runtime.outcome != 'skipped' && steps.harness_runtime.outcome != ''
-        run: node scripts/summarize_required_tap.mjs harness-runtime
-        working-directory: babel-cli
-      - name: Upload harness runtime TAP (Windows)
-        if: always() && steps.harness_runtime.outcome != 'skipped' && steps.harness_runtime.outcome != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: harness-runtime-windows
-          path: babel-cli/artifacts/harness-runtime
-          if-no-files-found: warn
-      - name: Capture Chat truth test selection
-        run: node scripts/capture_required_tap_selection.mjs chat-truth
-        working-directory: babel-cli
-      - name: Run required Chat truth suite
-        id: chat_truth
-        shell: pwsh
-        run: |
-          npm run test:chat-truth 2>&1 | Tee-Object -FilePath artifacts/chat-truth/full.tap
-          exit $LASTEXITCODE
-        working-directory: babel-cli
-      - name: Summarize Chat truth TAP (Windows)
-        if: always() && steps.chat_truth.outcome != 'skipped' && steps.chat_truth.outcome != ''
-        run: node scripts/summarize_required_tap.mjs chat-truth
-        working-directory: babel-cli
-      - name: Upload Chat truth selection and TAP (Windows)
-        if: always() && steps.chat_truth.outcome != 'skipped' && steps.chat_truth.outcome != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: chat-truth-windows
-          path: babel-cli/artifacts/chat-truth
-          if-no-files-found: warn
-      - name: Run required benchmark/eval suite
-        run: npm run test:benchmark-eval
-        working-directory: babel-cli
-      - name: Validate catalog
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1
       - name: Public scrub (Windows)
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-scrub.ps1 -Strict
       - name: Public prevention fixtures (Windows)
@@ -354,3 +721,152 @@ jobs:
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-canonical-independence.ps1 -RepoRoot .
       - name: Public policy runtime matrix (Windows)
         run: pwsh -NoProfile -ExecutionPolicy Bypass -Command "& './tools/tests/test-public-content-policy-runtime.ps1'"
+      - name: Upload candidate identity
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-windows-policy-${{ runner.os }}
+          path: artifacts/ci-validation
+          if-no-files-found: error
+          retention-days: 7
+  docker-smoke:
+    name: docker-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FORCE_COLOR: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Record candidate identity
+        shell: pwsh
+        run: >
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Force artifacts/ci-validation | Out-Null
+
+          $head = '${{ github.event.pull_request.head.sha || github.sha }}'
+
+          $checkout = git rev-parse HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git merge-base --is-ancestor $head HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @{ candidateHead = $head; checkout = $checkout; runId = '${{ github.run_id }}'; os = '${{ runner.os }}'; role
+          = 'docker-smoke' } | ConvertTo-Json > artifacts/ci-validation/identity.json
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Prepare smoke evidence
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/ci-package | Out-Null
+          Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue
+          if (Test-Path Env:BABEL_ALLOW_HOST_FALLBACK) { throw 'Host fallback must remain unset' }
+          if (Test-Path Env:BABEL_DOCKER_DISABLE) { throw 'Docker disable must remain unset' }
+      - name: Prepare isolated Ubuntu Docker smoke
+        id: docker_prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker info
+          docker pull node@sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
+      - name: Run isolated Ubuntu smoke fixtures
+        id: docker_smoke
+        env:
+          BABEL_BENCHMARK_DOCKER_IMAGE: node@sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
+        shell: pwsh
+        run: |
+          npm run test:smoke-fixtures 2>&1 | Tee-Object ../artifacts/ci-package/full.log
+          exit $LASTEXITCODE
+        working-directory: babel-cli
+      - name: Upload isolated smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: docker-smoke-linux
+          path: |-
+            artifacts/ci-package
+            artifacts/ci-validation
+          if-no-files-found: error
+          retention-days: 7
+  unit-shards:
+    name: unit-shards (${{ matrix.os }}, ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+        shard:
+          - 0
+          - 1
+          - 2
+          - 3
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      FORCE_COLOR: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Record candidate identity
+        shell: pwsh
+        run: >
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Force artifacts/ci-validation | Out-Null
+
+          $head = '${{ github.event.pull_request.head.sha || github.sha }}'
+
+          $checkout = git rev-parse HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git merge-base --is-ancestor $head HEAD
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @{ candidateHead = $head; checkout = $checkout; runId = '${{ github.run_id }}'; os = '${{ runner.os }}'; role
+          = 'unit-shards' } | ConvertTo-Json > artifacts/ci-validation/identity.json
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Run complete unit shard
+        id: unit_shard
+        shell: pwsh
+        working-directory: babel-cli
+        run: >
+          Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue
+
+          New-Item -ItemType Directory -Force artifacts/ci-unit | Out-Null
+
+          node scripts/run_ci_unit_shard.mjs --shard-index ${{ matrix.shard }} --shard-count 4 2>&1 | Tee-Object
+          artifacts/ci-unit/full.tap
+
+          exit $LASTEXITCODE
+      - name: Upload complete unit selection and TAP
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unit-${{ matrix.os }}-${{ matrix.shard }}
+          path: |-
+            babel-cli/artifacts/ci-unit
+            artifacts/ci-validation
+          if-no-files-found: error
+          retention-days: 7
