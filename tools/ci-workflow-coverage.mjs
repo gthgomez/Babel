@@ -22,10 +22,12 @@ function directlyRuns(script, command) {
   if (!lines.length || lines.some(line => !supported.some(pattern => pattern.test(line)))) return false;
   const exit = lines.indexOf('exit $LASTEXITCODE');
   if (exit >= 0 && exit !== lines.length - 1) return false;
-  if (command === 'check-harness-architecture.ps1') {
-    return lines.includes('pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1');
-  }
-  return lines.some(line => line === command || line.startsWith(command + ' '));
+  const target = command === 'check-harness-architecture.ps1'
+    ? lines.indexOf('pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1')
+    : lines.findIndex(line => line === command || line.startsWith(command + ' '));
+  // GitHub's built-in shells retain the final native exit status. A later
+  // command would overwrite it and cannot prove the required suite is gated.
+  return target >= 0 && lines.slice(target + 1).every(line => line === 'exit $LASTEXITCODE');
 }
 
 // Deliberately support explicit hosted labels and the reviewed OS matrix only.
@@ -55,6 +57,11 @@ export function commandCoverage(workflow, command) {
       if (!platforms.includes(os)) continue;
       for (const step of job.steps ?? []) {
         if (step['continue-on-error'] !== undefined) continue;
+        const shell = step.shell ?? job.defaults?.run?.shell ?? workflow.defaults?.run?.shell
+          ?? (os === 'windows-latest' ? 'pwsh' : 'bash');
+        // Only built-in runner shells execute this closed command grammar.
+        // Custom templates can merely print the script and still succeed.
+        if (shell !== 'pwsh' && shell !== 'bash') continue;
         if (step.if !== undefined && step.if !== `matrix.os == '${os}'`) {
           const report = step.if.match(/^matrix\.os == '(ubuntu-latest|windows-latest)' && \(always\(\) && steps\.([a-z_]+)\.outcome != 'skipped' && steps\.([a-z_]+)\.outcome != ''\)$/);
           if (!report || report[1] !== os || report[2] !== report[3]) continue;
