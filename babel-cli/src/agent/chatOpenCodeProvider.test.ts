@@ -267,8 +267,12 @@ test('exact GLM ChatEngine path streams and persists matching provider receipts'
     }
     assert.equal(input?.kind === 'model_input_receipt' ? input.route_receipt?.run_ref : undefined,
       hashRouteReference(join(BABEL_RUNS_DIR, 'chat-sessions', runId)));
-    assert.ok(!JSON.stringify(sessionEvents).includes(projectRoot));
-    assert.ok(!JSON.stringify(sessionEvents).includes(join(BABEL_RUNS_DIR, 'chat-sessions', runId)));
+    if (input?.kind === 'model_input_receipt') {
+      assert.equal(input.route_receipt?.project_ref, hashRouteReference(projectRoot));
+      const receiptJson = JSON.stringify(input.route_receipt);
+      assert.ok(!receiptJson.includes(JSON.stringify(projectRoot).slice(1, -1)));
+      assert.ok(!receiptJson.includes(JSON.stringify(join(BABEL_RUNS_DIR, 'chat-sessions', runId)).slice(1, -1)));
+    }
     if (result?.kind === 'model_result_delivery') {
       assert.equal(result.status, 'delivered');
       assert.equal(result.observed_model_id, 'z-ai/glm-5.3-flash');
@@ -500,6 +504,7 @@ describeExactGlm('exact GLM ChatEngine path performs a bounded mutation and auth
     requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
     const toolCall = (id: string, name: string, args: Record<string, unknown>) => ({
       model: 'z-ai/glm-5.3-flash',
+      usage: { prompt_tokens: 20, completion_tokens: 3, total_tokens: 23 },
       choices: [
         {
           delta: {

@@ -3,28 +3,17 @@ param([string]$RepoRoot = (Join-Path $PSScriptRoot '../..'))
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$checker = Join-Path (Resolve-Path $RepoRoot).Path 'tools/check-architectural-budget.ps1'
-$lines = @(Get-Content -LiteralPath $checker)
-$insideProcessExitAllowlist = $false
-$foundProcessExitAllowlist = $false
+$registry = Join-Path (Resolve-Path $RepoRoot).Path 'config/architectural-budget/process-boundaries.json'
+$policy = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
 $seen = @{}
 $duplicates = @()
 
-foreach ($line in $lines) {
-  if ($line -match '^\s*\$processExitAllowlist\s*=\s*@\(') {
-    $insideProcessExitAllowlist = $true
-    $foundProcessExitAllowlist = $true
-    continue
-  }
-  if (-not $insideProcessExitAllowlist) { continue }
-  if ($line -match '^\s*\)\s*$') { break }
-  if ($line -match '^\s*"([^"]+)"') {
-    $path = $Matches[1]
+foreach ($entry in @($policy.exits)) {
+    $path = [string]$entry.path
     if ($seen.ContainsKey($path)) { $duplicates += $path }
     else { $seen[$path] = $true }
-  }
 }
 
-if (-not $foundProcessExitAllowlist) { throw 'processExitAllowlist was not found in architectural budget checker.' }
+if ($policy.schemaVersion -ne 1 -or @($policy.exits).Count -eq 0) { throw 'Process boundary registry is missing or invalid.' }
 if ($duplicates.Count -gt 0) { throw "Duplicate processExitAllowlist paths: $($duplicates -join ', ')" }
 Write-Output 'Architectural process-exit allowlist has unique paths.'

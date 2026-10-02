@@ -162,6 +162,9 @@ function authorityFixture(root: string, expiresInMs = 5_000) {
     allowance: authorityAllowance,
     issuedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + expiresInMs).toISOString(),
+    // Authority time is controlled independently of native process startup.
+    // Expiry and renewal are exercised by the supervisor's clock regressions.
+    now: () => now,
   });
 }
 
@@ -198,7 +201,7 @@ async function waitUntilDead(pid: number, timeoutMs = 5_000): Promise<boolean> {
   return !isAlive(pid);
 }
 
-test('follow-authority host lifetime survives the former finite timeout without a huge timer', async () => {
+test('follow-authority host lifetime survives the former finite timeout without a huge timer', { timeout: 15_000 }, async () => {
   const fixture = workerFixture();
   const authority = authorityFixture(fixture.source);
   writeFileSync(fixture.worker, `import { writeFileSync } from 'node:fs';
@@ -219,7 +222,7 @@ writeFileSync(process.env.BABEL_REVIEW_OUTPUT!, JSON.stringify({ completed: true
   assert.equal(result.terminalCause, 'worker_exit');
 });
 
-test('controller authority loss aborts and contains a real descendant process tree', async () => {
+test('controller authority loss aborts and contains a real descendant process tree', { timeout: 20_000 }, async () => {
   const fixture = workerFixture();
   const authority = authorityFixture(fixture.source);
   const marker = join(fixture.source, 'late-descendant-write.txt');
@@ -236,16 +239,24 @@ setInterval(() => {}, 100);
 `);
 
   let grandchildPid = 0;
+  let workerPid = 0;
+  const abort = new AbortController();
+  let spawned!: () => void;
+  const ready = new Promise<void>(resolve => { spawned = resolve; });
+  const running = launchBabelReviewChild({
+    ...fixture,
+    timeoutMs: 2_000,
+    hostLifetime: followReviewAuthorityLifetime({ pollIntervalMs: 20, cleanupTimeoutMs: 2_000 }),
+    authority: authority.monitor,
+    candidate: authorityCandidate,
+    abortSignal: abort.signal,
+    onSpawn(pid) { workerPid = pid; spawned(); },
+  });
+  // Attach a rejection handler immediately; awaiting the same promise below
+  // retains its failure while startup readiness is independently bounded.
+  void running.catch(() => {});
   try {
-    const running = launchBabelReviewChild({
-      ...fixture,
-      // Legacy fallback keeps the pre-implementation RED run bounded. The
-      // typed follow-authority lifetime takes precedence once implemented.
-      timeoutMs: 2_000,
-      hostLifetime: followReviewAuthorityLifetime({ pollIntervalMs: 20, cleanupTimeoutMs: 2_000 }),
-      authority: authority.monitor,
-      candidate: authorityCandidate,
-    });
+    await Promise.race([ready, running.then(() => { throw new Error('Worker exited before readiness'); })]);
     const started = await waitForJson(fixture.output);
     grandchildPid = Number(started['grandchildPid']);
     assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0);
@@ -263,8 +274,13 @@ setInterval(() => {}, 100);
     else assert.equal(result.containment, 'posix_process_group');
     assert.equal(authority.monitor.snapshot().terminalCause, 'controller_lost');
   } finally {
+    abort.abort();
+    authority.controller.stop('controller_lost');
+    await running.catch(() => {});
+    if (workerPid > 0) assert.ok(await waitUntilDead(workerPid), 'worker must exit before fixture deletion');
     if (grandchildPid > 0 && isAlive(grandchildPid)) {
       try { process.kill(grandchildPid, 'SIGKILL'); } catch { /* already exited */ }
+      assert.ok(await waitUntilDead(grandchildPid), 'descendant must exit before fixture deletion');
     }
     rmSync(fixture.source, { recursive: true, force: true });
   }

@@ -32,7 +32,8 @@ export function registerRemoteCommands(program: Command): void {
       const port = Number(options.port ?? 4545);
       if (!Number.isInteger(port) || port < 1024 || port > 65535) {
         console.error('Invalid --port');
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       const extraOrigins = (options.origin ?? []).filter((origin) => origin && origin !== '*');
       const server = new BridgeServer({
@@ -73,12 +74,14 @@ export function registerRemoteCommands(program: Command): void {
       const port = Number(options.port ?? 0);
       if (!Number.isInteger(port) || port < 0 || port > 65535) {
         console.error('Invalid --port');
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       const scenario = options.scenario ?? 'connected-idle';
       if (!REMOTE_UI_FIXTURE_SCENARIOS.some((candidate) => candidate.id === scenario)) {
         console.error(`Unknown --scenario: ${scenario}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       const fixture = await startRemoteUiFixtureServer({ port });
       console.log(`Babel Remote UI fixture listening on ${fixture.url}`);

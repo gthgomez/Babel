@@ -19,6 +19,7 @@ import { runUndoLane } from './undoLane.js';
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env['DEEPINFRA_API_KEY'];
 const originalDeepSeekApiKey = process.env['DEEPSEEK_API_KEY'];
+const originalRouterKey = process.env['OPENROUTER_API_KEY'];
 const originalHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
 
 function writeNodeFixture(root: string, implementation: string): void {
@@ -54,6 +55,7 @@ function writeNodeFixture(root: string, implementation: string): void {
 
 function mockSmallFixResponse(replacementContent: string): void {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  process.env['OPENROUTER_API_KEY'] = 'fixture-openrouter-key';
   // The fixture verifies the host-local small-fix/undo path; make that escalation explicit.
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
   globalThis.fetch = (async () =>
@@ -146,6 +148,8 @@ describe('runUndoLane', () => {
         } else {
           process.env['DEEPINFRA_API_KEY'] = originalApiKey;
         }
+        if (originalRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+        else process.env['OPENROUTER_API_KEY'] = originalRouterKey;
         if (originalDeepSeekApiKey === undefined) {
           delete process.env['DEEPSEEK_API_KEY'];
         } else {
@@ -211,6 +215,8 @@ describe('runUndoLane', () => {
         } else {
           process.env['DEEPINFRA_API_KEY'] = originalApiKey;
         }
+        if (originalRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+        else process.env['OPENROUTER_API_KEY'] = originalRouterKey;
         if (originalDeepSeekApiKey === undefined) {
           delete process.env['DEEPSEEK_API_KEY'];
         } else {
