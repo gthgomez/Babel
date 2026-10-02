@@ -768,6 +768,8 @@ const HOST_PROCESS_SURFACE = new Set([
   'services/ship.ts',
   'services/smallFix.ts',
   'services/swebenchProCampaign.ts',
+  'services/swebenchProVerifier.ts',
+  'services/swebenchProWorkspace.ts',
   'services/verifierOverlay.ts',
   'services/workspaceDepPreflight.ts',
   'services/worktreeIsolation.ts',
