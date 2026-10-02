@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 const packageJson = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
@@ -25,10 +27,15 @@ test('required Chat truth selection includes focused accounting, Chronicle and b
   ]) {
     assert.ok(files.has(required), `${required} is missing from the required selection`)
   }
-  assert.equal(workflow.match(/npm run test:chat-truth 2>&1/g)?.length, 2)
-  assert.equal(workflow.match(/node scripts\/summarize_required_tap\.mjs chat-truth/g)?.length, 2)
-  assert.equal(workflow.match(/npm run test:harness-runtime -- --test-timeout=60000 2>&1/g)?.length, 2)
-  assert.equal(workflow.match(/node scripts\/summarize_required_tap\.mjs harness-runtime/g)?.length, 2)
-  assert.equal(workflow.match(/node scripts\/capture_required_tap_selection\.mjs chat-truth/g)?.length, 2)
-  assert.equal(workflow.match(/node scripts\/capture_required_tap_selection\.mjs harness-runtime/g)?.length, 2)
+  const coverage = spawnSync(process.execPath, [
+    fileURLToPath(new URL('../../../tools/ci-workflow-coverage.mjs', import.meta.url)), '-',
+    'npm run test:chat-truth 2>&1',
+    'node scripts/summarize_required_tap.mjs chat-truth',
+    'npm run test:harness-runtime -- --test-timeout=60000 2>&1',
+    'node scripts/summarize_required_tap.mjs harness-runtime',
+    'node scripts/capture_required_tap_selection.mjs chat-truth',
+    'node scripts/capture_required_tap_selection.mjs harness-runtime',
+  ], { input: workflow, encoding: 'utf8' })
+  assert.ifError(coverage.error)
+  assert.equal(coverage.status, 0, coverage.stderr)
 })

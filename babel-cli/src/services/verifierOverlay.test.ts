@@ -22,6 +22,8 @@ test('verifier overlay applies production diff but excludes protected test chang
   writeFileSync(join(root, 'app.py'), 'return 1\n', 'utf8');
   writeFileSync(join(tests, 'test_app.py'), 'assert True\n', 'utf8');
   assert.equal(git(root, ['init']).status, 0);
+  assert.equal(git(root, ['config', '--local', 'core.autocrlf', 'false']).status, 0);
+  assert.equal(git(root, ['config', '--local', 'core.eol', 'lf']).status, 0);
   assert.equal(git(root, ['config', 'user.email', 'babel-test@example.com']).status, 0);
   assert.equal(git(root, ['config', 'user.name', 'Babel Test']).status, 0);
   assert.equal(git(root, ['add', '.']).status, 0);

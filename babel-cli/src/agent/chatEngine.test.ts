@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 
 import { ChatEngine } from './chatEngine.js';
@@ -294,10 +295,12 @@ describe('ChatEngine recursive shell degradation & suppression loop', () => {
 });
 
 describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
-  it('synthesizes informational answer and completes normally with blockedReport: null on hard cap', async () => {
+  it('synthesizes informational answer and completes normally with blockedReport: null on hard cap', async (t) => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'babel-readonly-cap-'));
+    t.after(() => rmSync(projectRoot, { recursive: true, force: true }));
     const engine = new ChatEngine({
       task: 'how many services exist in this project',
-      projectRoot: '/tmp',
+      projectRoot,
       maxTurns: 20,
     });
 
@@ -349,10 +352,12 @@ describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
     assert.ok(!doneEvent.answer.includes('write_file'));
   });
 
-  it('truthfully reports synthesis failure when synthesis runner errors without misreporting inspection budget', async () => {
+  it('truthfully reports synthesis failure when synthesis runner errors without misreporting inspection budget', async (t) => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'babel-readonly-cap-'));
+    t.after(() => rmSync(projectRoot, { recursive: true, force: true }));
     const engine = new ChatEngine({
       task: 'how many services exist in this project',
-      projectRoot: '/tmp',
+      projectRoot,
       maxTurns: 20,
     });
 

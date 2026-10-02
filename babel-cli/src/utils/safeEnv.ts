@@ -12,12 +12,14 @@
  */
 const SAFE_ENV_ALLOWLIST = new Set([
   'PATH',
+  'Path',
   'HOME',
   'TMP',
   'TEMP',
   'LANG',
   'NODE_ENV',
   'SYSTEMROOT',
+  'SystemRoot',
   'ComSpec',
   'PATHEXT',
 ]);
