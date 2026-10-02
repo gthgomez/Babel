@@ -4,6 +4,149 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
 
+for (const [field, value, invocation] of [['quit', 'process.exit', '(1)'], ['out', 'process.stdout', '.write("x")']]) for (const base of ['Base', 'Alias', 'N.Base']) for (const context of ['static {BODY}', 'static run(){BODY}', 'static result=(()=>{BODY})()']) for (const projection of [`super.${field}`, `super["${field}"]`, `const alias=super.${field}; alias`]) {
+  const source=`class Base {static ${field}=${value}} const Alias=Base; namespace N {export const Base=Alias} class C extends ${base} {${context.replace('BODY',projection+invocation)}} C.run?.()`;
+  test('super preserves known static host fields: '+source,()=>{
+    const result=inspectSource(source);
+    assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+    const shadow='const process={exit(){},stdout:{write(){}}}; '+source;
+    assert.deepEqual(inspectSource(shadow),{exits:[],stdout:[],ambiguous:[]},shadow);
+  });
+}
+test('super static projections keep host captures and ordinary calls clear',()=>{
+  for(const source of [
+    'class Base {static quit=process.exit} class C extends Base {static {const quit=super.quit}}',
+    'class Base {static out=process.stdout} class C extends Base {static {const width=super.out.columns}}',
+    'class Base {static quit=()=>{}} class C extends Base {static {super.quit()}}',
+  ]) assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+});
+
+for(const [context,member,method,construction] of [
+  ['class C {fake(...args:any[]){} run(){BODY}}','this','','new C().run()'],
+  ['class C {static fake(...args:any[]){} static run(){BODY}}','this','static','C.run()'],
+  ['class Base {fake(...args:any[]) {}} class C extends Base {run(){BODY}}','super','','new C().run()'],
+  ['class Base {static fake(...args:any[]) {}} class C extends Base {static run(){BODY}}','super','static','C.run()'],
+]) for(const [target,receiver,arg] of [['process.exit','process','1'],['process.stdout.write','process.stdout','"x"']]) for(const projection of [`${member}.fake`,`${member}["fake"]`,'const alias='+member+'.fake; alias']) for(const adapter of [
+  `.call.call(${target},${receiver},${arg})`,
+  `.call.apply(${target},[${receiver},${arg}])`,
+  `.apply.call(${target},${receiver},[${arg}])`,
+  `.apply.apply(${target},[${receiver},[${arg}]])`,
+  `.call.bind(${target},${receiver})(${arg})`,
+  `.apply.bind(${target},${receiver})([${arg}])`,
+]) {
+  const source=context.replace('BODY',projection+adapter)+' '+construction;
+  test('this/super method identities retain borrowed host targets: '+method+source,()=>{
+    const result=inspectSource(source);
+    assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+    const shadow='const process={exit(){},stdout:{write(){}}}; '+source;
+    assert.deepEqual(inspectSource(shadow),{exits:[],stdout:[],ambiguous:[]},shadow);
+  });
+}
+test('this/super methods keep harmless host-function data and ordinary bodies clear',()=>{
+  for(const source of [
+    'class C {fake(...args:any[]){} run(){this.fake.call.call(this.fake,null,process.exit)}} new C().run()',
+    'class Base {fake(...args:any[]) {}} class C extends Base {run(){super.fake.call.call(super.fake,null,process.exit)}} new C().run()',
+    'class Base {static fake(...args:any[]) {}} class C extends Base {static run(){super.fake.apply.call(super.fake,null,[process.stdout.write])}} C.run()',
+  ]) assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+});
+
+const methodCarrierDeclarations=[
+  'namespace N {export function fake(...args:any[]) {}} const fake:any=N.fake',
+  'const box={fake(...args:any[]) {}}; const fake:any=box.fake',
+  'class C {static fake(...args:any[]) {}} const fake:any=C.fake',
+  'class C {fake(...args:any[]) {}} const fake:any=new C().fake',
+  'class Base {static fake(...args:any[]) {}} class C extends Base {} const fake:any=C.fake',
+  'class Base {fake(...args:any[]) {}} class C extends Base {} const fake:any=new C().fake',
+];
+for(const declaration of methodCarrierDeclarations) for(const [target,receiver,arg] of [['process.exit','process','1'],['process.stdout.write','process.stdout','"x"']]) for(const wrapper of [
+  `fake.call.call(${target},${receiver},${arg})`,
+  `fake.call.apply(${target},[${receiver},${arg}])`,
+  `fake.apply.call(${target},${receiver},[${arg}])`,
+  `fake.apply.apply(${target},[${receiver},[${arg}]])`,
+  `const invoke=fake.call.bind(${target},${receiver}); invoke(${arg})`,
+  `const invoke=fake.apply.bind(${target},${receiver}); invoke([${arg}])`,
+]) test('known method/function carriers retain borrowed host targets: '+declaration+wrapper,()=>{
+  const source=declaration+'; '+wrapper,result=inspectSource(source);
+  assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+});
+test('known method/function carriers keep local receivers and host data clear',()=>{
+  for(const declaration of methodCarrierDeclarations) for(const target of ['process.exit','process.stdout.write']) for(const wrapper of [
+    `fake.call.call(fake,null,${target})`,
+    `fake.apply.call(fake,null,[${target}])`,
+    `const invoke=Reflect.apply.call.bind(fake,null); invoke(${target})`,
+  ]) {
+    const source=declaration+'; '+wrapper;
+    assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+  }
+});
+test('opaque local results do not become native origins through iteration',()=>{
+  for(const source of [
+    'function list():string[]{return ["x"]} for(const item of list())item.replace(/x/g,"").trim()',
+    'const list=()=>["x"]; let item; for(item of list())item.replace(/x/g,"").trim()',
+    'const box={list(){return ["x"]}}; for(const item of box.list())item.replace(/x/g,"").trim()',
+    'class C {static list(){return ["x"]}} for(const item of C.list())item.replace(/x/g,"").trim()',
+    'class C {list(){return ["x"]}} for(const item of new C().list())item.replace(/x/g,"").trim()',
+  ]) assert.deepEqual(inspectSource(source+';const unrelated=Reflect'),{exits:[],stdout:[],ambiguous:[]},source);
+});
+test('real local tool path normalization retains no ambiguous boundaries',()=>{
+  const source=readFileSync(new URL('../../babel-cli/src/localTools.ts',import.meta.url),'utf8');
+  const result=inspectSource(source);
+  assert.deepEqual(result.ambiguous,[]);
+  assert.deepEqual(result.exits,[]);
+});
+test('opaque result controls preserve native-loader iteration',()=>{
+  for(const source of [
+    'for(const p of [require("process")])p.exit(1)',
+    'import {createRequire}from"node:module"; for(const load of [createRequire(import.meta.url)])load("process").stdout.write("x")',
+    'namespace N {export function fake(...args:any[]) {process.exit(1)}} N.fake()',
+    'const box={fake(){process.stdout.write("x")}}; box.fake()',
+  ]) {const result=inspectSource(source);assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);}
+});
+
+for(const [prefix,target,receiver,arg] of [
+  ['', 'process.exit','process','1'],
+  ['', 'process.stdout.write','process.stdout','"x"'],
+  ['import {exit as target} from "node:process";', 'target','null','1'],
+  ['import {stdout} from "node:process"; const target=stdout.write;', 'target','stdout','"x"'],
+]) for(const wrapper of [
+  `fake.call.call(${target},${receiver},${arg})`,
+  `fake.call.apply(${target},[${receiver},${arg}])`,
+  `fake.apply.call(${target},${receiver},[${arg}])`,
+  `fake.apply.apply(${target},[${receiver},[${arg}]])`,
+  `const invoke=fake.call.bind(${target},${receiver}); invoke(${arg})`,
+  `const invoke=fake.apply.bind(${target},${receiver}); invoke([${arg}])`,
+]) test('local Function adapters detect host receivers without unrelated seeds: '+prefix+wrapper,()=>{
+  const source=prefix+'const fake:any=()=>{}; '+wrapper;
+  const result=inspectSource(source);
+  assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+  assert.deepEqual(result,inspectSource(source+'; const unrelated=Reflect;'),source);
+});
+test('Function adapter host seeds survive global aliases and computed members',()=>{
+  for(const source of [
+    'const p=process; const fake:any=()=>{}; fake.call.call(p.exit,p,1)',
+    'const p=process.stdout; const fake:any=()=>{}; fake.apply.call(p.write,p,["x"])',
+    'const fake:any=()=>{}; fake.call.call(process["exit"],process,1)',
+    'import p from "process"; const fake:any=()=>{}; fake.call.call(p.exit,p,1)',
+    'import {exit as target} from "process"; const fake:any=()=>{}; fake.call.call(target,null,1)',
+  ]) {const result=inspectSource(source);assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);}
+});
+test('local Function adapters keep shadowed and harmless host-data receivers clear',()=>{
+  for(const source of [
+    'const fake:any=()=>{}; fake.call.call(fake,null,process.exit)',
+    'const fake:any=()=>{}; const invoke=fake.call.bind(fake,null); invoke(process.stdout.write)',
+    'const process={exit(){},stdout:{write(){}}}; const fake:any=()=>{}; fake.call.call(process.exit,process,1)',
+    'const process={exit(){},stdout:{write(){}}}; const fake:any=()=>{}; fake.apply.call(process.stdout.write,process.stdout,["x"])',
+    'import {exit as target} from "./fake.js"; const fake:any=()=>{}; fake.call.call(target,null,1)',
+  ]) assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+});
+test('recursive terminal parser remains bounded with a native seed',()=>{
+  const source=readFileSync(new URL('../../babel-cli/src/ui/keyInput.ts',import.meta.url),'utf8')+'\nconst unrelated=Reflect;';
+  const script=`import {inspectSource} from ${JSON.stringify(new URL('../architectural-boundaries.mjs',import.meta.url).href)};let source='';for await(const chunk of process.stdin)source+=chunk;process.stdout.write(JSON.stringify(inspectSource(source)));`;
+  const result=spawnSync(process.execPath,['--input-type=module','--eval',script],{input:source,encoding:'utf8',timeout:15_000});
+  assert.equal(result.status,0,result.error?.message??result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout),{exits:[],stdout:[],ambiguous:[]});
+});
+
 for(const target of ['process.exit','process.stdout.write']) for(const wrapper of [
   `Reflect.apply.call.call(fake,null,${target})`,
   `Reflect.apply.call.apply(fake,[null,${target}])`,
