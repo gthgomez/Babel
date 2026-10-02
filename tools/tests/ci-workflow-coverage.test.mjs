@@ -18,6 +18,11 @@ for (const [label, change] of [
   ['tolerated command failure', w => { w.jobs['platform-core'].steps.find(s => s.run?.includes(command))['continue-on-error'] = true; }],
   ['missing Windows gate dependency', w => { w.jobs['windows-portability'].needs = w.jobs['windows-portability'].needs.filter(n => n !== 'platform-core'); }],
   ['missing command', w => { w.jobs['platform-core'].steps = w.jobs['platform-core'].steps.filter(s => !s.run?.includes(command)); }],
+  ['comment-only command', w => { w.jobs['platform-core'].steps.find(s => s.run === command).run = `# ${command}`; }],
+  ['quoted command data', w => { w.jobs['platform-core'].steps.find(s => s.run === command).run = `Write-Output '${command}'`; }],
+  ['unreachable command', w => { w.jobs['platform-core'].steps.find(s => s.run === command).run = `if ($false) {\n  ${command}\n}`; }],
+  ['different script with shared prefix', w => { w.jobs['platform-core'].steps.find(s => s.run === command).run = `${command}-different`; }],
+  ['early exit before command', w => { w.jobs['platform-core'].steps.find(s => s.run === command).run = `exit $LASTEXITCODE\n${command}`; }],
   ['skippable aggregate', w => { delete w.jobs['windows-portability'].if; }],
   ['missing dependency guard', w => { w.jobs['linux-validation'].steps = []; }],
 ]) {

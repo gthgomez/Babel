@@ -250,17 +250,19 @@ jobs:
 
           $results = @()
 
+          $failure = 0
+
           foreach ($suite in $portable) {
             $started = Get-Date
             $log = '../artifacts/ci-package/' + $suite.Replace(':', '-') + '.log'
             npm run $suite 2>&1 | Tee-Object $log
             $code = $LASTEXITCODE
             $results += @{ suite = $suite; exitCode = $code; elapsedSeconds = ((Get-Date) - $started).TotalSeconds }
-            $results | ConvertTo-Json | Set-Content ../artifacts/ci-package/results.json
-            if ($code -ne 0) { exit $code }
+            ConvertTo-Json -InputObject @($results) | Set-Content ../artifacts/ci-package/results.json
+            if ($code -ne 0 -and $failure -eq 0) { $failure = $code }
           }
 
-          exit $LASTEXITCODE
+          exit $failure
         working-directory: babel-cli
       - name: Upload portable package evidence
         if: always()

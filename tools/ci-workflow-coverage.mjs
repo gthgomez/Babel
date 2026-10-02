@@ -7,6 +7,27 @@ import { fileURLToPath } from 'node:url';
 const { load } = createRequire(new URL('../babel-cli/package.json', import.meta.url))('js-yaml');
 export const parseWorkflow = text => load(text);
 
+// A closed grammar for the straight-line commands used by the reviewed jobs.
+// Script data, functions, branches, substitutions and unknown shell constructs
+// cannot establish coverage; extending the grammar requires a reviewed test.
+function directlyRuns(script, command) {
+  const lines = String(script ?? '').split(/\r?\n/).filter(line => line.trim() && !line.startsWith('#'));
+  const supported = [
+    /^npm run [a-z0-9:-]+(?: -- --test-timeout=[0-9]+)?(?: 2>&1 \| Tee-Object(?: -FilePath)? [a-zA-Z0-9_./-]+)?$/,
+    /^node scripts\/[a-zA-Z0-9_.-]+\.mjs [a-z0-9-]+$/,
+    /^pwsh -NoProfile -ExecutionPolicy Bypass -File tools\/check-harness-architecture\.ps1$/,
+    /^New-Item -ItemType Directory -Force artifacts\/[a-z0-9-]+ \| Out-Null$/,
+    /^exit \$LASTEXITCODE$/,
+  ];
+  if (!lines.length || lines.some(line => !supported.some(pattern => pattern.test(line)))) return false;
+  const exit = lines.indexOf('exit $LASTEXITCODE');
+  if (exit >= 0 && exit !== lines.length - 1) return false;
+  if (command === 'check-harness-architecture.ps1') {
+    return lines.includes('pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1');
+  }
+  return lines.some(line => line === command || line.startsWith(command + ' '));
+}
+
 // Deliberately support explicit hosted labels and the reviewed OS matrix only.
 // Unknown conditions or matrix exclusions do not establish required coverage.
 export function commandCoverage(workflow, command) {
@@ -40,7 +61,7 @@ export function commandCoverage(workflow, command) {
           const attempted = job.steps.find(s => s.id === report[2]);
           if (!attempted?.run || attempted.if !== undefined || attempted['continue-on-error'] !== undefined) continue;
         }
-        if (String(step.run ?? '').includes(command)) providers.push(name);
+        if (directlyRuns(step.run, command)) providers.push(name);
       }
     }
     assert.ok(providers.length > 0, `${gateName}: ${command} has no unconditional ${os} execution dependency`);
