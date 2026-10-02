@@ -69,8 +69,8 @@
     "test:public-export-regressions": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/tests/test-public-prevention-gates.ps1",
     "test:public-release": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/validate-public-release.ps1",
     "test:public-release:strict": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/validate-public-release.ps1 -Strict",
-    "test:public-release:security": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/run-public-secret-scan.ps1 -RequireExternalScanner",
-    "test:public-release:security:local": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/run-public-secret-scan.ps1",
+    "test:public-release:security": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/run-public-secret-scan.ps1 -RepoRoot .. -Strict -RequireExternalScanner",
+    "test:public-release:security:local": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/run-public-secret-scan.ps1 -RepoRoot .. -Strict",
     "test:schema-failures": "npm run test:schema-failures:unit && npm run test:schema-failures:replay",
     "test:schema-failures:replay": "node --import tsx --no-warnings=ExperimentalWarning scripts/test_schema_failures_replay.ts",
     "build": "npm run clean:dist && tsc && node scripts/copy_playbooks.mjs",
@@ -158,7 +158,7 @@
     "benchmark:claude-babel:canary": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_mimo_t1_canary.ts",
     "benchmark:claude-babel:pilot": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_profile_pilot.ts",
     "test:claude-babel-lab": "tsx --no-warnings=ExperimentalWarning --test src/runners/openCodeApi.test.ts src/runners/providerRegistry.test.ts src/runners/providerEngine.test.ts src/claude-babel-astra-lab/lab.test.ts src/claude-babel-astra-lab/claudeHarness.test.ts",
-    "test:comparison": "tsx --no-warnings=ExperimentalWarning --test src/claude-babel-astra-lab/comparison-contract.test.ts src/claude-babel-astra-lab/comparison-runner.test.ts src/claude-babel-astra-lab/frozen-evaluator.test.ts src/claude-babel-astra-lab/recovery-observation.test.ts",
+    "test:comparison": "tsx --no-warnings=ExperimentalWarning --test src/claude-babel-astra-lab/comparison-contract-v3.test.ts src/claude-babel-astra-lab/comparison-contract.test.ts src/claude-babel-astra-lab/comparison-runner.test.ts src/claude-babel-astra-lab/frozen-evaluator.test.ts src/claude-babel-astra-lab/recovery-observation.test.ts",
     "benchmark:claude-babel:compare": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_comparison.ts"
   },
   "dependencies": {
