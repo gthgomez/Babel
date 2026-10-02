@@ -10,6 +10,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 function isDaemonWarmEnabled(): boolean {
+  if (process.env['NODE_ENV'] === 'test' || process.env['BABEL_TEST'] === '1') {
+    return false;
+  }
   const raw = process.env['BABEL_DAEMON_WARM']?.trim().toLowerCase();
   if (raw === '0' || raw === 'false' || raw === 'off' || raw === 'no') {
     return false;

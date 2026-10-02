@@ -58,16 +58,32 @@ export function exitRepl(): void {
   process.exit(0);
 }
 
+export interface BootstrapReplHooks {
+  warmRuntime?: boolean | (() => void);
+  startIndexing?: boolean | (() => void);
+}
+
 export async function bootstrapReplSession(
   ctx: ReplContext,
   _loadSessionState: () => SessionState | null,
+  hooks: BootstrapReplHooks = {},
 ): Promise<void> {
   // Marks interactive TUI so sandbox notices route through OutputBuffer (not stderr).
   process.env['BABEL_INTERACTIVE'] = '1';
   // Clear viewport + scrollback so prior-session error boxes do not linger above the picker.
   OutputBuffer.getInstance().writeControl('\x1b[2J\x1b[3J\x1b[H');
-  warmReplRuntime();
-  startBackgroundIndexing();
+
+  if (typeof hooks.warmRuntime === 'function') {
+    hooks.warmRuntime();
+  } else if (hooks.warmRuntime !== false && process.env['NODE_ENV'] !== 'test' && !process.env['BABEL_TEST']) {
+    warmReplRuntime();
+  }
+
+  if (typeof hooks.startIndexing === 'function') {
+    hooks.startIndexing();
+  } else if (hooks.startIndexing !== false && process.env['NODE_ENV'] !== 'test' && !process.env['BABEL_TEST']) {
+    startBackgroundIndexing();
+  }
 
   // Fresh interactive process: never inherit ~/.babel/session.json cost.
   // Conversation resume is explicit (/resume); do not reload last process totals.

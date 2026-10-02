@@ -80,7 +80,7 @@ let _indexingPromise: Promise<void> | null = null;
  * Never throws — errors are surfaced via the task registry.
  */
 export function startBackgroundIndexing(): void {
-  if (process.env['BABEL_SKIP_KG_INDEX']) return;
+  if (process.env['NODE_ENV'] === 'test' || process.env['BABEL_TEST'] === '1' || process.env['BABEL_SKIP_KG_INDEX']) return;
   if (_indexingInProgress) return;
 
   // Probe whether the persistent index already exists to avoid redundant re-indexing

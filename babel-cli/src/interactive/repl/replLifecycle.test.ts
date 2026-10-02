@@ -49,15 +49,44 @@ describe('fresh interactive launch cost', () => {
       resolveSessionModel: () => undefined,
     };
 
-    await bootstrapReplSession(ctx as never, () => ({
-      costTotals: {
-        totalCostUSD: 9.99,
-        totalInputTokens: 50,
-        totalOutputTokens: 50,
-        totalTokens: 100,
-      },
-    }) as never);
+    await bootstrapReplSession(
+      ctx as never,
+      () => ({
+        costTotals: {
+          totalCostUSD: 9.99,
+          totalInputTokens: 50,
+          totalOutputTokens: 50,
+          totalTokens: 100,
+        },
+      }) as never,
+      { warmRuntime: false, startIndexing: false },
+    );
 
     assert.equal(globalCostTracker.getSessionSummary().totalCostUSD, 0);
+  });
+
+  it('runs hermetically without triggering background daemon or indexing handles', async () => {
+    let warmCalled = false;
+    let indexCalled = false;
+
+    const ctx = {
+      projectSettingsApplied: true,
+      state: { model: 'deepseek-v4-flash' },
+      resolveCurrentTarget: () => ({ targetRoot: process.cwd() }),
+      resolveSessionModel: () => undefined,
+    };
+
+    await bootstrapReplSession(
+      ctx as never,
+      () => null,
+      {
+        warmRuntime: () => { warmCalled = true; },
+        startIndexing: () => { indexCalled = true; },
+      },
+    );
+
+    assert.equal(warmCalled, true, 'custom warmup hook invoked');
+    assert.equal(indexCalled, true, 'custom indexing hook invoked');
+    assert.equal(process.env['BABEL_INTERACTIVE'], '1');
   });
 });

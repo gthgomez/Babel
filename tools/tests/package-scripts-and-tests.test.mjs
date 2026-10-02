@@ -28,6 +28,17 @@ export function tokenizeCommand(cmdStr) {
       }
     } else if (ch === '"' || ch === "'") {
       inQuote = ch;
+    } else if (ch === '|') {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = '';
+      }
+      if (cmdStr[i + 1] === '|') {
+        tokens.push('||');
+        i++;
+      } else {
+        tokens.push('|');
+      }
     } else if (/\s/.test(ch)) {
       if (current.length > 0) {
         tokens.push(current);
@@ -61,6 +72,18 @@ export function parseAndValidateScriptTargets(scripts, options = {}) {
       const tokens = tokenizeCommand(pipelineStep);
       if (tokens.length === 0) continue;
 
+      if (tokens.includes('|') || tokens.includes('||')) {
+        const pipeToken = tokens.find(t => t === '|' || t === '||');
+        missing.push({
+          script: name,
+          target: pipeToken,
+          resolved: pipeToken,
+          kind: 'unsupported_syntax',
+          reason: `Unquoted shell pipe/or '${pipeToken}' is not supported in package script grammar`,
+        });
+        continue;
+      }
+
       let idx = 0;
       // Skip environment variable prefixes (e.g. UPDATE_SNAPSHOTS=1)
       while (idx < tokens.length && /^[A-Z0-9_]+=.*/.test(tokens[idx])) {
@@ -91,9 +114,32 @@ export function parseAndValidateScriptTargets(scripts, options = {}) {
       if (tool === 'pwsh' || tool === 'powershell') {
         while (idx < tokens.length) {
           const t = tokens[idx];
-          if (t === '-File' && idx + 1 < tokens.length) {
-            idx++;
-            parsedTargets.push({ script: name, target: tokens[idx], kind: 'input' });
+          if (t === '-File') {
+            if (idx + 1 < tokens.length && !tokens[idx + 1].startsWith('-')) {
+              idx++;
+              parsedTargets.push({ script: name, target: tokens[idx], kind: 'input' });
+            } else {
+              missing.push({
+                script: name,
+                target: '-File',
+                resolved: '-File',
+                kind: 'unsupported_syntax',
+                reason: "Missing script target argument for '-File' in pwsh command",
+              });
+            }
+          } else if (t.startsWith('-File=')) {
+            const target = t.slice('-File='.length);
+            if (target.length > 0) {
+              parsedTargets.push({ script: name, target, kind: 'input' });
+            } else {
+              missing.push({
+                script: name,
+                target: t,
+                resolved: t,
+                kind: 'unsupported_syntax',
+                reason: "Empty script target argument in '-File='",
+              });
+            }
           } else if (t === '-Command' && idx + 1 < tokens.length) {
             idx++;
             const cmd = tokens[idx];
@@ -109,9 +155,33 @@ export function parseAndValidateScriptTargets(scripts, options = {}) {
 
       if (tool === 'tsc') {
         while (idx < tokens.length) {
-          if (tokens[idx] === '-p' && idx + 1 < tokens.length) {
-            idx++;
-            parsedTargets.push({ script: name, target: tokens[idx], kind: 'input' });
+          const t = tokens[idx];
+          if (t === '-p' || t === '--project') {
+            if (idx + 1 < tokens.length && !tokens[idx + 1].startsWith('-')) {
+              idx++;
+              parsedTargets.push({ script: name, target: tokens[idx], kind: 'input' });
+            } else {
+              missing.push({
+                script: name,
+                target: t,
+                resolved: t,
+                kind: 'unsupported_syntax',
+                reason: `Missing project target argument for '${t}' in tsc command`,
+              });
+            }
+          } else if (t.startsWith('-p=') || t.startsWith('--project=')) {
+            const target = t.split('=')[1];
+            if (target && target.length > 0) {
+              parsedTargets.push({ script: name, target, kind: 'input' });
+            } else {
+              missing.push({
+                script: name,
+                target: t,
+                resolved: t,
+                kind: 'unsupported_syntax',
+                reason: `Empty project target argument in '${t}'`,
+              });
+            }
           }
           idx++;
         }
@@ -134,28 +204,101 @@ export function parseAndValidateScriptTargets(scripts, options = {}) {
       }
 
       if (tool === 'node' || tool === 'tsx' || tool === 'npx') {
-        if (tool === 'npx' && tokens[idx] === 'promptfoo') {
+        if (tool === 'npx') {
+          if (tokens[idx] !== 'promptfoo') {
+            missing.push({
+              script: name,
+              target: tokens[idx] || 'npx',
+              resolved: `npx ${tokens[idx] || ''}`,
+              kind: 'unsupported_syntax',
+              reason: `Unsupported npx tool '${tokens[idx] || ''}'; only 'npx promptfoo' is permitted in package scripts`,
+            });
+            continue;
+          }
           idx++;
         }
         while (idx < tokens.length) {
           const t = tokens[idx];
           if (t === '--output' || t === '-o') {
-            idx++;
-            if (idx < tokens.length) {
+            if (idx + 1 < tokens.length && !tokens[idx + 1].startsWith('-')) {
+              idx++;
               parsedTargets.push({ script: name, target: tokens[idx], kind: 'generated_output' });
+            } else {
+              missing.push({
+                script: name,
+                target: t,
+                resolved: t,
+                kind: 'unsupported_syntax',
+                reason: `Missing target argument for '${t}'`,
+              });
+            }
+          } else if (t.startsWith('--output=') || t.startsWith('-o=')) {
+            const val = t.slice(t.indexOf('=') + 1);
+            if (val) {
+              parsedTargets.push({ script: name, target: val, kind: 'generated_output' });
+            } else {
+              missing.push({
+                script: name,
+                target: t,
+                resolved: t,
+                kind: 'unsupported_syntax',
+                reason: `Empty target argument in '${t}'`,
+              });
             }
           } else if (t === '--config' || t === '-c') {
-            idx++;
-            if (idx < tokens.length) {
+            if (idx + 1 < tokens.length && !tokens[idx + 1].startsWith('-')) {
+              idx++;
               parsedTargets.push({ script: name, target: tokens[idx], kind: 'input' });
+            } else {
+              missing.push({
+                script: name,
+                target: t,
+                resolved: t,
+                kind: 'unsupported_syntax',
+                reason: `Missing target argument for '${t}'`,
+              });
+            }
+          } else if (t.startsWith('--config=') || t.startsWith('-c=')) {
+            const val = t.slice(t.indexOf('=') + 1);
+            if (val) {
+              parsedTargets.push({ script: name, target: val, kind: 'input' });
+            } else {
+              missing.push({
+                script: name,
+                target: t,
+                resolved: t,
+                kind: 'unsupported_syntax',
+                reason: `Empty target argument in '${t}'`,
+              });
             }
           } else if (t === '--import') {
-            idx++;
-            if (idx < tokens.length) {
+            if (idx + 1 < tokens.length && !tokens[idx + 1].startsWith('-')) {
+              idx++;
               const imp = tokens[idx];
               if (imp.startsWith('.') || imp.startsWith('src/') || imp.endsWith('.js') || imp.endsWith('.mjs') || imp.endsWith('.ts')) {
                 parsedTargets.push({ script: name, target: imp, kind: 'input' });
               }
+            } else {
+              missing.push({
+                script: name,
+                target: t,
+                resolved: t,
+                kind: 'unsupported_syntax',
+                reason: `Missing target argument for '${t}'`,
+              });
+            }
+          } else if (t.startsWith('--import=')) {
+            const imp = t.slice('--import='.length);
+            if (imp.length === 0) {
+              missing.push({
+                script: name,
+                target: t,
+                resolved: t,
+                kind: 'unsupported_syntax',
+                reason: `Empty target argument in '${t}'`,
+              });
+            } else if (imp.startsWith('.') || imp.startsWith('src/') || imp.endsWith('.js') || imp.endsWith('.mjs') || imp.endsWith('.ts')) {
+              parsedTargets.push({ script: name, target: imp, kind: 'input' });
             }
           } else if (t.startsWith('--env-file=')) {
             // env-file is runtime configuration
@@ -330,9 +473,108 @@ export function validateTestClassification(allTests, unitInventorySet, specializ
   const pkgDir = options.packageDir || babelCliDir;
   const errors = [];
 
+  function getJobBlock(jobName) {
+    const lines = workflowContent.split(/\r?\n/);
+    let inJob = false;
+    const jobLines = [];
+    for (const rawLine of lines) {
+      if (!inJob) {
+        if (rawLine === `  ${jobName}:`) inJob = true;
+      } else {
+        if (/^  [a-zA-Z0-9_-]+:/.test(rawLine)) break;
+        jobLines.push(rawLine);
+      }
+    }
+    return inJob ? jobLines.join('\n') : null;
+  }
+
+  function getJobNeeds(jobName) {
+    const block = getJobBlock(jobName);
+    if (!block) return [];
+    const lines = block.split('\n');
+    let inNeeds = false;
+    const needs = [];
+    for (const rawLine of lines) {
+      if (!inNeeds) {
+        if (/^\s*needs:/.test(rawLine)) inNeeds = true;
+      } else {
+        const itemMatch = /^\s*-\s*([a-zA-Z0-9_-]+)/.exec(rawLine);
+        if (itemMatch) {
+          needs.push(itemMatch[1]);
+        } else if (/^\s*[a-zA-Z0-9_-]+:/.test(rawLine)) {
+          break;
+        }
+      }
+    }
+    return needs;
+  }
+
+  const linuxValidationNeeds = getJobNeeds('linux-validation');
+  const windowsPortabilityNeeds = getJobNeeds('windows-portability');
+
+  function globToRegex(globStr) {
+    let reStr = '^';
+    let i = 0;
+    while (i < globStr.length) {
+      const c = globStr[i];
+      if (c === '*' && globStr[i + 1] === '*' && globStr[i + 2] === '/') {
+        reStr += '(?:.*/)?';
+        i += 3;
+      } else if (c === '*' && globStr[i + 1] === '*') {
+        reStr += '.*';
+        i += 2;
+      } else if (c === '*') {
+        reStr += '[^/]*';
+        i += 1;
+      } else if (/[.+?^${}()|[\]\\]/.test(c)) {
+        reStr += '\\' + c;
+        i += 1;
+      } else {
+        reStr += c;
+        i += 1;
+      }
+    }
+    reStr += '$';
+    return new RegExp(reStr);
+  }
+
+  function scriptCoversFile(scriptDef, file) {
+    if (!scriptDef) return false;
+    if (scriptDef.includes(file)) return true;
+    const tokens = tokenizeCommand(scriptDef);
+    for (const token of tokens) {
+      const cleanToken = token.replace(/^["']|["']$/g, '');
+      if (cleanToken.includes('*')) {
+        const globRegex = globToRegex(cleanToken);
+        if (globRegex.test(file)) return true;
+      }
+    }
+    return false;
+  }
+
+  function jobExecutesCommand(jobBlock, scriptName) {
+    const lines = jobBlock.split(/\r?\n/);
+    const targetPattern = new RegExp(`\\bnpm run ${scriptName}\\b`);
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || /^\s*(?:-\s*run:\s*)?#/.test(line)) continue;
+      if (targetPattern.test(line)) {
+        if (/\becho\s+.*npm run\b/.test(line) || /^\s*(?:-\s*run:\s*)?echo\b/.test(line)) continue;
+        if (/\|\|\s*true\b|\|\|\s*exit 0\b/.test(line)) continue;
+        return true;
+      }
+    }
+    return false;
+  }
+
   const specializedSet = new Set();
   for (const [lane, entry] of Object.entries(specializedLanes)) {
     // 1. Validate files exist on disk
+    if (!Array.isArray(entry.files) || entry.files.length === 0) {
+      errors.push(`Specialized lane '${lane}' has no files defined`);
+      continue;
+    }
+
     for (const file of entry.files) {
       const fullPath = join(pkgDir, file);
       if (!existsSync(fullPath)) {
@@ -341,23 +583,78 @@ export function validateTestClassification(allTests, unitInventorySet, specializ
       specializedSet.add(file);
     }
 
-    // 2. Validate commands exist in package.json scripts
-    const commandsToCheck = entry.commandsByFile ? Object.values(entry.commandsByFile) : [entry.command];
-    for (const cmd of commandsToCheck) {
-      const scriptName = cmd.replace(/^npm run\s+/, '');
-      if (!pkgScripts[scriptName]) {
-        errors.push(`Lane '${lane}' command '${cmd}' (script '${scriptName}') is missing from package.json scripts`);
+    // 2. Validate commands mapping and execution proof
+    const commandsToCheck = new Set();
+
+    if (entry.commandsByFile !== undefined) {
+      if (typeof entry.commandsByFile !== 'object' || entry.commandsByFile === null || Object.keys(entry.commandsByFile).length === 0) {
+        errors.push(`Specialized lane '${lane}' specifies commandsByFile, but it is empty or invalid`);
+      } else {
+        for (const file of entry.files) {
+          const cmd = entry.commandsByFile[file];
+          if (!cmd || typeof cmd !== 'string' || !cmd.startsWith('npm run ')) {
+            errors.push(`Specialized lane '${lane}' file '${file}' is missing a valid npm run command in commandsByFile`);
+          } else {
+            commandsToCheck.add(cmd);
+            const scriptName = cmd.replace(/^npm run\s+/, '').trim();
+            const scriptDef = pkgScripts[scriptName];
+            if (!scriptDef) {
+              errors.push(`Lane '${lane}' command '${cmd}' (script '${scriptName}') for file '${file}' is missing from package.json scripts`);
+            } else if (!scriptCoversFile(scriptDef, file)) {
+              errors.push(`Lane '${lane}' file '${file}' is assigned to command '${cmd}', but script '${scriptName}' does not target or match this file`);
+            }
+          }
+        }
+      }
+    } else {
+      if (!entry.command || typeof entry.command !== 'string' || !entry.command.startsWith('npm run ')) {
+        errors.push(`Specialized lane '${lane}' is missing a valid default command ('npm run ...')`);
+      } else {
+        commandsToCheck.add(entry.command);
+        const scriptName = entry.command.replace(/^npm run\s+/, '').trim();
+        const scriptDef = pkgScripts[scriptName];
+        if (!scriptDef) {
+          errors.push(`Lane '${lane}' command '${entry.command}' (script '${scriptName}') is missing from package.json scripts`);
+        } else {
+          for (const file of entry.files) {
+            if (!scriptCoversFile(scriptDef, file)) {
+              errors.push(`Lane '${lane}' file '${file}' is assigned to command '${entry.command}', but script '${scriptName}' does not target or match this file`);
+            }
+          }
+        }
       }
     }
 
     // 3. Validate requiredJob in workflow or justified exclusion
     if (entry.requiredJob !== null) {
-      const jobPattern = new RegExp(`^\\s{2}${entry.requiredJob}:`, 'm');
-      if (!jobPattern.test(workflowContent)) {
+      const jobBlock = getJobBlock(entry.requiredJob);
+      if (!jobBlock) {
         errors.push(`Lane '${lane}' specifies requiredJob '${entry.requiredJob}', but that job is not in workflow`);
+      } else {
+        for (const cmd of commandsToCheck) {
+          const scriptName = cmd.replace(/^npm run\s+/, '').trim();
+          if (!jobExecutesCommand(jobBlock, scriptName)) {
+            errors.push(`Required job '${entry.requiredJob}' for lane '${lane}' does not actively execute command '${cmd}'`);
+          }
+        }
+
+        if (!linuxValidationNeeds.includes(entry.requiredJob)) {
+          errors.push(`Required job '${entry.requiredJob}' for lane '${lane}' is not in 'needs:' list of linux-validation`);
+        }
+        if (!windowsPortabilityNeeds.includes(entry.requiredJob)) {
+          errors.push(`Required job '${entry.requiredJob}' for lane '${lane}' is not in 'needs:' list of windows-portability`);
+        }
       }
     } else {
-      if (!entry.exclusion || !entry.exclusion.reason || !entry.exclusion.owner || !entry.exclusion.restorationCriteria) {
+      if (
+        !entry.exclusion ||
+        typeof entry.exclusion.reason !== 'string' ||
+        !entry.exclusion.reason.trim() ||
+        typeof entry.exclusion.owner !== 'string' ||
+        !entry.exclusion.owner.trim() ||
+        typeof entry.exclusion.restorationCriteria !== 'string' ||
+        !entry.exclusion.restorationCriteria.trim()
+      ) {
         errors.push(`Lane '${lane}' is excluded from required CI but missing complete exclusion justification (reason, owner, restorationCriteria)`);
       }
     }
@@ -404,7 +701,7 @@ test('every npm script target reference exists on disk and adheres to command gr
   assert.ok(outputCount >= 5, `Expected at least 5 generated output targets, found ${outputCount}`);
 });
 
-test('script target validation negative fixtures (missing files, empty globs, invalid syntax, missing subscripts)', () => {
+test('script target validation negative fixtures (missing files, empty globs, invalid syntax, missing subscripts, equals-form, pipes, npx)', () => {
   // Negative 1: Missing file
   const missingFileRes = parseAndValidateScriptTargets({
     'bad:file': 'tsx src/does-not-exist-at-all-xyz.ts',
@@ -437,6 +734,64 @@ test('script target validation negative fixtures (missing files, empty globs, in
   assert.throws(() => {
     tokenizeCommand('node "unclosed string');
   }, /Unterminated quote/);
+
+  // Negative 6: Equals-form missing file
+  const equalsMissingFileRes = parseAndValidateScriptTargets({
+    'bad:import': 'node --import=./src/missing_import_file_xyz.mjs',
+  });
+  assert.equal(equalsMissingFileRes.missing.length, 1);
+  assert.equal(equalsMissingFileRes.missing[0].kind, 'missing_file');
+
+  // Negative 7: Equals-form missing config
+  const equalsMissingConfigRes = parseAndValidateScriptTargets({
+    'bad:config': 'npx promptfoo eval --config=promptfoo/missing_config_xyz.yaml',
+  });
+  assert.equal(equalsMissingConfigRes.missing.length, 1);
+  assert.equal(equalsMissingConfigRes.missing[0].kind, 'missing_file');
+
+  // Negative 8: Equals-form missing pwsh file
+  const equalsMissingPwshRes = parseAndValidateScriptTargets({
+    'bad:pwsh': 'pwsh -File=../tools/missing_script_xyz.ps1',
+  });
+  assert.equal(equalsMissingPwshRes.missing.length, 1);
+  assert.equal(equalsMissingPwshRes.missing[0].kind, 'missing_file');
+
+  // Negative 9: Equals-form missing tsc project
+  const equalsMissingTscRes = parseAndValidateScriptTargets({
+    'bad:tsc': 'tsc -p=tsconfig.missing_xyz.json',
+  });
+  assert.equal(equalsMissingTscRes.missing.length, 1);
+  assert.equal(equalsMissingTscRes.missing[0].kind, 'missing_file');
+
+  // Negative 10: Unsupported npx tool
+  const unsupportedNpxRes = parseAndValidateScriptTargets({
+    'bad:npx': 'npx some-unsupported-tool-xyz --flag',
+  });
+  assert.equal(unsupportedNpxRes.missing.length, 1);
+  assert.equal(unsupportedNpxRes.missing[0].kind, 'unsupported_syntax');
+  assert.ok(unsupportedNpxRes.missing[0].reason.includes('Unsupported npx tool'));
+
+  // Negative 11: Bare -File without target argument
+  const barePwshFileRes = parseAndValidateScriptTargets({
+    'bad:bare-file': 'pwsh -NoProfile -File',
+  });
+  assert.equal(barePwshFileRes.missing.length, 1);
+  assert.equal(barePwshFileRes.missing[0].kind, 'unsupported_syntax');
+
+  // Negative 12: Unquoted shell pipe
+  const pipeRes = parseAndValidateScriptTargets({
+    'bad:pipe': 'node dist/index.js | grep something',
+  });
+  assert.equal(pipeRes.missing.length, 1);
+  assert.equal(pipeRes.missing[0].kind, 'unsupported_syntax');
+  assert.ok(pipeRes.missing[0].reason.includes('Unquoted shell pipe/or'));
+
+  // Negative 13: Unquoted shell or
+  const orRes = parseAndValidateScriptTargets({
+    'bad:or': 'node dist/index.js || true',
+  });
+  assert.equal(orRes.missing.length, 1);
+  assert.equal(orRes.missing[0].kind, 'unsupported_syntax');
 
   // Positive control: Generated build outputs are recognized without requiring pre-build existence
   const outputRes = parseAndValidateScriptTargets({
@@ -478,7 +833,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   assert.equal(unitInventory.size + specializedSet.size, 747);
 });
 
-test('test classification negative fixtures (orphan file, deleted lane command, lane absent from CI, missing file, unjustified exclusion)', () => {
+test('test classification negative fixtures (orphan file, deleted lane command, lane absent from CI, missing file, unjustified exclusion, empty commandsByFile, unrelated test match, masked CI, echo CI)', () => {
   const mockUnit = new Set(['src/a.test.ts']);
   const baseSpecialized = {
     'lane-a': {
@@ -571,4 +926,166 @@ test('test classification negative fixtures (orphan file, deleted lane command, 
     workflowYaml
   );
   assert.ok(unjustifiedRes.errors.some(e => e.includes('missing complete exclusion justification')));
+
+  // Negative 6: Empty commandsByFile
+  const emptyCommandsByFileSpecialized = {
+    'lane-empty-cbf': {
+      files: ['src/acceptance/acceptance.test.ts'],
+      command: 'npm run test:acceptance-v0',
+      commandsByFile: {},
+      requiredJob: 'platform-core',
+      exclusion: null,
+    },
+  };
+  const emptyCbfRes = validateTestClassification(
+    ['src/acceptance/acceptance.test.ts'],
+    new Set(),
+    emptyCommandsByFileSpecialized,
+    pkg.scripts,
+    workflowYaml
+  );
+  assert.ok(emptyCbfRes.errors.some(e => e.includes('commandsByFile, but it is empty or invalid')));
+
+  // Negative 7: Script command does not target or match the file
+  const unrelatedMatchSpecialized = {
+    'lane-unrelated': {
+      files: ['src/acceptance/acceptance.test.ts'],
+      command: 'npm run test:contrast', // test:contrast tests src/ui/contrast.test.ts, NOT src/acceptance/acceptance.test.ts
+      requiredJob: null,
+      exclusion: {
+        reason: 'test',
+        owner: 'test',
+        restorationCriteria: 'test',
+      },
+    },
+  };
+  const unrelatedRes = validateTestClassification(
+    ['src/acceptance/acceptance.test.ts'],
+    new Set(),
+    unrelatedMatchSpecialized,
+    pkg.scripts,
+    workflowYaml
+  );
+  assert.ok(unrelatedRes.errors.some(e => e.includes('does not target or match this file')));
+
+  // Negative 8: CI step is commented out
+  const commentedWorkflow = `
+jobs:
+  fake-job:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          # npm run test:acceptance-v0
+  linux-validation:
+    needs:
+      - fake-job
+  windows-portability:
+    needs:
+      - fake-job
+`;
+  const commentedRes = validateTestClassification(
+    ['src/acceptance/acceptance.test.ts'],
+    new Set(),
+    {
+      'lane-fake': {
+        files: ['src/acceptance/acceptance.test.ts'],
+        command: 'npm run test:acceptance-v0',
+        requiredJob: 'fake-job',
+        exclusion: null,
+      },
+    },
+    pkg.scripts,
+    commentedWorkflow
+  );
+  assert.ok(commentedRes.errors.some(e => e.includes('does not actively execute command')));
+
+  // Negative 9: CI step is masked with || true
+  const maskedWorkflow = `
+jobs:
+  fake-job:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm run test:acceptance-v0 || true
+  linux-validation:
+    needs:
+      - fake-job
+  windows-portability:
+    needs:
+      - fake-job
+`;
+  const maskedRes = validateTestClassification(
+    ['src/acceptance/acceptance.test.ts'],
+    new Set(),
+    {
+      'lane-fake': {
+        files: ['src/acceptance/acceptance.test.ts'],
+        command: 'npm run test:acceptance-v0',
+        requiredJob: 'fake-job',
+        exclusion: null,
+      },
+    },
+    pkg.scripts,
+    maskedWorkflow
+  );
+  assert.ok(maskedRes.errors.some(e => e.includes('does not actively execute command')));
+
+  // Negative 10: CI step is merely echo
+  const echoWorkflow = `
+jobs:
+  fake-job:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo npm run test:acceptance-v0
+  linux-validation:
+    needs:
+      - fake-job
+  windows-portability:
+    needs:
+      - fake-job
+`;
+  const echoRes = validateTestClassification(
+    ['src/acceptance/acceptance.test.ts'],
+    new Set(),
+    {
+      'lane-fake': {
+        files: ['src/acceptance/acceptance.test.ts'],
+        command: 'npm run test:acceptance-v0',
+        requiredJob: 'fake-job',
+        exclusion: null,
+      },
+    },
+    pkg.scripts,
+    echoWorkflow
+  );
+  assert.ok(echoRes.errors.some(e => e.includes('does not actively execute command')));
+
+  // Negative 11: requiredJob not in needs of portability gates
+  const unneededWorkflow = `
+jobs:
+  fake-job:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm run test:acceptance-v0
+  linux-validation:
+    needs:
+      - other-job
+  windows-portability:
+    needs:
+      - other-job
+`;
+  const unneededRes = validateTestClassification(
+    ['src/acceptance/acceptance.test.ts'],
+    new Set(),
+    {
+      'lane-fake': {
+        files: ['src/acceptance/acceptance.test.ts'],
+        command: 'npm run test:acceptance-v0',
+        requiredJob: 'fake-job',
+        exclusion: null,
+      },
+    },
+    pkg.scripts,
+    unneededWorkflow
+  );
+  assert.ok(unneededRes.errors.some(e => e.includes("not in 'needs:' list")));
 });
