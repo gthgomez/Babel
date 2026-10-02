@@ -63,7 +63,7 @@ setInterval(() => {}, 100);
   }
 })
 
-test('trusted service follows renewable authority instead of the former finite timeout', async () => {
+test('trusted service follows renewable authority instead of the former finite timeout', { timeout: 15_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-review-service-authority-'))
   const service = join(root, 'service.cjs')
   const candidate: ReviewAuthorityCandidate = {
@@ -92,6 +92,7 @@ process.stdin.on('end', () => setTimeout(() => process.stdout.write(JSON.stringi
     },
     issuedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + 5_000).toISOString(),
+    now: () => now,
   })
   try {
     const result = await runJsonService<{ accepted: boolean }>({

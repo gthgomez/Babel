@@ -34,13 +34,8 @@ describe('startup resume — no forced picker', () => {
   });
 
   it('opt-in picker remains available', () => {
-    const prev = process.env['BABEL_RESUME_PICKER'];
-    process.env['BABEL_RESUME_PICKER'] = '1';
-    try {
-      assert.equal(shouldForceResumePicker(), true);
-    } finally {
-      if (prev !== undefined) process.env['BABEL_RESUME_PICKER'] = prev;
-      else delete process.env['BABEL_RESUME_PICKER'];
-    }
+    assert.equal(shouldForceResumePicker({ BABEL_RESUME_PICKER: '1' }), true);
+    assert.equal(shouldForceResumePicker({ BABEL_RESUME_PICKER: '1', CI: 'true' }), false);
+    assert.equal(shouldForceResumePicker({ BABEL_RESUME_PICKER: '1', BABEL_SKIP_RESUME_PICKER: '1' }), false);
   });
 });

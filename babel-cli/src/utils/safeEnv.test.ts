@@ -3,6 +3,20 @@ import test from 'node:test';
 
 import { getSafeEnv } from './safeEnv.js';
 
+test('getSafeEnv preserves Windows spellings of existing system keys without forwarding credentials or preload hooks', () => {
+  const safe = getSafeEnv({
+    Path: 'C:\\Windows\\System32', SystemRoot: 'C:\\Windows',
+    OPENROUTER_API_KEY: 'fixture-secret', NODE_OPTIONS: '--require untrusted.cjs',
+    PSModulePath: 'untrusted-modules', BABEL_UNKNOWN_SECRET: 'fixture-secret',
+  });
+  assert.equal(safe.Path, 'C:\\Windows\\System32');
+  assert.equal(safe.SystemRoot, 'C:\\Windows');
+  assert.equal(safe.OPENROUTER_API_KEY, undefined);
+  assert.equal(safe.NODE_OPTIONS, undefined);
+  assert.equal(safe.PSModulePath, undefined);
+  assert.equal(safe.BABEL_UNKNOWN_SECRET, undefined);
+});
+
 test('getSafeEnv strips all configured LLM provider secrets', () => {
   const safe = getSafeEnv({
     DEEPSEEK_API_KEY: 'deepseek',
