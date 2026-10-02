@@ -16,6 +16,16 @@ assert.ifError(original.error);
 assert.equal(original.status, 0, original.stderr);
 const baseline = load(original.stdout);
 
+test('the final combined stack enforces all real architecture budgets on Linux and Windows', () => {
+  const job = workflow.jobs['architecture-regressions'];
+  assert.deepEqual(job.strategy.matrix.os, ['ubuntu-latest', 'windows-latest']);
+  const budget = job.steps.find(step => step.name === 'Enforce full combined architecture budget');
+  assert.ok(budget, 'Full architecture enforcement must begin with the final owner split');
+  assert.equal(budget.run, 'pwsh -NoProfile -File tools/check-architectural-budget.ps1');
+  assert.equal(budget.if, undefined);
+  assert.equal(budget['continue-on-error'], undefined);
+});
+
 test('required stable platform names are explicit fail-closed aggregates', () => {
   for (const name of ['linux-validation', 'windows-portability']) {
     const job = workflow.jobs[name];
