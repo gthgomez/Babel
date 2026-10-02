@@ -205,7 +205,7 @@ export function inspectSource(source, path = 'source.ts') {
     if (!ts.isModuleDeclaration(node) || !node.body) return [];
     if (ts.isModuleDeclaration(node.body)) return [node.body];
     return node.body.statements.filter(statement => statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)).flatMap(statement =>
-      ts.isVariableStatement(statement) ? [...statement.declarationList.declarations] : ts.isModuleDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isImportEqualsDeclaration(statement) && !statement.isTypeOnly && !ts.isExternalModuleReference(statement.moduleReference) ? [statement] : []);
+      ts.isVariableStatement(statement) ? [...statement.declarationList.declarations] : ts.isModuleDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement) || ts.isImportEqualsDeclaration(statement) && !statement.isTypeOnly && !ts.isExternalModuleReference(statement.moduleReference) ? [statement] : []);
   }
   function namespaceValue(declaration) {
     return ts.isVariableDeclaration(declaration) ? declaration.initializer : ts.isImportEqualsDeclaration(declaration) ? declaration.moduleReference : declaration;
@@ -454,6 +454,9 @@ export function inspectSource(source, path = 'source.ts') {
     return new Set(recognized.map(identity)).size > 1 ? nativeOrigin('ambiguous') : recognized[0] ?? null;
   }
   function projectNativeOrigin(origin, keys) {
+    // Invocation identity says nothing about an ordinary callback's result.
+    // Keep that result opaque instead of deriving a wildcard host origin.
+    if (origin?.kind === 'ordinaryInvocation') return keys.length ? null : origin;
     for (const key of keys) {
       if (!origin) return null;
       if (origin.kind === 'ambiguous') continue;
@@ -527,9 +530,9 @@ export function inspectSource(source, path = 'source.ts') {
     if (!keys.length || bases.has(owner)) return null;
     bases = new Set(bases).add(owner);
     const [key, ...rest] = keys;
-    const fields = (isStatic ? owner.members.filter(field => ts.isPropertyDeclaration(field) && hasStatic(field)) : instanceFields(owner)).filter(field => key === '*' || propertyKey(field.name) === key);
+    const fields = [...(isStatic ? owner.members.filter(field => ts.isPropertyDeclaration(field) && hasStatic(field)) : instanceFields(owner)), ...owner.members.filter(member => ts.isMethodDeclaration(member) && Boolean(hasStatic(member)) === isStatic)].filter(field => key === '*' || propertyKey(field.name) === key);
     const stored = classFields.get(isStatic ? carrierSymbol(owner) : instanceSymbol(owner));
-    const values = [...fields.map(field => field.initializer), ...(key === '*' ? [...(stored?.values() ?? [])].flat() : stored?.get(key) ?? [])];
+    const values = [...fields.map(field => ts.isMethodDeclaration(field) ? field : field.initializer), ...(key === '*' ? [...(stored?.values() ?? [])].flat() : stored?.get(key) ?? [])];
     return mergeNativeOrigins([...values.map(value => nativeLoaderOrigin(value, rest, seen)), ...baseExpressions(owner).flatMap(base => (localClasses(base) ?? []).map(parent => nativeClassProjection(parent, isStatic, keys, seen, bases)))]);
   }
   function nativeLoaderOrigin(expression, keys = [], seen = new Set()) {
@@ -538,7 +541,7 @@ export function inspectSource(source, path = 'source.ts') {
     seen = new Set(seen).add(expression);
     const resolve = (value, path = keys) => nativeLoaderOrigin(value, path, seen);
     const combine = mergeNativeOrigins;
-    if (ts.isArrowFunction(expression) || ts.isFunctionExpression(expression) || ts.isFunctionDeclaration(expression)) return projectNativeOrigin(nativeOrigin('ordinary'), keys);
+    if (ts.isArrowFunction(expression) || ts.isFunctionExpression(expression) || ts.isFunctionDeclaration(expression) || ts.isMethodDeclaration(expression)) return projectNativeOrigin(nativeOrigin('ordinary'), keys);
     if (ts.isAwaitExpression(expression)) return resolve(expression.expression);
     if (ts.isBinaryExpression(expression)) {
       if ([ts.SyntaxKind.CommaToken, ts.SyntaxKind.EqualsToken].includes(expression.operatorToken.kind)) return resolve(expression.right);
@@ -562,7 +565,7 @@ export function inspectSource(source, path = 'source.ts') {
       return combine(namespaceDeclarations(expression).filter(declaration => declaration.name && (keys[0] === '*' || propertyKey(declaration.name) === keys[0])).map(declaration => resolve(namespaceValue(declaration), keys.slice(1))));
     }
     if (keys.length && ts.isObjectLiteralExpression(expression)) return combine(expression.properties.flatMap(property =>
-      ts.isSpreadAssignment(property) ? [resolve(property.expression)] : (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) && (keys[0] === '*' || propertyKey(property.name) === '*' || propertyKey(property.name) === keys[0]) ? [resolve(ts.isPropertyAssignment(property) ? property.initializer : property.name, keys.slice(1))] : []));
+      ts.isSpreadAssignment(property) ? [resolve(property.expression)] : (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property) || ts.isMethodDeclaration(property)) && (keys[0] === '*' || propertyKey(property.name) === '*' || propertyKey(property.name) === keys[0]) ? [resolve(ts.isPropertyAssignment(property) ? property.initializer : ts.isMethodDeclaration(property) ? property : property.name, keys.slice(1))] : []));
     if (keys.length && ts.isArrayLiteralExpression(expression)) {
       const elements = literalArrayElements(expression) ?? [];
       return keys[0] === '*' ? combine(elements.map(element => resolve(element, keys.slice(1)))) : resolve(elements[Number(keys[0])], keys.slice(1));

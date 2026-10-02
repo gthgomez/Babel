@@ -4,6 +4,59 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
 
+const methodCarrierDeclarations=[
+  'namespace N {export function fake(...args:any[]) {}} const fake:any=N.fake',
+  'const box={fake(...args:any[]) {}}; const fake:any=box.fake',
+  'class C {static fake(...args:any[]) {}} const fake:any=C.fake',
+  'class C {fake(...args:any[]) {}} const fake:any=new C().fake',
+  'class Base {static fake(...args:any[]) {}} class C extends Base {} const fake:any=C.fake',
+  'class Base {fake(...args:any[]) {}} class C extends Base {} const fake:any=new C().fake',
+];
+for(const declaration of methodCarrierDeclarations) for(const [target,receiver,arg] of [['process.exit','process','1'],['process.stdout.write','process.stdout','"x"']]) for(const wrapper of [
+  `fake.call.call(${target},${receiver},${arg})`,
+  `fake.call.apply(${target},[${receiver},${arg}])`,
+  `fake.apply.call(${target},${receiver},[${arg}])`,
+  `fake.apply.apply(${target},[${receiver},[${arg}]])`,
+  `const invoke=fake.call.bind(${target},${receiver}); invoke(${arg})`,
+  `const invoke=fake.apply.bind(${target},${receiver}); invoke([${arg}])`,
+]) test('known method/function carriers retain borrowed host targets: '+declaration+wrapper,()=>{
+  const source=declaration+'; '+wrapper,result=inspectSource(source);
+  assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+});
+test('known method/function carriers keep local receivers and host data clear',()=>{
+  for(const declaration of methodCarrierDeclarations) for(const target of ['process.exit','process.stdout.write']) for(const wrapper of [
+    `fake.call.call(fake,null,${target})`,
+    `fake.apply.call(fake,null,[${target}])`,
+    `const invoke=Reflect.apply.call.bind(fake,null); invoke(${target})`,
+  ]) {
+    const source=declaration+'; '+wrapper;
+    assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+  }
+});
+test('opaque local results do not become native origins through iteration',()=>{
+  for(const source of [
+    'function list():string[]{return ["x"]} for(const item of list())item.replace(/x/g,"").trim()',
+    'const list=()=>["x"]; let item; for(item of list())item.replace(/x/g,"").trim()',
+    'const box={list(){return ["x"]}}; for(const item of box.list())item.replace(/x/g,"").trim()',
+    'class C {static list(){return ["x"]}} for(const item of C.list())item.replace(/x/g,"").trim()',
+    'class C {list(){return ["x"]}} for(const item of new C().list())item.replace(/x/g,"").trim()',
+  ]) assert.deepEqual(inspectSource(source+';const unrelated=Reflect'),{exits:[],stdout:[],ambiguous:[]},source);
+});
+test('real local tool path normalization retains no ambiguous boundaries',()=>{
+  const source=readFileSync(new URL('../../babel-cli/src/localTools.ts',import.meta.url),'utf8');
+  const result=inspectSource(source);
+  assert.deepEqual(result.ambiguous,[]);
+  assert.deepEqual(result.exits,[]);
+});
+test('opaque result controls preserve native-loader iteration',()=>{
+  for(const source of [
+    'for(const p of [require("process")])p.exit(1)',
+    'import {createRequire}from"node:module"; for(const load of [createRequire(import.meta.url)])load("process").stdout.write("x")',
+    'namespace N {export function fake(...args:any[]) {process.exit(1)}} N.fake()',
+    'const box={fake(){process.stdout.write("x")}}; box.fake()',
+  ]) {const result=inspectSource(source);assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);}
+});
+
 for(const [prefix,target,receiver,arg] of [
   ['', 'process.exit','process','1'],
   ['', 'process.stdout.write','process.stdout','"x"'],
