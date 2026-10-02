@@ -14,7 +14,11 @@ export function inspectSource(source, path = 'source.ts') {
   if (sf.parseDiagnostics.length) throw new Error(`Cannot parse source for boundary inspection: ${path}`);
   function hasNativeSeed(node) {
     if (ts.isIdentifier(node) && ['require', 'Reflect', 'global', 'globalThis'].includes(node.text) ||
-        ts.isStringLiteralLike(node) && ['module', 'node:module'].includes(node.text) || node.kind === ts.SyntaxKind.ImportKeyword) return true;
+        ts.isStringLiteralLike(node) && ['module', 'node:module', 'process', 'node:process'].includes(node.text) || node.kind === ts.SyntaxKind.ImportKeyword) return true;
+    // A local Function adapter can borrow a host target. Include process aliases,
+    // boundary members and computed projections; direct non-boundary properties
+    // cannot supply an exit/writer origin and need no native graph traversal.
+    if (ts.isIdentifier(node) && node.text === 'process' && (!ts.isPropertyAccessExpression(node.parent) || node.parent.expression !== node || ['exit', 'stdout'].includes(node.parent.name.text))) return true;
     return Boolean(ts.forEachChild(node, hasNativeSeed));
   }
   // Every supported native origin derives from one of these AST seeds. Avoid

@@ -4,6 +4,50 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { inspectSource, validateRegistry } from '../architectural-boundaries.mjs';
 
+for(const [prefix,target,receiver,arg] of [
+  ['', 'process.exit','process','1'],
+  ['', 'process.stdout.write','process.stdout','"x"'],
+  ['import {exit as target} from "node:process";', 'target','null','1'],
+  ['import {stdout} from "node:process"; const target=stdout.write;', 'target','stdout','"x"'],
+]) for(const wrapper of [
+  `fake.call.call(${target},${receiver},${arg})`,
+  `fake.call.apply(${target},[${receiver},${arg}])`,
+  `fake.apply.call(${target},${receiver},[${arg}])`,
+  `fake.apply.apply(${target},[${receiver},[${arg}]])`,
+  `const invoke=fake.call.bind(${target},${receiver}); invoke(${arg})`,
+  `const invoke=fake.apply.bind(${target},${receiver}); invoke([${arg}])`,
+]) test('local Function adapters detect host receivers without unrelated seeds: '+prefix+wrapper,()=>{
+  const source=prefix+'const fake:any=()=>{}; '+wrapper;
+  const result=inspectSource(source);
+  assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);
+  assert.deepEqual(result,inspectSource(source+'; const unrelated=Reflect;'),source);
+});
+test('Function adapter host seeds survive global aliases and computed members',()=>{
+  for(const source of [
+    'const p=process; const fake:any=()=>{}; fake.call.call(p.exit,p,1)',
+    'const p=process.stdout; const fake:any=()=>{}; fake.apply.call(p.write,p,["x"])',
+    'const fake:any=()=>{}; fake.call.call(process["exit"],process,1)',
+    'import p from "process"; const fake:any=()=>{}; fake.call.call(p.exit,p,1)',
+    'import {exit as target} from "process"; const fake:any=()=>{}; fake.call.call(target,null,1)',
+  ]) {const result=inspectSource(source);assert.ok(result.exits.length+result.stdout.length+result.ambiguous.length>0,source);}
+});
+test('local Function adapters keep shadowed and harmless host-data receivers clear',()=>{
+  for(const source of [
+    'const fake:any=()=>{}; fake.call.call(fake,null,process.exit)',
+    'const fake:any=()=>{}; const invoke=fake.call.bind(fake,null); invoke(process.stdout.write)',
+    'const process={exit(){},stdout:{write(){}}}; const fake:any=()=>{}; fake.call.call(process.exit,process,1)',
+    'const process={exit(){},stdout:{write(){}}}; const fake:any=()=>{}; fake.apply.call(process.stdout.write,process.stdout,["x"])',
+    'import {exit as target} from "./fake.js"; const fake:any=()=>{}; fake.call.call(target,null,1)',
+  ]) assert.deepEqual(inspectSource(source),{exits:[],stdout:[],ambiguous:[]},source);
+});
+test('recursive terminal parser remains bounded with a native seed',()=>{
+  const source=readFileSync(new URL('../../babel-cli/src/ui/keyInput.ts',import.meta.url),'utf8')+'\nconst unrelated=Reflect;';
+  const script=`import {inspectSource} from ${JSON.stringify(new URL('../architectural-boundaries.mjs',import.meta.url).href)};let source='';for await(const chunk of process.stdin)source+=chunk;process.stdout.write(JSON.stringify(inspectSource(source)));`;
+  const result=spawnSync(process.execPath,['--input-type=module','--eval',script],{input:source,encoding:'utf8',timeout:15_000});
+  assert.equal(result.status,0,result.error?.message??result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout),{exits:[],stdout:[],ambiguous:[]});
+});
+
 for(const target of ['process.exit','process.stdout.write']) for(const wrapper of [
   `Reflect.apply.call.call(fake,null,${target})`,
   `Reflect.apply.call.apply(fake,[null,${target}])`,
