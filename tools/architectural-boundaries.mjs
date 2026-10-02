@@ -36,6 +36,7 @@ export function inspectSource(source, path = 'source.ts') {
   const implicitGlobals = new Map([['process', globalProcessSymbol], ['global', globalObjectSymbol], ['globalThis', globalObjectSymbol], ['Reflect', globalReflectSymbol]]);
   let hasBindOverrides = false;
   linkSymbols(globalProcessSymbol, globalObjectSymbol);
+  linkSymbols(globalReflectSymbol, globalObjectSymbol);
   function isAmbientDeclaration(node) {
     for (let owner = node; owner && !ts.isSourceFile(owner); owner = owner.parent) {
       if (owner.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword)) return true;
@@ -230,7 +231,7 @@ export function inspectSource(source, path = 'source.ts') {
       const owner = thisOwner(expression);
       return owner ? [owner.static ? carrierSymbol(owner.node) : instanceSymbol(owner.node)] : [];
     }
-    if (ts.isCallExpression(expression) && ((ts.isIdentifier(expression.expression) && expression.expression.text === 'require') || expression.expression.kind === ts.SyntaxKind.ImportKeyword) && ts.isStringLiteralLike(expression.arguments[0]) && ['process', 'node:process'].includes(expression.arguments[0].text)) return [globalProcessSymbol];
+    if (isProcessImport(expression)) return [globalProcessSymbol];
     if (ts.isAwaitExpression(expression)) return roots(expression.expression);
     if (ts.isQualifiedName(expression)) return roots(expression.left);
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) return roots(expression.expression);
@@ -415,6 +416,45 @@ export function inspectSource(source, path = 'source.ts') {
     const expression = node && ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) ? node.moduleReference.expression : node?.moduleSpecifier;
     return expression && ts.isStringLiteralLike(expression) ? expression.text : undefined;
   }
+  function isNodeLoaderFactory(expression, seen = new Set()) {
+    expression = unwrap(expression);
+    if (!expression || seen.has(expression)) return false;
+    seen = new Set(seen).add(expression);
+    const symbol = ts.isIdentifier(expression) ? checker.getSymbolAtLocation(expression) : ts.isPropertyAccessExpression(expression) ? checker.getSymbolAtLocation(expression.expression) : null;
+    return (symbol?.declarations ?? []).some(declaration =>
+      ['node:module', 'module'].includes(moduleOf(declaration)) &&
+        (ts.isImportSpecifier(declaration) && (declaration.propertyName?.text ?? declaration.name.text) === 'createRequire' ||
+          (ts.isNamespaceImport(declaration) || ts.isImportClause(declaration)) && ts.isPropertyAccessExpression(expression) && expression.name.text === 'createRequire') ||
+      (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration)) && isNodeLoaderFactory(declaration.initializer, seen)) ||
+      (assignments.get(symbol) ?? []).some(value => !value.keys.length && isNodeLoaderFactory(value.expression, seen));
+  }
+  function isNodeLoader(expression, seen = new Set()) {
+    expression = unwrap(expression);
+    if (!expression || seen.has(expression)) return false;
+    seen = new Set(seen).add(expression);
+    if (ts.isCallExpression(expression)) return isNodeLoaderFactory(expression.expression);
+    if (!ts.isIdentifier(expression)) return false;
+    const symbol = checker.getSymbolAtLocation(expression);
+    const declarations = (symbol?.declarations ?? []).filter(declaration => !isAmbientDeclaration(declaration));
+    if (expression.text === 'require' && !declarations.length) return true;
+    return declarations.some(declaration => ts.isVariableDeclaration(declaration) && isNodeLoader(declaration.initializer, seen)) ||
+      (assignments.get(symbol) ?? []).some(value => !value.keys.length && isNodeLoader(value.expression, seen));
+  }
+  function isProcessImport(node) {
+    if (!ts.isCallExpression(node) || !node.arguments[0] || !ts.isStringLiteralLike(node.arguments[0]) || !['node:process', 'process'].includes(node.arguments[0].text)) return false;
+    return node.expression.kind === ts.SyntaxKind.ImportKeyword || isNodeLoader(node.expression);
+  }
+  function boundReflectionAccess(callee, args, seen) {
+    const adapter = callee.slice(0, -1).join('.');
+    if (args.length <= 1) return callee.slice(0, -1);
+    if (!['reflect.apply', 'reflect.apply.call', 'reflect.apply.apply'].includes(adapter)) return args.some(argument => access(argument, seen)?.[0] === 'process') ? ['process', '*'] : ['reflect', 'bound'];
+    const index = adapter === 'reflect.apply' ? 1 : 2;
+    if (args.length <= index) return ['reflect', 'bound'];
+    const target = adapter === 'reflect.apply.apply' ? projectionAccess(args[index], ['0'], seen) : access(args[index], seen);
+    if (target?.[0] === 'process') return target;
+    if (target?.[0] === 'reflect') return args.slice(index + 1).some(argument => access(argument, seen)?.[0] === 'process') ? ['process', '*'] : ['reflect', 'bound'];
+    return null;
+  }
   function mergeAccess(candidates) {
     const recognized = candidates.filter(Boolean);
     if (new Set(recognized.map(route => route.join('.'))).size > 1) return ['process', '*'];
@@ -466,10 +506,10 @@ export function inspectSource(source, path = 'source.ts') {
       return member(base, key);
     }
     if (ts.isCallExpression(node)) {
-      if (((ts.isIdentifier(node.expression) && node.expression.text === 'require') || node.expression.kind === ts.SyntaxKind.ImportKeyword) &&
-          ts.isStringLiteralLike(node.arguments[0]) && ['node:process', 'process'].includes(node.arguments[0].text)) return ['process'];
+      if (isProcessImport(node)) return ['process'];
       const callee = access(node.expression, seen);
       if (unresolvedInvocation(callee)) return ['process', '*'];
+      if (callee?.[0] === 'reflect' && callee.at(-1) === 'bind') return boundReflectionAccess(callee, node.arguments, seen);
       if (callee?.at(-1) === 'bind') return callee.slice(0, -1);
     }
     if (!ts.isIdentifier(node)) return null;

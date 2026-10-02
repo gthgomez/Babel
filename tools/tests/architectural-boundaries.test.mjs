@@ -34,6 +34,63 @@ test('nested Reflect invokers cannot clear a possible host target', () => {
 });
 
 for (const source of [
+  'const invoke=Reflect.apply.bind(Reflect,process.exit,process); invoke([1])',
+  'const invoke=Reflect.apply.bind(Reflect,process.exit); invoke(process,[1])',
+  'const R=Reflect; const invoke=R.apply.bind(R,process.exit,process); invoke([1])',
+  'const invoke=Reflect.apply.bind(Reflect,process.stdout.write,process.stdout); invoke(["x"])',
+  'const {apply}=Reflect; const quit=process.exit; const invoke=apply.bind(Reflect,quit); invoke(process,[1])',
+  'const invoke=Reflect.apply.call.bind(Reflect.apply,Reflect,process.exit,process); invoke([1])',
+  'const invoke=Reflect.apply.call.bind(Reflect.apply,Reflect); invoke(process.exit,process,[1])',
+  'const invoke=Reflect.apply.apply.bind(Reflect.apply,Reflect,[process.exit,process,[1]]); invoke()',
+  'const invoke=Reflect.apply.apply.bind(Reflect.apply,Reflect); invoke([process.exit,process,[1]])',
+  'const invoke=Reflect.apply.bind(Reflect).bind(null,process.exit,process); invoke([1])',
+  'const invoke=Reflect.apply.bind(Reflect,Reflect.apply); invoke(Reflect,[process.exit,process,[1]])',
+]) test('partially bound Reflect invokers retain their stored host target: ' + source, () => {
+  const result=inspectSource(source);
+  assert.equal(result.exits.length + result.stdout.length + result.ambiguous.length, 1);
+});
+
+test('partial Reflect binding controls do not invoke host boundaries', () => {
+  for (const source of [
+    'const invoke=Reflect.apply.bind(Reflect,process.exit,process)',
+    'const invoke=Reflect.apply.bind(Reflect,()=>{},process); invoke([])',
+    'const invoke=Reflect.apply.bind(Reflect,()=>{},null); invoke([process.exit])',
+    'const invoke=Reflect.apply.call.bind(Reflect.apply,Reflect,()=>{},null); invoke([process.exit])',
+    'const invoke=Reflect.apply.apply.bind(Reflect.apply,Reflect,[()=>{},null,[process.exit]]); invoke()',
+    'function f(Reflect){const invoke=Reflect.apply.bind(Reflect,process.exit,process); invoke([1])}',
+    'const Reflect={apply:()=>{}}; const invoke=Reflect.apply.bind(Reflect,process.exit); invoke([])',
+  ]) assert.deepEqual(inspectSource(source), {exits:[], stdout:[], ambiguous:[]});
+});
+
+test('shadowed require loaders do not imply Node process ownership', () => {
+  for (const source of [
+    'function f(require){require("node:process").exit(1)}',
+    'const require=()=>({exit:()=>{}}); require("node:process").exit(1)',
+    'function require(){return {exit:()=>{}}} require("process").exit(1)',
+    'import {createRequire} from "./fake.js"; const require=createRequire("x"); require("process").exit(1)',
+    'function f(createRequire){const require=createRequire("x"); require("process").exit(1)}',
+    'const load=()=>({exit:()=>{}}); load("node:process").exit(1)',
+  ]) assert.deepEqual(inspectSource(source), {exits:[], stdout:[], ambiguous:[]});
+});
+
+test('Node createRequire aliases retain host process ownership', () => {
+  for (const source of [
+    'import {createRequire as makeRequire} from "node:module"; const require=makeRequire(import.meta.url); require("node:process").exit(1)',
+    'import * as M from "node:module"; const load=M.createRequire(import.meta.url); load("node:process").exit(1)',
+    'import M from "node:module"; const load=M.createRequire(import.meta.url); load("node:process").exit(1)',
+    'import {createRequire} from "node:module"; createRequire(import.meta.url)("node:process").exit(1)',
+    'import {createRequire} from "node:module"; const factory=createRequire; const load=factory(import.meta.url); load("process").exit(1)',
+    'import {createRequire} from "node:module"; let factory; factory=createRequire; const load=factory(import.meta.url); load("process").exit(1)',
+    'const load=require; load("node:process").exit(1)',
+    'let load; load=require; load("process").exit(1)',
+  ]) assert.equal(inspectSource(source).exits.length, 1, source);
+});
+
+test('Reflect property mutation shares the global object identity', () => {
+  assert.equal(inspectSource('globalThis.Reflect.apply=process.exit; Reflect.apply(1)').ambiguous.length, 1);
+});
+
+for (const source of [
   'function f(Reflect) { Reflect.apply(process.exit, process, [1]) }',
   'const Reflect={apply:()=>{}}; Reflect.apply(process.exit, process, [1])',
   'Reflect.apply(()=>{}, null, [])',
@@ -52,6 +109,10 @@ for (const source of [
   'class C {constructor(protected quit=process.exit){}} class D extends C {run(){this.quit(1)}} new D().run()',
   'const end=process.exit; class C {constructor(public quit=end){}} new C().quit(1)',
   'class C {constructor(public quit=process.exit){}} const {quit}=new C(); quit(1)',
+  'class C {constructor(public quit=process.exit){}} const c=new C(); const quit=c.quit; quit(1)',
+  'class C {constructor(readonly quit=process.exit.bind(process)){}} new C()["quit"](1)',
+  'namespace M {export class C {constructor(public quit=process.exit){}}} const ctor=M.C; new ctor().quit(1)',
+  'class C {constructor(public quit=process.exit){}} Reflect.apply(new C().quit, null, [1])',
 ]) test('initialized parameter property retains exit ownership: ' + source, () => {
   const result=inspectSource(source);
   assert.equal(result.exits.length + result.ambiguous.length, 1);
