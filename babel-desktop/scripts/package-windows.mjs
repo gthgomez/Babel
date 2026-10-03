@@ -4,6 +4,7 @@ import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
+import {homedir} from 'node:os';
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(desktop, '..');
@@ -59,6 +60,9 @@ cpSync(join(desktop,'docs','INSTALL-WINDOWS.md'),join(bundle,'INSTALL.md'));
 const metadata = {version,sourceSha,platform:'win32-x64',electron:desktopPackage.devDependencies.electron,node:nodeVersion,nodeArchiveSha256:nodeArchiveSha,cliVersion:pack.version,cliArchiveSha256:sha(readFileSync(join(output,pack.filename))),signed:false};
 writeFileSync(join(bundle,'BUILD.json'), JSON.stringify(metadata,null,2)+'\n');
 const files = [];
+// Match actual build-machine prefixes; upstream type declarations contain public
+// example user paths which are not private build provenance.
+const buildPrefixes = [homedir(), repo].flatMap(path => [path, path.replaceAll('\\','/'), path.replaceAll('\\','\\\\')]);
 function inventory(dir, prefix='') {
   for(const item of readdirSync(dir,{withFileTypes:true})) {
     const rel = prefix+item.name, path = join(dir,item.name);
@@ -67,7 +71,7 @@ function inventory(dir, prefix='') {
     else {
       if(/(?:^|\/)(?:\.env(?:\..*)?|\.git|auth\.json|ui-connection\.json|transcript\.jsonl)$|\.(?:log|pem|key)$/i.test(rel)) throw new Error(`Forbidden package file: ${rel}`);
       const bytes = readFileSync(path);
-      if(bytes.includes(Buffer.from(['C:','Users',''].join('\\'))) || bytes.includes(Buffer.from(['D:','Workspace',''].join('\\')))) throw new Error(`Personal build path in package: ${rel}`);
+      if(buildPrefixes.some(prefix => bytes.includes(Buffer.from(prefix)))) throw new Error(`Personal build path in package: ${rel}`);
       files.push({path:rel,bytes:statSync(path).size,sha256:sha(bytes)});
     }
   }
