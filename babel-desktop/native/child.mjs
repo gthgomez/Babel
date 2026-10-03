@@ -31,9 +31,9 @@ export function buildRunArgs(entry, projectRoot, {task, mode, sessionId}) {
 /** Owns one child process, not a Babel runtime or an agent/session store. */
 export class BabelChild {
   #child = null;
-  constructor({executable, entry, projectRoot, env = {}}) {
+  constructor({executable, entry, projectRoot, env = {}, inheritEnv = true}) {
     if (!isAbsolute(executable)) throw new TypeError('The Node executable must be absolute');
-    this.executable = executable; this.entry = entry; this.projectRoot = projectRoot; this.env = env;
+    this.executable = executable; this.entry = entry; this.projectRoot = projectRoot; this.env = env; this.inheritEnv = inheritEnv;
   }
   get busy() { return this.#child !== null; }
   start(request, onPacket) {
@@ -46,7 +46,7 @@ export class BabelChild {
     const decoder = new JsonlDecoder(event => send({kind:'event',event}), report);
     const child = spawn(this.executable, args, {
       cwd: this.projectRoot, shell: false, windowsHide: true,
-      stdio: ['pipe','pipe','pipe'], env: {...process.env, ...this.env, BABEL_DESKTOP_IPC:'1'}
+      stdio: ['pipe','pipe','pipe'], env: {...(this.inheritEnv ? process.env : {}), ...this.env, BABEL_DESKTOP_IPC:'1'}
     });
     this.#child = child;
     child.stdout.on('data', chunk => {

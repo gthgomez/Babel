@@ -1,6 +1,7 @@
 node_modules/
 dist/
 artifacts/
+node-compile-cache/
 .env
 .env.*
 *.log

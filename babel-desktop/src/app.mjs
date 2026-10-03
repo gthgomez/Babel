@@ -189,6 +189,11 @@ $('#dialog').addEventListener('close',()=>focusBeforeDialog?.focus?.());
 $('#dialog').addEventListener('click',ev=>{if(ev.target === $('#dialog')) { const r=ev.target.getBoundingClientRect(); if(ev.clientX<r.left||ev.clientX>r.right||ev.clientY<r.top||ev.clientY>r.bottom) closeDialog(); }});
 
 function connectionDialog() {
+  if(nativeInfo?.packaged){
+    const d=nativeInfo.diagnostics;
+    openDialog('BABEL SETUP',`<p>Babel Desktop includes its CLI, Node runtime, and prompt assets. Choose a project when you are ready.</p><div class="settings-row"><span>Bundled runtime</span><span>${nativeInfo.officialCliReady?'Available':'Missing files — extract the complete ZIP again'}</span></div><div class="settings-row"><span>Provider</span><span>${d?.provider==='configured'?'Credential present; authentication unverified':'Not configured'}</span></div><div class="settings-row"><span>Docker / safe_repo</span><span>${d?.docker==='available'?'Available':'Unavailable — start Docker before running tasks'}</span></div><div class="settings-row"><span>Project</span><span>${e(nativeInfo.projectName??'Not selected')}</span></div><h3>FIRST LAUNCH</h3><p>To use the default OpenRouter route, create <code>.env</code> yourself in this Desktop configuration directory and add <code>OPENROUTER_API_KEY</code>. Never share that file.</p><pre>${e(nativeInfo.configDirectory??'Configuration directory unavailable')}</pre><p>Other supported provider settings belong in the same file. Model reference controls do not configure a provider. Desktop does not import credentials from other apps or checkouts. Environment credentials you explicitly supply are also accepted by Babel.</p><p>Install and start Docker separately. The default <code>safe_repo</code> profile requires it; Desktop does not start Docker or switch to unrestricted host execution.</p>${d?.error?`<p>${e(d.error)}</p>`:''}<div class="dialog-actions"><button class="button" data-action="refresh-diagnostics">Recheck setup</button><button class="button" data-action="open-project">Open project</button><button class="button primary" data-action="use-live" ${nativeInfo.ready&&d?.ready?'':'disabled'}>Use Babel CLI</button></div><p class="fine-print">Diagnostics make no model calls. A present credential has not been authenticated. See INSTALL.md and use Babel CLI.cmd doctor --json for local details.</p>`);
+    return;
+  }
   openDialog('BABEL CONNECTION',`<div class="connection-label">${icon('terminal')}${transport === 'preview' ? 'Reference preview' : 'Babel CLI'}</div><p>${transport === 'preview' ? 'This is a working UI preview, not a running agent. The initial conversation, model names, tool activity, and token count reproduce the supplied reference.' : 'Tasks run through the Babel CLI. Replies, tool rows, and status on this screen come from that run.'}</p><p>${native ? 'Startup uses the sibling babel-cli build when that file exists. Open a project, then send a task. Another CLI entry is an advanced setting.' : 'The browser preview has no access to your CLI. Use the Electron app for a live run. No keys are requested or stored here.'}</p>${nativeInfo ? `<div class="settings-row"><span>Official CLI</span><span class="muted">${nativeInfo.officialCliReady === true ? e(nativeInfo.officialCliLabel || 'babel-cli/dist/index.js') : nativeInfo.officialCliReady === false ? 'Not built' : 'Not reported'}</span></div><div class="settings-row"><span>CLI</span><span class="muted">${e(nativeInfo.cliName ?? 'Not selected')}</span></div><div class="settings-row"><span>Project</span><span class="muted">${e(nativeInfo.projectName ?? 'Not selected')}</span></div>` : ''}<div class="dialog-actions">${native ? `<button class="button" data-action="choose-cli">Advanced: other CLI</button><button class="button" data-action="open-project">Open project</button><button class="button primary" data-action="use-live" ${nativeInfo?.ready ? '' : 'disabled'}>Use Babel CLI</button>` : '<button class="button primary" data-action="close-dialog">Continue preview</button>'}</div><p class="fine-print">File changes and commands follow Babel's own approval rules. Allow or deny them in this window. Stop ends the current run.</p>`);
 }
 function settingsDialog() {
@@ -427,6 +432,7 @@ document.addEventListener('click',async event=>{
   else if(a==='draft')draft(button.dataset.text);
   else if(a==='settings')settingsDialog();
   else if(a==='connection')connectionDialog();
+  else if(a==='refresh-diagnostics'){try{nativeInfo=await native.refreshDiagnostics();connectionDialog();}catch(err){toast(err.message);}}
   else if(a==='open-project')await chooseProject();
   else if(a==='choose-cli'){try{const info=await native.chooseCli();if(info)nativeInfo=info;connectionDialog();}catch(err){toast(err.message);}}
   else if(a==='use-live'){try{await enableLive();}catch(err){toast(err.message);}}
@@ -451,6 +457,9 @@ document.addEventListener('keydown',ev=>{
   else if(ev.key==='Escape'&&!$('#dialog').open){$('.workspace').classList.remove('show-left','show-right');}
 });
 try{if(localStorage.getItem('babel-preview-motion')==='reduce')document.body.classList.add('reduce-motion');}catch{}
-if(native){native.getInfo().then(info=>{nativeInfo=info;}).catch(()=>{});native.onEvent(handleNativeEvent);}
+if(native){native.getInfo().then(info=>{
+  nativeInfo=info;
+  if(info?.packaged){state={version:1,mode:'chat',model:'',sessions:[],activeId:''};files=[];newSession();connectionDialog();}
+}).catch(error=>toast(`Connection unavailable: ${error.message}`));native.onEvent(handleNativeEvent);}
 setInterval(updateClock,30000);
 renderAll(true);

@@ -4,8 +4,8 @@ import { join } from 'node:path';
 const SESSION_ID = /^[\w-]{1,80}$/;
 
 /** Babel's own chat-session directory. This reader does not create a second store. */
-export function runsSessionsDir(packageRoot) {
-  return join(packageRoot, '..', 'runs', 'chat-sessions');
+export function runsSessionsDir(packageRoot, runsDir = process.env.BABEL_RUNS_DIR) {
+  return runsDir ? join(runsDir, 'chat-sessions') : join(packageRoot, '..', 'runs', 'chat-sessions');
 }
 
 export function messagesFromTranscript(text) {
@@ -22,13 +22,13 @@ export function messagesFromTranscript(text) {
   return messages;
 }
 
-export async function listSavedChats(packageRoot, { limit = 30 } = {}) {
+export async function listSavedChats(packageRoot, { limit = 30, runsDir } = {}) {
   let names = [];
-  try { names = await readdir(runsSessionsDir(packageRoot)); } catch { return []; }
+  try { names = await readdir(runsSessionsDir(packageRoot, runsDir)); } catch { return []; }
   const sessions = [];
   for (const name of names) {
     if (!SESSION_ID.test(name)) continue;
-    const transcript = join(runsSessionsDir(packageRoot), name, 'transcript.jsonl');
+    const transcript = join(runsSessionsDir(packageRoot, runsDir), name, 'transcript.jsonl');
     try {
       const info = await stat(transcript);
       if (!info.isFile() || info.size > 8 * 1024 * 1024) continue;
@@ -42,9 +42,9 @@ export async function listSavedChats(packageRoot, { limit = 30 } = {}) {
   return sessions.slice(0, limit);
 }
 
-export async function readSavedChat(packageRoot, sessionId) {
+export async function readSavedChat(packageRoot, sessionId, {runsDir} = {}) {
   if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) throw new Error('Invalid chat session id');
-  const transcript = join(runsSessionsDir(packageRoot), sessionId, 'transcript.jsonl');
+  const transcript = join(runsSessionsDir(packageRoot, runsDir), sessionId, 'transcript.jsonl');
   const info = await stat(transcript);
   if (!info.isFile() || info.size > 8 * 1024 * 1024) throw new Error('Saved chat is unavailable');
   return { id: sessionId, messages: messagesFromTranscript(await readFile(transcript, 'utf8')) };
