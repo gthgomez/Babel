@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
@@ -90,7 +90,13 @@ test('stages catalog assets and defaults while removing stale resources and buil
     mkdirSync(join(pkg, 'bin'))
     writeFileSync(join(pkg, 'bin/babel.js'), '#!/usr/bin/env node\n')
     writeFileSync(join(pkg, '.env'), 'secret=sentinel')
-    const packed = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts', '--cache', join(root, 'npm-cache')], { cwd: pkg, encoding: 'utf8', shell: process.platform === 'win32' })
+    const npmCli = process.env.npm_execpath || [
+      join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'),
+      join(dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js'),
+      '/usr/share/nodejs/npm/bin/npm-cli.js',
+    ].find(existsSync)
+    assert.ok(npmCli, 'npm CLI is available beside the selected Node runtime')
+    const packed = spawnSync(process.execPath, [npmCli, 'pack', '--dry-run', '--json', '--ignore-scripts', '--cache', join(root, 'npm-cache')], { cwd: pkg, encoding: 'utf8' })
     assert.equal(packed.status, 0, packed.stderr)
     const result = JSON.parse(packed.stdout)[0]
     assert.equal(result.name, '@babel-preview-local/coding-agent')
