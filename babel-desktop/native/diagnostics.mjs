@@ -4,7 +4,8 @@ import {execFile} from 'node:child_process';
 export function prerequisiteStatus(report) {
   const checks = report?.kind === 'installed_user' && Array.isArray(report.checks) ? report.checks : [];
   const good = id => checks.filter(check => check?.id === id).length === 1 && checks.find(check => check?.id === id)?.status === 'ok';
-  return {ready:['node','resources','provider','docker'].every(good),
+  // Provider presence is advisory: credential-free local routes are owned by the CLI.
+  return {ready:['node','resources','docker'].every(good),
     node:good('node') ? 'ready' : 'unavailable', resources:good('resources') ? 'ready' : 'unavailable',
     provider:good('provider') ? 'configured' : 'missing', docker:good('docker') ? 'available' : 'unavailable'};
 }

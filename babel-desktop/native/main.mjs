@@ -126,7 +126,7 @@ async function start(){
     if(!(await getInfo()).ready)throw new Error('The selected Babel CLI or project is no longer available');
     if(app.isPackaged){
       diagnostics=await diagnoseRuntime(officialRuntime(),{env:runtimeEnvironment(),cwd:app.getPath('userData')});
-      if(!diagnostics.ready)throw new Error('Execution prerequisites are missing or unverified. Open Connection, configure a provider and start Docker, then recheck setup.');
+      if(!diagnostics.ready)throw new Error('Execution prerequisites are missing or unverified. Open Connection, check runtime files and start Docker, then recheck setup.');
     }
     // Validate before presenting consent; renderer cannot provide arbitrary flags.
     buildRunArgs(cliEntry,preferences.projectRoot,request);

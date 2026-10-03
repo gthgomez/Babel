@@ -23,3 +23,10 @@ test('malformed or incomplete diagnostics fail closed', () => {
     assert.equal(diagnostics.prerequisiteStatus(input).ready, false);
   }
 });
+
+test('credential presence remains advisory for credential-free local providers', () => {
+  assert.equal(diagnostics.prerequisiteStatus({kind:'installed_user', checks:[
+    {id:'node',status:'ok'}, {id:'resources',status:'ok'},
+    {id:'provider',status:'warn'}, {id:'docker',status:'ok'},
+  ]}).ready, true);
+});
