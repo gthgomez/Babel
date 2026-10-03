@@ -42,6 +42,83 @@ export function presentTool(tool, target) {
   else if (/test/.test(name)) action = 'run';
   return { action, path, label: `${action} ${path}` };
 }
+function sameWork(left, right) {
+  return left?.action === right?.action && left?.path === right?.path;
+}
+export function absorbFileChange(tools, item) {
+  const path = safeProjectPath(item?.path);
+  if (!path) return null;
+  const meta = `+${Number(item.additions) || 0} -${Number(item.deletions) || 0}`;
+  const existing = (Array.isArray(tools) ? tools : []).find(tool => tool.action === 'edit' && tool.path === path);
+  if (existing) {
+    existing.meta = meta;
+    if (existing.status === 'running') existing.status = 'complete';
+    return existing;
+  }
+  return { id: `file:${path}`, action: 'edit', path, label: `edit ${path}`, status: 'complete', detail: '', meta };
+}
+export function reviewFromResult(result) {
+  const critic = result?.critic_receipt;
+  const reasons = Array.isArray(critic?.reasons)
+    ? critic.reasons.filter(reason => typeof reason === 'string' && reason.trim()).map(reason => reason.trim().slice(0, 500)).slice(0, 8)
+    : [];
+  if (!reasons.length) return null;
+  const verdict = typeof critic.verdict === 'string' ? critic.verdict.trim().slice(0, 40) : '';
+  return { title: verdict ? `REVIEW · ${verdict}` : 'REVIEW', reasons };
+}
+export function liveModelFromResult(result) {
+  const context = result?.active_context;
+  if (!context || context.source === 'unknown') return '';
+  const id = typeof context.model_id === 'string' ? context.model_id.trim() : '';
+  if (!id || id === 'unknown' || id === 'default') return '';
+  return id.slice(0, 80);
+}
+export function liveRequestTokens(result) {
+  const context = result?.active_context;
+  if (!context || context.source !== 'provider_prompt_tokens') return null;
+  const tokens = Number(context.tokens);
+  if (!Number.isFinite(tokens) || tokens < 0) return null;
+  return tokens;
+}
+export function toolsFromResult(result, existing) {
+  const have = Array.isArray(existing) ? existing.slice() : [];
+  const rows = [];
+  const calls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
+  for (const call of calls) {
+    if (!call || typeof call !== 'object') continue;
+    const presented = presentTool(call.tool, call.target);
+    const row = {
+      id: String(call.toolCallId || `${presented.action}:${presented.path}`),
+      ...presented,
+      status: typeof call.error === 'string' && call.error ? 'failed' : 'complete',
+      detail: String(call.detail || call.error || '').slice(0, 4000),
+      meta: '',
+    };
+    if (have.some(tool => tool.id === row.id || sameWork(tool, row))) continue;
+    if (have.length + rows.length >= 100) break;
+    rows.push(row);
+    have.push(row);
+  }
+  const verifier = result?.verifier_receipt;
+  const command = typeof verifier?.command === 'string' ? verifier.command.trim() : '';
+  if (command) {
+    const row = {
+      id: `verify:${command}`.slice(0, 300),
+      action: 'run',
+      path: command.slice(0, 500),
+      label: `run ${command}`.slice(0, 520),
+      status: verifier.exit_code === 0 ? 'complete' : Number.isInteger(verifier.exit_code) ? 'failed' : 'unverified',
+      detail: typeof verifier.summary === 'string' ? verifier.summary.slice(0, 4000) : '',
+      meta: Number.isInteger(verifier.exit_code) ? `exit ${verifier.exit_code}` : '',
+    };
+    if (!have.some(tool => tool.id === row.id || sameWork(tool, row)) && have.length + rows.length < 100) rows.push(row);
+  }
+  return rows;
+}
+export function verifiedStatus(status, poisoned) {
+  if (poisoned && status === 'complete') return 'unverified';
+  return status;
+}
 export function normalizeEvent(event) {
   if (!event || typeof event !== 'object') return {kind:'unknown'};
   if (event.type === 'assistant_chunk' && typeof event.chunk === 'string') return {kind:'delta',text:event.chunk};
@@ -53,7 +130,9 @@ export function normalizeEvent(event) {
     const presented = presentTool(item.tool, item.target);
     const failed = event.type === 'tool.failed' || (Number.isInteger(item.exit_code) && item.exit_code !== 0);
     const status = event.type === 'tool.started' ? 'running' : failed ? 'failed' : 'complete';
-    return {kind:'tool', id:String(item.id || `${presented.action}:${presented.path}`), action:presented.action, path:presented.path, label:presented.label, status, detail:typeof item.detail === 'string' ? item.detail : '', meta:status === 'running' ? 'running...' : ''};
+    const exitCode = Number.isInteger(item.exit_code) ? item.exit_code : null;
+    const meta = status === 'running' ? 'running...' : exitCode == null ? '' : `exit ${exitCode}`;
+    return {kind:'tool', id:String(item.id || `${presented.action}:${presented.path}`), action:presented.action, path:presented.path, label:presented.label, status, detail:typeof item.detail === 'string' ? item.detail : '', meta};
   }
   if (event.type === 'file.changed') {
     const item = event.item ?? {};

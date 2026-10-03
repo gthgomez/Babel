@@ -33,8 +33,8 @@ export async function listSavedChats(packageRoot, { limit = 30 } = {}) {
       const info = await stat(transcript);
       if (!info.isFile() || info.size > 8 * 1024 * 1024) continue;
       const messages = messagesFromTranscript(await readFile(transcript, 'utf8'));
-      const lastUser = [...messages].reverse().find(message => message.role === 'user');
-      const title = (lastUser?.text || 'Saved chat').replace(/\s+/g, ' ').trim().slice(0, 80);
+      const firstUser = messages.find(message => message.role === 'user');
+      const title = (firstUser?.text || 'Saved chat').replace(/\s+/g, ' ').trim().slice(0, 80);
       sessions.push({ id: name, title: title || 'Saved chat', mtimeMs: info.mtimeMs, messages: messages.length });
     } catch { /* A damaged session stays out of the list. */ }
   }

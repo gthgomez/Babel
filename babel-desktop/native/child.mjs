@@ -77,6 +77,11 @@ export class BabelChild {
     if (decision !== 'allow_once' && decision !== 'deny') return;
     this.#child.stdin.write(`${JSON.stringify({ decision })}\n`);
   }
+  whenIdle(callback) {
+    if (typeof callback !== 'function') return;
+    if (!this.#child) { callback(); return; }
+    this.#child.once('close', callback);
+  }
   cancel() {
     const child = this.#child;
     if (!child || child.desktopCancelling) return;

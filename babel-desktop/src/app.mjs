@@ -1,4 +1,4 @@
-import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, validPreview } from './core.mjs';
+import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, validPreview, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus } from './core.mjs';
 import { icon } from './icons.mjs';
 import { MODE_OPTIONS, MODEL_OPTIONS, TOOL_OPTIONS, FINDINGS, SOLUTIONS, PREVIEW_FILES, createReference, REFERENCE_PROMPT, REFERENCE_INTRO, REFERENCE_SUMMARY, REFERENCE_TOOLS } from './fixtures.mjs';
 
@@ -54,11 +54,12 @@ function renderTabs() {
 function renderControls() {
   renderTabs();
   $('#mode-controls').innerHTML = MODE_OPTIONS.map(m => `<button class="mode-option ${state.mode === m.id ? 'selected' : ''}" data-action="mode" data-mode="${m.id}" aria-pressed="${state.mode === m.id}" ${activeRun ? 'disabled' : ''}><span class="radio-dot"></span><span class="mode-name">${m.label}</span><span class="mode-description">${m.description}</span></button>`).join('');
-  const models = transport === 'preview' ? MODEL_OPTIONS : ['Babel configured model'];
+  const liveModelLabel = liveModel || 'Configured model';
+  const models = transport === 'preview' ? MODEL_OPTIONS : [liveModelLabel];
   $('#model-controls').innerHTML = models.map(m => `<button class="model-option ${(transport === 'live' || state.model === m) ? 'selected' : ''}" data-action="model" data-model="${e(m)}" aria-pressed="${transport === 'live' || state.model === m}" ${transport === 'live' ? 'disabled' : ''} title="${transport === 'preview' ? 'Reference model option; no provider is connected' : 'The existing Babel configuration owns model routing'}"><span class="radio-dot"></span>${e(m)}</button>`).join('');
   $('.more-models').hidden = transport === 'live';
   $('.preview-model-dot').style.background = transport === 'live' ? 'var(--muted)' : '';
-  $('#top-model').textContent = transport === 'preview' ? state.model : (liveModel || 'Babel default');
+  $('#top-model').textContent = transport === 'preview' ? state.model : liveModelLabel;
   $('#tool-controls').innerHTML = TOOL_OPTIONS.map(t => `<button class="tool-toggle" role="switch" aria-checked="${transport === 'preview' && tools[t]}" aria-label="${e(t)}${transport === 'preview' ? ' preview state' : ' controlled by Babel'}" data-action="tool" data-tool="${e(t)}" ${transport === 'live' ? 'disabled' : ''} title="${transport === 'preview' ? 'Visual preview only; this is not an execution permission' : 'Babel decides which tools run for this task'}"><span class="status-dot"></span><span>${e(t)}</span><span class="tool-on"><span class="status-dot"></span>${transport === 'live' ? 'CLI' : tools[t] ? 'On' : 'Off'}</span></button>`).join('');
   const percent = transport === 'preview' ? contextPercent(42318,112000) : null;
   $('#top-context').textContent = percent == null ? '—' : `${percent}%`;
@@ -66,7 +67,7 @@ function renderControls() {
   $('#context-fill').style.width = percent == null ? '0%' : `${percent}%`;
   $('#context-meter').setAttribute('aria-label', transport === 'preview' ? 'Reference context usage' : 'Context usage not reported by CLI');
   if (percent == null) $('#context-meter').removeAttribute('aria-valuenow'); else $('#context-meter').setAttribute('aria-valuenow',String(percent));
-  $('#token-count').textContent = transport === 'preview' ? '42,318 / 112,000 tokens' : (liveTokens == null ? 'Not reported by CLI' : `${Number(liveTokens).toLocaleString('en-US')} tokens`);
+  $('#token-count').textContent = transport === 'preview' ? '42,318 / 112,000 tokens' : (liveTokens == null ? 'Not reported by CLI' : `${Number(liveTokens).toLocaleString('en-US')} tokens in the latest request`);
   $('#preview-badge').textContent = transport === 'preview' ? 'REFERENCE PREVIEW' : 'BABEL CLI';
   renderStatus();
 }
@@ -78,7 +79,8 @@ function renderStatus(status) {
   $('#main-status-dot').className = `status-dot ${['failed','blocked'].includes(s) ? s : ''}`;
   $('.status-main').className = `status-main ${['failed','blocked'].includes(s) ? s : ''}`;
   const changedNote = transport === 'live' && changedFiles.length ? ` ${changedFiles.length} changed file${changedFiles.length === 1 ? '' : 's'}.` : '';
-  const detail = transport === 'preview' ? (s === 'running' ? 'Simulated stream · no provider call.' : s === 'failed' ? 'Example failure · no tools executed.' : s === 'cancelled' ? 'Preview stream stopped.' : 'Sample session · no engine connected.') : s === 'running' ? `Babel CLI is working on this task.${changedNote}` : s === 'unverified' ? 'Run ended; verification not established.' : s === 'failed' ? 'See the run details in the conversation.' : s === 'blocked' ? 'Babel is waiting for a decision.' : `Connected to the Babel CLI.${changedNote}`;
+  const liveRunning = activeRun?.stopping ? 'Stopping the Babel CLI.' : (messageHasWork(msg) ? `Babel CLI is working on this task.${changedNote}` : 'Starting the Babel CLI.');
+  const detail = transport === 'preview' ? (s === 'running' ? 'Simulated stream · no provider call.' : s === 'failed' ? 'Example failure · no tools executed.' : s === 'cancelled' ? 'Preview stream stopped.' : 'Sample session · no engine connected.') : s === 'running' ? liveRunning : s === 'unverified' ? 'Run ended; verification not established.' : s === 'failed' ? 'See the run details in the conversation.' : s === 'blocked' ? 'Babel is waiting for a decision.' : `Connected to the Babel CLI.${changedNote}`;
   $('#status-detail').textContent = detail;
   $('#send-button').disabled = Boolean(activeRun);
   $('#composer-input').disabled = Boolean(activeRun);
@@ -112,14 +114,25 @@ function card(title, symbol, items) {
 function referenceMarkup() {
   return `<article class="message user-message"><div class="message-label">YOU</div><div class="message-body message-text">${e(REFERENCE_PROMPT)}</div></article><article class="message assistant-message reference-answer"><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body"><div class="message-text">${e(REFERENCE_INTRO)}</div>${toolRows(REFERENCE_TOOLS)}<div class="message-text">${e(REFERENCE_SUMMARY)}</div>${card('KEY FINDINGS','info',FINDINGS)}${card('PROPOSED SOLUTION','wrench',SOLUTIONS)}<p class="closing-message">Would you like me to implement this now?</p></div></article>`;
 }
+function messageHasWork(message) {
+  if (!message) return false;
+  if (message.text) return true;
+  if (message.tools?.length) return true;
+  return Boolean(message.blocks?.some(block => block.kind === 'note' || (block.kind === 'text' && block.text) || block.kind === 'tool'));
+}
 function assistantBody(m) {
   const blocks = m.blocks?.length ? m.blocks : [{kind:'text',text:m.text||''},...(m.tools??[]).map(tool=>({kind:'tool',tool}))];
+  if (transport === 'live' && m.status === 'running' && !messageHasWork(m)) return '<div class="message-text starting">Starting Babel…</div>';
   const parts = [];
   let tools = [];
   const flush = () => { if (tools.length) { parts.push(toolRows(tools)); tools = []; } };
   blocks.forEach((block, index) => {
     if (block.kind === 'tool') { tools.push(block.tool); return; }
     flush();
+    if (block.kind === 'note') {
+      parts.push(`<details class="thought-note"><summary>Thinking</summary><pre class="tool-detail">${e(block.text)}</pre></details>`);
+      return;
+    }
     const caret = m.status === 'running' && index === blocks.length - 1 ? '<span class="stream-caret"></span>' : '';
     parts.push(`<div class="message-text">${e(block.text)}${caret}</div>`);
   });
@@ -129,8 +142,9 @@ function assistantBody(m) {
 function messageMarkup(m, index) {
   if (m.role === 'user') return `<article class="message user-message"><div class="message-label">YOU</div><div class="message-body message-text">${e(m.text)}</div></article>`;
   const approval = m.pendingApproval ? `<div class="approval-card"><p>${e(m.pendingApproval)}</p><div class="dialog-actions"><button class="button primary" data-action="approve-run">Allow</button><button class="button" data-action="deny-run">Deny</button></div></div>` : '';
+  const review = m.review?.reasons?.length ? card(m.review.title || 'REVIEW', 'info', m.review.reasons) : '';
   const evidence = m.result && ['failed','blocked','unverified'].includes(m.status) ? `<details class="raw-result"><summary>CLI result / evidence</summary><pre class="tool-detail">${e(JSON.stringify(m.result,null,2))}</pre></details>` : '';
-  return `<article class="message assistant-message"><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${transport === 'preview' ? 'PREVIEW · ' : ''}${e(({complete:'Response complete',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}">${icon('copy')} Copy</button></div></article>`;
+  return `<article class="message assistant-message"><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${review}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${transport === 'preview' ? 'PREVIEW · ' : ''}${e(({complete:'Response complete',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}">${icon('copy')} Copy</button></div></article>`;
 }
 function renderConversation(forceBottom = false, reset = false) {
   const scroller = $('#conversation');
@@ -226,19 +240,25 @@ function stopPreview() {
   if (!activeRun) return;
   if (transport === 'live') {
     native?.cancel?.();
+    activeRun.stopping = true;
+    activeRun.message.stopping = true;
     activeRun.message.pendingApproval = '';
-    settleTools(activeRun.message, 'cancelled');
-    activeRun.message.status = 'cancelled';
-    activeRun = null;
     renderConversation();
     renderControls();
-    announce('Babel run stopped.');
-    $('#composer-input').focus();
+    announce('Babel run stopping.');
     return;
   }
   clearInterval(activeRun.timer);
   activeRun.message.status='cancelled';activeRun=null;
   persist();renderConversation();renderControls();announce('Preview response stopped.');$('#composer-input').focus();
+}
+function appendNote(message, extra) {
+  const line = String(extra ?? '').slice(0, 4000);
+  if (!line) return;
+  message.blocks ??= [];
+  const note = [...message.blocks].reverse().find(block => block.kind === 'note');
+  if (note) note.text = `${note.text}\n${line}`.slice(0, 8000);
+  else message.blocks.push({kind:'note', text:line});
 }
 function appendLiveText(message, extra) {
   message.text = (message.text + extra).slice(0, 250000);
@@ -292,41 +312,60 @@ function handleNativeEvent(packet) {
   if(!activeRun||packet.runId!==activeRun.runId)return;
   const run=activeRun;const message=run.message;
   if(packet.kind==='exit') {
-    if(message.status==='running'){
-      if(packet.code!==0){message.status='failed';settleTools(message,'failed');appendLiveText(message,'\n\nThe CLI exited before Babel reported a result.');}
-      else if(run.transportError||packet.displayLimited){message.status='unverified';settleTools(message,'unverified');appendLiveText(message,'\n\nThe event stream was incomplete. Inspect Babel’s run evidence before trusting completion.');}
-      else{message.status='unverified';settleTools(message,'unverified');if(!message.text)appendLiveText(message,'The CLI exited without a terminal result.');}
+    const poisoned = Boolean(run.transportError || packet.displayLimited);
+    if(packet.code!==0){
+      if(message.status==='running' && !message.text) appendLiveText(message,'\n\nThe CLI exited before Babel reported a result.');
+      message.status='failed';
+      settleTools(message,'failed');
+    } else if(poisoned && (message.status==='running' || message.status==='complete')){
+      message.status='unverified';
+      settleTools(message,'unverified');
+      appendLiveText(message,'\n\nThe event stream was incomplete. Inspect Babel’s run evidence before trusting completion.');
+    } else if(message.status==='running' && run.stopping){
+      message.status='cancelled';
+      settleTools(message,'cancelled');
+    } else if(message.status==='running'){
+      message.status='unverified';
+      settleTools(message,'unverified');
+      if(!message.text)appendLiveText(message,'The CLI exited without a terminal result.');
     }
+    message.stopping=false;
     activeRun=null;
   } else if(packet.kind==='transport-error') {
-    run.transportError=true;appendLiveText(message,`\n\nTransport: ${String(packet.error).slice(0,4000)}`);message.status='failed';
+    run.transportError=true;appendLiveText(message,`\n\nTransport: ${String(packet.error).slice(0,4000)}`);
   } else if(packet.kind==='event') {
     const ev=normalizeEvent(packet.event);
     if (packet.event?.type === 'file.changed') {
       const item = packet.event.item ?? {};
       changedFiles = rememberChange(changedFiles, item.path, Number(item.additions), Number(item.deletions));
+      const row = absorbFileChange(message.tools, item);
+      if (row && !message.tools?.includes(row)) upsertLiveTool(message, row);
     }
     if(ev.kind==='delta')appendLiveText(message,ev.text);
-    else if(ev.kind==='thought'){const prior=message.tools?.find(item=>item.id==='thought');upsertLiveTool(message,{id:'thought',action:'note',path:'working',label:'note working',status:'running',meta:'thinking',detail:prior?`${prior.detail}\n${ev.text}`:ev.text});}
-    else if(ev.kind==='start'&&ev.model){liveModel=ev.model;}
-    else if(ev.kind==='progress'&&ev.text){upsertLiveTool(message,{id:'progress',action:'note',path:'working',label:'note working',status:'running',meta:'working',detail:ev.text});}
+    else if(ev.kind==='thought' || ev.kind==='progress') appendNote(message, ev.text);
+    else if(ev.kind==='start' && ev.model && ev.model !== 'default' && ev.model !== 'unknown'){liveModel=ev.model;}
     else if(ev.kind==='approval'){message.pendingApproval=ev.text;}
     else if(ev.kind==='terminal') {
       message.pendingApproval='';
-      message.status=ev.status;
-      settleTools(message, ev.status==='failed'||ev.status==='blocked'?'failed':ev.status==='cancelled'?'cancelled':'complete');
+      const status = verifiedStatus(ev.status, run.transportError);
+      message.status=status;
+      settleTools(message, status==='failed'||status==='blocked'?'failed':status==='cancelled'?'cancelled':'complete');
       if(!message.text&&ev.text)appendLiveText(message,ev.text.slice(0,250000));
       if(!message.text)appendLiveText(message,'Babel returned a structured result.');
       message.result=ev.raw;
+      message.review=reviewFromResult(ev.raw);
+      for (const row of toolsFromResult(ev.raw, message.tools)) upsertLiveTool(message, row);
       const resumed=sessionIdFromResult(ev.raw);
       if(resumed&&run.mode==='chat'){const owner=state.sessions.find(item=>item.id===run.sessionId);if(owner)owner.babelSessionId=resumed;}
-      const tokens=ev.usage?.totalTokens??ev.usage?.total_tokens;
-      if(Number.isFinite(tokens))liveTokens=tokens;
+      const reportedModel = liveModelFromResult(ev.raw);
+      if (reportedModel) liveModel = reportedModel;
+      const requestTokens = liveRequestTokens(ev.raw);
+      if (requestTokens != null) liveTokens = requestTokens;
       if (Array.isArray(ev.raw?.changed_files)) {
         for (const path of ev.raw.changed_files) changedFiles = rememberChange(changedFiles, path, null, null);
       }
       // Keep activeRun until the process exits; prevents overlapping children.
-    } else if(ev.kind==='tool') upsertLiveTool(message,ev);
+    } else if(ev.kind==='tool' && packet.event?.type !== 'file.changed') upsertLiveTool(message,ev);
   }
   if(state.activeId===run.sessionId)renderConversation();
   renderControls();

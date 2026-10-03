@@ -6,6 +6,14 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 const load = (name) => import(`../native/${name}.mjs`).catch(() => ({}));
 
+test('closing the window quits even while a run is busy',async()=>{
+ const {decideWindowClose,decideLastWindow,CLOSE_GRACE_MS}=await load('lifecycle');
+ assert.equal(decideWindowClose({busy:false,closing:false}),'close');
+ assert.equal(decideWindowClose({busy:true,closing:false}),'cancel-then-close');
+ assert.equal(decideWindowClose({busy:true,closing:true}),'close');
+ assert.equal(decideLastWindow(),'quit');
+ assert.equal(CLOSE_GRACE_MS>1500,true);
+});
 test('decoder preserves fragmented UTF-8 and fragmented JSON lines',async()=>{
  const {JsonlDecoder}=await load('stream');assert.equal(typeof JsonlDecoder,'function');
  const events=[],errors=[];const d=new JsonlDecoder(v=>events.push(v),v=>errors.push(v));
@@ -79,12 +87,13 @@ test('saved chats are read from Babel session transcripts only',async()=>{
  const session=join(root,'runs','chat-sessions','chat-abc123');
  await mkdir(session,{recursive:true});
  await mkdir(desktop);
- await writeFile(join(session,'transcript.jsonl'),'{"role":"user","content":"Fix the timeout"}\n{"role":"assistant","content":"I updated the controller."}\n');
+ await writeFile(join(session,'transcript.jsonl'),'{"role":"user","content":"Fix the timeout"}\n{"role":"assistant","content":"I updated the controller."}\n{"role":"user","content":"finish"}\n');
  await writeFile(join(root,'runs','chat-sessions','..bad','transcript.jsonl'),'{"role":"user","content":"no"}\n').catch(()=>{});
  const listed=await listSavedChats(desktop);
  assert.equal(listed.length,1);
  assert.equal(listed[0].id,'chat-abc123');
  assert.equal(listed[0].title,'Fix the timeout');
+ assert.equal(listed[0].title.includes('finish'),false);
  const opened=await readSavedChat(desktop,'chat-abc123');
  assert.equal(opened.messages[1].text,'I updated the controller.');
  await assert.rejects(()=>readSavedChat(desktop,'../chat-abc123'));

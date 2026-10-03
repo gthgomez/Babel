@@ -7,9 +7,12 @@ import {listDirectory,readProjectFile} from './workspace.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli} from './runtime.mjs';
 import {listSavedChats,readSavedChat} from './sessions.mjs';
+import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose} from './lifecycle.mjs';
 
 const packageRoot=dirname(dirname(fileURLToPath(import.meta.url)));
 let window=null;
+let closingWindow=false;
+let closeFinished=false;
 let preferences={cliEntry:null,projectRoot:null};
 let runner=null;
 let runAdmission=false;
@@ -123,9 +126,27 @@ function createWindow(){
   window.webContents.on('will-navigate',event=>event.preventDefault());
   window.webContents.on('will-attach-webview',event=>event.preventDefault());
   window.on('ready-to-show',()=>window.show());
-  window.on('close',()=>{runner?.cancel();});
+  window.on('close',event=>{
+    const decision=decideWindowClose({busy:busy(),closing:closingWindow});
+    if(decision==='cancel-then-close'){
+      event.preventDefault();
+      closingWindow=true;
+      runner?.cancel();
+      const timer=setTimeout(finishClosingWindow,CLOSE_GRACE_MS);
+      if(runner?.busy) runner.whenIdle(()=>{clearTimeout(timer);finishClosingWindow();});
+      else {clearTimeout(timer);finishClosingWindow();}
+      return;
+    }
+    runner?.cancel();
+  });
   window.on('closed',()=>{window=null;});
   window.loadURL(APP_URL);
 }
+function finishClosingWindow(){
+  if(closeFinished)return;
+  closeFinished=true;
+  if(window&&!window.isDestroyed())window.destroy();
+  app.quit();
+}
 app.on('before-quit',()=>{runner?.cancel();});
-app.on('window-all-closed',()=>{if(!busy())app.quit();});
+app.on('window-all-closed',()=>{if(decideLastWindow()==='quit')app.quit();});

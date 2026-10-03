@@ -1334,6 +1334,17 @@ export function buildChatRunPayload(
     };
   }
 
+  if (result.activeContext && typeof result.activeContext.modelId === 'string') {
+    const source = result.activeContext.source;
+    if (source === 'provider_prompt_tokens' || source === 'estimated' || source === 'unknown') {
+      payload['active_context'] = {
+        tokens: result.activeContext.tokens,
+        model_id: result.activeContext.modelId,
+        source,
+      };
+    }
+  }
+
   // Honest budget-kill classification for harness failure_class mapping.
   // user_status stays within UserFacingStatus via outcome (failed); keep
   // budget_exceeded as a dedicated machine flag, not a user_status string.

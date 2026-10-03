@@ -52,6 +52,25 @@ test('assistant stream and error events are normalized without prose parsing', a
   assert.equal(again[0].additions, 5);
   assert.equal(rememberChange([], '../secret', 1, 0).length, 0);
   assert.equal(rememberChange([], 'C:/Windows/notepad.exe', 1, 0).length, 0);
+  const {absorbFileChange,reviewFromResult,liveModelFromResult,liveRequestTokens,toolsFromResult,verifiedStatus}=await load();
+  const edit=absorbFileChange([{id:'t1',action:'edit',path:'src/app.ts',status:'running',meta:''}],{path:'src/app.ts',additions:4,deletions:1});
+  assert.equal(edit.meta,'+4 -1');
+  assert.equal(edit.status,'complete');
+  assert.equal(absorbFileChange([],{path:'../secret',additions:1,deletions:0}),null);
+  assert.equal(reviewFromResult({answer:{facts:['parsed prose']}}),null);
+  assert.deepEqual(reviewFromResult({critic_receipt:{verdict:'reject',reasons:['wrong file']}}).reasons,['wrong file']);
+  assert.equal(liveModelFromResult({active_context:{model_id:'default',source:'estimated'}}),'');
+  assert.equal(liveModelFromResult({active_context:{model_id:'deepseek/deepseek-v4-flash',source:'provider_prompt_tokens'}}),'deepseek/deepseek-v4-flash');
+  assert.equal(liveRequestTokens({usage:{totalTokens:99}}),null);
+  assert.equal(liveRequestTokens({active_context:{tokens:812,source:'provider_prompt_tokens'}}),812);
+  const backfill=toolsFromResult({toolCalls:[{tool:'file_read',target:'README.md'}],verifier_receipt:{command:'npm test',exit_code:0}},[{id:'have',action:'read',path:'README.md',status:'complete'}]);
+  assert.equal(backfill.length,1);
+  assert.equal(backfill[0].action,'run');
+  assert.equal(backfill[0].path,'npm test');
+  assert.equal(verifiedStatus('complete',true),'unverified');
+  assert.equal(verifiedStatus('no_change',true),'no_change');
+  assert.equal(normalizeEvent({type:'tool.completed',item:{id:'t1',tool:'file_read',target:'README.md',exit_code:0}}).meta,'exit 0');
+  assert.equal(normalizeEvent({type:'thought',line:'looking'}).kind,'thought');
 });
 test('preview storage schema rejects malformed history', async () => {
   const { validPreview } = await load();
