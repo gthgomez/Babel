@@ -157,8 +157,8 @@ reset/remote-main rewrite this way.
   lazy-load heavy dependencies; justify caches.
 - Honesty: configured != healthy; historical != current; missing cost != zero;
   missing proof != success. Verify superlatives/pre-existing failures
-  with relevant base/control or equivalent evidence; prove isolation/architecture
-  claims. Update topology/index facts; preserve budgets/baselines/allowlists.
+  with relevant base/control or equivalent evidence; cite observed evidence for
+  isolation/architecture claims. Update topology/index facts; keep budgets/baselines/allowlists.
   Back lessons in task/PR handoff or this owner; no duplicate plans/public private
   incidents. Visuals: show 3-4 named variants together; obtain
   selection before integration unless specified.
