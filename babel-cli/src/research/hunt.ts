@@ -24,6 +24,7 @@ import {
   type RateBudgetSnapshot,
 } from './rateBudget.js';
 import { buildQueryPlan, extractProblemTerms } from './queryPlanner.js';
+import { runDeepAnalysis, keywordReaderStrategy, type ReaderStrategy, type DeepAnalysisResult } from './analysis/deepAnalysis.js';
 import {
   appendJsonl,
   initializeResearchRun,
@@ -35,6 +36,10 @@ import type { ResearchMissionV1 } from './contracts.js';
 export interface HuntOptions {
   runsRoot?: string;
   now?: Date;
+  /** Reader strategy for the deep-read pool; defaults to the deterministic keyword reader. */
+  readerStrategy?: ReaderStrategy;
+  /** Skip the Slice C deep-analysis stage (discovery-only runs). */
+  skipDeepAnalysis?: boolean;
 }
 
 export type HuntStatus = 'COMPLETE' | 'INCOMPLETE' | 'PAUSED';
@@ -65,6 +70,7 @@ export interface HuntResult {
   shortlist: Array<{ candidate: CandidateRecordV1; breakdown: TriageScoreBreakdown }>;
   metrics: HuntMetrics;
   budget: RateBudgetSnapshot | null;
+  deep: DeepAnalysisResult | null;
 }
 
 /** Infer target languages from the project root (package.json today; more later). */
@@ -142,6 +148,20 @@ export async function runHuntDiscovery(
   for (const { breakdown } of ranked) appendJsonl(paths.scoreBreakdownJsonl, breakdown);
   const shortlist = selectDiverseShortlist(ranked, { limit: mission.budget.max_enriched_candidates });
 
+  let deep: DeepAnalysisResult | null = null;
+  if (!options.skipDeepAnalysis && shortlist.length > 0) {
+    deep = await runDeepAnalysis(
+      mission,
+      provider,
+      shortlist.map((s) => s.candidate),
+      paths,
+      {
+        strategy: options.readerStrategy ?? keywordReaderStrategy,
+        ...(options.now ? { now: options.now } : {}),
+      },
+    );
+  }
+
   const metrics: HuntMetrics = {
     candidate_count: pagesByHypothesis.reduce((sum, p) => sum + p.entries.length, 0),
     candidate_count_after_dedup: candidates.length,
@@ -156,9 +176,18 @@ export async function runHuntDiscovery(
     status,
     reason,
     budget: budgetSnapshot,
+    deep_analysis: deep
+      ? {
+          deep_read_count: deep.snapshots.length,
+          patterns_proposed: deep.patterns.length,
+          patterns_source_confirmed: deep.patterns.filter((p) => p.evidence_state === 'SOURCE_CONFIRMED').length,
+          invalid_evidence_refs: deep.invalidEvidenceCount,
+          rejected_evidence_ids: deep.rejectionCount,
+        }
+      : null,
   });
 
-  return { status, reason, paths, candidates, shortlist, metrics, budget: budgetSnapshot };
+  return { status, reason, paths, candidates, shortlist, metrics, budget: budgetSnapshot, deep };
 }
 
 function problemTermsForTriage(mission: ResearchMissionV1): string[] {

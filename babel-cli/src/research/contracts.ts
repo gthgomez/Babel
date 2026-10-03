@@ -391,6 +391,78 @@ export interface RepositoryResearchProvider {
 }
 
 // ---------------------------------------------------------------------------
+// SnapshotManifestV1 (Slice C)
+// ---------------------------------------------------------------------------
+
+/** One fetched file inside an immutable repository snapshot. */
+export const SnapshotFileEntrySchema = z
+  .object({
+    path: z.string().min(1),
+    blob_sha: z.string().nullable(),
+    content_hash: z.string().min(1),
+    size_bytes: z.number().int().nonnegative(),
+    /** Why this file was selected (manifest | license | docs | term_match | test). */
+    selection_reason: z.string().min(1),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type SnapshotFileEntry = z.infer<typeof SnapshotFileEntrySchema>;
+
+export const SnapshotManifestV1Schema = z
+  .object({
+    schema_version: z.literal(1).default(1),
+    snapshot_id: z.string().min(1),
+    mission_id: z.string().min(1),
+    repository_id: z.string().min(1),
+    repository_full_name: z.string().min(1),
+    /** Resolved and recorded before any evidence collection. */
+    commit_sha: z.string().regex(/^[0-9a-f]{40}$/),
+    created_at: z.string().min(1),
+    tree_truncated: z.boolean(),
+    files: z.array(SnapshotFileEntrySchema),
+    total_bytes: z.number().int().nonnegative(),
+    byte_budget: z.number().int().nonnegative(),
+    budget_exhausted: z.boolean(),
+  })
+  .strict();
+export type SnapshotManifestV1 = z.infer<typeof SnapshotManifestV1Schema>;
+
+// ---------------------------------------------------------------------------
+// RepoReaderReportV1 (Slice C) — the only channel out of quarantine
+// ---------------------------------------------------------------------------
+
+export const ReaderObservationSchema = z
+  .object({
+    claim: z.string().min(1),
+    evidence_ref_ids: z.array(z.string()),
+    kind: z.enum(['source_observed', 'inferred', 'local_hypothesis']),
+  })
+  .strict();
+export type ReaderObservation = z.infer<typeof ReaderObservationSchema>;
+
+export const ReaderPatternSchema = z
+  .object({
+    name: z.string().min(1),
+    mechanism: z.string().min(1),
+    tradeoffs: z.array(z.string()),
+  })
+  .strict();
+export type ReaderPattern = z.infer<typeof ReaderPatternSchema>;
+
+export const RepoReaderReportV1Schema = z
+  .object({
+    schema_version: z.literal(1).default(1),
+    repository: z.string().min(1),
+    commit_sha: z.string().regex(/^[0-9a-f]{40}$/),
+    problem_match: z.string(),
+    observations: z.array(ReaderObservationSchema),
+    patterns: z.array(ReaderPatternSchema),
+    missing_evidence: z.array(z.string()),
+  })
+  .strict();
+export type RepoReaderReportV1 = z.infer<typeof RepoReaderReportV1Schema>;
+
+// ---------------------------------------------------------------------------
 // Serialization helpers
 // ---------------------------------------------------------------------------
 
