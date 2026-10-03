@@ -25,6 +25,11 @@ import {
 } from './rateBudget.js';
 import { buildQueryPlan, extractProblemTerms } from './queryPlanner.js';
 import { runDeepAnalysis, keywordReaderStrategy, type ReaderStrategy, type DeepAnalysisResult } from './analysis/deepAnalysis.js';
+import { analyzeApplicability, type ApplicabilityFinding } from './analysis/applicability.js';
+import { buildExperimentProposal, NotFalsifiableError } from './reporting/experiments.js';
+import { reviewPatternCard } from './reporting/review.js';
+import { writeReportArtifacts } from './reporting/report.js';
+import type { ExperimentProposalV1, ResearchReviewV1 } from './contracts.js';
 import {
   appendJsonl,
   initializeResearchRun,
@@ -71,6 +76,9 @@ export interface HuntResult {
   metrics: HuntMetrics;
   budget: RateBudgetSnapshot | null;
   deep: DeepAnalysisResult | null;
+  findings: Array<{ patternId: string; finding: ApplicabilityFinding }>;
+  proposals: ExperimentProposalV1[];
+  reviews: ResearchReviewV1[];
 }
 
 /** Infer target languages from the project root (package.json today; more later). */
@@ -149,6 +157,9 @@ export async function runHuntDiscovery(
   const shortlist = selectDiverseShortlist(ranked, { limit: mission.budget.max_enriched_candidates });
 
   let deep: DeepAnalysisResult | null = null;
+  const findings: Array<{ patternId: string; finding: ApplicabilityFinding }> = [];
+  const proposals: ExperimentProposalV1[] = [];
+  const reviews: ResearchReviewV1[] = [];
   if (!options.skipDeepAnalysis && shortlist.length > 0) {
     deep = await runDeepAnalysis(
       mission,
@@ -160,6 +171,57 @@ export async function runHuntDiscovery(
         ...(options.now ? { now: options.now } : {}),
       },
     );
+
+    // Slice D: local applicability (source-confirmed cards only, HEAD-bound),
+    // falsifiable experiment proposals, independent research review, report.
+    for (const card of deep.patterns) {
+      if (card.evidence_state !== 'SOURCE_CONFIRMED') continue;
+      const sourceSession = deep.sessions.find(
+        (s) => s.candidate.identity.provider_repo_id === card.sources[0]?.repository_id,
+      );
+      const reportText = sourceSession
+        ? [
+            sourceSession.finished.report.problem_match,
+            ...sourceSession.finished.report.observations.map((o) => o.claim),
+            ...sourceSession.finished.report.patterns.map((p) => `${p.name}: ${p.mechanism}`),
+          ].join('\n')
+        : '';
+      const finding = analyzeApplicability(mission, card, {
+        ...(options.now ? { now: options.now } : {}),
+        reportText,
+      });
+      findings.push({ patternId: card.pattern_id, finding });
+      card.applicability = {
+        target_head_sha: finding.head_sha,
+        local_evidence_refs: [
+          ...finding.attach_points.map((a) => a.local_ref_id),
+          ...finding.existing_mechanisms.map((m) => m.local_ref_id),
+        ],
+        hypothesis: finding.smallest_experiment,
+        integration_risks: finding.conflicts,
+      };
+      try {
+        proposals.push(buildExperimentProposal({ mission, card, finding, now: options.now ?? new Date() }));
+      } catch (error) {
+        if (!(error instanceof NotFalsifiableError)) throw error;
+      }
+      reviews.push(
+        reviewPatternCard({
+          mission,
+          card,
+          evidenceRefs: deep.sessions.find(
+            (s) => s.finished.report.patterns.length >= 0 && s.candidate.identity.observed_full_name === card.sources[0]!.repository_id,
+          )?.finished.evidenceRefs ?? deep.sessions[0]?.finished.evidenceRefs ?? [],
+          validEvidenceIds: new Set(
+            deep.sessions.flatMap((s) => s.finished.evidenceRefs.map((r) => r.evidence_id)),
+          ),
+          snapshot: deep.snapshots.find((snap) => snap.manifest.repository_id === card.sources[0]!.repository_id)!.manifest,
+          finding,
+          currentTargetHeadSha: mission.target.head_sha,
+          now: options.now ?? new Date(),
+        }),
+      );
+    }
   }
 
   const metrics: HuntMetrics = {
@@ -187,7 +249,23 @@ export async function runHuntDiscovery(
       : null,
   });
 
-  return { status, reason, paths, candidates, shortlist, metrics, budget: budgetSnapshot, deep };
+  if (deep) {
+    writeReportArtifacts({
+      mission,
+      status,
+      reason,
+      candidates,
+      shortlistCount: shortlist.length,
+      deep,
+      findings,
+      proposals,
+      reviews,
+      paths,
+      budget: budgetSnapshot,
+    });
+  }
+
+  return { status, reason, paths, candidates, shortlist, metrics, budget: budgetSnapshot, deep, findings, proposals, reviews };
 }
 
 function problemTermsForTriage(mission: ResearchMissionV1): string[] {
