@@ -340,7 +340,9 @@ try {
     Assert-AgentTest ($draftMergeRun.exitCode -eq 1 -and -not $draftMerge.mergeReady -and (Test-Path -LiteralPath $checkReadLog)) 'non-audit draft gate must retain full checks and still block'
   } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
 
-  foreach ($auditArgs in @(@(), @('-AuditOnly'))) {
+  foreach ($auditMode in @($false, $true)) {
+    $auditArgs = @()
+    if ($auditMode) { $auditArgs = @('-AuditOnly') }
     foreach ($case in @(
       @{ Text = $fakeGhHealthy.Replace('"conclusion":"success"', '"conclusion":"failure"'); Blocker = 'required_checks_not_green' },
       @{ Text = $fakeGhHealthy.Replace('"id":15368', '"id":99999'); Blocker = 'required_checks_not_green' },

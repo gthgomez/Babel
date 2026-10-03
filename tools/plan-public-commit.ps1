@@ -50,7 +50,7 @@ function Get-Disposition {
     return 'exclude'
   }
 
-  if ($normalized -match '^\.agents/(rules/05-github-workflow\.md|skills/(branch-stack|bv|catalog-validate-all|ci-dry-run|ci-triage|ratchet-preflight|ship|task-helper)/)') {
+  if ($normalized -match '^(AGENTS\.md$|\.agents/skills/(branch-stack|bv|catalog-validate-all|ci-dry-run|ci-triage|ratchet-preflight|ship|task-helper)/)') {
     return 'ship'
   }
 

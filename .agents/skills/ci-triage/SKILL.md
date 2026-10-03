@@ -11,7 +11,10 @@ description: >
 
 Diagnose PR / workflow check status with class labels and next actions.
 
-Contract: the configured workspace `ci-triage.ps1` helper.
+Technical reference only; [AGENTS.md](../../../AGENTS.md) owns contributor policy.
+`ci-triage.ps1` is an optional configured-workspace helper, not shipped by Babel.
+Check its installed version/configuration before use; `gh pr checks` and
+`gh run view` provide direct diagnostics when absent.
 
 ## Triggers
 
@@ -49,7 +52,7 @@ pwsh -File <workspace-tools>/ci-triage.ps1 -RunId 29532798599 -Logs
 
 | Tool | Hook |
 |------|------|
-| `ship-slice` | After draft PR, invoke `ci-triage -Pr N` instead of raw `gh pr checks` only |
+| `ship-slice` | Optional status classification after a draft PR |
 | `/handoff-repro` | Session continuity for product work; ci-triage for GitHub status |
 | Self-hosted CI | `billing` / `infra` classes point at runner start + billing settings |
 

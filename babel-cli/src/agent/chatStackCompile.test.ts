@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 import {
@@ -331,9 +332,10 @@ describe("compileChatStack shape invariants", () => {
 
 describe("compileChatStack with real project root", () => {
   it("loads identity from AGENTS.md when present in project root", () => {
-    // Use the real repo root which has AGENTS.md
+    // Bind the repository explicitly: package test runners start in babel-cli.
+    const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
     const stack = compileChatStack({
-      projectRoot: process.cwd(),
+      projectRoot: repoRoot,
       task: "fix a bug",
       promptBudgetChars: 12_000,
     });
@@ -342,9 +344,8 @@ describe("compileChatStack with real project root", () => {
     assert.ok(identity, "must have identity entry");
     // When AGENTS.md exists, it should be loaded from repo root
     assert.ok(
-      identity!.path.includes("AGENTS.md") ||
-        identity!.path.includes("CLAUDE.md"),
-      `identity path should be AGENTS.md or CLAUDE.md, got: ${identity!.path}`,
+      identity!.path === join(repoRoot, "AGENTS.md"),
+      `identity path should be the canonical root AGENTS.md, got: ${identity!.path}`,
     );
     assert.ok(identity!.contentPreview, "identity should have content preview");
   });

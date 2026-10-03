@@ -45,7 +45,7 @@ $required = @(
   'docs/architecture/HARNESS_ARCHITECTURE_V1.md',
   'docs/architecture/HARNESS_OVERVIEW.md',
   'docs/adr/ADR-012-canonical-harness-architecture-v1.md',
-  'babel-cli/CLAUDE.md',
+  'AGENTS.md',
   'babel-cli/src/executor/architectureConformance.test.ts',
   'babel-cli/src/executor/contracts.ts',
   'babel-cli/src/executor/kernel.ts',
@@ -122,7 +122,7 @@ foreach ($indexRel in @('docs/architecture/README.md', 'docs/README.md')) {
 }
 
 # ── Startup pointers ────────────────────────────────────────────────────────
-foreach ($startRel in @('CLAUDE.md', 'babel-cli/CLAUDE.md', 'babel-cli/PROJECT_CONTEXT.md', 'babel-cli/AGENTS.md')) {
+foreach ($startRel in @('AGENTS.md', 'babel-cli/PROJECT_CONTEXT.md')) {
   if (-not (Test-RepoFile $startRel)) {
     Add-Fail "Missing startup file: $startRel"
     continue
@@ -133,9 +133,16 @@ foreach ($startRel in @('CLAUDE.md', 'babel-cli/CLAUDE.md', 'babel-cli/PROJECT_C
   }
 }
 
-# Root CLAUDE historically claimed babel-cli/CLAUDE.md — ensure it exists
-if (-not (Test-RepoFile 'babel-cli/CLAUDE.md')) {
-  Add-Fail 'babel-cli/CLAUDE.md missing (root CLAUDE.md package authority)'
+# Contributor instruction discovery has one owner; deleted host/rule entrypoints
+# cannot silently become required again. Technical product assets stay separate.
+$trackedPaths = @(& git -C $RepoRoot ls-files --cached --others --exclude-standard)
+if ($LASTEXITCODE -ne 0) { Add-Fail 'Cannot inventory contributor instruction paths' }
+foreach ($entry in $trackedPaths) {
+  if (-not (Test-RepoFile $entry)) { continue }
+  if (($entry -match '(^|/)(AGENTS|CLAUDE|GEMINI|ENGINEERING)\.md$' -and $entry -cne 'AGENTS.md') -or
+      $entry -match '^\.agents/rules/.*\.md$') {
+    Add-Fail "Competing contributor instruction entrypoint: $entry"
+  }
 }
 
 # ── Source map ──────────────────────────────────────────────────────────────

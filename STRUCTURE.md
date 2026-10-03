@@ -8,13 +8,11 @@ is optional and must not become a repository prerequisite.
 
 ## Startup chain and agent rules
 
-- `AGENTS.md` - agent identity, values, and startup for coding agents
-- `CLAUDE.md` - project invariants, high-risk zones, special rules, common task paths
-- `ENGINEERING.md` - coding standards agents follow
+- `AGENTS.md` - sole contributor operating-policy owner and task-specific reference map
 - `PROJECT_CONTEXT.md` - system topology, contracts, and runtime state
 - `START_HERE.md` - first deterministic success path
 - `INTEGRATION.md` - Babel invocation sequence for control-plane work
-- `.agents/` - contributor agent rules (`rules/05`–`09`) and skills
+- `.agents/skills/` - specialized tool references; contributor policy stays in `AGENTS.md`
 
 ## Prompt operating system
 
@@ -33,7 +31,7 @@ is optional and must not become a repository prerequisite.
 
 ## Runtime, code, and validation
 
-- `babel-cli/` - Node.js CLI runtime (has its own `AGENTS.md` and `PROJECT_CONTEXT.md` router)
+- `babel-cli/` - Node.js CLI runtime (implementation reference: `babel-cli/PROJECT_CONTEXT.md`)
 - `scripts/` - agent git/PR gate helpers, evidence receipts, and trust-root ceremony scripts
 - `skills/` - installable agent skills
 - `tests/` - test suites

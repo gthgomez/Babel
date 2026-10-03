@@ -14,16 +14,9 @@ description: >-
 
 # /babel-pr-review
 
-Operational entrypoint for independent pull request and branch review. Follow
-[Independent Review Routing](../../rules/10-independent-review-policy.md),
-[Babel PR Review](../../../docs/BABEL_PR_REVIEW.md), and the
-[GitHub workflow](../../rules/05-github-workflow.md).
-
-Freeze the exact base and head, inspect the complete diff, and use a separate
-reviewer execution when available. Any harness or model may provide that review;
-the same model in a separate execution is acceptable. Record the reviewed SHA,
-findings, unresolved issues, and limitations in a normal PR comment or native
-GitHub review. Repair findings and review the resulting head again.
+Technical reference for optional Babel PR tooling. Contributor review and merge
+policy is owned only by [AGENTS.md](../../../AGENTS.md#independent-review-and-merge).
+[Babel PR Review](../../../docs/BABEL_PR_REVIEW.md) describes the evidence surfaces.
 
 Custom Babel certification and receipts are optional advisory tooling. They do
 not replace independent review, the base-rooted gate, required CI, live GitHub

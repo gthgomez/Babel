@@ -229,7 +229,8 @@ Hosts may load a **project-local** skill instead of the user-global one.
 | Loaded skill is legacy (auto-resume every session, dump-only, inherited repro) | Follow **this** contract anyway; warn only if that conflict is live |
 | Both exist | Prefer this contract |
 
-Project-local copies must be a **junction** to `~/.claude/skills/handoff-resume` or a full current tree — never the pre-v1 auto-resume skill.
+This repository ships its reference schema locally; no user-global host skill
+or junction is required. Contributor policy remains in root AGENTS.md.
 
 ## Integration
 

@@ -190,7 +190,7 @@ PR, and they are fixed without weakening any check:
 
 ## Review tiers for ordinary (non-trust-root) PRs
 
-Per `.agents/rules/10-independent-review-policy.md`, ordinary PRs satisfy
+Per `AGENTS.md` §Independent review and merge, ordinary PRs satisfy
 independent review with either:
 
 - **CERTIFIED** — a signed `independent_review_receipt_v1` bound to a

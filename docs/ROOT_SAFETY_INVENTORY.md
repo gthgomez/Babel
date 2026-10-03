@@ -63,9 +63,7 @@ Dotfiles (`.gitignore`, `.gitattributes`, `.rgignore`) are **KEEP** operational 
 | `CODE_OF_CONDUCT.md` | **KEEP** | Community standard. |
 | `SECURITY.md` | **KEEP** | Security reporting. |
 | `AGENTS.md` | **DO-NOT-TOUCH** | Agent instruction / startup surface. |
-| `CLAUDE.md` | **DO-NOT-TOUCH** | Agent instruction / project invariants. |
-| `GEMINI.md` | **DO-NOT-TOUCH** | Agent instruction surface. |
-| `ENGINEERING.md` | **DOCUMENT** | Coding standards for agents/contributors. |
+| Host adapters and separate engineering instructions | **REMOVED** | Contributor policy consolidated into `AGENTS.md`; historical classifications above do not reintroduce those entrypoints. |
 | `PROJECT_CONTEXT.md` | **DOCUMENT** | Topology / contracts context for agents. |
 | `INTEGRATION.md` | **DOCUMENT** | Model/integration invocation contract. |
 | `STRUCTURE.md` | **DOCUMENT** | Human-oriented tree map (companion to this inventory). |
