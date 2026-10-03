@@ -315,6 +315,45 @@ try {
     Assert-AgentTest ($failedCiRun.exitCode -eq 1 -and $failedCi.status -eq 'BLOCKED') 'failed required CI remains blocking without custom evidence'
     Assert-AgentTest (-not [bool]$failedCi.checks.REQUIRED_CHECKS_GREEN) 'failed CI cannot be reported green'
   } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
+  # A draft audit must never read peer check runs, even when they happen to be
+  # green. Keep the fake API observable so a false PASS or polling regression
+  # fails without waiting for the production timeout.
+  $checkReadLog = Join-Path $tempRoot 'check-reads.txt'
+  $draftGh = $fakeGhHealthy.Replace('"isDraft":false', '"isDraft":true')
+  $draftGh = $draftGh.Replace("Write-Output '$checkJson'", "Add-Content -LiteralPath '$($checkReadLog -replace "'", "''")' -Value 'read'; Write-Output '$checkJson'")
+  try {
+    $draftGh | Set-Content -LiteralPath $fakeGh -Encoding utf8
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $draftRun = Invoke-TestScript -Script $prGateScript -Arguments ($gateArguments + @('-AuditOnly'))
+    $clock.Stop()
+    $draft = $draftRun.text | ConvertFrom-Json
+    Assert-AgentTest ($draftRun.exitCode -eq 1 -and $draft.status -eq 'BLOCKED' -and -not $draft.mergeReady) 'draft audit must return BLOCKED'
+    Assert-AgentTest (@($draft.blockers) -contains 'pr_is_draft') 'draft audit must explain the draft blocker'
+    Assert-AgentTest (-not (Test-Path -LiteralPath $checkReadLog)) 'draft audit must not poll or read check runs'
+    Assert-AgentTest (@($draft.requiredChecks).Count -eq 0 -and $null -eq $draft.sha.ciHead) 'unobserved checks must not be reported PASS or bound to CI'
+    Assert-AgentTest (-not ($draft.checks.PSObject.Properties.Name -contains 'REQUIRED_CHECKS_READY')) 'draft audit must not invent readiness'
+    Assert-AgentTest (@($draft.blockers) -notcontains 'required_check_wait_timeout') 'draft audit must not invent a timeout'
+    Assert-AgentTest ($draft.checks.PR_HEAD_REVIEWED -and $draft.checks.REMOTE_HEAD_MATCH -and $draft.checks.BASE_NOT_INVALIDATED) 'draft audit must first bind authoritative metadata and heads'
+    Write-Output ("draft-audit elapsed: {0:N3}s; peer check reads: 0" -f $clock.Elapsed.TotalSeconds)
+    $draftMergeRun = Invoke-TestScript -Script $prGateScript -Arguments $gateArguments
+    $draftMerge = $draftMergeRun.text | ConvertFrom-Json
+    Assert-AgentTest ($draftMergeRun.exitCode -eq 1 -and -not $draftMerge.mergeReady -and (Test-Path -LiteralPath $checkReadLog)) 'non-audit draft gate must retain full checks and still block'
+  } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
+
+  foreach ($auditArgs in @(@(), @('-AuditOnly'))) {
+    foreach ($case in @(
+      @{ Text = $fakeGhHealthy.Replace('"conclusion":"success"', '"conclusion":"failure"'); Blocker = 'required_checks_not_green' },
+      @{ Text = $fakeGhHealthy.Replace('"id":15368', '"id":99999'); Blocker = 'required_checks_not_green' },
+      @{ Text = $fakeGhHealthy.Replace('"baseRefOid":"' + $mainSha + '"', '"baseRefOid":"' + $headSha + '"'); Blocker = 'pr_base_sha_is_stale' }
+    )) {
+      try {
+        $case.Text | Set-Content -LiteralPath $fakeGh -Encoding utf8
+        $caseRun = Invoke-TestScript -Script $prGateScript -Arguments ($gateArguments + $auditArgs)
+        $caseResult = $caseRun.text | ConvertFrom-Json
+        Assert-AgentTest ($caseRun.exitCode -eq 1 -and -not $caseResult.mergeReady -and @($caseResult.blockers) -contains $case.Blocker) "audit/merge must retain $($case.Blocker)"
+      } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
+    }
+  }
   $malformedPath = Join-Path $tempRoot 'malformed-review.json'
   '{malformed' | Set-Content -LiteralPath $malformedPath -Encoding utf8
   $malformedRun = Invoke-TestScript -Script $prGateScript -Arguments ($gateArguments + @('-AutonomousReviewEvidencePath', $malformedPath))

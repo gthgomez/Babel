@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "82b2c907db836af3208de7d1d627c4c3ce17a1e83ef0aa556983770c36432645",
+  "policy_bundle_id": "3357a062c9ca3cb2dcf7d97bc29ee0853dfffc503c63ac67c567738e86f7344c",
   "files": {
     ".agents/rules/10-independent-review-policy.md": "e7bfbfe7cc15d8e84d8399c38dd017e87ca77bdaae60a232fb5e961a54e63d57",
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
@@ -119,7 +119,7 @@
     "docs/guides/AGENT_GIT_OPERATIONS.md": "05e4a76f03b8a1ff9753d595da6c07b2790856cfddd0b4ddbff8703db939d95b",
     "scripts/agent-git-common.psm1": "c3b28e605eabf4105af236bc5dc5b664a31b644834c302df11712a3d66767cff",
     "scripts/agent-pr-gate-common.psm1": "37b1afbe8e0b227228d416e853a6ec1f469e69e371f325416774f50d5acdbffc",
-    "scripts/agent-pr-gate.ps1": "71adc6258d250f94d6b7158dc3d8cfa489ce2cf50a9bfc3328e4b597d947293e",
+    "scripts/agent-pr-gate.ps1": "e71d64942c4ff4988ad752c6c2be63f98dc60fc8cb1e06c8228d4e9a50afb68e",
     "scripts/agent-pr-merge.ps1": "f54c8486fd6d388c787ff731a0f3b2db2d3398c8bc1e78bb14499206be0a217f",
     "scripts/agent-review-evidence.ps1": "de3ba52ffb6d1307d40f41727c8ed86c40d10dbd4bcb7b6441ff244c18210e8b",
     "scripts/materialize-independent-review-receipt.ps1": "0f7def159b62359ccc44d4392635b56c854d3c57fea60d440b21fe9e5277dcb6",
