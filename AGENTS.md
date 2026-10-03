@@ -127,11 +127,16 @@ separately cleared. Never reset an open PR head or rewrite remote main this way.
 
 ## Delivery and verification
 
-1. Run `pwsh scripts/agent-preflight.ps1` before mutation/staging; inspect failures
-   and pause only affected operations. Use explicit `-GitPath`/`-GhPath` if needed
-   on the host. Preserve Git/auth/state checks; use noninteractive Git/gh settings.
+1. Establish repository, branch, remote and worktree identity once before Git
+   delivery with `pwsh scripts/agent-preflight.ps1`. Refresh affected observations
+   when their context changes or a later action needs current remote evidence;
+   staging or another wrapper step alone does not invalidate unchanged evidence.
+   Preserve Git/auth/state checks; use explicit `-GitPath`/`-GhPath` if needed
+   on the host and noninteractive Git/gh settings. Read/auth failures stop only
+   the operation that depends on them; local inspection, edits and tests continue.
    For substantial work use `scripts/agent-worktree.ps1 -Action create -Name <task>`
-   with a `codex/` task branch from current main. Refresh actual main/open PR state.
+   with a `codex/` task branch from current main, or the exact existing PR head
+   when continuing its authorized work. Refresh actual main/open PR state.
 2. Inventory `git status --porcelain=v2 -z --untracked-files=all`. Assign each
    visible path to exactly one disposition: ship, split, vault, exclude,
    investigate, or local-helper. Ship one coherent acceptance slice; check risky
@@ -149,18 +154,36 @@ separately cleared. Never reset an open PR head or rewrite remote main this way.
    diagnostics and release validation are not full hosted CI equivalents.
 5. Reuse a local result only if inputs, dependency lock, command, runtime/platform,
    and relevant environment are unchanged; note that briefly in the handoff.
-   A later fix invalidates affected evidence. Run required checks and final review
-   on the exact candidate; an old SHA is never final CI proof.
+   A later fix invalidates affected evidence. Batch coherent fixes before pushing
+   to avoid launching the hosted matrix for each intermediate local commit.
+   Observe final required hosted checks to terminal results and bind final review
+   to the exact candidate; an old SHA is never final CI proof. Diagnose a failed
+   job before rerunning; do not restart successful unchanged local checks merely
+   because a wrapper ran. Never use skip-CI directives or hidden test omissions.
 6. Measure the proposed PR against its direct base with `git diff --numstat
-   <base>...HEAD` and `git diff --name-only <base>...HEAD`. The budget is at most
-   1,500 additions+deletions and 30 changed files. Above either, propose a real
-   semantic split or obtain explicit owner exception with exact counts/reason.
+   <base>...HEAD` and `git diff --name-only <base>...HEAD`. The 1,500
+   additions+deletions and 30 changed-file thresholds are review guidelines,
+   never automatic publication blockers or a reason to repeat owner approval.
+   Above either, record exact counts, ownership, why the change is coherent and
+   how it remains reviewable. Split only along useful semantic boundaries;
+   avoid artificial stacks or a separate PR solely for crossing a threshold.
+   Independent review depth, architectural file/cast budgets, executable safety
+   boundaries and resource/spending limits retain their separate controls.
    Stack parents organize review; merge readiness is against current main.
    Never automatically rebase shared work or escalate a rejected push to force.
    Fetch, freeze remote state, classify ownership and select a safe sync strategy.
 7. Open a draft PR with problem/behavior, included/excluded/deferred scope, stack
    dependencies, measured size, actual checks, skipped/failed verification, risks,
-   and follow-ups. Monitor CI when requested; diagnose failures without bypass.
+   and follow-ups. Diagnose CI failures without bypass.
+
+Report a blocker with the actual failing command, observed exit/result and the
+stage that requires it (local work, ordinary push, maintainer pre-merge or merge).
+Do not infer a universal service outage from one failed interface: check available
+permitted connectors with a harmless read when useful. Respect denied network
+access; a working connector cannot substitute for a required trusted wrapper.
+For necessary in-scope work, the host's supported per-action approval/escalation
+mechanism may be requested. This is not permission to bypass a reviewer/policy
+denial, grant blanket escalation or change host admin/security settings.
 
 Canonical commands (from repository root):
 
@@ -176,9 +199,12 @@ pwsh tools/validate-public-release.ps1
 
 Package scripts, workflow files and their executable checks own command details;
 raw `npx tsc` does not override the package typecheck. Before maintainer merge,
-require a clean `validate-public-release.ps1` result with
-`-Strict -RequireSupplementalPolicy -SupplementalPolicyPath` and the external
-`BABEL_PRIVATE_SCRUB_POLICY_PATH`. A missing required capability is a
+require a clean `pwsh tools/validate-public-release.ps1 -Strict -RequireSupplementalPolicy`
+result, using the real external policy configured by
+`BABEL_PRIVATE_SCRUB_POLICY_PATH` or an approved `-SupplementalPolicyPath`.
+Absence blocks maintainer pre-merge validation, not the ordinary push commands
+above. A configured policy still applies to ordinary scans; never empty, unset,
+fabricate or weaken it to pass. A missing required capability is a stage-specific
 reported blocker, never assumed evidence. Optional hooks and workspace helpers
 cannot waive pre-push checks or introduce mandatory quick/full/Docker cycles.
 

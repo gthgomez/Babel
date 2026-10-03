@@ -11,7 +11,7 @@ This non-authoritative technical reference describes Git/GitHub helper inputs
 and outputs. [AGENTS.md](../../AGENTS.md) alone owns contributor operating policy;
 examples here do not grant authorization. The scripts own executable behavior.
 
-## Start with the readiness gate
+## Readiness diagnostics
 
 Readiness diagnostic:
 
@@ -20,6 +20,11 @@ Readiness diagnostic:
 ```
 
 The command emits JSON with the repository, branch, local and base SHAs, Git and GitHub CLI paths, authentication result, credential-provider result, worktree state, and named readiness checks. It exits nonzero when a required check is blocked. Use `-AllowDirtyWorktree` only for inspection when an existing dirty tree is intentional; that mode does not make the tree mutation- or push-ready.
+
+This diagnostic includes a fetch and GitHub reads. AGENTS.md determines when its
+evidence needs refreshing; invoking another wrapper or staging unchanged inputs
+does not itself require repeating it. Its readiness verdict describes delivery
+state, not authority to continue local engineering.
 
 For a compact diagnostic snapshot that does not fetch or call GitHub:
 
