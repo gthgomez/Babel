@@ -8,9 +8,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const distEntry = resolve(__dirname, '../dist/index.js');
 const envBootstrapEntry = resolve(__dirname, '../dist/config/envBootstrap.js');
-const [major, minor] = process.versions.node.split('.').map(Number);
-if (!((major === 22 && minor >= 19) || (major === 24 && minor >= 5) || major > 24)) {
-  console.error('[babel-agent] Node ^22.19.0 or >=24.5.0 is required.');
+const [major, minor, patch] = process.versions.node.split('.').map(Number);
+if (!((major === 22 && minor >= 19) || (major === 24 && (minor > 13 || (minor === 13 && patch >= 1))))) {
+  console.error('[babel-agent] Node ^22.19.0 or ^24.13.1 is required.');
   process.exit(1);
 }
 

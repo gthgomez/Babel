@@ -7,8 +7,8 @@ import { listProviderSpecs } from './runners/providerRegistry.js'
 type Check = { id: string; status: 'ok' | 'warn' | 'fail'; message: string }
 
 export function supportsInstalledNode(version: string): boolean {
-  const [major = 0, minor = 0] = version.replace(/^v/, '').split('.').map(Number)
-  return (major === 22 && minor >= 19) || (major === 24 && minor >= 5) || major > 24
+  const [major = 0, minor = 0, patch = 0] = version.replace(/^v/, '').split('.').map(Number)
+  return (major === 22 && minor >= 19) || (major === 24 && (minor > 13 || (minor === 13 && patch >= 1)))
 }
 
 /** Read-only installed diagnostics; presence checks never expose credential values. */
@@ -25,7 +25,7 @@ export function runInstalledDoctor(options: {
   const dockerReady = options.dockerProbe ? options.dockerProbe() :
     spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 3000, stdio: 'ignore', env }).status === 0
   const checks: Check[] = [
-    { id: 'node', status: nodeReady ? 'ok' : 'fail', message: `Node ${process.versions.node}; requires ^22.19.0 or >=24.5.0` },
+    { id: 'node', status: nodeReady ? 'ok' : 'fail', message: `Node ${process.versions.node}; requires ^22.19.0 or ^24.13.1` },
     { id: 'resources', status: existsSync(join(paths.resourceRoot, 'prompt_catalog.yaml')) ? 'ok' : 'fail', message: paths.resourceRoot },
     { id: 'provider', status: configured.length ? 'ok' : 'warn', message: configured.length ?
       `Credential environment configured for: ${configured.join(', ')} (not authenticated)` :

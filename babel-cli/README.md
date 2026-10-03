@@ -40,9 +40,11 @@ npm install --prefix ./babel-preview --omit=dev ./babel-preview-local-coding-age
 
 On Windows use `babel-preview\node_modules\.bin\babel-agent.cmd`. For a separate
 installation location use an absolute `--prefix` path; target files resolve from
-the current directory or explicit project arguments. Node **22.19.x or later in the 22.x line, or 24.5.0+**, is
-required for unflagged WebAssembly module imports as well as `node:sqlite` and its extension API. Consumer CI checks
-22.19.0 and Node 24 on hosted Linux, Windows, and macOS; the artifact records the
+the current directory or explicit project arguments. Node **22.19.0+ in the 22.x line, or 24.13.1+ in the 24.x line**, is
+required for unflagged WebAssembly module imports as well as `node:sqlite` and its extension API.
+The Node 24 floor includes the [upstream non-ASCII path deletion fix](https://github.com/nodejs/node/pull/61108),
+released in [24.13.1](https://nodejs.org/en/blog/release/v24.13.1). Other Node release lines and older Node 24 releases are unsupported.
+Consumer CI checks 22.19.0, 24.13.1 and latest Node 24 on hosted Linux, Windows, and macOS; the artifact records the
 actual OS/architecture and result. These checks qualify tested runner platforms,
 not every computer. Native `sqlite-vec` support depends on available platform
 binaries and may degrade to non-vector search. SQLite still emits an experimental
@@ -110,7 +112,7 @@ generated CLI source back into this package.
 
 ## First Five Minutes
 
-From a clone of this repository (not an npm registry package). Node.js 22.19+ in the 22.x line, or 24.5+.
+From a clone of this repository (not an npm registry package). Node.js 22.19.0+ in the 22.x line, or 24.13.1+ in the 24.x line.
 
 Throughout this file, `babel <command>` means `node .\babel-cli\dist\index.js <command>` run from the repository root, unless you have linked or installed the binary yourself (macOS/Linux: `./babel-cli/dist/index.js`).
 

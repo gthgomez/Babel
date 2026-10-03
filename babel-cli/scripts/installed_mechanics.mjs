@@ -1,6 +1,6 @@
 // License: Apache-2.0 — see LICENSE
 import assert from 'node:assert/strict'
-import { mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -19,7 +19,8 @@ const answer = (text) => [
  * The caller must isolate user directories and block HTTP in this child process.
  * @param {string} packageRoot Installed package directory containing dist/.
  * @param {string} projectRoot Disposable parent directory for the fixture.
- * @returns {Promise<object>} Compact observed evidence; assertions fail closed.
+ * The caller owns fixture removal after this process exits and releases its handles.
+ * @returns {Promise<object>} Compact observed evidence and canonical fixture ownership.
  */
 export async function runInstalledMechanics(packageRoot, projectRoot) {
   // macOS /var aliases /private/var; the lease must bind the same canonical
@@ -182,7 +183,7 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
     const evidence = (result) => ({ status: result.terminal.status ?? result.terminal.type,
       outcome: result.terminal.outcome ?? null, providerCalls: result.calls,
       durableEvents: result.durable.length })
-    return { execution: 'explicit dev_local fixture lease; actual local npm test; HTTP blocked by caller',
+    return { fixtureRoot: fixture, execution: 'explicit dev_local fixture lease; actual local npm test; HTTP blocked by caller',
       inspect: evidence(inspected), denied: evidence(denied), repair: evidence(repaired),
       verifierExitCodes: verifiers.map((call) => call.exit_code), cancel: evidence(cancelled),
       freshTask: evidence(fresh), resume: evidence(afterResume) }
@@ -192,6 +193,5 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
     }
-    rmSync(fixture, { recursive: true, force: true })
   }
 }

@@ -2,9 +2,9 @@
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -52,6 +52,20 @@ function treeDigest(dir) {
   }
   walk(dir)
   return sha(JSON.stringify(entries.sort()))
+}
+function fixtureSnapshot() {
+  const entries = []
+  function walk(dir, relative, depth) {
+    for (const item of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, item.name)
+      const stat = statSync(path)
+      const name = relative + item.name
+      entries.push({ path: name, directory: item.isDirectory(), bytes: stat.size, modified: stat.mtimeMs })
+      if (item.isDirectory() && depth < 3) walk(path, name + '/', depth + 1)
+    }
+  }
+  for (const entry of readdirSync(project)) if (entry.startsWith('mechanics-')) walk(join(project, entry), entry + '/', 0)
+  return entries
 }
 function readonly(dir, value) {
   for (const item of readdirSync(dir, { withFileTypes: true })) {
@@ -187,8 +201,13 @@ try {
   const mechanics = command(process.execPath, [runner], { env: guardedEnv })
   const evidence = JSON.parse(mechanics.stdout.match(/MECHANICS_RESULT (.+)/)?.[1] ?? 'null')
   assert.ok(evidence, mechanics.stdout)
-  // The child has exited, so asynchronous evidence writes are now settled.
-  for (const entry of readdirSync(project)) if (entry.startsWith('mechanics-')) rmSync(join(project, entry), { recursive: true, force: true })
+  const fixtureBeforeCleanup = fixtureSnapshot()
+  // One owner removes the exact fixture after the child exits and releases its handles.
+  assert.equal(dirname(evidence.fixtureRoot), realpathSync(project), 'Fixture belongs to this private target')
+  assert.ok(basename(evidence.fixtureRoot).startsWith('mechanics-'))
+  assert.ok(existsSync(evidence.fixtureRoot), 'Child retains its fixture for parent-owned cleanup')
+  rmSync(evidence.fixtureRoot, { recursive: true, maxRetries: 5, retryDelay: 100 })
+  assert.ok(!readdirSync(project).some(entry => entry.startsWith('mechanics-')), JSON.stringify({ phase: 'immediate fixture cleanup', fixtureBeforeCleanup, remaining: fixtureSnapshot() }))
   records.push({ check: 'scripted installed mechanics', status: 'pass', evidence })
   assert.equal(treeDigest(installed), original, 'Installation remained immutable')
   assert.ok(!existsSync(env.BABEL_ROOT), 'Installed operation ignored the source-root override for state')
@@ -200,7 +219,7 @@ try {
   npm(['install', '--prefix', prefix, '--omit=dev', '--no-audit', '--no-fund', artifact])
   assert.equal(cli(['--version']).stdout.trim(), pkg.version)
   assert.equal(readFileSync(join(env.BABEL_CONFIG_DIR, 'runtime-flags.json'), 'utf8'), saved)
-  assert.deepEqual(readdirSync(project).sort(), ['.babel_history', 'README.md'].filter(path => existsSync(join(project, path))).sort())
+  assert.deepEqual(readdirSync(project).sort(), ['.babel_history', 'README.md'].filter(path => existsSync(join(project, path))).sort(), JSON.stringify({ phase: 'after reinstall', fixtureBeforeCleanup, remaining: fixtureSnapshot() }))
   records.push({ check: 'consumer commands, immutable install, isolated state, uninstall/reinstall', status: 'pass' },
     { check: 'read-only installation enforcement', status: process.platform === 'win32' ? 'not qualified' : 'pass', reason: process.platform === 'win32' ? 'chmod does not establish Windows ACL restrictions; immutable digest checked' : 'OS denied write probe' },
     { check: 'live-model quality', status: 'not run', reason: 'Scored provider route/credentials/protocol pending; scripted mechanics only' },
