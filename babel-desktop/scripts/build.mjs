@@ -6,7 +6,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const logo = `data:image/png;base64,${(await readFile(root+'assets/babel-mark.png')).toString('base64')}`;
 const modules = ['core.mjs','icons.mjs','fixtures.mjs','app.mjs'];
 let script = '(function(){\n"use strict";\n'+(await Promise.all(modules.map(m=>readFile(root+'src/'+m,'utf8')))).map(s=>s.replace(/^import .*?;\s*$/gm,'').replace(/^export /gm,'')).join('\n')+'\n})();';
-script = script.replaceAll('__LOGO__',logo);
+script = script.replaceAll('__LOGO__',logo).replace(/\r\n/g,'\n');
 new Script(script, { filename: 'babel-renderer.js' });
 // A script hash allows a portable, self-contained file without unsafe-inline scripts.
 const scriptHash = createHash('sha256').update(script).digest('base64');
