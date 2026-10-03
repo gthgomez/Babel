@@ -10,10 +10,10 @@
  * the local target project, never remote repository content.
  */
 
-import { execFileSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { runGitCommand } from '../utils/gitExec.js';
 import {
   BUDGET_PRESET_VALUES,
   ResearchMissionV1Schema,
@@ -34,24 +34,18 @@ export interface CreateMissionInput {
 export function resolveTargetHeadSha(projectRoot: string): string | null {
   if (!existsSync(join(projectRoot, '.git'))) return null;
   try {
-    const sha = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: projectRoot,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    const result = runGitCommand(['rev-parse', 'HEAD'], projectRoot, { timeoutMs: 3000 });
+    if (result.status !== 0) return null;
+    const sha = result.stdout.trim();
     return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
   } catch {
     return null;
   }
 }
 
-/** Stable digest of the target project's repo-map inputs (placeholder digest over root metadata until RepoMap integration). */
-export function computeRepoMapDigest(projectRoot: string): string | null {
-  if (!existsSync(projectRoot)) return null;
-  const hash = createHash('sha256');
-  hash.update('repo-map-v1');
-  hash.update(projectRoot);
-  return hash.digest('hex');
+/** No repository-content digest is available until authoritative RepoMap integration. */
+export function computeRepoMapDigest(_projectRoot: string): string | null {
+  return null;
 }
 
 export function resolveBudget(preset: BudgetPresetName): MissionBudget {
