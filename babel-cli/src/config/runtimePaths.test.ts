@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { resolveRuntimeLearningRoot, resolveRuntimePaths } from './runtimePaths.js'
+import { getAgentRunsRoot, runAgentTeam } from '../services/agentTeams.js'
 
 test('does separate installed resources from user directories despite BABEL_ROOT', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel paths é '))
@@ -133,3 +134,38 @@ test('does persist session, token, and memory stores under the state override', 
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('does resolve agent runs under user state while retaining explicit source roots', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel agent state ü-'));
+  const previousState = process.env['BABEL_STATE_DIR'];
+  const previousRuns = process.env['BABEL_RUNS_DIR'];
+  process.env['BABEL_STATE_DIR'] = root;
+  delete process.env['BABEL_RUNS_DIR'];
+  try {
+    assert.equal(getAgentRunsRoot(), join(root, 'runs', 'agents'));
+    const projectRoot = join(root, 'project');
+    mkdirSync(projectRoot);
+    const run = runAgentTeam({
+      schema_version: 1,
+      id: 'user-state-boundary',
+      project_root: projectRoot,
+      isolation: 'copy',
+      agents: [{
+        id: 'reviewer', role: 'reviewer', task: 'Record note only.',
+        allowed_tools: ['file_read'], disallowed_tools: ['file_write'],
+        write_scope: [], merge_strategy: 'review_only',
+        operations: [{ type: 'note', note: 'User state boundary check.' }],
+      }],
+    });
+    assert.equal(run.run_dir.startsWith(join(root, 'runs', 'agents')), true);
+    assert.equal(existsSync(join(root, 'runs', 'agents', 'agents.json')), true);
+    assert.equal(getAgentRunsRoot({ babelRoot: root }), join(root, 'runs', 'agents'));
+    assert.equal(getAgentRunsRoot({ runsRoot: join(root, 'explicit') }), join(root, 'explicit'));
+  } finally {
+    if (previousState === undefined) delete process.env['BABEL_STATE_DIR'];
+    else process.env['BABEL_STATE_DIR'] = previousState;
+    if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
+    else process.env['BABEL_RUNS_DIR'] = previousRuns;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
