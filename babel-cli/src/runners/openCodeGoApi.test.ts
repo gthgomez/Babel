@@ -219,7 +219,7 @@ test('exact V4.1 refuses missing shared budget before resolving a credential', (
   assert.throws(() => new OpenCodeGoApiRunner('deepseek-v4.1-flash', { maxTokens: 32 }, { credentialSource: 'explicit-test', explicitCredential: 'synthetic' }), /budget/i)
 })
 
-test('Go budget persists reservations and rejects contention, exhaustion and job reuse', async (t) => {
+test('Go budget persists reservations and rejects contention, exhaustion and job reuse', { skip: process.platform === 'win32' ? 'POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows' : false }, async (t) => {
   const { mkdtemp, readFile, writeFile, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
@@ -241,7 +241,7 @@ test('Go budget persists reservations and rejects contention, exhaustion and job
   assert.throws(() => new OpenCodeGoBudget({ statePath: path, jobId: 'job', limitUsd: 2.01 }), /budget/i)
 })
 
-test('V4.1 reserves exact body cost for every operation and never refunds unknown or cancelled usage', async (t) => {
+test('V4.1 reserves exact body cost for every operation and never refunds unknown or cancelled usage', { skip: process.platform === 'win32' ? 'POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows' : false }, async (t) => {
   const { mkdtemp, readFile, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
@@ -282,7 +282,7 @@ test('V4.1 reserves exact body cost for every operation and never refunds unknow
   assert.deepEqual(sessions, Array(5).fill('stable-job'))
 })
 
-test('shared Go ledger prevents overspend across runner instances without network retry', async (t) => {
+test('shared Go ledger prevents overspend across runner instances without network retry', { skip: process.platform === 'win32' ? 'POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows' : false }, async (t) => {
   const { mkdtemp, readFile, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
@@ -333,7 +333,7 @@ test('Go validates pinned request before any reservation or dispatch', async (t)
   await assert.rejects(access(path))
 })
 
-test('Go ledger shares a durable reservation with another process', async (t) => {
+test('Go ledger shares a durable reservation with another process', { skip: process.platform === 'win32' ? 'POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows' : false }, async (t) => {
   const { mkdtemp, readFile, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
@@ -374,4 +374,29 @@ test('Go does not dispatch or debit a request cancelled before entry', async (t)
   await assert.rejects(runner.executeRaw('synthetic', undefined, undefined, controller.signal))
   assert.equal(calls, 0)
   await assert.rejects(access(path))
+})
+
+
+test('Windows Go budget denies native dispatch before writing reservation state', { skip: process.platform !== 'win32' ? 'Actual Windows unsupported-durability contract' : false }, async (t) => {
+  const { mkdtemp, access, readdir, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { OpenCodeGoBudget, OpenCodeGoBudgetError } = await import('./openCodeGoBudget.js')
+  const dir = await mkdtemp(join(tmpdir(), 'synthetic-windows-go-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const statePath = join(dir, 'budget.json')
+  const budget = new OpenCodeGoBudget({ statePath, jobId: 'windows-job', limitUsd: 2 })
+  await assert.rejects(budget.reserve(1, 1), (error: unknown) => error instanceof OpenCodeGoBudgetError && /unsupported on Windows/.test(error.message))
+  const runner = new OpenCodeGoApiRunner('deepseek-v4.1-flash', { maxTokens: 16 }, { budget, credentialSource: 'explicit-test', explicitCredential: 'synthetic' })
+  let fetches = 0
+  globalThis.fetch = (async () => { fetches++; throw Error('unsupported Windows dispatch reached network') }) as typeof fetch
+  const errors: string[] = []
+  for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'synthetic' }], [])) {
+    if (event.type === 'error') errors.push(event.message)
+  }
+  assert.equal(errors.length, 1)
+  assert.match(errors[0] ?? '', /budget denied.*unsupported on Windows/)
+  assert.equal(fetches, 0)
+  await assert.rejects(access(statePath))
+  assert.deepEqual(await readdir(dir), [])
 })

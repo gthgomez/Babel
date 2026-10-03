@@ -12,7 +12,11 @@ export interface OpenCodeGoBudgetOptions {
 /** Content-free, fail-closed budget error; callers must not select another provider. */
 export class OpenCodeGoBudgetError extends Error {
   readonly code = 'GO_BUDGET_DENIED'
-  constructor() { super('OpenCode Go budget denied the request.') }
+  constructor(reason: 'windows_unsupported' | 'denied' = 'denied') {
+    super(reason === 'windows_unsupported'
+      ? 'OpenCode Go budget denied: durable reservations are unsupported on Windows.'
+      : 'OpenCode Go budget denied the request.')
+  }
 }
 
 /** Shared cross-process ledger. Reservations are durable before dispatch and never refunded. */
@@ -28,8 +32,10 @@ export class OpenCodeGoBudget {
     this.limitNanoUsd = Math.floor(options.limitUsd * 1e9)
   }
 
-  /** Atomically reserve conservative peak cost from actual serialized request bytes. */
+  /** Reserve with POSIX file/directory durability; Windows is explicitly unsupported. */
   async reserve(inputBytes: number, maxOutputTokens: number): Promise<void> {
+    // Deny before lock/state writes: Node directory fsync cannot establish this contract on Windows.
+    if (process.platform === 'win32') throw new OpenCodeGoBudgetError('windows_unsupported')
     if (!Number.isSafeInteger(inputBytes) || inputBytes < 0 ||
       !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) throw new OpenCodeGoBudgetError()
     const amount = inputBytes * 300 + maxOutputTokens * 1200

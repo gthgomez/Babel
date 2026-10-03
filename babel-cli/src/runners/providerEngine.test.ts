@@ -126,7 +126,7 @@ test('ProviderEngine keeps benchmark providers distinct and exposes no Zen fallb
   )
 })
 
-test('ProviderEngine uses native standalone Go with shared budget and stable job session', async (t) => {
+test('ProviderEngine uses native standalone Go with shared budget and stable job session', { skip: process.platform === 'win32' ? 'POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows' : false }, async (t) => {
   const { mkdtemp, rm, readFile } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
@@ -149,4 +149,27 @@ test('ProviderEngine uses native standalone Go with shared budget and stable job
   const { getProviderSpec } = await import('./providerRegistry.js')
   assert.equal(getProviderSpec('opencode-go').authorityConformance, 'untested')
   assert.throws(() => createProviderRunner({ provider: 'opencode-go', modelId: 'deepseek-v4.1-flash', credentialSource: 'explicit-test', explicitCredential: 'synthetic' }), /budget/i)
+})
+
+
+test('Windows ProviderEngine Go refuses native network dispatch without claiming durability', { skip: process.platform !== 'win32' ? 'Actual Windows unsupported-durability contract' : false }, async (t) => {
+  const { mkdtemp, readdir, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { OpenCodeGoBudget } = await import('./openCodeGoBudget.js')
+  const dir = await mkdtemp(join(tmpdir(), 'synthetic-windows-engine-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const priorFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = priorFetch })
+  let fetches = 0
+  globalThis.fetch = (async () => { fetches++; throw Error('unsupported Windows dispatch reached network') }) as typeof fetch
+  const runner = createProviderRunner({ provider: 'opencode-go', modelId: 'deepseek-v4.1-flash', sampling: { maxTokens: 16 }, budget: new OpenCodeGoBudget({ statePath: join(dir, 'budget.json'), jobId: 'windows-job', limitUsd: 2 }), credentialSource: 'explicit-test', explicitCredential: 'synthetic' })
+  const errors: string[] = []
+  for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'synthetic' }], [])) {
+    if (event.type === 'error') errors.push(event.message)
+  }
+  assert.equal(errors.length, 1)
+  assert.match(errors[0] ?? '', /budget denied.*unsupported on Windows/)
+  assert.equal(fetches, 0)
+  assert.deepEqual(await readdir(dir), [])
 })
