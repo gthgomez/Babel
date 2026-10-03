@@ -6,7 +6,7 @@
 import { join } from 'node:path';
 
 import { openAdmissionStore, type AdmissionOpenResult } from '../runtime/admission.js';
-import { BABEL_ROOT } from './constants.js';
+import { resolveRuntimeRunsDir } from '../config/runtimePaths.js';
 
 const CHAT_SESSIONS = 'chat-sessions';
 const THREADS = 'threads';
@@ -14,7 +14,7 @@ const TRANSCRIPT_FILE = 'transcript.jsonl';
 
 /** Resolve runs directory at call time (honours per-test BABEL_RUNS_DIR overrides). */
 export function resolveBabelRunsDir(): string {
-  return process.env['BABEL_RUNS_DIR'] ?? join(BABEL_ROOT, 'runs');
+  return resolveRuntimeRunsDir();
 }
 
 export function chatSessionsDir(): string {

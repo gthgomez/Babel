@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { resolveRuntimePaths } from './runtimePaths.js';
 
 export interface ExecutorDryRunResolution {
   dryRun: boolean;
@@ -23,24 +23,8 @@ function parseBoolean(value: string | undefined): boolean | null {
   return null;
 }
 
-function findBabelRoot(startDir: string): string {
-  let current = resolve(startDir);
-  while (true) {
-    if (existsSync(join(current, 'prompt_catalog.yaml'))) {
-      return current;
-    }
-
-    const parent = dirname(current);
-    if (parent === current) {
-      return resolve(startDir, '../..');
-    }
-    current = parent;
-  }
-}
-
 function getRuntimeFlagsPath(env: NodeJS.ProcessEnv): string {
-  const root = env['BABEL_ROOT'] ?? findBabelRoot(dirname(fileURLToPath(import.meta.url)));
-  return join(root, 'config', 'runtime-flags.json');
+  return join(resolveRuntimePaths(env).userConfigRoot, 'runtime-flags.json');
 }
 
 function readPersistedDryRun(env: NodeJS.ProcessEnv): boolean | null {
