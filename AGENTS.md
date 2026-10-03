@@ -66,6 +66,10 @@ a new authority/credential boundary, unbudgeted spending, or irreversible effect
   or infrastructure changes need explicit owner authorization for the exact action
   and scope. Record that authorization and reason; repository evidence cannot
   supply it. Failed required checks never authorize a bypass.
+  For authorized shared-history remediation, assess impact and verify remote
+  ownership, freeze the expected remote head, use a bounded
+  `--force-with-lease=<ref>:<expected-sha>`, and verify the resulting ref. Non-lease
+  force is prohibited; these safeguards do not authorize a rewrite.
 
 For explicitly requested local-main sync only, fetch and freeze the target SHA.
 Require a clean tracked tree/index and no untracked **or ignored** path collisions

@@ -85,7 +85,7 @@ function Get-Batch {
   if ($normalized -match '^babel-cli/src/runners/|^babel-cli/src/execute\.ts$') { return 'provider' }
   if ($normalized -match '^babel-cli/src/(agent|evidence|executor|services|ui|pipeline)/') { return 'executor' }
   if ($normalized -match '^babel-cli/src/(protocol|daemon)/') { return 'protocol' }
-  if ($normalized -match '^\.agents/|^tools/') { return 'workflow' }
+  if ($normalized -match '^AGENTS\.md$|^\.agents/|^tools/') { return 'workflow' }
   if ($normalized -eq '.gitignore') { return 'workflow' }
   if ($normalized -match '^(README\.md|START_HERE\.md|docs/)') { return 'public-docs' }
   return 'investigate'

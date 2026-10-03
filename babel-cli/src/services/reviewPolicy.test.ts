@@ -142,7 +142,8 @@ test('resolveReviewAuthority: reviewer/gate paths require HOST_PROTECTED', () =>
   assert.equal(resolveReviewAuthority(['config/review-risk-policy.json']), 'HOST_PROTECTED');
   assert.equal(resolveReviewAuthority(['babel-cli/src/services/reviewIndependence.ts']), 'HOST_PROTECTED');
   assert.equal(resolveReviewAuthority(['scripts/agent-git-common.psm1']), 'HOST_PROTECTED');
-  assert.equal(resolveReviewAuthority(['.agents/rules/10-independent-review-policy.md']), 'HOST_PROTECTED');
+  assert.equal(resolveReviewAuthority(['AGENTS.md']), 'HOST_PROTECTED');
+  assert.equal(classifyReviewRisk(['AGENTS.md']), 'CRITICAL');
   assert.equal(resolveReviewAuthority(['babel-cli/src/services/chatEngine.ts']), 'SESSION_ATTESTED');
   assert.equal(resolveReviewAuthority([]), 'HOST_PROTECTED');
 });

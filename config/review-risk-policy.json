@@ -23,7 +23,7 @@
   ],
   "hostProtectedPrefixes": [
     ".github/workflows/",
-    ".agents/rules/10-independent-review-policy.md",
+    "AGENTS.md",
     "scripts/agent-pr-gate", "scripts/agent-review-", "scripts/trusted-merge-gate",
     "scripts/agent-pr-merge", "scripts/agent-git-common", "scripts/verify-", "scripts/materialize-independent-review",
     "config/review-risk-policy.json",

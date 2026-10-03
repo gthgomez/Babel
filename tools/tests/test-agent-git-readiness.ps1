@@ -437,6 +437,11 @@ try {
   }
   $planTextRun = Invoke-TestScript -Script $planner -Arguments @('-RepoRoot', $planFixture)
   Assert-AgentTest ($planTextRun.exitCode -eq 0 -and $planTextRun.text -match 'above review guidance' -and $planTextRun.text -notmatch 'SPLIT REQUIRED') 'text advice must describe reviewability without demanding a split'
+  Set-Content -LiteralPath (Join-Path $planFixture 'AGENTS.md') -Value 'contributor policy' -Encoding utf8
+  $ownerPlanRun = Invoke-TestScript -Script $planner -Arguments @('-RepoRoot', $planFixture, '-Json')
+  $ownerPlan = $ownerPlanRun.text | ConvertFrom-Json
+  $ownerRecord = @($ownerPlan.records | Where-Object { $_.path -eq 'AGENTS.md' })
+  Assert-AgentTest ($ownerPlanRun.exitCode -eq 0 -and $ownerPlan.safeToStage -and $ownerRecord.Count -eq 1 -and $ownerRecord[0].disposition -eq 'ship' -and $ownerRecord[0].batch -eq 'workflow') 'canonical policy owner must have consistent ship disposition and workflow batch'
   Set-Content -LiteralPath (Join-Path $planFixture 'unclassified.txt') -Value 'unknown' -Encoding utf8
   $unknownPlanRun = Invoke-TestScript -Script $planner -Arguments @('-RepoRoot', $planFixture, '-Json')
   $unknownPlan = $unknownPlanRun.text | ConvertFrom-Json
