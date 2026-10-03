@@ -46,7 +46,7 @@ Babel
 
 There is **no published npm package** for this CLI today. Run from a clone.
 
-**Requirements:** Node.js 22.5+, a clone of this repo, and (for model sessions) a provider key.
+**Requirements:** Node.js 22.19+ in the 22.x line, or 24.5+, a clone of this repo, and (for model sessions) a provider key.
 
 ```powershell
 git clone https://github.com/gthgomez/Babel.git
