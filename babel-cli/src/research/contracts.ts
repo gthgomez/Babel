@@ -463,6 +463,53 @@ export const RepoReaderReportV1Schema = z
 export type RepoReaderReportV1 = z.infer<typeof RepoReaderReportV1Schema>;
 
 // ---------------------------------------------------------------------------
+// ExperimentProposalV1 + ResearchReviewV1 (Slice D)
+// ---------------------------------------------------------------------------
+
+export const ExperimentProposalV1Schema = z
+  .object({
+    schema_version: z.literal(1).default(1),
+    proposal_id: z.string().min(1),
+    mission_id: z.string().min(1),
+    pattern_id: z.string().min(1),
+    /** The uncertainty the experiment tests — a proposal without one is not falsifiable. */
+    hypothesis: z.string().min(1),
+    baseline: z.string().min(1),
+    experiment: z.string().min(1),
+    metrics: z.array(z.string().min(1)).min(1),
+    promotion_criteria: z.string().min(1),
+    /** Bound to the target HEAD the experiment was designed against. */
+    target_head_sha: z.string().nullable(),
+    created_at: z.string().min(1),
+  })
+  .strict();
+export type ExperimentProposalV1 = z.infer<typeof ExperimentProposalV1Schema>;
+
+export const RESEARCH_REVIEW_VERDICTS = [
+  'ACCEPT_RESEARCH_FINDING',
+  'NEEDS_MORE_EVIDENCE',
+  'REJECT_RESEARCH_FINDING',
+] as const;
+
+export const ResearchReviewV1Schema = z
+  .object({
+    schema_version: z.literal(1).default(1),
+    review_id: z.string().min(1),
+    mission_id: z.string().min(1),
+    pattern_id: z.string().min(1),
+    verdict: z.enum(RESEARCH_REVIEW_VERDICTS),
+    /** Evidence-backed reasoning; the reviewer sees validated artifacts only. */
+    rationale: z.string().min(1),
+    checked: z.array(z.string()).min(1),
+    concerns: z.array(z.string()),
+    reviewed_at: z.string().min(1),
+    /** Research review never substitutes for code review/merge governance. */
+    grants_merge_authority: z.literal(false),
+  })
+  .strict();
+export type ResearchReviewV1 = z.infer<typeof ResearchReviewV1Schema>;
+
+// ---------------------------------------------------------------------------
 // Serialization helpers
 // ---------------------------------------------------------------------------
 

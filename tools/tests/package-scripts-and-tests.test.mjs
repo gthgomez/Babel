@@ -806,14 +806,14 @@ test('every discovered source test belongs to canonical unit lane or an explicit
     .map(f => f.split(sep).join('/'))
     .sort();
 
-  assert.equal(allTests.length, 756, `Expected exactly 756 source test files, found ${allTests.length}`);
+  assert.equal(allTests.length, 757, `Expected exactly 757 source test files, found ${allTests.length}`);
 
   // Load canonical unit shard inventory using repo helper
   const { prepareUnitShard } = await import('../../babel-cli/scripts/run_ci_unit_shard.mjs');
   const unitShard = prepareUnitShard(babelCliDir, 0, 1);
   const unitInventory = new Set(unitShard.inventory);
 
-  assert.equal(unitInventory.size, 736, `Expected exactly 736 unit shard test files, found ${unitInventory.size}`);
+  assert.equal(unitInventory.size, 737, `Expected exactly 737 unit shard test files, found ${unitInventory.size}`);
 
   const totalSpecializedFiles = Object.values(SPECIALIZED_LANES).reduce((acc, l) => acc + l.files.length, 0);
   assert.equal(totalSpecializedFiles, 20, `Expected exactly 20 specialized test files, found ${totalSpecializedFiles}`);
@@ -830,7 +830,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   assert.equal(specializedSet.size, 20);
   assert.equal(unclassified.length, 0);
   assert.equal(overlap.length, 0);
-  assert.equal(unitInventory.size + specializedSet.size, 756);
+  assert.equal(unitInventory.size + specializedSet.size, 757);
 });
 
 test('test classification negative fixtures (orphan file, deleted lane command, lane absent from CI, missing file, unjustified exclusion, empty commandsByFile, unrelated test match, masked CI, echo CI)', () => {

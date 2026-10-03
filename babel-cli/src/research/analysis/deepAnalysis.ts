@@ -59,7 +59,7 @@ export const keywordReaderStrategy: ReaderStrategy = {
     // Candidate views: content hits from repo_search plus snapshot paths
     // whose names match the problem terms (snapshots are path-selected).
     const windows = new Map<string, { start_line: number; end_line: number }>();
-    for (const term of context.problemTerms.slice(0, 6)) {
+    for (const term of context.problemTerms.slice(0, 12)) {
       for (const hit of session.repo_search(term)) {
         if (!windows.has(hit.path)) windows.set(hit.path, { start_line: hit.start_line, end_line: hit.end_line });
       }
