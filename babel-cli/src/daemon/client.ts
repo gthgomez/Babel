@@ -38,6 +38,7 @@ export async function pingDaemon(): Promise<DaemonPingResult> {
 // ── Auto-spawn ───────────────────────────────────────────────────────────────
 
 let spawnPromise: Promise<void> | null = null;
+let ownedDaemon: ChildProcess | null = null;
 
 /**
  * Ensure the daemon is running. If not, spawn it and wait for readiness.
@@ -89,6 +90,9 @@ export async function daemonAutoSpawn(): Promise<void> {
     detached: false,
   });
 
+  ownedDaemon = child;
+  child.once('exit', () => { if (ownedDaemon === child) ownedDaemon = null; });
+
   // Forward daemon stdout/stderr to parent for visibility
   child.stdout?.on('data', (data: Buffer) => {
     process.stdout.write(data);
@@ -131,6 +135,21 @@ export async function daemonAutoSpawn(): Promise<void> {
     `Daemon failed to start within ${DAEMON_AUTO_SPAWN_TIMEOUT_MS}ms. ` +
       `Last status: ${lastError || 'unknown'}`,
   );
+}
+
+/** Stop only the daemon spawned by this process, preserving external daemons. */
+export async function stopOwnedDaemon(): Promise<void> {
+  if (spawnPromise) {
+    try { await spawnPromise; } catch { /* failed startup still needs cleanup */ }
+  }
+  const child = ownedDaemon;
+  if (!child || !child.pid || child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => child.kill('SIGKILL'), 2000);
+    const deadline = setTimeout(() => reject(new Error('Owned daemon did not exit within 3000ms')), 3000);
+    child.once('exit', () => { clearTimeout(timer); clearTimeout(deadline); resolve(); });
+    child.kill('SIGTERM');
+  });
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
