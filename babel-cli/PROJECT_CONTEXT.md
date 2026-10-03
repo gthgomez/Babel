@@ -12,14 +12,17 @@ authoritative for Babel-wide control-plane rules.
 
 ## Startup Sequence
 
-From `babel-cli/`:
+Follow the package [AGENTS.md](./AGENTS.md) startup router and the repository-root
+[AGENTS.md](../AGENTS.md). This file supplies package implementation context;
+additional reads depend on the task:
 
-1. Read `..\INTEGRATION.md`.
-2. Read `..\PROJECT_CONTEXT.md`.
-3. Read `..\README.md`.
-4. Read `..\prompt_catalog.yaml`.
-5. Read this file.
-6. Read `README.md` for package command examples and CLI workflows.
+- Read [README.md](./README.md) for command examples or CLI workflows.
+- For Babel control-plane or prompt-stack work, read
+  [INTEGRATION.md](../INTEGRATION.md), the root
+  [PROJECT_CONTEXT.md](../PROJECT_CONTEXT.md), and
+  [prompt_catalog.yaml](../prompt_catalog.yaml).
+- For harness architecture, completion, mode policy, or the other high-risk
+  areas listed there, read the package [CLAUDE.md](./CLAUDE.md).
 
 Consumer repositories may add their own `AGENTS.md`, engineering standards, or
 project context. Those files govern work in that consumer and are not required by
@@ -60,6 +63,13 @@ a clean Babel clone.
 | Executable acceptance (local experimental recording) | `acceptance/` (subordinate to `docs/architecture/EXECUTABLE_ACCEPTANCE_V0.md`; must not change kernel completion in V0) |
 
 **Invariant:** the model proposes; `executorKernel.completion.decide` owns final terminal honesty for execute modes. This file records **implementation context** and MUST NOT redefine target architecture norms.
+
+For additional source and ownership pointers, consult the explanatory
+[HARNESS_OVERVIEW.md](../docs/architecture/HARNESS_OVERVIEW.md) when relevant.
+Architectural size, cast, output, and exit budgets live in the committed
+[baselines](../config/architectural-budget/) and are checked by
+[check-architectural-budget.ps1](../tools/check-architectural-budget.ps1).
+Repository and CI locations are mapped in [STRUCTURE.md](../STRUCTURE.md).
 
 ## Verification & Commands
 

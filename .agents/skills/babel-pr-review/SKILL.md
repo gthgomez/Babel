@@ -8,22 +8,37 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 ---
 name: babel-pr-review
 description: >-
-  Orchestrates Babel autonomous trusted code review, candidate collection, merge
-  readiness evaluation, and ground-truth adjudication across Babel and external
-  workspace repositories (e.g. DragonWake, AGES).
+  Routes independent exact-head PR review and optional Babel certification,
+  candidate collection, readiness evaluation, and outcome adjudication.
 ---
 
 # /babel-pr-review
 
-Unified operational entrypoint for autonomous, trusted, independent pull request and branch code review using the Babel Host Review Controller.
+Operational entrypoint for independent pull request and branch review. Follow
+[Independent Review Routing](../../rules/10-independent-review-policy.md),
+[Babel PR Review](../../../docs/BABEL_PR_REVIEW.md), and the
+[GitHub workflow](../../rules/05-github-workflow.md).
+
+Freeze the exact base and head, inspect the complete diff, and use a separate
+reviewer execution when available. Any harness or model may provide that review;
+the same model in a separate execution is acceptable. Record the reviewed SHA,
+findings, unresolved issues, and limitations in a normal PR comment or native
+GitHub review. Repair findings and review the resulting head again.
+
+Custom Babel certification and receipts are optional advisory tooling. They do
+not replace independent review, the base-rooted gate, required CI, live GitHub
+rules, actual merge permission, or the owner's task authorization. A changed
+head invalidates earlier review coverage and check results. Do not claim process
+or sandbox isolation without evidence.
+
+The following commands apply when the task calls for the optional Babel tooling.
 
 ## 1. Dynamic Babel Discovery
 
-Locate the active trusted Babel root:
-
-1. Primary: `<workspace-root>/Babel-public-live`
-2. Workspace Map: Check `<workspace-root>/.workspace-map.json` under `"Babel"`
-3. Fallback: Search workspace directory for `Babel` repository root
+Locate the task's trusted Babel installation. An optional local workspace map
+can help locate a checkout; a directory name or map entry does not establish
+repository identity or trust. Verify the repository and source revision before
+using it. Do not run the reviewer controller from the candidate checkout.
 
 Verify the trusted build is ready:
 ```powershell
@@ -41,8 +56,12 @@ Determine the target repository and trust separation:
   - Invariant: The review harness source commit MUST be an ancestor of the candidate's base branch (`pr.baseRefOid`).
   - Candidate code cannot alter reviewer prompt, tools, or merge gates.
 - **`EXTERNAL_REPO_REVIEW`**: Target repository is outside Babel (e.g. `DragonWake`, `tools/gamedev`, `Project_Games`).
-  - Invariant: Pinned clean Babel installation digest is used.
+  - Invariant: Babel evaluator code remains separate from the target candidate; record the trusted installation's source revision and version digest. Publishing requires a clean trusted installation.
   - Target candidate changes cannot modify Babel evaluator code. Ancestry check against target base history is bypassed because Babel is external to the target repo.
+
+These are optional controller trust modes, not GitHub merge authorization. The
+GitHub gate uses the immutable base's evaluator and risk policy; candidate code
+cannot change that evaluator for its own merge.
 
 ## 3. Operations & Commands
 
@@ -57,8 +76,11 @@ Or via PowerShell wrapper:
 pwsh -File "$babelRoot\.agents\skills\code-review\scripts\collect-target.ps1" -Json [-Pr <number>] [-Range <A..B>] [-Staged]
 ```
 
-### B. Execute Multi-Model Independent Review
-Runs isolated dual-model review (`mimo-v2.5` + `longcat-2.0`) in read-only sandbox with trace-based coverage and finding verification:
+### B. Execute Optional Orchestrated Review
+Runs the controller's configured reviewer with trace-derived coverage and finding
+verification. The current launcher uses `mimo-v2.5`; this implementation default
+is not a vendor requirement for ordinary independent review. Its evidence
+validators retain their own provenance, revision, and isolation requirements:
 ```powershell
 $privateState = "$env:LOCALAPPDATA\Babel\review-state"
 Push-Location "$babelRoot"
@@ -73,19 +95,29 @@ Pop-Location
 ```
 
 Key artifacts produced in `$privateState/jobs/<digest>/`:
-- `handoff.json`: Dual-model verdict and findings
+- `handoff.json`: Controller review verdict and findings
 - `completed.json`: Execution status and telemetry
 - `<model>-coverage.json`: Trace-derived `ReviewCoverageReceipt`
-- `<model>-independence.json`: Attestation of reviewer independence ($I_0 \dots I_4$)
+- `<model>-independence.json`: Computed independence class for that execution
 - `<model>-findings.json`: Static-verified `StructuredFinding`s
 
-### C. Evaluate Multi-Gate Merge Readiness
-Synthesizes CodeReview + Tests + RemoteCI + Security into a single `MergeReadinessReceipt`:
+### C. Evaluate Optional Certification Readiness
+Evaluates the optional subsystem's available review and verification evidence
+under its risk policy, producing a `MergeReadinessReceipt`:
 ```powershell
-node "$babelRoot\babel-cli\dist\index.js" review readiness --repo-root <target-repo> --pr <number> --json
+node "$babelRoot\babel-cli\dist\index.js" review readiness --repo-root <target-repo> --pr <number> --state-dir $privateState --json
 ```
-- Exit 0: `READY` (routine 0-touch auto-merge authorized)
-- Exit 2: `REPAIR` / `INSUFFICIENT` / `ESCALATE` (repair required, merge blocked)
+- Exit 0: `READY` for the optional subsystem's evidence evaluation.
+- Exit 2: `REPAIR` / `INSUFFICIENT` / `ESCALATE`; inspect its findings and missing evidence.
+
+Neither exit code grants GitHub merge permission. For a Babel merge decision,
+use the trusted base-rooted gate specified by the GitHub workflow, bound to the
+exact reviewed head. The current gate reports `independentReviewMode: ADVISORY`
+and `mergeAuthorizationSource: GITHUB_SERVER`; absent or invalid custom evidence
+remains visible without becoming a custom certification prerequisite. Required
+checks and their producers, live approvals and resolved threads, base freshness,
+and PR/head state still govern readiness. Merge only within the owner's task
+authorization and actual GitHub permissions, with an expected-head check.
 
 ### D. Benchmark & Shadow Evaluation (BabelBench)
 Inspect benchmark fixtures and evaluate reviewer accuracy:
