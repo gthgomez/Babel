@@ -374,6 +374,7 @@ describe("compileChatStack with real project root", () => {
         assert.equal(typeof renderedSystem, "string");
         for (const guard of [
           "Read AGENTS.md in full once before repository work",
+          "Babel packages use this root file; workspace-template offers to save nested instructions do not apply.",
           "AGENTS.md alone owns contributor policy",
           "no host adapters/nested instructions/",
           "Never read credential files",
@@ -383,6 +384,7 @@ describe("compileChatStack with real project root", () => {
           "agent-pr-merge.ps1",
           "-ReviewedHeadSha",
           "hostProtectedPrefixes",
+          "Merges changing any path matched by",
           "need explicit owner authorization",
           "independent exact-head review",
           "no admin bypass/candidate self-certification",
