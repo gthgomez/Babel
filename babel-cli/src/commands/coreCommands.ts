@@ -61,6 +61,9 @@ export function applyProgramMetadata(program: Command): void {
     if (['learn', 'skill', 'benchmark', 'smoke', 'test', 'audit'].includes(command.name())) {
       program.error(`${command.name()} requires a contributor checkout in this preview.`);
     }
+    if (command.name() === 'run' && action.opts()['benchmark']) {
+      program.error('run --benchmark requires a contributor checkout in this preview.');
+    }
   });
   program
     .name(installed ? 'babel-agent' : 'babel')

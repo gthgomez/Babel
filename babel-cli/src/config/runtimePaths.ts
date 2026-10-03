@@ -73,3 +73,26 @@ export function resolveRuntimeLearningRoot(
     : join(babelRoot, 'runs')
   return join(runsRoot, 'local-learning')
 }
+
+/** Resolve session, token, and memory state, retaining source-checkout home defaults. */
+export function resolveRuntimeUserStateRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  packageRoot: string = ownPackageRoot,
+): string {
+  const paths = resolveRuntimePaths(env, packageRoot)
+  return resolve(env['BABEL_STATE_DIR'] || (paths.isInstalled
+    ? paths.userStateRoot
+    : join(env['USERPROFILE'] || env['HOME'] || homedir(), '.babel')))
+}
+
+/** Keep project lock scope explicit, redirecting only the installed resource root. */
+export function resolveRuntimeLockRoot(
+  babelRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+  packageRoot: string = ownPackageRoot,
+): string {
+  const paths = resolveRuntimePaths(env, packageRoot)
+  return paths.isInstalled && resolve(babelRoot) === paths.resourceRoot
+    ? join(paths.userStateRoot, 'locks')
+    : join(babelRoot, '.babel', 'locks')
+}

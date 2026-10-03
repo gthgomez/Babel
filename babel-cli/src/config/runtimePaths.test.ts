@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -79,6 +79,57 @@ test('does retain source paths when prepack stages installed resources in a chec
     assert.equal(paths.userStateRoot, root)
     assert.equal(resolveRuntimePaths({ BABEL_ROOT: join(root, 'override') }, packageRoot).resourceRoot, join(root, 'override'))
   } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('does honor state overrides for user stores while retaining source home defaults', async () => {
+  const { resolveRuntimeUserStateRoot } = await import('./runtimePaths.js')
+  assert.equal(resolveRuntimeUserStateRoot({ HOME: '/user', BABEL_ROOT: '/source', BABEL_STATE_DIR: '/state' }, '/source/babel-cli'), resolve('/state'))
+  assert.equal(resolveRuntimeUserStateRoot({ HOME: '/user', BABEL_ROOT: '/source' }, '/source/babel-cli'), resolve('/user/.babel'))
+})
+
+test('does place installed resource locks in user state while preserving explicit project scope', async () => {
+  const { resolveRuntimeLockRoot, resolveRuntimeUserStateRoot } = await import('./runtimePaths.js')
+  const root = mkdtempSync(join(tmpdir(), 'babel locks ü '))
+  const packageRoot = join(root, 'package')
+  const resourceRoot = join(packageRoot, 'resources')
+  mkdirSync(resourceRoot, { recursive: true })
+  writeFileSync(join(resourceRoot, 'prompt_catalog.yaml'), 'assets: []')
+  try {
+    const env = { HOME: join(root, 'home'), BABEL_STATE_DIR: join(root, 'state') }
+    assert.equal(resolveRuntimeUserStateRoot({ HOME: join(root, 'home') }, packageRoot), join(root, 'home', '.babel'))
+    assert.equal(resolveRuntimeUserStateRoot(env, packageRoot), join(root, 'state'))
+    assert.equal(resolveRuntimeLockRoot(resourceRoot, env, packageRoot), join(root, 'state', 'locks'))
+    assert.equal(resolveRuntimeLockRoot(join(root, 'project'), env, packageRoot), join(root, 'project', '.babel', 'locks'))
+    assert.equal(resolveRuntimeLockRoot(root, env, join(root, 'source')), join(root, '.babel', 'locks'))
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+
+test('does persist session, token, and memory stores under the state override', async () => {
+  const { saveSessionState, loadSessionState } = await import('../interactive/session.js')
+  const { resolveTokenDbPath } = await import('../services/tokenHistoryDb.js')
+  const { resolveMemoryRoot } = await import('../services/memory/memoryStore.js')
+  const root = mkdtempSync(join(tmpdir(), 'babel user stores ü '))
+  const oldState = process.env['BABEL_STATE_DIR']
+  const oldTokenDb = process.env['BABEL_TOKEN_DB_PATH']
+  process.env['BABEL_STATE_DIR'] = root
+  delete process.env['BABEL_TOKEN_DB_PATH']
+  try {
+    saveSessionState({ state: { mode: 'chat' }, turnCounter: 0 } as never)
+    assert.equal(loadSessionState()?.mode, 'chat')
+    assert.ok(existsSync(join(root, 'session.json')))
+    assert.ok(existsSync(join(root, 'token-history.json')))
+    assert.equal(resolveTokenDbPath(), join(root, 'token_history.db'))
+    const memoryRoot = resolveMemoryRoot(join(root, 'target'))
+    assert.ok(memoryRoot?.startsWith(join(root, 'projects')))
+    assert.ok(existsSync(memoryRoot!))
+  } finally {
+    if (oldState === undefined) delete process.env['BABEL_STATE_DIR']
+    else process.env['BABEL_STATE_DIR'] = oldState
+    if (oldTokenDb === undefined) delete process.env['BABEL_TOKEN_DB_PATH']
+    else process.env['BABEL_TOKEN_DB_PATH'] = oldTokenDb
     rmSync(root, { recursive: true, force: true })
   }
 })

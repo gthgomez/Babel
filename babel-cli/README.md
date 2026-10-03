@@ -40,7 +40,7 @@ npm install --prefix ./babel-preview --omit=dev ./babel-preview-local-coding-age
 
 On Windows use `babel-preview\node_modules\.bin\babel-agent.cmd`. For a separate
 installation location use an absolute `--prefix` path; target files resolve from
-the current directory or explicit project arguments. Node **22.19.0 or later** is
+the current directory or explicit project arguments. Node **22.19.x or later in the 22.x line, or 24.5.0+**, is
 required for unflagged WebAssembly module imports as well as `node:sqlite` and its extension API. Consumer CI checks
 22.19.0 and Node 24 on hosted Linux, Windows, and macOS; the artifact records the
 actual OS/architecture and result. These checks qualify tested runner platforms,
@@ -110,7 +110,7 @@ generated CLI source back into this package.
 
 ## First Five Minutes
 
-From a clone of this repository (not an npm registry package). Node.js 22.5+.
+From a clone of this repository (not an npm registry package). Node.js 22.19+ in the 22.x line, or 24.5+.
 
 Throughout this file, `babel <command>` means `node .\babel-cli\dist\index.js <command>` run from the repository root, unless you have linked or installed the binary yourself (macOS/Linux: `./babel-cli/dist/index.js`).
 

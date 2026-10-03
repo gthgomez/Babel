@@ -1,3 +1,4 @@
+import { resolveRuntimeUserStateRoot } from '../config/runtimePaths.js';
 /**
  * TokenHistoryDb — SQLite-backed token usage persistence using node:sqlite.
  *
@@ -15,7 +16,6 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import * as path from 'node:path';
-import * as os from 'node:os';
 
 // ── Schema SQL ─────────────────────────────────────────────────────────────────
 
@@ -111,7 +111,7 @@ export function resolveTokenDbPath(override?: string): string {
   if (override) return override;
   const envPath = process.env['BABEL_TOKEN_DB_PATH']?.trim();
   if (envPath) return envPath;
-  return path.join(os.homedir(), '.babel', 'token_history.db');
+  return path.join(resolveRuntimeUserStateRoot(), 'token_history.db');
 }
 
 // ── TokenHistoryDb class ───────────────────────────────────────────────────────

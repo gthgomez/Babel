@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   buildSubagentIsolationContract,
   inspectAgentRun,
+  getAgentRunsRoot,
   listAgentRuns,
   mergeAgentRun,
   restoreAgentMerge,
@@ -401,4 +402,39 @@ test('agent run index lists completed team runs', () => {
   assert.equal(index.runs.length, 1);
   assert.equal(index.runs[0]?.id, 'team-index');
   assert.equal(index.runs[0]?.status, 'no_changes');
+});
+
+
+test('does resolve agent runs under user state while retaining explicit source roots', () => {
+  const root = tempRoot('user state ü');
+  const previousState = process.env['BABEL_STATE_DIR'];
+  const previousRuns = process.env['BABEL_RUNS_DIR'];
+  process.env['BABEL_STATE_DIR'] = root;
+  delete process.env['BABEL_RUNS_DIR'];
+  try {
+    assert.equal(getAgentRunsRoot(), join(root, 'runs', 'agents'));
+    const projectRoot = join(root, 'project');
+    mkdirSync(projectRoot);
+    const run = runAgentTeam({
+      schema_version: 1,
+      id: 'user-state-boundary',
+      project_root: projectRoot,
+      isolation: 'copy',
+      agents: [{
+        id: 'reviewer', role: 'reviewer', task: 'Record note only.',
+        allowed_tools: ['file_read'], disallowed_tools: ['file_write'],
+        write_scope: [], merge_strategy: 'review_only',
+        operations: [{ type: 'note', note: 'User state boundary check.' }],
+      }],
+    });
+    assert.equal(run.run_dir.startsWith(join(root, 'runs', 'agents')), true);
+    assert.equal(existsSync(join(root, 'runs', 'agents', 'agents.json')), true);
+    assert.equal(getAgentRunsRoot({ babelRoot: root }), join(root, 'runs', 'agents'));
+    assert.equal(getAgentRunsRoot({ runsRoot: join(root, 'explicit') }), join(root, 'explicit'));
+  } finally {
+    if (previousState === undefined) delete process.env['BABEL_STATE_DIR'];
+    else process.env['BABEL_STATE_DIR'] = previousState;
+    if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
+    else process.env['BABEL_RUNS_DIR'] = previousRuns;
+  }
 });

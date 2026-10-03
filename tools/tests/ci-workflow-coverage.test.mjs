@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
@@ -44,6 +44,34 @@ test('consumer artifact install is required on Linux and Windows', () => {
   assert.deepEqual(commandCoverage(workflow, 'npm run test:consumer-artifact'), {
     'ubuntu-latest': ['consumer-artifact'], 'windows-latest': ['consumer-artifact'],
   });
+});
+
+test('consumer guard blocks direct and normalized socket arguments without contacting a server', () => {
+  const guard = new URL('../../babel-cli/scripts/block_consumer_network.mjs', import.meta.url).href
+  const source = `
+    import assert from 'node:assert/strict';
+    import net from 'node:net';
+    let allowed = 0;
+    net.Socket.prototype.connect = function() { allowed++; return this; };
+    await import(${JSON.stringify(guard)});
+    assert.throws(() => net.createConnection({host:'external.invalid',port:443}), /blocked/);
+    assert.throws(() => new net.Socket().connect(443,'external.invalid'), /blocked/);
+    assert.throws(() => new net.Socket().connect([{host:'external.invalid',port:443},null]), /blocked/);
+    assert.equal(allowed, 0);
+    net.createConnection({host:'127.0.0.1',port:443}).destroy();
+    assert.equal(allowed, 1);
+    await assert.rejects(fetch('https://external.invalid'), /blocked/);
+  `
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], { encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr)
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import {spawnSync} from 'node:child_process';
+    const child = spawnSync(process.execPath, ['--input-type=module','-e', "await fetch('https://external.invalid')"], {encoding:'utf8'});
+    assert.notEqual(child.status,0);
+    assert.match(child.stderr,/Inference blocked/);
+  `], { encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '--import=' + guard } })
+  assert.equal(child.status, 0, child.stderr)
 });
 for (const [label, mutate] of [
   ['quoted consumer command', w => { w.jobs['consumer-artifact'].steps.find(s => s.run === 'npm run test:consumer-artifact').run = "echo 'npm run test:consumer-artifact'"; }],
@@ -90,7 +118,13 @@ test('stages catalog assets and defaults while removing stale resources and buil
     mkdirSync(join(pkg, 'bin'))
     writeFileSync(join(pkg, 'bin/babel.js'), '#!/usr/bin/env node\n')
     writeFileSync(join(pkg, '.env'), 'secret=sentinel')
-    const packed = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts', '--cache', join(root, 'npm-cache')], { cwd: pkg, encoding: 'utf8', shell: process.platform === 'win32' })
+    const npmCli = process.env.npm_execpath || [
+      join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'),
+      join(dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js'),
+      '/usr/share/nodejs/npm/bin/npm-cli.js',
+    ].find(existsSync)
+    assert.ok(npmCli, 'npm CLI is available beside the selected Node runtime')
+    const packed = spawnSync(process.execPath, [npmCli, 'pack', '--dry-run', '--json', '--ignore-scripts', '--cache', join(root, 'npm-cache')], { cwd: pkg, encoding: 'utf8' })
     assert.equal(packed.status, 0, packed.stderr)
     const result = JSON.parse(packed.stdout)[0]
     assert.equal(result.name, '@babel-preview-local/coding-agent')
