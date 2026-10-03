@@ -1,3 +1,4 @@
+import { resolveRuntimeUserStateRoot } from '../config/runtimePaths.js';
 /**
  * TokenHistory — token usage history tracker + sparkline renderer.
  *
@@ -20,7 +21,6 @@
 
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync } from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import { accent, info, muted, ghost } from './theme.js';
 import { getGlobalTokenHistoryDb } from '../services/tokenHistoryDb.js';
 
@@ -335,7 +335,7 @@ export function getGlobalTokenTracker(
     const resolvedPath =
       persistPath !== undefined
         ? persistPath
-        : path.join(os.homedir(), '.babel', 'token-history.json');
+        : path.join(resolveRuntimeUserStateRoot(), 'token-history.json');
     _globalTracker = new TokenUsageTracker(200, resolvedPath || undefined);
   } else if (persistPath !== undefined && persistPath) {
     _globalTracker.setPersistPath(persistPath);

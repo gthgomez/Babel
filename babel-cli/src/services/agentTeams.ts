@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process';
 
 import { z } from 'zod';
 
-import { BABEL_ROOT } from '../cli/constants.js';
+import { resolveRuntimeRunsDir } from '../config/runtimePaths.js';
 import type { AgentSession } from '../agent/session.js';
 import type { LiveSubagentSpec } from '../agent/session.js';
 
@@ -267,12 +267,10 @@ export interface SubagentIsolationContract {
   };
 }
 
-function getBabelRoot(options: AgentTeamOptions = {}): string {
-  return options.babelRoot ?? process.env['BABEL_ROOT'] ?? BABEL_ROOT;
-}
-
 export function getAgentRunsRoot(options: AgentTeamOptions = {}): string {
-  return options.runsRoot ?? join(getBabelRoot(options), 'runs', 'agents');
+  return options.runsRoot ?? (options.babelRoot
+    ? join(options.babelRoot, 'runs', 'agents')
+    : join(resolveRuntimeRunsDir(), 'agents'));
 }
 
 function getAgentIndexPath(options: AgentTeamOptions = {}): string {

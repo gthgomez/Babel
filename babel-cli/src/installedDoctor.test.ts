@@ -3,7 +3,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { it } from 'node:test'
-import { runInstalledDoctor, installedSetupChecklist } from './installedDoctor.js'
+import { runInstalledDoctor, installedSetupChecklist, supportsInstalledNode } from './installedDoctor.js'
+
+it('requires unflagged WASM support and the Node 24 Unicode deletion fix', () => {
+  for (const version of ['20.19.0', '22.18.0', '23.11.0', '24.0.0', '24.4.9', '24.5.0', '24.12.0', '24.13.0', '25.0.0', '25.4.0', '26.0.0']) assert.equal(supportsInstalledNode(version), false, version)
+  for (const version of ['22.19.0', '22.23.3', '24.13.1', '24.14.0', '24.19.0']) assert.equal(supportsInstalledNode(version), true, version)
+})
 
 it('diagnoses an installed user without contributor files or all provider credentials', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel doctor ü '))
