@@ -109,11 +109,12 @@ try {
   const packed = JSON.parse(packOutput.slice(packOutput.indexOf('[\n')))[0]
   const files = packed.files.map(file => file.path).sort()
   for (const path of files) {
-    assert.match(path, /^(?:package\.json|README\.md|LICENSE|bin\/babel\.js|dist\/.*\.js|dist\/services\/playbooks\/.*\.json|resources\/.*)$/)
+    assert.match(path, /^(?:package\.json|README\.md|LICENSE|bin\/babel\.js|dist\/.*\.js|dist\/voice\/(?:audio-capture|vad)-worker\.mjs|dist\/services\/playbooks\/.*\.json|resources\/.*)$/)
     assert.doesNotMatch(path, /(?:^|\/)(?:\.env[^/]*|node_modules|runs|cache|logs|testinfra|__snapshots__)(?:\/|$)|\.test\.js$|\.(?:map|ts|sqlite|log|tgz)$/)
   }
   assert.ok(files.includes('resources/prompt_catalog.yaml'))
   assert.ok(files.includes('LICENSE'))
+  for (const worker of ['audio-capture-worker.mjs', 'vad-worker.mjs']) assert.ok(files.includes(`dist/voice/${worker}`), worker)
   const artifact = join(output, packed.filename)
   const identity = { sourceSha: command('git', ['rev-parse', 'HEAD'], { cwd: packageRoot }).stdout.trim(),
     name: pkg.name, version: pkg.version, node: process.version, platform: process.platform, arch: process.arch,
