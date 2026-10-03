@@ -807,8 +807,6 @@ test('every discovered source test belongs to canonical unit lane or an explicit
     .map(f => f.split(sep).join('/'))
     .sort();
 
-  // Desktop adds these three tests to the installed-package stack's unit lane.
-  const desktopTests = ['src/agent/desktopApproval.test.ts', 'src/cli/chatStreamNdjson.test.ts', 'src/interactive/execution/chatResumeHeadless.test.ts'];
   assert.equal(allTests.length, 753, `Expected exactly 753 source test files, found ${allTests.length}`);
 
   // Load canonical unit shard inventory using repo helper
@@ -817,7 +815,9 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   const unitInventory = new Set(unitShard.inventory);
 
   assert.equal(unitInventory.size, 732, `Expected exactly 732 unit shard test files, found ${unitInventory.size}`);
-  for (const file of desktopTests) assert.ok(unitInventory.has(file), `Desktop test missing from unit lane: ${file}`);
+  for (const path of ['src/agent/desktopApproval.test.ts', 'src/cli/chatStreamNdjson.test.ts', 'src/interactive/execution/chatResumeHeadless.test.ts']) {
+    assert.ok(unitInventory.has(path), `Desktop integration test must be covered by the canonical unit lane: ${path}`);
+  }
 
   const totalSpecializedFiles = Object.values(SPECIALIZED_LANES).reduce((acc, l) => acc + l.files.length, 0);
   assert.equal(totalSpecializedFiles, 21, `Expected exactly 21 specialized test files, found ${totalSpecializedFiles}`);
