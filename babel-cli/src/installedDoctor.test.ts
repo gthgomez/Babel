@@ -22,5 +22,9 @@ it('diagnoses an installed user without contributor files or all provider creden
     assert.equal(absent.checks.find(c => c.id === 'docker')?.status, 'fail')
     assert.equal(absent.checks.find(c => c.id === 'provider')?.status, 'warn')
     assert.match(JSON.stringify(installedSetupChecklist()), /babel-agent doctor/)
+    const setup = installedSetupChecklist({ paths })
+    assert.equal(setup.provider_configuration.env_file, join(paths.userConfigRoot, '.env'))
+    assert.ok(setup.provider_configuration.credential_env_vars.includes('OPENROUTER_API_KEY'))
+    assert.doesNotMatch(JSON.stringify(setup), /doctor-secret-sentinel/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

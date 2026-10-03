@@ -74,6 +74,10 @@ test('stages catalog assets and defaults while removing stale resources and buil
       writeFileSync(join(pkg, 'dist', name), '')
     }
     writeFileSync(join(pkg, 'resources/stale.json'), '{}')
+    mkdirSync(join(pkg, 'dist/voice'))
+    for (const name of ['audio-capture-worker.mjs', 'vad-worker.mjs']) {
+      writeFileSync(join(pkg, 'dist/voice', name), '// worker fixture')
+    }
     const staged = spawnSync(process.execPath, [script, root, pkg], { encoding: 'utf8' })
     assert.equal(staged.status, 0, staged.stderr)
     assert.equal(readFileSync(join(pkg, 'resources/layer/prompt.md'), 'utf8'), 'prompt')
@@ -102,7 +106,7 @@ test('stages catalog assets and defaults while removing stale resources and buil
     assert.equal(result.name, '@babel-preview-local/coding-agent')
     assert.deepEqual(manifest.bin, { 'babel-agent': 'bin/babel.js' })
     const paths = result.files.map(file => file.path)
-    for (const file of ['resources/layer/prompt.md', 'LICENSE', 'dist/index.js']) assert.ok(paths.includes(file), file)
+    for (const file of ['resources/layer/prompt.md', 'LICENSE', 'dist/index.js', 'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs']) assert.ok(paths.includes(file), file)
     assert.ok(!paths.some(path => /\.env|\.test\.|\.map$|\.d\.ts$/.test(path)))
   } finally {
     rmSync(root, { recursive: true, force: true })

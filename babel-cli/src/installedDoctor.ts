@@ -35,11 +35,15 @@ export function runInstalledDoctor(options: {
 }
 
 /** Read-only first steps for the installed executable. */
-export function installedSetupChecklist(): { status: string; kind: string; first_five_minutes: { step: string; command: string; note?: string }[]; next_command: string; mutates_workspace: boolean; remote_side_effects: boolean } {
-  return { status: 'ok', kind: 'installed_user', first_five_minutes: [
+export function installedSetupChecklist(options: { paths?: ReturnType<typeof resolveRuntimePaths> } = {}): { status: string; kind: string; provider_configuration: { env_file: string; credential_env_vars: string[]; local_provider: string }; first_five_minutes: { step: string; command: string; note?: string }[]; next_command: string; mutates_workspace: boolean; remote_side_effects: boolean } {
+  const envFile = join((options.paths ?? resolveRuntimePaths()).userConfigRoot, '.env')
+  const credentialEnvVars = listProviderSpecs().filter(p => p.authorityConformance === 'certified' && p.credentialEnvVar).map(p => p.credentialEnvVar!)
+  return { status: 'ok', kind: 'installed_user', provider_configuration: {
+    env_file: envFile, credential_env_vars: credentialEnvVars, local_provider: 'Ollama does not require a cloud credential; configure a local model separately.',
+  }, first_five_minutes: [
     { step: 'diagnose_installation', command: 'babel-agent doctor --json' },
     { step: 'preview_project_context', command: 'babel-agent context preview @file README.md --json', note: 'Run inside your target project, with an existing file.' },
-    { step: 'configure_provider', command: 'babel-agent doctor', note: 'Configure one supported provider credential or a local Ollama model. Diagnostics never send provider requests.' },
+    { step: 'configure_provider', command: 'babel-agent doctor', note: `Create ${envFile} yourself and set one supported credential (${credentialEnvVars.join(', ')}), or configure a local Ollama model. Diagnostics never send provider requests.` },
     { step: 'start_safe_execution', command: 'babel-agent interactive', note: 'The default safe_repo profile requires a running Docker server.' },
   ], next_command: 'babel-agent doctor --json', mutates_workspace: false, remote_side_effects: false }
 }
