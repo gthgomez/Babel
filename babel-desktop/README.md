@@ -9,10 +9,10 @@ For contributors, use the combined Desktop and installed-CLI candidate, install 
 ```sh
 npm ci
 npm --prefix ../babel-cli ci --ignore-scripts
-npm run package:windows -- --node-archive=<absolute-official-node-v24.13.1-win-x64.zip>
+npm run package:windows -- --node-archive=<absolute-official-node-v24.13.1-win-x64.zip> --electron-archive=<absolute-official-electron-v44.5.1-win32-x64.zip>
 ```
 
-The builder checks the pinned Node archive SHA256, requires a committed source candidate, builds and packs the canonical CLI, installs only lockfile-resolved production dependencies without lifecycle scripts, and copies an explicit Desktop allowlist. It produces the portable ZIP, file manifest, BUILD.json, and SHA256SUMS under `artifacts/windows/`. It refuses to overwrite prior outputs. The bundle is unsigned; installer, uninstaller integration, signing, and automatic updates remain unimplemented.
+The builder checks pinned Node and Electron archive SHA256 values, freshly extracts Electron instead of trusting an existing dependency folder, requires a committed source candidate, builds and packs the canonical CLI, installs only lockfile-resolved production dependencies without lifecycle scripts, and copies an explicit Desktop allowlist. It produces the portable ZIP, file manifest, BUILD.json, and SHA256SUMS under `artifacts/windows/`. It refuses to overwrite prior outputs. The bundle is unsigned; installer, uninstaller integration, signing, and automatic updates remain unimplemented.
 
 Visual shell for `BabelTuiNorthStar.png`, plus an Electron host. The opening screen is still the reference preview. After you connect a project, a task runs the sibling Babel CLI and the center panel shows that run in the same layout: your message, Babel's streaming reply, tool rows, and status.
 

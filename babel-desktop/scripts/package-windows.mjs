@@ -12,15 +12,18 @@ const desktopPackage = JSON.parse(readFileSync(join(desktop,'package.json'),'utf
 const version = desktopPackage.version;
 const nodeVersion = '24.13.1';
 const nodeArchiveSha = 'fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279';
+const electronVersion = '44.5.1';
+const electronArchiveSha = '9b382492dcfee91f8f9e92c91f7972550a1b95d2299cac72279dab33a600d7db';
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
 const archive = resolve(option('node-archive') || '');
+const electronArchive = resolve(option('electron-archive') || '');
 const output = resolve(option('output') || join(desktop, 'artifacts', 'windows'));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('This preview builder supports Windows x64 only');
 if (process.versions.node !== nodeVersion) throw new Error(`Build with Node ${nodeVersion} for the pinned runtime`);
 if (!existsSync(archive) || sha(readFileSync(archive)) !== nodeArchiveSha) throw new Error('Provide --node-archive=<official node-v24.13.1-win-x64.zip>; checksum must match the pinned value');
-const npm = resolve(desktop, 'node_modules', 'electron', 'dist');
-if (!existsSync(join(npm, 'electron.exe'))) throw new Error('Run npm ci in babel-desktop first');
+if (desktopPackage.devDependencies.electron !== electronVersion) throw new Error('Update the pinned Electron archive and checksum when changing the Electron dependency');
+if (!existsSync(electronArchive) || !statSync(electronArchive).isFile() || sha(readFileSync(electronArchive)) !== electronArchiveSha) throw new Error('Provide --electron-archive=<official electron-v44.5.1-win32-x64.zip>; checksum must match the pinned value');
 const npmCli = option('npm-cli') || process.env.npm_execpath;
 if (!npmCli || !existsSync(npmCli)) throw new Error('Provide --npm-cli=<npm/bin/npm-cli.js> or invoke through npm');
 const command = (exe, args, cwd = repo) => execFileSync(exe, args, {cwd, windowsHide:true, encoding:'utf8', timeout:300000, maxBuffer:16*1024*1024});
@@ -35,7 +38,10 @@ const cliSource = join(repo, 'babel-cli');
 command(process.execPath, [npmCli, 'run', 'build'], cliSource);
 command(process.execPath, [join(cliSource,'scripts','stage_runtime_assets.mjs')]);
 const pack = JSON.parse(command(process.execPath, [npmCli,'pack','--ignore-scripts','--json','--pack-destination',output], cliSource))[0];
-cpSync(npm, bundle, {recursive:true});
+// Never reuse node_modules/electron/dist: its installer can retain stale or changed files.
+mkdirSync(bundle);
+command('tar.exe', ['-xf',electronArchive,'-C',bundle]);
+if (readFileSync(join(bundle,'version'),'utf8').trim() !== electronVersion) throw new Error('Verified Electron archive has an unexpected runtime version');
 renameSync(join(bundle,'electron.exe'), join(bundle,'Babel Desktop.exe'));
 const app = join(bundle, 'resources', 'app');
 mkdirSync(app, {recursive:true});
@@ -57,7 +63,7 @@ for (const name of ['node.exe','LICENSE']) cpSync(join(nodeSource,name),join(run
 cpSync(join(desktop,'scripts','cli-launch.mjs'),join(runtime,'cli-launch.mjs'));
 writeFileSync(join(bundle,'Babel CLI.cmd'),'@echo off\r\n"%~dp0resources\\babel-runtime\\node\\node.exe" "%~dp0resources\\babel-runtime\\cli-launch.mjs" %*\r\nexit /b %errorlevel%\r\n');
 cpSync(join(desktop,'docs','INSTALL-WINDOWS.md'),join(bundle,'INSTALL.md'));
-const metadata = {version,sourceSha,platform:'win32-x64',electron:desktopPackage.devDependencies.electron,node:nodeVersion,nodeArchiveSha256:nodeArchiveSha,cliVersion:pack.version,cliArchiveSha256:sha(readFileSync(join(output,pack.filename))),signed:false};
+const metadata = {version,sourceSha,platform:'win32-x64',electron:electronVersion,electronArchiveSha256:electronArchiveSha,node:nodeVersion,nodeArchiveSha256:nodeArchiveSha,cliVersion:pack.version,cliArchiveSha256:sha(readFileSync(join(output,pack.filename))),signed:false};
 writeFileSync(join(bundle,'BUILD.json'), JSON.stringify(metadata,null,2)+'\n');
 const files = [];
 // Match actual build-machine prefixes; upstream type declarations contain public
