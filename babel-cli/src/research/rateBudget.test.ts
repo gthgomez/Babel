@@ -3,6 +3,13 @@ import { test } from 'node:test';
 
 import { RateBudget, RateBudgetExhaustedError, RateBudgetPausedError } from './rateBudget.js';
 
+test('zero response byte budget prevents the first request', () => {
+  const budget = new RateBudget(100, 30, 0);
+  assert.throws(() => budget.beforeRequest('core'), RateBudgetExhaustedError);
+  assert.equal(budget.snapshot().requestsIssued, 0);
+  assert.equal(budget.snapshot().state, 'EXHAUSTED');
+});
+
 test('budget counts requests and search requests separately', () => {
   const budget = new RateBudget(100, 2);
   budget.beforeRequest('search');

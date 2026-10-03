@@ -15,6 +15,7 @@ import type { Command } from "commander";
 import { BABEL_RUNS_DIR } from "../cli/constants.js";
 import { createResearchMission } from "../research/missionPlanner.js";
 import { GitHubResearchProvider } from "../research/discovery/githubProvider.js";
+import { RateBudget } from "../research/rateBudget.js";
 import { runHuntDiscovery } from "../research/hunt.js";
 import { readJsonl } from "../research/artifacts.js";
 import type { CandidateRecordV1 } from "../research/contracts.js";
@@ -67,7 +68,8 @@ export function registerResearchCommands(program: Command): void {
           budgetPreset: options.budget as "low" | "normal" | "deep",
         });
         const token = researchTokenFromEnv();
-        const provider = new GitHubResearchProvider(token ? { token } : {});
+        const rateBudget = new RateBudget(undefined, mission.budget.max_search_queries, mission.budget.max_remote_bytes);
+        const provider = new GitHubResearchProvider({ ...(token ? { token } : {}), rateBudget });
         try {
           const result = await runHuntDiscovery(mission, provider);
           const shortlistIds = new Set(result.shortlist.map((s) => s.candidate.candidate_id));
