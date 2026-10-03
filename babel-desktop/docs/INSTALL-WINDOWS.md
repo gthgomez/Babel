@@ -9,6 +9,8 @@ This portable preview includes Babel Desktop, the authoritative Babel CLI, promp
 5. Install and start Docker separately for the default `safe_repo` execution profile. Desktop does not start Docker, change Windows policy, or switch to unrestricted host execution. Project commands may need their own language tools inside the execution environment; these are not installed by this preview.
 6. Click **Recheck setup**, then **Use Babel CLI**. Credential presence is not authentication; actual provider errors remain errors. A task may send project content to your configured provider and incur charges. Review Babel's normal run confirmation and tool approvals.
 
+Credential-free local Ollama routes do not require a cloud key. Configure a local model and route separately through Babel's CLI configuration; model reference controls in Desktop do not configure a provider.
+
 For diagnostics without a provider call, open Command Prompt in the extracted folder and run:
 
 ```bat
