@@ -2,9 +2,9 @@
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -202,8 +202,11 @@ try {
   const evidence = JSON.parse(mechanics.stdout.match(/MECHANICS_RESULT (.+)/)?.[1] ?? 'null')
   assert.ok(evidence, mechanics.stdout)
   const fixtureBeforeCleanup = fixtureSnapshot()
-  // The child has exited; require removal before testing ordinary reinstall behavior.
-  for (const entry of readdirSync(project)) if (entry.startsWith('mechanics-')) rmSync(join(project, entry), { recursive: true, force: true })
+  // One owner removes the exact fixture after the child exits and releases its handles.
+  assert.equal(dirname(evidence.fixtureRoot), realpathSync(project), 'Fixture belongs to this private target')
+  assert.ok(basename(evidence.fixtureRoot).startsWith('mechanics-'))
+  assert.ok(existsSync(evidence.fixtureRoot), 'Child retains its fixture for parent-owned cleanup')
+  rmSync(evidence.fixtureRoot, { recursive: true, maxRetries: 5, retryDelay: 100 })
   assert.ok(!readdirSync(project).some(entry => entry.startsWith('mechanics-')), JSON.stringify({ phase: 'immediate fixture cleanup', fixtureBeforeCleanup, remaining: fixtureSnapshot() }))
   records.push({ check: 'scripted installed mechanics', status: 'pass', evidence })
   assert.equal(treeDigest(installed), original, 'Installation remained immutable')
