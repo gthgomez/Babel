@@ -21,7 +21,7 @@ repo root unless you have installed the package binary yourself.
 
 ## Requirements
 
-- Node.js **22.5+**
+- Node.js **22.19+ in the 22.x line, or 24.5+**
 - PowerShell (`pwsh`) for the helper scripts in this guide
 - A provider API key for model-backed sessions
 - Docker plus a sandbox image **or** `dev_local` / host fallback before

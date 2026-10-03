@@ -1,6 +1,6 @@
 // License: Apache-2.0 — see LICENSE
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -22,7 +22,9 @@ const answer = (text) => [
  * @returns {Promise<object>} Compact observed evidence; assertions fail closed.
  */
 export async function runInstalledMechanics(packageRoot, projectRoot) {
-  const fixture = mkdtempSync(join(projectRoot, 'mechanics-'))
+  // macOS /var aliases /private/var; the lease must bind the same canonical
+  // repository identity as runtime admission and the sandbox.
+  const fixture = realpathSync(mkdtempSync(join(projectRoot, 'mechanics-')))
   const settings = {
     BABEL_RUNS_DIR: join(fixture, 'runs'),
     BABEL_BENCHMARK_AUTO_APPROVE: '1', BABEL_BENCHMARK_MODE: '1',
@@ -134,7 +136,7 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
     assert.equal(readFileSync(join(fixture, 'parser.mjs'), 'utf8'), fixed)
     const verifiers = fixing.getParityRuntime().eventLog.events.filter((event) =>
       event.kind === 'tool_result' && event.tool_name === 'run_command')
-    assert.deepEqual(verifiers.map((call) => call.exit_code), [1, 0], 'real red then green verifier exits')
+    assert.deepEqual(verifiers.map((call) => call.exit_code), [1, 0], `real red then green verifier exits: ${JSON.stringify(verifiers)}`)
     assert.ok(fixing.getWriteCount() > 0)
     assert.equal(fixing.lastVerifierReceipt?.exit_code, 0)
     assert.equal(repaired.terminal.status, 'completed', JSON.stringify({ terminal: repaired.terminal,

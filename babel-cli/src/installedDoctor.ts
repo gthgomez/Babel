@@ -6,6 +6,11 @@ import { listProviderSpecs } from './runners/providerRegistry.js'
 
 type Check = { id: string; status: 'ok' | 'warn' | 'fail'; message: string }
 
+export function supportsInstalledNode(version: string): boolean {
+  const [major = 0, minor = 0] = version.replace(/^v/, '').split('.').map(Number)
+  return (major === 22 && minor >= 19) || (major === 24 && minor >= 5) || major > 24
+}
+
 /** Read-only installed diagnostics; presence checks never expose credential values. */
 export function runInstalledDoctor(options: {
   paths?: ReturnType<typeof resolveRuntimePaths>
@@ -15,13 +20,12 @@ export function runInstalledDoctor(options: {
 } = {}): { status: 'ok' | 'warn' | 'fail'; kind: string; paths: ReturnType<typeof resolveRuntimePaths>; checks: Check[] } {
   const env = options.env ?? process.env
   const paths = options.paths ?? resolveRuntimePaths(env)
-  const [major = 0, minor = 0] = process.versions.node.split('.').map(Number)
-  const nodeReady = major > 22 || (major === 22 && minor >= 19)
+  const nodeReady = supportsInstalledNode(process.versions.node)
   const configured = listProviderSpecs().filter(p => p.authorityConformance === 'certified' && p.credentialEnvVar && env[p.credentialEnvVar]?.trim()).map(p => p.id)
   const dockerReady = options.dockerProbe ? options.dockerProbe() :
     spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 3000, stdio: 'ignore', env }).status === 0
   const checks: Check[] = [
-    { id: 'node', status: nodeReady ? 'ok' : 'fail', message: `Node ${process.versions.node}; requires >=22.19.0` },
+    { id: 'node', status: nodeReady ? 'ok' : 'fail', message: `Node ${process.versions.node}; requires ^22.19.0 or >=24.5.0` },
     { id: 'resources', status: existsSync(join(paths.resourceRoot, 'prompt_catalog.yaml')) ? 'ok' : 'fail', message: paths.resourceRoot },
     { id: 'provider', status: configured.length ? 'ok' : 'warn', message: configured.length ?
       `Credential environment configured for: ${configured.join(', ')} (not authenticated)` :
