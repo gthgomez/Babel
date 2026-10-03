@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#030a17">
+<meta name="description" content="Babel Desktop — Run. Verify. Understand. An interactive implementation of the Babel North Star.">
+<!--CSP-->
+<title>Babel — Run. Verify. Understand.</title>
+<style>/*STYLES*/</style>
+</head>
+<body>
+<a class="skip-link" href="#composer-input">Skip to message composer</a>
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="wordmark"><button class="brand-button" data-action="about" aria-label="About Babel"><img class="brand-mark" src="__LOGO__" alt=""><span>BABEL</span></button></div>
+    <nav class="top-tabs" aria-label="Execution mode" id="top-tabs"></nav>
+    <div class="top-telemetry"><span id="top-model">gpt-5.6-sol</span><span class="status-dot small preview-model-dot"></span><span class="vertical-rule"></span><span class="context-label">context <span id="top-context">38%</span></span><span class="vertical-rule"></span><time id="clock">10:24 AM</time></div>
+    <span class="top-motto">Run. Verify. Understand.</span>
+    <div class="mobile-controls"><button data-action="toggle-left" aria-label="Toggle sessions">__MENU__</button><button data-action="toggle-right" aria-label="Toggle controls">__SETTINGS__</button></div>
+  </header>
+  <div class="workspace">
+    <aside class="left-panel" aria-label="Sessions and project">
+      <section class="sessions-section"><div class="section-heading"><h2>SESSIONS</h2><button class="icon-button" data-action="new-session" title="New session (Ctrl+Alt+N)" aria-label="New session">__PLUS__</button></div><div class="session-list" id="sessions"></div><button class="show-more" data-action="show-more" id="show-more">Show more...</button></section>
+      <section class="project-section"><div class="section-heading"><h2>PROJECT</h2><button class="project-open icon-button" data-action="open-project" title="Open project" aria-label="Open project">__FOLDER__</button></div><div class="project-tree" id="project-tree" aria-label="Project files"></div></section>
+      <section class="quick-section"><div class="section-heading"><h2>QUICK ACTIONS</h2></div><div id="quick-actions" class="quick-actions"></div></section>
+    </aside>
+    <main class="center-panel" aria-label="Conversation">
+      <div class="conversation" id="conversation" tabindex="0" aria-label="Messages"></div>
+      <div class="composer-wrap"><form class="composer" id="composer-form"><button class="send-button" type="submit" id="send-button" title="Send message (Ctrl+Enter)" aria-label="Send message">__CHEVRON__</button><textarea id="composer-input" aria-label="Message Babel" rows="1" spellcheck="false" placeholder="Type a message to Babel..."></textarea><div class="composer-hints"><span>Ctrl+Enter send</span><span class="vertical-rule"></span><span>Shift+Enter newline</span></div><button class="stop-button" type="button" data-action="stop" aria-label="Stop preview response" hidden>__STOP__</button></form></div>
+    </main>
+    <aside class="right-panel" aria-label="Babel controls">
+      <section class="identity-section"><div class="identity-brand"><img src="__LOGO__" alt="Babel logo"><div><div class="identity-name">BABEL</div><div class="identity-motto">Run. Verify. Understand.</div></div></div><p>Open-source coding-agent harness<br>for inspectable, verifiable<br>agent work.</p></section>
+      <section class="mode-section"><h2>MODE</h2><div id="mode-controls" class="mode-controls" role="group" aria-label="Mode"></div></section>
+      <section class="model-section"><h2>MODEL</h2><div id="model-controls" class="model-controls" role="group" aria-label="Model"></div><button class="more-models" data-action="models">More models...</button></section>
+      <section class="tools-section"><h2>TOOLS</h2><div id="tool-controls" class="tool-controls"></div></section>
+      <section class="context-section"><h2>CONTEXT</h2><div class="context-meter-row"><div class="context-meter" id="context-meter" role="progressbar" aria-label="Reference context usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="38"><div class="context-fill" id="context-fill"></div></div><span id="context-value">38%</span></div><div class="token-count" id="token-count">42,318 / 112,000 tokens</div></section>
+      <section class="status-section"><h2>STATUS</h2><button class="status-main" data-action="connection" title="Preview and connection information"><span class="status-dot" id="main-status-dot"></span><span id="main-status">Preview</span></button><p id="status-detail">Sample session · no engine connected.</p></section>
+    </aside>
+  </div>
+  <footer class="bottom-bar"><div class="footer-left"><span>BABEL <span id="version">v0.1.0-preview</span></span><span class="vertical-rule"></span><button data-action="repo" class="repo-link">github.com/gthgomez/Babel</button></div><div class="footer-right"><button class="preview-badge" data-action="connection" id="preview-badge">REFERENCE PREVIEW</button><span>Open source. Built in public.</span></div></footer>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<dialog id="dialog" aria-labelledby="dialog-title"><div class="dialog-header"><h2 id="dialog-title"></h2><button class="icon-button" data-action="close-dialog" aria-label="Close dialog">__CLOSE__</button></div><div id="dialog-content" class="dialog-content"></div></dialog>
+<div id="live-announcement" class="sr-only" aria-live="polite"></div>
+<script>/*SCRIPT*/</script>
+</body></html>

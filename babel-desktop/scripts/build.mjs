@@ -1,0 +1,20 @@
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { Script } from 'node:vm';
+import { fileURLToPath } from 'node:url';
+const root = fileURLToPath(new URL('../', import.meta.url));
+const logo = `data:image/png;base64,${(await readFile(root+'assets/babel-mark.png')).toString('base64')}`;
+const modules = ['core.mjs','icons.mjs','fixtures.mjs','app.mjs'];
+let script = '(function(){\n"use strict";\n'+(await Promise.all(modules.map(m=>readFile(root+'src/'+m,'utf8')))).map(s=>s.replace(/^import .*?;\s*$/gm,'').replace(/^export /gm,'')).join('\n')+'\n})();';
+script = script.replaceAll('__LOGO__',logo);
+new Script(script, { filename: 'babel-renderer.js' });
+// A script hash allows a portable, self-contained file without unsafe-inline scripts.
+const scriptHash = createHash('sha256').update(script).digest('base64');
+const csp = `default-src 'none'; script-src 'sha256-${scriptHash}'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`;
+const {icon} = await import('../src/icons.mjs');
+let html = await readFile(root+'src/index.html','utf8');
+html = html.replace('/*STYLES*/',await readFile(root+'src/styles.css','utf8')).replace('/*SCRIPT*/',()=>script).replace('<!--CSP-->',`<meta http-equiv="Content-Security-Policy" content="${csp}">`).replaceAll('__LOGO__',logo);
+for(const [token,name] of Object.entries({MENU:'menu',SETTINGS:'settings',PLUS:'plus',FOLDER:'folderOpen',CHEVRON:'chevron',STOP:'stop',CLOSE:'close'})) html = html.replaceAll(`__${token}__`,icon(name));
+await mkdir(root+'dist',{recursive:true});
+await writeFile(root+'dist/index.html',html);
+console.log(`Built dist/index.html (${Math.round(Buffer.byteLength(html)/1024)} KB). No dependencies or remote assets.`);
