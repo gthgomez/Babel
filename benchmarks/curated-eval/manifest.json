@@ -26,7 +26,7 @@
         "kind": "babel_original",
         "name": "Babel original fixture",
         "repository": "https://github.com/gthgomez/Babel",
-        "revision": "fixture-sha256:28b66796d86c9f9c56971870436575b7e1e7a8b4e3032648887d7fa35d52a11b",
+        "revision": "fixture-sha256:9ccd7290e83d5e043894fa3ff3e56d6fa438e2d467a9314e70c3b530c6e524b5",
         "license": "Apache-2.0",
         "fixture": "fixtures/csv-rollup-cli"
       },
@@ -49,7 +49,7 @@
       "fixture": {
         "solver_dir": "fixtures/csv-rollup-cli/solver",
         "grader_dir": "fixtures/csv-rollup-cli/grader",
-        "solver_sha256": "sha256:28b66796d86c9f9c56971870436575b7e1e7a8b4e3032648887d7fa35d52a11b"
+        "solver_sha256": "sha256:9ccd7290e83d5e043894fa3ff3e56d6fa438e2d467a9314e70c3b530c6e524b5"
       },
       "limits": {
         "wall_seconds": 300,
@@ -92,7 +92,7 @@
         "kind": "babel_original",
         "name": "Babel original fixture",
         "repository": "https://github.com/gthgomez/Babel",
-        "revision": "fixture-sha256:e23d9de24992d6772f41ea2560c67f8e4b090e613114909c563030e517f1a48b",
+        "revision": "fixture-sha256:de0d04fcb048accc205df66489ed27c0c13d5cc1bbfb5dce29e799eeeb599aff",
         "license": "Apache-2.0",
         "fixture": "fixtures/repo-map-read-only"
       },
@@ -115,7 +115,7 @@
       "fixture": {
         "solver_dir": "fixtures/repo-map-read-only/solver",
         "grader_dir": "fixtures/repo-map-read-only/grader",
-        "solver_sha256": "sha256:e23d9de24992d6772f41ea2560c67f8e4b090e613114909c563030e517f1a48b"
+        "solver_sha256": "sha256:de0d04fcb048accc205df66489ed27c0c13d5cc1bbfb5dce29e799eeeb599aff"
       },
       "limits": {
         "wall_seconds": 240,

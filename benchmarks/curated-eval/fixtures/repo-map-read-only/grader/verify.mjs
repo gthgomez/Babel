@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const referenceReport = {
   request_flow: [
@@ -21,11 +21,15 @@ export async function writeReference(workspace) {
   await import('node:fs/promises').then(({ writeFile }) => writeFile(reportPath, `${JSON.stringify(referenceReport, null, 2)}\n`))
 }
 
-export async function verify(workspace) {
+export async function verify(workspace, { fixtureRoot = fileURLToPath(new URL('../solver', import.meta.url)) } = {}) {
   try {
+    for (const relative of ['src/api/charge-route.mjs', 'src/auth/tenant-policy.mjs', 'src/billing/charges.mjs', 'test/charge-route.test.mjs']) {
+      const [submitted, trusted] = await Promise.all([readFile(path.join(workspace, relative), 'utf8'), readFile(path.join(fixtureRoot, relative), 'utf8')])
+      assert.equal(submitted.replaceAll('\r\n', '\n'), trusted.replaceAll('\r\n', '\n'), `Protected fixture changed: ${relative}`)
+    }
     const report = JSON.parse(await readFile(path.join(workspace, 'reports', 'architecture.json'), 'utf8'))
     assert.deepEqual(report, referenceReport, 'report must identify the real request, authorization, billing, and test path')
-    const route = await import(pathToFileURL(path.join(workspace, 'src/api/charge-route.mjs')).href + `?grader=${Date.now()}`)
+    const route = await import(pathToFileURL(path.join(fixtureRoot, 'src/api/charge-route.mjs')).href + `?grader=${Date.now()}`)
     const denied = route.postCharge({
       tenantId: 'tenant-a',
       invoice: { id: 'private-invoice', tenantId: 'tenant-b', items: [{ amountCents: 99 }] },

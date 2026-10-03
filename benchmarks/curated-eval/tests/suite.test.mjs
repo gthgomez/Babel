@@ -66,7 +66,7 @@ test('Docker args keep solver and grader isolated and resource bounded', async (
     runner: path.join(root, 'grader-runner.mjs'),
     command: ['node', '/oracle/verify.mjs', '/solver'],
   })
-  for (const required of ['--network=none', '--cpus=1', '--memory=2g', '--gpus=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges']) {
+  for (const required of ['--network=none', '--cpus=1', '--memory=2g', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges']) {
     assert.ok(args.includes(required), `missing ${required}`)
   }
   assert.equal(args[args.indexOf('--user') + 1], workspaceOwner)

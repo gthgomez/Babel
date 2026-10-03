@@ -42,10 +42,16 @@ test('every original oracle rejects the broken baseline, accepts its reference r
         await assert.rejects(readFile(path.join(workspace, 'reference', 'solve.mjs')))
 
         await grader.writeReference(workspace)
+        // Only the trusted reference control is executed here, outside grading.
+        // Live submissions must generate their artifact in the isolated solver.
+        if (task.id === 'csv-rollup-cli') {
+          const run = spawnSync(process.execPath, [path.join(workspace, 'src/summarize.mjs'), 'input/events.csv', 'output/summary.csv'], { cwd: workspace, encoding: 'utf8', timeout: 5000 })
+          assert.equal(run.status, 0, run.stderr)
+        }
         const repaired = verifyInFreshProcess(graderPath, workspace)
         assert.equal(repaired.status, 'passed', repaired.errors.join('\n'))
 
-        const artifact = task.expected_artifacts[0]
+        const artifact = task.expected_artifacts.at(-1)
         await writeFile(path.join(workspace, artifact), '/* deliberate broken negative control */\n')
         const negative = verifyInFreshProcess(graderPath, workspace)
         assert.equal(negative.status, 'failed', 'oracle must reject a deliberately broken repair')

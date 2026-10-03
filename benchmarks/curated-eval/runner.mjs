@@ -203,14 +203,30 @@ async function walkFiles(root, relative = '') {
   return paths.sort()
 }
 
-/** Hash the full solver-visible tree, rejecting symlinks and special files. */
+function logicalMode(stats) {
+  // Git tracks executability, not a checkout's umask or Windows writable bits.
+  return process.platform !== 'win32' && (stats.mode & 0o111) ? 0o755 : 0o644
+}
+
+function fixtureContent(bytes) {
+  // These catalog fixtures are UTF-8 text; LF and CRLF checkouts are equivalent.
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  if (text.includes('\0')) throw new Error('Curated fixtures must contain UTF-8 text')
+  return text.replaceAll('\r\n', '\n')
+}
+
+function diffContent(bytes) {
+  try { return fixtureContent(bytes) } catch { return bytes }
+}
+
+/** Hash fixture text and Git-style logical modes, rejecting links and special files. */
 export async function hashTree(root) {
   const hash = createHash('sha256')
   for (const relative of await walkFiles(root)) {
     const filename = path.join(root, relative)
     const stats = await lstat(filename)
-    hash.update(`${relative}\0${stats.mode & 0o777}\0`)
-    hash.update(await readFile(filename))
+    hash.update(`${relative}\0${logicalMode(stats)}\0`)
+    hash.update(fixtureContent(await readFile(filename)))
     hash.update('\0')
   }
   return `sha256:${hash.digest('hex')}`
@@ -290,12 +306,12 @@ export async function collectWorkspaceDiff(beforeRoot, afterRoot) {
   for (const relative of beforePaths) {
     const filename = path.join(beforeRoot, relative)
     const stats = await lstat(filename)
-    before.set(relative, { digest: createHash('sha256').update(await readFile(filename)).digest('hex'), mode: stats.mode & 0o777 })
+    before.set(relative, { digest: createHash('sha256').update(diffContent(await readFile(filename))).digest('hex'), mode: logicalMode(stats) })
   }
   for (const relative of afterPaths) {
     const filename = path.join(afterRoot, relative)
     const stats = await lstat(filename)
-    after.set(relative, { digest: createHash('sha256').update(await readFile(filename)).digest('hex'), mode: stats.mode & 0o777 })
+    after.set(relative, { digest: createHash('sha256').update(diffContent(await readFile(filename))).digest('hex'), mode: logicalMode(stats) })
   }
   const added = afterPaths.filter((item) => !before.has(item))
   const deleted = beforePaths.filter((item) => !after.has(item))
@@ -407,7 +423,6 @@ export function buildIsolatedDockerArgs(task, options) {
     'run', '--rm', '--network=none',
     `--cpus=${task.environment.cpus}`,
     `--memory=${Math.round(task.environment.memory_mb / 1024)}g`,
-    '--gpus=none',
     '--read-only',
     '--cap-drop=ALL',
     '--security-opt=no-new-privileges',
@@ -416,6 +431,7 @@ export function buildIsolatedDockerArgs(task, options) {
     '--workdir', task.environment.working_directory,
     '--mount', bindMount(workspacePath, role === 'grader' ? '/solver' : task.environment.working_directory, role === 'grader'),
   ]
+  if (task.environment.gpus > 0) args.push(`--gpus=${task.environment.gpus}`)
   if (role === 'solver') {
     args.push('--user', task.environment.container_user ?? workspaceOwnerUser())
     args.push('--env=HOME=/tmp/agent-home', '--env=BABEL_CURATED_ISOLATED_SOLVER=1')
@@ -432,7 +448,7 @@ export function buildIsolatedDockerArgs(task, options) {
       '--user', workspaceOwnerUser(),
       '--mount', bindMount(graderPath, '/oracle', true),
       '--mount', bindMount(outputPath, '/out', false),
-      '--mount', bindMount(runnerPath, '/runner/grade.mjs', true),
+      '--mount', bindMount(path.dirname(runnerPath), '/runner', true),
     )
   }
   args.push(task.environment.image, ...command)
@@ -444,7 +460,7 @@ export async function runIsolatedVerifier(task, options) {
   const args = buildIsolatedDockerArgs(task, {
     ...options,
     role: 'grader',
-    command: ['node', '/runner/grade.mjs', '/solver', '/oracle/verify.mjs', task.id],
+    command: ['node', '/runner/grader-runner.mjs', '/solver', '/oracle/verify.mjs', task.id],
   })
   const result = spawnSync(options.docker ?? 'docker', args, {
     encoding: 'utf8',

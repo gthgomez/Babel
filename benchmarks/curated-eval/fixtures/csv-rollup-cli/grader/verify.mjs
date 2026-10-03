@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { spawnSync } from 'node:child_process'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 
 const reference = `import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 function parseCsv(text) {
   const rows = []
@@ -47,7 +48,7 @@ export async function main(inputPath = 'input/events.csv', outputPath = 'output/
   await writeFile(outputPath, output)
 }
 
-if (import.meta.url === new URL(process.argv[1], 'file:').href) await main(process.argv[2], process.argv[3])
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main(process.argv[2], process.argv[3])
 `
 
 function parseCsv(text) {
@@ -107,29 +108,20 @@ export async function writeReference(workspace) {
   await writeFile(source, reference)
 }
 
-export async function verify(workspace) {
-  const script = path.join(workspace, 'src', 'summarize.mjs')
+export async function verify(workspace, { fixtureRoot = fileURLToPath(new URL('../solver', import.meta.url)) } = {}) {
   const input = path.join(workspace, 'input', 'events.csv')
   const output = path.join(workspace, 'output', 'summary.csv')
-  await rm(output, { force: true })
-  const run = spawnSync(process.execPath, [script, input, output], {
-    cwd: workspace,
-    encoding: 'utf8',
-    timeout: 5000,
-  })
-  if (run.status !== 0) {
-    return { status: 'failed', assertions: 1, errors: [run.stderr || `summarizer exited ${run.status}`] }
-  }
   try {
-    const [actual, sourceText] = await Promise.all([readFile(output, 'utf8'), readFile(input, 'utf8')])
-    assert.equal(actual, expectedSummary(sourceText), 'rollup rows must be behaviorally correct and sorted')
+    const [actual, submittedInput, trustedInput] = await Promise.all([readFile(output, 'utf8'), readFile(input, 'utf8'), readFile(path.join(fixtureRoot, 'input/events.csv'), 'utf8')])
+    assert.equal(submittedInput.replaceAll('\r\n', '\n'), trustedInput.replaceAll('\r\n', '\n'), 'input fixture must remain unchanged')
+    assert.equal(actual.replaceAll('\r\n', '\n'), expectedSummary(trustedInput), 'rollup rows must match the immutable fixture and be sorted')
     return { status: 'passed', assertions: 2, errors: [] }
   } catch (error) {
     return { status: 'failed', assertions: 2, errors: [error.message] }
   }
 }
 
-if (process.argv[1] && import.meta.url === new URL(process.argv[1], 'file:').href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const result = await verify(path.resolve(process.argv[2] ?? '.'))
   process.stdout.write(`${JSON.stringify(result)}\n`)
   if (result.status !== 'passed') process.exitCode = 1

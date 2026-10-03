@@ -7,7 +7,7 @@ This initial slice is a reusable behavioral harness, not a leaderboard or a mode
 | `csv-rollup-cli` | Babel original | Terminal/data processing | Independently recomputed deduplicated CSV output |
 | `repo-map-read-only` | Babel original | Read-only repository exploration | Exact architecture report plus executable authorization behavior |
 
-Each task pins its solver fixture content and modes with SHA-256, and declares image digest, resource/time/turn/token limits, expected artifacts, scoring, and permitted workspace changes in `manifest.json`.
+Each task pins its UTF-8 solver fixture content (canonical LF) and Git-style executable modes with SHA-256. Checkout umask and Windows writable bits do not change the digest. The manifest also declares image digest, resource/time/turn/token limits, expected artifacts, scoring, and permitted workspace changes.
 
 ## No-spend selection
 
@@ -28,6 +28,10 @@ Repeat `--category` or `--task` for multiple selections. Turn, seconds, token, a
 node --test benchmarks/curated-eval/tests/*.test.mjs
 ```
 
-The deterministic oracle test requires each broken/no-op fixture to fail, a grader-authored reference repair to pass, and a deliberately broken repair to fail. The scorer checks added, modified, and deleted files against an allowlist and requires a passing behavioral verifier. The grader runs in a separate no-network container with a read-only solver copy and oracle mount.
+The existing CLI `test:benchmark-eval` hosted gate also runs this suite. It exercises deterministic fixtures without Docker, credentials or provider requests.
+
+The deterministic oracle test requires each broken/no-op fixture to fail, a trusted reference control to pass, and a deliberately broken artifact to fail. CSV submissions must generate their output in the solver before grading; grading checks the submitted output against immutable fixture input and never executes submission code. The repository verifier compares protected source with its trusted fixture and imports only that trusted source. These fixed-fixture checks do not establish general behavior on unseen inputs.
+
+The grader checks the complete copied workspace against the catalog's change policy before invoking its trusted verifier. It runs in a separate no-network container with read-only solver, oracle and suite mounts; only its report mount is writable. Oracle/reference files are never mounted in the solver. Zero GPUs omit the Docker GPU request. Host oracle controls do not qualify the actual Docker isolation path.
 
 `adapters/chat-engine-result.mjs` maps an already completed Babel `ChatResult` into the versioned report schema. It does not invoke ChatEngine or dispatch provider requests. The live solver/provider route is not integrated here; task and grader containers are offline, and the separate OpenCode Go transport is not yet an installed-CLI route. This core slice has not had its pinned Docker image execution qualified in this environment.
