@@ -1,11 +1,11 @@
 /**
- * research/hunt.ts — Repo Hunt discovery orchestration (Slice B)
+ * research/hunt.ts - Repo Hunt discovery and bounded analysis orchestration
  *
- * Runs one research mission through the discovery half of the pipeline:
+ * Runs one research mission through the discovery pipeline:
  * query plan → provider search → merge/dedup → deterministic triage →
  * diversity shortlist, persisting every artifact and a metrics receipt.
- * The shortlist is the terminal output of Slice B: no deep model reader
- * runs yet, and no foreign code is executed.
+ * A completed discovery can continue through the bounded reader and
+ * evidence validator. No foreign code is executed.
  *
  * Rate limiting is an explicit non-success state: when the request budget
  * pauses or exhausts, the run is persisted as PAUSED/INCOMPLETE with the
@@ -21,6 +21,7 @@ import { rankCandidates, type TriageContext } from './discovery/triage.js';
 import {
   RateBudgetExhaustedError,
   RateBudgetPausedError,
+  bindMissionByteBudget,
   type RateBudgetSnapshot,
 } from './rateBudget.js';
 import { buildQueryPlan, extractProblemTerms } from './queryPlanner.js';
@@ -110,6 +111,7 @@ export async function runHuntDiscovery(
   let budgetSnapshot: RateBudgetSnapshot | null = null;
 
   const githubProvider = provider as { budget?: { snapshot(): RateBudgetSnapshot } };
+  bindMissionByteBudget(provider, mission.budget.max_remote_bytes);
 
   try {
     for (const hypothesis of queryPlan.hypotheses) {
@@ -149,18 +151,28 @@ export async function runHuntDiscovery(
   const shortlist = selectDiverseShortlist(ranked, { limit: mission.budget.max_enriched_candidates });
 
   let deep: DeepAnalysisResult | null = null;
-  if (!options.skipDeepAnalysis && shortlist.length > 0) {
-    deep = await runDeepAnalysis(
-      mission,
-      provider,
-      shortlist.map((s) => s.candidate),
-      paths,
-      {
-        strategy: options.readerStrategy ?? keywordReaderStrategy,
-        ...(options.now ? { now: options.now } : {}),
-      },
-    );
+  if (status === 'COMPLETE' && !options.skipDeepAnalysis && shortlist.length > 0) {
+    try {
+      deep = await runDeepAnalysis(
+        mission,
+        provider,
+        shortlist.map((s) => s.candidate),
+        paths,
+        {
+          strategy: options.readerStrategy ?? keywordReaderStrategy,
+          ...(options.now ? { now: options.now } : {}),
+        },
+      );
+      if (deep.status !== 'COMPLETE') {
+        status = deep.status;
+        reason = deep.reason;
+      }
+    } catch (error) {
+      status = error instanceof RateBudgetPausedError ? 'PAUSED' : 'INCOMPLETE';
+      reason = error instanceof Error ? error.message : String(error);
+    }
   }
+  budgetSnapshot = githubProvider.budget?.snapshot() ?? null;
 
   const metrics: HuntMetrics = {
     candidate_count: pagesByHypothesis.reduce((sum, p) => sum + p.entries.length, 0),

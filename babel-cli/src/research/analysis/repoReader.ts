@@ -141,17 +141,28 @@ export class RepoReaderSession {
     if (content === undefined) return null;
     const totalLines = content.split('\n').length;
     const clampedEnd = Math.min(endLine, totalLines, startLine + 499);
-    const excerpt = excerptLines(content, startLine, clampedEnd);
-    if (excerpt === null) return null;
-    const actualEnd = startLine + excerpt.split('\n').length - 1;
-    const truncated = Buffer.byteLength(excerpt, 'utf8') >= MAX_READ_BYTES || actualEnd < endLine;
+    const requested = excerptLines(content, startLine, clampedEnd);
+    if (requested === null) return null;
+    const returnedLines: string[] = [];
+    let bytes = 0;
+    for (const line of requested.split('\n')) {
+      const nextBytes = Buffer.byteLength(line, 'utf8') + (returnedLines.length ? 1 : 0);
+      if (bytes + nextBytes > MAX_READ_BYTES) break;
+      returnedLines.push(line);
+      bytes += nextBytes;
+    }
+    // A partial line cannot have an honest line-range evidence ref.
+    if (returnedLines.length === 0) return null;
+    const excerpt = returnedLines.join('\n');
+    const actualEnd = startLine + returnedLines.length - 1;
+    const truncated = actualEnd < endLine;
     const ref = this.issueRef(path, startLine, actualEnd, excerpt);
     this.pushRef(path, ref);
     return {
       path,
       start_line: startLine,
       end_line: actualEnd,
-      content: excerpt.length > MAX_READ_BYTES ? excerpt.slice(0, MAX_READ_BYTES) : excerpt,
+      content: excerpt,
       truncated,
       evidence_ref_id: ref.evidence_id,
     };

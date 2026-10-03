@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EvidenceRefV1 } from '../contracts.js';
 import type { RepositorySnapshot } from './snapshot.js';
-import { sha256Hex } from './snapshot.js';
+import { excerptLines, sha256Hex } from './snapshot.js';
 
 export interface CreateEvidenceRefInput {
   path: string;
@@ -26,6 +26,8 @@ export function createEvidenceRef(snapshot: RepositorySnapshot, input: CreateEvi
   const entry = snapshot.manifest.files.find((file) => file.path === input.path);
   const content = snapshot.files.get(input.path);
   if (!entry || content === undefined) return null;
+  const excerpt = excerptLines(content, input.startLine ?? 1, input.endLine ?? content.split('\n').length);
+  if (excerpt === null) return null;
   return {
     schema_version: 1,
     evidence_id: `ev_${randomUUID().slice(0, 12)}`,
@@ -36,7 +38,7 @@ export function createEvidenceRef(snapshot: RepositorySnapshot, input: CreateEvi
     ...(input.blobSha !== undefined ? { blob_sha: input.blobSha } : {}),
     ...(input.startLine !== undefined ? { start_line: input.startLine } : {}),
     ...(input.endLine !== undefined ? { end_line: input.endLine } : {}),
-    content_hash: input.contentHash ?? entry.content_hash ?? sha256Hex(content),
+    content_hash: input.contentHash ?? sha256Hex(excerpt),
     acquisition_method: 'github_contents',
     observed_at: snapshot.manifest.created_at,
   };
