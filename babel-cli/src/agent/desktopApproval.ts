@@ -24,7 +24,7 @@ export function parseDesktopApprovalLine(line: string): 'allow_once' | 'deny' {
   return parseDesktopDecision(line) === 'allow_once' ? 'allow_once' : 'deny';
 }
 
-let readerStarted = false;
+let reader: ReturnType<typeof createInterface> | null = null;
 let pending: ((decision: DesktopDecision) => void) | null = null;
 let cancelHandler: (() => void) | null = null;
 
@@ -34,13 +34,20 @@ export function setDesktopCancelHandler(handler: (() => void) | null): void {
 }
 
 /**
- * One readline owns stdin for the process. A second reader would steal
+ * One readline owns stdin for the active turn. A second reader would steal
  * approval lines from the cancel line, or the reverse.
  */
 export function startDesktopIpc(): void {
-  if (readerStarted || !desktopApprovalEnabled()) return;
-  readerStarted = true;
-  const reader = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  if (reader || !desktopApprovalEnabled()) return;
+  reader = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const activeReader = reader;
+  reader.once('close', () => {
+    if (reader !== activeReader) return;
+    reader = null;
+    const resolve = pending;
+    pending = null;
+    resolve?.('deny');
+  });
   reader.on('line', (line) => {
     const decision = parseDesktopDecision(line);
     if (decision === 'cancel') {
@@ -62,6 +69,16 @@ export function startDesktopIpc(): void {
       resolve(decision);
     }
   });
+}
+
+/** Release stdin after the turn; a closed channel can never approve work. */
+export function stopDesktopIpc(): void {
+  cancelHandler = null;
+  const resolve = pending;
+  pending = null;
+  resolve?.('deny');
+  reader?.close();
+  reader = null;
 }
 
 /** Ask the Desktop window, then wait for one JSON decision on stdin. */

@@ -29,7 +29,7 @@ import {
 } from '../../agent/chatFailureClassification.js';
 import { detectAndBuildBlockedReport } from '../../agent/chatEngineSupport.js';
 import { BABEL_RUNS_DIR } from '../../cli/constants.js';
-import { desktopApprovalEnabled, setDesktopCancelHandler, startDesktopIpc } from '../../agent/desktopApproval.js';
+import { desktopApprovalEnabled, setDesktopCancelHandler, startDesktopIpc, stopDesktopIpc } from '../../agent/desktopApproval.js';
 import { getProtocolClient } from '../../protocol/client/index.js';
 import {
   classifyFailureText,
@@ -795,12 +795,6 @@ export async function runChatEngineOnce(input: {
   } else {
     convRenderer?.setCancelTarget(cancelViaProtocol);
   }
-  if (desktopApprovalEnabled()) {
-    startDesktopIpc();
-    setDesktopCancelHandler(() => {
-      cancelViaProtocol();
-    });
-  }
 
   const useStreaming =
     input.useStreaming ??
@@ -837,6 +831,10 @@ export async function runChatEngineOnce(input: {
 
   let result: ChatResult;
   try {
+    if (desktopApprovalEnabled()) {
+      startDesktopIpc();
+      setDesktopCancelHandler(cancelViaProtocol);
+    }
     if (!input.engine) {
       // P05/P11 headless companion: attach INSIDE the guarded region so any
       // throw before or during the stream releases the refcounted handle in
@@ -922,7 +920,7 @@ export async function runChatEngineOnce(input: {
     persistTurnAssistantCells(turnPersistence, convRenderer);
     finalizeProtocolTurn(protocolSession);
   } finally {
-    if (desktopApprovalEnabled()) setDesktopCancelHandler(null);
+    if (desktopApprovalEnabled()) stopDesktopIpc();
     if (execution !== null) coordinator.settle(execution);
     // Headless run end: release this run's admission-store reference (no-op
     // when the engine, and therefore the store, belongs to the caller).
