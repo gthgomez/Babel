@@ -205,6 +205,8 @@
   "files": [
     "bin/babel.js",
     "dist/**/*.js",
+    "dist/voice/audio-capture-worker.mjs",
+    "dist/voice/vad-worker.mjs",
     "dist/services/playbooks/*.json",
     "resources/",
     "LICENSE"

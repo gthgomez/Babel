@@ -1,0 +1,9 @@
+Babel North Star desktop implementation
+
+This source increment was created for the owner of the Babel project from the
+supplied BabelTuiNorthStar.png. The Babel name and logo are retained from that
+reference. The included logo crop and reference image are not newly designed
+or independently relicensed branding assets.
+
+New implementation source is provided under Apache-2.0. This package is not an
+upstream Babel release and contains no model provider credentials or font files.

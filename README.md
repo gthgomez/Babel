@@ -87,6 +87,8 @@ Then talk to it:
 Full first-success path (profiles, one-shots, recovery): **[START_HERE.md](./START_HERE.md)**.  
 Operational command reference: **[docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md)**.
 
+The North Star desktop shell lives in [`babel-desktop/`](./babel-desktop/README.md). Its opening screen is a visual reference. Coding behavior remains in `babel-cli`.
+
 ## What Babel does
 
 | Mode | Use it when |
