@@ -36,7 +36,7 @@ function command(binary, args, options = {}) {
   assert.ok((options.codes ?? [0]).includes(result.status), `${args.join(' ')}\n${result.stdout}\n${result.stderr}`)
   return result
 }
-function npm(args, options = {}) { return command(process.execPath, [npmCli, ...args], options) }
+function npm(args, options = {}) { return command(process.execPath, [npmCli, ...args], { timeout: 300000, ...options }) }
 const installed = join(prefix, 'node_modules', ...pkg.name.split('/'))
 const bin = join(installed, pkg.bin['babel-agent'])
 const cli = (args, options = {}) => command(process.execPath, [bin, ...args], { env: guardedEnv, ...options })
@@ -116,7 +116,7 @@ try {
   const shim = join(prefix, process.platform === 'win32' ? 'node_modules/.bin/babel-agent.cmd' : 'node_modules/.bin/babel-agent')
   assert.ok(existsSync(shim), 'npm installed the unambiguous executable')
   const shimVersion = process.platform === 'win32'
-    ? command(process.env.ComSpec || 'cmd.exe', ['/d', '/c', `call "${shim}" --version`], { env: guardedEnv })
+    ? command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${shim}" --version"`], { env: guardedEnv, windowsVerbatimArguments: true })
     : command(shim, ['--version'], { env: guardedEnv })
   assert.equal(shimVersion.stdout.trim(), pkg.version)
   const setup = json(['setup', '--json'])
