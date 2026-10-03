@@ -40,7 +40,11 @@ pwsh -File .\tools\validate-catalog.ps1
 
 ## PRE-EXISTING
 
-Validate/typecheck failures on files **not** in this change, or on the catalog when `CATALOG_IN_DIFF: false`, get label `PRE-EXISTING`. They **do not** enter the merge vote.
+Root [AGENTS.md](../../../AGENTS.md) owns evidence and merge policy. A failure is
+`PRE-EXISTING` only after reproduction on the relevant base/control or equivalent
+recorded evidence. File membership and an unchanged catalog alone do not establish
+causality. Report confirmed baseline failures and remaining verification limits;
+required checks still block merge.
 
 Only a breakage **introduced by this change** may be P0/P1. Introduced catalog/router regression → P0, `BLOCK`, category `control-plane`.
 

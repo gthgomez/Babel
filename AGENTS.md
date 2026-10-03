@@ -175,9 +175,10 @@ pwsh tools/validate-public-release.ps1
 ```
 
 Package scripts, workflow files and their executable checks own command details;
-raw `npx tsc` does not override the package typecheck. Maintainer release validation
-also uses `-Strict -RequireSupplementalPolicy -SupplementalPolicyPath` with the
-external `BABEL_PRIVATE_SCRUB_POLICY_PATH`. A missing required capability is a
+raw `npx tsc` does not override the package typecheck. Before maintainer merge,
+require a clean `validate-public-release.ps1` result with
+`-Strict -RequireSupplementalPolicy -SupplementalPolicyPath` and the external
+`BABEL_PRIVATE_SCRUB_POLICY_PATH`. A missing required capability is a
 reported blocker, never assumed evidence. Optional hooks and workspace helpers
 cannot waive pre-push checks or introduce mandatory quick/full/Docker cycles.
 
@@ -189,7 +190,7 @@ including the same model in a separate execution, may review. Record reviewed
 SHA, actual findings, unresolved issues and limitations in a PR comment/native
 review. Preserve rejections, repair findings, and review the resulting head again.
 Do not fabricate isolation, attribution or evidence. Custom Babel certification
-is optional advisory telemetry; its V3 validators retain their own guarantees.
+is optional advisory telemetry; its V3 validators retain their own evidence requirements.
 
 The managing agent owns Git mutations. Delegate only useful independent work;
 state task, revision, checks, exact allowed/forbidden paths, and whether patches
