@@ -2,7 +2,7 @@
  * U1.4: Slim interactive stack — budget-aware compilation tests.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,9 @@ import {
   resolveStackBudgetForClass,
   SWE_STACK_BUDGET,
 } from "./chatStackCompile.js";
+import { buildChatSystemPrompt } from "./chatToolDefinitions.js";
+import { mapProviderMessagesToWire } from "../runners/providerMessages.js";
+import { loadProjectSessionIdentityDispositionSync } from "../interactive/identity.js";
 
 describe("resolveStackBudgetForClass", () => {
   it("returns INTERACTIVE_STACK_BUDGET (12_000) for non-SWE classes", () => {
@@ -331,22 +334,69 @@ describe("compileChatStack shape invariants", () => {
 });
 
 describe("compileChatStack with real project root", () => {
-  it("loads identity from AGENTS.md when present in project root", () => {
-    // Bind the repository explicitly: package test runners start in babel-cli.
-    const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
-    const stack = compileChatStack({
-      projectRoot: repoRoot,
-      task: "fix a bug",
-      promptBudgetChars: 12_000,
-    });
+  for (const promptBudgetChars of [12_000, 24_000]) {
+    for (const target of ["root", "package"]) {
+      it(`renders canonical guards for ${target} at budget ${promptBudgetChars}`, () => {
+        // Bind the repository explicitly: package test runners start in babel-cli.
+        const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
+        const projectRoot = target === "root" ? repoRoot : join(repoRoot, "babel-cli");
+        const stack = compileChatStack({
+          projectRoot,
+          task: "fix a bug",
+          promptBudgetChars,
+        });
 
-    const identity = stack.selected_entries.find((e) => e.layer === "identity");
-    assert.ok(identity, "must have identity entry");
-    // When AGENTS.md exists, it should be loaded from repo root
-    assert.ok(
-      identity!.path === join(repoRoot, "AGENTS.md"),
-      `identity path should be the canonical root AGENTS.md, got: ${identity!.path}`,
-    );
-    assert.ok(identity!.contentPreview, "identity should have content preview");
-  });
+        const identity = stack.selected_entries.find((e) => e.layer === "identity");
+        assert.ok(identity, "must have identity entry");
+        assert.ok(identity.contentPreview, "identity should have content preview");
+        const session = loadProjectSessionIdentityDispositionSync(projectRoot);
+        assert.equal(session.fragments.find((fragment) => fragment.id === "session:agents")?.source,
+          join(repoRoot, "AGENTS.md"), "session must discover the sole canonical source");
+        if (target === "root") {
+          assert.equal(identity.path, join(repoRoot, "AGENTS.md"));
+          assert.equal(identity.source_truncated, false, "canonical policy must fit the source cap");
+          const source = readFileSync(identity.path, "utf8");
+          assert.ok(source.replace(/\r?\n/g, "\r\n").length <= 12_000,
+            "canonical policy must also fit the unchanged source cap on CRLF hosts");
+        }
+        const systemPrompt = buildChatSystemPrompt({
+          projectRoot,
+          nativeTools: true,
+          executionFirst: true,
+          // Match chatCore: dispatch identity followed by the compiled target stack.
+          systemContext: [session.systemContext, stack.system_context].join("\n\n"),
+        });
+        // Exercise the shared native request serializer without dispatching a provider.
+        const request = mapProviderMessagesToWire(
+          [{ role: "user", content: "fix a bug" }], systemPrompt,
+        );
+        const renderedSystem = request.find((message) => message.role === "system")?.content;
+        assert.equal(typeof renderedSystem, "string");
+        for (const guard of [
+          "Read AGENTS.md in full once before repository work",
+          "AGENTS.md alone owns contributor policy",
+          "no host adapters/nested instructions/",
+          "Never read credential files",
+          "-Strict -RequireExternalScanner",
+          "-RequireSupplementalPolicy",
+          "BABEL_PRIVATE_SCRUB_POLICY_PATH",
+          "agent-pr-merge.ps1",
+          "-ReviewedHeadSha",
+          "hostProtectedPrefixes",
+          "need explicit owner authorization",
+          "independent exact-head review",
+          "no admin bypass/candidate self-certification",
+        ]) {
+          if (target === "root") {
+            assert.ok(stack.system_context.includes(guard), `delivered stack must retain ${guard}`);
+          }
+          assert.ok(renderedSystem!.includes(guard), `rendered request must retain ${guard}`);
+        }
+        if (target === "root" && promptBudgetChars === 24_000) {
+          assert.equal(stack.content_disposition.find((entry) => entry.id === identity.id)?.status,
+            "included", "SWE stack must deliver the complete canonical policy");
+        }
+      });
+    }
+  }
 });
