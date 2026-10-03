@@ -3,6 +3,7 @@ const {contextBridge, ipcRenderer} = require('electron');
 // A fixed, narrow interface. No generic IPC, Node, shell, or credential API.
 contextBridge.exposeInMainWorld('babelDesktop',Object.freeze({
   getInfo:()=>ipcRenderer.invoke('babel:get-info'),
+  refreshDiagnostics:()=>ipcRenderer.invoke('babel:refresh-diagnostics'),
   chooseCli:()=>ipcRenderer.invoke('babel:choose-cli'),
   chooseProject:()=>ipcRenderer.invoke('babel:choose-project'),
   listSessions:()=>ipcRenderer.invoke('babel:list-sessions'),
