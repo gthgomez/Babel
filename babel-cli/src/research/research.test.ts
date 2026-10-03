@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   BUDGET_PRESET_VALUES,
@@ -13,7 +14,7 @@ import {
   type PatternCardV1,
 } from './contracts.js';
 import { FakeResearchProvider, fakeBlobSha, sha256Hex } from './fakeProvider.js';
-import { createResearchMission, resolveBudget } from './missionPlanner.js';
+import { createResearchMission, resolveBudget, computeRepoMapDigest, resolveTargetHeadSha } from './missionPlanner.js';
 import {
   appendJsonl,
   initializeResearchRun,
@@ -23,6 +24,33 @@ import {
 } from './artifacts.js';
 
 const FIXED_NOW = new Date('2026-10-03T12:00:00.000Z');
+
+test('unavailable repo-map evidence stays null across relocation and content edits', () => {
+  const roots = [mkdtempSync(join(tmpdir(), 'babel research original ')), mkdtempSync(join(tmpdir(), 'babel research moved '))];
+  try {
+    for (const root of roots) {
+      writeFileSync(join(root, 'README.md'), 'identical content');
+      assert.equal(computeRepoMapDigest(root), null);
+    }
+    writeFileSync(join(roots[0]!, 'README.md'), 'changed content');
+    assert.equal(computeRepoMapDigest(roots[0]!), null);
+  } finally { for (const root of roots) rmSync(root, {recursive:true, force:true}); }
+});
+
+test('target HEAD uses the bounded Git owner and handles missing Git or nonrepositories', () => {
+  const repo = fileURLToPath(new URL('../../../', import.meta.url));
+  assert.match(resolveTargetHeadSha(repo) ?? '', /^[0-9a-f]{40}$/);
+  const nonrepo = mkdtempSync(join(tmpdir(), 'babel research nonrepo '));
+  const prior = process.env['BABEL_GIT_PATH'];
+  try {
+    assert.equal(resolveTargetHeadSha(nonrepo), null);
+    process.env['BABEL_GIT_PATH'] = join(nonrepo, 'missing-git-executable');
+    assert.equal(resolveTargetHeadSha(repo), null);
+  } finally {
+    if (prior === undefined) delete process.env['BABEL_GIT_PATH']; else process.env['BABEL_GIT_PATH'] = prior;
+    rmSync(nonrepo, {recursive:true, force:true});
+  }
+});
 
 function makeMission(projectRoot: string) {
   return createResearchMission({

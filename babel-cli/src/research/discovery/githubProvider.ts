@@ -19,7 +19,7 @@ import type {
   RepositoryTree,
   ResolvedRevision,
 } from '../contracts.js';
-import { RateBudget, type RateLimitHeaders } from '../rateBudget.js';
+import { RateBudget, RateBudgetExhaustedError, type RateLimitHeaders } from '../rateBudget.js';
 
 const API_ROOT = 'https://api.github.com';
 
@@ -200,11 +200,29 @@ export class GitHubResearchProvider implements RepositoryResearchProvider {
         redact(url, this.options.token),
       );
     }
-    const text = await response.text();
-    this.rateBudget.recordHeaders(
-      headersFrom(response),
-      Number(response.headers.get('content-length') ?? Buffer.byteLength(text, 'utf8')),
-    );
+    this.rateBudget.recordHeaders(headersFrom(response), 0);
+    const reader = response.body?.getReader();
+    const chunks: Uint8Array[] = [];
+    try {
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          // Never trust Content-Length. Reject before retaining an overflow
+          // chunk; its already-received bytes remain honest in the receipt.
+          this.rateBudget.recordBytes(value.byteLength);
+          chunks.push(value);
+        }
+      }
+    } catch (error) {
+      this.rateBudget.recordError();
+      await reader?.cancel().catch(() => {});
+      if (error instanceof RateBudgetExhaustedError) throw error;
+      throw new GitHubApiError('GitHub response body could not be read', response.status, redact(url, this.options.token));
+    } finally {
+      reader?.releaseLock();
+    }
+    const text = Buffer.concat(chunks).toString('utf8');
     if (response.status === 403 || response.status === 429) {
       this.rateBudget.recordError();
       throw new GitHubApiError(
@@ -221,7 +239,12 @@ export class GitHubResearchProvider implements RepositoryResearchProvider {
       }
       throw new GitHubApiError(`GitHub API error ${response.status}`, response.status, redact(url, this.options.token));
     }
-    return JSON.parse(text) as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      this.rateBudget.recordError();
+      throw new GitHubApiError('GitHub returned invalid JSON', response.status, redact(url, this.options.token));
+    }
   }
 }
 
