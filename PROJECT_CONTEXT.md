@@ -79,6 +79,7 @@ repository, or safety instructions and is never automatically published.
 - **05_Project_Overlays:** Public example overlays only.
 - **06_Task_Overlays:** Public reusable task overlays and public example deltas.
 - **babel-cli:** Public runtime harness for the interactive coding agent (chat, plan, deep), resolver preview, read-only MCP, and governed pipeline execution.
+- **babel-desktop:** North Star Electron shell beside `babel-cli`. It is the desktop UI host. Coding behavior stays in `babel-cli`.
 - **AGENTS.md / `.agents/skills/`:** One contributor-policy owner and specialized technical references for stack assembly, code review, and validation.
 
 ## Key Contracts

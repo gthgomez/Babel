@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { resolveRuntimePaths } from '../config/runtimePaths.js';
 
 import { inspectCatalog } from '../control-plane/stackResolver.js';
 import { previewInstructionStackResolution } from '../control-plane/stackResolver.js';
@@ -10,7 +11,7 @@ import type { CatalogEntry } from '../control-plane/catalog.js';
 import type { InstructionStack, ResolutionPolicy } from '../schemas/agentContracts.js';
 import { InstructionStackSchema, ResolutionPolicySchema } from '../schemas/agentContracts.js';
 
-const BABEL_ROOT = process.env['BABEL_ROOT'] ?? resolve(import.meta.dirname, '..', '..', '..');
+const BABEL_ROOT = resolveRuntimePaths().resourceRoot;
 const CATALOG_PATH = resolve(BABEL_ROOT, 'prompt_catalog.yaml');
 const PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'babel-mcp';

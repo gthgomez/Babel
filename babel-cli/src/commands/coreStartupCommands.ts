@@ -1,3 +1,5 @@
+import { resolveRuntimePaths } from '../config/runtimePaths.js';
+import { runInstalledDoctor, installedSetupChecklist } from '../installedDoctor.js';
 import { join, resolve } from "node:path";
 import { Command } from "commander";
 import { registerRunIntelligenceCommands } from './runIntelligenceCommands.js';
@@ -120,7 +122,12 @@ function addDryModeOptions(command: Command): Command {
   return command.option("--json", "Emit structured JSON only");
 }
 
-function printSetupChecklist(options: { json?: boolean }): void {
+function printSetupChecklist(options: { json?: boolean; contributor?: boolean }): void {
+  if (resolveRuntimePaths().isInstalled && !options.contributor) {
+    const payload = installedSetupChecklist();
+    printJsonOrHuman(payload, payload.first_five_minutes.map(item => `${item.step}: ${item.command}${item.note ? ` — ${item.note}` : ""}`).join("\n"), options.json === true);
+    return;
+  }
   const payload = {
     status: "ok",
     kind: "first_five_minutes",
@@ -286,9 +293,10 @@ program
 
 program
     .command("setup")
+    .option("--contributor", "Show source contributor setup")
     .description("Show the read-only first-five-minutes setup checklist")
     .option("--json", "Emit structured JSON only")
-    .action((options: { json?: boolean }) => {
+    .action((options: { json?: boolean; contributor?: boolean }) => {
       printSetupChecklist(options);
     });
 
@@ -314,6 +322,7 @@ program
 
 program
     .command("doctor")
+    .option("--contributor", "Run repository contributor diagnostics")
     .description(
       "Everyday diagnostic: run Babel workspace health and integrity checks",
     )
@@ -355,8 +364,16 @@ Examples:
         repairPointers?: boolean;
         scope?: string;
         skills?: boolean;
+        contributor?: boolean;
       }) => {
         validateRuntimeEnvForCommand({ json: options.json === true });
+
+        if (resolveRuntimePaths().isInstalled && !options.contributor) {
+          const report = runInstalledDoctor({ strict: options.strict === true });
+          printJsonOrHuman(report, report.checks.map(check => `${check.status}: ${check.id} — ${check.message}`).join("\n"), options.json === true);
+          if (report.status === "fail") process.exitCode = 1;
+          return;
+        }
 
         if (options.skills === true) {
           const report = runSkillDoctor(BABEL_ROOT);

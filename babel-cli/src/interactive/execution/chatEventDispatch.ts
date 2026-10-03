@@ -13,7 +13,19 @@ import type { ProtocolTurnSession } from './chatTransport.js';
 
 export type ChatStreamEvent =
   | { type: 'assistant_chunk'; chunk: string }
-  | { type: 'thought'; text: string };
+  | { type: 'thought'; text: string }
+  | { type: 'tool_start'; toolCallId?: string; tool: string; target: string }
+  | {
+      type: 'tool_complete' | 'tool_failed'
+      toolCallId?: string
+      tool: string
+      target: string
+      detail?: string
+      error?: string
+      exitCode?: number
+    }
+  | { type: 'file_changed'; path: string; additions: number; deletions: number }
+  | { type: 'cancelled' };
 
 export interface ChatEventDispatchSinks {
   convRenderer?: ConversationalRenderer | null;
@@ -77,6 +89,12 @@ export function dispatchChatEvent(
       const id = sinks.convRenderer?.onToolCallStart(event.tool, event.target) ?? -1;
       if (event.toolCallId) sinks.toolIdsByCallId?.set(event.toolCallId, id);
       else sinks.toolIdQueue?.push(id);
+      sinks.onStreamEvent?.({
+        type: 'tool_start',
+        ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+        tool: event.tool,
+        target: event.target,
+      });
       break;
     }
     case 'tool_complete':
@@ -88,6 +106,15 @@ export function dispatchChatEvent(
         sinks.convRenderer?.onToolCallComplete(id, event.detail, event.error, event.exitCode);
       }
       if (event.toolCallId) sinks.toolIdsByCallId?.delete(event.toolCallId);
+      sinks.onStreamEvent?.({
+        type: event.type,
+        ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+        tool: event.tool,
+        target: event.target,
+        ...(event.detail !== undefined ? { detail: event.detail } : {}),
+        ...(event.error !== undefined ? { error: event.error } : {}),
+        ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+      });
       break;
     }
     case 'sub_agent_start':
@@ -106,6 +133,12 @@ export function dispatchChatEvent(
         event.deletions,
         event.content,
       );
+      sinks.onStreamEvent?.({
+        type: 'file_changed',
+        path: event.path,
+        additions: event.additions,
+        deletions: event.deletions,
+      });
       break;
     case 'progress_recovery':
       sinks.convRenderer?.onProgressRecovery?.(event.intervention, event.source, event.score, event.message);
@@ -154,6 +187,7 @@ export function dispatchChatEvent(
   }
 
   if (event.type === 'cancelled') {
+    sinks.onStreamEvent?.({ type: 'cancelled' });
     const terminal = projectChatTerminal({ outcome: event.outcome ?? 'CANCELLED' });
     const ev = event as {
       toolCalls?: ChatResult['toolCalls'];

@@ -178,12 +178,11 @@ export interface RunStreamEvent {
     | 'plan.updated'
     | 'approval.required'
     | 'command.started'
-    | 'command.completed'
-    | 'file.changed'
-    | 'diff.ready';
+    | 'command.completed' | 'tool.started' | 'tool.completed' | 'tool.failed'
+    | 'thought' | 'cancelled' | 'file.changed' | 'diff.ready';
   ts: string;
   task?: string;
-  mode?: ValidMode;
+  mode?: ValidMode; model?: string;
   project?: string | null;
   stage_index?: number;
   stage_name?: string;

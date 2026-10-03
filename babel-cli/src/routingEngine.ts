@@ -32,8 +32,8 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { resolveRuntimeRunsDir } from './config/runtimePaths.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -76,16 +76,8 @@ export interface RoutingDecision {
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname_local = dirname(__filename);
-
-// Base path formula: dist/routingEngine.js → up two levels → Babel/ → + runs
-// (same as pipeline.ts). The full path is resolved lazily so that tests can
-// override BABEL_RUNS_DIR with withPatchedEnv after module load.
-const BABEL_ROOT_PATH = resolve(__dirname_local, '../..');
-
 function getDefaultRunsDir(): string {
-  return process.env['BABEL_RUNS_DIR'] ?? join(BABEL_ROOT_PATH, 'runs');
+  return resolveRuntimeRunsDir();
 }
 
 const MAX_RUNS = Math.max(1, Number(process.env['BABEL_DYNAMIC_ROUTING_MAX_RUNS'] ?? '50') || 50);

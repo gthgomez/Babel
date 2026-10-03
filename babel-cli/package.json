@@ -1,6 +1,6 @@
 {
-  "name": "babel-cli",
-  "version": "0.1.0",
+  "name": "@babel-preview-local/coding-agent",
+  "version": "0.1.1-preview.20261003",
   "description": "Local coding agent runtime for Babel — chat, plan, and deep modes with TUI/REPL",
   "license": "Apache-2.0",
   "author": "Jonathan Gomez Aguilar",
@@ -23,9 +23,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "babel": "bin/babel.js",
-    "babel-lite": "bin/babel-lite.js",
-    "bl": "bin/babel-lite.js"
+    "babel-agent": "bin/babel.js"
   },
   "scripts": {
     "audit:pricing": "tsx --no-warnings=ExperimentalWarning scripts/audit_provider_pricing.ts",
@@ -159,7 +157,10 @@
     "benchmark:claude-babel:pilot": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_profile_pilot.ts",
     "test:claude-babel-lab": "tsx --no-warnings=ExperimentalWarning --test src/runners/openCodeApi.test.ts src/runners/providerRegistry.test.ts src/runners/providerEngine.test.ts src/claude-babel-astra-lab/lab.test.ts src/claude-babel-astra-lab/claudeHarness.test.ts",
     "test:comparison": "tsx --no-warnings=ExperimentalWarning --test src/claude-babel-astra-lab/comparison-contract-v3.test.ts src/claude-babel-astra-lab/comparison-contract.test.ts src/claude-babel-astra-lab/comparison-runner.test.ts src/claude-babel-astra-lab/frozen-evaluator.test.ts src/claude-babel-astra-lab/recovery-observation.test.ts",
-    "benchmark:claude-babel:compare": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_comparison.ts"
+    "benchmark:claude-babel:compare": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_comparison.ts",
+    "prepack": "npm run build && node scripts/stage_runtime_assets.mjs",
+    "test:package-assets": "node --test ../tools/tests/ci-workflow-coverage.test.mjs",
+    "test:consumer-artifact": "node scripts/verify_consumer_artifact.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
@@ -181,7 +182,8 @@
     "string-width": "^8.2.0",
     "supports-terminal-graphics": "^0.1.0",
     "wrap-ansi": "^10.0.0",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "js-tiktoken": "^1.0.21"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -189,7 +191,6 @@
     "eslint": "^10.6.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.7.0",
-    "js-tiktoken": "^1.0.21",
     "knip": "^6.17.1",
     "prettier": "^3.8.5",
     "promptfoo": "^0.121.17",
@@ -199,6 +200,15 @@
     "typescript-eslint": "^8.62.0"
   },
   "engines": {
-    "node": ">=22.5.0"
-  }
+    "node": "^22.19.0 || ^24.13.1"
+  },
+  "files": [
+    "bin/babel.js",
+    "dist/**/*.js",
+    "dist/voice/audio-capture-worker.mjs",
+    "dist/voice/vad-worker.mjs",
+    "dist/services/playbooks/*.json",
+    "resources/",
+    "LICENSE"
+  ]
 }

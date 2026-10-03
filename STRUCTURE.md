@@ -32,6 +32,7 @@ is optional and must not become a repository prerequisite.
 ## Runtime, code, and validation
 
 - `babel-cli/` - Node.js CLI runtime (implementation reference: `babel-cli/PROJECT_CONTEXT.md`)
+- `babel-desktop/` - North Star Electron shell. The opening screen is a visual reference. A connected task runs the sibling `babel-cli`.
 - `scripts/` - agent git/PR gate helpers, evidence receipts, and trust-root ceremony scripts
 - `skills/` - installable agent skills
 - `tests/` - test suites

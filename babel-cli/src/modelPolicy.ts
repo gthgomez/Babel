@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve } from 'node:path';
+import { resolveRuntimeConfigPath, resolveRuntimePaths } from './config/runtimePaths.js';
 
 import {
   evaluateModelBackendPolicy,
@@ -365,25 +365,6 @@ interface ModelPolicyConfig {
   };
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-/** Walk up from startDir until config/model-policy.json is found.
- *  Handles the case where dist/ is one level deeper than src/ and
- *  the policy file lives at the repo root rather than in babel-cli/. */
-function findBabelRoot(startDir: string): string {
-  let dir = resolve(startDir);
-  for (let i = 0; i < 5; i++) {
-    if (existsSync(join(dir, 'config', 'model-policy.json'))) return dir;
-    const parent = resolve(dir, '..');
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return resolve(startDir); // fallback to original
-}
-
-const DEFAULT_BABEL_ROOT = process.env['BABEL_ROOT'] ?? findBabelRoot(resolve(__dirname, '../..'));
-
 function isKnownTier(value: string): value is ModelPolicyTier {
   return (MODEL_POLICY_TIERS as readonly string[]).includes(value);
 }
@@ -471,14 +452,17 @@ function resolveVendorAliasKey(config: ModelPolicyConfig, key: string): string {
   return current;
 }
 
-export function getPolicyPath(babelRoot = DEFAULT_BABEL_ROOT): string {
+export function getPolicyPath(babelRoot = resolveRuntimePaths().resourceRoot): string {
   const explicit = process.env['BABEL_MODEL_POLICY_PATH']?.trim();
   return explicit && explicit.length > 0
     ? resolve(explicit)
-    : join(babelRoot, 'config', 'model-policy.json');
+    : resolveRuntimePaths().isInstalled &&
+      (babelRoot === resolveRuntimePaths().resourceRoot || babelRoot === process.env['BABEL_ROOT'])
+      ? resolveRuntimeConfigPath('model-policy.json')
+      : join(babelRoot, 'config', 'model-policy.json');
 }
 
-export function loadModelPolicyConfig(babelRoot = DEFAULT_BABEL_ROOT): {
+export function loadModelPolicyConfig(babelRoot = resolveRuntimePaths().resourceRoot): {
   path: string;
   config: ModelPolicyConfig;
 } {
