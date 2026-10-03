@@ -29,6 +29,7 @@ import {
 } from '../../agent/chatFailureClassification.js';
 import { detectAndBuildBlockedReport } from '../../agent/chatEngineSupport.js';
 import { BABEL_RUNS_DIR } from '../../cli/constants.js';
+import { desktopApprovalEnabled, setDesktopCancelHandler, startDesktopIpc } from '../../agent/desktopApproval.js';
 import { getProtocolClient } from '../../protocol/client/index.js';
 import {
   classifyFailureText,
@@ -85,7 +86,8 @@ import {
   compileIntentPlan,
   formatIntentPlanUserMessage,
 } from '../../agent/intentCompiler.js';
-import { outcomeFromReasonCode, persistIntentPlan } from '../../agent/chatEngineObservability.js';
+import { outcomeFromReasonCode, persistIntentPlan, persistTranscriptToDisk } from '../../agent/chatEngineObservability.js';
+import { openResumedChatEngine } from './chatResumeHeadless.js';
 import {
   compileChatStack,
   resolveStackBudgetForClass,
@@ -793,6 +795,12 @@ export async function runChatEngineOnce(input: {
   } else {
     convRenderer?.setCancelTarget(cancelViaProtocol);
   }
+  if (desktopApprovalEnabled()) {
+    startDesktopIpc();
+    setDesktopCancelHandler(() => {
+      cancelViaProtocol();
+    });
+  }
 
   const useStreaming =
     input.useStreaming ??
@@ -914,6 +922,7 @@ export async function runChatEngineOnce(input: {
     persistTurnAssistantCells(turnPersistence, convRenderer);
     finalizeProtocolTurn(protocolSession);
   } finally {
+    if (desktopApprovalEnabled()) setDesktopCancelHandler(null);
     if (execution !== null) coordinator.settle(execution);
     // Headless run end: release this run's admission-store reference (no-op
     // when the engine, and therefore the store, belongs to the caller).
@@ -1120,6 +1129,10 @@ export function buildChatRunPayload(
   if (result.outcome !== undefined) {
     payload['terminal_outcome'] = result.outcome;
   }
+  if (typeof result.runDir === 'string' && result.runDir.length > 0) {
+    const sessionId = path.basename(result.runDir);
+    if (/^[\w-]{1,80}$/.test(sessionId)) payload['session_id'] = sessionId;
+  }
   // D03: carry the structured terminal reason alongside the outcome.
   if (result.reason_code !== undefined) {
     payload['reason_code'] = result.reason_code;
@@ -1319,6 +1332,17 @@ export function buildChatRunPayload(
         ? { latency_ms: result.criticReceipt.latency_ms }
         : {}),
     };
+  }
+
+  if (result.activeContext && typeof result.activeContext.modelId === 'string') {
+    const source = result.activeContext.source;
+    if (source === 'provider_prompt_tokens' || source === 'estimated' || source === 'unknown') {
+      payload['active_context'] = {
+        tokens: result.activeContext.tokens,
+        model_id: result.activeContext.modelId,
+        source,
+      };
+    }
   }
 
   // Honest budget-kill classification for harness failure_class mapping.
@@ -1557,6 +1581,8 @@ export async function runCliChatTask(input: {
   onStreamEvent?: (event: ChatStreamEvent) => void;
   engineFactory?: ChatEngineFactory;
   executionProfile?: ChatExecutionProfile;
+  /** Persisted chat session to restore before this turn. Chat mode only. */
+  sessionId?: string;
 }): Promise<{ payload: Record<string, unknown>; exitCode: number }> {
   const outputFormat = input.outputFormat ?? 'text';
   const target = resolveAgentTarget({
@@ -1577,6 +1603,16 @@ export async function runCliChatTask(input: {
 
   // Classify intent up front so the gate and payload status are consistent.
   const resolvedIntent = ChatEngine.classifyChatTaskIntent(input.task);
+  const runtimeMode = useConversational ? 'tui' : 'headless';
+  const resumedEngine = input.sessionId
+    ? await openResumedChatEngine(input.sessionId, {
+        task: input.task,
+        projectRoot: input.projectRoot,
+        ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        runtimeMode,
+      })
+    : undefined;
 
   const result = await runChatEngineOnce({
     task: input.task,
@@ -1589,10 +1625,19 @@ export async function runCliChatTask(input: {
     ...(input.allowExpensive === true ? { allowExpensive: true } : {}),
     convRenderer,
     ...(input.onStreamEvent ? { onStreamEvent: input.onStreamEvent } : {}),
+    ...(resumedEngine ? { engine: resumedEngine } : {}),
     ...(input.engineFactory ? { engineFactory: input.engineFactory } : {}),
     ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
-    runtimeMode: useConversational ? 'tui' : 'headless',
+    runtimeMode,
   });
+
+  if (result.runDir !== undefined) {
+    try {
+      await persistTranscriptToDisk(result.runDir, result.conversation);
+    } catch {
+      // The turn result still stands. The next resume reports a missing transcript.
+    }
+  }
 
   if (outputFormat === 'text') {
     finishConversationalRenderer(convRenderer, result, preRunCost);
