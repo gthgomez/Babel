@@ -26,7 +26,7 @@ By default Desktop stores UI preferences under `%APPDATA%\babel-north-star-deskt
 "Babel CLI.cmd" "--profile-dir=C:\Babel Profiles\Preview One" doctor --json
 ```
 
-Quit by closing the Desktop window. Active tasks are cancelled before shutdown. Restart from the same extracted directory with the same profile. Saved chats are read from Babel's own state directory.
+Quit by closing the Desktop window. Closing requests cancellation before the application exits; active model-task shutdown is not qualified in this preview. Restart from the same extracted directory with the same profile. Saved chats are read from Babel's own state directory.
 
 This is an **unsigned private preview**, not a public release or a signed installer. Windows SmartScreen may flag an unfamiliar unsigned application. No code-signing identity, SmartScreen reputation, automated updater, Start Menu registration, or uninstaller is provided. Do not disable Windows security settings to run it. If your policy blocks unsigned software, retain the artifact for review and wait for a signed distribution.
 
