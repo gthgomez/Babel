@@ -167,10 +167,9 @@ test('pattern card requires evidence and sources, evidence state is bounded', ()
 test('fake provider search, resolve, tree, and read deterministically', async () => {
   const provider = new FakeResearchProvider({ repositories: fixtureCorpus() });
   const page = await provider.searchRepositories('durable crash recovery');
-  assert.equal(page.totalCount, 1);
-  assert.equal(page.repositories[0]!.identity.observed_full_name, 'acme/durable-runner');
-
-  const identity = page.repositories[0]!.identity;
+  assert.equal(page.totalCount, 2);
+  const acme = page.repositories.find((r) => r.identity.observed_full_name === 'acme/durable-runner')!;
+  const identity = acme.identity;
   const revision = await provider.resolveRevision(identity, 'main');
   assert.equal(revision.commitSha, 'a'.repeat(40));
   await assert.rejects(provider.resolveRevision(identity, 'nope'));

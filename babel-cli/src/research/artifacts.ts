@@ -42,6 +42,7 @@ export interface ResearchRunPaths {
 
 /** Atomic whole-file JSON write (tmp + rename), pretty-printed with stable key order as authored. */
 export function writeJsonArtifact(filePath: string, value: unknown): void {
+  mkdirSync(join(filePath, '..'), { recursive: true });
   const tmp = `${filePath}.tmp`;
   writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
   renameSync(tmp, filePath);
