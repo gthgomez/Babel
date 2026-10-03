@@ -16,6 +16,7 @@ const user = join(scratch, 'user space')
 for (const dir of [output, project, user]) mkdirSync(dir, { recursive: true })
 const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
 const guard = join(scratch, 'block-network.mjs')
+const guardUrl = pathToFileURL(guard).href
 writeFileSync(guard, `import net from 'node:net';\nconst connect = net.Socket.prototype.connect;\nnet.Socket.prototype.connect = function(...args) {\n const value = args[0]; const host = typeof value === 'object' ? value.host : args[1];\n if (host && !['localhost','127.0.0.1','::1'].includes(host)) throw Error('external networking blocked');\n return connect.apply(this,args);\n};\nglobalThis.fetch = async () => { throw Error('inference blocked'); };\n`)
 const npmCli = process.env.npm_execpath
 assert.ok(npmCli && existsSync(npmCli), 'Run through npm run test:consumer-artifact')
@@ -36,10 +37,10 @@ function command(binary, args, options = {}) {
   assert.ok((options.codes ?? [0]).includes(result.status), `${args.join(' ')}\n${result.stdout}\n${result.stderr}`)
   return result
 }
-function npm(args, options = {}) { return command(process.execPath, [npmCli, ...args], options) }
+function npm(args, options = {}) { return command(process.execPath, [npmCli, ...args], { timeout: 300000, ...options }) }
 const installed = join(prefix, 'node_modules', ...pkg.name.split('/'))
 const bin = join(installed, pkg.bin['babel-agent'])
-const cli = (args, options = {}) => command(process.execPath, ['--import', guard, bin, ...args], options)
+const cli = (args, options = {}) => command(process.execPath, ['--import', guardUrl, bin, ...args], options)
 const json = args => JSON.parse(cli(args, { codes: [0, 1] }).stdout)
 function treeDigest(dir) {
   const entries = []
@@ -63,7 +64,7 @@ function readonly(dir, value) {
   chmodSync(dir, value ? 0o555 : 0o755)
 }
 async function tui() {
-  const child = spawn(process.execPath, ['--import', guard, bin, 'interactive'], { cwd: project, env, windowsHide: true })
+  const child = spawn(process.execPath, ['--import', guardUrl, bin, 'interactive'], { cwd: project, env, windowsHide: true })
   let transcript = ''
   let sent = false
   const timer = setTimeout(() => child.kill(), 20000)
@@ -111,7 +112,7 @@ try {
   assert.equal(cli(['--version']).stdout.trim(), pkg.version)
   const shim = join(prefix, process.platform === 'win32' ? 'node_modules/.bin/babel-agent.cmd' : 'node_modules/.bin/babel-agent')
   assert.ok(existsSync(shim), 'npm installed the unambiguous executable')
-  if (process.platform !== 'win32') assert.equal(command(shim, ['--version'], { env: { ...env, NODE_OPTIONS: `--import ${JSON.stringify(guard)}` } }).stdout.trim(), pkg.version)
+  if (process.platform !== 'win32') assert.equal(command(shim, ['--version'], { env: { ...env, NODE_OPTIONS: `--import=${guardUrl}` } }).stdout.trim(), pkg.version)
   const setup = json(['setup', '--json'])
   assert.equal(setup.mutates_workspace, false)
   const doctor = json(['doctor', '--json'])
@@ -133,7 +134,7 @@ try {
   // Separate child avoids source-package resolution and installs the guard before any runtime import.
   const runner = join(scratch, 'journey.mjs')
   writeFileSync(runner, `import {runInstalledMechanics} from ${JSON.stringify(pathToFileURL(join(packageRoot,'scripts/installed_mechanics.mjs')).href)};\nconsole.log('MECHANICS_RESULT '+JSON.stringify(await runInstalledMechanics(${JSON.stringify(installed)},${JSON.stringify(project)})));\n`)
-  const mechanics = command(process.execPath, ['--import', guard, runner])
+  const mechanics = command(process.execPath, ['--import', guardUrl, runner])
   const evidence = JSON.parse(mechanics.stdout.match(/MECHANICS_RESULT (.+)/)?.[1] ?? 'null')
   assert.ok(evidence, mechanics.stdout)
   // The child has exited, so asynchronous evidence writes are now settled.
