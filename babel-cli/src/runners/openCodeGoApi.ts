@@ -1,3 +1,5 @@
+import { OpenCodeGoBudget, OpenCodeGoBudgetError } from './openCodeGoBudget.js'
+import type { ResolvedExecutionEnvelope } from '../intelligence/types.js'
 import { randomUUID } from 'node:crypto'
 import type { ZodType } from 'zod'
 
@@ -16,6 +18,7 @@ import {
 
 /** The only OpenCode Go model identifiers accepted by this direct transport. */
 export const OPENCODE_GO_MODELS = [
+  'deepseek-v4.1-flash',
   'deepseek-v4-flash',
   'mimo-v2.5',
   'longcat-2.0',
@@ -30,6 +33,7 @@ const OPENCODE_GO_DEFAULT_TIMEOUT_MS = 85_000
 const OPENCODE_GO_MAX_TIMEOUT_MS = 120_000
 
 export type OpenCodeGoErrorCode =
+  | 'GO_BUDGET_DENIED'
   | 'AUTH_FAILURE'
   | 'GO_QUOTA_EXHAUSTED'
   | 'MODEL_UNAVAILABLE'
@@ -58,6 +62,10 @@ export class OpenCodeGoError extends Error {
 
 export interface OpenCodeGoRunnerOptions {
   /** Default production source; never falls back to an environment key. */
+  budget?: OpenCodeGoBudget
+  env?: NodeJS.ProcessEnv
+  executionEnvelope?: ResolvedExecutionEnvelope
+  benchmarkRunId?: string
   credentialSource?: OpenCodeGoCredentialSource
   /** Test-only in-memory credential injection. */
   explicitCredential?: string
@@ -81,8 +89,10 @@ function statusFromMessage(message: string): number | null {
 
 function classifyError(error: unknown): OpenCodeGoError {
   if (error instanceof OpenCodeGoError) return error
+  if (error instanceof OpenCodeGoBudgetError) return new OpenCodeGoError('GO_BUDGET_DENIED', error.message)
   const message = error instanceof Error ? error.message : String(error)
   const lower = message.toLowerCase()
+  if (lower.includes('opencode go budget denied')) return new OpenCodeGoError('GO_BUDGET_DENIED', 'OpenCode Go budget denied the request.')
   const status = statusFromMessage(message)
   if (lower.includes('abort') || lower.includes('timeout')) {
     return new OpenCodeGoError(lower.includes('timeout') ? 'TIMEOUT' : 'ABORTED', 'OpenCode Go request was interrupted.', status)
@@ -108,6 +118,8 @@ function classifyError(error: unknown): OpenCodeGoError {
  * the runner lifetime without selecting any fallback provider.
  */
 export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
+  private readonly budget: OpenCodeGoBudget | undefined
+  private readonly outputTokenLimit: number
   private readonly pinnedModel: OpenCodeGoModel
   private readonly sessionId: string
   private readonly requestTimeoutMs: number
@@ -124,24 +136,46 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
     if (!isOpenCodeGoModel(model)) {
       throw new OpenCodeGoError('MODEL_UNAVAILABLE', `OpenCode Go does not allow model "${model}".`)
     }
+    if (model === 'deepseek-v4.1-flash' && !options.budget) throw new OpenCodeGoBudgetError()
     const credentialSource = options.credentialSource ?? 'opencode-auth-helper'
-    const resolvedCredential = options.resolvedCredential?.trim()
+    const resolvedCredential = credentialSource === 'network-secret' ? undefined : options.resolvedCredential?.trim()
     const resolution = resolvedCredential
       ? { credential: resolvedCredential }
       : resolveOpenCodeGoCredential({
           source: credentialSource,
+          ...(options.env ? { env: options.env } : {}),
           ...(credentialSource === 'explicit-test' ? { explicitCredential: options.explicitCredential } : {}),
         })
     super(model, 'OPENCODE_GO_AUTH_HELPER', sampling, {
       provider: 'opencode-go',
       explicitCredential: resolution.credential,
+      ...(options.executionEnvelope ? { executionEnvelope: options.executionEnvelope } : {}),
     })
+    this.outputTokenLimit = options.executionEnvelope?.output.effective ?? sampling.maxTokens ?? Number.MAX_SAFE_INTEGER
+    this.budget = options.budget
     this.pinnedModel = model
-    this.sessionId = options.sessionId?.trim() || `opencode-go-${randomUUID()}`
+    this.sessionId = options.sessionId?.trim() || options.benchmarkRunId?.trim() || `opencode-go-${randomUUID()}`
     this.requestTimeoutMs = typeof options.requestTimeoutMs === 'number' &&
       Number.isFinite(options.requestTimeoutMs) && options.requestTimeoutMs > 0
       ? Math.min(Math.floor(options.requestTimeoutMs), OPENCODE_GO_MAX_TIMEOUT_MS)
       : OPENCODE_GO_DEFAULT_TIMEOUT_MS
+  }
+
+  protected override async dispatchFetch(url: string, init: RequestInit): Promise<Response> {
+    if (url !== this.apiUrl || init.method !== 'POST' || init.redirect !== 'error' || typeof init.body !== 'string') {
+      throw new OpenCodeGoBudgetError()
+    }
+    let body: { model?: unknown; max_tokens?: unknown }
+    try { body = JSON.parse(init.body) as typeof body } catch { throw new OpenCodeGoBudgetError() }
+    if (body.model !== this.pinnedModel || !Number.isSafeInteger(body.max_tokens) ||
+      (body.max_tokens as number) <= 0 || (body.max_tokens as number) > this.outputTokenLimit) {
+      throw new OpenCodeGoBudgetError()
+    }
+    if (this.pinnedModel === 'deepseek-v4.1-flash' && !this.budget) throw new OpenCodeGoBudgetError()
+    if (init.signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
+    await this.budget?.reserve(Buffer.byteLength(init.body, 'utf8'), body.max_tokens as number)
+    if (init.signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
+    return super.dispatchFetch(url, init)
   }
 
   /** Return the stable session header assigned to this runner. */
@@ -196,6 +230,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
     signal?: AbortSignal,
   ): Promise<T> {
     try {
+      if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       return await super.execute(prompt, schema, callbacks, systemPrompt, signal)
     } catch (error) {
       throw classifyError(error)
@@ -209,6 +244,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
     signal?: AbortSignal,
   ): Promise<string> {
     try {
+      if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       return await super.executeRaw(prompt, callbacks, systemPrompt, signal)
     } catch (error) {
       throw classifyError(error)
@@ -222,6 +258,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
     callbacks?: RunnerCallbacks,
   ): AsyncGenerator<string, void, undefined> {
     try {
+      if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       yield* super.executeRawStream(prompt, systemPrompt, signal, callbacks)
     } catch (error) {
       throw classifyError(error)
@@ -237,6 +274,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
     callbacks?: RunnerCallbacks,
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
     try {
+      if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       yield* super.executeWithToolsStream(messages, tools, systemPrompt, signal, toolChoice, callbacks)
     } catch (error) {
       throw classifyError(error)

@@ -69,3 +69,11 @@ test('OpenCode Go credential resolver does not fall back to environment keys', (
     (error: unknown) => error instanceof OpenCodeGoCredentialError && error.code === 'AUTH_FAILURE',
   )
 })
+
+test('OpenCode Go reads opaque network secret only with explicit source', () => {
+  const env = { BABEL_OPENCODE_GO_API_KEY: '  synthetic-proxy-placeholder  ', OPENCODE_API_KEY: 'ignored-synthetic' }
+  const resolution = resolveOpenCodeGoCredential({ source: 'network-secret', env, existsSyncImpl: () => { throw new Error('must not inspect helpers') } })
+  assert.equal(resolution.credential, 'synthetic-proxy-placeholder')
+  assert.equal(resolution.credentialSource, 'network-secret')
+  assert.throws(() => resolveOpenCodeGoCredential({ source: 'network-secret', env: { OPENCODE_API_KEY: 'ignored-synthetic' }, execFileSyncImpl: (() => { throw new Error('must not invoke helper') }) as never }), OpenCodeGoCredentialError)
+})
