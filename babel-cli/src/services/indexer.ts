@@ -14,6 +14,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 
 import { FtsSearchIndex, type FtsSearchHit } from './ftsIndex.js';
 import { VectorIndex } from './vectorIndex.js';
+import { resolveRuntimePaths, resolveRuntimeRunsDir } from '../config/runtimePaths.js';
 
 export interface FileDocument {
   id: string;
@@ -374,6 +375,7 @@ export function extractMatchingSnippet(content: string, query: string): string |
 }
 
 function resolveFtsDbPath(): string {
+  if (resolveRuntimePaths().isInstalled) return join(resolveRuntimeRunsDir(), 'index', 'fts-index.db');
   const babelRoot = process.env['BABEL_ROOT'];
   if (babelRoot) {
     return join(babelRoot, 'runs', 'index', 'fts-index.db');

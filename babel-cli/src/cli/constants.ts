@@ -1,6 +1,4 @@
-import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolveRuntimePaths, resolveRuntimeRunsDir } from '../config/runtimePaths.js';
 
 import { MODEL_POLICY_TIERS } from '../modelPolicy.js';
 
@@ -84,26 +82,8 @@ export type ValidProject = string;
 export const VALID_ORCHESTRATORS = ['v9'] as const;
 export type ValidOrchestrator = (typeof VALID_ORCHESTRATORS)[number];
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-function findBabelRoot(startDir: string): string {
-  let current = resolve(startDir);
-  while (true) {
-    if (existsSync(join(current, 'prompt_catalog.yaml'))) {
-      return current;
-    }
-
-    const parent = dirname(current);
-    if (parent === current) {
-      return resolve(startDir, '../../..');
-    }
-    current = parent;
-  }
-}
-
-export const BABEL_ROOT = process.env['BABEL_ROOT'] ?? findBabelRoot(__dirname);
-export const BABEL_RUNS_DIR = process.env['BABEL_RUNS_DIR'] ?? join(BABEL_ROOT, 'runs');
+export const BABEL_ROOT = resolveRuntimePaths().resourceRoot;
+export const BABEL_RUNS_DIR = resolveRuntimeRunsDir();
 
 export {
   chatSessionDir,
