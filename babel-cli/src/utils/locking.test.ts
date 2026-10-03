@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { acquireLock, releaseLock } from './locking.js';
+import { acquireLock, getWorkspaceLockPath, releaseLock } from './locking.js';
 
 function makeRoot() {
   const root = mkdtempSync(join(tmpdir(), 'babel-locking-'));
@@ -46,6 +46,24 @@ test('releaseLock refuses to release another run owner', () => {
     assert.equal(release.success, false);
     assert.match(release.message, /Refusing to release/);
   } finally {
+    fixture.cleanup();
+  }
+});
+
+
+test('does retain project identity and explicit lock roots with a state override', () => {
+  const fixture = makeRoot();
+  const oldState = process.env['BABEL_STATE_DIR'];
+  process.env['BABEL_STATE_DIR'] = join(fixture.root, 'user-state');
+  try {
+    const first = getWorkspaceLockPath('src/file.ts', join(fixture.root, 'first'));
+    const second = getWorkspaceLockPath('src/file.ts', join(fixture.root, 'second'));
+    assert.ok(first.startsWith(join(fixture.root, 'first', '.babel', 'locks')));
+    assert.notEqual(first, second);
+    assert.equal(getWorkspaceLockPath(join(fixture.root, 'first', 'src/file.ts'), join(fixture.root, 'first')), first);
+  } finally {
+    if (oldState === undefined) delete process.env['BABEL_STATE_DIR'];
+    else process.env['BABEL_STATE_DIR'] = oldState;
     fixture.cleanup();
   }
 });

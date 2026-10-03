@@ -1,8 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { join } from "node:path";
 import { Command } from "commander";
 import { renderProductBanner } from "../ui/renderers.js";
 import { warning, muted } from "../ui/theme.js";
 import { readRuntimeMode } from "../config/runtimeMode.js";
+import { resolveRuntimePaths } from '../config/runtimePaths.js';
 import { registerInternalTextProviderCommands } from "./liteCommands.js";
 
 import { registerCoreStartupCommands } from './coreStartupCommands.js';
@@ -50,12 +52,25 @@ Notes:
 `;
 
 export function applyProgramMetadata(program: Command): void {
+  const installed = resolveRuntimePaths().isInstalled;
+  // These contributor utilities create prompt/benchmark artifacts in the source
+  // library. A preview installation has immutable resources and fails closed.
+  if (installed) program.hook('preAction', (_root, action) => {
+    let command = action;
+    while (command.parent && command.parent !== program) command = command.parent;
+    if (['learn', 'skill', 'benchmark', 'smoke', 'test', 'audit'].includes(command.name())) {
+      program.error(`${command.name()} requires a contributor checkout in this preview.`);
+    }
+    if (command.name() === 'run' && action.opts()['benchmark']) {
+      program.error('run --benchmark requires a contributor checkout in this preview.');
+    }
+  });
   program
-    .name("babel")
+    .name(installed ? 'babel-agent' : 'babel')
     .description(
       "Babel Multi-Agent OS — local runtime harness for multi-repo workspaces",
     )
-    .version("1.0.0")
+    .version((JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }).version)
     .addHelpText("after", TOP_LEVEL_HELP_TEXT);
 }
 

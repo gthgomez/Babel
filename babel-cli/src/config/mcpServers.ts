@@ -12,7 +12,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolveRuntimePaths } from './runtimePaths.js';
 
 import { readActivePluginMcpServers } from '../services/plugins.js';
 import { evaluateMcpServerPolicy, formatEnterprisePolicyDecision } from './enterprisePolicy.js';
@@ -63,9 +63,10 @@ interface McpServersJson {
 }
 
 export function getMcpServersConfigPath(): string {
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  // babel-cli/src/config/ → babel-cli/ → config/mcp_servers.json
-  return resolve(__dirname, '../..', 'config', 'mcp_servers.json');
+  const paths = resolveRuntimePaths();
+  return paths.isInstalled || process.env['BABEL_CONFIG_DIR']
+    ? resolve(paths.userConfigRoot, 'mcp_servers.json')
+    : resolve(paths.packageRoot, 'config', 'mcp_servers.json');
 }
 
 export function isAllowedMcpServerCommand(command: string): boolean {
@@ -114,7 +115,11 @@ export function filterEnterpriseMcpServers(
 }
 
 export function readMcpServers(): Record<string, McpServerConfig> {
-  const configPath = getMcpServersConfigPath();
+  const paths = resolveRuntimePaths();
+  const userPath = getMcpServersConfigPath();
+  const configPath = paths.isInstalled && !existsSync(userPath)
+    ? resolve(paths.resourceRoot, 'babel-cli', 'config', 'mcp_servers.json')
+    : userPath;
   let servers: Record<string, McpServerConfig>;
   if (!existsSync(configPath)) {
     servers = FALLBACK_SERVERS;

@@ -85,6 +85,30 @@ describe('buildChatRunPayload budget honesty', () => {
     });
     assert.equal(payload['status'], 'NEEDS_MORE_CONTEXT');
     assert.ok(payload['budget_exceeded'] !== true);
+    assert.equal(payload['active_context'], undefined);
+  });
+
+  test('active context is copied and omitted when the engine has none', () => {
+    const present: ChatResult = {
+      status: 'completed',
+      answer: 'done',
+      usage: minimalUsage() as ChatResult['usage'],
+      conversation: [],
+      activeContext: { tokens: 812, modelId: 'deepseek/deepseek-v4-flash', source: 'provider_prompt_tokens' },
+    };
+    const payload = buildChatRunPayload(present, { task: 'hello', projectRoot: 'C:/tmp' });
+    assert.deepEqual(payload['active_context'], {
+      tokens: 812,
+      model_id: 'deepseek/deepseek-v4-flash',
+      source: 'provider_prompt_tokens',
+    });
+    const absent: ChatResult = {
+      status: 'completed',
+      answer: 'done',
+      usage: minimalUsage() as ChatResult['usage'],
+      conversation: [],
+    };
+    assert.equal(buildChatRunPayload(absent, { task: 'hello', projectRoot: 'C:/tmp' })['active_context'], undefined);
   });
 
   test('failed with toolCalls preserves tool log in payload (stream turn-limit honesty)', () => {

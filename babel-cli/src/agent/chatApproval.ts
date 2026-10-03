@@ -36,6 +36,7 @@ import {
 } from './approvalOperation.js';
 import { getRemoteSurface } from '../bridge/remoteApproval.js';
 import { getExecutionContext } from './executionContext.js';
+import { desktopApprovalEnabled, waitForDesktopApproval } from './desktopApproval.js';
 
 function asConversationalRenderer(
   renderer: ReturnType<typeof getActiveRenderer>,
@@ -219,6 +220,14 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
       applyApprovalDecision(session, req, 'deny');
       return false;
     }
+    if (desktopApprovalEnabled()) {
+      const allowed = await waitForDesktopApproval({
+        command: commandForAction(action),
+        reason: req.reason,
+      });
+      applyApprovalDecision(session, req, allowed ? 'allow_once' : 'deny');
+      return allowed;
+    }
     const res = resolveApprovalHeadless(session, req);
     return res.decision !== 'deny';
   }
@@ -326,6 +335,14 @@ export async function requestMcpApproval(action: ChatToolAction): Promise<boolea
     );
   if (isPreApproved(session, req) && liveStillMatches()) return true;
   if (isBabelHeadlessEnv() || !process.stdout.isTTY || process.env['CI'] === 'true') {
+    if (desktopApprovalEnabled() && liveStillMatches()) {
+      const allowed = await waitForDesktopApproval({
+        command: `mcp:${server}`,
+        reason: req.reason,
+      });
+      applyApprovalDecision(session, req, allowed ? 'allow_once' : 'deny');
+      return allowed;
+    }
     return resolveApprovalHeadless(session, req).decision !== 'deny';
   }
   const coordinator = InputCoordinator.getInstance();

@@ -1,3 +1,5 @@
+import { resolveRuntimePaths } from '../../config/runtimePaths.js';
+import { runInstalledDoctor } from '../../installedDoctor.js';
 // ─── Info / Status Command Handlers ──────────────────────────────────────────
 // Extracted from interactive.ts — display-oriented commands that show session
 // state, run stats, tools, memory, transcripts, and dashboards.
@@ -89,8 +91,13 @@ export function handleStatus(ctx: ReplContext, _args: string[]): void {
   );
 }
 
-export async function handleDoctor(_ctx: ReplContext, _args: string[]): Promise<void> {
+export async function handleDoctor(_ctx: ReplContext, args: string[]): Promise<void> {
   try {
+    if (resolveRuntimePaths().isInstalled && !args.includes('--contributor')) {
+      const report = runInstalledDoctor({ strict: args.includes('--strict') });
+      console.log('\n' + report.checks.map(check => `${check.status}: ${check.id} — ${check.message}`).join('\n'));
+      return;
+    }
     const result = await runDoctor({
       babelRoot: BABEL_ROOT,
       scope: 'workspace' as const,
