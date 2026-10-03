@@ -8,6 +8,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const distEntry = resolve(__dirname, '../dist/index.js');
 const envBootstrapEntry = resolve(__dirname, '../dist/config/envBootstrap.js');
+const [major, minor] = process.versions.node.split('.').map(Number);
+if (major < 22 || (major === 22 && minor < 19)) {
+  console.error('[babel-agent] Node >=22.19.0 is required.');
+  process.exit(1);
+}
 
 if (!existsSync(distEntry)) {
   console.error(
@@ -20,4 +25,6 @@ if (existsSync(envBootstrapEntry)) {
   await import(pathToFileURL(envBootstrapEntry).href);
 }
 
-await import(pathToFileURL(distEntry).href);
+const { runCli } = await import(pathToFileURL(distEntry).href);
+// Node retains a Unix npm symlink's executable name in argv[1].
+if (!process.argv[1]?.endsWith('babel.js')) runCli();

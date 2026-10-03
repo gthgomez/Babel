@@ -6,8 +6,13 @@
  * derives its gate requirements from this policy so the two cannot drift.
  */
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { resolveRuntimePaths } from '../config/runtimePaths.js';
 
-const sharedRiskPolicy = JSON.parse(readFileSync(new URL('../../../config/review-risk-policy.json', import.meta.url), 'utf8')) as {
+const runtimePaths = resolveRuntimePaths();
+const sharedRiskPolicy = JSON.parse(readFileSync(runtimePaths.isInstalled
+  ? join(runtimePaths.resourceRoot, 'config/review-risk-policy.json')
+  : new URL('../../../config/review-risk-policy.json', import.meta.url), 'utf8')) as {
   criticalPrefixes: string[];
   elevatedPrefixes: string[];
   hostProtectedPrefixes: string[];

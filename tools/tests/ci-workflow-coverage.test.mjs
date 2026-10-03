@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { commandCoverage, parseWorkflow } from '../ci-workflow-coverage.mjs';
 
@@ -34,3 +38,77 @@ for (const [label, change] of [
     assert.throws(() => commandCoverage(changed, command));
   });
 }
+
+// Consumer packaging must be an unconditional dependency of both protected gates.
+test('consumer artifact install is required on Linux and Windows', () => {
+  assert.deepEqual(commandCoverage(workflow, 'npm run test:consumer-artifact'), {
+    'ubuntu-latest': ['consumer-artifact'], 'windows-latest': ['consumer-artifact'],
+  });
+});
+for (const [label, mutate] of [
+  ['quoted consumer command', w => { w.jobs['consumer-artifact'].steps.find(s => s.run === 'npm run test:consumer-artifact').run = "echo 'npm run test:consumer-artifact'"; }],
+  ['consumer excludes Windows', w => { w.jobs['consumer-artifact'].strategy.matrix.exclude = [{ os: 'windows-latest' }]; }],
+  ['consumer missing dependency', w => { w.jobs['windows-portability'].needs = w.jobs['windows-portability'].needs.filter(n => n !== 'consumer-artifact'); }],
+]) test(label + ' fails closed', () => {
+  const changed = structuredClone(workflow);
+  mutate(changed);
+  assert.throws(() => commandCoverage(changed, 'npm run test:consumer-artifact'));
+});
+
+// The staged-asset fixture exercises the actual npm-pack manifest.
+const script = fileURLToPath(new URL('../../babel-cli/scripts/stage_runtime_assets.mjs', import.meta.url))
+test('stages catalog assets and defaults while removing stale resources and build debris', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel assets ü '))
+  const pkg = join(root, 'babel-cli')
+  try {
+    for (const dir of ['layer', 'config', 'babel-cli/config', 'babel-cli/dist', 'babel-cli/resources']) {
+      mkdirSync(join(root, dir), { recursive: true })
+    }
+    writeFileSync(join(root, 'prompt_catalog.yaml'), 'entries:\n  - id: sample\n    path: layer/prompt.md\n')
+    writeFileSync(join(root, 'layer/prompt.md'), 'prompt')
+    writeFileSync(join(root, 'config/model-policy.json'), '{}')
+    writeFileSync(join(root, 'config/private-local.json'), 'private sentinel')
+    writeFileSync(join(root, 'babel-cli/config/runtime-mode.json'), '{}')
+    writeFileSync(join(root, 'LICENSE'), 'Apache License')
+    for (const name of ['index.js', 'unit.test.js', 'index.js.map', 'index.d.ts']) {
+      writeFileSync(join(pkg, 'dist', name), '')
+    }
+    writeFileSync(join(pkg, 'resources/stale.json'), '{}')
+    mkdirSync(join(pkg, 'dist/voice'))
+    for (const name of ['audio-capture-worker.mjs', 'vad-worker.mjs']) {
+      writeFileSync(join(pkg, 'dist/voice', name), '// worker fixture')
+    }
+    const staged = spawnSync(process.execPath, [script, root, pkg], { encoding: 'utf8' })
+    assert.equal(staged.status, 0, staged.stderr)
+    assert.equal(readFileSync(join(pkg, 'resources/layer/prompt.md'), 'utf8'), 'prompt')
+    for (const file of ['prompt_catalog.yaml', 'config/model-policy.json', 'babel-cli/config/runtime-mode.json']) {
+      assert.ok(existsSync(join(pkg, 'resources', file)), file)
+    }
+    assert.ok(existsSync(join(pkg, 'LICENSE')))
+    assert.ok(existsSync(join(pkg, 'dist/index.js')))
+    for (const file of ['resources/config/private-local.json', 'resources/stale.json', 'dist/unit.test.js', 'dist/index.js.map', 'dist/index.d.ts']) {
+      assert.equal(existsSync(join(pkg, file)), false, file)
+    }
+    const manifest = JSON.parse(readFileSync(new URL('../../babel-cli/package.json', import.meta.url), 'utf8'))
+    writeFileSync(join(pkg, 'package.json'), JSON.stringify({ ...manifest, scripts: {} }))
+    mkdirSync(join(pkg, 'bin'))
+    writeFileSync(join(pkg, 'bin/babel.js'), '#!/usr/bin/env node\n')
+    writeFileSync(join(pkg, '.env'), 'secret=sentinel')
+    const npmCli = process.env.npm_execpath || [
+      join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'),
+      join(dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js'),
+      '/usr/share/nodejs/npm/bin/npm-cli.js',
+    ].find(existsSync)
+    assert.ok(npmCli, 'npm CLI is available beside the selected Node runtime')
+    const packed = spawnSync(process.execPath, [npmCli, 'pack', '--dry-run', '--json', '--ignore-scripts', '--cache', join(root, 'npm-cache')], { cwd: pkg, encoding: 'utf8' })
+    assert.equal(packed.status, 0, packed.stderr)
+    const result = JSON.parse(packed.stdout)[0]
+    assert.equal(result.name, '@babel-preview-local/coding-agent')
+    assert.deepEqual(manifest.bin, { 'babel-agent': 'bin/babel.js' })
+    const paths = result.files.map(file => file.path)
+    for (const file of ['resources/layer/prompt.md', 'LICENSE', 'dist/index.js', 'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs']) assert.ok(paths.includes(file), file)
+    assert.ok(!paths.some(path => /\.env|\.test\.|\.map$|\.d\.ts$/.test(path)))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

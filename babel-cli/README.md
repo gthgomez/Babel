@@ -19,6 +19,71 @@ Deeper references:
 - [Harness architecture](../docs/architecture/HARNESS_ARCHITECTURE_V1.md)
 - [CLI command contract](../docs/CLI_COMMAND_CONTRACT.md)
 
+## Installed preview package
+
+The local tarball preview uses `@babel-preview-local/coding-agent`, version
+`0.1.1-preview.20261003`, and executable `babel-agent`. This provisional label
+claims no npm scope ownership. Nothing is published or reserved on npm. It avoids
+the unrelated BabelJS `babel-cli` package and `babel` executable. Source checkout
+wrappers remain available; retired Lite wrappers retain their deprecation behavior
+and are omitted from the tarball. The July `v0.1.0` release/tag is not reused.
+
+Download the candidate tarball and `SHA256SUMS` from the PR's consumer-package CI
+artifact, verify the checksum, and run from any target project:
+
+```sh
+npm install --prefix ./babel-preview --omit=dev ./babel-preview-local-coding-agent-0.1.1-preview.20261003.tgz
+./babel-preview/node_modules/.bin/babel-agent --version
+./babel-preview/node_modules/.bin/babel-agent setup --json
+./babel-preview/node_modules/.bin/babel-agent doctor --json
+```
+
+On Windows use `babel-preview\node_modules\.bin\babel-agent.cmd`. For a separate
+installation location use an absolute `--prefix` path; target files resolve from
+the current directory or explicit project arguments. Node **22.19.0 or later** is
+required for unflagged WebAssembly module imports as well as `node:sqlite` and its extension API. Consumer CI checks
+22.19.0 and Node 24 on hosted Linux, Windows, and macOS; the artifact records the
+actual OS/architecture and result. These checks qualify tested runner platforms,
+not every computer. Native `sqlite-vec` support depends on available platform
+binaries and may degrade to non-vector search. SQLite still emits an experimental
+warning on Node 22.19.0.
+
+Bundled prompts, defaults, and license are immutable. Installed commands use
+`~/.babel/config` for user configuration, `~/.babel` for state (including `runs/`),
+and `~/.babel/cache` for caches. Override these with `BABEL_CONFIG_DIR`,
+`BABEL_STATE_DIR`, and `BABEL_CACHE_DIR`; `BABEL_RUNS_DIR` independently overrides
+run evidence. An installed package ignores `BABEL_ROOT` for resource discovery.
+An optional user configuration file is `~/.babel/config/.env`; ordinary provider
+environment variables also work. Set credentials securely outside the checkout;
+setup and doctor never print them or contact inference providers. Configure one
+supported provider for model-backed tasks; presence alone is not authentication.
+A local Ollama route needs its service and selected model available.
+
+Read-only help, context preview, and stack resolution need no provider. The
+**default `safe_repo` profile requires a running Docker server** for execution;
+doctor reports missing Docker and never enables host fallback. Contributor
+`learn`, `skill`, `benchmark`, `smoke`, `test`, and `audit` utilities require a source
+checkout in this preview because they manage source-library artifacts. Use
+`setup --contributor` and `doctor --contributor` for contributor diagnostics.
+
+From a clone, `npm run test:consumer-artifact` in `babel-cli/` builds, packs, installs
+only production dependencies into a fresh prefix outside the checkout, runs the
+installed CLI/TUI and scripted ChatEngine journey, and checks immutable install,
+Unicode/space paths, user/project boundaries, and uninstall/reinstall. Outputs
+include tarball, SHA-256, exact source SHA/version, full pack manifest and observed
+verification. The synthetic journey uses an explicit disposable `dev_local`
+fixture lease for actual local tests and blocks external inference; this is
+mechanics evidence, not live-model quality. Its UI start/exit check uses pipes;
+separate PTY evidence and platform-specific skipped coverage belong in the PR.
+
+Before a future release: choose an owned package scope/name, approve release
+version/platform qualifications, resolve PR review and required checks, verify a
+fresh artifact and license/security contents, then obtain explicit authorization
+for npm publication and any tag/release or publishing credentials. Live evaluations
+require separately approved exact provider/model routing, credentials, quota,
+billing fallback settings and budget. No such steps are performed by this preview.
+
+
 ## Known Limitations
 
 - Evidence for live provider-backed PLAN -> QA -> ACT governance is limited.
