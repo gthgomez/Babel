@@ -1,13 +1,10 @@
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { resolveRuntimePaths, resolveRuntimeRunsDir } from '../config/runtimePaths.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-/** Absolute path to the Babel prompt library root (parent of babel-cli/). */
-export const BABEL_ROOT = process.env['BABEL_ROOT'] ?? resolve(__dirname, '../../..');
-export const BABEL_RUNS_DIR = process.env['BABEL_RUNS_DIR'] ?? join(BABEL_ROOT, 'runs');
-export const GRADLE_CACHE_DIR = join(BABEL_ROOT, 'runtime', 'cache', 'gradle-distributions');
+/** Immutable prompt library root; source BABEL_ROOT overrides remain supported. */
+export const BABEL_ROOT = resolveRuntimePaths().resourceRoot;
+export const BABEL_RUNS_DIR = resolveRuntimeRunsDir();
+export const GRADLE_CACHE_DIR = join(resolveRuntimePaths().userCacheRoot, 'gradle-distributions');
 
 /** Maximum SWE -> QA iterations before halting with an error. */
 export const MAX_SWE_QA_LOOPS = 3;
@@ -39,7 +36,7 @@ export const EXECUTOR_PATHS = [
 ];
 
 export function abs(relativePaths: readonly string[]): string[] {
-  return relativePaths.map((p) => join(BABEL_ROOT, p));
+  return relativePaths.map((p) => join(resolveRuntimePaths().resourceRoot, p));
 }
 
 export function resolveOrchestratorVersion(requestedVersion?: string): OrchestratorRuntimeVersion {

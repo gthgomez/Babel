@@ -1,3 +1,4 @@
+import { resolveRuntimePaths } from './runtimePaths.js';
 import { config as dotenvConfig, parse as dotenvParse } from 'dotenv';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -8,7 +9,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /** Absolute path to the babel-cli package root (directory containing package.json and .env). */
 export const BABEL_CLI_PACKAGE_ROOT = resolve(__dirname, '../..');
 
-export const BABEL_CLI_ENV_FILE_PATH = resolve(BABEL_CLI_PACKAGE_ROOT, '.env');
+export const BABEL_CLI_ENV_FILE_PATH = resolve(resolveRuntimePaths().isInstalled ? resolveRuntimePaths().userConfigRoot : BABEL_CLI_PACKAGE_ROOT, '.env');
 
 let envFileLoadAttempted = false;
 let envFileLoaded = false;
@@ -33,7 +34,7 @@ export function parseEnvFileKeys(envFilePath: string): string[] {
 /** Load babel-cli/.env without overriding variables already set in the process environment. */
 export function loadBabelCliEnv(
   env: NodeJS.ProcessEnv = process.env,
-  envFilePath: string = BABEL_CLI_ENV_FILE_PATH,
+  envFilePath: string = resolve(resolveRuntimePaths(env).isInstalled ? resolveRuntimePaths(env).userConfigRoot : BABEL_CLI_PACKAGE_ROOT, '.env'),
 ): {
   envFilePath: string;
   envFileExists: boolean;
@@ -63,7 +64,7 @@ export function loadBabelCliEnv(
 /** Keys declared in babel-cli/.env that are not active in the current process environment. */
 export function getEnvFileKeysNotActiveInProcess(
   env: NodeJS.ProcessEnv = process.env,
-  envFilePath: string = BABEL_CLI_ENV_FILE_PATH,
+  envFilePath: string = resolve(resolveRuntimePaths(env).isInstalled ? resolveRuntimePaths(env).userConfigRoot : BABEL_CLI_PACKAGE_ROOT, '.env'),
 ): string[] {
   if (!existsSync(envFilePath)) {
     return [];
