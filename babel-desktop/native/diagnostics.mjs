@@ -22,7 +22,7 @@ export async function diagnoseRuntime(runtime, {env, cwd}) {
         if (report.kind !== 'installed_user') throw new Error('Unexpected doctor');
         resolve(prerequisiteStatus(report));
       } catch {
-        resolve({...prerequisiteStatus(null), error:error?.killed ? 'Runtime diagnostics timed out. Retry after checking the installation and Docker.' : 'Runtime diagnostics failed. Run Babel CLI.cmd doctor --json for local details.'});
+        resolve({...prerequisiteStatus(null), error:error?.killed ? 'Runtime diagnostics timed out. Retry after checking the installation and Docker.' : 'Runtime diagnostics failed. Run Babel Harness.cmd doctor --json for local details.'});
       }
     });
   });

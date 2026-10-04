@@ -1,6 +1,6 @@
 {
   "name": "babel-north-star-desktop",
-  "version": "0.1.1-preview.20261003",
+  "version": "0.1.1-preview.20261004",
   "private": true,
   "description": "North Star desktop shell for the Babel coding agent",
   "type": "module",

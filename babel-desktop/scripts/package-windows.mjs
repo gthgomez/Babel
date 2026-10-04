@@ -61,7 +61,10 @@ const nodeSource = join(nodeExtract, `node-v${nodeVersion}-win-x64`);
 mkdirSync(join(runtime,'node'));
 for (const name of ['node.exe','LICENSE']) cpSync(join(nodeSource,name),join(runtime,'node',name));
 cpSync(join(desktop,'scripts','cli-launch.mjs'),join(runtime,'cli-launch.mjs'));
-writeFileSync(join(bundle,'Babel CLI.cmd'),'@echo off\r\n"%~dp0resources\\babel-runtime\\node\\node.exe" "%~dp0resources\\babel-runtime\\cli-launch.mjs" %*\r\nexit /b %errorlevel%\r\n');
+const cliLauncher = '@echo off\r\n"%~dp0resources\\babel-runtime\\node\\node.exe" "%~dp0resources\\babel-runtime\\cli-launch.mjs" %*\r\nexit /b %errorlevel%\r\n';
+writeFileSync(join(bundle,'Babel Harness.cmd'),cliLauncher);
+// Keep the previous launcher name as an alias for existing preview users.
+writeFileSync(join(bundle,'Babel CLI.cmd'),cliLauncher);
 cpSync(join(desktop,'docs','INSTALL-WINDOWS.md'),join(bundle,'INSTALL.md'));
 const metadata = {version,sourceSha,platform:'win32-x64',electron:electronVersion,electronArchiveSha256:electronArchiveSha,node:nodeVersion,nodeArchiveSha256:nodeArchiveSha,cliVersion:pack.version,cliArchiveSha256:sha(readFileSync(join(output,pack.filename))),signed:false};
 writeFileSync(join(bundle,'BUILD.json'), JSON.stringify(metadata,null,2)+'\n');

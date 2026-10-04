@@ -1,6 +1,6 @@
 {
-  "name": "@babel-preview-local/coding-agent",
-  "version": "0.1.1-preview.20261003",
+  "name": "babel-harness",
+  "version": "0.1.1-preview.20261004",
   "description": "Local coding agent runtime for Babel — chat, plan, and deep modes with TUI/REPL",
   "license": "Apache-2.0",
   "author": "Jonathan Gomez Aguilar",
@@ -23,7 +23,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "babel-agent": "bin/babel.js"
+    "babel-agent": "bin/babel.js",
+    "babel-harness": "bin/babel.js"
   },
   "scripts": {
     "audit:pricing": "tsx --no-warnings=ExperimentalWarning scripts/audit_provider_pricing.ts",
