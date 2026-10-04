@@ -1,3 +1,4 @@
+import { resolveRuntimePaths } from '../config/runtimePaths.js';
 import {
   appendFileSync,
   existsSync,
@@ -156,6 +157,8 @@ export function detectProjectFromCwd(cwd = process.cwd()): ValidProject | null {
     current = parentDir;
   }
 
+  if (resolveRuntimePaths().isInstalled) return null;
+
   // Strategy 2: Scan workspace directories and check containment
   const workspaceRoot = dirname(BABEL_ROOT);
   const scanDirs = [
@@ -266,7 +269,7 @@ export function readClipboardPlanText(): string {
 }
 
 export function getRuntimeFlagsPath(): string {
-  return join(BABEL_ROOT, 'config', 'runtime-flags.json');
+  return join(resolveRuntimePaths().userConfigRoot, 'runtime-flags.json');
 }
 
 export function readPersistedDryRunValue(runtimeFlagsPath: string): boolean | null {

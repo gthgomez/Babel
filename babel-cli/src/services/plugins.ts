@@ -13,7 +13,7 @@ import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 
 import { z } from 'zod';
 
-import { BABEL_ROOT } from '../cli/constants.js';
+import { resolveRuntimePaths } from '../config/runtimePaths.js';
 import {
   describeEnterprisePolicySource,
   evaluatePluginPolicy,
@@ -203,7 +203,7 @@ export interface PluginToolCallRequest {
 }
 
 function getBabelRoot(options: PluginRuntimeOptions = {}): string {
-  return options.babelRoot ?? process.env['BABEL_ROOT'] ?? BABEL_ROOT;
+  return options.babelRoot ?? resolveRuntimePaths().resourceRoot;
 }
 
 function evaluatePluginPolicyForRoot(
@@ -233,12 +233,16 @@ export function getPluginConfigPath(options: PluginRuntimeOptions = {}): string 
   return (
     options.configPath ??
     process.env['BABEL_PLUGINS_CONFIG'] ??
-    join(getBabelRoot(options), 'babel-cli', 'config', 'plugins.json')
+    (!options.babelRoot && (resolveRuntimePaths().isInstalled || process.env['BABEL_CONFIG_DIR'])
+      ? join(resolveRuntimePaths().userConfigRoot, 'plugins.json')
+      : join(getBabelRoot(options), 'babel-cli', 'config', 'plugins.json'))
   );
 }
 
 function getDefaultPluginRoot(options: PluginRuntimeOptions = {}): string {
-  return join(getBabelRoot(options), 'babel-cli', 'plugins');
+  return !options.babelRoot && (resolveRuntimePaths().isInstalled || process.env['BABEL_STATE_DIR'])
+    ? join(resolveRuntimePaths().userStateRoot, 'plugins')
+    : join(getBabelRoot(options), 'babel-cli', 'plugins');
 }
 
 function uniqueValues(values: string[]): string[] {
@@ -254,7 +258,12 @@ function readJsonFile(path: string): unknown {
 }
 
 export function readPluginConfig(options: PluginRuntimeOptions = {}): PluginConfig {
-  const configPath = getPluginConfigPath(options);
+  const userPath = getPluginConfigPath(options);
+  const paths = resolveRuntimePaths();
+  const configPath = paths.isInstalled && !options.configPath && !options.babelRoot &&
+    !process.env['BABEL_PLUGINS_CONFIG'] && !existsSync(userPath)
+    ? join(paths.resourceRoot, 'babel-cli', 'config', 'plugins.json')
+    : userPath;
   if (!existsSync(configPath)) {
     return PluginConfigSchema.parse({});
   }
@@ -286,7 +295,10 @@ function getPluginRoots(config: PluginConfig, options: PluginRuntimeOptions = {}
     ? process.env['BABEL_PLUGIN_ROOTS'].split(delimiter).filter(Boolean)
     : [];
   const explicitRoots = options.pluginRoots ?? [];
-  const configRoots = config.plugin_roots.map((root) => resolve(getBabelRoot(options), root));
+  const rootBase = !options.babelRoot && resolveRuntimePaths().isInstalled
+    ? resolveRuntimePaths().userStateRoot
+    : getBabelRoot(options);
+  const configRoots = config.plugin_roots.map((root) => resolve(rootBase, root));
   return uniqueValues([
     getDefaultPluginRoot(options),
     ...configRoots,

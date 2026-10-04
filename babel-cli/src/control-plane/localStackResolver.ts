@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { resolveRuntimeLearningRoot } from '../config/runtimePaths.js';
 
 import { filterCatalogEntries, parseCatalog } from './catalog.js';
 import { previewInstructionStackResolution } from './stackResolver.js';
@@ -721,6 +722,7 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
   const babelRoot = options.babelRoot;
   const project = options.project ?? 'global';
   const model = normalizeModel(options.model);
+  const localLearningRoot = options.localLearningRoot ?? resolveRuntimeLearningRoot(babelRoot);
   const pipelineMode = options.pipelineMode ?? 'chat';
 
   // ── Cache check ──
@@ -739,7 +741,7 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
     JSON.stringify(options.taskOverlayIds ?? []),
     String(options.disableRecommendedTaskOverlays ?? false),
     String(options.loadAllSkills ?? false),
-    options.localLearningRoot ?? '',
+    localLearningRoot,
   ].join('|');
   const catalogMtime = getCatalogMtime(babelRoot);
   const cached = resolverCache.get(cacheKey);
@@ -757,7 +759,6 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
   const catalogEntries = parseCatalog(catalogPath);
   const entriesById = new Map(catalogEntries.map((entry) => [entry.id, entry]));
 
-  const localLearningRoot = options.localLearningRoot ?? join(babelRoot, 'runs', 'local-learning');
   const resolvedClientSurface = options.clientSurface?.trim() || resolveDefaultClientSurface(model);
 
   let selectedCodexAdapterName: 'balanced' | 'ultra' =

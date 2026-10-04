@@ -685,6 +685,8 @@ function collectSpawnFiles(srcRoot: string): string[] {
 
 /** Production (non-test) files that spawn child processes. Update when adding a site. */
 const HOST_PROCESS_SURFACE = new Set([
+  // Installed diagnostics probes Docker readiness using fixed arguments and a bounded timeout.
+  'installedDoctor.ts',
   // Evaluator-owned comparison processes and native harness transport.
   'claude-babel-astra-lab/babelHarness.ts',
   'claude-babel-astra-lab/claudeHarness.ts',
