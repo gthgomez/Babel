@@ -1,11 +1,11 @@
 /**
- * research/hunt.ts - Repo Hunt discovery and bounded analysis orchestration
+ * research/hunt.ts — Repo Hunt discovery orchestration (Slice B)
  *
- * Runs one research mission through the discovery pipeline:
+ * Runs one research mission through the discovery half of the pipeline:
  * query plan → provider search → merge/dedup → deterministic triage →
  * diversity shortlist, persisting every artifact and a metrics receipt.
- * A completed discovery can continue through the bounded reader and
- * evidence validator. No foreign code is executed.
+ * The shortlist is the terminal output of Slice B: no deep model reader
+ * runs yet, and no foreign code is executed.
  *
  * Rate limiting is an explicit non-success state: when the request budget
  * pauses or exhausts, the run is persisted as PAUSED/INCOMPLETE with the
@@ -15,20 +15,27 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CandidateRecordV1, RepositoryResearchProvider, TriageScoreBreakdown } from './contracts.js';
+import { EvidenceRefV1Schema } from './contracts.js';
 import { mergeAndDedupeCandidates, type CandidateSearchEntry } from './discovery/candidateMerge.js';
 import { selectDiverseShortlist } from './discovery/diversity.js';
 import { rankCandidates, type TriageContext } from './discovery/triage.js';
 import {
   RateBudgetExhaustedError,
   RateBudgetPausedError,
-  bindMissionByteBudget,
   type RateBudgetSnapshot,
 } from './rateBudget.js';
 import { buildQueryPlan, extractProblemTerms } from './queryPlanner.js';
+import { resolveTargetHeadSha } from './missionPlanner.js';
 import { runDeepAnalysis, keywordReaderStrategy, type ReaderStrategy, type DeepAnalysisResult } from './analysis/deepAnalysis.js';
+import { analyzeApplicability, createLocalScanBudget, type ApplicabilityFinding } from './analysis/applicability.js';
+import { buildExperimentProposal, NotFalsifiableError } from './reporting/experiments.js';
+import { reviewPatternCard } from './reporting/review.js';
+import { writeReportArtifacts } from './reporting/report.js';
+import type { ExperimentProposalV1, ResearchReviewV1 } from './contracts.js';
 import {
   appendJsonl,
   initializeResearchRun,
+  readJsonl,
   writeJsonArtifact,
   type ResearchRunPaths,
 } from './artifacts.js';
@@ -72,6 +79,9 @@ export interface HuntResult {
   metrics: HuntMetrics;
   budget: RateBudgetSnapshot | null;
   deep: DeepAnalysisResult | null;
+  findings: Array<{ patternId: string; finding: ApplicabilityFinding }>;
+  proposals: ExperimentProposalV1[];
+  reviews: ResearchReviewV1[];
 }
 
 /** Infer target languages from the project root (package.json today; more later). */
@@ -111,7 +121,6 @@ export async function runHuntDiscovery(
   let budgetSnapshot: RateBudgetSnapshot | null = null;
 
   const githubProvider = provider as { budget?: { snapshot(): RateBudgetSnapshot } };
-  bindMissionByteBudget(provider, mission.budget.max_remote_bytes);
 
   try {
     for (const hypothesis of queryPlan.hypotheses) {
@@ -151,6 +160,10 @@ export async function runHuntDiscovery(
   const shortlist = selectDiverseShortlist(ranked, { limit: mission.budget.max_enriched_candidates });
 
   let deep: DeepAnalysisResult | null = null;
+  const findings: Array<{ patternId: string; finding: ApplicabilityFinding }> = [];
+  const proposals: ExperimentProposalV1[] = [];
+  const reviews: ResearchReviewV1[] = [];
+  const localScanBudget = createLocalScanBudget();
   if (status === 'COMPLETE' && !options.skipDeepAnalysis && shortlist.length > 0) {
     try {
       deep = await runDeepAnalysis(
@@ -171,6 +184,70 @@ export async function runHuntDiscovery(
       status = error instanceof RateBudgetPausedError ? 'PAUSED' : 'INCOMPLETE';
       reason = error instanceof Error ? error.message : String(error);
     }
+  }
+  if (deep) {
+    // Slice D: local applicability (source-confirmed cards only, HEAD-bound),
+    // falsifiable experiment proposals, independent research review, report.
+    const persistedEvidence = readJsonl<unknown>(paths.evidenceJsonl).map((record) => EvidenceRefV1Schema.parse(record));
+    for (const card of deep.patterns) {
+      if (card.evidence_state !== 'SOURCE_CONFIRMED') continue;
+      const sourceId = card.sources[0]?.repository_id;
+      if (!sourceId) continue;
+      const sourceSession = deep.sessions.find(
+        (s) => s.candidate.identity.provider_repo_id === sourceId,
+      );
+      if (!sourceSession) continue;
+      const reportText = sourceSession
+        ? [
+            sourceSession.finished.report.problem_match,
+            ...sourceSession.finished.report.observations.map((o) => o.claim),
+            ...sourceSession.finished.report.patterns.map((p) => `${p.name}: ${p.mechanism}`),
+          ].join('\n')
+        : '';
+      const finding = analyzeApplicability(mission, card, {
+        ...(options.now ? { now: options.now } : {}),
+        reportText,
+        localScanBudget,
+      });
+      findings.push({ patternId: card.pattern_id, finding });
+      card.applicability = {
+        target_head_sha: finding.head_sha,
+        local_evidence_refs: [
+          ...finding.attach_points.map((a) => a.local_ref_id),
+          ...finding.existing_mechanisms.map((m) => m.local_ref_id),
+        ],
+        hypothesis: finding.smallest_experiment,
+        integration_risks: finding.conflicts,
+      };
+      try {
+        proposals.push(buildExperimentProposal({ mission, card, finding, now: options.now ?? new Date() }));
+      } catch (error) {
+        if (!(error instanceof NotFalsifiableError)) throw error;
+      }
+      const sourceSnapshot = deep.snapshots.find((snap) => snap.manifest.repository_id === sourceId);
+      if (!sourceSnapshot) continue;
+      const sourceEvidence = persistedEvidence.filter((ref) => ref.repository_id === sourceId);
+      const validEvidenceIds = new Set(sourceEvidence.map((ref) => ref.evidence_id));
+      reviews.push(
+        reviewPatternCard({
+          mission,
+          card,
+          evidenceRefs: sourceEvidence,
+          validEvidenceIds,
+          snapshot: sourceSnapshot.manifest,
+          finding,
+          currentTargetHeadSha: resolveTargetHeadSha(mission.target.project_root),
+          now: options.now ?? new Date(),
+          applicabilityPartial: finding.scan_budget_exhausted || finding.occurrences_truncated,
+        }),
+      );
+    }
+  }
+  if ((localScanBudget.exhausted || localScanBudget.occurrencesTruncated) && status === 'COMPLETE') {
+    status = 'INCOMPLETE';
+    reason = localScanBudget.exhausted
+      ? 'local applicability scan exhausted its shared file or byte budget'
+      : 'local applicability scan truncated occurrence evidence at its per-finding cap';
   }
   budgetSnapshot = githubProvider.budget?.snapshot() ?? null;
 
@@ -199,7 +276,27 @@ export async function runHuntDiscovery(
       : null,
   });
 
-  return { status, reason, paths, candidates, shortlist, metrics, budget: budgetSnapshot, deep };
+  if (deep) {
+    writeReportArtifacts({
+      mission,
+      status,
+      reason,
+      candidates,
+      shortlistCount: shortlist.length,
+      deep,
+      findings,
+      proposals,
+      reviews,
+      paths,
+      budget: budgetSnapshot,
+      metrics,
+      deepStatus: deep.status,
+      deepReason: deep.reason,
+      localScanBudget,
+    });
+  }
+
+  return { status, reason, paths, candidates, shortlist, metrics, budget: budgetSnapshot, deep, findings, proposals, reviews };
 }
 
 function problemTermsForTriage(mission: ResearchMissionV1): string[] {

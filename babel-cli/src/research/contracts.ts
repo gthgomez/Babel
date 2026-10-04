@@ -256,6 +256,45 @@ export const EvidenceRefV1Schema = z
   );
 export type EvidenceRefV1 = z.infer<typeof EvidenceRefV1Schema>;
 
+export const EvidenceValidationEntryV1Schema = z.object({
+  evidence_id: z.string().min(1),
+  valid: z.boolean(),
+  reasons: z.array(z.string()),
+}).strict();
+export type EvidenceValidationEntryV1 = z.infer<typeof EvidenceValidationEntryV1Schema>;
+
+export const LocalEvidenceRefV1Schema = z.object({
+  local_ref_id: z.string().regex(/^loc_[0-9a-f]{12}$/),
+  path: z.string().min(1).refine((value) =>
+    !value.startsWith('/') && !value.startsWith('\\') && !/^[A-Za-z]:[\\/]/.test(value) &&
+    !value.split(/[\\/]/).includes('..'),
+  ),
+  start_line: z.number().int().positive(),
+  end_line: z.number().int().positive(),
+  content_hash: z.string().regex(/^[0-9a-f]{64}$/),
+}).strict().refine((data) => data.start_line <= data.end_line, {
+  message: 'start_line must be <= end_line', path: ['start_line'],
+});
+export type LocalEvidenceRefV1 = z.infer<typeof LocalEvidenceRefV1Schema>;
+
+export const ApplicabilityFindingV1Schema = z.object({
+  attach_points: z.array(LocalEvidenceRefV1Schema),
+  existing_mechanisms: z.array(LocalEvidenceRefV1Schema),
+  gaps: z.array(z.string()),
+  conflicts: z.array(z.string()),
+  smallest_experiment: z.string().min(1),
+  head_sha: z.string().regex(/^[0-9a-f]{40}$/).nullable(),
+  scan_budget_exhausted: z.boolean(),
+  occurrences_truncated: z.boolean(),
+}).strict();
+export type ApplicabilityFindingV1 = z.infer<typeof ApplicabilityFindingV1Schema>;
+
+export const ResearchApplicabilityRecordV1Schema = z.object({
+  pattern_id: z.string().min(1),
+  finding: ApplicabilityFindingV1Schema,
+}).strict();
+export type ResearchApplicabilityRecordV1 = z.infer<typeof ResearchApplicabilityRecordV1Schema>;
+
 // ---------------------------------------------------------------------------
 // PatternCardV1
 // ---------------------------------------------------------------------------
@@ -461,6 +500,53 @@ export const RepoReaderReportV1Schema = z
   })
   .strict();
 export type RepoReaderReportV1 = z.infer<typeof RepoReaderReportV1Schema>;
+
+// ---------------------------------------------------------------------------
+// ExperimentProposalV1 + ResearchReviewV1 (Slice D)
+// ---------------------------------------------------------------------------
+
+export const ExperimentProposalV1Schema = z
+  .object({
+    schema_version: z.literal(1).default(1),
+    proposal_id: z.string().min(1),
+    mission_id: z.string().min(1),
+    pattern_id: z.string().min(1),
+    /** The uncertainty the experiment tests — a proposal without one is not falsifiable. */
+    hypothesis: z.string().min(1),
+    baseline: z.string().min(1),
+    experiment: z.string().min(1),
+    metrics: z.array(z.string().min(1)).min(1),
+    promotion_criteria: z.string().min(1),
+    /** Bound to the target HEAD the experiment was designed against. */
+    target_head_sha: z.string().nullable(),
+    created_at: z.string().min(1),
+  })
+  .strict();
+export type ExperimentProposalV1 = z.infer<typeof ExperimentProposalV1Schema>;
+
+export const RESEARCH_REVIEW_VERDICTS = [
+  'ACCEPT_RESEARCH_FINDING',
+  'NEEDS_MORE_EVIDENCE',
+  'REJECT_RESEARCH_FINDING',
+] as const;
+
+export const ResearchReviewV1Schema = z
+  .object({
+    schema_version: z.literal(1).default(1),
+    review_id: z.string().min(1),
+    mission_id: z.string().min(1),
+    pattern_id: z.string().min(1),
+    verdict: z.enum(RESEARCH_REVIEW_VERDICTS),
+    /** Evidence-backed reasoning; the reviewer sees validated artifacts only. */
+    rationale: z.string().min(1),
+    checked: z.array(z.string()).min(1),
+    concerns: z.array(z.string()),
+    reviewed_at: z.string().min(1),
+    /** Research review never substitutes for code review/merge governance. */
+    grants_merge_authority: z.literal(false),
+  })
+  .strict();
+export type ResearchReviewV1 = z.infer<typeof ResearchReviewV1Schema>;
 
 // ---------------------------------------------------------------------------
 // Serialization helpers
