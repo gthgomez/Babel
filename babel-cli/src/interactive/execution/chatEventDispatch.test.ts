@@ -174,6 +174,19 @@ describe('dispatchChatEvent cancelled telemetry threading', () => {
     assert.equal(result.turnTelemetry, undefined);
   });
 
+  test('tool and file events are forwarded to the stream callback', () => {
+    const events: Array<{ type: string }> = [];
+    dispatchChatEvent(
+      { type: 'tool_start', toolCallId: 'call-1', tool: 'file_read', target: 'README.md' },
+      { onStreamEvent: (event) => events.push(event) },
+    );
+    dispatchChatEvent(
+      { type: 'file_changed', path: 'README.md', additions: 1, deletions: 0 },
+      { onStreamEvent: (event) => events.push(event) },
+    );
+    assert.deepEqual(events.map((event) => event.type), ['tool_start', 'file_changed']);
+  });
+
   test('failed event preserves authoritative AGENT_FAILURE', () => {
     const result = dispatchChatEvent(
       { type: 'failed', error: 'agent invariant failed', outcome: 'AGENT_FAILURE' },

@@ -1,3 +1,4 @@
+import { resolveRuntimeUserStateRoot } from '../../config/runtimePaths.js';
 /**
  * memoryStore.ts — CRUD operations on the Babel memory directory.
  *
@@ -8,7 +9,6 @@
 
 import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
 
 import { z } from 'zod';
 
@@ -50,7 +50,7 @@ export function sanitizeGitRoot(gitRoot: string): string {
 export function resolveMemoryRoot(projectRoot: string): string | null {
   try {
     const sanitized = sanitizeGitRoot(resolve(projectRoot));
-    const memoryRoot = join(homedir(), '.babel', 'projects', sanitized, 'memory');
+    const memoryRoot = join(resolveRuntimeUserStateRoot(), 'projects', sanitized, 'memory');
     mkdirSync(memoryRoot, { recursive: true });
     return memoryRoot;
   } catch (err) {

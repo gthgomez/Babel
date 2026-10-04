@@ -15,8 +15,9 @@ import { GroqApiRunner } from './groqApi.js'
 import { OllamaApiRunner } from './ollamaApi.js'
 import { OpenAiApiRunner } from './openAiApi.js'
 import { OpenCodeApiRunner } from './openCodeApi.js'
-import { OpenCodeGoApiRunner } from '../claude-babel-astra-lab/openCodeGoApi.js'
-import type { OpenCodeGoCredentialSource } from '../claude-babel-astra-lab/credentialResolver.js'
+import { OpenCodeGoApiRunner } from './openCodeGoApi.js'
+import type { OpenCodeGoCredentialSource } from './openCodeGoCredential.js'
+import type { OpenCodeGoBudget } from './openCodeGoBudget.js'
 import { OpenRouterApiRunner } from './openRouterApi.js'
 import {
   providerSupportsOperation,
@@ -48,7 +49,9 @@ export interface ProviderEngineOptions {
   apiKeyEnvVar?: string
   explicitCredential?: string
   env?: NodeJS.ProcessEnv
-  /** Required for benchmark-only credential boundary selection. */
+  /** Shared caller-owned allowance ledger; required for the exact V4.1 Go pilot. */
+  budget?: OpenCodeGoBudget
+  /** Explicit Go credential source; default remains the approved helper. */
   credentialSource?: OpenCodeGoCredentialSource
   benchmarkRunId?: string
   requestTimeoutMs?: number
@@ -90,6 +93,9 @@ function createAdapter(options: ProviderEngineOptions): RawLlmRunner {
       })
     case 'opencode-go':
       return new OpenCodeGoApiRunner(options.modelId, options.sampling, {
+        ...(options.budget ? { budget: options.budget } : {}),
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.executionEnvelope ? { executionEnvelope: options.executionEnvelope } : {}),
         credentialSource: options.credentialSource ?? (options.explicitCredential ? 'explicit-test' : 'opencode-auth-helper'),
         ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}),
         ...(options.benchmarkRunId ? { benchmarkRunId: options.benchmarkRunId } : {}),

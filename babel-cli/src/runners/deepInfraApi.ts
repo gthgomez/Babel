@@ -231,6 +231,11 @@ export class DeepInfraApiRunner implements LlmRunner {
     return 'follow';
   }
 
+  /** Dispatch unchanged by default; specialized transports may gate every request. */
+  protected dispatchFetch(url: string, init: RequestInit): Promise<Response> {
+    return fetch(url, init)
+  }
+
   // ── Shared request/response logic ──────────────────────────────────────────
   /**
    * Sends the prompt to the API, handles retries, and reads the response
@@ -551,7 +556,7 @@ export class DeepInfraApiRunner implements LlmRunner {
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
-        response = await fetch(this.apiUrl, {
+        response = await this.dispatchFetch(this.apiUrl, {
           method: 'POST',
           redirect: this.getRequestRedirect(),
           signal: controller.signal,
@@ -761,7 +766,7 @@ export class DeepInfraApiRunner implements LlmRunner {
           const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
           lastAttempt += 1;
           try {
-            response = await fetch(this.apiUrl, {
+            response = await this.dispatchFetch(this.apiUrl, {
               method: 'POST',
               redirect: this.getRequestRedirect(),
               signal: controller.signal,
@@ -1356,7 +1361,7 @@ export class DeepInfraApiRunner implements LlmRunner {
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
-        response = await fetch(this.apiUrl, {
+        response = await this.dispatchFetch(this.apiUrl, {
           method: 'POST',
           redirect: this.getRequestRedirect(),
           signal: controller.signal,

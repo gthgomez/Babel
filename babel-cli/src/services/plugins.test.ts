@@ -9,6 +9,9 @@ import {
   enablePlugin,
   handlePluginTool,
   loadPluginRegistry,
+  getPluginConfigPath,
+  readPluginConfig,
+  writePluginConfig,
   runPluginCommand,
   runPluginHooks,
 } from './plugins.js';
@@ -461,4 +464,34 @@ test('enterprise plugin policy blocks disallowed trust levels and activation', (
       );
     },
   );
+});
+
+
+test('does persist plugin config and discover plugins inside user overrides', () => {
+  const root = createTempBabelRoot();
+  const previousConfig = process.env['BABEL_CONFIG_DIR'];
+  const previousState = process.env['BABEL_STATE_DIR'];
+  const previousPluginConfig = process.env['BABEL_PLUGINS_CONFIG'];
+  process.env['BABEL_CONFIG_DIR'] = join(root, 'user config');
+  process.env['BABEL_STATE_DIR'] = join(root, 'user state');
+  delete process.env['BABEL_PLUGINS_CONFIG'];
+  try {
+    assert.equal(getPluginConfigPath(), join(root, 'user config', 'plugins.json'));
+    const config = writePluginConfig(readPluginConfig({ configPath: join(root, 'missing.json') }));
+    assert.deepEqual(readPluginConfig(), config);
+    writeReadonlyPlugin(root);
+    const userPluginRoot = join(root, 'user state', 'plugins', 'sample-readonly');
+    mkdirSync(userPluginRoot, { recursive: true });
+    writeFileSync(join(userPluginRoot, 'plugin.json'), readFileSync(join(root, 'babel-cli', 'plugins', 'sample-readonly', 'plugin.json')));
+    assert.equal(loadPluginRegistry().plugins.some((plugin) => plugin.manifest.id === 'sample-readonly'), true);
+    assert.equal(loadPluginRegistry().plugin_roots.includes(join(root, 'user state', 'plugins')), true);
+    assert.equal(getPluginConfigPath({ babelRoot: root }), join(root, 'babel-cli', 'config', 'plugins.json'));
+  } finally {
+    if (previousConfig === undefined) delete process.env['BABEL_CONFIG_DIR'];
+    else process.env['BABEL_CONFIG_DIR'] = previousConfig;
+    if (previousState === undefined) delete process.env['BABEL_STATE_DIR'];
+    else process.env['BABEL_STATE_DIR'] = previousState;
+    if (previousPluginConfig === undefined) delete process.env['BABEL_PLUGINS_CONFIG'];
+    else process.env['BABEL_PLUGINS_CONFIG'] = previousPluginConfig;
+  }
 });

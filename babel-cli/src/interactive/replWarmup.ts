@@ -9,6 +9,15 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+let pendingWarmup: Promise<unknown> | undefined;
+
+/** Wait for warmup and stop its owned daemon before interactive exit. */
+export async function stopReplWarmup(): Promise<void> {
+  await pendingWarmup;
+  const { stopOwnedDaemon } = await import('../daemon/client.js');
+  await stopOwnedDaemon();
+}
+
 function isDaemonWarmEnabled(): boolean {
   if (process.env['NODE_ENV'] === 'test' || process.env['BABEL_TEST'] === '1') {
     return false;
@@ -43,7 +52,7 @@ export function warmReplRuntime(): void {
     return;
   }
 
-  void import('../daemon/client.js')
+  pendingWarmup = import('../daemon/client.js')
     .then(({ ensureDaemon }) => ensureDaemon())
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);

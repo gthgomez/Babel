@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,6 +8,9 @@ import {
   filterAllowedMcpServers,
   filterEnterpriseMcpServers,
   isAllowedMcpServerCommand,
+  getMcpServersConfigPath,
+  writeMcpServers,
+  readMcpServers,
 } from './mcpServers.js';
 
 for (const command of ['npx', 'node', 'npm.cmd', 'python3', 'uvx', 'yarn.exe']) {
@@ -80,5 +83,22 @@ test('filterEnterpriseMcpServers applies configured server allowlist', () => {
     if (previousAdminPolicyPath === undefined)
       delete process.env['BABEL_ENTERPRISE_POLICY_ADMIN_PATH'];
     else process.env['BABEL_ENTERPRISE_POLICY_ADMIN_PATH'] = previousAdminPolicyPath;
+  }
+});
+
+
+test('does write MCP configuration inside the user config override', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel mcp ü '));
+  const previous = process.env['BABEL_CONFIG_DIR'];
+  process.env['BABEL_CONFIG_DIR'] = join(root, 'user config');
+  try {
+    assert.equal(getMcpServersConfigPath(), join(root, 'user config', 'mcp_servers.json'));
+    writeMcpServers({ local: { command: 'node', args: ['server.js'] } });
+    assert.equal(existsSync(getMcpServersConfigPath()), true);
+    assert.deepEqual(readMcpServers()['local'], { command: 'node', args: ['server.js'] });
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CONFIG_DIR'];
+    else process.env['BABEL_CONFIG_DIR'] = previous;
+    rmSync(root, { recursive: true, force: true });
   }
 });

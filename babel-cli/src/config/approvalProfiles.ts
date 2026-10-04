@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { BABEL_ROOT } from '../cli/constants.js';
+import { resolveRuntimePaths } from './runtimePaths.js';
 import { readDryRunState, type DryRunState, writeDryRunState } from '../cli/helpers.js';
 import { readRuntimeMode, writeRuntimeMode } from './runtimeMode.js';
 import type { ExecutorMode } from '../sandbox.js';
@@ -53,7 +53,7 @@ export const APPROVAL_PROFILE_DEFINITIONS: Record<ApprovalProfile, ApprovalProfi
 };
 
 function getApprovalProfilePath(): string {
-  return join(BABEL_ROOT, 'config', 'approval-profile.json');
+  return join(resolveRuntimePaths().userConfigRoot, 'approval-profile.json');
 }
 
 function normalizeApprovalProfile(value: string | undefined): ApprovalProfile | null {
