@@ -1,9 +1,9 @@
+import { resolveRuntimeUserStateRoot } from '../config/runtimePaths.js';
 // ─── Session Persistence ──────────────────────────────────────────────────────
 // Extracted from interactive.ts — session state save/load, model resolution,
 // and cost total tracking. All functions take ReplContext as first param.
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { globalCostTracker } from '../services/costTracker.js';
 import { MODE_ALIAS_TO_RUNTIME } from './types.js';
@@ -38,7 +38,7 @@ export function updateCostTotals(ctx: ReplContext): void {
 
 export function saveSessionState(ctx: ReplContext): void {
   updateCostTotals(ctx);
-  const sessionDir = path.join(os.homedir(), '.babel');
+  const sessionDir = resolveRuntimeUserStateRoot();
   const sessionFile = path.join(sessionDir, 'session.json');
   try {
     fs.mkdirSync(sessionDir, { recursive: true });
@@ -53,14 +53,14 @@ export function saveSessionState(ctx: ReplContext): void {
     const tmpFile = sessionFile + '.tmp';
     fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2), 'utf-8');
     fs.renameSync(tmpFile, sessionFile);
-    saveTokenHistory(path.join(os.homedir(), '.babel', 'token-history.json'));
+    saveTokenHistory(path.join(resolveRuntimeUserStateRoot(), 'token-history.json'));
   } catch {
     // Best-effort — silent if home dir is unwritable
   }
 }
 
 export function loadSessionState(): SessionState | null {
-  const sessionFile = path.join(os.homedir(), '.babel', 'session.json');
+  const sessionFile = path.join(resolveRuntimeUserStateRoot(), 'session.json');
   try {
     if (!fs.existsSync(sessionFile)) return null;
     const raw = fs.readFileSync(sessionFile, 'utf-8');
@@ -73,7 +73,7 @@ export function loadSessionState(): SessionState | null {
     } else if (!VALID_MODES.includes(parsed.mode)) {
       parsed.mode = 'chat';
     }
-    loadTokenHistory(path.join(os.homedir(), '.babel', 'token-history.json'));
+    loadTokenHistory(path.join(resolveRuntimeUserStateRoot(), 'token-history.json'));
     return parsed as SessionState;
   } catch {
     return null;

@@ -3,6 +3,26 @@ import { test } from 'node:test';
 
 import { RateBudget, RateBudgetExhaustedError, RateBudgetPausedError } from './rateBudget.js';
 
+test('zero response byte budget prevents the first request', () => {
+  const budget = new RateBudget(100, 30, 0);
+  assert.throws(() => budget.beforeRequest('core'), RateBudgetExhaustedError);
+  assert.equal(budget.snapshot().requestsIssued, 0);
+  assert.equal(budget.snapshot().state, 'EXHAUSTED');
+});
+
+test('binding a smaller mission ceiling preserves consumed bytes and cannot replenish capacity', () => {
+  const budget = new RateBudget(100, 30, 100);
+  budget.recordBytes(20);
+  budget.limitRemoteBytes(30);
+  assert.equal(budget.remainingBytes, 10);
+  budget.limitRemoteBytes(1000);
+  assert.equal(budget.remainingBytes, 10);
+  budget.limitRemoteBytes(15);
+  assert.equal(budget.bytes, 20);
+  assert.equal(budget.remainingBytes, 0);
+  assert.throws(() => budget.beforeRequest('core'), RateBudgetExhaustedError);
+});
+
 test('budget counts requests and search requests separately', () => {
   const budget = new RateBudget(100, 2);
   budget.beforeRequest('search');

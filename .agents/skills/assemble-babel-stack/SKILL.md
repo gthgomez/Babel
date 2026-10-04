@@ -16,7 +16,7 @@ description: Assembles the correct Babel instruction stack for a task. Use when 
 
 ## Workflow
 
-1. Read `INTEGRATION.md`, `PROJECT_CONTEXT.md`, and `prompt_catalog.yaml` (paths relative to the repo root). Also read `CLAUDE.md` §Startup Sequence for the canonical load order.
+1. Read `INTEGRATION.md`, `PROJECT_CONTEXT.md`, and `prompt_catalog.yaml` (paths relative to the repo root). Contributor policy is owned only by `AGENTS.md`; stack load order is a product contract in `INTEGRATION.md`.
 2. Using `prompt_catalog.yaml` as the canonical registry, identify:
    - task purpose
    - primary domain

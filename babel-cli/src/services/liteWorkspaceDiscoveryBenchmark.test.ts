@@ -128,7 +128,7 @@ test('findContextAnchorHits detects PROJECT_CONTEXT reads', () => {
 
 test('scoreWorkspaceDiscoveryCell ignores policy-blocked out-of-scope tool targets', () => {
   const repo = readWorkspaceDiscoveryRepos().repos.find(
-    (entry) => entry.id === 'monte_carlo_ledger',
+    (entry) => entry.id === 'example_finance_forecast',
   );
   const scenario = readWorkspaceDiscoveryScenarios().scenarios.find(
     (entry) => entry.id === 'disc_plan_named_features',

@@ -51,12 +51,10 @@ harness surfaces. Technical flows may still inspect a resolved stack before
 governed execution; that is a control-plane invariant, not the product
 category.
 
-## Contributor Startup
+## Reference scope
 
-Follow `AGENTS.md`: read this facts file, then load the additional material
-required for the task. For Babel invocation or Prompt OS stack assembly, read
-`INTEGRATION.md`, `prompt_catalog.yaml`, and the selected layers. `README.md`
-provides optional product orientation.
+This file supplies product facts, not contributor policy. The operating map in
+`AGENTS.md` selects task-relevant references. `README.md` provides product orientation.
 
 Consumer repositories may provide optional repo-local rules or project overlays.
 Those files are external inputs, not prerequisites for understanding, validating,
@@ -81,7 +79,8 @@ repository, or safety instructions and is never automatically published.
 - **05_Project_Overlays:** Public example overlays only.
 - **06_Task_Overlays:** Public reusable task overlays and public example deltas.
 - **babel-cli:** Public runtime harness for the interactive coding agent (chat, plan, deep), resolver preview, read-only MCP, and governed pipeline execution.
-- **AGENTS.md / `.agents/`:** Contributor routing, goal-clearance and GitHub workflow rules, and repo-local skills for stack assembly, code review, and control-plane validation.
+- **babel-desktop:** North Star Electron shell beside `babel-cli`. It is the desktop UI host. Coding behavior stays in `babel-cli`.
+- **AGENTS.md / `.agents/skills/`:** One contributor-policy owner and specialized technical references for stack assembly, code review, and validation.
 
 ## Key Contracts
 
@@ -110,7 +109,7 @@ repository, or safety instructions and is never automatically published.
 - `prompt_catalog.yaml`
 - `00_System_Router/`
 - `babel-cli/src/control-plane/`
-- `AGENTS.md` and `.agents/rules/` / `.agents/skills/`
+- `AGENTS.md` and `.agents/skills/`
 - public onboarding docs
 - public release tooling
 - public CI and security scanning

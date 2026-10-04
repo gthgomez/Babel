@@ -9,6 +9,7 @@
  * provider's response headers (x-ratelimit-*), not the rate-limit endpoint.
  */
 
+import { BUDGET_PRESET_VALUES, type RepositoryResearchProvider } from './contracts.js';
 export type RateBudgetState = 'OK' | 'BACKOFF' | 'EXHAUSTED';
 
 export interface RateLimitHeaders {
@@ -51,10 +52,15 @@ export class RateBudget {
   constructor(
     private readonly maxTotalRequests = DEFAULT_MAX_TOTAL_REQUESTS,
     private readonly maxSearchRequests = DEFAULT_MAX_SEARCH_REQUESTS,
+    private maxRemoteBytes = BUDGET_PRESET_VALUES.normal.max_remote_bytes,
   ) {}
 
   /** Throws RateBudgetExhaustedError when the next request must not be issued. */
   beforeRequest(kind: 'search' | 'core', now: Date = new Date()): void {
+    if (this.bytesDownloaded >= this.maxRemoteBytes) {
+      this.lastReason = `remote byte budget exhausted (${this.maxRemoteBytes})`;
+      throw new RateBudgetExhaustedError(this.lastReason);
+    }
     if (this.backoffUntil && now < this.backoffUntil) {
       throw new RateBudgetPausedError(
         `backoff until ${this.backoffUntil.toISOString()}: ${this.lastReason ?? 'rate limited'}`,
@@ -78,7 +84,7 @@ export class RateBudget {
   }
 
   recordHeaders(headers: RateLimitHeaders, bytes: number): void {
-    this.bytesDownloaded += bytes;
+    this.recordBytes(bytes);
     const remaining = headers['x-ratelimit-remaining'];
     if (remaining !== undefined && remaining !== null && remaining !== '') {
       const value = Number.parseInt(remaining, 10);
@@ -105,6 +111,26 @@ export class RateBudget {
     }
   }
 
+  /** Account actual received response chunks, including an overflow chunk. */
+  recordBytes(bytes: number): void {
+    if (!Number.isSafeInteger(bytes) || bytes < 0) throw new RangeError('Invalid response byte count');
+    this.bytesDownloaded += bytes;
+    if (this.bytesDownloaded > this.maxRemoteBytes) {
+      this.lastReason = `remote byte budget exhausted (${this.maxRemoteBytes})`;
+      throw new RateBudgetExhaustedError(this.lastReason);
+    }
+  }
+
+  get remainingBytes(): number {
+    return Math.max(0, this.maxRemoteBytes - this.bytesDownloaded);
+  }
+
+  /** Bind a mission's ceiling without replenishing previously consumed bytes. */
+  limitRemoteBytes(limit: number): void {
+    if (!Number.isSafeInteger(limit) || limit < 0) throw new RangeError('Invalid mission byte limit');
+    this.maxRemoteBytes = Math.min(this.maxRemoteBytes, limit);
+  }
+
   recordError(): void {
     this.errors += 1;
   }
@@ -119,7 +145,9 @@ export class RateBudget {
 
   snapshot(now: Date = new Date()): RateBudgetSnapshot {
     const state: RateBudgetState =
-      this.backoffUntil && now < this.backoffUntil
+      this.bytesDownloaded >= this.maxRemoteBytes
+        ? 'EXHAUSTED'
+        : this.backoffUntil && now < this.backoffUntil
         ? 'BACKOFF'
         : this.requestsIssued >= this.maxTotalRequests ||
             (this.remainingPrimary !== null &&
@@ -141,6 +169,14 @@ export class RateBudget {
       lastReason: this.lastReason,
     };
   }
+}
+
+/** Share the real provider's request-byte owner across mission entry points. */
+export function bindMissionByteBudget(provider: RepositoryResearchProvider, limit: number): RateBudget | null {
+  const budget = (provider as RepositoryResearchProvider & { budget?: RateBudget }).budget;
+  if (!budget || typeof budget.limitRemoteBytes !== 'function') return null;
+  budget.limitRemoteBytes(limit);
+  return budget;
 }
 
 export class RateBudgetExhaustedError extends Error {

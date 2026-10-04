@@ -1,3 +1,4 @@
+import { resolveRuntimeLockRoot } from '../config/runtimePaths.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -14,7 +15,7 @@ export interface WorkspaceLock {
 export function getWorkspaceLockPath(targetPath: string, babelRoot: string): string {
   const absolutePath = resolve(babelRoot, targetPath);
   const hash = createHash('sha256').update(absolutePath).digest('hex');
-  return join(babelRoot, '.babel', 'locks', `${hash}.lock`);
+  return join(resolveRuntimeLockRoot(babelRoot), `${hash}.lock`);
 }
 
 export function readLock(lockPath: string): WorkspaceLock | null {
@@ -52,7 +53,7 @@ export function acquireLock(
   reason: string,
   ttlSec: number = 300,
 ): { success: boolean; message: string } {
-  const lockDir = join(babelRoot, '.babel', 'locks');
+  const lockDir = resolveRuntimeLockRoot(babelRoot);
   if (!existsSync(lockDir)) {
     mkdirSync(lockDir, { recursive: true });
   }

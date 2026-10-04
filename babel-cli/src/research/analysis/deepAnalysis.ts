@@ -26,6 +26,8 @@ import { openReaderSession, type FinishedSession } from './repoReader.js';
 import { extractPatternCard, promoteOnValidEvidence } from './patternExtractor.js';
 import { appendJsonl, writeJsonArtifact, type ResearchRunPaths } from '../artifacts.js';
 import { extractProblemTerms } from '../queryPlanner.js';
+import { PatternCardV1Schema } from '../contracts.js';
+import { bindMissionByteBudget, RateBudgetPausedError } from '../rateBudget.js';
 
 export interface ReaderStrategy {
   readonly name: string;
@@ -39,6 +41,8 @@ export interface ReaderStrategyContext {
 }
 
 export interface DeepAnalysisResult {
+  status: 'COMPLETE' | 'INCOMPLETE' | 'PAUSED';
+  reason: string | null;
   snapshots: Array<RepositorySnapshot>;
   sessions: Array<{ candidate: CandidateRecordV1; finished: FinishedSession }>;
   patterns: PatternCardV1[];
@@ -114,56 +118,86 @@ export async function runDeepAnalysis(
   const patterns: PatternCardV1[] = [];
   let invalidEvidenceCount = 0;
   let rejectionCount = 0;
+  const transportBudget = bindMissionByteBudget(provider, mission.budget.max_remote_bytes);
+  let remainingBytes = mission.budget.max_remote_bytes;
+  let status: DeepAnalysisResult['status'] = 'COMPLETE';
+  let reason: string | null = null;
+  const unsupportedReports: Array<{ candidate_id: string; missing_evidence: string[] }> = [];
 
   for (const candidate of deepPool) {
-    const readerTerms = [
-      ...new Set([
-        ...problemTerms,
-        ...extractProblemTerms(candidate.description ?? ''),
-        ...candidate.topics.map((topic) => topic.toLowerCase()),
-      ]),
-    ];
-    const snapshot = await buildRepositorySnapshot(provider, candidate.identity, {
-      missionId: mission.mission_id,
-      now,
-      byteBudget: mission.budget.max_remote_bytes,
-      maxFiles: mission.budget.max_files_per_repo,
-      interestTerms: readerTerms,
-    });
-    snapshots.push(snapshot);
-    appendJsonl(paths.snapshotManifestsJsonl, snapshot.manifest);
-
-    const session = openReaderSession(candidate.identity, snapshot);
-    const rawReport = strategy.run(session, { mission, candidate, problemTerms: readerTerms });
-    const finished = session.finish(rawReport);
-    sessions.push({ candidate, finished });
-    rejectionCount += finished.rejectedEvidenceIds.length;
-
-    const validation = validateEvidenceRefs(snapshot, finished.evidenceRefs);
-    for (const ref of validation.valid) appendJsonl(paths.evidenceJsonl, ref);
-    for (const entry of validation.entries) {
-      appendJsonl(paths.evidenceValidationJsonl, entry);
+    const byteBudget = Math.min(remainingBytes, transportBudget?.remainingBytes ?? remainingBytes);
+    if (byteBudget <= 0 || mission.budget.max_files_per_repo <= 0) {
+      status = 'INCOMPLETE';
+      reason = 'deep analysis acquisition budget exhausted';
+      break;
     }
-    invalidEvidenceCount += validation.invalid.length;
-    const validRefIds = new Set(validation.valid.map((ref) => ref.evidence_id));
+    try {
+      const readerTerms = [
+        ...new Set([
+          ...problemTerms,
+          ...extractProblemTerms(candidate.description ?? ''),
+          ...candidate.topics.map((topic) => topic.toLowerCase()),
+        ]),
+      ];
+      const snapshot = await buildRepositorySnapshot(provider, candidate.identity, {
+        missionId: mission.mission_id,
+        now,
+        byteBudget,
+        maxFiles: mission.budget.max_files_per_repo,
+        interestTerms: readerTerms,
+      });
+      snapshots.push(snapshot);
+      remainingBytes = Math.max(0, remainingBytes - (snapshot.receivedBytes ?? snapshot.manifest.total_bytes));
+      appendJsonl(paths.snapshotManifestsJsonl, snapshot.manifest);
 
-    const card = extractPatternCard({
-      missionId: mission.mission_id,
-      report: finished.report,
-      evidenceRefs: validation.valid,
-      manifest: snapshot.manifest,
-      files: snapshot.files,
-      targetHeadSha: mission.target.head_sha,
-      now,
-    });
-    patterns.push(promoteOnValidEvidence(card, validRefIds));
+      const session = openReaderSession(candidate.identity, snapshot);
+      const rawReport = strategy.run(session, { mission, candidate, problemTerms: readerTerms });
+      const finished = session.finish(rawReport);
+      sessions.push({ candidate, finished });
+      rejectionCount += finished.rejectedEvidenceIds.length;
+
+      const validation = validateEvidenceRefs(snapshot, finished.evidenceRefs);
+      for (const ref of validation.valid) appendJsonl(paths.evidenceJsonl, ref);
+      for (const entry of validation.entries) {
+        appendJsonl(paths.evidenceValidationJsonl, entry);
+      }
+      invalidEvidenceCount += validation.invalid.length;
+      const validRefIds = new Set(validation.valid.map((ref) => ref.evidence_id));
+
+      if (validation.valid.length === 0) {
+        unsupportedReports.push({ candidate_id: candidate.candidate_id, missing_evidence: finished.report.missing_evidence });
+      } else {
+        const card = extractPatternCard({
+          missionId: mission.mission_id,
+          report: finished.report,
+          evidenceRefs: validation.valid,
+          manifest: snapshot.manifest,
+          files: snapshot.files,
+          targetHeadSha: mission.target.head_sha,
+          now,
+        });
+        patterns.push(PatternCardV1Schema.parse(promoteOnValidEvidence(card, validRefIds)));
+      }
+      if (snapshot.manifest.budget_exhausted) {
+        status = 'INCOMPLETE';
+        reason = 'snapshot byte budget exhausted';
+        break;
+      }
+    } catch (error) {
+      status = error instanceof RateBudgetPausedError ? 'PAUSED' : 'INCOMPLETE';
+      reason = error instanceof Error ? error.message : String(error);
+      break;
+    }
   }
 
   for (const card of patterns) {
-    appendJsonl(paths.patternsJsonl, card);
+    appendJsonl(paths.patternsJsonl, PatternCardV1Schema.parse(card));
   }
   writeJsonArtifact(paths.metricsJson.replace('metrics.json', 'deep-analysis.json'), {
-    deep_read_count: deepPool.length,
+    status,
+    reason,
+    unsupported_reports: unsupportedReports,
+    deep_read_count: snapshots.length,
     patterns_proposed: patterns.length,
     patterns_source_confirmed: patterns.filter((p) => p.evidence_state === 'SOURCE_CONFIRMED').length,
     invalid_evidence_refs: invalidEvidenceCount,
@@ -171,5 +205,5 @@ export async function runDeepAnalysis(
     strategy: strategy.name,
   });
 
-  return { snapshots, sessions, patterns, invalidEvidenceCount, rejectionCount };
+  return { status, reason, snapshots, sessions, patterns, invalidEvidenceCount, rejectionCount };
 }

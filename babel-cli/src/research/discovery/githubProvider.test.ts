@@ -142,3 +142,50 @@ test('unauthenticated requests send no authorization header', async () => {
   await provider.searchRepositories('x');
   assert.equal(authHeaders[0], '');
 });
+
+test('mission byte budget counts actual UTF8 body bytes across requests, ignoring Content-Length', async () => {
+  const body = JSON.stringify({ total_count: 0, items: [], text: 'é' });
+  const bytes = Buffer.byteLength(body, 'utf8');
+  let requests = 0;
+  const budget = new RateBudget(100, 30, bytes * 2);
+  const provider = new GitHubResearchProvider({ rateBudget: budget, fetchImpl: (async () => {
+    requests += 1;
+    return new Response(body, { headers: { 'content-length': '1' } });
+  }) as typeof fetch });
+  await provider.searchRepositories('one');
+  assert.equal(budget.bytes, bytes);
+  await provider.searchRepositories('two');
+  await assert.rejects(provider.searchRepositories('three'), RateBudgetExhaustedError);
+  assert.equal(requests, 2);
+  assert.equal(budget.snapshot().state, 'EXHAUSTED');
+});
+
+test('oversized streaming body is cancelled at the mission byte cap', async () => {
+  const chunks = ['{"tot', 'al_count":0,"items":[]}'];
+  let cancelled = false;
+  const budget = new RateBudget(100, 30, 8);
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) { const chunk = chunks.shift(); if (chunk) controller.enqueue(Buffer.from(chunk)); },
+    cancel() { cancelled = true; },
+  });
+  const response = new Response(stream, { headers: { 'content-length': '1' } });
+  // Reading the whole body before applying a cap is not a valid boundary.
+  Object.defineProperty(response, 'text', { value: async () => { throw new Error('unbounded response.text called'); } });
+  const provider = new GitHubResearchProvider({ rateBudget: budget, fetchImpl: (async () => response) as typeof fetch });
+  await assert.rejects(provider.searchRepositories('large'), RateBudgetExhaustedError);
+  assert.equal(cancelled, true);
+  assert.ok(budget.bytes > 8, 'receipt includes the actual overflow chunk already received');
+  assert.equal(budget.snapshot().state, 'EXHAUSTED');
+});
+
+test('error response bytes consume the same budget before a retry can start', async () => {
+  const body = JSON.stringify({ message: 'temporary' });
+  const budget = new RateBudget(100, 30, Buffer.byteLength(body));
+  let requests = 0;
+  const provider = new GitHubResearchProvider({ rateBudget: budget, fetchImpl: (async () => {
+    requests += 1;
+    return new Response(body, { status: 500 });
+  }) as typeof fetch });
+  await assert.rejects(provider.searchRepositories('retry'), RateBudgetExhaustedError);
+  assert.equal(requests, 1);
+});

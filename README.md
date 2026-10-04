@@ -46,7 +46,7 @@ Babel
 
 There is **no published npm package** for this CLI today. Run from a clone.
 
-**Requirements:** Node.js 22.5+, a clone of this repo, and (for model sessions) a provider key.
+**Requirements:** Node.js 22.19.0+ in the 22.x line, or 24.13.1+ in the 24.x line, a clone of this repo, and (for model sessions) a provider key.
 
 ```powershell
 git clone https://github.com/gthgomez/Babel.git
@@ -86,6 +86,8 @@ Then talk to it:
 
 Full first-success path (profiles, one-shots, recovery): **[START_HERE.md](./START_HERE.md)**.  
 Operational command reference: **[docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md)**.
+
+The North Star desktop shell lives in [`babel-desktop/`](./babel-desktop/README.md). Its opening screen is a visual reference. Coding behavior remains in `babel-cli`.
 
 ## What Babel does
 

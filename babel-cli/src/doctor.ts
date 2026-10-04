@@ -118,29 +118,29 @@ const REQUIRED_REPO_KEYS = [
   'example_saas_backend',
   'example_llm_router',
   'example_web_audit',
-  'project_android',
-  'project_games',
-  'godot_td',
-  'app_test_babel',
+  'example_mobile_suite',
+  'example_game_suite',
+  'example_game_workspace',
+  'example_mobile_reference',
 ] as const;
 
 const CORE_REPO_CASES: RepoResolutionCase[] = [
   { key: 'example_saas_backend', project: 'example_saas_backend', taskCategory: 'frontend' },
-  { key: 'prismatix', project: 'example_llm_router', taskCategory: 'frontend' },
-  { key: 'auditguard', project: 'example_web_audit', taskCategory: 'backend' },
-  { key: 'project_android', project: 'example_mobile_suite', taskCategory: 'mobile' },
-  { key: 'project_games', project: 'example_game_suite', taskCategory: 'game' },
-  { key: 'godot_td', project: 'godot_td', taskCategory: 'game' },
-  { key: 'app_test_babel', project: 'app_test_babel', taskCategory: 'research' },
+  { key: 'example_llm_router', project: 'example_llm_router', taskCategory: 'frontend' },
+  { key: 'example_web_audit', project: 'example_web_audit', taskCategory: 'backend' },
+  { key: 'example_mobile_suite', project: 'example_mobile_suite', taskCategory: 'mobile' },
+  { key: 'example_game_suite', project: 'example_game_suite', taskCategory: 'game' },
+  { key: 'example_game_workspace', project: 'example_game_workspace', taskCategory: 'game' },
+  { key: 'example_mobile_reference', project: 'example_mobile_reference', taskCategory: 'research' },
 ];
 
 const DOCUMENTED_EXTERNAL_REPO_PREREQUISITES: Record<string, ExternalRepoPrerequisite> = {
-  godot_td: {
-    label: 'TowerDefenseGodot sample game repo',
+  example_game_workspace: {
+    label: 'example_game_workspace sample game repo',
     reason:
       'Optional external game workspace used by game-routing demos, not required for Babel CLI release readiness.',
     fixHint:
-      'Clone or restore example_game_suite\\TowerDefenseGodot when game demo coverage is required, or keep this warning as an accepted external prerequisite.',
+      'Clone or restore example_game_suite\\example_game_workspace when game demo coverage is required, or keep this warning as an accepted external prerequisite.',
   },
 };
 

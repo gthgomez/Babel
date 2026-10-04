@@ -1,26 +1,15 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
+import { join, dirname } from 'node:path';
+import { resolveRuntimePaths } from './runtimePaths.js';
 import { type ExecutorMode } from '../sandbox.js';
 
-/**
- * Resolves the Babel CLI root directory.
- * Assumes the compiled file is at dist/config/runtimeMode.js
- */
-function getBabelRoot(): string {
-  if (process.env['BABEL_ROOT']) {
-    return process.env['BABEL_ROOT'];
-  }
-  // From dist/config/runtimeMode.js to babel-cli/
-  return resolve(__dirname, '../..');
-}
-
 function getModeFilePath(): string {
-  return join(getBabelRoot(), 'config', 'runtime-mode.json');
+  const paths = resolveRuntimePaths();
+  // Keep the historical package-local mode file for an unconfigured source checkout.
+  const configRoot = !paths.isInstalled && !process.env['BABEL_CONFIG_DIR'] && !process.env['BABEL_ROOT']
+    ? join(paths.packageRoot, 'config')
+    : paths.userConfigRoot;
+  return join(configRoot, 'runtime-mode.json');
 }
 
 interface RuntimeModeFile {

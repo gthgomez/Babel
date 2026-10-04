@@ -49,6 +49,16 @@ async function snap() {
   return buildRepositorySnapshot(provider, page.repositories[0]!.identity, SNAP_OPTS);
 }
 
+test('ranged evidence cannot certify arbitrary lines using a full-file hash', async () => {
+  const snapshot = await snap();
+  const full = createEvidenceRef(snapshot, { path: 'src/journal.ts' })!;
+  const forged = { ...full, start_line: 2, end_line: 2 };
+  assert.equal(validateEvidenceRefs(snapshot, [forged]).valid.length, 0);
+  const subset = createEvidenceRef(snapshot, { path: 'src/journal.ts', startLine: 2, endLine: 2 })!;
+  assert.equal(subset.content_hash, sha256Hex(excerptLines(snapshot.files.get('src/journal.ts')!, 2, 2)!));
+  assert.equal(validateEvidenceRefs(snapshot, [subset]).valid.length, 1);
+});
+
 test('snapshot pins the exact commit and hashes every file', async () => {
   const snapshot = await snap();
   assert.equal(snapshot.manifest.commit_sha, COMMIT);
@@ -117,12 +127,8 @@ test('validator rejects wrong repo, wrong commit, and bad line ranges', async ()
   const base = createEvidenceRef(snapshot, { path: 'src/journal.ts' })!;
   const wrongRepo = { ...base, repository_id: '9999' };
   const wrongCommit = { ...base, commit_sha: 'b'.repeat(40) };
-  const badRange = createEvidenceRef(snapshot, {
-    path: 'src/journal.ts',
-    startLine: 1,
-    endLine: 500,
-    contentHash: sha256Hex(snapshot.files.get('src/journal.ts')!),
-  })!;
+  const badRange = { ...base, start_line: 1, end_line: 500 };
+  assert.equal(createEvidenceRef(snapshot, { path: 'src/journal.ts', startLine: 1, endLine: 500 }), null);
   const result = validateEvidenceRefs(snapshot, [wrongRepo, wrongCommit, badRange]);
   assert.equal(result.valid.length, 0);
   const reasons = result.entries.flatMap((e) => e.reasons).join('; ');

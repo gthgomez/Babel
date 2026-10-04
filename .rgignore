@@ -1,6 +1,6 @@
 # Ripgrep ignore patterns for Babel public repo
 # Prevents Glob/Ripgrep timeouts on unscoped searches (20s default timeout)
-# Per CLAUDE.md Environment Gotcha #3
+# Unscoped searches time out (see AGENTS.md search guidance)
 
 # Build artifacts and dependencies
 node_modules/

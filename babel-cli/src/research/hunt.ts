@@ -160,18 +160,28 @@ export async function runHuntDiscovery(
   const findings: Array<{ patternId: string; finding: ApplicabilityFinding }> = [];
   const proposals: ExperimentProposalV1[] = [];
   const reviews: ResearchReviewV1[] = [];
-  if (!options.skipDeepAnalysis && shortlist.length > 0) {
-    deep = await runDeepAnalysis(
-      mission,
-      provider,
-      shortlist.map((s) => s.candidate),
-      paths,
-      {
-        strategy: options.readerStrategy ?? keywordReaderStrategy,
-        ...(options.now ? { now: options.now } : {}),
-      },
-    );
-
+  if (status === 'COMPLETE' && !options.skipDeepAnalysis && shortlist.length > 0) {
+    try {
+      deep = await runDeepAnalysis(
+        mission,
+        provider,
+        shortlist.map((s) => s.candidate),
+        paths,
+        {
+          strategy: options.readerStrategy ?? keywordReaderStrategy,
+          ...(options.now ? { now: options.now } : {}),
+        },
+      );
+      if (deep.status !== 'COMPLETE') {
+        status = deep.status;
+        reason = deep.reason;
+      }
+    } catch (error) {
+      status = error instanceof RateBudgetPausedError ? 'PAUSED' : 'INCOMPLETE';
+      reason = error instanceof Error ? error.message : String(error);
+    }
+  }
+  if (deep) {
     // Slice D: local applicability (source-confirmed cards only, HEAD-bound),
     // falsifiable experiment proposals, independent research review, report.
     for (const card of deep.patterns) {
@@ -223,6 +233,7 @@ export async function runHuntDiscovery(
       );
     }
   }
+  budgetSnapshot = githubProvider.budget?.snapshot() ?? null;
 
   const metrics: HuntMetrics = {
     candidate_count: pagesByHypothesis.reduce((sum, p) => sum + p.entries.length, 0),

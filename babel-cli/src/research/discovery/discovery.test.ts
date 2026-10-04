@@ -144,6 +144,13 @@ test('ranking is deterministic on identical input', () => {
   assert.deepEqual(first, second);
 });
 
+test('missing topics do not collapse unrelated repositories into one candidate', () => {
+  const candidates = [entry('1', 'alpha/a', { language: 'TypeScript' }), entry('2', 'beta/b', { language: 'Rust' }), entry('3', 'gamma/c', { language: 'Python' })]
+    .map((value, index) => ({ schema_version: 1, candidate_id: `cand_${index}`, matched_hypothesis_ids: ['hyp_1'], ...value }) as CandidateRecordV1);
+  const ranked = rankCandidates(candidates, TRIAGE_CONTEXT);
+  assert.equal(selectDiverseShortlist(ranked, { limit: 10 }).length, 3);
+});
+
 test('diversity selection caps per-org, per-family, and near-duplicate topics', () => {
   const mk = (id: string, fullName: string, topics: string[], score: number) => ({
     candidate: {

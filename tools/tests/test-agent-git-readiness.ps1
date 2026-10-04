@@ -315,6 +315,61 @@ try {
     Assert-AgentTest ($failedCiRun.exitCode -eq 1 -and $failedCi.status -eq 'BLOCKED') 'failed required CI remains blocking without custom evidence'
     Assert-AgentTest (-not [bool]$failedCi.checks.REQUIRED_CHECKS_GREEN) 'failed CI cannot be reported green'
   } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
+  # A draft audit must never read peer check runs, even when they happen to be
+  # green. Keep the fake API observable so a false PASS or polling regression
+  # fails without waiting for the production timeout.
+  $checkReadLog = Join-Path $tempRoot 'check-reads.txt'
+  $draftGh = $fakeGhHealthy.Replace('"isDraft":false', '"isDraft":true')
+  $draftGh = $draftGh.Replace("Write-Output '$checkJson'", "Add-Content -LiteralPath '$($checkReadLog -replace "'", "''")' -Value 'read'; Write-Output '$checkJson'")
+  try {
+    $draftGh | Set-Content -LiteralPath $fakeGh -Encoding utf8
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $draftRun = Invoke-TestScript -Script $prGateScript -Arguments ($gateArguments + @('-AuditOnly'))
+    $clock.Stop()
+    $draft = $draftRun.text | ConvertFrom-Json
+    Assert-AgentTest ($draftRun.exitCode -eq 1 -and $draft.status -eq 'BLOCKED' -and -not $draft.mergeReady) 'draft audit must return BLOCKED'
+    Assert-AgentTest (@($draft.blockers) -contains 'pr_is_draft') 'draft audit must explain the draft blocker'
+    Assert-AgentTest (-not (Test-Path -LiteralPath $checkReadLog)) 'draft audit must not poll or read check runs'
+    Assert-AgentTest (@($draft.requiredChecks).Count -eq 0 -and $null -eq $draft.sha.ciHead) 'unobserved checks must not be reported PASS or bound to CI'
+    Assert-AgentTest (-not ($draft.checks.PSObject.Properties.Name -contains 'REQUIRED_CHECKS_READY')) 'draft audit must not invent readiness'
+    Assert-AgentTest (@($draft.blockers) -notcontains 'required_check_wait_timeout') 'draft audit must not invent a timeout'
+    Assert-AgentTest ($draft.checks.PR_HEAD_REVIEWED -and $draft.checks.REMOTE_HEAD_MATCH -and $draft.checks.BASE_NOT_INVALIDATED) 'draft audit must first bind authoritative metadata and heads'
+    Write-Output ("draft-audit elapsed: {0:N3}s; peer check reads: 0" -f $clock.Elapsed.TotalSeconds)
+    foreach ($case in @(
+      @{ Text = $draftGh.Replace('"headRefOid":"' + $headSha + '"', '"headRefOid":"' + $mainSha + '"'); Blocker = 'reviewed_head_does_not_match_pr_head' },
+      @{ Text = $draftGh.Replace('"baseRefOid":"' + $mainSha + '"', '"baseRefOid":"' + $headSha + '"'); Blocker = 'pr_base_sha_is_stale' },
+      @{ Text = $draftGh.Replace('"state":"OPEN"', '"state":"CLOSED"'); Blocker = 'pr_not_open' }
+    )) {
+      $case.Text | Set-Content -LiteralPath $fakeGh -Encoding utf8
+      $caseRun = Invoke-TestScript -Script $prGateScript -Arguments ($gateArguments + @('-AuditOnly'))
+      $caseResult = $caseRun.text | ConvertFrom-Json
+      Assert-AgentTest ($caseRun.exitCode -eq 1 -and -not $caseResult.mergeReady -and @($caseResult.blockers) -contains $case.Blocker) "draft shortcut must preserve $($case.Blocker)"
+      Assert-AgentTest (-not (Test-Path -LiteralPath $checkReadLog) -and $null -eq $caseResult.sha.ciHead) 'draft metadata failure must not read or certify CI'
+    }
+    $draftGh | Set-Content -LiteralPath $fakeGh -Encoding utf8
+    $draftMergeRun = Invoke-TestScript -Script $prGateScript -Arguments $gateArguments
+    $draftMerge = $draftMergeRun.text | ConvertFrom-Json
+    Assert-AgentTest ($draftMergeRun.exitCode -eq 1 -and -not $draftMerge.mergeReady -and (Test-Path -LiteralPath $checkReadLog)) 'non-audit draft gate must retain full checks and still block'
+  } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
+
+  foreach ($auditMode in @($false, $true)) {
+    $auditArgs = @()
+    if ($auditMode) { $auditArgs = @('-AuditOnly') }
+    foreach ($case in @(
+      @{ Text = $fakeGhHealthy.Replace('"conclusion":"success"', '"conclusion":"failure"'); Blocker = 'required_checks_not_green' },
+      @{ Text = $fakeGhHealthy.Replace('"id":15368', '"id":99999'); Blocker = 'required_checks_not_green' },
+      @{ Text = $fakeGhHealthy.Replace('"state":"OPEN"', '"state":"CLOSED"'); Blocker = 'pr_not_open' },
+      @{ Text = $fakeGhHealthy.Replace('"mergeable":"MERGEABLE"', '"mergeable":"CONFLICTING"'); Blocker = 'pr_not_mergeable' },
+      @{ Text = $fakeGhHealthy.Replace('"baseRefOid":"' + $mainSha + '"', '"baseRefOid":"' + $headSha + '"'); Blocker = 'pr_base_sha_is_stale' }
+    )) {
+      try {
+        $case.Text | Set-Content -LiteralPath $fakeGh -Encoding utf8
+        $caseRun = Invoke-TestScript -Script $prGateScript -Arguments ($gateArguments + $auditArgs)
+        $caseResult = $caseRun.text | ConvertFrom-Json
+        Assert-AgentTest ($caseRun.exitCode -eq 1 -and -not $caseResult.mergeReady -and @($caseResult.blockers) -contains $case.Blocker) "audit/merge must retain $($case.Blocker)"
+      } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
+    }
+  }
   $malformedPath = Join-Path $tempRoot 'malformed-review.json'
   '{malformed' | Set-Content -LiteralPath $malformedPath -Encoding utf8
   $malformedRun = Invoke-TestScript -Script $prGateScript -Arguments ($gateArguments + @('-AutonomousReviewEvidencePath', $malformedPath))
@@ -354,6 +409,43 @@ try {
   Assert-AgentTest (-not [bool]$authFailure.mergeReady) 'auth failure must not report mergeReady'
   Assert-AgentTest (@($authFailure.blockers) -contains 'github_auth_failed') 'auth failure should identify github_auth_failed'
   Assert-AgentTest ($authFailureRun.text -notmatch 'PropertyNotFound') 'auth failure must not produce a secondary property exception'
+
+  # Review-size advice must not become a publication/staging gate. Exercise the
+  # real planner with a tracked 1,544-line delta and 31 files, independently
+  # crossing each threshold. Unknown-path disposition remains a separate guard.
+  $planFixture = Join-Path $tempRoot 'plan-fixture'
+  New-Item -ItemType Directory -Path (Join-Path $planFixture 'tools') -Force | Out-Null
+  Invoke-TestGit -WorkingDirectory $planFixture -Arguments @('init', '--initial-branch=main') | Out-Null
+  Invoke-TestGit -WorkingDirectory $planFixture -Arguments @('config', 'user.email', 'plan-test@example.com') | Out-Null
+  Invoke-TestGit -WorkingDirectory $planFixture -Arguments @('config', 'user.name', 'Plan Test') | Out-Null
+  foreach ($index in 1..31) {
+    Set-Content -LiteralPath (Join-Path $planFixture "tools/file-$index.txt") -Value 'base' -Encoding utf8
+  }
+  Invoke-TestGit -WorkingDirectory $planFixture -Arguments @('add', '--', 'tools') | Out-Null
+  Invoke-TestGit -WorkingDirectory $planFixture -Arguments @('commit', '-m', 'planner base') | Out-Null
+  foreach ($index in 1..31) {
+    Add-Content -LiteralPath (Join-Path $planFixture "tools/file-$index.txt") -Value 'changed' -Encoding utf8
+  }
+  Add-Content -LiteralPath (Join-Path $planFixture 'tools/file-1.txt') -Value (1..1513 | ForEach-Object { "line $_" }) -Encoding utf8
+  $planner = Join-Path $repoRoot 'tools/plan-public-commit.ps1'
+  foreach ($thresholds in @(@('-MaxFiles', '30', '-MaxChangedLines', '9999'), @('-MaxFiles', '99', '-MaxChangedLines', '1500'), @())) {
+    $planRun = Invoke-TestScript -Script $planner -Arguments (@('-RepoRoot', $planFixture, '-Json') + $thresholds)
+    $plan = $planRun.text | ConvertFrom-Json
+    Assert-AgentTest ($planRun.exitCode -eq 0 -and $plan.safeToStage) 'size alone must not block a classified ship slice'
+    Assert-AgentTest ($plan.budgets.mode -eq 'advisory' -and @($plan.batches).Count -eq 1 -and -not $plan.batches[0].withinBudget) 'above-threshold size must remain visible advisory evidence'
+    Assert-AgentTest ($plan.batches[0].files -eq 31 -and $plan.batches[0].changedLines -eq 1544) 'planner must retain exact review counts'
+  }
+  $planTextRun = Invoke-TestScript -Script $planner -Arguments @('-RepoRoot', $planFixture)
+  Assert-AgentTest ($planTextRun.exitCode -eq 0 -and $planTextRun.text -match 'above review guidance' -and $planTextRun.text -notmatch 'SPLIT REQUIRED') 'text advice must describe reviewability without demanding a split'
+  Set-Content -LiteralPath (Join-Path $planFixture 'AGENTS.md') -Value 'contributor policy' -Encoding utf8
+  $ownerPlanRun = Invoke-TestScript -Script $planner -Arguments @('-RepoRoot', $planFixture, '-Json')
+  $ownerPlan = $ownerPlanRun.text | ConvertFrom-Json
+  $ownerRecord = @($ownerPlan.records | Where-Object { $_.path -eq 'AGENTS.md' })
+  Assert-AgentTest ($ownerPlanRun.exitCode -eq 0 -and $ownerPlan.safeToStage -and $ownerRecord.Count -eq 1 -and $ownerRecord[0].disposition -eq 'ship' -and $ownerRecord[0].batch -eq 'workflow') 'canonical policy owner must have consistent ship disposition and workflow batch'
+  Set-Content -LiteralPath (Join-Path $planFixture 'unclassified.txt') -Value 'unknown' -Encoding utf8
+  $unknownPlanRun = Invoke-TestScript -Script $planner -Arguments @('-RepoRoot', $planFixture, '-Json')
+  $unknownPlan = $unknownPlanRun.text | ConvertFrom-Json
+  Assert-AgentTest (-not $unknownPlan.safeToStage -and $unknownPlan.nextAction -match 'resolve investigate/vault') 'unknown-path staging guard must remain independent of size guidance'
 
   Write-Output 'agent-git-readiness: PASS'
   exit 0

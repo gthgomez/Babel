@@ -5,6 +5,7 @@ import { FakeResearchProvider, type FakeRepository } from '../fakeProvider.js';
 import { buildRepositorySnapshot } from '../acquisition/snapshot.js';
 import { openReaderSession, READER_TOOL_NAMES } from './repoReader.js';
 import { keywordReaderStrategy } from './deepAnalysis.js';
+import { sha256Hex } from '../acquisition/snapshot.js';
 
 const COMMIT = 'a'.repeat(40);
 
@@ -62,6 +63,32 @@ async function openSession() {
   });
   return { session: openReaderSession(identity, snapshot), snapshot };
 }
+
+async function sessionForText(content: string) {
+  const provider = new FakeResearchProvider({ repositories: [{ ...maliciousRepo(), files: { 'README.md': content } }] });
+  const identity = (await provider.searchRepositories('durable')).repositories[0]!.identity;
+  const snapshot = await buildRepositorySnapshot(provider, identity, { missionId: 'bounded_read', byteBudget: 1_000_000, maxFiles: 1 });
+  return openReaderSession(identity, snapshot);
+}
+
+test('read evidence binds only returned complete lines within the UTF8 byte cap', async () => {
+  const session = await sessionForText('é'.repeat(4000) + '\n' + 'é'.repeat(4000));
+  const read = session.repo_read('README.md', 1, 2)!;
+  assert.ok(Buffer.byteLength(read.content, 'utf8') <= 16_000);
+  assert.equal(read.end_line, 1);
+  assert.equal(read.content, 'é'.repeat(4000));
+  assert.equal(read.truncated, true);
+  const finished = session.finish({ schema_version: 1, problem_match: '', observations: [], patterns: [], missing_evidence: [] });
+  assert.equal(finished.evidenceRefs[0]!.content_hash, sha256Hex(read.content));
+  assert.equal(finished.evidenceRefs[0]!.end_line, read.end_line);
+});
+
+test('an oversized single line returns no view or unseen-byte evidence', async () => {
+  const session = await sessionForText('a'.repeat(20_000));
+  assert.equal(session.repo_read('README.md', 1, 1), null);
+  const finished = session.finish({ schema_version: 1, problem_match: '', observations: [], patterns: [], missing_evidence: [] });
+  assert.equal(finished.evidenceRefs.length, 0);
+});
 
 test('reader tool surface is exactly the six scoped tools', () => {
   assert.deepEqual([...READER_TOOL_NAMES], [

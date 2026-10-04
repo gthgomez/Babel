@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { resolveRuntimeLearningRoot } from '../config/runtimePaths.js';
 
 import { filterCatalogEntries, parseCatalog } from './catalog.js';
 import { previewInstructionStackResolution } from './stackResolver.js';
@@ -72,9 +73,9 @@ export type LocalProject =
   | 'example_mobile_suite'
   | 'example_game_suite'
   | 'simlife'
-  | 'godot_td'
+  | 'example_game_workspace'
   | 'example_finance_forecast'
-  | 'app_test_babel'
+  | 'example_mobile_reference'
   | 'AetherlynGameDraft'
   | 'aetherlyn';
 
@@ -168,13 +169,11 @@ const TASK_OVERLAY_ALIAS_MAP: Record<string, string> = {
 
 // ── Convention-based project resolution ──────────────────────────────────────
 
-const FAMILY_DIRECTORIES = ['Project_SaaS', 'example_mobile_suite', 'example_game_suite'];
+const FAMILY_DIRECTORIES = ['example_backend_suite', 'example_mobile_suite', 'example_game_suite'];
 
 const PROJECT_NAME_ALIASES: Record<string, string> = {
   simlife: 'SimLife',
-  godot_td: 'TowerDefenseGodot',
   aetherlyn: 'AetherlynGameDraft',
-  app_test_babel: 'App-test-Babel',
 };
 
 /**
@@ -202,15 +201,15 @@ function resolveOverlayId(projectPath: string): string | null {
 
   // Family-based overlay assignment
   if (parentDir === 'example_game_suite') {
-    if (dirLower === 'towerdefensegodot') return 'overlay_godot_td';
-    return 'overlay_project_games';
+    if (dirLower === 'example_game_workspace') return 'overlay_example_game_workspace';
+    return 'overlay_example_game_suite';
   }
-  if (parentDir === 'Project_SaaS') {
+  if (parentDir === 'example_backend_suite') {
     return `overlay_${dirLower.replace(/[^a-z0-9_]/g, '_')}`;
   }
   if (parentDir === 'example_mobile_suite') {
-    if (dirLower === 'example_finance_forecast') return 'overlay_monte_carlo_ledger';
-    return 'overlay_project_android';
+    if (dirLower === 'example_finance_forecast') return 'overlay_example_finance_forecast';
+    return 'overlay_example_mobile_suite';
   }
 
   // Direct workspace child — use name convention
@@ -608,17 +607,6 @@ function resolveProjectPath(
     }
   }
 
-  // Special case: app_test_babel has multiple fallback candidates
-  if (project === 'app_test_babel') {
-    for (const candidate of [
-      join('example_mobile_suite', 'example_finance_forecast'),
-      'App-test-Babel',
-    ]) {
-      const resolved = join(workspaceRoot, candidate);
-      if (existsSync(resolved)) return resolved;
-    }
-  }
-
   return null;
 }
 
@@ -721,6 +709,7 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
   const babelRoot = options.babelRoot;
   const project = options.project ?? 'global';
   const model = normalizeModel(options.model);
+  const localLearningRoot = options.localLearningRoot ?? resolveRuntimeLearningRoot(babelRoot);
   const pipelineMode = options.pipelineMode ?? 'chat';
 
   // ── Cache check ──
@@ -739,7 +728,7 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
     JSON.stringify(options.taskOverlayIds ?? []),
     String(options.disableRecommendedTaskOverlays ?? false),
     String(options.loadAllSkills ?? false),
-    options.localLearningRoot ?? '',
+    localLearningRoot,
   ].join('|');
   const catalogMtime = getCatalogMtime(babelRoot);
   const cached = resolverCache.get(cacheKey);
@@ -757,7 +746,6 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
   const catalogEntries = parseCatalog(catalogPath);
   const entriesById = new Map(catalogEntries.map((entry) => [entry.id, entry]));
 
-  const localLearningRoot = options.localLearningRoot ?? join(babelRoot, 'runs', 'local-learning');
   const resolvedClientSurface = options.clientSurface?.trim() || resolveDefaultClientSurface(model);
 
   let selectedCodexAdapterName: 'balanced' | 'ultra' =

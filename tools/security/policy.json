@@ -8,7 +8,18 @@
     "(?i)[A-Z]:[\\\\/]+(?:Users|Workspace|Projects)[\\\\/]+",
     "\\.supabase\\.co"
   ],
-  "binary_asset_allowlist": [],
+  "binary_asset_allowlist": [
+    {
+      "path": "babel-desktop/assets/babel-mark.png",
+      "sha256": "7dc22e2312036c5c8002442d5aba65b58d7de462397c91c35e157624f62cac99",
+      "rationale": "Brand mark drawn by the North Star desktop shell."
+    },
+    {
+      "path": "babel-desktop/references/BabelTuiNorthStar.png",
+      "sha256": "fd4250031448b6b0a448f2fbe57177b56fbcdab93609db4ea9f4ba970bf796f0",
+      "rationale": "Visual source image for the desktop shell screenshot harness."
+    }
+  ],
   "identifier_exceptions": [],
   "forbidden_dependency_fingerprints": [
     "GPCGuard"

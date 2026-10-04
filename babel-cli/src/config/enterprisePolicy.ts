@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolveRuntimePaths } from './runtimePaths.js';
 
 import { z } from 'zod';
 
@@ -20,11 +20,8 @@ export interface EnterpriseModelBackendDescriptor {
   providerModelId: string;
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
 function getDefaultBabelRoot(): string {
-  return process.env['BABEL_ROOT'] ?? resolve(__dirname, '../../..');
+  return resolveRuntimePaths().resourceRoot;
 }
 
 export const EnterprisePolicyFileSchema = z
@@ -237,16 +234,20 @@ function splitEnvList(name: string): string[] {
 export function getEnterprisePolicyPaths(
   babelRoot = getDefaultBabelRoot(),
 ): Array<{ label: EnterprisePolicyLoadSource['label']; path: string }> {
+  const runtimePaths = resolveRuntimePaths();
+  if (runtimePaths.isInstalled && babelRoot === process.env['BABEL_ROOT']) {
+    babelRoot = runtimePaths.resourceRoot;
+  }
   const workspaceRoot = dirname(resolve(babelRoot));
   const userProfile = process.env['USERPROFILE'] ?? process.env['HOME'] ?? '';
   const paths: Array<{ label: EnterprisePolicyLoadSource['label']; path: string | undefined }> = [
     { label: 'repo', path: join(resolve(babelRoot), 'config', 'enterprise-policy.json') },
-    { label: 'workspace', path: join(workspaceRoot, 'config', 'babel-enterprise-policy.json') },
+    { label: 'workspace', path: runtimePaths.isInstalled ? undefined : join(workspaceRoot, 'config', 'babel-enterprise-policy.json') },
     {
       label: 'user',
       path:
         process.env['BABEL_ENTERPRISE_POLICY_USER_PATH'] ??
-        (userProfile ? join(userProfile, '.babel', 'enterprise-policy.json') : undefined),
+        (runtimePaths.isInstalled ? join(runtimePaths.userConfigRoot, 'enterprise-policy.json') : userProfile ? join(userProfile, '.babel', 'enterprise-policy.json') : undefined),
     },
     { label: 'admin', path: process.env['BABEL_ENTERPRISE_POLICY_ADMIN_PATH'] },
     { label: 'explicit', path: process.env['BABEL_ENTERPRISE_POLICY_PATH'] },

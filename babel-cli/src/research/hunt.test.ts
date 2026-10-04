@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { FakeResearchProvider, type FakeRepository } from './fakeProvider.js';
 import { createResearchMission } from './missionPlanner.js';
 import { runHuntDiscovery } from './hunt.js';
-import { RateBudget, RateBudgetExhaustedError } from './rateBudget.js';
+import { RateBudget, RateBudgetExhaustedError, RateBudgetPausedError } from './rateBudget.js';
 
 const FIXED_NOW = new Date('2026-10-03T12:00:00.000Z');
 
@@ -135,4 +135,48 @@ test('hunt attaches the rate budget snapshot when the provider exposes one', asy
   const result = await runHuntDiscovery(missionFor(runsRoot), withBudget, { runsRoot, now: FIXED_NOW });
   assert.ok(result.budget);
   assert.equal(result.budget!.state, 'OK');
+});
+
+test('paused discovery persists partial results without starting deep acquisition', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-hunt-paused-'));
+  const provider = new FakeResearchProvider({ repositories: corpus() });
+  let searches = 0, resolves = 0;
+  const wrapped = new Proxy(provider, { get(target, prop, receiver) {
+    if (prop === 'searchRepositories') return async (...args: Parameters<typeof provider.searchRepositories>) => { if (searches++ > 0) throw new RateBudgetPausedError('rate limited', new Date(Date.now() + 30000)); return target.searchRepositories(...args); };
+    if (prop === 'resolveRevision') return async (...args: Parameters<typeof provider.resolveRevision>) => { resolves += 1; return target.resolveRevision(...args); };
+    return Reflect.get(target, prop, receiver);
+  } });
+  const result = await runHuntDiscovery(missionFor(root), wrapped, { runsRoot: root });
+  assert.equal(result.status, 'PAUSED');
+  assert.ok(result.shortlist.length > 0);
+  assert.equal(resolves, 0);
+  assert.equal(JSON.parse(readFileSync(result.paths.metricsJson, 'utf8')).status, 'PAUSED');
+});
+
+test('acquisition errors preserve an honest incomplete hunt receipt', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-hunt-acquisition-'));
+  const provider = new FakeResearchProvider({ repositories: corpus() });
+  const wrapped = new Proxy(provider, { get(target, prop, receiver) {
+    if (prop === 'resolveRevision') return async () => { throw new RateBudgetExhaustedError('remote byte budget exhausted'); };
+    return Reflect.get(target, prop, receiver);
+  } });
+  const result = await runHuntDiscovery(missionFor(root), wrapped, { runsRoot: root });
+  assert.equal(result.status, 'INCOMPLETE');
+  assert.match(result.reason ?? '', /byte budget exhausted/);
+  assert.equal(JSON.parse(readFileSync(result.paths.metricsJson, 'utf8')).status, 'INCOMPLETE');
+});
+
+test('hunt receipt refreshes actual budget consumption after deep acquisition', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-hunt-budget-final-'));
+  const provider = new FakeResearchProvider({ repositories: corpus() });
+  const budget = new RateBudget(1000, 100);
+  const wrapped = new Proxy(provider, { get(target, prop, receiver) {
+    if (prop === 'budget') return budget;
+    if (prop === 'readTextFile') return async (...args: Parameters<typeof provider.readTextFile>) => { const file = await target.readTextFile(...args); budget.recordBytes(Buffer.byteLength(file.content, 'utf8')); return file; };
+    return Reflect.get(target, prop, receiver);
+  } });
+  const result = await runHuntDiscovery(missionFor(root), wrapped, { runsRoot: root });
+  assert.ok(budget.bytes > 0);
+  assert.equal(result.budget!.bytesDownloaded, budget.bytes);
+  assert.equal(JSON.parse(readFileSync(result.paths.metricsJson, 'utf8')).budget.bytesDownloaded, budget.bytes);
 });

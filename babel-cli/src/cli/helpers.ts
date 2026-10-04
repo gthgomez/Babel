@@ -1,3 +1,4 @@
+import { resolveRuntimePaths } from '../config/runtimePaths.js';
 import {
   appendFileSync,
   existsSync,
@@ -76,13 +77,11 @@ const PROJECT_MARKERS = [
   'project.godot',
 ];
 
-const FAMILY_DIRECTORIES = ['Project_SaaS', 'example_mobile_suite', 'example_game_suite'];
+const FAMILY_DIRECTORIES = ['example_backend_suite', 'example_mobile_suite', 'example_game_suite'];
 
 const PROJECT_NAME_ALIASES: Record<string, string> = {
   simlife: 'SimLife',
-  godot_td: 'TowerDefenseGodot',
   aetherlyn: 'AetherlynGameDraft',
-  app_test_babel: 'App-test-Babel',
 };
 
 function hasProjectMarker(dir: string): boolean {
@@ -155,6 +154,8 @@ export function detectProjectFromCwd(cwd = process.cwd()): ValidProject | null {
 
     current = parentDir;
   }
+
+  if (resolveRuntimePaths().isInstalled) return null;
 
   // Strategy 2: Scan workspace directories and check containment
   const workspaceRoot = dirname(BABEL_ROOT);
@@ -266,7 +267,7 @@ export function readClipboardPlanText(): string {
 }
 
 export function getRuntimeFlagsPath(): string {
-  return join(BABEL_ROOT, 'config', 'runtime-flags.json');
+  return join(resolveRuntimePaths().userConfigRoot, 'runtime-flags.json');
 }
 
 export function readPersistedDryRunValue(runtimeFlagsPath: string): boolean | null {

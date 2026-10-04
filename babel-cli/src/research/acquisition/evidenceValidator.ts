@@ -60,7 +60,7 @@ export function validateEvidenceRefs(
       const excerpt = excerptLines(content, start, end);
       if (excerpt === null) {
         reasons.push(`line range ${start}-${ref.end_line ?? '?'} outside file (${lines.length} lines)`);
-      } else if (ref.content_hash !== excerptHash(excerpt) && ref.content_hash !== file?.content_hash) {
+      } else if (ref.content_hash !== excerptHash(excerpt)) {
         reasons.push('excerpt bytes do not match content hash');
       }
     }

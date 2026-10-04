@@ -164,7 +164,7 @@ entries:
     path: PROJECT_CONTEXT.md
     description: >
       Canonical system contracts and hot paths for the Babel control plane.
-      Referenced by CLAUDE.md startup sequence as step 2. Not loaded as a
+      Referenced by AGENTS.md for product facts when relevant. Not loaded as a
       runtime prompt layer — catalogued for discoverability and drift checks.
     status: reference
     selection_scope: reference_only

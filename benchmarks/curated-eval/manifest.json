@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "suite_id": "babel-curated-eval-v1",
+  "title": "Babel curated evaluation core slice",
+  "description": "A small, varied starting set of behavioral tasks for repeated evaluation of the Babel coding-agent loop.",
+  "status": "pilot-catalog",
+  "execution_policy": {
+    "default_mode": "dry_run",
+    "live_execution_authorized": false,
+    "fresh_solver_workspace_per_attempt": true,
+    "grader_isolated_from_solver": true,
+    "network": "none",
+    "provider_traffic": "separate_narrow_broker_required",
+    "provider_transport_integrated": false,
+    "host_fallback": false,
+    "reference_and_oracle_visible_to_solver": false,
+    "scripted_provider_runs_count_as_model_performance": false
+  },
+  "report_schema": "report.schema.json",
+  "tasks": [
+    {
+      "id": "csv-rollup-cli",
+      "category": "terminal_data_processing",
+      "title": "Build a deduplicating event rollup",
+      "source": {
+        "kind": "babel_original",
+        "name": "Babel original fixture",
+        "repository": "https://github.com/gthgomez/Babel",
+        "revision": "fixture-sha256:9ccd7290e83d5e043894fa3ff3e56d6fa438e2d467a9314e70c3b530c6e524b5",
+        "license": "Apache-2.0",
+        "fixture": "fixtures/csv-rollup-cli"
+      },
+      "adapter": "babel_source_chat_engine_result",
+      "prerequisites": [
+        "Node.js 22.19",
+        "Docker with network isolation"
+      ],
+      "description": "Write a small CLI that reads CSV event rows, keeps the newest row for each event_id, and emits deterministic UTC-day/status counts.",
+      "prompt": "Implement src/summarize.mjs. Read input/events.csv, keep the latest row by occurred_at for each event_id, then write output/summary.csv with columns date,status,count sorted by date and status. Ignore no valid row; preserve quoted commas in detail fields. Run the behavioral verifier before reporting completion.",
+      "environment": {
+        "image": "docker.io/library/node:22.19.0-bookworm-slim@sha256:cff78eb5aa1cf27dc2b6aeea9d31366415a43e9a9ea0ddec00d780b2b66fad0f",
+        "platform": "linux/amd64",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "gpus": 0,
+        "network": "none",
+        "working_directory": "/workspace"
+      },
+      "fixture": {
+        "solver_dir": "fixtures/csv-rollup-cli/solver",
+        "grader_dir": "fixtures/csv-rollup-cli/grader",
+        "solver_sha256": "sha256:9ccd7290e83d5e043894fa3ff3e56d6fa438e2d467a9314e70c3b530c6e524b5"
+      },
+      "limits": {
+        "wall_seconds": 300,
+        "max_turns": 6,
+        "max_tokens": 12000,
+        "max_cost_usd": null
+      },
+      "expected_artifacts": [
+        "src/summarize.mjs",
+        "output/summary.csv"
+      ],
+      "change_policy": {
+        "allowed_patterns": [
+          "src/summarize.mjs",
+          "output/summary.csv"
+        ],
+        "protected_patterns": [
+          "input/**",
+          "grader/**",
+          "reference/**",
+          "test/**"
+        ]
+      },
+      "scoring": {
+        "verifier": "grader/verify.mjs",
+        "success": "behavioral output exactly matches independently computed rollup",
+        "partial_credit": false
+      },
+      "qualification": {
+        "oracle": "host_behavior_controls_passed",
+        "isolated_container": "not_run",
+        "limitation": "Deterministic oracle controls ran in the local Node process; the pinned Node task image and isolated Docker grader path were not exercised."
+      }
+    },
+    {
+      "id": "repo-map-read-only",
+      "category": "read_only_repository_exploration",
+      "title": "Map a request path without changing source",
+      "source": {
+        "kind": "babel_original",
+        "name": "Babel original fixture",
+        "repository": "https://github.com/gthgomez/Babel",
+        "revision": "fixture-sha256:de0d04fcb048accc205df66489ed27c0c13d5cc1bbfb5dce29e799eeeb599aff",
+        "license": "Apache-2.0",
+        "fixture": "fixtures/repo-map-read-only"
+      },
+      "adapter": "babel_source_chat_engine_result",
+      "prerequisites": [
+        "Node.js 22.19",
+        "Docker with network isolation"
+      ],
+      "description": "Inspect a small layered service and produce a precise JSON ownership and request-flow report without modifying project files.",
+      "prompt": "Read the source and tests. Write reports/architecture.json with request_flow, authorization_module, billing_export, and test_file fields. Identify the actual runtime path from the route to the authorization helper to the billing function, and state which module rejects a cross-tenant request. Do not modify source, tests, or config files.",
+      "environment": {
+        "image": "docker.io/library/node:22.19.0-bookworm-slim@sha256:cff78eb5aa1cf27dc2b6aeea9d31366415a43e9a9ea0ddec00d780b2b66fad0f",
+        "platform": "linux/amd64",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "gpus": 0,
+        "network": "none",
+        "working_directory": "/workspace"
+      },
+      "fixture": {
+        "solver_dir": "fixtures/repo-map-read-only/solver",
+        "grader_dir": "fixtures/repo-map-read-only/grader",
+        "solver_sha256": "sha256:de0d04fcb048accc205df66489ed27c0c13d5cc1bbfb5dce29e799eeeb599aff"
+      },
+      "limits": {
+        "wall_seconds": 240,
+        "max_turns": 5,
+        "max_tokens": 10000,
+        "max_cost_usd": null
+      },
+      "expected_artifacts": [
+        "reports/architecture.json"
+      ],
+      "change_policy": {
+        "allowed_patterns": [
+          "reports/architecture.json"
+        ],
+        "protected_patterns": [
+          "src/**",
+          "test/**",
+          "package.json"
+        ]
+      },
+      "scoring": {
+        "verifier": "grader/verify.mjs",
+        "success": "report facts match executable source behavior and no project file changed",
+        "partial_credit": false
+      },
+      "qualification": {
+        "oracle": "host_behavior_controls_passed",
+        "isolated_container": "not_run",
+        "limitation": "Deterministic oracle controls ran in the local Node process; the pinned Node task image and isolated Docker grader path were not exercised."
+      }
+    }
+  ]
+}

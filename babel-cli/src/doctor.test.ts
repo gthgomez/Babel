@@ -368,12 +368,12 @@ test('doctor repo map distinguishes missing mapped repo paths', async () => {
         babel_core: root,
         babel_public: join(workspace, 'missing-babel-public'),
         example_saas_backend: join(workspace, 'repos', 'example_saas_backend'),
-        prismatix: join(workspace, 'repos', 'example_llm_router'),
-        auditguard: join(workspace, 'repos', 'example_web_audit'),
-        project_android: join(workspace, 'repos', 'project_android'),
-        project_games: join(workspace, 'repos', 'project_games'),
-        godot_td: join(workspace, 'repos', 'godot_td'),
-        app_test_babel: join(workspace, 'repos', 'app_test_babel'),
+        example_llm_router: join(workspace, 'repos', 'example_llm_router'),
+        example_web_audit: join(workspace, 'repos', 'example_web_audit'),
+        example_mobile_suite: join(workspace, 'repos', 'example_mobile_suite'),
+        example_game_suite: join(workspace, 'repos', 'example_game_suite'),
+        example_game_workspace: join(workspace, 'repos', 'example_game_workspace'),
+        example_mobile_reference: join(workspace, 'repos', 'example_mobile_reference'),
       },
     }),
     'utf8',
@@ -405,22 +405,22 @@ test('doctor repo map distinguishes missing mapped repo paths', async () => {
 
 test('doctor scope all allows documented external repo-map prerequisite to remain missing without fail', async () => {
   const { root, workspace } = makeDoctorWorkspace({ validCatalog: true, dist: true });
-  const externalGodotPath = join(workspace, 'missing', 'example_game_suite', 'TowerDefenseGodot');
+  const externalGodotPath = join(workspace, 'missing', 'example_game_suite', 'example_game_workspace');
   const expectedRepoPaths = {
     babel_core: root,
     babel_public: join(workspace, 'repos', 'babel_public'),
     example_saas_backend: join(workspace, 'repos', 'example_saas_backend'),
-    prismatix: join(workspace, 'repos', 'prismatix'),
-    auditguard: join(workspace, 'repos', 'auditguard'),
-    project_android: join(workspace, 'repos', 'project_android'),
-    project_games: join(workspace, 'repos', 'project_games'),
-    godot_td: externalGodotPath,
-    app_test_babel: join(workspace, 'repos', 'app_test_babel'),
+    example_llm_router: join(workspace, 'repos', 'example_llm_router'),
+    example_web_audit: join(workspace, 'repos', 'example_web_audit'),
+    example_mobile_suite: join(workspace, 'repos', 'example_mobile_suite'),
+    example_game_suite: join(workspace, 'repos', 'example_game_suite'),
+    example_game_workspace: externalGodotPath,
+    example_mobile_reference: join(workspace, 'repos', 'example_mobile_reference'),
   };
   writeFileSync(
     join(workspace, 'config', 'repo-map.json'),
     JSON.stringify({
-      external_prerequisites: ['godot_td'],
+      external_prerequisites: ['example_game_workspace'],
       repos: expectedRepoPaths,
     }),
     'utf8',
@@ -493,11 +493,11 @@ test('doctor scope all allows documented external repo-map prerequisite to remai
       (check) =>
         check.id === 'repo_map.external_prerequisites' &&
         check.status === 'pass' &&
-        check.message?.includes('godot_td'),
+        check.message?.includes('example_game_workspace'),
     ),
     true,
   );
-  const godotResolution = result.checks.find((check) => check.id === 'resolution.godot_td');
+  const godotResolution = result.checks.find((check) => check.id === 'resolution.example_game_workspace');
   assert.equal(godotResolution?.status, 'warn');
   assert.equal(godotResolution?.diagnostic_code, 'EXTERNAL_PREREQUISITE_MISSING');
 });
@@ -599,12 +599,12 @@ function makeDoctorWorkspace(options: { validCatalog: boolean; dist: boolean }):
     babel_core: root,
     babel_public: join(workspace, 'repos', 'babel_public'),
     example_saas_backend: join(workspace, 'repos', 'example_saas_backend'),
-    prismatix: join(workspace, 'repos', 'prismatix'),
-    auditguard: join(workspace, 'repos', 'auditguard'),
-    project_android: join(workspace, 'repos', 'project_android'),
-    project_games: join(workspace, 'repos', 'project_games'),
-    godot_td: join(workspace, 'repos', 'godot_td'),
-    app_test_babel: join(workspace, 'repos', 'app_test_babel'),
+    example_llm_router: join(workspace, 'repos', 'example_llm_router'),
+    example_web_audit: join(workspace, 'repos', 'example_web_audit'),
+    example_mobile_suite: join(workspace, 'repos', 'example_mobile_suite'),
+    example_game_suite: join(workspace, 'repos', 'example_game_suite'),
+    example_game_workspace: join(workspace, 'repos', 'example_game_workspace'),
+    example_mobile_reference: join(workspace, 'repos', 'example_mobile_reference'),
   };
   for (const repoPath of Object.values(repos)) {
     mkdirSync(repoPath, { recursive: true });

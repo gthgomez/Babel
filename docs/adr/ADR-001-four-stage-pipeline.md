@@ -41,4 +41,4 @@ An **Evidence Loop** wraps Stages 2-4: when the SWE Agent emits `plan_type=EVIDE
 
 ## Compliance
 
-All pipeline stages must emit output matching their Zod schema contract. Schema changes require co-evolution of the prompt file (per `CLAUDE.md` Critical Invariant #6). Stage boundaries are enforced in `runBabelPipeline()` in `babel-cli/src/pipeline.ts`.
+All pipeline stages must emit output matching their Zod schema contract. Schema changes require co-evolution of the prompt file (per `AGENTS.md` prompt/runtime co-evolution contract). Stage boundaries are enforced in `runBabelPipeline()` in `babel-cli/src/pipeline.ts`.

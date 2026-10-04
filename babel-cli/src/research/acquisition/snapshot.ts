@@ -16,11 +16,14 @@ import type {
   RepositoryResearchProvider,
   SnapshotManifestV1,
 } from '../contracts.js';
+import { RateBudgetExhaustedError } from '../rateBudget.js';
 
 export interface RepositorySnapshot {
   manifest: SnapshotManifestV1;
   /** path -> exact fetched content (bounded by the byte budget). */
   files: Map<string, string>;
+  /** Actual fetched content bytes, including a rejected oversized file. */
+  receivedBytes?: number;
 }
 
 export interface SnapshotOptions {
@@ -94,17 +97,19 @@ export async function buildRepositorySnapshot(
   options: SnapshotOptions,
 ): Promise<RepositorySnapshot> {
   const now = (options.now ?? new Date()).toISOString();
+  if (options.byteBudget <= 0) throw new RateBudgetExhaustedError('snapshot byte budget exhausted');
   const revision = await provider.resolveRevision(identity);
   const tree = await provider.getTree(revision);
   const blobs = tree.entries.filter((entry) => entry.type === 'blob');
   const selected = selectSnapshotFiles(
     blobs.map((entry) => ({ path: entry.path, size: entry.size })),
-    options,
+    { ...options, byteBudget: Number.MAX_SAFE_INTEGER },
   );
 
   const files = new Map<string, string>();
   const manifestFiles: SnapshotManifestV1['files'] = [];
   let totalBytes = 0;
+  let receivedBytes = 0;
   let budgetExhausted = false;
 
   for (const { path, reason } of selected) {
@@ -112,9 +117,15 @@ export async function buildRepositorySnapshot(
       budgetExhausted = true;
       break;
     }
+    const declaredSize = blobs.find(entry => entry.path === path)?.size;
+    if (declaredSize !== null && declaredSize !== undefined && declaredSize > options.byteBudget - receivedBytes) {
+      budgetExhausted = true;
+      continue;
+    }
     const file = await provider.readTextFile(revision, path);
     const sizeBytes = Buffer.byteLength(file.content, 'utf8');
-    if (totalBytes + sizeBytes > options.byteBudget) {
+    receivedBytes += sizeBytes;
+    if (receivedBytes > options.byteBudget) {
       budgetExhausted = true;
       break;
     }
@@ -144,7 +155,7 @@ export async function buildRepositorySnapshot(
     byte_budget: options.byteBudget,
     budget_exhausted: budgetExhausted,
   };
-  return { manifest, files };
+  return { manifest, files, receivedBytes };
 }
 
 export function sha256Hex(content: string): string {

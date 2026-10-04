@@ -8,6 +8,7 @@ import { FakeResearchProvider, type FakeRepository } from '../fakeProvider.js';
 import { createResearchMission } from '../missionPlanner.js';
 import { runHuntDiscovery } from '../hunt.js';
 import { runDeepAnalysis } from './deepAnalysis.js';
+import { PatternCardV1Schema } from '../contracts.js';
 
 
 const COMMIT = 'a'.repeat(40);
@@ -121,11 +122,41 @@ test('no unsupported claim reaches SOURCE_CONFIRMED', async () => {
     },
   });
 
-  const card = result.patterns[0]!;
-  assert.equal(card.evidence_state, 'DISCOVERED', 'fabricated-only citations can never earn promotion');
-  assert.deepEqual(card.evidence_refs, [], 'no valid evidence, no citations');
+  assert.deepEqual(result.patterns, [], 'a card without evidence cannot satisfy PatternCardV1');
+  assert.ok(!existsSync(hunt.paths.patternsJsonl), 'unsupported cards must not be persisted');
   assert.ok(result.rejectionCount >= 1);
   assert.ok(!existsSync(hunt.paths.evidenceJsonl), 'no validated evidence was persisted');
+});
+
+test('deep reads share one remaining mission content budget across repositories', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-deep-shared-'));
+  const mission = missionFor(root);
+  mission.budget = { ...mission.budget, max_remote_bytes: 8, max_files_per_repo: 1, max_deep_reads: 3 };
+  const repositories = [1, 2, 3].map(n => ({ ...repo(), providerRepoId: String(n), fullName: `org${n}/journal`, topics: [], files: { 'README.md': 'journal\n' } }));
+  const provider = new FakeResearchProvider({ repositories });
+  const hunt = await runHuntDiscovery(mission, provider, { runsRoot: root, now: FIXED_NOW, skipDeepAnalysis: true });
+  const result = await runDeepAnalysis(mission, provider, hunt.shortlist.map(item => item.candidate), hunt.paths);
+  assert.ok(result.snapshots.reduce((sum, snapshot) => sum + snapshot.manifest.total_bytes, 0) <= 8);
+  assert.equal(result.snapshots.length, 1);
+  for (const card of result.patterns) PatternCardV1Schema.parse(card);
+  if (existsSync(hunt.paths.patternsJsonl)) for (const line of readFileSync(hunt.paths.patternsJsonl, 'utf8').split('\n').filter(Boolean)) PatternCardV1Schema.parse(JSON.parse(line));
+});
+
+test('zero remaining byte budget prevents snapshot metadata requests', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-deep-zero-'));
+  const mission = missionFor(root);
+  const provider = new FakeResearchProvider({ repositories: [repo()] });
+  const hunt = await runHuntDiscovery(mission, provider, { runsRoot: root, skipDeepAnalysis: true });
+  mission.budget.max_remote_bytes = 0;
+  let resolves = 0;
+  const wrapped = new Proxy(provider, { get(target, prop, receiver) {
+    if (prop === 'resolveRevision') return async (...args: Parameters<typeof provider.resolveRevision>) => { resolves += 1; return target.resolveRevision(...args); };
+    return Reflect.get(target, prop, receiver);
+  } });
+  const result = await runDeepAnalysis(mission, wrapped, hunt.shortlist.map(item => item.candidate), hunt.paths);
+  assert.equal(resolves, 0);
+  assert.equal(result.snapshots.length, 0);
+  assert.deepEqual(result.patterns, []);
 });
 
 test('deep analysis respects the max_deep_reads budget', async () => {

@@ -14,16 +14,9 @@ description: >-
 
 # /babel-pr-review
 
-Operational entrypoint for independent pull request and branch review. Follow
-[Independent Review Routing](../../rules/10-independent-review-policy.md),
-[Babel PR Review](../../../docs/BABEL_PR_REVIEW.md), and the
-[GitHub workflow](../../rules/05-github-workflow.md).
-
-Freeze the exact base and head, inspect the complete diff, and use a separate
-reviewer execution when available. Any harness or model may provide that review;
-the same model in a separate execution is acceptable. Record the reviewed SHA,
-findings, unresolved issues, and limitations in a normal PR comment or native
-GitHub review. Repair findings and review the resulting head again.
+Technical reference for optional Babel PR tooling. Contributor review and merge
+policy is owned only by [AGENTS.md](../../../AGENTS.md#independent-review-and-merge).
+[Babel PR Review](../../../docs/BABEL_PR_REVIEW.md) describes the evidence surfaces.
 
 Custom Babel certification and receipts are optional advisory tooling. They do
 not replace independent review, the base-rooted gate, required CI, live GitHub
@@ -55,7 +48,7 @@ Determine the target repository and trust separation:
 - **`SELF_REVIEW`**: Target repository is `gthgomez/Babel`.
   - Invariant: The review harness source commit MUST be an ancestor of the candidate's base branch (`pr.baseRefOid`).
   - Candidate code cannot alter reviewer prompt, tools, or merge gates.
-- **`EXTERNAL_REPO_REVIEW`**: Target repository is outside Babel (e.g. `DragonWake`, `tools/gamedev`, `Project_Games`).
+- **`EXTERNAL_REPO_REVIEW`**: Target repository is outside Babel.
   - Invariant: Babel evaluator code remains separate from the target candidate; record the trusted installation's source revision and version digest. Publishing requires a clean trusted installation.
   - Target candidate changes cannot modify Babel evaluator code. Ancestry check against target base history is bypassed because Babel is external to the target repo.
 

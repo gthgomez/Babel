@@ -3626,7 +3626,7 @@ function runArgs(
     '--mode',
     mode,
     '--project',
-    'app_test_babel',
+    'example_mobile_reference',
     '--project-root',
     root,
     ...extraOptions,

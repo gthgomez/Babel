@@ -286,6 +286,7 @@ jobs:
       - public-content-policy
       - architecture-regressions
       - package-components
+      - consumer-artifact
       - unit-shards
       - docker-smoke
       - platform-core
@@ -314,6 +315,7 @@ jobs:
       - public-content-policy
       - architecture-regressions
       - package-components
+      - consumer-artifact
       - unit-shards
       - docker-smoke
       - platform-core
@@ -878,3 +880,36 @@ jobs:
             artifacts/ci-validation
           if-no-files-found: error
           retention-days: 7
+  consumer-artifact:
+    name: consumer-artifact (${{ matrix.os }}, Node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['22.19.0', '24.13.1', '24']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Install build dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Verify consumer artifact
+        run: npm run test:consumer-artifact
+        working-directory: babel-cli
+      - name: Upload verified preview and provenance
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: consumer-package-${{ runner.os }}-node-${{ matrix.node }}
+          path: artifacts/consumer-package
+          if-no-files-found: error
+          retention-days: 14

@@ -476,6 +476,28 @@ exit 0
     if ($policy.independentReviewRequired) { throw 'Missing custom evidence must be advisory.' }
   }
 
+  # Mutable readiness changes without a new head. A prior draft observation
+  # cannot poison the fresh audit, and a newly converted draft must block again.
+  Invoke-Step 'draft-ready-draft-same-head' {
+    try {
+      $prView.isDraft = $true
+      $prView | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'pr-view.json') -Encoding utf8NoBOM
+      $draft = Invoke-Gate -Label 'initial-draft' -Extra @{}
+      if ($draft.exitCode -eq 0 -or $draft.result.blockers -notcontains 'pr_is_draft' -or @($draft.result.requiredChecks).Count -ne 0) { throw 'Draft must block before peer CI polling.' }
+      $prView.isDraft = $false
+      $prView | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'pr-view.json') -Encoding utf8NoBOM
+      $readyAgain = Invoke-Gate -Label 'ready-again' -Extra @{}
+      if ($readyAgain.exitCode -ne 0 -or $readyAgain.result.status -ne 'MERGE_READY' -or $readyAgain.result.sha.prHead -ne $headSha) { throw 'Fresh ready audit must use live readiness at the identical head.' }
+      $prView.isDraft = $true
+      $prView | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'pr-view.json') -Encoding utf8NoBOM
+      $draftAgain = Invoke-Gate -Label 'draft-again' -Extra @{}
+      if ($draftAgain.exitCode -eq 0 -or $draftAgain.result.blockers -notcontains 'pr_is_draft') { throw 'Prior ready result cannot authorize a newly converted draft.' }
+    } finally {
+      $prView.isDraft = $false
+      $prView | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'pr-view.json') -Encoding utf8NoBOM
+    }
+  }
+
   # 5. dirty candidate worktree
   Invoke-Step 'dirty-candidate-blocked' {
     Set-Content -LiteralPath (Join-Path $candidatePath 'feature.txt') -Value 'tampered' -Encoding utf8NoBOM
