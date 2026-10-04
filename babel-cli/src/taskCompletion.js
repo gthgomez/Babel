@@ -243,27 +243,19 @@ function buildReferenceInventorySnippets(projectRoot, referenceRoots) {
     if (existsSync(pyprojectPath)) {
       rootFiles.push(pyprojectPath);
     }
-    for (const childDir of listDirectChildDirectories(referenceRoot)) {
-      const pythonFiles = listGroundedFiles(childDir, /\.py$/i);
-      if (pythonFiles.length > 0) {
-        rootFiles.push(...pythonFiles);
-      }
-    }
+    const sourceModuleFiles = listGroundedFiles(referenceRoot, /\.py$/i);
+    rootFiles.push(...sourceModuleFiles);
     if (rootFiles.length > 0) {
       snippets.push(
         `// ${pathToPosix(projectRoot, referenceRoot)} authoritative source file_read allowlist (closed; exact paths only)\n${unique(rootFiles).join('\n')}`,
       );
     }
-    const sourceModuleFiles = listGroundedFiles(
-      referenceRoot,
-      /\.py$/i,
-    );
     if (sourceModuleFiles.length > 0) {
       const sourceModuleNames = unique(
         sourceModuleFiles.map((filePath) => pathToPosix(referenceRoot, filePath)),
       ).sort((a, b) => a.localeCompare(b));
       snippets.push(
-        `// ${pathToPosix(projectRoot, referenceRoot)} closed source module inventory (exact relative paths)\n// ${sourceModuleNames.join(', ')}\n// Do not invent models.py or engine.py; they are not present in this inventory.`,
+        `// ${pathToPosix(projectRoot, referenceRoot)} closed source module inventory (exact relative paths)\n// ${sourceModuleNames.join(', ')}\n// Use only the real module paths listed here; do not invent files absent from this inventory.`,
       );
     }
   }

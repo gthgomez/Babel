@@ -53,6 +53,13 @@ async function main(): Promise<void> {
       'utf-8',
     );
     writeFileSync(join(tempRoot, 'outside_reference.py'), 'raise RuntimeError("out of scope")\n', 'utf-8');
+    for (const moduleName of ['models.py', 'engine.py']) {
+      writeFileSync(
+        join(projectRoot, 'reference-montecarlo-ledger', 'reference_package_ledger', moduleName),
+        'class Fixture:\n    pass\n',
+        'utf-8',
+      );
+    }
 
     const taskContract = classifyTaskContract(
       'Inside this Android project, port the source app from ./reference-montecarlo-ledger into a production-ready Android mobile app.',
@@ -93,6 +100,18 @@ async function main(): Promise<void> {
       grounding.files.every((filePath: string) => filePath.startsWith(projectRoot)) &&
       !groundingContext.includes('outside_reference.py'),
       'expected reference inventory to remain inside the explicitly grounded project',
+    );
+
+    const absoluteAllowlist = grounding.referenceInventorySnippets[0] ?? '';
+    assert(
+      absoluteAllowlist.includes(join(projectRoot, 'reference-montecarlo-ledger', 'root_utils.py')),
+      'expected the closed absolute allowlist to include root-level Python files',
+    );
+    assert(
+      groundingContext.includes('reference_package_ledger/models.py') &&
+      groundingContext.includes('reference_package_ledger/engine.py') &&
+      !groundingContext.includes('models.py or engine.py; they are not present'),
+      'expected guidance to accept actual module names instead of claiming they are absent',
     );
 
     console.log('reference grounding regression test passed');
