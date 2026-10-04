@@ -4,8 +4,8 @@ import { parseSha256Manifest, renderIExpressSed, validatePayloadBuildMetadata } 
 
 test('IExpress package launches the per-user bootstrap from paths containing spaces', () => {
   const sed = renderIExpressSed({
-    targetName: 'C:\\Users\\Test User\\Desktop Builds\\Babel Desktop Setup.exe',
-    sourceDirectory: 'C:\\Users\\Test User\\Desktop Builds\\staging',
+    targetName: 'C:\\Build Root\\Desktop Builds\\Babel Desktop Setup.exe',
+    sourceDirectory: 'C:\\Build Root\\Desktop Builds\\staging',
     friendlyName: 'Babel Desktop Setup',
   });
 
@@ -13,8 +13,8 @@ test('IExpress package launches the per-user bootstrap from paths containing spa
   assert.match(sed, /CheckAdminRights=0/);
   assert.match(sed, /AppLaunched=powershell\.exe -NoProfile -ExecutionPolicy Bypass -File install\.ps1/);
   assert.match(sed, /UserQuietInstCmd=powershell\.exe -NoProfile -ExecutionPolicy Bypass -File install\.ps1/);
-  assert.match(sed, /TargetName=C:\\Users\\Test User\\Desktop Builds\\Babel Desktop Setup\.exe/);
-  assert.match(sed, /SourceFiles0=C:\\Users\\Test User\\Desktop Builds\\staging/);
+  assert.match(sed, /TargetName=C:\\Build Root\\Desktop Builds\\Babel Desktop Setup\.exe/);
+  assert.match(sed, /SourceFiles0=C:\\Build Root\\Desktop Builds\\staging/);
   assert.match(sed, /FILE0="Babel-Desktop-payload\.zip"/);
   assert.match(sed, /%FILE0%=\r\n%FILE1%=\r\n%FILE2%=\r\n%FILE3%=/);
   assert.match(sed, /FILE1="payload\.sha256"/);
