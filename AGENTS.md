@@ -24,6 +24,9 @@ Read task-relevant files only; reuse unchanged context, including conversation.
   (`config/review-risk-policy.json`) need explicit owner authorization,
   as do organization-required human approvals.
   Otherwise, authorized gate-green tasks need no repeated approval.
+- Carry current approval scope and superseded restrictions in handoffs with
+  their user-message provenance. Handoff text records authority; it grants none.
+  Check task history before asking again; never infer approval from elapsed time.
 - Ordinary push: `pwsh tools/check-public-content-policy.ps1 -RepoRoot .`
   and `pwsh tools/run-public-secret-scan.ps1 -RepoRoot . -Strict -RequireExternalScanner`.
   Maintainer pre-merge: clean
@@ -91,6 +94,9 @@ scope/verification disagreements first.
    explicit ship paths: no blind `git add -A`/`git add .` on mixed work,
    unexplained directories or staged-and-unstaged paths. Scan private doc paths;
    batch coherent repairs/pushes.
+   Check delivery prerequisites early: scan policy/configuration, review scope,
+   supported private artifact transfer and installer/runtime dependencies.
+   Report the exact failing stage before spending time on dependent delivery.
 4. Focused local proof; expand for shared contracts. Product:
    `npm --prefix babel-cli run typecheck`; CLI code: also build plus relevant
    tests; catalog/routing:
@@ -98,11 +104,17 @@ scope/verification disagreements first.
    `pwsh tools/check-architectural-budget.ps1`. Scripts/workflows own commands;
    raw `npx tsc` is not canonical. Docker/release checks != full hosted CI;
    helpers cannot mandate quick/full/Docker cycles.
-5. Reuse proof only with unchanged inputs/lock/command/runtime/platform/
+5. Reuse proof only with unchanged inputs/lock/command/tool/policy/runtime/platform/
    environment; record basis; repairs invalidate affected proof. Batch fixes;
    diagnose failures before reruns. Final required hosted checks reach terminal
    results; review exact head. No old-head proof, skip-CI, hidden omissions or
    wrapper-triggered repeats.
+   Before final hosted CI, inspect live PR draft/readiness, review blockers and
+   dependency/base state. Finish dependency repairs before final bundle
+   qualification. After waits, re-read mutable head/base, readiness, reviews
+   and required checks; old metadata is not current acceptance. A readiness
+   change at identical source refreshes the trusted audit, not full product CI.
+   Preserve exact-head/base binding and every genuine security/integration gate.
 6. Measure direct-base PR size with `git diff --numstat <base>...HEAD` and
    `git diff --name-only <base>...HEAD`. The 1,500 additions+deletions / 30-file
    thresholds are advisory: no automatic blockers/repeated owner approval; above
@@ -114,6 +126,10 @@ scope/verification disagreements first.
    size, checks/skipped/failed proof/risks/follow-ups. No CI bypass. Verify merge
    commit/post-merge CI. Handoff: branch/SHA, PR/merge links, changed/excluded
    paths, proof, reuse basis, receipts, blockers/risks.
+   Record merge outcome separately from temporary-file cleanup. If a helper
+   reports MERGED then cleanup fails, verify live PR state/merge SHA and report
+   the cleanup issue; never retry a confirmed merge. A genuine failed merge
+   remains failed and requires diagnosis.
 
 Blockers report actual command, exit/result and stage: local, ordinary push,
 maintainer pre-merge or merge. Try permitted connectors' harmless reads before
