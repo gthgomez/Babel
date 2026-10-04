@@ -21,24 +21,29 @@ Deeper references:
 
 ## Installed preview package
 
-The local tarball preview uses `@babel-preview-local/coding-agent`, version
-`0.1.1-preview.20261003`, and executable `babel-agent`. This provisional label
-claims no npm scope ownership. Nothing is published or reserved on npm. It avoids
-the unrelated BabelJS `babel-cli` package and `babel` executable. Source checkout
-wrappers remain available; retired Lite wrappers retain their deprecation behavior
-and are omitted from the tarball. The July `v0.1.0` release/tag is not reused.
+The local preview package is `babel-harness`, version `0.1.1-preview.20261004`.
+It provides the preferred `babel-harness` command and the compatible
+`babel-agent` command. The package is not currently installable from the public
+npm registry; the registry returned E404 for this name on 2026-10-04. The
+Windows Desktop bundle includes the same CLI and also retains `Babel CLI.cmd` as
+a launcher alias. These names avoid the unrelated BabelJS `babel` executable.
+Source-checkout wrappers remain available; retired Lite wrappers retain their
+deprecation behavior and are omitted from the tarball. The July `v0.1.0`
+release/tag is not reused.
 
-Download the candidate tarball and `SHA256SUMS` from the PR's consumer-package CI
-artifact, verify the checksum, and run from any target project:
+Build or obtain the private candidate tarball `babel-harness-0.1.1-preview.20261004.tgz`,
+verify it against its accompanying `SHA256SUMS`, then install it from a local
+path and run from any target project:
 
 ```sh
-npm install --prefix ./babel-preview --omit=dev ./babel-preview-local-coding-agent-0.1.1-preview.20261003.tgz
-./babel-preview/node_modules/.bin/babel-agent --version
-./babel-preview/node_modules/.bin/babel-agent setup --json
-./babel-preview/node_modules/.bin/babel-agent doctor --json
+npm install --prefix ./babel-preview --omit=dev ./babel-harness-0.1.1-preview.20261004.tgz
+./babel-preview/node_modules/.bin/babel-harness --version
+./babel-preview/node_modules/.bin/babel-harness setup --json
+./babel-preview/node_modules/.bin/babel-harness doctor --json
 ```
 
-On Windows use `babel-preview\node_modules\.bin\babel-agent.cmd`. For a separate
+On Windows use `babel-preview\node_modules\.bin\babel-harness.cmd`. The
+`babel-agent` alias remains available on all platforms. For a separate
 installation location use an absolute `--prefix` path; target files resolve from
 the current directory or explicit project arguments. Node **22.19.0+ in the 22.x line, or 24.13.1+ in the 24.x line**, is
 required for unflagged WebAssembly module imports as well as `node:sqlite` and its extension API.

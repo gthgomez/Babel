@@ -1,6 +1,6 @@
 {
   "name": "babel-north-star-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1-preview.20261004",
   "private": true,
   "description": "North Star desktop shell for the Babel coding agent",
   "type": "module",
@@ -11,7 +11,8 @@
     "preview": "node scripts/serve.mjs",
     "start": "node scripts/build.mjs && electron .",
     "test": "node scripts/build.mjs && node --test test/*.test.mjs",
-    "test:ui": "python test/ui_test.py && python test/native_ui_test.py"
+    "test:ui": "python test/ui_test.py && python test/native_ui_test.py",
+    "package:windows": "node scripts/package-windows.mjs"
   },
   "devDependencies": {
     "electron": "44.5.1"

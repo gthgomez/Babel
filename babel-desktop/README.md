@@ -1,4 +1,18 @@
-# Babel Desktop — North Star shell
+# Babel Desktop - North Star shell
+
+## Windows portable preview
+
+The Windows x64 portable bundle includes the Desktop shell, official CLI, immutable prompt assets, production dependencies, and pinned Node 24.13.1. A consumer needs neither npm nor a source checkout. See [installation and setup](docs/INSTALL-WINDOWS.md).
+
+For contributors, use the combined Desktop and installed-CLI candidate, install both package lockfiles, and run these commands with the pinned Node runtime on PATH:
+
+```sh
+npm ci
+npm --prefix ../babel-cli ci --ignore-scripts
+npm run package:windows -- --node-archive=<absolute-official-node-v24.13.1-win-x64.zip> --electron-archive=<absolute-official-electron-v44.5.1-win32-x64.zip>
+```
+
+The builder checks pinned Node and Electron archive SHA256 values, freshly extracts Electron instead of trusting an existing dependency folder, requires a committed source candidate, builds and packs the canonical CLI, installs only lockfile-resolved production dependencies without lifecycle scripts, and copies an explicit Desktop allowlist. It produces the portable ZIP, file manifest, BUILD.json, and SHA256SUMS under `artifacts/windows/`. It refuses to overwrite prior outputs. The bundle is unsigned; installer, uninstaller integration, signing, and automatic updates remain unimplemented.
 
 Visual shell for `BabelTuiNorthStar.png`, plus an Electron host. The opening screen is still the reference preview. After you connect a project, a task runs the sibling Babel CLI and the center panel shows that run in the same layout: your message, Babel's streaming reply, tool rows, and status.
 
@@ -38,7 +52,7 @@ npm start
 
 The package pins Electron 44.5.1. `npm install` writes `package-lock.json` for this package.
 
-On startup the host resolves the official runtime at `../babel-cli/dist/index.js`. Build Babel with its own instructions first. If that file is missing, the connection dialog says the CLI is not built. Choosing a different entry is an advanced setting, not the normal startup path. The desktop never requests or stores an API key.
+In a source build the host resolves the official runtime at `../babel-cli/dist/index.js`. Build Babel with its own instructions first. If that file is missing, the connection dialog says the CLI is not built. Choosing a different entry is an advanced source setting. A packaged app uses only its bundled CLI and Node. Desktop never requests or stores an API key.
 
 The reference preview stays the opening screen. After you open a project and choose Use Babel CLI, a task runs `babel run` in the selected mode. The answer streams into the Babel bubble, and tool rows use the same read / search / run / edit layout as the reference. Files Babel reports as changed are listed above the project tree. Saved Babel chats from this checkout appear in the session list and can be opened. Allow and Deny answer Babel's approval requests. Stop asks the CLI to cancel, then ends the process if it is still running.
 
@@ -60,7 +74,7 @@ In Electron, its executable is used with `ELECTRON_RUN_AS_NODE=1` instead of sea
 
 The native source contains isolated IPC, folder/CLI selection, a bounded read-only file viewer, a UTF-8-safe JSONL parser, a single-child controller, and renderer event mapping. Fixtures disappear when live mode is enabled. Unknown model/tool/context telemetry remains unknown.
 
-The desktop does not keep a second session database. Chat continuity is Babel's own transcript: the id comes back on the run result, and the next chat message in that desktop session resumes it. Restarting the app does not list older CLI sessions. `--session-id` remains the Local Mode evidence flag and is not used for this resume.
+The desktop does not keep a second session database. Chat continuity is Babel's own transcript: the id comes back on the run result, and the next chat message in that desktop session resumes it. After reconnecting, saved chats come from the same `BABEL_RUNS_DIR` used by the child CLI; packaged builds place it under the Desktop profile. `--session-id` remains the Local Mode evidence flag and is not used for this resume.
 
 Chat runs forward answer text, thoughts, tool rows, file-change rows, and approval requests that Babel emits. Plan and deep runs show pipeline stage lines in the same tool-row layout. Missing events are not invented. Reference findings and solution cards stay on the sample session. A failed, blocked, or unverified run can expand the structured CLI result.
 
@@ -80,7 +94,7 @@ npm run test:ui
 
 `npm run test:ui` writes screenshots and result JSON under `babel-desktop/artifacts/`. That directory is generated output and is not source. The harness captures 1536 × 1024, 1366 × 768, and 390 × 844. It does not assert pixel equality with the reference image.
 
-Electron install, the native window, and a provider-backed Babel run are checked on a machine with the CLI built. Windows packaging is later work.
+Portable bundle qualification uses the actual Electron executable and bundled CLI in a clean temporary installation/profile. Model-backed execution remains a separate qualification requiring a configured provider and Docker.
 
 ## Source map
 
@@ -95,4 +109,4 @@ references/       Original user-supplied North Star screenshot
 artifacts/        Rendered screenshots and test evidence
 ```
 
-This package is separate from the upstream Babel repository. It does not alter Babel's runtime or publish a branch or PR.
+The Desktop remains a shell over the canonical Babel CLI; it owns no alternate execution engine.
