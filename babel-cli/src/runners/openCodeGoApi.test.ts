@@ -219,6 +219,23 @@ test('exact V4.1 refuses missing shared budget before resolving a credential', (
   assert.throws(() => new OpenCodeGoApiRunner('deepseek-v4.1-flash', { maxTokens: 32 }, { credentialSource: 'explicit-test', explicitCredential: 'synthetic' }), /budget/i)
 })
 
+test('Go rechecks the actual task authority after an asynchronous reservation before dispatch', async () => {
+  const { OpenCodeGoBudget } = await import('./openCodeGoBudget.js')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  let currentOwner = true
+  const budget = new OpenCodeGoBudget({ statePath: join(tmpdir(), 'unused-go-owner-probe.json'), jobId: 'owner', limitUsd: 2,
+    currentLimitUsd: () => currentOwner ? 2 : 0 })
+  // Controlled lifecycle barrier only; no durable reservation is fabricated.
+  budget.reserve = async () => { await Promise.resolve(); currentOwner = false }
+  let fetches = 0
+  globalThis.fetch = (async () => { fetches++; throw new Error('retired owner reached synthetic transport') }) as typeof fetch
+  const runner = new OpenCodeGoApiRunner('deepseek-v4.1-flash', { maxTokens: 16 }, {
+    budget, credentialSource: 'explicit-test', explicitCredential: 'synthetic' })
+  await assert.rejects(runner.executeRaw('owner retired at the barrier'), /budget denied/i)
+  assert.equal(fetches, 0)
+})
+
 test('Go budget persists reservations and rejects contention, exhaustion and job reuse', { skip: process.platform === 'win32' ? 'POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows' : false }, async (t) => {
   const { mkdtemp, readFile, writeFile, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
@@ -241,7 +258,33 @@ test('Go budget persists reservations and rejects contention, exhaustion and job
   assert.throws(() => new OpenCodeGoBudget({ statePath: path, jobId: 'job', limitUsd: 2.01 }), /budget/i)
 })
 
-test('V4.1 reserves exact body cost for every operation and never refunds unknown or cancelled usage', { skip: process.platform === 'win32' ? 'POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows' : false }, async (t) => {
+test('Go reservations retain spent state across resume, respect a reduced task ceiling and refuse deleted state', { skip: process.platform === 'win32' ? 'Native POSIX persistence contract; Windows remains denied' : false }, async t => {
+  const { mkdtemp, readFile, unlink, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { OpenCodeGoBudget } = await import('./openCodeGoBudget.js')
+  const dir = await mkdtemp(join(tmpdir(), 'synthetic-go-resume-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const statePath = join(dir, 'reservations.json')
+  let ceiling = 0.000006
+  const options = { statePath, jobId: 'owner', limitUsd: ceiling, currentLimitUsd: () => ceiling }
+  const original = new OpenCodeGoBudget(options)
+  await original.reserve(1, 1)
+  const resumed = new OpenCodeGoBudget({ ...options, requireExistingState: true })
+  await resumed.reserve(1, 1)
+  assert.equal(JSON.parse(await readFile(statePath, 'utf8')).reservedNanoUsd, 3000)
+  ceiling = 0.000003
+  await assert.rejects(resumed.reserve(1, 1), /budget denied/i)
+  assert.equal(JSON.parse(await readFile(statePath, 'utf8')).attempts, 2)
+  ceiling = 0.000007
+  await assert.rejects(resumed.reserve(1, 1), /budget denied/i)
+  ceiling = options.limitUsd
+  await unlink(statePath)
+  await assert.rejects(original.reserve(1, 1), /budget denied/i)
+  await assert.rejects(new OpenCodeGoBudget({ ...options, requireExistingState: true }).reserve(1, 1), /budget denied/i)
+})
+
+test('V4.1 reserves the serialized-body estimate for every operation and never refunds unknown or cancelled usage', { skip: process.platform === 'win32' ? 'POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows' : false }, async (t) => {
   const { mkdtemp, readFile, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
@@ -377,26 +420,26 @@ test('Go does not dispatch or debit a request cancelled before entry', async (t)
 })
 
 
-test('Windows Go budget denies native dispatch before writing reservation state', { skip: process.platform !== 'win32' ? 'Actual Windows unsupported-durability contract' : false }, async (t) => {
-  const { mkdtemp, access, readdir, rm } = await import('node:fs/promises')
+test('Windows Go corrupt reservation state denies transport without replacing evidence', { skip: process.platform !== 'win32' ? 'Native Windows SQLite contract' : false }, async (t) => {
+  const { mkdtemp, writeFile, readFile, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
   const { OpenCodeGoBudget, OpenCodeGoBudgetError } = await import('./openCodeGoBudget.js')
   const dir = await mkdtemp(join(tmpdir(), 'synthetic-windows-go-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
   const statePath = join(dir, 'budget.json')
+  await writeFile(statePath, 'corrupt reservation evidence')
   const budget = new OpenCodeGoBudget({ statePath, jobId: 'windows-job', limitUsd: 2 })
-  await assert.rejects(budget.reserve(1, 1), (error: unknown) => error instanceof OpenCodeGoBudgetError && /unsupported on Windows/.test(error.message))
+  await assert.rejects(budget.reserve(1, 1), (error: unknown) => error instanceof OpenCodeGoBudgetError)
   const runner = new OpenCodeGoApiRunner('deepseek-v4.1-flash', { maxTokens: 16 }, { budget, credentialSource: 'explicit-test', explicitCredential: 'synthetic' })
   let fetches = 0
-  globalThis.fetch = (async () => { fetches++; throw Error('unsupported Windows dispatch reached network') }) as typeof fetch
+  globalThis.fetch = (async () => { fetches++; throw Error('corrupt Windows state reached network') }) as typeof fetch
   const errors: string[] = []
   for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'synthetic' }], [])) {
     if (event.type === 'error') errors.push(event.message)
   }
   assert.equal(errors.length, 1)
-  assert.match(errors[0] ?? '', /budget denied.*unsupported on Windows/)
+  assert.match(errors[0] ?? '', /budget denied/i)
   assert.equal(fetches, 0)
-  await assert.rejects(access(statePath))
-  assert.deepEqual(await readdir(dir), [])
+  assert.equal(await readFile(statePath, 'utf8'), 'corrupt reservation evidence')
 })

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { renameSync, writeFileSync } from "node:fs";
 import {
@@ -20,6 +20,8 @@ import type {
   ChatAllowanceGrant,
 } from "./chatEngineContracts.js";
 import type { TurnRuntimeSnapshot } from "./turnRuntime.js";
+import { OpenCodeGoBudget, OpenCodeGoBudgetError } from "../runners/openCodeGoBudget.js";
+import type { OpenCodeGoRunnerOptions } from "../runners/openCodeGoApi.js";
 import {
   parseOwnerAccountingFaults,
   type OwnerAccountingFault,
@@ -56,7 +58,45 @@ export function allowanceCostCapUsd(costCap: ChatAllowanceCostCap): number {
 }
 
 export class ChatEngineTaskAllowance {
+  private goReservation: { taskOwnerId: string; budget: OpenCodeGoBudget } | null = null;
   constructor(private readonly host: ChatTaskAllowanceHost) {}
+
+  /** Bind every Go phase to the existing durable task grant and reservation owner. */
+  resolveGoRunnerOptions(): OpenCodeGoRunnerOptions {
+    const allowance = this.host.taskAllowance;
+    if (!allowance || this.host.taskCostScopeUnavailable) throw new OpenCodeGoBudgetError();
+    const taskOwnerId = allowance.taskOwnerId;
+    if (this.goReservation?.taskOwnerId !== taskOwnerId) {
+      const limitUsd = allowanceCostCapUsd(allowance.grant.costCap);
+      this.goReservation = {
+        taskOwnerId,
+        budget: new OpenCodeGoBudget({
+          statePath: join(this.host.engineRunDir, `go-budget-${createHash("sha256").update(taskOwnerId).digest("hex")}.json`),
+          jobId: taskOwnerId,
+          limitUsd,
+          currentGrant: () => {
+            const current = this.host.taskAllowance;
+            if (this.host.taskCostScopeUnavailable || current?.taskOwnerId !== taskOwnerId) throw new OpenCodeGoBudgetError();
+            return { grantId: current.grant.grantId, revision: current.grant.revision ?? 0,
+              limitUsd: allowanceCostCapUsd(current.grant.costCap) };
+          },
+          requireExistingState: allowance.goReservationRequired === true || allowance.accountedChargeIds.length > 0,
+          currentLimitUsd: () => {
+            if (this.host.taskCostScopeUnavailable || this.host.taskAllowance?.taskOwnerId !== taskOwnerId) {
+              throw new OpenCodeGoBudgetError();
+            }
+            return this.effectiveCostCapUsd();
+          },
+        }),
+      };
+      // Persist before any possible reservation/dispatch. A crash or denied
+      // first attempt may conservatively block resume when state is absent.
+      allowance.goReservationRequired = true;
+      this.persistTaskAllowance();
+      if (this.host.taskCostScopeUnavailable) throw new OpenCodeGoBudgetError();
+    }
+    return { budget: this.goReservation.budget, sessionId: taskOwnerId };
+  }
 
   checkpointActiveWall(nowMs = Date.now()): void {
     const allowance = this.host.taskAllowance;
@@ -111,6 +151,7 @@ export class ChatEngineTaskAllowance {
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       grant: {
         grantId: randomUUID(),
+        revision: 0,
         provenance: "chat-engine-initial",
         costCap: allowanceCostCap(this.host.limits.maxCostUsd),
         wallCapMs: this.host.limits.maxWallMs,
@@ -245,8 +286,11 @@ export class ChatEngineTaskAllowance {
         "Allowance renewal must increase at least one cap without decreasing another",
       );
     }
+    const revision = (allowance.grant.revision ?? 0) + 1;
+    if (!Number.isSafeInteger(revision)) throw new Error("Allowance grant revision exhausted");
     allowance.grant = {
       grantId: grant.grantId,
+      revision,
       provenance: grant.provenance,
       costCap: allowanceCostCap(grant.costCapUsd),
       wallCapMs: grant.wallCapMs,
@@ -416,6 +460,7 @@ export function parseTaskAllowance(
     costCap === null ||
     typeof grantRecord["grantId"] !== "string" ||
     grantRecord["grantId"].length === 0 ||
+    (grantRecord["revision"] !== undefined && (!Number.isSafeInteger(grantRecord["revision"]) || (grantRecord["revision"] as number) < 0)) ||
     typeof grantRecord["provenance"] !== "string" ||
     grantRecord["provenance"].length === 0 ||
     !isNonNegativeFinite(grantRecord["wallCapMs"]) ||
@@ -435,6 +480,7 @@ export function parseTaskAllowance(
       (id) => typeof id === "string",
     ) ||
     typeof candidate["activeExecution"] !== "boolean" ||
+    (candidate["goReservationRequired"] !== undefined && typeof candidate["goReservationRequired"] !== "boolean") ||
     !isNonNegativeFinite(candidate["taskCostBaselineUsd"])
   )
     return null;
@@ -449,6 +495,7 @@ export function parseTaskAllowance(
     accountingEpoch: candidate["accountingEpoch"],
     grant: {
       grantId: grantRecord["grantId"],
+      ...(grantRecord["revision"] !== undefined ? { revision: grantRecord["revision"] as number } : {}),
       provenance: grantRecord["provenance"],
       costCap,
       wallCapMs: grantRecord["wallCapMs"],
@@ -474,6 +521,7 @@ export function parseTaskAllowance(
       postWriteRepairRestrict: repairRecord["postWriteRepairRestrict"],
     },
     accountedChargeIds: [...(candidate["accountedChargeIds"] as string[])],
+    ...(candidate["goReservationRequired"] !== undefined ? { goReservationRequired: candidate["goReservationRequired"] as boolean } : {}),
     // A crashed active marker is cleared on restore; downtime is not execution.
     activeExecution: false,
     taskCostBaselineUsd: candidate["taskCostBaselineUsd"],

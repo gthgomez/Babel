@@ -32,8 +32,8 @@ if (!isSyntheticProviderFixtureReady()) {
     t.diagnostic(diagnostic)
     assert.equal(code, 0, 'isolated Go provider regression subprocess must pass')
     const inventory = JSON.parse(diagnostic) as { tests: number; passed: number; failed: number; skipped: number }
-    assert.equal(inventory.tests, 11, 'all eleven provider contracts must execute')
-    assert.equal(inventory.passed, 11)
+    assert.equal(inventory.tests, 14, 'all fourteen provider contracts must execute')
+    assert.equal(inventory.passed, 14)
     assert.equal(inventory.failed, 0)
     assert.equal(inventory.skipped, 0)
     removeSyntheticProviderFixture(isolated.root)
@@ -47,6 +47,7 @@ if (!isSyntheticProviderFixtureReady()) {
     resolveChatFallbackRunner, resolveChatFallbackOrFail,
   } = await import('./chatEngineProviderRuntime.js')
   const { OpenCodeGoApiRunner } = await import('../runners/openCodeGoApi.js')
+  const { OpenCodeGoBudget, OpenCodeGoBudgetError } = await import('../runners/openCodeGoBudget.js')
   const { loadModelPolicyConfig } = await import('../modelPolicy.js')
   const { BABEL_RUNS_DIR } = await import('../cli/constants.js')
   const { getProviderSpec } = await import('../runners/providerRegistry.js')
@@ -132,10 +133,87 @@ if (!isSyntheticProviderFixtureReady()) {
     }
   })
 
+  test('ordinary Go Chat shares one native task budget across primary, synthesis and critic, then fences a fresh task', async t => {
+    const { root, runId } = fixture(t)
+    const engine = new ChatEngine({ task: codingTask, projectRoot: root, model: currentBackendKey, runId })
+    const internal = engine as unknown as {
+      resolveDeliberationRunner(): InstanceType<typeof OpenCodeGoApiRunner>
+      synthesizeAnswer(observations: string, callbacks: {}): Promise<string>
+      startIndependentTaskCostScope(): void
+    }
+    const reservations: Array<InstanceType<typeof OpenCodeGoBudget>> = []
+    const original = OpenCodeGoBudget.prototype.reserve
+    // Observe the real caller-owned objects; injected denial prevents inference.
+    // This proves wiring and owner fencing, not durable reservation behavior.
+    OpenCodeGoBudget.prototype.reserve = async function () {
+      reservations.push(this)
+      throw new OpenCodeGoBudgetError()
+    }
+    t.after(() => { OpenCodeGoBudget.prototype.reserve = original })
+    assert.equal(engine.getTaskAllowanceSnapshot()?.goReservationRequired, undefined)
+    const primary = internal.resolveDeliberationRunner()
+    assert.equal(engine.getTaskAllowanceSnapshot()?.goReservationRequired, true)
+    await assert.rejects(primary.executeRaw('primary'), /budget denied/i)
+    await assert.rejects(internal.synthesizeAnswer('observed tools', {}), /budget denied/i)
+    const critic = resolveOrCreateCriticRunner('deepseek-v4.1-flash', null,
+      () => internal.resolveDeliberationRunner(), 'opencode-go').runner
+    await assert.rejects(critic.executeRaw('critic'), /budget denied/i)
+    assert.equal(reservations.length, 3)
+    assert.ok(reservations.every(budget => budget === reservations[0]))
+    internal.startIndependentTaskCostScope()
+    assert.equal(engine.getTaskAllowanceSnapshot()?.goReservationRequired, undefined)
+    const successor = internal.resolveDeliberationRunner()
+    assert.ok(successor !== primary, 'cached runner must not retain the previous task budget')
+    assert.notEqual(successor.getLastOpenCodeSessionId(), primary.getLastOpenCodeSessionId())
+    await assert.rejects(successor.executeRaw('successor'), /budget denied/i)
+    assert.ok(reservations[3] !== reservations[0])
+    assert.throws(() => reservations[0]!.assertCurrentAuthority(), /budget denied/i)
+    reservations[3]!.assertCurrentAuthority()
+    OpenCodeGoBudget.prototype.reserve = original
+    // Real Windows persistence and transport admission use separate native tests.
+  })
+
+  test('ordinary Go Chat refuses missing durable task authority before credential lookup', t => {
+    const { root, runId } = fixture(t)
+    const engine = new ChatEngine({ task: codingTask, projectRoot: root, model: currentBackendKey, runId })
+    const internal = engine as unknown as {
+      taskCostScopeUnavailable: boolean
+      resolveDeliberationRunner(): InstanceType<typeof OpenCodeGoApiRunner>
+    }
+    internal.taskCostScopeUnavailable = true
+    delete process.env['BABEL_OPENCODE_GO_HELPER']
+    let code: string | null = null
+    try { internal.resolveDeliberationRunner() } catch (error) { code = (error as { code?: string }).code ?? null }
+    assert.equal(code, 'GO_BUDGET_DENIED')
+  })
+
+  test('Go task keeps its reservation owner through valid allowance renewal and cold resume', t => {
+    const { root, runId } = fixture(t)
+    const engine = new ChatEngine({ task: codingTask, projectRoot: root, model: currentBackendKey, runId, maxCostUsd: 1 })
+    engine.applyUserSubmission({ userInput: codingTask })
+    const ownerAccess = (value: InstanceType<typeof ChatEngine>) => value as unknown as {
+      taskAllowanceOwner: { resolveGoRunnerOptions(): { budget: InstanceType<typeof OpenCodeGoBudget> } }
+    }
+    const budget = ownerAccess(engine).taskAllowanceOwner.resolveGoRunnerOptions().budget
+    const before = engine.getTaskAllowanceSnapshot()!
+    budget.assertCurrentAuthority()
+    engine.renewAllowance({ grantId: 'go-renewal', provenance: 'operator:synthetic-renewal', costCapUsd: 2,
+      wallCapMs: before.grant.wallCapMs, turnCap: before.grant.turnCap })
+    assert.equal(ownerAccess(engine).taskAllowanceOwner.resolveGoRunnerOptions().budget, budget)
+    assert.equal(engine.getTaskAllowanceSnapshot()?.taskOwnerId, before.taskOwnerId)
+    budget.assertCurrentAuthority()
+    const resumed = new ChatEngine({ task: codingTask, projectRoot: root, model: currentBackendKey, runId,
+      maxCostUsd: 1, resumeExisting: true })
+    assert.equal(resumed.getTaskAllowanceSnapshot()?.taskOwnerId, before.taskOwnerId)
+    assert.equal(resumed.getTaskAllowanceSnapshot()?.grant.grantId, 'go-renewal')
+    assert.deepEqual(resumed.getTaskAllowanceSnapshot()?.grant.costCap, { kind: 'finite', usd: 2 })
+    ownerAccess(resumed).taskAllowanceOwner.resolveGoRunnerOptions().budget.assertCurrentAuthority()
+  })
+
   function controlledCurrentRunner(): InstanceType<typeof OpenCodeGoApiRunner> {
     // Controlled source regression only: no durable-reservation or product proof.
     // The transport's native Windows/missing-budget gates have separate real tests.
-    const budget = { reserve: async () => {} } as unknown as OpenCodeGoBudget
+    const budget = { reserve: async () => {}, assertCurrentAuthority: () => {} } as unknown as OpenCodeGoBudget
     return new OpenCodeGoApiRunner('deepseek-v4.1-flash', {}, { budget })
   }
 
@@ -177,9 +255,9 @@ if (!isSyntheticProviderFixtureReady()) {
     // CostTracker estimates from its model registry, not response metadata.
     // This temporary accounting-only entry represents zero-cost synthetic
     // responses. It does not register production Go pricing or change routing.
-    const syntheticKey = 'deepseek:deepseek-v4.1-flash'
+    const syntheticKey = 'opencode-go:deepseek-v4.1-flash'
     const priorPricing = MODEL_PRICING_REGISTRY[syntheticKey]
-    MODEL_PRICING_REGISTRY[syntheticKey] = { provider: 'deepseek', modelId: 'deepseek-v4.1-flash',
+    MODEL_PRICING_REGISTRY[syntheticKey] = { provider: 'opencode-go', modelId: 'deepseek-v4.1-flash',
       inputCostPer1M: 0, outputCostPer1M: 0, sourceUrl: 'fixture:synthetic-only', verifiedAt: 'synthetic-fixture' }
     t.after(() => { if (priorPricing) MODEL_PRICING_REGISTRY[syntheticKey] = priorPricing
       else delete MODEL_PRICING_REGISTRY[syntheticKey] })
@@ -309,6 +387,16 @@ if (!isSyntheticProviderFixtureReady()) {
     ['OpenRouter control', 'glm-5.3-flash', 'openrouter', 'z-ai/glm-5.3-flash', 'https://openrouter.ai/api/v1/chat/completions'],
   ] as const) test(`${label} native proposals retain explicit read-only authority and deliver denied results`, async t => {
     const { root, runId } = fixture(t)
+    // Mechanics-only provider seam. Ordinary Windows Go remains denied by its
+    // native reservation guard, exercised above and in transport controls.
+    const syntheticKey = `opencode-go:${expectedModel}`
+    const priorPricing = MODEL_PRICING_REGISTRY[syntheticKey]
+    if (provider === 'opencode-go') {
+      MODEL_PRICING_REGISTRY[syntheticKey] = { provider: 'opencode-go', modelId: expectedModel,
+        inputCostPer1M: 0, outputCostPer1M: 0, sourceUrl: 'fixture:synthetic-only', verifiedAt: 'synthetic-fixture' }
+      t.after(() => { if (priorPricing) MODEL_PRICING_REGISTRY[syntheticKey] = priorPricing
+        else delete MODEL_PRICING_REGISTRY[syntheticKey] })
+    }
     // The raw engine seam does not create an ordinary CLI prepared turn. Supply
     // the same explicit read-only authority used by installed mechanics, rather
     // than pretending a model/user phrase mints a capability restriction.
@@ -331,7 +419,9 @@ if (!isSyntheticProviderFixtureReady()) {
         { headers: { 'content-type': 'text/event-stream' } })
     }) as typeof fetch
     const engine = new ChatEngine({ task: 'Explain this file without changing it.',
-      projectRoot: root, model: key, runId })
+      projectRoot: root, model: key, runId,
+      ...(provider === 'opencode-go' ? { providerRunner: new OpenCodeGoApiRunner(expectedModel, {},
+        { budget: { reserve: async () => {}, assertCurrentAuthority: () => {} } as unknown as OpenCodeGoBudget }) } : {}) })
     for await (const _event of engine.submitMessageStream('Explain this file without changing it.', 'explain')) { /* drain */ }
     assert.equal(readFileSync(target, 'utf8'), 'unchanged\n')
     assert.equal(bodies.length, 2)

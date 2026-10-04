@@ -10,6 +10,17 @@ import {
   getModelPricingByModelId,
 } from './modelPricingRegistry.js';
 
+test('Go 4.1 uses its published peak usage rates and keeps the billing estimate conservative', () => {
+  const estimate = estimateProviderUsageCost({ provider: 'opencode-go', modelId: 'deepseek-v4.1-flash',
+    promptTokens: 1000, completionTokens: 2000, promptCacheHitTokens: 400, promptCacheMissTokens: 600 });
+  assert.ok(Math.abs((estimate.estimatedCostUsd ?? -1) - 0.0025824) < 1e-12);
+  assert.equal(estimate.precision, 'conservative');
+  assert.equal(estimate.pricingSourceUrl, 'https://dev.opencode.ai/docs/go/');
+  assert.equal(estimate.pricingVerifiedAt, '2026-10-04');
+  assert.match(estimate.warning ?? '', /peak.*usage.*billing/i);
+  assert.equal(getModelPricing('deepseek', 'deepseek-v4.1-flash'), null);
+});
+
 test('prices direct DeepSeek usage exactly when cache split tokens are reported', () => {
   const estimate = estimateProviderUsageCost({
     provider: 'deepseek',

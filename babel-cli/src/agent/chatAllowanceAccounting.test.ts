@@ -263,6 +263,33 @@ test('finite task dollar cap refuses another request after unknown-price usage',
   }
 })
 
+test('finite task cap uses the Go usage estimate while the actual invoice remains unknown', () => {
+  const runsRoot = mkdtempSync(join(tmpdir(), 'babel-go-estimate-runs-'))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-go-estimate-project-'))
+  const previousRunsDir = process.env['BABEL_RUNS_DIR']
+  const previousUsage = globalCostTracker.getSessionSummary()
+  process.env['BABEL_RUNS_DIR'] = runsRoot
+  globalCostTracker.resetSession()
+  try {
+    const engine = new ChatEngine({ task: 'finite cap task', projectRoot, model: 'deepseek-v4-flash' })
+    engine.applyUserSubmission({ userInput: 'start finite cap task' })
+    const owner = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
+    globalCostTracker.settleUsage('deepseek-v4.1-flash', 1000, 100, null, null,
+      { taskOwnerId: owner, chargeId: 'go-estimate' }, true, 'opencode-go')
+    assert.equal(globalCostTracker.getTaskSummary(owner).actualCostUSD, null)
+    assert.equal(globalCostTracker.getTaskSummary(owner).costComplete, false)
+    assert.equal(globalCostTracker.getTaskSummary(owner).estimateComplete, true)
+    assert.equal(allowanceAccess(engine).checkBudgets().ok, true)
+  } finally {
+    globalCostTracker.resetSession()
+    globalCostTracker.restoreSessionCost(previousUsage)
+    if (previousRunsDir === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRunsDir
+    rmSync(runsRoot, { recursive: true, force: true })
+    rmSync(projectRoot, { recursive: true, force: true })
+  }
+})
+
 test('finite child cost allowance without an owner fails closed despite unrelated session spend', () => {
   const allowance = deriveChildAllowance({
     parentTaskBaselineUsd: 0,

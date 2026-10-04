@@ -90,6 +90,8 @@ export interface ChatTaskAllowanceSnapshot {
   accountingEpoch: string
   grant: {
     grantId: string
+    /** Monotonic revision within this task owner; older grants cannot overwrite renewal. */
+    revision?: number
     provenance: string
     costCap: ChatAllowanceCostCap
     wallCapMs: number
@@ -107,6 +109,8 @@ export interface ChatTaskAllowanceSnapshot {
     postWriteRepairRestrict: boolean
   }
   accountedChargeIds: string[]
+  /** Go reservation ownership was checkpointed; resume must not create missing state. */
+  goReservationRequired?: boolean
   activeExecution: boolean
   taskCostBaselineUsd: number
   /** Owner-scoped faults mirrored when an owner-receipt write fails. */

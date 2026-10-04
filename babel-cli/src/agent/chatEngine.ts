@@ -1518,10 +1518,10 @@ export class ChatEngine {
       Number.isFinite(grantedCostCapUsd) && this.criticRepairCostCapUsd != null
         ? Math.min(grantedCostCapUsd, this.criticRepairCostCapUsd)
         : grantedCostCapUsd;
+    const costSummary = globalCostTracker.getTaskSummary(this.taskAllowance.taskOwnerId);
     if (
       Number.isFinite(maxCostUsd) &&
-      globalCostTracker.getTaskSummary(this.taskAllowance.taskOwnerId)
-        .costComplete === false
+      (costSummary.estimateComplete ?? costSummary.costComplete) === false
     ) {
       const reason =
         "Task cost is incomplete because a provider charge has unknown pricing; refusing paid dispatch under a finite dollar cap.";
@@ -3736,6 +3736,8 @@ export class ChatEngine {
     this.synthesisRunner = resolveChatSynthesisRunner(
       this.synthesisRunner,
       this.modelPolicy,
+      this.modelPolicy?.provider === "opencode-go" && !this.options.providerRunner
+        ? this.taskAllowanceOwner.resolveGoRunnerOptions() : undefined,
     );
     const usageScope = this.captureProviderUsageScope(ownerGeneration);
     return synthesizeChatAnswer(
@@ -3777,6 +3779,7 @@ export class ChatEngine {
       accountingEpoch: string;
       turnId: string | null;
       chargeId: string | null;
+      provider?: string | null;
       requestId?: string;
       attemptId?: string;
       runDir?: string;
@@ -3832,6 +3835,7 @@ export class ChatEngine {
           null,
           attribution,
           usage.inputTokens !== null && usage.outputTokens !== null,
+          usageScope.provider ?? null,
         );
         if (update.kind === "conflict") {
           this.recordOwnerAccountingFault(
@@ -3968,6 +3972,8 @@ export class ChatEngine {
     this.deliberationRunner = resolveChatDeliberationRunner(
       this.deliberationRunner,
       this.modelPolicy,
+      this.modelPolicy?.provider === "opencode-go" && !this.options.providerRunner
+        ? this.taskAllowanceOwner.resolveGoRunnerOptions() : undefined,
     );
     return this.deliberationRunner;
   }

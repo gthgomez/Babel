@@ -3,7 +3,7 @@ import { DeepInfraApiRunner } from '../runners/deepInfraApi.js'
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js'
 import { OllamaApiRunner } from '../runners/ollamaApi.js'
 import { OpenCodeApiRunner } from '../runners/openCodeApi.js'
-import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js'
+import { OpenCodeGoApiRunner, type OpenCodeGoRunnerOptions } from '../runners/openCodeGoApi.js'
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js'
 import type { ProviderMessage, RunnerCallbacks } from '../runners/base.js'
 import {
@@ -62,8 +62,13 @@ const TURN_TIMEOUT_MS = 120_000
 export function resolveChatDeliberationRunner(
   current: ChatProviderRunner | null,
   modelPolicy: ResolvedModelPolicy | undefined,
+  goOptions?: OpenCodeGoRunnerOptions,
 ): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner {
   let runner = current
+
+  if (modelPolicy?.provider === 'opencode-go' && goOptions?.budget &&
+    (!(runner instanceof OpenCodeGoApiRunner) || !runner.usesBudget(goOptions.budget) ||
+      runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
 
   if (!runner) {
     const provider = modelPolicy?.provider
@@ -111,7 +116,7 @@ export function resolveChatDeliberationRunner(
       if (!isChatOpenCodeGoRoute(modelPolicy)) {
         throw new Error('[LIVE_MODEL_POLICY] Chat requires the qualified explicit OpenCode Go route.')
       }
-      runner = new OpenCodeGoApiRunner(modelId!)
+      runner = new OpenCodeGoApiRunner(modelId!, {}, goOptions)
     } else if (provider === 'opencode' && modelId) {
       // OpenCode Zen (e.g. ox-alpha-free): explicit backend-key opt-in.
       try {
@@ -250,8 +255,12 @@ export function resolveChatFallbackRunner(
 export function resolveChatSynthesisRunner(
   current: ChatProviderRunner | null,
   modelPolicy: ResolvedModelPolicy | undefined,
+  goOptions?: OpenCodeGoRunnerOptions,
 ): ChatProviderRunner {
   let runner = current
+  if (modelPolicy?.provider === 'opencode-go' && goOptions?.budget &&
+    (!(runner instanceof OpenCodeGoApiRunner) || !runner.usesBudget(goOptions.budget) ||
+      runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
   if (!runner) {
     const provider = modelPolicy?.provider
     const modelId = modelPolicy?.providerModelId
@@ -285,7 +294,7 @@ export function resolveChatSynthesisRunner(
       if (!isChatOpenCodeGoRoute(modelPolicy)) {
         throw new Error('[LIVE_MODEL_POLICY] Chat requires the qualified explicit OpenCode Go route.')
       }
-      runner = new OpenCodeGoApiRunner(modelId!)
+      runner = new OpenCodeGoApiRunner(modelId!, {}, goOptions)
     } else if (provider === 'opencode' && modelId) {
       runner = new OpenCodeApiRunner(modelId)
     } else if (provider === 'openrouter' && modelId) {
