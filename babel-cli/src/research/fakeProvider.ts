@@ -48,7 +48,9 @@ export interface FakeProviderOptions {
 
 function matches(haystack: string, terms: string[]): boolean {
   const lower = haystack.toLowerCase();
-  return terms.every((term) => lower.includes(term.toLowerCase()));
+  // Search engines (incl. GitHub) match loosely; require any term hit so
+  // multi-hypothesis discovery behaves realistically.
+  return terms.some((term) => lower.includes(term.toLowerCase()));
 }
 
 export class FakeResearchProvider implements RepositoryResearchProvider {
