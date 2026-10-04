@@ -233,10 +233,25 @@ export function loadRunArtifacts(paths: ResearchRunPaths): {
   validateJsonl(paths.scoreBreakdownJsonl, TriageScoreBreakdownSchema);
   validateJsonl(paths.evidenceValidationJsonl, EvidenceValidationEntryV1Schema);
   const applicabilityPath = `${paths.researchDir}/patterns/applicability.jsonl`;
-  const applicability = existsSync(applicabilityPath)
+  const hasApplicabilityArtifact = existsSync(applicabilityPath);
+  const applicability = hasApplicabilityArtifact
     ? validateJsonl(applicabilityPath, ResearchApplicabilityRecordV1Schema)
     : [];
   const patterns = validateJsonl(paths.patternsJsonl, PatternCardV1Schema);
+  const applicabilityByPattern = new Map(applicability.map((record) => [record.pattern_id, record]));
+  for (const card of patterns) {
+    const hasPersistedFinding =
+      card.applicability.local_evidence_refs.length > 0 ||
+      card.applicability.hypothesis.length > 0 ||
+      card.applicability.integration_risks.length > 0 ||
+      card.applicability.target_head_sha !== mission.target.head_sha;
+    if (!hasApplicabilityArtifact && hasPersistedFinding) {
+      throw new Error(`Applicability artifact is missing for populated pattern: ${card.pattern_id}`);
+    }
+    if (hasPersistedFinding && !applicabilityByPattern.has(card.pattern_id)) {
+      throw new Error(`Applicability record is missing for populated pattern: ${card.pattern_id}`);
+    }
+  }
   for (const record of applicability) {
     const card = patterns.find((item) => item.pattern_id === record.pattern_id);
     if (!card) throw new Error(`Applicability record has no persisted pattern: ${record.pattern_id}`);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -217,6 +217,11 @@ test('artifact loader rejects malformed V1 artifacts and JSONL records', async (
   writeFileSync(hunt.paths.evidenceJsonl, evidenceText);
   const applicabilityPath = `${hunt.paths.researchDir}/patterns/applicability.jsonl`;
   const applicabilityText = readFileSync(applicabilityPath, 'utf8');
+  unlinkSync(applicabilityPath);
+  assert.throws(() => loadRunArtifacts(hunt.paths), /Applicability artifact is missing/);
+  writeFileSync(applicabilityPath, '');
+  assert.throws(() => loadRunArtifacts(hunt.paths), /Applicability record is missing/);
+  writeFileSync(applicabilityPath, applicabilityText);
   writeFileSync(applicabilityPath, '{}\n');
   assert.throws(() => loadRunArtifacts(hunt.paths));
   writeFileSync(applicabilityPath, applicabilityText);
