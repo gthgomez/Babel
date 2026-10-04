@@ -9,13 +9,14 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 # LLM Collaboration System (Humans + LLMs)
 
-This folder exists to keep Codex, Claude, and Gemini aligned in this repo.
+This folder contains product prompt assets for Babel model stacks. It is not a
+contributor instruction entrypoint; root `AGENTS.md` owns contributor policy.
 
 ## Why This Exists
 
 - Reduces instruction drift between tools.
 - Makes model switching deterministic.
-- Gives first-time contributors a predictable startup sequence.
+- Describes runtime prompt activation and model-specific layers.
 - Supports web-only LLM sessions that do not have direct filesystem access.
 
 ## File Index
@@ -32,11 +33,10 @@ This folder exists to keep Codex, Claude, and Gemini aligned in this repo.
 - `WEB_UPLOAD_GUIDE.md`: what to upload when using web chat interfaces.
 - `legacy_manifests/`: backups of prior manifest files.
 
-## Manifest Policy
+## Runtime scope
 
-- `CLAUDE.md`: Manually maintained (root + per-project lean files). Never auto-generated.
-- `AGENTS.md` / `GEMINI.md`: Report-only sync via `tools/sync-model-manifests.ps1`. Proposals staged in `tools/reports/` for manual review.
-
-## Non-Negotiable
-
-Always read `PROJECT_CONTEXT.md` before coding or proposing code changes.
+`ACTIVATION_CONTRACT.yaml` governs behavioral activation in assembled Babel
+runtime stacks. Model overlay names describe supported product adapters; they do
+not require root host instruction files. The catalog/resolver owns assembly.
+This tree has no model-manifest synchronization helper or separate contributor
+startup sequence.

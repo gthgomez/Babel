@@ -9,6 +9,7 @@
  * when the architecture only documents a gap.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -234,7 +235,7 @@ test("canonical harness documents exist", () => {
     "docs/architecture/HARNESS_ARCHITECTURE_V1.md",
     "docs/architecture/HARNESS_OVERVIEW.md",
     "docs/adr/ADR-012-canonical-harness-architecture-v1.md",
-    "babel-cli/CLAUDE.md",
+    "AGENTS.md",
     "tools/check-harness-architecture.ps1",
   ];
   for (const rel of required) {
@@ -280,8 +281,7 @@ test("only HARNESS_ARCHITECTURE_V1 claims normative harness authority", () => {
 
 test("startup documents do not point to missing files", () => {
   const pointers = [
-    { file: "CLAUDE.md", mustExist: ["docs/architecture/HARNESS_ARCHITECTURE_V1.md"] },
-    { file: "babel-cli/CLAUDE.md", mustExist: ["docs/architecture/HARNESS_ARCHITECTURE_V1.md"] },
+    { file: "AGENTS.md", mustExist: ["docs/architecture/HARNESS_ARCHITECTURE_V1.md"] },
     { file: "babel-cli/PROJECT_CONTEXT.md", mustExist: ["docs/architecture/HARNESS_ARCHITECTURE_V1.md"] },
   ];
   for (const p of pointers) {
@@ -291,8 +291,27 @@ test("startup documents do not point to missing files", () => {
       assert.ok(existsSync(path.join(REPO_ROOT, target)), `${p.file} → missing ${target}`);
     }
   }
-  // Root CLAUDE may reference babel-cli/CLAUDE.md — that file must exist after this package
-  assert.ok(existsSync(path.join(BABEL_CLI, "CLAUDE.md")));
+  const entries = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+    cwd: REPO_ROOT, encoding: "utf8",
+  }).split("\0").filter((entry) => entry && existsSync(path.join(REPO_ROOT, entry)));
+  const instructions = entries.filter((entry) =>
+    /(^|\/)(AGENTS|CLAUDE|GEMINI|ENGINEERING)\.md$/.test(entry) || /^\.agents\/rules\/.*\.md$/.test(entry),
+  );
+  assert.deepEqual([...new Set(instructions)], ["AGENTS.md"]);
+  const referencePaths = entries.filter((entry) =>
+    entry.endsWith(".md") && (entry.startsWith(".agents/") ||
+      ["AGENTS.md", "CONTRIBUTING.md", "PROJECT_CONTEXT.md", "STRUCTURE.md", "babel-cli/PROJECT_CONTEXT.md"].includes(entry)),
+  );
+  for (const entry of referencePaths) {
+    const text = readFileSync(path.join(REPO_ROOT, entry), "utf8");
+    assert.doesNotMatch(text, /(?:CLAUDE|GEMINI|ENGINEERING)\.md|(?:\.agents\/|\.\.\/)rules\/\d{2}-/,
+      `${entry} points to retired contributor guidance`);
+    for (const match of text.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+      const target = match[1]?.split("#")[0];
+      if (!target || /^[a-z]+:/i.test(target)) continue;
+      assert.ok(existsSync(path.resolve(REPO_ROOT, path.dirname(entry), target)), `${entry} → missing ${target}`);
+    }
+  }
 });
 
 test("architecture source-map paths resolve", () => {

@@ -349,6 +349,32 @@ try {
   Add-AgentCheck -Name 'NO_CROSS_REPO' -Passed ($prAvailable -and (-not [bool]$prView.isCrossRepository)) -Blocker 'cross_repository_pr'
   Add-AgentCheck -Name 'PR_OPEN' -Passed ($prAvailable -and [string]$prView.state -eq 'OPEN') -Blocker 'pr_not_open'
   Add-AgentCheck -Name 'NO_DRAFT' -Passed ($prAvailable -and -not [bool]$prView.isDraft) -Blocker 'pr_is_draft'
+
+  # A draft cannot be merge-ready. Audit callers need that observed blocker
+  # immediately; do not wait for peer CI or manufacture unobserved verdicts.
+  # Keep all metadata/head-binding failures already collected above.
+  if ($AuditOnly -and $authOk -and $prAvailable -and (Test-AgentShaValue $prHead) -and [bool]$prView.isDraft) {
+    $remotePrHead = ''
+    if ($remoteOk -and -not [string]::IsNullOrWhiteSpace($prHeadBranch)) {
+      $remotePrHeadResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('ls-remote', $ExpectedRemote, "refs/heads/$prHeadBranch")
+      if ($remotePrHeadResult.exitCode -eq 0) { $remotePrHead = (($remotePrHeadResult.text -split '\s+')[0]).Trim() }
+    }
+    Add-AgentCheck -Name 'REMOTE_HEAD_MATCH' -Passed ((Test-AgentShaValue $remotePrHead) -and [string]::Equals($remotePrHead, $prHead, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'remote_branch_head_differs_from_pr_head'
+    $result = [ordered]@{
+      schemaVersion = 4; kind = 'babel_agent_pr_gate'; status = 'BLOCKED'; mergeReady = $false
+      repository = $ExpectedRepository; remote = $ExpectedRemote
+      pr = [ordered]@{ number = $PR; url = [string]$prView.url }
+      sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = $null; baseHead = $prBase; currentOriginMain = $originMain }
+      branch = [ordered]@{ local = $localBranch; prHead = $prHeadBranch; prBase = $prBaseBranch }
+      worktree = [ordered]@{ clean = $status.clean; dirtyPaths = @($status.dirtyPaths); isolated = $topology.isolated }
+      reviewPolicy = [ordered]@{ auditOnly = $true }
+      checks = $checks; requiredChecks = @()
+      notEvaluated = @('mergeability', 'ruleset', 'required_checks', 'review_evidence', 'review_threads', 'diff_scope')
+      environment = $envState; blockers = @($blockers | Select-Object -Unique); warnings = @($warnings | Select-Object -Unique)
+    }
+    Write-AgentResult -Result $result -OutputFormat $OutputFormat
+    exit 1
+  }
   Add-AgentCheck -Name 'MERGEABLE' -Passed ($prAvailable -and [string]$prView.mergeable -eq 'MERGEABLE') -Blocker 'pr_not_mergeable'
   # While this job itself is the executing trusted-control-plane check, GitHub
   # reports the merge state as BLOCKED because this very check is pending.
@@ -424,12 +450,14 @@ try {
   $reviewPolicy = Get-AgentReviewPolicyVerdict -RequiredApprovalCount $githubApprovalCount -ObservedApprovalCount $observedApprovalCount -ThreadsRequired ([bool]$rulesetPolicy.required_review_thread_resolution) -ThreadsResolved ([bool]$threads.resolved) -IndependentRequired $independentRequired -IndependentSatisfied $independentReviewSatisfied
   Add-AgentCheck -Name 'GITHUB_APPROVAL_SATISFIED' -Passed ($rulesetPolicy.available -and $reviewPolicy.github_approval_satisfied) -Blocker 'github_required_approval_not_satisfied'
 
+
   $remotePrHead = ''
   if ($remoteOk -and -not [string]::IsNullOrWhiteSpace($prHeadBranch)) {
     $remotePrHeadResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('ls-remote', $ExpectedRemote, "refs/heads/$prHeadBranch")
     if ($remotePrHeadResult.exitCode -eq 0) { $remotePrHead = (($remotePrHeadResult.text -split '\s+')[0]).Trim() }
   }
   Add-AgentCheck -Name 'REMOTE_HEAD_MATCH' -Passed ((Test-AgentShaValue $remotePrHead) -and [string]::Equals($remotePrHead, $prHead, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'remote_branch_head_differs_from_pr_head'
+
 
   if ($ghAvailable -and $authOk -and (Test-AgentShaValue $prHead)) {
     $ciResult = Get-AgentJsonFromGh -Arguments @('api', "repos/$ExpectedRepository/commits/$prHead/check-runs?per_page=100")

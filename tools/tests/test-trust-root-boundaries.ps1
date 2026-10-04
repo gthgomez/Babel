@@ -77,6 +77,16 @@ foreach ($marker in @('babel-controller-ai-reviews-v2', 'github_host_review_bund
   if ($evidenceValidator -notmatch [regex]::Escape($marker)) { throw "Immutable evidence validator is missing marker: $marker" }
 }
 $workflow = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot '.github/workflows/trusted-control-plane.yml')
+$trustedEvents = [regex]::Match($workflow, '(?ms)^  pull_request_target:\r?\n    types: \[(?<events>[^\]]+)\]')
+if (-not $trustedEvents.Success) { throw 'Trusted audit lifecycle events unavailable.' }
+$events = @($trustedEvents.Groups['events'].Value.Split(',') | ForEach-Object { $_.Trim() })
+foreach ($event in @('opened', 'synchronize', 'reopened', 'ready_for_review', 'converted_to_draft')) {
+  if ($events -notcontains $event) { throw "Trusted audit must refresh mutable readiness on $event." }
+}
+# Product work runs for source events; changing readiness alone must not cause
+# a second full product pipeline. The default pull_request lifecycle excludes it.
+$productWorkflow = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot '.github/workflows/typecheck.yml')
+if ($productWorkflow -match 'ready_for_review|converted_to_draft') { throw 'Readiness refresh must not trigger full product CI.' }
 if ($workflow -match [regex]::Escape('materialize-independent-review-receipt.ps1')) { throw 'Advisory certification must not be a workflow prerequisite.' }
 if ($workflow -match 'BABEL_REVIEW_CONTROLLER_(LOGIN|APP_ID)') { throw 'Trusted workflow must not retain App-controller configuration.' }
 if ($workflow -notmatch [regex]::Escape('github.event.repository.owner.id')) { throw 'Trusted workflow is missing owner-controller provenance binding.' }

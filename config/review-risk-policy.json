@@ -1,6 +1,6 @@
 {
   "criticalPrefixes": [
-    ".github/", ".agents/", "config/", "AGENTS.md", "CLAUDE.md", "ENGINEERING.md",
+    ".github/", ".agents/", "config/", "AGENTS.md",
     "docs/AUTONOMY_POLICY.md", "LLM_COLLABORATION_SYSTEM/", "01_Behavioral_OS/",
     "docs/architecture/MERGE_CONTROL", "docs/architecture/TRUST_",
     "scripts/agent-pr-gate", "scripts/agent-pr-merge", "scripts/agent-git-common", "scripts/trusted-merge-gate",
@@ -23,7 +23,7 @@
   ],
   "hostProtectedPrefixes": [
     ".github/workflows/",
-    ".agents/rules/10-independent-review-policy.md",
+    "AGENTS.md",
     "scripts/agent-pr-gate", "scripts/agent-review-", "scripts/trusted-merge-gate",
     "scripts/agent-pr-merge", "scripts/agent-git-common", "scripts/verify-", "scripts/materialize-independent-review",
     "config/review-risk-policy.json",

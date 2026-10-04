@@ -10,13 +10,13 @@ name: code-review
 description: >-
   Defect-first review of what would merge: merge-base plus dirty tree plus
   untracked. Use for /code-review, /cr, "review this diff", "review my
-  changes", or a specified path/range/PR. Does not post to GitHub — use Grok
-  /review --pr for a PENDING review.
+  changes", or a specified path/range/PR. Read-only review; publication follows AGENTS.md.
 ---
 
 # /code-review
 
-Thin router. Collect the target, apply the gate, write findings. Read-only.
+Specialized review procedure; [AGENTS.md](../../../AGENTS.md) alone owns
+contributor policy. Collect the target, apply the finding filter, write findings.
 
 Details: [references/contract.md](references/contract.md). The block below is the fallback if that file is never opened.
 
@@ -42,7 +42,7 @@ If `STATUS: TOO_LARGE` or `ERROR`, print `MESSAGE` and stop.
 
 **Default target** (what the collector already did): on `main`/`master`, `git diff HEAD` ∪ untracked; otherwise `git diff $(git merge-base HEAD <origin/main|origin/master|main|master>)` ∪ untracked. Not staged-only.
 
-**Read-only.** Do not edit source, commit, push, or post a GitHub review. For PENDING GitHub comments use Grok `/review --pr`.
+**Read-only.** Do not edit source, commit, push, or post a GitHub review. Publication is a separate authorized operation.
 
 **Finding gate** — flag only if **all** are true:
 
@@ -80,7 +80,7 @@ Markdown-only paths stay on **bugs** only.
 
 ## 3b. Isolation
 
-If this harness can spawn a **read-only** subagent (`spawn_subagent` with `capability_mode: read-only`, Claude `Task`, or equivalent):
+If this harness can spawn a **read-only** subagent with the current host tools:
 
 1. Spawn **one subagent per selected specialist** (security / control-plane / structure). Bugs stay on the orchestrator.
 2. Description prefix `[reviewer]`. Prompt: prepend the specialist SKILL.md; pass the collector report; **do not modify files**; write findings in the schema to `%TEMP%\babel-cr-<lens>.md`.
@@ -102,4 +102,4 @@ Read full file context around every listed hunk. Cite a line on the new side of 
 
 ## Collision
 
-This family is the daily review. Grok `/review` stays installed for PENDING GitHub reviews (`/review --pr`). Do not replace that command.
+This family is the daily review. Optional host review integrations are separate tools; their availability is not assumed.

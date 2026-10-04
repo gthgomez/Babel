@@ -470,7 +470,7 @@ program
     )
     .option(
       "-p, --project <name>",
-      "Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | godot_td)",
+      "Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | example_game_workspace)",
     )
     .addHelpText(
       "after",

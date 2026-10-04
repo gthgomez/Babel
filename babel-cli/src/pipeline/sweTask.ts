@@ -155,13 +155,7 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       const appBuildGradlePath = join(projectRoot, 'app', 'build.gradle.kts');
       const rootBuildGradleExists = existsSync(rootBuildGradlePath);
       const appBuildGradleExists = existsSync(appBuildGradlePath);
-      const referenceExampleFinanceRoot = join(projectRoot, 'reference-example-finance-forecast');
-      const referenceExampleFinanceExists = existsSync(referenceExampleFinanceRoot);
-      const referenceExampleFinanceLooksLikePython =
-        referenceExampleFinanceExists &&
-        (existsSync(join(referenceExampleFinanceRoot, 'pyproject.toml')) ||
-          existsSync(join(referenceExampleFinanceRoot, 'requirements.txt')) ||
-          existsSync(join(referenceExampleFinanceRoot, 'monte_carlo_ledger')));
+      const hasPythonReferenceInventory = groundingContext.includes('Reference source inventories');
 
       projectRootLines.push(
         `Gradle wrapper state: properties=${wrapperPropertiesExists ? 'present' : 'missing'}, jar=${wrapperJarExists ? 'present' : 'missing'}, gradlew=${gradlewExists ? 'present' : 'missing'}, gradlew.bat=${gradlewBatExists ? 'present' : 'missing'}`,
@@ -173,9 +167,9 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       runtimePreflightLines.push(`Executor Gradle runtime: ${gradleRuntimeStatus.summary}`);
       runtimePreflightLines.push(`Executor Android SDK runtime: ${androidSdkStatus.summary}`);
       runtimePreflightLines.push(`Executor winget runtime: ${wingetRuntimeStatus.summary}`);
-      if (referenceExampleFinanceLooksLikePython) {
+      if (hasPythonReferenceInventory) {
         runtimePreflightLines.push(
-          'Reference source shape: reference-example-finance-forecast is a non-Android Python repo (pyproject/requirements/monte_carlo_ledger present). Do NOT assume Android package paths or Gradle files inside the reference source. Read the actual Python files under reference-example-finance-forecast/README.md, pyproject.toml, monte_carlo_ledger/*.py, and docs/** first.',
+          'Reference source shape: the grounded reference inventory identifies Python source. Do NOT assume Android package paths or Gradle files inside the reference source. Read the exact Python files and metadata paths listed in the reference inventory before planning changes.',
         );
       }
 

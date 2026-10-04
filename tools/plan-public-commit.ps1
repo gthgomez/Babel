@@ -4,8 +4,9 @@
 
 .DESCRIPTION
   Inventories Git-visible paths without reading file contents, classifies each
-  path into a public batch or an explicit exclusion, and reports review-size
-  budgets. It never stages, commits, pushes, or deletes files.
+  path into a public batch or an explicit exclusion, and reports advisory review
+  size thresholds. AGENTS.md owns contributor policy. It never stages, commits,
+  pushes, or deletes files.
 #>
 [CmdletBinding()]
 param(
@@ -50,7 +51,7 @@ function Get-Disposition {
     return 'exclude'
   }
 
-  if ($normalized -match '^\.agents/(rules/05-github-workflow\.md|skills/(branch-stack|bv|catalog-validate-all|ci-dry-run|ci-triage|ratchet-preflight|ship|task-helper)/)') {
+  if ($normalized -match '^(AGENTS\.md$|\.agents/skills/(branch-stack|bv|catalog-validate-all|ci-dry-run|ci-triage|ratchet-preflight|ship|task-helper)/)') {
     return 'ship'
   }
 
@@ -84,7 +85,7 @@ function Get-Batch {
   if ($normalized -match '^babel-cli/src/runners/|^babel-cli/src/execute\.ts$') { return 'provider' }
   if ($normalized -match '^babel-cli/src/(agent|evidence|executor|services|ui|pipeline)/') { return 'executor' }
   if ($normalized -match '^babel-cli/src/(protocol|daemon)/') { return 'protocol' }
-  if ($normalized -match '^\.agents/|^tools/') { return 'workflow' }
+  if ($normalized -match '^AGENTS\.md$|^\.agents/|^tools/') { return 'workflow' }
   if ($normalized -eq '.gitignore') { return 'workflow' }
   if ($normalized -match '^(README\.md|START_HERE\.md|docs/)') { return 'public-docs' }
   return 'investigate'
@@ -151,11 +152,12 @@ $result = [pscustomobject]@{
   schemaVersion = 'public-commit-plan-v1'
   repoRoot = $resolvedRoot
   baseRef = $BaseRef
-  budgets = [pscustomobject]@{ maxFiles = $MaxFiles; maxChangedLines = $MaxChangedLines }
+  # Keep the existing field names for consumers; sizes inform review, not staging.
+  budgets = [pscustomobject]@{ mode = 'advisory'; maxFiles = $MaxFiles; maxChangedLines = $MaxChangedLines }
   safeToStage = (@($records | Where-Object { $_.disposition -in @('investigate', 'vault') }).Count -eq 0)
   records = @($records)
   batches = @($batches)
-  nextAction = if (@($records | Where-Object { $_.disposition -eq 'investigate' }).Count -gt 0) { 'classify investigate paths before staging' } elseif (@($records).Count -eq 0) { 'nothing to ship' } else { 'select exactly one batch and stage explicit paths' }
+  nextAction = if (@($records | Where-Object { $_.disposition -in @('investigate', 'vault') }).Count -gt 0) { 'resolve investigate/vault paths before staging' } elseif (@($records).Count -eq 0) { 'nothing to ship' } else { 'select a coherent ship slice and stage explicit paths' }
 }
 
 $jsonText = $result | ConvertTo-Json -Depth 8
@@ -172,7 +174,7 @@ if ($Json) {
   Write-Output "Base: $BaseRef"
   Write-Output "Safe to stage: $($result.safeToStage)"
   foreach ($batch in $batches) {
-    $budget = if ($batch.withinBudget) { 'within budget' } else { 'SPLIT REQUIRED' }
+    $budget = if ($batch.withinBudget) { 'within review guidance' } else { 'above review guidance; explain coherence and reviewability' }
     Write-Output ("- {0}: {1} files, {2} changed lines ({3})" -f $batch.name, $batch.files, $batch.changedLines, $budget)
   }
   foreach ($record in ($records | Sort-Object disposition, path)) {

@@ -7,6 +7,7 @@ import { registerCoreCommands } from './coreCommands.js';
 // Captured before the ownership extraction. This binds names, ordering, aliases,
 // descriptions, arguments and option flags without machine-specific defaults.
 // Consumer packaging deliberately adds --contributor to setup and doctor.
+// Generic doctor project examples intentionally update its option description.
 type CommandContract = {
   name: string; aliases: string[]; description: string;
   args: Array<{ name: string; required: boolean; variadic: boolean; description: string }>;
@@ -32,7 +33,7 @@ test('core registration preserves the complete existing command contract', () =>
   assert.equal(contract.children.at(-1)?.name, 'research', 'the intentional new group is appended after the existing contract');
   const legacy = { ...contract, children: contract.children.filter(child => child.name !== 'research') };
   const digest = createHash('sha256').update(JSON.stringify(legacy)).digest('hex');
-  assert.equal(digest, '055c2fe63f88d850d8f281f11bed324e1181eb8a8321f990aa5eded79f2d503b');
+  assert.equal(digest, '5a7149653f90ac455439e49e107a93853b16c738aa04bf07674c23ceb0fa6541');
   assert.deepEqual(research[0], {
     name: 'research', aliases: [], description: 'Repo Hunt research missions (discover, inspect, and learn from OSS evidence)',
     args: [], options: [], children: [

@@ -14,7 +14,7 @@ last_verified: 2026-08-03
 
 > **Role**: Deep technical reference — how Babel works internally. Layer model, catalog system, router, pipeline, and layer precedence.
 > For what Babel is and how to invoke it, see [INTEGRATION.md](../../INTEGRATION.md).
-> For AI-session navigation and invariants, see [CLAUDE.md](../../CLAUDE.md).
+> For AI-session navigation and invariants, see [AGENTS.md](../../AGENTS.md).
 > For the **runtime harness**, the normative specification is [HARNESS_ARCHITECTURE_V1.md](./HARNESS_ARCHITECTURE_V1.md).
 > [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) is an explanatory map only.
 

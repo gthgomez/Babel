@@ -213,4 +213,4 @@ Details and normative mode/completion rules: [architecture/HARNESS_ARCHITECTURE_
 - Chat mode never loads pipeline stages (QA or executor) in the governed pipeline sense.
 - The `--use-chat-pipeline` flag exists as a legacy path for `pipeline.ts` but is not the default.
 - Chat **does** share the unified executor kernel (completion + tool mapping) with plan/deep — see [architecture/HARNESS_ARCHITECTURE_V1.md](./architecture/HARNESS_ARCHITECTURE_V1.md) and [architecture/ARCHITECTURE.md](./architecture/ARCHITECTURE.md) §Unified Execution Kernel.
-- Package-local notes: `babel-cli/CLAUDE.md`, `babel-cli/AGENTS.md`, `babel-cli/PROJECT_CONTEXT.md`. Root `CLAUDE.md` remains repo-wide.
+- Implementation map: `babel-cli/PROJECT_CONTEXT.md`. Root `AGENTS.md` owns contributor policy.

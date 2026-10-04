@@ -11,7 +11,7 @@ import {
 test('candidateCollector: parseRepositorySlug handles https, ssh and local urls', () => {
   assert.equal(parseRepositorySlug('https://github.com/gthgomez/Babel.git'), 'gthgomez/Babel');
   assert.equal(parseRepositorySlug('git@github.com:gthgomez/Babel.git'), 'gthgomez/Babel');
-  assert.equal(parseRepositorySlug('https://github.com/gthgomez/Project_Games.git'), 'gthgomez/Project_Games');
+  assert.equal(parseRepositorySlug('https://github.com/fixture-owner/external-repository.git'), 'fixture-owner/external-repository');
   assert.equal(parseRepositorySlug('D:/MockProjects/DragonWake'), 'MockProjects/DragonWake');
 });
 
@@ -28,7 +28,7 @@ test('candidateCollector: determineRiskTier correctly categorizes surfaces', () 
 test('candidateCollector: determineTrustMode separates self from external repos', () => {
   assert.equal(determineTrustMode('gthgomez/Babel'), 'SELF_REVIEW');
   assert.equal(determineTrustMode('gthgomez/babel'), 'SELF_REVIEW');
-  assert.equal(determineTrustMode('gthgomez/Project_Games'), 'EXTERNAL_REPO_REVIEW');
+  assert.equal(determineTrustMode('fixture-owner/external-repository'), 'EXTERNAL_REPO_REVIEW');
   assert.equal(determineTrustMode('owner/dragonwake'), 'EXTERNAL_REPO_REVIEW');
 });
 

@@ -226,6 +226,12 @@ try {
 } finally {
   [Environment]::SetEnvironmentVariable('GIT_NO_REPLACE_OBJECTS', $priorNoReplaceObjects, 'Process')
   if ($null -ne (Get-Variable -Name trustedLauncher -ErrorAction SilentlyContinue)) {
-    Remove-Item -LiteralPath $trustedLauncher -Force -ErrorAction SilentlyContinue
+    # Cleanup cannot replace the already determined merge result or encourage
+    # a duplicate merge. Keep the failure visible without changing permissions.
+    try {
+      Remove-Item -LiteralPath $trustedLauncher -Force -ErrorAction Stop
+    } catch {
+      Write-Warning 'merge_executor_cleanup_failed: temporary trusted launcher could not be removed; merge outcome is unchanged.' -WarningAction Continue
+    }
   }
 }

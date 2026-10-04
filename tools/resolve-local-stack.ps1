@@ -880,13 +880,17 @@ $domainIdMap = @{
     game       = "domain_godot_game_dev"
 }
 
-$projectOverlayIdMap = @{
-    example_saas_backend     = "overlay_example_saas_backend"
-    example_llm_router       = "overlay_example_llm_router"
-    example_web_audit        = "overlay_example_web_audit"
-    example_mobile_suite     = "overlay_example_mobile_suite"
-    example_game_suite       = "overlay_example_game_suite"
-    example_autonomous_agent = "overlay_example_autonomous_agent"
+$projectOverlayIdMap = @{}
+# Match the TypeScript resolver's first catalog route for a project instead of
+# maintaining a separate list of personal or example project names here.
+foreach ($entry in $entries) {
+    if ($entry.Layer -ne "project_overlay" -or [string]::IsNullOrWhiteSpace([string]$entry.Project)) {
+        continue
+    }
+    $projectKey = ([string]$entry.Project).Trim().ToLowerInvariant()
+    if (-not $projectOverlayIdMap.ContainsKey($projectKey)) {
+        $projectOverlayIdMap[$projectKey] = [string]$entry.Id
+    }
 }
 
 $taskOverlayAliasMap = @{
@@ -1076,7 +1080,7 @@ foreach ($entry in $baseEntries) {
 }
 
 if ($Project -ne "global") {
-    $projectOverlayId = $projectOverlayIdMap[$Project]
+    $projectOverlayId = $projectOverlayIdMap[$Project.Trim().ToLowerInvariant()]
     if ($projectOverlayId) {
         $entry = Get-EntryById -Entries $entries -Id $projectOverlayId
         $selectedEntries.Add([PSCustomObject]@{

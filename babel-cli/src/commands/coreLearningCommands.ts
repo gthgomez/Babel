@@ -687,7 +687,7 @@ Examples:
   $ babel evidence open
   $ babel evidence open --run <path>
   $ babel evidence export --run <path>
-  $ babel evidence --project app_test_babel
+  $ babel evidence --project example_mobile_reference
   $ babel evidence --json
 `,
     )

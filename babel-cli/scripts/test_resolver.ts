@@ -431,15 +431,15 @@ entries:
     path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
     load_position: 4
-  - id: overlay_auditguard
+  - id: overlay_example_web_audit
     layer: project_overlay
-    path: 05_Project_Overlays/AuditGuard-Context.md
+    path: 05_Project_Overlays/Example-Web-Audit-Context.md
     status: active
     load_position: 5
-  - id: overlay_app_test_babel
+  - id: overlay_example_mobile_reference
     layer: project_overlay
-    path: 05_Project_Overlays/App-Test-Babel-Context.md
-    project: app_test_babel
+    path: 05_Project_Overlays/Example-Mobile-Reference-Context.md
+    project: example_mobile_reference
     status: active
     load_position: 5
   - id: task_frontend_professionalism
@@ -459,8 +459,8 @@ entries:
       '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
       '02_Domain_Architects/Clean_SWE_Frontend-v6.md',
       '03_Model_Adapters/DeepSeek_Balanced.md',
-      '05_Project_Overlays/AuditGuard-Context.md',
-      '05_Project_Overlays/App-Test-Babel-Context.md',
+      '05_Project_Overlays/Example-Web-Audit-Context.md',
+      '05_Project_Overlays/Example-Mobile-Reference-Context.md',
       '06_Task_Overlays/Frontend-Professionalism-v1.0.md',
       '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
     ]) {
@@ -498,28 +498,28 @@ entries:
         domain_id: 'domain_swe_frontend',
         skill_ids: [],
         model_adapter_id: 'adapter_claude',
-        project_overlay_id: 'overlay_auditguard_frontend_professionalism',
+        project_overlay_id: 'overlay_example_web_audit_frontend_professionalism',
         task_overlay_ids: [],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
       },
     }), root);
 
     assert(
-      hallucinatedCompositeManifest.instruction_stack?.project_overlay_id === 'overlay_auditguard',
-      'hallucinated composite overlay test: expected project overlay to normalize to overlay_auditguard',
+      hallucinatedCompositeManifest.instruction_stack?.project_overlay_id === 'overlay_example_web_audit',
+      'hallucinated composite overlay test: expected project overlay to normalize to overlay_example_web_audit',
     );
     assert(
       hallucinatedCompositeManifest.instruction_stack?.task_overlay_ids.includes('task_frontend_professionalism'),
       'hallucinated composite overlay test: expected frontend professionalism task overlay to be injected',
     );
     assert(
-      hallucinatedCompositeManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_auditguard') &&
+      hallucinatedCompositeManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_example_web_audit') &&
       hallucinatedCompositeManifest.compiled_artifacts?.selected_entry_ids.includes('task_frontend_professionalism'),
       'hallucinated composite overlay test: expected normalized project/task overlays to compile successfully',
     );
 
     const unknownProjectOverlayManifest = resolveInstructionStackManifest(makeTypedManifest({
-      target_project: 'app_test_babel',
+      target_project: 'example_mobile_reference',
       instruction_stack: {
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
@@ -532,11 +532,11 @@ entries:
     }), root);
 
     assert(
-      unknownProjectOverlayManifest.instruction_stack?.project_overlay_id === 'overlay_app_test_babel',
+      unknownProjectOverlayManifest.instruction_stack?.project_overlay_id === 'overlay_example_mobile_reference',
       'unknown project overlay test: expected target project overlay to replace unknown project_overlay_id',
     );
     assert(
-      unknownProjectOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_app_test_babel'),
+      unknownProjectOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_example_mobile_reference'),
       'unknown project overlay test: expected corrected project overlay to compile successfully',
     );
   });
@@ -578,12 +578,12 @@ entries:
     path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
     load_position: 4
-  - id: overlay_auditguard
+  - id: overlay_example_web_audit
     layer: project_overlay
-    path: 05_Project_Overlays/AuditGuard-Context.md
+    path: 05_Project_Overlays/Example-Web-Audit-Context.md
     status: active
     load_position: 5
-    project: AuditGuard
+    project: example_web_audit
   - id: overlay_example_saas_backend
     layer: project_overlay
     path: 05_Project_Overlays/example_saas_backend-Context.md
@@ -613,7 +613,7 @@ entries:
       '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
       '02_Domain_Architects/Clean_SWE_Frontend-v6.md',
       '03_Model_Adapters/DeepSeek_Balanced.md',
-      '05_Project_Overlays/AuditGuard-Context.md',
+      '05_Project_Overlays/Example-Web-Audit-Context.md',
       '05_Project_Overlays/example_saas_backend-Context.md',
       '06_Task_Overlays/Frontend-Professionalism-v1.0.md',
       '06_Task_Overlays/example_saas_backend-Frontend-Professionalism-v1.0.md',
@@ -623,7 +623,7 @@ entries:
     }
 
     const mismatchedProjectTaskOverlayManifest = resolveInstructionStackManifest(makeTypedManifest({
-      target_project: 'AuditGuard',
+      target_project: 'example_web_audit',
       instruction_stack: {
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
@@ -636,16 +636,16 @@ entries:
     }), root);
 
     assert(
-      mismatchedProjectTaskOverlayManifest.instruction_stack?.project_overlay_id === 'overlay_auditguard',
+      mismatchedProjectTaskOverlayManifest.instruction_stack?.project_overlay_id === 'overlay_example_web_audit',
       'project-scoped overlay test: expected missing project overlay to be inferred from target_project',
     );
     assert(
       JSON.stringify(mismatchedProjectTaskOverlayManifest.instruction_stack?.task_overlay_ids ?? []) ===
       JSON.stringify(['task_frontend_professionalism']),
-      'project-scoped overlay test: expected example_saas_backend-specific frontend overlay to fall back to generic frontend overlay for AuditGuard',
+      'project-scoped overlay test: expected example_saas_backend-specific frontend overlay to fall back to generic frontend overlay for example_web_audit',
     );
     assert(
-      mismatchedProjectTaskOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_auditguard') &&
+      mismatchedProjectTaskOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_example_web_audit') &&
       mismatchedProjectTaskOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('task_frontend_professionalism') &&
       !mismatchedProjectTaskOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('task_example_saas_backend_frontend_professionalism'),
       'project-scoped overlay test: expected compiled stack to exclude the mismatched example_saas_backend-specific overlay',
@@ -689,12 +689,12 @@ entries:
     path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
     load_position: 4
-  - id: overlay_auditguard
+  - id: overlay_example_web_audit
     layer: project_overlay
-    path: 05_Project_Overlays/AuditGuard-Context.md
+    path: 05_Project_Overlays/Example-Web-Audit-Context.md
     status: active
     load_position: 5
-    project: AuditGuard
+    project: example_web_audit
   - id: task_frontend_professionalism
     layer: task_overlay
     path: 06_Task_Overlays/Frontend-Professionalism-v1.0.md
@@ -712,7 +712,7 @@ entries:
       '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
       '02_Domain_Architects/Clean_SWE_Frontend-v6.md',
       '03_Model_Adapters/DeepSeek_Balanced.md',
-      '05_Project_Overlays/AuditGuard-Context.md',
+      '05_Project_Overlays/Example-Web-Audit-Context.md',
       '06_Task_Overlays/Frontend-Professionalism-v1.0.md',
       '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
     ]) {
@@ -720,7 +720,7 @@ entries:
     }
 
     const hallucinatedSlugManifest = resolveInstructionStackManifest(makeTypedManifest({
-      target_project: 'AuditGuard',
+      target_project: 'example_web_audit',
       instruction_stack: {
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
@@ -733,7 +733,7 @@ entries:
     }), root);
 
     assert(
-      hallucinatedSlugManifest.instruction_stack?.project_overlay_id === 'overlay_auditguard',
+      hallucinatedSlugManifest.instruction_stack?.project_overlay_id === 'overlay_example_web_audit',
       'hallucinated project slug fallback test: expected target project overlay to be recovered from target_project',
     );
     assert(
@@ -742,7 +742,7 @@ entries:
       'hallucinated project slug fallback test: expected generic frontend professionalism overlay to be injected',
     );
     assert(
-      hallucinatedSlugManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_auditguard') &&
+      hallucinatedSlugManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_example_web_audit') &&
       hallucinatedSlugManifest.compiled_artifacts?.selected_entry_ids.includes('task_frontend_professionalism'),
       'hallucinated project slug fallback test: expected normalized overlays to compile successfully',
     );
@@ -853,9 +853,9 @@ entries:
     load_position: 5
     dependencies: []
     conflicts: []
-  - id: overlay_auditguard
+  - id: overlay_example_web_audit
     layer: project_overlay
-    path: 05_Project_Overlays/AuditGuard-Context.md
+    path: 05_Project_Overlays/Example-Web-Audit-Context.md
     status: active
     load_position: 6
   - id: adapter_claude
@@ -880,7 +880,7 @@ entries:
       '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
       '02_Domain_Architects/Clean_SWE_Frontend-v6.md',
       '02_Skills/UI/A11y-Design-v1.md',
-      '05_Project_Overlays/AuditGuard-Context.md',
+      '05_Project_Overlays/Example-Web-Audit-Context.md',
       '06_Task_Overlays/Frontend-Professionalism-v1.0.md',
       '03_Model_Adapters/DeepSeek_Balanced.md',
       '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
@@ -894,7 +894,7 @@ entries:
         domain_id: 'domain_swe_frontend',
         skill_ids: ['skill_ui'],
         model_adapter_id: 'adapter_claude',
-        project_overlay_id: 'overlay_auditguard',
+        project_overlay_id: 'overlay_example_web_audit',
         task_overlay_ids: ['task_frontend_professionalism'],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
       },
@@ -905,7 +905,7 @@ entries:
         'behavioral_core_v11',
         'domain_swe_frontend',
         'skill_ui',
-        'overlay_auditguard',
+        'overlay_example_web_audit',
         'adapter_claude',
         'task_frontend_professionalism',
         'pipeline_qa_reviewer',

@@ -15,12 +15,10 @@ const source = readFileSync(
   "utf8",
 );
 const paths = [
-  ".agents/rules/10-independent-review-policy.md",
   ".github/workflows/public-pr-metadata.yml",
   ".github/workflows/trusted-control-plane.yml",
   ".github/workflows/typecheck.yml",
   "AGENTS.md",
-  "CLAUDE.md",
   "babel-cli/src/agent/autonomyEnforcement.ts",
   "babel-cli/src/authority/actionRequest.ts",
   "babel-cli/src/authority/authority.test.ts",

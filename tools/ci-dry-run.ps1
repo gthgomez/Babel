@@ -1,6 +1,6 @@
 <# .SYNOPSIS
-Local CI simulation — runs build, typecheck, and tests inside a Linux Docker
-container so results match GitHub Actions before you push.
+Local Linux diagnostic — runs package build, typecheck, and tests in Docker.
+Does not cover all hosted workflows, Windows, or trusted-base merge acceptance.
 
 .DESCRIPTION
 Pulls node:22-alpine (cached after first run), mounts the repo, and executes:
@@ -21,7 +21,7 @@ Do not remove the container after the run (for debugging).
 
 .EXAMPLE
 pwsh tools/ci-dry-run.ps1
-# Full CI simulation: build + test.
+# Linux diagnostic: build + test.
 
 .EXAMPLE
 pwsh tools/ci-dry-run.ps1 -Quick

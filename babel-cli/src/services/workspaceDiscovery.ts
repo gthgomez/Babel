@@ -8,7 +8,7 @@ export interface WorkspaceProject {
   name: string;
   /** Absolute path to the project root */
   root: string;
-  /** Parent grouping directory name (e.g. "Project_SaaS"), if nested under one */
+  /** Parent grouping directory name (e.g. "example_backend_suite"), if nested under one */
   family?: string;
   /** Which markers were found at the project root */
   markers: string[];
@@ -49,14 +49,12 @@ const PROJECT_MARKERS = [
 const CASCADING_CONTEXT_FILES = ['CLAUDE.md', 'AGENTS.md'];
 
 /** Directories under the workspace root that may contain projects */
-const FAMILY_DIRECTORIES = ['Project_SaaS', 'example_mobile_suite', 'example_game_suite'];
+const FAMILY_DIRECTORIES = ['example_backend_suite', 'example_mobile_suite', 'example_game_suite'];
 
 /** Known project name aliases (directory basename → canonical name) */
 const PROJECT_NAME_ALIASES: Record<string, string> = {
   simlife: 'SimLife',
-  godot_td: 'TowerDefenseGodot',
   aetherlyn: 'AetherlynGameDraft',
-  app_test_babel: 'App-test-Babel',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -422,22 +420,22 @@ export class WorkspaceScanner {
 
     // Family-based overlay (multiple projects share a family overlay)
     if (family === 'example_game_suite') {
-      // godot_td gets its own overlay, others use project_games
-      if (projectName.toLowerCase() === 'towerdefensegodot') {
-        return 'overlay_godot_td';
+      // example_game_workspace gets its own overlay, others use example_game_suite
+      if (projectName.toLowerCase() === 'example_game_workspace') {
+        return 'overlay_example_game_workspace';
       }
-      return 'overlay_project_games';
+      return 'overlay_example_game_suite';
     }
-    if (family === 'Project_SaaS') {
+    if (family === 'example_backend_suite') {
       // Check for project-specific overlay pattern
       const specificOverlay = `overlay_${projectName.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
       return specificOverlay;
     }
     if (family === 'example_mobile_suite') {
       if (projectName.toLowerCase() === 'example_finance_forecast') {
-        return 'overlay_monte_carlo_ledger';
+        return 'overlay_example_finance_forecast';
       }
-      return 'overlay_project_android';
+      return 'overlay_example_mobile_suite';
     }
 
     // Direct workspace root children — use project name convention
