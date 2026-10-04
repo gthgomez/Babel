@@ -205,7 +205,7 @@ test('hunt persists report artifacts readable by loadRunArtifacts', async () => 
 
 test('artifact loader rejects malformed V1 artifacts and JSONL records', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-sd-invalid-'));
-  gitInit(root);
+  gitInit(root, { 'recovery.ts': 'journal crash resilience\n' });
   const { hunt } = await huntWithCard(root);
   const missionText = readFileSync(hunt.paths.missionJson, 'utf8');
   writeFileSync(hunt.paths.missionJson, '{}');
@@ -219,6 +219,13 @@ test('artifact loader rejects malformed V1 artifacts and JSONL records', async (
   const applicabilityText = readFileSync(applicabilityPath, 'utf8');
   writeFileSync(applicabilityPath, '{}\n');
   assert.throws(() => loadRunArtifacts(hunt.paths));
+  writeFileSync(applicabilityPath, applicabilityText);
+  const record = JSON.parse(applicabilityText.split('\n')[0]!);
+  const ref = [...record.finding.attach_points, ...record.finding.existing_mechanisms][0];
+  assert.ok(ref, 'fixture must persist a real local source ref');
+  ref.content_hash = 'f'.repeat(64);
+  writeFileSync(applicabilityPath, `${JSON.stringify(record)}\n`);
+  assert.throws(() => loadRunArtifacts(hunt.paths), /content hash mismatch/);
   writeFileSync(applicabilityPath, applicabilityText);
   const proposalsPath = `${hunt.paths.researchDir}/report/candidate-experiments.json`;
   writeFileSync(proposalsPath, '{"mission_id":"m","proposals":[{}]}');

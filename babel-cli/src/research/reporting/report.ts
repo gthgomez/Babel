@@ -8,8 +8,9 @@
  * normal Babel governance.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { appendJsonl, readJsonl, writeJsonArtifact, type ResearchRunPaths } from '../artifacts.js';
 import type { CandidateRecordV1, EvidenceRefV1, PatternCardV1, ResearchMissionV1, SnapshotManifestV1 } from '../contracts.js';
 import { CandidateRecordV1Schema, EvidenceRefV1Schema, EvidenceValidationEntryV1Schema, ExperimentProposalV1Schema, PatternCardV1Schema, ResearchApplicabilityRecordV1Schema, ResearchMissionV1Schema, ResearchReviewV1Schema, SnapshotManifestV1Schema, TriageScoreBreakdownSchema, type ExperimentProposalV1, type ResearchApplicabilityRecordV1, type ResearchReviewV1 } from '../contracts.js';
@@ -185,6 +186,29 @@ function writeJsonlAtomic(filePath: string, records: unknown[]): void {
   renameSync(temporaryPath, filePath);
 }
 
+function verifyLocalEvidenceContent(targetRoot: string, ref: { path: string; start_line: number; end_line: number; content_hash: string }): void {
+  const segments = ref.path.split(/[\\/]/);
+  let currentPath = targetRoot;
+  for (const [index, segment] of segments.entries()) {
+    currentPath = join(currentPath, segment);
+    const stat = lstatSync(currentPath);
+    if (stat.isSymbolicLink() || (index < segments.length - 1 && !stat.isDirectory())) {
+      throw new Error(`Local applicability path is not a regular target-tree path: ${ref.path}`);
+    }
+  }
+  const stat = lstatSync(currentPath);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`Local applicability path is not a regular file: ${ref.path}`);
+  }
+  const lines = readFileSync(currentPath, 'utf8').split('\n');
+  if (ref.end_line > lines.length) throw new Error(`Local applicability line range is missing: ${ref.path}:${ref.start_line}`);
+  const excerpt = lines.slice(ref.start_line - 1, ref.end_line).join('\n');
+  const actualHash = createHash('sha256').update(excerpt).digest('hex');
+  if (actualHash !== ref.content_hash) {
+    throw new Error(`Local applicability content hash mismatch: ${ref.path}:${ref.start_line}`);
+  }
+}
+
 /**
  * Rehydrate validated artifacts from a persisted run (used by
  * `babel research inspect` and future phases). Strict-parses known
@@ -224,6 +248,7 @@ export function loadRunArtifacts(paths: ResearchRunPaths): {
     if (findingRefs.some((ref) => !persistedRefs.has(ref.local_ref_id))) {
       throw new Error(`Applicability evidence refs differ from persisted pattern: ${record.pattern_id}`);
     }
+    for (const ref of findingRefs) verifyLocalEvidenceContent(mission.target.project_root, ref);
   }
   return {
     mission,
