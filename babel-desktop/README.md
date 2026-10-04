@@ -12,7 +12,17 @@ npm --prefix ../babel-cli ci --ignore-scripts
 npm run package:windows -- --node-archive=<absolute-official-node-v24.13.1-win-x64.zip> --electron-archive=<absolute-official-electron-v44.5.1-win32-x64.zip>
 ```
 
-The builder checks pinned Node and Electron archive SHA256 values, freshly extracts Electron instead of trusting an existing dependency folder, requires a committed source candidate, builds and packs the canonical CLI, installs only lockfile-resolved production dependencies without lifecycle scripts, and copies an explicit Desktop allowlist. It produces the portable ZIP, file manifest, BUILD.json, and SHA256SUMS under `artifacts/windows/`. It refuses to overwrite prior outputs. The bundle is unsigned; installer, uninstaller integration, signing, and automatic updates remain unimplemented.
+The builder checks pinned Node and Electron archive SHA256 values, freshly extracts Electron instead of trusting an existing dependency folder, requires a committed source candidate, builds and packs the canonical CLI, installs only lockfile-resolved production dependencies without lifecycle scripts, and copies an explicit Desktop allowlist. It produces the portable ZIP, file manifest, BUILD.json, and SHA256SUMS under `artifacts/windows/`. It refuses to overwrite prior outputs. The portable bundle is unsigned; signing and automatic updates remain unimplemented.
+
+The follow-up `package:windows:setup` command wraps a checksum-verified portable ZIP in a Windows Setup.exe. Setup installs into the current user's `%LOCALAPPDATA%\Programs\Babel Desktop`, adds a Start Menu shortcut and a per-user uninstall entry, and preserves profile data when removed. It requires Windows IExpress at build time, adds no npm dependency, and does not create a signed installer, updater, public release, or downloadable release asset.
+
+From this directory, after committing the source and building the portable ZIP, run:
+
+```powershell
+npm run package:windows:setup -- --zip=artifacts/windows/Babel-Desktop-0.1.1-preview.20261004-win-x64.zip --checksums=artifacts/windows/SHA256SUMS --output=artifacts/windows/Babel-Desktop-0.1.1-preview.20261004-Setup.exe
+```
+
+The Setup builder refuses dirty source trees and existing output names. It writes a `.sha256` sidecar and a `.build.json` source/payload record beside Setup.exe.
 
 Visual shell for `BabelTuiNorthStar.png`, plus an Electron host. The opening screen is still the reference preview. After you connect a project, a task runs the sibling Babel CLI and the center panel shows that run in the same layout: your message, Babel's streaming reply, tool rows, and status.
 
@@ -78,7 +88,7 @@ The desktop does not keep a second session database. Chat continuity is Babel's 
 
 Chat runs forward answer text, thoughts, tool rows, file-change rows, and approval requests that Babel emits. Plan and deep runs show pipeline stage lines in the same tool-row layout. Missing events are not invented. Reference findings and solution cards stay on the sample session. A failed, blocked, or unverified run can expand the structured CLI result.
 
-Allow and Deny answer an approval in this window. Stop ends the run by stopping the CLI process tree. Closing the window does the same. Model-list discovery, a production installer, signing, and auto-update are not in this build.
+Allow and Deny answer an approval in this window. Stop ends the run by stopping the CLI process tree. Closing the window does the same. Model-list discovery, a signed production installer, signing, and auto-update are not in this build.
 
 ## Validation
 
