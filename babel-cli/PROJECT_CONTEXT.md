@@ -10,41 +10,29 @@ This file is the agent-neutral package-local context. The repository-root
 `PROJECT_CONTEXT.md`, `INTEGRATION.md`, and `prompt_catalog.yaml` remain
 authoritative for Babel-wide control-plane rules.
 
-## Startup Sequence
+## Reference scope
 
-Follow the package [AGENTS.md](./AGENTS.md) startup router and the repository-root
-[AGENTS.md](../AGENTS.md). This file supplies package implementation context;
-additional reads depend on the task:
-
-- Read [README.md](./README.md) for command examples or CLI workflows.
-- For Babel control-plane or prompt-stack work, read
-  [INTEGRATION.md](../INTEGRATION.md), the root
-  [PROJECT_CONTEXT.md](../PROJECT_CONTEXT.md), and
-  [prompt_catalog.yaml](../prompt_catalog.yaml).
-- For harness architecture, completion, mode policy, or the other high-risk
-  areas listed there, read the package [CLAUDE.md](./CLAUDE.md).
-
-Consumer repositories may add their own `AGENTS.md`, engineering standards, or
-project context. Those files govern work in that consumer and are not required by
-a clean Babel clone.
+This is a non-authoritative implementation map, not contributor instructions.
+Root [AGENTS.md](../AGENTS.md) owns contributor policy. [README.md](README.md)
+contains CLI command examples; [INTEGRATION.md](../INTEGRATION.md) and the catalog
+explain Babel stack assembly. Consumer-local instructions remain external inputs.
 
 ## Architecture & Invariants
 
 - `src/` is the only source tree for active CLI implementation.
-- `dist/` is generated output. Do not hand-edit `dist/`.
-- `runs/` contains runtime evidence and local outputs. Do not clean it without explicit user approval.
+- `dist/` is generated build output.
+- `runs/` contains runtime evidence and local outputs.
 - `source-provenance.json` tracks approved `.js` source provenance debt.
 - Prompt catalog and runtime contract changes can affect the whole Babel system.
-- CLI commands that push, deploy, create PRs, or mutate remote state must remain gated.
+- Remote-mutating CLI commands use the runtime authority gates.
 
-### Runtime harness (read before large agent/executor edits)
+### Runtime harness references
 
 | Document | Role |
 |----------|------|
 | `../docs/architecture/HARNESS_ARCHITECTURE_V1.md` | **Normative** harness architecture (`harness-v1`) |
 | `../docs/architecture/HARNESS_OVERVIEW.md` | Explanatory map only |
 | `../docs/adr/ADR-012-canonical-harness-architecture-v1.md` | Decision record |
-| `CLAUDE.md` (this package) | Ops pointer, high-risk files, test commands |
 | `../examples/golden-harness/` | Golden + negative fixtures |
 | `../tools/check-harness-architecture.ps1` | Drift checker |
 | `src/executor/architectureConformance.test.ts` | Conformance tests |
@@ -62,7 +50,7 @@ a clean Babel clone.
 | BDNS observation | `diagnostics/bdns/` (subordinate to `docs/architecture/BDNS_ARCHITECTURE_V1.md`) |
 | Executable acceptance (local experimental recording) | `acceptance/` (subordinate to `docs/architecture/EXECUTABLE_ACCEPTANCE_V0.md`; must not change kernel completion in V0) |
 
-**Invariant:** the model proposes; `executorKernel.completion.decide` owns final terminal honesty for execute modes. This file records **implementation context** and MUST NOT redefine target architecture norms.
+`executorKernel.completion.decide` implements terminal honesty for execute modes under harness-v1. The source map is explanatory; harness-v1 owns runtime norms.
 
 For additional source and ownership pointers, consult the explanatory
 [HARNESS_OVERVIEW.md](../docs/architecture/HARNESS_OVERVIEW.md) when relevant.
@@ -83,7 +71,7 @@ Run from `.\babel-cli`.
 - Dist cleanliness: `npm run check:dist`
 - Source provenance: `npm run check:source-provenance`
 
-Prefer targeted tests for small changes; full `npm test` can be broader.
+Verification selection is governed by root AGENTS.md; these are package command references.
 
 ## Risk Zones
 

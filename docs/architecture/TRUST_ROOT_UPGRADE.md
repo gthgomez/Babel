@@ -1,9 +1,22 @@
 <!---
-status: ACTIVE
-last_verified: 2026-09-05
+status: HISTORICAL
+last_verified: 2026-10-03
 -->
 
 # TrustRootUpgradeV1 — safe post-bootstrap trust-root upgrades
+
+## Reference scope and current behavior
+
+This is a historical design reference for the retained signed-ceremony subsystem,
+not current contributor merge policy. Root [AGENTS.md](../../AGENTS.md) owns that
+policy. The current `scripts/agent-pr-gate.ps1` reports custom review evidence as
+advisory; GitHub permissions, live required checks, base/head binding and the
+owner's trust-root authorization govern merge. Current workflows do not read
+`BABEL_REQUIRE_SIGNED_REVIEW`. The signature, custody and binding requirements
+below describe the optional protocol and its historical integration, not an
+additional prerequisite for ordinary contributor review or trust-root promotion.
+The immutable-base execution boundary remains active; candidate code cannot
+supply the evaluator for its own merge.
 
 ## Problem being solved
 
@@ -137,7 +150,7 @@ requires the embedded base/head bindings, and fails closed on zero or
 multiple distinct documents. Authority comes exclusively from signature
 verification against the base-rooted registry.
 
-## Gate behavior (`scripts/agent-pr-gate.ps1`)
+## Historical gate integration
 
 - The protected trust-root path set is: `config/independent-review-keys.json`,
   `config/trusted-supervisor-keys.json`, `scripts/verify-independent-review.mjs`,
@@ -188,10 +201,9 @@ PR, and they are fixed without weakening any check:
    transient AV/index locks on Windows; it is now best-effort and can never
    mask an audit result.
 
-## Review tiers for ordinary (non-trust-root) PRs
+## Historical review tiers
 
-Per `.agents/rules/10-independent-review-policy.md`, ordinary PRs satisfy
-independent review with either:
+The former integration represented ordinary review with either:
 
 - **CERTIFIED** — a signed `independent_review_receipt_v1` bound to a
   supervisor-signed consumed challenge (unchanged verification path); or
@@ -200,10 +212,10 @@ independent review with either:
   `diff_numstat_digest` binding over `git diff --numstat base...head`),
   transported the same way as receipts.
 
-Trust-root changes never accept the AUTONOMOUS tier. The repository owner can
-force the CERTIFIED tier for **all** PRs by setting the repository variable
-`BABEL_REQUIRE_SIGNED_REVIEW=1` (read by the workflow from `vars`), which is
-the supported steady state once signing custody is provisioned to CI.
+Trust-root changes never accept the AUTONOMOUS tier. The former workflow allowed the repository owner to
+select the CERTIFIED tier for all PRs through the repository variable
+`BABEL_REQUIRE_SIGNED_REVIEW=1` (formerly read from `vars`). This is a historical interface, not current
+workflow enforcement or an instruction to change repository settings.
 
 ## One-time migration record (this PR)
 

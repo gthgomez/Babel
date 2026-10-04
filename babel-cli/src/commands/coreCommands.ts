@@ -16,6 +16,7 @@ import { registerCoreGitCommands } from './coreGitCommands.js';
 import { registerCoreBenchmarkCommands } from './coreBenchmarkCommands.js';
 import { registerCoreMemoryPlanCommands } from './coreMemoryPlanCommands.js';
 import { registerCoreExecutionCommands } from './coreExecutionCommands.js';
+import { registerResearchCommands } from './researchCommands.js';
 export { validateRuntimeEnvForCommand } from './coreCommandSupport.js';
 export { buildApprovalProfilePayload } from './coreCommandSupport.js';
 export { resolveBenchmarkProvider } from './coreCommandSupport.js';
@@ -116,6 +117,7 @@ const ADVANCED_HELP_GROUPS: Array<[string, string[]]> = [
     ["files", "verify", "diff", "repo-map", "onboard-project", "create"],
   ],
   ["Extensions", ["plugins", "agents", "skill", "codex"]],
+  ["Research", ["research"]],
   [
     "Internals",
     [
@@ -260,4 +262,5 @@ export function registerCoreCommands(program: Command): void {
   registerCoreBenchmarkCommands(program);
   registerCoreMemoryPlanCommands(program);
   registerCoreExecutionCommands(program);
+  registerResearchCommands(program);
 }

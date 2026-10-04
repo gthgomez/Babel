@@ -20,6 +20,7 @@ $ghExecutable = Join-Path $ghBin $(if ($IsWindows) { 'gh.cmd' } else { 'gh' })
 $priorPath = $env:PATH
 $ghLog = Join-Path $tempRoot 'gh.log'
 $launcherLog = Join-Path $tempRoot 'launcher.log'
+$cleanupDriver = Join-Path $tempRoot 'cleanup-driver.ps1'
 $head = 'a' * 40
 $otherHead = 'b' * 40
 $base = ''
@@ -64,7 +65,8 @@ function Invoke-MergeFixture {
     [string]$SuppliedBase = '',
     [int]$GateExit = 0,
     [int]$MergeExit = 0,
-    [string]$MergeMethod = 'squash'
+    [string]$MergeMethod = 'squash',
+    [switch]$CleanupFailure
   )
   Set-Content -LiteralPath $ghLog -Value '' -Encoding utf8NoBOM
   Set-Content -LiteralPath $launcherLog -Value '' -Encoding utf8NoBOM
@@ -79,11 +81,32 @@ function Invoke-MergeFixture {
     '-ReviewedHeadSha', $head, '-RepoRoot', $repoRoot,
     '-MergeMethod', $MergeMethod)
   if ($SuppliedBase) { $arguments += @('-BaseSha', $SuppliedBase) }
+  if ($CleanupFailure) {
+    # Inject failure only in this test process, without changing production
+    # environment/configuration or adding a cleanup bypass to the executor.
+    $driver = @'
+$ErrorActionPreference = 'Stop'
+$WarningPreference = 'Stop'
+function Remove-Item {
+  [CmdletBinding()]
+  param([string]$LiteralPath, [switch]$Force)
+  $ErrorActionPreference = 'Stop'
+  throw 'Controlled temporary launcher cleanup failure.'
+}
+& $env:BABEL_MERGE_TEST_SCRIPT @args
+exit $LASTEXITCODE
+'@
+    Set-Content -LiteralPath $cleanupDriver -Value $driver -Encoding utf8NoBOM
+    $env:BABEL_MERGE_TEST_SCRIPT = $mergeScript
+    $arguments[3] = $cleanupDriver
+  }
   $output = & $pwshPath @arguments 2>&1
   $exitCode = $LASTEXITCODE
   $text = (@($output) | ForEach-Object { [string]$_ }) -join "`n"
   $json = $null
-  try { $json = $text | ConvertFrom-Json -ErrorAction Stop } catch { }
+  foreach ($line in ($text -split '\r?\n')) {
+    try { $parsed = $line | ConvertFrom-Json -ErrorAction Stop; if ($parsed.status) { $json = $parsed } } catch { }
+  }
   return [pscustomobject]@{
     exitCode = $exitCode; json = $json; text = $text
     gh = (Get-Content -Raw -LiteralPath $ghLog)
@@ -121,6 +144,16 @@ try {
   Assert-MergeTest ($happy.exitCode -eq 0 -and $happy.json.status -eq 'MERGED') "exact-head merge must succeed: $($happy.text); gh: $($happy.gh)"
   Assert-MergeTest ($happy.launcher.Contains("trusted_base=$base")) 'gate launcher must come from trusted base commit'
   Assert-MergeTest ($happy.gh.Contains("pr merge 42 --repo gthgomez/Babel --match-head-commit $head --squash")) 'merge must bind repository and exact head'
+
+  $cleanupAfterSuccess = Invoke-MergeFixture -GateJson $ready -ViewJson $view -CleanupFailure
+  Assert-MergeTest ($cleanupAfterSuccess.exitCode -eq 0 -and $cleanupAfterSuccess.json.status -eq 'MERGED') "cleanup failure must not turn a successful merge into failure: exit=$($cleanupAfterSuccess.exitCode); $($cleanupAfterSuccess.text)"
+  Assert-MergeTest ($cleanupAfterSuccess.text.Contains('merge_executor_cleanup_failed')) 'cleanup failure must remain visible separately'
+  Assert-MergeTest (([regex]::Matches($cleanupAfterSuccess.gh, 'pr merge')).Count -eq 1) 'successful merge with cleanup failure must never retry'
+
+  $cleanupAfterFailure = Invoke-MergeFixture -GateJson $ready -ViewJson $view -MergeExit 1 -CleanupFailure
+  Assert-MergeTest ($cleanupAfterFailure.exitCode -ne 0 -and $cleanupAfterFailure.json.status -eq 'BLOCKED' -and @($cleanupAfterFailure.json.blockers) -contains 'merge_failed') 'cleanup must preserve a genuine merge failure'
+  Assert-MergeTest ($cleanupAfterFailure.text.Contains('merge_executor_cleanup_failed')) 'blocked merge cleanup failure must remain visible separately'
+  Assert-MergeTest (([regex]::Matches($cleanupAfterFailure.gh, 'pr merge')).Count -eq 1) 'failed merge with cleanup failure must never retry'
 
   $derived = Invoke-MergeFixture -GateJson $ready -ViewJson $view
   Assert-MergeTest ($derived.exitCode -eq 0) 'omitted base must derive from live PR'
@@ -179,7 +212,7 @@ try {
   $env:PATH = $priorPath
   foreach ($name in @('BABEL_MERGE_TEST_BASE', 'BABEL_MERGE_TEST_GATE_JSON', 'BABEL_MERGE_TEST_PR_VIEW',
       'BABEL_MERGE_TEST_GATE_EXIT', 'BABEL_MERGE_TEST_MERGE_EXIT', 'BABEL_MERGE_TEST_GH_LOG',
-      'BABEL_MERGE_TEST_LAUNCHER_LOG')) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+      'BABEL_MERGE_TEST_LAUNCHER_LOG', 'BABEL_MERGE_TEST_SCRIPT')) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
   Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 

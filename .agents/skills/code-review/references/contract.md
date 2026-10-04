@@ -12,4 +12,4 @@ Lenses: bugs always; security / control-plane / structure path-routed. Load spec
 
 Gate: meaningful + discrete + introduced here (except control-plane `PRE-EXISTING`) + demonstrable + author would fix.
 
-Isolation: spawn read-only per specialist if the harness can; else inline. No GitHub post — use Grok `/review --pr`.
+Isolation: spawn read-only per specialist if the harness can; else inline. No GitHub post from this read-only procedure; contributor publication policy is in root AGENTS.md.

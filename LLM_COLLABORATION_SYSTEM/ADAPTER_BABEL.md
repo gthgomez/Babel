@@ -25,7 +25,7 @@ All paths are relative to the Babel repo root:
 
 ## Critical Invariants
 
-1. `OLS-v9-Orchestrator.md` is the **only live typed runtime lane** in `babel-cli`. Legacy V8 references are historical compatibility notes only — do not treat them as an active fallback. See root `CLAUDE.md` Critical Invariant #2.
+1. `OLS-v9-Orchestrator.md` is the **only live typed runtime lane** in `babel-cli`. Legacy V8 references are historical compatibility notes only — do not treat them as an active fallback. See the cataloged V9 router contract.
 2. Preserve the typed v9 compilation path: `instruction_stack` plus `resolution_policy` must compile into `compiled_artifacts` and a mirrored root `prompt_manifest` without breaking downstream worker/QA/executor consumers.
 3. Maintain strict separation between **Behavioral OS** (how the model acts), **Domain Architects** (task strategy and invariants), and **Skills** (reusable technical knowledge).
 4. Any changes to `01_Behavioral_OS/OLS-v11-Core-Unified.md` must be treated as **GLOBAL BREAKING CHANGES** as they affect all downstream agents.
@@ -43,4 +43,5 @@ All paths are relative to the Babel repo root:
 
 ## Context Sync
 
-On completion of substantial runs, sync `PROJECT_CONTEXT.md` for drift in system topology or orchestrator behavior.
+`PROJECT_CONTEXT.md` records product topology. Contributor update discipline is
+owned by root `AGENTS.md`; this adapter defines runtime stack behavior.

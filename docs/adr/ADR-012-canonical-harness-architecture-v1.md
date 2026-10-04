@@ -32,7 +32,7 @@ Without a frozen contract, agents and humans re-discover or accidentally weaken 
 3. Keep **Prompt OS** (catalog layers, V9 routing) separate from **harness enforcement** (tools, isolation, completion).
 4. Place **completion authority outside model self-report** (`completionGatePolicy` + `kernel.completion.decide`).
 5. Enforce the freeze with **conformance tests**, a **golden harness example**, and **`tools/check-harness-architecture.ps1`** drift detection.
-6. Resolve package guidance via **`babel-cli/CLAUDE.md`** (concise operational pointer), not a second architecture bible.
+6. Resolve contributor policy via **`AGENTS.md`** and package implementation facts via **`babel-cli/PROJECT_CONTEXT.md`**; neither duplicates harness norms.
 7. Use one validated, hash-linked `episode-events.jsonl` producer per Chat/pipeline run. Pipeline episode persistence is supplemental to the authoritative `EvidenceBundle`, reports degradation, and fails closed on invalid resume/quarantine boundaries. This remains **PARTIAL** until phase instrumentation, offline integration, and full-suite release gates are green.
 
 ## Alternatives considered

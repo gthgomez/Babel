@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 /** Explicit credential sources accepted by the OpenCode Go transport. */
-export type OpenCodeGoCredentialSource = 'opencode-auth-helper' | 'explicit-test'
+export type OpenCodeGoCredentialSource = 'opencode-auth-helper' | 'explicit-test' | 'network-secret'
 
 export interface OpenCodeGoCredentialResolution {
   credential: string
@@ -13,6 +13,7 @@ export interface OpenCodeGoCredentialResolution {
 
 export interface OpenCodeGoCredentialResolverOptions {
   source: OpenCodeGoCredentialSource
+  env?: NodeJS.ProcessEnv
   explicitCredential?: string
   helperPath?: string
   existsSyncImpl?: typeof existsSync
@@ -81,6 +82,14 @@ function firstExistingHelperPath(
 export function resolveOpenCodeGoCredential(
   options: OpenCodeGoCredentialResolverOptions,
 ): OpenCodeGoCredentialResolution {
+  if (options.source === 'network-secret') {
+    const credential = (options.env ?? process.env)['BABEL_OPENCODE_GO_API_KEY']?.trim()
+    if (!credential) throw new OpenCodeGoCredentialError('network-secret', {
+      helperPresent: false, exitCode: 'UNKNOWN', stderrPresent: false, timedOut: false,
+    })
+    return { credential, credentialSource: 'network-secret' }
+  }
+
   if (options.source === 'explicit-test') {
     const credential = options.explicitCredential?.trim()
     if (!credential) {

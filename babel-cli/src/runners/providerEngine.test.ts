@@ -3,7 +3,7 @@ import test from 'node:test'
 import { z } from 'zod'
 
 import { createProviderRunner } from './providerEngine.js'
-import { OpenCodeGoError } from '../claude-babel-astra-lab/openCodeGoApi.js'
+import { OpenCodeGoError } from './openCodeGoApi.js'
 
 const schema = z.object({ ok: z.boolean() })
 
@@ -98,7 +98,7 @@ test('ProviderEngine registers benchmark-only OpenCode Go with exact model selec
   assert.deepEqual(await runner.execute('probe', schema), { ok: true })
   assert.equal(url, 'https://opencode.ai/zen/go/v1/chat/completions')
   assert.equal(body.model, 'mimo-v2.5')
-  assert.match(headers['x-opencode-session'] ?? '', /^run-[0-9a-f-]{36}-[0-9a-f-]{36}$/)
+  assert.match(headers['x-opencode-session'] ?? '', /^opencode-go-[0-9a-f-]{36}$/)
   assert.equal(runner.provider, 'opencode-go')
   assert.equal(runner.modelId, 'mimo-v2.5')
   assert.equal(runner.getLastInvocationMetadata()?.provider, 'opencode-go')
@@ -124,4 +124,52 @@ test('ProviderEngine keeps benchmark providers distinct and exposes no Zen fallb
     () => createProviderRunner({ provider: 'opencode-zen', modelId: 'x-preview-f-free', credentialSource: 'explicit-test', explicitCredential: 'synthetic-zen-key' }),
     /MODEL_UNAVAILABLE/,
   )
+})
+
+test('ProviderEngine uses native standalone Go with shared budget and stable job session', { skip: process.platform === 'win32' ? 'POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows' : false }, async (t) => {
+  const { mkdtemp, rm, readFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { OpenCodeGoBudget } = await import('./openCodeGoBudget.js')
+  const dir = await mkdtemp(join(tmpdir(), 'synthetic-engine-go-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const priorFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = priorFetch })
+  const path = join(dir, 'budget.json')
+  const runner = createProviderRunner({ provider: 'opencode-go', modelId: 'deepseek-v4.1-flash', sampling: { maxTokens: 16 }, budget: new OpenCodeGoBudget({ statePath: path, jobId: 'job', limitUsd: 2 }), credentialSource: 'network-secret', env: { BABEL_OPENCODE_GO_API_KEY: 'synthetic-proxy-placeholder' }, benchmarkRunId: 'stable-job' })
+  globalThis.fetch = (async (url, init) => {
+    assert.equal(url, 'https://opencode.ai/zen/go/v1/chat/completions')
+    assert.equal((init?.headers as Record<string, string>)['x-opencode-session'], 'stable-job')
+    assert.equal(init?.redirect, 'error')
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).attempts, 1)
+    return new Response(`data: ${JSON.stringify({ model: 'deepseek-v4.1-flash', choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+  }) as typeof fetch
+  for await (const _event of runner.executeWithToolsStream([{ role: 'user', content: 'synthetic' }], [])) { /* consume */ }
+  assert.equal(runner.getLastInvocationMetadata()?.observed_model_id, 'deepseek-v4.1-flash')
+  const { getProviderSpec } = await import('./providerRegistry.js')
+  assert.equal(getProviderSpec('opencode-go').authorityConformance, 'untested')
+  assert.throws(() => createProviderRunner({ provider: 'opencode-go', modelId: 'deepseek-v4.1-flash', credentialSource: 'explicit-test', explicitCredential: 'synthetic' }), /budget/i)
+})
+
+
+test('Windows ProviderEngine Go refuses native network dispatch without claiming durability', { skip: process.platform !== 'win32' ? 'Actual Windows unsupported-durability contract' : false }, async (t) => {
+  const { mkdtemp, readdir, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { OpenCodeGoBudget } = await import('./openCodeGoBudget.js')
+  const dir = await mkdtemp(join(tmpdir(), 'synthetic-windows-engine-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const priorFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = priorFetch })
+  let fetches = 0
+  globalThis.fetch = (async () => { fetches++; throw Error('unsupported Windows dispatch reached network') }) as typeof fetch
+  const runner = createProviderRunner({ provider: 'opencode-go', modelId: 'deepseek-v4.1-flash', sampling: { maxTokens: 16 }, budget: new OpenCodeGoBudget({ statePath: join(dir, 'budget.json'), jobId: 'windows-job', limitUsd: 2 }), credentialSource: 'explicit-test', explicitCredential: 'synthetic' })
+  const errors: string[] = []
+  for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'synthetic' }], [])) {
+    if (event.type === 'error') errors.push(event.message)
+  }
+  assert.equal(errors.length, 1)
+  assert.match(errors[0] ?? '', /budget denied.*unsupported on Windows/)
+  assert.equal(fetches, 0)
+  assert.deepEqual(await readdir(dir), [])
 })

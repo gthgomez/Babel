@@ -77,6 +77,10 @@ try {
   $case6 = Resolve-AgentRequiredCheck -Observations @($pending) -RequiredName 'security' @policyArgs
   Assert-AgentGateTest ($case6.status -eq 'BLOCKED') 'pending current-head check must block'
 
+  $newPending = New-AgentGateObservation -Status 'in_progress' -Conclusion '' -RunId '601' -Started '2026-08-28T10:02:00Z' -Completed ''
+  $pendingAfterSuccess = Resolve-AgentRequiredCheck -Observations @($oldSuccess, $newPending) -RequiredName 'security' @policyArgs
+  Assert-AgentGateTest ($pendingAfterSuccess.status -eq 'BLOCKED') 'newer authoritative pending must override older success'
+
   $skipped = New-AgentGateObservation -Conclusion 'skipped' -RunId '700'
   $case7 = Resolve-AgentRequiredCheck -Observations @($skipped) -RequiredName 'security' @policyArgs
   Assert-AgentGateTest ($case7.status -eq 'FAIL') 'only skipped authoritative result must not be green'

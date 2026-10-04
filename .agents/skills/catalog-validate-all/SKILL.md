@@ -11,6 +11,7 @@ description: >
 Run all three post-catalog-change validations together and interpret failures
 into actionable fixes.
 
+Technical reference; root AGENTS.md owns contributor verification policy.
 Contract: invokes `tools/validate-all.ps1`.
 
 ## Triggers
@@ -51,4 +52,4 @@ Contract: invokes `tools/validate-all.ps1`.
 ## Related
 
 - `ratchet-preflight` — pre-push file-size budget check
-- `ci-dry-run` — full local CI simulation
+- `ci-dry-run` — optional Linux Docker diagnostic

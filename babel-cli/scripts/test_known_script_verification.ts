@@ -10,8 +10,8 @@ function assert(condition: unknown, message: string): asserts condition {
 function makeManifest() {
   return OrchestratorManifestSchema.parse({
     orchestrator_version: '9.0',
-    target_project: 'AuditGuard',
-    target_project_path: '/tmp/Project_SaaS\\AuditGuard',
+    target_project: 'example_web_audit',
+    target_project_path: '/tmp/example_backend_suite\\example_web_audit',
     analysis: {
       task_summary: 'known script verification regression',
       task_category: 'Frontend',
@@ -45,7 +45,7 @@ function makeManifest() {
       domain_id: 'domain_swe_frontend',
       skill_ids: [],
       model_adapter_id: 'adapter_codex',
-      project_overlay_id: 'overlay_auditguard',
+      project_overlay_id: 'overlay_example_web_audit',
       task_overlay_ids: ['task_frontend_professionalism'],
       pipeline_stage_ids: ['pipeline_qa_reviewer', 'pipeline_cli_executor'],
     },
@@ -69,7 +69,7 @@ async function main(): Promise<void> {
     plan_version: '1.0',
     plan_type: 'IMPLEMENTATION_PLAN',
     task_summary: 'OBJECTIVE: Verify scripts.',
-    known_facts: ['AuditGuard frontend package.json exposes the available npm scripts.'],
+    known_facts: ['example_web_audit frontend package.json exposes the available npm scripts.'],
     assumptions: [],
     risks: [],
     minimal_action_set: [
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
     plan_version: '1.0',
     plan_type: 'IMPLEMENTATION_PLAN',
     task_summary: 'OBJECTIVE: Verify scripts.',
-    known_facts: ['AuditGuard frontend package.json exposes the available npm scripts.'],
+    known_facts: ['example_web_audit frontend package.json exposes the available npm scripts.'],
     assumptions: [],
     risks: [],
     minimal_action_set: [
@@ -123,7 +123,7 @@ async function main(): Promise<void> {
     plan_version: '1.0',
     plan_type: 'IMPLEMENTATION_PLAN',
     task_summary: 'OBJECTIVE: Verify scripts.',
-    known_facts: ['AuditGuard frontend package.json exposes the available npm scripts.'],
+    known_facts: ['example_web_audit frontend package.json exposes the available npm scripts.'],
     assumptions: [],
     risks: [],
     minimal_action_set: [

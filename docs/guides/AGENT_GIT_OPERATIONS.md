@@ -7,11 +7,13 @@ last_verified: 2026-08-26
 
 # Babel Agent Git Operations
 
-This guide defines the observable Git/GitHub operating environment for agents working in Babel’s public canonical repository (`gthgomez/Babel`). It is operational guidance; it does not change the `harness-v1` contract.
+This non-authoritative technical reference describes Git/GitHub helper inputs
+and outputs. [AGENTS.md](../../AGENTS.md) alone owns contributor operating policy;
+examples here do not grant authorization. The scripts own executable behavior.
 
-## Start with the readiness gate
+## Readiness diagnostics
 
-Run this before modifying or staging work:
+Readiness diagnostic:
 
 ```powershell
 .\scripts\agent-preflight.ps1
@@ -19,13 +21,19 @@ Run this before modifying or staging work:
 
 The command emits JSON with the repository, branch, local and base SHAs, Git and GitHub CLI paths, authentication result, credential-provider result, worktree state, and named readiness checks. It exits nonzero when a required check is blocked. Use `-AllowDirtyWorktree` only for inspection when an existing dirty tree is intentional; that mode does not make the tree mutation- or push-ready.
 
+This diagnostic includes a fetch and GitHub reads. AGENTS.md determines when its
+evidence needs refreshing; invoking another wrapper or staging unchanged inputs
+does not itself require repeating it. Its readiness verdict describes delivery
+state, not authority to continue local engineering.
+
 For a compact diagnostic snapshot that does not fetch or call GitHub:
 
 ```powershell
 .\scripts\agent-git-status.ps1
 ```
 
-The standard executable environment is the Git installation under `$env:ProgramFiles\Git\cmd\git.exe` and the `gh` executable resolved from PATH. The scripts set `GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`, and `GH_PROMPT_DISABLED=1` in their process so credential or editor prompts become explicit failures.
+Some helpers default to Windows Git under `$env:ProgramFiles\Git\cmd\git.exe`;
+use explicit `-GitPath` and `-GhPath` for another host. The scripts set `GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`, and `GH_PROMPT_DISABLED=1` in their process so credential or editor prompts become explicit failures.
 
 ## Repository-local GitHub credentials
 
@@ -68,21 +76,6 @@ Remove a worktree only after confirming its exact path and branch ownership:
 & (Join-Path $env:ProgramFiles 'Git\cmd\git.exe') worktree remove '<worktree-path>'
 ```
 
-## Git and GitHub ownership
-
-Use `git` for repository state and `gh` for GitHub state:
-
-| Concern | Command family |
-|---|---|
-| status, fetch, diff, worktrees, add, commit, push | `git` |
-| auth, repository metadata, PRs, reviews, checks, runs, merge | `gh` |
-
-The normal lifecycle is:
-
-`preflight → fetch → isolated worktree → modify → verify → review diff → commit → clean status → push → verify remote SHA → create/update PR → inspect exact-SHA CI → revalidate → merge → fetch → verify main → post-merge checks`
-
-Do not infer that green CI belongs to the current work. Bind review, the remote branch, the PR, and the check runs to the same commit SHA immediately before a merge.
-
 ## PR merge gate
 
 After verification, run:
@@ -97,13 +90,6 @@ and optional review diagnostics. The gate reads policy from GitHub; it does not
 grant merge permission. The actual merging account must have permission and
 current task authorization. Use an expected-head merge; never use admin bypass.
 
-## Review sources
-
-Reviewers can run in any harness. Publish actual findings in a PR comment or
-native GitHub review and identify the reviewed SHA. Custom V3 receipts and Babel
-supervisor capability are optional advisory tooling. Unknown provider or process
-attribution remains unknown. Missing receipts are not false approvals.
-
 ## Troubleshooting hangs
 
-If `gh auth status` succeeds but `git push` hangs, Git may be invoking an inherited credential helper such as Git Credential Manager before the GitHub CLI helper. Inspect the repo-local helper state and apply the repository-local reset above. Keep the global helper intact for other repositories. With noninteractive defaults enabled, an unresolved credential or editor problem should fail with a command result rather than waiting for input.
+If `gh auth status` succeeds but `git push` hangs, Git may be invoking an inherited credential helper such as Git Credential Manager before the GitHub CLI helper. Inspect the repo-local helper state; any configuration change follows AGENTS.md authorization. Keep the global helper intact for other repositories. With noninteractive defaults enabled, an unresolved credential or editor problem should fail with a command result rather than waiting for input.

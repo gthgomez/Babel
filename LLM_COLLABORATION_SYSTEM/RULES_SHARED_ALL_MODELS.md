@@ -9,7 +9,10 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 # Shared Rules For All Models (Codex, Claude, Gemini)
 
-Scope: Entire `Babel` repository.
+Scope: compatibility prompt asset when selected in a Babel runtime stack.
+This is not a repository contributor entrypoint; root `AGENTS.md` owns contributor
+policy. Runtime selection/activation remains owned by the catalog and activation
+contract below.
 
 ## v7 Layered Control Plane (Authoritative Sources)
 
@@ -22,7 +25,7 @@ Authoritative layered sources:
 Load decision policy lives in:
 - `ACTIVATION_CONTRACT.yaml`
 
-## Startup Sequence (Mandatory)
+## Runtime stack initialization (when selected)
 
 1. Read `PROJECT_CONTEXT.md`.
 2. Apply this file (`RULES_SHARED_ALL_MODELS.md`).

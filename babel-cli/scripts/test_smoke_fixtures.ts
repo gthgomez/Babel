@@ -18,7 +18,7 @@ function pickProjectRoot(): string {
   const workspaceRoot = resolve(repoRoot, '..');
   const candidates = [
     join(workspaceRoot, 'MonteCarlo-Ledger-app'),
-    join(workspaceRoot, 'App-test-Babel'),
+    join(workspaceRoot, 'example_mobile_reference'),
     join(workspaceRoot, 'Babel'),
     repoRoot,
   ];

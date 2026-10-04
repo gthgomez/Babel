@@ -417,18 +417,15 @@ Treat as non-executable description; do not keep them as the plan:
 
 ---
 
-## Schema maintenance (dual copies)
+## Schema maintenance
 
-Identical `handoff-schema.md` lives under:
-
-- `~/.claude/skills/handoff/references/handoff-schema.md`  
-- `~/.claude/skills/handoff-resume/references/handoff-schema.md`  
-
-When editing the schema, **update both files in the same change**. Hashes must match. Codex/Grok skill dirs are junctions to the `~/.claude` trees — do not write a second physical copy to junction targets.
-
-Project-local skill dirs must **not** ship a legacy auto-resume contract. Prefer a junction to the user-global skill, or a full current copy.
-
-A contract validator and fixture suite live under `~/.claude/skills/handoff/tests/`. These are maintenance/conformance tooling; they are not a runtime dependency of the host-neutral handoff protocol.
+This repository ships the schema at `.agents/skills/handoff-resume/references/`.
+It does not ship a sibling producer skill, require user-global copies, or assume
+host skill directories are junctions. An explicitly configured external producer
+may maintain a compatible copy and its own conformance tooling; its installation
+and changes are outside ordinary Babel contributor work. Root AGENTS.md owns
+repository scope and authorization. The protocol below is a specialized data and
+resume contract, not an additional contributor-policy entrypoint.
 
 **Portability note.** Behavior protocol: host-neutral (any agent following this schema can interoperate). Installation and skill-discovery: host-adapter specific (Claude Code, Codex, Grok, Cursor each have their own loader). Do not conflate protocol conformance with installation completeness.
 
@@ -437,7 +434,7 @@ A contract validator and fixture suite live under `~/.claude/skills/handoff/test
 ## Out of scope
 
 - Durable long-term memory → `memory-extraction` / host auto-memory  
-- Full PR/release workflow → github-workflow / ship skills  
+- Full PR/release workflow → root AGENTS.md
 - Typed/executable verification manifests (v2, if designed deliberately)  
 - Markdown → `.repro.json` → execute  
 - Auto-resume at every session start  
