@@ -15,7 +15,7 @@ disable-model-invocation: true
 
 # code-review-control
 
-Control-plane lens. The `/code-review` router reads this file only when the collector lists `control-plane` **and** `CATALOG_PRESENT: true`. Do not run this lens because the folder is named Babel-private.
+Control-plane lens. The `/code-review` router reads this file only when the collector lists `control-plane` **and** `CATALOG_PRESENT: true`. Do not select this lens from the checkout folder name.
 
 Use the parent router gate and P0–P3 schema. Read-only. Do not edit source, commit, push, or post. If spawned, stay read-only and write only `%TEMP%\babel-cr-control.md`.
 
