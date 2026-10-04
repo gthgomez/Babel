@@ -258,10 +258,23 @@ export function loadRunArtifacts(paths: ResearchRunPaths): {
     if (card.applicability.target_head_sha !== record.finding.head_sha) {
       throw new Error(`Applicability HEAD binding differs from persisted pattern: ${record.pattern_id}`);
     }
-    const persistedRefs = new Set(card.applicability.local_evidence_refs);
     const findingRefs = [...record.finding.attach_points, ...record.finding.existing_mechanisms];
-    if (findingRefs.some((ref) => !persistedRefs.has(ref.local_ref_id))) {
-      throw new Error(`Applicability evidence refs differ from persisted pattern: ${record.pattern_id}`);
+    const findingRefIds = findingRefs.map((ref) => ref.local_ref_id);
+    const persistedRefIds = card.applicability.local_evidence_refs;
+    if (
+      persistedRefIds.length !== findingRefIds.length ||
+      persistedRefIds.some((refId, index) => refId !== findingRefIds[index])
+    ) {
+      throw new Error(`Applicability evidence refs differ from finding: ${record.pattern_id}`);
+    }
+    if (card.applicability.hypothesis !== record.finding.smallest_experiment) {
+      throw new Error(`Applicability hypothesis differs from finding: ${record.pattern_id}`);
+    }
+    if (
+      card.applicability.integration_risks.length !== record.finding.conflicts.length ||
+      card.applicability.integration_risks.some((risk, index) => risk !== record.finding.conflicts[index])
+    ) {
+      throw new Error(`Applicability integration risks differ from finding: ${record.pattern_id}`);
     }
     for (const ref of findingRefs) verifyLocalEvidenceContent(mission.target.project_root, ref);
   }

@@ -232,6 +232,33 @@ test('artifact loader rejects malformed V1 artifacts and JSONL records', async (
   writeFileSync(applicabilityPath, `${JSON.stringify(record)}\n`);
   assert.throws(() => loadRunArtifacts(hunt.paths), /content hash mismatch/);
   writeFileSync(applicabilityPath, applicabilityText);
+  const patternsPath = hunt.paths.patternsJsonl;
+  const patternsText = readFileSync(patternsPath, 'utf8');
+  const cards = patternsText.trimEnd().split('\n').map((line) => JSON.parse(line));
+  const card = cards.find((item) => item.pattern_id === record.pattern_id);
+  assert.ok(card, 'fixture must persist the corresponding pattern card');
+  const originalApplicability = JSON.parse(JSON.stringify(card.applicability));
+  const resetCardApplicability = () => {
+    card.applicability = {
+      ...originalApplicability,
+      local_evidence_refs: [...originalApplicability.local_evidence_refs],
+      integration_risks: [...originalApplicability.integration_risks],
+    };
+  };
+  card.applicability.local_evidence_refs.push('loc_000000000000');
+  writeFileSync(patternsPath, `${cards.map((item) => JSON.stringify(item)).join('\n')}\n`);
+  assert.throws(() => loadRunArtifacts(hunt.paths), /Applicability evidence refs differ/);
+  writeFileSync(patternsPath, patternsText);
+  resetCardApplicability();
+  card.applicability.hypothesis = `${card.applicability.hypothesis} altered`;
+  writeFileSync(patternsPath, `${cards.map((item) => JSON.stringify(item)).join('\n')}\n`);
+  assert.throws(() => loadRunArtifacts(hunt.paths), /Applicability hypothesis differs/);
+  writeFileSync(patternsPath, patternsText);
+  resetCardApplicability();
+  card.applicability.integration_risks.push('altered risk');
+  writeFileSync(patternsPath, `${cards.map((item) => JSON.stringify(item)).join('\n')}\n`);
+  assert.throws(() => loadRunArtifacts(hunt.paths), /Applicability integration risks differ/);
+  writeFileSync(patternsPath, patternsText);
   const proposalsPath = `${hunt.paths.researchDir}/report/candidate-experiments.json`;
   writeFileSync(proposalsPath, '{"mission_id":"m","proposals":[{}]}');
   assert.throws(() => loadRunArtifacts(hunt.paths));
