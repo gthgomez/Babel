@@ -49,7 +49,7 @@
       "anchor_files": ["PROJECT_CONTEXT.md", "build.gradle.kts", "settings.gradle.kts"]
     },
     {
-      "id": "monte_carlo_ledger",
+      "id": "example_finance_forecast",
       "path": "example_mobile_suite\\example_finance_forecast",
       "display_name": "Monte Carlo Ledger",
       "slug": "example_finance_forecast",

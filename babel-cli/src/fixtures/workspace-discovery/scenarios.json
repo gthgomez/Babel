@@ -2,7 +2,7 @@
   "schema_version": 1,
   "fixture_type": "babel_workspace_discovery_scenarios",
   "smoke_scenario_ids": ["disc_plan_named_features", "disc_project_identity"],
-  "smoke_repo_ids": ["relic_run", "simlife", "exact_upload_fixer", "monte_carlo_ledger"],
+  "smoke_repo_ids": ["relic_run", "simlife", "exact_upload_fixer", "example_finance_forecast"],
   "scenarios": [
     {
       "id": "disc_plan_named_features",

@@ -48,7 +48,7 @@ Determine the target repository and trust separation:
 - **`SELF_REVIEW`**: Target repository is `gthgomez/Babel`.
   - Invariant: The review harness source commit MUST be an ancestor of the candidate's base branch (`pr.baseRefOid`).
   - Candidate code cannot alter reviewer prompt, tools, or merge gates.
-- **`EXTERNAL_REPO_REVIEW`**: Target repository is outside Babel (e.g. `DragonWake`, `tools/gamedev`, `Project_Games`).
+- **`EXTERNAL_REPO_REVIEW`**: Target repository is outside Babel.
   - Invariant: Babel evaluator code remains separate from the target candidate; record the trusted installation's source revision and version digest. Publishing requires a clean trusted installation.
   - Target candidate changes cannot modify Babel evaluator code. Ancestry check against target base history is bypassed because Babel is external to the target repo.
 

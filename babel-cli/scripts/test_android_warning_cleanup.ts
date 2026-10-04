@@ -11,7 +11,7 @@ function assert(condition: unknown, message: string): asserts condition {
 function buildManifest() {
   return OrchestratorManifestSchema.parse({
     orchestrator_version: '9.0',
-    target_project: 'app_test_babel',
+    target_project: 'example_mobile_reference',
     analysis: {
       task_summary: 'warning cleanup regression',
       task_category: 'Mobile',
@@ -48,7 +48,7 @@ function buildManifest() {
       domain_id: 'domain_android_kotlin',
       skill_ids: ['skill_android_app_bundle', 'skill_android_release_build'],
       model_adapter_id: 'adapter_codex',
-      project_overlay_id: 'overlay_app_test_babel',
+      project_overlay_id: 'overlay_example_mobile_reference',
       task_overlay_ids: [],
       pipeline_stage_ids: ['pipeline_qa_reviewer', 'pipeline_cli_executor'],
     },
@@ -69,12 +69,12 @@ function buildManifest() {
     },
     handoff_payload: {
       user_request: [
-        'Warning cleanup only for the MonteCarlo-Ledger Android port in /tmp/App-test-Babel.',
+        'Warning cleanup only for the MonteCarlo-Ledger Android port in /tmp/example_mobile_reference.',
         'Fix these compiler warnings without changing behavior, using the exact files and exact paths:',
-        '/tmp/App-test-Babel\\app\\src\\main\\java\\com\\example\\app\\MainActivity.kt,',
-        '/tmp/App-test-Babel\\app\\src\\main\\java\\com\\example\\app\\data\\AppDatabase.kt,',
-        '/tmp/App-test-Babel\\app\\src\\main\\java\\com\\example\\app\\domain\\DomainRules.kt,',
-        'and /tmp/App-test-Babel\\app\\src\\main\\java\\com\\example\\app\\ui\\AddTransactionScreen.kt.',
+        '/tmp/example_mobile_reference\\app\\src\\main\\java\\com\\example\\app\\MainActivity.kt,',
+        '/tmp/example_mobile_reference\\app\\src\\main\\java\\com\\example\\app\\data\\AppDatabase.kt,',
+        '/tmp/example_mobile_reference\\app\\src\\main\\java\\com\\example\\app\\domain\\DomainRules.kt,',
+        'and /tmp/example_mobile_reference\\app\\src\\main\\java\\com\\example\\app\\ui\\AddTransactionScreen.kt.',
       ].join(' '),
       system_directive: 'Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order.',
     },

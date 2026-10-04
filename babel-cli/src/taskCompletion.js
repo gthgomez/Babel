@@ -255,15 +255,15 @@ function buildReferenceInventorySnippets(projectRoot, referenceRoots) {
       );
     }
     const sourceModuleFiles = listGroundedFiles(
-      join(referenceRoot, 'monte_carlo_ledger'),
+      referenceRoot,
       /\.py$/i,
     );
     if (sourceModuleFiles.length > 0) {
       const sourceModuleNames = unique(
-        sourceModuleFiles.map((filePath) => basename(filePath)),
+        sourceModuleFiles.map((filePath) => pathToPosix(referenceRoot, filePath)),
       ).sort((a, b) => a.localeCompare(b));
       snippets.push(
-        `// ${pathToPosix(projectRoot, join(referenceRoot, 'monte_carlo_ledger'))} closed source module inventory (exact basenames)\n// ${sourceModuleNames.join(', ')}\n// Do not invent models.py or engine.py; they are not present in this inventory.`,
+        `// ${pathToPosix(projectRoot, referenceRoot)} closed source module inventory (exact relative paths)\n// ${sourceModuleNames.join(', ')}\n// Do not invent models.py or engine.py; they are not present in this inventory.`,
       );
     }
   }
@@ -368,7 +368,7 @@ export function getAndroidUiAuditHardening(taskContract) {
     domainId: 'domain_android_kotlin',
     requiredSkillIds: unique(['skill_jetpack_compose', 'skill_android_ui_audit_review']),
     requiredTaskOverlayIds: unique(['task_overlay_ai_android_development']),
-    projectOverlayId: 'overlay_project_android',
+    projectOverlayId: 'overlay_example_mobile_suite',
   };
 }
 export function shouldPreloadGroundedEvidence(taskContract) {
@@ -531,6 +531,7 @@ export function formatGroundingContext(grounding) {
   if (grounding.referenceInventorySnippets?.length > 0) {
     lines.push(
       '',
+      'Reference source inventories:',
       'Reference source file_read allowlist (closed; use only these exact paths instead of guessing module names):',
       grounding.referenceInventorySnippets.join('\n---\n'),
     );

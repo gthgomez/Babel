@@ -20,7 +20,7 @@ async function main(): Promise<void> {
 
   try {
     mkdirSync(join(projectRoot, 'app', 'src', 'main', 'java', 'com', 'example', 'app'), { recursive: true });
-    mkdirSync(join(projectRoot, 'reference-montecarlo-ledger', 'monte_carlo_ledger'), { recursive: true });
+    mkdirSync(join(projectRoot, 'reference-montecarlo-ledger', 'reference_package_ledger'), { recursive: true });
 
     writeFileSync(
       join(projectRoot, 'app', 'src', 'main', 'java', 'com', 'example', 'app', 'MainActivity.kt'),
@@ -38,15 +38,21 @@ async function main(): Promise<void> {
       'utf-8',
     );
     writeFileSync(
-      join(projectRoot, 'reference-montecarlo-ledger', 'monte_carlo_ledger', 'forecasting.py'),
+      join(projectRoot, 'reference-montecarlo-ledger', 'reference_package_ledger', 'forecasting.py'),
       'def project_cashflow():\n    return []\n',
       'utf-8',
     );
     writeFileSync(
-      join(projectRoot, 'reference-montecarlo-ledger', 'monte_carlo_ledger', 'risk.py'),
+      join(projectRoot, 'reference-montecarlo-ledger', 'reference_package_ledger', 'risk.py'),
       'def calculate_risk():\n    return {}\n',
       'utf-8',
     );
+    writeFileSync(
+      join(projectRoot, 'reference-montecarlo-ledger', 'root_utils.py'),
+      'def normalize_value(value):\n    return value\n',
+      'utf-8',
+    );
+    writeFileSync(join(tempRoot, 'outside_reference.py'), 'raise RuntimeError("out of scope")\n', 'utf-8');
 
     const taskContract = classifyTaskContract(
       'Inside this Android project, port the source app from ./reference-montecarlo-ledger into a production-ready Android mobile app.',
@@ -65,17 +71,28 @@ async function main(): Promise<void> {
       'expected grounded files to include reference pyproject.toml',
     );
     assert(
-      grounding.files.some((filePath: string) => filePath.endsWith('reference-montecarlo-ledger\\monte_carlo_ledger\\forecasting.py')),
+      grounding.files.some((filePath: string) => filePath.endsWith('reference-montecarlo-ledger\\reference_package_ledger\\forecasting.py')),
       'expected grounded files to include reference forecasting.py',
     );
     assert(
-      grounding.files.some((filePath: string) => filePath.endsWith('reference-montecarlo-ledger\\monte_carlo_ledger\\risk.py')),
+      grounding.files.some((filePath: string) => filePath.endsWith('reference-montecarlo-ledger\\reference_package_ledger\\risk.py')),
       'expected grounded files to include reference risk.py',
     );
     assert(
-      groundingContext.includes('reference-montecarlo-ledger/monte_carlo_ledger/forecasting.py') &&
-      groundingContext.includes('Reference source inventories (use these real filenames instead of guessing module names):'),
+      groundingContext.includes('reference-montecarlo-ledger/reference_package_ledger/forecasting.py') &&
+      groundingContext.includes('Reference source inventories:') &&
+      groundingContext.includes('closed source module inventory'),
       'expected grounding context to surface the authoritative Python source inventory',
+    );
+    assert(
+      groundingContext.includes('root_utils.py') &&
+      groundingContext.includes('reference_package_ledger/risk.py'),
+      'expected the module inventory to include actual root and nested Python paths',
+    );
+    assert(
+      grounding.files.every((filePath: string) => filePath.startsWith(projectRoot)) &&
+      !groundingContext.includes('outside_reference.py'),
+      'expected reference inventory to remain inside the explicitly grounded project',
     );
 
     console.log('reference grounding regression test passed');

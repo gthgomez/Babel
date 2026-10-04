@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "81f4f106f31bebe0ccf68d71f7ffbb54ecf69c8d0e25544fcf7a07cef14a6805",
+  "policy_bundle_id": "763bb96944ed85db49274e2703b058eef7c9da6c83b492c12299234667730ed3",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/trusted-control-plane.yml": "276e2fe0ef7509e8751234ccbf0abe9e135b67c2436337b37ab393fe50e5cb0c",
@@ -56,7 +56,7 @@
     "babel-cli/src/services/babelReviewQueue.ts": "a7baa71a88ee1ec41c5456650db57131a6fa122a5c0637b5ef57e5c0312bae91",
     "babel-cli/src/services/babelReviewSnapshot.test.ts": "b641404614462d406eecb131aa58fc8d2cc354310b5557807219d9c38473ea6b",
     "babel-cli/src/services/babelReviewSnapshot.ts": "c992ece406ffa78efc3f911c5675d8a944ff1f0393966afdd3b5c3d9be09272d",
-    "babel-cli/src/services/candidateCollector.test.ts": "6189fbe750b630dacd533af6a1e4da6556b462a49f7d26e726409eb7bcc5952e",
+    "babel-cli/src/services/candidateCollector.test.ts": "93fe41c41254f52142659527d34906b2a4ea7a1f08d00cb9c29877f7ac2b02b6",
     "babel-cli/src/services/candidateCollector.ts": "e4080c000ab7f9e9cdd055e8621f1f3f9fda76184cab357da38e38ab2844820c",
     "babel-cli/src/services/candidateCollectorCli.ts": "c5cf455da9c4d87d03204fc094d8c4581b76afcca89573252fbd0d99570c3024",
     "babel-cli/src/services/codexHarnessReview.test.ts": "8532bd715364ed9c0f4b789ea140cd5dd7dfc863522a6bc4b000d9bfa4daef50",

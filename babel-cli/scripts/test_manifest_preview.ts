@@ -36,7 +36,7 @@ const babelRoot = resolve(scriptDir, '..', '..');
 const resolverScript = join(babelRoot, 'tools', 'resolve-local-stack.ps1');
 const previewRoot = join(babelRoot, 'examples', 'manifest-previews');
 
-const hasPrivateBackendProject = existsSync(join(babelRoot, 'Project_SaaS', 'example_saas_backend'));
+const hasPrivateBackendProject = existsSync(join(babelRoot, 'example_backend_suite', 'example_saas_backend'));
 const hasPrivateMobileProject = existsSync(join(babelRoot, 'example_mobile_suite'));
 
 const cases: PreviewCase[] = [
