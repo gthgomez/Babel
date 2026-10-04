@@ -6,6 +6,7 @@
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
+import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
 import type { BlockedReport } from '../schemas/agentContracts.js';
 import {
   isSweChatProfileEnabled,
@@ -27,7 +28,7 @@ import {
 import { formatBudgetExceededAnswer } from './budgetKillPolicy.js';
 import { isConfirmedMutation, type MutationEffectStatus } from './mutationTools.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
-import { isOfflineChatMode } from './chatModelPolicy.js';
+import { isChatOpenCodeGoRoute, isOfflineChatMode } from './chatModelPolicy.js';
 import {
   LIVE_OPENROUTER_BACKEND_KEY,
   LIVE_OPENROUTER_MODEL_ID,
@@ -329,7 +330,19 @@ export function resolveOrCreateCriticRunner(
   modelId: string,
   cached: CriticRunner | null,
   fallback: () => CriticRunner,
+  primaryProvider?: string,
 ): { runner: CriticRunner; cache: CriticRunner } {
+  if (primaryProvider === 'opencode-go') {
+    if (!isChatOpenCodeGoRoute({ provider: primaryProvider, providerModelId: modelId })) {
+      throw new Error('[LIVE_MODEL_POLICY] Go critic requires the exact admitted route.')
+    }
+    // Resolve from the current owner instead of trusting a prior task's critic cache.
+    const runner = fallback()
+    if (!(runner instanceof OpenCodeGoApiRunner) || runner.getPinnedModelId() !== modelId) {
+      throw new Error('[LIVE_MODEL_POLICY] Go critic refuses provider/model substitution.')
+    }
+    return { runner, cache: runner }
+  }
   if (cached) return { runner: cached, cache: cached };
   if (!isOfflineChatMode()) assertLiveModelId(modelId, 'live chat diff critic');
   const lower = modelId.toLowerCase();
@@ -368,7 +381,11 @@ export function resolveOrCreateCriticProRunner(
   modelId: string,
   cached: CriticRunner | null,
   flashFallback: () => CriticRunner,
+  primaryProvider?: string,
 ): { runner: CriticRunner; cache: CriticRunner } {
+  if (primaryProvider === 'opencode-go') {
+    return resolveOrCreateCriticRunner(modelId, cached, flashFallback, primaryProvider)
+  }
   if (cached) return { runner: cached, cache: cached };
   if (!isOfflineChatMode()) assertLiveModelId(modelId, 'live chat pro diff critic');
   const lower = modelId.toLowerCase();
@@ -470,6 +487,8 @@ export interface AsymmetricCriticState {
   turnTimeoutMs: number;
   /** Primary implementor model; keeps the critic on the fixed campaign model. */
   primaryModel?: string;
+  /** Transport identity survives secondary model resolution; never infer it from a name. */
+  primaryProvider?: string;
   resolveDeliberationRunner: () => CriticRunner;
   /** Provider lifecycle callbacks for secondary critic inferences. */
   providerCallbacks?: RunnerCallbacks;
@@ -535,16 +554,19 @@ export async function runAsymmetricDiffCritic(
     const mutationTargets = mutationTargetsFromLog(state.toolCallLog);
     const collected = collectWorkspacePatch(state.projectRoot, { mutationTargets });
 
-    const modelId = resolveDiffCriticModel(state.primaryModel);
+    const modelId = state.primaryProvider === 'opencode-go'
+      ? state.primaryModel ?? '' : resolveDiffCriticModel(state.primaryModel);
     const flashResolved = resolveOrCreateCriticRunner(
       modelId,
       state.criticRunner,
       state.resolveDeliberationRunner,
+      state.primaryProvider,
     );
     state.criticRunner = flashResolved.cache;
     const runner = flashResolved.runner;
 
-    const proModelId = resolveDiffCriticProModel(state.primaryModel);
+    const proModelId = state.primaryProvider === 'opencode-go'
+      ? state.primaryModel ?? '' : resolveDiffCriticProModel(state.primaryModel);
     const sweTier = isSweCriticTierEnabled() || isSweChatProfileEnabled();
     state.onThought?.('[Diff critic: reviewing patch vs task…]');
 
@@ -591,10 +613,12 @@ export async function runAsymmetricDiffCritic(
             state.criticProRunner,
             () =>
               resolveOrCreateCriticRunner(
-                resolveDiffCriticModel(state.primaryModel),
+                modelId,
                 state.criticRunner,
                 state.resolveDeliberationRunner,
+                state.primaryProvider,
               ).runner,
+            state.primaryProvider,
           );
           state.criticProRunner = proResolved.cache;
           const proRunner = proResolved.runner;
@@ -651,7 +675,7 @@ export async function runAsymmetricDiffCritic(
       skippedReason: 'error',
     };
     state.onThought?.(`[Diff critic: skipped — ${message.slice(0, 120)}]`);
-    return 'allow';
+    return state.primaryProvider === 'opencode-go' ? 'block' : 'allow';
   }
 }
 

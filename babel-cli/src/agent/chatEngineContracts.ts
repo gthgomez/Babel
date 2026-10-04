@@ -779,6 +779,8 @@ export interface ChatEngineActionExecutorHost {
     pattern?: string
   }) => void
   fullReadCounts: Map<string, number>
+  getTurnRuntimeSnapshot: () => TurnRuntimeSnapshot | null
+  getResolvedRequiredVerifiers: () => string[]
   getLiveSession: (
     c?:
       | {

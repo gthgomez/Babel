@@ -183,6 +183,11 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
     return this.sessionId
   }
 
+  /** Content-free configured identity for secondary calls that must retain this route. */
+  getPinnedModelId(): OpenCodeGoModel {
+    return this.pinnedModel
+  }
+
   protected override getRequestHeadersExtras(): Record<string, string> {
     return {
       'x-opencode-session': this.sessionId,

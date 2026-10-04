@@ -1164,7 +1164,7 @@ export class ChatEngine {
       abortController: this.abortController,
       turnTimeoutMs: TURN_TIMEOUT_MS,
       ...(this.modelPolicy?.providerModelId
-        ? { primaryModel: this.modelPolicy.providerModelId }
+        ? { primaryModel: this.modelPolicy.providerModelId, primaryProvider: this.modelPolicy.provider }
         : {}),
       resolveDeliberationRunner: () => this.resolveDeliberationRunner(),
       providerCallbacks: this.providerRetryCallbacks({
@@ -4121,6 +4121,8 @@ export class ChatEngine {
       usageScope,
       tools: this.services.tools,
       takeToolPolicy: () => this.nextTurnToolPolicy(),
+      acceptedOperation: this.getTurnRuntimeSnapshot()?.effectiveOperation,
+      requiredVerifierCommands: this.getResolvedRequiredVerifiers(),
       systemPrompt: (mode) => this.getOrBuildSystemPrompt(mode),
       useTextTools: () => this.shouldUseTextTools(),
       effects: this.providerUsageEffects(),
@@ -4388,7 +4390,7 @@ export class ChatEngine {
     | DeepSeekApiRunner
     | OllamaApiRunner
     | OpenRouterApiRunner {
-    const modelName = resolvePhaseModelName(this._lastPhase, {
+    const modelName = this.modelPolicy?.provider === "opencode-go" ? undefined : resolvePhaseModelName(this._lastPhase, {
       investigateModel: this.limits.investigateModel,
       mutateModel: this.limits.mutateModel,
     });

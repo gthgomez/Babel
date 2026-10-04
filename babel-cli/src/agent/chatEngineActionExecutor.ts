@@ -82,6 +82,7 @@ import {
 import { captureAndRecordVerifierReceipt } from "./chatEngineVerifierAdapter.js";
 import {
   deniesReadOnlyChatAction,
+  deniesReadOnlyTaskAction,
   isReadOnlyChat,
   resolveChatRangePath,
 } from "./chatReadOnly.js";
@@ -112,6 +113,9 @@ export class ChatEngineActionExecutor {
     const ownerGeneration =
       meta.ownerGeneration ?? this.host.activeSubmissionGeneration;
     const ownerRunDir = this.host.engineRunDir;
+    const acceptedOperation = this.host.getTurnRuntimeSnapshot()?.effectiveOperation;
+    const taskReadOnlyDenied = deniesReadOnlyTaskAction(action, acceptedOperation,
+      acceptedOperation === "READ_ONLY" ? this.host.getResolvedRequiredVerifiers() : []);
     // R0-7: the parent turn at dispatch time. Child mutation evidence must be
     // attributed to the turn that produced it, never to whatever turn is live
     // when the child finally resolves.
@@ -132,11 +136,11 @@ export class ChatEngineActionExecutor {
         action.type === "sub_agent" &&
         (action as { mutation?: boolean }).mutation === true;
       // Implementor W1.3: hard plan mode (mutations blocked until /execute-plan).
-      const hardPlanGate = deniesReadOnlyChatAction(action.type)
+      const hardPlanGate = deniesReadOnlyChatAction(action.type) || taskReadOnlyDenied
         ? {
             blocked: true,
             observation:
-              "Read-only chat policy denied this tool; use only read_file/read_range/list_dir/grep/glob inspection.",
+              "Read-only chat policy denied this tool; use inspection or the task's declared foreground verifier within its execution policy.",
           }
         : evaluateHardPlanModeGate({
             toolName: tool,

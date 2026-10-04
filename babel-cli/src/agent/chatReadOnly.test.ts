@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deniesReadOnlyChatAction, filterReadOnlyChatTools } from './chatReadOnly.js';
+import { deniesReadOnlyChatAction, deniesReadOnlyTaskAction, filterReadOnlyChatTools, filterReadOnlyTaskTools } from './chatReadOnly.js';
 import type { ToolDefinition } from '../runners/base.js';
 import { computeTerminalOutcome } from './chatEngineObservability.js';
 import { detectAndBuildBlockedReport } from './chatEngineSupport.js';
@@ -130,4 +130,31 @@ test('read-only tool advertisement matches enforcement without changing normal c
     assert.deepEqual(filterReadOnlyChatTools(definitions, env).map(tool => tool.function.name), ['read_file', 'read_range', 'grep', 'glob', 'list_dir']);
   }
   assert.equal(filterReadOnlyChatTools(definitions, {}), definitions);
+});
+
+test('accepted no-change scope denies mutation, shell expansion and delegated effects', () => {
+  const required = ['npm test'];
+  for (const action of [
+    { type: 'write_file', path: 'fixture.txt', content: 'forbidden' },
+    { type: 'run_command', command: 'npm test && node mutate.js' },
+    { type: 'test_run', command: 'npm test -- --update' },
+    { type: 'run_command', command: 'npm test', background: true },
+    { type: 'sub_agent', task: 'edit the fixture', mutation: true },
+  ] as const) assert.equal(deniesReadOnlyTaskAction(action, 'READ_ONLY', required), true);
+  assert.equal(deniesReadOnlyTaskAction({ type: 'read_file', path: 'fixture.txt' }, 'READ_ONLY', []), false);
+  assert.equal(deniesReadOnlyTaskAction({ type: 'write_file', path: 'fixture.txt', content: 'allowed' }, 'MUTATING', []), false);
+});
+
+test('accepted no-change scope preserves exactly declared foreground verification without broadening audit profile', () => {
+  for (const type of ['run_command', 'test_run'] as const) {
+    assert.equal(deniesReadOnlyTaskAction({ type, command: 'npm test' }, 'READ_ONLY', ['npm test']), false);
+    assert.equal(deniesReadOnlyTaskAction({ type, command: 'npm test' }, 'READ_ONLY', []), true);
+    assert.equal(deniesReadOnlyChatAction(type, { BABEL_EXECUTION_PROFILE: 'read_only_audit' }), true);
+  }
+  const tools = ['read_file', 'semantic_search', 'write_file', 'run_command', 'test_run', 'sub_agent', 'finish'].map(name => ({
+    type: 'function', function: { name, description: name, parameters: { type: 'object', properties: {} } },
+  })) as ToolDefinition[];
+  assert.deepEqual(filterReadOnlyTaskTools(tools, 'READ_ONLY', []).map(tool => tool.function.name), ['read_file', 'semantic_search', 'finish']);
+  assert.deepEqual(filterReadOnlyTaskTools(tools, 'READ_ONLY', ['npm test']).map(tool => tool.function.name), ['read_file', 'semantic_search', 'run_command', 'test_run', 'finish']);
+  assert.equal(filterReadOnlyTaskTools(tools, 'MUTATING', []), tools);
 });

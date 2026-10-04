@@ -191,8 +191,9 @@ test('conformance: live providers are authority-certified', () => {
     assert.ok(specs[id], `provider ${id} registered`);
   }
   // The live lanes today (per execute.ts liveOnly filtering and modelPolicy):
-  // deepseek, deepinfra, ollama, and the explicit GLM OpenRouter route.
-  for (const live of ['deepseek', 'deepinfra', 'ollama', 'openrouter'] as const) {
+  // Go additionally exercises real Chat native-tool denial/result delivery in
+  // chatOpenCodeGoProvider.test.ts; transport identity/budget controls remain separate.
+  for (const live of ['deepseek', 'deepinfra', 'ollama', 'openrouter', 'opencode-go'] as const) {
     assert.equal(specs[live]!.authorityConformance, 'certified', `${live} must be certified`);
   }
   // Dormant providers must NOT be certified until they pass this suite.

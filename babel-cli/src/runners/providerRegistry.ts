@@ -98,14 +98,16 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'untested',
   },
+  // Explicit Go transport; authority checks do not establish native budget/platform readiness.
   'opencode-go': {
     id: 'opencode-go',
     credentialEnvVar: null,
     protocol: 'openai_compatible',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
-    // Explicit transport; credentials are resolved by the approved helper.
-    authorityConformance: 'untested',
+    // Central authority suite plus Chat native-tool denial/delivery regressions.
+    // Certification does not qualify model quality, budget durability or other modes.
+    authorityConformance: 'certified',
   },
   openai: {
     id: 'openai',

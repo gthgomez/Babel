@@ -131,6 +131,8 @@ function makeFixture() {
   const previousExecutionProfile = process.env['BABEL_EXECUTION_PROFILE'];
   const previousHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
   const previousCompaction = process.env['BABEL_COMPACTION'];
+  const previousDryRun = process.env['BABEL_DRY_RUN'];
+  const previousDryRunSource = process.env['BABEL_DRY_RUN_SOURCE'];
   process.env['BABEL_RUNS_DIR'] = runs;
   process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
   process.env['BABEL_BENCHMARK_MODE'] = '1';
@@ -144,6 +146,9 @@ function makeFixture() {
   // production defaults and safety policy remain unchanged.
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+  // Real-effect mechanics must not depend on the operator's persisted flags.
+  process.env['BABEL_DRY_RUN'] = '0';
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session';
   return {
     root,
     runs,
@@ -163,6 +168,10 @@ function makeFixture() {
       else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousHostFallback;
       if (previousCompaction === undefined) delete process.env['BABEL_COMPACTION'];
       else process.env['BABEL_COMPACTION'] = previousCompaction;
+      if (previousDryRun === undefined) delete process.env['BABEL_DRY_RUN'];
+      else process.env['BABEL_DRY_RUN'] = previousDryRun;
+      if (previousDryRunSource === undefined) delete process.env['BABEL_DRY_RUN_SOURCE'];
+      else process.env['BABEL_DRY_RUN_SOURCE'] = previousDryRunSource;
       rmSync(root, { recursive: true, force: true });
     },
   };
@@ -222,9 +231,9 @@ function makeCrashDriver(
   driverPath: string,
   command: string,
 ): string {
-  const chatEngine = pathToFileURL(join(process.cwd(), 'src', 'agent', 'chatEngine.ts')).href;
-  const observability = pathToFileURL(join(process.cwd(), 'src', 'agent', 'chatEngineObservability.ts')).href;
-  const runsLayout = pathToFileURL(join(process.cwd(), 'src', 'cli', 'runsLayout.ts')).href;
+  const chatEngine = new URL('./chatEngine.ts', import.meta.url).href;
+  const observability = new URL('./chatEngineObservability.ts', import.meta.url).href;
+  const runsLayout = new URL('../cli/runsLayout.ts', import.meta.url).href;
   const source = `
 const { ChatEngine } = await import(${JSON.stringify(chatEngine)});
 const { persistTranscriptToDisk } = await import(${JSON.stringify(observability)});
@@ -243,7 +252,7 @@ const runner = {
   getLastInvocationMetadata() { return null; },
 };
 const engine = new ChatEngine({
-  task: 'perform the crash-after-effect lifecycle fixture',
+  task: 'Create the marker with the crash-after-effect lifecycle fixture',
   projectRoot,
   runId,
   model: 'deepseek-v4-flash',
@@ -259,9 +268,9 @@ const engine = new ChatEngine({
 });
 await persistTranscriptToDisk(chatSessionDir(runId), [
   { role: 'system', content: 'deterministic lifecycle fixture' },
-  { role: 'user', content: 'perform the crash-after-effect lifecycle fixture' },
+  { role: 'user', content: 'Create the marker with the crash-after-effect lifecycle fixture' },
 ]);
-await engine.submitMessage('perform the crash-after-effect lifecycle fixture', {});
+await engine.submitMessage('Create the marker with the crash-after-effect lifecycle fixture', {});
 `;
   writeFileSync(driverPath, source, 'utf8');
   return driverPath;
@@ -321,8 +330,15 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
         BABEL_LIFECYCLE_RUN_ID: runId,
         BABEL_LIFECYCLE_PROJECT_ROOT: fixture.project,
       });
+      const crashEvents = readEvents(runId);
+      const crashSummary = crashEvents.map(event => ({
+        kind: event.kind,
+        exit_code: 'exit_code' in event ? event.exit_code : null,
+        reason: 'reason' in event ? event.reason : null,
+      }));
+      assert.equal(existsSync(marker), true,
+        `crash fixture must leave a real effect; child_code=${child.code}; signal=${child.signal}; events=${JSON.stringify(crashSummary)}; stderr=${child.stderr}`);
 
-      assert.equal(existsSync(marker), true, `crash fixture must leave a real effect; stderr=${child.stderr}`);
       assert.equal(readFileSync(marker, 'utf8'), 'effect\n');
       const before = readEvents(runId);
       assert.equal(before.filter((event) => event.kind === 'tool_started').length, 1);
@@ -344,7 +360,7 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
             ],
       );
       const restored = await ChatEngine.restore(runId, {
-        task: 'perform the crash-after-effect lifecycle fixture',
+        task: 'Create the marker with the crash-after-effect lifecycle fixture',
         projectRoot: fixture.project,
         model: 'deepseek-v4-flash',
         maxTurns: 4,
