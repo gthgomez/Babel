@@ -88,8 +88,10 @@ def main():
         page.locator('#composer-input').fill('Demonstrate streaming')
         page.keyboard.press('Control+Enter')
         page.wait_for_selector('.stream-caret')
+        # Switching sessions is blocked while a preview run is active. Wait for
+        # the existing completion status before checking session isolation.
+        page.locator('.message-status.complete').filter(has_text='Response complete').wait_for(timeout=10000)
         page.locator('.session-button[data-id="reference"]').click()
-        page.wait_for_timeout(1700)
         assert page.locator('.reference-answer').count()==1
         assert 'Your message is saved' not in page.locator('#conversation').inner_text()
         page.locator('.session-button').first.click()
