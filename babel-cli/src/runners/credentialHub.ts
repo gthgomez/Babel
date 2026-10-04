@@ -1,4 +1,5 @@
 import { getProviderSpec, type ProviderId } from './providerRegistry.js'
+import { resolveRuntimePaths } from '../config/runtimePaths.js'
 
 export class ProviderCredentialError extends Error {
   readonly code = 'PROVIDER_CREDENTIAL_MISSING'
@@ -6,7 +7,7 @@ export class ProviderCredentialError extends Error {
   readonly envVar: string
 
   constructor(provider: ProviderId, envVar: string) {
-    super(`[provider:${provider}] ${envVar} is not set. Add it to babel-cli/.env or the host environment.`)
+    super(`[provider:${provider}] ${envVar} is not set. Set it in the host environment or ${resolveRuntimePaths().isInstalled ? 'the user config .env shown by babel-agent setup' : 'babel-cli/.env'}.`)
     this.name = 'ProviderCredentialError'
     this.provider = provider
     this.envVar = envVar

@@ -5,8 +5,9 @@ import { getAvailableModels } from '../../modelPolicy.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import { detectProjectFromCwd } from '../../cli/helpers.js';
 import { readRuntimeMode } from '../../config/runtimeMode.js';
+import { resolveRuntimePaths } from '../../config/runtimePaths.js';
 import { readProjectSettings, mergeProjectSettings } from '../../config/projectSettings.js';
-import { warmReplRuntime } from '../replWarmup.js';
+import { warmReplRuntime, stopReplWarmup } from '../replWarmup.js';
 import { startBackgroundIndexing } from '../../services/knowledgeGraphIndexer.js';
 import { showOnboarding, isFirstRun } from '../../ui/onboarding.js';
 import { listResumableSessions } from '../../services/chatSessionIndex.js';
@@ -54,8 +55,17 @@ export function restoreTerminalBeforeExit(): void {
 export function exitRepl(): void {
   delete process.env['BABEL_INTERACTIVE'];
   restoreTerminalBeforeExit();
-  console.log(primary('  Babel session ended. See you next run.\n'));
-  process.exit(0);
+  void (async () => {
+    let exitCode = 0;
+    try {
+      await stopReplWarmup();
+      console.log(primary('  Babel session ended. See you next run.\n'));
+    } catch (err: unknown) {
+      console.error(`[babel] Daemon cleanup failed: ${String(err)}`);
+      exitCode = 1;
+    }
+    process.exit(exitCode);
+  })();
 }
 
 export interface BootstrapReplHooks {
@@ -81,7 +91,7 @@ export async function bootstrapReplSession(
 
   if (typeof hooks.startIndexing === 'function') {
     hooks.startIndexing();
-  } else if (hooks.startIndexing !== false && process.env['NODE_ENV'] !== 'test' && !process.env['BABEL_TEST']) {
+  } else if (hooks.startIndexing !== false && !resolveRuntimePaths().isInstalled && process.env['NODE_ENV'] !== 'test' && !process.env['BABEL_TEST']) {
     startBackgroundIndexing();
   }
 

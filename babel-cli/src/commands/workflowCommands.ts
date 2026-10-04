@@ -69,6 +69,7 @@ import {
   writeJson,
   writeNdjson,
 } from '../cli/structuredOutput.js';
+import { writeChatStreamLine } from '../cli/chatStreamNdjson.js';
 import { exitCodeFromOutcome } from '../cli/userFacingStatus.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { validateRuntimeEnvForCommand } from './coreCommands.js';
@@ -81,6 +82,7 @@ import {
 } from '../config/envBootstrap.js';
 import { writeTextRunPrelude } from '../ui/runPrelude.js';
 import { runCliChatTask } from '../interactive/execution/chatCore.js';
+import type { ChatStreamEvent } from '../interactive/execution/chatEventDispatch.js';
 import { runAskAnswerPath } from '../services/askAnswer.js';
 import { buildRecoveryAssessment, formatRecoveryAssessmentHuman } from '../services/recovery.js';
 import {
@@ -666,7 +668,7 @@ async function runChatEngineAsRun(input: {
   allowExpensive?: boolean;
   showModelPolicy?: boolean;
   outputFormat?: 'text' | 'json' | 'stream-json';
-  onStreamEvent?: (event: { type: 'assistant_chunk'; chunk: string } | { type: 'thought'; text: string }) => void;
+  onStreamEvent?: (event: ChatStreamEvent) => void;
 }): Promise<Record<string, unknown>> {
   const { payload } = await runCliChatTask(input);
   return payload;
@@ -1937,6 +1939,10 @@ Notes:
     )
     .option('--session-id <id>', 'Associate this raw evidence bundle with a Local Mode session ID')
     .option(
+      '--resume-chat <id>',
+      'Resume a persisted Babel chat session. Used by chat mode; plan and deep ignore it',
+    )
+    .option(
       '--session-start-path <path>',
       'Attach this run to an exact Local Mode session-start artifact',
     )
@@ -2029,6 +2035,7 @@ Notes:
           allowExpensive?: boolean;
           showModelPolicy?: boolean;
           sessionId?: string;
+          resumeChat?: string;
           sessionStartPath?: string;
           localLearningRoot?: string;
           projectRoot?: string;
@@ -2491,6 +2498,7 @@ Notes:
                 task,
                 mode: mode as ValidMode,
                 project: resolvedProject ?? null,
+                ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
               }),
             );
           }
@@ -2519,16 +2527,9 @@ Notes:
                         ? (outputFormat as 'json' | 'stream-json')
                         : 'text',
                       ...(outputFormat === 'stream-json'
-                        ? {
-                            onStreamEvent: (event) => {
-                              if (event.type === 'assistant_chunk') {
-                                writeNdjson(
-                                  makeRunStreamEvent('assistant_chunk', { chunk: event.chunk }),
-                                );
-                              }
-                            },
-                          }
+                        ? { onStreamEvent: (event) => writeChatStreamLine(event) }
                         : {}),
+                      ...(options.resumeChat !== undefined ? { sessionId: options.resumeChat } : {}),
                     }),
                   ),
                 ),
