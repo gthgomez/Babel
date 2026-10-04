@@ -8,12 +8,13 @@
  * normal Babel governance.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { appendJsonl, readJsonl, writeJsonArtifact, type ResearchRunPaths } from '../artifacts.js';
 import type { CandidateRecordV1, EvidenceRefV1, PatternCardV1, ResearchMissionV1, SnapshotManifestV1 } from '../contracts.js';
-import { ExperimentProposalV1Schema, ResearchReviewV1Schema, type ExperimentProposalV1, type ResearchReviewV1 } from '../contracts.js';
+import { CandidateRecordV1Schema, EvidenceRefV1Schema, EvidenceValidationEntryV1Schema, ExperimentProposalV1Schema, PatternCardV1Schema, ResearchMissionV1Schema, ResearchReviewV1Schema, SnapshotManifestV1Schema, TriageScoreBreakdownSchema, type ExperimentProposalV1, type ResearchReviewV1 } from '../contracts.js';
 import type { ApplicabilityFinding } from '../analysis/applicability.js';
 import type { DeepAnalysisResult } from '../analysis/deepAnalysis.js';
+import { z } from 'zod';
 
 export interface ReportInputs {
   mission: ResearchMissionV1;
@@ -27,6 +28,10 @@ export interface ReportInputs {
   reviews: ResearchReviewV1[];
   paths: ResearchRunPaths;
   budget: unknown;
+  metrics?: { candidate_count: number; candidate_count_after_dedup: number; candidate_count_after_triage: number; shortlist_count: number; queries_executed: number; fork_family_collapsed: number; duplicate_discoveries: number };
+  deepStatus?: string;
+  deepReason?: string | null;
+  localScanBudget?: { maxFiles: number; maxBytes: number; filesScanned: number; bytesScanned: number; exhausted: boolean; occurrencesTruncated: boolean };
 }
 
 export interface FinalMetrics {
@@ -46,6 +51,12 @@ export interface FinalMetrics {
   injection_policy_violations: number;
   tokens_per_accepted_pattern: null;
   status: string;
+  reason: string | null;
+  deep_analysis_status: string | null;
+  deep_analysis_reason: string | null;
+  budget: unknown;
+  discovery: ReportInputs['metrics'];
+  local_scan_budget: ReportInputs['localScanBudget'] | null;
 }
 
 export function renderReportMarkdown(inputs: ReportInputs): string {
@@ -82,6 +93,9 @@ export function renderReportMarkdown(inputs: ReportInputs): string {
       lines.push(`  - existing mechanisms: ${finding.existing_mechanisms.map((a) => `${a.path}:${a.start_line}`).join(', ') || 'none identified'}`);
       lines.push(`  - gaps: ${finding.gaps.join('; ') || 'none identified'}`);
       if (finding.conflicts.length > 0) lines.push(`  - conflicts: ${finding.conflicts.join('; ')}`);
+      if (finding.scan_budget_exhausted || finding.occurrences_truncated) {
+        lines.push('  - local scan: partial; a finite scan limit was reached');
+      }
     }
     lines.push('');
   }
@@ -109,7 +123,8 @@ export function renderReportMarkdown(inputs: ReportInputs): string {
 export function computeFinalMetrics(inputs: ReportInputs): FinalMetrics {
   const reviews = inputs.reviews;
   return {
-    candidate_count: inputs.candidates.length,
+    ...inputs.metrics,
+    candidate_count: inputs.metrics?.candidate_count ?? inputs.candidates.length,
     candidate_count_after_dedup: inputs.candidates.length,
     shortlist_count: inputs.shortlistCount,
     deep_read_count: inputs.deep.snapshots.length,
@@ -125,6 +140,12 @@ export function computeFinalMetrics(inputs: ReportInputs): FinalMetrics {
     injection_policy_violations: inputs.deep.rejectionCount,
     tokens_per_accepted_pattern: null,
     status: inputs.status,
+    reason: inputs.reason,
+    deep_analysis_status: inputs.deepStatus ?? null,
+    deep_analysis_reason: inputs.deepReason ?? null,
+    budget: inputs.budget,
+    discovery: inputs.metrics,
+    local_scan_budget: inputs.localScanBudget ?? null,
   };
 }
 
@@ -138,9 +159,10 @@ export function writeReportArtifacts(inputs: ReportInputs): void {
   for (const review of inputs.reviews) {
     appendJsonl(`${paths.researchDir}/patterns/review.jsonl`, review);
   }
-  writeJsonArtifact(`${paths.researchDir}/report/RESEARCH_REPORT.md`, {
-    markdown: renderReportMarkdown(inputs),
-  });
+  const markdownPath = `${paths.researchDir}/report/RESEARCH_REPORT.md`;
+  const markdownTmp = `${markdownPath}.tmp`;
+  writeFileSync(markdownTmp, renderReportMarkdown(inputs), 'utf8');
+  renameSync(markdownTmp, markdownPath);
 }
 
 /**
@@ -157,22 +179,20 @@ export function loadRunArtifacts(paths: ResearchRunPaths): {
   proposals: ExperimentProposalV1[];
   reviews: ResearchReviewV1[];
 } {
-  const mission = JSON.parse(readFileSync(paths.missionJson, 'utf8')) as ResearchMissionV1;
+  const mission = ResearchMissionV1Schema.parse(JSON.parse(readFileSync(paths.missionJson, 'utf8')));
   const proposalsPath = `${paths.researchDir}/report/candidate-experiments.json`;
-  const proposals = existsSync(proposalsPath)
-    ? (JSON.parse(readFileSync(proposalsPath, 'utf8')).proposals as unknown[]).map((p) =>
-        ExperimentProposalV1Schema.parse(p),
-      )
-    : [];
-  const reviews = readJsonl<unknown>(`${paths.researchDir}/patterns/review.jsonl`).map((r) =>
-    ResearchReviewV1Schema.parse(r),
-  );
+  const proposalDocument = existsSync(proposalsPath) ? JSON.parse(readFileSync(proposalsPath, 'utf8')) : { mission_id: mission.mission_id, proposals: [] };
+  const proposals = z.object({ mission_id: z.string().min(1), proposals: z.array(ExperimentProposalV1Schema) }).strict().parse(proposalDocument).proposals;
+  const reviews = readJsonl<unknown>(`${paths.researchDir}/patterns/review.jsonl`).map((r) => ResearchReviewV1Schema.parse(r));
+  const validateJsonl = <T>(filePath: string, schema: { parse(value: unknown): T }): T[] => readJsonl<unknown>(filePath).map((record) => schema.parse(record));
+  validateJsonl(paths.scoreBreakdownJsonl, TriageScoreBreakdownSchema);
+  validateJsonl(paths.evidenceValidationJsonl, EvidenceValidationEntryV1Schema);
   return {
     mission,
-    candidates: readJsonl<CandidateRecordV1>(paths.candidatesJsonl),
-    evidence: readJsonl<EvidenceRefV1>(paths.evidenceJsonl),
-    snapshots: readJsonl<SnapshotManifestV1>(paths.snapshotManifestsJsonl),
-    patterns: readJsonl<PatternCardV1>(paths.patternsJsonl),
+    candidates: validateJsonl(paths.candidatesJsonl, CandidateRecordV1Schema),
+    evidence: validateJsonl(paths.evidenceJsonl, EvidenceRefV1Schema),
+    snapshots: validateJsonl(paths.snapshotManifestsJsonl, SnapshotManifestV1Schema),
+    patterns: validateJsonl(paths.patternsJsonl, PatternCardV1Schema),
     proposals,
     reviews,
   };

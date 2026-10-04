@@ -34,12 +34,18 @@ export interface ReviewInput {
   finding: ApplicabilityFinding;
   currentTargetHeadSha: string | null;
   now: Date;
+  applicabilityPartial?: boolean;
 }
 
 export function reviewPatternCard(input: ReviewInput): ResearchReviewV1 {
   const { card, evidenceRefs, validEvidenceIds, snapshot, finding } = input;
   const checked: string[] = [];
   const concerns: string[] = [];
+
+  if (input.applicabilityPartial) {
+    checked.push('local applicability scan reached a finite file, byte, or occurrence limit');
+    concerns.push('local applicability evidence is partial because a scan limit was reached');
+  }
 
   // 1. Every cited evidence ref exists and validated against the snapshot.
   const cited = card.evidence_refs;

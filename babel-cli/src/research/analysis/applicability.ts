@@ -14,11 +14,11 @@
  * conclusion "current".
  */
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PatternCardV1, ResearchMissionV1 } from '../contracts.js';
 import { createHash } from 'node:crypto';
+import { resolveTargetHeadSha } from '../missionPlanner.js';
 
 export interface LocalEvidenceRef {
   /** Referenceable id for the Pattern Card's local_evidence_refs. */
@@ -41,6 +41,21 @@ export interface ApplicabilityFinding {
   /** Smallest meaningful experiment, as a falsifiable statement. */
   smallest_experiment: string;
   head_sha: string | null;
+  scan_budget_exhausted: boolean;
+  occurrences_truncated: boolean;
+}
+
+export interface LocalScanBudget {
+  maxFiles: number;
+  maxBytes: number;
+  filesScanned: number;
+  bytesScanned: number;
+  exhausted: boolean;
+  occurrencesTruncated: boolean;
+}
+
+export function createLocalScanBudget(): LocalScanBudget {
+  return { maxFiles: 1000, maxBytes: 16 * 1024 * 1024, filesScanned: 0, bytesScanned: 0, exhausted: false, occurrencesTruncated: false };
 }
 
 export interface ApplicabilityOptions {
@@ -49,26 +64,13 @@ export interface ApplicabilityOptions {
   attachHints?: string[];
   /** Reader-report text (problem_match, observation claims) used to ground gap detection. */
   reportText?: string;
+  localScanBudget?: LocalScanBudget;
 }
 
 const MECHANISM_FILE_HINTS = [
   /journal/i, /checkpoint/i, /resume/i, /retry/i, /recover/i, /session/i,
   /state/i, /queue/i, /worker/i, /crash/i, /persist/i,
 ];
-
-function gitHeadSha(projectRoot: string): string | null {
-  if (!existsSync(join(projectRoot, '.git'))) return null;
-  try {
-    const sha = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: projectRoot,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
-  } catch {
-    return null;
-  }
-}
 
 function hashText(text: string): string {
   return createHash('sha256').update(text).digest('hex');
@@ -78,6 +80,7 @@ interface Occurrence {
   path: string;
   line: number;
   text: string;
+  content_hash: string;
 }
 
 /**
@@ -86,7 +89,7 @@ interface Occurrence {
  * and .git. V1 ships grep-style scanning; swapping in SemanticIndexer/FTS5
  * later changes only this function.
  */
-export function scanTargetProject(projectRoot: string, terms: string[], maxOccurrences = 40): Occurrence[] {
+export function scanTargetProject(projectRoot: string, terms: string[], maxOccurrences = 40, budget = createLocalScanBudget()): Occurrence[] {
   const occurrences: Occurrence[] = [];
   const skip = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.aic-worktrees', 'runs']);
   // Skip timestamped Babel run directories (own research artifacts are not target evidence).
@@ -94,15 +97,15 @@ export function scanTargetProject(projectRoot: string, terms: string[], maxOccur
   const textExtensions = /\.(ts|tsx|js|jsx|mjs|cjs|md|json|py|rs|go|java|rb|sh|yml|yaml|toml)$/i;
 
   const walk = (dir: string, depth: number): void => {
-    if (depth > 6 || occurrences.length >= maxOccurrences) return;
+    if (depth > 6 || budget.exhausted) return;
     let entries: string[] = [];
     try {
       entries = readdirSync(dir);
     } catch {
       return;
     }
-    for (const entry of entries) {
-      if (occurrences.length >= maxOccurrences) return;
+    for (const entry of entries.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+      if (budget.exhausted) return;
       if (skip.has(entry) || runDirLike.test(entry)) continue;
       const full = join(dir, entry);
       let stat;
@@ -116,6 +119,12 @@ export function scanTargetProject(projectRoot: string, terms: string[], maxOccur
         continue;
       }
       if (!textExtensions.test(entry) || stat.size > 1_000_000) continue;
+      if (budget.filesScanned >= budget.maxFiles || budget.bytesScanned + stat.size > budget.maxBytes) {
+        budget.exhausted = true;
+        return;
+      }
+      budget.filesScanned += 1;
+      budget.bytesScanned += stat.size;
       let content: string;
       try {
         content = readFileSync(full, 'utf8');
@@ -126,8 +135,11 @@ export function scanTargetProject(projectRoot: string, terms: string[], maxOccur
       for (let i = 0; i < lines.length; i++) {
         const lower = lines[i]!.toLowerCase();
         if (terms.some((term) => lower.includes(term))) {
-          occurrences.push({ path: full, line: i + 1, text: lines[i]!.trim().slice(0, 200) });
-          if (occurrences.length >= maxOccurrences) return;
+          if (occurrences.length < maxOccurrences) {
+            occurrences.push({ path: full, line: i + 1, text: lines[i]!.trim().slice(0, 400), content_hash: hashText(lines[i]!) });
+          } else {
+            budget.occurrencesTruncated = true;
+          }
         }
       }
     }
@@ -142,16 +154,16 @@ function toLocalRef(root: string, occurrence: Occurrence): LocalEvidenceRef {
     path: occurrence.path.startsWith(root) ? occurrence.path.slice(root.length + 1) : occurrence.path,
     start_line: occurrence.line,
     end_line: occurrence.line,
-    content_hash: hashText(occurrence.text),
+    content_hash: occurrence.content_hash,
   };
 }
 
 const GAP_SIGNATURES: Array<[RegExp, string]> = [
-  [/\bjournal\b/i, 'append-only journaling of state transitions'],
-  [/\bcheckpoint\b/i, 'explicit checkpointing of long-running work'],
-  [/\bidempotent/i, 'idempotent re-execution guards'],
-  [/\breplay\b/i, 'deterministic replay of interrupted work'],
-  [/\bresume\b/i, 'resume-from-persisted-state semantics'],
+  [/\b(journal|journaling|append.only log)\b/i, 'append-only journaling of state transitions'],
+  [/\b(checkpoint|checkpointing|persisted snapshot)\b/i, 'explicit checkpointing of long-running work'],
+  [/\b(idempotent|idempotency|deduplicat(?:e|ion)|exactly.once)\b/i, 'idempotent re-execution guards'],
+  [/\b(replay|replaying|event log)\b/i, 'deterministic replay of interrupted work'],
+  [/\b(resume|resumable|restart from (?:saved|persisted) state)\b/i, 'resume-from-persisted-state semantics'],
 ];
 
 const CONFLICT_SIGNATURES: Array<[RegExp, string]> = [
@@ -165,7 +177,7 @@ export function analyzeApplicability(
   options: ApplicabilityOptions = {},
 ): ApplicabilityFinding {
   const root = mission.target.project_root;
-  const headSha = gitHeadSha(root);
+  const headSha = resolveTargetHeadSha(root);
   const terms = [
     ...new Set([
       ...card.title.toLowerCase().split(/\W+/).filter((w) => w.length > 3),
@@ -177,7 +189,8 @@ export function analyzeApplicability(
     ]),
   ].slice(0, 14);
 
-  const occurrences = scanTargetProject(root, terms);
+  const localScanBudget = options.localScanBudget ?? createLocalScanBudget();
+  const occurrences = scanTargetProject(root, terms, 40, localScanBudget);
   const attach = occurrences.filter((o) => MECHANISM_FILE_HINTS.some((re) => re.test(o.path)));
   const existing = occurrences.filter((o) => !attach.includes(o));
 
@@ -192,10 +205,9 @@ export function analyzeApplicability(
   ].join('\n');
   // A gap is a mechanism the pattern relies on (per its signature) that the
   // target project's scanned text does not already mention.
-  const localText = occurrences.map((o) => o.text.toLowerCase()).join('\n');
-  const gaps = GAP_SIGNATURES.filter(([re, label]) => re.test(haystack) && !localText.includes(label)).map(
-    ([, label]) => label,
-  );
+  const localText = occurrences.map((o) => o.text).join('\n');
+  const mechanismText = `${card.mechanism}\n${card.problem}`;
+  const gaps = GAP_SIGNATURES.filter(([re]) => re.test(mechanismText) && !re.test(localText)).map(([, label]) => label);
   const conflicts = CONFLICT_SIGNATURES.filter(([re]) => re.test(haystack)).map(([, label]) => label);
 
   return {
@@ -205,6 +217,8 @@ export function analyzeApplicability(
     conflicts,
     smallest_experiment: buildSmallestExperiment(card, gaps),
     head_sha: headSha,
+    scan_budget_exhausted: localScanBudget.exhausted,
+    occurrences_truncated: localScanBudget.occurrencesTruncated,
   };
 }
 

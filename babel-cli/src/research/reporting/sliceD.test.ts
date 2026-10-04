@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { FakeResearchProvider, type FakeRepository } from '../fakeProvider.js';
 import { createResearchMission } from '../missionPlanner.js';
 import { runHuntDiscovery } from '../hunt.js';
-import { analyzeApplicability, isApplicabilityStale } from '../analysis/applicability.js';
+import { analyzeApplicability, createLocalScanBudget, isApplicabilityStale, scanTargetProject } from '../analysis/applicability.js';
 import { buildExperimentProposal, NotFalsifiableError } from './experiments.js';
 import { reviewPatternCard } from './review.js';
 import { loadRunArtifacts } from './report.js';
@@ -173,7 +173,7 @@ test('hunt persists report artifacts readable by loadRunArtifacts', async () => 
   assert.equal(artifacts.reviews[0]!.grants_merge_authority, false);
   assert.equal(artifacts.proposals.length, artifacts.reviews.length);
 
-  const markdown = JSON.parse(readFileSync(`${hunt.paths.researchDir}/report/RESEARCH_REPORT.md`, 'utf8')).markdown as string;
+  const markdown = readFileSync(`${hunt.paths.researchDir}/report/RESEARCH_REPORT.md`, 'utf8');
   assert.match(markdown, /# Research Report — mission_slice_d/);
   assert.match(markdown, /## Governance boundary/);
   assert.match(markdown, /SOURCE_CONFIRMED/);
@@ -182,6 +182,39 @@ test('hunt persists report artifacts readable by loadRunArtifacts', async () => 
   const metrics = JSON.parse(readFileSync(hunt.paths.metricsJson, 'utf8'));
   assert.equal(typeof metrics.reviews_accepted, 'number');
   assert.equal(metrics.status, 'COMPLETE');
+  assert.equal(metrics.candidate_count_after_dedup, hunt.metrics.candidate_count_after_dedup);
+  assert.ok(metrics.discovery.queries_executed > 0);
+});
+
+test('artifact loader rejects malformed V1 artifacts and JSONL records', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-sd-invalid-'));
+  gitInit(root);
+  const { hunt } = await huntWithCard(root);
+  const missionText = readFileSync(hunt.paths.missionJson, 'utf8');
+  writeFileSync(hunt.paths.missionJson, '{}');
+  assert.throws(() => loadRunArtifacts(hunt.paths));
+  writeFileSync(hunt.paths.missionJson, missionText);
+  const evidenceText = readFileSync(hunt.paths.evidenceJsonl, 'utf8');
+  writeFileSync(hunt.paths.evidenceJsonl, '{}\n');
+  assert.throws(() => loadRunArtifacts(hunt.paths));
+  writeFileSync(hunt.paths.evidenceJsonl, evidenceText);
+  const proposalsPath = `${hunt.paths.researchDir}/report/candidate-experiments.json`;
+  writeFileSync(proposalsPath, '{"mission_id":"m","proposals":[{}]}');
+  assert.throws(() => loadRunArtifacts(hunt.paths));
+});
+
+test('applicability scan is sorted and shares a finite file and byte budget', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-app-budget-'));
+  writeFileSync(join(root, 'z.ts'), 'hit z');
+  writeFileSync(join(root, 'a.ts'), 'hit a');
+  writeFileSync(join(root, 'm.ts'), 'hit m');
+  const budget = createLocalScanBudget();
+  budget.maxFiles = 2;
+  const found = scanTargetProject(root, ['hit'], 40, budget);
+  assert.deepEqual(found.map((entry) => entry.path.split(/[\\/]/).pop()), ['a.ts', 'm.ts']);
+  assert.equal(budget.filesScanned, 2);
+  assert.equal(budget.exhausted, true);
+  assert.equal(budget.occurrencesTruncated, false);
 });
 
 test('evidence refs issued by the reader session validate for review input', async () => {
@@ -208,4 +241,23 @@ test('evidence refs issued by the reader session validate for review input', asy
   });
   assert.equal(finished.evidenceRefs.length, 1);
   assert.equal(finished.evidenceRefs[0]!.commit_sha, COMMIT);
+});
+
+test('research review uses validated evidence from the pattern source repository', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-sd-sources-'));
+  gitInit(root);
+  const first = repo();
+  const second = repo();
+  second.providerRepoId = '2002';
+  second.fullName = 'beta/replay-runner';
+  second.topics = ['replay-runner'];
+  second.files = { 'README.md': 'agent workflow replay and crash recovery', 'src/replay.ts': 'export class ReplayJournal { replay(): void {} }' };
+  const mission = createResearchMission({ problem: 'How can we make long-running agent work crash-resilient?', projectRoot: root, budgetPreset: 'low', now: FIXED_NOW, missionId: 'mission_two_sources' });
+  const hunt = await runHuntDiscovery(mission, new FakeResearchProvider({ repositories: [first, second] }), { runsRoot: root, now: FIXED_NOW });
+  const secondSourceCard = hunt.deep!.patterns.find((card) => card.sources.some((source) => source.repository_id === '2002'));
+  assert.ok(secondSourceCard, 'second source should produce a pattern card');
+  const review = hunt.reviews.find((item) => item.pattern_id === secondSourceCard.pattern_id);
+  assert.ok(review);
+  assert.equal(review.grants_merge_authority, false);
+  assert.notEqual(review.verdict, 'REJECT_RESEARCH_FINDING');
 });

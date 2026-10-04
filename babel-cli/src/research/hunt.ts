@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CandidateRecordV1, RepositoryResearchProvider, TriageScoreBreakdown } from './contracts.js';
+import { EvidenceRefV1Schema } from './contracts.js';
 import { mergeAndDedupeCandidates, type CandidateSearchEntry } from './discovery/candidateMerge.js';
 import { selectDiverseShortlist } from './discovery/diversity.js';
 import { rankCandidates, type TriageContext } from './discovery/triage.js';
@@ -25,7 +26,7 @@ import {
 } from './rateBudget.js';
 import { buildQueryPlan, extractProblemTerms } from './queryPlanner.js';
 import { runDeepAnalysis, keywordReaderStrategy, type ReaderStrategy, type DeepAnalysisResult } from './analysis/deepAnalysis.js';
-import { analyzeApplicability, type ApplicabilityFinding } from './analysis/applicability.js';
+import { analyzeApplicability, createLocalScanBudget, type ApplicabilityFinding } from './analysis/applicability.js';
 import { buildExperimentProposal, NotFalsifiableError } from './reporting/experiments.js';
 import { reviewPatternCard } from './reporting/review.js';
 import { writeReportArtifacts } from './reporting/report.js';
@@ -33,6 +34,7 @@ import type { ExperimentProposalV1, ResearchReviewV1 } from './contracts.js';
 import {
   appendJsonl,
   initializeResearchRun,
+  readJsonl,
   writeJsonArtifact,
   type ResearchRunPaths,
 } from './artifacts.js';
@@ -160,6 +162,7 @@ export async function runHuntDiscovery(
   const findings: Array<{ patternId: string; finding: ApplicabilityFinding }> = [];
   const proposals: ExperimentProposalV1[] = [];
   const reviews: ResearchReviewV1[] = [];
+  const localScanBudget = createLocalScanBudget();
   if (status === 'COMPLETE' && !options.skipDeepAnalysis && shortlist.length > 0) {
     try {
       deep = await runDeepAnalysis(
@@ -184,11 +187,15 @@ export async function runHuntDiscovery(
   if (deep) {
     // Slice D: local applicability (source-confirmed cards only, HEAD-bound),
     // falsifiable experiment proposals, independent research review, report.
+    const persistedEvidence = readJsonl<unknown>(paths.evidenceJsonl).map((record) => EvidenceRefV1Schema.parse(record));
     for (const card of deep.patterns) {
       if (card.evidence_state !== 'SOURCE_CONFIRMED') continue;
+      const sourceId = card.sources[0]?.repository_id;
+      if (!sourceId) continue;
       const sourceSession = deep.sessions.find(
-        (s) => s.candidate.identity.provider_repo_id === card.sources[0]?.repository_id,
+        (s) => s.candidate.identity.provider_repo_id === sourceId,
       );
+      if (!sourceSession) continue;
       const reportText = sourceSession
         ? [
             sourceSession.finished.report.problem_match,
@@ -199,6 +206,7 @@ export async function runHuntDiscovery(
       const finding = analyzeApplicability(mission, card, {
         ...(options.now ? { now: options.now } : {}),
         reportText,
+        localScanBudget,
       });
       findings.push({ patternId: card.pattern_id, finding });
       card.applicability = {
@@ -215,23 +223,30 @@ export async function runHuntDiscovery(
       } catch (error) {
         if (!(error instanceof NotFalsifiableError)) throw error;
       }
+      const sourceSnapshot = deep.snapshots.find((snap) => snap.manifest.repository_id === sourceId);
+      if (!sourceSnapshot) continue;
+      const sourceEvidence = persistedEvidence.filter((ref) => ref.repository_id === sourceId);
+      const validEvidenceIds = new Set(sourceEvidence.map((ref) => ref.evidence_id));
       reviews.push(
         reviewPatternCard({
           mission,
           card,
-          evidenceRefs: deep.sessions.find(
-            (s) => s.finished.report.patterns.length >= 0 && s.candidate.identity.observed_full_name === card.sources[0]!.repository_id,
-          )?.finished.evidenceRefs ?? deep.sessions[0]?.finished.evidenceRefs ?? [],
-          validEvidenceIds: new Set(
-            deep.sessions.flatMap((s) => s.finished.evidenceRefs.map((r) => r.evidence_id)),
-          ),
-          snapshot: deep.snapshots.find((snap) => snap.manifest.repository_id === card.sources[0]!.repository_id)!.manifest,
+          evidenceRefs: sourceEvidence,
+          validEvidenceIds,
+          snapshot: sourceSnapshot.manifest,
           finding,
           currentTargetHeadSha: mission.target.head_sha,
           now: options.now ?? new Date(),
+          applicabilityPartial: finding.scan_budget_exhausted || finding.occurrences_truncated,
         }),
       );
     }
+  }
+  if ((localScanBudget.exhausted || localScanBudget.occurrencesTruncated) && status === 'COMPLETE') {
+    status = 'INCOMPLETE';
+    reason = localScanBudget.exhausted
+      ? 'local applicability scan exhausted its shared file or byte budget'
+      : 'local applicability scan truncated occurrence evidence at its per-finding cap';
   }
   budgetSnapshot = githubProvider.budget?.snapshot() ?? null;
 
@@ -273,6 +288,10 @@ export async function runHuntDiscovery(
       reviews,
       paths,
       budget: budgetSnapshot,
+      metrics,
+      deepStatus: deep.status,
+      deepReason: deep.reason,
+      localScanBudget,
     });
   }
 

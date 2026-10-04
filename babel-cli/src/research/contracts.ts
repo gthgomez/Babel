@@ -256,6 +256,13 @@ export const EvidenceRefV1Schema = z
   );
 export type EvidenceRefV1 = z.infer<typeof EvidenceRefV1Schema>;
 
+export const EvidenceValidationEntryV1Schema = z.object({
+  evidence_id: z.string().min(1),
+  valid: z.boolean(),
+  reasons: z.array(z.string()),
+}).strict();
+export type EvidenceValidationEntryV1 = z.infer<typeof EvidenceValidationEntryV1Schema>;
+
 // ---------------------------------------------------------------------------
 // PatternCardV1
 // ---------------------------------------------------------------------------
