@@ -8,10 +8,11 @@
  * normal Babel governance.
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { appendJsonl, readJsonl, writeJsonArtifact, type ResearchRunPaths } from '../artifacts.js';
 import type { CandidateRecordV1, EvidenceRefV1, PatternCardV1, ResearchMissionV1, SnapshotManifestV1 } from '../contracts.js';
-import { CandidateRecordV1Schema, EvidenceRefV1Schema, EvidenceValidationEntryV1Schema, ExperimentProposalV1Schema, PatternCardV1Schema, ResearchMissionV1Schema, ResearchReviewV1Schema, SnapshotManifestV1Schema, TriageScoreBreakdownSchema, type ExperimentProposalV1, type ResearchReviewV1 } from '../contracts.js';
+import { CandidateRecordV1Schema, EvidenceRefV1Schema, EvidenceValidationEntryV1Schema, ExperimentProposalV1Schema, PatternCardV1Schema, ResearchApplicabilityRecordV1Schema, ResearchMissionV1Schema, ResearchReviewV1Schema, SnapshotManifestV1Schema, TriageScoreBreakdownSchema, type ExperimentProposalV1, type ResearchApplicabilityRecordV1, type ResearchReviewV1 } from '../contracts.js';
 import type { ApplicabilityFinding } from '../analysis/applicability.js';
 import type { DeepAnalysisResult } from '../analysis/deepAnalysis.js';
 import { z } from 'zod';
@@ -93,6 +94,10 @@ export function renderReportMarkdown(inputs: ReportInputs): string {
       lines.push(`  - existing mechanisms: ${finding.existing_mechanisms.map((a) => `${a.path}:${a.start_line}`).join(', ') || 'none identified'}`);
       lines.push(`  - gaps: ${finding.gaps.join('; ') || 'none identified'}`);
       if (finding.conflicts.length > 0) lines.push(`  - conflicts: ${finding.conflicts.join('; ')}`);
+      const localEvidence = [...finding.attach_points, ...finding.existing_mechanisms];
+      if (localEvidence.length > 0) {
+        lines.push(`  - local content SHA-256: ${localEvidence.map((ref) => `${ref.path}:${ref.start_line}=${ref.content_hash}`).join(', ')}`);
+      }
       if (finding.scan_budget_exhausted || finding.occurrences_truncated) {
         lines.push('  - local scan: partial; a finite scan limit was reached');
       }
@@ -151,6 +156,13 @@ export function computeFinalMetrics(inputs: ReportInputs): FinalMetrics {
 
 export function writeReportArtifacts(inputs: ReportInputs): void {
   const { paths } = inputs;
+  const patternRecords = inputs.deep.patterns.map((card) => PatternCardV1Schema.parse(card));
+  writeJsonlAtomic(paths.patternsJsonl, patternRecords);
+  const applicabilityPath = `${paths.researchDir}/patterns/applicability.jsonl`;
+  const applicabilityRecords = inputs.findings.map(({ patternId, finding }) =>
+    ResearchApplicabilityRecordV1Schema.parse({ pattern_id: patternId, finding }),
+  );
+  writeJsonlAtomic(applicabilityPath, applicabilityRecords);
   writeJsonArtifact(paths.metricsJson, computeFinalMetrics(inputs));
   writeJsonArtifact(`${paths.researchDir}/report/candidate-experiments.json`, {
     mission_id: inputs.mission.mission_id,
@@ -165,6 +177,14 @@ export function writeReportArtifacts(inputs: ReportInputs): void {
   renameSync(markdownTmp, markdownPath);
 }
 
+function writeJsonlAtomic(filePath: string, records: unknown[]): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.tmp`;
+  const contents = records.map((record) => JSON.stringify(record)).join('\n');
+  writeFileSync(temporaryPath, contents.length > 0 ? `${contents}\n` : '', 'utf8');
+  renameSync(temporaryPath, filePath);
+}
+
 /**
  * Rehydrate validated artifacts from a persisted run (used by
  * `babel research inspect` and future phases). Strict-parses known
@@ -176,6 +196,7 @@ export function loadRunArtifacts(paths: ResearchRunPaths): {
   evidence: EvidenceRefV1[];
   snapshots: SnapshotManifestV1[];
   patterns: PatternCardV1[];
+  applicability: ResearchApplicabilityRecordV1[];
   proposals: ExperimentProposalV1[];
   reviews: ResearchReviewV1[];
 } {
@@ -187,12 +208,30 @@ export function loadRunArtifacts(paths: ResearchRunPaths): {
   const validateJsonl = <T>(filePath: string, schema: { parse(value: unknown): T }): T[] => readJsonl<unknown>(filePath).map((record) => schema.parse(record));
   validateJsonl(paths.scoreBreakdownJsonl, TriageScoreBreakdownSchema);
   validateJsonl(paths.evidenceValidationJsonl, EvidenceValidationEntryV1Schema);
+  const applicabilityPath = `${paths.researchDir}/patterns/applicability.jsonl`;
+  const applicability = existsSync(applicabilityPath)
+    ? validateJsonl(applicabilityPath, ResearchApplicabilityRecordV1Schema)
+    : [];
+  const patterns = validateJsonl(paths.patternsJsonl, PatternCardV1Schema);
+  for (const record of applicability) {
+    const card = patterns.find((item) => item.pattern_id === record.pattern_id);
+    if (!card) throw new Error(`Applicability record has no persisted pattern: ${record.pattern_id}`);
+    if (card.applicability.target_head_sha !== record.finding.head_sha) {
+      throw new Error(`Applicability HEAD binding differs from persisted pattern: ${record.pattern_id}`);
+    }
+    const persistedRefs = new Set(card.applicability.local_evidence_refs);
+    const findingRefs = [...record.finding.attach_points, ...record.finding.existing_mechanisms];
+    if (findingRefs.some((ref) => !persistedRefs.has(ref.local_ref_id))) {
+      throw new Error(`Applicability evidence refs differ from persisted pattern: ${record.pattern_id}`);
+    }
+  }
   return {
     mission,
     candidates: validateJsonl(paths.candidatesJsonl, CandidateRecordV1Schema),
     evidence: validateJsonl(paths.evidenceJsonl, EvidenceRefV1Schema),
     snapshots: validateJsonl(paths.snapshotManifestsJsonl, SnapshotManifestV1Schema),
-    patterns: validateJsonl(paths.patternsJsonl, PatternCardV1Schema),
+    patterns,
+    applicability,
     proposals,
     reviews,
   };

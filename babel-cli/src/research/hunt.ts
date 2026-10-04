@@ -25,6 +25,7 @@ import {
   type RateBudgetSnapshot,
 } from './rateBudget.js';
 import { buildQueryPlan, extractProblemTerms } from './queryPlanner.js';
+import { resolveTargetHeadSha } from './missionPlanner.js';
 import { runDeepAnalysis, keywordReaderStrategy, type ReaderStrategy, type DeepAnalysisResult } from './analysis/deepAnalysis.js';
 import { analyzeApplicability, createLocalScanBudget, type ApplicabilityFinding } from './analysis/applicability.js';
 import { buildExperimentProposal, NotFalsifiableError } from './reporting/experiments.js';
@@ -235,7 +236,7 @@ export async function runHuntDiscovery(
           validEvidenceIds,
           snapshot: sourceSnapshot.manifest,
           finding,
-          currentTargetHeadSha: mission.target.head_sha,
+          currentTargetHeadSha: resolveTargetHeadSha(mission.target.project_root),
           now: options.now ?? new Date(),
           applicabilityPartial: finding.scan_budget_exhausted || finding.occurrences_truncated,
         }),

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -40,11 +41,12 @@ function repo(): FakeRepository {
   };
 }
 
-function gitInit(dir: string): string {
+function gitInit(dir: string, extraFiles: Record<string, string> = {}): string {
   execFileSync('git', ['init', '-q'], { cwd: dir });
   execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: dir });
   execFileSync('git', ['config', 'user.name', 't'], { cwd: dir });
   writeFileSync(join(dir, 'worker.ts'), 'export class Worker {\n  async run(): Promise<void> {}\n}\n');
+  for (const [path, content] of Object.entries(extraFiles)) writeFileSync(join(dir, path), content);
   execFileSync('git', ['add', '.'], { cwd: dir });
   execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
   return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim();
@@ -80,6 +82,7 @@ test('applicability is grounded in local evidence and bound to target HEAD', asy
 
   assert.equal(isApplicabilityStale(finding, head), false);
   assert.equal(isApplicabilityStale(finding, 'b'.repeat(40)), true);
+  assert.equal(isApplicabilityStale({ ...finding, head_sha: null }, null), true);
 });
 
 test('experiment proposals are falsifiable and bound to target HEAD', async () => {
@@ -160,24 +163,38 @@ test('research review re-checks artifacts and cannot grant merge authority', asy
 
 test('hunt persists report artifacts readable by loadRunArtifacts', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-sd-'));
-  gitInit(root);
+  gitInit(root, { 'recovery.ts': 'export const recovery = "journal crash resilience";\n' });
   const { hunt } = await huntWithCard(root);
 
   assert.ok(existsSync(`${hunt.paths.researchDir}/report/RESEARCH_REPORT.md`));
   assert.ok(existsSync(`${hunt.paths.researchDir}/report/candidate-experiments.json`));
   assert.ok(existsSync(`${hunt.paths.researchDir}/patterns/review.jsonl`));
+  assert.ok(existsSync(`${hunt.paths.researchDir}/patterns/applicability.jsonl`));
 
   const artifacts = loadRunArtifacts(hunt.paths);
   assert.equal(artifacts.mission.mission_id, 'mission_slice_d');
   assert.ok(artifacts.patterns.length >= 1);
   assert.equal(artifacts.reviews[0]!.grants_merge_authority, false);
   assert.equal(artifacts.proposals.length, artifacts.reviews.length);
+  assert.ok(artifacts.applicability.length > 0);
+  const savedFinding = artifacts.applicability[0]!;
+  const savedCard = artifacts.patterns.find((item) => item.pattern_id === savedFinding.pattern_id)!;
+  assert.equal(savedCard.applicability.target_head_sha, savedFinding.finding.head_sha);
+  const localRef = [...savedFinding.finding.attach_points, ...savedFinding.finding.existing_mechanisms]
+    .find((ref) => ref.path === 'recovery.ts');
+  assert.ok(localRef, `the real local source line should be persisted as applicability evidence; finding=${JSON.stringify(savedFinding.finding)}`);
+  assert.equal(
+    localRef.content_hash,
+    createHash('sha256').update('export const recovery = "journal crash resilience";').digest('hex'),
+  );
+  assert.ok(savedCard.applicability.local_evidence_refs.includes(localRef.local_ref_id));
 
   const markdown = readFileSync(`${hunt.paths.researchDir}/report/RESEARCH_REPORT.md`, 'utf8');
   assert.match(markdown, /# Research Report — mission_slice_d/);
   assert.match(markdown, /## Governance boundary/);
   assert.match(markdown, /SOURCE_CONFIRMED/);
   assert.match(markdown, /ACCEPT_RESEARCH_FINDING|NEEDS_MORE_EVIDENCE|REJECT_RESEARCH_FINDING/);
+  assert.match(markdown, new RegExp(localRef.content_hash));
 
   const metrics = JSON.parse(readFileSync(hunt.paths.metricsJson, 'utf8'));
   assert.equal(typeof metrics.reviews_accepted, 'number');
@@ -198,6 +215,11 @@ test('artifact loader rejects malformed V1 artifacts and JSONL records', async (
   writeFileSync(hunt.paths.evidenceJsonl, '{}\n');
   assert.throws(() => loadRunArtifacts(hunt.paths));
   writeFileSync(hunt.paths.evidenceJsonl, evidenceText);
+  const applicabilityPath = `${hunt.paths.researchDir}/patterns/applicability.jsonl`;
+  const applicabilityText = readFileSync(applicabilityPath, 'utf8');
+  writeFileSync(applicabilityPath, '{}\n');
+  assert.throws(() => loadRunArtifacts(hunt.paths));
+  writeFileSync(applicabilityPath, applicabilityText);
   const proposalsPath = `${hunt.paths.researchDir}/report/candidate-experiments.json`;
   writeFileSync(proposalsPath, '{"mission_id":"m","proposals":[{}]}');
   assert.throws(() => loadRunArtifacts(hunt.paths));
@@ -215,6 +237,45 @@ test('applicability scan is sorted and shares a finite file and byte budget', ()
   assert.equal(budget.filesScanned, 2);
   assert.equal(budget.exhausted, true);
   assert.equal(budget.occurrencesTruncated, false);
+
+  const cappedBudget = createLocalScanBudget();
+  const capped = scanTargetProject(root, ['hit'], 1, cappedBudget);
+  assert.equal(capped.length, 1);
+  assert.equal(cappedBudget.occurrencesTruncated, true);
+});
+
+test('hunt reports occurrence-capped applicability as incomplete and partial', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-app-occurrence-cap-'));
+  const repeatedEvidence = `${Array.from({ length: 41 }, () => 'journal crash resilience').join('\n')}\n`;
+  gitInit(root, { 'recovery.ts': repeatedEvidence });
+  const { hunt } = await huntWithCard(root);
+
+  assert.equal(hunt.status, 'INCOMPLETE', `unexpected completion; reason=${hunt.reason}; finding=${JSON.stringify(hunt.findings[0]?.finding)}`);
+  assert.match(hunt.reason ?? '', /truncated occurrence evidence/);
+  assert.equal(hunt.findings[0]!.finding.occurrences_truncated, true);
+  assert.ok(hunt.reviews[0]!.concerns.some((concern) => concern.includes('scan limit')));
+  const metrics = JSON.parse(readFileSync(hunt.paths.metricsJson, 'utf8'));
+  assert.equal(metrics.status, 'INCOMPLETE');
+  assert.equal(metrics.local_scan_budget.occurrencesTruncated, true);
+});
+
+test('applicability scanner does not follow a symlink outside the target tree', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-app-symlink-root-'));
+  const outside = mkdtempSync(join(tmpdir(), 'babel-app-symlink-outside-'));
+  try {
+    const outsideFile = join(outside, 'external.ts');
+    writeFileSync(outsideFile, 'outside_only_marker');
+    try {
+      symlinkSync(outsideFile, join(root, 'linked.ts'), 'file');
+    } catch {
+      t.skip('the current Windows profile cannot create a test symlink');
+      return;
+    }
+    assert.deepEqual(scanTargetProject(root, ['outside_only_marker']), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 test('evidence refs issued by the reader session validate for review input', async () => {

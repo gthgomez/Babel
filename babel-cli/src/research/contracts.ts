@@ -263,6 +263,38 @@ export const EvidenceValidationEntryV1Schema = z.object({
 }).strict();
 export type EvidenceValidationEntryV1 = z.infer<typeof EvidenceValidationEntryV1Schema>;
 
+export const LocalEvidenceRefV1Schema = z.object({
+  local_ref_id: z.string().regex(/^loc_[0-9a-f]{12}$/),
+  path: z.string().min(1).refine((value) =>
+    !value.startsWith('/') && !value.startsWith('\\') && !/^[A-Za-z]:[\\/]/.test(value) &&
+    !value.split(/[\\/]/).includes('..'),
+  ),
+  start_line: z.number().int().positive(),
+  end_line: z.number().int().positive(),
+  content_hash: z.string().regex(/^[0-9a-f]{64}$/),
+}).strict().refine((data) => data.start_line <= data.end_line, {
+  message: 'start_line must be <= end_line', path: ['start_line'],
+});
+export type LocalEvidenceRefV1 = z.infer<typeof LocalEvidenceRefV1Schema>;
+
+export const ApplicabilityFindingV1Schema = z.object({
+  attach_points: z.array(LocalEvidenceRefV1Schema),
+  existing_mechanisms: z.array(LocalEvidenceRefV1Schema),
+  gaps: z.array(z.string()),
+  conflicts: z.array(z.string()),
+  smallest_experiment: z.string().min(1),
+  head_sha: z.string().regex(/^[0-9a-f]{40}$/).nullable(),
+  scan_budget_exhausted: z.boolean(),
+  occurrences_truncated: z.boolean(),
+}).strict();
+export type ApplicabilityFindingV1 = z.infer<typeof ApplicabilityFindingV1Schema>;
+
+export const ResearchApplicabilityRecordV1Schema = z.object({
+  pattern_id: z.string().min(1),
+  finding: ApplicabilityFindingV1Schema,
+}).strict();
+export type ResearchApplicabilityRecordV1 = z.infer<typeof ResearchApplicabilityRecordV1Schema>;
+
 // ---------------------------------------------------------------------------
 // PatternCardV1
 // ---------------------------------------------------------------------------

@@ -14,8 +14,8 @@
  * conclusion "current".
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import type { PatternCardV1, ResearchMissionV1 } from '../contracts.js';
 import { createHash } from 'node:crypto';
 import { resolveTargetHeadSha } from '../missionPlanner.js';
@@ -110,10 +110,11 @@ export function scanTargetProject(projectRoot: string, terms: string[], maxOccur
       const full = join(dir, entry);
       let stat;
       try {
-        stat = statSync(full);
+        stat = lstatSync(full);
       } catch {
         continue;
       }
+      if (stat.isSymbolicLink()) continue;
       if (stat.isDirectory()) {
         walk(full, depth + 1);
         continue;
@@ -151,7 +152,7 @@ export function scanTargetProject(projectRoot: string, terms: string[], maxOccur
 function toLocalRef(root: string, occurrence: Occurrence): LocalEvidenceRef {
   return {
     local_ref_id: `loc_${hashText(`${occurrence.path}:${occurrence.line}`).slice(0, 12)}`,
-    path: occurrence.path.startsWith(root) ? occurrence.path.slice(root.length + 1) : occurrence.path,
+    path: relative(root, occurrence.path),
     start_line: occurrence.line,
     end_line: occurrence.line,
     content_hash: occurrence.content_hash,
@@ -232,6 +233,6 @@ function buildSmallestExperiment(card: PatternCardV1, gaps: string[]): string {
 
 /** Staleness check: an applicability conclusion is stale once target HEAD moves. */
 export function isApplicabilityStale(finding: ApplicabilityFinding, currentHeadSha: string | null): boolean {
-  if (!finding.head_sha || !currentHeadSha) return finding.head_sha !== currentHeadSha;
+  if (!finding.head_sha || !currentHeadSha) return true;
   return finding.head_sha !== currentHeadSha;
 }
