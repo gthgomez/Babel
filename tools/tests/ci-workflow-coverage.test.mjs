@@ -131,8 +131,9 @@ test('stages catalog assets and defaults while removing stale resources and buil
     const packed = spawnSync(process.execPath, [npmCli, 'pack', '--dry-run', '--json', '--ignore-scripts', '--cache', join(root, 'npm-cache')], { cwd: pkg, encoding: 'utf8' })
     assert.equal(packed.status, 0, packed.stderr)
     const result = JSON.parse(packed.stdout)[0]
-    assert.equal(result.name, '@babel-preview-local/coding-agent')
-    assert.deepEqual(manifest.bin, { 'babel-agent': 'bin/babel.js' })
+    assert.equal(manifest.name, 'babel-harness')
+    assert.equal(result.name, 'babel-harness')
+    assert.deepEqual(manifest.bin, { 'babel-agent': 'bin/babel.js', 'babel-harness': 'bin/babel.js' })
     const paths = result.files.map(file => file.path)
     for (const file of ['resources/layer/prompt.md', 'LICENSE', 'dist/index.js', 'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs']) assert.ok(paths.includes(file), file)
     assert.ok(!paths.some(path => /\.env|\.test\.|\.map$|\.d\.ts$/.test(path)))
