@@ -1481,7 +1481,16 @@ export class ChatEngineActionExecutor {
           invalidateReadCacheForPath(this.host.readCache, possibleKey);
           this.host.fullReadCounts.delete(possibleKey);
         }
-        if (!confirmedDirectMutation) {
+        if (
+          !confirmedDirectMutation &&
+          mutationEffect.status !== "confirmed_no_change"
+        ) {
+          // A committed receipt that proves an identical post-state (byte-equal
+          // pre/post image hashes, e.g. a model rewriting a file with its
+          // current content) leaves the workspace revision exactly where the
+          // verifier receipt bound it, so that receipt is factually current
+          // and must stay authoritative. Only a real change or an
+          // indeterminate effect invalidates verifier evidence.
           invalidateVerifierLedger(
             this.host as never,
             "direct mutation effect not confirmed",
