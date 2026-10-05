@@ -373,10 +373,18 @@ export class ChatEngineStreamingLoop {
         !p11ContextInstalled &&
         (hadInstalledP11Context || pendingCapsuleAuthority)
       ) {
+        // Structured refusal diagnostic: surface WHY the install was blocked
+        // (reason code + bounded details from the rejecting boundary) so a
+        // captured run can be triaged without reproducing it live. Codes only
+        // — never credentials or provider payloads.
+        const block = this.host.p11InstallBlock;
+        const blockSuffix = block
+          ? ` (install block: ${block.code}${block.details.length > 0 ? `: ${block.details.join('; ')}` : ''})`
+          : '';
         yield this.host.streamFailed(
           hadInstalledP11Context
-            ? "P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused."
-            : "P11 context installation was blocked; this turn committed a compaction capsule that no installed context root authorizes, so provider dispatch was refused.",
+            ? `P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused.${blockSuffix}`
+            : `P11 context installation was blocked; this turn committed a compaction capsule that no installed context root authorizes, so provider dispatch was refused.${blockSuffix}`,
         );
         return;
       }

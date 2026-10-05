@@ -538,6 +538,8 @@ export class ChatEngine {
   /** P11 A11a: exact approved observation refs retained for the installed context. */
   private p11ObservationRefs: ObservationRefV1[] = [];
   private p11ObservationCaptureIssues: string[] = [];
+  /** P11 install diagnostics: structured block reason of the last refused install. */
+  p11InstallBlock: { code: string; details: string[] } | null = null;
   /** Soft investigate-budget one-shot latch (synced via explore fuse state). */
   private investigateSoftNudgeDone = false;
   /** Cumulative exploration tools across the entire session (never resets).
@@ -2870,6 +2872,7 @@ export class ChatEngine {
       // prior task owner, even when the physical observation bytes remain.
       this.p11ObservationRefs = [];
       this.p11ObservationCaptureIssues = [];
+      this.p11InstallBlock = null;
       delete this.parity.contextCheckpoint;
       // R0-1: failure-class budgets are task-scoped. A fresh task must not
       // inherit budgets already consumed by the previous task; recreate the

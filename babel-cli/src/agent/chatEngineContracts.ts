@@ -619,6 +619,8 @@ export interface ChatEngineStreamingLoopHost {
   readonly installP11ContextCheckpoint: (
     routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,
   ) => Promise<boolean>
+  /** Structured diagnostic from the most recent refused P11 install (codes only). */
+  p11InstallBlock: { code: string; details: string[] } | null
   investigateSoftNudgeDone: boolean
   readonly isSubmissionCurrent: (ownerGeneration: number) => boolean
   readonly lastCriticReceipt: DiffCriticVerdict | null
