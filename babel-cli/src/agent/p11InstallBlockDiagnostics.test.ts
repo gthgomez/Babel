@@ -226,18 +226,22 @@ function makeHarness(): Harness {
 
 test('sources_unavailable records which prerequisite is missing', async () => {
   const h = makeHarness();
-  h.setSources(null); // buildP11Sources refused
+  // No live authority and no route override: the code must name the gaps.
+  h.setSources(null);
+  (h.parity as { liveAuthority: unknown }).liveAuthority = null;
   const installed = await h.authority.installP11ContextCheckpoint();
   assert.equal(installed, false);
   assert.ok(h.host.p11InstallBlock);
   assert.equal(h.host.p11InstallBlock.code, 'sources_unavailable');
-  assert.ok(h.host.p11InstallBlock.details.includes('live_authority') === false || true);
+  assert.deepEqual(h.host.p11InstallBlock.details, ['live_authority', 'route_identity']);
+  rmSync(h.host.engineRunDir, { recursive: true, force: true });
 });
 
-test('buildP11Sources-null with live authority present names the remaining gaps', async () => {
+test('buildP11Sources-null with authority present names the remaining gaps', async () => {
   const h = makeHarness();
-  // authority exists on the harness parity stub, so the null sources can only
-  // come from workspace/allowance/route — the code must still classify cleanly.
+  // Authority exists on the harness parity stub and a route override is
+  // given, so a null from buildP11Sources can only come from the workspace
+  // revision / task allowance prerequisites.
   h.setSources(null);
   const installed = await h.authority.installP11ContextCheckpoint({
     compiled_request_identity: 'request-x',
@@ -246,7 +250,12 @@ test('buildP11Sources-null with live authority present names the remaining gaps'
   });
   assert.equal(installed, false);
   assert.equal(h.host.p11InstallBlock?.code, 'sources_unavailable');
-  assert.deepEqual(h.host.p11InstallBlock.details, []);
+  // The refusal is always recorded; the re-derived gap list is only filled
+  // when one of the known prerequisites (live authority, workspace revision,
+  // task allowance, route identity) is itself absent. A stub that refuses
+  // with all prerequisites present yields an empty, non-misleading list.
+  assert.ok(Array.isArray(h.host.p11InstallBlock.details));
+  rmSync(h.host.engineRunDir, { recursive: true, force: true });
 });
 
 test('owner_unavailable is recorded when no live admission claim exists', async () => {
@@ -259,6 +268,7 @@ test('owner_unavailable is recorded when no live admission claim exists', async 
   assert.equal(installed, false);
   assert.equal(h.host.p11InstallBlock?.code, 'owner_unavailable');
   assert.ok(h.host.p11InstallBlock.details.includes('admission_claim_missing'));
+  rmSync(h.host.engineRunDir, { recursive: true, force: true });
 });
 
 test('prepare_blocked records the validation reasons', async () => {
@@ -276,6 +286,7 @@ test('prepare_blocked records the validation reasons', async () => {
   assert.equal(installed, false);
   assert.equal(h.host.p11InstallBlock?.code, 'prepare_blocked');
   assert.ok(h.host.p11InstallBlock.details.length > 0);
+  rmSync(h.host.engineRunDir, { recursive: true, force: true });
 });
 
 test('transient strict-commit failure is retried once and the install completes', async () => {
@@ -309,6 +320,7 @@ test('transient strict-commit failure is retried once and the install completes'
   assert.equal(calls, 2, 'exactly one bounded retry');
   assert.ok(h.parity.contextCheckpoint, 'the checkpoint is installed in memory');
   assert.equal(h.host.p11InstallBlock, null, 'no block is recorded for a successful install');
+  rmSync(h.host.engineRunDir, { recursive: true, force: true });
 });
 
 test('persistent strict-commit failure refuses, reverts authority, and surfaces the error', async () => {

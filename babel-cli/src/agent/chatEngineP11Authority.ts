@@ -591,7 +591,13 @@ export class ChatEngineP11Authority {
   ] as const;
 
   private noteP11InstallBlock(code: string, details: string[]): void {
-    this.host.p11InstallBlock = { code, details: details.filter((d) => d.length > 0).slice(0, 8) };
+    this.host.p11InstallBlock = {
+      code,
+      details: details
+        .filter((d) => d.length > 0)
+        .slice(0, 8)
+        .map((d) => (d.length > 200 ? `${d.slice(0, 197)}…` : d)),
+    };
   }
 
   async installP11ContextCheckpoint(
@@ -684,12 +690,19 @@ export class ChatEngineP11Authority {
         // not permanently strand an otherwise-valid installed authority.
         let receipt = await attempt();
         if (receipt.status !== 'committed') {
-          installPortErrors.push(receipt.error ?? 'checkpoint persistence blocked');
+          // Attempt 2 begins with recoverCheckpointArtifacts: a blocked batch
+          // (including a mid-rollback interruption) is restored to the
+          // pre-batch durable state before restaging. If even the recovery is
+          // blocked, this attempt fails and the install refuses honestly;
+          // disk and memory authority can then only be reconciled by cold
+          // resume validation, never by an in-memory overwrite.
+          installPortErrors.unshift(receipt.error ?? 'checkpoint persistence blocked');
           receipt = await attempt();
         }
         if (receipt.status !== 'committed') {
           if (previous) this.host.parity.contextCheckpoint = previous;
           else delete this.host.parity.contextCheckpoint;
+          installPortErrors.unshift(receipt.error ?? 'checkpoint persistence blocked');
           throw new Error(receipt.error ?? 'checkpoint persistence blocked');
         }
       },
@@ -697,7 +710,7 @@ export class ChatEngineP11Authority {
     if (committed.status !== 'installed') {
       this.noteP11InstallBlock(
         committed.reasons.includes('stale_owner') ? 'owner_changed' : 'install_blocked',
-        [...committed.reasons, ...installPortErrors],
+        [...installPortErrors, ...committed.reasons],
       );
       return false;
     }
