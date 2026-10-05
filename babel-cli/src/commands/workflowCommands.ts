@@ -2265,6 +2265,9 @@ Notes:
           process.exit(1);
         }
 
+        const useChatEnginePath =
+          (mode === 'chat' || mode === 'chat-headless') && !shouldUseReadOnlyQuestionPath && options.useChatPipeline !== true;
+
         const effectiveAllowExpensive = resolveEffectiveAllowExpensive({
           task,
           ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
@@ -2280,6 +2283,7 @@ Notes:
             preflightRequestedModelPolicy(normalizedModel, {
               ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
               ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+              chatController: useChatEnginePath,
               liveOnly: process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1',
             });
           } catch (error: unknown) {
@@ -2367,9 +2371,6 @@ Notes:
           executionProfile,
           ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
         };
-
-        const useChatEnginePath =
-          (mode === 'chat' || mode === 'chat-headless') && !shouldUseReadOnlyQuestionPath && options.useChatPipeline !== true;
 
         if (!isStructuredOutput && !isManualMode && !useChatEnginePath) {
           writeTextRunPrelude({

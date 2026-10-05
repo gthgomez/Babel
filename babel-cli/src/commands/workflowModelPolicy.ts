@@ -1,4 +1,5 @@
 import { BABEL_ROOT } from '../cli/constants.js';
+import { resolveChatModelPolicy } from '../agent/chatModelPolicy.js';
 import {
   resolveFamilyModelPolicy,
   resolveModelByKey,
@@ -6,11 +7,19 @@ import {
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
 
-/** Resolve an explicit workflow model while enforcing live-only policy when requested. */
+/** Resolve an explicit model using the policy owned by its actual controller. */
 export function preflightRequestedModelPolicy(
   model: string,
-  options: { modelTier?: string; allowExpensive?: boolean; liveOnly?: boolean },
+  options: { modelTier?: string; allowExpensive?: boolean; liveOnly?: boolean; chatController?: boolean },
 ): ResolvedModelPolicy {
+  if (options.chatController === true) {
+    return resolveChatModelPolicy({
+      model,
+      ...(options.modelTier !== undefined ? { modelTier: options.modelTier } : {}),
+      ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+      babelRoot: BABEL_ROOT,
+    }).policy;
+  }
   const backendKey = resolveModelPolicyBackendKey(model, BABEL_ROOT);
   if (backendKey) {
     return resolveModelByKey({
