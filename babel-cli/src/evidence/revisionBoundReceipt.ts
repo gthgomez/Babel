@@ -165,7 +165,7 @@ function readGitTree(projectRoot: string): string | null {
   }
 }
 
-function compareRevisions(
+export function compareRevisions(
   bound: WorkspaceRevision,
   current: WorkspaceRevision,
 ): { stale: boolean; reason?: string } {

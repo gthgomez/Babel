@@ -28,6 +28,8 @@ import { ChatEngine, type ChatEvent } from './chatEngine.js';
 import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
 import type { ResolvedModelPolicy } from '../modelPolicy.js';
 import { assessMutationEffect } from './mutationTools.js';
+import { captureChatVerifierReceipt } from './chatEngineVerifierAdapter.js';
+import { evaluateChatVerifierReceiptCurrencySync } from '../evidence/chatRevisionBinding.js';
 
 const MANAGED_ENV = [
   'BABEL_RUNS_DIR',
@@ -202,6 +204,47 @@ describe('proven no-op writes keep verifier receipts current', { concurrency: fa
     });
     assert.equal(effect.status, 'confirmed_no_change');
     assert.match(effect.reason, /identical post-state/);
+  });
+
+  test('receipt currency is re-derived from the bound revision, not the stale flag', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-noop-write-'));
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'f', private: true }));
+    const git = (args: string[]) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    git(['init', '--quiet']);
+    git(['config', 'user.email', 'fixture@example.test']);
+    git(['config', 'user.name', 'fixture']);
+    writeFileSync(join(root, 'src.add.js'), 'export const a = 1;\n', 'utf8');
+    git(['add', '-A']);
+    git(['commit', '--quiet', '-m', 'baseline']);
+    try {
+      const receipt = await captureChatVerifierReceipt({
+        projectRoot: root,
+        command: 'npm test',
+        exitCode: 0,
+        summary: 'ok',
+        mutationPaths: ['src.add.js'],
+      });
+      assert.ok(receipt, 'the receipt binds to the current revision');
+      // Conservative heuristics flag the receipt stale (e.g. a non-verifier
+      // shell command ran afterwards); the bound scope is still byte-identical.
+      receipt.stale = true;
+      receipt.staleReason = 'non-verifier shell command executed';
+      const current = evaluateChatVerifierReceiptCurrencySync(root, receipt);
+      assert.ok(current, 'a bound receipt is evaluable');
+      assert.equal(current.stale, false, 'provably unchanged bound scope is factually current');
+      // A real change under the bound scope must stay stale (fail-closed).
+      writeFileSync(join(root, 'src.add.js'), 'export const a = 2;\n', 'utf8');
+      const changed = evaluateChatVerifierReceiptCurrencySync(root, receipt);
+      assert.ok(changed);
+      assert.equal(changed.stale, true, 'a changed bound scope is refused');
+      // No bound revision: unevaluable, caller falls back to the flag.
+      assert.equal(
+        evaluateChatVerifierReceiptCurrencySync(root, { ...receipt, boundRevision: undefined as never }),
+        null,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test('a byte-identical write_file after a green verifier keeps the receipt authoritative', async () => {

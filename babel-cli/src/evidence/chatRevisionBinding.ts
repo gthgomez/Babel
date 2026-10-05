@@ -19,6 +19,7 @@ import {
 import { EvidenceGraph } from './evidenceGraph.js';
 import { independentVerifierProofErrors } from './independentVerifier.js';
 import {
+  compareRevisions,
   RevisionManager,
   type RevisionBoundReceipt,
   type WorkspaceRevision,
@@ -124,6 +125,48 @@ export function toRevisionBoundReceipt(
     boundRevision: receipt.boundRevision,
     stale: receipt.stale === true,
   };
+}
+
+/**
+ * Authoritative re-evaluation of a verifier receipt's currency against the
+ * CURRENT workspace state, using the receipt's own bound revision scope.
+ *
+ * The in-memory `stale` flag is a one-way conservative ratchet: any
+ * subsequent tool that cannot PROVE its workspace effect (an unconfirmed
+ * direct mutation, a non-verifier shell command such as `cat`) permanently
+ * marks the receipt stale, even when the workspace bytes are provably
+ * unchanged. For an install boundary that requires a live receipt, that
+ * ratchet deadlocks the turn: the receipt is stale, so no context checkpoint
+ * installs, so every later dispatch is refused — and the model can never
+ * re-run its verifier because dispatch never happens again.
+ *
+ * This function re-derives staleness from evidence instead of the flag: it
+ * recomputes the revision for the receipt's OWN bound scope and compares it
+ * to the bound revision. Unchanged ⇒ the receipt is factually current
+ * (stale=false). Changed ⇒ stale (fail-closed, exactly as before). A receipt
+ * with no evaluable bound revision returns null so callers fall back to the
+ * conservative flag. This narrows the staleness heuristic to what it can
+ * actually prove; it never marks a changed workspace as current.
+ */
+export function evaluateChatVerifierReceiptCurrencySync(
+  projectRoot: string,
+  receipt: BoundChatVerifierReceipt | null | undefined,
+): { stale: boolean; reason?: string } | null {
+  if (!receipt) return null;
+  const bound = toRevisionBoundReceipt(receipt);
+  const revision = receipt.boundRevision;
+  if (!bound || !revision || !revision.scope || !revision.gitBinding) return null;
+  const paths = revision.scope.kind === 'files' ? revision.scope.paths : [];
+  let fresh: WorkspaceRevision;
+  try {
+    fresh = RevisionManager.computeRevisionSync(projectRoot, paths, {
+      scope_kind: revision.scope.kind,
+      git_binding: revision.gitBinding,
+    });
+  } catch {
+    return null;
+  }
+  return compareRevisions(revision, fresh);
 }
 
 /**

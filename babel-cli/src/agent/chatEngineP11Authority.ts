@@ -7,6 +7,7 @@ import {
   type ObservationRefV1,
 } from '../evidence/observationStore.js';
 import { RevisionManager } from '../evidence/revisionBoundReceipt.js';
+import { evaluateChatVerifierReceiptCurrencySync } from '../evidence/chatRevisionBinding.js';
 import { canonicalizeContained } from '../bridge/workspaceBound.js';
 import type { ChatEngineOptions, ChatTaskAllowanceSnapshot } from './chatEngine.js';
 import type { ChatExecutionProfile } from './chatEngineServices.js';
@@ -530,14 +531,30 @@ export class ChatEngineP11Authority {
       ],
       next_experiment: this.host.workingState.nextExperiment || 'continue the current controller step',
     };
-    const receipts = this.host.lastVerifierReceipt
-      ? [{
-          receipt_id: this.host.lastVerifierReceipt.receiptId ?? `receipt:${this.host.lastVerifierReceipt.command}`,
-          identity: this.host.lastVerifierReceipt.verifierId ?? this.host.lastVerifierReceipt.command,
-          scope: this.host.lastVerifierReceipt.scope ?? 'unknown',
-          stale: this.host.lastVerifierReceipt.stale === true,
-          bound_revision: this.host.lastVerifierReceipt.boundRevision?.compositeTreeHash ?? null,
-        }]
+    // Staleness is re-derived from evidence, not the conservative one-way
+    // flag: an unproven-but-benign tool (no-op rewrite, `cat` via run_command)
+    // permanently flags the receipt stale, which would deadlock the turn at
+    // this boundary (no install ⇒ no dispatch ⇒ no chance to re-verify). The
+    // receipt's own bound revision scope is recomputed here; only a receipt
+    // whose bound scope still matches the live workspace is treated as live.
+    const verifierReceipt = this.host.lastVerifierReceipt;
+    const currency = evaluateChatVerifierReceiptCurrencySync(
+      this.host.options.projectRoot,
+      verifierReceipt,
+    );
+    const receiptStale = currency
+      ? currency.stale
+      : verifierReceipt?.stale === true;
+    const receipts = verifierReceipt
+      ? [
+          {
+            receipt_id: verifierReceipt.receiptId ?? `receipt:${verifierReceipt.command}`,
+            identity: verifierReceipt.verifierId ?? verifierReceipt.command,
+            scope: verifierReceipt.scope ?? 'unknown',
+            stale: receiptStale,
+            bound_revision: verifierReceipt.boundRevision?.compositeTreeHash ?? null,
+          },
+        ]
       : [];
     const observations = this.host.p11ObservationRefs.map((observation) => ({
       observation_id: observation.observation_id,
