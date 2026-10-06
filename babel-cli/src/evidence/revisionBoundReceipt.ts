@@ -151,15 +151,20 @@ function readGitHead(projectRoot: string): string | null {
 }
 
 /**
- * Hash the repository's tracked index state PLUS the live working-tree delta
- * reported by Git. `ls-files -s` alone reflects the index and cannot see
- * unstaged modifications or untracked files, so a receipt bound only to it
- * stays "current" across exactly the edits it must detect. The status output
- * (names + worktree/index delta states) is bounded evidence: it proves the
- * *set* of changed/untracked paths, not the bytes of untracked files. An edit
- * to an unstaged tracked file changes both its blob state and the status
- * output, so repository-scope revisions diverge; fully untracked byte edits
- * are outside what this bounded capture can prove (explicit limitation).
+ * Hash the repository's ACTUAL verification-relevant state.
+ *
+ * `ls-files -s` contributes the blob hash of every clean tracked file. The
+ * Git status (`--porcelain=v2 -z --untracked-files=all`) identifies the
+ * divergent paths — worktree-modified tracked files and untracked files —
+ * and for each of those the ACTUAL worktree bytes are hashed here, together
+ * with existence and type. A metadata-only fingerprint (hashing the status
+ * text itself) could not see a byte change A→B in a file that was already
+ * dirty, or in an untracked file that already existed: the status output is
+ * identical for both states. Hashing the bytes closes that gap.
+ *
+ * Type is part of the evidence: a path that vanished hashes as "missing", a
+ * directory as "dir", a symlink by its target string. Without Git this
+ * capture returns null — unknown stays unknown.
  */
 function readGitTree(projectRoot: string): string | null {
   try {
@@ -172,7 +177,7 @@ function readGitTree(projectRoot: string): string | null {
     });
     const status = execFileSync(
       "git",
-      ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
+      ["status", "--porcelain", "-z", "--untracked-files=all"],
       {
         cwd: projectRoot,
         encoding: "utf8",
@@ -181,7 +186,36 @@ function readGitTree(projectRoot: string): string | null {
         windowsHide: true,
       },
     );
-    return hashFileContent(`${index}\0${status}`);
+
+    const divergent: string[] = [];
+    const tokens = status.split("\0").filter((token) => token.length > 0);
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i]!;
+      // Porcelain v1: exactly two status bytes, one space, then the path.
+      if (token.length < 4) continue;
+      const xy = token.slice(0, 2);
+      const recordPath = token.slice(3);
+      divergent.push(recordPath);
+      if (xy.includes("R") || xy.includes("C")) i += 1; // skip origPath token
+    }
+
+    const contentDigests = divergent
+      .sort()
+      .map((relativePath) => {
+        const absolute = path.resolve(projectRoot, relativePath);
+        let stats: fs.Stats;
+        try {
+          stats = fs.lstatSync(absolute);
+        } catch {
+          return `${relativePath}:missing`;
+        }
+        if (stats.isDirectory()) return `${relativePath}:dir`;
+        if (stats.isSymbolicLink())
+          return `${relativePath}:symlink:${hashFileContent(fs.readlinkSync(absolute))}`;
+        return `${relativePath}:${hashFileContent(fs.readFileSync(absolute))}`;
+      });
+
+    return hashFileContent(`${index}\0${contentDigests.join("\n")}`);
   } catch {
     return null;
   }
