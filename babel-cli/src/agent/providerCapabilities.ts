@@ -1,12 +1,22 @@
 /**
  * Provider capability truth, context budget, failover helpers.
  *
- * One ProviderCapabilities record per model. Budget formula:
- *   context_budget = context_window - max_output - tool/schema_reserve - safety_margin
+ * One ProviderCapabilities record per resolved route. Capability defaults are
+ * keyed by an explicit provider, never by substrings of a model name: a routed
+ * model keeps the provider that serves it. Budget formula:
+ *   context_budget = context_window - requested_output - tool/schema_reserve - safety_margin
  */
 
 import type { ProviderCapabilities } from '../runners/base.js';
-import { getModelContextWindow, getNormalizedModelCapabilities } from '../modelPolicy.js';
+import { isProviderId, type ProviderId } from '../runners/providerRegistry.js';
+import type { ModelRef } from '../intelligence/model-ref.js';
+import {
+  getAvailableModels,
+  getModelContextWindow,
+  getNormalizedModelCapabilities,
+  type ModelPolicyModelEntry,
+} from '../modelPolicy.js';
+import { computeRequestBudget } from './context-budget.js';
 
 export const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
 export const DEFAULT_TOOL_SCHEMA_RESERVE = 4_096;
@@ -29,36 +39,34 @@ export interface ContextBudget {
 }
 
 /**
- * Canonical budget formula (P1-E).
- * Never returns negative; floors at 1_024 for pathological configs.
+ * Compatibility projection over {@link computeRequestBudget}.
+ *
+ * Never fabricates capacity: an unknown or infeasible request reports 0 here
+ * (the typed status lives in `computeRequestBudget`). `maxOutputTokens` is used
+ * as the requested per-turn output for these legacy callers.
  */
 export function computeContextBudget(input: ContextBudgetInput): ContextBudget {
   const maxOutputTokens = input.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
   const toolSchemaReserve = input.toolSchemaReserve ?? DEFAULT_TOOL_SCHEMA_RESERVE;
   const safetyMargin = input.safetyMargin ?? DEFAULT_SAFETY_MARGIN;
-  if (!input.contextWindow || input.contextWindow <= 0) {
-    return {
-      contextWindow: 0,
-      maxOutputTokens,
-      toolSchemaReserve,
-      safetyMargin,
-      contextBudget: 0,
-    };
-  }
-  const raw =
-    input.contextWindow - maxOutputTokens - toolSchemaReserve - safetyMargin;
-  const contextBudget = Math.max(1_024, raw);
-  return {
+  const budget = computeRequestBudget({
     contextWindow: input.contextWindow,
+    requestedOutputTokens: maxOutputTokens,
     maxOutputTokens,
     toolSchemaReserve,
     safetyMargin,
-    contextBudget,
+  });
+  return {
+    contextWindow: budget.contextWindow ?? 0,
+    maxOutputTokens,
+    toolSchemaReserve,
+    safetyMargin,
+    contextBudget: budget.capacityTokens,
   };
 }
 
-/** Built-in capability defaults when policy lacks detail. */
-const CAPABILITY_DEFAULTS: Record<string, Partial<ProviderCapabilities>> = {
+/** Built-in capability defaults keyed by explicit provider identity. */
+const CAPABILITY_DEFAULTS: Partial<Record<ProviderId, Partial<ProviderCapabilities>>> = {
   deepseek: {
     maxOutputTokens: 8_192,
     supportsThinking: true,
@@ -96,38 +104,120 @@ const CAPABILITY_DEFAULTS: Record<string, Partial<ProviderCapabilities>> = {
   },
 };
 
-function inferProvider(modelId: string): string {
-  const m = modelId.toLowerCase();
-  if (m.includes('deepseek')) return 'deepseek';
-  if (m.includes('ollama') || m.includes(':')) return 'ollama';
-  if (m.includes('qwen') || m.includes('llama') || m.includes('deepinfra')) {
-    return 'deepinfra';
+/** Conservative defaults when a provider has no registered capability profile. */
+const GENERIC_CAPABILITY_DEFAULTS: Partial<ProviderCapabilities> = {
+  maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+  supportsThinking: false,
+  supportsToolChoice: true,
+  supportsParallelToolCalls: true,
+  supportsStreaming: true,
+  thinkingWithTools: 'unknown',
+};
+
+/** A provider identity that could not be resolved from a bare selector. */
+export type ResolvedProviderId = ProviderId | 'unknown';
+
+/** Capability record bound to the explicit route that produced it. */
+export interface RoutedProviderCapabilities extends ProviderCapabilities {
+  /** Hosting provider of the resolved route; never inferred from model text. */
+  readonly provider: ResolvedProviderId;
+  readonly modelId: string;
+}
+
+function safeAvailableModels(): ReturnType<typeof getAvailableModels> {
+  try {
+    return getAvailableModels();
+  } catch {
+    return [];
   }
-  if (m === 'z-ai/glm-5.3-flash') return 'openrouter';
-  return 'unknown';
+}
+
+/** Find the single policy entry for an explicit provider + model tuple. */
+function findRoutePolicyEntry(
+  provider: ProviderId,
+  modelId: string,
+): ModelPolicyModelEntry | null {
+  const matches = safeAvailableModels().filter(
+    ({ key, entry }) =>
+      entry.provider === provider && (entry.model_id === modelId || key === modelId),
+  );
+  if (matches.length === 0) return null;
+  // Multiple backend keys may reference one served model (the shipped v2 policy
+  // does). That is one tuple, not ambiguity. Distinct served model IDs for the
+  // same selector are ambiguous and rejected.
+  const distinctServedModels = new Set(matches.map((match) => match.entry.model_id));
+  if (distinctServedModels.size > 1) {
+    throw new Error(
+      `Ambiguous model policy entries for provider "${provider}" and model "${modelId}": ${[
+        ...distinctServedModels,
+      ]
+        .sort()
+        .join(', ')}.`,
+    );
+  }
+  const exactKey = matches.find((match) => match.key === modelId);
+  return (exactKey ?? matches[0]!).entry;
 }
 
 /**
- * Resolve one ProviderCapabilities record for a model.
- * Uses model-policy context_window only (never conflicting context_limit).
+ * Resolve the hosting provider for a bare model selector.
+ *
+ * Deterministic tuple lookup only. A selector that matches entries from more
+ * than one provider is ambiguous and rejected rather than guessed.
  */
-export function resolveProviderCapabilities(
+export function resolveProviderIdForSelector(modelId: string): ResolvedProviderId {
+  const candidates = new Set<ProviderId>();
+  const normalized = getNormalizedModelCapabilities(modelId);
+  if (normalized && isProviderId(normalized.provider)) {
+    candidates.add(normalized.provider);
+  }
+  for (const { key, entry } of safeAvailableModels()) {
+    if (key === modelId || entry.model_id === modelId) {
+      if (isProviderId(entry.provider)) {
+        candidates.add(entry.provider);
+      }
+    }
+  }
+  if (candidates.size === 0) return 'unknown';
+  if (candidates.size > 1) {
+    throw new Error(
+      `Ambiguous provider identity for model selector "${modelId}": ${[...candidates]
+        .sort()
+        .join(', ')}. Supply an explicit route provider instead of relying on a model-name lookup.`,
+    );
+  }
+  return [...candidates][0]!;
+}
+
+function resolveCapabilities(
+  provider: ResolvedProviderId,
   modelId: string,
   overrides?: Partial<ProviderCapabilities>,
-): ProviderCapabilities {
-  const provider = inferProvider(modelId);
-  const defaults = CAPABILITY_DEFAULTS[provider] ?? {
-    maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-    supportsThinking: false,
-    supportsToolChoice: true,
-    supportsParallelToolCalls: true,
-    supportsStreaming: true,
-    thinkingWithTools: 'unknown' as const,
-  };
-  // Canonical window from policy; 0 if unknown.
-  const norm = getNormalizedModelCapabilities(modelId);
-  const contextWindow = norm?.contextWindow ?? getModelContextWindow(modelId) ?? 0;
-  const maxOutputTokens = norm?.maxOutputTokens ?? defaults.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+): RoutedProviderCapabilities {
+  const defaults =
+    (provider !== 'unknown' ? CAPABILITY_DEFAULTS[provider] : undefined) ??
+    GENERIC_CAPABILITY_DEFAULTS;
+  const entry = provider === 'unknown' ? null : findRoutePolicyEntry(provider, modelId);
+  const normalized = getNormalizedModelCapabilities(modelId);
+  // A legacy policy record is trusted only when it names the same provider as
+  // the explicit route; otherwise the route wins.
+  const providerAgrees =
+    normalized !== null && isProviderId(normalized.provider) && normalized.provider === provider;
+  const normalizedWindow = providerAgrees ? normalized?.contextWindow : undefined;
+  // For an explicit route, only a provider-qualified entry (or a record that
+  // names the same provider) may supply the window; a provider-agnostic policy
+  // lookup is reserved for the `unknown` compatibility path.
+  const contextWindow =
+    entry?.context_window ??
+    entry?.context_limit ??
+    normalizedWindow ??
+    (provider === 'unknown' ? getModelContextWindow(modelId) : undefined) ??
+    0;
+  const maxOutputTokens =
+    entry?.max_output_tokens ??
+    (providerAgrees ? normalized?.maxOutputTokens : undefined) ??
+    defaults.maxOutputTokens ??
+    DEFAULT_MAX_OUTPUT_TOKENS;
 
   const base: ProviderCapabilities = {
     contextWindow,
@@ -139,7 +229,48 @@ export function resolveProviderCapabilities(
     thinkingWithTools: defaults.thinkingWithTools ?? 'unknown',
   };
 
-  return { ...base, ...overrides, contextWindow: overrides?.contextWindow ?? base.contextWindow };
+  return {
+    ...base,
+    ...overrides,
+    contextWindow: overrides?.contextWindow ?? base.contextWindow,
+    provider,
+    modelId,
+  };
+}
+
+/**
+ * Resolve capabilities for an explicit routed identity.
+ *
+ * This is the primary entrypoint: the supplied provider is authoritative. A
+ * model ID that merely contains "deepseek" or ":" never changes the provider.
+ */
+export function resolveProviderCapabilitiesForRoute(
+  ref: ModelRef,
+  overrides?: Partial<ProviderCapabilities>,
+): RoutedProviderCapabilities {
+  return resolveCapabilities(ref.provider, ref.modelId, overrides);
+}
+
+/**
+ * Compatibility adapter over {@link resolveProviderCapabilitiesForRoute}.
+ *
+ * The provider is resolved from the model-policy tuple graph — never from
+ * model-name substrings. An ambiguous selector throws.
+ */
+export function resolveProviderCapabilities(
+  modelId: string,
+  overrides?: Partial<ProviderCapabilities>,
+): ProviderCapabilities {
+  const resolved = resolveCapabilities(resolveProviderIdForSelector(modelId), modelId, overrides);
+  return {
+    contextWindow: resolved.contextWindow,
+    maxOutputTokens: resolved.maxOutputTokens,
+    supportsThinking: resolved.supportsThinking,
+    supportsToolChoice: resolved.supportsToolChoice,
+    supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+    supportsStreaming: resolved.supportsStreaming,
+    thinkingWithTools: resolved.thinkingWithTools,
+  };
 }
 
 export function contextBudgetForModel(modelId: string): ContextBudget {
@@ -301,36 +432,48 @@ export function buildContextBudgetSnapshot(input: {
   retrievedContextTokens?: number;
   contextWindow: number;
   maxOutputTokens?: number;
+  /** Per-turn output actually requested; defaults to `maxOutputTokens`. */
+  requestedOutputTokens?: number;
   toolSchemaReserve?: number;
   safetyMargin?: number;
+  /**
+   * Set when canonical/retrieved tokens are NOT already part of
+   * `nextRequestTokens`. `nextRequestTokens` is the total payload estimate, so
+   * by default the breakdown fields are informational and counted once. Only
+   * set this when the caller passes a total that excludes the breakdown.
+   */
+  breakdownExcludedFromNextRequest?: boolean;
 }): ContextBudgetSnapshot {
   const maxOutputTokens = input.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  const requestedOutputTokens = input.requestedOutputTokens ?? maxOutputTokens;
   const toolSchemaReserve = input.toolSchemaReserve ?? DEFAULT_TOOL_SCHEMA_RESERVE;
   const safetyMargin = input.safetyMargin ?? DEFAULT_SAFETY_MARGIN;
-  const budget = computeContextBudget({
-    contextWindow: input.contextWindow,
-    maxOutputTokens,
-    toolSchemaReserve,
-    safetyMargin,
-  });
   const activeWindowTokens = input.activeWindowTokens ?? input.nextRequestTokens;
   const canonicalStateTokens = input.canonicalStateTokens ?? 0;
   const retrievedContextTokens = input.retrievedContextTokens ?? 0;
   const systemToolReserve = toolSchemaReserve + safetyMargin;
-  const headroom = Math.max(
-    0,
-    budget.contextBudget - input.nextRequestTokens - canonicalStateTokens - retrievedContextTokens,
-  );
+  const promptTokens =
+    input.breakdownExcludedFromNextRequest === true
+      ? input.nextRequestTokens + canonicalStateTokens + retrievedContextTokens
+      : input.nextRequestTokens;
+  const budget = computeRequestBudget({
+    contextWindow: input.contextWindow,
+    requestedOutputTokens,
+    maxOutputTokens,
+    promptTokens,
+    toolSchemaReserve,
+    safetyMargin,
+  });
   return {
     nextRequestTokens: input.nextRequestTokens,
     systemToolReserve,
     activeWindowTokens,
     canonicalStateTokens,
     retrievedContextTokens,
-    outputReserve: maxOutputTokens,
-    headroom,
-    contextWindow: budget.contextWindow,
-    contextBudget: budget.contextBudget,
+    outputReserve: budget.selectedOutputReserve,
+    headroom: budget.status === 'fit' ? budget.capacityTokens - promptTokens : 0,
+    contextWindow: budget.contextWindow ?? 0,
+    contextBudget: budget.capacityTokens,
   };
 }
 

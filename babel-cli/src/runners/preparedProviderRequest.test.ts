@@ -123,3 +123,36 @@ test('ordinary retries keep logical request identity but allocate a new attempt 
   assert.equal(retry.body_bytes, first.body_bytes);
   assert.equal(retry.parent_request_id, null);
 });
+
+test('explicit_null_context_stays_unknown', () => {
+  // contextLimitTokens is present and null, so the deprecated inputLimitTokens
+  // alias must not substitute a value and change the admission decision.
+  const prepared = prepareProviderRequest({
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'task' }] }),
+    mode: 'native',
+    provider: 'opencode',
+    requestedModelId: 'x-preview-f-free',
+    contextLimitTokens: null,
+    inputLimitTokens: 32_000,
+    reservedCompletionTokens: 512,
+  });
+
+  assert.equal(prepared.context_limit_tokens, null);
+  assert.equal(prepared.context_limit_source, 'unknown');
+  assert.equal(prepared.admission, 'unknown');
+  assert.doesNotThrow(() => assertPreparedProviderRequestAdmissible(prepared));
+});
+
+test('legacy_input_limit_used_only_when_context_absent', () => {
+  const prepared = prepareProviderRequest({
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'task' }] }),
+    mode: 'native',
+    provider: 'opencode',
+    requestedModelId: 'x-preview-f-free',
+    inputLimitTokens: 32_000,
+    reservedCompletionTokens: 512,
+  });
+
+  assert.equal(prepared.context_limit_tokens, 32_000);
+  assert.equal(prepared.context_limit_source, 'explicit');
+});

@@ -74,10 +74,19 @@ function resolveContextLimit(input: PrepareProviderRequestInput): {
   tokens: number | null;
   source: ContextLimitSource;
 } {
-  const explicitLimit = input.contextLimitTokens ?? input.inputLimitTokens;
-  const hasExplicitLimit = input.contextLimitTokens !== undefined || input.inputLimitTokens !== undefined;
-  if (hasExplicitLimit) {
-    const tokens = normalizeTokenLimit(explicitLimit, 'contextLimitTokens') ?? null;
+  // An explicitly supplied contextLimitTokens owns the decision, including an
+  // explicit null. The deprecated inputLimitTokens alias is consulted only when
+  // contextLimitTokens is absent, so a deliberate unknown cannot be replaced by
+  // a legacy value.
+  if (input.contextLimitTokens !== undefined) {
+    const tokens = normalizeTokenLimit(input.contextLimitTokens, 'contextLimitTokens') ?? null;
+    return {
+      tokens,
+      source: tokens === null ? 'unknown' : input.contextLimitSource ?? 'explicit',
+    };
+  }
+  if (input.inputLimitTokens !== undefined) {
+    const tokens = normalizeTokenLimit(input.inputLimitTokens, 'inputLimitTokens') ?? null;
     return {
       tokens,
       source: tokens === null ? 'unknown' : input.contextLimitSource ?? 'explicit',
