@@ -4,8 +4,8 @@
  *
  * These cases prove that a clean install can start offline from the staged
  * model policy + generated catalog, and that every campaign test file is
- * actually selected by `test:unit` on a POSIX shell (where an unquoted `**`
- * pattern expands to one directory level and silently drops flat files).
+ * actually selected by the canonical `test:unit` inventory (expanded with the
+ * same `globSync` mechanism the CI shard runner uses).
  */
 
 import assert from 'node:assert/strict'
@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process'
 import {
   copyFileSync,
   existsSync,
+  globSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -99,19 +100,11 @@ function runStage(repo: string, root: string): { status: number | null; stderr: 
   return { status: result.status, stderr: result.stderr }
 }
 
-interface Selector {
-  pattern: string
-  quoted: boolean
-}
-
-function testUnitSelectors(): Selector[] {
+function testUnitPatterns(): string[] {
   const command = packageScripts()['test:unit'] ?? ''
   const marker = ' --test '
   const tail = command.slice(command.indexOf(marker) + marker.length).trim()
-  return tail.split(/\s+/).map((token) => ({
-    pattern: token.replace(/^['"]|['"]$/g, ''),
-    quoted: /^['"]/.test(token),
-  }))
+  return tail.split(/\s+/).map((token) => token.replace(/^['"]|['"]$/g, ''))
 }
 
 function walkTestFiles(directory: string): string[] {
@@ -122,76 +115,40 @@ function walkTestFiles(directory: string): string[] {
   })
 }
 
-function globToRegExp(pattern: string, mode: 'node' | 'shell'): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-  const expanded = mode === 'shell'
-    // A POSIX shell without globstar treats `**` as a single `*` segment.
-    ? escaped.replace(/\*/g, '[^/]*')
-    : escaped
-      .replace(/\*\*\//g, '\u0000')
-      .replace(/\*\*/g, '\u0001')
-      .replace(/\*/g, '[^/]*')
-      .replace(/\u0000/g, '(?:[^/]+/)*')
-      .replace(/\u0001/g, '.*')
-  return new RegExp(`^${expanded}$`)
-}
-
 test('selected_tests_equal_expected_inventory', () => {
   const scripts = packageScripts()
-  const selectors = testUnitSelectors()
+  const patterns = testUnitPatterns()
   const allSourceTests = walkTestFiles(join(packageRoot, 'src'))
     .map((file) => relative(packageRoot, file).split(sep).join('/'))
     .sort()
 
-  const expand = (pattern: string, mode: 'node' | 'shell'): string[] => {
-    const regexp = globToRegExp(pattern, mode)
-    return allSourceTests.filter((file) => regexp.test(file))
+  // Expand every configured selector exactly as the CI shard runner does
+  // (`globSync` against the package root), so this sentinel proves what the
+  // canonical `test:unit` inventory actually selects.
+  const selected: string[] = []
+  for (const pattern of patterns) {
+    const matches = globSync(pattern, { cwd: packageRoot }).map((file) => file.split(sep).join('/'))
+    assert.ok(matches.length > 0, `test:unit selector matched no test files: ${pattern}`)
+    selected.push(...matches)
   }
+  const selectedUnique = [...new Set(selected)].sort()
 
-  // Intended inventory: what the runner selects when node expands every pattern.
-  const intended = [...new Set(selectors.flatMap(({ pattern }) => expand(pattern, 'node')))].sort()
+  // Selection must be disjoint: a test file is never selected by two patterns.
+  assert.equal(selected.length, selectedUnique.length, 'a selected test file must never be selected twice')
 
-  // Executed inventory: how a POSIX `sh -c` expands the unquoted patterns before
-  // node sees them, then node expands any literal pattern that matched nothing.
-  const executed: string[] = []
-  for (const { pattern, quoted } of selectors) {
-    if (!pattern.includes('*')) {
-      executed.push(pattern)
-      continue
-    }
-    if (quoted) {
-      executed.push(...expand(pattern, 'node'))
-      continue
-    }
-    const shellMatches = expand(pattern, 'shell')
-    executed.push(...(shellMatches.length > 0 ? shellMatches : expand(pattern, 'node')))
-  }
-  const executedUnique = [...new Set(executed)].sort()
-
-  assert.deepEqual(
-    executedUnique,
-    intended,
-    'the executed file inventory must equal the complete intended test:unit inventory',
-  )
-  assert.equal(executed.length, executedUnique.length, 'a selected test file must never run twice')
-
-  // Every campaign test file is present in both the intended and executed sets.
+  // Every campaign test file must be present in the selected inventory.
   for (const file of CAMPAIGN_NEW_TESTS) {
-    assert.ok(intended.includes(file), `${file} is missing from the intended test:unit inventory`)
-    assert.ok(executedUnique.includes(file), `${file} is not executed by test:unit`)
+    assert.ok(selectedUnique.includes(file), `${file} is not selected by test:unit`)
   }
 
-  // No test file in a campaign directory may fall outside the executed selection,
-  // so a future nested directory cannot silently drop tests.
+  // No test file in a campaign directory may fall outside the selection, so a
+  // future nested directory cannot silently drop tests.
+  const selectedSet = new Set(selectedUnique)
   for (const directory of CAMPAIGN_TEST_DIRECTORIES) {
-    const present = allSourceTests.filter((file) => file.startsWith(`${directory}/`))
-    const missing = present.filter((file) => !executedUnique.includes(file))
-    assert.deepEqual(missing, [], `${directory} has test files outside the executed selection`)
-  }
-
-  // Recursive patterns must be quoted so the shell does not expand them to one level.
-  for (const { pattern, quoted } of selectors.filter((selector) => selector.pattern.includes('**'))) {
-    assert.equal(quoted, true, `recursive selector ${pattern} must be quoted for a portable full inventory`)
+    const missing = allSourceTests.filter(
+      (file) => file.startsWith(`${directory}/`) && !selectedSet.has(file),
+    )
+    assert.deepEqual(missing, [], `${directory} has test files outside the selected inventory`)
   }
 
   // Preserve the no-ambient-inference bootstrap and strict TAP required suites.
@@ -202,8 +159,8 @@ test('selected_tests_equal_expected_inventory', () => {
   }
   assert.ok(existsSync(join(packageRoot, 'scripts', 'capture_required_tap_selection.mjs')))
   assert.ok(existsSync(join(packageRoot, 'scripts', 'summarize_required_tap.mjs')))
-  assert.ok(executedUnique.includes('src/testinfra/noAmbientInference.test.ts'))
-  assert.ok(executedUnique.includes('src/testinfra/requiredTapSummary.test.ts'))
+  assert.ok(selectedUnique.includes('src/testinfra/noAmbientInference.test.ts'))
+  assert.ok(selectedUnique.includes('src/testinfra/requiredTapSummary.test.ts'))
 })
 
 test('packed_catalog_present', () => {

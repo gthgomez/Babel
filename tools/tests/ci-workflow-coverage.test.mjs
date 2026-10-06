@@ -95,6 +95,7 @@ test('stages catalog assets and defaults while removing stale resources and buil
     writeFileSync(join(root, 'prompt_catalog.yaml'), 'entries:\n  - id: sample\n    path: layer/prompt.md\n')
     writeFileSync(join(root, 'layer/prompt.md'), 'prompt')
     writeFileSync(join(root, 'config/model-policy.json'), '{}')
+    writeFileSync(join(root, 'config/model-catalog.generated.json'), '{"schemaVersion":1}')
     writeFileSync(join(root, 'config/private-local.json'), 'private sentinel')
     writeFileSync(join(root, 'babel-cli/config/runtime-mode.json'), '{}')
     writeFileSync(join(root, 'LICENSE'), 'Apache License')
@@ -109,7 +110,7 @@ test('stages catalog assets and defaults while removing stale resources and buil
     const staged = spawnSync(process.execPath, [script, root, pkg], { encoding: 'utf8' })
     assert.equal(staged.status, 0, staged.stderr)
     assert.equal(readFileSync(join(pkg, 'resources/layer/prompt.md'), 'utf8'), 'prompt')
-    for (const file of ['prompt_catalog.yaml', 'config/model-policy.json', 'babel-cli/config/runtime-mode.json']) {
+    for (const file of ['prompt_catalog.yaml', 'config/model-policy.json', 'config/model-catalog.generated.json', 'babel-cli/config/runtime-mode.json']) {
       assert.ok(existsSync(join(pkg, 'resources', file)), file)
     }
     assert.ok(existsSync(join(pkg, 'LICENSE')))
