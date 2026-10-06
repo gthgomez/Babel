@@ -79,6 +79,42 @@ selected upstream, endpoint, attempts, fallback/retry state, context
 transformation, and metadata hash are retained where exposed. Missing required
 metadata is an unknown/blocked condition, not an inferred success.
 
+## Effective model availability view
+
+The interactive `/model show` and `/model` picker render a read-only
+`ModelAvailabilityView` projected from the same canonical read path the runtime
+uses: `ModelRef`, `CatalogSnapshot`, `resolveModelSelection` (single admission
+gate), `resolvePriceQuote`, and the provider registry. The view is presentation
+only; it stores no second registry, maintains no UI-owned model list, and never
+mints an admission decision. Admitted/blocked state is copied verbatim from the
+shared gate, so a renderer cannot promote a refused route.
+
+The view surfaces:
+
+- provider-qualified requested and resolved identity (`provider:model_id`),
+  exact-case and never case-folded;
+- the selected purpose (production vs benchmark-only) and protocol;
+- the transport state, separating `connected`, listed-in-catalog but not
+  connected, and transport-not-implemented (registered but not
+  authority-certified for a live lane);
+- model and provider limits against the requested output cap, with an explicit
+  over-cap flag instead of silent clamping;
+- catalog freshness (with the freshness window) and source-read status, so an
+  old, partial, unauthorized or failed authoritative source is labeled stale
+  rather than presented as current;
+- capability support paired with its evidence level (`declared`,
+  `api_advertised`, `request_accepted`, `behavioral`), marking advertised-only
+  claims and the protocol qualification status;
+- quote provenance (source URL, verification date, quote revision) when a quote
+  is exact, and an explicit unknown reason otherwise.
+
+Deprecated vendor aliases (`claude`, `codex`, `gemini`) are explained as
+compatibility aliases that resolve to another provider's model; they are never
+presented as native Anthropic/OpenAI/Gemini models. The picker lists admitted
+routes first while still listing unavailable routes, so discovery never hides a
+model or invents an alternative. All browser/TUI rendering is non-authoritative
+and prints neither credential values nor private endpoints.
+
 ## Attribution and campaign validity
 
 `finish_reason=length` at Babel's configured ceiling is recorded as

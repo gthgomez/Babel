@@ -8,17 +8,34 @@ import { renderOperatorHeader } from '../../ui/renderers.js';
 import { getPolicyPath, type ModelPolicyModelEntry, type ResolvedModelPolicy, type ResolvedModelPolicyEntry } from '../../modelPolicy.js';
 import { handleModel } from './config.js';
 import {
+  buildModelAvailabilityView,
   nextFallbackEntry,
   readLastRouteFacts,
   renderAvailableModelsTable,
+  renderModelAvailability,
   renderModelDetail,
   renderModelHealth,
   renderModelHealthForSnapshot,
+  renderModelPicker,
   renderModelWhy,
   resolveModelSnapshot,
+  resolvePolicyModelAvailability,
   resolveStatusBarModelLabel,
   resetModelSnapshotCache,
 } from './modelDetail.js';
+import { createCatalogSnapshot } from '../../intelligence/catalog.js';
+import type {
+  CapabilityEvidenceLevel,
+  CapabilityObservation,
+  CapabilitySupport,
+  CatalogSnapshot,
+  CatalogSourceCompleteness,
+  CatalogSourceStatus,
+  PricingProfile,
+  ProtocolProfile,
+} from '../../intelligence/types.js';
+import type { ConfiguredRoute } from '../../intelligence/route-selection.js';
+import type { ProviderId } from '../../runners/providerRegistry.js';
 import type { ReplContext } from '../context.js';
 
 function makeCtx(partial?: Partial<ReplContext>): ReplContext {
@@ -786,4 +803,283 @@ test('acceptance: /model show|why|health answer the five questions honestly', ()
     fallbackRow!.includes('configured') || fallbackRow!.includes('none configured'),
     'fallback row must state configuration honestly',
   );
+});
+
+// ═══ C07 acceptance: effective model availability (read-only projection) ═════
+
+function routeFixture(overrides: Partial<ConfiguredRoute> & { routeId: string }): ConfiguredRoute {
+  return {
+    ref: { provider: 'deepseek', modelId: 'deepseek-v4-flash' },
+    enabled: true,
+    requiredOperation: 'structured',
+    ...overrides,
+  };
+}
+
+function capabilityObservation(
+  evidenceLevel: CapabilityEvidenceLevel,
+  support: CapabilitySupport = 'supported',
+): CapabilityObservation {
+  const state = evidenceLevel === 'behavioral'
+    ? 'behaviorally_verified'
+    : evidenceLevel === 'request_accepted'
+      ? 'request_accepted'
+      : evidenceLevel === 'api_advertised'
+        ? 'api_advertised'
+        : 'declared';
+  return { state, support, evidenceLevel };
+}
+
+function makeCatalog(options: {
+  observedAt?: string;
+  sourceStatus?: CatalogSourceStatus;
+  sourceCompleteness?: CatalogSourceCompleteness;
+  provider?: ProviderId;
+  providerModelId?: string;
+  canonicalModelId?: string;
+  qualification?: ProtocolProfile['qualificationStatus'];
+  toolBasic?: CapabilityObservation;
+  providerLimits?: { contextTokens?: number; maxOutputTokens?: number };
+  declaredLimits?: { contextTokens?: number; maxOutputTokens?: number };
+  pricing?: PricingProfile;
+} = {}): CatalogSnapshot {
+  const observedAt = options.observedAt ?? '2026-10-06T00:00:00.000Z';
+  const provider = options.provider ?? 'deepseek';
+  const providerModelId = options.providerModelId ?? 'deepseek-v4-flash';
+  const canonicalModelId = options.canonicalModelId ?? providerModelId;
+  const protocol: ProtocolProfile = {
+    protocol: 'chat_completions',
+    streaming: capabilityObservation('api_advertised'),
+    reasoning: { enabled: capabilityObservation('declared') },
+    tools: {
+      basicTools: options.toolBasic ?? capabilityObservation('declared'),
+      streamingTools: capabilityObservation('declared'),
+      sequentialTools: capabilityObservation('declared'),
+      parallelTools: capabilityObservation('declared'),
+      toolChoiceAuto: capabilityObservation('declared'),
+      toolChoiceRequired: capabilityObservation('declared'),
+      toolChoiceSpecific: capabilityObservation('declared'),
+      strictArgumentSchema: capabilityObservation('declared'),
+      reasoningToolInterleave: capabilityObservation('declared'),
+      reasoningReplayAcrossTurns: capabilityObservation('declared'),
+      multipleToolRounds: capabilityObservation('declared'),
+    },
+    structuredOutput: {
+      jsonObjectMode: capabilityObservation('declared'),
+      jsonSchemaMode: capabilityObservation('declared'),
+      strictSchemaEnforcement: capabilityObservation('declared'),
+      structuredOutputWithTools: capabilityObservation('declared'),
+      structuredOutputStreaming: capabilityObservation('declared'),
+    },
+    supportedParameters: [],
+    qualificationStatus: options.qualification ?? 'qualified',
+  };
+  return createCatalogSnapshot({
+    observedAt,
+    sourceResults: [
+      {
+        sourceId: 'fixture-source',
+        status: options.sourceStatus ?? 'ok',
+        completeness: options.sourceCompleteness ?? 'complete',
+        fetchedAt: observedAt,
+      },
+    ],
+    labModels: [
+      {
+        schemaVersion: 1,
+        canonicalModelId,
+        family: 'Fixture',
+        modalities: { input: ['text'], output: ['text'] },
+        declaredLimits: options.declaredLimits ?? { contextTokens: 1_000_000, maxOutputTokens: 384_000 },
+        nativeCapabilities: {},
+        sourceEvidence: [{ source: 'official_docs', retrievedAt: observedAt }],
+      },
+    ],
+    providerModels: [
+      {
+        schemaVersion: 1,
+        provider,
+        canonicalModelId,
+        providerModelId,
+        protocolProfiles: [protocol],
+        providerLimits: options.providerLimits ?? { contextTokens: 1_000_000, maxOutputTokens: 384_000 },
+        ...(options.pricing ? { pricing: options.pricing } : {}),
+        lifecycle: { status: 'active' },
+        sourceEvidence: [{ source: 'provider_api', retrievedAt: observedAt }],
+        observedEvidence: [],
+      },
+    ],
+  });
+}
+
+test('model_detail_shows_effective_block_reason', () => {
+  const blockedRoute = routeFixture({ routeId: 'blocked-route', enabled: false });
+  const availableRoute = routeFixture({ routeId: 'available-route' });
+
+  const blocked = buildModelAvailabilityView({
+    requested: 'blocked-route',
+    mode: 'benchmark_strict',
+    routes: [blockedRoute, availableRoute],
+  });
+  assert.equal(blocked.status, 'blocked');
+  assert.equal(blocked.admission.admitted, false);
+  assert.ok(blocked.blockedReason, 'a blocked selection must expose the typed reason');
+  const blockedText = renderModelAvailability(blocked).join('\n');
+  assert.match(blockedText, /Blocked/);
+  assert.ok(blockedText.includes(blocked.blockedReason!), 'render must carry the effective reason verbatim');
+
+  const valid = buildModelAvailabilityView({
+    requested: 'available-route',
+    mode: 'benchmark_strict',
+    routes: [blockedRoute, availableRoute],
+  });
+  assert.equal(valid.status, 'resolved');
+  assert.equal(valid.admission.admitted, true);
+  assert.equal(valid.blockedReason, null);
+  assert.ok(!renderModelAvailability(valid).join('\n').includes('Blocked'));
+});
+
+test('vendor_alias_does_not_claim_vendor_model', () => {
+  const view = buildModelAvailabilityView({
+    requested: 'claude',
+    mode: 'production_resilient',
+    routes: [routeFixture({ routeId: 'deepseek-v4-flash' })],
+    aliases: [{ alias: 'claude', target: 'deepseek-v4-flash' }],
+  });
+
+  assert.equal(view.status, 'resolved');
+  assert.equal(view.aliasUsed, true);
+  assert.ok(view.vendorAlias);
+  assert.equal(view.vendorAlias!.impliedVendor, 'anthropic');
+  assert.equal(view.vendorAlias!.mismatchedVendor, true);
+  assert.equal(view.ref!.provider, 'deepseek');
+  assert.equal(view.providerQualifiedId, 'deepseek:deepseek-v4-flash');
+
+  const rendered = renderModelAvailability(view).join('\n');
+  assert.match(rendered, /compatibility alias/);
+  assert.match(rendered, /not a native Anthropic model/);
+  assert.ok(!rendered.includes('anthropic:'), 'the alias must not be presented as an Anthropic route');
+});
+
+test('stale_catalog_is_labeled', () => {
+  const route = routeFixture({ routeId: 'deepseek-v4-flash' });
+  const now = new Date('2026-10-06T12:00:00.000Z');
+
+  const fresh = buildModelAvailabilityView({
+    requested: 'deepseek-v4-flash',
+    mode: 'production_resilient',
+    routes: [route],
+    catalog: makeCatalog({ observedAt: '2026-10-06T00:00:00.000Z' }),
+    now,
+  });
+  assert.equal(fresh.freshness.status, 'fresh');
+
+  const stale = buildModelAvailabilityView({
+    requested: 'deepseek-v4-flash',
+    mode: 'production_resilient',
+    routes: [route],
+    catalog: makeCatalog({ observedAt: '2026-08-01T00:00:00.000Z' }),
+    now,
+  });
+  assert.equal(stale.freshness.status, 'stale');
+  const staleText = renderModelAvailability(stale).join('\n');
+  assert.match(staleText, /stale/);
+  assert.match(staleText, /window 30/);
+
+  // An authoritative-but-degraded source read is also labeled, never trusted.
+  const degraded = buildModelAvailabilityView({
+    requested: 'deepseek-v4-flash',
+    mode: 'production_resilient',
+    routes: [route],
+    catalog: makeCatalog({ sourceStatus: 'partial', sourceCompleteness: 'partial' }),
+    now,
+  });
+  assert.equal(degraded.freshness.status, 'stale');
+  assert.match(renderModelAvailability(degraded).join('\n'), /partial/);
+});
+
+test('ui_does_not_mint_admission', () => {
+  const dormant = routeFixture({
+    routeId: 'ox-alpha-free',
+    ref: { provider: 'opencode', modelId: 'x-preview-f-free' },
+  });
+  const view = buildModelAvailabilityView({
+    requested: 'ox-alpha-free',
+    mode: 'production_resilient',
+    routes: [dormant],
+  });
+
+  assert.equal(view.status, 'blocked');
+  assert.equal(view.admission.admitted, false);
+  assert.equal(view.admission.code, 'provider_uncertified');
+  assert.equal(view.transport, 'not_implemented');
+  assert.doesNotMatch(renderModelAvailability(view).join('\n'), /admitted/i);
+
+  const candidate = view.candidates.find((entry) => entry.routeId === 'ox-alpha-free');
+  assert.ok(candidate);
+  assert.equal(candidate!.usable, false, 'the renderer cannot promote a refused route to usable');
+  assert.match(renderModelPicker(view), /unavailable \(provider_uncertified\)/);
+});
+
+test('model_picker_uses_shared_view', () => {
+  resetModelSnapshotCache();
+  const ctx = makeCtx();
+  const output = captureConsole(() => handleModel(ctx, [])).join('\n');
+  assert.match(output, /usable first — unavailable models are still listed/);
+
+  const snapshot = resolveModelSnapshot(undefined);
+  assert.ok(snapshot);
+  const view = resolvePolicyModelAvailability({
+    requested: ctx.state.model ?? snapshot!.policy.resolvedBackendKey,
+  });
+  assert.ok(view);
+  assert.ok(
+    output.includes(renderModelPicker(view!)),
+    'the picker must render the shared availability projection, not a UI-owned list',
+  );
+});
+
+test('availability_covers_listed_advertised_preview_and_policy_denied', () => {
+  // Catalog listed but not connected: a known profile with no configured route.
+  const listed = buildModelAvailabilityView({
+    requested: 'deepseek:deepseek-v4-flash',
+    mode: 'production_resilient',
+    routes: [],
+    catalog: makeCatalog({}),
+  });
+  assert.equal(listed.status, 'blocked');
+  assert.equal(listed.transport, 'listed_not_connected');
+
+  // Advertised-only tools: evidence level is a vendor claim, not behavior.
+  const advertised = buildModelAvailabilityView({
+    requested: 'deepseek-v4-flash',
+    mode: 'production_resilient',
+    routes: [routeFixture({ routeId: 'deepseek-v4-flash' })],
+    catalog: makeCatalog({ toolBasic: capabilityObservation('api_advertised') }),
+  });
+  const basicTools = advertised.capabilities.find((row) => row.capability === 'tools.basic');
+  assert.ok(basicTools);
+  assert.equal(basicTools!.evidenceLevel, 'api_advertised');
+  assert.equal(basicTools!.advertisedOnly, true);
+
+  // Preview model: lifecycle is provisional and labeled.
+  const preview = buildModelAvailabilityView({
+    requested: 'ox-alpha-free',
+    mode: 'production_resilient',
+    routes: [routeFixture({ routeId: 'ox-alpha-free', ref: { provider: 'opencode', modelId: 'x-preview-f-free' } })],
+  });
+  assert.equal(preview.preview, true);
+
+  // Policy denied: the shared gate's explicit denial is surfaced verbatim.
+  const denied = buildModelAvailabilityView({
+    requested: 'opencode-route',
+    mode: 'qualification',
+    routes: [routeFixture({ routeId: 'opencode-route', ref: { provider: 'opencode', modelId: 'x-preview-f-free' } })],
+    authorizations: [
+      { ref: { provider: 'opencode', modelId: 'x-preview-f-free' }, decision: { allowed: false, reason: 'not qualified' } },
+    ],
+  });
+  assert.equal(denied.status, 'blocked');
+  assert.equal(denied.admission.code, 'authorization_denied');
+  assert.match(renderModelAvailability(denied).join('\n'), /not qualified/);
 });

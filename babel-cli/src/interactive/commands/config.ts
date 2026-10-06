@@ -23,10 +23,13 @@ import { globalCostTracker } from '../../services/costTracker.js';
 import { VALID_MODES } from '../../cli/constants.js';
 import { getRecentRuns } from '../utils.js';
 import {
+  renderAvailableModelsTable,
   renderModelDetail,
   renderModelHealth,
+  renderModelPicker,
   renderModelWhy,
   resolveModelSnapshot,
+  resolvePolicyModelAvailability,
   resetModelSnapshotCache,
 } from './modelDetail.js';
 import { loadInspectBundle, buildInspectRunView } from '../../inspect/loaders.js';
@@ -266,7 +269,10 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
     if (!snapshot) {
       console.log(muted('\n  Model policy could not be resolved — run /doctor for details.'));
     } else {
-      console.log(renderModelDetail(snapshot));
+      const availability = resolvePolicyModelAvailability({
+        requested: ctx.state.model ?? snapshot.policy.resolvedBackendKey,
+      });
+      console.log(renderModelDetail(snapshot, availability ?? undefined));
     }
     return;
   }
@@ -378,18 +384,20 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
         console.log(muted('\n  No model set — using auto (route-selected default)'));
       }
     }
-    console.log(primary('\n  Available Models:'));
-    const available = getAvailableModels()
-      .map(
-        (m) =>
-          `    - ${accentBright(padRight(m.key, 12))} ${muted(`$${padRight((m.entry.estimated_cost_per_1m_output ?? 0).toString(), 6)}/M`)}${m.entry.selection_reason ? `  ${muted(m.entry.selection_reason)}` : ''}`,
-      )
-      .join('\n');
+    const pickerSnapshot = resolveModelSnapshot(undefined);
+    const pickerView = resolvePolicyModelAvailability({
+      requested: ctx.state.model ?? pickerSnapshot?.policy.resolvedBackendKey ?? '',
+    });
+    if (pickerView) {
+      console.log(`\n${renderModelPicker(pickerView)}`);
+    } else {
+      console.log(primary('\n  Available Models:'));
+      console.log(renderAvailableModelsTable());
+    }
     const aliases = Object.keys(MODEL_ALIASES)
       .sort()
       .map((a) => `    - ${accentBright(padRight(a, 12))} ${muted(`alias`)}`)
       .join('\n');
-    console.log(available);
     console.log(primary('\n  Model Aliases:'));
     console.log(aliases);
     console.log(
