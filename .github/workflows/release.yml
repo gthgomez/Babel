@@ -1,0 +1,151 @@
+name: Release
+
+# Builds the Windows portable bundle for a v* tag and opens a DRAFT GitHub
+# Release for owner review. Publishing the draft is a separate, deliberate
+# owner action (distribution authorization); this workflow never publishes.
+# Policy: docs/guides/RELEASE.md; artifact producer: babel-desktop/scripts/package-windows.mjs.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v* tag to build (e.g. v0.1.1)"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-portable:
+    name: Build Windows portable bundle
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          case "$TAG" in
+            v*) ;;
+            *) echo "::error::Refusing non-release tag '$TAG' (expected v*)"; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js 24.13.1 (pinned runtime required by the packager)
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v4
+        with:
+          node-version: "24.13.1"
+
+      - name: Install desktop dependencies
+        run: npm --prefix babel-desktop ci
+
+      - name: Install CLI dependencies
+        run: npm --prefix babel-cli ci
+
+      - name: Download pinned Node runtime archive
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v24.13.1/node-v24.13.1-win-x64.zip" `
+            -OutFile "$env:RUNNER_TEMP/node-v24.13.1-win-x64.zip"
+
+      - name: Download pinned Electron archive
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-win32-x64.zip" `
+            -OutFile "$env:RUNNER_TEMP/electron-v44.5.1-win32-x64.zip"
+
+      # The packager independently enforces the pinned SHA256 values for both
+      # archives and refuses a dirty tree; it is the source of truth, not this
+      # workflow.
+      - name: Build portable bundle
+        shell: pwsh
+        run: >
+          npm --prefix babel-desktop run package:windows --
+          "--node-archive=$env:RUNNER_TEMP/node-v24.13.1-win-x64.zip"
+          "--electron-archive=$env:RUNNER_TEMP/electron-v44.5.1-win32-x64.zip"
+          "--output=$env:RUNNER_TEMP/release-out"
+
+      - name: Verify build provenance against the tag
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "$env:RUNNER_TEMP/release-out"
+          $tag = "${{ steps.tag.outputs.tag }}"
+          $version = "${{ steps.tag.outputs.version }}"
+          foreach ($f in @('SHA256SUMS', 'manifest.json')) {
+            if (-not (Test-Path (Join-Path $out $f))) { throw "Missing build artifact: $f" }
+          }
+          $build = Get-ChildItem -Path $out -Recurse -Filter BUILD.json | Select-Object -First 1
+          if (-not $build) { throw "Missing BUILD.json in bundle" }
+          $meta = Get-Content $build.FullName -Raw | ConvertFrom-Json
+          if ($meta.version -ne $version) { throw "BUILD.json version $($meta.version) does not match tag $tag" }
+          if ($meta.signed -ne $false) { throw "Unexpected signed state in BUILD.json" }
+          if ($meta.platform -ne 'win32-x64') { throw "Unexpected platform $($meta.platform)" }
+          Write-Host "Provenance OK: version $version at source $($meta.sourceSha)"
+
+      - name: Re-verify SHA256SUMS
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "$env:RUNNER_TEMP/release-out"
+          $line = (Get-Content (Join-Path $out 'SHA256SUMS') | Select-Object -First 1)
+          $parts = $line -split '\s+', 2
+          $expected = $parts[0].Trim('*')
+          $file = $parts[1].Trim('*').Trim()
+          $actual = (Get-FileHash (Join-Path $out $file) -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected.ToLowerInvariant()) { throw "SHA256SUMS mismatch for $file" }
+          Write-Host "SHA256SUMS verified for $file"
+
+      # Stage exactly the distributable set into the workspace so the release
+      # step uses plain relative paths. The CLI pack tarball produced by the
+      # packager is attached for transparency; npm publishing is a separate
+      # authorized flow, not this workflow.
+      - name: Stage release artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "$env:RUNNER_TEMP/release-out"
+          New-Item -ItemType Directory -Path release-dist -Force | Out-Null
+          Copy-Item (Join-Path $out '*.zip') release-dist/
+          Copy-Item (Join-Path $out 'SHA256SUMS') release-dist/
+          Copy-Item (Join-Path $out 'manifest.json') release-dist/
+          Copy-Item (Join-Path $out '*.tgz') release-dist/
+          Get-ChildItem release-dist | ForEach-Object { Write-Host ("staged: " + $_.Name) }
+
+      - name: Create draft GitHub release with artifacts
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Babel ${{ steps.tag.outputs.tag }}"
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: release-dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-build-evidence
+          path: |
+            ${{ runner.temp }}/release-out/BUILD.json
+          if-no-files-found: ignore
+          retention-days: 14
