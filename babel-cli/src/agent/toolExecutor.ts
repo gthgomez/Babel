@@ -42,6 +42,7 @@ import {
   type ToolResult,
 } from '../localTools.js';
 import { resolveExecutorDryRun } from '../config/dryRun.js';
+import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js';
 import { isPathInside } from '../services/targetResolver.js';
 import type { AgentAction } from './actions.js';
 import { modelToolNameToExecutor } from './canonicalToolMapping.js';
@@ -131,8 +132,16 @@ function resetBlocks(runId: string): void {
   sessionBlocks.delete(runId);
 }
 
+/**
+ * Runs whose default-dry-run governed mutation was confirmed. A later
+ * authoritative verifier in the same run may execute without flipping the
+ * process-wide dry-run flag. Explicit dry-run and shadow capture never enter.
+ */
+const liveCertifiedRunIds = new Set<string>();
+
 export function resetCircuitBreaker(): void {
   sessionBlocks.clear();
+  liveCertifiedRunIds.clear();
 }
 
 export function resetCircuitBreakerForRun(runId: string): void {
@@ -656,6 +665,11 @@ async function rollbackBatchTx(
 function resolveInvocationLiveDefault(): boolean {
   if (process.env['BABEL_SHADOW_ROOT'] !== undefined) return false;
   return resolveExecutorDryRun().source === 'default';
+}
+
+function isCertificationCommand(action: AgentAction): boolean {
+  if (action.type !== 'run_command' && action.type !== 'test_run') return false;
+  return isAuthoritativeVerifierCommand(action.command);
 }
 
 export async function executeActionWithPolicy(
@@ -1183,9 +1197,15 @@ export async function executeActionWithPolicy(
     // process "live", and concurrent sessions with different decisions stay
     // isolated. An operator's explicit choice (persisted flags, BABEL_DRY_RUN,
     // BABEL_LIVE) and shadow capture runs are unaffected.
+    const defaultLive = resolveInvocationLiveDefault();
+    // The live override stays on this dispatch. After a confirmed governed
+    // mutation, a later authoritative verifier in the same run is also live;
+    // every other command, and any explicit dry-run or shadow session, is not.
     const invocationLive =
-      effectClass === 'reconcilable_mutation' &&
-      resolveInvocationLiveDefault();
+      (effectClass === 'reconcilable_mutation' && defaultLive) ||
+      (defaultLive &&
+        liveCertifiedRunIds.has(context.runId) &&
+        isCertificationCommand(action));
     const executionContext: ToolContext = {
       ...context,
       sessionId: context.sessionId ?? context.runId,
@@ -1445,6 +1465,9 @@ export async function executeActionWithPolicy(
       }
     }
 
+    if (invocationLive && effectClass === 'reconcilable_mutation' && context.runId) {
+      liveCertifiedRunIds.add(context.runId);
+    }
     return {
       ...execution,
       policyDecision,

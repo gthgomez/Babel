@@ -686,6 +686,7 @@ async function handleShellExec(
       exit_code: 0,
       stdout: `[DRY RUN] Would execute: ${req.command}`,
       stderr: '',
+      simulated: true,
     };
   }
 
@@ -710,6 +711,7 @@ async function handleTestRun(
       exit_code: 0,
       stdout: `[DRY RUN] Would run tests: ${req.command}`,
       stderr: '',
+      simulated: true,
     };
   }
 

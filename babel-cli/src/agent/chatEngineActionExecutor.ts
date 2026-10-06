@@ -1654,6 +1654,7 @@ export class ChatEngineActionExecutor {
               projectRoot: this.host.options.projectRoot,
               command: target,
               exitCode: lastResult.exit_code,
+              simulated: lastResult.simulated === true,
               summary: formatVerifierReceiptSummary({
                 verifierId: target,
                 command: target,
@@ -1800,7 +1801,11 @@ export class ChatEngineActionExecutor {
             );
             this.host.persistRecoveryWorkingState();
             this.host.lastVerifierFailed = true;
-          } else if (lastResult.exit_code === 0 && !confirmedShellMutation) {
+          } else if (
+            lastResult.exit_code === 0 &&
+            !confirmedShellMutation &&
+            lastResult.simulated !== true
+          ) {
             invalidateVerifierLedger(
               this.host as never,
               "non-verifier shell command executed",
@@ -1809,7 +1814,7 @@ export class ChatEngineActionExecutor {
 
           // A command can mutate files and then fail. Prefer the executor's
           // changed-path receipt; without one, invalidate conservatively.
-          if (!result.policyBlocked) {
+          if (!result.policyBlocked && lastResult.simulated !== true) {
             if (result.mutationPaths && result.mutationPaths.length > 0) {
               for (const changedPath of result.mutationPaths) {
                 const changedKey = this.host.readCacheKey(changedPath);

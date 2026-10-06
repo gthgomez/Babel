@@ -17,8 +17,8 @@
  *  - a receipt with no evaluable bound revision fails closed to execution.
  */
 import assert from 'node:assert/strict';
-import { after, before, describe, test } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { join } from 'node:path';
@@ -35,6 +35,9 @@ import {
   verifierExecutionFingerprint,
 } from '../services/verifierIdentity.js';
 import { bindChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
+import { ChatEngine } from './chatEngine.js';
+import { resetCircuitBreaker } from './toolExecutor.js';
+import { refreshDryRunState } from '../localTools.js';
 
 describe('verifier cache identity', () => {
   const projectRoot = '/repo/root';
@@ -188,5 +191,115 @@ describe('verifier execution identity preserves argument semantics', () => {
       verifierExecutionFingerprint('npm test'),
       verifierExecutionFingerprint('npm test -- --coverage'),
     );
+  });
+
+  test('quoted spacing and empty arguments stay distinct executions', () => {
+    const oneSpace = 'npm test -- "a b"';
+    const twoSpaces = 'npm test -- "a  b"';
+    const emptyArg = 'npm test -- ""';
+    const absentArg = 'npm test --';
+    assert.equal(classifyVerifierScope(oneSpace), classifyVerifierScope(twoSpaces));
+    assert.notEqual(verifierExecutionFingerprint(oneSpace), verifierExecutionFingerprint(twoSpaces));
+    assert.notEqual(verifierExecutionFingerprint(emptyArg), verifierExecutionFingerprint(absentArg));
+    assert.notEqual(
+      resolveVerifierCacheIdentity({ projectRoot, command: oneSpace }).key,
+      resolveVerifierCacheIdentity({ projectRoot, command: twoSpaces }).key,
+    );
+    assert.notEqual(
+      resolveVerifierCacheIdentity({ projectRoot, command: emptyArg }).key,
+      resolveVerifierCacheIdentity({ projectRoot, command: absentArg }).key,
+    );
+    assert.equal(
+      verifierExecutionFingerprint(oneSpace),
+      verifierExecutionFingerprint(oneSpace),
+    );
+  });
+});
+
+describe('verifier cache executions follow argv identity', { concurrency: false }, () => {
+  const managed = ['BABEL_LIVE', 'BABEL_DRY_RUN', 'BABEL_SHADOW_ROOT', 'BABEL_CONFIG_DIR', 'BABEL_DRY_RUN_SOURCE', 'BABEL_EXECUTION_PROFILE', 'BABEL_ALLOW_HOST_FALLBACK'];
+  let snapshot: Record<string, string | undefined>;
+  let root: string;
+  let configDir: string;
+
+  beforeEach(() => {
+    resetCircuitBreaker();
+    snapshot = Object.fromEntries(managed.map((key) => [key, process.env[key]]));
+    for (const key of managed) delete process.env[key];
+    root = mkdtempSync(join(tmpdir(), 'babel-verifier-argv-'));
+    configDir = mkdtempSync(join(tmpdir(), 'babel-verifier-argv-cfg-'));
+    process.env['BABEL_CONFIG_DIR'] = configDir;
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+    refreshDryRunState();
+    const log = join(tmpdir(), `babel-verifier-argv-log-${root.split(/[\\/]/).at(-1)}`);
+    writeFileSync(join(root, 'fixture.txt'), 'initial\n', 'utf8');
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ private: true, scripts: { test: 'node record-argv.mjs' } }),
+      'utf8',
+    );
+    writeFileSync(
+      join(root, 'record-argv.mjs'),
+      `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + '\\n');\n`,
+      'utf8',
+    );
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(snapshot)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    refreshDryRunState();
+    rmSync(join(tmpdir(), `babel-verifier-argv-log-${root.split(/[\\/]/).at(-1)}`), { force: true });
+    rmSync(root, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  test('distinct quoted commands execute separately and an identical command is reused', async () => {
+    const log = join(tmpdir(), `babel-verifier-argv-log-${root.split(/[\\/]/).at(-1)}`);
+    const lines = (): string[] => existsSync(log)
+      ? readFileSync(log, 'utf8').trim().split(/\r?\n/).filter((line) => line.length > 0)
+      : [];
+    const engine = new ChatEngine({ task: 'verify the fixture', projectRoot: root });
+    const context = {
+      runId: 'verifier-argv',
+      agentId: 'test-agent',
+      projectRoot: root,
+      babelRoot: root,
+      runDir: configDir,
+    };
+    const call = (engine as unknown as {
+      executeOneAction: (...args: unknown[]) => Promise<{ observation: string }>;
+    }).executeOneAction.bind(engine);
+    await call(
+      { type: 'write_file', path: join(root, 'fixture.txt'), content: 'updated\n' },
+      context,
+      {},
+      { index: 0, ownerGeneration: 0 },
+    );
+    const run = (command: string, index: number) => call(
+      { type: 'run_command', command },
+      context,
+      {},
+      { index, ownerGeneration: 0 },
+    );
+    const oneSpace = 'npm test -- "a b"';
+    const twoSpaces = 'npm test -- "a  b"';
+    const emptyArg = 'npm test -- ""';
+    const absentArg = 'npm test --';
+    const first = await run(oneSpace, 1);
+    const second = await run(twoSpaces, 2);
+    const empty = await run(emptyArg, 3);
+    const absent = await run(absentArg, 4);
+    assert.equal(lines().length, 4, `expected four executions, got ${lines().join(' | ')} after ${first.observation}`);
+    assert.notEqual(lines()[0], lines()[1], 'one-space and two-space patterns must reach the process');
+    assert.notEqual(lines()[2], lines()[3], 'empty and absent arguments must reach the process');
+    assert.doesNotMatch(second.observation, /Verifier result unchanged/);
+    assert.doesNotMatch(empty.observation, /Verifier result unchanged/);
+    assert.doesNotMatch(absent.observation, /Verifier result unchanged/);
+    const repeated = await run(oneSpace, 5);
+    assert.equal(lines().length, 4, 'an identical command reuses the current receipt');
+    assert.match(repeated.observation, /Verifier result unchanged/);
   });
 });

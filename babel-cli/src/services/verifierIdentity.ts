@@ -13,6 +13,8 @@
  * Pure helpers; no I/O.
  */
 
+import { parseCommandArgv } from '../utils/commandArgv.js';
+
 export type VerifierScope = 'full' | 'targeted' | 'unknown';
 
 export interface VerifierIdentity {
@@ -108,17 +110,19 @@ export function classifyVerifierScope(command: string): VerifierScope {
  * case-folding of arguments.
  */
 export function verifierExecutionFingerprint(command: string): string {
-  const display = cleanCommand(command);
-  if (!display) return '';
-  const tokens = tokenizeCommand(display);
-  if (tokens.length === 0) return '';
-  return tokens
-    .map((token, index) => (index === 0 ? normalizeExecutable(token) : stripQuotes(token)))
+  const trimmed = command.trim();
+  if (!trimmed) return '';
+  // Identity is the argv the sandbox would execute. Coverage matching keeps
+  // its own collapsed tokenizer; do not run that cleanup first.
+  let argv: string[];
+  try {
+    argv = parseCommandArgv(trimmed);
+  } catch {
+    return `unparsed\u0000${trimmed}`;
+  }
+  return argv
+    .map((token, index) => (index === 0 ? normalizeExecutable(token) : token))
     .join('\u0000');
-}
-
-function stripQuotes(token: string): string {
-  return token.replace(/^['"]|['"]$/g, '');
 }
 
 /**

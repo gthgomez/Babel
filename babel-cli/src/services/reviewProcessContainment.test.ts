@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
-import { attachWindowsReviewJobObject, resolveWindowsReviewHost } from './reviewProcessContainment.js'
+import {
+  attachWindowsReviewJobObject,
+  resolveWindowsReviewHost,
+  WINDOWS_JOB_COMPILE_TIMEOUT_MS,
+  WINDOWS_JOB_HELPER_TIMEOUT_MS,
+} from './reviewProcessContainment.js'
 
 test('Windows review host uses only the standard absolute system runtime', () => {
   const probes: string[] = []
@@ -136,7 +141,10 @@ setInterval(() => {}, 100);
   let workerPid = 0
   let grandchildPid = 0
   try {
-    const containment = await waitForJson(containmentState)
+    const containment = await waitForJson(
+      containmentState,
+      WINDOWS_JOB_COMPILE_TIMEOUT_MS + WINDOWS_JOB_HELPER_TIMEOUT_MS + 5_000,
+    )
     assert.equal(
       containment['kind'],
       process.platform === 'win32' ? 'windows_job_object' : 'posix_process_group',

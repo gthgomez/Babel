@@ -182,7 +182,10 @@ export async function captureAndRecordVerifierReceipt(input: {
   toolCallId?: string;
   /** Composite cache slot identity; derived from command+cwd+env when omitted. */
   cacheIdentity?: { key: string; cwd: string; envKey: string };
+  /** The command was not started. A synthetic exit must not enter the ledger. */
+  simulated?: boolean;
 }): Promise<BoundChatVerifierReceipt | null> {
+  if (input.simulated === true) return null;
   const receipt = await captureChatVerifierReceipt(input);
   if (!receipt) return null;
   const caveats = verifierEvidenceCaveats(receipt);

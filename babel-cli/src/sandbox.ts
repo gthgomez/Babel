@@ -136,6 +136,11 @@ export interface ToolResult {
   checkpoint_ids?: string[];
   render_intent?: ToolRenderIntent;
   failure?: ToolResultFailure;
+  /**
+   * True when no process was started. A zero exit then means the command
+   * never ran, and it must not be recorded as verifier evidence.
+   */
+  simulated?: boolean;
 }
 
 /**
