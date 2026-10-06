@@ -13,6 +13,12 @@ export interface MutationBatchTransaction {
   postRevisionHash?: string;
   changedBytes: number;
   status: 'open' | 'committed' | 'rolled_back' | 'conflicted';
+  /**
+   * True when observed post-images matched caller-supplied expected post-images.
+   * Undefined when no expectation was supplied; commitBatch alone never proves
+   * the requested write happened — it only records observed bytes.
+   */
+  verified?: boolean;
 }
 
 export interface MutationBatchReceipt {
@@ -48,7 +54,7 @@ export class WorkspaceTransactionManager {
           } catch (e: any) {
             if (e.code === 'ENOENT') {
               preImages[p] = null;
-              preBatchHash[p] = this.hashString('');
+              preBatchHash[p] = this.missingPathDigest();
             } else {
               throw e;
             }
@@ -74,7 +80,16 @@ export class WorkspaceTransactionManager {
 
   static async commitBatch(
     tx: MutationBatchTransaction,
-    options: { lockContext?: FileLockContext | undefined } = {},
+    options: {
+      lockContext?: FileLockContext | undefined;
+      /**
+       * Expected post-image content per path. When supplied, commitBatch
+       * verifies the observed bytes actually match the requested post-image
+       * and records the result in `tx.verified` (status becomes 'conflicted'
+       * on mismatch). A path expected to still not exist is expressed as null.
+       */
+      expectedPostImages?: Record<string, string | null>;
+    } = {},
   ): Promise<MutationBatchTransaction> {
     for (const p of Object.keys(tx.preImages)) {
       await FileWriteMutex.runExclusive(
@@ -87,7 +102,7 @@ export class WorkspaceTransactionManager {
           } catch (e: any) {
             if (e.code === 'ENOENT') {
               tx.postImages[p] = null;
-              tx.postBatchHash[p] = this.hashString('');
+              tx.postBatchHash[p] = this.missingPathDigest();
             } else {
               throw e;
             }
@@ -101,7 +116,21 @@ export class WorkspaceTransactionManager {
       0,
     );
     tx.postRevisionHash = this.revisionHash(tx.postBatchHash);
-    tx.status = 'committed';
+    if (options.expectedPostImages) {
+      const expected = options.expectedPostImages;
+      const expectedPaths = Object.keys(expected).sort();
+      const observedPaths = Object.keys(tx.postBatchHash).sort();
+      tx.verified =
+        expectedPaths.length === observedPaths.length &&
+        expectedPaths.every((p) => {
+          const expectedHash =
+            expected[p] === null ? this.missingPathDigest() : this.hashString(expected[p]!);
+          return tx.postBatchHash[p] === expectedHash;
+        });
+      tx.status = tx.verified ? 'committed' : 'conflicted';
+    } else {
+      tx.status = 'committed';
+    }
     if (tx.sessionId) this.latestBySession.set(tx.sessionId, tx);
     return tx;
   }
@@ -141,7 +170,7 @@ export class WorkspaceTransactionManager {
             }
           } catch (e: any) {
             if (e.code === 'ENOENT') {
-              if (tx.preBatchHash[p] !== this.hashString('')) {
+              if (tx.preBatchHash[p] !== this.missingPathDigest()) {
                 verification = false;
               }
             } else {
@@ -160,6 +189,19 @@ export class WorkspaceTransactionManager {
 
   private static hashString(content: string): string {
     return crypto.createHash('sha256').update(content).digest('hex');
+  }
+
+  /**
+   * Digest recorded for a path that does NOT exist. Deliberately distinct
+   * from hashString(''): an absent file and an existing empty file are
+   * different workspace states, and collapsing them let a requested
+   * empty-file creation "succeed" without any file landing.
+   */
+  static missingPathDigest(): string {
+    return crypto
+      .createHash('sha256')
+      .update('babel://workspace-transactions/missing-path/v1')
+      .digest('hex');
   }
 
   private static revisionHash(hashes: Record<string, string>): string {

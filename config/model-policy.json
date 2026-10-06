@@ -117,6 +117,24 @@
         "Do not substitute another provider or model when this backend is requested."
       ]
     },
+    "opencode-go/deepseek-v4.1-flash": {
+      "provider": "opencode-go",
+      "model_id": "deepseek-v4.1-flash",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "source_url": "https://opencode.ai/zen/go/v1/models",
+      "verified_at": "2026-10-04",
+      "expires_at": "2027-01-02",
+      "selection_reason": "Explicit current OpenCode Go Flash model; requires the existing caller-owned durable budget.",
+      "notes": [
+        "Not a default family or stage route; use the exact backend key.",
+        "No model or provider fallback. Other Go models remain unqualified for Chat.",
+        "Native durable reservations fail closed on Windows; registration does not establish an executable product path.",
+        "Pricing/context/output metadata is not independently established for this Go route."
+      ]
+    },
     "deepseek-v4-flash-openrouter": {
       "provider": "openrouter",
       "model_id": "deepseek/deepseek-v4-flash-0731",

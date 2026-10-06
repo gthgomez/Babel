@@ -150,22 +150,78 @@ function readGitHead(projectRoot: string): string | null {
   }
 }
 
+/**
+ * Hash the repository's ACTUAL verification-relevant state.
+ *
+ * `ls-files -s` contributes the blob hash of every clean tracked file. The
+ * Git status (`--porcelain=v2 -z --untracked-files=all`) identifies the
+ * divergent paths — worktree-modified tracked files and untracked files —
+ * and for each of those the ACTUAL worktree bytes are hashed here, together
+ * with existence and type. A metadata-only fingerprint (hashing the status
+ * text itself) could not see a byte change A→B in a file that was already
+ * dirty, or in an untracked file that already existed: the status output is
+ * identical for both states. Hashing the bytes closes that gap.
+ *
+ * Type is part of the evidence: a path that vanished hashes as "missing", a
+ * directory as "dir", a symlink by its target string. Without Git this
+ * capture returns null — unknown stays unknown.
+ */
 function readGitTree(projectRoot: string): string | null {
   try {
-    const tree = execFileSync("git", ["ls-files", "-s", "--", "."], {
+    const index = execFileSync("git", ["ls-files", "-s", "--", "."], {
       cwd: projectRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 10_000,
       windowsHide: true,
     });
-    return hashFileContent(tree);
+    const status = execFileSync(
+      "git",
+      ["status", "--porcelain", "-z", "--untracked-files=all"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10_000,
+        windowsHide: true,
+      },
+    );
+
+    const divergent: string[] = [];
+    const tokens = status.split("\0").filter((token) => token.length > 0);
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i]!;
+      // Porcelain v1: exactly two status bytes, one space, then the path.
+      if (token.length < 4) continue;
+      const xy = token.slice(0, 2);
+      const recordPath = token.slice(3);
+      divergent.push(recordPath);
+      if (xy.includes("R") || xy.includes("C")) i += 1; // skip origPath token
+    }
+
+    const contentDigests = divergent
+      .sort()
+      .map((relativePath) => {
+        const absolute = path.resolve(projectRoot, relativePath);
+        let stats: fs.Stats;
+        try {
+          stats = fs.lstatSync(absolute);
+        } catch {
+          return `${relativePath}:missing`;
+        }
+        if (stats.isDirectory()) return `${relativePath}:dir`;
+        if (stats.isSymbolicLink())
+          return `${relativePath}:symlink:${hashFileContent(fs.readlinkSync(absolute))}`;
+        return `${relativePath}:${hashFileContent(fs.readFileSync(absolute))}`;
+      });
+
+    return hashFileContent(`${index}\0${contentDigests.join("\n")}`);
   } catch {
     return null;
   }
 }
 
-function compareRevisions(
+export function compareRevisions(
   bound: WorkspaceRevision,
   current: WorkspaceRevision,
 ): { stale: boolean; reason?: string } {
@@ -235,7 +291,15 @@ function computeRevision(
     const treeHash = readGitTree(projectRoot);
     if (!treeHash && gitBinding === "required")
       throw new Error("Required Git tree cannot be established.");
-    fileHashes["<repository>"] = treeHash ?? hashFileContent(projectRoot);
+    // Without Git the repository's contents are UNVERIFIED: the legacy
+    // fallback hashed the directory PATH string, which is constant across
+    // content changes and could therefore "prove" an unchanged tree that had
+    // in fact moved. Keep a revision for optional-binding callers, but make
+    // its provenance explicit in the digest so it can never be confused with
+    // content-derived evidence; downstream consumers must treat a repository
+    // scope without a Git hash as an unknown state, not a fresh capture.
+    fileHashes["<repository>"] =
+      treeHash ?? hashFileContent(`unverified-contents:${projectRoot}`);
   }
   return {
     gitCommitHash,

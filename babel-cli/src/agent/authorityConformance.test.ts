@@ -13,6 +13,9 @@
  */
 
 import { test } from 'node:test';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
 import { executeActionWithPolicy } from './toolExecutor.js';
 import type { AgentAction } from './actions.js';
@@ -24,17 +27,32 @@ import { listProviderSpecs, PROVIDER_IDS } from '../runners/providerRegistry.js'
 let ctxSeq = 0;
 function freshCtx(): ToolContext {
   ctxSeq += 1;
+  // A disposable project root: conforming write_file effects must land real
+  // bytes somewhere, never in the repository checkout.
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-authority-conformance-'));
   return {
     agentId: 'authority-conformance',
     runId: `authority-conformance-run-${ctxSeq}`,
-    babelRoot: process.cwd(),
+    projectRoot,
+    babelRoot: projectRoot,
   };
 }
 
 /** Stub executor — records whether the action reached execution. */
 const stubExecutor = {
   mapAction: () => [],
-  execute: async () => ({ action: { type: 'run_command', command: 'ok' } as AgentAction, terminal: false, results: [{ exit_code: 0, stdout: 'ok', stderr: '' }] }),
+  execute: async (action: AgentAction, context: ToolContext) => {
+    // The governed path verifies that a requested write actually produced the
+    // requested bytes, so the stub must perform real writes to stand in for a
+    // conforming executor.
+    if (action.type === 'write_file') {
+      const root = context.projectRoot ?? process.cwd();
+      const target = resolve(root, action.path);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, action.content, 'utf8');
+    }
+    return { action, terminal: false, results: [{ exit_code: 0, stdout: 'ok', stderr: '' }] };
+  },
 };
 
 async function dispatch(
@@ -191,8 +209,9 @@ test('conformance: live providers are authority-certified', () => {
     assert.ok(specs[id], `provider ${id} registered`);
   }
   // The live lanes today (per execute.ts liveOnly filtering and modelPolicy):
-  // deepseek, deepinfra, ollama, and the explicit GLM OpenRouter route.
-  for (const live of ['deepseek', 'deepinfra', 'ollama', 'openrouter'] as const) {
+  // Go additionally exercises real Chat native-tool denial/result delivery in
+  // chatOpenCodeGoProvider.test.ts; transport identity/budget controls remain separate.
+  for (const live of ['deepseek', 'deepinfra', 'ollama', 'openrouter', 'opencode-go'] as const) {
     assert.equal(specs[live]!.authorityConformance, 'certified', `${live} must be certified`);
   }
   // Dormant providers must NOT be certified until they pass this suite.

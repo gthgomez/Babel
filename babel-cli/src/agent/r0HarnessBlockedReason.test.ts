@@ -40,7 +40,7 @@ const MANAGED_ENV = [
   'BABEL_AUTONOMY_LEASE',
   'BABEL_EXECUTION_PROFILE',
   'BABEL_ALLOW_HOST_FALLBACK',
-] as const;
+  'BABEL_CHAT_MAX_COST'] as const;
 
 let envSnapshot: EnvSnapshot = {};
 let runsRoot = '';
@@ -65,6 +65,9 @@ before(() => {
     ],
   });
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+  // Unpriced mock usage otherwise trips the finite cost cap's unknown-pricing
+  // refusal before round two can start; these scenarios test blocked-reason typing.
+  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
 });
 

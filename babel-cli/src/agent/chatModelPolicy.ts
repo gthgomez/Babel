@@ -7,6 +7,17 @@ import {
   getAvailableModels,
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
+import { getProviderSpec, providerSupportsOperation } from '../runners/providerRegistry.js';
+
+/** Exact existing Go routes allowed for explicit Chat selection; native budget gates still apply. */
+export function isChatOpenCodeGoRoute(
+  policy: Pick<ResolvedModelPolicy, 'provider' | 'providerModelId'> | undefined,
+): boolean {
+  return policy?.provider === 'opencode-go' &&
+    (policy.providerModelId === 'deepseek-v4-flash' || policy.providerModelId === 'deepseek-v4.1-flash') &&
+    getProviderSpec('opencode-go').authorityConformance === 'certified' &&
+    providerSupportsOperation('opencode-go', 'native_tool_stream');
+}
 
 /** Inputs used to resolve ChatEngine's provider-backed model policy. */
 export interface ChatModelPolicyOptions {
@@ -53,10 +64,14 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   // Explicit opencode requests skip the DeepSeek-only live assertion: naming
   // the backend key IS the opt-in (operator supplies OPENCODE_API_KEY).
   const explicitOpenCodeRequest = requestedBackendEntry?.provider === 'opencode';
+  const explicitGoRequest = requestedBackendEntry !== undefined && isChatOpenCodeGoRoute({
+    provider: requestedBackendEntry.provider,
+    providerModelId: requestedBackendEntry.model_id,
+  });
   const policy = requestedModelIsBackendKey
     ? resolveModelByKey({
         key: requestedBackendKey!,
-        ...(explicitOpenCodeRequest ? {} : { liveOnly: !offline }),
+        ...(explicitOpenCodeRequest || explicitGoRequest ? {} : { liveOnly: !offline }),
         ...policyRootOptions,
       })
     : resolveFamilyModelPolicy({
@@ -66,6 +81,17 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
         liveOnly: !offline,
         ...policyRootOptions,
       });
+  if (explicitGoRequest) {
+    const backend = policy.waterfall[0]!;
+    policy.stagePolicies = policy.stagePolicies.map(stage => ({
+      ...stage,
+      primaryBackendKey: backend.backendKey,
+      primaryProvider: backend.provider,
+      primaryProviderModelId: backend.providerModelId,
+      orderedBackends: [backend],
+      selectionReason: 'Explicit OpenCode Go Chat route stays on the requested model.',
+    }));
+  }
   return { policy, offline };
 }
 

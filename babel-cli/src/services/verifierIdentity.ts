@@ -72,10 +72,53 @@ const BOOLEAN_RUNNER_FLAGS = new Set([
 ]);
 
 /**
+ * Flags that make a command a help / version / listing invocation rather than
+ * a test execution. A command carrying one of these anywhere in its runner
+ * arguments must not satisfy a required verifier: `npm test --help` prints
+ * help and runs nothing, yet the flag was previously dropped during scope
+ * analysis and the command classified as a full-suite run.
+ */
+const NON_EXECUTING_FLAGS = new Set([
+  '-h',
+  '--help',
+  '--usage',
+  '--version',
+]);
+// `-v` is ambiguous (verbose in some runners) and stays in BOOLEAN_RUNNER_FLAGS;
+// only unambiguous version/help/listing forms are treated as non-executing.
+const NON_EXECUTING_FLAG_PREFIXES = ['--list', '--collect-only', '--show-config', '--print-config'];
+
+/**
  * Classify structural scope of a verifier command.
  */
 export function classifyVerifierScope(command: string): VerifierScope {
   return analyzeVerifierIdentity(command)?.scope ?? 'unknown';
+}
+
+/**
+ * Execution-cache fingerprint of a verifier command: quote-aware tokens in
+ * original order, executable lower-cased, argument values case-preserved.
+ *
+ * Deliberately DISTINCT from {@link analyzeVerifierIdentity}'s identityKey:
+ * the structural identity exists for coverage matching and intentionally
+ * collapses argument detail (npm test and npm test -- --coverage are both
+ * family npm-test, scope full). Execution-cache identity must NOT collapse —
+ * `pytest -m slow` and `pytest -m fast` are different executions, argument
+ * order can matter, and quoted values must stay one token. No sorting, no
+ * case-folding of arguments.
+ */
+export function verifierExecutionFingerprint(command: string): string {
+  const display = cleanCommand(command);
+  if (!display) return '';
+  const tokens = tokenizeCommand(display);
+  if (tokens.length === 0) return '';
+  return tokens
+    .map((token, index) => (index === 0 ? normalizeExecutable(token) : stripQuotes(token)))
+    .join('\u0000');
+}
+
+function stripQuotes(token: string): string {
+  return token.replace(/^['"]|['"]$/g, '');
 }
 
 /**
@@ -102,8 +145,22 @@ export function analyzeVerifierIdentity(command: string): VerifierIdentity | nul
   }
 
   const selectors = extractTargetSelectors(family, executable, args);
-  const scope: VerifierScope = selectors.length > 0 ? 'targeted' : 'full';
+  // A help / version / listing flag means the command may not execute tests at
+  // all; downgrade so it can never satisfy a full-suite or targeted requirement.
+  const scope: VerifierScope = hasNonExecutingFlag(args)
+    ? 'unknown'
+    : selectors.length > 0
+      ? 'targeted'
+      : 'full';
   return identityOf(family, scope, selectors, display);
+}
+
+function hasNonExecutingFlag(args: readonly string[]): boolean {
+  for (const token of args) {
+    if (NON_EXECUTING_FLAGS.has(token)) return true;
+    if (NON_EXECUTING_FLAG_PREFIXES.some((prefix) => token.startsWith(prefix))) return true;
+  }
+  return false;
 }
 
 /**

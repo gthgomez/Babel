@@ -167,7 +167,7 @@ const OPERATION_METHOD: Readonly<Record<ProviderOperation, RegExp>> = {
  * structural check below. Certifying a new provider means adding it here AND
  * to ADAPTER_INDEX AND wiring it in providerEngine.ts — all enforced.
  */
-const EVIDENCE_VETTED_PROVIDERS: readonly ProviderId[] = ['deepseek', 'deepinfra', 'ollama', 'openrouter'];
+const EVIDENCE_VETTED_PROVIDERS: readonly ProviderId[] = ['deepseek', 'deepinfra', 'ollama', 'openrouter', 'opencode-go'];
 
 /** Independent evidence record — registry claims must agree with it. */
 const EVIDENCE_EXPECTATIONS: Readonly<

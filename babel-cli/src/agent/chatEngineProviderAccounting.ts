@@ -36,6 +36,7 @@ export type ChatUsageScope = {
   attemptId?: string;
   runDir?: string;
   modelId?: string;
+  provider?: string | null;
   usageMetadata?: RunnerInvocationMetadata | null;
   ownerGeneration?: number;
   isOwnerCurrent?: () => boolean;
@@ -127,6 +128,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
             attemptId: event.attempt_id,
             runDir: ownerRunDir,
             modelId: event.sent_model_id,
+            provider: event.provider,
           });
           if (context.usageScope.taskOwnerId) {
             const scope = context.usageScope;
@@ -135,7 +137,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
               scope, event.inference_id, event.request_id, event.attempt_id,
             );
             const update = globalCostTracker.settleUsage(
-              event.sent_model_id, 0, 0, null, null, attribution, false,
+              event.sent_model_id, 0, 0, null, null, attribution, false, event.provider,
             );
             if (update.kind === 'conflict') {
               const appliesToCurrent = ownerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent();
@@ -322,6 +324,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
               metadata?.prompt_cache_miss_tokens ?? null,
               attribution,
               known,
+              metadata?.provider ?? scope.provider ?? event.provider,
             );
             if (update.kind === 'conflict') {
               const scope = context.usageScope;
@@ -359,6 +362,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
           const update = globalCostTracker.settleUsage(
             event.model, 0, 0, null, null, attribution,
             false,
+            scope.provider ?? event.provider,
           );
           if (update.kind === 'conflict') {
             const appliesToCurrent = scope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent();
@@ -469,7 +473,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
               scope, event.inference_id, scope.requestId, scope.attemptId,
             );
             const update = globalCostTracker.settleUsage(
-              startedInvocation.sent_model_id, 0, 0, null, null, attribution, false,
+              startedInvocation.sent_model_id, 0, 0, null, null, attribution, false, startedInvocation.provider,
             );
             if (update.kind !== 'inserted') {
               const appliesToCurrent = ownerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent();
@@ -531,6 +535,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
             startedInvocation.sent_model_id, 0, 0, null, null,
             attribution,
             false,
+            startedInvocation.provider,
           );
           if (update.kind === 'conflict') {
             const appliesToCurrent = scope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent();
@@ -659,6 +664,9 @@ export function trackRunnerUsage(
               chargeId: host.pendingUsageChargeId ?? randomUUID(),
             }
           : undefined,
+        true,
+        metadata.provider ?? usageScope?.provider ?? null,
+        metadata.estimated_cost_usd,
       );
       if (chargeUpdate.kind === 'duplicate') return;
       if (chargeUpdate.kind === 'conflict') {
@@ -742,7 +750,7 @@ export function trackRunnerUsage(
         if (!attribution) throw new Error('Missing captured provider charge attribution');
         const update = globalCostTracker.settleUsage(
           usageScope?.modelId ?? metadata?.provider_model_id ?? 'unknown-provider-model',
-          0, 0, null, null, attribution, false,
+          0, 0, null, null, attribution, false, usageScope?.provider ?? metadata?.provider ?? null,
         );
         if (update.kind === 'conflict') {
           const faultScope: ChatUsageScope = usageScope ?? {

@@ -94,3 +94,27 @@ test('classifies flag=value targeted filters correctly', () => {
   assert.equal(satisfiesVerifierRequirement('npm test', 'npm test -- -t=math'), false);
   assert.equal(satisfiesVerifierRequirement('pytest', 'pytest -k=math'), false);
 });
+
+test('help and listing flags never satisfy a full-suite requirement', () => {
+  // npm test --help prints npm's help for the test script and runs nothing;
+  // the flag must not be dropped during scope analysis.
+  assert.equal(classifyVerifierScope('npm test --help'), 'unknown');
+  assert.equal(satisfiesVerifierRequirement('npm test', 'npm test --help'), false);
+  assert.equal(satisfiesVerifierRequirement('npm test', 'npm test --version'), false);
+  assert.equal(satisfiesVerifierRequirement('npm test', 'npm test -- -h'), false);
+  // Listing-only pytest invocations are not executions either.
+  assert.equal(classifyVerifierScope('pytest --collect-only'), 'unknown');
+  assert.equal(satisfiesVerifierRequirement('pytest', 'pytest --collect-only'), false);
+  assert.equal(satisfiesVerifierRequirement('vitest', 'vitest run --list'), false);
+  // Two help invocations share an identity (still distinct from a real run).
+  assert.equal(sameVerifierIdentity('npm test --help', 'npm test --help'), true);
+  assert.equal(sameVerifierIdentity('npm test', 'npm test --help'), false);
+});
+
+test('legitimate runner flags still classify as executions', () => {
+  assert.equal(classifyVerifierScope('npm test -- --coverage'), 'full');
+  assert.equal(classifyVerifierScope('vitest run --reporter=verbose'), 'full');
+  assert.equal(classifyVerifierScope('jest --runinband --silent'), 'full');
+  assert.equal(satisfiesVerifierRequirement('npm test', 'npm test -- --coverage'), true);
+  assert.equal(satisfiesVerifierRequirement('npm test', 'npm run test --silent'), true);
+});

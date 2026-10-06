@@ -538,6 +538,8 @@ export class ChatEngine {
   /** P11 A11a: exact approved observation refs retained for the installed context. */
   private p11ObservationRefs: ObservationRefV1[] = [];
   private p11ObservationCaptureIssues: string[] = [];
+  /** P11 install diagnostics: structured block reason of the last refused install. */
+  p11InstallBlock: { code: string; details: string[] } | null = null;
   /** Soft investigate-budget one-shot latch (synced via explore fuse state). */
   private investigateSoftNudgeDone = false;
   /** Cumulative exploration tools across the entire session (never resets).
@@ -1164,7 +1166,7 @@ export class ChatEngine {
       abortController: this.abortController,
       turnTimeoutMs: TURN_TIMEOUT_MS,
       ...(this.modelPolicy?.providerModelId
-        ? { primaryModel: this.modelPolicy.providerModelId }
+        ? { primaryModel: this.modelPolicy.providerModelId, primaryProvider: this.modelPolicy.provider }
         : {}),
       resolveDeliberationRunner: () => this.resolveDeliberationRunner(),
       providerCallbacks: this.providerRetryCallbacks({
@@ -1518,10 +1520,10 @@ export class ChatEngine {
       Number.isFinite(grantedCostCapUsd) && this.criticRepairCostCapUsd != null
         ? Math.min(grantedCostCapUsd, this.criticRepairCostCapUsd)
         : grantedCostCapUsd;
+    const costSummary = globalCostTracker.getTaskSummary(this.taskAllowance.taskOwnerId);
     if (
       Number.isFinite(maxCostUsd) &&
-      globalCostTracker.getTaskSummary(this.taskAllowance.taskOwnerId)
-        .costComplete === false
+      (costSummary.estimateComplete ?? costSummary.costComplete) === false
     ) {
       const reason =
         "Task cost is incomplete because a provider charge has unknown pricing; refusing paid dispatch under a finite dollar cap.";
@@ -2870,6 +2872,7 @@ export class ChatEngine {
       // prior task owner, even when the physical observation bytes remain.
       this.p11ObservationRefs = [];
       this.p11ObservationCaptureIssues = [];
+      this.p11InstallBlock = null;
       delete this.parity.contextCheckpoint;
       // R0-1: failure-class budgets are task-scoped. A fresh task must not
       // inherit budgets already consumed by the previous task; recreate the
@@ -3736,6 +3739,8 @@ export class ChatEngine {
     this.synthesisRunner = resolveChatSynthesisRunner(
       this.synthesisRunner,
       this.modelPolicy,
+      this.modelPolicy?.provider === "opencode-go" && !this.options.providerRunner
+        ? this.taskAllowanceOwner.resolveGoRunnerOptions() : undefined,
     );
     const usageScope = this.captureProviderUsageScope(ownerGeneration);
     return synthesizeChatAnswer(
@@ -3777,6 +3782,7 @@ export class ChatEngine {
       accountingEpoch: string;
       turnId: string | null;
       chargeId: string | null;
+      provider?: string | null;
       requestId?: string;
       attemptId?: string;
       runDir?: string;
@@ -3832,6 +3838,7 @@ export class ChatEngine {
           null,
           attribution,
           usage.inputTokens !== null && usage.outputTokens !== null,
+          usageScope.provider ?? null,
         );
         if (update.kind === "conflict") {
           this.recordOwnerAccountingFault(
@@ -3968,6 +3975,8 @@ export class ChatEngine {
     this.deliberationRunner = resolveChatDeliberationRunner(
       this.deliberationRunner,
       this.modelPolicy,
+      this.modelPolicy?.provider === "opencode-go" && !this.options.providerRunner
+        ? this.taskAllowanceOwner.resolveGoRunnerOptions() : undefined,
     );
     return this.deliberationRunner;
   }
@@ -4121,6 +4130,8 @@ export class ChatEngine {
       usageScope,
       tools: this.services.tools,
       takeToolPolicy: () => this.nextTurnToolPolicy(),
+      acceptedOperation: this.getTurnRuntimeSnapshot()?.effectiveOperation,
+      requiredVerifierCommands: this.getResolvedRequiredVerifiers(),
       systemPrompt: (mode) => this.getOrBuildSystemPrompt(mode),
       useTextTools: () => this.shouldUseTextTools(),
       effects: this.providerUsageEffects(),
@@ -4388,7 +4399,7 @@ export class ChatEngine {
     | DeepSeekApiRunner
     | OllamaApiRunner
     | OpenRouterApiRunner {
-    const modelName = resolvePhaseModelName(this._lastPhase, {
+    const modelName = this.modelPolicy?.provider === "opencode-go" ? undefined : resolvePhaseModelName(this._lastPhase, {
       investigateModel: this.limits.investigateModel,
       mutateModel: this.limits.mutateModel,
     });

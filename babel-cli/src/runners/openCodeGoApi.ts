@@ -124,6 +124,11 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
   private readonly sessionId: string
   private readonly requestTimeoutMs: number
 
+  /** Compare caller-owned reservation identity without exposing its state or credentials. */
+  usesBudget(budget: OpenCodeGoBudget): boolean {
+    return this.budget === budget
+  }
+
   protected override get apiUrl(): string {
     return `${OPENCODE_GO_BASE_URL}/chat/completions`
   }
@@ -175,12 +180,18 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
     if (init.signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
     await this.budget?.reserve(Buffer.byteLength(init.body, 'utf8'), body.max_tokens as number)
     if (init.signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
+    this.budget?.assertCurrentAuthority()
     return super.dispatchFetch(url, init)
   }
 
   /** Return the stable session header assigned to this runner. */
   getLastOpenCodeSessionId(): string {
     return this.sessionId
+  }
+
+  /** Content-free configured identity for secondary calls that must retain this route. */
+  getPinnedModelId(): OpenCodeGoModel {
+    return this.pinnedModel
   }
 
   protected override getRequestHeadersExtras(): Record<string, string> {

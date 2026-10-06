@@ -5,6 +5,7 @@ import {
   estimateProviderUsageCost,
   getModelPricingByModelId,
 } from './modelPricingRegistry.js';
+import type { CostPrecision } from './modelPricingRegistry.js';
 import { getGlobalTokenHistoryDb } from './tokenHistoryDb.js';
 
 export interface ModelUsage {
@@ -14,6 +15,8 @@ export interface ModelUsage {
   /** Known subtotal; a nonzero unknown count makes the full cost unavailable. */
   unknownChargeCount?: number;
   completeCostUSD?: number | null;
+  estimatedCostUSD?: number;
+  costEstimates?: CostEstimateSource[];
   /** P-3.1: DeepSeek context cache hit tokens (KV cache reuse across turns). */
   promptCacheHitTokens?: number;
   /** P-3.1: DeepSeek context cache miss tokens (new encoding required). */
@@ -23,6 +26,10 @@ export interface ModelUsage {
 export interface ProjectStats {
   totalCostUSD: number;
   completeCostUSD?: number | null;
+  actualCostUSD?: null;
+  estimatedCostUSD?: number;
+  costEstimates?: CostEstimateSource[];
+  estimateComplete?: boolean;
   unknownChargeCount?: number;
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -75,6 +82,11 @@ export interface SessionUsageSummary {
   knownCostUSD?: number;
   unknownChargeCount?: number;
   costComplete?: boolean;
+  /** Usage-equivalent allowance accounting is separate from an observed invoice. */
+  estimatedCostUSD?: number;
+  actualCostUSD?: null;
+  estimateComplete?: boolean;
+  costEstimates?: CostEstimateSource[];
   totalInputTokens: number;
   totalOutputTokens: number;
   totalTokens: number;
@@ -134,19 +146,82 @@ export type ChargeUpdate =
 export interface ChargeReceipt {
   attribution: UsageAttribution;
   modelId: string;
+  /** Exact transport identity when observed; legacy receipts may omit it. */
+  provider?: string | null;
   inputTokens: number;
   outputTokens: number;
   cacheHitTokens: number;
   cacheMissTokens: number;
   knownCostUSD: number | null;
+  /** Go's published peak rates bound usage; they are not a reported charge. */
+  estimatedCostUSD?: number | null;
+  costEstimate?: CostEstimateSource;
+}
+
+export interface CostEstimateSource {
+  basis: 'published_usage_estimate';
+  precision: CostPrecision;
+  pricingSourceUrl: string | null;
+  pricingVerifiedAt: string | null;
+}
+
+/** Preserve legacy accounting values without reinterpreting them as Go invoices. */
+function receiptAllowanceCost(receipt: ChargeReceipt): number | null {
+  return receipt.costEstimate ? receipt.estimatedCostUSD ?? null : receipt.knownCostUSD;
+}
+
+function validReceiptCost(receipt: ChargeReceipt): boolean {
+  const validCost = (value: unknown) => value === null ||
+    (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+  if (!validCost(receipt.knownCostUSD)) return false;
+  if (!receipt.costEstimate) return receipt.estimatedCostUSD === undefined;
+  const source = receipt.costEstimate;
+  return receipt.provider === 'opencode-go' && receipt.knownCostUSD === null &&
+    validCost(receipt.estimatedCostUSD) && source.basis === 'published_usage_estimate' &&
+    ['exact', 'conservative', 'unknown'].includes(source.precision) &&
+    (source.pricingSourceUrl === null || typeof source.pricingSourceUrl === 'string') &&
+    (source.pricingVerifiedAt === null || typeof source.pricingVerifiedAt === 'string') &&
+    (receipt.estimatedCostUSD === null ? source.precision === 'unknown' : source.precision !== 'unknown');
+}
+
+function uniqueEstimateSources(sources: CostEstimateSource[]): CostEstimateSource[] {
+  return [...new Map(sources.map((source) => [JSON.stringify([
+    source.basis, source.precision, source.pricingSourceUrl, source.pricingVerifiedAt,
+  ]), { ...source }])).values()];
+}
+
+/** Projection only: budgets still use totalCostUSD and missing-usage counts. */
+function projectGoEstimates(summary: SessionUsageSummary, receipts: readonly ChargeReceipt[]): SessionUsageSummary {
+  const goReceipts = receipts.filter((receipt) => receipt.provider === 'opencode-go');
+  const modelSources = Object.values(summary.modelBreakdown).flatMap((model) => model.costEstimates ?? []);
+  if (goReceipts.length === 0 && modelSources.length === 0) return summary;
+  const sources = uniqueEstimateSources([...modelSources, ...goReceipts.map((receipt) => receipt.costEstimate ?? {
+    basis: 'published_usage_estimate' as const, precision: 'unknown' as const,
+    pricingSourceUrl: null, pricingVerifiedAt: null,
+  })]);
+  const receiptEstimate = goReceipts.reduce((sum, receipt) => sum + (receiptAllowanceCost(receipt) ?? 0), 0);
+  const modelEstimate = Object.values(summary.modelBreakdown).reduce((sum, model) => sum + (model.estimatedCostUSD ?? 0), 0);
+  // Model evidence covers only unattributed calls; receipts cover owned calls.
+  const estimate = receiptEstimate + modelEstimate;
+  for (const [modelId, model] of Object.entries(summary.modelBreakdown)) {
+    if (model.costEstimates?.length || goReceipts.some((receipt) => receipt.modelId === modelId) ||
+        (modelId === '__restored__' && goReceipts.length > 0)) model.completeCostUSD = null;
+  }
+  return { ...summary, knownCostUSD: Math.max(0, summary.totalCostUSD - estimate),
+    estimatedCostUSD: estimate, actualCostUSD: null, costEstimates: sources,
+    estimateComplete: summary.estimateComplete ?? summary.costComplete ?? false,
+    completeCostUSD: null, costComplete: false };
 }
 
 /** Compare durable receipt values without relying on serialized key order. */
 function sameChargeReceipt(a: ChargeReceipt, b: ChargeReceipt): boolean {
-  return a.modelId === b.modelId && sameUsageAttribution(a.attribution, b.attribution) &&
+  return a.modelId === b.modelId && a.provider === b.provider && sameUsageAttribution(a.attribution, b.attribution) &&
     a.inputTokens === b.inputTokens && a.outputTokens === b.outputTokens &&
     a.cacheHitTokens === b.cacheHitTokens && a.cacheMissTokens === b.cacheMissTokens &&
-    a.knownCostUSD === b.knownCostUSD;
+    a.knownCostUSD === b.knownCostUSD && a.estimatedCostUSD === b.estimatedCostUSD &&
+    a.costEstimate?.basis === b.costEstimate?.basis && a.costEstimate?.precision === b.costEstimate?.precision &&
+    a.costEstimate?.pricingSourceUrl === b.costEstimate?.pricingSourceUrl &&
+    a.costEstimate?.pricingVerifiedAt === b.costEstimate?.pricingVerifiedAt;
 }
 
 interface ChargeObservation extends ChargeReceipt {
@@ -185,9 +260,11 @@ export class CostTracker {
     cacheMissTokens?: number | null,
     attribution?: UsageAttribution,
     usageKnown = true,
+    provider?: string | null,
+    reportedCostUsd?: number | null,
   ): number | null {
     const update = this.settleUsage(modelId, inputTokens, outputTokens, cacheHitTokens,
-      cacheMissTokens, attribution, usageKnown);
+      cacheMissTokens, attribution, usageKnown, provider, reportedCostUsd);
     if (update.kind === 'duplicate' || update.kind === 'conflict') return 0;
     return update.unknownDelta > 0 ? null : update.knownCostDelta;
   }
@@ -201,6 +278,8 @@ export class CostTracker {
     cacheMissTokens?: number | null,
     attribution?: UsageAttribution,
     usageKnown = true,
+    provider?: string | null,
+    reportedCostUsd?: number | null,
   ): ChargeUpdate {
     if (attribution?.accountingEpoch && attribution.accountingEpoch !== this.accountingEpoch) {
       throw new Error('Usage attribution belongs to a different accounting epoch');
@@ -211,12 +290,27 @@ export class CostTracker {
     }
     const pricingEntry = getModelPricingByModelId(modelId);
     const estimate = estimateProviderUsageCost({
-      provider: pricingEntry?.provider ?? null,
+      provider: provider === undefined
+        ? pricingEntry?.provider === 'opencode-go' ? null : pricingEntry?.provider ?? null
+        : provider,
       modelId,
       promptTokens: inputTokens,
       completionTokens: outputTokens,
+      promptCacheHitTokens: cacheHitTokens,
+      promptCacheMissTokens: cacheMissTokens,
     });
-    const cost = usageKnown ? estimate.estimatedCostUsd : null;
+    const registryCost = usageKnown ? estimate.estimatedCostUsd : null;
+    // A provider-reported amount is accepted only when this route has no pinned
+    // price. Unknown or invalid reports stay unresolved instead of becoming $0.
+    const reportedCost = registryCost === null && usageKnown &&
+      typeof reportedCostUsd === 'number' && Number.isFinite(reportedCostUsd) && reportedCostUsd >= 0
+      ? reportedCostUsd
+      : null;
+    const cost = registryCost ?? reportedCost;
+    const goEstimate: CostEstimateSource | undefined = provider === 'opencode-go' ? {
+      basis: 'published_usage_estimate', precision: cost === null ? 'unknown' : estimate.precision,
+      pricingSourceUrl: estimate.pricingSourceUrl, pricingVerifiedAt: estimate.pricingVerifiedAt,
+    } : undefined;
     if (cost !== null && (!Number.isFinite(cost) || cost < 0)) {
       return { kind: 'conflict', reason: 'Invalid provider cost estimate' };
     }
@@ -225,12 +319,21 @@ export class CostTracker {
       return { kind: 'duplicate' }; // Restored legacy receipt lacks refinement evidence.
     }
     if (previous) {
-      const sameIdentity = previous.modelId === modelId &&
-        sameUsageAttribution(previous.attribution, attribution);
-      if (!sameIdentity) return { kind: 'conflict', reason: 'Charge identity differs from the recorded attempt' };
-      if (previous.knownCostUSD !== null) {
+      const sameAttribution = sameUsageAttribution(previous.attribution, attribution);
+      const sameIdentity = previous.modelId === modelId && previous.provider === provider && sameAttribution;
+      // A zero-token dispatch placeholder may adopt the billed provider.
+      // A confirmed receipt that changes provider stays a conflict.
+      const unresolvedPlaceholder = receiptAllowanceCost(previous) === null &&
+        previous.inputTokens === 0 && previous.outputTokens === 0 &&
+        previous.cacheHitTokens === 0 && previous.cacheMissTokens === 0;
+      const adoptsObservedRoute = !sameIdentity && unresolvedPlaceholder && sameAttribution &&
+        previous.modelId === modelId;
+      if (!sameIdentity && !adoptsObservedRoute) {
+        return { kind: 'conflict', reason: 'Charge identity differs from the recorded attempt' };
+      }
+      if (receiptAllowanceCost(previous) !== null) {
         if (cost === null) return { kind: 'duplicate' }; // A stale unknown cannot downgrade a known receipt.
-        return previous.knownCostUSD === cost && previous.inputTokens === inputTokens &&
+        return receiptAllowanceCost(previous) === cost && previous.inputTokens === inputTokens &&
           previous.outputTokens === outputTokens && previous.cacheHitTokens === (cacheHitTokens ?? 0) &&
           previous.cacheMissTokens === (cacheMissTokens ?? 0)
           ? { kind: 'duplicate' }
@@ -278,6 +381,10 @@ export class CostTracker {
     model.inputTokens += previous?.restoredInSession ? inputTokens : priorSessionProjected ? inputDelta : inputTokens;
     model.outputTokens += previous?.restoredInSession ? outputTokens : priorSessionProjected ? outputDelta : outputTokens;
     model.costUSD += knownCostDelta;
+    if (goEstimate && !attribution) {
+      model.estimatedCostUSD = (model.estimatedCostUSD ?? 0) + knownCostDelta;
+      model.costEstimates = uniqueEstimateSources([...(model.costEstimates ?? []), goEstimate]);
+    }
     const sessionUnknownDelta = priorSessionProjected ? unknownDelta : cost === null ? 1 : 0;
     model.unknownChargeCount = (model.unknownChargeCount ?? 0) +
       (previous?.restoredInSession ? cost === null ? 1 : 0 : sessionUnknownDelta);
@@ -292,8 +399,10 @@ export class CostTracker {
       this.recordedChargeIds.add(attribution.chargeId);
       this.chargeObservations.set(attribution.chargeId, {
         attribution: { ...attribution }, modelId, inputTokens, outputTokens,
+        ...(provider !== undefined ? { provider } : {}),
         cacheHitTokens: cacheHitTokens ?? 0, cacheMissTokens: cacheMissTokens ?? 0,
-        knownCostUSD: cost, projectedInSession: true,
+        knownCostUSD: goEstimate ? null : cost,
+        ...(goEstimate ? { estimatedCostUSD: cost, costEstimate: goEstimate } : {}), projectedInSession: true,
       });
       const owners = new Set([
         attribution.taskOwnerId,
@@ -324,7 +433,7 @@ export class CostTracker {
   /** Retract only a zero-token pending attempt proven to have stopped before inference. */
   public clearUnstartedCharge(attribution: UsageAttribution): boolean {
     const prior = this.chargeObservations.get(attribution.chargeId);
-    if (!prior || prior.knownCostUSD !== null || prior.inputTokens !== 0 ||
+    if (!prior || receiptAllowanceCost(prior) !== null || prior.inputTokens !== 0 ||
         prior.outputTokens !== 0 || prior.cacheHitTokens !== 0 || prior.cacheMissTokens !== 0 ||
         !sameUsageAttribution(prior.attribution, attribution)) return false;
     if (prior.projectedInSession) {
@@ -443,11 +552,11 @@ export class CostTracker {
       observations.every((receipt) => receipt?.attribution &&
         this.restoredSessionChargeIds!.has(receipt.attribution.chargeId) &&
         typeof receipt.modelId === 'string' && receipt.modelId.length > 0 &&
+        (receipt.provider === undefined || receipt.provider === null ||
+          (typeof receipt.provider === 'string' && receipt.provider.length > 0)) &&
         [receipt.inputTokens, receipt.outputTokens, receipt.cacheHitTokens, receipt.cacheMissTokens]
           .every((value) => Number.isSafeInteger(value) && value >= 0) &&
-        (receipt.knownCostUSD === null ||
-          (typeof receipt.knownCostUSD === 'number' && Number.isFinite(receipt.knownCostUSD) &&
-           receipt.knownCostUSD >= 0))) &&
+        validReceiptCost(receipt)) &&
       new Set(observations.map((receipt) => receipt.attribution.chargeId)).size === observations.length
       ? new Map(observations.map((receipt) => [receipt.attribution.chargeId, receipt])) : null;
     this.sessionProjectionComplete = this.restoredSessionObservations !== null;
@@ -506,7 +615,7 @@ export class CostTracker {
     if (totalCacheMissTokens > 0) {
       summary.totalCacheMissTokens = totalCacheMissTokens;
     }
-    return summary;
+    return projectGoEstimates(summary, this.getSessionChargeObservations());
   }
 
   /** Return usage attributed to one immutable task owner. */
@@ -533,7 +642,7 @@ export class CostTracker {
       (sum, usage) => sum + (usage.promptCacheMissTokens ?? 0),
       0,
     );
-    return {
+    return projectGoEstimates({
       totalCostUSD: this.taskTotalCost.get(taskOwnerId) ?? 0,
       knownCostUSD: this.taskTotalCost.get(taskOwnerId) ?? 0,
       completeCostUSD: (this.taskUnknownCharges.get(taskOwnerId) ?? 0) === 0
@@ -546,7 +655,7 @@ export class CostTracker {
       modelBreakdown,
       ...(totalCacheHitTokens > 0 ? { totalCacheHitTokens } : {}),
       ...(totalCacheMissTokens > 0 ? { totalCacheMissTokens } : {}),
-    };
+    }, this.getTaskChargeObservations(taskOwnerId));
   }
 
   /** Stable charge identities already applied to one task owner. */
@@ -585,7 +694,7 @@ export class CostTracker {
     return [...this.chargeObservations.values()]
       .filter((receipt) => receipt.attribution.taskOwnerId === taskOwnerId ||
         receipt.attribution.parentTaskOwnerId === taskOwnerId)
-      .map(({ projectedInSession: _projectedInSession, ...receipt }) => ({
+      .map(({ projectedInSession: _projectedInSession, restoredInSession: _restoredInSession, ...receipt }) => ({
         ...receipt,
         attribution: { ...receipt.attribution },
       }));
@@ -594,7 +703,7 @@ export class CostTracker {
   /** Reconcile a newer owner receipt against the exact older REPL snapshot. */
   private reconcileRestoredSessionReceipt(saved: ChargeReceipt, current: ChargeReceipt): boolean {
     if (sameChargeReceipt(saved, current)) return false;
-    const monotone = saved.modelId === current.modelId && saved.knownCostUSD === null &&
+    const monotone = saved.modelId === current.modelId && saved.provider === current.provider && receiptAllowanceCost(saved) === null &&
       sameUsageAttribution(saved.attribution, current.attribution) &&
       current.inputTokens >= saved.inputTokens && current.outputTokens >= saved.outputTokens &&
       current.cacheHitTokens >= saved.cacheHitTokens && current.cacheMissTokens >= saved.cacheMissTokens;
@@ -612,14 +721,14 @@ export class CostTracker {
     const model = this.sessionUsage[current.modelId] ?? { inputTokens: 0, outputTokens: 0, costUSD: 0 };
     model.inputTokens += current.inputTokens;
     model.outputTokens += current.outputTokens;
-    model.costUSD += current.knownCostUSD ?? 0;
-    model.unknownChargeCount = (model.unknownChargeCount ?? 0) + (current.knownCostUSD === null ? 1 : 0);
+    model.costUSD += receiptAllowanceCost(current) ?? 0;
+    model.unknownChargeCount = (model.unknownChargeCount ?? 0) + (receiptAllowanceCost(current) === null ? 1 : 0);
     model.completeCostUSD = model.unknownChargeCount === 0 ? model.costUSD : null;
     model.promptCacheHitTokens = (model.promptCacheHitTokens ?? 0) + current.cacheHitTokens;
     model.promptCacheMissTokens = (model.promptCacheMissTokens ?? 0) + current.cacheMissTokens;
     this.sessionUsage[current.modelId] = model;
-    this.sessionTotalCost += current.knownCostUSD ?? 0;
-    this.sessionUnknownCharges += current.knownCostUSD === null ? 0 : -1;
+    this.sessionTotalCost += receiptAllowanceCost(current) ?? 0;
+    this.sessionUnknownCharges += receiptAllowanceCost(current) === null ? 0 : -1;
     return true;
   }
 
@@ -648,6 +757,8 @@ export class CostTracker {
           new Set(receipts.map((receipt) => receipt?.attribution?.chargeId)).size !== receipts.length ||
           receipts.some((receipt) => !receipt || !receipt.attribution ||
             typeof receipt.modelId !== 'string' || receipt.modelId.length === 0 ||
+            (receipt.provider !== undefined && receipt.provider !== null &&
+              (typeof receipt.provider !== 'string' || receipt.provider.length === 0)) ||
             ['__proto__', 'prototype', 'constructor'].includes(receipt.modelId) ||
             typeof receipt.attribution.taskOwnerId !== 'string' ||
             receipt.attribution.taskOwnerId.length === 0 ||
@@ -660,9 +771,7 @@ export class CostTracker {
             !validOptionalId(receipt.attribution.attemptId) ||
             !validTokens(receipt.inputTokens) || !validTokens(receipt.outputTokens) ||
             !validTokens(receipt.cacheHitTokens) || !validTokens(receipt.cacheMissTokens) ||
-            (receipt.knownCostUSD !== null &&
-              (typeof receipt.knownCostUSD !== 'number' ||
-               !Number.isFinite(receipt.knownCostUSD) || receipt.knownCostUSD < 0)))) {
+            !validReceiptCost(receipt))) {
         throw new Error('Invalid durable charge observation');
       }
       if (receipts.some((receipt) => !declaredIds.has(receipt.attribution.chargeId) ||
@@ -670,8 +779,8 @@ export class CostTracker {
            receipt.attribution.parentTaskOwnerId !== taskOwnerId))) {
         throw new Error('Durable charge observations do not match the task owner snapshot');
       }
-      const knownTotal = receipts.reduce((sum, receipt) => sum + (receipt.knownCostUSD ?? 0), 0);
-      const unknownTotal = receipts.filter((receipt) => receipt.knownCostUSD === null).length;
+      const knownTotal = receipts.reduce((sum, receipt) => sum + (receiptAllowanceCost(receipt) ?? 0), 0);
+      const unknownTotal = receipts.filter((receipt) => receiptAllowanceCost(receipt) === null).length;
       if (Math.abs(knownTotal - input.totalCostUSD) > 1e-9 ||
           unknownTotal !== (input.unknownChargeCount ?? 0)) {
         throw new Error('Durable charge observations disagree with the task totals');
@@ -682,14 +791,14 @@ export class CostTracker {
       const effectiveReceipts = receipts.map((receipt) => {
         const saved = this.restoredSessionObservations?.get(receipt.attribution.chargeId);
         if (!saved || sameChargeReceipt(saved, receipt)) return receipt;
-        const sameIdentity = saved.modelId === receipt.modelId &&
+        const sameIdentity = saved.modelId === receipt.modelId && saved.provider === receipt.provider &&
           sameUsageAttribution(saved.attribution, receipt.attribution);
-        if (sameIdentity && saved.knownCostUSD !== null && receipt.knownCostUSD === null &&
+        if (sameIdentity && receiptAllowanceCost(saved) !== null && receiptAllowanceCost(receipt) === null &&
             saved.inputTokens >= receipt.inputTokens && saved.outputTokens >= receipt.outputTokens &&
             saved.cacheHitTokens >= receipt.cacheHitTokens && saved.cacheMissTokens >= receipt.cacheMissTokens) {
           return saved;
         }
-        if (sameIdentity && saved.knownCostUSD === null &&
+        if (sameIdentity && receiptAllowanceCost(saved) === null &&
             receipt.inputTokens >= saved.inputTokens && receipt.outputTokens >= saved.outputTokens &&
             receipt.cacheHitTokens >= saved.cacheHitTokens && receipt.cacheMissTokens >= saved.cacheMissTokens) {
           return receipt;
@@ -715,8 +824,8 @@ export class CostTracker {
         if (saved) this.restoredSessionObservations?.set(receipt.attribution.chargeId, receipt);
         this.recordedChargeIds.add(receipt.attribution.chargeId);
         this.recordTaskUsage(taskOwnerId, receipt.attribution.chargeId, receipt.modelId,
-          receipt.inputTokens, receipt.outputTokens, receipt.knownCostUSD ?? 0,
-          receipt.knownCostUSD === null ? 1 : 0, receipt.cacheHitTokens, receipt.cacheMissTokens);
+          receipt.inputTokens, receipt.outputTokens, receiptAllowanceCost(receipt) ?? 0,
+          receiptAllowanceCost(receipt) === null ? 1 : 0, receipt.cacheHitTokens, receipt.cacheMissTokens);
       }
       if (receipts.length === 0) {
         this.taskUsage.set(taskOwnerId, {});
@@ -796,8 +905,8 @@ export class CostTracker {
     const session = this.getSessionSummary();
     const allInput = receipts.reduce((sum, receipt) => sum + receipt.inputTokens, 0);
     const allOutput = receipts.reduce((sum, receipt) => sum + receipt.outputTokens, 0);
-    const allCost = receipts.reduce((sum, receipt) => sum + (receipt.knownCostUSD ?? 0), 0);
-    const allUnknown = receipts.filter((receipt) => receipt.knownCostUSD === null).length;
+    const allCost = receipts.reduce((sum, receipt) => sum + (receiptAllowanceCost(receipt) ?? 0), 0);
+    const allUnknown = receipts.filter((receipt) => receiptAllowanceCost(receipt) === null).length;
     if (allInput !== session.totalInputTokens || allOutput !== session.totalOutputTokens ||
         Math.abs(allCost - session.totalCostUSD) > 1e-9 ||
         allUnknown !== (session.unknownChargeCount ?? 0)) return null;
@@ -835,24 +944,24 @@ export class CostTracker {
       };
       model.inputTokens += receipt.inputTokens;
       model.outputTokens += receipt.outputTokens;
-      model.costUSD += receipt.knownCostUSD ?? 0;
-      model.unknownChargeCount = (model.unknownChargeCount ?? 0) + (receipt.knownCostUSD === null ? 1 : 0);
+      model.costUSD += receiptAllowanceCost(receipt) ?? 0;
+      model.unknownChargeCount = (model.unknownChargeCount ?? 0) + (receiptAllowanceCost(receipt) === null ? 1 : 0);
       model.promptCacheHitTokens = (model.promptCacheHitTokens ?? 0) + receipt.cacheHitTokens;
       model.promptCacheMissTokens = (model.promptCacheMissTokens ?? 0) + receipt.cacheMissTokens;
       model.completeCostUSD = model.unknownChargeCount === 0 ? model.costUSD : null;
       modelBreakdown[receipt.modelId] = model;
-      totalCostUSD += receipt.knownCostUSD ?? 0;
-      unknownChargeCount += receipt.knownCostUSD === null ? 1 : 0;
+      totalCostUSD += receiptAllowanceCost(receipt) ?? 0;
+      unknownChargeCount += receiptAllowanceCost(receipt) === null ? 1 : 0;
       totalInputTokens += receipt.inputTokens;
       totalOutputTokens += receipt.outputTokens;
     }
-    return { receipts: selected, summary: {
+    return { receipts: selected, summary: projectGoEstimates({
       totalCostUSD, knownCostUSD: totalCostUSD,
       completeCostUSD: unknownChargeCount === 0 ? totalCostUSD : null,
       unknownChargeCount, costComplete: unknownChargeCount === 0,
       totalInputTokens, totalOutputTokens, totalTokens: totalInputTokens + totalOutputTokens,
       modelBreakdown,
-    } };
+    }, selected) };
   }
 
   /** A newer view must contain every prior project charge, with no downgrade. */
@@ -861,10 +970,10 @@ export class CostTracker {
     if (byId.size !== current.length) return false;
     return prior.every((saved) => {
       const latest = byId.get(saved.attribution.chargeId);
-      if (!latest || latest.modelId !== saved.modelId ||
+      if (!latest || latest.modelId !== saved.modelId || latest.provider !== saved.provider ||
           !sameUsageAttribution(latest.attribution, saved.attribution)) return false;
-      if (saved.knownCostUSD !== null) {
-        return latest.knownCostUSD === saved.knownCostUSD &&
+      if (receiptAllowanceCost(saved) !== null) {
+        return receiptAllowanceCost(latest) === receiptAllowanceCost(saved) &&
           latest.inputTokens === saved.inputTokens && latest.outputTokens === saved.outputTokens &&
           latest.cacheHitTokens === saved.cacheHitTokens && latest.cacheMissTokens === saved.cacheMissTokens;
       }
@@ -876,8 +985,8 @@ export class CostTracker {
   private receiptsMatchSummary(receipts: readonly ChargeReceipt[], summary: SessionUsageSummary): boolean {
     return receipts.reduce((sum, receipt) => sum + receipt.inputTokens, 0) === summary.totalInputTokens &&
       receipts.reduce((sum, receipt) => sum + receipt.outputTokens, 0) === summary.totalOutputTokens &&
-      Math.abs(receipts.reduce((sum, receipt) => sum + (receipt.knownCostUSD ?? 0), 0) - summary.totalCostUSD) <= 1e-9 &&
-      receipts.filter((receipt) => receipt.knownCostUSD === null).length === (summary.unknownChargeCount ?? 0);
+      Math.abs(receipts.reduce((sum, receipt) => sum + (receiptAllowanceCost(receipt) ?? 0), 0) - summary.totalCostUSD) <= 1e-9 &&
+      receipts.filter((receipt) => receiptAllowanceCost(receipt) === null).length === (summary.unknownChargeCount ?? 0);
   }
 
   private saveToProjectStatsLocked(sessionId: string, baseline: SessionUsageSummary | undefined, statsPath: string): void {
@@ -954,6 +1063,8 @@ export class CostTracker {
             inputTokens: (after?.inputTokens ?? 0) - (before?.inputTokens ?? 0),
             outputTokens: (after?.outputTokens ?? 0) - (before?.outputTokens ?? 0),
             costUSD: (after?.costUSD ?? 0) - (before?.costUSD ?? 0),
+            estimatedCostUSD: (after?.estimatedCostUSD ?? 0) - (before?.estimatedCostUSD ?? 0),
+            ...(after?.costEstimates ? { costEstimates: after.costEstimates } : {}),
             unknownChargeCount: (after?.unknownChargeCount ?? 0) - (before?.unknownChargeCount ?? 0),
             promptCacheHitTokens: (after?.promptCacheHitTokens ?? 0) - (before?.promptCacheHitTokens ?? 0),
             promptCacheMissTokens: (after?.promptCacheMissTokens ?? 0) - (before?.promptCacheMissTokens ?? 0),
@@ -977,6 +1088,10 @@ export class CostTracker {
             inputTokens: (before?.inputTokens ?? 0) + (after?.inputTokens ?? 0),
             outputTokens: (before?.outputTokens ?? 0) + (after?.outputTokens ?? 0),
             costUSD: (before?.costUSD ?? 0) + (after?.costUSD ?? 0),
+            estimatedCostUSD: (before?.estimatedCostUSD ?? 0) + (after?.estimatedCostUSD ?? 0),
+            ...((before?.costEstimates || after?.costEstimates) ? {
+              costEstimates: uniqueEstimateSources([...(before?.costEstimates ?? []), ...(after?.costEstimates ?? [])]),
+            } : {}),
             unknownChargeCount: (before?.unknownChargeCount ?? 0) + (after?.unknownChargeCount ?? 0),
             promptCacheHitTokens: (before?.promptCacheHitTokens ?? 0) + (after?.promptCacheHitTokens ?? 0),
             promptCacheMissTokens: (before?.promptCacheMissTokens ?? 0) + (after?.promptCacheMissTokens ?? 0),
@@ -1007,6 +1122,8 @@ export class CostTracker {
         model.inputTokens += usage.inputTokens;
         model.outputTokens += usage.outputTokens;
         model.costUSD += usage.costUSD;
+        model.estimatedCostUSD = (model.estimatedCostUSD ?? 0) + (usage.estimatedCostUSD ?? 0);
+        if (usage.costEstimates) model.costEstimates = uniqueEstimateSources([...(model.costEstimates ?? []), ...usage.costEstimates]);
         model.unknownChargeCount = (model.unknownChargeCount ?? 0) + (usage.unknownChargeCount ?? 0);
         model.promptCacheHitTokens = (model.promptCacheHitTokens ?? 0) + (usage.promptCacheHitTokens ?? 0);
         model.promptCacheMissTokens = (model.promptCacheMissTokens ?? 0) + (usage.promptCacheMissTokens ?? 0);
@@ -1018,6 +1135,17 @@ export class CostTracker {
     }
     stats.completeCostUSD = stats.unknownChargeCount === 0 && stats.projectionComplete !== false
       ? stats.totalCostUSD : null;
+    const projected = projectGoEstimates({ ...stats,
+      totalTokens: stats.totalInputTokens + stats.totalOutputTokens,
+      costComplete: stats.completeCostUSD !== null,
+    }, Object.values(stats.sessionReceipts ?? {}).flat());
+    if (projected.costEstimates) {
+      stats.completeCostUSD = null;
+      stats.actualCostUSD = null;
+      if (projected.estimatedCostUSD !== undefined) stats.estimatedCostUSD = projected.estimatedCostUSD;
+      stats.costEstimates = projected.costEstimates;
+      stats.estimateComplete = projected.estimateComplete === true;
+    }
 
     const tmpPath = `${statsPath}.tmp-${process.pid}-${randomUUID()}`;
     try {
@@ -1048,7 +1176,7 @@ export class CostTracker {
         totalInputTokens: summary.totalInputTokens,
         totalOutputTokens: summary.totalOutputTokens,
         totalCost: summary.totalCostUSD,
-        unknownChargeCount: summary.unknownChargeCount ?? 0,
+        unknownChargeCount: (summary.unknownChargeCount ?? 0) + (summary.actualCostUSD === null ? 1 : 0),
         turnCount: 1, // Each saveToProjectStats call counts as a batch save point
         projectRoot,
       });
@@ -1067,7 +1195,7 @@ export class CostTracker {
       const statsPath = join(root, 'project_stats.json');
       if (existsSync(statsPath)) {
         const stats = JSON.parse(readFileSync(statsPath, 'utf-8')) as ProjectStats;
-        if (stats.projectionComplete === false) return null;
+        if (stats.projectionComplete === false || stats.actualCostUSD === null) return null;
       }
       const db = getGlobalTokenHistoryDb();
       const cost = db.getProjectCostSummary(root);

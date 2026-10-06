@@ -167,6 +167,58 @@ test('first-turn preparation records no verifier yet without fabricating a recei
   );
 });
 
+test('a stale-only receipt set stays visible as a gap instead of deadlocking install', () => {
+  // Regression (chat-reliability-20261004): a stale receipt used to map to a
+  // missing verification row + error, which blocked checkpoint preparation and
+  // therefore every later dispatch — the model could never rerun its verifier.
+  // Staleness must close VERIFIED completion, not the ability to repair.
+  const population = mapCheckpointRequiredState(
+    completeSources({
+      receipts: [
+        {
+          receipt_id: 'receipt-stale-1',
+          identity: 'npm test',
+          scope: 'full_suite',
+          stale: true,
+          bound_revision: 'snapshot-historical',
+          exit_code: 0,
+        },
+      ],
+    }),
+  );
+  const row = population.rows.find((entry) => entry.id === 'verification');
+  assert.equal(row?.present, true);
+  assert.equal(row?.source, 'stale_receipt');
+  assert.ok(row?.value_refs.includes('receipt:receipt-stale-1'));
+  assert.ok(row?.value_refs.includes('exit:0'));
+  assert.ok(row?.gap?.includes('stale'));
+  assert.equal(population.status, 'populated');
+  assert.equal(population.errors.length, 0);
+  assert.equal(checkpointPopulationAllowsInstall(population), true);
+});
+
+test('a failed verifier exit is carried truthfully into the next context', () => {
+  const population = mapCheckpointRequiredState(
+    completeSources({
+      receipts: [
+        {
+          receipt_id: 'receipt-red-1',
+          identity: 'npm test',
+          scope: 'full_suite',
+          stale: false,
+          bound_revision: 'snapshot-historical',
+          exit_code: 1,
+        },
+      ],
+    }),
+  );
+  const row = population.rows.find((entry) => entry.id === 'verification');
+  assert.equal(row?.present, true);
+  assert.equal(row?.source, 'live_receipt');
+  assert.ok(row?.value_refs.includes('exit:1'));
+  assert.equal(population.status, 'populated');
+});
+
 test('unavailable cold-resume observations keep the next install incomplete', () => {
   const population = mapCheckpointRequiredState(
     completeSources({ observation_recovery_issues: ['observation obs:missing unavailable'] }),

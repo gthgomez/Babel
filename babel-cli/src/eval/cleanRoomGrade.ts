@@ -8,6 +8,8 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { buildBenchmarkContainerCommand, isHostIsolationEscalationAllowed } from '../config/benchmarkContainer.js'
+import { validateDockerIsolationArgs } from '../config/dockerIsolationArgs.js'
 
 export interface CleanRoomFile {
   relativePath: string
@@ -28,6 +30,8 @@ export interface CleanRoomGradeInput {
   oracleFiles: CleanRoomFile[]
   verifierCommand: string[]
   cwdHint?: string
+  /** Explicit isolated candidate grading; omission preserves trusted host controls. */
+  execution?: { kind: 'docker'; image: string }
 }
 
 export interface CleanRoomGradeResult {
@@ -39,6 +43,9 @@ export interface CleanRoomGradeResult {
   verifier_command: string[]
   /** Deletion paths actually enforced in the graded tree (evidence). */
   deletions_applied: string[]
+  /** Present only for an explicitly selected isolated execution boundary. */
+  execution_boundary?: { kind: 'docker'; image: string }
+  execution_command?: string[]
 }
 
 function materialize(root: string, files: CleanRoomFile[]): void {
@@ -53,6 +60,15 @@ function materialize(root: string, files: CleanRoomFile[]): void {
  * Fresh start SHA + production diff + private oracle + harness-owned verifier.
  */
 export function gradeInCleanRoom(input: CleanRoomGradeInput): CleanRoomGradeResult {
+  if (input.execution !== undefined) {
+    if (input.execution?.kind !== 'docker' ||
+        !/^[a-zA-Z0-9._/:+-]+@sha256:[a-f0-9]{64}$/.test(input.execution.image) ||
+        input.verifierCommand[0] !== 'node' ||
+        input.verifierCommand.some(arg => typeof arg !== 'string' || /[\0\r\n]/.test(arg)) ||
+        isHostIsolationEscalationAllowed() || !validateDockerIsolationArgs().ok) {
+      throw new Error('Isolated grader requires a pinned Docker image, in-container node argv and no host fallback.')
+    }
+  }
   const deletedPaths = input.candidateDeletedPaths ?? []
   const candidatePaths = new Set(input.candidateDiffFiles.map((f) => f.relativePath))
   const conflicted = deletedPaths.filter((p) => candidatePaths.has(p))
@@ -73,7 +89,17 @@ export function gradeInCleanRoom(input: CleanRoomGradeInput): CleanRoomGradeResu
       rmSync(join(graderRoot, rel), { force: true, recursive: true })
     }
     const [cmd, ...args] = input.verifierCommand
-    const result = spawnSync(cmd ?? process.execPath, args, {
+    const container = input.execution ? buildBenchmarkContainerCommand({
+      dockerImage: input.execution.image,
+      projectRoot: graderRoot,
+      cwd: graderRoot,
+      // Build only the existing hardened prefix; append trusted argv directly.
+      // No shell parsing or host executable path enters isolated grading.
+      command: 'node',
+    }) : null
+    const executable = container?.executable ?? cmd ?? process.execPath
+    const executionArgs = container ? [...container.args, ...args] : args
+    const result = spawnSync(executable, executionArgs, {
       cwd: graderRoot,
       encoding: 'utf8',
       windowsHide: true,
@@ -90,6 +116,8 @@ export function gradeInCleanRoom(input: CleanRoomGradeInput): CleanRoomGradeResu
       grader_root: graderRoot,
       verifier_command: input.verifierCommand,
       deletions_applied: [...deletedPaths],
+      ...(input.execution ? { execution_boundary: { ...input.execution },
+        execution_command: [executable, ...executionArgs] } : {}),
     }
   } finally {
     if (existsSync(graderRoot)) {

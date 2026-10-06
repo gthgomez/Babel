@@ -3,6 +3,7 @@ import { DeepInfraApiRunner } from '../runners/deepInfraApi.js'
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js'
 import { OllamaApiRunner } from '../runners/ollamaApi.js'
 import { OpenCodeApiRunner } from '../runners/openCodeApi.js'
+import { OpenCodeGoApiRunner, type OpenCodeGoRunnerOptions } from '../runners/openCodeGoApi.js'
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js'
 import type { ProviderMessage, RunnerCallbacks } from '../runners/base.js'
 import {
@@ -12,7 +13,7 @@ import {
   resolveOpenRouterDeepSeekModelId,
   type ResolvedModelPolicy,
 } from '../modelPolicy.js'
-import { isOfflineChatMode, resolveFallbackModelId } from './chatModelPolicy.js'
+import { isChatOpenCodeGoRoute, isOfflineChatMode, resolveFallbackModelId } from './chatModelPolicy.js'
 import type {
   ChatCallbacks,
   ChatEngineOptions,
@@ -28,7 +29,8 @@ import {
   buildProviderRetryCallbacks,
   type ChatUsageScope,
 } from './chatEngineProviderAccounting.js'
-import { filterReadOnlyChatTools, isReadOnlyChat } from './chatReadOnly.js'
+import { filterReadOnlyChatTools, filterReadOnlyTaskTools, isReadOnlyChat } from './chatReadOnly.js'
+import type { TaskOperation } from '../config/chatTaskClass.js'
 import {
   nativeTurnFromStream,
   ProviderOutputTruncatedError,
@@ -60,8 +62,13 @@ const TURN_TIMEOUT_MS = 120_000
 export function resolveChatDeliberationRunner(
   current: ChatProviderRunner | null,
   modelPolicy: ResolvedModelPolicy | undefined,
+  goOptions?: OpenCodeGoRunnerOptions,
 ): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner {
   let runner = current
+
+  if (modelPolicy?.provider === 'opencode-go' && goOptions?.budget &&
+    (!(runner instanceof OpenCodeGoApiRunner) || !runner.usesBudget(goOptions.budget) ||
+      runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
 
   if (!runner) {
     const provider = modelPolicy?.provider
@@ -105,6 +112,11 @@ export function resolveChatDeliberationRunner(
           )
         }
       }
+    } else if (provider === 'opencode-go') {
+      if (!isChatOpenCodeGoRoute(modelPolicy)) {
+        throw new Error('[LIVE_MODEL_POLICY] Chat requires the qualified explicit OpenCode Go route.')
+      }
+      runner = new OpenCodeGoApiRunner(modelId!, {}, goOptions)
     } else if (provider === 'opencode' && modelId) {
       // OpenCode Zen (e.g. ox-alpha-free): explicit backend-key opt-in.
       try {
@@ -188,6 +200,7 @@ export function resolveChatFallbackRunner(
   let runner = current
 
   if (options.providerRunner) return options.providerRunner
+  if (modelPolicy?.provider === 'opencode-go') return null
   if (
     !isOfflineChatMode() &&
     modelPolicy?.provider === 'openrouter' &&
@@ -242,8 +255,12 @@ export function resolveChatFallbackRunner(
 export function resolveChatSynthesisRunner(
   current: ChatProviderRunner | null,
   modelPolicy: ResolvedModelPolicy | undefined,
+  goOptions?: OpenCodeGoRunnerOptions,
 ): ChatProviderRunner {
   let runner = current
+  if (modelPolicy?.provider === 'opencode-go' && goOptions?.budget &&
+    (!(runner instanceof OpenCodeGoApiRunner) || !runner.usesBudget(goOptions.budget) ||
+      runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
   if (!runner) {
     const provider = modelPolicy?.provider
     const modelId = modelPolicy?.providerModelId
@@ -273,6 +290,11 @@ export function resolveChatSynthesisRunner(
           )
         runner = new DeepInfraApiRunner(resolveFallbackModelId())
       }
+    } else if (provider === 'opencode-go') {
+      if (!isChatOpenCodeGoRoute(modelPolicy)) {
+        throw new Error('[LIVE_MODEL_POLICY] Chat requires the qualified explicit OpenCode Go route.')
+      }
+      runner = new OpenCodeGoApiRunner(modelId!, {}, goOptions)
     } else if (provider === 'opencode' && modelId) {
       runner = new OpenCodeApiRunner(modelId)
     } else if (provider === 'openrouter' && modelId) {
@@ -415,6 +437,8 @@ export interface ChatDeliberationInput {
   usageScope: ChatUsageScope
   tools: ChatEngineServices['tools']
   takeToolPolicy: () => NextTurnToolPolicy
+  acceptedOperation?: TaskOperation | undefined
+  requiredVerifierCommands?: readonly string[]
   systemPrompt: (mode: 'native' | 'text') => string
   useTextTools: () => boolean
   effects: ChatProviderUsageEffects
@@ -447,14 +471,14 @@ export async function deliberateChatTurn(
     )
   if (useNativeTools && typeof runner.executeWithToolsStream === 'function') {
     const nextTools = input.takeToolPolicy()
-    const restrictTools = nextTools.restrict && !isReadOnlyChat()
-    const toolDefs = filterReadOnlyChatTools(
+    const restrictTools = nextTools.restrict && !isReadOnlyChat() && input.acceptedOperation !== 'READ_ONLY'
+    const toolDefs = filterReadOnlyTaskTools(filterReadOnlyChatTools(
       restrictTools
         ? input.tools.buildRestrictedDefinitions(
             nextTools.mode === 'full' ? 'act_or_verify' : nextTools.mode,
           )
         : input.tools.buildDefinitions(),
-    )
+    ), input.acceptedOperation, input.requiredVerifierCommands ?? [])
     const nativeActions: ChatToolAction[] = []
     let answerText = ''
     let nativeFinishReason: string | undefined
@@ -634,6 +658,10 @@ export async function* resolveChatFallbackOrFail(
   }
   if (turn > 0) {
     yield input.failed(err.message)
+    return null
+  }
+  if (input.modelPolicy?.provider === 'opencode-go') {
+    yield input.failed(`${err.message} [LIVE_MODEL_POLICY] exact Go route refuses provider substitution`)
     return null
   }
   // Runtime Pro → Flash failover with visible reason (not verification)

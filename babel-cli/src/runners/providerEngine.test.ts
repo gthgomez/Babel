@@ -71,7 +71,7 @@ test('ProviderEngine exposes operation capabilities before invocation', () => {
   assert.equal(structuredOnly.supports('native_tool_stream'), false)
 })
 
-test('ProviderEngine registers benchmark-only OpenCode Go with exact model selection', async (t) => {
+test('ProviderEngine registers explicit OpenCode Go with exact model selection', async (t) => {
   const priorFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = priorFetch })
   let url = ''
@@ -147,29 +147,44 @@ test('ProviderEngine uses native standalone Go with shared budget and stable job
   for await (const _event of runner.executeWithToolsStream([{ role: 'user', content: 'synthetic' }], [])) { /* consume */ }
   assert.equal(runner.getLastInvocationMetadata()?.observed_model_id, 'deepseek-v4.1-flash')
   const { getProviderSpec } = await import('./providerRegistry.js')
-  assert.equal(getProviderSpec('opencode-go').authorityConformance, 'untested')
+  assert.equal(getProviderSpec('opencode-go').authorityConformance, 'certified')
   assert.throws(() => createProviderRunner({ provider: 'opencode-go', modelId: 'deepseek-v4.1-flash', credentialSource: 'explicit-test', explicitCredential: 'synthetic' }), /budget/i)
 })
 
 
-test('Windows ProviderEngine Go refuses native network dispatch without claiming durability', { skip: process.platform !== 'win32' ? 'Actual Windows unsupported-durability contract' : false }, async (t) => {
-  const { mkdtemp, readdir, rm } = await import('node:fs/promises')
+test('Windows ProviderEngine Go commits a reservation before native network dispatch', { skip: process.platform !== 'win32' ? 'Actual Windows SQLite reservation contract' : false }, async (t) => {
+  const { mkdtemp, access, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
   const { OpenCodeGoBudget } = await import('./openCodeGoBudget.js')
   const dir = await mkdtemp(join(tmpdir(), 'synthetic-windows-engine-'))
+  const budgetPath = join(dir, 'budget.json')
   t.after(() => rm(dir, { recursive: true, force: true }))
   const priorFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = priorFetch })
   let fetches = 0
-  globalThis.fetch = (async () => { fetches++; throw Error('unsupported Windows dispatch reached network') }) as typeof fetch
-  const runner = createProviderRunner({ provider: 'opencode-go', modelId: 'deepseek-v4.1-flash', sampling: { maxTokens: 16 }, budget: new OpenCodeGoBudget({ statePath: join(dir, 'budget.json'), jobId: 'windows-job', limitUsd: 2 }), credentialSource: 'explicit-test', explicitCredential: 'synthetic' })
+  globalThis.fetch = (async () => {
+    fetches++
+    await access(budgetPath)
+    return new Response(`data: ${JSON.stringify({ model: 'deepseek-v4.1-flash', choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+  }) as typeof fetch
+  const runner = createProviderRunner({ provider: 'opencode-go', modelId: 'deepseek-v4.1-flash', sampling: { maxTokens: 16 }, budget: new OpenCodeGoBudget({ statePath: budgetPath, jobId: 'windows-job', limitUsd: 2 }), credentialSource: 'explicit-test', explicitCredential: 'synthetic' })
   const errors: string[] = []
   for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'synthetic' }], [])) {
     if (event.type === 'error') errors.push(event.message)
   }
-  assert.equal(errors.length, 1)
-  assert.match(errors[0] ?? '', /budget denied.*unsupported on Windows/)
-  assert.equal(fetches, 0)
-  assert.deepEqual(await readdir(dir), [])
+  assert.equal(errors.length, 0)
+  assert.equal(fetches, 1)
+  await access(budgetPath)
+
+  globalThis.fetch = (async () => { fetches++; throw Error('unsupported Windows dispatch reached network') }) as typeof fetch
+  const failing = createProviderRunner({ provider: 'opencode-go', modelId: 'deepseek-v4.1-flash', sampling: { maxTokens: 16 }, budget: new OpenCodeGoBudget({ statePath: budgetPath, jobId: 'windows-job', limitUsd: 2 }), credentialSource: 'explicit-test', explicitCredential: 'synthetic' })
+  const networkErrors: string[] = []
+  for await (const event of failing.executeWithToolsStream([{ role: 'user', content: 'synthetic' }], [])) {
+    if (event.type === 'error') networkErrors.push(event.message)
+  }
+  assert.equal(networkErrors.length, 1)
+  assert.match(networkErrors[0] ?? '', /Network error/)
+  assert.doesNotMatch(networkErrors[0] ?? '', /budget denied/i)
+  await access(budgetPath)
 })

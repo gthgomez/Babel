@@ -158,6 +158,39 @@ test('unknown compaction cost under a finite cap blocks the following provider d
   })
 })
 
+test('compaction settlement preserves the observed provider when refining its pending owner receipt', async () => {
+  await withFixture(async root => {
+    globalCostTracker.resetSession()
+    try {
+      const chat = engine(root, () => {}, 1)
+      const owner = chat.getTaskAllowanceSnapshot()!.taskOwnerId
+      const internal = chat as unknown as {
+        activeSubmissionGeneration: number
+        taskCostScopeUnavailable: boolean
+        compactionManager: unknown
+        compactIfNeeded(callbacks: undefined, force: boolean, generation: number): Promise<unknown>
+      }
+      internal.compactionManager = {
+        compactWithResult: async (messages: unknown[], options: {
+          callbacks?: RunnerCallbacks
+          onUsageRecorded?: (usage: { inferenceId: string; modelId: string; inputTokens: number; outputTokens: number }) => void
+        }) => {
+          options.callbacks?.onInvocationStarted?.({ inference_id: 'compaction-go', request_id: 'compaction-request',
+            attempt_id: 'compaction-attempt', provider: 'opencode-go', requested_model_id: 'deepseek-v4.1-flash',
+            normalized_model_id: 'deepseek-v4.1-flash', sent_model_id: 'deepseek-v4.1-flash', input_digest: 'fixture-input' })
+          options.onUsageRecorded?.({ inferenceId: 'compaction-go', modelId: 'deepseek-v4.1-flash', inputTokens: 1000, outputTokens: 2000 })
+          return { messages, strategy: 'llm-summarize', tokensBefore: 2, tokensAfter: 2, changed: false }
+        },
+      }
+      await internal.compactIfNeeded(undefined, true, internal.activeSubmissionGeneration)
+      assert.equal(internal.taskCostScopeUnavailable, false)
+      assert.equal(globalCostTracker.getTaskSummary(owner).unknownChargeCount, 0)
+      assert.ok(Math.abs(globalCostTracker.getTaskSummary(owner).totalCostUSD - 0.0027) < 1e-12)
+      assert.equal(globalCostTracker.getTaskChargeObservations(owner)[0]?.provider, 'opencode-go')
+    } finally { globalCostTracker.resetSession() }
+  })
+})
+
 test('a started provider attempt that streams partial output then fails retains an unknown charge', async () => {
   await withFixture(async (root) => {
     const prior = globalCostTracker.getSessionSummary()
@@ -1009,8 +1042,8 @@ test("rooted unstarted inference clears its finite-cap charge and permits a same
 
       const coldResume = `
         import assert from 'node:assert/strict';
-        import { ChatEngine } from './src/agent/chatEngine.ts';
-        import { globalCostTracker } from './src/services/costTracker.ts';
+        import { ChatEngine } from ${JSON.stringify(new URL('./chatEngine.ts', import.meta.url).href)};
+        import { globalCostTracker } from ${JSON.stringify(new URL('../services/costTracker.ts', import.meta.url).href)};
         const engine = new ChatEngine({ task: 'resume', projectRoot: ${JSON.stringify(root)},
           runId: ${JSON.stringify(runId)}, model: 'deepseek-v4-flash', maxCostUsd: 1, resumeExisting: true });
         const owner = ${JSON.stringify(owner)};
@@ -1020,7 +1053,7 @@ test("rooted unstarted inference clears its finite-cap charge and permits a same
       `;
       const cold = spawnSync(
         process.execPath,
-        ["--import", "tsx", "--input-type=module", "-e", coldResume],
+        ["--import", import.meta.resolve('tsx'), "--input-type=module", "-e", coldResume],
         { cwd: process.cwd(), encoding: "utf8", env: process.env },
       );
       assert.equal(cold.status, 0, cold.stderr || cold.stdout);
@@ -1512,7 +1545,7 @@ test("an old-owner conflict survives a separate-process resume after its receipt
 
       const source = `
         import assert from 'node:assert/strict';
-        import { ChatEngine } from './src/agent/chatEngine.ts';
+        import { ChatEngine } from ${JSON.stringify(new URL('./chatEngine.ts', import.meta.url).href)};
         const engine = new ChatEngine({ task: 'resume', projectRoot: ${JSON.stringify(root)},
           runId: ${JSON.stringify(runId)}, model: 'deepseek-v4-flash', maxCostUsd: 1, resumeExisting: true });
         const ownerA = ${JSON.stringify(ownerA)};
@@ -1526,7 +1559,7 @@ test("an old-owner conflict survives a separate-process resume after its receipt
       `;
       const child = spawnSync(
         process.execPath,
-        ["--import", "tsx", "--input-type=module", "-e", source],
+        ["--import", import.meta.resolve('tsx'), "--input-type=module", "-e", source],
         { cwd: process.cwd(), encoding: "utf8", env: process.env },
       );
       assert.equal(child.status, 0, child.stderr || child.stdout);

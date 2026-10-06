@@ -1,4 +1,4 @@
-export type PricingProvider = 'deepinfra' | 'deepseek' | 'openrouter';
+export type PricingProvider = 'deepinfra' | 'deepseek' | 'openrouter' | 'opencode-go';
 export type CostPrecision = 'exact' | 'conservative' | 'unknown';
 
 export interface ModelPricingEntry {
@@ -11,6 +11,8 @@ export interface ModelPricingEntry {
   inputCacheHitCostPer1M?: number;
   inputCacheMissCostPer1M?: number;
   cacheInputDiscountAvailable?: boolean;
+  /** A published ceiling for usage accounting, not an observed billing-window rate. */
+  conservativeWarning?: string;
 }
 
 export interface UsageCostInput {
@@ -46,6 +48,18 @@ export const DEEPSEEK_SUPPORTED_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'
 export type DeepSeekModelId = (typeof DEEPSEEK_SUPPORTED_MODELS)[number];
 
 export const MODEL_PRICING_REGISTRY: Record<string, ModelPricingEntry> = {
+  'opencode-go:deepseek-v4.1-flash': {
+    provider: 'opencode-go',
+    modelId: 'deepseek-v4.1-flash',
+    inputCostPer1M: 0.30,
+    outputCostPer1M: 1.20,
+    inputCacheHitCostPer1M: 0.006,
+    inputCacheMissCostPer1M: 0.30,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: 'https://dev.opencode.ai/docs/go/',
+    verifiedAt: '2026-10-04',
+    conservativeWarning: 'Peak usage rates are a conservative estimate; the billing window and actual charge are unobserved.',
+  },
   'deepinfra:meta-llama/Llama-4-Scout-17B-16E-Instruct': {
     provider: 'deepinfra',
     modelId: 'meta-llama/Llama-4-Scout-17B-16E-Instruct',
@@ -228,6 +242,11 @@ export function estimateProviderUsageCost(input: UsageCostInput): UsageCostEstim
     inputCostUsd !== null || outputCostUsd !== null
       ? (inputCostUsd ?? 0) + (outputCostUsd ?? 0)
       : null;
+
+  if (estimatedCostUsd !== null && pricing.conservativeWarning) {
+    precision = 'conservative';
+    warning = [pricing.conservativeWarning, warning].filter(Boolean).join(' ');
+  }
 
   return {
     estimatedCostUsd,

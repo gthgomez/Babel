@@ -1,7 +1,7 @@
 <!-- License: Apache-2.0 — see LICENSE -->
 # OpenCode Go Personal Vault adapter
 
-The source-only Go pilot can use
+The existing Go transport can use
 [`tools/opencode-go-network-secret-helper.cjs`](../../tools/opencode-go-network-secret-helper.cjs)
 with the existing `opencode-auth-helper` credential source. Set the nonsecret
 `BABEL_OPENCODE_GO_HELPER` variable to that file's absolute path in the prepared
@@ -32,11 +32,20 @@ raw-key isolation depends on provisioning it as a Network secret, not on a
 guessed token pattern. Dummy child-process tests qualify the adapter; they do
 not prove configured proxy substitution or live provider authentication.
 
-This prepares credential delivery only. The preview tarball does not contain
-the Go pilot. The native Go route remains limited to direct source embedding
-with its mandatory caller-owned durable budget and fixed Go endpoint; CLI
-registry integration and auxiliary/fallback budget sharing are not qualified.
-Windows native budget persistence fails closed. Confirm provider-side allowance,
+This prepares credential delivery only. The preview artifact includes the Go
+transport. Chat accepts explicit `opencode-go/deepseek-v4.1-flash` selection with
+exact `deepseek-v4.1-flash` identity. The transport uses the approved helper and
+fixed Go endpoint after its required budget admission succeeds. It is not
+a default route and does not substitute another provider/model on interruption
+or through phase overrides. Native Chat limits and execution policy remain in
+force; other Go Chat models and live product reliability are not qualified by
+synthetic transport/authority checks.
+
+The `deepseek-v4.1-flash` transport requires its caller-owned durable budget;
+ordinary Chat currently lacks that budget handoff, and native reservations fail
+closed on Windows. Configuration/admission does not prove successful execution.
+The older V4 fixture remains historical mechanics evidence, not a substitute
+for a requested V4.1 run. Confirm provider-side allowance,
 paid-balance use, automatic top-up and fallback settings, then obtain the owner's
 action-time approval before a real pilot. No live request or spend is authorized
 by this setup document.

@@ -63,3 +63,12 @@ test('retains explicit unlimited cost authority and known zero unknown charges',
   assert.deepEqual(restored?.grant.costCap, { kind: 'unlimited' })
   assert.equal(restored?.consumed.unknownChargeCount, 0)
 })
+
+test('Go reservation ownership survives resume even after all unstarted charges were cleared', () => {
+  const original = checkpoint()
+  original.accountedChargeIds = []
+  original.goReservationRequired = true
+  assert.equal(parseTaskAllowance(original)?.goReservationRequired, true)
+  assert.equal(parseTaskAllowance({ ...original, goReservationRequired: 'yes' }), null)
+  assert.equal(parseTaskAllowance(checkpoint())?.goReservationRequired, undefined)
+})

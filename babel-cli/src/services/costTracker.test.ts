@@ -7,6 +7,126 @@ import { join } from 'node:path';
 import { CostTracker, usageDelta } from './costTracker.js';
 import { resetGlobalTokenHistoryDb, TokenHistoryDb } from './tokenHistoryDb.js';
 
+test('Go peak-price estimates retain their basis and never claim an observed bill', () => {
+  const tracker = new CostTracker();
+  tracker.settleUsage('deepseek-v4.1-flash', 1000, 2000, 400, 600,
+    { taskOwnerId: 'go', chargeId: 'priced' }, true, 'opencode-go');
+  const receipt = tracker.getTaskChargeObservations('go')[0]!;
+  assert.equal(receipt.knownCostUSD, null);
+  assert.ok(Math.abs(receipt.estimatedCostUSD! - 0.0025824) < 1e-12);
+  assert.deepEqual(receipt.costEstimate, {
+    basis: 'published_usage_estimate', precision: 'conservative',
+    pricingSourceUrl: 'https://dev.opencode.ai/docs/go/', pricingVerifiedAt: '2026-10-04',
+  });
+  for (const summary of [tracker.getTaskSummary('go'), tracker.getSessionSummary()]) {
+    assert.equal(summary.knownCostUSD, 0);
+    assert.equal(summary.actualCostUSD, null);
+    assert.equal(summary.completeCostUSD, null);
+    assert.equal(summary.costComplete, false);
+    assert.equal(summary.estimateComplete, true);
+    assert.deepEqual(summary.costEstimates, [receipt.costEstimate]);
+    assert.equal(summary.modelBreakdown['deepseek-v4.1-flash']?.completeCostUSD, null);
+  }
+});
+
+test('Go estimate evidence survives cold owner/session restore and project persistence', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-estimate-'));
+  try {
+    const original = new CostTracker(root);
+    const attribution = { taskOwnerId: 'go', chargeId: 'priced', projectRoot: root };
+    original.settleUsage('deepseek-v4.1-flash', 1000, 2000, null, null, attribution, true, 'opencode-go');
+    const receipts = original.getTaskChargeObservations('go');
+    const saved = JSON.parse(JSON.stringify(original.getSessionSummary()));
+    const resumed = new CostTracker(root);
+    resumed.restoreSessionCost({ ...saved, accountedChargeIds: ['priced'], chargeObservations: receipts });
+    resumed.restoreTaskUsage('go', { totalCostUSD: saved.totalCostUSD, chargeIds: ['priced'], unknownChargeCount: 0, chargeObservations: receipts });
+    assert.equal(resumed.settleUsage('deepseek-v4.1-flash', 1000, 2000, null, null, attribution, true, 'opencode-go').kind, 'duplicate');
+    assert.deepEqual(resumed.getTaskChargeObservations('go'), receipts);
+    assert.equal(resumed.getSessionSummary().completeCostUSD, null);
+    assert.equal(resumed.getTaskSummary('go').estimateComplete, true);
+    resumed.saveToProjectStats(resumed.getProjectSessionId(), undefined, root);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.completeCostUSD, null);
+    assert.equal(stats.actualCostUSD, null);
+    assert.deepEqual(stats.costEstimates, [receipts[0]!.costEstimate]);
+    assert.equal(resumed.getProjectHistoricalCost(root), null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Go unknown usage and legacy numeric receipts cannot become an observed invoice', () => {
+  const tracker = new CostTracker();
+  tracker.settleUsage('deepseek-v4.1-flash', 0, 0, null, null,
+    { taskOwnerId: 'go', chargeId: 'missing' }, false, 'opencode-go');
+  assert.equal(tracker.getTaskSummary('go').estimateComplete, false);
+  const legacy = new CostTracker();
+  legacy.restoreTaskUsage('legacy', { totalCostUSD: 0.1, unknownChargeCount: 0, chargeIds: ['old'],
+    chargeObservations: [{ attribution: { taskOwnerId: 'legacy', chargeId: 'old' }, provider: 'opencode-go',
+      modelId: 'deepseek-v4.1-flash', inputTokens: 100, outputTokens: 10,
+      cacheHitTokens: 0, cacheMissTokens: 0, knownCostUSD: 0.1 }] });
+  const summary = legacy.getTaskSummary('legacy');
+  assert.equal(summary.completeCostUSD, null);
+  assert.equal(summary.actualCostUSD, null);
+  assert.equal(summary.knownCostUSD, 0);
+  assert.equal(summary.estimatedCostUSD, 0.1);
+  assert.equal(summary.costEstimates?.[0]?.precision, 'unknown');
+  assert.equal(summary.costEstimates?.[0]?.pricingSourceUrl, null);
+});
+
+test('unattributed Go usage retains its estimate basis in session and project summaries', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-unattributed-'));
+  try {
+    const tracker = new CostTracker(root);
+    tracker.trackUsage('deepseek-v4.1-flash', 1000, 2000, null, null, undefined, true, 'opencode-go');
+    assert.equal(tracker.getSessionSummary().completeCostUSD, null);
+    tracker.saveToProjectStats('unattributed');
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.completeCostUSD, null);
+    assert.equal(stats.costEstimates?.[0]?.precision, 'conservative');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('CostTracker prices the observed Go provider and retains cache usage through durable settlement', () => {
+  const tracker = new CostTracker();
+  const attribution = { taskOwnerId: 'go-task', chargeId: 'go-attempt' };
+  assert.equal(tracker.settleUsage('deepseek-v4.1-flash', 0, 0, null, null, attribution, false, 'opencode-go').kind, 'inserted');
+  const update = tracker.settleUsage('deepseek-v4.1-flash', 1000, 2000, 400, 600, attribution, true, 'opencode-go');
+  assert.equal(update.kind, 'refined');
+  assert.ok(Math.abs(tracker.getTaskSummary('go-task').totalCostUSD - 0.0025824) < 1e-12);
+  assert.equal(tracker.getTaskSummary('go-task').unknownChargeCount, 0);
+  const receipts = tracker.getTaskChargeObservations('go-task');
+  assert.equal(receipts[0]?.provider, 'opencode-go');
+  const resumed = new CostTracker();
+  resumed.restoreTaskUsage('go-task', { totalCostUSD: 0.0025824, chargeIds: ['go-attempt'], unknownChargeCount: 0, chargeObservations: receipts });
+  assert.equal(resumed.settleUsage('deepseek-v4.1-flash', 1000, 2000, 400, 600, attribution, true, 'opencode-go').kind, 'duplicate');
+  assert.equal(resumed.settleUsage('deepseek-v4.1-flash', 1000, 2000, 400, 600, attribution, true, 'deepseek').kind, 'conflict');
+});
+
+test('CostTracker never borrows another provider price for an explicitly unpriced route', () => {
+  const tracker = new CostTracker();
+  tracker.settleUsage('deepseek-v4-flash', 1000, 2000, null, null,
+    { taskOwnerId: 'unknown-route', chargeId: 'unpriced-attempt' }, true, 'unregistered-provider');
+  assert.equal(tracker.getTaskSummary('unknown-route').unknownChargeCount, 1);
+  assert.equal(tracker.getTaskSummary('unknown-route').completeCostUSD, null);
+});
+
+test('Go model name alone does not establish an observed route or a known charge', () => {
+  const tracker = new CostTracker();
+  tracker.trackUsage('deepseek-v4.1-flash', 1000, 2000, null, null,
+    { taskOwnerId: 'unknown-go-route', chargeId: 'unknown-route' });
+  assert.equal(tracker.getTaskSummary('unknown-go-route').completeCostUSD, null);
+  assert.equal(tracker.getTaskSummary('unknown-go-route').unknownChargeCount, 1);
+});
+
+test('proven unstarted Go dispatch clears the unknown attempt without a fictitious bill', () => {
+  const tracker = new CostTracker();
+  const attribution = { taskOwnerId: 'go', chargeId: 'unstarted' };
+  tracker.settleUsage('deepseek-v4.1-flash', 0, 0, null, null, attribution, false, 'opencode-go');
+  assert.equal(tracker.clearUnstartedCharge(attribution), true);
+  assert.equal(tracker.getTaskSummary('go').completeCostUSD, 0);
+  assert.equal(tracker.getSessionSummary().completeCostUSD, 0);
+  assert.equal(tracker.getSessionSummary().costComplete, true);
+});
+
 test('CostTracker prices direct DeepSeek v4 Flash with conservative cache-miss input', () => {
   const tracker = new CostTracker();
   const cost = tracker.trackUsage('deepseek-v4-flash', 1000, 2000);

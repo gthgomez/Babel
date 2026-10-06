@@ -90,6 +90,11 @@ import { filterReadOnlyChatTools, isReadOnlyChat } from "./chatReadOnly.js";
 import type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
 export type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
 
+/** One same-route retry is allowed only for an empty transport reset. */
+function isEmptyStreamTransportReset(message: string): boolean {
+  return /connection reset|econnreset|socket hang up|network error/i.test(message);
+}
+
 export class ChatEngineStreamingLoop {
   constructor(private readonly host: ChatEngineStreamingLoopHost) {}
 
@@ -123,6 +128,7 @@ export class ChatEngineStreamingLoop {
     } = prepared;
     let allToolObservations = "";
     let _turnSpan: Span | null = null;
+    let sameRouteTransportRetryUsed = false;
 
     for (let turn = 0; turn < maxTurns; turn++) {
       // R0-8: a superseded generator must stop before it executes another
@@ -373,10 +379,18 @@ export class ChatEngineStreamingLoop {
         !p11ContextInstalled &&
         (hadInstalledP11Context || pendingCapsuleAuthority)
       ) {
+        // Structured refusal diagnostic: surface WHY the install was blocked
+        // (reason code + bounded details from the rejecting boundary) so a
+        // captured run can be triaged without reproducing it live. Codes only
+        // — never credentials or provider payloads.
+        const block = this.host.p11InstallBlock;
+        const blockSuffix = block
+          ? ` (install block: ${block.code}${block.details.length > 0 ? `: ${block.details.join('; ')}` : ''})`
+          : '';
         yield this.host.streamFailed(
           hadInstalledP11Context
-            ? "P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused."
-            : "P11 context installation was blocked; this turn committed a compaction capsule that no installed context root authorizes, so provider dispatch was refused.",
+            ? `P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused.${blockSuffix}`
+            : `P11 context installation was blocked; this turn committed a compaction capsule that no installed context root authorizes, so provider dispatch was refused.${blockSuffix}`,
         );
         return;
       }
@@ -645,6 +659,21 @@ export class ChatEngineStreamingLoop {
             continue;
           }
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          // Retry the same runner once when the attempt produced no text and
+          // no tool call. A different provider is not a substitute, and an
+          // operator abort must not match this path.
+          if (
+            !sameRouteTransportRetryUsed &&
+            answerText.length === 0 &&
+            nativeActions.length === 0 &&
+            !toolsAnnouncedInStream &&
+            isEmptyStreamTransportReset(err?.message ?? String(err))
+          ) {
+            sameRouteTransportRetryUsed = true;
+            endSpan(_turnSpan, SpanStatusCode.ERROR);
+            _turnSpan = null;
+            continue;
+          }
           const fb = yield* this.host.resolveFallbackOrFail(
             err,
             turn,

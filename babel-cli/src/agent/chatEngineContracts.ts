@@ -90,6 +90,8 @@ export interface ChatTaskAllowanceSnapshot {
   accountingEpoch: string
   grant: {
     grantId: string
+    /** Monotonic revision within this task owner; older grants cannot overwrite renewal. */
+    revision?: number
     provenance: string
     costCap: ChatAllowanceCostCap
     wallCapMs: number
@@ -107,6 +109,8 @@ export interface ChatTaskAllowanceSnapshot {
     postWriteRepairRestrict: boolean
   }
   accountedChargeIds: string[]
+  /** Go reservation ownership was checkpointed; resume must not create missing state. */
+  goReservationRequired?: boolean
   activeExecution: boolean
   taskCostBaselineUsd: number
   /** Owner-scoped faults mirrored when an owner-receipt write fails. */
@@ -615,6 +619,8 @@ export interface ChatEngineStreamingLoopHost {
   readonly installP11ContextCheckpoint: (
     routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,
   ) => Promise<boolean>
+  /** Structured diagnostic from the most recent refused P11 install (codes only). */
+  p11InstallBlock: { code: string; details: string[] } | null
   investigateSoftNudgeDone: boolean
   readonly isSubmissionCurrent: (ownerGeneration: number) => boolean
   readonly lastCriticReceipt: DiffCriticVerdict | null
@@ -779,6 +785,8 @@ export interface ChatEngineActionExecutorHost {
     pattern?: string
   }) => void
   fullReadCounts: Map<string, number>
+  getTurnRuntimeSnapshot: () => TurnRuntimeSnapshot | null
+  getResolvedRequiredVerifiers: () => string[]
   getLiveSession: (
     c?:
       | {
@@ -845,7 +853,14 @@ export interface ChatEngineActionExecutorHost {
   }[]
   verifierReceiptCache: Map<
     string,
-    { receipt: BoundChatVerifierReceipt; writeCountAtCache: number }
+    {
+      receipt: BoundChatVerifierReceipt
+      writeCountAtCache: number
+      /** Physical working directory the cached command ran in (set by capture). */
+      cwd?: string
+      /** Fingerprint of the execution environment at capture time (set by capture). */
+      envKey?: string
+    }
   >
   workingState: WorkingState
   writeCount: number

@@ -13,7 +13,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { after, afterEach, describe, test } from 'node:test';
+import { after, afterEach, before, describe, test } from 'node:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +25,25 @@ const roots: string[] = [];
 function cleanupRoots(): void {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 }
+
+// The mock runners report usage without pricing, so a model invocation incurs
+// an unknown-priced charge and the engine's finite default cost cap refuses
+// every subsequent dispatch ("unknown pricing" budget_kill) before a second
+// round can start. The cost guard is production behavior; these scenarios are
+// about turn/telemetry mechanics, so the fixture opts out exactly like
+// noopWriteKeepsVerifierReceipt.
+const MANAGED_ENV = ['BABEL_CHAT_MAX_COST'] as const;
+let envSnapshot: Record<string, string | undefined> = {};
+before(() => {
+  envSnapshot = Object.fromEntries(MANAGED_ENV.map((key) => [key, process.env[key]]));
+  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
+});
+after(() => {
+  for (const [key, value] of Object.entries(envSnapshot)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 afterEach(cleanupRoots);
 after(cleanupRoots);

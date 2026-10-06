@@ -12,8 +12,10 @@
  *   current step / unresolved failures  → working state, never just `writes=N`
  *   current workspace snapshot/coverage → P08/P07 current capture, never a
  *                                         relabelled historical verifier hash
- *   verification                        → live receipt ids/identity/scope/stale,
- *                                         a summary is never a fresh receipt
+ *   verification                        → live/stale receipt ids/identity/scope/
+ *                                         exit; stale receipts stay visible as
+ *                                         gaps so repair can re-verify, a
+ *                                         summary is never a fresh receipt
  *   budget / cancellation ownership     → task/child budget owner, never reset
  *                                         on compaction or resume
  *   pending operations / children       → P05/P06/P09 handles; pending stays
@@ -126,6 +128,8 @@ export interface LiveOperationalSourcesV1 {
     scope: string;
     stale: boolean;
     bound_revision: string | null;
+    /** Settled process exit of the verification run; null when unknown. */
+    exit_code?: number | null;
   }>;
   budget: {
     owner: string;
@@ -710,17 +714,28 @@ export function mapCheckpointRequiredState(
   }
 
   // verification — live receipts, summary never substitutes for a fresh receipt.
+  // Stale and failed receipts are real verification evidence and must be
+  // represented truthfully rather than treated as absent: blocking the
+  // checkpoint on a stale-only receipt set deadlocks repair (no install ⇒ no
+  // dispatch ⇒ no verifier rerun). Staleness closes VERIFIED completion at the
+  // completion-proof boundary; it must not revoke the agent's ability to
+  // continue diagnosis and re-verify under existing authority.
   const liveReceipt = sources.receipts.find((receipt) => !receipt.stale);
+  const describeReceipt = (receipt: (typeof sources.receipts)[number]): string[] => [
+    `receipt:${receipt.receipt_id}`,
+    `identity:${receipt.identity}`,
+    `scope:${receipt.scope}`,
+    ...(receipt.exit_code === undefined || receipt.exit_code === null
+      ? []
+      : [`exit:${receipt.exit_code}`]),
+    ...(receipt.bound_revision ? [`revision:${receipt.bound_revision}`] : []),
+  ];
   if (liveReceipt) {
     rows.push({
       id: 'verification',
       present: true,
       source: 'live_receipt',
-      value_refs: [
-        `receipt:${liveReceipt.receipt_id}`,
-        `identity:${liveReceipt.identity}`,
-        `scope:${liveReceipt.scope}`,
-      ],
+      value_refs: describeReceipt(liveReceipt),
       constraint_satisfied: true,
     });
   } else if (sources.receipts.length === 0) {
@@ -735,14 +750,18 @@ export function mapCheckpointRequiredState(
       constraint_satisfied: true,
     });
   } else {
-    rows.push(
-      missingRow(
-        'verification',
-        'live_receipt',
-        'no current receipt; a summary cannot be promoted to verification',
-      ),
-    );
-    errors.push('verification: no non-stale receipt is available');
+    // All receipts are stale (or otherwise non-current). The evidence is
+    // carried into the next context as-is so the model can see exactly what
+    // verification is outstanding and rerun it. Recorded as a gap-bearing row,
+    // not an error: install stays authorized, completion does not.
+    rows.push({
+      id: 'verification',
+      present: true,
+      source: 'stale_receipt',
+      value_refs: sources.receipts.flatMap(describeReceipt),
+      constraint_satisfied: true,
+      gap: 'verifier receipt is stale; verification must be rerun before a verified completion',
+    });
   }
 
   // budget / cancellation ownership — never reset on resume/compaction.

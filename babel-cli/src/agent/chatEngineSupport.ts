@@ -124,10 +124,32 @@ export async function executeLspChatToolAction(args: {
   };
 }
 
+/**
+ * Project a settled mutation effect into a truthful one-line detail. An absent
+ * or not_applicable assessment is "unverified", never "applied"; unknown stays
+ * unknown instead of claiming success.
+ */
+export function describeDirectMutationEffect(
+  effect?: { status: MutationEffectStatus; reason: string } | null,
+): string {
+  switch (effect?.status) {
+    case 'confirmed_change':
+      return 'changed';
+    case 'confirmed_no_change':
+      return 'no change (content already matched)';
+    case 'indeterminate':
+      return `effect unknown (${effect.reason})`;
+    case 'not_applicable':
+    case undefined:
+      return 'effect unverified';
+  }
+}
+
 /** Compact one-line detail for tool result logging / UI. */
 export function formatResultDetail(
   action: ChatToolAction,
   result: { stdout?: string; stderr?: string; exit_code?: number },
+  effect?: { status: MutationEffectStatus; reason: string } | null,
 ): string {
   const stdout = result.stdout ?? '';
   switch (action.type) {
@@ -142,10 +164,13 @@ export function formatResultDetail(
     case 'await_command':
     case 'test_run':
       return `exit ${result.exit_code ?? -1}`;
+    // A mutation's user-facing detail must reflect the SETTLED effect, never
+    // the process exit alone: a proposed diff or exit 0 is not proof that
+    // files changed. stdout.length was previously displayed as "B written"
+    // although it measures the tool runner's output, not bytes on disk.
     case 'write_file':
-      return `${stdout.length} B written`;
     case 'apply_patch':
-      return 'applied';
+      return describeDirectMutationEffect(effect);
     case 'semantic_search':
       return `${stdout.split('\n').filter(Boolean).length} hits`;
     case 'git_context':

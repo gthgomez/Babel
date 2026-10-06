@@ -20,9 +20,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { type FileLockContext } from '../services/editReliability.js';
-import { WorkspaceTransactionManager, type MutationBatchReceipt } from '../services/workspaceTransactions.js';
+import { WorkspaceTransactionManager, type MutationBatchReceipt, type MutationBatchTransaction } from '../services/workspaceTransactions.js';
 import { classifyToolEffect } from '../executor/contracts.js';
-import { recordEffectIntent, recordEffectTerminal } from '../executor/effectLedger.js';
+import { recordEffectIntent, recordEffectTerminal, classifyIntendedWriteOutcome } from '../executor/effectLedger.js';
 import {
   beginEffectTransaction,
   captureWorkspaceRevisionIdentity,
@@ -35,11 +35,13 @@ import {
 
 import {
   executeTool,
+  runWithLiveExecution,
   runWithProjectRoot,
   type ToolCallRequest,
   type ToolContext,
   type ToolResult,
 } from '../localTools.js';
+import { resolveExecutorDryRun } from '../config/dryRun.js';
 import { isPathInside } from '../services/targetResolver.js';
 import type { AgentAction } from './actions.js';
 import { modelToolNameToExecutor } from './canonicalToolMapping.js';
@@ -629,6 +631,33 @@ function readOnlyEffectViolation(action: AgentAction, preset: PermissionPreset):
  * Includes circuit-breaker: consecutive policy blocks trip the breaker, causing all
  * further actions to return a terminal circuit-breaker result until reset.
  */
+/**
+ * Roll back a mutation batch and map the verified undo result — never assume
+ * the restore succeeded.
+ */
+async function rollbackBatchTx(
+  batchTx: MutationBatchTransaction,
+  lockContext: FileLockContext | undefined,
+): Promise<'success' | 'failed' | 'partial'> {
+  try {
+    const undo = await WorkspaceTransactionManager.undoLastMutationBatch(batchTx, { lockContext });
+    return undo.verification ? 'success' : 'partial';
+  } catch {
+    return 'failed';
+  }
+}
+
+/**
+ * True when the process is in the DEFAULT dry-run state (no explicit operator
+ * choice via BABEL_DRY_RUN/BABEL_LIVE/persisted flags) and no shadow capture
+ * is active. Only in that state does a governed mutation carry an
+ * invocation-scoped live decision; explicit operator settings are untouched.
+ */
+function resolveInvocationLiveDefault(): boolean {
+  if (process.env['BABEL_SHADOW_ROOT'] !== undefined) return false;
+  return resolveExecutorDryRun().source === 'default';
+}
+
 export async function executeActionWithPolicy(
   action: AgentAction,
   preset: PermissionPreset,
@@ -1144,14 +1173,30 @@ export async function executeActionWithPolicy(
     }
     const isolateLocal =
       mapped !== null && CAPABILITY_KINDS[mapped.capability] === 'local';
+    // A mutation that has passed every governed gate (policy, capability,
+    // lease, scope) carries an invocation-scoped live-execution decision: the
+    // DEFAULT dry-run must never silently swallow it with an exit-zero report
+    // (the G01 write-drop defect — fresh environments default to dry-run, so
+    // real edits vanished while the tool reported success). The decision is
+    // async-local to THIS dispatch — it never flips the process-wide dry-run
+    // state, so a later denial, throw, or cancellation cannot leave the
+    // process "live", and concurrent sessions with different decisions stay
+    // isolated. An operator's explicit choice (persisted flags, BABEL_DRY_RUN,
+    // BABEL_LIVE) and shadow capture runs are unaffected.
+    const invocationLive =
+      effectClass === 'reconcilable_mutation' &&
+      resolveInvocationLiveDefault();
     const executionContext: ToolContext = {
       ...context,
       sessionId: context.sessionId ?? context.runId,
       ...(idempotencyKey ? { toolCallId: context.toolCallId ?? idempotencyKey } : {}),
     };
+    const executeInvocation = () => executor.execute(action, executionContext, budget);
     const execution = isolateLocal
-      ? await runWithUnprivilegedChildEnv(() => executor.execute(action, executionContext, budget))
-      : await executor.execute(action, executionContext, budget);
+      ? await runWithUnprivilegedChildEnv(() =>
+          invocationLive ? runWithLiveExecution(executeInvocation) : executeInvocation(),
+        )
+      : await (invocationLive ? runWithLiveExecution(executeInvocation) : executeInvocation());
 
     if (governanceSnapshot && governanceRepoRoot) {
       let recon: ReturnType<typeof reconcileGovernanceAfterEffect>;
@@ -1255,9 +1300,129 @@ export async function executeActionWithPolicy(
     }
 
     if (batchTx) {
+      // An exit-zero tool result does not prove the requested write landed.
+      // Compare observed post-operation bytes against the requested post-image
+      // before marking the effect completed.
+      const expectedPostImages =
+        action.type === 'write_file'
+          ? { [resolveWriteFileMutationPath(action.path, workspaceRoot)]: action.content }
+          : undefined;
       batchTx = await WorkspaceTransactionManager.commitBatch(batchTx, {
         lockContext: deps.lockContext,
+        ...(expectedPostImages ? { expectedPostImages } : {}),
       });
+      const writeOutcome =
+        action.type === 'write_file' && effectIntent?.intendedDigest
+          ? classifyIntendedWriteOutcome(
+              effectIntent.intendedDigest,
+              batchTx.preBatchHash,
+              batchTx.postBatchHash,
+            )
+          : null;
+      // apply_patch: `git apply` fails on an already-applied patch, so an
+      // exit-zero result with zero byte delta on every target means the
+      // requested effect did not land.
+      const applyPatchNoEffect =
+        action.type === 'apply_patch' &&
+        txPaths.length > 0 &&
+        txPaths.every((p) => batchTx!.postBatchHash[p] === batchTx!.preBatchHash[p]);
+
+      if (
+        batchTx.verified === false &&
+        (writeOutcome === 'effect_missing' || writeOutcome === 'postimage_mismatch' || !writeOutcome)
+      ) {
+        const failureDetail =
+          writeOutcome === 'effect_missing'
+            ? 'the requested content differs from the file bytes, which are unchanged'
+            : writeOutcome === 'postimage_mismatch'
+              ? 'the on-disk bytes changed, but not to the requested content'
+              : 'observed post-operation bytes do not match the requested post-image';
+        const message =
+          `[MUTATION_POSTIMAGE_NOT_CONFIRMED] ${action.type} reported success but ` +
+          `${failureDetail}. The effect is not marked completed.`;
+        const undone = await rollbackBatchTx(batchTx, deps.lockContext);
+        if (effectIntent && context.runDir) {
+          recordEffectTerminal(context.runDir, effectIntent, {
+            status: 'failed',
+            error: message,
+          });
+        }
+        if (effectTx) {
+          effectTx = {
+            ...rollbackEffectTransaction(effectTx, undone),
+            post_revision:
+              undone === 'success'
+                ? { compositeTreeHash: batchTx.preRevisionHash }
+                : captureWorkspaceRevisionIdentity(workspaceRoot),
+          };
+        }
+        return {
+          action,
+          terminal: false,
+          results: [{ exit_code: 1, stdout: '', stderr: message }],
+          policyDecision,
+          policyBlocked: false,
+          ...(effectTx ? { effectTransaction: effectTx } : {}),
+          mutationPaths: txPaths,
+          preBatchHash: batchTx.preBatchHash,
+          postBatchHash: batchTx.postBatchHash,
+          mutationReceipt: {
+            batchId: batchTx.batchId,
+            ...(batchTx.sessionId ? { sessionId: batchTx.sessionId } : {}),
+            startingRevision: batchTx.preRevisionHash,
+            ...(batchTx.postRevisionHash ? { endingRevision: batchTx.postRevisionHash } : {}),
+            affectedFiles: [...txPaths],
+            preImageHashes: { ...batchTx.preBatchHash },
+            postImageHashes: { ...batchTx.postBatchHash },
+            changedBytes: batchTx.changedBytes,
+            status: batchTx.status,
+          },
+        };
+      }
+
+      if (applyPatchNoEffect) {
+        const message =
+          '[MUTATION_POSTIMAGE_NOT_CONFIRMED] apply_patch reported success but no target file bytes changed.';
+        const undone = await rollbackBatchTx(batchTx, deps.lockContext);
+        if (effectIntent && context.runDir) {
+          recordEffectTerminal(context.runDir, effectIntent, {
+            status: 'failed',
+            error: message,
+          });
+        }
+        if (effectTx) {
+          effectTx = {
+            ...rollbackEffectTransaction(effectTx, undone),
+            post_revision:
+              undone === 'success'
+                ? { compositeTreeHash: batchTx.preRevisionHash }
+                : captureWorkspaceRevisionIdentity(workspaceRoot),
+          };
+        }
+        return {
+          action,
+          terminal: false,
+          results: [{ exit_code: 1, stdout: '', stderr: message }],
+          policyDecision,
+          policyBlocked: false,
+          ...(effectTx ? { effectTransaction: effectTx } : {}),
+          mutationPaths: txPaths,
+          preBatchHash: batchTx.preBatchHash,
+          postBatchHash: batchTx.postBatchHash,
+          mutationReceipt: {
+            batchId: batchTx.batchId,
+            ...(batchTx.sessionId ? { sessionId: batchTx.sessionId } : {}),
+            startingRevision: batchTx.preRevisionHash,
+            ...(batchTx.postRevisionHash ? { endingRevision: batchTx.postRevisionHash } : {}),
+            affectedFiles: [...txPaths],
+            preImageHashes: { ...batchTx.preBatchHash },
+            postImageHashes: { ...batchTx.postBatchHash },
+            changedBytes: batchTx.changedBytes,
+            status: batchTx.status,
+          },
+        };
+      }
+
       if (effectIntent && context.runDir) {
         recordEffectTerminal(context.runDir, effectIntent, {
           status: 'completed',
