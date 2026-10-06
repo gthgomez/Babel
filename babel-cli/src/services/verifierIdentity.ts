@@ -72,6 +72,23 @@ const BOOLEAN_RUNNER_FLAGS = new Set([
 ]);
 
 /**
+ * Flags that make a command a help / version / listing invocation rather than
+ * a test execution. A command carrying one of these anywhere in its runner
+ * arguments must not satisfy a required verifier: `npm test --help` prints
+ * help and runs nothing, yet the flag was previously dropped during scope
+ * analysis and the command classified as a full-suite run.
+ */
+const NON_EXECUTING_FLAGS = new Set([
+  '-h',
+  '--help',
+  '--usage',
+  '--version',
+]);
+// `-v` is ambiguous (verbose in some runners) and stays in BOOLEAN_RUNNER_FLAGS;
+// only unambiguous version/help/listing forms are treated as non-executing.
+const NON_EXECUTING_FLAG_PREFIXES = ['--list', '--collect-only', '--show-config', '--print-config'];
+
+/**
  * Classify structural scope of a verifier command.
  */
 export function classifyVerifierScope(command: string): VerifierScope {
@@ -102,8 +119,22 @@ export function analyzeVerifierIdentity(command: string): VerifierIdentity | nul
   }
 
   const selectors = extractTargetSelectors(family, executable, args);
-  const scope: VerifierScope = selectors.length > 0 ? 'targeted' : 'full';
+  // A help / version / listing flag means the command may not execute tests at
+  // all; downgrade so it can never satisfy a full-suite or targeted requirement.
+  const scope: VerifierScope = hasNonExecutingFlag(args)
+    ? 'unknown'
+    : selectors.length > 0
+      ? 'targeted'
+      : 'full';
   return identityOf(family, scope, selectors, display);
+}
+
+function hasNonExecutingFlag(args: readonly string[]): boolean {
+  for (const token of args) {
+    if (NON_EXECUTING_FLAGS.has(token)) return true;
+    if (NON_EXECUTING_FLAG_PREFIXES.some((prefix) => token.startsWith(prefix))) return true;
+  }
+  return false;
 }
 
 /**
