@@ -33,3 +33,24 @@ it('diagnoses an installed user without contributor files or all provider creden
     assert.doesNotMatch(JSON.stringify(setup), /doctor-secret-sentinel/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+
+it('reports staged model resources without provider or network calls', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel doctor catalog é '))
+  try {
+    const resources = join(root, 'resources')
+    mkdirSync(join(resources, 'config'), { recursive: true })
+    writeFileSync(join(resources, 'prompt_catalog.yaml'), 'assets: []')
+    writeFileSync(join(resources, 'config', 'model-catalog.generated.json'), '{"schemaVersion":1}')
+    const paths = { packageRoot: root, resourceRoot: resources, isInstalled: true,
+      userConfigRoot: join(root, 'config'), userStateRoot: join(root, 'state'),
+      userCacheRoot: join(root, 'cache'), targetProjectRoot: root }
+    let dockerProbed = 0
+    const result = runInstalledDoctor({ paths, env: {}, dockerProbe: () => { dockerProbed += 1; return true } })
+    const resourcesCheck = result.checks.find(check => check.id === 'resources')
+    assert.equal(resourcesCheck?.status, 'ok')
+    assert.equal(resourcesCheck?.message, resources)
+    assert.equal(dockerProbed, 1)
+    assert.equal(result.status, 'warn')
+    assert.doesNotMatch(JSON.stringify(result), /api\.|https?:\/\/|bearer /i)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})

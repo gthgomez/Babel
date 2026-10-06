@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { existsSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { resolveRuntimeLearningRoot, resolveRuntimePaths } from './runtimePaths.js'
 import { getAgentRunsRoot, runAgentTeam } from '../services/agentTeams.js'
@@ -169,3 +170,35 @@ test('does resolve agent runs under user state while retaining explicit source r
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('read_only_install_uses_user_cache', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel read only install é '))
+  const packageRoot = join(root, 'installed package')
+  const resources = join(packageRoot, 'resources')
+  const home = join(root, 'home')
+  const catalog = fileURLToPath(new URL('../../../config/model-catalog.generated.json', import.meta.url))
+  mkdirSync(join(resources, 'config'), { recursive: true })
+  writeFileSync(join(resources, 'prompt_catalog.yaml'), 'assets: []')
+  copyFileSync(catalog, join(resources, 'config', 'model-catalog.generated.json'))
+  writeFileSync(join(resources, 'config', 'model-policy.json'), '{"version":2}')
+  chmodSync(resources, 0o555)
+  chmodSync(packageRoot, 0o555)
+  try {
+    const paths = resolveRuntimePaths({ HOME: home }, packageRoot)
+    assert.equal(paths.isInstalled, true)
+    assert.equal(paths.resourceRoot, resources)
+    assert.equal(paths.userConfigRoot, join(home, '.babel', 'config'))
+    assert.equal(paths.userStateRoot, join(home, '.babel'))
+    assert.equal(paths.userCacheRoot, join(home, '.babel', 'cache'))
+    // Immutable resources are readable from the read-only install...
+    assert.ok(existsSync(join(paths.resourceRoot, 'config', 'model-catalog.generated.json')))
+    // ...while cache writes land in the writable user root, never the install.
+    mkdirSync(paths.userCacheRoot, { recursive: true })
+    writeFileSync(join(paths.userCacheRoot, 'catalog-cache.json'), '{}')
+    assert.ok(existsSync(join(paths.userCacheRoot, 'catalog-cache.json')))
+  } finally {
+    chmodSync(resources, 0o755)
+    chmodSync(packageRoot, 0o755)
+    rmSync(root, { recursive: true, force: true })
+  }
+})

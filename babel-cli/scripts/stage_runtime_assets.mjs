@@ -20,13 +20,20 @@ for (const dir of ['07_Pipeline_Stages', 'prompts', 'LLM_COLLABORATION_SYSTEM'])
   }
 }
 for (const file of [
-  'config/model-policy.json', 'config/purpose-mode-seeds.json', 'config/review-risk-policy.json',
+  'config/purpose-mode-seeds.json', 'config/review-risk-policy.json',
   'config/runtime-flags.json', 'config/independent-review-keys.json', 'config/trusted-supervisor-keys.json',
   'babel-cli/config/enterprise-policy.example.json', 'babel-cli/config/mcp_servers.json',
   'babel-cli/config/plugins.json', 'babel-cli/config/runtime-mode.json',
   'INTEGRATION.md', 'PROJECT_CONTEXT.md', 'docs/architecture/HARNESS_ARCHITECTURE_V1.md',
 ]) {
   if (existsSync(resolve(repoRoot, file))) assets.add(file)
+}
+// Immutable offline configuration every clean install must ship: the retained
+// model policy and the generated catalog snapshot. These are required, so the
+// validation loop below fails closed before replacing resources when either is
+// absent; an installed package can never silently start with a partial asset set.
+for (const file of ['config/model-policy.json', 'config/model-catalog.generated.json']) {
+  assets.add(file)
 }
 // Validate everything before replacing generated resources, so missing catalog assets fail closed.
 for (const asset of assets) {
