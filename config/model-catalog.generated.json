@@ -1,0 +1,1173 @@
+{
+  "schemaVersion": 1,
+  "revision": "2fe80c18b46358160f680ff2fc0185f4fd7871912fd6ae7c066747fceba1587a",
+  "observedAt": "2026-10-06T00:00:00.000Z",
+  "sourceResults": [
+    {
+      "sourceId": "openrouter-catalog",
+      "status": "ok",
+      "completeness": "complete",
+      "fetchedAt": "2026-10-06T00:00:00.000Z",
+      "contentDigest": "e9cf0bdbd5ab5912d3e44e07c7b1921b569665f9f94fb90946b601f128544263"
+    }
+  ],
+  "labModels": [
+    {
+      "schemaVersion": 1,
+      "canonicalModelId": "z-ai/glm-5.3-flash",
+      "family": "z-ai",
+      "revision": "flash",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "declaredLimits": {},
+      "limitEvidence": [
+        {
+          "scope": "gateway",
+          "claim": "OPENROUTER_GATEWAY_CATALOG_LIMIT",
+          "field": "contextTokens",
+          "value": 1310720,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "contextTokens",
+          "value": 1048576,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "maxOutputTokens",
+          "value": 131072,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        }
+      ],
+      "limitEvidenceStatus": "conflicting",
+      "nativeCapabilities": {},
+      "sourceEvidence": [
+        {
+          "source": "provider_api",
+          "uri": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-10-06T00:00:00.000Z"
+        }
+      ],
+      "profileHash": "3c0bc1e66b50dc9a06a37817c2371cecdd3b3d5c58de90c36d68d911fc974c3e",
+      "compatibilityFingerprintVersion": 1,
+      "compatibilityFingerprint": "681dc56352bcf6fa966f5264313af1b61e90c86fea48b991224103a72269fe3f",
+      "pricingRevisionVersion": 1,
+      "pricingRevision": "10dbde7296ba8edbcda1315585206c1ba56073b932920154fc5ccb2e8e6e1ce5"
+    },
+    {
+      "schemaVersion": 1,
+      "canonicalModelId": "deepseek/deepseek-v4-flash-0731",
+      "family": "deepseek",
+      "revision": "0731",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "declaredLimits": {},
+      "limitEvidence": [
+        {
+          "scope": "gateway",
+          "claim": "OPENROUTER_GATEWAY_CATALOG_LIMIT",
+          "field": "contextTokens",
+          "value": 1310720,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "contextTokens",
+          "value": 1048576,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "maxOutputTokens",
+          "value": 131072,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        }
+      ],
+      "limitEvidenceStatus": "conflicting",
+      "nativeCapabilities": {},
+      "sourceEvidence": [
+        {
+          "source": "provider_api",
+          "uri": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-10-06T00:00:00.000Z"
+        }
+      ],
+      "profileHash": "55f612afd753736ecdebc3883b61cd5e37e1b455eabb4339bf347f0a0f2b0051",
+      "compatibilityFingerprintVersion": 1,
+      "compatibilityFingerprint": "9300f416fee0d913d05e3d249d58838860832125d028c23a0d09d798040f6ebc",
+      "pricingRevisionVersion": 1,
+      "pricingRevision": "10dbde7296ba8edbcda1315585206c1ba56073b932920154fc5ccb2e8e6e1ce5"
+    },
+    {
+      "schemaVersion": 1,
+      "canonicalModelId": "deepseek/deepseek-v4-pro",
+      "family": "deepseek",
+      "revision": "pro",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "declaredLimits": {},
+      "limitEvidence": [
+        {
+          "scope": "gateway",
+          "claim": "OPENROUTER_GATEWAY_CATALOG_LIMIT",
+          "field": "contextTokens",
+          "value": 1000000,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "contextTokens",
+          "value": 1000000,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "maxOutputTokens",
+          "value": 384000,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        }
+      ],
+      "limitEvidenceStatus": "conflicting",
+      "nativeCapabilities": {},
+      "sourceEvidence": [
+        {
+          "source": "provider_api",
+          "uri": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-10-06T00:00:00.000Z"
+        }
+      ],
+      "profileHash": "3562a7887a145f0eac65dd5cb09de79f781c6eb7326cce0126afad8267b2a92a",
+      "compatibilityFingerprintVersion": 1,
+      "compatibilityFingerprint": "449759a93a2e45c1f89f0ac75cbd7e91adfec483a5569858ad128ab1b7f218a8",
+      "pricingRevisionVersion": 1,
+      "pricingRevision": "10dbde7296ba8edbcda1315585206c1ba56073b932920154fc5ccb2e8e6e1ce5"
+    }
+  ],
+  "providerModels": [
+    {
+      "schemaVersion": 1,
+      "provider": "openrouter",
+      "canonicalModelId": "z-ai/glm-5.3-flash",
+      "providerModelId": "z-ai/glm-5.3-flash",
+      "protocolProfiles": [
+        {
+          "protocol": "chat_completions",
+          "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+          "streaming": {
+            "state": "api_advertised",
+            "support": "supported",
+            "evidenceLevel": "api_advertised",
+            "confidence": "high",
+            "evidence": [
+              {
+                "capability": "streaming",
+                "state": "api_advertised",
+                "provider": "openrouter",
+                "model": "z-ai/glm-5.3-flash",
+                "protocol": "chat_completions",
+                "observedAt": "2026-10-06T00:00:00.000Z",
+                "source": "provider_api",
+                "confidence": "high",
+                "support": "supported",
+                "evidenceLevel": "api_advertised"
+              }
+            ]
+          },
+          "reasoning": {
+            "enabled": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "mechanism": "unknown",
+            "semanticEffectEvidence": []
+          },
+          "tools": {
+            "basicTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "streamingTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "sequentialTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "parallelTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "toolChoiceAuto": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "toolChoiceRequired": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "toolChoiceSpecific": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "strictArgumentSchema": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "reasoningToolInterleave": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "reasoningReplayAcrossTurns": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "multipleToolRounds": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            }
+          },
+          "structuredOutput": {
+            "jsonObjectMode": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "jsonSchemaMode": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "strictSchemaEnforcement": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "structuredOutputWithTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "structuredOutputStreaming": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            }
+          },
+          "supportedParameters": [],
+          "qualificationStatus": "unqualified"
+        }
+      ],
+      "providerLimits": {
+        "contextTokens": 1048576,
+        "maxOutputTokens": 131072
+      },
+      "limitEvidence": [
+        {
+          "scope": "gateway",
+          "claim": "OPENROUTER_GATEWAY_CATALOG_LIMIT",
+          "field": "contextTokens",
+          "value": 1310720,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "contextTokens",
+          "value": 1048576,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "maxOutputTokens",
+          "value": 131072,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        }
+      ],
+      "limitEvidenceStatus": "conflicting",
+      "pricing": {},
+      "routingCapabilities": {
+        "supportsProviderOrder": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "provider.order",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "z-ai/glm-5.3-flash",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        },
+        "supportsFallbackControl": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "provider.allow_fallbacks",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "z-ai/glm-5.3-flash",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        },
+        "supportsRequireParameters": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "provider.require_parameters",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "z-ai/glm-5.3-flash",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        },
+        "supportsRouterMetadata": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "router_metadata",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "z-ai/glm-5.3-flash",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        }
+      },
+      "cacheCapabilities": {
+        "supportsPromptCaching": {
+          "state": "unknown",
+          "support": "unknown",
+          "evidenceLevel": "api_advertised",
+          "confidence": "unknown"
+        },
+        "reportsCacheHitTokens": {
+          "state": "unknown",
+          "support": "unknown",
+          "evidenceLevel": "api_advertised",
+          "confidence": "unknown"
+        },
+        "reportsCacheMissTokens": {
+          "state": "unknown",
+          "support": "unknown",
+          "evidenceLevel": "api_advertised",
+          "confidence": "unknown"
+        }
+      },
+      "lifecycle": {
+        "status": "active"
+      },
+      "sourceEvidence": [
+        {
+          "source": "provider_api",
+          "uri": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-10-06T00:00:00.000Z"
+        }
+      ],
+      "observedEvidence": [],
+      "profileHash": "138bb32c500899d5b5d027a65e5d1adb5a6872dd014ccfe3abc268df68b1909a",
+      "compatibilityFingerprintVersion": 1,
+      "compatibilityFingerprint": "c4c2ee6ec9c3f798a43a6a5d0e9d939ee9c987fc2334b41946bef7c8254f62b0",
+      "pricingRevisionVersion": 1,
+      "pricingRevision": "b44fbca5fcd046f7bfa088d053e2bf14bd540e3ef864f2403ec6c8ecb9b1d73a"
+    },
+    {
+      "schemaVersion": 1,
+      "provider": "openrouter",
+      "canonicalModelId": "deepseek/deepseek-v4-flash-0731",
+      "providerModelId": "deepseek/deepseek-v4-flash-0731",
+      "protocolProfiles": [
+        {
+          "protocol": "chat_completions",
+          "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+          "streaming": {
+            "state": "api_advertised",
+            "support": "supported",
+            "evidenceLevel": "api_advertised",
+            "confidence": "high",
+            "evidence": [
+              {
+                "capability": "streaming",
+                "state": "api_advertised",
+                "provider": "openrouter",
+                "model": "deepseek/deepseek-v4-flash-0731",
+                "protocol": "chat_completions",
+                "observedAt": "2026-10-06T00:00:00.000Z",
+                "source": "provider_api",
+                "confidence": "high",
+                "support": "supported",
+                "evidenceLevel": "api_advertised"
+              }
+            ]
+          },
+          "reasoning": {
+            "enabled": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "mechanism": "unknown",
+            "semanticEffectEvidence": []
+          },
+          "tools": {
+            "basicTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "streamingTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "sequentialTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "parallelTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "toolChoiceAuto": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "toolChoiceRequired": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "toolChoiceSpecific": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "strictArgumentSchema": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "reasoningToolInterleave": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "reasoningReplayAcrossTurns": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "multipleToolRounds": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            }
+          },
+          "structuredOutput": {
+            "jsonObjectMode": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "jsonSchemaMode": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "strictSchemaEnforcement": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "structuredOutputWithTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "structuredOutputStreaming": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            }
+          },
+          "supportedParameters": [],
+          "qualificationStatus": "unqualified"
+        }
+      ],
+      "providerLimits": {
+        "contextTokens": 1048576,
+        "maxOutputTokens": 131072
+      },
+      "limitEvidence": [
+        {
+          "scope": "gateway",
+          "claim": "OPENROUTER_GATEWAY_CATALOG_LIMIT",
+          "field": "contextTokens",
+          "value": 1310720,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "contextTokens",
+          "value": 1048576,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "maxOutputTokens",
+          "value": 131072,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        }
+      ],
+      "limitEvidenceStatus": "conflicting",
+      "pricing": {},
+      "routingCapabilities": {
+        "supportsProviderOrder": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "provider.order",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "deepseek/deepseek-v4-flash-0731",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        },
+        "supportsFallbackControl": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "provider.allow_fallbacks",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "deepseek/deepseek-v4-flash-0731",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        },
+        "supportsRequireParameters": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "provider.require_parameters",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "deepseek/deepseek-v4-flash-0731",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        },
+        "supportsRouterMetadata": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "router_metadata",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "deepseek/deepseek-v4-flash-0731",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        }
+      },
+      "cacheCapabilities": {
+        "supportsPromptCaching": {
+          "state": "unknown",
+          "support": "unknown",
+          "evidenceLevel": "api_advertised",
+          "confidence": "unknown"
+        },
+        "reportsCacheHitTokens": {
+          "state": "unknown",
+          "support": "unknown",
+          "evidenceLevel": "api_advertised",
+          "confidence": "unknown"
+        },
+        "reportsCacheMissTokens": {
+          "state": "unknown",
+          "support": "unknown",
+          "evidenceLevel": "api_advertised",
+          "confidence": "unknown"
+        }
+      },
+      "lifecycle": {
+        "status": "active"
+      },
+      "sourceEvidence": [
+        {
+          "source": "provider_api",
+          "uri": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-10-06T00:00:00.000Z"
+        }
+      ],
+      "observedEvidence": [],
+      "profileHash": "f619dc25bb3c11db1e9f547edb918faa447f7e389f1f86e0f3072c521585eb16",
+      "compatibilityFingerprintVersion": 1,
+      "compatibilityFingerprint": "7cd058d01b9368838cdb5d6bf1cff5b960c434e55d7286236c3a61b9f7afaaae",
+      "pricingRevisionVersion": 1,
+      "pricingRevision": "b44fbca5fcd046f7bfa088d053e2bf14bd540e3ef864f2403ec6c8ecb9b1d73a"
+    },
+    {
+      "schemaVersion": 1,
+      "provider": "openrouter",
+      "canonicalModelId": "deepseek/deepseek-v4-pro",
+      "providerModelId": "deepseek/deepseek-v4-pro",
+      "protocolProfiles": [
+        {
+          "protocol": "chat_completions",
+          "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+          "streaming": {
+            "state": "api_advertised",
+            "support": "supported",
+            "evidenceLevel": "api_advertised",
+            "confidence": "high",
+            "evidence": [
+              {
+                "capability": "streaming",
+                "state": "api_advertised",
+                "provider": "openrouter",
+                "model": "deepseek/deepseek-v4-pro",
+                "protocol": "chat_completions",
+                "observedAt": "2026-10-06T00:00:00.000Z",
+                "source": "provider_api",
+                "confidence": "high",
+                "support": "supported",
+                "evidenceLevel": "api_advertised"
+              }
+            ]
+          },
+          "reasoning": {
+            "enabled": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "mechanism": "unknown",
+            "semanticEffectEvidence": []
+          },
+          "tools": {
+            "basicTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "streamingTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "sequentialTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "parallelTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "toolChoiceAuto": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "toolChoiceRequired": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "toolChoiceSpecific": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "strictArgumentSchema": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "reasoningToolInterleave": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "reasoningReplayAcrossTurns": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "multipleToolRounds": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            }
+          },
+          "structuredOutput": {
+            "jsonObjectMode": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "jsonSchemaMode": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "strictSchemaEnforcement": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "structuredOutputWithTools": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            },
+            "structuredOutputStreaming": {
+              "state": "unknown",
+              "support": "unknown",
+              "evidenceLevel": "api_advertised",
+              "confidence": "unknown"
+            }
+          },
+          "supportedParameters": [],
+          "qualificationStatus": "unqualified"
+        }
+      ],
+      "providerLimits": {
+        "contextTokens": 1000000,
+        "maxOutputTokens": 384000
+      },
+      "limitEvidence": [
+        {
+          "scope": "gateway",
+          "claim": "OPENROUTER_GATEWAY_CATALOG_LIMIT",
+          "field": "contextTokens",
+          "value": 1000000,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "contextTokens",
+          "value": 1000000,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        },
+        {
+          "scope": "top_provider",
+          "claim": "OPENROUTER_TOP_PROVIDER_LIMIT",
+          "field": "maxOutputTokens",
+          "value": 384000,
+          "source": {
+            "source": "provider_api",
+            "uri": "https://openrouter.ai/api/v1/models",
+            "retrievedAt": "2026-10-06T00:00:00.000Z"
+          },
+          "observedAt": "2026-10-06T00:00:00.000Z",
+          "confidence": "high",
+          "status": "supported"
+        }
+      ],
+      "limitEvidenceStatus": "conflicting",
+      "pricing": {},
+      "routingCapabilities": {
+        "supportsProviderOrder": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "provider.order",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "deepseek/deepseek-v4-pro",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        },
+        "supportsFallbackControl": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "provider.allow_fallbacks",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "deepseek/deepseek-v4-pro",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        },
+        "supportsRequireParameters": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "provider.require_parameters",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "deepseek/deepseek-v4-pro",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        },
+        "supportsRouterMetadata": {
+          "state": "api_advertised",
+          "support": "supported",
+          "evidenceLevel": "api_advertised",
+          "confidence": "high",
+          "evidence": [
+            {
+              "capability": "router_metadata",
+              "state": "api_advertised",
+              "provider": "openrouter",
+              "model": "deepseek/deepseek-v4-pro",
+              "protocol": "chat_completions",
+              "observedAt": "2026-10-06T00:00:00.000Z",
+              "source": "provider_api",
+              "confidence": "high",
+              "support": "supported",
+              "evidenceLevel": "api_advertised"
+            }
+          ]
+        }
+      },
+      "cacheCapabilities": {
+        "supportsPromptCaching": {
+          "state": "unknown",
+          "support": "unknown",
+          "evidenceLevel": "api_advertised",
+          "confidence": "unknown"
+        },
+        "reportsCacheHitTokens": {
+          "state": "unknown",
+          "support": "unknown",
+          "evidenceLevel": "api_advertised",
+          "confidence": "unknown"
+        },
+        "reportsCacheMissTokens": {
+          "state": "unknown",
+          "support": "unknown",
+          "evidenceLevel": "api_advertised",
+          "confidence": "unknown"
+        }
+      },
+      "lifecycle": {
+        "status": "active"
+      },
+      "sourceEvidence": [
+        {
+          "source": "provider_api",
+          "uri": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-10-06T00:00:00.000Z"
+        }
+      ],
+      "observedEvidence": [],
+      "profileHash": "029c6d361518345d6857d73ded7d7806927345383518df2b333a49e0032dfbf4",
+      "compatibilityFingerprintVersion": 1,
+      "compatibilityFingerprint": "35843f22c269e9c164a095ff26cb3f9992785a25c7e1f91438e251be7a1a4fe5",
+      "pricingRevisionVersion": 1,
+      "pricingRevision": "b44fbca5fcd046f7bfa088d053e2bf14bd540e3ef864f2403ec6c8ecb9b1d73a"
+    }
+  ]
+}

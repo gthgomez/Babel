@@ -131,14 +131,12 @@ function observation(
   capability: string,
   observedAt: string,
 ): CapabilityObservation {
+  // Absence from supported_parameters is not evidence of support. Returning the
+  // canonical unknown observation keeps the outer state and the attached
+  // evidence consistent instead of advertising a capability that was omitted.
   const supported = item.supported_parameters?.includes(capability) === true;
-  return {
-    state: supported ? "api_advertised" : "unknown",
-    support: supported ? "supported" : "unknown",
-    evidenceLevel: "api_advertised",
-    confidence: supported ? "high" : "unknown",
-    evidence: [evidence({ capability, model: item.id, observedAt })],
-  };
+  if (!supported) return unknownObservation();
+  return advertisedObservation(capability, item.id, observedAt);
 }
 
 function unknownObservation(): CapabilityObservation {
@@ -268,9 +266,15 @@ function buildProtocolProfile(
       support: reasoningEnabled ? "supported" : "unknown",
       evidenceLevel: "api_advertised",
       confidence: reasoningEnabled ? "high" : "unknown",
-      evidence: [
-        evidence({ capability: "reasoning", model: item.id, observedAt }),
-      ],
+      // Omitted reasoning metadata yields no evidence at all; only an actual
+      // advertisement may attach supported evidence.
+      ...(reasoningEnabled
+        ? {
+            evidence: [
+              evidence({ capability: "reasoning", model: item.id, observedAt }),
+            ],
+          }
+        : {}),
     },
     ...(item.reasoning?.supported_efforts === undefined
       ? {}
