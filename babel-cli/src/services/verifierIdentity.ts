@@ -96,6 +96,32 @@ export function classifyVerifierScope(command: string): VerifierScope {
 }
 
 /**
+ * Execution-cache fingerprint of a verifier command: quote-aware tokens in
+ * original order, executable lower-cased, argument values case-preserved.
+ *
+ * Deliberately DISTINCT from {@link analyzeVerifierIdentity}'s identityKey:
+ * the structural identity exists for coverage matching and intentionally
+ * collapses argument detail (npm test and npm test -- --coverage are both
+ * family npm-test, scope full). Execution-cache identity must NOT collapse —
+ * `pytest -m slow` and `pytest -m fast` are different executions, argument
+ * order can matter, and quoted values must stay one token. No sorting, no
+ * case-folding of arguments.
+ */
+export function verifierExecutionFingerprint(command: string): string {
+  const display = cleanCommand(command);
+  if (!display) return '';
+  const tokens = tokenizeCommand(display);
+  if (tokens.length === 0) return '';
+  return tokens
+    .map((token, index) => (index === 0 ? normalizeExecutable(token) : stripQuotes(token)))
+    .join('\u0000');
+}
+
+function stripQuotes(token: string): string {
+  return token.replace(/^['"]|['"]$/g, '');
+}
+
+/**
  * Analyze structural identity of a verifier command.
  * Returns null only when the command is empty after clean.
  */

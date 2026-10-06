@@ -27,8 +27,13 @@ import { tmpdir } from 'node:os';
 import {
   resolveVerifierCacheIdentity,
   shouldReuseCachedVerifierReceipt,
+  upsertVerifierReceipt,
   verifierEnvironmentKey,
 } from './chatEngineVerifierAdapter.js';
+import {
+  classifyVerifierScope,
+  verifierExecutionFingerprint,
+} from '../services/verifierIdentity.js';
 import { bindChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
 
 describe('verifier cache identity', () => {
@@ -125,6 +130,63 @@ describe('cached verifier receipt reuse currency', () => {
         receiptId: 'receipt-x',
       }),
       false,
+    );
+  });
+});
+
+describe('verifier execution identity preserves argument semantics', () => {
+  const projectRoot = '/repo/root';
+
+  test('distinct arguments are distinct executions (separate cache slots)', () => {
+    const slots = new Set<string>();
+    for (const command of [
+      'pytest -m slow',
+      'pytest -m fast',
+      'npm test',
+      'npm test -- --coverage',
+    ]) {
+      slots.add(resolveVerifierCacheIdentity({ projectRoot, command }).key);
+    }
+    assert.equal(slots.size, 4, 'each distinct execution gets its own slot');
+  });
+
+  test('argument order and quoting are preserved, not normalized away', () => {
+    const identity = resolveVerifierCacheIdentity({ projectRoot, command: 'node --test' });
+    assert.notEqual(
+      identity.key,
+      resolveVerifierCacheIdentity({ projectRoot, command: 'node --test a b' }).key,
+    );
+    assert.notEqual(
+      resolveVerifierCacheIdentity({ projectRoot, command: 'vitest -t "slow path"' }).key,
+      resolveVerifierCacheIdentity({ projectRoot, command: 'vitest -t slow path' }).key,
+    );
+    // Identical commands still share the slot.
+    assert.equal(
+      resolveVerifierCacheIdentity({ projectRoot, command: 'pytest -m slow' }).key,
+      resolveVerifierCacheIdentity({ projectRoot, command: 'pytest -m slow' }).key,
+    );
+  });
+
+  test('the execution ledger keeps distinct-argument receipts separately', () => {
+    const ledger: Array<{ command: string } & Record<string, unknown>> = [];
+    upsertVerifierReceipt(ledger as never, { command: 'pytest -m slow' } as never);
+    upsertVerifierReceipt(ledger as never, { command: 'pytest -m fast' } as never);
+    upsertVerifierReceipt(ledger as never, { command: 'npm test' } as never);
+    upsertVerifierReceipt(ledger as never, { command: 'npm test -- --coverage' } as never);
+    assert.equal(ledger.length, 4, 'distinct executions are not collapsed in the ledger');
+    // Re-running the SAME execution updates its own entry.
+    upsertVerifierReceipt(ledger as never, { command: 'pytest -m slow' } as never);
+    assert.equal(ledger.length, 4);
+  });
+
+  test('coverage classification stays separate from execution identity', () => {
+    // Coverage/requirement matching intentionally collapses these; execution
+    // identity must not — and neither view may leak into the other.
+    assert.equal(classifyVerifierScope('npm test'), 'full');
+    assert.equal(classifyVerifierScope('npm test -- --coverage'), 'full');
+    assert.notEqual(
+      verifierExecutionFingerprint('npm test'),
+      verifierExecutionFingerprint('npm test -- --coverage'),
     );
   });
 });

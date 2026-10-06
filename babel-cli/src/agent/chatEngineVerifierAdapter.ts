@@ -18,7 +18,10 @@ import {
   recordVerifierAttempt,
   type SessionEventLog,
 } from './sessionEvents.js';
-import { analyzeVerifierIdentity } from '../services/verifierIdentity.js';
+import {
+  analyzeVerifierIdentity,
+  verifierExecutionFingerprint,
+} from '../services/verifierIdentity.js';
 import {
   isAuthoritativeVerifierCommand,
   parseStructuredVerifierCommand,
@@ -272,7 +275,15 @@ export function shouldReuseCachedVerifierReceipt(
 }
 
 function verifierReceiptIdentityKey(command: string): string {
-  return analyzeVerifierIdentity(command)?.identityKey ?? command.trim().replace(/\s+/g, ' ');
+  // Execution identity, NOT coverage identity: the structural identityKey
+  // collapses argument detail by design (coverage matching), which would
+  // alias distinct executions (pytest -m slow vs pytest -m fast, npm test vs
+  // npm test -- --coverage) into one cache slot / ledger entry. The
+  // fingerprint preserves executable, argument order, values and quoting.
+  return (
+    verifierExecutionFingerprint(command) ||
+    command.trim().replace(/\s+/g, ' ')
+  );
 }
 
 export function prepareKernelVerifierInput(
