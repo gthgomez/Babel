@@ -35,7 +35,7 @@ import {
 
 import {
   executeTool,
-  refreshDryRunState,
+  runWithLiveExecution,
   runWithProjectRoot,
   type ToolCallRequest,
   type ToolContext,
@@ -647,6 +647,17 @@ async function rollbackBatchTx(
   }
 }
 
+/**
+ * True when the process is in the DEFAULT dry-run state (no explicit operator
+ * choice via BABEL_DRY_RUN/BABEL_LIVE/persisted flags) and no shadow capture
+ * is active. Only in that state does a governed mutation carry an
+ * invocation-scoped live decision; explicit operator settings are untouched.
+ */
+function resolveInvocationLiveDefault(): boolean {
+  if (process.env['BABEL_SHADOW_ROOT'] !== undefined) return false;
+  return resolveExecutorDryRun().source === 'default';
+}
+
 export async function executeActionWithPolicy(
   action: AgentAction,
   preset: PermissionPreset,
@@ -1162,31 +1173,30 @@ export async function executeActionWithPolicy(
     }
     const isolateLocal =
       mapped !== null && CAPABILITY_KINDS[mapped.capability] === 'local';
-    if (effectClass === 'reconcilable_mutation') {
-      // A mutation that has passed every governed gate (policy, capability,
-      // lease, scope) is a live opt-in for this process: the DEFAULT dry-run
-      // must never silently swallow it with an exit-zero report (the G01
-      // write-drop defect — fresh environments default to dry-run, so real
-      // edits vanished while the tool reported success). An operator's
-      // explicit dry-run choice (persisted flags, BABEL_DRY_RUN, or a shadow
-      // capture run) is always respected.
-      const dryRun = resolveExecutorDryRun();
-      if (
-        dryRun.source === 'default' &&
-        process.env['BABEL_SHADOW_ROOT'] === undefined
-      ) {
-        process.env['BABEL_LIVE'] = 'true';
-        refreshDryRunState();
-      }
-    }
+    // A mutation that has passed every governed gate (policy, capability,
+    // lease, scope) carries an invocation-scoped live-execution decision: the
+    // DEFAULT dry-run must never silently swallow it with an exit-zero report
+    // (the G01 write-drop defect — fresh environments default to dry-run, so
+    // real edits vanished while the tool reported success). The decision is
+    // async-local to THIS dispatch — it never flips the process-wide dry-run
+    // state, so a later denial, throw, or cancellation cannot leave the
+    // process "live", and concurrent sessions with different decisions stay
+    // isolated. An operator's explicit choice (persisted flags, BABEL_DRY_RUN,
+    // BABEL_LIVE) and shadow capture runs are unaffected.
+    const invocationLive =
+      effectClass === 'reconcilable_mutation' &&
+      resolveInvocationLiveDefault();
     const executionContext: ToolContext = {
       ...context,
       sessionId: context.sessionId ?? context.runId,
       ...(idempotencyKey ? { toolCallId: context.toolCallId ?? idempotencyKey } : {}),
     };
+    const executeInvocation = () => executor.execute(action, executionContext, budget);
     const execution = isolateLocal
-      ? await runWithUnprivilegedChildEnv(() => executor.execute(action, executionContext, budget))
-      : await executor.execute(action, executionContext, budget);
+      ? await runWithUnprivilegedChildEnv(() =>
+          invocationLive ? runWithLiveExecution(executeInvocation) : executeInvocation(),
+        )
+      : await (invocationLive ? runWithLiveExecution(executeInvocation) : executeInvocation());
 
     if (governanceSnapshot && governanceRepoRoot) {
       let recon: ReturnType<typeof reconcileGovernanceAfterEffect>;

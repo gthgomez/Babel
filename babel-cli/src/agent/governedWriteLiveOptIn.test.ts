@@ -1,20 +1,21 @@
 /**
  * Regression: a mutation that passes every governed gate must not be silently
- * swallowed by the DEFAULT dry-run state (G01 write-drop — fresh environments
- * default to dry-run, so write_file reported success while no bytes landed).
- * The governed gate promotes the documented live opt-in (BABEL_LIVE) for the
- * process; an operator's explicit dry-run choice is always respected.
+ * swallowed by the DEFAULT dry-run state (G01 write-drop), and the resulting
+ * live decision must be INVOCATION-SCOPED: no process-wide environment side
+ * effect, isolation between concurrent dispatches, and explicit operator
+ * dry-run choices always win.
  */
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { executeActionWithPolicy, resetCircuitBreaker } from './toolExecutor.js';
-import { refreshDryRunState } from '../localTools.js';
+import { executeTool, refreshDryRunState } from '../localTools.js';
 import type { ToolContext } from '../localTools.js';
 
+const REQUESTED = 'updated fixture\n';
 const MANAGED_ENV = ['BABEL_LIVE', 'BABEL_DRY_RUN', 'BABEL_SHADOW_ROOT', 'BABEL_CONFIG_DIR', 'BABEL_DRY_RUN_SOURCE'];
 
 function ctx(runId: string, projectRoot: string): ToolContext {
@@ -22,12 +23,23 @@ function ctx(runId: string, projectRoot: string): ToolContext {
     runId,
     agentId: 'test-agent',
     projectRoot,
-    cwd: projectRoot,
     babelRoot: projectRoot,
   } as unknown as ToolContext;
 }
 
-describe('governed mutations opt out of the default dry-run', { concurrency: false }, () => {
+function executorThat(behavior: 'write' | 'silent-no-op'): unknown {
+  return {
+    mapAction: () => [],
+    async execute(action: { type: string; path?: string; content?: string }) {
+      if (behavior === 'write' && action.type === 'write_file') {
+        writeFileSync(action.path!, action.content!, 'utf8');
+      }
+      return { action, terminal: false, results: [{ exit_code: 0, stdout: 'ok', stderr: '' }] };
+    },
+  };
+}
+
+describe('governed mutations carry an invocation-scoped live decision', { concurrency: false }, () => {
   let snapshot: Record<string, string | undefined>;
   let root: string;
   let configDir: string;
@@ -37,8 +49,6 @@ describe('governed mutations opt out of the default dry-run', { concurrency: fal
     snapshot = Object.fromEntries(MANAGED_ENV.map((key) => [key, process.env[key]]));
     for (const key of MANAGED_ENV) delete process.env[key];
     root = mkdtempSync(join(tmpdir(), 'babel-live-optin-'));
-    // Empty config dir: no persisted runtime-flags.json → dry-run source is
-    // the DEFAULT, which is the state fresh environments run in.
     configDir = mkdtempSync(join(tmpdir(), 'babel-live-optin-cfg-'));
     process.env['BABEL_CONFIG_DIR'] = configDir;
   });
@@ -57,7 +67,7 @@ describe('governed mutations opt out of the default dry-run', { concurrency: fal
     const target = join(root, 'fixture.txt');
     writeFileSync(target, 'initial fixture\n', 'utf8');
     const result = await executeActionWithPolicy(
-      { type: 'write_file', path: target, content: 'updated fixture\n' },
+      { type: 'write_file', path: target, content: REQUESTED },
       'workspace_write',
       ctx('live-optin-1', root),
       { mutationRoot: root, mode: 'chat' },
@@ -65,7 +75,7 @@ describe('governed mutations opt out of the default dry-run', { concurrency: fal
     assert.equal(result.results[0]?.exit_code, 0);
     assert.equal(
       readFileSync(target, 'utf8'),
-      'updated fixture\n',
+      REQUESTED,
       'a governed write must produce real bytes, not a silent dry-run no-op',
     );
   });
@@ -76,12 +86,53 @@ describe('governed mutations opt out of the default dry-run', { concurrency: fal
     const target = join(root, 'fixture.txt');
     writeFileSync(target, 'initial fixture\n', 'utf8');
     const result = await executeActionWithPolicy(
-      { type: 'write_file', path: target, content: 'updated fixture\n' },
+      { type: 'write_file', path: target, content: REQUESTED },
       'workspace_write',
       ctx('live-optin-2', root),
       { mutationRoot: root, mode: 'chat' },
     );
-    assert.equal(readFileSync(target, 'utf8'), 'initial fixture\n');
+    assert.equal(readFileSync(target, 'utf8'), 'initial fixture' + '\n');
     assert.equal(process.env['BABEL_LIVE'], snapshot['BABEL_LIVE'], 'explicit dry-run must not be overridden');
+  });
+
+  test('a downstream refusal leaves no process-wide live state behind', async () => {
+    const target = join(root, 'refused.txt');
+    const result = await executeActionWithPolicy(
+      { type: 'write_file', path: target, content: REQUESTED },
+      'workspace_write',
+      ctx('live-optin-3', root),
+      { executor: executorThat('silent-no-op') as never, mutationRoot: root, mode: 'chat' },
+    );
+    assert.equal(result.results[0]?.exit_code, 1, 'the silent no-op is refused by post-image verification');
+    assert.equal(
+      process.env['BABEL_LIVE'],
+      snapshot['BABEL_LIVE'],
+      'a refused dispatch must not leave the process live',
+    );
+    await executeTool(
+      { tool: 'file_write', path: join(root, 'after.txt'), content: 'direct' },
+      ctx('live-optin-3b', root) as unknown as Parameters<typeof executeTool>[1],
+    );
+    assert.equal(existsSync(join(root, 'after.txt')), false, 'default dry-run still applies to later work');
+  });
+
+  test('concurrent dispatches with different execution decisions never observe each other', async () => {
+    const governedTarget = join(root, 'governed.txt');
+    const dryTarget = join(root, 'dry.txt');
+    const governed = executeActionWithPolicy(
+      { type: 'write_file', path: governedTarget, content: REQUESTED },
+      'workspace_write',
+      ctx('live-optin-4', root),
+      { mutationRoot: root, mode: 'chat' },
+    );
+    const ungoverned = executeTool(
+      { tool: 'file_write', path: dryTarget, content: 'dry' },
+      ctx('live-optin-4b', root) as unknown as Parameters<typeof executeTool>[1],
+    );
+    const [g] = await Promise.all([governed, ungoverned]);
+    assert.equal(g.results[0]?.exit_code, 0);
+    assert.equal(readFileSync(governedTarget, 'utf8'), REQUESTED, 'governed write lands');
+    assert.equal(existsSync(dryTarget), false, 'ungoverned concurrent write stays dry');
+    assert.equal(process.env['BABEL_LIVE'], snapshot['BABEL_LIVE'], 'no process-wide residue');
   });
 });
