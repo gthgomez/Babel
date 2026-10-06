@@ -153,6 +153,31 @@ export function runWithProjectRoot<T>(root: string, fn: () => Promise<T>): Promi
   return projectRootStore.run(root, fn);
 }
 
+/**
+ * Invocation-scoped live-execution decision. A governed path that has already
+ * passed every policy/lease gate can mark exactly ONE executor invocation as
+ * live without flipping the process-wide dry-run state: the override lives in
+ * async-local storage, so concurrent sessions with different dry/live
+ * decisions never observe each other's mode and a later denial, throw, or
+ * cancellation cannot leave the process "live".
+ */
+const liveExecutionStore = new AsyncLocalStorage<boolean>();
+
+/** Run `fn` with an invocation-scoped live-execution decision. */
+export function runWithLiveExecution<T>(fn: () => Promise<T>): Promise<T> {
+  return liveExecutionStore.run(true, fn);
+}
+
+/**
+ * The effective dry-run gate for THIS invocation: an invocation-scoped live
+ * decision wins; otherwise the process/persisted/operator dry-run state
+ * applies unchanged.
+ */
+export function isInvocationLive(): boolean {
+  if (liveExecutionStore.getStore() === true) return true;
+  return !DRY_RUN;
+}
+
 function getExecutor(projectRoot?: string): SafeExecutor {
   const root = getExecutorProjectRoot(projectRoot);
   const shadowRoot = process.env['BABEL_SHADOW_ROOT'] || null;
@@ -561,7 +586,7 @@ function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>, 
     };
   }
 
-  if (DRY_RUN) {
+  if (!isInvocationLive()) {
     if (process.env['BABEL_SHADOW_ROOT']) {
       const result = getExecutor(context.projectRoot).fileWrite(req.path, req.content);
       console.log(`  [DRY RUN] file_write → ${req.path} (${result.stdout})`);
@@ -586,7 +611,7 @@ function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>, 
 
 function handleFileDelete(req: Extract<ToolCallRequest, { tool: 'file_delete' }>, context: ToolContext): ToolResult {
   refreshDryRunState();
-  if (DRY_RUN) {
+  if (!isInvocationLive()) {
     console.log(`  [DRY RUN] file_delete → ${req.path}`);
     return {
       exit_code: 0,
@@ -605,7 +630,7 @@ async function handleGitReset(
   const target = req.target ?? '';
   const hardFlag = req.hard === true ? ' --hard' : '';
   const command = `git reset${hardFlag}${target ? ` ${target}` : ''}`;
-  if (DRY_RUN) {
+  if (!isInvocationLive()) {
     console.log(`  [DRY RUN] git_reset → ${command.trim()}`);
     return {
       exit_code: 0,
@@ -632,7 +657,7 @@ async function handleGitPush(
   const branch = req.branch ?? '';
   const forceFlag = req.force === true ? ' --force' : '';
   const command = `git push${forceFlag} ${remote}${branch ? ` ${branch}` : ''}`;
-  if (DRY_RUN) {
+  if (!isInvocationLive()) {
     console.log(`  [DRY RUN] git_push → ${command.trim()}`);
     return {
       exit_code: 0,
@@ -655,7 +680,7 @@ async function handleShellExec(
   context: ToolContext,
 ): Promise<ToolResult> {
   refreshDryRunState();
-  if (DRY_RUN) {
+  if (!isInvocationLive()) {
     console.log(`  [DRY RUN] shell_exec → ${req.command}`);
     return {
       exit_code: 0,
@@ -679,7 +704,7 @@ async function handleTestRun(
   context: ToolContext,
 ): Promise<ToolResult> {
   refreshDryRunState();
-  if (DRY_RUN) {
+  if (!isInvocationLive()) {
     console.log(`  [DRY RUN] test_run → ${req.command}`);
     return {
       exit_code: 0,
@@ -1296,7 +1321,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     handler: (req, context) => {
       refreshDryRunState();
       const typedReq = req as Extract<ToolCallRequest, { tool: 'acquire_lock' }>;
-      if (DRY_RUN) {
+      if (!isInvocationLive()) {
         return {
           exit_code: 0,
           stdout: `[DRY RUN] Would acquire lock for ${typedReq.path}: ${typedReq.reason}`,
@@ -1329,7 +1354,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     handler: (req, context) => {
       refreshDryRunState();
       const typedReq = req as Extract<ToolCallRequest, { tool: 'release_lock' }>;
-      if (DRY_RUN) {
+      if (!isInvocationLive()) {
         return {
           exit_code: 0,
           stdout: `[DRY RUN] Would release lock for ${typedReq.path}`,
@@ -1535,7 +1560,7 @@ function isControlPlaneFile(filePath: string): boolean {
 }
 
 export function shouldJitApprove(req: ToolCallRequest): boolean {
-  if (DRY_RUN) {
+  if (!isInvocationLive()) {
     return false;
   }
 
@@ -1870,7 +1895,7 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
   const projectRoot = getExecutorProjectRoot();
   const checkpoint = shouldCheckpointToolCall(req)
     ? createPreMutationCheckpoint(req, context, {
-        dryRun: DRY_RUN,
+        dryRun: !isInvocationLive(),
         projectRoot,
         shadowRoot: process.env['BABEL_SHADOW_ROOT'] ?? null,
       })

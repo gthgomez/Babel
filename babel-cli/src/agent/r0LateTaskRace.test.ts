@@ -249,7 +249,7 @@ describe('R0-8 real late Task-A completion after Task B begins', () => {
       ]);
       const aEvents: ChatEvent[] = [];
       const pumpA = (async () => {
-        for await (const event of engine.submitMessageStream('Task A: inspect the module.')) {
+        for await (const event of engine.submitMessageStream('Task A: update the module export.')) {
           aEvents.push(event);
         }
       })();
@@ -355,7 +355,7 @@ describe('R0-8 real late Task-A completion after Task B begins', () => {
         [{ type: 'text_delta', text: 'A concluding.' }, { type: 'done', finishReason: 'stop' }],
       ]);
       const pumpA = (async () => {
-        for await (const _event of engine.submitMessageStream('Task A: inspect the module.')) {
+        for await (const _event of engine.submitMessageStream('Task A: update the module export.')) {
           /* drain */
         }
       })();

@@ -374,11 +374,14 @@ describe('settlement identity — positional settleCallIds invariant', { concurr
       { kind: 'text', text: 'never reached' },
     ]);
     try {
-      const engine = makeEngine(root, runId, 'Run the slow command then read a.txt and b.txt.');
+      // The original wording has no mutation verb, so the task is READ_ONLY
+      // and the shell is denied before it can stay in flight for the abort.
+      const task = 'Fix the verifier and run npm test.';
+      const engine = makeEngine(root, runId, task);
       const abortTimer = setTimeout(() => engine.abortTurn(), 600);
       const events: ChatEvent[] = [];
       try {
-        for await (const event of engine.submitMessageStream('Run the slow command then read a.txt and b.txt.')) {
+        for await (const event of engine.submitMessageStream(task)) {
           events.push(event);
         }
       } finally {

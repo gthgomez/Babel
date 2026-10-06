@@ -79,7 +79,11 @@ import {
   isFatalWindowsProcessExit,
   logPlatformUnusableResult,
 } from "./verifierFailFast.js";
-import { captureAndRecordVerifierReceipt } from "./chatEngineVerifierAdapter.js";
+import {
+  captureAndRecordVerifierReceipt,
+  resolveVerifierCacheIdentity,
+  shouldReuseCachedVerifierReceipt,
+} from "./chatEngineVerifierAdapter.js";
 import {
   deniesReadOnlyChatAction,
   deniesReadOnlyTaskAction,
@@ -1212,17 +1216,30 @@ export class ChatEngineActionExecutor {
       }
 
       // R8: Verifier run dedup — if the same verifier command was already run
-      // and no writes have occurred since, return the cached receipt instead
-      // of re-executing. This collapses repeated identical verifier runs.
-      // Fatal Windows exits are not soft-cached: mark unusable and fail-fast.
+      // in this directory and environment, and the workspace bytes its receipt
+      // bound are provably unchanged, return the cached receipt instead of
+      // re-executing. Write count alone is not sufficient: some shell actions
+      // mark receipts stale without bumping it. Fatal Windows exits are not
+      // soft-cached: mark unusable and fail-fast.
       if (
         (action.type === "run_command" || action.type === "test_run") &&
         target
       ) {
-        const cachedVerifier = this.host.verifierReceiptCache.get(target);
+        const cacheIdentity = resolveVerifierCacheIdentity({
+          projectRoot: this.host.options.projectRoot,
+          command: target,
+          ...(action.cwd !== undefined ? { cwd: action.cwd } : {}),
+        });
+        const cachedVerifier = this.host.verifierReceiptCache.get(cacheIdentity.key);
         if (
           cachedVerifier &&
-          cachedVerifier.writeCountAtCache === this.host.writeCount
+          cachedVerifier.cwd === cacheIdentity.cwd &&
+          cachedVerifier.envKey === cacheIdentity.envKey &&
+          cachedVerifier.writeCountAtCache === this.host.writeCount &&
+          shouldReuseCachedVerifierReceipt(
+            this.host.options.projectRoot,
+            cachedVerifier.receipt,
+          )
         ) {
           if (isFatalWindowsProcessExit(cachedVerifier.receipt.exit_code)) {
             this.host.platformUnusableVerifiers.add(target);
@@ -1257,7 +1274,7 @@ export class ChatEngineActionExecutor {
             index: meta.index,
             observation:
               `### ${tool} ${target}\nexit_code: ${cachedVerifier.receipt.exit_code}\n\`\`\`\n` +
-              `Verifier result unchanged — no file writes since last run.\n` +
+              `Verifier result unchanged — command, directory, environment and bound workspace bytes are identical since the last run.\n` +
               `${cachedVerifier.receipt.summary}\n\`\`\``,
           };
         }
@@ -1423,28 +1440,28 @@ export class ChatEngineActionExecutor {
         }
       }
 
-      const detail = lastResult
-        ? lastResult.exit_code === 0
-          ? formatResultDetail(action, lastResult)
-          : `exit ${lastResult.exit_code}`
-        : "done";
-
       const directMutationAction =
         action.type === "write_file" || action.type === "apply_patch";
-      const toolError = result.policyBlocked
-        ? "blocked"
-        : lastResult && lastResult.exit_code !== 0
-          ? lastResult.stderr || detail
-          : undefined;
       const mutationEffect = assessMutationEffect({
         tool,
-        error: toolError,
+        error: lastResult && lastResult.exit_code !== 0 ? lastResult.stderr : undefined,
         exitCode: lastResult?.exit_code,
         policyBlocked: result.policyBlocked,
         mutationPaths: result.mutationPaths,
         mutationReceipt: result.mutationReceipt,
         effectTransaction: result.effectTransaction,
       });
+      const detail = lastResult
+        ? lastResult.exit_code === 0
+          ? formatResultDetail(action, lastResult, mutationEffect)
+          : `exit ${lastResult.exit_code}`
+        : "done";
+
+      const toolError = result.policyBlocked
+        ? "blocked"
+        : lastResult && lastResult.exit_code !== 0
+          ? lastResult.stderr || detail
+          : undefined;
       if (
         admittedThisAction &&
         proposedEdit &&
@@ -1653,6 +1670,14 @@ export class ChatEngineActionExecutor {
               ledger: this.host.executedVerifierLedger,
               cache: this.host.verifierReceiptCache,
               writeCount: this.host.writeCount,
+              cacheIdentity: resolveVerifierCacheIdentity({
+                projectRoot: this.host.options.projectRoot,
+                command: target,
+                ...((action.type === "run_command" || action.type === "test_run") &&
+                  action.cwd !== undefined
+                  ? { cwd: action.cwd }
+                  : {}),
+              }),
               toolCallId:
                 meta.idempotencyKey ??
                 this.host._streamNativeToolCallIds[meta.index] ??

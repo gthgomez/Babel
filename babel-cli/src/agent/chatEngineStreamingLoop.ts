@@ -90,6 +90,11 @@ import { filterReadOnlyChatTools, isReadOnlyChat } from "./chatReadOnly.js";
 import type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
 export type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
 
+/** One same-route retry is allowed only for an empty transport reset. */
+function isEmptyStreamTransportReset(message: string): boolean {
+  return /connection reset|econnreset|socket hang up|network error/i.test(message);
+}
+
 export class ChatEngineStreamingLoop {
   constructor(private readonly host: ChatEngineStreamingLoopHost) {}
 
@@ -123,6 +128,7 @@ export class ChatEngineStreamingLoop {
     } = prepared;
     let allToolObservations = "";
     let _turnSpan: Span | null = null;
+    let sameRouteTransportRetryUsed = false;
 
     for (let turn = 0; turn < maxTurns; turn++) {
       // R0-8: a superseded generator must stop before it executes another
@@ -653,6 +659,21 @@ export class ChatEngineStreamingLoop {
             continue;
           }
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          // Retry the same runner once when the attempt produced no text and
+          // no tool call. A different provider is not a substitute, and an
+          // operator abort must not match this path.
+          if (
+            !sameRouteTransportRetryUsed &&
+            answerText.length === 0 &&
+            nativeActions.length === 0 &&
+            !toolsAnnouncedInStream &&
+            isEmptyStreamTransportReset(err?.message ?? String(err))
+          ) {
+            sameRouteTransportRetryUsed = true;
+            endSpan(_turnSpan, SpanStatusCode.ERROR);
+            _turnSpan = null;
+            continue;
+          }
           const fb = yield* this.host.resolveFallbackOrFail(
             err,
             turn,

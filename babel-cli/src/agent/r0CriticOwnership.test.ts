@@ -15,13 +15,16 @@ import { join } from 'node:path'
 
 import { ChatEngine } from './chatEngine.js'
 
-const MANAGED_ENV = ['BABEL_OFFLINE', 'BABEL_DIFF_CRITIC', 'BABEL_DIFF_CRITIC_PRO'] as const
+const MANAGED_ENV = ['BABEL_OFFLINE', 'BABEL_DIFF_CRITIC', 'BABEL_DIFF_CRITIC_PRO', 'BABEL_CHAT_MAX_COST'] as const
 let envSnapshot: Record<string, string | undefined> = {}
 
 before(() => {
   envSnapshot = Object.fromEntries(MANAGED_ENV.map((key) => [key, process.env[key]]))
   process.env['BABEL_OFFLINE'] = '1'
   process.env['BABEL_DIFF_CRITIC'] = '1'
+  // Unpriced mock usage otherwise trips the finite cost cap's unknown-pricing
+  // refusal before the critic round can run.
+  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited'
   delete process.env['BABEL_DIFF_CRITIC_PRO']
 })
 

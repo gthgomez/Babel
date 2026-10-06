@@ -19,7 +19,7 @@
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -106,7 +106,26 @@ function makeFixture(): { root: string; fixedContent: string } {
     `${JSON.stringify({ name: 'fixture', private: true, scripts: { test: 'node verify.mjs' } })}\n`,
     'utf8',
   );
-  writeFileSync(join(root, 'verify.mjs'), "import { appendFileSync } from 'node:fs';\nappendFileSync('verify.out', 'run\\n');\nprocess.exit(0);\n", 'utf8');
+  // The verifier really asserts add(a, b) behavior: it imports the fixture
+  // module and exits 1 when add(2, 3) does not return 5. A verifier that only
+  // appends a marker and exits zero cannot distinguish a fixed file from an
+  // untouched one.
+  writeFileSync(
+    join(root, 'verify.mjs'),
+    [
+      "import { pathToFileURL } from 'node:url';",
+      "import { dirname, join } from 'node:path';",
+      "import { fileURLToPath } from 'node:url';",
+      "const mod = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'src.add.js')).href);",
+      'if (mod.add(2, 3) !== 5) {',
+      "  console.error('add(2, 3) did not return 5');",
+      '  process.exit(1);',
+      '}',
+      'process.exit(0);',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
   // The verifier receipt binds to a Git revision; seed the fixture repo.
   const git = (args: string[]) =>
     spawnSync('git', args, { cwd: root, encoding: 'utf8' });
@@ -280,6 +299,13 @@ describe('proven no-op writes keep verifier receipts current', { concurrency: fa
       assert.equal(failed.length, 0, 'the turn must not collapse into an install refusal');
       const done = events.some((event) => event.type === 'done');
       assert.equal(done, true, 'the turn completes honestly');
+      // Independent final-file inspection: the loop may not report success
+      // unless the fix actually landed on disk and behaves correctly.
+      assert.equal(
+        readFileSync(join(root, 'src.add.js'), 'utf8'),
+        fixedContent,
+        'the requested fix must be present in the final file bytes',
+      );
     } finally {
       restore();
       rmSync(root, { recursive: true, force: true });

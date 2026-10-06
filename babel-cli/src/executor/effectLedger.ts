@@ -77,6 +77,51 @@ export function recordEffectIntent(input: {
   return record
 }
 
+/**
+ * Outcome of comparing observed post-operation bytes against the requested
+ * post-image. An exit-zero tool result alone never proves a write happened.
+ */
+export type IntendedWriteOutcome =
+  | 'real_change'
+  | 'legitimate_no_change'
+  | 'effect_missing'
+  | 'postimage_mismatch'
+
+/**
+ * Classify an observed post-image against the recorded intended content
+ * digest for a single-target content write (write_file). Callers must never
+ * pass a patch-text digest here — only the digest of the intended file bytes.
+ *
+ * - `real_change`: every observed post-image matches the intended digest and
+ *   differs from the pre-image.
+ * - `legitimate_no_change`: the file already matched the requested content,
+ *   so a no-op write is the correct result.
+ * - `effect_missing`: the requested content differs from the pre-image but
+ *   the bytes on disk are unchanged — the requested write never happened.
+ * - `postimage_mismatch`: the bytes changed, but to something other than the
+ *   requested content (wrong-target or partial write).
+ */
+export function classifyIntendedWriteOutcome(
+  intendedDigest: string,
+  preImageHashes: Record<string, string>,
+  postImageHashes: Record<string, string>,
+): IntendedWriteOutcome {
+  const paths = Object.keys(preImageHashes)
+  const postMatchesIntended = paths.every(
+    (path) => postImageHashes[path] === intendedDigest,
+  )
+  if (postMatchesIntended) {
+    const unchanged = paths.every(
+      (path) => postImageHashes[path] === preImageHashes[path],
+    )
+    return unchanged ? 'legitimate_no_change' : 'real_change'
+  }
+  const unchanged = paths.every(
+    (path) => postImageHashes[path] === preImageHashes[path],
+  )
+  return unchanged ? 'effect_missing' : 'postimage_mismatch'
+}
+
 /** Record the terminal state for a previously persisted effect intent. */
 export function recordEffectTerminal(
   runDir: string,
