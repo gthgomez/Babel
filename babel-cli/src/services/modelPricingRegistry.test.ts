@@ -76,3 +76,24 @@ test('prices output-only usage exactly for known models', () => {
   assert.ok(Math.abs((estimate.outputCostUsd ?? 0) - 0.00056) < 1e-12);
   assert.ok(Math.abs((estimate.estimatedCostUsd ?? 0) - 0.00056) < 1e-12);
 });
+
+test('unknown_cost_is_not_zero', () => {
+  // A model without a registered quote is unknown, never a free call.
+  const unregistered = estimateProviderUsageCost({
+    provider: 'deepinfra',
+    modelId: 'missing/model',
+    promptTokens: 1000,
+    completionTokens: 1000,
+  });
+  assert.equal(unregistered.estimatedCostUsd, null);
+  assert.equal(unregistered.inputCostUsd, null);
+  assert.equal(unregistered.outputCostUsd, null);
+
+  // A known model with no usage observation is unknown, not zero tokens.
+  const knownWithoutUsage = estimateProviderUsageCost({
+    provider: 'deepseek',
+    modelId: 'deepseek-v4-flash',
+  });
+  assert.equal(knownWithoutUsage.precision, 'unknown');
+  assert.equal(knownWithoutUsage.estimatedCostUsd, null);
+});
