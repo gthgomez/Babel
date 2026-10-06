@@ -340,7 +340,16 @@ export function assertDeepSeekLiveBackend(
   );
 }
 
-interface ModelPolicyConfig {
+/**
+ * Model policy configuration that has passed {@link decodeModelPolicy}
+ * structural validation.
+ *
+ * v2 keeps its family/stage/alias semantics and `BABEL_MODEL_POLICY_PATH`
+ * precedence. Validation rejects malformed shapes with a field path instead of
+ * casting, and unknown fields follow a documented version policy (see
+ * {@link decodeModelPolicy}).
+ */
+export interface ValidatedModelPolicy {
   version?: number;
   default_tier?: string;
   require_explicit_opt_in_for_expensive?: boolean;
@@ -363,6 +372,392 @@ interface ModelPolicyConfig {
     max_estimated_cost_per_run_usd?: number;
     warn_if_estimated_cost_per_run_usd_at_least?: number;
   };
+}
+
+/** Internal alias: the validated shape is the only accepted config form. */
+type ModelPolicyConfig = ValidatedModelPolicy;
+
+/** Versions this decoder understands; newer versions must migrate explicitly. */
+const MODEL_POLICY_ALLOWED_VERSIONS = [1, 2, 3] as const;
+
+/**
+ * Forward-compatible extension escape hatch. Unknown fields are rejected, so
+ * future annotations must use an `x_` prefix instead of silently drifting.
+ */
+const MODEL_POLICY_EXTENSION_PREFIX = 'x_';
+
+const MODEL_POLICY_TOP_LEVEL_KEYS = [
+  'version',
+  'default_tier',
+  'require_explicit_opt_in_for_expensive',
+  'show_preflight_cost_estimate',
+  'hard_fail_on_unknown_model',
+  'cost_estimation',
+  'selection_policy',
+  'family_defaults',
+  'experiments',
+  'vendor_aliases',
+  'models',
+  'stages',
+  'policy',
+] as const;
+
+const MODEL_ENTRY_KEYS = [
+  'provider',
+  'model_id',
+  'tier',
+  'context_window',
+  'max_output_tokens',
+  'estimated_cost_per_1m_input',
+  'estimated_cost_per_1m_output',
+  'source_url',
+  'verified_at',
+  'expires_at',
+  'expensive',
+  'enabled',
+  'experimental',
+  'selection_reason',
+  'notes',
+  'context_limit',
+  'native_tool_use',
+  'capabilities',
+] as const;
+
+/**
+ * Fields that make a model entry an independent fact owner are not a policy
+ * validation concern: the policy document is a decision/routing graph where
+ * multiple backend keys may intentionally reference one served model (the
+ * shipped v2 document does). One-fact-owner-per-identity is enforced by the
+ * catalog projection (`createCatalogSnapshot`), not here.
+ */
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function describeValue(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  const type = typeof value;
+  if (type === 'number' || type === 'boolean') return String(value);
+  return type;
+}
+
+function policyPath(base: string, key: string | number): string {
+  return base.length === 0 ? String(key) : `${base}.${key}`;
+}
+
+function invalidPolicy(path: string, message: string): never {
+  throw new Error(`Invalid model policy at "${path}": ${message}`);
+}
+
+function assertObject(value: unknown, path: string): Record<string, unknown> {
+  if (!isPlainObject(value)) {
+    invalidPolicy(path, `expected an object but received ${describeValue(value)}`);
+  }
+  return value;
+}
+
+function assertKnownKeys(
+  record: Record<string, unknown>,
+  allowed: readonly string[],
+  path: string,
+): void {
+  const allowedSet = new Set<string>(allowed);
+  for (const key of Object.keys(record)) {
+    if (allowedSet.has(key) || key.startsWith(MODEL_POLICY_EXTENSION_PREFIX)) continue;
+    invalidPolicy(policyPath(path, key), 'unknown configuration field');
+  }
+}
+
+function assertTier(value: unknown, path: string): void {
+  if (typeof value !== 'string' || !isKnownTier(value.trim().toLowerCase())) {
+    invalidPolicy(
+      path,
+      `expected one of ${MODEL_POLICY_TIERS.join(', ')} but received ${describeValue(value)}`,
+    );
+  }
+}
+
+function assertStage(value: unknown, path: string): void {
+  if (typeof value !== 'string' || !isKnownStage(value.trim().toLowerCase())) {
+    invalidPolicy(
+      path,
+      `expected one of ${MODEL_POLICY_STAGES.join(', ')} but received ${describeValue(value)}`,
+    );
+  }
+}
+
+function assertOptionalString(
+  record: Record<string, unknown>,
+  key: string,
+  basePath: string,
+): void {
+  const value = record[key];
+  if (value === undefined) return;
+  if (typeof value !== 'string') {
+    invalidPolicy(policyPath(basePath, key), `expected a string but received ${describeValue(value)}`);
+  }
+}
+
+function assertOptionalBoolean(
+  record: Record<string, unknown>,
+  key: string,
+  basePath: string,
+): void {
+  const value = record[key];
+  if (value === undefined) return;
+  if (typeof value !== 'boolean') {
+    invalidPolicy(
+      policyPath(basePath, key),
+      `expected a boolean but received ${describeValue(value)}`,
+    );
+  }
+}
+
+function assertOptionalNonNegativeNumber(
+  record: Record<string, unknown>,
+  key: string,
+  basePath: string,
+): void {
+  const value = record[key];
+  if (value === undefined) return;
+  const path = policyPath(basePath, key);
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    invalidPolicy(path, `expected a finite number but received ${describeValue(value)}`);
+  }
+  if (value < 0) {
+    invalidPolicy(path, `expected a non-negative number but received ${String(value)}`);
+  }
+}
+
+function assertOptionalPositiveSafeInteger(
+  record: Record<string, unknown>,
+  key: string,
+  basePath: string,
+): void {
+  const value = record[key];
+  if (value === undefined) return;
+  const path = policyPath(basePath, key);
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    invalidPolicy(path, `expected a positive safe integer but received ${describeValue(value)}`);
+  }
+}
+
+function assertOptionalStringArray(
+  record: Record<string, unknown>,
+  key: string,
+  basePath: string,
+): void {
+  const value = record[key];
+  if (value === undefined) return;
+  const path = policyPath(basePath, key);
+  if (!Array.isArray(value)) {
+    invalidPolicy(path, `expected an array but received ${describeValue(value)}`);
+  }
+  value.forEach((item: unknown, index: number) => {
+    if (typeof item !== 'string') {
+      invalidPolicy(policyPath(path, index), `expected a string but received ${describeValue(item)}`);
+    }
+  });
+}
+
+function validateModelEntries(value: unknown): void {
+  const models = assertObject(value, 'models');
+
+  for (const [backendKey, rawEntry] of Object.entries(models)) {
+    const path = `models.${backendKey}`;
+    const entry = assertObject(rawEntry, path);
+    assertKnownKeys(entry, MODEL_ENTRY_KEYS, path);
+
+    const provider = entry['provider'];
+    if (provider !== undefined && typeof provider !== 'string') {
+      invalidPolicy(`${path}.provider`, `expected a string but received ${describeValue(provider)}`);
+    }
+    const modelId = entry['model_id'];
+    if (modelId !== undefined && typeof modelId !== 'string') {
+      invalidPolicy(`${path}.model_id`, `expected a string but received ${describeValue(modelId)}`);
+    }
+    if (entry['tier'] !== undefined) {
+      assertTier(entry['tier'], `${path}.tier`);
+    }
+
+    for (const key of ['context_window', 'max_output_tokens', 'context_limit'] as const) {
+      assertOptionalPositiveSafeInteger(entry, key, path);
+    }
+    for (const key of [
+      'estimated_cost_per_1m_input',
+      'estimated_cost_per_1m_output',
+    ] as const) {
+      assertOptionalNonNegativeNumber(entry, key, path);
+    }
+    assertOptionalString(entry, 'source_url', path);
+    assertOptionalString(entry, 'verified_at', path);
+    assertOptionalString(entry, 'expires_at', path);
+    assertOptionalString(entry, 'selection_reason', path);
+    for (const key of ['expensive', 'enabled', 'experimental', 'native_tool_use'] as const) {
+      assertOptionalBoolean(entry, key, path);
+    }
+    assertOptionalStringArray(entry, 'notes', path);
+    assertOptionalStringArray(entry, 'capabilities', path);
+  }
+}
+
+/**
+ * Validate an unknown parsed document as a model policy and return it as a
+ * {@link ValidatedModelPolicy}.
+ *
+ * Rejections carry a dotted field path. Unknown fields are rejected so future
+ * schema drift is explicit; forward-compatible annotations must use an `x_`
+ * prefix and a supported `version`. Version 1/2/3 documents are accepted and
+ * keep their existing family/stage/alias semantics.
+ */
+export function decodeModelPolicy(input: unknown): ValidatedModelPolicy {
+  const root = assertObject(input, '<root>');
+  assertKnownKeys(root, MODEL_POLICY_TOP_LEVEL_KEYS, '');
+
+  if (root['version'] !== undefined) {
+    const version = root['version'];
+    if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
+      invalidPolicy('version', `expected a positive safe integer but received ${describeValue(version)}`);
+    }
+    if (!(MODEL_POLICY_ALLOWED_VERSIONS as readonly number[]).includes(version)) {
+      invalidPolicy(
+        'version',
+        `unsupported model policy version ${String(version)}; supported: ${MODEL_POLICY_ALLOWED_VERSIONS.join(', ')}`,
+      );
+    }
+  }
+
+  if (root['default_tier'] !== undefined) {
+    assertTier(root['default_tier'], 'default_tier');
+  }
+  for (const key of [
+    'require_explicit_opt_in_for_expensive',
+    'show_preflight_cost_estimate',
+    'hard_fail_on_unknown_model',
+  ] as const) {
+    assertOptionalBoolean(root, key, '');
+  }
+
+  if (root['cost_estimation'] !== undefined) {
+    const costEstimation = assertObject(root['cost_estimation'], 'cost_estimation');
+    assertKnownKeys(
+      costEstimation,
+      ['default_input_tokens', 'default_output_tokens'],
+      'cost_estimation',
+    );
+    assertOptionalPositiveSafeInteger(costEstimation, 'default_input_tokens', 'cost_estimation');
+    assertOptionalPositiveSafeInteger(costEstimation, 'default_output_tokens', 'cost_estimation');
+  }
+
+  if (root['selection_policy'] !== undefined) {
+    const selectionPolicy = assertObject(root['selection_policy'], 'selection_policy');
+    for (const [tier, rawEntry] of Object.entries(selectionPolicy)) {
+      const path = `selection_policy.${tier}`;
+      assertTier(tier, path);
+      const entry = assertObject(rawEntry, path);
+      assertKnownKeys(entry, ['selection_reason'], path);
+      assertOptionalString(entry, 'selection_reason', path);
+    }
+  }
+
+  if (root['family_defaults'] !== undefined) {
+    const familyDefaults = assertObject(root['family_defaults'], 'family_defaults');
+    for (const [family, rawEntry] of Object.entries(familyDefaults)) {
+      const path = `family_defaults.${family}`;
+      const entry = assertObject(rawEntry, path);
+      for (const [tier, backendKey] of Object.entries(entry)) {
+        const tierPath = `${path}.${tier}`;
+        assertTier(tier, tierPath);
+        if (typeof backendKey !== 'string' || backendKey.length === 0) {
+          invalidPolicy(
+            tierPath,
+            `expected a backend key string but received ${describeValue(backendKey)}`,
+          );
+        }
+      }
+    }
+  }
+
+  if (root['experiments'] !== undefined) {
+    const experiments = assertObject(root['experiments'], 'experiments');
+    for (const [name, rawEntry] of Object.entries(experiments)) {
+      const path = `experiments.${name}`;
+      const entry = assertObject(rawEntry, path);
+      assertKnownKeys(entry, ['backend_key', 'status', 'selection_reason', 'gates'], path);
+      assertOptionalString(entry, 'backend_key', path);
+      assertOptionalString(entry, 'status', path);
+      assertOptionalString(entry, 'selection_reason', path);
+      assertOptionalStringArray(entry, 'gates', path);
+    }
+  }
+
+  if (root['vendor_aliases'] !== undefined) {
+    const vendorAliases = assertObject(root['vendor_aliases'], 'vendor_aliases');
+    for (const [alias, rawEntry] of Object.entries(vendorAliases)) {
+      const path = `vendor_aliases.${alias}`;
+      const entry = assertObject(rawEntry, path);
+      assertKnownKeys(entry, ['maps_to', 'notes'], path);
+      assertOptionalString(entry, 'maps_to', path);
+      assertOptionalString(entry, 'notes', path);
+    }
+  }
+
+  if (root['stages'] !== undefined) {
+    const stages = assertObject(root['stages'], 'stages');
+    for (const [stage, rawEntry] of Object.entries(stages)) {
+      const path = `stages.${stage}`;
+      assertStage(stage, path);
+      const entry = assertObject(rawEntry, path);
+      assertKnownKeys(
+        entry,
+        ['primary_backend_key', 'ordered_backend_keys', 'selection_reason', 'notes'],
+        path,
+      );
+      assertOptionalString(entry, 'primary_backend_key', path);
+      assertOptionalString(entry, 'selection_reason', path);
+      assertOptionalStringArray(entry, 'ordered_backend_keys', path);
+      assertOptionalStringArray(entry, 'notes', path);
+    }
+  }
+
+  if (root['policy'] !== undefined) {
+    const policy = assertObject(root['policy'], 'policy');
+    assertKnownKeys(
+      policy,
+      [
+        'vendor_mode',
+        'blocked_without_explicit_opt_in',
+        'allowed_default_tiers',
+        'max_estimated_cost_per_run_usd',
+        'warn_if_estimated_cost_per_run_usd_at_least',
+      ],
+      'policy',
+    );
+    assertOptionalBoolean(policy, 'vendor_mode', 'policy');
+    assertOptionalStringArray(policy, 'blocked_without_explicit_opt_in', 'policy');
+    const allowedTiers = policy['allowed_default_tiers'];
+    if (allowedTiers !== undefined) {
+      if (!Array.isArray(allowedTiers)) {
+        invalidPolicy(
+          'policy.allowed_default_tiers',
+          `expected an array but received ${describeValue(allowedTiers)}`,
+        );
+      }
+      allowedTiers.forEach((tier: unknown, index: number) => {
+        assertTier(tier, `policy.allowed_default_tiers.${index}`);
+      });
+    }
+    assertOptionalNonNegativeNumber(policy, 'max_estimated_cost_per_run_usd', 'policy');
+    assertOptionalNonNegativeNumber(policy, 'warn_if_estimated_cost_per_run_usd_at_least', 'policy');
+  }
+
+  if (root['models'] !== undefined) {
+    validateModelEntries(root['models']);
+  }
+
+  return root as ValidatedModelPolicy;
 }
 
 function isKnownTier(value: string): value is ModelPolicyTier {
@@ -464,7 +859,7 @@ export function getPolicyPath(babelRoot = resolveRuntimePaths().resourceRoot): s
 
 export function loadModelPolicyConfig(babelRoot = resolveRuntimePaths().resourceRoot): {
   path: string;
-  config: ModelPolicyConfig;
+  config: ValidatedModelPolicy;
 } {
   const policyPath = getPolicyPath(babelRoot);
   if (!existsSync(policyPath)) {
@@ -480,11 +875,7 @@ export function loadModelPolicyConfig(babelRoot = resolveRuntimePaths().resource
     );
   }
 
-  if (parsed === null || typeof parsed !== 'object') {
-    throw new Error(`Model policy config at ${policyPath} must be a JSON object.`);
-  }
-
-  return { path: policyPath, config: parsed as ModelPolicyConfig };
+  return { path: policyPath, config: decodeModelPolicy(parsed) };
 }
 
 /** Resolve a backend key from either its configured key or exact model id. */

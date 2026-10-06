@@ -1,4 +1,5 @@
-import type { ProviderId } from "../runners/providerRegistry.js";
+import type { ProviderId } from '../runners/providerRegistry.js';
+import type { ModelRef } from './model-ref.js';
 
 /** Execution behavior is explicit so production resilience cannot leak into experiments. */
 export type ExecutionMode =
@@ -757,4 +758,87 @@ export interface ProviderOperationalProfile {
   throughputObservations?: ObservationDistribution;
   availabilityObservations?: ObservationDistribution;
   lastValidatedAt?: string;
+}
+
+/** How completely one catalog source was read for a snapshot. */
+export type CatalogSourceStatus =
+  | 'ok'
+  | 'unavailable'
+  | 'unauthorized'
+  | 'partial'
+  | 'failed';
+
+/** Whether a source read is known-complete; empty is not proof of removal. */
+export type CatalogSourceCompleteness = 'complete' | 'partial' | 'unknown';
+
+/**
+ * Non-secret provenance for one catalog source read.
+ *
+ * A failed, unauthorized or partial read can never claim global removal; the
+ * status and completeness are retained alongside the snapshot rather than
+ * collapsed into an empty model list.
+ */
+export interface CatalogSourceResult {
+  sourceId: string;
+  /** Non-secret scope identity (account/endpoint), when the source is scoped. */
+  scopeId?: string;
+  status: CatalogSourceStatus;
+  completeness: CatalogSourceCompleteness;
+  fetchedAt: string;
+  contentDigest?: string;
+  warnings?: string[];
+}
+
+/** A lab model before its derived profile hash is computed. */
+export type LabModelSpecInput = Omit<LabModelSpec, 'profileHash'>;
+
+/** A provider-hosted model before its derived profile hash is computed. */
+export type ProviderModelProfileInput = Omit<ProviderModelProfile, 'profileHash'>;
+
+/**
+ * Raw facts used to compose an immutable {@link CatalogSnapshot}.
+ *
+ * `revision` is a content identity when supplied; otherwise it is derived from
+ * the materialized facts. `observedAt` records when the snapshot was read and
+ * stays distinct from `revision`.
+ */
+export interface CatalogSnapshotInput {
+  schemaVersion?: number;
+  revision?: string;
+  observedAt: string;
+  sourceResults: readonly CatalogSourceResult[];
+  labModels: readonly LabModelSpecInput[];
+  providerModels: readonly ProviderModelProfileInput[];
+}
+
+/**
+ * Read-only projection over existing lab and provider profiles.
+ *
+ * Facts have exactly one owner: a profile here is the same immutable object
+ * returned by lookup. The snapshot does not re-blend lab, gateway or endpoint
+ * limits and evidence.
+ */
+export interface CatalogSnapshot {
+  schemaVersion: number;
+  /** Content identity, separate from per-record observation timestamps. */
+  revision: string;
+  observedAt: string;
+  sourceResults: readonly CatalogSourceResult[];
+  labModels: readonly LabModelSpec[];
+  providerModels: readonly ProviderModelProfile[];
+}
+
+/** Outcome of reading one {@link ModelRef} from a snapshot. */
+export type CatalogReadStatus = 'found' | 'missing' | 'ambiguous' | 'unavailable' | 'failed';
+
+/**
+ * Result of a catalog read: the snapshot plus explicit read state, never a
+ * bare array whose empty value conflates "no models" with "source unavailable".
+ */
+export interface CatalogReadResult {
+  ref: ModelRef;
+  status: CatalogReadStatus;
+  snapshot: CatalogSnapshot;
+  profile?: ProviderModelProfile;
+  reason?: string;
 }

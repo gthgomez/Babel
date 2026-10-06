@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
+  decodeModelPolicy,
   getAvailableModels,
+  loadModelPolicyConfig,
   resolveModelByKey,
   resolveFamilyModelPolicy,
   resolveStagePolicyRoutes,
@@ -14,6 +17,7 @@ import {
   assertLiveModelId,
   buildOpenRouterDeepSeekLiveEnv,
   getNormalizedModelCapabilities,
+  type ValidatedModelPolicy,
 } from './modelPolicy.js';
 
 function createModelPolicyRoot(): string {
@@ -488,4 +492,217 @@ test('unknown context models like qwen3 have context budget 0 and do not compact
   // An unknown model must not trigger premature token compaction at 1,024 tokens
   assert.equal(shouldCompactByTokens(1_024, 'qwen3'), false);
   assert.equal(shouldCompactByTokens(50_000, 'qwen3'), false);
+});
+
+function withModelPolicyPath<T>(path: string | undefined, fn: () => T): T {
+  const previous = process.env['BABEL_MODEL_POLICY_PATH'];
+  if (path === undefined) delete process.env['BABEL_MODEL_POLICY_PATH'];
+  else process.env['BABEL_MODEL_POLICY_PATH'] = path;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_MODEL_POLICY_PATH'];
+    else process.env['BABEL_MODEL_POLICY_PATH'] = previous;
+  }
+}
+
+function withCleanEnterpriseEnv<T>(fn: () => T): T {
+  const keys = [
+    'BABEL_ENTERPRISE_POLICY_PATH',
+    'BABEL_ENTERPRISE_POLICY_USER_PATH',
+    'BABEL_ENTERPRISE_POLICY_ADMIN_PATH',
+    'BABEL_ENTERPRISE_MODEL_OPT_IN',
+  ] as const;
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  try {
+    return fn();
+  } finally {
+    for (const key of keys) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+const PARENT_V2_STAGE_ROUTES = [
+  {
+    stage: 'orchestrator',
+    primaryBackendKey: 'deepseek-v4-flash',
+    primaryProvider: 'deepseek',
+    primaryProviderModelId: 'deepseek-v4-flash',
+    ordered: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+  },
+  {
+    stage: 'planning',
+    primaryBackendKey: 'deepseek-v4-pro',
+    primaryProvider: 'deepseek',
+    primaryProviderModelId: 'deepseek-v4-pro',
+    ordered: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+  },
+  {
+    stage: 'qa',
+    primaryBackendKey: 'deepseek-v4-pro',
+    primaryProvider: 'deepseek',
+    primaryProviderModelId: 'deepseek-v4-pro',
+    ordered: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+  },
+  {
+    stage: 'executor',
+    primaryBackendKey: 'deepseek-v4-flash',
+    primaryProvider: 'deepseek',
+    primaryProviderModelId: 'deepseek-v4-flash',
+    ordered: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+  },
+] as const;
+
+test('invalid_policy_fails_with_field_path', () => {
+  assert.throws(() => decodeModelPolicy(null), /<root>/);
+  assert.throws(() => decodeModelPolicy([]), /<root>/);
+  assert.throws(() => decodeModelPolicy('nope'), /<root>/);
+  assert.throws(() => decodeModelPolicy({ models: [] }), /"models"/);
+  assert.throws(
+    () =>
+      decodeModelPolicy({
+        models: {
+          m: {
+            provider: 'deepinfra',
+            model_id: 'x/y',
+            tier: 'cheap',
+            estimated_cost_per_1m_input: 'free',
+          },
+        },
+      }),
+    /models\.m\.estimated_cost_per_1m_input/,
+  );
+  assert.throws(
+    () =>
+      decodeModelPolicy({
+        models: {
+          m: {
+            provider: 'deepinfra',
+            model_id: 'x/y',
+            tier: 'cheap',
+            estimated_cost_per_1m_output: -1,
+          },
+        },
+      }),
+    /models\.m\.estimated_cost_per_1m_output/,
+  );
+  assert.throws(
+    () =>
+      decodeModelPolicy({
+        models: {
+          m: { provider: 'deepinfra', model_id: 'x/y', tier: 'cheap', context_window: -1 },
+        },
+      }),
+    /models\.m\.context_window/,
+  );
+  assert.throws(
+    () =>
+      decodeModelPolicy({
+        models: {
+          m: {
+            provider: 'deepinfra',
+            model_id: 'x/y',
+            tier: 'cheap',
+            context_window: 2 ** 53,
+          },
+        },
+      }),
+    /models\.m\.context_window/,
+  );
+  // Unknown configuration fields require a documented version policy; arbitrary junk is rejected.
+  assert.throws(() => decodeModelPolicy({ unknown_root_field: true }), /unknown_root_field/);
+  assert.throws(
+    () => decodeModelPolicy({ models: { m: { provider: 'deepinfra', model_id: 'x/y', tier: 'cheap', mystery: 1 } } }),
+    /models\.m\.mystery/,
+  );
+  // Documented extension escape hatch for forward-compatible annotations.
+  assert.doesNotThrow(() => decodeModelPolicy({ x_campaign: { note: 'ok' } }));
+
+  // The loader now rejects malformed files instead of casting them.
+  const root = createModelPolicyRoot();
+  writeFileSync(
+    join(root, 'config', 'model-policy.json'),
+    JSON.stringify({ version: 2, models: { m: { provider: 5 } } }),
+    'utf-8',
+  );
+  withModelPolicyPath(undefined, () => {
+    assert.throws(() => loadModelPolicyConfig(root), /models\.m\.provider/);
+  });
+});
+
+test('v2_config_route_parity', () => {
+  const realConfigPath = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    'config',
+    'model-policy.json',
+  );
+  const realConfig: unknown = JSON.parse(readFileSync(realConfigPath, 'utf-8'));
+
+  // The shipped v2 document validates as a whole and returns the validated form.
+  const validated: ValidatedModelPolicy = decodeModelPolicy(realConfig);
+  assert.equal(validated.version, 2);
+
+  // The policy graph intentionally allows multiple backend keys for one served
+  // model; one-fact-owner-per-identity is enforced by the catalog, not here.
+  const backendKeys = Object.keys(validated.models ?? {});
+  for (const key of ['deepseek', 'deepseek-v4-pro']) {
+    assert.ok(backendKeys.includes(key), `expected shipped backend key ${key}`);
+  }
+
+  const root = mkdtempSync(join(tmpdir(), 'babel-model-policy-parity-'));
+  mkdirSync(join(root, 'config'), { recursive: true });
+  const copiedPath = join(root, 'config', 'model-policy.json');
+  writeFileSync(copiedPath, JSON.stringify(realConfig), 'utf-8');
+
+  withCleanEnterpriseEnv(() => {
+    const project = (routes: ReturnType<typeof resolveStagePolicyRoutes>) =>
+      routes.map((route) => ({
+        stage: route.stage,
+        primaryBackendKey: route.primaryBackendKey,
+        primaryProvider: route.primaryProvider,
+        primaryProviderModelId: route.primaryProviderModelId,
+        ordered: route.orderedBackends.map((backend) => backend.backendKey),
+      }));
+
+    // BABEL_MODEL_POLICY_PATH takes precedence over babelRoot, as before.
+    withModelPolicyPath(copiedPath, () => {
+      const routes = resolveStagePolicyRoutes({ babelRoot: join(root, 'missing-root') });
+      assert.deepEqual(project(routes), PARENT_V2_STAGE_ROUTES);
+    });
+
+    // Without the env override the same file resolves through babelRoot.
+    withModelPolicyPath(undefined, () => {
+      const routes = resolveStagePolicyRoutes({ babelRoot: root });
+      assert.deepEqual(project(routes), PARENT_V2_STAGE_ROUTES);
+    });
+
+    // Malformed nested input now rejects explicitly instead of being cast.
+    writeFileSync(
+      copiedPath,
+      JSON.stringify({
+        ...(realConfig as Record<string, unknown>),
+        models: {
+          broken: {
+            provider: 'deepinfra',
+            model_id: 'x/y',
+            tier: 'cheap',
+            estimated_cost_per_1m_input: 'free',
+          },
+        },
+      }),
+      'utf-8',
+    );
+    withModelPolicyPath(undefined, () => {
+      assert.throws(
+        () => resolveStagePolicyRoutes({ babelRoot: root }),
+        /models\.broken\.estimated_cost_per_1m_input/,
+      );
+    });
+  });
 });
