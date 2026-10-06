@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  DEFAULT_MAX_OUTPUT_TOKENS,
   buildCompactionCapsule,
   buildContextBudgetSnapshot,
   formatCompactionCapsule,
@@ -33,6 +34,22 @@ test('routed_identity_is_not_inferred', () => {
   const compatible = resolveProviderCapabilities('example/model:free')
   assert.notEqual(compatible.maxOutputTokens, 4_096)
   assert.equal(compatible.supportsToolChoice, true)
+})
+
+test('unknown_output_ceiling_is_not_fabricated', () => {
+  // An unresolved selector must not invent a positive output ceiling.
+  const unknown = resolveProviderCapabilities('unresolved/does-not-exist-xyz')
+  assert.equal(unknown.contextWindow, 0)
+  assert.equal(unknown.maxOutputTokens, 0)
+  assert.notEqual(unknown.maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS)
+
+  // A registered provider with no explicit output policy is also unknown: it
+  // must not be silently granted the generic 8192 ceiling.
+  const noPolicy = resolveProviderCapabilitiesForRoute({
+    provider: 'openai',
+    modelId: 'unresolved/does-not-exist-xyz',
+  })
+  assert.equal(noPolicy.maxOutputTokens, 0)
 })
 
 test('compaction_receipt_identity_survives', () => {

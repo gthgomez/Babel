@@ -9,7 +9,7 @@ import {
   refreshCatalog,
   resetCatalogRefreshInFlight,
 } from './catalog-refresh.js'
-import { createCatalogSnapshot } from './catalog.js'
+import { createCatalogSnapshot, findModelProfile } from './catalog.js'
 import type { CatalogSnapshot } from './types.js'
 
 const BASE_TIME = '2026-10-06T00:00:00.000Z'
@@ -286,4 +286,135 @@ test('assertTrustedCatalogSource_accepts_configured_source', () => {
     assertTrustedCatalogSource(OPENROUTER_CATALOG_SOURCE).toString(),
     'https://openrouter.ai/api/v1/models',
   )
+})
+
+test('truncated_success_payload_is_partial_and_does_not_retire', async () => {
+  resetCatalogRefreshInFlight()
+  // A previous authoritative snapshot knows two models.
+  const previous = composeCatalogSnapshot(
+    undefined,
+    normalizeCatalog({
+      sourceId: 'openrouter-catalog',
+      status: 'ok',
+      completeness: 'complete',
+      fetchedAt: BASE_TIME,
+      models: [
+        { id: 'z-ai/glm-5.3-flash', canonical_slug: 'z-ai/glm-5.3-flash' },
+        { id: 'deepseek/deepseek-v4-pro', canonical_slug: 'deepseek/deepseek-v4-pro' },
+      ],
+    }),
+  )
+  assert.ok(
+    findModelProfile(previous, { provider: 'openrouter', modelId: 'deepseek/deepseek-v4-pro' }),
+  )
+
+  // HTTP 200 whose data array is a truncated subset, with no pagination/total
+  // signal: completeness cannot be asserted, so the read must be partial.
+  const result = await refreshCatalog({
+    source: OPENROUTER_CATALOG_SOURCE,
+    previous,
+    fetchImpl: async () =>
+      jsonResponse({
+        data: [{ id: 'z-ai/glm-5.3-flash', canonical_slug: 'z-ai/glm-5.3-flash' }],
+      }),
+  })
+
+  assert.equal(result.status, 'ok')
+  assert.equal(result.completeness, 'partial', 'a 200 without a completeness signal is partial')
+  assert.equal(result.batch?.completeness, 'partial')
+  assert.ok(
+    findModelProfile(result.snapshot, { provider: 'openrouter', modelId: 'deepseek/deepseek-v4-pro' }),
+    'a truncated 200 must not retire an unobserved model',
+  )
+})
+
+test('completeness_signal_allows_authoritative_removal', async () => {
+  resetCatalogRefreshInFlight()
+  const previous = composeCatalogSnapshot(
+    undefined,
+    normalizeCatalog({
+      sourceId: 'openrouter-catalog',
+      status: 'ok',
+      completeness: 'complete',
+      fetchedAt: BASE_TIME,
+      models: [
+        { id: 'z-ai/glm-5.3-flash', canonical_slug: 'z-ai/glm-5.3-flash' },
+        { id: 'deepseek/deepseek-v4-pro', canonical_slug: 'deepseek/deepseek-v4-pro' },
+      ],
+    }),
+  )
+
+  // An explicit total count equal to the returned rows is an authoritative
+  // completeness signal, so absence may mean removal.
+  const result = await refreshCatalog({
+    source: OPENROUTER_CATALOG_SOURCE,
+    previous,
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          total: 1,
+          data: [{ id: 'z-ai/glm-5.3-flash', canonical_slug: 'z-ai/glm-5.3-flash' }],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+  })
+
+  assert.equal(result.status, 'ok')
+  assert.equal(result.completeness, 'complete')
+  assert.ok(findModelProfile(result.snapshot, { provider: 'openrouter', modelId: 'z-ai/glm-5.3-flash' }))
+  assert.equal(
+    findModelProfile(result.snapshot, { provider: 'openrouter', modelId: 'deepseek/deepseek-v4-pro' }),
+    undefined,
+    'an authoritative complete read may retire an unobserved model',
+  )
+})
+
+test('oversized_body_is_bounded_and_not_fully_accepted', async () => {
+  resetCatalogRefreshInFlight()
+  const previous = previousSnapshot()
+  let aborted = false
+  const padding = 'x'.repeat(5_000)
+  const result = await refreshCatalog({
+    source: OPENROUTER_CATALOG_SOURCE,
+    previous,
+    maxBytes: 1_024,
+    fetchImpl: async (_input, init) => {
+      init?.signal?.addEventListener('abort', () => {
+        aborted = true
+      })
+      return new Response(
+        JSON.stringify({ data: [{ id: 'z-ai/glm-5.3-flash', note: padding }] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    },
+  })
+
+  assert.equal(result.status, 'failed')
+  assert.equal(result.preservedPrevious, true)
+  assert.ok(result.warnings.some((warning) => warning.includes('byte bound')))
+  assert.equal(aborted, true, 'the abort signal must fire for an oversized body')
+})
+
+test('redirect_to_disallowed_host_is_not_followed', async () => {
+  resetCatalogRefreshInFlight()
+  const requested: string[] = []
+  let followed = false
+  const fetchImpl: typeof fetch = async (input, init) => {
+    requested.push(String(input))
+    if (init?.redirect === 'manual') {
+      return new Response(null, {
+        status: 302,
+        headers: { location: 'https://evil.example/api/v1/models' },
+      })
+    }
+    // Only reached when a redirect would have been auto-followed.
+    followed = true
+    return jsonResponse({ data: [{ id: 'z-ai/glm-5.3-flash', canonical_slug: 'z-ai/glm-5.3-flash' }] })
+  }
+
+  const result = await refreshCatalog({ source: OPENROUTER_CATALOG_SOURCE, fetchImpl })
+
+  assert.equal(followed, false, 'a cross-origin redirect must not be followed')
+  assert.deepEqual(requested, [OPENROUTER_MODELS_URL])
+  assert.notEqual(result.status, 'ok')
 })

@@ -82,6 +82,9 @@ test('all_entrypoints_apply_effective_route_admission', () => {
   const root = createPolicyRoot({
     primary: { provider: 'deepinfra', model_id: 'Qwen/Qwen3-235B-A22B-Instruct-2507', tier: 'cheap' },
     'primary-disabled': { provider: 'deepinfra', model_id: 'Qwen/Qwen3-235B-A22B-Instruct-2507', tier: 'cheap', enabled: false },
+    // Dormant (uncertified) production-purpose provider: registry membership
+    // must not activate the lane.
+    'dormant-openai': { provider: 'openai', model_id: 'gpt-fixture', tier: 'cheap' },
   })
 
   withDeepInfraKey(() => {
@@ -91,10 +94,26 @@ test('all_entrypoints_apply_effective_route_admission', () => {
       (error: unknown) =>
         error instanceof RouteUnavailableError && error.code === 'route_not_admitted',
     )
+    // Router refuses the dormant provider with the shared typed denial.
+    assert.throws(
+      () =>
+        new ModelRouter({ babelRoot: root, mode: 'benchmark_strict' }).resolve(
+          'dormant-openai',
+        ),
+      (error: unknown) =>
+        error instanceof RouteUnavailableError && error.code === 'route_not_admitted',
+    )
     // Chat entrypoint applies the same effective denial through policy.
     assert.throws(
       () => resolveChatModelPolicy({ model: 'primary-disabled', babelRoot: root }),
       /disabled/,
+    )
+    // Chat applies the *same shared typed denial* for a dormant/uncertified
+    // provider, rather than an unchecked bypass.
+    assert.throws(
+      () => resolveChatModelPolicy({ model: 'dormant-openai', babelRoot: root }),
+      (error: unknown) =>
+        error instanceof Error && /provider_uncertified/.test(error.message),
     )
     // A default-lane request never selects the disabled route.
     const route = new ModelRouter({ babelRoot: root }).resolve()
@@ -128,6 +147,70 @@ test('cache_rekeys_on_connection_revision', () => {
       credentialProvenance: 'CUSTOM_DEEPINFRA_KEY',
     })
     assert.notEqual(credentialVariant.resolve('qwen3').connectionKey, routeA.connectionKey)
+  })
+})
+
+test('default lane never auto-selects an expensive cheapest route', () => {
+  const root = createPolicyRoot({
+    'expensive-cheap': {
+      provider: 'deepinfra',
+      model_id: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+      tier: 'cheap',
+      estimated_cost_per_1m_output: 1,
+      expensive: true,
+    },
+    'costlier-standard': {
+      provider: 'deepinfra',
+      model_id: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+      tier: 'standard',
+      estimated_cost_per_1m_output: 5,
+    },
+  })
+
+  withDeepInfraKey(() => {
+    const router = new ModelRouter({ babelRoot: root })
+    // The lowest-cost entry is expensive, so it requires explicit opt-in.
+    assert.equal(router.getDefaultBackendKey(), 'costlier-standard')
+    assert.equal(router.resolve().routeId, 'costlier-standard')
+    // Naming the expensive backend key explicitly is the opt-in.
+    assert.equal(router.resolve('expensive-cheap').routeId, 'expensive-cheap')
+  })
+})
+
+test('routeId reflects each requested backend key sharing one connection', () => {
+  const root = createPolicyRoot({
+    'ds-alias-a': { provider: 'deepinfra', model_id: 'Qwen/Qwen3-235B-A22B-Instruct-2507', tier: 'cheap', estimated_cost_per_1m_output: 1 },
+    'ds-alias-b': { provider: 'deepinfra', model_id: 'Qwen/Qwen3-235B-A22B-Instruct-2507', tier: 'standard', estimated_cost_per_1m_output: 2 },
+  })
+
+  withDeepInfraKey(() => {
+    const router = new ModelRouter({ babelRoot: root })
+    const a = router.resolve('ds-alias-a')
+    const b = router.resolve('ds-alias-b')
+
+    // Distinct backend keys must not collapse to the first-cached object.
+    assert.equal(a.routeId, 'ds-alias-a')
+    assert.equal(b.routeId, 'ds-alias-b')
+    assert.notEqual(a, b)
+    assert.equal(a.connectionKey, b.connectionKey)
+    // Same connection identity still shares the immutable transport runner.
+    assert.equal(a.runner, b.runner)
+
+    // Repeated resolution of the same key is stable.
+    assert.equal(router.resolve('ds-alias-b'), b)
+  })
+})
+
+test('defaultBackendKey option is honored by resolve and getDefaultBackendKey', () => {
+  const root = createPolicyRoot({
+    cheap: { provider: 'deepinfra', model_id: 'Qwen/Qwen3-235B-A22B-Instruct-2507', tier: 'cheap', estimated_cost_per_1m_output: 1 },
+    preferred: { provider: 'deepinfra', model_id: 'Qwen/Qwen3-235B-A22B-Instruct-2507', tier: 'standard', estimated_cost_per_1m_output: 9 },
+  })
+
+  withDeepInfraKey(() => {
+    const router = new ModelRouter({ babelRoot: root, defaultBackendKey: 'preferred' })
+    assert.equal(router.getDefaultBackendKey(), 'preferred')
+    assert.equal(router.resolve().routeId, 'preferred')
   })
 })
 

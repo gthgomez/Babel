@@ -1,6 +1,16 @@
 {
+  "_provenance": {
+    "generatedBy": "babel-cli/scripts/generate_model_catalog.ts",
+    "generatorVersion": 1,
+    "source": "https://openrouter.ai/api/v1/models",
+    "normalizer": "normalizeCatalog/composeCatalogSnapshot",
+    "input": "embedded stable fixture",
+    "observedAt": "2026-10-06T00:00:00.000Z",
+    "network": false,
+    "command": "npx tsx scripts/generate_model_catalog.ts (run from babel-cli)"
+  },
   "schemaVersion": 1,
-  "revision": "2fe80c18b46358160f680ff2fc0185f4fd7871912fd6ae7c066747fceba1587a",
+  "revision": "ab90133338afe8d9e83e47008d274dda532db4f85762d540fe3a46fba8dbc61d",
   "observedAt": "2026-10-06T00:00:00.000Z",
   "sourceResults": [
     {

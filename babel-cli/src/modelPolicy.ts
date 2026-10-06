@@ -500,6 +500,25 @@ function assertOptionalString(
   }
 }
 
+/**
+ * Require a non-empty string field. Missing identity fields (an undefined
+ * provider/model_id or a vendor alias without a target) must fail validation
+ * here rather than reaching the runner as `undefined`.
+ */
+function assertRequiredString(
+  record: Record<string, unknown>,
+  key: string,
+  basePath: string,
+): void {
+  const value = record[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    invalidPolicy(
+      policyPath(basePath, key),
+      `expected a non-empty string but received ${value === '' ? 'an empty string' : describeValue(value)}`,
+    );
+  }
+}
+
 function assertOptionalBoolean(
   record: Record<string, unknown>,
   key: string,
@@ -570,14 +589,10 @@ function validateModelEntries(value: unknown): void {
     const entry = assertObject(rawEntry, path);
     assertKnownKeys(entry, MODEL_ENTRY_KEYS, path);
 
-    const provider = entry['provider'];
-    if (provider !== undefined && typeof provider !== 'string') {
-      invalidPolicy(`${path}.provider`, `expected a string but received ${describeValue(provider)}`);
-    }
-    const modelId = entry['model_id'];
-    if (modelId !== undefined && typeof modelId !== 'string') {
-      invalidPolicy(`${path}.model_id`, `expected a string but received ${describeValue(modelId)}`);
-    }
+    // `provider` and `model_id` are identity fields: a missing value would be
+    // cast into `ResolvedModelPolicyEntry` and reach the runner as `undefined`.
+    assertRequiredString(entry, 'provider', path);
+    assertRequiredString(entry, 'model_id', path);
     if (entry['tier'] !== undefined) {
       assertTier(entry['tier'], `${path}.tier`);
     }
@@ -699,7 +714,8 @@ export function decodeModelPolicy(input: unknown): ValidatedModelPolicy {
       const path = `vendor_aliases.${alias}`;
       const entry = assertObject(rawEntry, path);
       assertKnownKeys(entry, ['maps_to', 'notes'], path);
-      assertOptionalString(entry, 'maps_to', path);
+      // A vendor alias without a target would resolve to an empty backend key.
+      assertRequiredString(entry, 'maps_to', path);
       assertOptionalString(entry, 'notes', path);
     }
   }

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import { composeCatalogSnapshot, normalizeCatalog, validateCatalogFreshness } from './catalog-normalize.js'
 import { findModelProfile } from './catalog.js'
-import type { OpenRouterModelEntry } from './openrouterMetadata.js'
+import { OPENROUTER_MODELS_URL, type OpenRouterModelEntry } from './openrouterMetadata.js'
 import type { ModelRef } from './model-ref.js'
 
 const FETCHED_AT = '2026-08-29T00:00:00.000Z'
@@ -60,6 +61,54 @@ test('partial_catalog_does_not_retire_model', () => {
     partial.sourceResults[0]?.status,
     'partial',
     'partial completeness is recorded, not silently upgraded',
+  )
+})
+
+test('complete_read_of_another_source_retains_foreign_models', () => {
+  const modelA = entry('meta/llama-4-scout', { canonical_slug: 'meta/llama-4-scout' })
+  const modelB = entry('z-ai/glm-5.3-flash', { canonical_slug: 'z-ai/glm-5.3-flash' })
+
+  const sourceA = normalizeCatalog({
+    sourceId: 'source-a',
+    scopeId: 'scope-a',
+    status: 'ok',
+    completeness: 'complete',
+    fetchedAt: FETCHED_AT,
+    models: [modelA],
+  })
+  // A partial read of source B merges rather than retiring, so both sources
+  // coexist in the previous snapshot.
+  const sourceBPartial = normalizeCatalog({
+    sourceId: 'source-b',
+    scopeId: 'scope-b',
+    status: 'partial',
+    completeness: 'partial',
+    fetchedAt: '2026-10-06T00:00:00.000Z',
+    models: [modelB],
+  })
+  const previous = composeCatalogSnapshot(composeCatalogSnapshot(undefined, sourceA), sourceBPartial)
+  assert.ok(findModelProfile(previous, { provider: 'openrouter', modelId: 'meta/llama-4-scout' }))
+  assert.ok(findModelProfile(previous, { provider: 'openrouter', modelId: 'z-ai/glm-5.3-flash' }))
+
+  // A complete read of source B must not retire a model owned only by source A.
+  const sourceBComplete = normalizeCatalog({
+    sourceId: 'source-b',
+    scopeId: 'scope-b',
+    status: 'ok',
+    completeness: 'complete',
+    fetchedAt: '2026-10-06T00:00:01.000Z',
+    models: [modelB],
+  })
+  const next = composeCatalogSnapshot(previous, sourceBComplete)
+
+  assert.ok(
+    findModelProfile(next, { provider: 'openrouter', modelId: 'meta/llama-4-scout' }),
+    'a complete read of source B must not retire a model observed only from source A',
+  )
+  assert.ok(findModelProfile(next, { provider: 'openrouter', modelId: 'z-ai/glm-5.3-flash' }))
+  assert.equal(
+    next.sourceResults.find((result) => result.sourceId === 'source-b')?.completeness,
+    'complete',
   )
 })
 
@@ -122,4 +171,33 @@ test('limits_only_metadata_gets_provenance_check', () => {
     ),
     `expected a limits freshness issue, received: ${JSON.stringify(stale.issues)}`,
   )
+})
+
+test('generated_catalog_documents_generator_provenance', async () => {
+  const raw = await readFile(
+    new URL('../../../config/model-catalog.generated.json', import.meta.url),
+    'utf8',
+  )
+  const parsed = JSON.parse(raw) as {
+    _provenance?: {
+      generatedBy?: string
+      generatorVersion?: number
+      source?: string
+      network?: boolean
+      command?: string
+    }
+    revision?: string
+    providerModels?: unknown[]
+  }
+  assert.equal(
+    parsed._provenance?.generatedBy,
+    'babel-cli/scripts/generate_model_catalog.ts',
+    'the committed catalog must name its in-tree generator',
+  )
+  assert.equal(parsed._provenance?.source, OPENROUTER_MODELS_URL)
+  assert.equal(parsed._provenance?.network, false)
+  assert.equal(parsed._provenance?.generatorVersion, 1)
+  assert.equal(typeof parsed._provenance?.command, 'string')
+  assert.equal(typeof parsed.revision, 'string')
+  assert.equal(parsed.providerModels?.length, 3)
 })

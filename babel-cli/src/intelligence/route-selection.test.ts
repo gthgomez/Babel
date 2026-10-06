@@ -11,7 +11,9 @@ import {
   recordRouteAttemptUsage,
   resolveModelSelection,
   type ConfiguredRoute,
+  type ModelAliasDeclaration,
   type ModelSelectionFailure,
+  type ModelSelectionResult,
 } from './route-selection.js'
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -123,6 +125,42 @@ test('alias resolution rejects depth overflow, duplicates and missing targets', 
     }),
   )
   assert.equal(missing.code, 'unknown_alias_target')
+})
+
+test('alias declared without a maps_to target is a typed unknown_alias_target, never a TypeError', () => {
+  const routes: ConfiguredRoute[] = [route({ routeId: 'qwen3' })]
+  // A partial/legacy policy can omit `maps_to`; the declared type is narrower
+  // than runtime, so this is exactly the defensive path under test.
+  const untargeted = { alias: 'ghost', target: undefined } as unknown as ModelAliasDeclaration
+
+  let result: ModelSelectionResult | null = null
+  assert.doesNotThrow(() => {
+    result = resolveModelSelection({
+      mode: 'production_resilient',
+      requested: 'ghost',
+      routes,
+      aliases: [untargeted],
+    })
+  })
+
+  const typed = failure(result!)
+  assert.equal(typed.code, 'unknown_alias_target')
+  assert.equal(typed.status, 'blocked')
+})
+
+test('alias with a malformed model-reference target is a typed unknown_alias_target', () => {
+  const routes: ConfiguredRoute[] = [route({ routeId: 'qwen3' })]
+  const malformed = { alias: 'ghost', target: { provider: 'deepinfra' } } as unknown as ModelAliasDeclaration
+  const result = failure(
+    resolveModelSelection({
+      mode: 'production_resilient',
+      requested: 'ghost',
+      routes,
+      aliases: [malformed],
+    }),
+  )
+  assert.equal(result.code, 'unknown_alias_target')
+  assert.equal(result.status, 'blocked')
 })
 
 test('human aliases resolve case-insensitively to a concrete route', () => {

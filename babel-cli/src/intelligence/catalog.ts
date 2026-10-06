@@ -6,6 +6,24 @@ import type { CatalogSnapshot, CatalogSnapshotInput, ProviderModelProfile } from
 
 const CATALOG_SCHEMA_VERSION = 1
 
+/**
+ * Recursively drop provenance timestamps before hashing the revision.
+ *
+ * The revision is a content identity over facts; `observedAt`/`retrievedAt`
+ * record when those facts were read, so re-reading identical facts must not
+ * mint a new revision. This mirrors the materialization used for profile
+ * identity in `profiles.ts`.
+ */
+function materializeForRevision(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(materializeForRevision)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== 'observedAt' && key !== 'retrievedAt')
+      .map(([key, child]) => [key, materializeForRevision(child)]),
+  )
+}
+
 /** Build an immutable catalog projection with one fact owner per model ref. */
 export function createCatalogSnapshot(input: CatalogSnapshotInput): CatalogSnapshot {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -39,7 +57,7 @@ export function createCatalogSnapshot(input: CatalogSnapshotInput): CatalogSnaps
   const revision =
     typeof input.revision === 'string' && input.revision.length > 0
       ? input.revision
-      : hashCanonical({ labModels, providerModels })
+      : hashCanonical(materializeForRevision({ labModels, providerModels }))
 
   const snapshot: CatalogSnapshot = {
     schemaVersion: input.schemaVersion ?? CATALOG_SCHEMA_VERSION,

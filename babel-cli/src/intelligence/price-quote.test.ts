@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { createCatalogSnapshot } from './catalog.js'
+import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js'
 import {
   buildPriceQuote,
   computeQuoteCostUsd,
@@ -156,4 +157,50 @@ test('unknown_components_are_not_coerced_to_zero', () => {
   const missing = resolvePriceQuote({ provider: 'openrouter', modelId: 'not/registered' })
   assert.equal(missing.status, 'unknown')
   assert.equal(missing.perToken, null)
+})
+
+test('partial_cache_split_is_not_exact', () => {
+  const resolved = resolvePriceQuote({ provider: 'deepseek', modelId: 'deepseek-v4-flash' })
+  assert.equal(resolved.status, 'exact')
+  const flash = resolved.quote!
+
+  // Only the cache-hit side of the split was observed. The miss side is
+  // unknown, so the input cost is unknown: pricing the hit side alone would
+  // silently understate the call and look exact.
+  const hitOnly = computeQuoteCostUsd(flash, { cacheHitTokens: 1000 })
+  assert.equal(hitOnly.inputCostUsd, null)
+  assert.equal(hitOnly.estimatedCostUsd, null)
+
+  // Same when only the miss side is observed; the hit side is unknown, not 0.
+  const missOnly = computeQuoteCostUsd(flash, { cacheMissTokens: 1000 })
+  assert.equal(missOnly.inputCostUsd, null)
+
+  // When the prompt total is also known the missing side is derivable and the
+  // full split prices exactly.
+  const derivable = computeQuoteCostUsd(flash, { promptTokens: 1000, cacheHitTokens: 400 })
+  const expectedInput = (400 * 0.0028) / 1_000_000 + (600 * 0.14) / 1_000_000
+  assert.ok(derivable.inputCostUsd !== null)
+  assert.ok(Math.abs(derivable.inputCostUsd - expectedInput) < 1e-15)
+
+  // The legacy estimate surface must never report `exact` while an observed
+  // input component could not be priced; the total is unknown, not a lower
+  // bound that could be mistaken for the whole charge.
+  const unknownTotal = estimateProviderUsageCost({
+    provider: 'deepseek',
+    modelId: 'deepseek-v4-flash',
+    promptCacheHitTokens: 1000,
+  })
+  assert.equal(unknownTotal.estimatedCostUsd, null)
+  assert.equal(unknownTotal.inputCostUsd, null)
+  assert.notEqual(unknownTotal.precision, 'exact')
+
+  const outputKnown = estimateProviderUsageCost({
+    provider: 'deepseek',
+    modelId: 'deepseek-v4-flash',
+    promptCacheHitTokens: 1000,
+    completionTokens: 2000,
+  })
+  assert.equal(outputKnown.inputCostUsd, null)
+  assert.equal(outputKnown.estimatedCostUsd, null)
+  assert.notEqual(outputKnown.precision, 'exact')
 })

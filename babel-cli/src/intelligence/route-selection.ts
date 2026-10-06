@@ -361,8 +361,31 @@ function resolveAlias(
     }
     visited.add(current)
     if (aliasId === null) aliasId = declaration.alias
-    const target = declaration.target
-    if (typeof target !== 'string') {
+    // A declaration may omit `maps_to` (legacy/partial policy); that is a
+    // typed unresolved target, never an unchecked TypeError from a missing ref.
+    const rawTarget: unknown = declaration.target
+    if (rawTarget === undefined || rawTarget === null) {
+      return {
+        kind: 'failure',
+        status: 'blocked',
+        code: 'unknown_alias_target',
+        reason: `Alias "${aliasId ?? declaration.alias}" has no target; declare maps_to to a route or model reference.`,
+      }
+    }
+    if (typeof rawTarget !== 'string') {
+      const malformed =
+        typeof rawTarget !== 'object' ||
+        typeof (rawTarget as ModelRef).provider !== 'string' ||
+        typeof (rawTarget as ModelRef).modelId !== 'string'
+      if (malformed) {
+        return {
+          kind: 'failure',
+          status: 'blocked',
+          code: 'unknown_alias_target',
+          reason: `Alias "${aliasId ?? declaration.alias}" has a malformed model reference target.`,
+        }
+      }
+      const target = rawTarget as ModelRef
       const route = routeForRef(input.routes, target)
       return {
         kind: 'candidate',
@@ -376,7 +399,7 @@ function resolveAlias(
         },
       }
     }
-    const next = target.trim().toLowerCase()
+    const next = rawTarget.trim().toLowerCase()
     if (byAlias.has(next)) {
       current = next
       continue
@@ -400,7 +423,7 @@ function resolveAlias(
       kind: 'failure',
       status: 'blocked',
       code: 'unknown_alias_target',
-      reason: `Alias "${aliasId}" targets unknown route "${target}".`,
+      reason: `Alias "${aliasId}" targets unknown route "${rawTarget}".`,
     }
   }
   return {

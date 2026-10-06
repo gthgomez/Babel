@@ -108,6 +108,52 @@ test('catalog_has_one_fact_owner', () => {
   assert.notEqual(changedFact.revision, snapshot.revision)
 })
 
+test('catalog_revision_ignores_provenance_timestamps', () => {
+  const base = createCatalogSnapshot(snapshotInput())
+
+  // Identical facts re-read at a different time keep the same content revision;
+  // only the stored per-record provenance timestamps change.
+  const reread = createCatalogSnapshot(
+    snapshotInput({
+      providerModels: [
+        providerInput('z-ai/glm-5.3-flash', {
+          sourceEvidence: [
+            { source: 'provider_api', retrievedAt: '2026-12-25T00:00:00.000Z' },
+          ],
+        }),
+      ],
+      labModels: [
+        labInput({
+          sourceEvidence: [
+            { source: 'official_docs', retrievedAt: '2026-12-25T00:00:00.000Z' },
+          ],
+          limitEvidence: [
+            {
+              scope: 'lab_model',
+              claim: 'MODEL_AUTHOR_DECLARED_LIMIT',
+              value: 1_310_720,
+              field: 'contextTokens',
+              source: { source: 'official_docs', retrievedAt: '2026-12-25T00:00:00.000Z' },
+              observedAt: '2026-12-25T00:00:00.000Z',
+              confidence: 'high',
+              status: 'supported',
+            },
+          ],
+        }),
+      ],
+    }),
+  )
+
+  // The stored profiles genuinely differ in provenance timestamps...
+  assert.equal(base.providerModels[0]?.sourceEvidence[0]?.retrievedAt, RETRIEVED_AT)
+  assert.equal(reread.providerModels[0]?.sourceEvidence[0]?.retrievedAt, '2026-12-25T00:00:00.000Z')
+  assert.equal(base.labModels[0]?.limitEvidence?.[0]?.observedAt, RETRIEVED_AT)
+  assert.equal(reread.labModels[0]?.limitEvidence?.[0]?.observedAt, '2026-12-25T00:00:00.000Z')
+
+  // ...but the content revision stays stable.
+  assert.equal(reread.revision, base.revision)
+})
+
 test('projection_preserves_scoped_evidence', () => {
   const snapshot = createCatalogSnapshot(
     snapshotInput({

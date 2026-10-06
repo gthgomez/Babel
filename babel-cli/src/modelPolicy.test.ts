@@ -613,6 +613,20 @@ test('invalid_policy_fails_with_field_path', () => {
       }),
     /models\.m\.context_window/,
   );
+  // Identity fields are required, not merely correctly typed: a missing
+  // provider/model_id must not reach the runner as `undefined`.
+  assert.throws(
+    () => decodeModelPolicy({ models: { m: { provider: 'deepinfra', tier: 'cheap' } } }),
+    /models\.m\.model_id/,
+  );
+  assert.throws(
+    () => decodeModelPolicy({ models: { m: { model_id: 'x/y', tier: 'cheap' } } }),
+    /models\.m\.provider/,
+  );
+  assert.throws(
+    () => decodeModelPolicy({ vendor_aliases: { x: { notes: 'no target' } } }),
+    /vendor_aliases\.x\.maps_to/,
+  );
   // Unknown configuration fields require a documented version policy; arbitrary junk is rejected.
   assert.throws(() => decodeModelPolicy({ unknown_root_field: true }), /unknown_root_field/);
   assert.throws(

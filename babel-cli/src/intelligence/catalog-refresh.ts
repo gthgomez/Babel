@@ -177,102 +177,231 @@ async function performOnlineRefresh(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
-  let response: Response
   try {
-    response = await input.fetchImpl!(url.toString(), {
-      signal: controller.signal,
-      headers: { accept: 'application/json' },
+    let response: Response
+    try {
+      response = await input.fetchImpl!(url.toString(), {
+        signal: controller.signal,
+        headers: { accept: 'application/json' },
+        // Never auto-follow a redirect: the trusted-host check applies to the
+        // configured URL, and a redirect is data that could point elsewhere.
+        redirect: 'manual',
+      })
+    } catch (error) {
+      return failureResult(
+        input,
+        startedAt,
+        now(),
+        'unavailable',
+        [`Catalog refresh request failed: ${describeError(error)}`],
+      )
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return failureResult(input, startedAt, now(), 'unauthorized', [
+        `Catalog source rejected the request with HTTP ${response.status}.`,
+      ])
+    }
+    if (!response.ok) {
+      // A manual 3xx is deliberately not followed and is reported as a failure.
+      const status: CatalogSourceStatus = response.status >= 500 ? 'unavailable' : 'failed'
+      return failureResult(input, startedAt, now(), status, [
+        `Catalog source replied with HTTP ${response.status}.`,
+      ])
+    }
+
+    // The abort timer stays armed through the body read so a slow-drip body is
+    // interrupted, and the reader stops at the byte cap instead of buffering an
+    // unbounded response.
+    let text: string
+    try {
+      text = await readBoundedBodyText(response, maxBytes, controller)
+    } catch (error) {
+      if (error instanceof CatalogRefreshError && error.code === 'response_too_large') {
+        return failureResult(input, startedAt, now(), 'failed', [
+          `Catalog response exceeded the ${maxBytes} byte bound.`,
+        ])
+      }
+      return failureResult(input, startedAt, now(), 'unavailable', [
+        `Catalog response body could not be read: ${describeError(error)}`,
+      ])
+    }
+
+    let body: unknown
+    try {
+      body = JSON.parse(text)
+    } catch {
+      return failureResult(input, startedAt, now(), 'failed', [
+        'Catalog response was not valid JSON.',
+      ])
+    }
+
+    let sanitized: { entries: OpenRouterModelEntry[]; warnings: string[] }
+    try {
+      sanitized = sanitizeCatalogPayload(body, maxItems)
+    } catch (error) {
+      return failureResult(input, startedAt, now(), 'failed', [describeError(error)])
+    }
+
+    // A 200 alone does not prove the full catalog was returned; only an
+    // explicit signal may mark the read complete.
+    const completeness = derivePayloadCompleteness(response, body, sanitized.entries.length)
+    const warnings = [...sanitized.warnings, ...completeness.warnings]
+
+    const completedAt = now().toISOString()
+
+    // A refresh that finishes after a newer snapshot was published must not win.
+    const current = input.current?.()
+    if (current && Date.parse(current.observedAt) > Date.parse(startedAt)) {
+      return {
+        status: 'ok',
+        completeness: 'complete',
+        snapshot: current,
+        warnings: ['A newer catalog snapshot was already published; refresh was not applied.'],
+        preservedPrevious: true,
+        superseded: true,
+        fromCache: false,
+        startedAt,
+        completedAt,
+      }
+    }
+
+    const endpoint = url.toString()
+    const batch = normalizeCatalog({
+      sourceId: input.source.sourceId,
+      ...(input.source.scopeId === undefined ? {} : { scopeId: input.source.scopeId }),
+      endpoint,
+      status: 'ok',
+      completeness: completeness.completeness,
+      fetchedAt: completedAt,
+      models: sanitized.entries,
+      warnings,
     })
-  } catch (error) {
-    clearTimeout(timer)
-    return failureResult(
-      input,
-      startedAt,
-      now(),
-      'unavailable',
-      [`Catalog refresh request failed: ${describeError(error)}`],
-    )
-  }
-  clearTimeout(timer)
-
-  if (response.status === 401 || response.status === 403) {
-    return failureResult(input, startedAt, now(), 'unauthorized', [
-      `Catalog source rejected the request with HTTP ${response.status}.`,
-    ])
-  }
-  if (!response.ok) {
-    const status: CatalogSourceStatus = response.status >= 500 ? 'unavailable' : 'failed'
-    return failureResult(input, startedAt, now(), status, [
-      `Catalog source replied with HTTP ${response.status}.`,
-    ])
-  }
-
-  const text = await response.text()
-  if (Buffer.byteLength(text, 'utf8') > maxBytes) {
-    return failureResult(input, startedAt, now(), 'failed', [
-      `Catalog response exceeded the ${maxBytes} byte bound.`,
-    ])
-  }
-
-  let body: unknown
-  try {
-    body = JSON.parse(text)
-  } catch {
-    return failureResult(input, startedAt, now(), 'failed', [
-      'Catalog response was not valid JSON.',
-    ])
-  }
-
-  let sanitized: { entries: OpenRouterModelEntry[]; warnings: string[] }
-  try {
-    sanitized = sanitizeCatalogPayload(body, maxItems)
-  } catch (error) {
-    return failureResult(input, startedAt, now(), 'failed', [describeError(error)])
-  }
-
-  const completedAt = now().toISOString()
-
-  // A refresh that finishes after a newer snapshot was published must not win.
-  const current = input.current?.()
-  if (current && Date.parse(current.observedAt) > Date.parse(startedAt)) {
+    const snapshot = composeCatalogSnapshot(input.previous, batch)
     return {
       status: 'ok',
-      completeness: 'complete',
-      snapshot: current,
-      warnings: ['A newer catalog snapshot was already published; refresh was not applied.'],
-      preservedPrevious: true,
-      superseded: true,
+      completeness: completeness.completeness,
+      snapshot,
+      batch,
+      warnings: [...warnings],
+      preservedPrevious: false,
+      superseded: false,
       fromCache: false,
       startedAt,
       completedAt,
     }
-  }
-
-  const endpoint = url.toString()
-  const batch = normalizeCatalog({
-    sourceId: input.source.sourceId,
-    ...(input.source.scopeId === undefined ? {} : { scopeId: input.source.scopeId }),
-    endpoint,
-    status: 'ok',
-    completeness: 'complete',
-    fetchedAt: completedAt,
-    models: sanitized.entries,
-    warnings: sanitized.warnings,
-  })
-  const snapshot = composeCatalogSnapshot(input.previous, batch)
-  return {
-    status: 'ok',
-    completeness: 'complete',
-    snapshot,
-    batch,
-    warnings: [...sanitized.warnings],
-    preservedPrevious: false,
-    superseded: false,
-    fromCache: false,
-    startedAt,
-    completedAt,
+  } finally {
+    clearTimeout(timer)
   }
 }
+
+/**
+ * Read a response body under an explicit byte cap.
+ *
+ * `response.text()` would buffer the whole body before the cap is applied, so
+ * an oversized or slow-drip response could exhaust memory or outlive its
+ * deadline. This reader stops as soon as the cap is crossed, aborts the shared
+ * signal and never decodes the rejected bytes.
+ */
+async function readBoundedBodyText(
+  response: Response,
+  maxBytes: number,
+  controller: AbortController,
+): Promise<string> {
+  const stream = response.body
+  if (stream === null) return ''
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value === undefined) continue
+      if (total + value.byteLength > maxBytes) {
+        controller.abort()
+        try {
+          await reader.cancel()
+        } catch {
+          // Cancellation is best-effort; the byte bound already rejected it.
+        }
+        throw new CatalogRefreshError(
+          'response_too_large',
+          `Catalog response exceeded the ${maxBytes} byte bound.`,
+        )
+      }
+      chunks.push(value)
+      total += value.byteLength
+    }
+  } finally {
+    try {
+      reader.releaseLock()
+    } catch {
+      // The reader may already be closed or cancelled.
+    }
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+interface PayloadCompleteness {
+  completeness: CatalogSourceCompleteness
+  warnings: string[]
+}
+
+/**
+ * Derive source completeness from an explicit signal only.
+ *
+ * A 200 response is not proof that the full catalog was returned: an
+ * unpaginated gateway may hand back a truncated page. Only a total/count equal
+ * to the returned row count, or an explicit `has_more: false`, is authoritative.
+ * Without such a signal the read is `partial`, so absent rows are never read as
+ * removals.
+ */
+function derivePayloadCompleteness(
+  response: Response,
+  body: unknown,
+  rowCount: number,
+): PayloadCompleteness {
+  const root = objectValue(body)
+  const total =
+    numericValue(response.headers.get('x-total-count')) ??
+    numericValue(root?.['total']) ??
+    numericValue(root?.['count'])
+  if (total !== undefined) {
+    if (total === rowCount) return { completeness: 'complete', warnings: [] }
+    return {
+      completeness: 'partial',
+      warnings: [
+        `Catalog completeness signal reported ${total} rows but ${rowCount} were returned; treating the read as partial.`,
+      ],
+    }
+  }
+  if (root?.['has_more'] === false) return { completeness: 'complete', warnings: [] }
+  const advertisedNextPage =
+    root?.['has_more'] === true || linkHeaderHasNext(response.headers.get('link'))
+  return {
+    completeness: 'partial',
+    warnings: [
+      advertisedNextPage
+        ? 'Catalog response advertised a next page; treating the read as partial.'
+        : 'Catalog response carried no completeness signal; treating the read as partial.',
+    ],
+  }
+}
+
+function linkHeaderHasNext(link: string | null): boolean {
+  return link !== null && /rel\s*=\s*"?next"?/i.test(link)
+}
+
+function numericValue(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value
+  if (typeof value === 'string' && value.length > 0) {
+    const parsed = Number(value)
+    if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed
+  }
+  return undefined
+}
+
 
 function offlineResult(
   input: CatalogRefreshInput,

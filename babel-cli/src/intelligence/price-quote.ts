@@ -303,7 +303,10 @@ export function quotePerTokenPrice(quote: PriceQuote): PerTokenPrice {
  *
  * Input cache-hit/cache-miss arithmetic mirrors provider usage: a missing split
  * falls back to the base input rate, and any unknown rate yields `null` for that
- * component rather than a guessed zero.
+ * component rather than a guessed zero. A partially observed cache split (only
+ * one side, or a side whose rate is unknown) also yields `null`: a missing token
+ * count is unknown, never zero, so pricing only the observed side would silently
+ * understate the input cost.
  */
 export function computeQuoteCostUsd(
   quote: PriceQuote,
@@ -319,10 +322,19 @@ export function computeQuoteCostUsd(
   if (cacheHitTokens !== null || cacheMissTokens !== null) {
     const hitRate = perToken.cacheRead ?? perToken.input
     const missRate = perToken.cacheWrite ?? perToken.input
-    if (hitRate !== null && missRate !== null) {
-      const hitTokens = cacheHitTokens ?? 0
-      const missTokens =
-        cacheMissTokens ?? (promptTokens !== null ? Math.max(promptTokens - hitTokens, 0) : 0)
+    // Derive the unobserved side from the prompt total when it is known; a
+    // missing side with no derivable total stays unknown, never zero.
+    const hitTokens =
+      cacheHitTokens ??
+      (promptTokens !== null && cacheMissTokens !== null
+        ? Math.max(promptTokens - cacheMissTokens, 0)
+        : null)
+    const missTokens =
+      cacheMissTokens ??
+      (promptTokens !== null && cacheHitTokens !== null
+        ? Math.max(promptTokens - cacheHitTokens, 0)
+        : null)
+    if (hitRate !== null && missRate !== null && hitTokens !== null && missTokens !== null) {
       inputCostUsd = hitTokens * hitRate + missTokens * missRate
     }
   } else if (promptTokens !== null && perToken.input !== null) {
@@ -333,10 +345,15 @@ export function computeQuoteCostUsd(
     completionTokens !== null && perToken.output !== null
       ? completionTokens * perToken.output
       : null
+  // When a cache split was observed, the input cost is a required part of the
+  // total. If it could not be priced, the total is unknown -- reporting the
+  // output half alone would be a misleadingly exact-looking number.
   const estimatedCostUsd =
-    inputCostUsd !== null || outputCostUsd !== null
-      ? (inputCostUsd ?? 0) + (outputCostUsd ?? 0)
-      : null
+    (cacheHitTokens !== null || cacheMissTokens !== null) && inputCostUsd === null
+      ? null
+      : inputCostUsd !== null || outputCostUsd !== null
+        ? (inputCostUsd ?? 0) + (outputCostUsd ?? 0)
+        : null
   return { inputCostUsd, outputCostUsd, estimatedCostUsd }
 }
 

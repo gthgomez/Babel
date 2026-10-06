@@ -137,17 +137,29 @@ function buildSourceResult(
  * Compose normalized observations with an optional previous snapshot.
  *
  * A successful-complete batch is authoritative for the models it lists: absent
- * rows may mean removal. A partial, unavailable, unauthorized or failed batch
- * is never authoritative, so previous facts are retained and absence is not
- * treated as retirement. Previous facts for the same identity are superseded by
- * the incoming batch.
+ * rows may mean removal. Authoritative removal is scoped to the batch's own
+ * source+scope: when the previous snapshot also holds facts owned by another
+ * source, a complete read of this source cannot speak for those models, so they
+ * are retained rather than retired. A partial, unavailable, unauthorized or
+ * failed batch is never authoritative, so previous facts are retained and
+ * absence is not treated as retirement. Previous facts for the same identity are
+ * superseded by the incoming batch.
  */
 export function composeCatalogSnapshot(
   previous: CatalogSnapshot | undefined,
   batch: CatalogObservationBatch,
 ): CatalogSnapshot {
   const sourceResults = mergeSourceResults(previous?.sourceResults ?? [], batch.sourceResults)
-  const authoritative = batch.status === 'ok' && batch.completeness === 'complete'
+  // Removal is only authoritative for models this batch's source+scope owns.
+  // A previous source result with a different source+scope means foreign facts
+  // are present that this read cannot retire.
+  const ownsPreviousSnapshot = (previous?.sourceResults ?? []).every(
+    (entry) =>
+      entry.sourceId === batch.sourceId &&
+      (entry.scopeId ?? undefined) === (batch.scopeId ?? undefined),
+  )
+  const authoritative =
+    batch.status === 'ok' && batch.completeness === 'complete' && ownsPreviousSnapshot
 
   if (authoritative) {
     return createCatalogSnapshot({

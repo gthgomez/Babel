@@ -106,7 +106,9 @@ const CAPABILITY_DEFAULTS: Partial<Record<ProviderId, Partial<ProviderCapabiliti
 
 /** Conservative defaults when a provider has no registered capability profile. */
 const GENERIC_CAPABILITY_DEFAULTS: Partial<ProviderCapabilities> = {
-  maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+  // No `maxOutputTokens`: a provider without a capability profile has an
+  // unknown output ceiling, not a supported one. Fabricating a positive value
+  // here would turn a missing fact into an asserted limit.
   supportsThinking: false,
   supportsToolChoice: true,
   supportsParallelToolCalls: true,
@@ -217,7 +219,9 @@ function resolveCapabilities(
     entry?.max_output_tokens ??
     (providerAgrees ? normalized?.maxOutputTokens : undefined) ??
     defaults.maxOutputTokens ??
-    DEFAULT_MAX_OUTPUT_TOKENS;
+    // Unknown is 0, matching the unknown contextWindow convention. Callers that
+    // need a per-turn output default must supply it from policy, not here.
+    0;
 
   const base: ProviderCapabilities = {
     contextWindow,

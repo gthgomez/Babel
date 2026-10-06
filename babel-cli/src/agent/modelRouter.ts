@@ -60,8 +60,10 @@ export interface ModelRoute {
 
 export interface ModelRouterOptions {
   /**
-   * Fallback model backend key when no model is specified.
-   * Defaults to the cheapest admitted model.
+   * Explicit default backend key when no model is specified. Honored verbatim
+   * (the named route is then admitted through the shared gate) and returned by
+   * {@link ModelRouter.getDefaultBackendKey}. When omitted, the cheapest
+   * admitted, non-expensive, credentialed route is selected.
    */
   defaultBackendKey?: string
   /** Operation required from automatically selected providers. */
@@ -104,11 +106,16 @@ export class RouteUnavailableError extends Error {
 interface MaterializedPolicy {
   routes: ConfiguredRoute[]
   costs: Map<string, number>
+  /** Backend keys whose policy entry is flagged `expensive: true`. */
+  expensive: Set<string>
   aliases: ModelAliasDeclaration[]
 }
 
 export class ModelRouter {
+  /** Route identity (routeId + connectionKey) → model route, for requested-identity fidelity. */
   private readonly routes = new Map<string, ModelRoute>()
+  /** Connection identity → shared immutable runner, reused across alias backend keys. */
+  private readonly runners = new Map<string, ProviderEngine>()
   private readonly options: ModelRouterOptions
   private readonly requiredOperation: ProviderOperation
   private readonly liveOnly: boolean
@@ -183,13 +190,23 @@ export class ModelRouter {
 
     const identity = connectionIdentityForRoute(route)
     const key = connectionKey(identity)
-    const cached = this.routes.get(key)
+    // Route identity includes the operator backend key so distinct backend keys
+    // that share one connection (e.g. `deepseek` and `deepseek-v4-pro`) each
+    // report their own requested routeId instead of collapsing to first-cached.
+    const routeKey = `${route.routeId}\u0000${key}`
+    const cached = this.routes.get(routeKey)
     if (cached) return cached
 
-    const runner = createProviderRunner({
-      provider: route.ref.provider,
-      modelId: route.ref.modelId,
-    })
+    // The transport runner is immutable and connection-scoped: alias backend
+    // keys that resolve to the same connection share one runner instance.
+    let runner = this.runners.get(key)
+    if (!runner) {
+      runner = createProviderRunner({
+        provider: route.ref.provider,
+        modelId: route.ref.modelId,
+      })
+      this.runners.set(key, runner)
+    }
     const modelRoute: ModelRoute = {
       provider: route.ref.provider,
       modelId: route.ref.modelId,
@@ -197,7 +214,7 @@ export class ModelRouter {
       connectionKey: key,
       runner,
     }
-    this.routes.set(key, modelRoute)
+    this.routes.set(routeKey, modelRoute)
     return modelRoute
   }
 
@@ -242,6 +259,7 @@ export class ModelRouter {
     const models = config.models ?? {}
     const routes: ConfiguredRoute[] = []
     const costs = new Map<string, number>()
+    const expensive = new Set<string>()
     for (const [routeId, entry] of Object.entries(models)) {
       if (!isProviderId(entry.provider)) continue
       if (this.liveOnly && entry.provider === 'deepseek') continue
@@ -260,23 +278,31 @@ export class ModelRouter {
       if (typeof entry.estimated_cost_per_1m_output === 'number') {
         costs.set(routeId, entry.estimated_cost_per_1m_output)
       }
+      if (entry.expensive === true) expensive.add(routeId)
     }
 
     const aliases: ModelAliasDeclaration[] = Object.entries(config.vendor_aliases ?? {}).map(
       ([alias, entry]) => ({ alias, target: entry.maps_to }),
     )
-    return { routes, costs, aliases }
+    return { routes, costs, expensive, aliases }
   }
 
   private resolveDefaultBackendKey(policy: MaterializedPolicy): string | null {
+    // An explicit operator default is honored verbatim; admission still runs
+    // when resolve() selects it. Expensive auto-selection stays opt-in only.
+    if (this.options.defaultBackendKey !== undefined) {
+      return this.options.defaultBackendKey
+    }
     if (this.liveOnly) {
       for (const preferred of LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS) {
         if (policy.routes.some((route) => route.routeId === preferred)) return preferred
       }
     }
 
+    // Expensive entries are never auto-selected for the default lane; they
+    // require an explicit backend key (operator opt-in).
     const ranked = policy.routes
-      .filter((route) => route.enabled)
+      .filter((route) => route.enabled && !policy.expensive.has(route.routeId))
       .map((route) => ({ route, cost: policy.costs.get(route.routeId) }))
       .sort((a, b) => (a.cost ?? Infinity) - (b.cost ?? Infinity))
 
