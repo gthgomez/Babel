@@ -124,3 +124,22 @@ describe("FileWriteMutex", () => {
     assert.strictEqual(sharedState, 2);
   });
 });
+
+test('a missing path and an empty file never share a digest', async () => {
+  const testDir = fs.mkdtempSync(path.join(process.cwd(), 'test-tx-missing-'));
+  const absent = path.join(testDir, 'absent.txt');
+  const empty = path.join(testDir, 'empty.txt');
+  fs.writeFileSync(empty, '', 'utf8');
+  const tx = await WorkspaceTransactionManager.beginBatch([absent, empty]);
+  assert.notEqual(tx.preBatchHash[absent], tx.preBatchHash[empty]);
+  try {
+    const expected = await WorkspaceTransactionManager.commitBatch(tx, {
+      expectedPostImages: { [absent]: '', [empty]: '' },
+    });
+    // Expecting content '' at the ABSENT path must not verify: absent !== empty.
+    assert.equal(expected.verified, false);
+    assert.equal(expected.status, 'conflicted');
+  } finally {
+    fs.rmSync(testDir, { recursive: true, force: true });
+  }
+});

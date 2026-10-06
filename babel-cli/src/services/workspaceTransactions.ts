@@ -54,7 +54,7 @@ export class WorkspaceTransactionManager {
           } catch (e: any) {
             if (e.code === 'ENOENT') {
               preImages[p] = null;
-              preBatchHash[p] = this.hashString('');
+              preBatchHash[p] = this.missingPathDigest();
             } else {
               throw e;
             }
@@ -102,7 +102,7 @@ export class WorkspaceTransactionManager {
           } catch (e: any) {
             if (e.code === 'ENOENT') {
               tx.postImages[p] = null;
-              tx.postBatchHash[p] = this.hashString('');
+              tx.postBatchHash[p] = this.missingPathDigest();
             } else {
               throw e;
             }
@@ -124,7 +124,7 @@ export class WorkspaceTransactionManager {
         expectedPaths.length === observedPaths.length &&
         expectedPaths.every((p) => {
           const expectedHash =
-            expected[p] === null ? this.hashString('') : this.hashString(expected[p]!);
+            expected[p] === null ? this.missingPathDigest() : this.hashString(expected[p]!);
           return tx.postBatchHash[p] === expectedHash;
         });
       tx.status = tx.verified ? 'committed' : 'conflicted';
@@ -170,7 +170,7 @@ export class WorkspaceTransactionManager {
             }
           } catch (e: any) {
             if (e.code === 'ENOENT') {
-              if (tx.preBatchHash[p] !== this.hashString('')) {
+              if (tx.preBatchHash[p] !== this.missingPathDigest()) {
                 verification = false;
               }
             } else {
@@ -189,6 +189,19 @@ export class WorkspaceTransactionManager {
 
   private static hashString(content: string): string {
     return crypto.createHash('sha256').update(content).digest('hex');
+  }
+
+  /**
+   * Digest recorded for a path that does NOT exist. Deliberately distinct
+   * from hashString(''): an absent file and an existing empty file are
+   * different workspace states, and collapsing them let a requested
+   * empty-file creation "succeed" without any file landing.
+   */
+  static missingPathDigest(): string {
+    return crypto
+      .createHash('sha256')
+      .update('babel://workspace-transactions/missing-path/v1')
+      .digest('hex');
   }
 
   private static revisionHash(hashes: Record<string, string>): string {

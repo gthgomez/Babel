@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -128,6 +128,68 @@ describe('governed write_file verifies the requested post-image', { concurrency:
     assert.equal(result.mutationReceipt?.status, 'committed');
     const ledger = loadEffectLedger(runDir);
     assert.equal(ledger.at(-1)?.status, 'completed');
+  });
+
+  test('a silent no-op that fails to create the requested EMPTY file is refused', async () => {
+    // An absent file and an empty file are different states; the digest for a
+    // missing path must never equal the digest of empty content.
+    const target = join(root, 'created-empty.txt');
+    const action: AgentAction = { type: 'write_file', path: target, content: '' };
+    const result = await executeActionWithPolicy(action, 'workspace_write', ctx('postimage-empty-1', root, runDir), {
+      executor: executorThat('silent-no-op'),
+      mutationRoot: root,
+      mode: 'chat',
+    });
+    assert.equal(result.results[0]?.exit_code, 1);
+    assert.match(result.results[0]?.stderr ?? '', /MUTATION_POSTIMAGE_NOT_CONFIRMED/);
+    assert.equal(existsSync(target), false, 'no file may pretend to have been created');
+    const ledger = loadEffectLedger(runDir);
+    assert.equal(ledger.at(-1)?.status, 'failed');
+  });
+
+  test('actual empty-file creation succeeds and a repeated empty no-op is a completed no-change', async () => {
+    const target = join(root, 'created-empty-2.txt');
+    const create: AgentAction = { type: 'write_file', path: target, content: '' };
+    const created = await executeActionWithPolicy(create, 'workspace_write', ctx('postimage-empty-2', root, runDir), {
+      executor: executorThat('write'),
+      mutationRoot: root,
+      mode: 'chat',
+    });
+    assert.equal(created.results[0]?.exit_code, 0);
+    assert.ok(existsSync(target), 'the empty file must exist after creation');
+    assert.equal(readFileSync(target, 'utf8'), '');
+
+    const repeat = await executeActionWithPolicy(create, 'workspace_write', ctx('postimage-empty-3', root, runDir), {
+      executor: executorThat('silent-no-op'),
+      mutationRoot: root,
+      mode: 'chat',
+    });
+    assert.equal(repeat.results[0]?.exit_code, 0, 'an existing empty file matching the request is a legitimate no-op');
+    assert.equal(repeat.mutationReceipt?.changedBytes, 0);
+  });
+
+  test('a wrong-target write (requested path unchanged, other path written) is refused', async () => {
+    const other = join(root, 'other.txt');
+    const misdirected: ToolExecutor = {
+      mapAction: () => [],
+      async execute(action: AgentAction) {
+        const a = action as Extract<AgentAction, { type: 'write_file' }>;
+        writeFileSync(other, a.content, 'utf8');
+        return { action, terminal: false, results: [{ exit_code: 0, stdout: 'ok', stderr: '' }] };
+      },
+    } as unknown as ToolExecutor;
+    const target = join(root, 'value.ts');
+    const result = await executeActionWithPolicy(
+      { type: 'write_file', path: target, content: REQUESTED },
+      'workspace_write',
+      ctx('postimage-wrongtarget', root, runDir),
+      { executor: misdirected, mutationRoot: root, mode: 'chat' },
+    );
+    assert.equal(result.results[0]?.exit_code, 1);
+    assert.equal(readFileSync(target, 'utf8'), ORIGINAL, 'the requested target must be untouched');
+    assert.equal(readFileSync(other, 'utf8'), REQUESTED, 'the misdirected bytes remain (unknown effect, not silently retried)');
+    const ledger = loadEffectLedger(runDir);
+    assert.equal(ledger.at(-1)?.status, 'failed');
   });
 
   test('apply_patch with exit zero but zero byte delta on every target is refused', async () => {
