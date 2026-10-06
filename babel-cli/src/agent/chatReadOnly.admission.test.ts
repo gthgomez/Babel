@@ -72,7 +72,7 @@ if (!isSyntheticProviderFixtureReady()) {
   function currentGoRunner(t: TestContext) {
     // No model inference: this source control bypasses only the unrelated native
     // budget prerequisite to exercise task admission; it is not a product cell.
-    const budget = { reserve: async () => {} } as unknown as OpenCodeGoBudget
+    const budget = { reserve: async () => {}, assertCurrentAuthority: () => {} } as unknown as OpenCodeGoBudget
     const syntheticKey = 'deepseek:deepseek-v4.1-flash'
     const priorPricing = MODEL_PRICING_REGISTRY[syntheticKey]
     // Fixture accounting only: zero-cost injected responses, no Go price claim.
