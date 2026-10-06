@@ -172,24 +172,63 @@ export function detectProviderProfileDrift(
   }
 }
 
-/** A qualification is stale when either material profile hash no longer matches. */
+/**
+ * A qualification is stale when its semantic compatibility identity no longer
+ * matches the current profile.
+ *
+ * This delegates to {@link qualificationCompatibility}: a price-only refresh
+ * (`pricingRevision` changed but `compatibilityFingerprint` stable) does not
+ * invalidate a semantic qualification, while a protocol/adapter/route/model/
+ * capability/limit change does. Records that predate the versioned split have
+ * no compatibility fields and remain conservative against the full provider
+ * hash, which includes pricing. The `reason` wording is preserved for existing
+ * callers; budget owners that must also react to a price change should call
+ * {@link qualificationCompatibility} directly.
+ */
 export function qualificationStaleness(
   record: Pick<
     ModelQualificationRecord,
     'modelProfileHash' | 'providerProfileHash'
-  >,
+  > & {
+    compatibilityFingerprint?: string
+    pricingRevision?: string
+  },
   current: Pick<ProviderModelProfile, 'profileHash'> & {
     modelProfileHash: string
+    compatibilityFingerprint?: string
+    pricingRevision?: string
   },
 ): { stale: boolean; reason?: string } {
+  const compatibility = qualificationCompatibility(
+    {
+      modelProfileHash: record.modelProfileHash,
+      providerProfileHash: record.providerProfileHash,
+      ...(record.compatibilityFingerprint === undefined
+        ? {}
+        : { compatibilityFingerprint: record.compatibilityFingerprint }),
+      ...(record.pricingRevision === undefined
+        ? {}
+        : { pricingRevision: record.pricingRevision }),
+    },
+    {
+      modelProfileHash: current.modelProfileHash,
+      profileHash: current.profileHash,
+      compatibilityFingerprint: current.compatibilityFingerprint ?? '',
+      pricingRevision: current.pricingRevision ?? '',
+    },
+  )
+  // A price-only refresh does not stale a semantic qualification. The separate
+  // `pricingChanged` flag remains available from qualificationCompatibility for
+  // budget/quota owners that must react to it.
+  if (!compatibility.semanticStale) return { stale: false }
   const reasons: string[] = []
   if (record.modelProfileHash !== current.modelProfileHash)
     reasons.push('lab model profile changed')
   if (record.providerProfileHash !== current.profileHash)
     reasons.push('provider model profile changed')
-  return reasons.length > 0
-    ? { stale: true, reason: reasons.join('; ') }
-    : { stale: false }
+  const reason =
+    reasons.length > 0 ? reasons.join('; ') : compatibility.reason
+  return reason ? { stale: true, reason } : { stale: true }
 }
 
 /** Result of comparing a qualification against a current versioned profile. */

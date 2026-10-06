@@ -1,15 +1,26 @@
 import { createHash } from 'node:crypto';
-import { PROVIDER_IDS, type ProviderId } from '../runners/providerRegistry.js';
+import { isProviderId, PROVIDER_IDS, type ProviderId } from '../runners/providerRegistry.js';
 
 export const MODEL_ROUTE_RECEIPT_SCHEMA_VERSION = 1 as const;
 
 export type ModelRouteStage =
   | 'chat'
+  | 'lite'
   | 'critic'
   | 'synthesis'
   | 'compaction'
   | 'verifier'
   | 'unknown';
+
+const MODEL_ROUTE_STAGES: readonly ModelRouteStage[] = [
+  'chat',
+  'lite',
+  'critic',
+  'synthesis',
+  'compaction',
+  'verifier',
+  'unknown',
+];
 
 /**
  * Content-free proof of the route selected for one provider inference.
@@ -44,6 +55,13 @@ export interface ModelRouteReceiptV1 {
   execution_envelope_hash?: string | null;
   retry_count: number;
   substitution_or_fallback: boolean;
+  /**
+   * Optional accounting observation. `null` is unknown; it is never coerced
+   * to zero, and an absent field means the observation was not provided.
+   */
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  cost_usd?: number | null;
   timestamp: string;
   receipt_hash: string;
 }
@@ -81,6 +99,9 @@ export function buildModelRouteReceipt(input: {
   executionEnvelopeHash?: string | null;
   retryCount?: number;
   substitutionOrFallback?: boolean;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  costUsd?: number | null;
   timestamp?: string;
 }): ModelRouteReceiptV1 {
   const unsigned = unsignedReceipt({
@@ -110,12 +131,74 @@ export function buildModelRouteReceipt(input: {
     ...(input.executionEnvelopeHash === undefined ? {} : { execution_envelope_hash: input.executionEnvelopeHash }),
     retry_count: input.retryCount ?? 0,
     substitution_or_fallback: input.substitutionOrFallback ?? false,
+    ...(input.promptTokens === undefined ? {} : { prompt_tokens: input.promptTokens }),
+    ...(input.completionTokens === undefined ? {} : { completion_tokens: input.completionTokens }),
+    ...(input.costUsd === undefined ? {} : { cost_usd: input.costUsd }),
     timestamp: input.timestamp ?? new Date().toISOString(),
   });
   return {
     ...unsigned,
     receipt_hash: hashRouteReference(JSON.stringify(unsigned)),
   };
+}
+
+/**
+ * Input for an auxiliary-route receipt (Lite, critic, synthesis, ...).
+ *
+ * The exact provider and the exact model ID sent are required: an auxiliary
+ * stage may not record a receipt without a concrete route identity. Unknown
+ * observed/accounting facts stay `null`, never zero.
+ */
+export interface AuxiliaryRouteReceiptInput {
+  stage: ModelRouteStage;
+  projectRef: string;
+  taskRef: string;
+  runRef: string;
+  contractRef: string;
+  inferenceId: string;
+  requestedModelSelector: string;
+  normalizedBabelModel: string;
+  provider: ProviderId;
+  exactModelIdSent: string;
+  observedModelId?: string | null;
+  upstreamProvider?: string | null;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  costUsd?: number | null;
+  timestamp?: string;
+}
+
+/**
+ * Build the content-free receipt for one auxiliary inference.
+ *
+ * A non-registered provider is a typed refusal rather than a fabricated route:
+ * an auxiliary route identity must be receivable by a downstream reader.
+ */
+export function buildAuxiliaryRouteReceipt(input: AuxiliaryRouteReceiptInput): ModelRouteReceiptV1 {
+  if (!isProviderId(input.provider)) {
+    throw new Error(`Auxiliary route receipt requires a registered provider, received "${String(input.provider)}".`);
+  }
+  if (typeof input.exactModelIdSent !== 'string' || input.exactModelIdSent.length === 0) {
+    throw new Error('Auxiliary route receipt requires the exact model ID that was sent.');
+  }
+  return buildModelRouteReceipt({
+    projectRef: input.projectRef,
+    taskRef: input.taskRef,
+    runRef: input.runRef,
+    contractRef: input.contractRef,
+    inferenceId: input.inferenceId,
+    executionStage: input.stage,
+    requestedModelSelector: input.requestedModelSelector,
+    normalizedBabelModel: input.normalizedBabelModel,
+    provider: input.provider,
+    exactModelIdSent: input.exactModelIdSent,
+    observedModelId: input.observedModelId ?? null,
+    upstreamProvider: input.upstreamProvider ?? null,
+    ...(input.promptTokens === undefined ? {} : { promptTokens: input.promptTokens }),
+    ...(input.completionTokens === undefined ? {} : { completionTokens: input.completionTokens }),
+    ...(input.costUsd === undefined ? {} : { costUsd: input.costUsd }),
+    ...(input.timestamp === undefined ? {} : { timestamp: input.timestamp }),
+  });
 }
 
 export function validateModelRouteReceipt(value: unknown): asserts value is ModelRouteReceiptV1 {
@@ -139,7 +222,7 @@ export function validateModelRouteReceipt(value: unknown): asserts value is Mode
     receipt.schema_version !== MODEL_ROUTE_RECEIPT_SCHEMA_VERSION ||
     receipt.kind !== 'babel_model_route_receipt' ||
     requiredStrings.some((field) => typeof receipt[field] !== 'string' || receipt[field]!.length === 0) ||
-    !['chat', 'critic', 'synthesis', 'compaction', 'verifier', 'unknown'].includes(receipt.execution_stage as string) ||
+    !MODEL_ROUTE_STAGES.includes(receipt.execution_stage as ModelRouteStage) ||
     !(PROVIDER_IDS as readonly string[]).includes(receipt.provider as string) ||
     (receipt.observed_model_id !== null && typeof receipt.observed_model_id !== 'string') ||
     (receipt.upstream_provider !== null && typeof receipt.upstream_provider !== 'string') ||
@@ -153,6 +236,9 @@ export function validateModelRouteReceipt(value: unknown): asserts value is Mode
     (receipt.router_attempt_count !== undefined && receipt.router_attempt_count !== null && (!Number.isInteger(receipt.router_attempt_count) || receipt.router_attempt_count < 0)) ||
     (receipt.router_metadata_hash !== undefined && receipt.router_metadata_hash !== null && typeof receipt.router_metadata_hash !== 'string') ||
     (receipt.execution_envelope_hash !== undefined && receipt.execution_envelope_hash !== null && typeof receipt.execution_envelope_hash !== 'string') ||
+    (receipt.prompt_tokens !== undefined && receipt.prompt_tokens !== null && (!Number.isInteger(receipt.prompt_tokens) || receipt.prompt_tokens < 0)) ||
+    (receipt.completion_tokens !== undefined && receipt.completion_tokens !== null && (!Number.isInteger(receipt.completion_tokens) || receipt.completion_tokens < 0)) ||
+    (receipt.cost_usd !== undefined && receipt.cost_usd !== null && (typeof receipt.cost_usd !== 'number' || !Number.isFinite(receipt.cost_usd) || receipt.cost_usd < 0)) ||
     !Number.isInteger(receipt.retry_count) || receipt.retry_count! < 0 ||
     typeof receipt.substitution_or_fallback !== 'boolean'
   ) {

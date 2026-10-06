@@ -525,6 +525,19 @@ export interface ModelQualificationRecord {
   createdAt: string;
   modelProfileHash: string;
   providerProfileHash: string;
+  /**
+   * Versioned semantic compatibility identity captured at qualification time.
+   *
+   * When present together with {@link pricingRevision}, a price-only profile
+   * refresh does not stale this record; a semantic (protocol/route/adapter/
+   * revision/capability/limit) change still does. Legacy records that omit
+   * these fields stay conservative against the full {@link providerProfileHash}
+   * (which includes pricing) until they are requalified.
+   */
+  compatibilityFingerprint?: string;
+  compatibilityFingerprintVersion?: number;
+  pricingRevision?: string;
+  pricingRevisionVersion?: number;
   protocol: ProtocolId;
   upstream?: string;
   harnessVersion: string;

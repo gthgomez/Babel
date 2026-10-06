@@ -10,6 +10,7 @@ import {
   type ChatFallbackInput,
   type ChatProviderRunner,
 } from './chatEngineProviderRuntime.js'
+import type { ModelRouteReceiptV1 } from './modelRouteReceipt.js'
 import type { ChatUsageScope } from './chatEngineProviderAccounting.js'
 
 function fallbackInput(
@@ -125,4 +126,47 @@ test('settles a late synthesis against its captured owner after a successor arri
   assert.equal(await answer, 'answer for original owner')
   assert.deepEqual(settled, ['owner-1'])
   assert.equal(scope.isOwnerCurrent?.(), false)
+})
+
+test('synthesis auxiliary receipts exact route identity and leaves unknown usage unknown', async () => {
+  const receipts: ModelRouteReceiptV1[] = []
+  const runner = {
+    executeRaw: async () => 'answer',
+    getLastInvocationMetadata: () => ({
+      provider: 'openrouter',
+      provider_model_id: 'z-ai/glm-5.3-flash',
+      requested_model_id: 'glm-5.3-flash',
+      normalized_model_id: 'z-ai/glm-5.3-flash',
+      sent_model_id: 'z-ai/glm-5.3-flash',
+      observed_model_id: null,
+      upstream_provider: null,
+      latency_ms: 1,
+      prompt_tokens: null,
+      completion_tokens: null,
+      total_tokens: null,
+      estimated_cost_usd: null,
+    }),
+  } as unknown as ChatProviderRunner
+  const scope: ChatUsageScope = {
+    taskOwnerId: 'owner-1',
+    accountingEpoch: 'epoch-1',
+    turnId: 'turn-1',
+    chargeId: 'charge-1',
+  }
+  const answer = await synthesizeChatAnswer(runner, 'question', {}, scope, {
+    retryCallbacks: () => ({}),
+    getAbortController: () => new AbortController(),
+    settleUsage: () => {},
+    captureRouteReceipt: (receipt) => receipts.push(receipt),
+  })
+  assert.equal(answer, 'answer')
+  assert.equal(receipts.length, 1)
+  const receipt = receipts[0]!
+  assert.equal(receipt.execution_stage, 'synthesis')
+  assert.equal(receipt.provider, 'openrouter')
+  assert.equal(receipt.exact_model_id_sent, 'z-ai/glm-5.3-flash')
+  assert.equal(receipt.observed_model_id, null)
+  assert.equal(receipt.prompt_tokens, null)
+  assert.equal(receipt.completion_tokens, null)
+  assert.equal(receipt.cost_usd, null)
 })

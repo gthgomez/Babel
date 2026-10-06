@@ -2,6 +2,11 @@ import type { LiteProviderConfig, LiteProviderId } from './config.js';
 import { LiteError } from './config.js';
 import { redactSecrets } from '../utils/redaction.js';
 import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
+import {
+  buildAuxiliaryRouteReceipt,
+  hashRouteReference,
+  type ModelRouteReceiptV1,
+} from '../agent/modelRouteReceipt.js';
 
 export interface LiteProviderRequest {
   mode: 'ask' | 'patch';
@@ -12,6 +17,20 @@ export interface LiteProviderRequest {
   temperature: number;
   timeoutMs: number;
   onChunk?: (chunk: string) => void;
+  /**
+   * Optional content-free receipt references. When omitted, hashes derived from
+   * the provider/model and mode are used; prompt content is never stored.
+   */
+  receipt?: LiteReceiptRefs;
+}
+
+/** Content-free references attached to a Lite route receipt. */
+export interface LiteReceiptRefs {
+  projectRef?: string;
+  taskRef?: string;
+  runRef?: string;
+  contractRef?: string;
+  inferenceId?: string;
 }
 
 export interface LiteProviderUsage {
@@ -26,6 +45,12 @@ export interface LiteProviderResponse {
   content: string;
   latencyMs: number;
   usage: LiteProviderUsage | null;
+  /**
+   * Exact provider+model route receipt for this inference. `null` only for the
+   * in-process mock provider, which performs no provider inference and has no
+   * route identity. Unknown usage/cost is `null`, never zero.
+   */
+  routeReceipt: ModelRouteReceiptV1 | null;
   rawResponse: unknown;
 }
 
@@ -77,6 +102,38 @@ function usageFromResponse(response: ChatResponse): LiteProviderUsage | null {
   };
 }
 
+function buildLiteRouteReceipt(input: {
+  config: LiteProviderConfig;
+  modelId: string;
+  mode: LiteProviderRequest['mode'];
+  usage: LiteProviderUsage | null;
+  refs?: LiteReceiptRefs;
+}): ModelRouteReceiptV1 {
+  const refs = input.refs ?? {};
+  if (input.config.id === 'mock') {
+    throw new Error('The mock Lite provider has no registered route identity to receipt.');
+  }
+  return buildAuxiliaryRouteReceipt({
+    stage: 'lite',
+    projectRef: refs.projectRef ?? hashRouteReference('babel-lite'),
+    taskRef: refs.taskRef ?? hashRouteReference(input.mode),
+    runRef: refs.runRef ?? hashRouteReference(`${input.config.id}:${input.modelId}`),
+    contractRef: refs.contractRef ?? 'lite',
+    inferenceId:
+      refs.inferenceId ?? `${input.config.id}:${input.modelId}:${Date.now().toString(36)}`,
+    requestedModelSelector: input.modelId,
+    normalizedBabelModel: input.modelId,
+    provider: input.config.id,
+    exactModelIdSent: input.modelId,
+    observedModelId: null,
+    upstreamProvider: null,
+    promptTokens: input.usage?.promptTokens ?? null,
+    completionTokens: input.usage?.completionTokens ?? null,
+    // Lite does not own price resolution; an unpriced cost is unknown, not zero.
+    costUsd: null,
+  });
+}
+
 function parseChatResponse(value: unknown): ChatResponse {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return {};
@@ -120,6 +177,7 @@ class MockLiteProvider implements LiteProvider {
         completionTokens: null,
         totalTokens: null,
       },
+      routeReceipt: null,
       rawResponse: {
         mode: input.mode,
         mock: true,
@@ -286,6 +344,13 @@ class OpenAiCompatibleLiteProvider implements LiteProvider {
         content: text,
         latencyMs: Date.now() - startedAt,
         usage: null,
+        routeReceipt: buildLiteRouteReceipt({
+          config: this.config,
+          modelId: input.model ?? this.config.defaultModel,
+          mode: input.mode,
+          usage: null,
+          ...(input.receipt ? { refs: input.receipt } : {}),
+        }),
         rawResponse: null,
       };
     }
@@ -311,12 +376,20 @@ class OpenAiCompatibleLiteProvider implements LiteProvider {
       );
     }
 
+    const usage = usageFromResponse(chat);
     return {
       providerId: this.config.id,
       providerModelId: input.model ?? this.config.defaultModel,
       content,
       latencyMs: Date.now() - startedAt,
-      usage: usageFromResponse(chat),
+      usage,
+      routeReceipt: buildLiteRouteReceipt({
+        config: this.config,
+        modelId: input.model ?? this.config.defaultModel,
+        mode: input.mode,
+        usage,
+        ...(input.receipt ? { refs: input.receipt } : {}),
+      }),
       rawResponse: raw,
     };
   }

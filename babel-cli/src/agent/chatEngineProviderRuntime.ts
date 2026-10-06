@@ -28,6 +28,13 @@ import {
   buildProviderRetryCallbacks,
   type ChatUsageScope,
 } from './chatEngineProviderAccounting.js'
+import { isProviderId } from '../runners/providerRegistry.js'
+import {
+  buildAuxiliaryRouteReceipt,
+  hashRouteReference,
+  type ModelRouteReceiptV1,
+  type ModelRouteStage,
+} from './modelRouteReceipt.js'
 import { filterReadOnlyChatTools, isReadOnlyChat } from './chatReadOnly.js'
 import {
   nativeTurnFromStream,
@@ -53,8 +60,57 @@ export type ChatProviderUsageEffects = {
   retryCallbacks: (context: ChatProviderRetryContext) => RunnerCallbacks
   settleUsage: (runner: ChatProviderRunner, scope: ChatUsageScope) => void
   getAbortController: () => AbortController
+  /**
+   * Optional request-local route-receipt capture for auxiliary inference.
+   * Receives a content-free receipt whose exact provider+model identity and
+   * accounting are captured at this dispatch; unknown usage/cost stays `null`.
+   */
+  captureRouteReceipt?: (receipt: ModelRouteReceiptV1) => void
 }
 const TURN_TIMEOUT_MS = 120_000
+
+/**
+ * Capture the exact provider+model identity of an auxiliary inference attempt.
+ *
+ * The identity is read from the runner's request-local invocation metadata; a
+ * missing provider or exact model ID yields no receipt rather than a fabricated
+ * route. Accounting fields are passed through as `null` when unknown.
+ */
+export function captureAuxiliaryRouteReceipt(
+  runner: ChatProviderRunner,
+  stage: ModelRouteStage,
+  usageScope: ChatUsageScope,
+  effects: ChatProviderUsageEffects,
+): ModelRouteReceiptV1 | null {
+  const capture = effects.captureRouteReceipt
+  if (!capture) return null
+  const metadata = runner.getLastInvocationMetadata?.() ?? usageScope.usageMetadata ?? null
+  const provider = metadata?.provider ?? null
+  if (!provider || !isProviderId(provider)) return null
+  const exactModelIdSent =
+    metadata?.sent_model_id ?? metadata?.provider_model_id ?? usageScope.modelId ?? null
+  if (!exactModelIdSent) return null
+  const receipt = buildAuxiliaryRouteReceipt({
+    stage,
+    projectRef: hashRouteReference(usageScope.projectRoot ?? 'babel-chat'),
+    taskRef: hashRouteReference(usageScope.taskOwnerId ?? 'unknown-task'),
+    runRef: hashRouteReference(usageScope.runDir ?? 'unknown-run'),
+    contractRef: stage,
+    inferenceId:
+      usageScope.chargeId ?? usageScope.requestId ?? `${provider}:${exactModelIdSent}`,
+    requestedModelSelector: metadata?.requested_model_id ?? exactModelIdSent,
+    normalizedBabelModel: metadata?.normalized_model_id ?? metadata?.provider_model_id ?? exactModelIdSent,
+    provider,
+    exactModelIdSent,
+    observedModelId: metadata?.observed_model_id ?? null,
+    upstreamProvider: metadata?.upstream_provider ?? null,
+    promptTokens: metadata?.prompt_tokens ?? null,
+    completionTokens: metadata?.completion_tokens ?? null,
+    costUsd: metadata?.estimated_cost_usd ?? null,
+  })
+  capture(receipt)
+  return receipt
+}
 
 /** Resolve the configured deliberation runner while preserving provider fallback diagnostics. */
 export function resolveChatDeliberationRunner(
@@ -336,6 +392,7 @@ export async function synthesizeChatAnswer(
     effects.getAbortController,
   )
   effects.settleUsage(runner, usageScope)
+  captureAuxiliaryRouteReceipt(runner, 'synthesis', usageScope, effects)
   return answer
 }
 

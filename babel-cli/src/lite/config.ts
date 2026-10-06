@@ -2,6 +2,12 @@ import {
   isSupportedDeepSeekModel,
   supportedDeepSeekModelsText,
 } from '../services/deepSeekPricing.js';
+import { readFileSync } from 'node:fs';
+
+import { resolveRuntimeConfigPath } from '../config/runtimePaths.js';
+import { modelRefKey, type ModelRef } from '../intelligence/model-ref.js';
+import type { CatalogSnapshot, ProviderModelProfile } from '../intelligence/types.js';
+import { isProviderId, type ProviderId } from '../runners/providerRegistry.js';
 
 export const LITE_PROVIDER_IDS = ['auto', 'deepseek', 'deepinfra', 'ollama', 'mock'] as const;
 export type LiteProviderId = (typeof LITE_PROVIDER_IDS)[number];
@@ -299,4 +305,149 @@ export function getLiteProviderStatuses(config: LiteRuntimeConfig): LiteProvider
       configured: provider.configured,
     };
   });
+}
+
+// ─── Exact route identity (parity with the chat/provider-qualified discipline) ─
+
+/**
+ * Resolve a Babel Lite provider and model into the same exact-case, provider-
+ * qualified {@link ModelRef} identity the chat path uses.
+ *
+ * A provider's registered route identity is required: the in-process `mock`
+ * provider performs no provider inference and has no route identity, so it is a
+ * typed refusal rather than a fabricated `mock` route. The provider-defined model
+ * case is preserved exactly; only surrounding whitespace is stripped.
+ */
+export function resolveLiteRouteIdentity(
+  providerId: ConcreteLiteProviderId,
+  model: string,
+): ModelRef {
+  if (!isProviderId(providerId)) {
+    throw new LiteError(
+      'PROVIDER_UNKNOWN',
+      `Babel Lite provider "${providerId}" has no registered provider route identity.`,
+      { providerId },
+    );
+  }
+  const modelId = model.trim();
+  if (modelId.length === 0) {
+    throw new LiteError(
+      'PROVIDER_UNKNOWN',
+      `Babel Lite provider "${providerId}" requires a non-empty model id.`,
+      { providerId },
+    );
+  }
+  if (providerId === 'deepseek') {
+    assertLiteProviderModel(providerId, modelId);
+  }
+  return { provider: providerId, modelId };
+}
+
+/** Render a Lite route identity in the canonical `provider:model_id` form. */
+export function formatLiteProviderQualifiedIdentity(ref: ModelRef): string {
+  return `${ref.provider}:${ref.modelId}`;
+}
+
+// ─── Offline catalog snapshot reader (no network on the start path) ───────────
+
+export interface LiteCatalogLoadOptions {
+  /** Explicit snapshot path; defaults to the packaged generated snapshot. */
+  path?: string;
+}
+
+/**
+ * Read the generated immutable catalog snapshot from disk.
+ *
+ * This is a local, synchronous file read and never touches the network: startup
+ * discovery uses the committed snapshot with no provider refresh. A malformed or
+ * missing snapshot is a typed failure, never a silently empty catalog.
+ */
+export function loadLiteCatalogSnapshot(
+  options: LiteCatalogLoadOptions = {},
+): CatalogSnapshot {
+  const path = options.path ?? resolveRuntimeConfigPath('model-catalog.generated.json');
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf-8');
+  } catch (error: unknown) {
+    throw new LiteError(
+      'REPO_NOT_FOUND',
+      `Babel Lite catalog snapshot is not readable at ${path}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error: unknown) {
+    throw new LiteError(
+      'REPO_NOT_FOUND',
+      `Babel Lite catalog snapshot at ${path} is not valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  return decodeLiteCatalogSnapshot(parsed, path);
+}
+
+function decodeLiteCatalogSnapshot(value: unknown, path: string): CatalogSnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new LiteError('REPO_NOT_FOUND', `Babel Lite catalog snapshot at ${path} is not an object.`);
+  }
+  const record = value as Partial<CatalogSnapshot>;
+  if (record.schemaVersion !== 1) {
+    throw new LiteError(
+      'REPO_NOT_FOUND',
+      `Babel Lite catalog snapshot at ${path} has unsupported schemaVersion ${String(record.schemaVersion)}.`,
+    );
+  }
+  if (typeof record.revision !== 'string' || record.revision.length === 0) {
+    throw new LiteError('REPO_NOT_FOUND', `Babel Lite catalog snapshot at ${path} has no revision.`);
+  }
+  if (typeof record.observedAt !== 'string' || record.observedAt.length === 0) {
+    throw new LiteError('REPO_NOT_FOUND', `Babel Lite catalog snapshot at ${path} has no observedAt.`);
+  }
+  if (
+    !Array.isArray(record.labModels) ||
+    !Array.isArray(record.providerModels) ||
+    !Array.isArray(record.sourceResults)
+  ) {
+    throw new LiteError(
+      'REPO_NOT_FOUND',
+      `Babel Lite catalog snapshot at ${path} is missing labModels/providerModels/sourceResults.`,
+    );
+  }
+  return record as CatalogSnapshot;
+}
+
+/** One discoverable model from the offline catalog snapshot. */
+export interface LiteCatalogModel {
+  ref: ModelRef;
+  canonicalModelId: string;
+}
+
+/**
+ * Project provider-qualified model identities from the offline snapshot.
+ *
+ * The result is deduplicated by exact provider+model identity and carries no
+ * routing/price authority: it is a discovery read only.
+ */
+export function discoverLiteCatalogModels(
+  options: LiteCatalogLoadOptions = {},
+): LiteCatalogModel[] {
+  const snapshot = loadLiteCatalogSnapshot(options);
+  const seen = new Set<string>();
+  const models: LiteCatalogModel[] = [];
+  for (const profile of snapshot.providerModels) {
+    const provider = (profile as ProviderModelProfile).provider;
+    const modelId = (profile as ProviderModelProfile).providerModelId;
+    if (!isProviderId(provider) || typeof modelId !== 'string' || modelId.length === 0) continue;
+    const ref: ModelRef = { provider, modelId };
+    const key = modelRefKey(ref);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    models.push({ ref, canonicalModelId: profile.canonicalModelId });
+  }
+  return models;
 }

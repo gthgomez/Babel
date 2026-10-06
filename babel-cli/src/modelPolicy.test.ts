@@ -17,8 +17,17 @@ import {
   assertLiveModelId,
   buildOpenRouterDeepSeekLiveEnv,
   getNormalizedModelCapabilities,
+  resolveOpenRouterDeepSeekBackendKey,
+  resolveOpenRouterDeepSeekModelId,
+  LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS,
+  LIVE_OPENROUTER_MODEL_ID,
   type ValidatedModelPolicy,
 } from './modelPolicy.js';
+import {
+  isHistoricalBenchmarkModel,
+  modelForBenchmarkProfile,
+  resolveHistoricalBenchmarkModel,
+} from './claude-babel-astra-lab/models.js';
 
 function createModelPolicyRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'babel-model-policy-'));
@@ -719,4 +728,36 @@ test('v2_config_route_parity', () => {
       );
     });
   });
+});
+
+test('historical_benchmark_identity_preserved', () => {
+  // Historical DeepSeek selectors remain explicit migration aliases to exact
+  // OpenRouter handles; they are never silently retargeted to a new model.
+  assert.equal(
+    resolveOpenRouterDeepSeekBackendKey('deepseek-v4-pro'),
+    'deepseek-v4-pro-openrouter',
+  );
+  assert.equal(
+    resolveOpenRouterDeepSeekBackendKey('deepseek/deepseek-v4-flash-0731'),
+    'deepseek-v4-flash-openrouter',
+  );
+  assert.equal(
+    resolveOpenRouterDeepSeekModelId('deepseek-v4-flash'),
+    LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0],
+  );
+  assert.equal(
+    resolveOpenRouterDeepSeekModelId('deepseek-v4-pro'),
+    LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1],
+  );
+  assert.equal(LIVE_OPENROUTER_MODEL_ID, 'z-ai/glm-5.3-flash');
+
+  // Historical benchmark labels map only through an explicit pinned fixture.
+  assert.equal(resolveHistoricalBenchmarkModel('claude-3-opus'), 'deepseek-v4-flash');
+  assert.equal(resolveHistoricalBenchmarkModel('claude-3-5-sonnet'), 'longcat-2.0');
+  assert.equal(resolveHistoricalBenchmarkModel('some-unknown-model'), null);
+  assert.equal(isHistoricalBenchmarkModel('claude-3-5-haiku'), true);
+  assert.equal(isHistoricalBenchmarkModel('deepseek-v4-flash'), false);
+
+  // The pinned benchmark profile still resolves to its exact OpenCode Go model.
+  assert.equal(modelForBenchmarkProfile('benchmark-deepseek'), 'deepseek-v4-flash');
 });
