@@ -35,11 +35,13 @@ import {
 
 import {
   executeTool,
+  refreshDryRunState,
   runWithProjectRoot,
   type ToolCallRequest,
   type ToolContext,
   type ToolResult,
 } from '../localTools.js';
+import { resolveExecutorDryRun } from '../config/dryRun.js';
 import { isPathInside } from '../services/targetResolver.js';
 import type { AgentAction } from './actions.js';
 import { modelToolNameToExecutor } from './canonicalToolMapping.js';
@@ -1160,6 +1162,23 @@ export async function executeActionWithPolicy(
     }
     const isolateLocal =
       mapped !== null && CAPABILITY_KINDS[mapped.capability] === 'local';
+    if (effectClass === 'reconcilable_mutation') {
+      // A mutation that has passed every governed gate (policy, capability,
+      // lease, scope) is a live opt-in for this process: the DEFAULT dry-run
+      // must never silently swallow it with an exit-zero report (the G01
+      // write-drop defect — fresh environments default to dry-run, so real
+      // edits vanished while the tool reported success). An operator's
+      // explicit dry-run choice (persisted flags, BABEL_DRY_RUN, or a shadow
+      // capture run) is always respected.
+      const dryRun = resolveExecutorDryRun();
+      if (
+        dryRun.source === 'default' &&
+        process.env['BABEL_SHADOW_ROOT'] === undefined
+      ) {
+        process.env['BABEL_LIVE'] = 'true';
+        refreshDryRunState();
+      }
+    }
     const executionContext: ToolContext = {
       ...context,
       sessionId: context.sessionId ?? context.runId,
