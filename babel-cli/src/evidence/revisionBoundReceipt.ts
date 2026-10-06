@@ -150,16 +150,38 @@ function readGitHead(projectRoot: string): string | null {
   }
 }
 
+/**
+ * Hash the repository's tracked index state PLUS the live working-tree delta
+ * reported by Git. `ls-files -s` alone reflects the index and cannot see
+ * unstaged modifications or untracked files, so a receipt bound only to it
+ * stays "current" across exactly the edits it must detect. The status output
+ * (names + worktree/index delta states) is bounded evidence: it proves the
+ * *set* of changed/untracked paths, not the bytes of untracked files. An edit
+ * to an unstaged tracked file changes both its blob state and the status
+ * output, so repository-scope revisions diverge; fully untracked byte edits
+ * are outside what this bounded capture can prove (explicit limitation).
+ */
 function readGitTree(projectRoot: string): string | null {
   try {
-    const tree = execFileSync("git", ["ls-files", "-s", "--", "."], {
+    const index = execFileSync("git", ["ls-files", "-s", "--", "."], {
       cwd: projectRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 10_000,
       windowsHide: true,
     });
-    return hashFileContent(tree);
+    const status = execFileSync(
+      "git",
+      ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10_000,
+        windowsHide: true,
+      },
+    );
+    return hashFileContent(`${index}\0${status}`);
   } catch {
     return null;
   }
@@ -235,7 +257,15 @@ function computeRevision(
     const treeHash = readGitTree(projectRoot);
     if (!treeHash && gitBinding === "required")
       throw new Error("Required Git tree cannot be established.");
-    fileHashes["<repository>"] = treeHash ?? hashFileContent(projectRoot);
+    // Without Git the repository's contents are UNVERIFIED: the legacy
+    // fallback hashed the directory PATH string, which is constant across
+    // content changes and could therefore "prove" an unchanged tree that had
+    // in fact moved. Keep a revision for optional-binding callers, but make
+    // its provenance explicit in the digest so it can never be confused with
+    // content-derived evidence; downstream consumers must treat a repository
+    // scope without a Git hash as an unknown state, not a fresh capture.
+    fileHashes["<repository>"] =
+      treeHash ?? hashFileContent(`unverified-contents:${projectRoot}`);
   }
   return {
     gitCommitHash,

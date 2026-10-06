@@ -853,7 +853,14 @@ export interface ChatEngineActionExecutorHost {
   }[]
   verifierReceiptCache: Map<
     string,
-    { receipt: BoundChatVerifierReceipt; writeCountAtCache: number }
+    {
+      receipt: BoundChatVerifierReceipt
+      writeCountAtCache: number
+      /** Physical working directory the cached command ran in (set by capture). */
+      cwd?: string
+      /** Fingerprint of the execution environment at capture time (set by capture). */
+      envKey?: string
+    }
   >
   workingState: WorkingState
   writeCount: number

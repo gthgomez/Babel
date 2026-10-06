@@ -1,10 +1,12 @@
 /**
  * Verifier preparation and required-command resolution helper for ChatEngine.
  */
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import {
   bindChatVerifierReceipt,
+  evaluateChatVerifierReceiptCurrencySync,
   toExecutorVerifierReceipt,
   type BoundChatVerifierReceipt,
 } from '../evidence/chatRevisionBinding.js';
@@ -129,6 +131,35 @@ export function restorePersistedVerifierEvidence(
   return latest;
 }
 
+/**
+ * Caveats that keep a green exit from reading as test evidence it does not
+ * carry. Uses only structured runner counts already on the receipt; counts
+ * that are absent stay unknown (no output parsing, no speculation).
+ */
+export function verifierEvidenceCaveats(receipt: {
+  exit_code: number;
+  scope?: BoundChatVerifierReceipt['scope'];
+  tests_total?: number;
+  tests_skipped?: number;
+}): string[] {
+  const caveats: string[] = [];
+  if (receipt.exit_code === 0 && receipt.tests_total === 0) {
+    caveats.push(
+      'verifier executed zero tests: a green exit with no tests is not test evidence',
+    );
+  }
+  if (
+    receipt.exit_code === 0 &&
+    typeof receipt.tests_total === 'number' &&
+    receipt.tests_total > 0 &&
+    typeof receipt.tests_skipped === 'number' &&
+    receipt.tests_skipped === receipt.tests_total
+  ) {
+    caveats.push('all reported tests were skipped: no test was actually executed');
+  }
+  return caveats;
+}
+
 /** Capture, persist, and cache one authoritative verifier result. */
 export async function captureAndRecordVerifierReceipt(input: {
   projectRoot: string;
@@ -140,12 +171,21 @@ export async function captureAndRecordVerifierReceipt(input: {
   sessionEvents: SessionEventLog;
   turnId: string;
   ledger: BoundChatVerifierReceipt[];
-  cache: Map<string, { receipt: BoundChatVerifierReceipt; writeCountAtCache: number }>;
+  cache: Map<
+    string,
+    { receipt: BoundChatVerifierReceipt; writeCountAtCache: number; cwd?: string; envKey?: string }
+  >;
   writeCount: number;
   toolCallId?: string;
+  /** Composite cache slot identity; derived from command+cwd+env when omitted. */
+  cacheIdentity?: { key: string; cwd: string; envKey: string };
 }): Promise<BoundChatVerifierReceipt | null> {
   const receipt = await captureChatVerifierReceipt(input);
   if (!receipt) return null;
+  const caveats = verifierEvidenceCaveats(receipt);
+  if (caveats.length > 0 && !receipt.summary.includes(caveats[0]!)) {
+    receipt.summary = [receipt.summary, ...caveats].join('\n');
+  }
   upsertVerifierReceipt(input.ledger, receipt);
   recordVerifierAttempt(input.sessionEvents, {
     turn_id: input.turnId,
@@ -155,8 +195,80 @@ export async function captureAndRecordVerifierReceipt(input: {
     ...(input.toolCallId !== undefined ? { tool_call_id: input.toolCallId } : {}),
     receipt,
   });
-  input.cache.set(input.command, { receipt, writeCountAtCache: input.writeCount });
+  const identity =
+    input.cacheIdentity ??
+    resolveVerifierCacheIdentity({
+      projectRoot: input.projectRoot,
+      command: input.command,
+    });
+  input.cache.set(identity.key, {
+    receipt,
+    writeCountAtCache: input.writeCount,
+    cwd: identity.cwd,
+    envKey: identity.envKey,
+  });
   return receipt;
+}
+
+/** Cache entry contract for verifier-run dedup (see chatEngineContracts). */
+export interface VerifierReceiptCacheEntry {
+  receipt: BoundChatVerifierReceipt;
+  writeCountAtCache: number;
+  cwd: string;
+  envKey: string;
+}
+
+/**
+ * Identity of a verifier cache slot: the command's structural identity plus
+ * the PHYSICAL working directory and an execution-environment fingerprint.
+ * A cache keyed by the command string alone reuses a receipt captured in a
+ * different directory or environment, which is not the same verification.
+ */
+export function resolveVerifierCacheIdentity(input: {
+  projectRoot: string;
+  command: string;
+  cwd?: string;
+  envKey?: string;
+}): { key: string; cwd: string; envKey: string } {
+  const cwd = path.resolve(input.projectRoot, input.cwd ?? '.');
+  const envKey = input.envKey ?? verifierEnvironmentKey();
+  return {
+    key: `${verifierReceiptIdentityKey(input.command)}::cwd=${cwd}::env=${envKey}`,
+    cwd,
+    envKey,
+  };
+}
+
+/**
+ * Stable fingerprint of the execution environment a verifier would run in.
+ * Bounded to the variables that plausibly change verifier behavior (PATH,
+ * NODE_ENV, BABEL_* overrides); it is a reuse-narrowing heuristic, not a
+ * sandbox guarantee — unknown stays covered by the write-count and
+ * workspace-byte checks.
+ */
+export function verifierEnvironmentKey(env: NodeJS.ProcessEnv = process.env): string {
+  const relevant = Object.keys(env)
+    .filter((key) => key === 'PATH' || key === 'NODE_ENV' || key.startsWith('BABEL_'))
+    .sort()
+    .map((key) => `${key}=${env[key] ?? ''}`)
+    .join('\n');
+  return createHash('sha256').update(`${process.platform}\n${relevant}`).digest('hex');
+}
+
+/**
+ * Decide whether a cached verifier receipt may be reused INSTEAD of executing.
+ * Reuse requires the same write count AND the receipt's bound workspace
+ * revision to still match the live tree: some shell actions mark receipts
+ * stale without bumping writeCount, so the counter alone can authorize a
+ * stale rerun-skip. An unevaluable or moved revision must execute (fail
+ * closed). Same-state reuse stays legitimate.
+ */
+export function shouldReuseCachedVerifierReceipt(
+  projectRoot: string,
+  receipt: BoundChatVerifierReceipt,
+): boolean {
+  const currency = evaluateChatVerifierReceiptCurrencySync(projectRoot, receipt);
+  return currency !== null && currency.stale === false;
 }
 
 function verifierReceiptIdentityKey(command: string): string {
