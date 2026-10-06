@@ -66,13 +66,12 @@ export type IdentityInstructionTier =
   | 'repo_map';
 
 /**
- * A delivered session-identity instruction fragment (SOUL / AGENT_IDENTITY /
- * AGENTS / CLAUDE / ENGINEERING / PROJECT_CONTEXT / repo map). Recorded in the
- * instruction manifest so delivered identity files are auditable instead of
- * only compiler-selected stack entries.
+ * Optional extra fragment a caller can still attach. The chat compiler does
+ * not emit SOUL, CLAUDE, or PROJECT_CONTEXT. Project instructions are
+ * AGENTS.md and ENGINEERING.md on the compiled stack.
  */
 export interface IdentityDeliveredFragment {
-  /** Stable fragment id (`session:soul`, `session:agents`, ...). */
+  /** Stable fragment id when a caller still supplies one. */
   id: string;
   /** Resolved source path, or synthetic marker when content is synthesized. */
   source: string;

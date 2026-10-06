@@ -8,7 +8,8 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { resolveRuntimeUserStateRoot } from '../config/runtimePaths.js';
 
 export interface ChatStackEntry {
   id: string;
@@ -66,13 +67,13 @@ export interface ChatCompiledStack {
 
 export interface CompileChatStackOptions {
   projectRoot: string;
-  /** Repo root that holds AGENTS.md / CLAUDE.md when different from project. */
+  /** Repo root that holds AGENTS.md / ENGINEERING.md when different from project. */
   babelRoot?: string;
   task?: string;
   modelId?: string;
   /** Max characters of system_context. Default 24_000. */
   promptBudgetChars?: number;
-  /** Include domain/skill hints from task keywords. Default true. */
+  /** Include domain/skill hints from task keywords. Default false. */
   includeDomainSkill?: boolean;
   /** Gap-2: Pre-fetched memory context (typed memory search results).
    *  Injected as a project-memory entry before safety/provider layers. */
@@ -95,12 +96,10 @@ export function resolveStackBudgetForClass(taskClass?: string): number {
   return INTERACTIVE_STACK_BUDGET;
 }
 
-const IDENTITY_CANDIDATES = ['AGENTS.md', 'Claude.md', 'CLAUDE.md'];
-const PROJECT_CANDIDATES = [
-  'PROJECT_CONTEXT.md',
-  'babel-cli/CLAUDE.md',
-  'CLAUDE.md',
-];
+const IDENTITY_CANDIDATES = ['AGENTS.md'];
+const ENGINEERING_CANDIDATES = ['ENGINEERING.md'];
+/** User memory stays short so it cannot crowd out AGENTS.md. */
+const USER_CONTEXT_MAX_CHARS = 4_000;
 const SAFETY_SNIPPET = [
   '# Chat safety adapter',
   '- Prefer workspace-scoped tools; never escape the project root.',
@@ -163,6 +162,36 @@ function firstExisting(root: string, names: string[]): ReadContent | null {
     if (content) return content;
   }
   return null;
+}
+
+/**
+ * Project instruction file. Look at the project, then the explicit babel root,
+ * then the parent directory (so babel-cli sees the repo AGENTS.md). Do not
+ * scan sibling repositories.
+ */
+function readInstructionFile(
+  projectRoot: string,
+  babelRoot: string,
+  names: readonly string[],
+): ReadContent | null {
+  const roots = [projectRoot];
+  if (resolve(babelRoot) !== resolve(projectRoot)) roots.push(babelRoot);
+  const parent = dirname(resolve(projectRoot));
+  if (parent !== resolve(projectRoot) && !roots.some((root) => resolve(root) === parent)) {
+    roots.push(parent);
+  }
+  for (const root of roots) {
+    const found = firstExisting(root, [...names]);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** User-wide memory. Override with BABEL_USER_CONTEXT in tests. */
+export function resolveUserContextPath(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env['BABEL_USER_CONTEXT']?.trim();
+  if (override) return resolve(override);
+  return join(resolveRuntimeUserStateRoot(env), 'context.md');
 }
 
 function inferDomainSkill(task: string): { id: string; content: string } | null {
@@ -249,10 +278,8 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     sections.push({ entry: entries[entries.length - 1]!, content });
   };
 
-  // Identity
-  const identity =
-    firstExisting(babelRoot, IDENTITY_CANDIDATES) ??
-    firstExisting(projectRoot, IDENTITY_CANDIDATES);
+  // Identity: AGENTS.md only. CLAUDE.md is not an instruction source.
+  const identity = readInstructionFile(projectRoot, babelRoot, IDENTITY_CANDIDATES);
   if (identity) {
     push(
       { id: 'identity:agents', layer: 'identity', path: identity.path },
@@ -266,15 +293,21 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     );
   }
 
-  // Closest project instructions
-  const project =
-    firstExisting(projectRoot, PROJECT_CANDIDATES) ??
-    firstExisting(babelRoot, ['PROJECT_CONTEXT.md']);
-  if (project) {
+  const engineering = readInstructionFile(projectRoot, babelRoot, ENGINEERING_CANDIDATES);
+  if (engineering) {
     push(
-      { id: 'project:context', layer: 'project', path: project.path },
-      project.content,
-      project,
+      { id: 'project:engineering', layer: 'project', path: engineering.path },
+      engineering.content,
+      engineering,
+    );
+  }
+
+  const userContext = tryRead(resolveUserContextPath(), USER_CONTEXT_MAX_CHARS);
+  if (userContext) {
+    push(
+      { id: 'user:context', layer: 'project', path: userContext.path },
+      `# User context\n${userContext.content}`,
+      userContext,
     );
   }
 
@@ -286,8 +319,8 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     );
   }
 
-  // Domain / skill (task-scoped, not full deep catalog)
-  if (options.includeDomainSkill !== false && options.task) {
+  // Domain / skill only when a caller asks. Keyword inference is not the default.
+  if (options.includeDomainSkill === true && options.task) {
     const domain = inferDomainSkill(options.task);
     if (domain) {
       push(
@@ -321,16 +354,16 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     'verifier:guidance',
   ]);
   const mandatorySections = sections.filter(({ entry }) => mandatoryIds.has(entry.id));
-  // Project context is the task's decisive contract. Pack it before generic
-  // identity prose so a tight budget cannot silently evict the project rule
-  // while retaining only broad agent identity.
+  // AGENTS.md is the project contract. Pack it before ENGINEERING.md and
+  // user context so a tight budget keeps the file that says what to do.
   const optionalSections = sections
     .filter(({ entry }) => !mandatoryIds.has(entry.id))
     .sort((left, right) => {
       const priority = (id: string): number =>
-        id === 'project:context' ? 0 :
-          id === 'project:memory' ? 1 :
-            id.startsWith('identity:') ? 2 : 3;
+        id.startsWith('identity:') ? 0 :
+          id === 'project:engineering' ? 1 :
+            id === 'user:context' ? 2 :
+              id === 'project:memory' ? 3 : 4;
       return priority(left.entry.id) - priority(right.entry.id);
     });
   const mandatoryText = mandatorySections.map(({ content }) => content).join('\n\n');

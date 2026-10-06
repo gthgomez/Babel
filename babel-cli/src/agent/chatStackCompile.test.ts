@@ -156,23 +156,37 @@ describe("compileChatStack budget behavior", () => {
     assert.ok(stack.content_disposition.some((item) => item.status === "omitted" || item.status === "truncated"));
   });
 
-  it("packs decisive project context before generic identity at a tight budget", () => {
+  it("keeps AGENTS.md ahead of engineering and user context at a tight budget", () => {
     const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-priority-"));
+    const previous = process.env["BABEL_USER_CONTEXT"];
+    const contextPath = join(root, "user-context.md");
+    process.env["BABEL_USER_CONTEXT"] = contextPath;
     try {
       writeFileSync(join(root, "AGENTS.md"), "generic identity\n" + "x".repeat(8_000), "utf8");
-      writeFileSync(join(root, "PROJECT_CONTEXT.md"), "PROJECT_REQUIREMENT: preserve the public API\n", "utf8");
+      writeFileSync(join(root, "ENGINEERING.md"), "ENGINEERING_REQUIREMENT: tests stay local\n", "utf8");
+      writeFileSync(join(root, "CLAUDE.md"), "CLAUDE_SHOULD_NOT_LOAD\n", "utf8");
+      writeFileSync(join(root, "PROJECT_CONTEXT.md"), "PROJECT_CONTEXT_SHOULD_NOT_LOAD\n", "utf8");
+      writeFileSync(contextPath, "USER_CONTEXT_SHOULD_WAIT\n", "utf8");
       const stack = compileChatStack({
         projectRoot: root,
         promptBudgetChars: 2_000,
         includeDomainSkill: false,
       });
 
-      assert.match(stack.system_context, /PROJECT_REQUIREMENT: preserve the public API/);
+      assert.match(stack.system_context, /generic identity/);
+      assert.doesNotMatch(stack.system_context, /CLAUDE_SHOULD_NOT_LOAD/);
+      assert.doesNotMatch(stack.system_context, /PROJECT_CONTEXT_SHOULD_NOT_LOAD/);
       assert.equal(
-        stack.content_disposition.find((item) => item.id === "project:context")?.status,
-        "included",
+        stack.content_disposition.find((item) => item.id === "project:engineering")?.status,
+        "omitted",
+      );
+      assert.equal(
+        stack.content_disposition.find((item) => item.id === "user:context")?.status,
+        "omitted",
       );
     } finally {
+      if (previous === undefined) delete process.env["BABEL_USER_CONTEXT"];
+      else process.env["BABEL_USER_CONTEXT"] = previous;
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -311,10 +325,11 @@ describe("compileChatStack shape invariants", () => {
     assert.ok(stack.project_root.includes("test"));
   });
 
-  it("includes domain/skill hints when task matches and includeDomainSkill is default", () => {
+  it("includes domain/skill hints only when includeDomainSkill is set", () => {
     const stack = compileChatStack({
       projectRoot: "/tmp/test",
       task: "fix the React component rendering",
+      includeDomainSkill: true,
     });
 
     const domain = stack.selected_entries.find((e) => e.layer === "domain");
@@ -331,6 +346,15 @@ describe("compileChatStack shape invariants", () => {
     const domain = stack.selected_entries.find((e) => e.layer === "domain");
     assert.equal(domain, undefined);
   });
+
+  it("skips domain/skill when includeDomainSkill is omitted", () => {
+    const stack = compileChatStack({
+      projectRoot: "/tmp/test",
+      task: "fix the React component rendering",
+    });
+
+    assert.equal(stack.selected_entries.find((e) => e.layer === "domain" || e.layer === "skill"), undefined);
+  });
 });
 
 describe("compileChatStack with real project root", () => {
@@ -340,6 +364,9 @@ describe("compileChatStack with real project root", () => {
         // Bind the repository explicitly: package test runners start in babel-cli.
         const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
         const projectRoot = target === "root" ? repoRoot : join(repoRoot, "babel-cli");
+        const previousContext = process.env["BABEL_USER_CONTEXT"];
+        process.env["BABEL_USER_CONTEXT"] = join(repoRoot, "missing-user-context.md");
+        try {
         const stack = compileChatStack({
           projectRoot,
           task: "fix a bug",
@@ -350,10 +377,12 @@ describe("compileChatStack with real project root", () => {
         assert.ok(identity, "must have identity entry");
         assert.ok(identity.contentPreview, "identity should have content preview");
         const session = loadProjectSessionIdentityDispositionSync(projectRoot);
-        assert.equal(session.fragments.find((fragment) => fragment.id === "session:agents")?.source,
-          join(repoRoot, "AGENTS.md"), "session must discover the sole canonical source");
+        assert.deepEqual(session.fragments, [], "session identity must not deliver a second copy");
+        assert.equal(session.systemContext, "");
+        assert.equal(identity.id, "identity:agents");
+        assert.equal(identity.path, join(repoRoot, "AGENTS.md"),
+          "package runs use the repo AGENTS.md one directory up");
         if (target === "root") {
-          assert.equal(identity.path, join(repoRoot, "AGENTS.md"));
           assert.equal(identity.source_truncated, false, "canonical policy must fit the source cap");
           const source = readFileSync(identity.path, "utf8");
           assert.ok(source.replace(/\r?\n/g, "\r\n").length <= 12_000,
@@ -363,7 +392,7 @@ describe("compileChatStack with real project root", () => {
           projectRoot,
           nativeTools: true,
           executionFirst: true,
-          // Match chatCore: dispatch identity followed by the compiled target stack.
+          // Match chatCore: an empty session identity plus the compiled stack.
           systemContext: [session.systemContext, stack.system_context].join("\n\n"),
         });
         // Exercise the shared native request serializer without dispatching a provider.
@@ -397,6 +426,13 @@ describe("compileChatStack with real project root", () => {
         if (target === "root" && promptBudgetChars === 24_000) {
           assert.equal(stack.content_disposition.find((entry) => entry.id === identity.id)?.status,
             "included", "SWE stack must deliver the complete canonical policy");
+        }
+        const once = "AGENTS.md alone owns contributor policy";
+        assert.equal(renderedSystem!.split(once).length - 1, 1,
+          "canonical policy is delivered once");
+        } finally {
+          if (previousContext === undefined) delete process.env["BABEL_USER_CONTEXT"];
+          else process.env["BABEL_USER_CONTEXT"] = previousContext;
         }
       });
     }

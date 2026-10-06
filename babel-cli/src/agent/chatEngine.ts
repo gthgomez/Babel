@@ -75,9 +75,7 @@ import {
 } from "./chatModelPolicy.js";
 import { globalCostTracker } from "../services/costTracker.js";
 
-import { readProjectMemoryStructured } from "../services/projectMemory.js";
 import {
-  buildPlaybookPrompt,
   selectPlaybookForChatTask,
   type PlaybookDefinition,
 } from "../services/playbooks/playbookService.js";
@@ -949,28 +947,11 @@ export class ChatEngine {
     // files so tampering can be detected and flagged in real-time.
     this.initializeVerifierGuard();
 
-    // P-4.2 / Gap-2: structured memory dir with task relevance, else BABEL.md.
-    const babelMd = readProjectMemoryStructured(
-      this.options.instructionRoot ?? this.options.projectRoot,
-      this.options.task,
-    );
-    if (babelMd) {
-      this.options.systemContext =
-        babelMd +
-        (this.options.systemContext ? "\n\n" + this.options.systemContext : "");
-    }
-
-    // Task-class playbook inject for REPL/chat (benchmark path already had this).
+    // Playbook selection still drives the todo gate. Its prose is not copied
+    // into the prompt; project instructions come from AGENTS.md and ENGINEERING.md.
     const chatPlaybook = selectPlaybookForChatTask(this.options.task);
     if (chatPlaybook) {
       this.activePlaybook = chatPlaybook;
-      const pbPrompt = buildPlaybookPrompt(chatPlaybook);
-      if (pbPrompt) {
-        this.options.systemContext =
-          (this.options.systemContext
-            ? this.options.systemContext + "\n\n"
-            : "") + pbPrompt;
-      }
     }
     // Plan-then-execute hard gate when playbook/size threshold says so.
     this.requireTodoBeforeMutate = shouldRequireTodoPlan(
@@ -3054,30 +3035,8 @@ export class ChatEngine {
       preparation.task,
       this.activePlaybook,
     );
-    if (preparation.systemContext !== undefined) {
-      const projectRoot =
-        this.options.instructionRoot ?? this.options.projectRoot;
-      const babelMd = readProjectMemoryStructured(
-        projectRoot,
-        preparation.task,
-      );
-      if (babelMd) {
-        this.options.systemContext =
-          babelMd +
-          (this.options.systemContext
-            ? "\n\n" + this.options.systemContext
-            : "");
-      }
-      if (chatPlaybook) {
-        const pbPrompt = buildPlaybookPrompt(chatPlaybook);
-        if (pbPrompt) {
-          this.options.systemContext =
-            (this.options.systemContext
-              ? this.options.systemContext + "\n\n"
-              : "") + pbPrompt;
-        }
-      }
-    }
+    // systemContext is replaced by preparation above. Do not append a second
+    // memory or playbook document here.
     if (preparation.limits) {
       this.limits = preparation.limits;
       this.options.maxTurns = preparation.limits.maxTurns;
