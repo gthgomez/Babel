@@ -20,6 +20,7 @@ import type { OpenCodeGoCredentialSource } from './openCodeGoCredential.js'
 import type { OpenCodeGoBudget } from './openCodeGoBudget.js'
 import { OpenRouterApiRunner } from './openRouterApi.js'
 import {
+  isProviderId,
   providerSupportsOperation,
   type BenchmarkProviderId,
   type ProviderId,
@@ -180,11 +181,12 @@ export class ProviderEngine implements LlmRunner {
   }
 
   supports(operation: ProviderOperation): boolean {
-    if (this.provider === 'opencode-go') {
-      return ['structured', 'raw', 'raw_stream', 'native_tool_stream'].includes(operation)
-    }
-    if (this.provider === 'opencode-zen') return false
-    return providerSupportsOperation(this.provider, operation)
+    // Single source of truth: the registry's declared operations match the
+    // handlers this engine installs. Benchmark-only identities outside
+    // `ProviderId` (e.g. opencode-zen) are not constructible and support none.
+    return isProviderId(this.provider)
+      ? providerSupportsOperation(this.provider, operation)
+      : false
   }
 }
 

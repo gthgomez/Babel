@@ -14,9 +14,21 @@ export const PROVIDER_IDS = [
 
 export type ProviderId = (typeof PROVIDER_IDS)[number]
 
-/** Benchmark-only identities; intentionally excluded from production ProviderId. */
+/**
+ * Benchmark-only identities. `opencode-go` is also a member of `PROVIDER_IDS`
+ * so its adapter can be constructed and its operations enumerated, but its
+ * declared {@link ProviderSpec.purpose} is `benchmark_only`: a production lane
+ * must refuse it, and a registry entry by itself never activates a lane.
+ */
 export const BENCHMARK_PROVIDER_IDS = ['opencode-go', 'opencode-zen'] as const
 export type BenchmarkProviderId = (typeof BENCHMARK_PROVIDER_IDS)[number]
+
+/**
+ * Which execution lanes a provider may serve. Registry membership and
+ * `authorityConformance` are separate facts; this field states purpose so a
+ * production lane cannot silently recruit a benchmark-only transport.
+ */
+export type ProviderPurpose = 'production' | 'benchmark_only'
 
 export type ProviderProtocol =
   | 'openai_compatible'
@@ -50,6 +62,8 @@ export interface ProviderSpec {
   protocol: ProviderProtocol
   requiresCredential: boolean
   operations: readonly ProviderOperation[]
+  /** Execution lanes this provider may serve; registry membership never enables one. */
+  purpose: ProviderPurpose
   /** P0-E: authority-conformance certification gate for live activation. */
   authorityConformance: AuthorityConformanceStatus
 }
@@ -62,6 +76,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'openai_compatible',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    purpose: 'production',
     authorityConformance: 'certified',
   },
   deepseek: {
@@ -70,6 +85,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'deepseek',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    purpose: 'production',
     authorityConformance: 'certified',
   },
   ollama: {
@@ -78,6 +94,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'ollama',
     requiresCredential: false,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    purpose: 'production',
     authorityConformance: 'certified',
   },
   openrouter: {
@@ -86,6 +103,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'openai_compatible',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    purpose: 'production',
     authorityConformance: 'certified',
   },
   // Dormant / legacy transports — NOT authority-certified. They must pass the
@@ -96,6 +114,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'openai_compatible',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    purpose: 'production',
     authorityConformance: 'untested',
   },
   'opencode-go': {
@@ -104,7 +123,8 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'openai_compatible',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
-    // Explicit transport; credentials are resolved by the approved helper.
+    // Explicit benchmark-only transport; credentials resolved by the approved helper.
+    purpose: 'benchmark_only',
     authorityConformance: 'untested',
   },
   openai: {
@@ -113,6 +133,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'openai_compatible',
     requiresCredential: true,
     operations: ['structured'],
+    purpose: 'production',
     authorityConformance: 'untested',
   },
   anthropic: {
@@ -121,6 +142,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'anthropic',
     requiresCredential: true,
     operations: ['structured'],
+    purpose: 'production',
     authorityConformance: 'untested',
   },
   gemini: {
@@ -129,6 +151,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'gemini',
     requiresCredential: true,
     operations: ['structured'],
+    purpose: 'production',
     authorityConformance: 'untested',
   },
   groq: {
@@ -137,6 +160,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'groq',
     requiresCredential: true,
     operations: ['structured'],
+    purpose: 'production',
     authorityConformance: 'untested',
   },
 })
@@ -144,6 +168,16 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
 /** Return true when a string is a registered provider identifier. */
 export function isProviderId(value: string): value is ProviderId {
   return (PROVIDER_IDS as readonly string[]).includes(value)
+}
+
+/** Return true when a provider is declared benchmark-only (never a production lane). */
+export function isBenchmarkProviderId(value: string): value is BenchmarkProviderId {
+  return (BENCHMARK_PROVIDER_IDS as readonly string[]).includes(value)
+}
+
+/** Return true when a provider may appear in a production lane. */
+export function isProductionProviderId(value: string): value is ProviderId {
+  return isProviderId(value) && getProviderSpec(value).purpose === 'production'
 }
 
 /** Resolve immutable runtime metadata for a provider. */

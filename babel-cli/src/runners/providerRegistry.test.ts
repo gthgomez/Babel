@@ -5,7 +5,7 @@ import {
   getProviderCredentialStatus,
   resolveProviderCredential,
 } from './credentialHub.js'
-import { BENCHMARK_PROVIDER_IDS, getProviderSpec, listProviderSpecs } from './providerRegistry.js'
+import { BENCHMARK_PROVIDER_IDS, getProviderSpec, isBenchmarkProviderId, isProductionProviderId, listProviderSpecs } from './providerRegistry.js'
 
 describe('provider credential hub', () => {
   it('covers every supported provider without exposing values in status', () => {
@@ -79,5 +79,16 @@ describe('provider credential hub', () => {
 
   it('keeps benchmark provider identities separate from production ProviderId', () => {
     assert.deepEqual(BENCHMARK_PROVIDER_IDS, ['opencode-go', 'opencode-zen'])
+  })
+
+  it('models provider purpose explicitly so registry membership never enables a lane', () => {
+    assert.equal(getProviderSpec('opencode-go').purpose, 'benchmark_only')
+    assert.equal(isBenchmarkProviderId('opencode-go'), true)
+    assert.equal(isProductionProviderId('opencode-go'), false)
+    assert.equal(isProductionProviderId('deepinfra'), true)
+    // Dormant transports stay production-purpose but are not certified.
+    assert.equal(getProviderSpec('opencode').purpose, 'production')
+    assert.equal(getProviderSpec('opencode').authorityConformance, 'untested')
+    assert.equal(getProviderSpec('deepinfra').authorityConformance, 'certified')
   })
 })

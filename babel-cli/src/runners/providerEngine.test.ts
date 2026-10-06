@@ -126,6 +126,36 @@ test('ProviderEngine keeps benchmark providers distinct and exposes no Zen fallb
   )
 })
 
+test('provider_operations_match_installed_handlers', async () => {
+  const { PROVIDER_IDS, getProviderSpec } = await import('./providerRegistry.js')
+  const operations = ['structured', 'raw', 'raw_stream', 'native_tool_stream'] as const
+
+  for (const provider of PROVIDER_IDS) {
+    // Declared capabilities must match a constructible installed handler.
+    const credential = provider === 'deepseek' ? 'sk-synthetic-deepseek-key' : 'synthetic-credential'
+    const modelId = provider === 'deepseek' ? 'deepseek-v4-flash' : 'fixture-model'
+    const runner = createProviderRunner(
+      provider === 'opencode-go'
+        ? { provider, modelId: 'mimo-v2.5', credentialSource: 'explicit-test', explicitCredential: credential }
+        : { provider, modelId, explicitCredential: credential },
+    )
+    const spec = getProviderSpec(provider)
+    for (const operation of operations) {
+      assert.equal(
+        runner.supports(operation),
+        spec.operations.includes(operation),
+        `${provider} support mismatch for ${operation}`,
+      )
+    }
+  }
+
+  // A benchmark identity with no installed handler is not constructible.
+  assert.throws(
+    () => createProviderRunner({ provider: 'opencode-zen', modelId: 'x-preview-f-free', credentialSource: 'explicit-test', explicitCredential: 'synthetic' }),
+    /MODEL_UNAVAILABLE/,
+  )
+})
+
 test('ProviderEngine uses native standalone Go with shared budget and stable job session', { skip: process.platform === 'win32' ? 'POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows' : false }, async (t) => {
   const { mkdtemp, rm, readFile } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
