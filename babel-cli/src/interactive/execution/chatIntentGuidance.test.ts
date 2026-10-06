@@ -190,6 +190,7 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
       assert.equal(captures.length, 1, 'expected exactly one provider request');
       assertNoEditMandate(captures[0]!, `fresh/${probe.label}`);
       assert.doesNotMatch(systemText(captures[0]!), /## How You Work/);
+      assert.doesNotMatch(systemText(captures[0]!), /\*\*Mutate\*\*/);
       assert.equal(
         enginePlan(engine!),
         undefined,
@@ -303,6 +304,8 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
 
     assertNoEditMandate(captures[0]!, 'investigate-and-fix/default');
     assert.match(systemText(captures[0]!), /## How You Work/);
+    assert.match(systemText(captures[0]!), /\*\*Mutate\*\*/);
+    assert.match(systemText(captures[0]!), /\*\*Verify\*\*/);
     assert.equal(enginePlan(engine!), undefined);
   });
 
@@ -388,6 +391,9 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
 
     assertNoEditMandate(captures[0]!, 'audit');
     assert.doesNotMatch(systemText(captures[0]!), /## How You Work/);
+    assert.doesNotMatch(systemText(captures[0]!), /\*\*Mutate\*\*/);
+    assert.doesNotMatch(systemText(captures[0]!), /\*\*Verify\*\*/);
+    assert.match(systemText(captures[0]!), /For a question, review, or audit/);
   });
 
   it('streaming and callback preparation agree on operation and prompts', async () => {

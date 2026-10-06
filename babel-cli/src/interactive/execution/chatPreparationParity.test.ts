@@ -324,6 +324,8 @@ describe('chat preparation parity (actual provider-bound request)', () => {
       assert.doesNotMatch(userContents, /## Intent Plan/);
       assert.doesNotMatch(userContents, /## Before You Start/);
       assert.match(systemPrompt, /## How You Work/);
+      assert.match(systemPrompt, /\*\*Mutate\*\*/);
+      assert.match(systemPrompt, /\*\*Verify\*\*/);
 
       assert.equal(headless.model, 'mimo-v2.5');
       assert.ok(headless.toolNames.length > 0, 'native request must declare tools');

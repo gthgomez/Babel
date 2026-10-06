@@ -77,6 +77,25 @@ describe("buildChatSystemPrompt text delivery", () => {
     assert.match(prompt, /Runtime mode: unknown\./);
     assert.doesNotMatch(prompt, /headless|interactive mode/i);
   });
+
+  it("shows mutate and verify only for a mutation task", () => {
+    const mutation = buildChatSystemPrompt({
+      projectRoot: "C:/fixture",
+      executionFirst: true,
+    });
+    const question = buildChatSystemPrompt({ projectRoot: "C:/fixture" });
+
+    assert.match(mutation, /\*\*Mutate\*\*/);
+    assert.match(mutation, /\*\*Verify\*\*/);
+    assert.match(mutation, /Prefer `str_replace` for a targeted edit under ~50 lines/);
+    assert.doesNotMatch(mutation, /primary tool for making code changes/);
+
+    assert.doesNotMatch(question, /\*\*Mutate\*\*/);
+    assert.doesNotMatch(question, /\*\*Verify\*\*/);
+    assert.match(question, /For a question, review, or audit/);
+    assert.match(question, /Prefer `str_replace` for a targeted edit under ~50 lines/);
+    assert.doesNotMatch(question, /primary tool for making code changes/);
+  });
 });
 
 describe("buildChatTurnPrompt delivery", () => {
