@@ -261,9 +261,10 @@ export class CostTracker {
     attribution?: UsageAttribution,
     usageKnown = true,
     provider?: string | null,
+    reportedCostUsd?: number | null,
   ): number | null {
     const update = this.settleUsage(modelId, inputTokens, outputTokens, cacheHitTokens,
-      cacheMissTokens, attribution, usageKnown, provider);
+      cacheMissTokens, attribution, usageKnown, provider, reportedCostUsd);
     if (update.kind === 'duplicate' || update.kind === 'conflict') return 0;
     return update.unknownDelta > 0 ? null : update.knownCostDelta;
   }
@@ -278,6 +279,7 @@ export class CostTracker {
     attribution?: UsageAttribution,
     usageKnown = true,
     provider?: string | null,
+    reportedCostUsd?: number | null,
   ): ChargeUpdate {
     if (attribution?.accountingEpoch && attribution.accountingEpoch !== this.accountingEpoch) {
       throw new Error('Usage attribution belongs to a different accounting epoch');
@@ -297,7 +299,14 @@ export class CostTracker {
       promptCacheHitTokens: cacheHitTokens,
       promptCacheMissTokens: cacheMissTokens,
     });
-    const cost = usageKnown ? estimate.estimatedCostUsd : null;
+    const registryCost = usageKnown ? estimate.estimatedCostUsd : null;
+    // A provider-reported amount is accepted only when this route has no pinned
+    // price. Unknown or invalid reports stay unresolved instead of becoming $0.
+    const reportedCost = registryCost === null && usageKnown &&
+      typeof reportedCostUsd === 'number' && Number.isFinite(reportedCostUsd) && reportedCostUsd >= 0
+      ? reportedCostUsd
+      : null;
+    const cost = registryCost ?? reportedCost;
     const goEstimate: CostEstimateSource | undefined = provider === 'opencode-go' ? {
       basis: 'published_usage_estimate', precision: cost === null ? 'unknown' : estimate.precision,
       pricingSourceUrl: estimate.pricingSourceUrl, pricingVerifiedAt: estimate.pricingVerifiedAt,
@@ -310,9 +319,18 @@ export class CostTracker {
       return { kind: 'duplicate' }; // Restored legacy receipt lacks refinement evidence.
     }
     if (previous) {
-      const sameIdentity = previous.modelId === modelId && previous.provider === provider &&
-        sameUsageAttribution(previous.attribution, attribution);
-      if (!sameIdentity) return { kind: 'conflict', reason: 'Charge identity differs from the recorded attempt' };
+      const sameAttribution = sameUsageAttribution(previous.attribution, attribution);
+      const sameIdentity = previous.modelId === modelId && previous.provider === provider && sameAttribution;
+      // A zero-token dispatch placeholder may adopt the billed provider.
+      // A confirmed receipt that changes provider stays a conflict.
+      const unresolvedPlaceholder = receiptAllowanceCost(previous) === null &&
+        previous.inputTokens === 0 && previous.outputTokens === 0 &&
+        previous.cacheHitTokens === 0 && previous.cacheMissTokens === 0;
+      const adoptsObservedRoute = !sameIdentity && unresolvedPlaceholder && sameAttribution &&
+        previous.modelId === modelId;
+      if (!sameIdentity && !adoptsObservedRoute) {
+        return { kind: 'conflict', reason: 'Charge identity differs from the recorded attempt' };
+      }
       if (receiptAllowanceCost(previous) !== null) {
         if (cost === null) return { kind: 'duplicate' }; // A stale unknown cannot downgrade a known receipt.
         return receiptAllowanceCost(previous) === cost && previous.inputTokens === inputTokens &&

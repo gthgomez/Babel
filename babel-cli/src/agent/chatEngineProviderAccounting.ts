@@ -666,6 +666,7 @@ export function trackRunnerUsage(
           : undefined,
         true,
         metadata.provider ?? usageScope?.provider ?? null,
+        metadata.estimated_cost_usd,
       );
       if (chargeUpdate.kind === 'duplicate') return;
       if (chargeUpdate.kind === 'conflict') {
