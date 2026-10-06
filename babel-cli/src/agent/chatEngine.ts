@@ -136,8 +136,10 @@ import {
 } from "./chatFailureClassification.js";
 
 import {
-  resolveChatTaskClass,
+  analyzeTaskShape,
   getChatTaskTune,
+  isMutationExecutionTask,
+  resolveChatTaskClass,
   type ChatTaskClass,
   type VerificationPolicy,
 } from "../config/chatTaskClass.js";
@@ -2799,8 +2801,13 @@ export class ChatEngine {
       previous,
     });
 
+    const previousTask = this.options.task;
+    const previousClass = this.taskClass;
     this.options = { ...this.options, task: runtime.taskText };
     this.taskClass = runtime.taskClass;
+    if (previousTask !== runtime.taskText || previousClass !== runtime.taskClass) {
+      this.clearSystemPromptCache();
+    }
     this.gatePolicy = runtime.gatePolicy;
     this.writeCount = runtime.writeCount;
     this.gateStrikes = runtime.gateStrikes;
@@ -4156,7 +4163,10 @@ export class ChatEngine {
       projectRoot: this.options.projectRoot,
       nativeTools,
       textTools,
-      executionFirst: true,
+      executionFirst: isMutationExecutionTask(
+        this.taskClass,
+        analyzeTaskShape(this.options.task).operation,
+      ),
       runtimeMode: this.options.runtimeMode ?? "unknown",
       ...(systemCtx ? { systemContext: systemCtx } : {}),
     });

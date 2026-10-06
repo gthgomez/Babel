@@ -152,36 +152,45 @@ export const HARNESS_GUIDANCE_LABEL =
   '> Harness-generated planning guidance (not user authorization).';
 
 /**
+ * The pre-tool intent plan is off unless the operator turns it back on.
+ * Accepted on-values: 1, true, on, yes. Unset and every other value stay off.
+ */
+export function isChatPreLoopPlanEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env['BABEL_CHAT_PRELOOP_PLAN'];
+  if (raw === undefined) return false;
+  const value = raw.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'on' || value === 'yes';
+}
+
+/**
  * Compile the intent-plan user message for execute tasks (heuristic, no LLM).
  * Matches the factory-path injection so reused TUI engines see the same text.
  *
- * S01/#211: the resolved TaskShape `operation` is authoritative. READ_ONLY
- * submissions (greetings, explanations, read-only investigation, quoted code)
- * get no generated edit/repair mandate at all; only execute-like operations
- * (MUTATING/HYBRID) receive the plan + pre-loop repair template.
+ * Default chat does not inject this message. Set BABEL_CHAT_PRELOOP_PLAN=1
+ * to restore it. S01/#211 still applies when it is on: READ_ONLY submissions
+ * get no generated edit/repair mandate; only execute-like operations receive
+ * the plan and the pre-loop repair template.
  */
 export function compileIntentPlanUserMessage(
   task: string,
   taskClass: ChatTaskClass,
   operation?: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
+  if (!isChatPreLoopPlanEnabled(env)) return undefined;
   const intentPlan = compileIntentPlan(task, {
     taskClass,
     ...(operation !== undefined ? { operation } : {}),
+    env,
   });
   if (!intentPlan) return undefined;
   let msg = formatIntentPlanUserMessage(intentPlan);
   if (intentPlan.test_command) {
     msg += '\n\n' + buildInteractiveFirstMoveHint(intentPlan.test_command);
   }
-  const preloopEnv = process.env['BABEL_CHAT_PRELOOP_PLAN'];
-  const preloopDisabled =
-    preloopEnv !== undefined &&
-    (preloopEnv.trim() === '0' ||
-      preloopEnv.trim().toLowerCase() === 'false' ||
-      preloopEnv.trim().toLowerCase() === 'off');
-  const isExecuteClass = taskClass !== 'investigate';
-  if (isExecuteClass && !preloopDisabled) {
+  if (taskClass !== 'investigate') {
     msg +=
       '\n\n' +
       buildPreLoopPlanningInstruction({
@@ -698,10 +707,9 @@ export async function runChatEngineOnce(input: {
     .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
     .join('\n\n');
 
-  // C1: Compile intent plan for execute tasks (heuristic, no LLM call).
-  // Injects as a structured user message so the model sees expanded intent
-  // before its first tool turn. Persisted to intent_plan.json after the run.
-  // READ_ONLY operations get no plan and no pre-loop repair template.
+  // The heuristic plan is still recorded at intent_plan.json. It is not a
+  // user-channel message unless BABEL_CHAT_PRELOOP_PLAN is explicitly on.
+  // READ_ONLY operations never receive that message.
   const intentPlan = compileIntentPlan(input.task, {
     taskClass: resolvedTaskClass,
     operation: effectiveOperation,

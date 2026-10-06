@@ -542,6 +542,28 @@ export function mapTaskShapeToClass(shape: TaskShape, taskText: string): ChatTas
 }
 
 /**
+ * Classes whose normal job is a code change. Questions, reviews, audits,
+ * and governance probes are outside this set.
+ */
+const MUTATION_EXECUTION_CLASSES: ReadonlySet<ChatTaskClass> = new Set([
+  'default',
+  'quick_fix',
+  'general_swe',
+]);
+
+/**
+ * The short fix procedure is for a mutation task only.
+ * A read-only operation stays off even when the class was forced onto a
+ * mutation tune, so an audit does not receive the fix frame.
+ */
+export function isMutationExecutionTask(
+  taskClass: ChatTaskClass,
+  operation: TaskOperation,
+): boolean {
+  return operation !== 'READ_ONLY' && MUTATION_EXECUTION_CLASSES.has(taskClass);
+}
+
+/**
  * Classify task text into a general work shape.
  * Multi-dimensional analysis: checks mutation intent, scope, and complexity.
  */
