@@ -445,3 +445,23 @@ describe('S07 class regression: coordinated no-edit negations are stripped in fu
     assert.equal(analyzeTaskShape('never clean up and delete the logs').operation, 'READ_ONLY');
   });
 });
+
+test('ordinary "change" edit requests classify as mutating; noun/negation usage stays read-only', () => {
+  // An ordinary edit request must not depend on the caller picking a synonym.
+  const mutating = analyzeTaskShape('Change src/add.js to return addition.');
+  assert.equal(mutating.operation, 'MUTATING');
+  assert.equal(
+    analyzeTaskShape('Change fixture.txt to updated fixture, run npm test, then report success.').operation,
+    'MUTATING',
+  );
+  assert.equal(analyzeTaskShape('please change the config').operation, 'MUTATING');
+  assert.equal(analyzeTaskShape('Update fixture.txt to say updated fixture.').operation, 'MUTATING');
+  // Noun usage and questions stay read-only.
+  assert.equal(analyzeTaskShape('Explain this change.').operation, 'READ_ONLY');
+  assert.equal(analyzeTaskShape('Explain this change to the parser.').operation, 'READ_ONLY');
+  assert.equal(analyzeTaskShape('What changed?').operation, 'READ_ONLY');
+  // Negations of "change" remain no-edit directives.
+  assert.equal(analyzeTaskShape('Do not change files.').operation, 'READ_ONLY');
+  assert.equal(analyzeTaskShape("don't change or update anything").operation, 'READ_ONLY');
+  assert.equal(analyzeTaskShape('never change the tests').operation, 'READ_ONLY');
+});

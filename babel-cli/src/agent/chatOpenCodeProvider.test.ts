@@ -583,7 +583,7 @@ describeExactGlm('exact GLM ChatEngine path performs a bounded mutation and auth
     }>;
     try {
       for await (const event of engine.submitMessageStream(
-        'Update fixture.txt to say updated fixture, run npm test, then report success.',
+        'Change fixture.txt to updated fixture, run npm test, then report success.',
         'execute',
       )) {
         events.push(event);

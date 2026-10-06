@@ -382,12 +382,19 @@ function stripInformationalFrames(text: string): string {
  * and be misread as positive mutation authority.
  */
 // Single source of truth for mutation verbs so the negation surface and the
-// positive-mutation scan can never drift. `change|touch|alter|clean` have no
-// positive-scope verb of their own (a bare "change the config" is intentionally
+// positive-mutation scan can never drift. `touch|alter|clean` have no
+// positive-scope verb of their own (a bare "touch the config" is intentionally
 // not treated as mutation today), but a negation of them is still a no-edit
 // directive, and `clean` covers the "clean up and delete" phrase.
+// "change" IS a positive mutation verb ("change fixture.txt to ..."), guarded
+// against determiner-preceded NOUN usage ("explain this change") so intent
+// classification never depends on the caller rephrasing an ordinary edit
+// request. A keyword still grants nothing by itself — execution authority
+// remains with the policy/lease gates.
+const CHANGE_NOUN_GUARD =
+  '(?<!\\b(?:this|that|the|these|those|a|an|any|your|my|our|their|its|said|such|same|net)\\s)change';
 const MUTATION_VERB_SOURCE =
-  'fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename';
+  `fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename|${CHANGE_NOUN_GUARD}`;
 const DESTRUCTIVE_VERB_SOURCE = 'delete|remove|rm|drop|erase|unlink';
 const READ_ONLY_VERB_SOURCE = `(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|change|touch|alter|clean)`;
 const READ_ONLY_VERB_GERUND_SOURCE =
