@@ -1,0 +1,344 @@
+{
+  "scope": "scripted-provider behavioral evaluation inventory; this maps concrete test evidence and gaps, not LLM judgment quality",
+  "cases": [
+    {
+      "case": 1,
+      "behavior": "read-only explanation",
+      "tests": [
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 1 ordinary investigation",
+        "src/agent/chatReadOnly.admission.test.ts \u2014 ordinary prepared no-change task denies native write"
+      ],
+      "limitation": "The capability denial route is synthetic; no external provider inference."
+    },
+    {
+      "case": 2,
+      "behavior": "read-only deep audit",
+      "tests": [
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 1 ordinary investigation",
+        "src/agent/progressEvidenceAlignment.test.ts \u2014 D-T05 twelve distinct hashed reads"
+      ],
+      "limitation": "Auditor depth/accuracy is not evaluated by a model benchmark."
+    },
+    {
+      "case": 3,
+      "behavior": "requested change already exists",
+      "tests": [
+        "src/agent/codingLoopSimplification.test.ts \u2014 a requested change already present is inspected and reported without writing",
+        "src/agent/chatHarnessFeedback.test.ts \u2014 rejected native completion feedback is controller-owned, durable, and changes the next provider action",
+        "src/agent/codingLoopSimplification.test.ts \u2014 already-correct change with an explicitly requested real green verifier completes NO_CHANGE_REQUIRED in Git"
+      ],
+      "limitation": "Scripted provider only; verifies gate feedback provenance, cold reconstruction, and a truthful NO_CHANGE_REQUIRED path, not live-model judgment."
+    },
+    {
+      "case": 4,
+      "behavior": "localized edit",
+      "tests": [
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 3 mixed inspect+mutate, authorized scoped fix",
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 wrong repair followed by different supported repair"
+      ],
+      "limitation": "Fixture repository and scripted provider only."
+    },
+    {
+      "case": 5,
+      "behavior": "multi-file bug",
+      "tests": [
+        "src/agent/codingLoopSimplification.test.ts \u2014 tiny two-file repair uses local tools without mandatory delegation or external calls"
+      ],
+      "limitation": "Temporary two-file fixture and scripted provider; no broad multi-file bug corpus or semantic diagnosis benchmark."
+    },
+    {
+      "case": 6,
+      "behavior": "failing task-caused verifier",
+      "tests": [
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 10 mutation with a failing authoritative verifier is UNVERIFIED_PATCH + verification_failed"
+      ],
+      "limitation": "Real temporary `npm test` verifier after task mutation; scripted provider controls the action sequence."
+    },
+    {
+      "case": 7,
+      "behavior": "failing baseline verifier",
+      "tests": [
+        "src/agent/codingLoopSimplification.test.ts \u2014 a demonstrated baseline-red verifier remains honest on a read-only investigation",
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 10 task-caused red verifier control"
+      ],
+      "limitation": "Baseline fixture runs actual `npm test` before, during, and after an unchanged investigation; it does not model all baseline-diff policies."
+    },
+    {
+      "case": 8,
+      "behavior": "unavailable verifier",
+      "tests": [
+        "src/agent/codingLoopSimplification.test.ts \u2014 an unavailable governed verifier preserves denial evidence and cannot certify completion"
+      ],
+      "limitation": "Safe-repo process authority is deliberately unavailable; confirms typed capability denial and no verifier process launch, not missing binary/tool installation."
+    },
+    {
+      "case": 9,
+      "behavior": "simulated/dry-run verifier",
+      "tests": [
+        "src/agent/governedWriteLiveOptIn.test.ts \u2014 explicit dry-run stays simulated and cannot certify the workspace"
+      ],
+      "limitation": "Executor/evidence boundary; not a full scripted ordinary-chat turn."
+    },
+    {
+      "case": 10,
+      "behavior": "stale verifier after later mutation",
+      "tests": [
+        "src/agent/codingLoopSimplification.test.ts \u2014 a verifier receipt cannot certify a later parent mutation on the same file",
+        "src/agent/toolExecutor.h4live.test.ts \u2014 strict wrong-revision completion rejection",
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 7d old child evidence cannot satisfy current parent progress/verification"
+      ],
+      "limitation": "The new scripted real-engine fixture performs a real temporary npm test successfully, then a later same-parent mutation and a false final claim; it proves the earlier receipt cannot certify the later workspace revision. It does not model concurrent mutation races."
+    },
+    {
+      "case": 11,
+      "behavior": "quoted command arguments",
+      "tests": [
+        "src/agent/backgroundShell.test.ts \u2014 passes quoted arguments as one argv item",
+        "src/agent/windowsProcessQualification.test.ts \u2014 parseCommandArgv platform argv fixture",
+        "src/agent/chatToolDefinitions.test.ts \u2014 governed quote-aware command contract",
+        "src/agent/verifierCacheIdentity.test.ts \u2014 distinct quoted arguments execute separately; exact repeat reuses evidence and records confirmed_no_change"
+      ],
+      "limitation": "H4 implementation was confirmed correct; only stale help text needed correction."
+    },
+    {
+      "case": 12,
+      "behavior": "repeated exploratory loop",
+      "tests": [
+        "src/agent/progressEvidenceAlignment.test.ts \u2014 repeated evidence remains bounded by production arbiter",
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 5b identical unchanged range earns no new progress credit",
+        "src/agent/chatHarnessFeedback.test.ts \u2014 fresh nonoverlapping ranges on one file preserve inspection and reach natural completion"
+      ],
+      "limitation": "Twelve disjoint ranges on one fixture file; scripted provider controls the sequence and no live-model loop-quality claim is made."
+    },
+    {
+      "case": 13,
+      "behavior": "extensive legitimate investigation",
+      "tests": [
+        "src/agent/codingLoopSimplification.test.ts \u2014 many distinct productive reads can reach a natural answer without a write-count stop",
+        "src/agent/progressEvidenceAlignment.test.ts \u2014 D-T05 twelve distinct hashed reads",
+        "src/agent/chatHarnessFeedback.test.ts \u2014 twelve fresh ranges on one file preserve inspection and reach natural completion",
+        "src/agent/chatProductiveInvestigation.test.ts \u2014 actual 18-file HYBRID investigation compared with frozen baseline"
+      ],
+      "limitation": "Productive read counts are deterministic fixtures; they do not assess semantic completeness of an actual audit."
+    },
+    {
+      "case": 14,
+      "behavior": "explicit no-edit",
+      "tests": [
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 4 explicit no-edit",
+        "src/agent/chatOperationPolicy.test.ts \u2014 D-T04 fenced code/repair paths cannot overrule explicit no-edit"
+      ],
+      "limitation": "No live-model inference."
+    },
+    {
+      "case": 15,
+      "behavior": "investigate then fix",
+      "tests": [
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 3 mixed inspect+mutate, investigation then authorized scoped fix"
+      ],
+      "limitation": "One deterministic single-file repair fixture."
+    },
+    {
+      "case": 16,
+      "behavior": "subagent helpful task",
+      "tests": [
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 7a successful read-only child evidence",
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 7c mutating child cannot escape write_scope"
+      ],
+      "limitation": "Mechanics only; does not evaluate whether a model independently recognizes delegation as helpful."
+    },
+    {
+      "case": 17,
+      "behavior": "subagent not helpful tiny task",
+      "tests": [
+        "src/agent/codingLoopSimplification.test.ts \u2014 tiny two-file repair uses local tools without mandatory delegation or external calls"
+      ],
+      "limitation": "The small fixture proves subagent/web/MCP tools are optional and unused in this scripted repair. It does not test model judgment about when delegation helps."
+    },
+    {
+      "case": 18,
+      "behavior": "no need web/MCP",
+      "tests": [
+        "src/agent/codingLoopSimplification.test.ts \u2014 tiny two-file repair uses local tools without mandatory delegation or external calls"
+      ],
+      "limitation": "The scripted local task has web/fetch tools advertised, `toolChoice=auto`, and no web/MCP calls; no live provider selection claim."
+    },
+    {
+      "case": 19,
+      "behavior": "requires external/current information",
+      "tests": [
+        "src/agent/codingLoopSimplification.test.ts \u2014 a current-information repair can use a scripted web result and verify the local change"
+      ],
+      "limitation": "The search response is synthetic and no network is used. This verifies tool mechanics and an explicit scripted web choice, not whether a model independently recognizes current information as requiring web/MCP."
+    },
+    {
+      "case": 20,
+      "behavior": "interrupted/recovered run",
+      "tests": [
+        "src/agent/s07OrdinaryLoop.test.ts \u2014 Scenario 8 cancel then unrelated task on reused engine",
+        "src/agent/chatEngine.lifecycleQualification.test.ts \u2014 interrupted/persisted lifecycle qualification"
+      ],
+      "limitation": "Fixture interruption and recovery; no process-crash/live provider replay."
+    }
+  ],
+  "reviewAdversarialCases": [
+    {
+      "id": "R1",
+      "case": "unknown background/await effects cannot support no-change",
+      "tests": [
+        "src/agent/chatOperationExplicit.test.ts"
+      ]
+    },
+    {
+      "id": "R2",
+      "case": "late retired task mutation cannot restore certification",
+      "tests": [
+        "src/agent/toolExecutor.h4live.test.ts"
+      ]
+    },
+    {
+      "id": "R3",
+      "case": "host fallback is not LSP action authority; denied before dispatch",
+      "tests": [
+        "src/agent/chatLspPolicy.test.ts",
+        "src/agent/chatOperationExplicit.test.ts"
+      ]
+    },
+    {
+      "id": "R4",
+      "case": "LSP discovery performs no process or package installation",
+      "tests": [
+        "src/services/lsp/manager.test.ts",
+        "src/services/lsp/client.test.ts"
+      ]
+    },
+    {
+      "id": "R5",
+      "case": "restricted native schemas omit finish",
+      "tests": [
+        "src/agent/chatToolDefinitions.test.ts",
+        "src/agent/chatEngineStall.test.ts"
+      ]
+    },
+    {
+      "id": "D6",
+      "case": "green no-change verifier needs content-bound repository revision; non-Git repository fallback remains unverified",
+      "tests": [
+        "src/agent/chatEngineVerifierAdapter.noChange.test.ts",
+        "src/agent/codingLoopSimplification.test.ts"
+      ]
+    },
+    {
+      "id": "R6",
+      "case": "nested project receipts bind dirty tracked/untracked bytes against the Git root while excluding outside-project bytes",
+      "tests": [
+        "src/evidence/repositoryRevisionWorkingTree.test.ts",
+        "src/agent/chatEngineVerifierAdapter.noChange.test.ts"
+      ]
+    },
+    {
+      "id": "R7",
+      "case": "historical receipts lacking evaluable scope or Git binding become stale and cannot satisfy strict no-change completion",
+      "tests": [
+        "src/evidence/chatRevisionBinding.test.ts"
+      ]
+    },
+    {
+      "id": "R6-containment",
+      "case": "symlink parents fail closed before content reads; legitimate deleted parent directories remain computable missing-file evidence",
+      "tests": [
+        "src/evidence/repositoryRevisionWorkingTree.test.ts"
+      ]
+    }
+  ],
+  "comparison": {
+    "basis": "Identical scripted native provider and 18-file fixture; current test overlaid temporarily on frozen baseline and removed after replay. No live-model inference.",
+    "test": "src/agent/chatProductiveInvestigation.test.ts",
+    "before": {
+      "sourceRevision": "22b30aed038a8b133af469502079398c1878c933",
+      "providerRequests": 23,
+      "workspaceFilesChanged": 0,
+      "mutationPressureRequests": 0,
+      "missingReadCapabilityRequests": 0,
+      "outcome": "BLOCKED_POLICY"
+    },
+    "after": {
+      "providerRequests": 19,
+      "workspaceFilesChanged": 0,
+      "mutationPressureRequests": 0,
+      "missingReadCapabilityRequests": 0,
+      "outcome": "NO_CHANGE_REQUIRED",
+      "sourceRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9"
+    },
+    "interpretation": "Removes false blocking and four unnecessary provider requests in this fixture. Does not establish average coding success, provider reasoning quality or model cost."
+  },
+  "liveModelValidation": {
+    "executed": false,
+    "reason": "No configured live provider credentials; no paid inference was authorized or invoked. Provider adapters were exercised offline with stubbed transport.",
+    "unmeasured": [
+      "live-model task success",
+      "patch correctness across a representative real bug corpus",
+      "model clarification rate",
+      "paid token/cost/latency changes",
+      "strong-versus-cheap-versus-non-OpenAI model behavior"
+    ]
+  },
+  "implementationRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
+  "verification": {
+    "sourceRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
+    "allMappedTestFilesExecuted": true,
+    "mappedTestFiles": 22,
+    "commands": [
+      {
+        "name": "chat-truth",
+        "summary": {
+          "tests": 928,
+          "suites": 93,
+          "pass": 925,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3,
+          "todo": 0
+        }
+      },
+      {
+        "name": "harness-runtime",
+        "summary": {
+          "tests": 883,
+          "suites": 126,
+          "pass": 882,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 1,
+          "todo": 0
+        }
+      },
+      {
+        "name": "campaign-unit",
+        "summary": {
+          "tests": 283,
+          "suites": 32,
+          "pass": 283,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0,
+          "todo": 0
+        }
+      },
+      {
+        "name": "behavior-supplement",
+        "summary": {
+          "tests": 7,
+          "suites": 1,
+          "pass": 7,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0,
+          "todo": 0
+        }
+      }
+    ],
+    "liveModelCalls": 0,
+    "note": "Selections overlap; counts are per command, not unique total."
+  }
+}

@@ -45,7 +45,7 @@
       {
         "number": 313,
         "branch": "feat/installer-nsis-20261006",
-        "head": "d85271282722431974ed93f6c17f236794163594",
+        "head": "0b9928259497ffe0c1d39732bf1a7f5f587b647f",
         "draft": false,
         "note": "Supersedes prior desktop PR #308; unrelated to coding-loop campaign."
       },
@@ -64,6 +64,7 @@
       "pushAttempted": false,
       "mergeAttempted": false,
       "deployAttempted": false
-    }
+    },
+    "sourceRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9"
   }
 }

@@ -1,0 +1,1321 @@
+{
+  "schemaVersion": 1,
+  "beforeRevision": "22b30aed038a8b133af469502079398c1878c933",
+  "afterImplementationRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
+  "referenceTokenizer": "cl100k_base (comparison only; not billed provider tokens)",
+  "measurementLayer": "real ChatEngine preparation and runner invocation; scripted provider, no network or model spend",
+  "caveats": [
+    "Synthetic fixtures and scripted providers: no live-model quality, cost or latency claim.",
+    "Character/token totals for system/developer context exclude the separately measured schemas; complete request metrics include supplemental messages.",
+    "The workflow-heading count tracks three named repeated headings, not every semantic duplication.",
+    "Text/legacy tool counts are advertised parser actions, not native function schemas.",
+    "The restricted native scenario injects a runtime restrict=true/act_or_verify state; it is not a measurement of a live-model stall rate."
+  ],
+  "repositoryContract": {
+    "beforeCharacters": 11870,
+    "afterCharacters": 3093,
+    "afterBytes": 3093
+  },
+  "scenarios": [
+    {
+      "id": "trivial-read-only",
+      "protocol": "native",
+      "before": {
+        "instruction": {
+          "chars": 17508,
+          "referenceTokens": 3851
+        },
+        "toolSchema": {
+          "chars": 12888,
+          "referenceTokens": 2671
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 31154,
+          "referenceTokens": 6805
+        },
+        "toolCount": 21,
+        "nativeSchemaCount": 21,
+        "instructionSources": 8,
+        "duplicatedWorkflowHeadings": 2
+      },
+      "after": {
+        "instruction": {
+          "chars": 4380,
+          "referenceTokens": 875
+        },
+        "toolSchema": {
+          "chars": 3259,
+          "referenceTokens": 677
+        },
+        "toolManual": {
+          "chars": 0,
+          "referenceTokens": 0
+        },
+        "request": {
+          "chars": 8298,
+          "referenceTokens": 1755
+        },
+        "toolCount": 8,
+        "nativeSchemaCount": 8,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent",
+        "lsp",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "read_range",
+        "todo_write"
+      ],
+      "instructionCharacterReductionPercent": 74.98
+    },
+    {
+      "id": "deep-audit",
+      "protocol": "native",
+      "before": {
+        "instruction": {
+          "chars": 17508,
+          "referenceTokens": 3851
+        },
+        "toolSchema": {
+          "chars": 12888,
+          "referenceTokens": 2671
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 31238,
+          "referenceTokens": 6819
+        },
+        "toolCount": 21,
+        "nativeSchemaCount": 21,
+        "instructionSources": 8,
+        "duplicatedWorkflowHeadings": 2
+      },
+      "after": {
+        "instruction": {
+          "chars": 4380,
+          "referenceTokens": 875
+        },
+        "toolSchema": {
+          "chars": 3259,
+          "referenceTokens": 677
+        },
+        "toolManual": {
+          "chars": 0,
+          "referenceTokens": 0
+        },
+        "request": {
+          "chars": 8382,
+          "referenceTokens": 1769
+        },
+        "toolCount": 8,
+        "nativeSchemaCount": 8,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent",
+        "lsp",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "read_range",
+        "todo_write"
+      ],
+      "instructionCharacterReductionPercent": 74.98
+    },
+    {
+      "id": "one-file-fix",
+      "protocol": "native",
+      "before": {
+        "instruction": {
+          "chars": 19100,
+          "referenceTokens": 4178
+        },
+        "toolSchema": {
+          "chars": 12888,
+          "referenceTokens": 2671
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 32796,
+          "referenceTokens": 7155
+        },
+        "toolCount": 21,
+        "nativeSchemaCount": 21,
+        "instructionSources": 8,
+        "duplicatedWorkflowHeadings": 3
+      },
+      "after": {
+        "instruction": {
+          "chars": 4380,
+          "referenceTokens": 875
+        },
+        "toolSchema": {
+          "chars": 11480,
+          "referenceTokens": 2374
+        },
+        "toolManual": {
+          "chars": 0,
+          "referenceTokens": 0
+        },
+        "request": {
+          "chars": 16547,
+          "referenceTokens": 3456
+        },
+        "toolCount": 19,
+        "nativeSchemaCount": 19,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent",
+        "lsp",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent"
+      ],
+      "instructionCharacterReductionPercent": 77.07
+    },
+    {
+      "id": "multi-file-swe",
+      "protocol": "native",
+      "before": {
+        "instruction": {
+          "chars": 19659,
+          "referenceTokens": 4302
+        },
+        "toolSchema": {
+          "chars": 12888,
+          "referenceTokens": 2671
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 33382,
+          "referenceTokens": 7288
+        },
+        "toolCount": 21,
+        "nativeSchemaCount": 21,
+        "instructionSources": 9,
+        "duplicatedWorkflowHeadings": 3
+      },
+      "after": {
+        "instruction": {
+          "chars": 4380,
+          "referenceTokens": 875
+        },
+        "toolSchema": {
+          "chars": 11480,
+          "referenceTokens": 2374
+        },
+        "toolManual": {
+          "chars": 0,
+          "referenceTokens": 0
+        },
+        "request": {
+          "chars": 16567,
+          "referenceTokens": 3458
+        },
+        "toolCount": 19,
+        "nativeSchemaCount": 19,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent",
+        "lsp",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent"
+      ],
+      "instructionCharacterReductionPercent": 77.72
+    },
+    {
+      "id": "investigate-then-fix",
+      "protocol": "native",
+      "before": {
+        "instruction": {
+          "chars": 19100,
+          "referenceTokens": 4178
+        },
+        "toolSchema": {
+          "chars": 12888,
+          "referenceTokens": 2671
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 32774,
+          "referenceTokens": 7151
+        },
+        "toolCount": 21,
+        "nativeSchemaCount": 21,
+        "instructionSources": 8,
+        "duplicatedWorkflowHeadings": 3
+      },
+      "after": {
+        "instruction": {
+          "chars": 4380,
+          "referenceTokens": 875
+        },
+        "toolSchema": {
+          "chars": 11480,
+          "referenceTokens": 2374
+        },
+        "toolManual": {
+          "chars": 0,
+          "referenceTokens": 0
+        },
+        "request": {
+          "chars": 16525,
+          "referenceTokens": 3452
+        },
+        "toolCount": 19,
+        "nativeSchemaCount": 19,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent",
+        "lsp",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent"
+      ],
+      "instructionCharacterReductionPercent": 77.07
+    },
+    {
+      "id": "explicit-no-edit",
+      "protocol": "native",
+      "before": {
+        "instruction": {
+          "chars": 17508,
+          "referenceTokens": 3851
+        },
+        "toolSchema": {
+          "chars": 12888,
+          "referenceTokens": 2671
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 31198,
+          "referenceTokens": 6815
+        },
+        "toolCount": 21,
+        "nativeSchemaCount": 21,
+        "instructionSources": 8,
+        "duplicatedWorkflowHeadings": 2
+      },
+      "after": {
+        "instruction": {
+          "chars": 4380,
+          "referenceTokens": 875
+        },
+        "toolSchema": {
+          "chars": 3259,
+          "referenceTokens": 677
+        },
+        "toolManual": {
+          "chars": 0,
+          "referenceTokens": 0
+        },
+        "request": {
+          "chars": 8342,
+          "referenceTokens": 1765
+        },
+        "toolCount": 8,
+        "nativeSchemaCount": 8,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent",
+        "lsp",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "read_range",
+        "todo_write"
+      ],
+      "instructionCharacterReductionPercent": 74.98
+    },
+    {
+      "id": "governance",
+      "protocol": "native",
+      "before": {
+        "instruction": {
+          "chars": 17508,
+          "referenceTokens": 3851
+        },
+        "toolSchema": {
+          "chars": 12888,
+          "referenceTokens": 2671
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 31230,
+          "referenceTokens": 6819
+        },
+        "toolCount": 21,
+        "nativeSchemaCount": 21,
+        "instructionSources": 8,
+        "duplicatedWorkflowHeadings": 2
+      },
+      "after": {
+        "instruction": {
+          "chars": 4380,
+          "referenceTokens": 875
+        },
+        "toolSchema": {
+          "chars": 3259,
+          "referenceTokens": 677
+        },
+        "toolManual": {
+          "chars": 0,
+          "referenceTokens": 0
+        },
+        "request": {
+          "chars": 8374,
+          "referenceTokens": 1769
+        },
+        "toolCount": 8,
+        "nativeSchemaCount": 8,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent",
+        "lsp",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "read_range",
+        "todo_write"
+      ],
+      "instructionCharacterReductionPercent": 74.98
+    },
+    {
+      "id": "verifier-command",
+      "protocol": "native",
+      "before": {
+        "instruction": {
+          "chars": 19222,
+          "referenceTokens": 4206
+        },
+        "toolSchema": {
+          "chars": 12888,
+          "referenceTokens": 2671
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 32916,
+          "referenceTokens": 7192
+        },
+        "toolCount": 21,
+        "nativeSchemaCount": 21,
+        "instructionSources": 9,
+        "duplicatedWorkflowHeadings": 3
+      },
+      "after": {
+        "instruction": {
+          "chars": 4416,
+          "referenceTokens": 883
+        },
+        "toolSchema": {
+          "chars": 11480,
+          "referenceTokens": 2374
+        },
+        "toolManual": {
+          "chars": 0,
+          "referenceTokens": 0
+        },
+        "request": {
+          "chars": 16579,
+          "referenceTokens": 3473
+        },
+        "toolCount": 19,
+        "nativeSchemaCount": 19,
+        "instructionSources": 7,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent",
+        "lsp",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent"
+      ],
+      "instructionCharacterReductionPercent": 77.03
+    },
+    {
+      "id": "reused-tui",
+      "protocol": "native",
+      "before": {
+        "instruction": {
+          "chars": 17503,
+          "referenceTokens": 3851
+        },
+        "toolSchema": {
+          "chars": 12888,
+          "referenceTokens": 2671
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 31321,
+          "referenceTokens": 6840
+        },
+        "toolCount": 21,
+        "nativeSchemaCount": 21,
+        "instructionSources": 8,
+        "duplicatedWorkflowHeadings": 2
+      },
+      "after": {
+        "instruction": {
+          "chars": 4375,
+          "referenceTokens": 875
+        },
+        "toolSchema": {
+          "chars": 3259,
+          "referenceTokens": 677
+        },
+        "toolManual": {
+          "chars": 0,
+          "referenceTokens": 0
+        },
+        "request": {
+          "chars": 8797,
+          "referenceTokens": 1857
+        },
+        "toolCount": 8,
+        "nativeSchemaCount": 8,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent",
+        "lsp",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "read_range",
+        "todo_write"
+      ],
+      "instructionCharacterReductionPercent": 75.0
+    },
+    {
+      "id": "native-tools",
+      "protocol": "native",
+      "before": {
+        "instruction": {
+          "chars": 19100,
+          "referenceTokens": 4178
+        },
+        "toolSchema": {
+          "chars": 12888,
+          "referenceTokens": 2671
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 32762,
+          "referenceTokens": 7149
+        },
+        "toolCount": 21,
+        "nativeSchemaCount": 21,
+        "instructionSources": 8,
+        "duplicatedWorkflowHeadings": 3
+      },
+      "after": {
+        "instruction": {
+          "chars": 4380,
+          "referenceTokens": 875
+        },
+        "toolSchema": {
+          "chars": 11480,
+          "referenceTokens": 2374
+        },
+        "toolManual": {
+          "chars": 0,
+          "referenceTokens": 0
+        },
+        "request": {
+          "chars": 16513,
+          "referenceTokens": 3450
+        },
+        "toolCount": 19,
+        "nativeSchemaCount": 19,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent",
+        "lsp",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent"
+      ],
+      "instructionCharacterReductionPercent": 77.07
+    },
+    {
+      "id": "native-restricted",
+      "protocol": "native",
+      "before": {
+        "instruction": {
+          "chars": 19100,
+          "referenceTokens": 4178
+        },
+        "toolSchema": {
+          "chars": 7168,
+          "referenceTokens": 1482
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 27046,
+          "referenceTokens": 5960
+        },
+        "toolCount": 8,
+        "nativeSchemaCount": 8,
+        "instructionSources": 8,
+        "duplicatedWorkflowHeadings": 3
+      },
+      "after": {
+        "instruction": {
+          "chars": 4380,
+          "referenceTokens": 875
+        },
+        "toolSchema": {
+          "chars": 6841,
+          "referenceTokens": 1402
+        },
+        "toolManual": {
+          "chars": 0,
+          "referenceTokens": 0
+        },
+        "request": {
+          "chars": 11878,
+          "referenceTokens": 2478
+        },
+        "toolCount": 7,
+        "nativeSchemaCount": 7,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "write_file",
+        "str_replace",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "finish"
+      ],
+      "afterToolNames": [
+        "write_file",
+        "str_replace",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run"
+      ],
+      "instructionCharacterReductionPercent": 77.07
+    },
+    {
+      "id": "text-tools",
+      "protocol": "text",
+      "before": {
+        "instruction": {
+          "chars": 13161,
+          "referenceTokens": 2914
+        },
+        "toolSchema": {
+          "chars": 2,
+          "referenceTokens": 1
+        },
+        "toolManual": {
+          "chars": 1142,
+          "referenceTokens": 333
+        },
+        "request": {
+          "chars": 27473,
+          "referenceTokens": 6231
+        },
+        "toolCount": 12,
+        "nativeSchemaCount": 0,
+        "instructionSources": 5,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "after": {
+        "instruction": {
+          "chars": 5269,
+          "referenceTokens": 1112
+        },
+        "toolSchema": {
+          "chars": 2,
+          "referenceTokens": 1
+        },
+        "toolManual": {
+          "chars": 1419,
+          "referenceTokens": 338
+        },
+        "request": {
+          "chars": 11639,
+          "referenceTokens": 2591
+        },
+        "toolCount": 13,
+        "nativeSchemaCount": 0,
+        "instructionSources": 4,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "grep",
+        "glob",
+        "write_file",
+        "str_replace",
+        "run_command",
+        "think",
+        "ask",
+        "remember",
+        "recall",
+        "check",
+        "plan"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "write_file",
+        "str_replace",
+        "grep",
+        "glob",
+        "run_command",
+        "finish",
+        "think",
+        "ask",
+        "remember",
+        "recall",
+        "check",
+        "plan"
+      ],
+      "instructionCharacterReductionPercent": 59.97
+    },
+    {
+      "id": "legacy-json",
+      "protocol": "legacy",
+      "before": {
+        "instruction": {
+          "chars": 20211,
+          "referenceTokens": 4481
+        },
+        "toolSchema": {
+          "chars": 2,
+          "referenceTokens": 1
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 20508,
+          "referenceTokens": 4682
+        },
+        "toolCount": 18,
+        "nativeSchemaCount": 0,
+        "instructionSources": 8,
+        "duplicatedWorkflowHeadings": 3
+      },
+      "after": {
+        "instruction": {
+          "chars": 7788,
+          "referenceTokens": 1647
+        },
+        "toolSchema": {
+          "chars": 2,
+          "referenceTokens": 1
+        },
+        "toolManual": {
+          "chars": 2732,
+          "referenceTokens": 603
+        },
+        "request": {
+          "chars": 7926,
+          "referenceTokens": 1745
+        },
+        "toolCount": 19,
+        "nativeSchemaCount": 0,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "glob",
+        "semantic_search",
+        "git_context",
+        "test_run",
+        "web_search",
+        "web_fetch",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "run_command",
+        "await_command",
+        "write_file",
+        "apply_patch",
+        "sub_agent",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "write_file",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "apply_patch",
+        "run_command",
+        "await_command",
+        "test_run",
+        "mcp_tool_search",
+        "mcp_request",
+        "web_search",
+        "web_fetch",
+        "sub_agent"
+      ],
+      "instructionCharacterReductionPercent": 61.47
+    },
+    {
+      "id": "text-read-only",
+      "protocol": "text",
+      "before": {
+        "instruction": {
+          "chars": 13161,
+          "referenceTokens": 2914
+        },
+        "toolSchema": {
+          "chars": 2,
+          "referenceTokens": 1
+        },
+        "toolManual": {
+          "chars": 1142,
+          "referenceTokens": 333
+        },
+        "request": {
+          "chars": 27488,
+          "referenceTokens": 6234
+        },
+        "toolCount": 12,
+        "nativeSchemaCount": 0,
+        "instructionSources": 5,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "after": {
+        "instruction": {
+          "chars": 4385,
+          "referenceTokens": 907
+        },
+        "toolSchema": {
+          "chars": 2,
+          "referenceTokens": 1
+        },
+        "toolManual": {
+          "chars": 535,
+          "referenceTokens": 133
+        },
+        "request": {
+          "chars": 9850,
+          "referenceTokens": 2164
+        },
+        "toolCount": 4,
+        "nativeSchemaCount": 0,
+        "instructionSources": 4,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "grep",
+        "glob",
+        "write_file",
+        "str_replace",
+        "run_command",
+        "think",
+        "ask",
+        "remember",
+        "recall",
+        "check",
+        "plan"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "grep",
+        "glob",
+        "finish"
+      ],
+      "instructionCharacterReductionPercent": 66.68
+    },
+    {
+      "id": "legacy-read-only",
+      "protocol": "legacy",
+      "before": {
+        "instruction": {
+          "chars": 18634,
+          "referenceTokens": 4157
+        },
+        "toolSchema": {
+          "chars": 2,
+          "referenceTokens": 1
+        },
+        "toolManual": {
+          "chars": 2507,
+          "referenceTokens": 624
+        },
+        "request": {
+          "chars": 18909,
+          "referenceTokens": 4339
+        },
+        "toolCount": 18,
+        "nativeSchemaCount": 0,
+        "instructionSources": 8,
+        "duplicatedWorkflowHeadings": 2
+      },
+      "after": {
+        "instruction": {
+          "chars": 6053,
+          "referenceTokens": 1272
+        },
+        "toolSchema": {
+          "chars": 2,
+          "referenceTokens": 1
+        },
+        "toolManual": {
+          "chars": 982,
+          "referenceTokens": 225
+        },
+        "request": {
+          "chars": 6180,
+          "referenceTokens": 1359
+        },
+        "toolCount": 8,
+        "nativeSchemaCount": 0,
+        "instructionSources": 6,
+        "duplicatedWorkflowHeadings": 0
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "glob",
+        "semantic_search",
+        "git_context",
+        "test_run",
+        "web_search",
+        "web_fetch",
+        "str_replace",
+        "read_range",
+        "todo_write",
+        "run_command",
+        "await_command",
+        "write_file",
+        "apply_patch",
+        "sub_agent",
+        "finish"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "semantic_search",
+        "git_context",
+        "glob",
+        "read_range",
+        "todo_write"
+      ],
+      "instructionCharacterReductionPercent": 67.52
+    },
+    {
+      "id": "subagent-invocation",
+      "protocol": "child-actions",
+      "before": {
+        "instruction": {
+          "chars": 1309,
+          "referenceTokens": 313
+        },
+        "toolCount": 7,
+        "nativeSchemaCount": 0,
+        "instructionSources": 3
+      },
+      "after": {
+        "instruction": {
+          "chars": 1309,
+          "referenceTokens": 313
+        },
+        "toolCount": 7,
+        "nativeSchemaCount": 0,
+        "instructionSources": 3
+      },
+      "beforeToolNames": [
+        "read_file",
+        "list_dir",
+        "search",
+        "grep",
+        "glob",
+        "finish",
+        "ask_approval"
+      ],
+      "afterToolNames": [
+        "read_file",
+        "list_dir",
+        "search",
+        "grep",
+        "glob",
+        "finish",
+        "ask_approval"
+      ],
+      "instructionCharacterReductionPercent": 0.0
+    }
+  ]
+}
