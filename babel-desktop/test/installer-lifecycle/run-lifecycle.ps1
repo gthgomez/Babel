@@ -148,7 +148,11 @@ try {
     git -C $repo add babel-desktop/package.json
     git -C $repo commit -m "test: bump desktop version to $v2 for lifecycle upgrade fixture" | Out-Null
     $out2 = Join-Path $workRoot 'payload-v2'
-    node (Join-Path $repo 'babel-desktop/scripts/package-windows.mjs') --node-archive="$env:LIFECYCLE_NODE_ARCHIVE" --electron-archive="$env:LIFECYCLE_ELECTRON_ARCHIVE" --output="$out2" | Out-Null
+    # package-windows.mjs shells out to npm; invoked via node directly there is
+    # no npm_execpath, so resolve npm's cli js from the npm on PATH.
+    $npmCmd = (Get-Command npm.cmd -ErrorAction Stop).Source
+    $npmCli = Join-Path (Split-Path $npmCmd -Parent) 'node_modules\npm\bin\npm-cli.js'
+    node (Join-Path $repo 'babel-desktop/scripts/package-windows.mjs') --node-archive="$env:LIFECYCLE_NODE_ARCHIVE" --electron-archive="$env:LIFECYCLE_ELECTRON_ARCHIVE" --output="$out2" --npm-cli="$npmCli" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "payload v2 build failed" }
     $setupV2Out = Join-Path $workRoot 'setup-v2'
     node (Join-Path $desktop 'scripts/package-windows-setup.mjs') --payload-zip="$out2/Babel-Desktop-$v2-win-x64.zip" --payload-sha256s="$out2/SHA256SUMS" --makensis="$MakensisPath" --output="$setupV2Out" | Out-Null
