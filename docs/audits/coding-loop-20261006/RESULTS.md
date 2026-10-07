@@ -99,7 +99,7 @@ Profile/task scope intersection, explicit denials, authority leases/PDP, approva
 
 ## Change size and reviewability
 
-The proposed direct-base diff contains 101 paths, 31,333 additions and 1,696 deletions, including the complete machine-readable audit and before/after request snapshots. The reviewed source slice before final artifacts contained 44 runtime/capture files (+1,254/−1,231), 41 tests (+2,904/−422), three policy/procedure files and three initial audit files. This exceeds the advisory size targets; the audit, implementation, lifecycle/evidence repairs and final measurement artifacts are separated into coherent commits. No unrelated pricing work is included.
+The proposed direct-base diff contains 101 paths, 31,340 additions and 1,696 deletions, including the complete machine-readable audit and before/after request snapshots. The reviewed source slice before final artifacts contained 44 runtime/capture files (+1,254/−1,231), 41 tests (+2,904/−422), three policy/procedure files and three initial audit files. This exceeds the advisory size targets; the audit, implementation, lifecycle/evidence repairs and final measurement artifacts are separated into coherent commits. No unrelated pricing work is included.
 
 ## Verification and limitations
 

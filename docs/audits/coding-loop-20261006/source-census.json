@@ -113,19 +113,22 @@
         "babel-cli/src/control-plane/stackResolver.tokenBudget.test.ts",
         "babel-cli/src/control-plane/stackResolver.ts",
         "babel-cli/src/evals/injectionTestPrompts.ts",
-        "babel-cli/src/execute/offlineFixtures.ts",
         "babel-cli/src/execute.test.ts",
+        "babel-cli/src/execute/offlineFixtures.ts",
         "babel-cli/src/executor/architectureConformance.test.ts",
         "babel-cli/src/injectionTypes.ts",
         "babel-cli/src/inspect/loaders.js",
+        "babel-cli/src/interactive.test.ts",
         "babel-cli/src/interactive/execution/chatCore.ts",
         "babel-cli/src/interactive/execution/chatPreparationParity.test.ts",
         "babel-cli/src/interactive/execution/dispatch.ts",
         "babel-cli/src/interactive/identity.ts",
-        "babel-cli/src/interactive.test.ts",
         "babel-cli/src/lite/contract.ts",
         "babel-cli/src/localTools.ts",
         "babel-cli/src/mcp/server.ts",
+        "babel-cli/src/pipeline.autonomousGuards.test.ts",
+        "babel-cli/src/pipeline.integration.test.ts",
+        "babel-cli/src/pipeline.ts",
         "babel-cli/src/pipeline/executorLoop.ts",
         "babel-cli/src/pipeline/executorSafety.test.ts",
         "babel-cli/src/pipeline/executorSafety.ts",
@@ -137,9 +140,6 @@
         "babel-cli/src/pipeline/orchestratorTask.ts",
         "babel-cli/src/pipeline/runtimeTelemetry.ts",
         "babel-cli/src/pipeline/sweTask.test.ts",
-        "babel-cli/src/pipeline.autonomousGuards.test.ts",
-        "babel-cli/src/pipeline.integration.test.ts",
-        "babel-cli/src/pipeline.ts",
         "babel-cli/src/portable/goldenArtifacts.ts",
         "babel-cli/src/portable/workflow.ts",
         "babel-cli/src/research/analysis/repoReader.test.ts",
@@ -195,13 +195,13 @@
         "docs/guides/PORTABLE_AGENT_WORKFLOW_PLAN.md"
       ],
       "atRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
-      "deltaReviewNote": "Existing aggregate counts are retained and adjusted only by matching-line deltas in the five source files changed since 10b80ec03f7a853b0938d4ba15bc94584329e0af; regexes and original search roots are unchanged."
+      "fullRegenerationMethod": "Recomputed from immutable Git-tree blobs extracted from this revision; ripgrep used case-sensitive defaults, --count (matching lines, not individual matches), and --files-with-matches. Roots and extension globs are from searchScope; exclusions are from searchScope. Source paths sorted lexicographically."
     },
     {
       "name": "prompt_and_completion_language",
       "regex": "You are|How You Work|Recommended Workflow|complete|completion|finish|must|Do not|should|verifier",
-      "matchedLineCount": 13517,
-      "sourceFileCount": 1341,
+      "matchedLineCount": 13529,
+      "sourceFileCount": 1342,
       "sourceFiles": [
         "AGENTS.md",
         "babel-cli/scripts/analyze_chat_calibration.ts",
@@ -338,6 +338,7 @@
         "babel-cli/src/agent/chatEngineTaskIntent.ts",
         "babel-cli/src/agent/chatEngineTerminalRuntime.test.ts",
         "babel-cli/src/agent/chatEngineTerminalRuntime.ts",
+        "babel-cli/src/agent/chatEngineVerifierAdapter.noChange.test.ts",
         "babel-cli/src/agent/chatEngineVerifierAdapter.ts",
         "babel-cli/src/agent/chatEngineVerifierSession.ts",
         "babel-cli/src/agent/chatFailureClassification.ts",
@@ -680,6 +681,7 @@
         "babel-cli/src/control-plane/localStackResolver.ts",
         "babel-cli/src/control-plane/stackResolver.ts",
         "babel-cli/src/controlPlaneResolution.test.ts",
+        "babel-cli/src/daemon.ts",
         "babel-cli/src/daemon/constants.ts",
         "babel-cli/src/daemon/evidence.ts",
         "babel-cli/src/daemon/evidenceTruthfulness.test.ts",
@@ -690,7 +692,6 @@
         "babel-cli/src/daemon/queue.test.ts",
         "babel-cli/src/daemon/queue.ts",
         "babel-cli/src/daemon/recovery.test.ts",
-        "babel-cli/src/daemon.ts",
         "babel-cli/src/diagnostics/bdns/diagnosticStore.test.ts",
         "babel-cli/src/diagnostics/bdns/diagnosticStore.ts",
         "babel-cli/src/diagnostics/bdns/diagnostics.test.ts",
@@ -733,6 +734,7 @@
         "babel-cli/src/eval/provenance.test.ts",
         "babel-cli/src/evals/evidenceLabelPrompts.ts",
         "babel-cli/src/evals/injectionTestPrompts.ts",
+        "babel-cli/src/evidence.ts",
         "babel-cli/src/evidence/acceptanceContracts.ts",
         "babel-cli/src/evidence/chatRevisionBinding.test.ts",
         "babel-cli/src/evidence/chatRevisionBinding.ts",
@@ -760,12 +762,11 @@
         "babel-cli/src/evidence/runEvidence.test.ts",
         "babel-cli/src/evidence/runEvidence.ts",
         "babel-cli/src/evidence/trustedExecutionIdentity.ts",
-        "babel-cli/src/evidence.ts",
-        "babel-cli/src/execute/offlineFixtures.ts",
         "babel-cli/src/execute.reliabilityRepairProof.test.ts",
         "babel-cli/src/execute.schemaFailureLedger.test.ts",
         "babel-cli/src/execute.test.ts",
         "babel-cli/src/execute.ts",
+        "babel-cli/src/execute/offlineFixtures.ts",
         "babel-cli/src/executor/architectureConformance.test.ts",
         "babel-cli/src/executor/contracts.ts",
         "babel-cli/src/executor/effectLedger.test.ts",
@@ -787,6 +788,7 @@
         "babel-cli/src/intelligence/retryPolicy.ts",
         "babel-cli/src/intelligence/types.ts",
         "babel-cli/src/intelligence/wire.ts",
+        "babel-cli/src/interactive.test.ts",
         "babel-cli/src/interactive/BabelRepl.ts",
         "babel-cli/src/interactive/chatSessionResume.identity.test.ts",
         "babel-cli/src/interactive/chatSessionResume.ts",
@@ -833,7 +835,6 @@
         "babel-cli/src/interactive/turns.ts",
         "babel-cli/src/interactive/types.ts",
         "babel-cli/src/interactive/utils.ts",
-        "babel-cli/src/interactive.test.ts",
         "babel-cli/src/lite/artifacts.ts",
         "babel-cli/src/lite/commands.ts",
         "babel-cli/src/lite/config.ts",
@@ -847,6 +848,9 @@
         "babel-cli/src/orchestrator/workflowEngine.test.ts",
         "babel-cli/src/orchestrator/workflowEngine.ts",
         "babel-cli/src/orchestrator/workflowNode.ts",
+        "babel-cli/src/pipeline.autonomousGuards.test.ts",
+        "babel-cli/src/pipeline.integration.test.ts",
+        "babel-cli/src/pipeline.ts",
         "babel-cli/src/pipeline/benchmarkRuntime.ts",
         "babel-cli/src/pipeline/benchmarkTasks.ts",
         "babel-cli/src/pipeline/chatExecutorLoop.ts",
@@ -886,9 +890,6 @@
         "babel-cli/src/pipeline/sweUtils.ts",
         "babel-cli/src/pipeline/turnHistory.test.ts",
         "babel-cli/src/pipeline/turnHistory.ts",
-        "babel-cli/src/pipeline.autonomousGuards.test.ts",
-        "babel-cli/src/pipeline.integration.test.ts",
-        "babel-cli/src/pipeline.ts",
         "babel-cli/src/portable/goldenArtifacts.ts",
         "babel-cli/src/portable/workflow.test.ts",
         "babel-cli/src/portable/workflow.ts",
@@ -1546,12 +1547,12 @@
         "docs/guides/RELEASE.md"
       ],
       "atRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
-      "deltaReviewNote": "Existing aggregate counts are retained and adjusted only by matching-line deltas in the five source files changed since 10b80ec03f7a853b0938d4ba15bc94584329e0af; regexes and original search roots are unchanged."
+      "fullRegenerationMethod": "Recomputed from immutable Git-tree blobs extracted from this revision; ripgrep used case-sensitive defaults, --count (matching lines, not individual matches), and --files-with-matches. Roots and extension globs are from searchScope; exclusions are from searchScope. Source paths sorted lexicographically."
     },
     {
       "name": "tool_schema_and_protocol_owners",
       "regex": "ToolDefinition|buildChatToolDefinitions|TEXT_TOOL|nativeTools|function: \\{|name: [\\'\\\"](read_file|write_file|run_command|test_run|finish|lsp)[\\'\\\"]",
-      "matchedLineCount": 559,
+      "matchedLineCount": 558,
       "sourceFileCount": 127,
       "sourceFiles": [
         "babel-cli/scripts/benchmark_observation_semantic.ts",
@@ -1683,13 +1684,13 @@
         "babel-cli/src/ui/shell/shellInspector.test.ts"
       ],
       "atRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
-      "deltaReviewNote": "Existing aggregate counts are retained and adjusted only by matching-line deltas in the five source files changed since 10b80ec03f7a853b0938d4ba15bc94584329e0af; regexes and original search roots are unchanged."
+      "fullRegenerationMethod": "Recomputed from immutable Git-tree blobs extracted from this revision; ripgrep used case-sensitive defaults, --count (matching lines, not individual matches), and --files-with-matches. Roots and extension globs are from searchScope; exclusions are from searchScope. Source paths sorted lexicographically."
     },
     {
       "name": "capability_admission_and_denial",
       "regex": "deny|denies|allowed|allowlist|authorize|approval|capability|READ_ONLY|hostFallbackAllowed|execution profile",
-      "matchedLineCount": 4606,
-      "sourceFileCount": 647,
+      "matchedLineCount": 4607,
+      "sourceFileCount": 648,
       "sourceFiles": [
         "AGENTS.md",
         "babel-cli/scripts/analyze_chat_calibration.ts",
@@ -1763,6 +1764,7 @@
         "babel-cli/src/agent/chatEngineTaskAuthority.test.ts",
         "babel-cli/src/agent/chatEngineTerminalRuntime.test.ts",
         "babel-cli/src/agent/chatEngineTerminalRuntime.ts",
+        "babel-cli/src/agent/chatEngineVerifierAdapter.noChange.test.ts",
         "babel-cli/src/agent/chatEngineVerifierAdapter.ts",
         "babel-cli/src/agent/chatLspPolicy.test.ts",
         "babel-cli/src/agent/chatLspPolicy.ts",
@@ -2015,8 +2017,8 @@
         "babel-cli/src/evidence/observationStore.ts",
         "babel-cli/src/evidence/receiptIndex.test.ts",
         "babel-cli/src/evidence/trustedExecutionIdentity.ts",
-        "babel-cli/src/execute/offlineFixtures.ts",
         "babel-cli/src/execute.ts",
+        "babel-cli/src/execute/offlineFixtures.ts",
         "babel-cli/src/executor/architectureConformance.test.ts",
         "babel-cli/src/executor/contracts.ts",
         "babel-cli/src/executor/kernel.test.ts",
@@ -2033,6 +2035,7 @@
         "babel-cli/src/intelligence/qualification.ts",
         "babel-cli/src/intelligence/resolver.ts",
         "babel-cli/src/intelligence/types.ts",
+        "babel-cli/src/interactive.test.ts",
         "babel-cli/src/interactive/BabelRepl.ts",
         "babel-cli/src/interactive/commands/config.ts",
         "babel-cli/src/interactive/commands/info.ts",
@@ -2053,11 +2056,13 @@
         "babel-cli/src/interactive/testing/dailyDriverScenarios.ts",
         "babel-cli/src/interactive/testing/turnInvariants.ts",
         "babel-cli/src/interactive/types.ts",
-        "babel-cli/src/interactive.test.ts",
         "babel-cli/src/localTools.test.ts",
         "babel-cli/src/localTools.ts",
         "babel-cli/src/modelPolicy.test.ts",
         "babel-cli/src/modelPolicy.ts",
+        "babel-cli/src/pipeline.autonomousGuards.test.ts",
+        "babel-cli/src/pipeline.integration.test.ts",
+        "babel-cli/src/pipeline.ts",
         "babel-cli/src/pipeline/benchmarkRuntime.ts",
         "babel-cli/src/pipeline/chatExecutorLoop.ts",
         "babel-cli/src/pipeline/executorLoop.test.ts",
@@ -2074,9 +2079,6 @@
         "babel-cli/src/pipeline/sweTask.test.ts",
         "babel-cli/src/pipeline/sweTask.ts",
         "babel-cli/src/pipeline/targetConsistency.ts",
-        "babel-cli/src/pipeline.autonomousGuards.test.ts",
-        "babel-cli/src/pipeline.integration.test.ts",
-        "babel-cli/src/pipeline.ts",
         "babel-cli/src/portable/goldenArtifacts.ts",
         "babel-cli/src/portable/workflow.ts",
         "babel-cli/src/protocol/client/host.ts",
@@ -2340,7 +2342,7 @@
         "docs/guides/PORTABLE_AGENT_WORKFLOW_PLAN.md"
       ],
       "atRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
-      "deltaReviewNote": "Existing aggregate counts are retained and adjusted only by matching-line deltas in the five source files changed since 10b80ec03f7a853b0938d4ba15bc94584329e0af; regexes and original search roots are unchanged."
+      "fullRegenerationMethod": "Recomputed from immutable Git-tree blobs extracted from this revision; ripgrep used case-sensitive defaults, --count (matching lines, not individual matches), and --files-with-matches. Roots and extension globs are from searchScope; exclusions are from searchScope. Source paths sorted lexicographically."
     },
     {
       "name": "budgets_limits_and_recovery",
@@ -2654,6 +2656,7 @@
         "babel-cli/src/intelligence/treatment.ts",
         "babel-cli/src/intelligence/types.ts",
         "babel-cli/src/intelligence/wire.ts",
+        "babel-cli/src/interactive.test.ts",
         "babel-cli/src/interactive/BabelRepl.ts",
         "babel-cli/src/interactive/commands/info.ts",
         "babel-cli/src/interactive/commands/service.ts",
@@ -2677,7 +2680,6 @@
         "babel-cli/src/interactive/testing/dailyDriverScenarios.ts",
         "babel-cli/src/interactive/testing/simulatedTtyInteractive.test.ts",
         "babel-cli/src/interactive/types.ts",
-        "babel-cli/src/interactive.test.ts",
         "babel-cli/src/lite/commands.ts",
         "babel-cli/src/lite/contract.ts",
         "babel-cli/src/lite/index.test.ts",
@@ -2688,6 +2690,8 @@
         "babel-cli/src/modelPolicy.ts",
         "babel-cli/src/orchestrator/workflowEngine.test.ts",
         "babel-cli/src/orchestrator/workflowNode.ts",
+        "babel-cli/src/pipeline.autonomousGuards.test.ts",
+        "babel-cli/src/pipeline.ts",
         "babel-cli/src/pipeline/benchmarkTasks.ts",
         "babel-cli/src/pipeline/executorLoop.test.ts",
         "babel-cli/src/pipeline/executorLoop.ts",
@@ -2701,8 +2705,6 @@
         "babel-cli/src/pipeline/runtimeTelemetry.ts",
         "babel-cli/src/pipeline/sweTask.test.ts",
         "babel-cli/src/pipeline/sweTask.ts",
-        "babel-cli/src/pipeline.autonomousGuards.test.ts",
-        "babel-cli/src/pipeline.ts",
         "babel-cli/src/portable/goldenArtifacts.ts",
         "babel-cli/src/portable/workflow.test.ts",
         "babel-cli/src/portable/workflow.ts",
@@ -2975,7 +2977,7 @@
         "docs/guides/PORTABLE_AGENT_WORKFLOW_PLAN.md"
       ],
       "atRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
-      "deltaReviewNote": "Existing aggregate counts are retained and adjusted only by matching-line deltas in the five source files changed since 10b80ec03f7a853b0938d4ba15bc94584329e0af; regexes and original search roots are unchanged."
+      "fullRegenerationMethod": "Recomputed from immutable Git-tree blobs extracted from this revision; ripgrep used case-sensitive defaults, --count (matching lines, not individual matches), and --files-with-matches. Roots and extension globs are from searchScope; exclusions are from searchScope. Source paths sorted lexicographically."
     },
     {
       "name": "context_prompt_compaction_memory",
@@ -3085,17 +3087,17 @@
         "babel-cli/src/doctor.ts",
         "babel-cli/src/eval/canary/liveCell.ts",
         "babel-cli/src/evals/injectionTestPrompts.ts",
+        "babel-cli/src/evidence.ts",
         "babel-cli/src/evidence/chatRevisionBinding.ts",
         "babel-cli/src/evidence/episodeStream.ts",
         "babel-cli/src/evidence/observationCheckpointIntegration.test.ts",
-        "babel-cli/src/evidence.ts",
         "babel-cli/src/execute.ts",
         "babel-cli/src/intelligence/inferenceInventory.ts",
         "babel-cli/src/intelligence/intelligence.test.ts",
         "babel-cli/src/intelligence/types.ts",
+        "babel-cli/src/interactive/commands.ts",
         "babel-cli/src/interactive/commands/info.ts",
         "babel-cli/src/interactive/commands/workflow.ts",
-        "babel-cli/src/interactive/commands.ts",
         "babel-cli/src/interactive/execution/chat.integration.test.ts",
         "babel-cli/src/interactive/execution/chat.ts",
         "babel-cli/src/interactive/execution/chatCoordinatorDispatch.test.ts",
@@ -3117,11 +3119,11 @@
         "babel-cli/src/modelPolicy.ts",
         "babel-cli/src/orchestrator/workflowEngine.ts",
         "babel-cli/src/orchestrator/workflowNode.ts",
+        "babel-cli/src/pipeline.integration.test.ts",
+        "babel-cli/src/pipeline.ts",
         "babel-cli/src/pipeline/executorLoop.ts",
         "babel-cli/src/pipeline/turnHistory.test.ts",
         "babel-cli/src/pipeline/turnHistory.ts",
-        "babel-cli/src/pipeline.integration.test.ts",
-        "babel-cli/src/pipeline.ts",
         "babel-cli/src/protocol/client/hostResumeReconstruction.test.ts",
         "babel-cli/src/research/acquisition/snapshot.ts",
         "babel-cli/src/research/analysis/repoReader.test.ts",
@@ -3220,7 +3222,7 @@
         "docs/guides/CONTRIBUTOR_PROCEDURES.md"
       ],
       "atRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
-      "deltaReviewNote": "Existing aggregate counts are retained and adjusted only by matching-line deltas in the five source files changed since 10b80ec03f7a853b0938d4ba15bc94584329e0af; regexes and original search roots are unchanged."
+      "fullRegenerationMethod": "Recomputed from immutable Git-tree blobs extracted from this revision; ripgrep used case-sensitive defaults, --count (matching lines, not individual matches), and --files-with-matches. Roots and extension globs are from searchScope; exclusions are from searchScope. Source paths sorted lexicographically."
     },
     {
       "name": "provider_request_and_native_projection",
@@ -3306,13 +3308,13 @@
         "babel-cli/src/services/threadStore/conversationSync.ts"
       ],
       "atRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
-      "deltaReviewNote": "Existing aggregate counts are retained and adjusted only by matching-line deltas in the five source files changed since 10b80ec03f7a853b0938d4ba15bc94584329e0af; regexes and original search roots are unchanged."
+      "fullRegenerationMethod": "Recomputed from immutable Git-tree blobs extracted from this revision; ripgrep used case-sensitive defaults, --count (matching lines, not individual matches), and --files-with-matches. Roots and extension globs are from searchScope; exclusions are from searchScope. Source paths sorted lexicographically."
     },
     {
       "name": "child_delegation_and_effects",
       "regex": "sub_agent|executeSubAgentAction|mutationEnabled|effect_status|changedFiles|childDelegation",
       "matchedLineCount": 702,
-      "sourceFileCount": 126,
+      "sourceFileCount": 127,
       "sourceFiles": [
         "babel-cli/src/agent/agentLoopReducer.ts",
         "babel-cli/src/agent/canonicalToolMapping.ts",
@@ -3375,6 +3377,7 @@
         "babel-cli/src/agent/toolCallExport.test.ts",
         "babel-cli/src/agent/toolCallExport.ts",
         "babel-cli/src/agent/toolExecutionIdentity.test.ts",
+        "babel-cli/src/agent/verifierCacheIdentity.test.ts",
         "babel-cli/src/claude-babel-astra-lab/babelHarness.ts",
         "babel-cli/src/claude-babel-astra-lab/claudeHarness.ts",
         "babel-cli/src/claude-babel-astra-lab/comparison-contract-v3.test.ts",
@@ -3442,7 +3445,7 @@
         "babel-cli/src/ui/tuiDailyDriverCert.ts"
       ],
       "atRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
-      "deltaReviewNote": "Existing aggregate counts are retained and adjusted only by matching-line deltas in the five source files changed since 10b80ec03f7a853b0938d4ba15bc94584329e0af; regexes and original search roots are unchanged."
+      "fullRegenerationMethod": "Recomputed from immutable Git-tree blobs extracted from this revision; ripgrep used case-sensitive defaults, --count (matching lines, not individual matches), and --files-with-matches. Roots and extension globs are from searchScope; exclusions are from searchScope. Source paths sorted lexicographically."
     },
     {
       "name": "manifest_and_instruction_provenance",
@@ -3475,7 +3478,7 @@
         "babel-cli/src/runIntelligence/contracts.ts"
       ],
       "atRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9",
-      "deltaReviewNote": "Existing aggregate counts are retained and adjusted only by matching-line deltas in the five source files changed since 10b80ec03f7a853b0938d4ba15bc94584329e0af; regexes and original search roots are unchanged."
+      "fullRegenerationMethod": "Recomputed from immutable Git-tree blobs extracted from this revision; ripgrep used case-sensitive defaults, --count (matching lines, not individual matches), and --files-with-matches. Roots and extension globs are from searchScope; exclusions are from searchScope. Source paths sorted lexicographically."
     }
   ],
   "reviewedCallPaths": [
@@ -3669,10 +3672,14 @@
         "current-nested-git-project-content-scope",
         "current-unknown-historical-revision-stale"
       ],
-      "searchDeltaMethod": "Compared these five source files against prior census revision 10b80ec03f7a853b0938d4ba15bc94584329e0af for each existing search regex within the original roots. The only added matching lines are two prompt/completion-language lines in chatRevisionBinding.test.ts; no instruction delivery owner was discovered by these evidence changes. The five files were also manually callpath-reviewed.",
+      "searchDeltaMethod": "The nine top-level searches were fully regenerated at 674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9 from immutable Git-tree blobs using the recorded roots, extension globs, exclusions, and case-sensitive ripgrep --count/--files-with-matches options. Any earlier incremental estimate from 10b80ec03f7a853b0938d4ba15bc94584329e0af is superseded. The five changed source files remain manually call-path-reviewed; their findings and two added current matrix rows are preserved above.",
       "searchHitDelta": {
-        "prompt_and_completion_language": 2,
-        "otherExistingSearches": 0
+        "status": "superseded_by_full_regeneration",
+        "priorRevision": "10b80ec03f7a853b0938d4ba15bc94584329e0af",
+        "priorEstimate": {
+          "prompt_and_completion_language": 2,
+          "otherExistingSearches": 0
+        }
       }
     }
   },
