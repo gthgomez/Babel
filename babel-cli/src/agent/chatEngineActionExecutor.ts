@@ -590,7 +590,7 @@ export class ChatEngineActionExecutor {
           hostFallbackAllowed: this.host.isolationBrokerFlags().hostFallbackAllowed,
           ...(acceptedOperation !== undefined ? { operation: acceptedOperation } : {}),
         })) {
-          const detail = "LSP denied: host-process authority is unavailable for this task/profile.";
+          const detail = "LSP denied: Chat has no lease-governed language-server process adapter.";
           this.host.toolCallLog.push({
             tool,
             target,
@@ -1278,6 +1278,8 @@ export class ChatEngineActionExecutor {
             index: meta.index,
             exit_code: cachedVerifier.receipt.exit_code,
             stdout: cachedVerifier.receipt.summary,
+            // Cache reuse executes no process and changes no workspace bytes.
+            effect_status: 'confirmed_no_change',
           });
           callbacks?.onToolComplete?.(
             toolId,
@@ -1304,11 +1306,8 @@ export class ChatEngineActionExecutor {
       });
       const result: PolicyGatedExecutionResult = await executeActionWithPolicy(
         agentAction,
-        // workspace_write = mutations auto-execute without user approval.
-        // Network-touching commands (curl, npm install) are still hard-denied.
-        // Future evolutions:
-        //   B — new 'auto' preset that allows everything (no approval, no denial)
-        //   C — BABEL_ALLOW_NETWORK_COMMANDS=1 env flag for graduated autonomy
+        // Task/profile scope only narrows capability; executor authority,
+        // isolation, network and approval decisions still govern dispatch.
         this.host.executionProfile === "plan" ||
           process.env["BABEL_READ_ONLY"] === "true" ||
           process.env["BABEL_EXECUTION_PROFILE"] === "read_only_audit"
@@ -1683,6 +1682,8 @@ export class ChatEngineActionExecutor {
                 this.host.parity.sessionEvents.events,
               ),
               allowRepositoryScopeForRedRecovery: lastResult.exit_code !== 0,
+              allowRepositoryScopeForGreenNoChange:
+                lastResult.exit_code === 0 && this.host.writeCount === 0,
               sessionEvents: this.host.parity.sessionEvents,
               turnId: String(this.host.parity.turnId ?? this.host._turnIndex),
               ledger: this.host.executedVerifierLedger,

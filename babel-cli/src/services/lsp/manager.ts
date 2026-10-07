@@ -13,9 +13,8 @@
  *   - TextDocument open/close state tracking
  */
 
-import { execSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs';
+import { delimiter, extname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { createLspClient, type LspClient } from './client.js';
@@ -132,29 +131,35 @@ function extensionToLanguageId(filePath: string): string | null {
 }
 
 /**
- * Detect the TypeScript language server binary.
- * Checks node_modules/.bin first, then falls back to npx.
+ * Detect an already-installed TypeScript language server without executing it.
+ * Discovery must never invoke package managers or run candidate binaries.
  */
 function detectTypeScriptServer(): { command: string; args: string[] } | null {
-  // Check common locations for typescript-language-server
+  const commandNames = process.platform === 'win32'
+    ? [TYPESCRIPT_SERVER_COMMAND, ...((process.env['PATHEXT'] ?? '.EXE;.CMD;.BAT').split(';')
+      .filter(Boolean).map(extension => `${TYPESCRIPT_SERVER_COMMAND}${extension.toLowerCase()}`))]
+    : [TYPESCRIPT_SERVER_COMMAND];
   const candidates = [
-    join(process.cwd(), 'node_modules', '.bin', TYPESCRIPT_SERVER_COMMAND),
     join(process.cwd(), 'node_modules', 'typescript-language-server', 'lib', 'cli.mjs'),
+    ...commandNames.map(name => join(process.cwd(), 'node_modules', '.bin', name)),
   ];
 
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return { command: candidate, args: TYPESCRIPT_SERVER_ARGS };
-    }
+  const pathValue = process.env['PATH'] ?? process.env['Path'] ?? '';
+  for (const directory of pathValue.split(delimiter).filter(Boolean)) {
+    candidates.push(...commandNames.map(name => join(directory, name)));
   }
 
-  // Fall back to npx
-  try {
-    execSync('npx --yes typescript-language-server --version', { stdio: 'ignore', timeout: 10_000 });
-    return { command: 'npx', args: ['--yes', TYPESCRIPT_SERVER_COMMAND, '--stdio'] };
-  } catch {
-    return null;
+  for (const candidate of candidates) {
+    try {
+      const absolute = resolve(candidate);
+      if (!isAbsolute(absolute) || !statSync(absolute).isFile()) continue;
+      if (process.platform !== 'win32') accessSync(absolute, constants.X_OK);
+      return { command: absolute, args: TYPESCRIPT_SERVER_ARGS };
+    } catch {
+      // Missing or non-executable candidates are simply unavailable.
+    }
   }
+  return null;
 }
 
 /** Build the default TypeScript server config. */

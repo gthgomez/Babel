@@ -42,8 +42,26 @@ The normal loop is `inspect → answer` or `inspect → edit when needed → rel
 * Text mode drops caller append context along with optional orientation data. Caller policy cannot be discarded merely because a small-model protocol was selected; parity tests must cover the deliberate context boundary.
 * Deep executor prose claims all files not explicitly excluded are authorized. An approved plan and QA verdict do not grant that authority. Narrow this wording to the plan and runtime grants while preserving Deep's actual plan gate.
 * No live API credentials are configured in this execution environment. Behavioral replay uses scripted providers and real runtime/tool/evidence boundaries; it is not a live-model intelligence or cost benchmark.
+* An actual engine replay reproduced a second mutation-pressure mechanism at completion: correct code read once followed by a truthful no-change answer triggers `completion prefers patch` repeatedly and finally fails. Remove this separate veto, admit inspected no-change conclusions through the existing completion gate, preserve explicit verifier requirements, and project `NO_CHANGE_REQUIRED` without certifying a patch. Regression: `codingLoopSimplification.test.ts`, plus adversarial no-inspection/failed-inspection/explicit-verifier gate tests.
+* Direct ChatEngine callers could compile a manifest without installing that repository context in the request. Use one compiled-stack object for delivery and provenance; direct callers compile it, prepared callers supply it, and reused preparation replaces it. Required-policy overflow must fail before provider dispatch on every path.
 
 ## Change contracts and regression evidence
+
+### D0 — Independent review correction: LSP discovery
+
+Old mechanism: when no local TypeScript language server exists, manager discovery runs `npx --yes typescript-language-server --version`, then registers another `npx --yes` command.
+
+Problem: discovery can install and execute package code, inherit ambient credentials, and use the network before the sanitized language-server client starts. The first safe-environment fix did not cover this earlier spawn. Independent review of `069509b` identified it.
+
+Real invariant: selecting code intelligence does not authorize installing dependencies or running a credential-bearing package probe.
+
+New mechanism: discover an already installed server without executing a probe; otherwise report no server. The embedded service retains explicit project server configuration and a sanitized client environment. Ordinary Chat withholds LSP at both schema projection and dispatch until an adapter can admit the actual process through its lease/authority boundary; host fallback alone is isolation configuration, not action authority.
+
+Why simpler: removes a hidden process/network/install path and its fallback behavior.
+
+Why safe: installed/configured servers remain usable by the embedded service under its caller authority. Ordinary Chat retains local read/search tools and does not expose an ungoverned process. Dependency installation, when actually needed and authorized, uses the ordinary governed command path rather than a hidden LSP side effect. No new authority flag is introduced.
+
+Evidence: a stubbed child-process reproduction of the old discovery path, a no-process/no-install discovery regression, installed-server/configured-server cases, and existing LSP client tests. This correction is a separate post-review commit; the reviewed original head is not presented as the corrected revision.
 
 ### D1 — Prompt and repository instruction delivery
 
@@ -85,7 +103,7 @@ Problem: capable investigation can be interrupted; caller intent may disagree wi
 
 Real invariant: explicit denials and runtime capabilities remain binding, no-progress work stays bounded, same-task verification remains possible, later tasks cannot inherit certification.
 
-New mechanism: explicit operation input with AUTO fallback, novelty-based progress/recovery for ordinary Chat, explicit fresh-task certification retirement.
+New mechanism: explicit operation input with AUTO fallback, novelty-based progress/recovery for ordinary Chat, fresh-task certification retirement with a task epoch captured before asynchronous dispatch. Retirement invalidates the epoch so an old in-flight mutation cannot restore certification for a reused run ID.
 
 Why simpler: use the existing progress/evidence owners rather than another mutation-pressure authority.
 
@@ -93,13 +111,73 @@ Why safe: resource ceilings, action admission, current-revision verification, no
 
 Evidence: distinct-read investigation versus identical rereads, no-change task completion, explicit READ_ONLY with mutation-shaped text, profile denial despite CHANGE, fresh task versus continuation, dry-run and stale receipt rejection.
 
+### D4 — No-change conclusions and unknown effects
+
+Old mechanism: a separate completion heuristic prefers a patch; change-task honesty starts from a required write. Initial simplification accepted a successful read as a no-change basis but missed process logs with no effect result.
+
+Problem: already-correct code can provoke a manufactured change or a blocked result. Conversely, a background start or successful process exit says nothing authoritative about whether workspace bytes changed.
+
+Real invariant: useful inspection may conclude no edit is needed; unknown effects cannot support that conclusion; a no-change answer is never patch certification.
+
+New mechanism: require successful, nonempty inspection and no observed or unresolved mutation for a `NO_CHANGE_REQUIRED` conclusion. Direct mutation failures, indeterminate child effects, and process/await logs without `confirmed_no_change` reject that path. A reused verifier cache entry records no new effects because no process runs. Explicit verifier requirements still apply.
+
+Why simpler: one evidence-based completion gate replaces the independent patch-preference loop; completion does not require a token edit.
+
+Why safe: native final prose proposes completion, while canonical evidence and terminal authority decide the outcome. Missing, failed, simulated, stale and revision-mismatched verification is not promoted to success.
+
+Evidence: real-engine already-correct fixture; no-inspection, failed-inspection, background-start and await adversarial controls; command-cache execution count and effect log; real stale-after-mutation fixture. Independent review R1 rejected the incomplete first version; it was corrected before delivery.
+
+### D5 — Recovery feedback and native completion
+
+Old mechanism: native natural completion and a `finish` schema coexist; restricted tools independently reintroduce `finish`. Completion rejection also competes with an immediate auto-continue and a separate text-only hard stop. Some injected advice is not represented as durable controller feedback.
+
+Problem: protocols disagree, rejection can loop without the provider receiving reliable feedback, and recovered sessions may not reproduce the live request.
+
+Real invariant: a model may propose completion, but it cannot approve its own evidence; interrupted sessions must preserve feedback provenance and outcome.
+
+New mechanism: all native advertisements, including restricted sets, derive from the canonical native inventory without `finish`. Text/JSON compatibility retains its explicit finish protocol. Controller feedback is a durable, non-authoritative advisory message; one bounded completion-recovery allowance governs unsupported final claims.
+
+Why simpler: one completion protocol per active transport and one recovery owner for rejected final claims.
+
+Why safe: the final decision stays with runtime/evidence gates. Feedback is not a user instruction or authority grant. Critic/resource controls remain; ordinary no-progress advice is selected by the existing arbiter rather than injected twice.
+
+Evidence: native and restricted-schema tests; real request snapshots; a scripted provider changes its next action after feedback; cold reconstruction reproduces that feedback; no-change and stale-proof terminal tests.
+
+### D6 — Explicit verifier after an already-correct change request
+
+Old mechanism: green verifier capture assumes a nonempty mutation-file scope. An actual successful verifier before any mutation can throw on empty file scope and leave a truthful no-change task blocked.
+
+Problem: requiring a fake diff to obtain evidence contradicts inspected no-change completion.
+
+Real invariant: verification must bind actual current contents; a root-path digest or an unchanged HEAD alone cannot establish workspace currency.
+
+New mechanism: an explicit adapter route for a successful verifier with zero task writes and no mutation paths may bind the Git-backed repository contents. It remains subject to inspection, command identity, execution provenance and currency checks. An unavailable content binding stays unverified. Existing file-scoped mutation receipts keep their contract.
+
+Why simpler: no-change tasks use the existing revision/evidence model without a manufactured mutation, a new tool, or an exception to honesty.
+
+Why safe: no-Git path-only bindings cannot prove currency. A later repository change invalidates the evidence. This route can support a no-change conclusion; it does not create a patch or satisfy the verified-patch write requirement.
+
+Evidence required before acceptance: red-first actual Git fixture with already-correct code and an explicitly required verifier; empty-scope default rejection; no-Git repository currency refusal; dirty/untracked content currency; simulated and stale controls. The final result records the implemented scope and executed checks.
+
+## Explicit instruction hierarchy and retained boundaries
+
+Host and user authority remain above all repository content. Ordinary Chat receives the small Babel behavioral/protocol contract, the complete applicable repository contract, explicitly supplied caller context and relevant task/conversation evidence. Optional skill/engineering guidance is loaded only through its declared owner. No inferred plan, tool description, model reply, repository file or review result creates execution authority.
+
+**Removed from ordinary model requests:** duplicate Core Principles/How You Work/Recommended Workflow sections; native Markdown tool table; native `finish` schema including restricted sets; generic provider/safety/verifier stack snippets that repeat other owners; repeated 50-line edit advice; default phase-plan/pre-loop workflow prose; ordinary mutation-count interventions; duplicate completion retry protocols. Runtime implementations and compatibility-only helpers may remain when supported callers require them; the matrix names those delivery boundaries.
+
+**Demand-loaded:** Git/PR/release/review/credential procedures in `CONTRIBUTOR_PROCEDURES.md`; optional ENGINEERING/domain context; explicitly selected skills; large Plan/Deep catalog, OS and domain overlays in their existing specialized runners. `CLAUDE.md`, `Claude.md`, `BABEL.md`, and `PROJECT_CONTEXT.md` are not silent ordinary Chat instruction sources. Product documentation and external host integrations remain separately inventoried.
+
+**Runtime-only enforcement retained:** profile/task scope intersection; lease/PDP and action approval; project and realpath containment; secret path and safe-environment restrictions; network/external-action admission; destructive Git/deploy/merge approval; mutation effect transactions, cancellation, owner generations and recovery; resource ceilings; verifier execution provenance, command/argv/cwd/environment identity, revision binding, stale invalidation and cache currency; exact-revision completion and independent delivery review. This campaign does not reimplement those policies in the prompt.
+
+**Deliberately retained compatibility:** `read_file`/`read_range`, focused replacement/patch/whole-file APIs, `run_command`/`test_run`, text and legacy JSON protocols, Plan/Deep staged workflows, and opaque third-party provider/MCP/skill entry points. Removing these active interfaces without behavioral evidence would be a migration rather than a simplification. Fine-grained web/MCP/delegation demand loading for change tasks remains a measured follow-up, not a claimed result here.
+
 ## Implementation plan and ownership
 
 The owner's packet authorizes proceeding after this internal decision; no further approval is required for these scoped changes.
 
-- [ ] **A: Prompt/stack slice.** Own `chatToolDefinitions.ts`, `chatStackCompile.ts`, `instructionManifest.ts`, their focused tests, text-protocol description owner, root AGENTS and procedural extraction. Preserve public action parameter names. Run focused tests before/after. Do not edit ChatEngine or shared runtime policy.
-- [ ] **B: Control/lifecycle slice.** Own `toolExecutor.ts`, `chatZeroWritePolicy.ts`, `policyShadow.ts` and focused runtime tests. Retire task certification through an exported lifecycle function; root integrates the ChatEngine hook. Use existing progress receipts rather than inventing another detector. Preserve resource, lease, recovery and evidence gates.
-- [ ] **Root: integration and behavioral instrumentation.** Own ChatEngine, operation/preparation contracts, request snapshots, evaluator fixtures, Deep wording, manifest/test inventory integration, audit artifacts and all Git writes. Run baseline comparison from the frozen original revision.
+- [x] **A: Prompt/stack slice.** Own `chatToolDefinitions.ts`, `chatStackCompile.ts`, `instructionManifest.ts`, their focused tests, text-protocol description owner, root AGENTS and procedural extraction. Preserve public action parameter names. Run focused tests before/after. Do not edit ChatEngine or shared runtime policy.
+- [x] **B: Control/lifecycle slice.** Own `toolExecutor.ts`, `chatZeroWritePolicy.ts`, `policyShadow.ts` and focused runtime tests. Retire task certification through an exported lifecycle function; root integrates the ChatEngine hook. Use existing progress receipts rather than inventing another detector. Preserve resource, lease, recovery and evidence gates.
+- [x] **Root: integration and behavioral instrumentation.** Own ChatEngine, operation/preparation contracts, request snapshots, evaluator fixtures, Deep wording, manifest/test inventory integration, audit artifacts and all Git writes. Run baseline comparison from the frozen original revision.
 - [ ] **Independent review.** Freeze exact changes, A reviews B and integration; B reviews A and integration. Reviewers do not modify or approve their own patch. Address concrete findings and rerun affected checks.
 - [ ] **Delivery.** Run relevant suites, canonical typecheck/build, policy/secret scans, architecture budget and applicable hosted checks; inspect changed paths and base diff; push and open/update a PR. No merge or deployment.
 

@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   buildChatSystemPrompt,
   buildChatToolDefinitions,
+  buildRestrictedChatToolDefinitions,
   buildChatTurnPrompt,
 } from "./chatToolDefinitions.js";
 import { TEXT_TOOL_NAMES, TEXT_TOOL_PROMPT_SECTION } from "./textToolParser.js";
@@ -123,6 +124,14 @@ describe("buildChatSystemPrompt text delivery", () => {
     assert.ok(tools.some((tool) => tool.function.name === "lsp"));
     assert.ok(!tools.some((tool) => tool.function.name === "finish"), "finish is not newly advertised for native calls");
     assert.ok(TEXT_TOOL_NAMES.has("finish"), "text compatibility keeps finish");
+  });
+
+  it("keeps legacy finish compatibility out of restricted native schemas", () => {
+    for (const mode of ["mutate_only", "act_or_verify"] as const) {
+      const names = buildRestrictedChatToolDefinitions(mode).map(tool => tool.function.name);
+      assert.ok(!names.includes("finish"), `${mode} must not advertise legacy finish`);
+    }
+    assert.ok(TEXT_TOOL_NAMES.has("finish"), "legacy text parser compatibility remains available");
   });
 
   it("scopes legacy and text manuals to the caller-visible tools", () => {

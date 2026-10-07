@@ -1,16 +1,15 @@
 import type { TaskOperation } from '../config/chatTaskClass.js';
-import { isReadOnlyChat } from './chatReadOnly.js';
 
 /**
- * LSP starts project-configured processes directly on the host. Task scope may
- * narrow that capability, but only the governed execution profile grants its
- * host-process boundary; Docker does not contain the current LSP spawn path.
+ * Ordinary Chat has no lease-governed adapter for language-server processes.
+ * Host fallback controls isolation, not action authority. Withhold both schema
+ * and dispatch until LSP startup passes the same admission boundary as commands.
+ * Keep this single capability projection for every supported Chat protocol.
  */
-export function canUseChatLsp(input: {
+export function canUseChatLsp(_input: {
   hostFallbackAllowed: boolean;
   operation?: TaskOperation;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  const env = input.env ?? process.env;
-  return input.hostFallbackAllowed && input.operation !== 'READ_ONLY' && !isReadOnlyChat(env);
+  return false;
 }

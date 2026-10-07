@@ -106,6 +106,7 @@ const scenarios = [
   { id: 'verifier-command', task: 'Fix the parser. Run `npm test` to verify the result.' },
   { id: 'reused-tui', task: 'Explain fixture.ts after the previous task.', reused: true, runtimeMode: 'tui' },
   { id: 'native-tools', task: 'Fix the single function in fixture.ts.', protocol: 'native' },
+  { id: 'native-restricted', task: 'Fix the single function in fixture.ts.', protocol: 'native', restricted: true },
   { id: 'text-tools', task: 'Fix the single function in fixture.ts.', protocol: 'text' },
   { id: 'legacy-json', task: 'Fix the single function in fixture.ts.', protocol: 'legacy' },
   { id: 'text-read-only', task: 'Do not modify anything. Explain fixture.ts.', protocol: 'text' },
@@ -136,6 +137,9 @@ try {
     activeCapture = snapshot
     const factory = options => {
       priorEngine = attachRunner(new ChatEngine({ ...options, maxTurns: 1 }), protocol)
+      // Exercise the actual restricted schema dispatch, without fabricating a
+      // long stalled conversation. The snapshot records this injected state.
+      if (scenario.restricted) priorEngine.nextTurnToolPolicy = () => ({ restrict: true, mode: 'act_or_verify' })
       return priorEngine
     }
     if (scenario.reused && priorEngine) attachRunner(priorEngine, protocol)
@@ -153,6 +157,8 @@ try {
       snapshot.captureNote = String(error.message).split(fixture).join('<FIXTURE>')
     }
     if (!snapshot.request) throw new Error(`No production runner request captured: ${scenario.id}: ${snapshot.captureNote ?? 'no terminal error'}`)
+    snapshot.runtimeCapabilityClass = priorEngine?.getTurnRuntimeSnapshot?.()?.effectiveOperation ?? snapshot.runtimeCapabilityClass
+    if (scenario.restricted) snapshot.injectedRuntimeState = { restrict: true, mode: 'act_or_verify' }
     const request = snapshot.request
     const instructionText = request.messages
       ? request.messages.filter(m => m.role === 'system' || m.role === 'developer').map(m => m.content).join('\n\n')

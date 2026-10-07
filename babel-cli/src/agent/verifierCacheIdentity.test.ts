@@ -301,5 +301,10 @@ describe('verifier cache executions follow argv identity', { concurrency: false 
     const repeated = await run(oneSpace, 5);
     assert.equal(lines().length, 4, 'an identical command reuses the current receipt');
     assert.match(repeated.observation, /Verifier result unchanged/);
+    const cachedLog = (engine as unknown as {
+      toolCallLog: Array<{ detail?: string; effect_status?: string }>;
+    }).toolCallLog.at(-1);
+    assert.match(cachedLog?.detail ?? '', /cached receipt/);
+    assert.equal(cachedLog?.effect_status, 'confirmed_no_change', 'cache reuse executes no process');
   });
 });

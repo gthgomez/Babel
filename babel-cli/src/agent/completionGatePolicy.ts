@@ -469,6 +469,10 @@ export type GateToolLogEntry = {
 /** Recorded inspection can support a no-change conclusion, never patch certification. */
 export function hasInspectedNoChangeEvidence(log: GateToolLogEntry[]): boolean {
   const unresolvedMutation = log.some(entry => entry.effect_status === 'indeterminate'
+    // Process success describes its exit, not its filesystem effects. In
+    // particular, background starts and awaits cannot prove an unchanged tree.
+    || ((isVerifierAttemptTool(entry.tool) || entry.tool === 'await_command')
+      && entry.effect_status !== 'confirmed_no_change')
     || (isDirectMutationTool(entry.tool)
       && (Boolean(entry.error) || entry.effect_status !== 'confirmed_no_change'))
     || (entry.tool === 'sub_agent' && Boolean(entry.error)

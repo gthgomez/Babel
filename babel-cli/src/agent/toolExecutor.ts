@@ -138,10 +138,21 @@ function resetBlocks(runId: string): void {
  * process-wide dry-run flag. Explicit dry-run and shadow capture never enter.
  */
 const liveCertifiedRunIds = new Set<string>();
+const liveCertificationEpochs = new Map<string, symbol>();
+
+function certificationEpochForRun(runId: string): symbol {
+  let epoch = liveCertificationEpochs.get(runId);
+  if (!epoch) {
+    epoch = Symbol(runId);
+    liveCertificationEpochs.set(runId, epoch);
+  }
+  return epoch;
+}
 
 export function resetCircuitBreaker(): void {
   sessionBlocks.clear();
   liveCertifiedRunIds.clear();
+  liveCertificationEpochs.clear();
 }
 
 export function resetCircuitBreakerForRun(runId: string): void {
@@ -157,6 +168,7 @@ export function resetCircuitBreakerForRun(runId: string): void {
  */
 export function retireLiveCertificationForRun(runId: string): void {
   liveCertifiedRunIds.delete(runId);
+  liveCertificationEpochs.delete(runId);
 }
 
 export function getCircuitBreakerState(runId?: string): {
@@ -743,6 +755,10 @@ export async function executeActionWithPolicy(
     lockContext?: FileLockContext | undefined;
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
+  // Capture task identity before any asynchronous policy/approval/executor
+  // suspension. A completion from a retired task cannot hand certification
+  // to a later task that reuses the same engine run id.
+  const certificationEpoch = certificationEpochForRun(context.runId);
   const executor = deps.executor ?? defaultToolExecutor;
   // V2 authority: the default decision path consults the PDP when a lease is
   // active (env or explicit override). Additive — no lease → legacy behavior.
@@ -1215,6 +1231,7 @@ export async function executeActionWithPolicy(
     const invocationLive =
       (effectClass === 'reconcilable_mutation' && defaultLive) ||
       (defaultLive &&
+        liveCertificationEpochs.get(context.runId) === certificationEpoch &&
         liveCertifiedRunIds.has(context.runId) &&
         isCertificationCommand(action));
     const executionContext: ToolContext = {
@@ -1476,7 +1493,12 @@ export async function executeActionWithPolicy(
       }
     }
 
-    if (invocationLive && effectClass === 'reconcilable_mutation' && context.runId) {
+    if (
+      invocationLive &&
+      effectClass === 'reconcilable_mutation' &&
+      context.runId &&
+      liveCertificationEpochs.get(context.runId) === certificationEpoch
+    ) {
       liveCertifiedRunIds.add(context.runId);
     }
     return {

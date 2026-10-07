@@ -27,12 +27,12 @@ afterEach(() => {
   for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
-test('LSP host process requires host-profile or explicit host-fallback authority', () => {
+test('LSP is withheld until its process adapter supports governed admission', () => {
   assert.equal(canUseChatLsp({ hostFallbackAllowed: false }), false)
-  assert.equal(canUseChatLsp({ hostFallbackAllowed: true }), true)
+  assert.equal(canUseChatLsp({ hostFallbackAllowed: true }), false)
 })
 
-test('governed isolation grants LSP in dev_local but not safe_repo without escalation', () => {
+test('host isolation and fallback settings never substitute for LSP action authority', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-lsp-profile-'))
   temporaryRoots.push(root)
   delete process.env['BABEL_ALLOW_HOST_FALLBACK']
@@ -42,7 +42,7 @@ test('governed isolation grants LSP in dev_local but not safe_repo without escal
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local'
   assert.equal(canUseChatLsp({
     hostFallbackAllowed: resolveIsolationBrokerFlags(root).hostFallbackAllowed,
-  }), true)
+  }), false)
 
   process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
   assert.equal(canUseChatLsp({
@@ -52,10 +52,10 @@ test('governed isolation grants LSP in dev_local but not safe_repo without escal
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1'
   assert.equal(canUseChatLsp({
     hostFallbackAllowed: resolveIsolationBrokerFlags(root).hostFallbackAllowed,
-  }), true)
+  }), false)
 })
 
-test('task and profile read-only scopes narrow otherwise granted LSP host authority', () => {
+test('read-only tasks and profiles do not expose LSP', () => {
   assert.equal(canUseChatLsp({ hostFallbackAllowed: true, operation: 'READ_ONLY' }), false)
   assert.equal(canUseChatLsp({
     hostFallbackAllowed: true,
@@ -67,22 +67,25 @@ test('task and profile read-only scopes narrow otherwise granted LSP host author
   }), false)
 })
 
-test('safe_repo without explicit fallback is denied before LSP executor dispatch', async () => {
-  process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
-  delete process.env['BABEL_ALLOW_HOST_FALLBACK']
+for (const profile of ['safe_repo', 'dev_local']) test(`${profile} LSP is denied before executor dispatch even with host fallback`, async () => {
+  process.env['BABEL_EXECUTION_PROFILE'] = profile
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1'
   delete process.env['BABEL_DOCKER_DISABLE']
   delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE']
   delete process.env['BABEL_READ_ONLY']
 
   const root = mkdtempSync(join(tmpdir(), 'babel-lsp-policy-'))
   temporaryRoots.push(root)
-  const engine = new ChatEngine({ task: 'Inspect project symbols', projectRoot: root })
+  const engine = new ChatEngine({ task: 'Fix project symbols', operation: 'CHANGE', projectRoot: root })
+  let dispatched = false
+  ;(engine as any).persistToolStartedAtExecutorDispatch = () => { dispatched = true }
   const result = await (engine as any).executeOneAction(
     { type: 'lsp', operation: 'workspaceSymbol', filePath: 'src/index.ts', query: 'entry' },
     { agentId: 'test', runId: 'test', runDir: root, babelRoot: root },
     {},
     { index: 0, ownerGeneration: 0 },
   )
-  assert.match(result.observation, /LSP denied: host-process authority is unavailable/)
+  assert.match(result.observation, /LSP denied: Chat has no lease-governed language-server process adapter/)
+  assert.equal(dispatched, false)
   assert.equal((engine as any).toolCallLog.at(-1)?.detail, result.observation)
 })

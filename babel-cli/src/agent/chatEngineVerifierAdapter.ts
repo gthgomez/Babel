@@ -45,6 +45,8 @@ export async function captureChatVerifierReceipt(input: {
   mutationPaths: string[];
   /** Explicit red-only baseline route; cannot satisfy a green completion. */
   allowRepositoryScopeForRedRecovery?: boolean;
+  /** Explicit no-patch route for a successful verifier after inspected no-change. */
+  allowRepositoryScopeForGreenNoChange?: boolean;
 }): Promise<BoundChatVerifierReceipt | null> {
   if (!isAuthoritativeVerifierCommand(input.command)) return null;
   const parsed = parseStructuredVerifierCommand(input.command, {
@@ -59,24 +61,31 @@ export async function captureChatVerifierReceipt(input: {
   if (mutationPaths === null) return null;
   const repositoryScopedRed = input.allowRepositoryScopeForRedRecovery === true &&
     input.exitCode !== 0 && mutationPaths.length === 0;
-  const receipt = await bindChatVerifierReceipt({
-    projectRoot: input.projectRoot,
-    command: input.command,
-    exit_code: input.exitCode,
-    summary: input.summary,
-    mutationPaths,
-    ...(repositoryScopedRed ? { scopeKind: 'repository' as const } : {}),
-    structured: {
-      verifierId: parsed.verifierId,
-      authoritySource: parsed.authoritySource,
-      executable: parsed.executable,
-      args: parsed.args,
-    },
-  });
-  // Repository scope falls back to a root-path digest without a Git commit.
-  // That is insufficient evidence for a red baseline repair candidate.
-  if (repositoryScopedRed && !receipt.boundRevision?.gitCommitHash) return null;
-  return receipt;
+  const repositoryScopedGreenNoChange = input.allowRepositoryScopeForGreenNoChange === true &&
+    input.exitCode === 0 && mutationPaths.length === 0;
+  const repositoryScoped = repositoryScopedRed || repositoryScopedGreenNoChange;
+  try {
+    return await bindChatVerifierReceipt({
+      projectRoot: input.projectRoot,
+      command: input.command,
+      exit_code: input.exitCode,
+      summary: input.summary,
+      mutationPaths,
+      ...(repositoryScoped ? {
+        scopeKind: 'repository' as const,
+        gitBinding: 'required' as const,
+      } : {}),
+      structured: {
+        verifierId: parsed.verifierId,
+        authoritySource: parsed.authoritySource,
+        executable: parsed.executable,
+        args: parsed.args,
+      },
+    });
+  } catch (error) {
+    if (repositoryScoped) return null;
+    throw error;
+  }
 }
 
 /**
@@ -171,6 +180,7 @@ export async function captureAndRecordVerifierReceipt(input: {
   summary: string;
   mutationPaths: string[];
   allowRepositoryScopeForRedRecovery?: boolean;
+  allowRepositoryScopeForGreenNoChange?: boolean;
   sessionEvents: SessionEventLog;
   turnId: string;
   ledger: BoundChatVerifierReceipt[];
@@ -186,7 +196,19 @@ export async function captureAndRecordVerifierReceipt(input: {
   simulated?: boolean;
 }): Promise<BoundChatVerifierReceipt | null> {
   if (input.simulated === true) return null;
-  const receipt = await captureChatVerifierReceipt(input);
+  const receipt = await captureChatVerifierReceipt({
+    projectRoot: input.projectRoot,
+    command: input.command,
+    exitCode: input.exitCode,
+    summary: input.summary,
+    mutationPaths: input.mutationPaths,
+    ...(input.allowRepositoryScopeForRedRecovery !== undefined
+      ? { allowRepositoryScopeForRedRecovery: input.allowRepositoryScopeForRedRecovery }
+      : {}),
+    ...(input.allowRepositoryScopeForGreenNoChange !== undefined
+      ? { allowRepositoryScopeForGreenNoChange: input.allowRepositoryScopeForGreenNoChange }
+      : {}),
+  });
   if (!receipt) return null;
   const caveats = verifierEvidenceCaveats(receipt);
   if (caveats.length > 0 && !receipt.summary.includes(caveats[0]!)) {

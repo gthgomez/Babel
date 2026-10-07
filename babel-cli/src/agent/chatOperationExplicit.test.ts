@@ -132,13 +132,13 @@ test('actual streamed read-only requests expose only their accepted task tools',
   }
 })
 
-test('native and text tool projections share the independent LSP host grant', () => {
+test('native and text tool projections withhold LSP without governed process admission', () => {
   const tools = buildChatToolDefinitions()
   for (const hostFallbackAllowed of [false, true]) {
     const policy = { operation: 'MUTATING' as const, hostFallbackAllowed, env: {} }
     const names = availableChatToolNames(tools.map(tool => tool.function.name), policy)
     assert.deepEqual(availableChatTools(tools, policy).map(tool => tool.function.name), names)
-    assert.equal(names.includes('lsp'), hostFallbackAllowed)
+    assert.equal(names.includes('lsp'), false)
     assert.ok(!availableChatToolNames(names, { ...policy, operation: 'READ_ONLY' }).includes('lsp'))
   }
 })
@@ -169,6 +169,16 @@ test('no-change completion requires real inspection and never certifies a patch'
   assert.equal(gate([{ ...read, exit_code: 1 }]), 'reject')
   assert.equal(gate([{ tool: 'sub_agent', target: 'child', detail: 'Already fixed, tests passed' }]), 'reject')
   assert.equal(gate([read]), 'allow')
+  // Background start/await logs can report exit 0 before their effects are
+  // known. Neither a process acknowledgement nor its exit status proves no diff.
+  for (const processResult of [
+    { tool: 'run_command', target: 'node worker.mjs', detail: 'background started bg-1', exit_code: 0 },
+    { tool: 'await_command', target: 'bg-1', detail: 'completed', exit_code: 0 },
+    { tool: 'test_run', target: 'npm test', detail: 'passed', exit_code: 0 },
+  ]) {
+    assert.equal(gate([read, processResult]), 'reject', processResult.tool)
+    assert.equal(gate([read, { ...processResult, effect_status: 'confirmed_no_change' }]), 'allow')
+  }
   assert.equal(gate([read], 'Fix the fixture and run npm test before completing.'), 'reject')
   assert.equal(gate([read], 'Fix the fixture.', { requiredVerifierCommands: ['npm test'] }), 'reject')
   assert.equal(gate([read], 'Fix the fixture.', { verifierEvidenceErrors: ['simulated'] }), 'reject')

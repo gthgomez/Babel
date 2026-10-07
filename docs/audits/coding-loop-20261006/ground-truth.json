@@ -31,5 +31,39 @@
     },
     "typecheck": "pass"
   },
-  "liveModelCredentialsAvailable": false
+  "liveModelCredentialsAvailable": false,
+  "finalRefresh": {
+    "dateUtc": "2026-10-07",
+    "method": [
+      "git fetch origin main codex/verifier-evidence-20261006",
+      "GitHub public REST pulls collection through connected read-only fetch"
+    ],
+    "main": "2aa0200dcf65a18d80183a8eecd5e5c370c9f7f3",
+    "continuation": "22b30aed038a8b133af469502079398c1878c933",
+    "continuationStillCorrect": true,
+    "openPRs": [
+      {
+        "number": 313,
+        "branch": "feat/installer-nsis-20261006",
+        "head": "d85271282722431974ed93f6c17f236794163594",
+        "draft": false,
+        "note": "Supersedes prior desktop PR #308; unrelated to coding-loop campaign."
+      },
+      {
+        "number": 312,
+        "branch": "feat/release-automation-20261006",
+        "head": "ef76cf92e8f5867f3d7821c2ed6db7f8feea4e25",
+        "draft": false
+      }
+    ],
+    "campaignPR": null,
+    "deliveryPreflight": {
+      "gitReadChecks": "pass",
+      "ghAuthentication": "unavailable",
+      "repositoryLocalCredentialHelper": "missing",
+      "pushAttempted": false,
+      "mergeAttempted": false,
+      "deployAttempted": false
+    }
+  }
 }

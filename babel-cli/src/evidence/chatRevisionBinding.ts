@@ -21,6 +21,7 @@ import { independentVerifierProofErrors } from './independentVerifier.js';
 import {
   compareRevisions,
   RevisionManager,
+  type GitBindingModeV1,
   type RevisionBoundReceipt,
   type WorkspaceRevision,
 } from './revisionBoundReceipt.js';
@@ -78,6 +79,7 @@ export async function bindChatVerifierReceipt(input: {
   summary: string;
   mutationPaths: string[];
   scopeKind?: 'files' | 'repository';
+  gitBinding?: GitBindingModeV1;
   structured?: {
     verifierId: string;
     authoritySource: VerifierAuthoritySource;
@@ -88,7 +90,10 @@ export async function bindChatVerifierReceipt(input: {
   const boundRevision = await RevisionManager.computeRevision(
     input.projectRoot,
     input.mutationPaths,
-    { scope_kind: input.scopeKind ?? 'files' },
+    {
+      scope_kind: input.scopeKind ?? 'files',
+      ...(input.gitBinding ? { git_binding: input.gitBinding } : {}),
+    },
   );
   const now = Date.now();
   return {
@@ -156,14 +161,20 @@ export function evaluateChatVerifierReceiptCurrencySync(
   const bound = toRevisionBoundReceipt(receipt);
   const revision = receipt.boundRevision;
   if (!bound || !revision || !revision.scope || !revision.gitBinding) return null;
+  if (revision.scope.kind === 'repository' && revision.gitBinding !== 'required') {
+    return { stale: true, reason: 'Repository content revision is unavailable' };
+  }
   const paths = revision.scope.kind === 'files' ? revision.scope.paths : [];
   let fresh: WorkspaceRevision;
   try {
     fresh = RevisionManager.computeRevisionSync(projectRoot, paths, {
       scope_kind: revision.scope.kind,
-      git_binding: revision.gitBinding,
+      git_binding: revision.scope.kind === 'repository' ? 'required' : revision.gitBinding,
     });
   } catch {
+    if (revision.scope.kind === 'repository') {
+      return { stale: true, reason: 'Repository content revision is unavailable' };
+    }
     return null;
   }
   return compareRevisions(revision, fresh);
@@ -220,6 +231,15 @@ export function toExecutorVerifierReceipt(
   }
 
   const revision = chatReceipt.boundRevision;
+  const rawRevision = revision as unknown as Record<string, unknown> | undefined;
+  const rawScope = rawRevision?.['scope'];
+  if (
+    rawScope && typeof rawScope === 'object' && !Array.isArray(rawScope) &&
+    (rawScope as Record<string, unknown>)['kind'] === 'repository' &&
+    (rawRevision?.['gitCommitHash'] == null || rawRevision?.['gitBinding'] !== 'required')
+  ) {
+    errors.push('Repository-scoped verifier evidence requires a content-bound Git tree');
+  }
   const boundRevision = validateWorkspaceRevisionIdentity(revision, errors);
 
   if (errors.length > 0) {
@@ -315,7 +335,8 @@ export function refreshChatVerifierReceiptStalenessSync(
   if (!receipt || receipt.stale) return receipt;
   const bound = toRevisionBoundReceipt(receipt);
   if (!bound) return receipt;
-  const result = RevisionManager.isReceiptStaleSync(bound, projectRoot);
+  const result = evaluateChatVerifierReceiptCurrencySync(projectRoot, receipt);
+  if (!result) return receipt;
   if (result.stale) {
     receipt.stale = true;
     if (result.reason) receipt.staleReason = result.reason;

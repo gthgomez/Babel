@@ -45,6 +45,19 @@ function project(): string {
   return root;
 }
 
+function initializeGitFixture(root: string): void {
+  for (const args of [
+    ['init', '--quiet'],
+    ['config', 'user.email', 'fixture@example.test'],
+    ['config', 'user.name', 'fixture'],
+    ['add', '-A'],
+    ['commit', '--quiet', '-m', 'fixture baseline'],
+  ]) {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`);
+  }
+}
+
 type Step = ToolStreamEvent[];
 function installScript(engine: ChatEngine, steps: Step[]) {
   let calls = 0;
@@ -241,6 +254,55 @@ describe('ordinary coding-loop behaviors', () => {
     assert.equal(engine.getTurnRuntimeSnapshot()?.effectiveOperation, 'MUTATING');
     assert.equal(readFileSync(join(root, 'parser.ts'), 'utf8'),
       'export const add = (a: number, b: number) => a + b;\n');
+  });
+
+  test('an already-correct change with an explicit green verifier completes as no-change', async () => {
+    await withLiveHostAuthority(async () => {
+      const root = project();
+      writeFileSync(join(root, 'parser.ts'), 'export const add = (a: number, b: number) => a + b;\n');
+      writeFileSync(join(root, 'verify.mjs'), [
+        "import assert from 'node:assert/strict';",
+        "import { readFileSync } from 'node:fs';",
+        "assert.match(readFileSync('parser.ts', 'utf8'), /a \\+ b/);",
+      ].join('\n') + '\n');
+      writeFileSync(join(root, 'package.json'), JSON.stringify({
+        name: 'coding-loop-green-nochange-fixture', private: true,
+        scripts: { test: 'node verify.mjs' },
+      }));
+      initializeGitFixture(root);
+      const task = 'Fix add so it returns the sum of its arguments; run `npm test` before finishing.';
+      const engine = new ChatEngine({ task, projectRoot: root, maxTurns: 5 });
+      const runner = installScript(engine, [
+        [{ type: 'tool_use', id: 'inspect-already-correct', name: 'read_file', input: { path: 'parser.ts' } },
+          { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'verify-already-correct', name: 'run_command', input: { command: 'npm test' } },
+          { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'text_delta', text: 'The requested implementation was already correct; npm test passed.' },
+          { type: 'done', finishReason: 'stop' }],
+      ]);
+
+      const events = await run(engine, task);
+      const done = terminal(events);
+      const calls = (engine as unknown as { toolCallLog: Array<{
+        tool: string; target: string; exit_code?: number;
+      }> }).toolCallLog;
+      const verifier = calls.find((entry) => entry.tool === 'run_command' && entry.target === 'npm test');
+      const receipt = (engine as unknown as { lastVerifierReceipt: {
+        command: string; exit_code: number; stale?: boolean;
+        boundRevision?: { scope?: { kind: string }; gitCommitHash?: string | null };
+      } | null }).lastVerifierReceipt;
+
+      assert.equal(verifier?.exit_code, 0, 'the requested verifier really executed and passed');
+      assert.equal(done.outcome, 'NO_CHANGE_REQUIRED', 'successful no-change is reported without patch certification');
+      assert.equal(receipt?.command, 'npm test');
+      assert.equal(receipt?.exit_code, 0);
+      assert.equal(receipt?.stale, false);
+      assert.deepEqual(receipt?.boundRevision?.scope, { kind: 'repository' });
+      assert.ok(receipt?.boundRevision?.gitCommitHash, 'the no-change receipt has a Git-backed revision');
+      assert.equal(readFileSync(join(root, 'parser.ts'), 'utf8'),
+        'export const add = (a: number, b: number) => a + b;\n');
+      assert.equal(runner.calls(), 3);
+    });
   });
 
   test('many distinct productive reads can reach a natural answer without a write-count stop', async () => {
@@ -452,9 +514,13 @@ describe('ordinary coding-loop behaviors', () => {
       assert.ok(['UNVERIFIED_PATCH', 'BLOCKED_POLICY', 'BLOCKED_EXTERNAL'].includes(terminalEvent.outcome ?? ''),
         `the terminal decision explicitly rejects stale verification evidence (got ${terminalEvent.outcome ?? 'no outcome'})`)
       if (terminalEvent.type === 'done') {
-        assert.equal(terminalEvent.verifierReceipt?.stale, true,
+        const receipt = terminalEvent.verifierReceipt
+        assert.ok(receipt, 'the completion retains the verifier receipt it rejected')
+        const staleReceipt = receipt as typeof receipt & { stale?: unknown; staleReason?: unknown }
+        assert.equal(staleReceipt.stale, true,
           'the prior verifier receipt is explicitly marked stale after the later mutation')
-        assert.match(terminalEvent.verifierReceipt?.staleReason ?? '', /workspace mutated after verifier receipt/i)
+        assert.match(typeof staleReceipt.staleReason === 'string' ? staleReceipt.staleReason : '',
+          /workspace mutated after verifier receipt/i)
       }
     })
   })

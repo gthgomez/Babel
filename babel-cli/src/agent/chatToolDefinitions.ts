@@ -1163,7 +1163,7 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
  *
  * Modes:
  * - mutate_only (default): force a real patch — no shell thrash path.
- *   write_file, str_replace, apply_patch, todo_write, finish.
+ *   write_file, str_replace, apply_patch, todo_write.
  * - act_or_verify: after a patch exists, also allow shell/test verification.
  *   + run_command, await_command, test_run.
  *
@@ -1180,7 +1180,6 @@ export function buildRestrictedChatToolDefinitions(
     'str_replace',
     'apply_patch',
     'todo_write',
-    'finish',
   ] as const;
   const actOrVerify = [
     ...mutateOnly,
@@ -1189,7 +1188,9 @@ export function buildRestrictedChatToolDefinitions(
     'test_run',
   ] as const;
   const names = new Set<string>(mode === 'act_or_verify' ? actOrVerify : mutateOnly);
-  return buildAllChatToolDefinitions().filter((def) => names.has(def.function.name));
+  // Restricted native requests must use the canonical native inventory too;
+  // the all-tools builder retains `finish` solely for legacy parser compatibility.
+  return buildChatToolDefinitions().filter((def) => names.has(def.function.name));
 }
 
 // ─── MCP Helpers ─────────────────────────────────────────────────────────
