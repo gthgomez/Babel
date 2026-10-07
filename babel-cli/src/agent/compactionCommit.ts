@@ -16,9 +16,11 @@ import type { ProviderToolCall, RunnerCallbacks } from '../runners/base.js';
 import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js';
 import {
   appendThreadEvent,
+  rebuildProviderMessagesFromEvents,
   type ThreadEvent,
   type ThreadEventLog,
 } from './threadEventLog.js';
+import { mapProviderMessagesToWire } from '../runners/providerMessages.js';
 import {
   recordCompactionCreated,
   recordCompactionStarted,
@@ -1026,6 +1028,38 @@ export class CompactionPersistenceError extends Error {
   }
 }
 
+/** Native next-request body. Shrink is measured here, not by message count. */
+function serializedProviderRequest(threadLog: ThreadEventLog): string {
+  return JSON.stringify(
+    mapProviderMessagesToWire(rebuildProviderMessagesFromEvents(threadLog), ''),
+  );
+}
+
+function operationalStateFor(host: ChatEngineCompactionHost): CompactionOperationalState {
+  const boundRevStr = host.lastVerifierReceipt?.boundRevision?.compositeTreeHash
+    ? String(host.lastVerifierReceipt.boundRevision.compositeTreeHash)
+    : '';
+  const last = host.progress.receipts[host.progress.receipts.length - 1];
+  return {
+    task: host.options.task,
+    progressSummary: last
+      ? `deltas=${last.deltas.join(',')} streak=${host.progress.consecutiveNoProgress}`
+      : 'none',
+    patchSummary: host.writeCount > 0 ? `writes=${host.writeCount}` : '',
+    verifierSummary: host.lastVerifierReceipt
+      ? `${host.lastVerifierReceipt.command}→${host.lastVerifierReceipt.exit_code}`
+      : '',
+    verifierFreshness: boundRevStr
+      ? `revision=${boundRevStr}`
+      : host.lastVerifierReceipt
+        ? 'unbound'
+        : '',
+    recentToolResults: host.toolCallLog.slice(-6).map((entry) => `${entry.tool} ${entry.target}`),
+    budgetsSummary: `turns=${host.turnIndex} maxTokens=${host.limits.maxEstimatedTokens}`,
+    workspaceRevision: boundRevStr,
+  };
+}
+
 /**
  * Full ChatEngine compaction path (H1). Extracted so chatEngine stays under size ratchet.
  * Mutates `host.conversation` when compaction applies.
@@ -1054,22 +1088,80 @@ export async function runChatEngineCompaction(
   const ownerIsCurrent = (): boolean => !host.isOwnerCurrent || host.isOwnerCurrent();
   const applyHeuristic = async (): Promise<void> => {
     if (!ownerIsCurrent()) return;
-    const prior = [...host.conversation]
+    const prior = host.conversation.map((message) => ({ ...message }));
     const priorFingerprint = JSON.stringify(host.conversation);
+    const priorThreadEvents = host.threadLog.events.map((event) => structuredClone(event));
+    const priorThreadNextSeq = host.threadLog.nextSeq;
+    const priorSessionEvents = host.sessionLog.events.map((event) => structuredClone(event));
+    const priorSessionNextSeq = host.sessionLog.nextSeq;
+    const priorFlushedThroughSeq = host.sessionLog.flushedThroughSeq;
+    const restore = (): void => {
+      host.conversation = prior;
+      host.threadLog.events.splice(0, host.threadLog.events.length, ...priorThreadEvents);
+      host.threadLog.nextSeq = priorThreadNextSeq;
+      host.sessionLog.events.splice(0, host.sessionLog.events.length, ...priorSessionEvents);
+      host.sessionLog.nextSeq = priorSessionNextSeq;
+      host.sessionLog.flushedThroughSeq = priorFlushedThroughSeq;
+    };
     host.compactHeuristic();
     try {
-      await host.checkpoint()
       if (!ownerIsCurrent()) {
-        host.conversation = prior;
+        restore();
         return;
       }
-      changed = JSON.stringify(host.conversation) !== priorFingerprint;
-      if (changed) mode = 'heuristic';
+      if (JSON.stringify(host.conversation) === priorFingerprint) {
+        await host.checkpoint();
+        return;
+      }
+      const beforeRequest = serializedProviderRequest(host.threadLog);
+      const committed = await commitCompaction({
+        strategyMessages: host.conversation.map((message) => ({ ...message })),
+        priorConversation: prior,
+        strategy: 'heuristic',
+        tokensBefore: host.estimateTokens(prior),
+        tokensAfter: host.estimateTokens(host.conversation),
+        operational: operationalStateFor(host),
+        threadLog: host.threadLog,
+        sessionLog: host.sessionLog,
+        turnId: host.turnId,
+        modelId,
+        persist: async () => {
+          await host.checkpoint();
+          return true;
+        },
+        blockOnPersistFailure: true,
+        isOwnerCurrent: ownerIsCurrent,
+      });
+      if (committed.status !== 'committed') {
+        restore();
+        if (committed.status === 'noop') return;
+        throw new CompactionPersistenceError(
+          committed.error ?? 'Heuristic compaction persistence failed',
+        );
+      }
+      const afterRequest = serializedProviderRequest(host.threadLog);
+      const capsuleCommitted = host.threadLog.events.some((event) => event.kind === 'compaction_capsule');
+      const authorityKept = host.options.task.length === 0 || afterRequest.includes(host.options.task);
+      if (!capsuleCommitted || !authorityKept || afterRequest.length >= beforeRequest.length) {
+        restore();
+        await host.checkpoint();
+        return;
+      }
+      if (!ownerIsCurrent()) {
+        restore();
+        await host.checkpoint();
+        return;
+      }
+      host.conversation = committed.conversation;
+      mode = 'heuristic';
+      changed = true;
+      commit = committed;
     } catch (error) {
-      host.conversation = prior
+      restore();
+      if (error instanceof CompactionPersistenceError) throw error;
       throw new CompactionPersistenceError(
         `Heuristic compaction checkpoint failed: ${error instanceof Error ? error.message : String(error)}`,
-      )
+      );
     }
   };
 
@@ -1098,36 +1190,13 @@ export async function runChatEngineCompaction(
         });
         if (!ownerIsCurrent()) return null;
         if (mgr.changed) {
-          const boundRevStr = host.lastVerifierReceipt?.boundRevision?.compositeTreeHash
-            ? String(host.lastVerifierReceipt.boundRevision.compositeTreeHash)
-            : '';
-          const last = host.progress.receipts[host.progress.receipts.length - 1];
           commit = await commitCompaction({
             strategyMessages: mgr.messages,
             priorConversation: host.conversation,
             strategy: mgr.strategy,
             tokensBefore: mgr.tokensBefore,
             tokensAfter: mgr.tokensAfter,
-            operational: {
-              task: host.options.task,
-              progressSummary: last
-                ? `deltas=${last.deltas.join(',')} streak=${host.progress.consecutiveNoProgress}`
-                : 'none',
-              patchSummary: host.writeCount > 0 ? `writes=${host.writeCount}` : '',
-              verifierSummary: host.lastVerifierReceipt
-                ? `${host.lastVerifierReceipt.command}→${host.lastVerifierReceipt.exit_code}`
-                : '',
-              verifierFreshness: boundRevStr
-                ? `revision=${boundRevStr}`
-                : host.lastVerifierReceipt
-                  ? 'unbound'
-                  : '',
-              recentToolResults: host.toolCallLog
-                .slice(-6)
-                .map((t) => `${t.tool} ${t.target}`),
-              budgetsSummary: `turns=${host.turnIndex} maxTokens=${host.limits.maxEstimatedTokens}`,
-              workspaceRevision: boundRevStr,
-            },
+            operational: operationalStateFor(host),
             threadLog: host.threadLog,
             sessionLog: host.sessionLog,
             turnId: host.turnId,
