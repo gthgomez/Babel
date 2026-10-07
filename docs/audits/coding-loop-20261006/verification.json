@@ -670,7 +670,35 @@
     "deploymentAttempted": false,
     "hostedChecksRun": false,
     "preflightBlocker": "Required authenticated gh and repository-local credential helper are unavailable. Git reads and connected public repository reads succeed; this is not a universal GitHub outage.",
-    "publicScans": "Pending final staged artifact scan at report assembly; results are filled after observed completion.",
+    "publicScans": {
+      "publicContentPolicy": {
+        "command": [
+          "pwsh",
+          "-NoProfile",
+          "-File",
+          "tools/check-public-content-policy.ps1",
+          "-RepoRoot",
+          "."
+        ],
+        "exitCode": 0
+      },
+      "strictSecretScan": {
+        "command": [
+          "pwsh",
+          "-NoProfile",
+          "-File",
+          "tools/run-public-secret-scan.ps1",
+          "-RepoRoot",
+          ".",
+          "-Strict",
+          "-RequireExternalScanner"
+        ],
+        "exitCode": 0,
+        "scanner": "gitleaks8.30.1",
+        "scope": "Clean detached candidate worktree with all committed files and unchanged scanner policy; generated untracked test checkpoints remain preserved in the primary checkout."
+      },
+      "qualification": "These outcomes were observed on the assembled candidate. Final release checks rerun against the final artifact bytes before the delivery commit; their result is confirmed in the handoff."
+    },
     "scanRepair": {
       "classification": "benign audit identifier matched unanchored key-pattern regex",
       "affectedArtifacts": [
@@ -686,7 +714,23 @@
       "findingCount": 170,
       "trackedCandidateFindings": 0,
       "scope": "All findings were in generated untracked runs/chat-sessions context checkpoints. Values were not read or exported. Checkpoints remain preserved outside the candidate commit.",
-      "nextStep": "Run the unchanged required scanner over a clean detached worktree of the committed candidate; all tracked files remain in scope."
+      "nextStep": "Resolved by running the unchanged strict scanner over the clean committed candidate; pass with zero findings. No generated checkpoint was staged, deleted or used to weaken scanner policy."
+    },
+    "preflight": {
+      "source": "scripts/agent-preflight.ps1",
+      "observedHead": "5e5505e8fbae4fb124e9251c4345f1e789daa6d7",
+      "expectedBase": "2aa0200dcf65a18d80183a8eecd5e5c370c9f7f3",
+      "branch": "codex/coding-loop-simplification-20261006",
+      "exitCode": 1,
+      "worktreeClean": true,
+      "pushReady": false,
+      "blockers": [
+        "repo_local_gh_credential_helper_missing",
+        "github_auth_failed",
+        "github_repository_metadata_mismatch",
+        "unexpected_default_branch"
+      ],
+      "interpretation": "Authentication and required local helper are unavailable. Repository/default-branch metadata checks cannot complete through unauthenticated gh. Independent Git fetch and public connected reads confirm main; no wrong-repository conclusion is inferred from missing authenticated metadata."
     }
   },
   "notMeasured": [

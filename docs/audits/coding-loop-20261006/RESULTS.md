@@ -6,6 +6,8 @@ The ordinary Chat loop now has a concise model contract, atomic repository instr
 
 This is a locally implemented campaign with a concrete branch and PR draft. Delivery is blocked by the repository's required preflight: Git reads succeed, but authenticated `gh` and the required repository-local credential helper are unavailable. No push, PR creation, merge, or deployment is claimed. Hosted checks and paid multi-model evaluations have not run.
 
+The final required preflight exited 1 on a clean committed checkout: authenticated `gh` and the repository-local helper are missing. Its dependent metadata checks could not qualify; independent Git/public reads still confirm the intended repository and main. No push was attempted.
+
 ## Repository ground truth
 
 - Current fetched `main`: `2aa0200dcf65a18d80183a8eecd5e5c370c9f7f3`.
@@ -97,7 +99,7 @@ Profile/task scope intersection, explicit denials, authority leases/PDP, approva
 
 ## Change size and reviewability
 
-The proposed direct-base diff contains 101 paths, 31,275 additions and 1,696 deletions, including the complete machine-readable audit and before/after request snapshots. The reviewed source slice before final artifacts contained 44 runtime/capture files (+1,254/−1,231), 41 tests (+2,904/−422), three policy/procedure files and three initial audit files. This exceeds the advisory size targets; the audit, implementation, lifecycle/evidence repairs and final measurement artifacts are separated into coherent commits. No unrelated pricing work is included.
+The proposed direct-base diff contains 101 paths, 31,333 additions and 1,696 deletions, including the complete machine-readable audit and before/after request snapshots. The reviewed source slice before final artifacts contained 44 runtime/capture files (+1,254/−1,231), 41 tests (+2,904/−422), three policy/procedure files and three initial audit files. This exceeds the advisory size targets; the audit, implementation, lifecycle/evidence repairs and final measurement artifacts are separated into coherent commits. No unrelated pricing work is included.
 
 ## Verification and limitations
 
@@ -112,8 +114,11 @@ The proposed direct-base diff contains 101 paths, 31,275 additions and 1,696 del
 | `tools/validate-all.ps1` | All three catalog/skill/routing validations pass |
 | `tools/check-architectural-budget.ps1` | All four checks pass |
 | `policy-integrity-manifest.mjs verify` | 124 covered files verified |
+| Public-content policy | Pass, exit 0 |
+| Strict public secret scan | Pass with required gitleaks 8.30.1 in clean candidate worktree |
+| Delivery preflight | Blocked, exit 1: authenticated gh/local helper unavailable |
 
-All source checks above ran at the frozen revision. Counts are per command and overlap; the 22 test files mapped by the behavioral inventory are all covered. Public scan outcomes and remote delivery remain separate gates.
+All source checks above ran at the frozen revision. Counts are per command and overlap; the 22 test files mapped by the behavioral inventory are all covered. The public-content policy and strict secret scan pass. The strict scan ran on a clean candidate worktree containing all committed files; generated untracked test checkpoints remain preserved outside the release tree. Scanner policy and allowlists are unchanged. Remote delivery remains blocked by authentication.
 
 
 The verification record gives commands, terminal counts, source revisions and the distinction between current checks and baseline/environment diagnostics. The 760-file unit selection was exercised in batches earlier in the campaign; environmental failures were reproduced on the frozen baseline and corrected in the command environment or build prerequisites. One batch lacked a valid aggregate footer, so its 40 files were rerun individually with complete terminal results. No single all-green 760-file aggregate is claimed.

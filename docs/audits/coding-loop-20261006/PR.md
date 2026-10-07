@@ -64,7 +64,7 @@ Source revision: `674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9`.
 
 The required test selections use `node --import tsx` because the `tsx` CLI cannot bind its IPC socket in this environment; selected files and no-ambient-inference protections are preserved. All 22 files mapped by the behavioral inventory ran at this revision. Counts overlap and are not a unique-test total.
 
-Independent source review and final public scan status are recorded in the audit package after completion.
+Independent source review found no remaining findings. The public-content check and strict secret scan pass; the latter uses a clean candidate worktree with all committed files and unchanged scanner policy. The initial scan of the development directory reported generated untracked test checkpoints; none enters the candidate commit. The required delivery preflight exits 1 because authenticated gh and the required local helper are unavailable. This remains a locally prepared draft; no push or hosted CI is claimed.
 
 ## Independent source review
 
@@ -74,7 +74,7 @@ Independent source review found no remaining findings at `674e9ad4c81a3c4ea59b9b
 
 Continuation source: `22b30aed038a8b133af469502079398c1878c933`; current main base: `2aa0200dcf65a18d80183a8eecd5e5c370c9f7f3`. The continuation was fetched and verified four commits ahead of main. This PR includes that prior verifier work plus coherent audit, implementation and review-repair commits.
 
-The proposed direct-base diff contains 101 paths, 31,275 additions and 1,696 deletions, including the complete machine-readable audit and before/after request snapshots. The reviewed source slice before final artifacts contained 44 runtime/capture files (+1,254/−1,231), 41 tests (+2,904/−422), three policy/procedure files and three initial audit files. This exceeds the advisory size targets; the audit, implementation, lifecycle/evidence repairs and final measurement artifacts are separated into coherent commits. No unrelated pricing work is included.
+The proposed direct-base diff contains 101 paths, 31,333 additions and 1,696 deletions, including the complete machine-readable audit and before/after request snapshots. The reviewed source slice before final artifacts contained 44 runtime/capture files (+1,254/−1,231), 41 tests (+2,904/−422), three policy/procedure files and three initial audit files. This exceeds the advisory size targets; the audit, implementation, lifecycle/evidence repairs and final measurement artifacts are separated into coherent commits. No unrelated pricing work is included.
 
 No unrelated V4.1 pricing changes are included. The isolated clone contained none; other checkouts were untouched. No dependency/lockfile migration, deployment or merge was performed. The draft was prepared locally; authenticated delivery preflight and hosted PR checks remain necessary before remote readiness.
 

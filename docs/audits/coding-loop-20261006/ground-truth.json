@@ -63,7 +63,16 @@
       "repositoryLocalCredentialHelper": "missing",
       "pushAttempted": false,
       "mergeAttempted": false,
-      "deployAttempted": false
+      "deployAttempted": false,
+      "observedHead": "5e5505e8fbae4fb124e9251c4345f1e789daa6d7",
+      "exitCode": 1,
+      "worktreeClean": true,
+      "blockers": [
+        "repo_local_gh_credential_helper_missing",
+        "github_auth_failed",
+        "github_repository_metadata_mismatch",
+        "unexpected_default_branch"
+      ]
     },
     "sourceRevision": "674e9ad4c81a3c4ea59b9b1f67f0b68fc080f6d9"
   }
