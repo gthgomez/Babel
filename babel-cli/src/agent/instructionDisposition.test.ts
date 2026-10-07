@@ -190,6 +190,15 @@ describe('delivered project instructions', () => {
     assert.equal(fragment.source, join(root, 'AGENTS.md'));
     assert.equal(fragment.precedence, 'identity');
     assert.match(fragment.content_preview ?? '', /read before write/);
+    const stackAgents = authority.chatStack?.selected_entries.find((entry) => entry.id === 'identity:agents');
+    const stackDisposition = authority.chatStack?.content_disposition.find((entry) => entry.id === 'identity:agents');
+    assert.ok(stackAgents?.source_digest);
+    assert.ok(stackDisposition?.delivered_content_digest);
+    assert.equal(fragment.source_hash, stackAgents.source_digest);
+    assert.equal(fragment.source_digest, stackAgents.source_digest);
+    assert.equal(fragment.delivered_content_digest, stackDisposition.delivered_content_digest);
+    assert.equal(fragment.included_chars, stackDisposition.included_chars);
+    assert.equal(fragment.delivery_status, stackDisposition.status);
     assert.equal(
       authority.instructionManifest.fragments.some((f) => f.rule_id.startsWith('session:')),
       false,
@@ -205,5 +214,22 @@ describe('delivered project instructions', () => {
       reloaded.instructionManifest.fragments.some((f) => f.rule_id === 'identity:agents'),
     );
     assert.ok(existsSync(join(runDir, INSTRUCTION_MANIFEST_FILENAME)));
+  });
+
+  it('binds manifest identity to the full instruction source beyond its preview', () => {
+    const root = makeRoot('babel-id-tail-digest-');
+    const prefix = `# Agent Instructions\n${'same-prefix '.repeat(30)}\n`;
+    process.env['BABEL_USER_CONTEXT'] = join(root, 'missing-user-context.md');
+    writeFileSync(join(root, 'AGENTS.md'), `${prefix}TAIL_VERSION_A\n`, 'utf-8');
+    const first = resolveLiveSessionAuthority({ mode: 'chat', projectRoot: root, task: 'inspect' });
+    writeFileSync(join(root, 'AGENTS.md'), `${prefix}TAIL_VERSION_B\n`, 'utf-8');
+    const second = resolveLiveSessionAuthority({ mode: 'chat', projectRoot: root, task: 'inspect' });
+
+    const firstFragment = first.instructionManifest.fragments.find((item) => item.rule_id === 'identity:agents');
+    const secondFragment = second.instructionManifest.fragments.find((item) => item.rule_id === 'identity:agents');
+    assert.ok(firstFragment && secondFragment);
+    assert.equal(firstFragment.content_preview, secondFragment.content_preview);
+    assert.notEqual(firstFragment.source_hash, secondFragment.source_hash);
+    assert.notEqual(firstFragment.delivered_content_digest, secondFragment.delivered_content_digest);
   });
 });

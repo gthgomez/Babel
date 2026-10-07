@@ -257,9 +257,6 @@ describe('chat preparation parity (actual provider-bound request)', () => {
         taskText: task,
       });
       const chatStack = compileChatStackForRun({ projectRoot: source, task });
-      const stackSystemContext = [systemContext, chatStack.system_context]
-        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-        .join('\n\n');
       const intentPlanUserMessage = compileIntentPlanUserMessage(
         task,
         intentClass,
@@ -268,7 +265,8 @@ describe('chat preparation parity (actual provider-bound request)', () => {
       const directEngine = new ChatEngine({
         task,
         projectRoot: source,
-        ...(stackSystemContext ? { systemContext: stackSystemContext } : {}),
+        systemContext,
+        compiledChatStack: chatStack,
         preflightContext,
         ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
         maxTurns: limits.maxTurns,
@@ -323,9 +321,8 @@ describe('chat preparation parity (actual provider-bound request)', () => {
       assert.equal(intentPlanUserMessage, undefined);
       assert.doesNotMatch(userContents, /## Intent Plan/);
       assert.doesNotMatch(userContents, /## Before You Start/);
-      assert.match(systemPrompt, /## How You Work/);
-      assert.match(systemPrompt, /\*\*Mutate\*\*/);
-      assert.match(systemPrompt, /\*\*Verify\*\*/);
+      assert.doesNotMatch(systemPrompt, /## How You Work|## Recommended Workflow/);
+      assert.equal(systemPrompt.split('## How Babel works').length - 1, 1);
 
       assert.equal(headless.model, 'mimo-v2.5');
       assert.ok(headless.toolNames.length > 0, 'native request must declare tools');

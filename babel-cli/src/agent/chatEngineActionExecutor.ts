@@ -65,6 +65,7 @@ import {
 } from "./chatEngineChildExecution.js";
 import { executeTool, renderGitDiff, type ToolContext } from "../localTools.js";
 import { classifyShellCapability } from "./progressController.js";
+import { canUseChatLsp } from "./chatLspPolicy.js";
 import { assessMutationEffect } from "./mutationTools.js";
 import {
   pinProjectRootEnv,
@@ -585,6 +586,22 @@ export class ChatEngineActionExecutor {
 
       // Gap-1: LSP tool — read-only code intelligence via localTools executor.
       if (action.type === "lsp") {
+        if (!canUseChatLsp({
+          hostFallbackAllowed: this.host.isolationBrokerFlags().hostFallbackAllowed,
+          ...(acceptedOperation !== undefined ? { operation: acceptedOperation } : {}),
+        })) {
+          const detail = "LSP denied: host-process authority is unavailable for this task/profile.";
+          this.host.toolCallLog.push({
+            tool,
+            target,
+            detail,
+            error: "blocked",
+            index: meta.index,
+            exit_code: 1,
+          });
+          callbacks?.onToolComplete?.(toolId, detail, detail, 1);
+          return { index: meta.index, observation: detail };
+        }
         const lsp = await executeLspChatToolAction({
           action,
           toolContext: {

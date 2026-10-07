@@ -3,7 +3,7 @@
  * Pure helpers; no I/O.
  */
 
-import { isConfirmedMutation, isVerifierAttemptTool, type MutationEffectStatus } from './mutationTools.js';
+import { isConfirmedMutation, isDirectMutationTool, isVerifierAttemptTool, type MutationEffectStatus } from './mutationTools.js';
 import { getChatTaskTune, isStrictVerification, type ChatTaskClass, type VerificationPolicy } from '../config/chatTaskClass.js';
 import {
   buildGateRejectionMessage,
@@ -466,6 +466,19 @@ export type GateToolLogEntry = {
   effect_status?: MutationEffectStatus;
 };
 
+/** Recorded inspection can support a no-change conclusion, never patch certification. */
+export function hasInspectedNoChangeEvidence(log: GateToolLogEntry[]): boolean {
+  const unresolvedMutation = log.some(entry => entry.effect_status === 'indeterminate'
+    || (isDirectMutationTool(entry.tool)
+      && (Boolean(entry.error) || entry.effect_status !== 'confirmed_no_change'))
+    || (entry.tool === 'sub_agent' && Boolean(entry.error)
+      && entry.effect_status !== 'confirmed_no_change'));
+  return !hasLoggedWrites(log) && !unresolvedMutation && log.some(entry =>
+    ['read_file', 'read_range', 'grep', 'glob', 'list_dir', 'search', 'semantic_search', 'git_context', 'lsp'].includes(entry.tool)
+    && !entry.error && (entry.exit_code === undefined || entry.exit_code === 0)
+    && Boolean(entry.detail?.trim()));
+}
+
 /**
  * Task text explicitly asks to run tests / verify before complete.
  */
@@ -584,6 +597,8 @@ export function areAllRequiredVerifiersSatisfied(
  */
 export function evaluateExecuteCompletionHonesty(opts: {
   hasWrite: boolean;
+  /** Only non-certified no-change completion may use successful inspection instead of a mutation. */
+  allowInspectedNoChange?: boolean;
   policy: VerificationPolicy;
   lastVerifierReceipt?: VerifierReceipt | import('../executor/contracts.js').ExecutorVerifierReceipt | null;
   toolCallLog: GateToolLogEntry[];
@@ -599,7 +614,7 @@ export function evaluateExecuteCompletionHonesty(opts: {
     return { allow: false, reason: 'verifier_receipt_invalid' };
   }
 
-  if (!opts.hasWrite) {
+  if (!opts.hasWrite && !(opts.allowInspectedNoChange && hasInspectedNoChangeEvidence(opts.toolCallLog))) {
     return { allow: false, reason: 'no_writes' };
   }
   if (opts.policy === 'none') {
@@ -887,16 +902,14 @@ export function logHasSuccessfulWrite(
   );
 }
 
-/** Shared BLOCKED answer when completion has no writes and zero tools this turn. */
-export const AUTO_CONTINUE_REFUSAL_MSG = [
-  'BLOCKED: Completion rejected (no writes) and this turn had zero tool calls.',
-  'Auto-continue refused — the model produced text without using any tools.',
-  'The task may be impossible or the model does not understand how to proceed.',
-].join('\n');
+/** One bounded recovery allowance for unsupported completion claims. */
+export const MAX_COMPLETION_RECOVERY_RETRIES = 3;
 
-export function buildAutoContinueBlockedReport(): {
+export function buildCompletionEvidenceBlockedReport(reason: string): {
   schema_version: 1;
   status: 'BLOCKED';
+  reason_code: 'recovery_exhausted';
+  cause_class: 'harness';
   reason: string;
   missing: string;
   checked: Array<{ action: string; target: string; finding: string }>;
@@ -904,14 +917,15 @@ export function buildAutoContinueBlockedReport(): {
   return {
     schema_version: 1,
     status: 'BLOCKED',
-    reason: 'Auto-continue refused: completion rejected with zero tool calls this turn',
-    missing: 'No tools were used — model produced text only',
+    reason_code: 'recovery_exhausted',
+    cause_class: 'harness',
+    reason,
+    missing: 'Successful inspection supporting a no-change conclusion, or a completed change with required evidence',
     checked: [
       {
-        action: 'auto_continue_refusal',
-        target: 'zero_tool_calls',
-        finding:
-          'Turn produced a completion without any tool calls; auto-continue refuses to restart',
+        action: 'completion_gate',
+        target: 'current_task',
+        finding: 'Repeated final answers did not satisfy the completion evidence contract',
       },
     ],
   };
@@ -927,9 +941,8 @@ export function buildAutoContinueBlockedReport(): {
  * - Interactive (hardGate false): `required` may soft-allow; `strict` still enforces.
  */
 export type GateRejectPlan =
-  | { kind: 'auto_continue_block' }
   | { kind: 'reject_continue'; gateStrikesAfter: number; useGreenMessage: boolean }
-  | { kind: 'blocked'; reason: string }
+  | { kind: 'blocked'; reason: string; missingInspection?: true }
   | { kind: 'soft_allow'; gateStrikesAfter: number };
 
 /** Whether this reject must never soft-allow through (headless required/strict or any strict). */
@@ -945,6 +958,7 @@ export function shouldHardBlockVerifierHonesty(opts: {
 
 export function planCompletionGateReject(opts: {
   hasWrites: boolean;
+  hasInspectedNoChange?: boolean;
   policy: VerificationPolicy;
   hardGate: boolean;
   hadToolCallsThisTurn: boolean;
@@ -956,31 +970,20 @@ export function planCompletionGateReject(opts: {
     hardGate: opts.hardGate,
   });
 
-  if (!opts.hasWrites) {
-    if (!opts.hadToolCallsThisTurn) {
-      return { kind: 'auto_continue_block' };
-    }
+  if (!opts.hasWrites && !opts.hasInspectedNoChange) {
     const next = opts.gateStrikes + 1;
-    if (opts.hardGate && next <= opts.maxGateStrikes) {
+    if (next <= opts.maxGateStrikes) {
       return {
         kind: 'reject_continue',
         gateStrikesAfter: next,
         useGreenMessage: false,
       };
     }
-    // Bug B fix: hardGate + zero writes after max strikes → BLOCKED (not soft_allow).
-    // Headless/CI must never soft-allow empty-patch completions.
-    if (opts.hardGate) {
-      return {
-        kind: 'blocked',
-        reason: [
-          `Gate blocked after ${next} consecutive completion rejections with no successful file mutations.`,
-          'The agent made tool calls but produced zero successful file writes.',
-          'Headless/CI hard-block: will not soft-allow without file mutations.',
-        ].join(' '),
-      };
-    }
-    return { kind: 'soft_allow', gateStrikesAfter: 0 };
+    return {
+      kind: 'blocked',
+      missingInspection: true,
+      reason: `Completion recovery exhausted after ${next} unsupported final answers. No successful inspection supports a no-change conclusion and no completed change is recorded.`,
+    };
   }
 
   // Has writes but honesty failed (verifier missing/red under strict, missing under required, …)
@@ -1065,9 +1068,14 @@ export function evaluateCompletionGateForEngine(opts: {
       ? { requiredVerifierCommands: opts.requiredVerifierCommands }
       : {}),
   });
+  const noChange = hasInspectedNoChangeEvidence(log);
+  const noChangeNeedsVerification = requiredVerifierCommands.length > 0
+    || taskAsksForVerifier(opts.task) || policy === 'strict';
   const honesty = evaluateExecuteCompletionHonesty({
     hasWrite,
-    policy,
+    allowInspectedNoChange: noChange,
+    policy: noChange && !noChangeNeedsVerification ? 'none'
+      : noChangeNeedsVerification && policy === 'none' ? 'required' : policy,
     lastVerifierReceipt: opts.lastVerifierReceipt ?? null,
     toolCallLog: log,
     requiredVerifierCommands,
@@ -1240,7 +1248,7 @@ export function buildGateRejectUserMessageForEngine(opts: {
     task: opts.task,
   });
   const log = opts.toolCallLog;
-  if (!opts.hasAnyWrites) {
+  if (!opts.hasAnyWrites && !hasInspectedNoChangeEvidence(log)) {
     return buildGateRejectionMessage(log);
   }
   const requiredVerifierCommands = resolveHonestyRequiredVerifiers({
@@ -1253,7 +1261,8 @@ export function buildGateRejectUserMessageForEngine(opts: {
       : {}),
   });
   const honesty = evaluateExecuteCompletionHonesty({
-    hasWrite: true,
+    hasWrite: opts.hasAnyWrites,
+    allowInspectedNoChange: hasInspectedNoChangeEvidence(log),
     policy,
     lastVerifierReceipt: opts.lastVerifierReceipt ?? null,
     toolCallLog: log,

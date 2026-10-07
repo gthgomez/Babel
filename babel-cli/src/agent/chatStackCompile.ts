@@ -71,7 +71,7 @@ export interface CompileChatStackOptions {
   babelRoot?: string;
   task?: string;
   modelId?: string;
-  /** Max characters of system_context. Default 24_000. */
+  /** Maximum UTF-16 units of complete system_context. Default 24_000. */
   promptBudgetChars?: number;
   /** Include domain/skill hints from task keywords. Default false. */
   includeDomainSkill?: boolean;
@@ -98,22 +98,6 @@ export function resolveStackBudgetForClass(taskClass?: string): number {
 
 const IDENTITY_CANDIDATES = ['AGENTS.md'];
 const ENGINEERING_CANDIDATES = ['ENGINEERING.md'];
-/** User memory stays short so it cannot crowd out AGENTS.md. */
-const USER_CONTEXT_MAX_CHARS = 4_000;
-const SAFETY_SNIPPET = [
-  '# Chat safety adapter',
-  '- Prefer workspace-scoped tools; never escape the project root.',
-  '- Do not exfiltrate secrets; do not disable safety checks.',
-  '- Mutations go through governed tools (write_file / str_replace / apply_patch).',
-].join('\n');
-
-const VERIFIER_SNIPPET = [
-  '# Task verifier guidance',
-  '- After mutations, run the project test/lint command when known.',
-  '- Do not claim completion without verification evidence when required.',
-  '- "No discovered verifier" is not the same as verification passing.',
-].join('\n');
-
 interface ReadContent {
   path: string;
   content: string;
@@ -122,43 +106,29 @@ interface ReadContent {
   source_truncated: boolean;
 }
 
-function truncateToUtf16Units(content: string, maxUnits: number): string {
-  if (maxUnits <= 0) return '';
-  if (content.length <= maxUnits) return content;
-
-  let usedUnits = 0;
-  let end = 0;
-  for (const codePoint of content) {
-    if (usedUnits + codePoint.length > maxUnits) break;
-    usedUnits += codePoint.length;
-    end += codePoint.length;
-  }
-  return content.slice(0, end);
-}
-
-function tryRead(path: string, maxChars: number): ReadContent | null {
+function tryRead(path: string, required: boolean): ReadContent | null {
+  let raw: string;
   try {
-    if (!existsSync(path)) return null;
-    const raw = readFileSync(path, 'utf-8');
-    const source_truncated = raw.length > maxChars;
-    return {
-      path,
-      content: source_truncated
-        ? truncateToUtf16Units(raw, maxChars) + '\n/* truncated */'
-        : raw,
-      source_digest: hashContent(raw),
-      source_length: raw.length,
-      source_truncated,
-    };
-  } catch {
+    raw = readFileSync(path, 'utf-8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return null;
+    if (required) throw new Error('required_instruction_read_failed', { cause: error });
     return null;
   }
+  return {
+    path,
+    content: raw,
+    source_digest: hashContent(raw),
+    source_length: raw.length,
+    source_truncated: false,
+  };
 }
 
-function firstExisting(root: string, names: string[]): ReadContent | null {
+function firstExisting(root: string, names: string[], required: boolean): ReadContent | null {
   for (const name of names) {
     const p = resolve(root, name);
-    const content = tryRead(p, 12_000);
+    const content = tryRead(p, required);
     if (content) return content;
   }
   return null;
@@ -173,6 +143,7 @@ function readInstructionFile(
   projectRoot: string,
   babelRoot: string,
   names: readonly string[],
+  required = false,
 ): ReadContent | null {
   const roots = [projectRoot];
   if (resolve(babelRoot) !== resolve(projectRoot)) roots.push(babelRoot);
@@ -181,13 +152,13 @@ function readInstructionFile(
     roots.push(parent);
   }
   for (const root of roots) {
-    const found = firstExisting(root, [...names]);
+    const found = firstExisting(root, [...names], required);
     if (found) return found;
   }
   return null;
 }
 
-/** User-wide memory. Override with BABEL_USER_CONTEXT in tests. */
+/** User-wide context. Override with BABEL_USER_CONTEXT in tests. */
 export function resolveUserContextPath(env: NodeJS.ProcessEnv = process.env): string {
   const override = env['BABEL_USER_CONTEXT']?.trim();
   if (override) return resolve(override);
@@ -225,16 +196,6 @@ function inferDomainSkill(task: string): { id: string; content: string } | null 
     };
   }
   return null;
-}
-
-function providerAdapterSnippet(modelId?: string): string {
-  const model = modelId ?? 'auto';
-  return [
-    '# Provider / model adapter',
-    `Effective model: ${model}`,
-    '- Use native tool calling when the provider supports it.',
-    '- Do not flatten tool results into prose when structured results are available.',
-  ].join('\n');
 }
 
 function hashManifest(entries: ChatStackEntry[]): string {
@@ -278,8 +239,9 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     sections.push({ entry: entries[entries.length - 1]!, content });
   };
 
-  // Identity: AGENTS.md only. CLAUDE.md is not an instruction source.
-  const identity = readInstructionFile(projectRoot, babelRoot, IDENTITY_CANDIDATES);
+  // Repository authority is atomic: a selected AGENTS.md is read completely or
+  // stack construction fails. CLAUDE.md is not an instruction source.
+  const identity = readInstructionFile(projectRoot, babelRoot, IDENTITY_CANDIDATES, true);
   if (identity) {
     push(
       { id: 'identity:agents', layer: 'identity', path: identity.path },
@@ -302,7 +264,7 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     );
   }
 
-  const userContext = tryRead(resolveUserContextPath(), USER_CONTEXT_MAX_CHARS);
+  const userContext = tryRead(resolveUserContextPath(), false);
   if (userContext) {
     push(
       { id: 'user:context', layer: 'project', path: userContext.path },
@@ -330,34 +292,12 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     }
   }
 
-  // Safety
-  push(
-    { id: 'safety:chat-adapter', layer: 'safety', path: '(builtin)' },
-    SAFETY_SNIPPET,
-  );
-
-  // Provider
-  push(
-    { id: 'provider:adapter', layer: 'provider', path: '(builtin)' },
-    providerAdapterSnippet(options.modelId),
-  );
-
-  // Verifier guidance
-  push(
-    { id: 'verifier:guidance', layer: 'verifier', path: '(builtin)' },
-    VERIFIER_SNIPPET,
-  );
-
-  const mandatoryIds = new Set([
-    'safety:chat-adapter',
-    'provider:adapter',
-    'verifier:guidance',
-  ]);
-  const mandatorySections = sections.filter(({ entry }) => mandatoryIds.has(entry.id));
-  // AGENTS.md is the project contract. Pack it before ENGINEERING.md and
-  // user context so a tight budget keeps the file that says what to do.
+  const requiredSections = sections.filter(({ entry }) => entry.id.startsWith('identity:'));
+  const requiredText = requiredSections.map(({ content }) => content).join('\n\n');
+  // Required AGENTS policy is never prefix-packed. Optional sources are each
+  // admitted whole or omitted; continue after an omission to try later inputs.
   const optionalSections = sections
-    .filter(({ entry }) => !mandatoryIds.has(entry.id))
+    .filter(({ entry }) => !entry.id.startsWith('identity:'))
     .sort((left, right) => {
       const priority = (id: string): number =>
         id.startsWith('identity:') ? 0 :
@@ -366,46 +306,26 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
               id === 'project:memory' ? 3 : 4;
       return priority(left.entry.id) - priority(right.entry.id);
     });
-  const mandatoryText = mandatorySections.map(({ content }) => content).join('\n\n');
   const content_disposition: ChatStackContentDisposition[] = [];
   let system_context = '';
   let context_error: string | undefined;
 
-  if (mandatoryText.length > budget) {
-    context_error = 'mandatory_instruction_core_exceeds_prompt_budget';
-    for (const { entry } of sections) {
-      content_disposition.push({
-        id: entry.id,
-        status: 'omitted',
-        included_chars: 0,
-        delivered_content_digest: hashContent(''),
-      });
-    }
+  if (requiredText.length > budget) {
+    throw new Error('required_instruction_exceeds_prompt_budget');
   } else {
     const includedOptional: string[] = [];
+    let usedChars = requiredText.length;
     for (const { entry, content } of optionalSections) {
-      const separatorBeforeMandatory = mandatoryText.length > 0 ? 2 : 0;
-      const separatorBefore = includedOptional.length > 0 ? 2 : 0;
-      const available = budget - mandatoryText.length - separatorBeforeMandatory -
-        includedOptional.join('\n\n').length - separatorBefore;
-      if (content.length <= available) {
+      const separator = usedChars > 0 ? 2 : 0;
+      if (content.length + separator <= budget - usedChars) {
         includedOptional.push(content);
+        usedChars += separator + content.length;
         content_disposition.push({
           id: entry.id,
           status: 'included',
           included_chars: content.length,
           delivered_content_digest: hashContent(content),
         });
-      } else if (available > 0) {
-        const partial = truncateToUtf16Units(content, available);
-        if (partial.length > 0) includedOptional.push(partial);
-        content_disposition.push({
-          id: entry.id,
-          status: 'truncated',
-          included_chars: partial.length,
-          delivered_content_digest: hashContent(partial),
-        });
-        break;
       } else {
         content_disposition.push({
           id: entry.id,
@@ -427,16 +347,13 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
         });
       }
     }
-    system_context = [...includedOptional, mandatoryText].filter(Boolean).join('\n\n');
-    for (const { entry } of mandatorySections) {
+    system_context = [requiredText, ...includedOptional].filter(Boolean).join('\n\n');
+    for (const { entry, content } of requiredSections) {
       content_disposition.push({
         id: entry.id,
         status: 'included',
-        included_chars:
-          sections.find((section) => section.entry.id === entry.id)?.content.length ?? 0,
-        delivered_content_digest: hashContent(
-          sections.find((section) => section.entry.id === entry.id)?.content ?? '',
-        ),
+        included_chars: content.length,
+        delivered_content_digest: hashContent(content),
       });
     }
   }

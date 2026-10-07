@@ -32,7 +32,7 @@ import { runChatEngineOnce } from './chatCore.js';
 
 const MODEL = 'deepseek-v4-flash';
 
-type Capture = { messages: ProviderMessage[]; systemPrompt?: string };
+type Capture = { messages: ProviderMessage[]; tools?: ToolDefinition[] };
 
 const roots: string[] = [];
 
@@ -61,10 +61,10 @@ function installCapturingRunner(engine: ChatEngine, captures: Capture[]): void {
   const runner = {
     executeWithToolsStream: async function* (
       messages: ProviderMessage[],
-      _tools: ToolDefinition[],
-      systemPrompt?: string,
+      tools: ToolDefinition[],
+      _systemPrompt?: string,
     ): AsyncGenerator<ToolStreamEvent, void, undefined> {
-      captures.push({ messages, ...(systemPrompt !== undefined ? { systemPrompt } : {}) });
+      captures.push({ messages, tools });
       yield { type: 'text_delta', text: 'Answer.' };
       yield { type: 'done', finishReason: 'stop' };
     },
@@ -93,8 +93,15 @@ function userContents(capture: Capture): string {
     .join('\n---\n');
 }
 
-function systemText(capture: Capture): string {
-  return capture.systemPrompt ?? '';
+function toolNames(capture: Capture): string[] {
+  return (capture.tools ?? []).map((tool) => tool.function.name);
+}
+
+function assertReadOnlyProjection(capture: Capture, label: string): void {
+  const forbidden = ['write_file', 'file_write', 'str_replace', 'apply_patch', 'file_delete', 'run_command', 'test_run', 'sub_agent', 'lsp'];
+  for (const name of forbidden) {
+    assert.ok(!toolNames(capture).includes(name), `${label}: ${name} must not be exposed for READ_ONLY`);
+  }
 }
 
 async function withPreLoopPlan<T>(fn: () => Promise<T>): Promise<T> {
@@ -189,8 +196,8 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
 
       assert.equal(captures.length, 1, 'expected exactly one provider request');
       assertNoEditMandate(captures[0]!, `fresh/${probe.label}`);
-      assert.doesNotMatch(systemText(captures[0]!), /## How You Work/);
-      assert.doesNotMatch(systemText(captures[0]!), /\*\*Mutate\*\*/);
+      assert.equal(engine!.getTurnRuntimeSnapshot()?.effectiveOperation, 'READ_ONLY');
+      assertReadOnlyProjection(captures[0]!, `fresh/${probe.label}`);
       assert.equal(
         enginePlan(engine!),
         undefined,
@@ -218,6 +225,8 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
     });
 
     assert.equal(captures.length, 1);
+    assert.equal(engine.getTurnRuntimeSnapshot()?.effectiveOperation, 'READ_ONLY');
+    assertReadOnlyProjection(captures[0]!, 'reused/stale-plan');
     assertNoEditMandate(captures[0]!, 'reused/stale-plan');
     assert.equal(
       enginePlan(engine),
@@ -251,7 +260,6 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
       !userContents(first[0]!).includes('## Before You Start'),
       'default chat does not inject the pre-tool repair guidance',
     );
-    assert.match(systemText(first[0]!), /## How You Work/);
     const afterExecute = mandateRecords();
     assert.equal(afterExecute, 0, 'default chat records no generated guidance message');
 
@@ -278,7 +286,7 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
     );
   });
 
-  it('a fix keeps the short procedure and skips the intent-plan message', async () => {
+  it('a fix keeps an edit-capable tool projection without default preloop guidance', async () => {
     const target = makeTarget();
     const captures: Capture[] = [];
     const task = 'Investigate the Babel terminal interface and fix the rendering problem.';
@@ -303,10 +311,33 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
     });
 
     assertNoEditMandate(captures[0]!, 'investigate-and-fix/default');
-    assert.match(systemText(captures[0]!), /## How You Work/);
-    assert.match(systemText(captures[0]!), /\*\*Mutate\*\*/);
-    assert.match(systemText(captures[0]!), /\*\*Verify\*\*/);
+    assert.equal(engine!.getTurnRuntimeSnapshot()?.effectiveOperation, analyzeTaskShape(task).operation);
+    assert.ok(toolNames(captures[0]!).includes('str_replace'), 'a mutating request retains the edit tool');
     assert.equal(enginePlan(engine!), undefined);
+  });
+
+  it('explicit READ_ONLY operation narrows mutation-shaped task tools', async () => {
+    const target = makeTarget();
+    const captures: Capture[] = [];
+    const task = 'Fix the example repository bug.';
+    let engine: ChatEngine | undefined;
+
+    await runChatEngineOnce({
+      task,
+      operation: 'READ_ONLY',
+      target,
+      preflightContext: '',
+      useStreaming: true,
+      engineFactory: (options) => {
+        engine = makeEngine(task, target.targetRoot, options);
+        installCapturingRunner(engine, captures);
+        return engine;
+      },
+    });
+
+    assert.equal(engine!.getTurnRuntimeSnapshot()?.effectiveOperation, 'READ_ONLY');
+    assertReadOnlyProjection(captures[0]!, 'explicit-operation');
+    assertNoEditMandate(captures[0]!, 'explicit-operation');
   });
 
   it('BABEL_CHAT_PRELOOP_PLAN=1 restores the intent-plan message for a fix', async () => {
@@ -337,7 +368,6 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
         'harness guidance must identify itself as guidance, not user authorization',
       );
       assert.ok(enginePlan(engine!), 'opt-in execute task keeps the intent plan attached');
-      assert.match(systemText(captures[0]!), /## How You Work/);
     });
   });
 
@@ -367,7 +397,6 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
     const text = userContents(captures[0]!);
     assert.doesNotMatch(text, /## Intent Plan/);
     assert.doesNotMatch(text, /## Before You Start/);
-    assert.match(systemText(captures[0]!), /## How You Work/);
   });
 
   it('an audit receives neither the fix frame nor the intent-plan message', async () => {
@@ -390,10 +419,8 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
     });
 
     assertNoEditMandate(captures[0]!, 'audit');
-    assert.doesNotMatch(systemText(captures[0]!), /## How You Work/);
-    assert.doesNotMatch(systemText(captures[0]!), /\*\*Mutate\*\*/);
-    assert.doesNotMatch(systemText(captures[0]!), /\*\*Verify\*\*/);
-    assert.match(systemText(captures[0]!), /For a question, review, or audit/);
+    assert.ok(captures[0]!.tools, 'capture the actual provider tool projection');
+    assertReadOnlyProjection(captures[0]!, 'audit');
   });
 
   it('streaming and callback preparation agree on operation and prompts', async () => {
@@ -426,5 +453,8 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
     );
     assertNoEditMandate(streaming, 'streaming/preparation');
     assertNoEditMandate(callback, 'callback/preparation');
+    assert.deepEqual(toolNames(streaming), toolNames(callback), 'streaming and callback paths must expose the same effective tool projection');
+    assertReadOnlyProjection(streaming, 'streaming/preparation');
+    assertReadOnlyProjection(callback, 'callback/preparation');
   });
 });

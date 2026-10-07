@@ -148,6 +148,17 @@ export function resetCircuitBreakerForRun(runId: string): void {
   sessionBlocks.delete(runId);
 }
 
+/**
+ * Retire the same-task live-verifier handoff when a fresh task starts or the
+ * owning run is disposed. Kept separate from breaker reset because successful
+ * tool calls reset that counter between a governed mutation and its verifier.
+ *
+ * @param runId - engine/run identity whose task certification is no longer live
+ */
+export function retireLiveCertificationForRun(runId: string): void {
+  liveCertifiedRunIds.delete(runId);
+}
+
 export function getCircuitBreakerState(runId?: string): {
   consecutiveBlocks: number;
   tripped: boolean;

@@ -535,6 +535,19 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
         throw new Error('B2_FAULT_AFTER_PERSISTED_START');
       };
       let first: { observation: string };
+      const lspHostGrantEnv = entry.suffix === 'lsp'
+        ? ['BABEL_EXECUTION_PROFILE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_DOCKER_DISABLE', 'BABEL_BENCHMARK_DOCKER_IMAGE', 'BABEL_READ_ONLY'] as const
+        : [] as const;
+      const lspHostGrantSnapshot = new Map(lspHostGrantEnv.map((key) => [key, process.env[key]]));
+      if (entry.suffix === 'lsp') {
+        // LSP starts its configured server directly on the host; this crash-boundary
+        // fixture explicitly grants that boundary instead of relying on task intent.
+        process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo';
+        process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+        process.env['BABEL_DOCKER_DISABLE'] = 'true';
+        delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+        delete process.env['BABEL_READ_ONLY'];
+      }
       try {
         first = await faultingEngine.executeOneAction(action, {
           agentId: 'b2', runId, runDir, babelRoot: process.cwd(), signal: new AbortController().signal,
@@ -542,6 +555,11 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
       } catch (error) {
         assert.match(error instanceof Error ? error.message : String(error), /B2_FAULT_AFTER_PERSISTED_START/);
         first = { observation: 'fault injected immediately after persisted start' };
+      } finally {
+        for (const [key, value] of lspHostGrantSnapshot) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
       }
       const afterDispatch = loadSessionEventLogFromDir(runDir)!;
       assert.ok(

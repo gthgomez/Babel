@@ -42,25 +42,11 @@ export async function prepareStreamingSubmission(
       ? { continueTask: submitOpts.continueTask }
       : {}),
   });
-  // D01/S01/M2: one effective-operation policy for this accepted submission,
-  // resolved BEFORE any generated guidance is appended. TaskShape is
-  // authoritative (derived from the same classifier that sets taskClass), so
-  // read-only gating, preparation fuses, progress scoring, loop-control and
-  // finalization all consume this decision.
-  //
-  // There are still two *inputs* by design: `resolvedIntent` is the legacy
-  // text-intent classifier (`classifyChatTaskIntent`) and TaskShape is the
-  // operation classifier. Neither is a second authority: `effectiveOperation`
-  // (TaskShape) dominates, and `effectiveExecutePolicy` below ANDs the two so
-  // the legacy `execute` label can never re-add mutation pressure to a
-  // READ_ONLY shape. Zero-write is safe for the same reason — its
-  // `executeIntent` is `effectiveExecutePolicy`, so a read-only shape cannot
-  // reach the zero-write terminal even where a class tune left the threshold
-  // non-zero. Older hydrated snapshots without the field fall back to their
-  // persisted shape; unknown defaults to MUTATING (fail-safe: never silently
-  // loosens mutation pressure).
+  // Accepted host operation (AUTO falls back to task shape) narrows tools and
+  // completion behavior. It grants no execution authority; profile/lease and
+  // action admission remain independent. Unknown old snapshots fail closed.
   const effectiveOperation: TaskOperation =
-    runtime.effectiveOperation ?? runtime.taskShape?.operation ?? "MUTATING";
+    runtime.effectiveOperation ?? runtime.taskShape?.operation ?? "READ_ONLY";
   const isReadOnlyInspection = effectiveOperation === "READ_ONLY";
 
   host.conversation.push({ role: "user", content: userInput });

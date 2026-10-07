@@ -42,6 +42,10 @@ import {
   renderReadOnlyChildResultSection,
   type ReadOnlyChildResult,
 } from './childConclusion.js';
+import {
+  CHAT_BEHAVIORAL_CONTRACT,
+  buildTextToolProtocolSection,
+} from './textToolParser.js';
 
 // ─── Chat Tool Action Schema ──────────────────────────────────────────────
 
@@ -290,276 +294,66 @@ export interface ChatSystemPromptOptions {
   executionFirst?: boolean;
   /** Truthful caller-provided runtime mode; unknown is used when not supplied. */
   runtimeMode?: ChatRuntimeMode;
+  /** Prompt projection of caller-visible tools; runtime admission remains authoritative. */
+  availableToolNames?: readonly string[];
+  /** Effective schemas for generated legacy documentation; native sends these separately. */
+  availableToolDefinitions?: ToolDefinition[];
 }
 
 export type ChatRuntimeMode = 'tui' | 'headless' | 'direct' | 'unknown';
 
 export function buildChatSystemPrompt(options: ChatSystemPromptOptions): string {
-  const sections: string[] = [];
   const runtimeMode = options.runtimeMode ?? 'unknown';
-
-  // Text-tools mode: use a MINIMAL prompt. Small models (3-4B) cannot
-  // reliably attend to the full Babel system prompt. Give them just the
-  // tool format and essential instructions.
+  const sections = [CHAT_BEHAVIORAL_CONTRACT, `Runtime mode: ${runtimeMode}.`];
   if (options.textTools) {
-    sections.push(
-      'You are a coding agent with file tools. Use tools to inspect or change files when needed; answer directly when the available evidence is sufficient.',
-      `Runtime mode: ${runtimeMode}.`,
-      'DO NOT copy example values — use REAL file paths and values for YOUR task.',
-      'Results arrive as [RESULT]... or [OK]. Chain tools or answer in plain text.',
-      '',
-      '[TOOL:read_file]',
-      'path: src/auth.ts',
-      '[TOOL:grep]',
-      'pattern: isAuthenticated',
-      'path: src/',
-      '[TOOL:glob]',
-      'pattern: **/*.test.ts',
-      '[TOOL:write_file]',
-      'path: src/fix.ts',
-      'content:',
-      '  export function hello() {',
-      '    return "world";',
-      '  }',
-      '[TOOL:str_replace]',
-      'file_path: src/auth.ts',
-      'old_str: if (token = null)',
-      'new_str: if (token === null)',
-      '[TOOL:run_command]',
-      'command: npm test',
-      '[TOOL:think]',
-      'thought: The bug is on line 42 — null assignment instead of comparison.',
-      '[TOOL:ask]',
-      'question: Should I fix this for Node 18 or Node 20?',
-      '[TOOL:remember]',
-      'key: auth_bug',
-      'value:',
-      '  Line 42: token = null should be token === null',
-      '  File: src/auth.ts',
-      '[TOOL:recall]',
-      'key: auth_bug',
-      '[TOOL:check]',
-      'file_path: src/auth.ts',
-      '[TOOL:plan]',
-      'steps:',
-      '  1. Read src/auth.ts to find the bug',
-      '  2. Apply str_replace to fix the comparison',
-      '  3. Run npm test to verify',
-      '  4. Report the fix',
-    );
-    if (options.systemContext) {
-      sections.push('', '## Project Context', options.systemContext);
-    }
-    return sections.join('\n');
-  }
-
-  sections.push(
-    '# Babel Chat',
-    '',
-    'You are a conversational coding agent — an interactive software engineer who investigates, ' +
-      'diagnoses, and applies fixes when a change is needed. If the requested state already exists, ' +
-      'verify that with evidence instead of manufacturing a diff.',
-    `Runtime mode: ${runtimeMode}.`,
-    '',
-    '## Core Principles',
-    '- Prefer the file/search tools (read_file, grep, glob) over shell commands for code exploration.',
-    '- When fixing: read → diagnose → apply changes → verify. Do not stop at diagnosis.',
-    '- Write code that matches the surrounding style, conventions, and patterns.',
-    '- Be thorough — read the relevant files, understand the problem, then act.',
-    '- Small, focused edits are better than large rewrites.',
-    '- Prefer `str_replace` over `write_file` for targeted edits under ~50 lines — it is faster, cheaper, and less error-prone.',
-    '- Use `read_range` when you know the approximate line numbers instead of reading entire files.',
-    '- Use `todo_write` when a task benefits from an explicit checklist; it is optional.',
-    '- If a verifier fails, classify the cause, repair task-caused failures, and stop with evidence when the failure is baseline or environmental.',
-  );
-
-  if (options.executionFirst) {
-    sections.push(
-      '',
-      '## How You Work',
-      '',
-      'Investigate and implement when the request requires a change; do not create a write merely to make the filesystem differ.',
-      '',
-      '### For fix, implement, repair, or create requests:',
-      '- Read the relevant files first to understand the problem.',
-      '- Apply the fix using str_replace (preferred for targeted edits) or write_file for larger changes when the evidence shows a change is needed.',
-      '- Run the most relevant project verifier after a change when one is available.',
-      '- Completion is based on the requested state and verification evidence, not on whether a file was written.',
-      '- If verification fails, diagnose whether the cause is task-related, baseline, or environmental; repair task-caused failures and report bounded unresolved failures.',
-      '',
-      '### For explanation or review requests:',
-      '- Read relevant files, then explain clearly.',
-      '- You may complete without writes.',
-      '',
-      '### Important',
-      '- Runtime mode above is caller-provided when known and otherwise `unknown`; do not infer or claim headless/interactive state.',
-      '- Prefer small, focused edits over large rewrites.',
-      '- If you do not know the answer, investigate with tools before giving up.',
-    );
-  }
-
-  if (options.textTools) {
-    sections.push(
-      '',
-      '## CRITICAL: How to use tools',
-      '',
-      'Use tools to inspect the repository and to make changes when the task requires them. Do NOT guess or hallucinate.',
-      'To invoke a tool, write EXACTLY this format on its own line:',
-      '',
-      '[TOOL:tool_name]',
-      'param1: value1',
-      'param2: value2',
-      '',
-      'Multi-line values: indent continuation lines with 2 spaces.',
-      '',
-      '[TOOL:write_file]',
-      'path: src/hello.ts',
-      'content:',
-      '  export function hello() {',
-      '    return "world";',
-      '  }',
-      '',
-      'Available tools:',
-      '- [TOOL:read_file] path: "file/path"',
-      '- [TOOL:write_file] path: "file/path" content: (next lines indented)',
-      '- [TOOL:str_replace] file_path: "f" old_str: (next lines) new_str: (next lines)',
-      '- [TOOL:grep] pattern: "regex" path: "dir/" (path optional)',
-      '- [TOOL:glob] pattern: "**/*.ts"',
-      '- [TOOL:run_command] command: "npm test"',
-      '- [TOOL:finish] (no params — signals completion)',
-      '',
-      'IMPORTANT: Every time you need to read a file, run a command, or make an edit,',
-      'you MUST start your response with the [TOOL:...] block. Do not write explanations',
-      'before using a tool. Tools go FIRST, then your analysis.',
-    );
+    sections.push(buildTextToolProtocolSection(options.availableToolNames));
   } else if (options.nativeTools) {
     sections.push(
-      '',
-      '## How to respond',
-      '',
-      'Use the provided function tools when you need to investigate or modify the codebase.',
-      'When you have enough context, reply in clear natural language with markdown.',
-      'Read before you write. Prefer small, focused edits.',
+      'Use the available function tools when useful. You may answer the user directly in natural language when ready; no completion tool call is required.',
     );
   } else {
     sections.push(
-      '',
-      '## How to respond',
-      '',
-      'Each turn you MUST output a single JSON object matching one of these two shapes:',
-      '',
-      '**To use tools (investigate or modify):**',
-      '```json',
-      '{',
-      '  "type": "tool_calls",',
-      '  "thinking": "brief reasoning about what you need to do",',
-      '  "actions": [',
-      '    { "type": "read_file", "path": "src/file.ts" },',
-      '    { "type": "grep", "pattern": "function name", "path": "src/" },',
-      '    { "type": "sub_agent", "task": "investigate the auth module" }',
-      '  ]',
-      '}',
-      '```',
-      '',
-      '**To answer (when you have enough context):**',
-      '```json',
-      '{',
-      '  "type": "completion",',
-      '  "answer": "Your full answer here in natural language. Use markdown."',
-      '}',
-      '```',
-      'Provide the complete answer in the JSON. It will be displayed to the user directly.',
-      'You do NOT need to make a separate call — the answer goes right here.',
+      [
+        '## Response format',
+        'Return one JSON object matching either `tool_calls` with an `actions` array, or `completion` with an `answer` string.',
+        'The completion envelope is the legacy response format; include the complete user-facing answer there.',
+      ].join('\n'),
+      formatLegacyToolManual(options.availableToolDefinitions ?? buildChatToolDefinitions(), options.availableToolNames),
     );
   }
 
-  sections.push(
-    '',
-    '## Available Tools',
-    '',
-    '| Tool | Description |',
-    '|------|-------------|',
-    '| `read_file` | Read a file. `path`: absolute or project-relative path |',
-    '| `list_dir` | List directory contents. `path`: directory path |',
-    '| `grep` | Search file contents with regex. `pattern`: regex, `path` (optional): scope file or directory |',
-    '| `glob` | Find files by glob pattern. `pattern`: eg `"src/**/*.ts"` |',
-    '| `semantic_search` | Semantic repo search. `query`: natural language query |',
-    '| `git_context` | Git status/diff context. `format`: summary/files/diff, optional `path` |',
-    '| `test_run` | Run tests with extended timeout. `command`: test command |',
-    '| `web_search` | Search the web. `query`: search string |',
-    '| `web_fetch` | Fetch and read a URL. `url`: full URL |',
-    '| `str_replace` | Perform exact string replacement in a file. `file_path`: target file, `old_str`: text to replace, `new_str`: replacement text. PREFERRED over write_file for targeted edits under ~50 lines. |',
-    '| `read_range` | Read a specific line range from a file. `file_path`: target file, `start_line`/`end_line`: 1-indexed inclusive range. Use instead of read_file when you only need a portion of a large file. |',
-    '| `todo_write` | Optional structured task list for work that benefits from explicit sub-goals. `todos`: array of `{id, content, status}` with merge-patch semantics. |',
-    '| `run_command` | Run a shell command. `command`: shell command. Optional `background: true` starts the command without blocking; use `await_command` to collect output. |',
-    '| `await_command` | Wait for a background shell job. `task_id`: id from background `run_command`, optional `timeout_seconds`. |',
-    '| `write_file` | Write a new file or replace a whole file. `path`: absolute or project-relative path, `content`: complete file contents. Prefer `str_replace` for a targeted edit under ~50 lines. |',
-    '| `apply_patch` | Apply a unified diff patch to modify files. `patch`: unified diff content. Use this when you have a specific diff to apply. |',
-    '| `sub_agent` | Optional delegation for an investigation or mutation. Delegated children run sequentially in this release (see #214). `task`: what to do, `instructions` (optional): extra child instructions, `mutation` (optional): set to true for write access, `write_scope` (optional): paths the sub-agent can modify, `model` (optional): backend key override (e.g. "deepseek-v4-pro", "scout"), `max_rounds` (optional): turn limit clamped to 1-20 (read default 4, mutation default 8). |',
-    '| `finish` | Signal completion (no more actions needed) |',
-    '',
-    '## Recommended Workflow',
-    '',
-    ...(options.executionFirst
-      ? [
-          'For a change, follow this cycle:',
-          '',
-          '1. **Investigate** — Use `read_file`, `read_range`, `grep`, `glob`, or `sub_agent` to understand the codebase.',
-          '2. **Plan** — Optionally use `todo_write` to track sub-goals with clear completion criteria.',
-          '3. **Mutate** — Apply changes using `str_replace` for a targeted edit under ~50 lines, or `write_file` for a new file or a larger rewrite. Use `apply_patch` when you have a specific diff.',
-          '4. **Verify** — Run tests or build commands via `test_run` or `run_command`. Check that your changes compile and pass existing tests.',
-          '5. **Complete** — Summarize the evidence and signal done with `finish` when the requested state and proportionate verification are satisfied.',
-          '',
-          'This cycle keeps work focused and verifiable; delegation and todo tracking remain optional.',
-        ]
-      : [
-          'For a question, review, or audit:',
-          '',
-          '1. **Investigate** — Use `read_file`, `read_range`, `grep`, `glob`, or `sub_agent` to gather the evidence.',
-          '2. **Plan** — Optionally use `todo_write` to track sub-goals with clear completion criteria.',
-          '3. **Complete** — Explain the evidence and signal done with `finish`.',
-          '',
-          'Delegation and todo tracking remain optional.',
-        ]),
-    '',
-    '## Safety Rules',
-    '',
-    '- Always read before you write — understand the code before changing it.',
-    '- Use `sub_agent` only when the question is independently delegable and delegation reduces total work. Delegated children are scheduled sequentially in this release (see #214).',
-    '- Be thorough: when investigating, read the relevant files, not just file names.',
-    '- When modifying code, show the user what changed and why.',
-    '- Never run destructive commands (rm -rf, force push, etc.).',
-    ...(options.executionFirst
-      ? [
-          '- When working on a fix or implementation task, act within the granted scope; stop only at a genuine authority, safety, or irreversible-effect boundary.',
-        ]
-      : ['- Ask the user only for a genuine product, authority, safety, cost, or irreversible-effect decision; otherwise investigate and proceed.']),
-  );
-
-  const mcpServers = readMcpServers();
-  const mcpNames = Object.keys(mcpServers);
-  if (mcpNames.length > 0) {
-    sections.push(
-      '',
-      '## MCP Servers',
-      ...mcpNames.map((name) => `- ${name}`),
-      '',
-      '| `mcp_tool_search` | Search tools on MCP server. `server`, optional `query` |',
-      '| `mcp_request` | Call MCP tool. `server`, `query` (tool name + JSON args) |',
-    );
+  if (options.systemContext) sections.push(`## Project Context\n${options.systemContext}`);
+  sections.push(`Current working directory: ${options.projectRoot}`, `Project: ${targetBasename(options.projectRoot)}`);
+  if (!options.textTools && Object.keys(readMcpServers()).length > 0) {
+    sections.push('Configured MCP servers are available through the MCP tool definitions.');
   }
+  return sections.join('\n\n');
+}
 
-  if (options.systemContext) {
-    sections.push('', '## Project Context', options.systemContext);
-  }
-
-  sections.push(
-    '',
-    `Current working directory: ${options.projectRoot}`,
-    `Project: ${targetBasename(options.projectRoot)}`,
-  );
-
-  return sections.join('\n');
+function formatLegacyToolManual(
+  tools: ToolDefinition[],
+  availableToolNames?: readonly string[],
+): string {
+  const available = availableToolNames === undefined
+    ? tools
+    : tools.filter((tool) => availableToolNames.includes(tool.function.name));
+  const lines = available.map((tool) => {
+    const parameters = tool.function.parameters as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    const properties = Object.keys(parameters.properties ?? {});
+    const required = new Set(parameters.required ?? []);
+    const parameterList = properties
+      .map((name) => {
+        const schema = parameters.properties?.[name] as { enum?: unknown[] } | undefined;
+        const choices = schema?.enum ? `=${schema.enum.map(value => JSON.stringify(value)).join('|')}` : '';
+        return `${name}${required.has(name) ? '' : '?'}${choices}`;
+      })
+      .join(', ');
+    return `- \`${tool.function.name}\`(${parameterList}): ${tool.function.description ?? ''}`;
+  });
+  return ['## Tool Definitions', ...lines].join('\n');
 }
 
 export interface ChatTurnPromptOptions {
@@ -956,7 +750,7 @@ const RECOVERY_PLAN_PARAMETER = {
  * These are passed to the runner's `executeWithToolsStream()` method for native
  * function calling.
  */
-export function buildChatToolDefinitions(): ToolDefinition[] {
+function buildAllChatToolDefinitions(): ToolDefinition[] {
   return [
     {
       type: 'function',
@@ -1050,7 +844,7 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
       function: {
         name: 'write_file',
         description:
-          'Write a new file or replace a whole file. Prefer str_replace for a targeted edit under ~50 lines.',
+          'Create a file or replace its complete contents. Use str_replace for a localized exact edit.',
         parameters: {
           type: 'object',
           properties: {
@@ -1067,7 +861,7 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
       function: {
         name: 'str_replace',
         description:
-          'Perform exact string replacement in a file. Use this instead of write_file for targeted edits under ~50 lines — it is faster, cheaper, and less error-prone than rewriting entire files.',
+          'Replace an exact string in a file. Use for localized edits; use write_file when replacing complete file contents.',
         parameters: {
           type: 'object',
           properties: {
@@ -1144,11 +938,11 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
       function: {
         name: 'run_command',
         description:
-          'Execute a shell command and return its output. Set background=true for long-running jobs (builds, full test suites) so the agent loop is not blocked; then call await_command with the returned task_id. Background uses the same allowlist/cwd sandbox as foreground shell; argv is whitespace-split only (no quoted multi-arg syntax). Not available under Docker sandbox profiles or plan mode.',
+          'Run an allowlisted command through the governed, shell-free executor. Quoted arguments are grouped; this is not a general shell. Set background=true for long-running jobs, then collect results with await_command. Background jobs use the same project scope and policy checks as foreground commands.',
         parameters: {
           type: 'object',
           properties: {
-            command: { type: 'string', description: 'Shell command to run' },
+            command: { type: 'string', description: 'Executable and quote-aware arguments; no shell evaluation' },
             cwd: {
               type: 'string',
               description: 'Working directory (must resolve within project root)',
@@ -1355,6 +1149,11 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
   ];
 }
 
+/** Build tools advertised for new native function-call requests. */
+export function buildChatToolDefinitions(): ToolDefinition[] {
+  return buildAllChatToolDefinitions().filter((tool) => tool.function.name !== 'finish');
+}
+
 /**
  * Build a restricted tool set for stall / force-mutate interventions.
  *
@@ -1390,7 +1189,7 @@ export function buildRestrictedChatToolDefinitions(
     'test_run',
   ] as const;
   const names = new Set<string>(mode === 'act_or_verify' ? actOrVerify : mutateOnly);
-  return buildChatToolDefinitions().filter((def) => names.has(def.function.name));
+  return buildAllChatToolDefinitions().filter((def) => names.has(def.function.name));
 }
 
 // ─── MCP Helpers ─────────────────────────────────────────────────────────

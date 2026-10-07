@@ -17,11 +17,12 @@
 import {
   getChatTaskTune,
   resolveChatTaskClass,
-  analyzeTaskShape,
+  resolveTaskShape,
   type ChatTaskClass,
   type TaskOperation,
   type VerificationPolicy,
   type TaskShape,
+  type RequestedTaskOperation,
 } from '../config/chatTaskClass.js';
 
 export type TurnTaskIntent = 'execute' | 'explain';
@@ -71,6 +72,7 @@ export interface BeginUserSubmissionInput {
   model?: string;
   /** Explicit intent override from the caller. */
   taskIntent?: TurnTaskIntent;
+  operation?: RequestedTaskOperation | undefined;
   /**
    * Explicit continuation linkage: preserve counters/verifier-facing state
    * from the previous submission. Default false = isolate.
@@ -122,18 +124,28 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
   const continuationGesture = !continueTask && prev != null && isContinuationPrompt(input.userInput);
   // Operation/class freeze for explicit continuation and bare continuation
   // gestures; counters still isolate unless continueTask is true.
-  const carryOperation = continueTask || continuationGesture;
+  const carryOperation = (input.operation === undefined || input.operation === 'AUTO')
+    && (continueTask || continuationGesture);
   const submissionIndex = (prev?.submissionIndex ?? 0) + 1;
 
+  const taskShape = resolveTaskShape(input.userInput, input.operation);
+  const effectiveOperation: TaskOperation =
+    carryOperation && prev
+      ? prev.effectiveOperation ?? prev.taskShape?.operation ?? resolveTaskShape(prev.taskText).operation
+      : taskShape.operation;
+
   const taskIntent: TurnTaskIntent =
-    input.taskIntent ??
-    (continueTask && prev?.stickyIntent ? prev.stickyIntent : input.classifyIntent(input.userInput));
+    effectiveOperation === 'READ_ONLY' ? 'explain'
+      : input.operation === 'CHANGE' ? 'execute'
+      : input.taskIntent ??
+        (continueTask && prev?.stickyIntent ? prev.stickyIntent : input.classifyIntent(input.userInput));
 
   const taskClass = carryOperation && prev
     ? prev.taskClass
     : resolveChatTaskClass({
         taskText: input.userInput,
         autoClassify: true,
+        operation: input.operation,
       });
 
   const gatePolicy = getChatTaskTune(taskClass).verificationPolicy;
@@ -152,14 +164,6 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
         restrictToolsNextTurn: prev.restrictToolsNextTurn,
       }
     : emptyTurnCounters();
-
-  const taskShape = analyzeTaskShape(input.userInput);
-  // Continuation (explicit or bare gesture) keeps the frozen operation from the
-  // prior submission; isolated submissions derive it fresh from TaskShape.
-  const effectiveOperation: TaskOperation =
-    carryOperation && prev?.effectiveOperation
-      ? prev.effectiveOperation
-      : taskShape.operation;
 
   return {
     submissionIndex,

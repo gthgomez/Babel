@@ -55,6 +55,8 @@ export interface InstructionFragmentV1 {
   delivered_content_digest?: string;
   /** UTF-16 code units delivered for this fragment. */
   included_chars?: number;
+  /** Whether the selected source was included, omitted, or budget-truncated. */
+  delivery_status?: 'included' | 'truncated' | 'omitted';
 }
 
 /** Where a delivered session-identity fragment came from. */
@@ -179,19 +181,23 @@ export function buildInstructionManifestV1(
 
   if (input.chatStack) {
     for (const entry of input.chatStack.selected_entries) {
-      const content =
-        getPathContent(entry.path, input.pathContents) ??
-        entry.contentPreview ??
-        entry.path;
+      const fullSourceDigest = entry.source_digest ?? entry.content_digest;
+      const delivery = input.chatStack.content_disposition.find((item) => item.id === entry.id);
       const precedence = layerToPrecedence(entry.layer);
       fragments.push({
         rule_id: entry.id,
         source: entry.path,
-        source_hash: sha256(content),
+        // Never let the display preview stand in for source identity. The
+        // compiler's source digest covers the complete selected source.
+        source_hash: fullSourceDigest ?? sha256(entry.path),
         precedence,
         scope: 'session',
         selection_reason: `chat_stack:${entry.layer}`,
         policy_class: defaultPolicyClass(precedence),
+        ...(fullSourceDigest ? { source_digest: fullSourceDigest } : {}),
+        delivered_content_digest: delivery?.delivered_content_digest ?? sha256(''),
+        included_chars: delivery?.included_chars ?? 0,
+        delivery_status: delivery?.status ?? 'omitted',
         ...(entry.contentPreview
           ? { content_preview: entry.contentPreview.slice(0, 200) }
           : {}),
@@ -233,6 +239,7 @@ export function buildInstructionManifestV1(
         delivered_content_digest: r.delivered_content_digest ?? sha256(r.content),
         included_chars: r.included_chars ?? r.content.length,
         ...(r.source_digest ? { source_digest: r.source_digest } : {}),
+        delivery_status: 'included',
       });
     }
   }

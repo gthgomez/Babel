@@ -41,7 +41,7 @@ import {
   ThreadEventLogRestoreError,
   type ThreadEventLog,
 } from './threadEventLog.js';
-import { compileChatStack, type ChatCompiledStack } from './chatStackCompile.js';
+import { compileChatStack, resolveStackBudgetForClass, type ChatCompiledStack } from './chatStackCompile.js';
 import {
   buildTaskContractV1,
   freezeTaskContract,
@@ -221,6 +221,8 @@ export function resolveLiveSessionAuthority(input: {
   instructionRoot?: string;
   task: string;
   taskClass?: string;
+  /** The exact stack installed by Chat preparation, rather than a second compilation. */
+  compiledChatStack?: ChatCompiledStack;
   modelId?: string;
   verifierRequirements?: string[];
   maxTurns?: number;
@@ -233,9 +235,10 @@ export function resolveLiveSessionAuthority(input: {
    */
   systemContextFragments?: readonly IdentityDeliveredFragment[];
 }): LiveSessionAuthority {
-  const chatStack = compileChatStack({
+  const chatStack = input.compiledChatStack ?? compileChatStack({
     projectRoot: input.instructionRoot ?? input.projectRoot,
     task: input.task,
+    promptBudgetChars: resolveStackBudgetForClass(input.taskClass),
     ...(input.modelId ? { modelId: input.modelId } : {}),
   });
 

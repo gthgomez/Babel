@@ -692,10 +692,8 @@ describe('Gate helpers', () => {
     assert.ok(msg.includes('0 file writes'));
     assert.ok(msg.includes('0 sub-agent mutations'));
     assert.ok(msg.includes('read_file, grep'));
-    assert.ok(
-      msg.includes('str_replace') || msg.includes('write_file'),
-      'rejection should mention str_replace or write_file',
-    );
+    assert.ok(msg.includes('Inspect the relevant code'));
+    assert.ok(msg.includes('without manufacturing a diff'));
   });
 
   test('buildRejectionMessage with writes but no verifier', () => {
@@ -1156,4 +1154,3 @@ describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
     assert.equal(decision, 'reject');
   });
 });
-

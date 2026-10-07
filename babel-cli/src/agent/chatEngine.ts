@@ -43,6 +43,9 @@ import {
   parseChatTurnLenient,
 } from "./chatEngineHelpers.js";
 import { classifyChatTaskIntent } from "./chatEngineTaskIntent.js";
+import { resolveChatInstructionContext } from "./chatInstructionContext.js";
+import { retireLiveCertificationForRun } from "./toolExecutor.js";
+import { TEXT_TOOL_NAMES } from "./textToolParser.js";
 
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -136,16 +139,18 @@ import {
 } from "./chatFailureClassification.js";
 
 import {
-  analyzeTaskShape,
+  resolveTaskShape,
   getChatTaskTune,
   isMutationExecutionTask,
   resolveChatTaskClass,
   type ChatTaskClass,
   type VerificationPolicy,
+  type RequestedTaskOperation,
 } from "../config/chatTaskClass.js";
 import {
   buildGateRejectUserMessageForEngine,
   evaluateCompletionGateForEngine,
+  hasInspectedNoChangeEvidence,
   isAuthoritativeVerifierCommand,
 } from "./completionGatePolicy.js";
 import {
@@ -204,6 +209,7 @@ import {
   type BoundChatVerifierReceipt,
 } from "../evidence/chatRevisionBinding.js";
 import { RevisionManager } from "../evidence/revisionBoundReceipt.js";
+import { availableChatToolNames, availableChatTools } from "./chatToolAvailability.js";
 import { resolveIsolationBrokerFlags } from "./chatEngineIsolationFlags.js";
 
 import {
@@ -833,6 +839,7 @@ export class ChatEngine {
     this.taskAllowanceOwner.markChildBudgetExhausted(limiter, reason);
   }
   constructor(options: ChatEngineOptions) {
+    options = { ...options, compiledChatStack: resolveChatInstructionContext(options) };
     this.options = options;
     this.ownerAccounting = new ChatEngineOwnerAccounting(
       this as unknown as ChatEngineOwnerAccountingHost,
@@ -857,6 +864,7 @@ export class ChatEngine {
     this.taskClass = resolveChatTaskClass({
       taskText: options.task,
       autoClassify: true,
+      operation: options.operation,
     });
     // P0: Initialize gatePolicy from task class so the result payload always
     // reflects the effective verification policy, even when the gate is never
@@ -1399,7 +1407,7 @@ export class ChatEngine {
     return turnHasMutation(this.toolCallLog, this._turnToolCallLogStart);
   }
 
-  /** Force-mutate + read-thrash + cumulative exploration fuses (shared submit/stream). */
+  /** Ordinary Chat uses evidence progress; legacy counters remain diagnostic. */
   private applyExploreFuses(
     executeIntent: boolean,
     readOnlyOperation: boolean,
@@ -1416,6 +1424,7 @@ export class ChatEngine {
       investigateSoftNudgeDone: this.investigateSoftNudgeDone,
     };
     const out = applyExploreFusesPolicy({
+      evidenceBasedProgress: true,
       executeIntent,
       readOnlyOperation,
       taskClass: this.taskClass,
@@ -2561,14 +2570,14 @@ export class ChatEngine {
    * once from TaskShape in `beginUserSubmission`; `isReadOnlyChat()` remains a
    * sufficient explicit read-only signal (BABEL_READ_ONLY / read_only_audit).
    *
-   * Unknown/missing accepted runtime falls back to explicit-only behavior so a
-   * legacy caller cannot be reinterpreted as "no change" merely by writing
-   * nothing. A mutating accepted operation still requires a real verifier.
+   * A concluded change request with successful inspection and no mutations
+   * projects a non-certified no-change result. Bare empty completions still
+   * fail the completion gate; neither path can certify a patch.
    */
   private isAcceptedReadOnlyTerminal(): boolean {
     return (
       this.lastTurnRuntime?.effectiveOperation === "READ_ONLY" ||
-      isReadOnlyChat()
+      isReadOnlyChat() || (this.lastTurnRuntime !== null && hasInspectedNoChangeEvidence(this.toolCallLog))
     );
   }
 
@@ -2679,6 +2688,7 @@ export class ChatEngine {
    * refcounted handle closes only when the last reference is released.
    */
   closeAdmissionStore(): void {
+    retireLiveCertificationForRun(this.engineRunId);
     const claim = this.activeAdmissionClaim;
     if (claim && !claim.settled) {
       this.settleAdmissionClaim(claim, "aborted", {
@@ -2783,11 +2793,13 @@ export class ChatEngine {
     userInput: string;
     taskIntent?: TaskIntent;
     continueTask?: boolean;
+    operation?: RequestedTaskOperation;
   }): TurnRuntimeSnapshot {
     const previous = this.snapshotPreviousForBegin();
     const runtime = beginUserSubmission({
       userInput: input.userInput,
       projectRoot: this.options.projectRoot,
+      operation: input.operation ?? this.options.operation,
       ...(this.options.model !== undefined
         ? { model: this.options.model }
         : {}),
@@ -2805,7 +2817,8 @@ export class ChatEngine {
     const previousClass = this.taskClass;
     this.options = { ...this.options, task: runtime.taskText };
     this.taskClass = runtime.taskClass;
-    if (previousTask !== runtime.taskText || previousClass !== runtime.taskClass) {
+    if (previousTask !== runtime.taskText || previousClass !== runtime.taskClass
+      || this.lastTurnRuntime?.effectiveOperation !== runtime.effectiveOperation) {
       this.clearSystemPromptCache();
     }
     this.gatePolicy = runtime.gatePolicy;
@@ -2826,6 +2839,7 @@ export class ChatEngine {
       !runtime.continuedTask &&
       this.taskCostScopeUnavailable;
     if (!runtime.continuedTask && !continuationScopeUnavailable) {
+      retireLiveCertificationForRun(this.engineRunId);
       // A fresh submission starts a new enforcement scope. The global tracker
       // is intentionally preserved for session/accounting views.
       //
@@ -3015,6 +3029,10 @@ export class ChatEngine {
     delete nextOptions.model;
     delete nextOptions.executionProfile;
     delete nextOptions.runtimeMode;
+    delete nextOptions.operation;
+    delete nextOptions.compiledChatStack;
+    if (preparation.operation !== undefined) nextOptions.operation = preparation.operation;
+    if (preparation.compiledChatStack !== undefined) nextOptions.compiledChatStack = preparation.compiledChatStack;
     if (preparation.projectRoot !== undefined)
       nextOptions.projectRoot = preparation.projectRoot;
     if (preparation.instructionRoot !== undefined)
@@ -3030,7 +3048,7 @@ export class ChatEngine {
       nextOptions.executionProfile = preparation.executionProfile;
     if (preparation.runtimeMode !== undefined)
       nextOptions.runtimeMode = preparation.runtimeMode;
-    this.options = nextOptions;
+    this.options = { ...nextOptions, compiledChatStack: resolveChatInstructionContext(nextOptions) };
     if (preparation.intentPlanUserMessage !== undefined) {
       this.options.intentPlanUserMessage = preparation.intentPlanUserMessage;
     } else {
@@ -3062,6 +3080,7 @@ export class ChatEngine {
     this.taskClass = resolveChatTaskClass({
       taskText: preparation.task,
       autoClassify: true,
+      operation: preparation.operation,
     });
     // Reused TUI engines start a new task/context. Do not let a previous
     // task's read dedupe suppress evidence in the new request.
@@ -4098,6 +4117,7 @@ export class ChatEngine {
       takeToolPolicy: () => this.nextTurnToolPolicy(),
       acceptedOperation: this.getTurnRuntimeSnapshot()?.effectiveOperation,
       requiredVerifierCommands: this.getResolvedRequiredVerifiers(),
+      hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed,
       systemPrompt: (mode) => this.getOrBuildSystemPrompt(mode),
       useTextTools: () => this.shouldUseTextTools(),
       effects: this.providerUsageEffects(),
@@ -4158,14 +4178,27 @@ export class ChatEngine {
     }
     const nativeTools = mode === "native";
     const textTools = mode === "text";
-    const systemCtx = this.options.systemContext;
+    const operation = this.lastTurnRuntime?.effectiveOperation
+      ?? resolveTaskShape(this.options.task, this.options.operation).operation;
+    const availableToolNames = availableChatToolNames(
+      [...this.services.tools.buildDefinitions().map(tool => tool.function.name), ...TEXT_TOOL_NAMES],
+      { operation, requiredVerifiers: operation === "READ_ONLY" ? this.getResolvedRequiredVerifiers() : [],
+        hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed },
+    );
+    const systemCtx = [this.options.systemContext, this.options.compiledChatStack?.system_context]
+      .filter(Boolean).join("\n\n");
     let systemContent = this.services.conversation.buildSystemPrompt({
       projectRoot: this.options.projectRoot,
       nativeTools,
       textTools,
+      availableToolNames,
+      availableToolDefinitions: availableChatTools(this.services.tools.buildDefinitions(), {
+        operation, requiredVerifiers: this.getResolvedRequiredVerifiers(),
+        hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed,
+      }),
       executionFirst: isMutationExecutionTask(
         this.taskClass,
-        analyzeTaskShape(this.options.task).operation,
+        operation,
       ),
       runtimeMode: this.options.runtimeMode ?? "unknown",
       ...(systemCtx ? { systemContext: systemCtx } : {}),
@@ -4175,12 +4208,14 @@ export class ChatEngine {
         "\n\nRead-only capability boundary: only read_file, read_range, list_dir, grep and glob are available. Do not request shell commands, writes, subagents or shared memory. If a read/search fails, use another available reading tool or report the missing evidence; unavailable tools cannot work around this boundary.";
     }
 
-    // Text-tools mode: keep the prompt MINIMAL. Small models cannot attend
-    // to long system prompts. Skip all the extra context that cloud models use.
+    // Caller policy applies to every protocol. Optional orientation stays lean
+    // in text mode; required repository context was already compiled above.
+    if (this.options.appendSystemPrompt) {
+      systemContent += "\n\n" + this.options.appendSystemPrompt;
+    }
+    const verifierCmd = extractVerifierCommandFn(this.options.task);
+    if (verifierCmd) systemContent += `\n\nTask verifier command: \`${verifierCmd}\`.`;
     if (!textTools) {
-      if (this.options.appendSystemPrompt) {
-        systemContent += "\n\n" + this.options.appendSystemPrompt;
-      }
       if (this.options.preflightContext) {
         systemContent += "\n\n" + this.options.preflightContext;
       }
@@ -4190,11 +4225,6 @@ export class ChatEngine {
         systemContent += "\n\n" + this.repoMapCache;
       }
 
-      // R3b: Extract and surface verifier command from task
-      const verifierCmd = extractVerifierCommandFn(this.options.task);
-      if (verifierCmd) {
-        systemContent += `\n\n## Task Verifier\nThe verifier command for this task is: \`${verifierCmd}\`\nRun it after making changes to confirm the fix works.`;
-      }
     }
 
     if (mode === "native") {

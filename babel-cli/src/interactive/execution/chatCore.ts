@@ -66,9 +66,11 @@ import {
 } from '../../services/workspaceDepPreflight.js';
 import {
   analyzeTaskShape,
+  resolveTaskShape,
   resolveChatTaskClass,
   type ChatTaskClass,
   type TaskOperation,
+  type RequestedTaskOperation,
 } from '../../config/chatTaskClass.js';
 import { confirmedMutationPaths, isConfirmedMutation } from '../../agent/mutationTools.js';
 import { isAuthoritativeVerifierCommand } from '../../agent/completionGatePolicy.js';
@@ -656,6 +658,8 @@ function persistTurnAssistantCells(
  */
 export async function runChatEngineOnce(input: {
   task: string;
+  /** Trusted host intent; runtime admission independently governs all effects. */
+  operation?: RequestedTaskOperation;
   /** Trusted instructions may come from outside the reviewed source snapshot. */
   instructionRoot?: string;
   target: AgentTargetContext;
@@ -687,9 +691,9 @@ export async function runChatEngineOnce(input: {
   // S01/#211: resolve the effective contract ONCE from the existing TaskShape
   // machinery. Preparation, prompt compilation and limits all consume this
   // resolution; there is no second (autoClassify:false) classifier.
-  const taskShape = analyzeTaskShape(input.task);
+  const taskShape = resolveTaskShape(input.task, input.operation);
   const effectiveOperation: TaskOperation = taskShape.operation;
-  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true });
+  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true, operation: input.operation });
   const limits = resolveChatEngineLimits(
     {},
     input.model,
@@ -703,10 +707,6 @@ export async function runChatEngineOnce(input: {
     taskClass: resolvedTaskClass,
     ...(input.model !== undefined ? { model: input.model } : {}),
   });
-  const stackSystemContext = [input.systemContext, chatStack.system_context]
-    .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
-    .join('\n\n');
-
   // The heuristic plan is still recorded at intent_plan.json. It is not a
   // user-channel message unless BABEL_CHAT_PRELOOP_PLAN is explicitly on.
   // READ_ONLY operations never receive that message.
@@ -724,9 +724,11 @@ export async function runChatEngineOnce(input: {
     input.engine ??
     factory({
       task: input.task,
+      ...(input.operation ? { operation: input.operation } : {}),
+      compiledChatStack: chatStack,
       ...(input.instructionRoot ? { instructionRoot: input.instructionRoot } : {}),
       projectRoot: input.target.targetRoot,
-      ...(stackSystemContext ? { systemContext: stackSystemContext } : {}),
+      ...(input.systemContext ? { systemContext: input.systemContext } : {}),
       ...(input.appendSystemPrompt ? { appendSystemPrompt: input.appendSystemPrompt } : {}),
       ...(preflightContext ? { preflightContext } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
@@ -744,9 +746,11 @@ export async function runChatEngineOnce(input: {
   if (input.engine) {
     applyEngineTurnPreparation(input.engine, {
       task: input.task,
+      ...(input.operation ? { operation: input.operation } : {}),
+      compiledChatStack: chatStack,
       projectRoot: input.target.targetRoot,
       instructionRoot: input.instructionRoot,
-      ...(stackSystemContext ? { systemContext: stackSystemContext } : {}),
+      ...(input.systemContext ? { systemContext: input.systemContext } : {}),
       ...(input.appendSystemPrompt ? { appendSystemPrompt: input.appendSystemPrompt } : {}),
       ...(preflightContext ? { preflightContext } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
@@ -807,7 +811,9 @@ export async function runChatEngineOnce(input: {
   const useStreaming =
     input.useStreaming ??
     (convRenderer !== null ? isChatStreamingEnabled() : true);
-  const resolvedIntent = input.taskIntent ?? ChatEngine.classifyChatTaskIntent(input.task);
+  const resolvedIntent = effectiveOperation === 'READ_ONLY' ? 'explain'
+    : input.operation === 'CHANGE' ? 'execute'
+    : input.taskIntent ?? ChatEngine.classifyChatTaskIntent(input.task);
 
   // P03: dispatch the controller through the shared runtime facade. For chat the
   // adapter is a pure delegation; the coordinator contributes controller

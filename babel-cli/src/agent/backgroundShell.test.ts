@@ -83,7 +83,7 @@ describe('backgroundShell', () => {
   });
 
   it('await reports timed_out without killing a still-running job', async () => {
-    // Avoid quoted args; sandbox-style split on whitespace.
+    // Use a portable long-lived process to observe the nonterminal timeout.
     const sleeper =
       process.platform === 'win32' ? 'ping -n 4 127.0.0.1' : 'sleep 3';
     const job = startBackgroundShell({ command: sleeper, cwd: process.cwd() });

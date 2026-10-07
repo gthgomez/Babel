@@ -682,7 +682,7 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
 });
 
 describe('planCompletionGateReject', () => {
-  test('zero tools + no writes → auto_continue_block', async () => {
+  test('unsupported first completion receives bounded inspection recovery', async () => {
     const { planCompletionGateReject } = await import('./completionGatePolicy.js');
     const p = planCompletionGateReject({
       hasWrites: false,
@@ -692,7 +692,7 @@ describe('planCompletionGateReject', () => {
       gateStrikes: 0,
       maxGateStrikes: 3,
     });
-    assert.equal(p.kind, 'auto_continue_block');
+    assert.deepEqual(p, { kind: 'reject_continue', gateStrikesAfter: 1, useGreenMessage: false });
   });
 
   test('strict policy blocks instead of infinite reject_continue after max strikes', async () => {
@@ -793,8 +793,8 @@ describe('planCompletionGateReject', () => {
     });
     assert.equal(p.kind, 'blocked');
     if (p.kind === 'blocked') {
-      assert.match(p.reason, /no successful file mutations/);
-      assert.match(p.reason, /Headless\/CI hard-block/);
+      assert.match(p.reason, /No successful inspection/);
+      assert.equal(p.missingInspection, true);
     }
   });
 
@@ -811,7 +811,7 @@ describe('planCompletionGateReject', () => {
     assert.equal(p.kind, 'reject_continue');
   });
 
-  test('interactive zero-write after max strikes → soft_allow (preserved)', async () => {
+  test('interactive unsupported completion also stops after bounded recovery', async () => {
     const { planCompletionGateReject } = await import('./completionGatePolicy.js');
     const p = planCompletionGateReject({
       hasWrites: false,
@@ -821,7 +821,7 @@ describe('planCompletionGateReject', () => {
       gateStrikes: 5,
       maxGateStrikes: 3,
     });
-    assert.equal(p.kind, 'soft_allow');
+    assert.equal(p.kind, 'blocked');
   });
 
   test('hardGate zero-write after max strikes + strict policy → blocked', async () => {
@@ -836,7 +836,7 @@ describe('planCompletionGateReject', () => {
     });
     assert.equal(p.kind, 'blocked');
     if (p.kind === 'blocked') {
-      assert.match(p.reason, /no successful file mutations/);
+      assert.match(p.reason, /No successful inspection/);
     }
   });
 

@@ -640,6 +640,9 @@ export async function executeSubAgentAction(
             target,
             detail: `failed, attribution=${attribution}`,
             error: "error",
+            // A mutation child may throw after partial effects. Absence of a
+            // settled result is not evidence that the parent tree is unchanged.
+            effect_status: "indeterminate",
             index: meta.index,
             exit_code: 1,
           });

@@ -29,6 +29,15 @@ function allowsReadOnlyTaskTool(tool: string, requiredVerifiers: readonly string
     || ((tool === 'run_command' || tool === 'test_run') && requiredVerifiers.length > 0);
 }
 
+/** One name projection for native schemas and text/legacy manuals; admission still checks actions. */
+export function filterChatToolNamesForTask(
+  names: readonly string[], operation: TaskOperation | undefined, requiredVerifiers: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return names.filter(name => !deniesReadOnlyChatAction(name, env)
+    && (operation !== 'READ_ONLY' || allowsReadOnlyTaskTool(name, requiredVerifiers)));
+}
+
 /** Accepted task scope narrows ordinary Chat; it never broadens profile grants. */
 export function deniesReadOnlyTaskAction(
   action: ChatToolAction,

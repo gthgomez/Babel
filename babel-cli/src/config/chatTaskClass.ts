@@ -39,7 +39,8 @@ export const CHAT_TASK_CLASSES: readonly ChatTaskClass[] = [
  *             the result and decides. Appropriate for interactive / default use.
  * - strict:   Verifier must exit 0 before completion is allowed. Never
  *             soft-allows through a missing or red verifier. Appropriate for
- *             multi-file SWE and governance-sensitive work.
+ *             governance-sensitive work. General SWE uses required evidence
+ *             with a strict critic; a failed verifier never certifies a patch.
  */
 export type VerificationPolicy = 'none' | 'required' | 'strict';
 
@@ -315,6 +316,8 @@ export function getChatTaskTune(taskClass: ChatTaskClass): ChatTaskTune {
 }
 
 export type TaskOperation = 'READ_ONLY' | 'MUTATING' | 'HYBRID';
+/** Trusted caller intent, independent of execution-profile/lease authority. */
+export type RequestedTaskOperation = 'AUTO' | 'READ_ONLY' | 'CHANGE';
 export type TaskComplexity = 'TRIVIAL' | 'BOUNDED' | 'OPEN_ENDED';
 
 export interface TaskShape {
@@ -500,6 +503,18 @@ export function analyzeTaskShape(taskText: string): TaskShape {
   return { operation, complexity };
 }
 
+/** Resolve host intent before heuristic defaults; explicit user denials still narrow it. */
+export function resolveTaskShape(
+  taskText: string,
+  requested: RequestedTaskOperation = 'AUTO',
+): TaskShape {
+  const shape = analyzeTaskShape(taskText);
+  if (requested === 'AUTO') return shape;
+  const denied = shape.operation === 'READ_ONLY'
+    && new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'i').test(stripFencedCodeBodies(taskText));
+  return { ...shape, operation: requested === 'READ_ONLY' || denied ? 'READ_ONLY' : 'MUTATING' };
+}
+
 /**
  * Map task shape into product task class.
  */
@@ -580,6 +595,7 @@ export function resolveChatTaskClass(opts?: {
    * Default true so interactive chat gets a useful tune without knobs.
    */
   autoClassify?: boolean;
+  operation?: RequestedTaskOperation | undefined;
 }): ChatTaskClass {
   const env = opts?.env ?? process.env;
   const auto = opts?.autoClassify !== false;
@@ -600,7 +616,7 @@ export function resolveChatTaskClass(opts?: {
   if (autonomyClass) return autonomyTaskClassFor(autonomyClass);
 
   if (auto && opts?.taskText && opts.taskText.trim()) {
-    return classifyChatTaskClassFromText(opts.taskText);
+    return mapTaskShapeToClass(resolveTaskShape(opts.taskText, opts.operation), opts.taskText);
   }
 
   return 'default';

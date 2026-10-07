@@ -6,6 +6,7 @@ import {
   buildChatToolDefinitions,
   buildChatTurnPrompt,
 } from "./chatToolDefinitions.js";
+import { TEXT_TOOL_NAMES, TEXT_TOOL_PROMPT_SECTION } from "./textToolParser.js";
 import {
   CHILD_MUTATION_DEFAULT_ROUNDS,
   CHILD_READ_DEFAULT_ROUNDS,
@@ -25,7 +26,7 @@ describe("buildChatSystemPrompt text delivery", () => {
 
     assert.equal(prompt.split(nonce).length - 1, 1);
     assert.match(prompt, /## Project Context/);
-    assert.match(prompt, /\[TOOL:read_file\]/);
+    assert.match(prompt, /- read_file/);
   });
 
   it("delivers each required nonce exactly once across native, legacy, and text modes", () => {
@@ -78,23 +79,82 @@ describe("buildChatSystemPrompt text delivery", () => {
     assert.doesNotMatch(prompt, /headless|interactive mode/i);
   });
 
-  it("shows mutate and verify only for a mutation task", () => {
+  it("uses one concise behavioral contract across protocols", () => {
     const mutation = buildChatSystemPrompt({
       projectRoot: "C:/fixture",
       executionFirst: true,
     });
     const question = buildChatSystemPrompt({ projectRoot: "C:/fixture" });
+    const native = buildChatSystemPrompt({ projectRoot: "C:/fixture", nativeTools: true });
+    const text = buildChatSystemPrompt({ projectRoot: "C:/fixture", textTools: true });
 
-    assert.match(mutation, /\*\*Mutate\*\*/);
-    assert.match(mutation, /\*\*Verify\*\*/);
-    assert.match(mutation, /Prefer `str_replace` for a targeted edit under ~50 lines/);
-    assert.doesNotMatch(mutation, /primary tool for making code changes/);
+    for (const prompt of [mutation, question, native, text]) {
+      assert.match(prompt, /relevant context before acting/);
+      assert.match(prompt, /make edits only when the request needs a change/);
+      assert.match(prompt, /verify with relevant evidence/);
+      assert.match(prompt, /Only fresh, executed passing verifier evidence for the current revision counts as verification/);
+      assert.doesNotMatch(prompt, /under ~50 lines/i);
+      assert.equal(prompt.split("## How Babel works").length - 1, 1);
+    }
+    assert.match(text, /## How to use tools/);
+    assert.match(text, /write_file: path, content \(multiline\)/);
+    assert.match(text, /str_replace: file_path, old_str \(multiline\), new_str \(multiline\)/);
+    assert.match(text, /quote arguments containing spaces/);
+    assert.ok(TEXT_TOOL_NAMES.has("finish"));
+    assert.match(TEXT_TOOL_PROMPT_SECTION, /finish/);
+    assert.doesNotMatch(native, /## Available Tools/);
+    assert.doesNotMatch(native, /signal done with `finish`/i);
+    assert.match(question, /Runtime mode: unknown/);
+    assert.match(mutation, /Runtime mode: unknown/);
+  });
 
-    assert.doesNotMatch(question, /\*\*Mutate\*\*/);
-    assert.doesNotMatch(question, /\*\*Verify\*\*/);
-    assert.match(question, /For a question, review, or audit/);
-    assert.match(question, /Prefer `str_replace` for a targeted edit under ~50 lines/);
-    assert.doesNotMatch(question, /primary tool for making code changes/);
+  it("uses native schemas as the native tool manual and generated schema guidance for legacy", () => {
+    const native = buildChatSystemPrompt({ projectRoot: "C:/fixture", nativeTools: true });
+    const legacy = buildChatSystemPrompt({ projectRoot: "C:/fixture" });
+    const tools = buildChatToolDefinitions();
+
+    assert.doesNotMatch(native, /## Available Tools/);
+    assert.match(native, /available function tools/);
+    assert.match(legacy, /## Tool Definitions/);
+    for (const tool of tools) {
+      assert.ok(legacy.includes(`\`${tool.function.name}\``), `${tool.function.name} must be generated in legacy manual`);
+      assert.ok(legacy.includes(tool.function.description ?? ""));
+    }
+    assert.ok(tools.some((tool) => tool.function.name === "lsp"));
+    assert.ok(!tools.some((tool) => tool.function.name === "finish"), "finish is not newly advertised for native calls");
+    assert.ok(TEXT_TOOL_NAMES.has("finish"), "text compatibility keeps finish");
+  });
+
+  it("scopes legacy and text manuals to the caller-visible tools", () => {
+    const availableToolNames = ["read_file", "grep"];
+    const legacy = buildChatSystemPrompt({
+      projectRoot: "C:/fixture",
+      availableToolNames,
+    });
+    const text = buildChatSystemPrompt({
+      projectRoot: "C:/fixture",
+      textTools: true,
+      availableToolNames,
+    });
+
+    for (const prompt of [legacy, text]) {
+      assert.match(prompt, /read_file/);
+      assert.match(prompt, /grep/);
+      assert.doesNotMatch(prompt, /write_file|str_replace|run_command|finish/);
+    }
+    assert.match(legacy, /read_file`\(path\)/);
+    assert.match(legacy, /grep`\(pattern, path\?\)/);
+    assert.match(text, /- read_file: path/);
+    assert.match(text, /- grep: pattern, path \(optional\)/);
+    assert.doesNotMatch(text, /multi-line field|quote arguments containing spaces/);
+  });
+
+  it("describes the governed quote-aware command contract truthfully", () => {
+    const command = buildChatToolDefinitions().find((tool) => tool.function.name === "run_command");
+    assert.ok(command);
+    assert.match(command.function.description ?? "", /quoted arguments are grouped/i);
+    assert.match(command.function.description ?? "", /not a general shell/i);
+    assert.doesNotMatch(command.function.description ?? "", /whitespace-split only/i);
   });
 });
 
