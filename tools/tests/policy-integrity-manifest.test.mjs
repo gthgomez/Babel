@@ -16,6 +16,8 @@ const source = readFileSync(
 );
 const paths = [
   ".github/workflows/public-pr-metadata.yml",
+  ".github/workflows/publish-npm.yml",
+  ".github/workflows/release.yml",
   ".github/workflows/trusted-control-plane.yml",
   ".github/workflows/typecheck.yml",
   "AGENTS.md",
