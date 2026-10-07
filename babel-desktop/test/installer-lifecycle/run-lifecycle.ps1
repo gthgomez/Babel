@@ -23,7 +23,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$desktop = Resolve-Path (Join-Path $PSScriptRoot '../..').Path
+$desktop = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $repo = (Resolve-Path (Join-Path $desktop '..')).Path
 $workRoot = Join-Path ([IO.Path]::GetTempPath()) ("babel-lifecycle-" + [guid]::NewGuid().ToString('N'))
 $installRoot = Join-Path $env:LOCALAPPDATA 'Programs\Babel Desktop'
