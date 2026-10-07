@@ -114,7 +114,13 @@ try {
   Write-Host "[3/8] Install-state assertions"
   $state1 = Get-InstallState
   Assert-That 'HKCU uninstall entry exists' { $null -ne $state1.Registry }
-  Assert-That 'Start Menu shortcut targets the installed exe' { $state1.Shortcut -and ((Resolve-Path -LiteralPath $state1.Shortcut -ErrorAction SilentlyContinue).Path -eq (Resolve-Path -LiteralPath (Join-Path $installRoot 'Babel Desktop.exe') -ErrorAction SilentlyContinue).Path) }
+  Assert-That 'Start Menu shortcut targets the installed exe' {
+    $shortcutTarget = $state1.Shortcut
+    if (-not $shortcutTarget) { return $false }
+    $resolvedLink = Resolve-Path -LiteralPath $shortcutTarget -ErrorAction SilentlyContinue
+    $resolvedExe = Resolve-Path -LiteralPath (Join-Path $installRoot 'Babel Desktop.exe') -ErrorAction SilentlyContinue
+    $resolvedLink -and $resolvedExe -and ($resolvedLink.Path -eq $resolvedExe.Path)
+  }
   Assert-That 'install-id marker matches the registry' { $state1.Registry -and $state1.InstallIdFile -and ($state1.Registry.Id -eq $state1.InstallIdFile) }
   Assert-That 'uninstall registration points at the install root' { $state1.Registry -and ([IO.Path]::GetFullPath($state1.Registry.Location).TrimEnd('\') -eq [IO.Path]::GetFullPath($installRoot).TrimEnd('\')) }
   $v1 = $state1.Registry.Version
