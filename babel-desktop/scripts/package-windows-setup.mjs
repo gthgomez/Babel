@@ -10,7 +10,7 @@
 //   Babel-Desktop-Setup-<version>-win-x64.exe
 //   Babel-Desktop-Setup-<version>-win-x64.exe.sha256
 //   Babel-Desktop-Setup-<version>-win-x64.build.json
-import {cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync} from 'node:fs';
 import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
@@ -98,8 +98,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 
 const payloadZip = resolve(option('payload-zip') || '');
 const payloadChecksums = resolve(option('payload-sha256s') || join(payloadZip, '..', 'SHA256SUMS'));
-const nsisArchive = resolve(option('nsis-archive') || '');
-const makensisArg = resolve(option('makensis') || '');
+const nsisArchiveArg = option('nsis-archive');
+const nsisArchive = nsisArchiveArg ? resolve(nsisArchiveArg) : '';
+const makensisArg = option('makensis');
+const makensisPath = makensisArg ? resolve(makensisArg) : '';
 const output = resolve(option('output') || join(desktop, 'artifacts', 'windows-setup'));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
@@ -110,12 +112,17 @@ if (!existsSync(payloadChecksums)) throw new Error('Payload SHA256SUMS not found
 //  - --nsis-archive=<official nsis zip>, SHA256-pinned (hermetic local builds), or
 //  - --makensis=<path to Bin/makensis.exe> from an externally installed NSIS
 //    (CI/Chocolatey; the recorded provenance is the compiler's own -VERSION).
-const useArchive = existsSync(nsisArchive);
-if (!useArchive && !makensisArg) {
+const useArchive = nsisArchiveArg !== undefined;
+if (!useArchive && !makensisPath) {
   throw new Error(`Provide --nsis-archive=<official nsis-${nsisVersion}.zip> (checksum-pinned) or --makensis=<Bin/makensis.exe>`);
 }
-if (useArchive && sha(readFileSync(nsisArchive)) !== nsisSha) {
-  throw new Error(`NSIS archive checksum does not match the pinned nsis-${nsisVersion} value`);
+if (useArchive) {
+  if (!existsSync(nsisArchive) || !statSync(nsisArchive).isFile()) {
+    throw new Error(`--nsis-archive does not point at a file: ${nsisArchive}`);
+  }
+  if (sha(readFileSync(nsisArchive)) !== nsisSha) {
+    throw new Error(`NSIS archive checksum does not match the pinned nsis-${nsisVersion} value`);
+  }
 }
 if (existsSync(output)) throw new Error('Output already exists; choose a new --output directory to retain prior builds');
 
@@ -157,7 +164,7 @@ if (useArchive) {
   if (!existsSync(makensis)) throw new Error(`Pinned NSIS archive has unexpected layout (missing nsis-${nsisVersion}/Bin/makensis.exe)`);
   nsisProvenance = {nsis: nsisVersion, nsisArchiveSha256: nsisSha};
 } else {
-  makensis = makensisArg;
+  makensis = makensisPath;
   if (!existsSync(makensis)) throw new Error(`--makensis points at a missing file: ${makensis}`);
   const reported = command(makensis, ['-VERSION']).trim(); // e.g. v3.11
   nsisProvenance = {nsis: reported.replace(/^v/, ''), nsisSource: 'external'};
