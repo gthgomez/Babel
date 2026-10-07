@@ -1,0 +1,35 @@
+{
+  "baselineMain": "2aa0200dcf65a18d80183a8eecd5e5c370c9f7f3",
+  "continuation": "22b30aed038a8b133af469502079398c1878c933",
+  "continuationAhead": 4,
+  "continuationBehind": 0,
+  "branch": "codex/coding-loop-simplification-20261006",
+  "initialTrackedChanges": [],
+  "initialUntrackedFiles": [],
+  "pricingWork": "Not present in the isolated clone; no other checkout touched.",
+  "openPRs": [
+    {
+      "number": 312,
+      "branch": "feat/release-automation-20261006"
+    },
+    {
+      "number": 308,
+      "branch": "codex/desktop-installer-followup-20261004",
+      "draft": true
+    }
+  ],
+  "recentRelevantMerges": [
+    311,
+    309,
+    301,
+    294
+  ],
+  "baselineChecks": {
+    "focusedTests": {
+      "passed": 121,
+      "failed": 0
+    },
+    "typecheck": "pass"
+  },
+  "liveModelCredentialsAvailable": false
+}
