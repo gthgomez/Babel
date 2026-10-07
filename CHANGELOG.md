@@ -1,6 +1,7 @@
 # Changelog
 
-## Unreleased
+## [0.1.1] - 2026-10-07
+
 
 ### Added
 - Agent infrastructure for contributors and coding agents: root `AGENTS.md`, `.agents/rules/` (GitHub workflow, goal clearance, subagent delegation, visual variants, credential-read deny), and `.agents/skills/` (assemble-babel-stack, code-review, validate-control-plane).
