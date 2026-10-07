@@ -12,11 +12,11 @@
 #
 # Usage:
 #   pwsh -File run-lifecycle.ps1 -PayloadZip <zip> -Sha256Sums <sums> `
-#        -NsisArchive <nsis-3.11.zip> [-SkipCliSmoke]
+#        -MakensisPath <Bin\makensis.exe> [-SkipCliSmoke]
 param(
   [Parameter(Mandatory = $true)][string]$PayloadZip,
   [Parameter(Mandatory = $true)][string]$Sha256Sums,
-  [Parameter(Mandatory = $true)][string]$NsisArchive,
+  [Parameter(Mandatory = $true)][string]$MakensisPath,
   [switch]$SkipCliSmoke
 )
 
@@ -87,7 +87,7 @@ function Invoke-Cleanup {
 }
 
 Write-Host "== Installer lifecycle qualification =="
-foreach ($file in @($PayloadZip, $Sha256Sums, $NsisArchive)) {
+foreach ($file in @($PayloadZip, $Sha256Sums, $MakensisPath)) {
   if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required input missing: $file" }
 }
 if (Test-Path -LiteralPath $registryPath) { throw 'A Babel Desktop per-user install already exists on this machine; run on a clean user only.' }
@@ -98,7 +98,7 @@ try {
   # --- 1. Build Setup v1 -------------------------------------------------------
   Write-Host "[1/8] Building Setup.exe from the qualified payload"
   $out1 = Join-Path $workRoot 'setup-v1'
-  node (Join-Path $desktop 'scripts/package-windows-setup.mjs') --payload-zip="$PayloadZip" --payload-sha256s="$Sha256Sums" --nsis-archive="$NsisArchive" --output="$out1" | Out-Null
+  node (Join-Path $desktop 'scripts/package-windows-setup.mjs') --payload-zip="$PayloadZip" --payload-sha256s="$Sha256Sums" --makensis="$MakensisPath" --output="$out1" | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "setup build failed with exit $LASTEXITCODE" }
   $setupV1 = Get-ChildItem -Path $out1 -Filter '*.exe' | Select-Object -First 1 -ExpandProperty FullName
   if (-not $setupV1) { throw 'no Setup.exe produced' }
@@ -145,7 +145,7 @@ try {
     node (Join-Path $repo 'babel-desktop/scripts/package-windows.mjs') --node-archive="$env:LIFECYCLE_NODE_ARCHIVE" --electron-archive="$env:LIFECYCLE_ELECTRON_ARCHIVE" --output="$out2" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "payload v2 build failed" }
     $setupV2Out = Join-Path $workRoot 'setup-v2'
-    node (Join-Path $desktop 'scripts/package-windows-setup.mjs') --payload-zip="$out2/Babel-Desktop-$v2-win-x64.zip" --payload-sha256s="$out2/SHA256SUMS" --nsis-archive="$NsisArchive" --output="$setupV2Out" | Out-Null
+    node (Join-Path $desktop 'scripts/package-windows-setup.mjs') --payload-zip="$out2/Babel-Desktop-$v2-win-x64.zip" --payload-sha256s="$out2/SHA256SUMS" --makensis="$MakensisPath" --output="$setupV2Out" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "setup v2 build failed" }
     $setupV2 = Get-ChildItem -Path $setupV2Out -Filter '*.exe' | Select-Object -First 1 -ExpandProperty FullName
   } finally { Pop-Location }

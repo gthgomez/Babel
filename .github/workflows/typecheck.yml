@@ -343,33 +343,23 @@ jobs:
           $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
           if ($actualSha256 -ne $expectedSha256) { throw "Electron archive checksum mismatch" }
           "LIFECYCLE_ELECTRON_ARCHIVE=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Download pinned NSIS archive
+      # SourceForge (the only official NSIS zip host) serves mirror-/region-
+      # dependent bodies to non-browser clients, which defeats byte-pinning
+      # from CI. Use the Chocolatey package instead: choco verifies the
+      # installer checksum embedded in the package feed, and the compiler's
+      # own version is recorded in the build provenance.
+      - name: Install pinned NSIS via Chocolatey
         shell: pwsh
         run: |
-          $version = '3.11'
-          $expectedSha256 = 'c7d27f780ddb6cffb4730138cd1591e841f4b7edb155856901cdf5f214394fa1'
-          $archivePath = Join-Path $env:RUNNER_TEMP "nsis-${version}.zip"
-          # SourceForge mirrors serve mirror-/region-dependent bodies to
-          # non-browser clients; accept only the byte stream matching the
-          # pinned checksum, trying the known-direct forms in order.
-          $urls = @(
-            "https://downloads.sourceforge.net/project/nsis/NSIS%203/${version}/nsis-${version}.zip?viasf=1",
-            "https://master.dl.sourceforge.net/project/nsis/NSIS%203/${version}/nsis-${version}.zip?viasf=1",
-            "https://downloads.sourceforge.net/project/nsis/NSIS%203/${version}/nsis-${version}.zip"
-          )
-          $downloaded = $false
-          foreach ($url in $urls) {
-            try {
-              Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $archivePath -ErrorAction Stop
-              $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
-              if ($actualSha256 -eq $expectedSha256) { $downloaded = $true; break }
-              Write-Host "Checksum mismatch from $url (got $actualSha256); trying next mirror."
-            } catch {
-              Write-Host "Download failed from $url : $($_.Exception.Message)"
-            }
+          choco install nsis --version 3.11 --yes --no-progress
+          $makensis = "C:\Program Files (x86)\NSIS\Bin\makensis.exe"
+          if (-not (Test-Path -LiteralPath $makensis -PathType Leaf)) {
+            $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
           }
-          if (-not $downloaded) { throw "No mirror produced the pinned NSIS archive checksum" }
-          "LIFECYCLE_NSIS_ARCHIVE=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if (-not $makensis -or -not (Test-Path -LiteralPath $makensis -PathType Leaf)) { throw "makensis.exe not found after choco install" }
+          $nsisVersion = (& $makensis -VERSION).Trim()
+          if ($nsisVersion -ne 'v3.11') { throw "Expected NSIS v3.11, got $nsisVersion" }
+          "LIFECYCLE_MAKENSIS=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build the qualified portable payload
         shell: pwsh
         run: >
@@ -383,7 +373,7 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass -File babel-desktop/test/installer-lifecycle/run-lifecycle.ps1
           -PayloadZip "$env:RUNNER_TEMP\lifecycle-payload\Babel-Desktop-$((Get-Content babel-desktop/package.json -Raw | ConvertFrom-Json).version)-win-x64.zip"
           -Sha256Sums "$env:RUNNER_TEMP\lifecycle-payload\SHA256SUMS"
-          -NsisArchive "$env:LIFECYCLE_NSIS_ARCHIVE"
+          -MakensisPath "$env:LIFECYCLE_MAKENSIS"
 
   windows-portability:
     name: windows-portability

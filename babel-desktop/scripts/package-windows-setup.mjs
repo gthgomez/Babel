@@ -99,20 +99,30 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 const payloadZip = resolve(option('payload-zip') || '');
 const payloadChecksums = resolve(option('payload-sha256s') || join(payloadZip, '..', 'SHA256SUMS'));
 const nsisArchive = resolve(option('nsis-archive') || '');
+const makensisArg = resolve(option('makensis') || '');
 const output = resolve(option('output') || join(desktop, 'artifacts', 'windows-setup'));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
 if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('This installer builder supports Windows x64 only');
 if (!existsSync(payloadZip)) throw new Error('Provide --payload-zip=<portable ZIP from package-windows.mjs>');
 if (!existsSync(payloadChecksums)) throw new Error('Payload SHA256SUMS not found next to the ZIP; pass --payload-sha256s=');
-if (!existsSync(nsisArchive)) throw new Error(`Provide --nsis-archive=<official nsis-${nsisVersion}.zip>; checksum must match the pinned value`);
-if (sha(readFileSync(nsisArchive)) !== nsisSha) throw new Error(`NSIS archive checksum does not match the pinned nsis-${nsisVersion} value`);
+// NSIS toolchain comes from exactly one of:
+//  - --nsis-archive=<official nsis zip>, SHA256-pinned (hermetic local builds), or
+//  - --makensis=<path to Bin/makensis.exe> from an externally installed NSIS
+//    (CI/Chocolatey; the recorded provenance is the compiler's own -VERSION).
+const useArchive = existsSync(nsisArchive);
+if (!useArchive && !makensisArg) {
+  throw new Error(`Provide --nsis-archive=<official nsis-${nsisVersion}.zip> (checksum-pinned) or --makensis=<Bin/makensis.exe>`);
+}
+if (useArchive && sha(readFileSync(nsisArchive)) !== nsisSha) {
+  throw new Error(`NSIS archive checksum does not match the pinned nsis-${nsisVersion} value`);
+}
 if (existsSync(output)) throw new Error('Output already exists; choose a new --output directory to retain prior builds');
 
 const command = (exe, args, cwd = repo) => execFileSync(exe, args, {cwd, windowsHide: true, encoding: 'utf8', timeout: 300000, maxBuffer: 16 * 1024 * 1024});
 // Prefer the Windows system bsdtar: in Git Bash environments PATH resolves
 // 'tar(.exe)' to GNU tar, which misreads drive-letter paths as remote hosts.
-const windowsTar = resolve(process.env.SystemRoot || 'C:\Windows', 'System32', 'tar.exe');
+const windowsTar = resolve(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
 const tarExe = existsSync(windowsTar) ? windowsTar : 'tar.exe';
 const sourceSha = command('git', ['rev-parse', 'HEAD']).trim();
 const dirty = command('git', ['status', '--porcelain', '--untracked-files=normal']).trim();
@@ -136,12 +146,22 @@ const version = validatePayloadBuild(payloadBuildParsed);
 const payloadBuildSourceSha = String(payloadBuildParsed.sourceSha || '');
 const setupName = `Babel-Desktop-Setup-${version}-win-x64`;
 
-// --- NSIS extraction -----------------------------------------------------------
-const nsisExtract = join(output, `nsis-${sourceSha.slice(0, 12)}`);
-mkdirSync(nsisExtract, {recursive: true});
-command(tarExe, ['-xf', nsisArchive, '-C', nsisExtract]);
-const makensis = join(nsisExtract, `nsis-${nsisVersion}`, 'Bin', 'makensis.exe');
-if (!existsSync(makensis)) throw new Error(`Pinned NSIS archive has unexpected layout (missing nsis-${nsisVersion}/Bin/makensis.exe)`);
+// --- NSIS toolchain ------------------------------------------------------------
+let makensis;
+let nsisProvenance;
+if (useArchive) {
+  const nsisExtract = join(output, `nsis-${sourceSha.slice(0, 12)}`);
+  mkdirSync(nsisExtract, {recursive: true});
+  command(tarExe, ['-xf', nsisArchive, '-C', nsisExtract]);
+  makensis = join(nsisExtract, `nsis-${nsisVersion}`, 'Bin', 'makensis.exe');
+  if (!existsSync(makensis)) throw new Error(`Pinned NSIS archive has unexpected layout (missing nsis-${nsisVersion}/Bin/makensis.exe)`);
+  nsisProvenance = {nsis: nsisVersion, nsisArchiveSha256: nsisSha};
+} else {
+  makensis = makensisArg;
+  if (!existsSync(makensis)) throw new Error(`--makensis points at a missing file: ${makensis}`);
+  const reported = command(makensis, ['-VERSION']).trim(); // e.g. v3.11
+  nsisProvenance = {nsis: reported.replace(/^v/, ''), nsisSource: 'external'};
+}
 
 // --- Staging -------------------------------------------------------------------
 const stage = join(output, 'setup-stage');
@@ -205,12 +225,11 @@ const installerMetadata = {
   payloadSha256: actualPayloadSha,
   payloadVersion: version,
   platform: 'win32-x64',
-  nsis: nsisVersion,
-  nsisArchiveSha256: nsisSha,
+  ...nsisProvenance,
   signed: false,
 };
 writeFileSync(join(output, setupName + '.build.json'), JSON.stringify(installerMetadata, null, 2) + '\n', 'utf8');
-rmSync(nsisExtract, {recursive: true, force: true});
+if (useArchive) rmSync(nsisExtract, {recursive: true, force: true});
 
 console.log(JSON.stringify({setup: setupName + '.exe', sha256: installerSha, payloadVersion: version, signed: false}, null, 2));
 }
