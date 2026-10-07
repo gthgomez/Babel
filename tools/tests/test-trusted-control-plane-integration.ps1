@@ -62,7 +62,7 @@ try {
   & $git -C $seedPath remote add origin $barePath
   & $git -C $seedPath commit --allow-empty -m 'previously merged installation' 2>&1 | Out-Null
   $previousInstallationSha = (& $git -C $seedPath rev-parse HEAD).Trim()
-  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-review-evidence.ps1', 'scripts/agent-git-common.psm1', 'scripts/trusted-merge-gate.ps1', 'scripts/materialize-independent-review-receipt.ps1', 'config/review-risk-policy.json')) {
+  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-pr-gate-evidence.psm1', 'scripts/agent-review-evidence.ps1', 'scripts/agent-git-common.psm1', 'scripts/trusted-merge-gate.ps1', 'scripts/materialize-independent-review-receipt.ps1', 'config/review-risk-policy.json')) {
     $target = Join-Path $seedPath $relative
     New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $RepoRoot $relative) -Destination $target -Force
@@ -196,7 +196,9 @@ if ($text -match '^repo view') { Emit '{"nameWithOwner":"gthgomez/Babel","defaul
 if ($text -match '^pr view') { Emit (Get-Content -Raw (Join-Path $root 'pr-view.json')) }
 if ($text -match 'rulesets\?per_page') { Emit '[{"name":"protect-main","enforcement":"active","id":19597161}]' }
 if ($text -match 'rulesets/19597161') { Emit (Get-Content -Raw (Join-Path $root 'ruleset.json')) }
-if ($text -match 'check-runs\?per_page') { Emit (Get-Content -Raw (Join-Path $root 'check-runs.json')) }
+if ($text -match 'check-runs\?filter=all&per_page') { Emit (Get-Content -Raw (Join-Path $root 'check-runs.json')) }
+if ($text -match 'actions/runs\?head_sha') { Emit '{"total_count":0,"workflow_runs":[]}' }
+if ($text -match 'git/ref/heads/main') { Emit ('{"object":{"sha":"' + $env:TCP_TEST_BASE + '"}}') }
 if ($text -match 'actions/runs/(\d+)') {
   $id = $Matches[1]
   $runs = Get-Content -Raw (Join-Path $root 'run-metadata.json') | ConvertFrom-Json
@@ -215,8 +217,8 @@ exit 0
 '@
   Set-Content -LiteralPath (Join-Path $shimDir 'gh.ps1') -Value $shimScript -Encoding utf8NoBOM
   if ($IsWindows) {
-    # Batch wrapper so PATH resolution finds `gh` on Windows.
-    Set-Content -LiteralPath (Join-Path $shimDir 'gh.cmd') -Value ('@echo off' + "`r`n" + 'pwsh -NoProfile -NonInteractive -File "%~dp0gh.ps1" %*') -Encoding ascii
+    # PowerShell resolves gh.ps1 through PATH; the bounded process runner
+    # launches it in a child PowerShell process, like a real gh executable.
   } else {
     # POSIX wrapper so `Get-Command gh` resolves this shim ahead of any system
     # gh, and so the shim runs as a child process (its `exit` must not end the
@@ -254,6 +256,7 @@ exit 0
     )
     foreach ($key in $Extra.Keys) { $argumentList += $key; $argumentList += $Extra[$key] }
     $env:TCP_TEST_ROOT = $root
+    $env:TCP_TEST_BASE = $baseSha
     $previousPath = $env:PATH
     $env:PATH = "$shimDir$([IO.Path]::PathSeparator)$previousPath"
     # Mirror the trusted workflow environment so the gate's self-check
@@ -268,6 +271,7 @@ exit 0
     } finally {
       $env:PATH = $previousPath
       Remove-Item Env:TCP_TEST_ROOT -ErrorAction SilentlyContinue
+      Remove-Item Env:TCP_TEST_BASE -ErrorAction SilentlyContinue
       Remove-Item Env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
       Remove-Item Env:GITHUB_EVENT_NAME -ErrorAction SilentlyContinue
       Remove-Item Env:GITHUB_WORKFLOW -ErrorAction SilentlyContinue

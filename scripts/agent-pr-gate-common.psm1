@@ -82,7 +82,7 @@ function Get-AgentObservationTimestamp {
 
 function Resolve-AgentRequiredCheck {
   param(
-    [Parameter(Mandatory = $true)][object[]]$Observations,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Observations,
     [Parameter(Mandatory = $true)][string]$RequiredName,
     [Parameter(Mandatory = $true)][string]$TargetSha,
     [Parameter(Mandatory = $true)][string]$AuthorityEvent,

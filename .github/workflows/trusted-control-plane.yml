@@ -3,8 +3,6 @@ name: Trusted Control Plane
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
-  issue_comment:
-    types: [created, edited]
 
 permissions:
   contents: read
@@ -30,11 +28,16 @@ jobs:
           ref: ${{ env.BASE_SHA }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Materialize candidate as data only
+      - name: Fetch exact candidate object
         shell: pwsh
         run: |
           git fetch --no-tags origin $env:HEAD_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Materialize candidate as data only
+        shell: pwsh
+        run: |
           git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:HEAD_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run base-rooted merge audit
         shell: pwsh
         env:

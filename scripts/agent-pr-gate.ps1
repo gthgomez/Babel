@@ -7,6 +7,7 @@ param(
   [string]$ExpectedRemote = 'origin',
   [string]$ExpectedRepository = 'gthgomez/Babel',
   [string]$ExpectedBaseBranch = 'main',
+  [string]$ExpectedExecutionBaseSha = '',
   [string]$ReviewedHeadSha = '',
   [ValidateSet('GREEN', 'YELLOW', 'RED', 'BLACK', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')][string]$RiskTier = 'GREEN',
   [string]$AutonomousReviewEvidencePath = '',
@@ -23,6 +24,7 @@ $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'agent-git-common.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'agent-pr-gate-common.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'agent-pr-gate-evidence.psm1') -Force
 
 $resolvedRepoRoot = $null
 $ghResolvedPath = $GhPath
@@ -33,7 +35,10 @@ $localHead = $null
 $originMain = $null
 $prView = $null
 $rulesetPolicy = $null
-[object[]]$checkRuns = @()
+$executionBase = ''
+$ciSnapshot = [pscustomobject]@{ available = $false; observations = @(); workflows = @(); error = 'not_checked'; apiCalls = 0 }
+$ciEvaluation = [pscustomobject]@{ state = 'not_checked'; results = @() }
+$requiredChecksReady = [pscustomobject]@{ ready = $false; attempts = 0; reason = 'not_checked' }
 
 function Add-AgentCheck {
   param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][bool]$Passed, [string]$Blocker = '')
@@ -68,9 +73,11 @@ function Get-AgentLocalValue {
 }
 
 function Get-AgentJsonFromGh {
-  param([Parameter(Mandatory = $true)][string[]]$Arguments)
-  $result = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments $Arguments
-  if ($result.exitCode -ne 0) { return [pscustomobject]@{ available = $false; value = $null; error = ($result.text.Trim()) } }
+  param([Parameter(Mandatory = $true)][string[]]$Arguments, [DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(15)))
+  $remaining = [Math]::Floor(($Deadline - [DateTimeOffset]::UtcNow).TotalSeconds)
+  if ($remaining -lt 1) { return [pscustomobject]@{ available = $false; value = $null; error = 'github_api_timeout' } }
+  $result = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments $Arguments -TimeoutSeconds ([Math]::Min(15, $remaining))
+  if ($result.exitCode -ne 0) { return [pscustomobject]@{ available = $false; value = $null; error = $(if ($result.exitCode -eq 124) { 'github_api_timeout' } elseif ($result.text -match 'HTTP 403') { 'github_api_forbidden' } elseif ($result.text -match 'HTTP 429|rate limit') { 'github_api_rate_limited' } elseif ($result.text -match 'HTTP 5\d\d') { 'github_api_server_error' } else { 'github_api_unavailable' }) } }
   try { return [pscustomobject]@{ available = $true; value = ($result.text | ConvertFrom-Json); error = '' } }
   catch { return [pscustomobject]@{ available = $false; value = $null; error = 'github_json_malformed' } }
 }
@@ -115,59 +122,35 @@ function Get-AgentRulesetPolicy {
   }
 }
 
-function Get-AgentWorkflowMetadata {
-  param([Parameter(Mandatory = $true)][object]$CheckRun)
-  $metadata = @{}
-  foreach ($name in @('event', 'workflow_id', 'workflow_name', 'workflow_run_id', 'workflow_run_attempt')) {
-    $value = Get-AgentLocalValue -Object $CheckRun -Name $name
-    if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) { $metadata[$name] = [string]$value }
+function Get-AgentCurrentCandidateIdentity {
+  param([DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(30)))
+  $current = Get-AgentJsonFromGh -Deadline $Deadline -Arguments @('pr', 'view', [string]$PR, '--repo', $ExpectedRepository, '--json', $prFields)
+  if (-not $current.available) { return [pscustomobject]@{ valid = $false; reason = 'candidate_source_unavailable' } }
+  $identity = Test-AgentCandidateIdentity -Candidate $current.value -HeadSha $prHead -BaseSha $executionBase
+  if (-not $identity.valid) { return $identity }
+  $main = Get-AgentJsonFromGh -Deadline $Deadline -Arguments @('api', "repos/$ExpectedRepository/git/ref/heads/$ExpectedBaseBranch")
+  if (-not $main.available) { return [pscustomobject]@{ valid = $false; reason = 'base_source_unavailable' } }
+  if ([string]$main.value.object.sha -ne $executionBase) { return [pscustomobject]@{ valid = $false; reason = 'execution_base_superseded' } }
+  return $identity
+}
+
+function Get-AgentCurrentCISnapshot {
+  param([DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(60)))
+  $appIds = @($requiredCheckPolicies | Where-Object { $null -ne $_.integration_id -and [int64]$_.integration_id -gt 0 } | ForEach-Object { [int64]$_.integration_id })
+  Get-AgentCISnapshot -Repository $ExpectedRepository -TargetSha $prHead -Deadline $Deadline -AuthorityAppIds $appIds -ReadJson {
+    param($Endpoint)
+    Get-AgentJsonFromGh -Deadline $Deadline -Arguments @('api', $Endpoint)
   }
-  $detailsUrl = [string](Get-AgentLocalValue -Object $CheckRun -Name 'details_url')
-  if (-not $metadata.ContainsKey('event') -and $detailsUrl -match '/runs/(?<runId>\d+)') {
-    $runResult = Get-AgentJsonFromGh -Arguments @('api', "repos/$ExpectedRepository/actions/runs/$($Matches.runId)")
-    if ($runResult.available) {
-      $run = $runResult.value
-      $metadata['event'] = [string]$run.event; $metadata['workflow_id'] = [string]$run.workflow_id
-      $metadata['workflow_name'] = [string]$run.name; $metadata['workflow_run_id'] = [string]$run.id; $metadata['workflow_run_attempt'] = [string]$run.run_attempt
-    }
-  }
-  return $metadata
 }
 
 function Wait-AgentRequiredChecksReady {
-  param(
-    [Parameter(Mandatory = $true)][string[]]$RequiredChecks,
-    [Parameter(Mandatory = $true)][string]$TargetSha,
-    # Linux/Windows validation is sequenced behind the public policy workflow;
-    # the observed Windows certification can therefore start several minutes
-    # after this gate. Keep polling exact-head runs with a bounded 30-minute
-    # ceiling so the gate synchronizes with the required jobs without weakening
-    # their terminal/conclusion/authority checks.
-    [int]$MaxAttempts = 180,
-    [int]$DelaySeconds = 10
-  )
-  $waitFor = @($RequiredChecks | Where-Object { -not [string]::Equals([string]$_, 'trusted-control-plane', [StringComparison]::OrdinalIgnoreCase) })
-  if ($waitFor.Count -eq 0) { return [pscustomobject]@{ ready = $true; attempts = 0; reason = 'no_peer_checks_to_wait_for' } }
-  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-    $ciResult = Get-AgentJsonFromGh -Arguments @('api', "repos/$ExpectedRepository/commits/$TargetSha/check-runs?per_page=100")
-    if ($ciResult.available) {
-      [object[]]$runs = @($ciResult.value.check_runs)
-      $allTerminal = $true
-      foreach ($required in $waitFor) {
-        $matching = @($runs | Where-Object {
-            [string]$_.head_sha -eq $TargetSha -and
-            (([string]$_.name) -eq $required -or ([string]$_.name).StartsWith("$required /", [StringComparison]::OrdinalIgnoreCase) -or ([string]$_.name).StartsWith("${required}:", [StringComparison]::OrdinalIgnoreCase))
-          })
-        if ($matching.Count -eq 0 -or @($matching | Where-Object { [string]$_.status -ne 'completed' }).Count -gt 0) {
-          $allTerminal = $false
-          break
-        }
-      }
-      if ($allTerminal) { return [pscustomobject]@{ ready = $true; attempts = $attempt; reason = 'all_peer_required_checks_terminal' } }
-    }
-    if ($attempt -lt $MaxAttempts) { Start-Sleep -Seconds $DelaySeconds }
+  $peers = @($requiredCheckPolicies | Where-Object { $_.context -ine 'trusted-control-plane' })
+  if ($peers.Count -eq 0) { return [pscustomobject]@{ ready = $true; attempts = 0; reason = 'no_peer_checks_to_wait_for' } }
+  Wait-AgentCIState -ReadCandidate { param($Deadline) Get-AgentCurrentCandidateIdentity -Deadline $Deadline } -ReadState {
+    param($Deadline)
+    $snapshot = Get-AgentCurrentCISnapshot -Deadline $Deadline
+    Get-AgentCIState -Snapshot $snapshot -Policies $peers -TargetSha $prHead
   }
-  return [pscustomobject]@{ ready = $false; attempts = $MaxAttempts; reason = 'required_check_wait_timeout' }
 }
 
 function Get-AgentReviewThreadStatus {
@@ -340,6 +323,8 @@ try {
   Add-AgentCheck -Name 'PR_READABLE' -Passed $prAvailable -Blocker 'pull_request_not_readable'
   $prHead = if ($prAvailable) { [string]$prView.headRefOid } else { '' }
   $prBase = if ($prAvailable) { [string]$prView.baseRefOid } else { '' }
+  $executionBase = if ([string]::IsNullOrWhiteSpace($ExpectedExecutionBaseSha)) { $originMain } else { $ExpectedExecutionBaseSha }
+  Add-AgentCheck -Name 'EXECUTION_BASE_CURRENT' -Passed ((Test-AgentShaValue $executionBase) -and $executionBase -eq $prBase -and $executionBase -eq $originMain) -Blocker 'execution_base_superseded'
   $prHeadBranch = if ($prAvailable) { [string]$prView.headRefName } else { '' }
   $prBaseBranch = if ($prAvailable) { [string]$prView.baseRefName } else { '' }
   Add-AgentCheck -Name 'PR_HEAD_REVIEWED' -Passed ((Test-AgentShaValue $reviewedHead) -and [string]::Equals($reviewedHead, $prHead, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'reviewed_head_does_not_match_pr_head'
@@ -361,10 +346,10 @@ try {
     }
     Add-AgentCheck -Name 'REMOTE_HEAD_MATCH' -Passed ((Test-AgentShaValue $remotePrHead) -and [string]::Equals($remotePrHead, $prHead, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'remote_branch_head_differs_from_pr_head'
     $result = [ordered]@{
-      schemaVersion = 4; kind = 'babel_agent_pr_gate'; status = 'BLOCKED'; mergeReady = $false
+      schemaVersion = 4; ciEvidence = [ordered]@{ available = $ciSnapshot.available; state = $ciEvaluation.state; error = $ciSnapshot.error; apiCalls = $ciSnapshot.apiCalls; wait = $requiredChecksReady }; kind = 'babel_agent_pr_gate'; status = 'BLOCKED'; mergeReady = $false
       repository = $ExpectedRepository; remote = $ExpectedRemote
       pr = [ordered]@{ number = $PR; url = [string]$prView.url }
-      sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = $null; baseHead = $prBase; currentOriginMain = $originMain }
+      sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = $null; baseHead = $prBase; currentOriginMain = $originMain; trustedPolicySha = $executionBase }
       branch = [ordered]@{ local = $localBranch; prHead = $prHeadBranch; prBase = $prBaseBranch }
       worktree = [ordered]@{ clean = $status.clean; dirtyPaths = @($status.dirtyPaths); isolated = $topology.isolated }
       reviewPolicy = [ordered]@{ auditOnly = $true }
@@ -414,8 +399,8 @@ try {
     }
   }
   Add-AgentCheck -Name 'REQUIRED_CHECK_PRODUCERS_BOUND' -Passed $producerBindingsComplete -Blocker 'required_check_producer_binding_incomplete'
-  $requiredChecksReady = if ($rulesetPolicy.available -and $authOk -and (Test-AgentShaValue $prHead)) { Wait-AgentRequiredChecksReady -RequiredChecks $requiredChecks -TargetSha $prHead } else { [pscustomobject]@{ ready = $false; attempts = 0; reason = 'required_check_wait_prerequisite_missing' } }
-  Add-AgentCheck -Name 'REQUIRED_CHECKS_READY' -Passed ([bool]$requiredChecksReady.ready) -Blocker 'required_check_wait_timeout'
+  $requiredChecksReady = if ($rulesetPolicy.available -and $authOk -and (Test-AgentShaValue $prHead) -and $blockers.Count -eq 0) { Wait-AgentRequiredChecksReady } else { [pscustomobject]@{ ready = $false; attempts = 0; reason = 'required_check_wait_prerequisite_missing' } }
+  if (-not $requiredChecksReady.ready) { $warnings += ('peer_wait:' + $requiredChecksReady.reason) }
   $githubApprovalCount = if ($rulesetPolicy.available) { [int]$rulesetPolicy.required_approving_review_count } else { -1 }
   $observedApprovalCount = if ($prAvailable) { Get-AgentLatestApprovalCount -PRData $prView } else { 0 }
   $threads = if ($rulesetPolicy.available -and $rulesetPolicy.required_review_thread_resolution) { Get-AgentReviewThreadStatus } else { [pscustomobject]@{ available = $true; resolved = $true; count = 0; unresolved = 0; error = '' } }
@@ -459,26 +444,11 @@ try {
   Add-AgentCheck -Name 'REMOTE_HEAD_MATCH' -Passed ((Test-AgentShaValue $remotePrHead) -and [string]::Equals($remotePrHead, $prHead, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'remote_branch_head_differs_from_pr_head'
 
 
-  if ($ghAvailable -and $authOk -and (Test-AgentShaValue $prHead)) {
-    $ciResult = Get-AgentJsonFromGh -Arguments @('api', "repos/$ExpectedRepository/commits/$prHead/check-runs?per_page=100")
-    if ($ciResult.available) { $checkRuns = @($ciResult.value.check_runs) }
-  }
-  $normalizedRuns = @()
-  foreach ($run in $checkRuns) {
-    $metadata = Get-AgentWorkflowMetadata -CheckRun $run
-    $checkSuite = Get-AgentLocalValue -Object $run -Name 'check_suite'
-    $checkApp = Get-AgentLocalValue -Object $run -Name 'app'
-    $raw = [pscustomobject][ordered]@{
-      name = [string]$run.name; head_sha = [string]$run.head_sha; status = [string]$run.status; conclusion = [string]$run.conclusion
-      check_run_id = [string]$run.id; check_suite_id = [string](Get-AgentLocalValue -Object $checkSuite -Name 'id')
-      started_at = [string]$run.started_at; completed_at = [string]$run.completed_at; details_url = [string](Get-AgentLocalValue -Object $run -Name 'details_url')
-      event = [string](Get-AgentLocalValue -Object $run -Name 'event'); workflow_id = [string](Get-AgentLocalValue -Object $run -Name 'workflow_id')
-      workflow_name = [string](Get-AgentLocalValue -Object $run -Name 'workflow_name'); workflow_run_id = [string](Get-AgentLocalValue -Object $run -Name 'workflow_run_id')
-      workflow_run_attempt = [string](Get-AgentLocalValue -Object $run -Name 'workflow_run_attempt'); authority = [string](Get-AgentLocalValue -Object $run -Name 'authority')
-      app_id = [string](Get-AgentLocalValue -Object $checkApp -Name 'id'); app_slug = [string](Get-AgentLocalValue -Object $checkApp -Name 'slug'); app_name = [string](Get-AgentLocalValue -Object $checkApp -Name 'name')
-    }
-    $normalizedRuns += ConvertTo-AgentCheckObservation -Raw $raw -WorkflowMetadata $metadata
-  }
+  $ciSnapshot = if ($ghAvailable -and $authOk -and (Test-AgentShaValue $prHead)) { Get-AgentCurrentCISnapshot }
+    else { [pscustomobject]@{ available = $false; observations = @(); workflows = @(); error = 'ci_source_not_checked'; apiCalls = 0 } }
+  $evaluationPolicies = if ($runningTrustedControlPlane) { @($requiredCheckPolicies | Where-Object { $_.context -ine 'trusted-control-plane' }) } else { $requiredCheckPolicies }
+  $ciEvaluation = Get-AgentCIState -Snapshot $ciSnapshot -Policies $evaluationPolicies -TargetSha $prHead
+  Add-AgentCheck -Name 'CI_SOURCE_AVAILABLE' -Passed ([bool]$ciSnapshot.available) -Blocker 'ci_source_unavailable'
   $requiredResults = @()
   $requiredChecksGreen = $true
   $ciHeadMatch = $true
@@ -490,22 +460,10 @@ try {
       # all peer checks remain resolved through the normal authoritative path.
       $resolution = [pscustomobject][ordered]@{ status = 'PASS'; reason = 'self_check_deferred_to_current_job_result'; required = $required; selected = $null; candidates = @(); ignored = @() }
     } else {
-      $authority = Get-AgentRequiredCheckAuthority -RequiredName $required
-      if (-not [bool]$authority.configured) {
-        $resolution = [pscustomobject][ordered]@{ status = 'AMBIGUOUS'; reason = [string]$authority.reason; required = $required; selected = $null; candidates = @(); ignored = @() }
-      } else {
-        # The ruleset's GitHub Actions integration ID is part of the producer
-        # binding. A missing binding is represented by an impossible ID so a
-        # same-name check can never satisfy the requirement accidentally.
-        [Nullable[int64]]$authorityAppId = 0
-        $matchingPolicy = @($requiredCheckPolicies | Where-Object {
-            [string]::Equals([string]$_.context, [string]$required, [StringComparison]::OrdinalIgnoreCase)
-          })
-        if ($matchingPolicy.Count -eq 1 -and $null -ne $matchingPolicy[0].integration_id -and [int64]$matchingPolicy[0].integration_id -gt 0) {
-          $authorityAppId = [int64]$matchingPolicy[0].integration_id
-        }
-        $resolution = Resolve-AgentRequiredCheck -Observations $normalizedRuns -RequiredName $required -TargetSha $prHead -AuthorityEvent ([string]$authority.event) -AuthorityWorkflowName ([string]$authority.workflow_name) -AuthorityAppId $authorityAppId
-      }
+      $selectedState = @($ciEvaluation.results | Where-Object { $_.name -ieq $required })
+      $resolution = if ($selectedState.Count -eq 1) { $selectedState[0].resolution }
+        else { [pscustomobject]@{ status = 'UNKNOWN'; reason = $ciSnapshot.error; selected = $null; candidates = @(); ignored = @() } }
+
     }
     if ($resolution.status -ne 'PASS') { $requiredChecksGreen = $false; $ciHeadMatch = $false }
     $selected = Get-AgentLocalValue -Object $resolution -Name 'selected'
@@ -548,12 +506,14 @@ try {
     try { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $independentReviewSummary -ErrorAction Stop }
     catch { $warnings += 'gate_step_summary_write_failed' }
   }
+  $finalIdentity = if ($prAvailable -and $authOk) { Get-AgentCurrentCandidateIdentity } else { [pscustomobject]@{ valid = $false; reason = 'candidate_source_unavailable' } }
+  Add-AgentCheck -Name 'FINAL_CANDIDATE_CURRENT' -Passed ([bool]$finalIdentity.valid) -Blocker $finalIdentity.reason
   $auditPassed = $blockers.Count -eq 0
   $mergeReady = $auditPassed
   $result = [ordered]@{
-    schemaVersion = 4; kind = 'babel_agent_pr_gate'; status = if ($mergeReady) { 'MERGE_READY' } else { 'BLOCKED' }; mergeReady = $mergeReady; summary = $independentReviewSummary
+    schemaVersion = 4; ciEvidence = [ordered]@{ available = $ciSnapshot.available; state = $ciEvaluation.state; error = $ciSnapshot.error; apiCalls = $ciSnapshot.apiCalls; wait = $requiredChecksReady }; kind = 'babel_agent_pr_gate'; status = if ($mergeReady) { 'MERGE_READY' } else { 'BLOCKED' }; mergeReady = $mergeReady; summary = $independentReviewSummary
     repository = $ExpectedRepository; remote = $ExpectedRemote; pr = [ordered]@{ number = $PR; url = if ($prAvailable) { [string]$prView.url } else { $null } }
-    sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = if ($ciHeadMatch) { $prHead } else { $null }; baseHead = $prBase; currentOriginMain = $originMain }
+    sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = if ($ciHeadMatch) { $prHead } else { $null }; baseHead = $prBase; currentOriginMain = $originMain; trustedPolicySha = $executionBase }
     branch = [ordered]@{ local = $localBranch; prHead = $prHeadBranch; prBase = $prBaseBranch }
     worktree = [ordered]@{ clean = $status.clean; dirtyPaths = @($status.dirtyPaths); isolated = $topology.isolated }
     repositoryPolicy = [ordered]@{ source = 'github_ruleset'; rulesetId = if ($rulesetPolicy.available) { $rulesetPolicy.id } else { $null }; name = if ($rulesetPolicy.available) { $rulesetPolicy.name } else { $null }; enforcement = if ($rulesetPolicy.available) { $rulesetPolicy.enforcement } else { $null }; githubRequiredApprovalCount = $githubApprovalCount; requiredReviewThreadResolution = if ($rulesetPolicy.available) { $rulesetPolicy.required_review_thread_resolution } else { $null }; requiredStatusChecks = @($requiredChecks); requiredStatusCheckProducers = @($requiredCheckPolicies); requiredStatusCheckProducersBound = [bool]$producerBindingsComplete; strictRequiredStatusChecksPolicy = if ($rulesetPolicy.available) { $rulesetPolicy.strict_required_status_checks_policy } else { $null } }
@@ -564,7 +524,7 @@ try {
   if (-not $auditPassed) { exit 1 }
   exit 0
 } catch {
-  $fallback = [ordered]@{ schemaVersion = 4; kind = 'babel_agent_pr_gate'; status = 'BLOCKED'; mergeReady = $false; repository = $ExpectedRepository; pr = [ordered]@{ number = $PR }; checks = $checks; blockers = @($blockers + 'pr_gate_exception' | Select-Object -Unique); warnings = @($warnings | Select-Object -Unique); errorType = $_.Exception.GetType().FullName; errorMessage = $_.Exception.Message; errorScriptStackTrace = $_.ScriptStackTrace }
+  $fallback = [ordered]@{ schemaVersion = 4; ciEvidence = [ordered]@{ available = $ciSnapshot.available; state = $ciEvaluation.state; error = $ciSnapshot.error; apiCalls = $ciSnapshot.apiCalls; wait = $requiredChecksReady }; kind = 'babel_agent_pr_gate'; status = 'BLOCKED'; mergeReady = $false; repository = $ExpectedRepository; pr = [ordered]@{ number = $PR }; checks = $checks; blockers = @($blockers + 'pr_gate_exception' | Select-Object -Unique); warnings = @($warnings | Select-Object -Unique); errorType = $_.Exception.GetType().FullName; errorMessage = $_.Exception.Message; errorScriptStackTrace = $_.ScriptStackTrace }
   Write-AgentResult -Result $fallback -OutputFormat $OutputFormat
   exit 1
 }
