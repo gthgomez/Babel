@@ -58,7 +58,7 @@ These controls do not establish that an arbitrary selected executable is safe. T
 3. Chat follow-ups use `--resume-chat` against Babel's transcript. `--session-id` is still only the Local Mode evidence flag.
 4. `BABEL_DESKTOP_IPC=1` carries allow, deny, and cancel on stdin. Cancel calls the chat engine, then the desktop ends the process tree if the CLI is still alive. There is no `--yes` bypass.
 5. Surface actual provider/model availability and context occupancy. Review and verification receipts should use existing result/event contracts.
-6. Add Windows end-to-end tests, graceful close/run lifecycle, packaging, signing, and update verification before distribution as an installer.
+6. Installer packaging is implemented (NSIS 3.11 per-user Setup.exe wrapping the checksum-verified portable ZIP) and its lifecycle (install, launch/relaunch, upgrade, rollback, uninstall, reinstall) is qualified in CI by babel-desktop/test/installer-lifecycle/run-lifecycle.ps1. Remaining before a production distribution claim: code signing and update verification.
 
 ## Self-review
 

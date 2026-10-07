@@ -10,6 +10,9 @@ For contributors, use the combined Desktop and installed-CLI candidate, install 
 npm ci
 npm --prefix ../babel-cli ci --ignore-scripts
 npm run package:windows -- --node-archive=<absolute-official-node-v24.13.1-win-x64.zip> --electron-archive=<absolute-official-electron-v44.5.1-win32-x64.zip>
+
+The optional Setup.exe builder wraps the verified portable ZIP in a pinned NSIS 3.11 package (per-user install: Start Menu shortcut, staged upgrade/rollback, HKCU uninstall registration). The installer lifecycle (install, upgrade, rollback, uninstall, reinstall) is qualified by babel-desktop/test/installer-lifecycle/run-lifecycle.ps1, enforced in CI by the installer-lifecycle job. Still unsigned; still preview:
+npm run package:windows:setup -- --payload-zip=<portable-zip> --payload-sha256s=<SHA256SUMS> --nsis-archive=<official-nsis-3.11.zip>
 ```
 
 The builder checks pinned Node and Electron archive SHA256 values, freshly extracts Electron instead of trusting an existing dependency folder, requires a committed source candidate, builds and packs the canonical CLI, installs only lockfile-resolved production dependencies without lifecycle scripts, and copies an explicit Desktop allowlist. It produces the portable ZIP, file manifest, BUILD.json, and SHA256SUMS under `artifacts/windows/`. It refuses to overwrite prior outputs. The bundle is unsigned; installer, uninstaller integration, signing, and automatic updates remain unimplemented.
