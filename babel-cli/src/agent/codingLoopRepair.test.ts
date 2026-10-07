@@ -295,74 +295,47 @@ test('generated and gitignored inputs invalidate verifier reuse', async () => {
 });
 
 test('strict completion accepts typecheck and runner summaries', async () => {
-  const typecheck = evaluateExecuteCompletionHonesty({
-    hasWrite: true,
-    policy: 'strict',
-    toolCallLog: [],
-    lastVerifierReceipt: {
-      command: 'npm run typecheck',
-      exit_code: 0,
-      summary: '',
-      authority: true,
-    },
-  });
-  assert.equal(typecheck.allow, true);
-  assert.equal(typecheck.reason, null);
-
-  const pytest = evaluateExecuteCompletionHonesty({
-    hasWrite: true,
-    policy: 'strict',
-    toolCallLog: [],
-    lastVerifierReceipt: { command: 'pytest', exit_code: 0, summary: '15 passed', authority: true },
-  });
-  assert.equal(pytest.allow, true);
-
-  const jest = evaluateExecuteCompletionHonesty({
-    hasWrite: true,
-    policy: 'strict',
-    toolCallLog: [],
-    lastVerifierReceipt: {
-      command: 'npx jest',
-      exit_code: 0,
-      summary: 'Tests:       1 skipped, 14 passed, 15 total',
-      authority: true,
-    },
-  });
-  assert.equal(jest.allow, true);
-
-  const vitest = evaluateExecuteCompletionHonesty({
-    hasWrite: true,
-    policy: 'strict',
-    toolCallLog: [],
-    lastVerifierReceipt: {
-      command: 'npx vitest run',
-      exit_code: 0,
-      summary: '      Tests  1 passed | 1 skipped (2)',
-      authority: true,
-    },
-  });
-  assert.equal(vitest.allow, true);
-
-  const vitestSkipped = evaluateExecuteCompletionHonesty({
-    hasWrite: true,
-    policy: 'strict',
-    toolCallLog: [],
-    lastVerifierReceipt: {
-      command: 'npx vitest run',
-      exit_code: 0,
-      summary: '      Tests  2 skipped (2)',
-      authority: true,
-    },
-  });
-  assert.equal(vitestSkipped.allow, false);
-
-  const prose = evaluateExecuteCompletionHonesty({
-    hasWrite: true,
-    policy: 'strict',
-    toolCallLog: [],
-    lastVerifierReceipt: { command: 'npm test', exit_code: 0, summary: 'all pass', authority: true },
-  });
-  assert.equal(prose.allow, false);
+  const jestSummary = 'Tests:       2 passed, 2 total';
+  const rows: Array<{ command: string; summary: string; allow: boolean }> = [
+    { command: 'npm run typecheck', summary: '', allow: true },
+    { command: 'pnpm run typecheck', summary: '', allow: true },
+    { command: 'yarn run typecheck', summary: '', allow: true },
+    { command: 'pytest', summary: '15 passed', allow: true },
+    { command: 'node --test', summary: 'ℹ tests 2\nℹ skipped 0', allow: true },
+    { command: 'npx jest', summary: 'Tests:       1 skipped, 14 passed, 15 total', allow: true },
+    { command: 'npx vitest run', summary: '      Tests  1 passed | 1 skipped (2)', allow: true },
+    { command: 'npm test', summary: 'all pass', allow: false },
+    { command: 'node --test', summary: 'ℹ tests 0\nℹ pass 0', allow: false },
+    { command: 'npx vitest run', summary: '      Tests  2 skipped (2)', allow: false },
+    { command: 'npm run test:unit', summary: 'ok', allow: false },
+    { command: 'pnpm run test:e2e', summary: 'ok', allow: false },
+    { command: 'yarn run test:chat-truth', summary: 'ok', allow: false },
+    { command: 'npm run test:unit', summary: jestSummary, allow: true },
+    { command: 'pnpm run test:e2e', summary: jestSummary, allow: true },
+    { command: 'yarn run test:chat-truth', summary: jestSummary, allow: true },
+    { command: 'npm test --help', summary: '', allow: false },
+    { command: 'npm test --version', summary: '', allow: false },
+    { command: 'pytest --collect-only', summary: '', allow: false },
+    { command: 'npm test --dry-run', summary: '', allow: false },
+    { command: 'node --test --list', summary: '', allow: false },
+  ];
+  for (const row of rows) {
+    const decision = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      toolCallLog: [],
+      lastVerifierReceipt: {
+        command: row.command,
+        exit_code: 0,
+        summary: row.summary,
+        authority: true,
+      },
+    });
+    assert.equal(decision.allow, row.allow, `${row.command} :: ${row.summary}`);
+  }
+  assert.equal(satisfiesVerifierRequirement('npm test', 'npm run test:unit'), false);
+  assert.equal(satisfiesVerifierRequirement('npm test', 'pnpm run test:e2e'), false);
+  assert.equal(satisfiesVerifierRequirement('npm test', 'yarn run test:chat-truth'), false);
 
   const root = mkdtempSync(join(tmpdir(), 'babel-runner-summary-'));
   try {
@@ -377,6 +350,13 @@ test('strict completion accepts typecheck and runner summaries', async () => {
     });
     assert.equal(captured?.tests_total, 17);
     assert.equal(captured?.tests_skipped, 2);
+    const capturedDecision = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      toolCallLog: [],
+      lastVerifierReceipt: captured,
+    });
+    assert.equal(capturedDecision.allow, true);
     const typecheckReceipt = await captureChatVerifierReceipt({
       projectRoot: root,
       command: 'npm run typecheck',

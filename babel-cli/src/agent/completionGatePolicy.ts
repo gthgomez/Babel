@@ -118,6 +118,8 @@ export function deriveAdversarialSignals(opts: {
 /** Known project/dataset test runners (prefixes; case-insensitive match on trimmed cmd). */
 const AUTHORITATIVE_VERIFIER_PREFIXES = [
   'npm run typecheck',
+  'pnpm run typecheck',
+  'yarn run typecheck',
   'npm run test',
   'npm test',
   'pnpm run test',
@@ -757,31 +759,37 @@ function isAuthoritativeReceipt(entry: VerifierEvidence): boolean {
   return entry.authority === true && isAuthoritativeVerifierCommand(entry.command);
 }
 
-const TEST_EXECUTION_FAMILIES = new Set([
-  'npm-test',
-  'vitest',
-  'jest',
-  'mocha',
-  'pytest',
-  'unittest',
-  'node-test',
-  'go-test',
-  'cargo-test',
-  'gradle-test',
-  'deno-test',
-  'dotnet-test',
-]);
-
 /**
- * Authoritative checks that do not execute a test suite. `npm run typecheck`
- * is the allowlisted case: a green exit is the check, and it has no test count.
- * Unknown families and known test runners stay on the count proof below.
+ * Count-free proof is an explicit list of non-test checks. Every other
+ * command, including `npm run test:unit` and the pnpm/yarn equivalents,
+ * requires a parsed executed-test count. Family keys stay unchanged:
+ * `test:unit` is not collapsed into `npm-test`.
  */
-function strictCheckOmitsTestCounts(command: string): boolean {
+function strictCountPolicy(command: string): 'count_free' | 'requires_executed_count' {
   const identity = analyzeVerifierIdentity(command);
-  if (!identity || identity.family === 'unknown' || identity.scope === 'unknown') return false;
-  if (TEST_EXECUTION_FAMILIES.has(identity.family) || identity.family.startsWith('npx-')) return false;
-  return true;
+  if (!identity || identity.scope === 'unknown') return 'requires_executed_count';
+  if (identity.family === 'tsc' || identity.family === 'tsc-b') return 'count_free';
+  let argv: string[];
+  try {
+    argv = parseCommandArgv(identity.displayCommand);
+  } catch {
+    return 'requires_executed_count';
+  }
+  const executable = argv[0]
+    ?.replace(/^['"]|['"]$/g, '')
+    .split(/[\\/]/)
+    .at(-1)
+    ?.toLowerCase()
+    .replace(/\.(cmd|bat|exe)$/i, '');
+  const script = argv[2]?.replace(/^['"]|['"]$/g, '').toLowerCase();
+  if (
+    (executable === 'npm' || executable === 'pnpm' || executable === 'yarn')
+    && argv[1]?.toLowerCase() === 'run'
+    && script === 'typecheck'
+  ) {
+    return 'count_free';
+  }
+  return 'requires_executed_count';
 }
 
 function evidenceCommand(entry: VerifierEvidence | GateToolLogEntry): string | undefined {
@@ -818,7 +826,7 @@ function explicitExecutedTestCounts(
  */
 function receiptProvesExecutedTests(entry: VerifierEvidence | GateToolLogEntry): boolean {
   const command = evidenceCommand(entry);
-  if (command && strictCheckOmitsTestCounts(command)) {
+  if (command && strictCountPolicy(command) === 'count_free') {
     return verifierExitCode(entry) === 0;
   }
   const counts = explicitExecutedTestCounts(entry)
