@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "eb0872f0bf3e07325ddcbc7de07f7e9ffb5eeecf1f7c01cf7ee3f86e1f251724",
+  "policy_bundle_id": "a7990a7432223ef79e59e2650df9db72db2cb394bf16349b59ae2159d6d4d2de",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "47921ef2675f0c51b25b52362b65650ecddd41e82e1a67c398f1efb2154a040f",
@@ -60,6 +60,7 @@
     "babel-cli/src/services/babelReviewSnapshot.ts": "c992ece406ffa78efc3f911c5675d8a944ff1f0393966afdd3b5c3d9be09272d",
     "babel-cli/src/services/candidateCollector.test.ts": "93fe41c41254f52142659527d34906b2a4ea7a1f08d00cb9c29877f7ac2b02b6",
     "babel-cli/src/services/candidateCollector.ts": "e4080c000ab7f9e9cdd055e8621f1f3f9fda76184cab357da38e38ab2844820c",
+    "babel-cli/src/services/candidateCollectorCli.test.ts": "04a5036e859ffdfadd80c38cfae2c760c333af8eaef71f36c5dce77787ad0586",
     "babel-cli/src/services/candidateCollectorCli.ts": "c5cf455da9c4d87d03204fc094d8c4581b76afcca89573252fbd0d99570c3024",
     "babel-cli/src/services/codexHarnessReview.test.ts": "8532bd715364ed9c0f4b789ea140cd5dd7dfc863522a6bc4b000d9bfa4daef50",
     "babel-cli/src/services/codexHarnessReview.ts": "d0e99802ffee32637182f08e6b76f9247e7d0837018ea64c0ded0b1a50f9806d",
@@ -130,6 +131,6 @@
     "tools/babel-pr-orchestrate-opencode.mts": "52b030c4ada9940ad8290872d453ef518bc5989475095787cc21ee579b62cf29",
     "tools/babel-pr-orchestrate.mts": "e2b8f541f807e5e7544534a3eb5804ec14395b05a6fc97a813c82269f7fc32a0",
     "tools/host-review-worker.mts": "751b80e69888ec098ff2e190bf487f1962bbb104ea87d7494b68e654009b336a",
-    "tools/policy-integrity-manifest.mjs": "97d0403ef0209a83f484ba578c41dc3a1d7467b7196d7ea93e4ec3bd88a7d1f2"
+    "tools/policy-integrity-manifest.mjs": "9091eb1ff9a11fff5fe42edb05ff3055a4e7ff54fb4389c0e994e84aaf540eb1"
   }
 }
