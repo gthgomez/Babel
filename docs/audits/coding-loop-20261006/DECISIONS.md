@@ -157,7 +157,7 @@ Why simpler: no-change tasks use the existing revision/evidence model without a 
 
 Why safe: no-Git path-only bindings cannot prove currency. A later repository change invalidates the evidence. This route can support a no-change conclusion; it does not create a patch or satisfy the verified-patch write requirement.
 
-Evidence required before acceptance: red-first actual Git fixture with already-correct code and an explicitly required verifier; empty-scope default rejection; no-Git repository currency refusal; dirty/untracked content currency; simulated and stale controls. The final result records the implemented scope and executed checks.
+Evidence: real Git fixture with already-correct code and an explicitly required verifier; empty-scope default rejection; no-Git repository currency refusal; dirty/untracked content currency; simulated and stale controls. Independent review of `10b80ec` additionally reproduced nested-project status paths resolved against the wrong root and historical scope-less receipts retaining a green flag. Status paths must resolve against the Git top-level while the pathspec stays within the requested project. Unknown currency during final refresh must mark evidence stale. Real nested-project dirty/untracked controls, symlink-parent containment, known deleted-directory handling, and historical-receipt strict-completion rejection cover these corrections; the final result records the exact reviewed implementation revision.
 
 ## Explicit instruction hierarchy and retained boundaries
 

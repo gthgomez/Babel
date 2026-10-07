@@ -335,8 +335,10 @@ export function refreshChatVerifierReceiptStalenessSync(
   if (!receipt || receipt.stale) return receipt;
   const bound = toRevisionBoundReceipt(receipt);
   if (!bound) return receipt;
-  const result = evaluateChatVerifierReceiptCurrencySync(projectRoot, receipt);
-  if (!result) return receipt;
+  const result = evaluateChatVerifierReceiptCurrencySync(projectRoot, receipt) ?? {
+    stale: true,
+    reason: 'Receipt has no evaluable revision scope or Git binding',
+  };
   if (result.stale) {
     receipt.stale = true;
     if (result.reason) receipt.staleReason = result.reason;

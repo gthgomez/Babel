@@ -93,6 +93,33 @@ describe('chatRevisionBinding', () => {
     );
   });
 
+  it('historical receipts without evaluable scope cannot remain green after refresh', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-legacy-scope-'));
+    try {
+      await fs.writeFile(path.join(root, 'checked.ts'), 'checked bytes');
+      const captured = await bindChatVerifierReceipt({
+        projectRoot: root, command: 'npm test', exit_code: 0, summary: 'ok',
+        mutationPaths: ['checked.ts'],
+        structured: { verifierId: 'npm-test', authoritySource: 'built_in_runner', executable: 'npm', args: ['test'] },
+      });
+      for (const missing of ['scope', 'gitBinding'] as const) {
+        const receipt = structuredClone(captured);
+        delete (receipt.boundRevision as unknown as Record<string, unknown>)[missing];
+        refreshChatVerifierReceiptStalenessSync(root, receipt);
+        assert.strictEqual(receipt.stale, true, missing);
+        const decision = evaluateExecuteCompletionHonesty({
+          hasWrite: false, allowInspectedNoChange: true, policy: 'strict',
+          lastVerifierReceipt: receipt, executedVerifierLedger: [receipt],
+          requiredVerifierCommands: ['npm test'],
+          toolCallLog: [{ tool: 'read_file', target: 'checked.ts', detail: 'checked bytes', exit_code: 0 }],
+        });
+        assert.strictEqual(decision.allow, false, `${missing} cannot support strict no-change completion`);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('builds evidence graph and evaluateEvidence rejects stale bound receipt', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-chat-ev-'));
     try {

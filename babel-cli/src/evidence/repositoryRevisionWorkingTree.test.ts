@@ -18,8 +18,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
@@ -84,6 +84,114 @@ describe('repository-scope revision vs the real working tree', () => {
       assert.equal(rev.gitCommitHash, null);
     } finally {
       rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  test('nested repository scope binds dirty and untracked bytes without reading outside the package', () => {
+    const repositoryRoot = mkdtempSync(join(tmpdir(), 'babel-nested-revision-'));
+    const projectRoot = join(repositoryRoot, 'packages', 'app');
+    mkdirSync(projectRoot, { recursive: true });
+    const git = (args: string[]) => execFileSync('git', args, { cwd: repositoryRoot, encoding: 'utf8' });
+    try {
+      writeFileSync(join(projectRoot, 'tracked.txt'), 'tracked baseline\n');
+      writeFileSync(join(repositoryRoot, 'outside.txt'), 'outside baseline\n');
+      git(['init', '-q']);
+      git(['config', 'user.email', 'test@example.invalid']);
+      git(['config', 'user.name', 'Babel Tests']);
+      git(['add', '-A']);
+      git(['commit', '-q', '-m', 'nested baseline']);
+
+      const revision = () => RevisionManager.computeRevisionSync(projectRoot, [], {
+        scope_kind: 'repository',
+        git_binding: 'required',
+      });
+
+      writeFileSync(join(projectRoot, 'tracked.txt'), 'tracked A\n');
+      const beforeDirtyTrackedEdit = revision();
+      writeFileSync(join(projectRoot, 'tracked.txt'), 'tracked B\n');
+      const afterDirtyTrackedEdit = revision();
+      assert.notEqual(afterDirtyTrackedEdit.compositeTreeHash, beforeDirtyTrackedEdit.compositeTreeHash,
+        'already-dirty tracked A→B bytes inside the nested project change its repository scope');
+
+      writeFileSync(join(projectRoot, 'untracked.txt'), 'untracked A\n');
+      const beforeUntrackedEdit = revision();
+      writeFileSync(join(projectRoot, 'untracked.txt'), 'untracked B\n');
+      const afterUntrackedEdit = revision();
+      assert.notEqual(afterUntrackedEdit.compositeTreeHash, beforeUntrackedEdit.compositeTreeHash,
+        'already-untracked A→B bytes inside the nested project change its repository scope');
+
+      const beforeOutsideEdit = revision();
+      writeFileSync(join(repositoryRoot, 'outside.txt'), 'outside changed\n');
+      const afterOutsideEdit = revision();
+      assert.equal(afterOutsideEdit.compositeTreeHash, beforeOutsideEdit.compositeTreeHash,
+        'a nested project scope neither reads nor binds changes outside that projectRoot');
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('nested repository scope fails closed when a dirty path traverses a symlinked parent', () => {
+    const repositoryRoot = mkdtempSync(join(tmpdir(), 'babel-symlink-parent-revision-'));
+    const projectRoot = join(repositoryRoot, 'packages', 'app');
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'babel-symlink-parent-target-'));
+    const trackedDirectory = join(projectRoot, 'src');
+    const outsideFile = join(outsideRoot, 'tracked.txt');
+    mkdirSync(trackedDirectory, { recursive: true });
+    writeFileSync(join(trackedDirectory, 'tracked.txt'), 'baseline\n');
+    const git = (args: string[]) => execFileSync('git', args, { cwd: repositoryRoot, encoding: 'utf8' });
+    try {
+      git(['init', '-q']);
+      git(['config', 'user.email', 'test@example.invalid']);
+      git(['config', 'user.name', 'Babel Tests']);
+      git(['add', '-A']);
+      git(['commit', '-q', '-m', 'symlink-parent baseline']);
+
+      rmSync(trackedDirectory, { recursive: true, force: true });
+      mkdirSync(outsideRoot, { recursive: true });
+      writeFileSync(outsideFile, 'outside A\n');
+      symlinkSync(outsideRoot, trackedDirectory, platform() === 'win32' ? 'junction' : 'dir');
+
+      const requiredRevision = () => RevisionManager.computeRevisionSync(projectRoot, [], {
+        scope_kind: 'repository',
+        git_binding: 'required',
+      });
+      assert.throws(requiredRevision, /Required Git tree cannot be established/,
+        'a tracked path beneath a symlinked parent cannot produce certifying content evidence');
+
+      writeFileSync(outsideFile, 'outside B\n');
+      assert.throws(requiredRevision, /Required Git tree cannot be established/,
+        'changing the outside target remains unverified instead of being read into the project receipt');
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('nested repository scope remains computable when a tracked parent directory is deleted', () => {
+    const repositoryRoot = mkdtempSync(join(tmpdir(), 'babel-deleted-parent-revision-'));
+    const projectRoot = join(repositoryRoot, 'packages', 'app');
+    const trackedDirectory = join(projectRoot, 'src');
+    mkdirSync(trackedDirectory, { recursive: true });
+    writeFileSync(join(trackedDirectory, 'tracked.txt'), 'baseline\n');
+    const git = (args: string[]) => execFileSync('git', args, { cwd: repositoryRoot, encoding: 'utf8' });
+    try {
+      git(['init', '-q']);
+      git(['config', 'user.email', 'test@example.invalid']);
+      git(['config', 'user.name', 'Babel Tests']);
+      git(['add', '-A']);
+      git(['commit', '-q', '-m', 'deleted parent baseline']);
+
+      const revision = () => RevisionManager.computeRevisionSync(projectRoot, [], {
+        scope_kind: 'repository',
+        git_binding: 'required',
+      });
+      const beforeDeletion = revision();
+      rmSync(trackedDirectory, { recursive: true, force: true });
+      const afterDeletion = revision();
+      assert.notEqual(afterDeletion.compositeTreeHash, beforeDeletion.compositeTreeHash,
+        'a deleted tracked parent remains known missing evidence and changes the repository revision');
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true });
     }
   });
 });

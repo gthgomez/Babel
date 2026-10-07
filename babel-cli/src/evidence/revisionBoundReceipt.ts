@@ -154,7 +154,7 @@ function readGitHead(projectRoot: string): string | null {
  * Hash the repository's ACTUAL verification-relevant state.
  *
  * `ls-files -s` contributes the blob hash of every clean tracked file. The
- * Git status (`--porcelain=v2 -z --untracked-files=all`) identifies the
+ * Git status (`--porcelain -z --untracked-files=all`) identifies the
  * divergent paths — worktree-modified tracked files and untracked files —
  * and for each of those the ACTUAL worktree bytes are hashed here, together
  * with existence and type. A metadata-only fingerprint (hashing the status
@@ -168,8 +168,22 @@ function readGitHead(projectRoot: string): string | null {
  */
 function readGitTree(projectRoot: string): string | null {
   try {
-    const index = execFileSync("git", ["ls-files", "-s", "--", "."], {
+    const gitRoot = fs.realpathSync(execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: projectRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+      windowsHide: true,
+    }).trim());
+    const physicalProjectRoot = fs.realpathSync(projectRoot);
+    const projectPrefix = path.relative(gitRoot, physicalProjectRoot);
+    if (
+      path.isAbsolute(projectPrefix) || projectPrefix === ".." ||
+      projectPrefix.startsWith(`..${path.sep}`)
+    ) return null;
+    const scopePath = projectPrefix ? `:(top,literal)${projectPrefix.split(path.sep).join("/")}` : ".";
+    const index = execFileSync("git", ["ls-files", "-s", "--", scopePath], {
+      cwd: gitRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 10_000,
@@ -177,9 +191,9 @@ function readGitTree(projectRoot: string): string | null {
     });
     const status = execFileSync(
       "git",
-      ["status", "--porcelain", "-z", "--untracked-files=all"],
+      ["status", "--porcelain", "-z", "--untracked-files=all", "--", scopePath],
       {
-        cwd: projectRoot,
+        cwd: gitRoot,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 10_000,
@@ -202,7 +216,39 @@ function readGitTree(projectRoot: string): string | null {
     const contentDigests = divergent
       .sort()
       .map((relativePath) => {
-        const absolute = path.resolve(projectRoot, relativePath);
+        const absolute = path.resolve(gitRoot, relativePath);
+        const withinProject = path.relative(physicalProjectRoot, absolute);
+        if (
+          path.isAbsolute(withinProject) || withinProject === ".." ||
+          withinProject.startsWith(`..${path.sep}`)
+        ) throw new Error("Git status returned a path outside the requested project scope.");
+        // The lexical check above is not enough: an in-project parent may be
+        // replaced by a symlink to an outside directory. Validate each parent
+        // physically before reading the leaf. The leaf itself is inspected
+        // with lstat below, so a final symlink is hashed as a link, not followed.
+        let parent = physicalProjectRoot;
+        const parentParts = path.dirname(withinProject).split(path.sep).filter(Boolean);
+        for (const part of parentParts) {
+          parent = path.resolve(parent, part);
+          let parentStats: fs.Stats;
+          try {
+            parentStats = fs.lstatSync(parent);
+          } catch (error) {
+            if (
+              error && typeof error === "object" && "code" in error &&
+              (error as { code?: string }).code === "ENOENT"
+            ) return `${relativePath}:missing`;
+            throw error;
+          }
+          if (parentStats.isSymbolicLink() || !parentStats.isDirectory())
+            throw new Error("Git status path traverses a non-directory or symlink parent.");
+          const physicalParent = fs.realpathSync(parent);
+          const physicalRelative = path.relative(physicalProjectRoot, physicalParent);
+          if (
+            path.isAbsolute(physicalRelative) || physicalRelative === ".." ||
+            physicalRelative.startsWith(`..${path.sep}`)
+          ) throw new Error("Git status path resolves outside the requested project scope.");
+        }
         let stats: fs.Stats;
         try {
           stats = fs.lstatSync(absolute);

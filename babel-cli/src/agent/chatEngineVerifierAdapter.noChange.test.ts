@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
@@ -120,6 +120,42 @@ describe('green verifier receipts for inspected no-change tasks', { concurrency:
     writeFileSync(join(root, 'verify.mjs'), 'console.log("changed after unverified receipt")\n')
     assert.equal(refreshChatVerifierReceiptStalenessSync(root, unverified)?.stale, true,
       'unknown repository content state is conservatively rejected at completion')
+  })
+
+  test('nested repository-scope receipt currency binds A→B changes inside the project only', async () => {
+    const repositoryRoot = project()
+    const projectRoot = join(repositoryRoot, 'packages', 'app')
+    mkdirSync(projectRoot, { recursive: true })
+    writeFileSync(join(projectRoot, 'checked.txt'), 'baseline\n')
+    writeFileSync(join(repositoryRoot, 'outside.txt'), 'outside baseline\n')
+    initializeGit(repositoryRoot)
+
+    writeFileSync(join(projectRoot, 'checked.txt'), 'dirty A\n')
+    const receipt = await captureChatVerifierReceipt({
+      projectRoot,
+      command: 'npm test',
+      exitCode: 0,
+      summary: 'ok',
+      mutationPaths: [],
+      allowRepositoryScopeForGreenNoChange: true,
+    })
+    assert.ok(receipt, 'nested Git projects can capture content-bound repository receipts')
+    writeFileSync(join(projectRoot, 'checked.txt'), 'dirty B\n')
+    assert.equal(refreshChatVerifierReceiptStalenessSync(projectRoot, receipt)?.stale, true,
+      'currency refresh detects byte changes when a tracked file stays dirty')
+
+    const freshReceipt = await captureChatVerifierReceipt({
+      projectRoot,
+      command: 'npm test',
+      exitCode: 0,
+      summary: 'ok',
+      mutationPaths: [],
+      allowRepositoryScopeForGreenNoChange: true,
+    })
+    assert.ok(freshReceipt)
+    writeFileSync(join(repositoryRoot, 'outside.txt'), 'outside changed\n')
+    assert.equal(refreshChatVerifierReceiptStalenessSync(projectRoot, freshReceipt)?.stale, false,
+      'nested repository receipt currency excludes bytes outside the project root')
   })
 
   test('valid non-Git file-scoped verifier receipts remain adaptable', async () => {
