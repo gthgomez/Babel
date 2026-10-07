@@ -18,6 +18,8 @@ import {
 } from './completionEvidence.js';
 import { EvidenceGraph } from './evidenceGraph.js';
 import { independentVerifierProofErrors } from './independentVerifier.js';
+import { discoverVerifierInputClosure } from './revisionBoundReceipt.js';
+import { analyzeVerifierIdentity } from '../services/verifierIdentity.js';
 import {
   compareRevisions,
   RevisionManager,
@@ -55,6 +57,8 @@ export type BoundChatVerifierReceipt = {
   tests_passed?: number;
   tests_failed?: number;
   tests_skipped?: number;
+  /** Present only when capture established a relevant-input closure. */
+  inputClosure?: { mode: "bound"; paths: string[] } | { mode: "unsupported"; reason: string };
 };
 
 /** Collect unique mutation paths from SessionEventV1 mutation_batch events. */
@@ -96,6 +100,12 @@ export async function bindChatVerifierReceipt(input: {
     },
   );
   const now = Date.now();
+  const identity = analyzeVerifierIdentity(input.command);
+  const executionScope = identity?.scope === 'full'
+    ? 'full_suite' as const
+    : identity?.scope === 'targeted'
+      ? 'targeted' as const
+      : undefined;
   return {
     command: input.command,
     exit_code: input.exit_code,
@@ -104,6 +114,7 @@ export async function bindChatVerifierReceipt(input: {
     stale: false,
     receiptId: `receipt-${now}`,
     capturedAt: now,
+    ...(executionScope ? { scope: executionScope } : {}),
     authority: input.structured !== undefined && input.structured !== null,
     boundRevision,
     ...(input.structured
@@ -158,6 +169,18 @@ export function evaluateChatVerifierReceiptCurrencySync(
   receipt: BoundChatVerifierReceipt | null | undefined,
 ): { stale: boolean; reason?: string } | null {
   if (!receipt) return null;
+  if (receipt.inputClosure?.mode === 'unsupported') {
+    return { stale: true, reason: receipt.inputClosure.reason || 'Verifier input closure is unsupported' };
+  }
+  if (receipt.inputClosure?.mode === 'bound') {
+    const freshClosure = discoverVerifierInputClosure(projectRoot);
+    if (freshClosure.mode !== 'bound') {
+      return { stale: true, reason: freshClosure.reason };
+    }
+    if (freshClosure.paths.join('\n') !== receipt.inputClosure.paths.join('\n')) {
+      return { stale: true, reason: 'Verifier input closure changed' };
+    }
+  }
   const bound = toRevisionBoundReceipt(receipt);
   const revision = receipt.boundRevision;
   if (!bound || !revision || !revision.scope || !revision.gitBinding) return null;

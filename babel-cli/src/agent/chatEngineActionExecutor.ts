@@ -86,6 +86,7 @@ import {
   shouldReuseCachedVerifierReceipt,
 } from "./chatEngineVerifierAdapter.js";
 import {
+  admitProjectContentRead,
   deniesReadOnlyChatAction,
   deniesReadOnlyTaskAction,
   isReadOnlyChat,
@@ -654,7 +655,32 @@ export class ChatEngineActionExecutor {
 
       // ── B2: Read dedupe cache — skip read_file if file unchanged ─────
       // Path-normalized keys so absolute/relative variants share one slot.
+      // Admission runs before the cache hash so a denied path is never opened.
       let fileReadCacheHash: string | undefined;
+      if (action.type === "read_file" || action.type === "read_range") {
+        const requestedPath =
+          action.type === "read_file" ? action.path : action.file_path;
+        const admitted = admitProjectContentRead(
+          this.host.options.projectRoot,
+          requestedPath,
+        );
+        if (!admitted.ok) {
+          const detail = `${admitted.code}: ${admitted.message}`;
+          this.host.toolCallLog.push({
+            tool,
+            target,
+            detail: "denied",
+            error: admitted.code,
+            index: meta.index,
+            exit_code: 1,
+          });
+          callbacks?.onToolComplete?.(toolId, "denied", admitted.code, 1);
+          return {
+            index: meta.index,
+            observation: `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n${detail}\n\`\`\``,
+          };
+        }
+      }
       if (action.type === "read_file") {
         if (isReadOnlyChat())
           resolveChatRangePath(this.host.options.projectRoot, action.path);

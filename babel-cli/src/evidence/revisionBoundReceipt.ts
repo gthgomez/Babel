@@ -267,6 +267,72 @@ function readGitTree(projectRoot: string): string | null {
   }
 }
 
+const INPUT_CLOSURE_SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", "coverage", ".next", "out",
+]);
+const INPUT_CLOSURE_MAX_FILES = 40;
+const INPUT_CLOSURE_MAX_BYTES = 1_000_000;
+
+function closurePathIsCredential(relativePath: string): boolean {
+  const norm = relativePath.replace(/\\/g, "/").toLowerCase();
+  const base = norm.split("/").pop() ?? "";
+  if (/^\.env(?:\.[a-z0-9_-]+)?$/.test(base) && !base.startsWith(".env.example")) return true;
+  if (base === "credentials.json" || base === ".git-credentials" || base === ".npmrc") return true;
+  if (/\.(pem|p12|pfx|key)$/.test(base)) return true;
+  if (norm.split("/").includes("secrets") || norm.split("/").includes(".ssh")) return true;
+  if (norm.endsWith(".aws/credentials")) return true;
+  return false;
+}
+
+/**
+ * Bounded relevant-input closure for verifier reuse. Credential paths are
+ * skipped without a content read. Oversized or too-wide trees are unsupported,
+ * which forbids reuse rather than pretending the tree was bound.
+ */
+export function discoverVerifierInputClosure(projectRoot: string):
+  | { mode: "bound"; paths: string[] }
+  | { mode: "unsupported"; reason: string } {
+  const root = path.resolve(projectRoot);
+  const paths: string[] = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return { mode: "unsupported", reason: "Input directory is not listable" };
+    }
+    for (const entry of entries) {
+      if (INPUT_CLOSURE_SKIP_DIRS.has(entry.name)) continue;
+      const absolute = path.join(dir, entry.name);
+      const relativePath = path.relative(root, absolute).split(path.sep).join("/");
+      if (closurePathIsCredential(relativePath)) continue;
+      let stats: fs.Stats;
+      try {
+        stats = fs.lstatSync(absolute);
+      } catch {
+        return { mode: "unsupported", reason: "Input path is not stat-able" };
+      }
+      if (stats.isSymbolicLink()) continue;
+      if (stats.isDirectory()) {
+        stack.push(absolute);
+        continue;
+      }
+      if (!stats.isFile()) continue;
+      if (stats.size > INPUT_CLOSURE_MAX_BYTES) {
+        return { mode: "unsupported", reason: "Input file exceeds the closure size cap" };
+      }
+      paths.push(relativePath);
+      if (paths.length > INPUT_CLOSURE_MAX_FILES) {
+        return { mode: "unsupported", reason: "Input closure exceeds the file cap" };
+      }
+    }
+  }
+  paths.sort();
+  return { mode: "bound", paths };
+}
+
 export function compareRevisions(
   bound: WorkspaceRevision,
   current: WorkspaceRevision,

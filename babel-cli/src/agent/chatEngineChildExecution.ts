@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { compileChatStack } from "./chatStackCompile.js";
 import { globalCostTracker } from "../services/costTracker.js";
 import { applyWorkingStateEvent } from "./codingLoop/index.js";
 import {
@@ -183,8 +184,30 @@ export async function executeSubAgentAction(
     maxRounds: (action as { max_rounds?: number }).max_rounds ?? null,
     parentModel: host.modelPolicy?.providerModelId ?? null,
   });
-  const mutationEnabled = spec.mutation;
-  const writeScope = spec.writeScope;
+  const parentReadOnly =
+    (host as { lastTurnRuntime?: { effectiveOperation?: string } }).lastTurnRuntime
+      ?.effectiveOperation === "READ_ONLY";
+  const mutationEnabled = parentReadOnly ? false : spec.mutation;
+  const writeScope = parentReadOnly ? [] : spec.writeScope;
+  let repositoryRules = "";
+  try {
+    repositoryRules = compileChatStack({
+      projectRoot: host.options.projectRoot,
+      task: host.options.task,
+      includeDomainSkill: false,
+    }).system_context.slice(0, 4000);
+  } catch {
+    repositoryRules = "";
+  }
+  const childEnvelope = [
+    "MANDATORY DELEGATION ENVELOPE",
+    `Objective: ${host.options.task}`,
+    `Capability: ${mutationEnabled ? "mutating" : "read-only"}`,
+    `Write scope: ${writeScope.join(", ") || "(none)"}`,
+    spec.instructions ? `Caller instructions: ${spec.instructions}` : "",
+    repositoryRules ? `Repository rules:\n${repositoryRules}` : "",
+    "The child cannot exceed this capability or the accepted objective.",
+  ].filter(Boolean).join("\n");
   const specReceipt = formatChildSpecReceipt(spec);
   // Test-only deterministic lane overrides (never set in production).
   const childLane = host.options.testChildLaneOverrides;
@@ -449,6 +472,7 @@ export async function executeSubAgentAction(
             task: action.task,
             projectRoot: host.options.projectRoot,
             writeScope,
+            additionalInstructions: childEnvelope,
             ...(host.options.workspaceRoot
               ? { workspaceRoot: host.options.workspaceRoot }
               : {}),
@@ -700,6 +724,7 @@ export async function executeSubAgentAction(
           verb: "ask",
           task: action.task,
           projectRoot: host.options.projectRoot,
+          additionalInstructions: childEnvelope,
           seedPaths: [],
           toolContext: {
             agentId: subId,

@@ -40,6 +40,7 @@ import {
   handleMcpResourceList,
   handleMcpResourceRead,
   handleMcpToolSearch,
+  mcpAutoDispatchDenied,
 } from './tools/mcpTransport.js';
 import { handleWebFetch, handleWebSearch } from './tools/webContext.js';
 import { handlePluginTool } from './services/plugins.js';
@@ -1569,7 +1570,10 @@ export function shouldJitApprove(req: ToolCallRequest): boolean {
   let needsApproval = false;
   if (process.env['BABEL_ASK'] === 'true') {
     const snap = EXECUTOR_TOOL_REGISTRY.getSnapshot(req.tool);
-    needsApproval =
+    if (req.tool === 'mcp_request' && mcpAutoDispatchDenied() !== null) {
+      needsApproval = true;
+    }
+    needsApproval = needsApproval ||
       req.tool === 'file_write' ||
       req.tool === 'shell_exec' ||
       req.tool === 'test_run' ||

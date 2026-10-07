@@ -122,7 +122,8 @@ export interface ToolResultFailure {
     | 'mcp_tool_error'
     | 'mcp_rpc_error'
     | 'mcp_protocol_error'
-    | 'no_compatible_mcp_tool';
+    | 'no_compatible_mcp_tool'
+    | 'mcp_approval_required';
   category: 'output_contract' | 'tool_execution' | 'transport' | 'input_contract';
   tool: string;
 }

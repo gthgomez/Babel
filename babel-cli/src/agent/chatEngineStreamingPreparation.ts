@@ -168,6 +168,17 @@ export async function prepareStreamingSubmission(
       useNativeInit ? "native" : useTextInit ? "text" : "legacy",
     );
     host.conversation.unshift({ role: "system", content: systemContent });
+  } else if (
+    host.conversation[0]?.role === "system" &&
+    host.conversation[0].name !== "compaction_capsule"
+  ) {
+    const useNativeInit = host.shouldUseNativeTools(
+      host.resolveDeliberationRunner(),
+    );
+    const useTextInit = !useNativeInit && host.shouldUseTextTools();
+    host.conversation[0].content = host.getOrBuildSystemPrompt(
+      useNativeInit ? "native" : useTextInit ? "text" : "legacy",
+    );
   }
 
   const maxTurns = Math.max(

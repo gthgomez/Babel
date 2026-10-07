@@ -261,6 +261,13 @@ export class ChatEngineStreamingLoop {
       const runner = this.host.resolveRoutedRunner();
       const useNativeTools = this.host.shouldUseNativeTools(runner);
       const useTextTools = !useNativeTools && this.host.shouldUseTextTools();
+      const activeSystemPrompt = this.host.getOrBuildSystemPrompt(
+        useNativeTools ? "native" : useTextTools ? "text" : "legacy",
+      );
+      const installed = this.host.conversation[0];
+      if (installed?.role === "system" && installed.name !== "compaction_capsule") {
+        installed.content = activeSystemPrompt;
+      }
       const prompt = this.host.services.conversation.buildTurnPrompt({
         conversation: this.host.conversation,
         task: this.host.options.task,
@@ -282,9 +289,6 @@ export class ChatEngineStreamingLoop {
           },
         );
       }
-      const activeSystemPrompt = this.host.getOrBuildSystemPrompt(
-        useNativeTools ? "native" : useTextTools ? "text" : "legacy",
-      );
       const hadInstalledP11Context =
         this.host.parity.contextCheckpoint !== undefined;
       const usageScope = {
@@ -868,7 +872,7 @@ export class ChatEngineStreamingLoop {
         try {
           for await (const chunk of runner.executeRawStream(
             prompt,
-            undefined,
+            activeSystemPrompt,
             this.host.abortController.signal,
             this.host.providerRetryCallbacks({
               deliveryMode: "text",

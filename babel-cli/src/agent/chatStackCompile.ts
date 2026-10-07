@@ -7,8 +7,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { resolveRuntimeUserStateRoot } from '../config/runtimePaths.js';
 
 export interface ChatStackEntry {
@@ -106,7 +106,72 @@ interface ReadContent {
   source_truncated: boolean;
 }
 
-function tryRead(path: string, required: boolean): ReadContent | null {
+function pathEscapesRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === '..' || isAbsolute(rel) || rel.startsWith('../') || rel.startsWith('..\\');
+}
+
+/** Roots that may supply automatic instruction files. Stops at the git root. */
+export function instructionIntakeRoots(projectRoot: string, babelRoot: string): string[] {
+  const project = resolve(projectRoot);
+  const babel = resolve(babelRoot);
+  const walked: string[] = [];
+  let dir = project;
+  let sawGit = false;
+  for (let i = 0; i < 8; i++) {
+    if (!walked.includes(dir)) walked.push(dir);
+    if (existsSync(join(dir, '.git'))) {
+      sawGit = true;
+      break;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (!sawGit) {
+    const parent = dirname(project);
+    const legacy = [project];
+    if (babel !== project) legacy.push(babel);
+    if (parent !== project && !legacy.includes(parent)) legacy.push(parent);
+    return legacy;
+  }
+  if (!walked.includes(babel)) walked.push(babel);
+  return walked;
+}
+
+/**
+ * Automatic instruction files must stay inside the approved intake roots.
+ * A symlink whose real path leaves those roots is refused before content I/O.
+ * Deliberately selected user context does not use this gate.
+ */
+function admitAutomaticInstruction(path: string, roots: readonly string[]): boolean {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT';
+  }
+  if (!stat.isSymbolicLink()) return true;
+  let realTarget: string;
+  let realRoots: string[];
+  try {
+    realTarget = realpathSync(path);
+    realRoots = roots.map((root) => {
+      try {
+        return realpathSync(root);
+      } catch {
+        return resolve(root);
+      }
+    });
+  } catch {
+    return false;
+  }
+  return realRoots.some((root) => !pathEscapesRoot(root, realTarget));
+}
+
+function tryRead(path: string, required: boolean, intakeRoots?: readonly string[]): ReadContent | null {
+  if (intakeRoots && !admitAutomaticInstruction(path, intakeRoots)) return null;
   let raw: string;
   try {
     raw = readFileSync(path, 'utf-8');
@@ -125,19 +190,25 @@ function tryRead(path: string, required: boolean): ReadContent | null {
   };
 }
 
-function firstExisting(root: string, names: string[], required: boolean): ReadContent | null {
+function firstExisting(
+  root: string,
+  names: string[],
+  required: boolean,
+  intakeRoots: readonly string[],
+): ReadContent | null {
   for (const name of names) {
     const p = resolve(root, name);
-    const content = tryRead(p, required);
+    const content = tryRead(p, required, intakeRoots);
     if (content) return content;
   }
   return null;
 }
 
 /**
- * Project instruction file. Look at the project, then the explicit babel root,
- * then the parent directory (so babel-cli sees the repo AGENTS.md). Do not
- * scan sibling repositories.
+ * Project instruction file. Walk from the project up to the git root so a
+ * nested package still sees repository AGENTS.md. Do not scan above that root
+ * or sibling repositories. When there is no git root, keep the historical
+ * project / babel-root / one-parent set.
  */
 function readInstructionFile(
   projectRoot: string,
@@ -145,14 +216,9 @@ function readInstructionFile(
   names: readonly string[],
   required = false,
 ): ReadContent | null {
-  const roots = [projectRoot];
-  if (resolve(babelRoot) !== resolve(projectRoot)) roots.push(babelRoot);
-  const parent = dirname(resolve(projectRoot));
-  if (parent !== resolve(projectRoot) && !roots.some((root) => resolve(root) === parent)) {
-    roots.push(parent);
-  }
+  const roots = instructionIntakeRoots(projectRoot, babelRoot);
   for (const root of roots) {
-    const found = firstExisting(root, [...names], required);
+    const found = firstExisting(root, [...names], required, roots);
     if (found) return found;
   }
   return null;

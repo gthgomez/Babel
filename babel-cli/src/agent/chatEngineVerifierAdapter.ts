@@ -18,6 +18,7 @@ import {
   recordVerifierAttempt,
   type SessionEventLog,
 } from './sessionEvents.js';
+import { discoverVerifierInputClosure } from '../evidence/revisionBoundReceipt.js';
 import {
   analyzeVerifierIdentity,
   verifierExecutionFingerprint,
@@ -59,18 +60,22 @@ export async function captureChatVerifierReceipt(input: {
   // of throwing and corrupting the loop.
   const mutationPaths = toRepositoryRelativePaths(input.projectRoot, input.mutationPaths);
   if (mutationPaths === null) return null;
+  const inputClosure = discoverVerifierInputClosure(input.projectRoot);
+  const boundMutationPaths = inputClosure.mode === 'bound'
+    ? [...new Set([...mutationPaths, ...inputClosure.paths])].sort()
+    : mutationPaths;
   const repositoryScopedRed = input.allowRepositoryScopeForRedRecovery === true &&
     input.exitCode !== 0 && mutationPaths.length === 0;
   const repositoryScopedGreenNoChange = input.allowRepositoryScopeForGreenNoChange === true &&
     input.exitCode === 0 && mutationPaths.length === 0;
   const repositoryScoped = repositoryScopedRed || repositoryScopedGreenNoChange;
   try {
-    return await bindChatVerifierReceipt({
+    const receipt = await bindChatVerifierReceipt({
       projectRoot: input.projectRoot,
       command: input.command,
       exit_code: input.exitCode,
       summary: input.summary,
-      mutationPaths,
+      mutationPaths: repositoryScoped ? mutationPaths : boundMutationPaths,
       ...(repositoryScoped ? {
         scopeKind: 'repository' as const,
         gitBinding: 'required' as const,
@@ -82,6 +87,8 @@ export async function captureChatVerifierReceipt(input: {
         args: parsed.args,
       },
     });
+    receipt.inputClosure = inputClosure;
+    return receipt;
   } catch (error) {
     if (repositoryScoped) return null;
     throw error;

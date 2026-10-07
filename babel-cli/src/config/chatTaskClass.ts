@@ -394,10 +394,16 @@ function stripInformationalFrames(text: string): string {
 // classification never depends on the caller rephrasing an ordinary edit
 // request. A keyword still grants nothing by itself — execution authority
 // remains with the policy/lease gates.
-const CHANGE_NOUN_GUARD =
-  '(?<!\\b(?:this|that|the|these|those|a|an|any|your|my|our|their|its|said|such|same|net)\\s)change';
+// Determiner-preceded nouns ("this patch", "the fix", "that update") are topics.
+// Ordinary edit verbs that are not in the historical list (optimize, bump,
+// convert, migrate) are still mutation intent. A keyword grants nothing by
+// itself — execution authority remains with the policy/lease gates.
+const NOUN_GUARD_PREFIX =
+  '(?<!\\b(?:this|that|the|these|those|a|an|any|your|my|our|their|its|said|such|same|net)\\s)';
+const GUARDED_MUTATION_VERBS =
+  `${NOUN_GUARD_PREFIX}(?:change|patch|fix|update|repair|optimize|bump|convert|migrate)`;
 const MUTATION_VERB_SOURCE =
-  `fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename|${CHANGE_NOUN_GUARD}`;
+  `implement|create|write|refactor|apply|modify|edit|add|replace|rename|${GUARDED_MUTATION_VERBS}`;
 const DESTRUCTIVE_VERB_SOURCE = 'delete|remove|rm|drop|erase|unlink';
 const READ_ONLY_VERB_SOURCE = `(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|change|touch|alter|clean)`;
 const READ_ONLY_VERB_GERUND_SOURCE =
@@ -409,6 +415,15 @@ const COORD_SEPARATOR = '\\s*(?:,?\\s*(?:or|nor|and)|,|/)\\s*';
 const READ_ONLY_VERB_LIST = `${READ_ONLY_VERB_SOURCE}(?:${COORD_SEPARATOR}${READ_ONLY_VERB_SOURCE})*`;
 const READ_ONLY_GERUND_LIST = `${READ_ONLY_VERB_GERUND_SOURCE}(?:${COORD_SEPARATOR}${READ_ONLY_VERB_GERUND_SOURCE})*`;
 const READ_ONLY_DIRECTIVE_SOURCE = `\\b(without (any )?${READ_ONLY_GERUND_LIST}|read-?only|(?:do\\s*not|don't|never)\\s+${READ_ONLY_VERB_LIST}|dry-?run)\\b`;
+const SEQUENCED_MUTATION_SOURCE =
+  '\\b(?:then|afterwards|and\\s+then)\\s+(?:fix|implement|repair|modify|update|apply|patch|change|edit|optimize|bump|convert|migrate)\\b';
+
+/** Explicit no-edit language, independent of topic nouns such as "patch" or "fix". */
+export function hasExplicitEditDenial(taskText: string): boolean {
+  const evidence = stripFencedCodeBodies(taskText);
+  if (!new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'i').test(evidence)) return false;
+  return !new RegExp(SEQUENCED_MUTATION_SOURCE, 'i').test(evidence);
+}
 
 /**
  * Lightweight multi-dimensional task-shape analysis.
@@ -449,10 +464,7 @@ export function analyzeTaskShape(taskText: string): TaskShape {
     /\b(find|search|list|check|inspect|investigate|research|discover|locate|scan|show|inventory|explain|analyze|review|compare|diagnose)\b/i.test(t);
 
   // 4. Sequenced mutation override (e.g. "review without changing anything, then fix the issue")
-  const hasSequencedMutationOverride =
-    /\b(?:then|afterwards|and\s+then)\s+(?:fix|implement|repair|modify|update|apply|patch|change|edit)\b/i.test(
-      t,
-    );
+  const hasSequencedMutationOverride = new RegExp(SEQUENCED_MUTATION_SOURCE, 'i').test(t);
 
   let operation: TaskOperation;
   if (hasReadOnlyDirective && !hasSequencedMutationOverride && !hasMutation) {
@@ -509,10 +521,10 @@ export function resolveTaskShape(
   requested: RequestedTaskOperation = 'AUTO',
 ): TaskShape {
   const shape = analyzeTaskShape(taskText);
+  const denied = hasExplicitEditDenial(taskText);
+  if (denied) return { ...shape, operation: 'READ_ONLY' };
   if (requested === 'AUTO') return shape;
-  const denied = shape.operation === 'READ_ONLY'
-    && new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'i').test(stripFencedCodeBodies(taskText));
-  return { ...shape, operation: requested === 'READ_ONLY' || denied ? 'READ_ONLY' : 'MUTATING' };
+  return { ...shape, operation: requested === 'READ_ONLY' ? 'READ_ONLY' : 'MUTATING' };
 }
 
 /**

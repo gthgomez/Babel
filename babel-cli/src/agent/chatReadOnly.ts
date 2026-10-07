@@ -1,7 +1,9 @@
 import { classifyToolEffect } from '../executor/contracts.js';
-import { realpathSync } from 'node:fs';
-import { isAbsolute, relative } from 'node:path';
+import { lstatSync, realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { resolveProjectPath } from '../utils/projectPath.js';
+import { isCredentialTargetPath } from './autonomyEnforcement.js';
+import { isOfflineChatMode } from './chatModelPolicy.js';
 import type { ToolDefinition } from '../runners/base.js';
 import type { TaskOperation } from '../config/chatTaskClass.js';
 import type { ChatToolAction } from './chatToolDefinitions.js';
@@ -24,6 +26,10 @@ export function filterReadOnlyChatTools(tools: ToolDefinition[], env: NodeJS.Pro
 }
 
 function allowsReadOnlyTaskTool(tool: string, requiredVerifiers: readonly string[]): boolean {
+  // External reads are not repository writes. Offline mode and unknown MCP
+  // effects stay denied. A read-only child cannot widen this set.
+  if (tool === 'web_search' || tool === 'web_fetch') return !isOfflineChatMode();
+  if (tool === 'sub_agent') return true;
   return classifyToolEffect(tool) === 'read_only'
     || tool === 'finish' || tool === 'todo_write'
     || ((tool === 'run_command' || tool === 'test_run') && requiredVerifiers.length > 0);
@@ -63,10 +69,73 @@ export function filterReadOnlyTaskTools(
     ? tools.filter(tool => allowsReadOnlyTaskTool(tool.function.name, requiredVerifiers)) : tools;
 }
 
+export type ContentReadAdmission =
+  | { ok: true; target: string }
+  | { ok: false; code: 'AUTONOMY_DENIED:CLASS_D' | 'READ_OUTSIDE_PROJECT_DENIED'; message: string };
+
+function pathEscapesRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === '..' || isAbsolute(rel) || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || rel.startsWith('../') || rel.startsWith('..\\');
+}
+
+/**
+ * Admit a content read before any content I/O. Credential class and outside-root
+ * targets, including symlink escapes, are refused from the lexical path first.
+ * realpath is used only after the credential class check, and only to prove
+ * containment. It is not a content read.
+ */
+export function admitProjectContentRead(root: string, requestedPath: string): ContentReadAdmission {
+  if (isCredentialTargetPath(requestedPath)) {
+    return {
+      ok: false,
+      code: 'AUTONOMY_DENIED:CLASS_D',
+      message: `Target path "${requestedPath}" is a credential store.`,
+    };
+  }
+  const lexical = resolve(resolveProjectPath(root, requestedPath));
+  if (isCredentialTargetPath(lexical)) {
+    return {
+      ok: false,
+      code: 'AUTONOMY_DENIED:CLASS_D',
+      message: `Target path "${requestedPath}" is a credential store.`,
+    };
+  }
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    return { ok: false, code: 'READ_OUTSIDE_PROJECT_DENIED', message: 'Project root is not readable.' };
+  }
+  if (pathEscapesRoot(resolve(root), lexical)) {
+    return { ok: false, code: 'READ_OUTSIDE_PROJECT_DENIED', message: 'READ_OUTSIDE_PROJECT_DENIED' };
+  }
+  let target = lexical;
+  try {
+    const stat = lstatSync(lexical);
+    if (stat.isSymbolicLink() || stat.isFile() || stat.isDirectory()) {
+      target = realpathSync(lexical);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') {
+      return { ok: false, code: 'READ_OUTSIDE_PROJECT_DENIED', message: 'READ_OUTSIDE_PROJECT_DENIED' };
+    }
+  }
+  if (isCredentialTargetPath(target) || pathEscapesRoot(rootReal, target)) {
+    return {
+      ok: false,
+      code: isCredentialTargetPath(target) ? 'AUTONOMY_DENIED:CLASS_D' : 'READ_OUTSIDE_PROJECT_DENIED',
+      message: isCredentialTargetPath(target)
+        ? `Target path "${requestedPath}" is a credential store.`
+        : 'READ_OUTSIDE_PROJECT_DENIED',
+    };
+  }
+  return { ok: true, target };
+}
+
 /** Range reads bypass the ordinary executor, so enforce its root boundary here. */
 export function resolveChatRangePath(root: string, path: string): string {
-  const target = realpathSync(resolveProjectPath(root, path));
-  const rel = relative(realpathSync(root), target);
-  if (isAbsolute(rel) || rel === '..' || rel.startsWith('../') || rel.startsWith('..\\')) throw new Error('READ_OUTSIDE_PROJECT_DENIED');
-  return target;
+  const admitted = admitProjectContentRead(root, path);
+  if (!admitted.ok) throw new Error(admitted.code);
+  return admitted.target;
 }

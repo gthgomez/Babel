@@ -401,7 +401,7 @@ import {
   type TurnRuntimeSnapshot,
 } from "./turnRuntime.js";
 
-import { isReadOnlyChat } from "./chatReadOnly.js";
+import { admitProjectContentRead, isReadOnlyChat } from "./chatReadOnly.js";
 
 /**
  * Version label for the chat tool surface offered to admitted commands. Part
@@ -4377,9 +4377,10 @@ export class ChatEngine {
   }
 
   private async hashFilePath(filePath: string): Promise<string> {
+    const admitted = admitProjectContentRead(this.options.projectRoot, filePath);
+    if (!admitted.ok) return "";
     try {
-      const resolved = resolveProjectPath(this.options.projectRoot, filePath);
-      return this.hashContent(await readFile(resolved, "utf-8"));
+      return this.hashContent(await readFile(admitted.target, "utf-8"));
     } catch {
       return "";
     }

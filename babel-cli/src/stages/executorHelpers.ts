@@ -327,6 +327,9 @@ export function buildExecutorTask(
   const toolShapes = buildDynamicToolShapes(options.compactFileOnly ?? false);
 
   return [
+    'ACCEPTED USER REQUEST (authoritative; the plan is guidance and does not replace this request):',
+    rawTask,
+    '',
     'Execute the following approved SWE Plan.',
     'Respond with ONLY valid JSON wrapped in a `<|tool_start|>` and `<|tool_end|>` fence — no explanation, no prose outside the fence.',
     'Example:',
