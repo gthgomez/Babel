@@ -43,6 +43,8 @@ export async function captureChatVerifierReceipt(input: {
   command: string;
   exitCode: number;
   summary: string;
+  stdout?: string;
+  stderr?: string;
   mutationPaths: string[];
   /** Explicit red-only baseline route; cannot satisfy a green completion. */
   allowRepositoryScopeForRedRecovery?: boolean;
@@ -61,7 +63,7 @@ export async function captureChatVerifierReceipt(input: {
   const mutationPaths = toRepositoryRelativePaths(input.projectRoot, input.mutationPaths);
   if (mutationPaths === null) return null;
   const inputClosure = discoverVerifierInputClosure(input.projectRoot);
-  const boundMutationPaths = inputClosure.mode === 'bound'
+  const boundMutationPaths = inputClosure.mode === 'bound' && mutationPaths.length > 0
     ? [...new Set([...mutationPaths, ...inputClosure.paths])].sort()
     : mutationPaths;
   const repositoryScopedRed = input.allowRepositoryScopeForRedRecovery === true &&
@@ -88,6 +90,11 @@ export async function captureChatVerifierReceipt(input: {
       },
     });
     receipt.inputClosure = inputClosure;
+    const counts = parseExecutedTestCounts(`${input.stdout ?? ''}\n${input.stderr ?? ''}`);
+    if (counts) {
+      receipt.tests_total = counts.tests_total;
+      receipt.tests_skipped = counts.tests_skipped;
+    }
     return receipt;
   } catch (error) {
     if (repositoryScoped) return null;
@@ -185,6 +192,8 @@ export async function captureAndRecordVerifierReceipt(input: {
   command: string;
   exitCode: number;
   summary: string;
+  stdout?: string;
+  stderr?: string;
   mutationPaths: string[];
   allowRepositoryScopeForRedRecovery?: boolean;
   allowRepositoryScopeForGreenNoChange?: boolean;
@@ -208,6 +217,8 @@ export async function captureAndRecordVerifierReceipt(input: {
     command: input.command,
     exitCode: input.exitCode,
     summary: input.summary,
+    ...(input.stdout !== undefined ? { stdout: input.stdout } : {}),
+    ...(input.stderr !== undefined ? { stderr: input.stderr } : {}),
     mutationPaths: input.mutationPaths,
     ...(input.allowRepositoryScopeForRedRecovery !== undefined
       ? { allowRepositoryScopeForRedRecovery: input.allowRepositoryScopeForRedRecovery }
@@ -304,6 +315,19 @@ export function shouldReuseCachedVerifierReceipt(
 ): boolean {
   const currency = evaluateChatVerifierReceiptCurrencySync(projectRoot, receipt);
   return currency !== null && currency.stale === false;
+}
+
+/** Machine reporter lines only. A hand-written summary cannot mint a test count. */
+export function parseExecutedTestCounts(output: string): { tests_total: number; tests_skipped: number } | null {
+  const text = output.replace(/\r/g, '');
+  const totals = [...text.matchAll(/^(?:ℹ|#)\s+tests\s+(\d+)\s*$/gm)];
+  const lastTotal = totals.at(-1)?.[1];
+  if (lastTotal === undefined) return null;
+  const testsTotal = Number(lastTotal);
+  const skipped = [...text.matchAll(/^(?:ℹ|#)\s+skipped\s+(\d+)\s*$/gm)].at(-1)?.[1];
+  const testsSkipped = skipped === undefined ? 0 : Number(skipped);
+  if (!Number.isInteger(testsTotal) || !Number.isInteger(testsSkipped)) return null;
+  return { tests_total: testsTotal, tests_skipped: testsSkipped };
 }
 
 function verifierReceiptIdentityKey(command: string): string {

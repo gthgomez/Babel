@@ -108,7 +108,7 @@ describe('completionGatePolicy', () => {
     const r = evaluateExecuteCompletionHonesty({
       hasWrite: true,
       policy: 'strict',
-      lastVerifierReceipt: { command: 'pytest', exit_code: 0, summary: '15 passed', authority: true },
+      lastVerifierReceipt: { command: 'pytest', exit_code: 0, summary: '15 passed', authority: true, tests_total: 15, tests_skipped: 0 },
       toolCallLog: [],
     });
     assert.equal(r.allow, true);
@@ -366,7 +366,7 @@ describe('gate command validation in evaluateExecuteCompletionHonesty', () => {
     const r = evaluateExecuteCompletionHonesty({
       hasWrite: true,
       policy: 'strict',
-      lastVerifierReceipt: { command: 'pytest tests/', exit_code: 0, summary: '15 passed', authority: true },
+      lastVerifierReceipt: { command: 'pytest tests/', exit_code: 0, summary: '15 passed', authority: true, tests_total: 15, tests_skipped: 0 },
       toolCallLog: [
         { tool: 'test_run', target: 'npm test', detail: 'all pass', exit_code: 0 },
       ],
@@ -586,6 +586,8 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
         exit_code: 0,
         summary: 'all pass',
         authority: true,
+        tests_total: 4,
+        tests_skipped: 0,
       },
       toolCallLog: [],
       requiredVerifierCommands: ['npm test'],
@@ -603,6 +605,8 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
         exit_code: 0,
         summary: 'all pass',
         authority: true,
+        tests_total: 4,
+        tests_skipped: 0,
       },
       toolCallLog: [],
       requiredVerifierCommands: ['npm test -- src/add.test.ts'],
@@ -943,8 +947,8 @@ describe('planCompletionGateReject', () => {
     const complete = evaluateExecuteCompletionHonesty({
       ...base,
       executedVerifierLedger: [
-        { command: 'npm test', exit_code: 0, authority: true, stale: false } as any,
-        { command: 'pytest', exit_code: 0, authority: true, stale: false } as any,
+        { command: 'npm test', exit_code: 0, authority: true, stale: false, tests_total: 3, tests_skipped: 0 } as any,
+        { command: 'pytest', exit_code: 0, authority: true, stale: false, tests_total: 2, tests_skipped: 0 } as any,
       ],
     });
     assert.equal(complete.allow, true);

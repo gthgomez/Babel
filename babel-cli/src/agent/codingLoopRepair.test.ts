@@ -33,6 +33,10 @@ import {
 } from '../services/verifierIdentity.js';
 import { buildExecutorTask } from '../stages/executorHelpers.js';
 import { buildSweTask } from '../pipeline/sweTask.js';
+import { ChatEngine } from './chatEngine.js';
+import { buildChatTurnPrompt } from './chatToolDefinitions.js';
+import { mapProviderMessagesToWire } from '../runners/providerMessages.js';
+import { buildDelegatedChildEnvelope } from './chatEngineChildExecution.js';
 
 const readOnly = { readOnlyHint: true, destructiveHint: false };
 
@@ -188,10 +192,15 @@ test('a real node test reaches strict completion and help does not', async () =>
       command: passCommand,
       exitCode: pass.status ?? 1,
       summary: 'pass',
+      stdout: pass.stdout,
+      stderr: pass.stderr,
       mutationPaths: ['pass.test.mjs'],
     });
     assert.ok(receipt);
     assert.equal(receipt?.scope, 'targeted');
+    assert.equal(typeof receipt?.tests_total, 'number');
+    assert.ok((receipt?.tests_total ?? 0) > 0);
+    assert.ok((receipt?.tests_skipped ?? 0) < (receipt?.tests_total ?? 0));
     const helpReceipt = await captureChatVerifierReceipt({
       projectRoot: root,
       command: 'node --help',
@@ -221,6 +230,125 @@ test('a real node test reaches strict completion and help does not', async () =>
       },
     });
     assert.equal(helpDecision.allow, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('generated and gitignored inputs invalidate verifier reuse', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-closure-'));
+  try {
+    mkdirSync(join(root, 'dist'));
+    writeFileSync(join(root, 'dist', 'gen.js'), 'export const generated = 1;\n');
+    writeFileSync(join(root, 'a.txt'), 'bound');
+    const generated = await captureChatVerifierReceipt({
+      projectRoot: root,
+      command: 'npm test',
+      exitCode: 0,
+      summary: 'ok',
+      mutationPaths: ['a.txt'],
+    });
+    assert.ok(generated);
+    assert.equal(generated?.inputClosure?.mode, 'bound');
+    assert.equal(shouldReuseCachedVerifierReceipt(root, generated!), true);
+    writeFileSync(join(root, 'dist', 'gen.js'), 'export const generated = 2;\n');
+    assert.equal(shouldReuseCachedVerifierReceipt(root, generated!), false);
+
+    const ignoredRoot = mkdtempSync(join(tmpdir(), 'babel-ignored-'));
+    try {
+      writeFileSync(join(ignoredRoot, '.gitignore'), 'ignored.txt\n');
+      writeFileSync(join(ignoredRoot, 'ignored.txt'), 'before\n');
+      writeFileSync(join(ignoredRoot, 'keep.txt'), 'keep\n');
+      const git = (args: string[]) => spawnSync('git', args, { cwd: ignoredRoot, encoding: 'utf8' });
+      for (const args of [
+        ['init', '--quiet'],
+        ['config', 'user.email', 'fixture@example.test'],
+        ['config', 'user.name', 'fixture'],
+        ['add', '-A'],
+        ['commit', '--quiet', '-m', 'baseline'],
+      ]) {
+        const result = git(args);
+        assert.equal(result.status, 0, result.stderr);
+      }
+      const ignored = await captureChatVerifierReceipt({
+        projectRoot: ignoredRoot,
+        command: 'npm test',
+        exitCode: 0,
+        summary: 'ok',
+        mutationPaths: [],
+        allowRepositoryScopeForGreenNoChange: true,
+      });
+      assert.ok(ignored);
+      assert.equal(ignored?.inputClosure?.mode, 'bound');
+      if (ignored?.inputClosure?.mode === 'bound') {
+        assert.equal(ignored.inputClosure.paths.includes('ignored.txt'), true);
+      }
+      assert.equal(shouldReuseCachedVerifierReceipt(ignoredRoot, ignored!), true);
+      writeFileSync(join(ignoredRoot, 'ignored.txt'), 'after\n');
+      assert.equal(shouldReuseCachedVerifierReceipt(ignoredRoot, ignored!), false);
+    } finally {
+      rmSync(ignoredRoot, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('strict completion rejects a missing, zero, or fully skipped test count', async () => {
+  const absent = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: 'strict',
+    toolCallLog: [],
+    lastVerifierReceipt: { command: 'npm test', exit_code: 0, summary: 'ok', authority: true },
+  });
+  assert.equal(absent.allow, false);
+  const zero = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: 'strict',
+    toolCallLog: [],
+    requiredVerifierCommands: ['npm test'],
+    lastVerifierReceipt: { command: 'npm test', exit_code: 0, summary: 'ok', authority: true, tests_total: 0, tests_skipped: 0 },
+  });
+  assert.equal(zero.allow, false);
+  const skipped = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: 'strict',
+    toolCallLog: [],
+    requiredVerifierCommands: ['npm test'],
+    lastVerifierReceipt: { command: 'npm test', exit_code: 0, summary: 'ok', authority: true, tests_total: 2, tests_skipped: 2 },
+  });
+  assert.equal(skipped.allow, false);
+
+  const root = mkdtempSync(join(tmpdir(), 'babel-zero-tests-'));
+  try {
+    const skip = join(root, 'skip.test.mjs');
+    writeFileSync(skip, "import test from 'node:test'; test.skip('later', () => {});\n");
+    const childEnv = { ...process.env };
+    for (const key of Object.keys(childEnv)) {
+      if (key.startsWith('NODE_TEST') || key === 'NODE_CHANNEL_FD') delete childEnv[key];
+    }
+    const skipRun = spawnSync(process.execPath, ['--test', skip], { cwd: root, encoding: 'utf8', env: childEnv });
+    assert.equal(skipRun.status, 0);
+    const skipReceipt = await captureChatVerifierReceipt({
+      projectRoot: root,
+      command: `node --test ${skip}`,
+      exitCode: 0,
+      summary: 'skipped',
+      stdout: skipRun.stdout,
+      stderr: skipRun.stderr,
+      mutationPaths: ['skip.test.mjs'],
+    });
+    assert.ok(skipReceipt);
+    assert.equal(skipReceipt?.tests_skipped, skipReceipt?.tests_total);
+    assert.ok((skipReceipt?.tests_total ?? 0) > 0);
+    const decision = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      toolCallLog: [],
+      requiredVerifierCommands: [skipReceipt!.command],
+      executedVerifierLedger: [skipReceipt!],
+    });
+    assert.equal(decision.allow, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -320,5 +448,90 @@ test('python fixture does not activate gradle bootstrap', () => {
     assert.doesNotMatch(prompt, /Deterministic Gradle bootstrap lane is ACTIVE/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('serialized native, text, and legacy requests replace policy A with policy B', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'babel-policy-'));
+  const prev = process.env['BABEL_USER_CONTEXT'];
+  try {
+    mkdirSync(join(repo, '.git'));
+    process.env['BABEL_USER_CONTEXT'] = join(repo, 'missing-user-context.md');
+    writeFileSync(join(repo, 'AGENTS.md'), 'POLICY_A_OBSOLETE\n');
+    const task = 'Explain the fix without changing files';
+    const engine = new ChatEngine({ task, projectRoot: repo });
+    const serialized = (mode: 'native' | 'text' | 'legacy'): string => {
+      const host = engine as unknown as {
+        getOrBuildSystemPrompt: (kind: 'native' | 'text' | 'legacy') => string;
+        conversation: Array<{ role: string; name?: string; content: string }>;
+        options: { task: string };
+      };
+      const system = host.getOrBuildSystemPrompt(mode);
+      const conversation = host.conversation.map((message) => ({ ...message }));
+      const installed = conversation[0];
+      if (installed?.role === 'system' && installed.name !== 'compaction_capsule') {
+        installed.content = system;
+      }
+      const prompt = buildChatTurnPrompt({
+        conversation: conversation as never,
+        task: host.options.task,
+        nativeTools: mode === 'native',
+        textTools: mode === 'text',
+      });
+      const wire = mapProviderMessagesToWire(
+        [
+          { role: 'system', content: system },
+          { role: 'user', content: host.options.task },
+        ],
+        system,
+      );
+      return JSON.stringify({ system, prompt, wire });
+    };
+    for (const mode of ['native', 'text', 'legacy'] as const) {
+      const first = serialized(mode);
+      assert.equal(first.includes('POLICY_A_OBSOLETE'), true, mode);
+    }
+    writeFileSync(join(repo, 'AGENTS.md'), 'POLICY_B_CURRENT\n');
+    engine.applyTurnPreparation({ task });
+    for (const mode of ['native', 'text', 'legacy'] as const) {
+      const next = serialized(mode);
+      assert.equal(next.includes('POLICY_B_CURRENT'), true, mode);
+      assert.equal(next.includes('POLICY_A_OBSOLETE'), false, mode);
+    }
+
+    const pkg = join(repo, 'packages', 'frontend');
+    mkdirSync(pkg, { recursive: true });
+    const delegated = buildDelegatedChildEnvelope({
+      task,
+      projectRoot: pkg,
+      parentReadOnly: true,
+      requestedMutation: true,
+      requestedWriteScope: ['src/app.ts', '..', join(repo, 'outside.txt')],
+      instructions: 'keep the original no-edit constraint',
+      parentModel: null,
+    });
+    assert.match(delegated.envelope, /POLICY_B_CURRENT/);
+    assert.match(delegated.envelope, /Explain the fix without changing files/);
+    assert.match(delegated.envelope, /keep the original no-edit constraint/);
+    assert.equal(delegated.mutationEnabled, false);
+    assert.deepEqual(delegated.writeScope, []);
+    assert.match(delegated.envelope, /Write scope: \(none\)/);
+    assert.doesNotMatch(delegated.envelope, /outside\.txt/);
+    const mutating = buildDelegatedChildEnvelope({
+      task,
+      projectRoot: pkg,
+      parentReadOnly: false,
+      requestedMutation: true,
+      requestedWriteScope: ['src/app.ts', '..', join(repo, 'outside.txt')],
+      instructions: null,
+      parentModel: null,
+    });
+    assert.deepEqual(mutating.writeScope, ['src/app.ts']);
+    assert.match(mutating.envelope, /Write scope: src\/app.ts/);
+    assert.equal(mutating.envelope.includes('outside.txt'), false);
+  } finally {
+    if (prev === undefined) delete process.env['BABEL_USER_CONTEXT'];
+    else process.env['BABEL_USER_CONTEXT'] = prev;
+    rmSync(repo, { recursive: true, force: true });
   }
 });

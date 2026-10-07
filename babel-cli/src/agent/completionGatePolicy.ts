@@ -464,6 +464,8 @@ export type VerifierReceipt = {
   authoritySource?: VerifierAuthoritySource;
   capturedAt?: number;
   argv?: string[];
+  tests_total?: number;
+  tests_skipped?: number;
 };
 
 export type GateToolLogEntry = {
@@ -675,7 +677,10 @@ export function evaluateExecuteCompletionHonesty(opts: {
     if (opts.policy === 'strict' && activeAttempts.some((entry) => verifierExitCode(entry) !== 0)) {
       return { allow: false, reason: 'verifier_red' };
     }
-    if (!activeAttempts.some((entry) => receiptProvesExecutedTests(entry))) {
+    if (
+      opts.policy === 'strict' &&
+      !activeAttempts.some((entry) => verifierExitCode(entry) === 0 && receiptProvesExecutedTests(entry))
+    ) {
       return { allow: false, reason: 'verifier_missing' };
     }
     return { allow: true, reason: null };
@@ -707,7 +712,7 @@ export function evaluateExecuteCompletionHonesty(opts: {
       hasStaleRequirement = true;
       continue;
     }
-    if (verifierExitCode(latest) === 0 && !receiptProvesExecutedTests(latest)) {
+    if (opts.policy === 'strict' && verifierExitCode(latest) === 0 && !receiptProvesExecutedTests(latest)) {
       hasMissingRequirement = true;
       continue;
     }
@@ -752,11 +757,11 @@ function isAuthoritativeReceipt(entry: VerifierEvidence): boolean {
   return entry.authority === true && isAuthoritativeVerifierCommand(entry.command);
 }
 
-/** Present counts of zero or all-skipped are not proof. Absent counts are not treated as zero. */
+/** Exit 0 is proof only when the receipt records tests that actually ran. */
 function receiptProvesExecutedTests(entry: VerifierEvidence | GateToolLogEntry): boolean {
   const counted = entry as { tests_total?: unknown; tests_skipped?: unknown };
-  if (typeof counted.tests_total !== 'number') return true;
-  if (counted.tests_total === 0) return false;
+  if (typeof counted.tests_total !== 'number' || !Number.isFinite(counted.tests_total)) return false;
+  if (counted.tests_total <= 0) return false;
   if (typeof counted.tests_skipped === 'number' && counted.tests_skipped >= counted.tests_total) return false;
   return true;
 }

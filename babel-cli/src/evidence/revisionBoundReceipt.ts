@@ -268,7 +268,7 @@ function readGitTree(projectRoot: string): string | null {
 }
 
 const INPUT_CLOSURE_SKIP_DIRS = new Set([
-  "node_modules", ".git", "dist", "build", "coverage", ".next", "out",
+  "node_modules", ".git",
 ]);
 const INPUT_CLOSURE_MAX_FILES = 40;
 const INPUT_CLOSURE_MAX_BYTES = 1_000_000;
@@ -290,10 +290,11 @@ function closurePathIsCredential(relativePath: string): boolean {
  * which forbids reuse rather than pretending the tree was bound.
  */
 export function discoverVerifierInputClosure(projectRoot: string):
-  | { mode: "bound"; paths: string[] }
+  | { mode: "bound"; paths: string[]; digests: Record<string, string> }
   | { mode: "unsupported"; reason: string } {
   const root = path.resolve(projectRoot);
   const paths: string[] = [];
+  const digests: Record<string, string> = {};
   const stack = [root];
   while (stack.length > 0) {
     const dir = stack.pop()!;
@@ -314,7 +315,9 @@ export function discoverVerifierInputClosure(projectRoot: string):
       } catch {
         return { mode: "unsupported", reason: "Input path is not stat-able" };
       }
-      if (stats.isSymbolicLink()) continue;
+      if (stats.isSymbolicLink()) {
+        return { mode: "unsupported", reason: "Input closure cannot bind a symlink" };
+      }
       if (stats.isDirectory()) {
         stack.push(absolute);
         continue;
@@ -323,14 +326,21 @@ export function discoverVerifierInputClosure(projectRoot: string):
       if (stats.size > INPUT_CLOSURE_MAX_BYTES) {
         return { mode: "unsupported", reason: "Input file exceeds the closure size cap" };
       }
+      let content: Buffer;
+      try {
+        content = fs.readFileSync(absolute);
+      } catch {
+        return { mode: "unsupported", reason: "Input file is not readable" };
+      }
       paths.push(relativePath);
+      digests[relativePath] = hashFileContent(content);
       if (paths.length > INPUT_CLOSURE_MAX_FILES) {
         return { mode: "unsupported", reason: "Input closure exceeds the file cap" };
       }
     }
   }
   paths.sort();
-  return { mode: "bound", paths };
+  return { mode: "bound", paths, digests };
 }
 
 export function compareRevisions(

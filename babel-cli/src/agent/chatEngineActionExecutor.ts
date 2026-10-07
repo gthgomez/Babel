@@ -1704,6 +1704,8 @@ export class ChatEngineActionExecutor {
                 stdout: lastResult.stdout,
                 stderr: lastResult.stderr,
               }),
+              ...(lastResult.stdout !== undefined ? { stdout: lastResult.stdout } : {}),
+              ...(lastResult.stderr !== undefined ? { stderr: lastResult.stderr } : {}),
               mutationPaths: mutationPathsFromSessionEvents(
                 this.host.parity.sessionEvents.events,
               ),

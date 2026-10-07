@@ -58,7 +58,7 @@ export type BoundChatVerifierReceipt = {
   tests_failed?: number;
   tests_skipped?: number;
   /** Present only when capture established a relevant-input closure. */
-  inputClosure?: { mode: "bound"; paths: string[] } | { mode: "unsupported"; reason: string };
+  inputClosure?: { mode: "bound"; paths: string[]; digests: Record<string, string> } | { mode: "unsupported"; reason: string };
 };
 
 /** Collect unique mutation paths from SessionEventV1 mutation_batch events. */
@@ -179,6 +179,15 @@ export function evaluateChatVerifierReceiptCurrencySync(
     }
     if (freshClosure.paths.join('\n') !== receipt.inputClosure.paths.join('\n')) {
       return { stale: true, reason: 'Verifier input closure changed' };
+    }
+    const boundDigests = receipt.inputClosure.digests;
+    if (!boundDigests) {
+      return { stale: true, reason: 'Verifier input closure has no content digests' };
+    }
+    for (const rel of freshClosure.paths) {
+      if (freshClosure.digests[rel] !== boundDigests[rel]) {
+        return { stale: true, reason: `Verifier input changed: ${rel}` };
+      }
     }
   }
   const bound = toRevisionBoundReceipt(receipt);
