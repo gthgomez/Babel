@@ -1,46 +1,19 @@
 <#
 .SYNOPSIS
-Posts an independent exact-head review verdict as a controller review-evidence
-comment on a pull request. Exists so the review-marker format lives in one
-maintained place instead of tribal knowledge (the markers are read by
-.github/workflows/trusted-control-plane.yml).
-
+Render or post a human-readable independent exact-head review summary.
 .DESCRIPTION
-Builds a comment starting with the required marker (the trusted-control-plane
-rerun-after-review job only reacts to comments from the repository owner that
-start with one of the recognized markers) and posts it with gh. The comment
-must include the reviewed head SHA so the audit trail binds evidence to an
-exact commit.
-
-.PARAMETER PR
-Pull request number.
-
-.PARAMETER HeadSha
-The exact 40-character head SHA the review covers.
-
-.PARAMETER Verdict
-APPROVE or CHANGES_REQUESTED.
-
-.PARAMETER Reviewer
-Free-text reviewer identity (e.g. "fresh-context AI reviewer (ZCode agent)").
-
-.PARAMETER Summary
-One-paragraph verdict summary.
-
-.PARAMETER FindingsFile
-Optional path to a markdown fragment with numbered findings (P1/P2/P3).
-
-.EXAMPLE
-pwsh tools/post-ai-review.ps1 -PR 313 -HeadSha 2990bcf... -Verdict APPROVE -Reviewer "fresh-context AI reviewer" -Summary "All adversarial checks passed." -FindingsFile findings.md
+This summary is ordinary review prose. Structured V3 certification uses the
+canonical hostReviewV3Publication producer and is validated separately.
 #>
 param(
   [Parameter(Mandatory = $true)][int]$PR,
   [Parameter(Mandatory = $true)][string]$HeadSha,
-  [Parameter(Mandatory = $true)][ValidateSet('APPROVE', 'CHANGES_REQUESTED')][string]$Verdict,
+  [Parameter(Mandatory = $true)][ValidateSet('APPROVE', 'CHANGES_REQUESTED', 'BLOCK')][string]$Verdict,
   [Parameter(Mandatory = $true)][string]$Reviewer,
   [Parameter(Mandatory = $true)][string]$Summary,
   [string]$FindingsFile,
-  [string]$Repository = ''
+  [string]$Repository = '',
+  [string]$OutputPath = ''
 )
 
 Set-StrictMode -Version Latest
@@ -50,7 +23,6 @@ if ($HeadSha -notmatch '^[0-9a-f]{40}$') { throw "HeadSha must be a full 40-char
 $ghArgs = @()
 if ($Repository) { $ghArgs = @('-R', $Repository) }
 
-$marker = '<!-- babel-controller-ai-reviews-v2 -->'
 $findings = ''
 if ($FindingsFile) {
   if (-not (Test-Path -LiteralPath $FindingsFile -PathType Leaf)) { throw "FindingsFile not found: $FindingsFile" }
@@ -58,8 +30,9 @@ if ($FindingsFile) {
 }
 
 $body = @"
-$marker
-## Independent exact-head AI review (babel-controller-ai-reviews-v2)
+## Independent exact-head AI review
+
+This is a human-readable review summary; structured certification is separate.
 
 **Reviewer:** $Reviewer
 **Reviewed head:** $HeadSha
@@ -69,6 +42,7 @@ $Summary
 $findings
 "@
 
+if ($OutputPath) { Set-Content -LiteralPath $OutputPath -Value $body -Encoding utf8NoBOM; return }
 $body | gh pr comment $PR @ghArgs --body-file -
 if ($LASTEXITCODE -ne 0) { throw 'gh pr comment failed' }
 Write-Host "Review comment posted on PR $PR ($Verdict, head $HeadSha)."

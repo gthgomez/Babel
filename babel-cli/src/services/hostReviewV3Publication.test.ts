@@ -1,3 +1,8 @@
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
@@ -6,7 +11,7 @@ import {
   publicIndependentReviewHandoffV3,
   validateHostReviewHandoffV3,
 } from './independentReviewEvidenceV3.js'
-import { V3_REVIEW_MARKER, publishIndependentReviewV3 } from './hostReviewV3Publication.js'
+import { V3_REVIEW_MARKER, publishIndependentReviewV3, serializeIndependentReviewV3 } from './hostReviewV3Publication.js'
 
 const ownerId = '12345'
 const repository = 'gthgomez/Babel'
@@ -259,4 +264,26 @@ test('a failed secret scan blocks publication', async () => {
   assert.equal(scanned.length, 1)
   assert.ok(scanned[0]!.startsWith(V3_REVIEW_MARKER))
   assert.equal(posted, false)
+})
+
+
+test('canonical V3 serializer round-trips through the actual base-gate transport consumer', () => {
+  const handoff = validHandoff()
+  const body = serializeIndependentReviewV3(handoff)
+  const root = mkdtempSync(join(tmpdir(), 'babel-v3-roundtrip-'))
+  const comment = join(root, 'comment.json')
+  try {
+    writeFileSync(comment, JSON.stringify({ id: 99, user: { id: ownerId, type: 'User' }, body,
+      issue_url: `https://api.github.com/repos/${repository}/issues/${prNumber}` }))
+    const module = fileURLToPath(new URL('../../../scripts/agent-pr-gate-common.psm1', import.meta.url))
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command',
+      '& { param($module,$path) Import-Module $module -Force; $comment = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json; Select-AgentHostReviewBundle -Comments @($comment) -Repository gthgomez/Babel -PR 180 -BaseSha ("a" * 40) -HeadSha ("b" * 40) -PublisherId 12345 | ConvertTo-Json -Depth 40 -Compress }', module, comment], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+    const selected = JSON.parse(result.stdout)
+    assert.equal(selected.schema_version, 3)
+    assert.equal(selected.kind, 'github_host_review_bundle_v3')
+    assert.equal(selected.head_sha, handoff.head_sha)
+    assert.equal(selected.handoff.reviews.length, handoff.reviews.length)
+    assert.ok(!selected.transport_error)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
