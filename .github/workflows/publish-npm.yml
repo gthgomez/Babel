@@ -42,7 +42,6 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.tag || github.ref }}
-          fetch-depth: 0
 
       - name: Resolve release tag
         id: tag
@@ -51,8 +50,10 @@ jobs:
         shell: bash
         run: |
           TAG="$RAW_REF"
+          # Full semver form: the error text and body promise v<semver>, and
+          # these outputs flow into later scripts via env only.
           case "$TAG" in
-            v[0-9]*) ;;
+            v[0-9]*.[0-9]*.[0-9]*|v[0-9]*.[0-9]*.[0-9]*-*) ;;
             *) echo "::error::Refusing non-release tag '$TAG' (expected v<semver>)"; exit 1 ;;
           esac
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -65,11 +66,13 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Verify package version matches the tag
+        env:
+          EXPECTED_VERSION: ${{ steps.tag.outputs.version }}
         shell: bash
         run: |
           PKG_VERSION=$(node -p "require('./babel-cli/package.json').version")
-          if [ "$PKG_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
-            echo "::error::babel-cli version $PKG_VERSION does not match tag ${{ steps.tag.outputs.tag }}"
+          if [ "$PKG_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "::error::babel-cli version $PKG_VERSION does not match tag $EXPECTED_VERSION"
             exit 1
           fi
           echo "version OK: $PKG_VERSION"
@@ -78,21 +81,29 @@ jobs:
         run: npm --prefix babel-cli ci
 
       - name: Publish (or dry-run)
-        id: publish
         env:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          ARGS="--provenance --access public"
           if [ "$DRY_RUN" = "true" ]; then
             echo "Dry run: packing only, nothing will be published."
-            npm --prefix babel-cli pack $ARGS --dry-run
+            npm --prefix babel-cli pack --dry-run
           else
-            npm --prefix babel-cli publish $ARGS
+            npm --prefix babel-cli publish --provenance --access public
           fi
 
       - name: Verify publication
         if: ${{ inputs.dry_run != true }}
+        env:
+          EXPECTED_VERSION: ${{ steps.tag.outputs.version }}
         shell: bash
         run: |
-          sleep 15
-          npm view babel-harness@${{ steps.tag.outputs.version }} version dist.tarball --json
+          # Registry propagation can exceed a fixed sleep; retry bounded.
+          for attempt in 1 2 3 4 5 6; do
+            if npm view babel-harness@$EXPECTED_VERSION version dist.tarball --json; then
+              exit 0
+            fi
+            echo "attempt $attempt: not visible yet; retrying in 10s"
+            sleep 10
+          done
+          echo "::error::published version not visible on the registry after retries"
+          exit 1
