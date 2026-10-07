@@ -1,0 +1,98 @@
+name: Publish npm package
+
+# Publishes babel-harness to the npm registry via npm trusted publishing
+# (OIDC) - no stored npm token. Requires the one-time npmjs.com binding:
+# babel-harness -> gthgomez/Babel, workflow publish-npm.yml, environment
+# left blank. Provenance is generated from the repository build.
+#
+# Publish is a consequential, owner-authorized distribution act: it fires
+# automatically on a GitHub release being PUBLISHED (not drafted) and can
+# also be run manually against an existing tag with dry-run first.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v* tag to publish (e.g. v0.1.1)"
+        required: true
+        type: string
+      dry_run:
+        description: "Pack and validate without publishing"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish babel-harness to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: tag
+        env:
+          RAW_REF: ${{ inputs.tag || github.event.release.tag_name }}
+        shell: bash
+        run: |
+          TAG="$RAW_REF"
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "::error::Refusing non-release tag '$TAG' (expected v<semver>)"; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify package version matches the tag
+        shell: bash
+        run: |
+          PKG_VERSION=$(node -p "require('./babel-cli/package.json').version")
+          if [ "$PKG_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "::error::babel-cli version $PKG_VERSION does not match tag ${{ steps.tag.outputs.tag }}"
+            exit 1
+          fi
+          echo "version OK: $PKG_VERSION"
+
+      - name: Install CLI dependencies
+        run: npm --prefix babel-cli ci
+
+      - name: Publish (or dry-run)
+        id: publish
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          ARGS="--provenance --access public"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: packing only, nothing will be published."
+            npm --prefix babel-cli pack $ARGS --dry-run
+          else
+            npm --prefix babel-cli publish $ARGS
+          fi
+
+      - name: Verify publication
+        if: ${{ inputs.dry_run != true }}
+        shell: bash
+        run: |
+          sleep 15
+          npm view babel-harness@${{ steps.tag.outputs.version }} version dist.tarball --json
