@@ -306,6 +306,75 @@ jobs:
           foreach ($dependency in $dependencies) {
             if ($dependency.Value.result -ne 'success') { throw "Required CI dependency $($dependency.Name) concluded $($dependency.Value.result)" }
           }
+  installer-lifecycle:
+    name: installer-lifecycle
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.13.1'
+      - name: Configure git for the lifecycle upgrade fixture commit
+        run: |
+          git config user.name "babel-lifecycle-ci"
+          git config user.email "babel-lifecycle-ci@users.noreply.github.com"
+      - name: Install dependencies
+        run: |
+          npm --prefix babel-desktop ci
+          npm --prefix babel-cli ci
+      - name: Download pinned Node runtime archive
+        shell: pwsh
+        run: |
+          $version = '24.13.1'
+          $expectedSha256 = 'fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279'
+          $archivePath = Join-Path $env:RUNNER_TEMP "node-v${version}-win-x64.zip"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/v${version}/node-v${version}-win-x64.zip" -OutFile $archivePath
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) { throw "Node archive checksum mismatch" }
+          "LIFECYCLE_NODE_ARCHIVE=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Download pinned Electron archive
+        shell: pwsh
+        run: |
+          $version = '44.5.1'
+          $expectedSha256 = '9b382492dcfee91f8f9e92c91f7972550a1b95d2299cac72279dab33a600d7db'
+          $archivePath = Join-Path $env:RUNNER_TEMP "electron-v${version}-win32-x64.zip"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/electron/electron/releases/download/v${version}/electron-v${version}-win32-x64.zip" -OutFile $archivePath
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) { throw "Electron archive checksum mismatch" }
+          "LIFECYCLE_ELECTRON_ARCHIVE=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      # SourceForge (the only official NSIS zip host) serves mirror-/region-
+      # dependent bodies to non-browser clients, which defeats byte-pinning
+      # from CI. Use the Chocolatey package instead: choco verifies the
+      # installer checksum embedded in the package feed, and the compiler's
+      # own version is recorded in the build provenance.
+      - name: Install pinned NSIS via Chocolatey
+        shell: pwsh
+        run: |
+          choco install nsis --version 3.11 --yes --no-progress
+          $makensis = "C:\Program Files (x86)\NSIS\Bin\makensis.exe"
+          if (-not (Test-Path -LiteralPath $makensis -PathType Leaf)) {
+            $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
+          }
+          if (-not $makensis -or -not (Test-Path -LiteralPath $makensis -PathType Leaf)) { throw "makensis.exe not found after choco install" }
+          $nsisVersion = (& $makensis -VERSION).Trim()
+          if ($nsisVersion -ne 'v3.11') { throw "Expected NSIS v3.11, got $nsisVersion" }
+          "LIFECYCLE_MAKENSIS=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build the qualified portable payload
+        shell: pwsh
+        run: >
+          npm --prefix babel-desktop run package:windows --
+          "--node-archive=$env:LIFECYCLE_NODE_ARCHIVE"
+          "--electron-archive=$env:LIFECYCLE_ELECTRON_ARCHIVE"
+          "--output=$env:RUNNER_TEMP\lifecycle-payload"
+      - name: Run installer lifecycle qualification
+        shell: pwsh
+        run: >
+          pwsh -NoProfile -ExecutionPolicy Bypass -File babel-desktop/test/installer-lifecycle/run-lifecycle.ps1
+          -PayloadZip "$env:RUNNER_TEMP\lifecycle-payload\Babel-Desktop-$((Get-Content babel-desktop/package.json -Raw | ConvertFrom-Json).version)-win-x64.zip"
+          -Sha256Sums "$env:RUNNER_TEMP\lifecycle-payload\SHA256SUMS"
+          -MakensisPath "$env:LIFECYCLE_MAKENSIS"
+
   windows-portability:
     name: windows-portability
     if: always()
@@ -322,6 +391,7 @@ jobs:
       - harness-runtime
       - chat-truth
       - windows-policy
+      - installer-lifecycle
     steps:
       - name: Require every coverage dependency to succeed
         env:

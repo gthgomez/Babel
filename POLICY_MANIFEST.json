@@ -3,11 +3,11 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "ca0db95e106807cb0118c0681f593db1e0e4f71573abbb19d441aab6df72ced9",
+  "policy_bundle_id": "c60172ccb6509609df1d1006cfe52ed1f24a53ca1dc80a57ae8e3eb603430b29",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/trusted-control-plane.yml": "276e2fe0ef7509e8751234ccbf0abe9e135b67c2436337b37ab393fe50e5cb0c",
-    ".github/workflows/typecheck.yml": "259f8fca377fbf179ec1c3675904ef7ff4bd790a0599710664ae38a15254fd11",
+    ".github/workflows/typecheck.yml": "cc7953b9b04644fa46f6a9dc7c2205d63def25084cb14ecc0d7e42475e0dc95a",
     "AGENTS.md": "6e2d3d8670d03e44898a12427b911dab4362f57917960917c91a1e58657b7ad5",
     "babel-cli/src/agent/autonomyEnforcement.ts": "48a487784b9c7c9e1f397760b5875cb2811be8ca787e7177d86365d44757f36f",
     "babel-cli/src/authority/actionRequest.ts": "e17df5cebed675ebfff4bc512d280d0a0bd38fd2b968fc9f19e5a397deda8335",

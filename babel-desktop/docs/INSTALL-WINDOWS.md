@@ -2,6 +2,10 @@
 
 This portable preview includes Babel Desktop, the authoritative Babel CLI, prompt assets, production dependencies, and Node 24.13.1. It requires Windows x64. You do not need Node, npm, a source checkout, or a separate CLI build to launch it.
 
+## Install with Setup.exe (per-user, unsigned preview)
+
+When a Setup.exe is published alongside the ZIP, it performs the same per-user install without manual extraction: Start Menu shortcut, upgrade with rollback, and an entry under Settings -> Apps -> Installed apps -> Babel Desktop for uninstall. It installs only for the current Windows user, requires no administrator rights, and verifies the payload SHA256 before anything is written. It is still an **unsigned preview** (SmartScreen will warn; see the signing note below). Silent install: run the Setup.exe with the /S switch from a command prompt.
+
 1. Verify the ZIP's SHA256 against the supplied SHA256SUMS.
 2. Extract the **entire** ZIP to a writable directory, including one with spaces. Keep the directory structure intact. Do not launch from inside the ZIP.
 3. Open **Babel Desktop.exe**. First launch shows setup status. Choose your project with **Open project**.
