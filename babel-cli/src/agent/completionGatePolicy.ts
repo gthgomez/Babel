@@ -757,13 +757,204 @@ function isAuthoritativeReceipt(entry: VerifierEvidence): boolean {
   return entry.authority === true && isAuthoritativeVerifierCommand(entry.command);
 }
 
-/** Exit 0 is proof only when the receipt records tests that actually ran. */
-function receiptProvesExecutedTests(entry: VerifierEvidence | GateToolLogEntry): boolean {
-  const counted = entry as { tests_total?: unknown; tests_skipped?: unknown };
-  if (typeof counted.tests_total !== 'number' || !Number.isFinite(counted.tests_total)) return false;
-  if (counted.tests_total <= 0) return false;
-  if (typeof counted.tests_skipped === 'number' && counted.tests_skipped >= counted.tests_total) return false;
+const TEST_EXECUTION_FAMILIES = new Set([
+  'npm-test',
+  'vitest',
+  'jest',
+  'mocha',
+  'pytest',
+  'unittest',
+  'node-test',
+  'go-test',
+  'cargo-test',
+  'gradle-test',
+  'deno-test',
+  'dotnet-test',
+]);
+
+/**
+ * Authoritative checks that do not execute a test suite. `npm run typecheck`
+ * is the allowlisted case: a green exit is the check, and it has no test count.
+ * Unknown families and known test runners stay on the count proof below.
+ */
+function strictCheckOmitsTestCounts(command: string): boolean {
+  const identity = analyzeVerifierIdentity(command);
+  if (!identity || identity.family === 'unknown' || identity.scope === 'unknown') return false;
+  if (TEST_EXECUTION_FAMILIES.has(identity.family) || identity.family.startsWith('npx-')) return false;
   return true;
+}
+
+function evidenceCommand(entry: VerifierEvidence | GateToolLogEntry): string | undefined {
+  if ('command' in entry && typeof entry.command === 'string') return entry.command;
+  if ('target' in entry && typeof entry.target === 'string') return entry.target;
+  return undefined;
+}
+
+function evidenceOutput(entry: VerifierEvidence | GateToolLogEntry): string {
+  const parts: string[] = [];
+  if ('summary' in entry && typeof entry.summary === 'string') parts.push(entry.summary);
+  if ('detail' in entry && typeof entry.detail === 'string') parts.push(entry.detail);
+  const raw = entry as { stdout?: unknown; stderr?: unknown };
+  if (typeof raw.stdout === 'string') parts.push(raw.stdout);
+  if (typeof raw.stderr === 'string') parts.push(raw.stderr);
+  return parts.join('\n');
+}
+
+function explicitExecutedTestCounts(
+  entry: VerifierEvidence | GateToolLogEntry,
+): { tests_total: number; tests_skipped: number } | null {
+  const counted = entry as { tests_total?: unknown; tests_skipped?: unknown };
+  if (typeof counted.tests_total !== 'number' || !Number.isFinite(counted.tests_total)) return null;
+  const testsSkipped = typeof counted.tests_skipped === 'number' && Number.isFinite(counted.tests_skipped)
+    ? counted.tests_skipped
+    : 0;
+  return { tests_total: counted.tests_total, tests_skipped: testsSkipped };
+}
+
+/**
+ * A green test command is proof only when captured or runner-reported counts
+ * show that a test actually ran. A non-test check such as `npm run typecheck`
+ * has no count and is proved by its own green exit.
+ */
+function receiptProvesExecutedTests(entry: VerifierEvidence | GateToolLogEntry): boolean {
+  const command = evidenceCommand(entry);
+  if (command && strictCheckOmitsTestCounts(command)) {
+    return verifierExitCode(entry) === 0;
+  }
+  const counts = explicitExecutedTestCounts(entry)
+    ?? parseExecutedTestCounts(evidenceOutput(entry), command);
+  if (!counts || !Number.isFinite(counts.tests_total) || counts.tests_total <= 0) return false;
+  if (counts.tests_skipped >= counts.tests_total) return false;
+  return true;
+}
+
+function integerCount(value: number): boolean {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function collectCountWords(phrase: string): Record<string, number> {
+  const found: Record<string, number> = {};
+  for (const match of phrase.matchAll(/(\d+)\s+([A-Za-z]+)/g)) {
+    const word = match[2];
+    if (!word) continue;
+    found[word.toLowerCase()] = Number(match[1]);
+  }
+  return found;
+}
+
+function parseNodeTestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const totals = [...text.matchAll(/^(?:ℹ|#)\s+tests\s+(\d+)\s*$/gm)];
+  const lastTotal = totals.at(-1)?.[1];
+  if (lastTotal === undefined) return null;
+  const testsTotal = Number(lastTotal);
+  const skipped = [...text.matchAll(/^(?:ℹ|#)\s+skipped\s+(\d+)\s*$/gm)].at(-1)?.[1];
+  const testsSkipped = skipped === undefined ? 0 : Number(skipped);
+  if (!integerCount(testsTotal) || !integerCount(testsSkipped)) return null;
+  return { tests_total: testsTotal, tests_skipped: testsSkipped };
+}
+
+function parsePytestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const token = String.raw`\d+\s+(?:failed|passed|skipped|errors?|xfailed|xpassed|warnings?|deselected|reruns?)`;
+  const line = new RegExp(
+    `^(?:=+\\s*)?((?:${token}(?:,\\s*)?)+)(?:\\s+in\\s+[\\d.]+s)?\\s*(?:=+)?\\s*$`,
+    'gim',
+  );
+  const phrase = [...text.matchAll(line)].at(-1)?.[1];
+  if (!phrase) return null;
+  const words = collectCountWords(phrase);
+  const testsSkipped = words.skipped ?? 0;
+  const testsTotal = (words.passed ?? 0)
+    + (words.failed ?? 0)
+    + (words.error ?? 0)
+    + (words.errors ?? 0)
+    + (words.xfailed ?? 0)
+    + (words.xpassed ?? 0)
+    + testsSkipped;
+  if (!integerCount(testsTotal) || !integerCount(testsSkipped)) return null;
+  if (
+    testsTotal === 0
+    && words.passed === undefined
+    && words.failed === undefined
+    && words.skipped === undefined
+    && words.error === undefined
+    && words.errors === undefined
+  ) {
+    return null;
+  }
+  return { tests_total: testsTotal, tests_skipped: testsSkipped };
+}
+
+function parseJestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const phrase = [...text.matchAll(/^Tests:\s+(.+)$/gim)].at(-1)?.[1];
+  if (!phrase) return null;
+  const words = collectCountWords(phrase);
+  const testsSkipped = (words.skipped ?? 0) + (words.todo ?? 0) + (words.pending ?? 0);
+  const testsTotal = words.total
+    ?? ((words.passed ?? 0) + (words.failed ?? 0) + testsSkipped);
+  if (!integerCount(testsTotal) || !integerCount(testsSkipped)) return null;
+  if (words.total === undefined && testsTotal === 0) return null;
+  return { tests_total: testsTotal, tests_skipped: testsSkipped };
+}
+
+function parseVitestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const phrase = [...text.matchAll(/^[ \t]*Tests[ \t]+([^:\n].*)$/gim)].at(-1)?.[1];
+  if (!phrase) return null;
+  const words = collectCountWords(phrase);
+  const testsSkipped = (words.skipped ?? 0) + (words.todo ?? 0);
+  const paren = phrase.match(/\((\d+)\)\s*$/);
+  const testsTotal = paren
+    ? Number(paren[1])
+    : (words.passed ?? 0) + (words.failed ?? 0) + testsSkipped;
+  if (!integerCount(testsTotal) || !integerCount(testsSkipped)) return null;
+  if (!paren && testsTotal === 0) return null;
+  return { tests_total: testsTotal, tests_skipped: testsSkipped };
+}
+
+function parseUnittestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const ran = [...text.matchAll(/^Ran (\d+) tests?\b/gim)].at(-1)?.[1];
+  if (ran === undefined) return null;
+  const skipped = [...text.matchAll(/\bskipped=(\d+)/gi)].at(-1)?.[1];
+  const testsTotal = Number(ran);
+  const testsSkipped = skipped === undefined ? 0 : Number(skipped);
+  if (!integerCount(testsTotal) || !integerCount(testsSkipped)) return null;
+  return { tests_total: testsTotal, tests_skipped: testsSkipped };
+}
+
+function parseMochaCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const passing = [...text.matchAll(/^[ \t]*(\d+)\s+passing(?:\s+\([^)\n]*\))?\s*$/gim)].at(-1)?.[1];
+  if (passing === undefined) return null;
+  const pending = [...text.matchAll(/^[ \t]*(\d+)\s+pending\s*$/gim)].at(-1)?.[1];
+  const failing = [...text.matchAll(/^[ \t]*(\d+)\s+failing\s*$/gim)].at(-1)?.[1];
+  const passed = Number(passing);
+  const testsSkipped = pending === undefined ? 0 : Number(pending);
+  const failed = failing === undefined ? 0 : Number(failing);
+  if (!integerCount(passed) || !integerCount(testsSkipped) || !integerCount(failed)) return null;
+  return { tests_total: passed + testsSkipped + failed, tests_skipped: testsSkipped };
+}
+
+/**
+ * Counts from a runner's own report. Node's machine lines, pytest's summary,
+ * Jest's `Tests:` line, and Vitest's `Tests` line are accepted. A hand-written
+ * "ok" or "all pass" does not mint a count.
+ */
+export function parseExecutedTestCounts(
+  output: string,
+  command?: string,
+): { tests_total: number; tests_skipped: number } | null {
+  const text = output.replace(/\r/g, '').replace(/\u001b\[[0-9;]*m/g, '');
+  const family = command ? analyzeVerifierIdentity(command)?.family : undefined;
+  if (family === 'node-test') return parseNodeTestCounts(text);
+  if (family === 'pytest') return parsePytestCounts(text);
+  if (family === 'unittest') return parseUnittestCounts(text);
+  if (family === 'jest') return parseJestCounts(text);
+  if (family === 'vitest') return parseVitestCounts(text);
+  if (family === 'mocha') return parseMochaCounts(text);
+  return parseNodeTestCounts(text)
+    ?? parseJestCounts(text)
+    ?? parseVitestCounts(text)
+    ?? parsePytestCounts(text)
+    ?? parseUnittestCounts(text)
+    ?? parseMochaCounts(text);
 }
 
 function verifierExitCode(entry: VerifierEvidence | GateToolLogEntry): number {

@@ -294,6 +294,112 @@ test('generated and gitignored inputs invalidate verifier reuse', async () => {
   }
 });
 
+test('strict completion accepts typecheck and runner summaries', async () => {
+  const typecheck = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: 'strict',
+    toolCallLog: [],
+    lastVerifierReceipt: {
+      command: 'npm run typecheck',
+      exit_code: 0,
+      summary: '',
+      authority: true,
+    },
+  });
+  assert.equal(typecheck.allow, true);
+  assert.equal(typecheck.reason, null);
+
+  const pytest = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: 'strict',
+    toolCallLog: [],
+    lastVerifierReceipt: { command: 'pytest', exit_code: 0, summary: '15 passed', authority: true },
+  });
+  assert.equal(pytest.allow, true);
+
+  const jest = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: 'strict',
+    toolCallLog: [],
+    lastVerifierReceipt: {
+      command: 'npx jest',
+      exit_code: 0,
+      summary: 'Tests:       1 skipped, 14 passed, 15 total',
+      authority: true,
+    },
+  });
+  assert.equal(jest.allow, true);
+
+  const vitest = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: 'strict',
+    toolCallLog: [],
+    lastVerifierReceipt: {
+      command: 'npx vitest run',
+      exit_code: 0,
+      summary: '      Tests  1 passed | 1 skipped (2)',
+      authority: true,
+    },
+  });
+  assert.equal(vitest.allow, true);
+
+  const vitestSkipped = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: 'strict',
+    toolCallLog: [],
+    lastVerifierReceipt: {
+      command: 'npx vitest run',
+      exit_code: 0,
+      summary: '      Tests  2 skipped (2)',
+      authority: true,
+    },
+  });
+  assert.equal(vitestSkipped.allow, false);
+
+  const prose = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: 'strict',
+    toolCallLog: [],
+    lastVerifierReceipt: { command: 'npm test', exit_code: 0, summary: 'all pass', authority: true },
+  });
+  assert.equal(prose.allow, false);
+
+  const root = mkdtempSync(join(tmpdir(), 'babel-runner-summary-'));
+  try {
+    writeFileSync(join(root, 'a.txt'), 'bound');
+    const captured = await captureChatVerifierReceipt({
+      projectRoot: root,
+      command: 'pytest',
+      exitCode: 0,
+      summary: 'short',
+      stdout: '======================== 15 passed, 2 skipped in 0.01s ========================\n',
+      mutationPaths: ['a.txt'],
+    });
+    assert.equal(captured?.tests_total, 17);
+    assert.equal(captured?.tests_skipped, 2);
+    const typecheckReceipt = await captureChatVerifierReceipt({
+      projectRoot: root,
+      command: 'npm run typecheck',
+      exitCode: 0,
+      summary: '',
+      stdout: 'ok\n',
+      mutationPaths: ['a.txt'],
+    });
+    assert.ok(typecheckReceipt);
+    assert.equal(typecheckReceipt?.tests_total, undefined);
+    const decision = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      toolCallLog: [],
+      requiredVerifierCommands: ['npm run typecheck'],
+      executedVerifierLedger: typecheckReceipt ? [typecheckReceipt] : [],
+    });
+    assert.equal(decision.allow, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('strict completion rejects a missing, zero, or fully skipped test count', async () => {
   const absent = evaluateExecuteCompletionHonesty({
     hasWrite: true,

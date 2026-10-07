@@ -108,7 +108,7 @@ describe('completionGatePolicy', () => {
     const r = evaluateExecuteCompletionHonesty({
       hasWrite: true,
       policy: 'strict',
-      lastVerifierReceipt: { command: 'pytest', exit_code: 0, summary: '15 passed', authority: true, tests_total: 15, tests_skipped: 0 },
+      lastVerifierReceipt: { command: 'pytest', exit_code: 0, summary: '15 passed', authority: true },
       toolCallLog: [],
     });
     assert.equal(r.allow, true);
@@ -366,7 +366,7 @@ describe('gate command validation in evaluateExecuteCompletionHonesty', () => {
     const r = evaluateExecuteCompletionHonesty({
       hasWrite: true,
       policy: 'strict',
-      lastVerifierReceipt: { command: 'pytest tests/', exit_code: 0, summary: '15 passed', authority: true, tests_total: 15, tests_skipped: 0 },
+      lastVerifierReceipt: { command: 'pytest tests/', exit_code: 0, summary: '15 passed', authority: true },
       toolCallLog: [
         { tool: 'test_run', target: 'npm test', detail: 'all pass', exit_code: 0 },
       ],
@@ -584,10 +584,8 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
       lastVerifierReceipt: {
         command: 'npm test',
         exit_code: 0,
-        summary: 'all pass',
+        summary: 'Tests:       4 passed, 4 total',
         authority: true,
-        tests_total: 4,
-        tests_skipped: 0,
       },
       toolCallLog: [],
       requiredVerifierCommands: ['npm test'],
@@ -603,10 +601,8 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
       lastVerifierReceipt: {
         command: 'npm test',
         exit_code: 0,
-        summary: 'all pass',
+        summary: 'Tests:       4 passed, 4 total',
         authority: true,
-        tests_total: 4,
-        tests_skipped: 0,
       },
       toolCallLog: [],
       requiredVerifierCommands: ['npm test -- src/add.test.ts'],
@@ -947,8 +943,8 @@ describe('planCompletionGateReject', () => {
     const complete = evaluateExecuteCompletionHonesty({
       ...base,
       executedVerifierLedger: [
-        { command: 'npm test', exit_code: 0, authority: true, stale: false, tests_total: 3, tests_skipped: 0 } as any,
-        { command: 'pytest', exit_code: 0, authority: true, stale: false, tests_total: 2, tests_skipped: 0 } as any,
+        { command: 'npm test', exit_code: 0, authority: true, stale: false, summary: 'Tests:       3 passed, 3 total' } as any,
+        { command: 'pytest', exit_code: 0, authority: true, stale: false, summary: '2 passed' } as any,
       ],
     });
     assert.equal(complete.allow, true);

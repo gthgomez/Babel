@@ -25,9 +25,12 @@ import {
 } from '../services/verifierIdentity.js';
 import {
   isAuthoritativeVerifierCommand,
+  parseExecutedTestCounts,
   parseStructuredVerifierCommand,
   resolveHonestyRequiredVerifiers,
 } from './completionGatePolicy.js';
+
+export { parseExecutedTestCounts };
 
 export function resolveEngineRequiredVerifiers(input: {
   task: string;
@@ -90,7 +93,10 @@ export async function captureChatVerifierReceipt(input: {
       },
     });
     receipt.inputClosure = inputClosure;
-    const counts = parseExecutedTestCounts(`${input.stdout ?? ''}\n${input.stderr ?? ''}`);
+    const counts = parseExecutedTestCounts(
+      `${input.stdout ?? ''}\n${input.stderr ?? ''}`,
+      input.command,
+    );
     if (counts) {
       receipt.tests_total = counts.tests_total;
       receipt.tests_skipped = counts.tests_skipped;
@@ -315,19 +321,6 @@ export function shouldReuseCachedVerifierReceipt(
 ): boolean {
   const currency = evaluateChatVerifierReceiptCurrencySync(projectRoot, receipt);
   return currency !== null && currency.stale === false;
-}
-
-/** Machine reporter lines only. A hand-written summary cannot mint a test count. */
-export function parseExecutedTestCounts(output: string): { tests_total: number; tests_skipped: number } | null {
-  const text = output.replace(/\r/g, '');
-  const totals = [...text.matchAll(/^(?:ℹ|#)\s+tests\s+(\d+)\s*$/gm)];
-  const lastTotal = totals.at(-1)?.[1];
-  if (lastTotal === undefined) return null;
-  const testsTotal = Number(lastTotal);
-  const skipped = [...text.matchAll(/^(?:ℹ|#)\s+skipped\s+(\d+)\s*$/gm)].at(-1)?.[1];
-  const testsSkipped = skipped === undefined ? 0 : Number(skipped);
-  if (!Number.isInteger(testsTotal) || !Number.isInteger(testsSkipped)) return null;
-  return { tests_total: testsTotal, tests_skipped: testsSkipped };
 }
 
 function verifierReceiptIdentityKey(command: string): string {
