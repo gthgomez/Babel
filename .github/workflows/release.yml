@@ -27,27 +27,35 @@ jobs:
     name: Build Windows portable bundle
     runs-on: windows-latest
     timeout-minutes: 45
+    # contents: write is required solely to create the DRAFT release; the
+    # workflow never publishes (the owner publishes the reviewed draft).
+    permissions:
+      contents: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Resolve release tag
         id: tag
+        env:
+          # Env indirection: GitHub expressions must not interpolate into the
+          # shell script (a crafted tag input could otherwise inject script).
+          RAW_REF: ${{ inputs.tag || github.ref_name }}
         shell: bash
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="$RAW_REF"
           case "$TAG" in
-            v*) ;;
-            *) echo "::error::Refusing non-release tag '$TAG' (expected v*)"; exit 1 ;;
+            v[0-9]*) ;;
+            *) echo "::error::Refusing non-release tag '$TAG' (expected v<semver>)"; exit 1 ;;
           esac
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js 24.13.1 (pinned runtime required by the packager)
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v4
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "24.13.1"
 
@@ -82,11 +90,16 @@ jobs:
 
       - name: Verify build provenance against the tag
         shell: pwsh
+        env:
+          # Env indirection: no GitHub expressions interpolated into the script.
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
           $out = "$env:RUNNER_TEMP/release-out"
-          $tag = "${{ steps.tag.outputs.tag }}"
-          $version = "${{ steps.tag.outputs.version }}"
+          $tag = $env:RELEASE_TAG
+          $version = $env:RELEASE_VERSION
+          if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "Refusing unexpected tag '$tag'" }
           foreach ($f in @('SHA256SUMS', 'manifest.json')) {
             if (-not (Test-Path (Join-Path $out $f))) { throw "Missing build artifact: $f" }
           }
@@ -103,10 +116,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $out = "$env:RUNNER_TEMP/release-out"
-          $line = (Get-Content (Join-Path $out 'SHA256SUMS') | Select-Object -First 1)
-          $parts = $line -split '\s+', 2
+          $lines = @(Get-Content (Join-Path $out 'SHA256SUMS') | Where-Object { $_.Trim() -ne '' })
+          if ($lines.Count -ne 1) { throw "SHA256SUMS must contain exactly one entry (got $($lines.Count))" }
+          $parts = $lines[0] -split '\s+', 2
           $expected = $parts[0].Trim('*')
           $file = $parts[1].Trim('*').Trim()
+          if ($expected -notmatch '^[0-9a-fA-F]{64}$') { throw "SHA256SUMS hash is malformed" }
           $actual = (Get-FileHash (Join-Path $out $file) -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $expected.ToLowerInvariant()) { throw "SHA256SUMS mismatch for $file" }
           Write-Host "SHA256SUMS verified for $file"
