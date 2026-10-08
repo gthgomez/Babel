@@ -15,7 +15,7 @@ The optional Setup.exe builder wraps the verified portable ZIP in a pinned NSIS 
 npm run package:windows:setup -- --payload-zip=<portable-zip> --payload-sha256s=<SHA256SUMS> --nsis-archive=<official-nsis-3.11.zip>
 ```
 
-The builder checks pinned Node and Electron archive SHA256 values, freshly extracts Electron instead of trusting an existing dependency folder, requires a committed source candidate, builds and packs the canonical CLI, installs only lockfile-resolved production dependencies without lifecycle scripts, and copies an explicit Desktop allowlist. It produces the portable ZIP, file manifest, BUILD.json, and SHA256SUMS under `artifacts/windows/`. It refuses to overwrite prior outputs. The bundle is unsigned; installer, uninstaller integration, signing, and automatic updates remain unimplemented.
+The builder checks pinned Node and Electron archive SHA256 values, freshly extracts Electron instead of trusting an existing dependency folder, requires a committed source candidate, builds and packs the canonical CLI, installs only lockfile-resolved production dependencies without lifecycle scripts, and copies an explicit Desktop allowlist. It produces the portable ZIP, file manifest, BUILD.json, and SHA256SUMS under `artifacts/windows/`. It refuses to overwrite prior outputs. The bundle is unsigned and code signing is not provided; the per-user Setup.exe builder (install, staged upgrade/rollback, uninstall) is already qualified by CI and is now built and attached by the release workflow. Automatic in-place updates are not implemented: a source build refreshes its own CLI from the Runtime panel, and a packaged install is updated by running a newer verified Setup.exe.
 
 Visual shell for `BabelTuiNorthStar.png`, plus an Electron host. The opening screen is still the reference preview. After you connect a project, a task runs the sibling Babel CLI and the center panel shows that run in the same layout: your message, Babel's streaming reply, tool rows, and status.
 
@@ -81,7 +81,9 @@ The desktop does not keep a second session database. Chat continuity is Babel's 
 
 Chat runs forward answer text, thoughts, tool rows, file-change rows, and approval requests that Babel emits. Plan and deep runs show pipeline stage lines in the same tool-row layout. Missing events are not invented. Reference findings and solution cards stay on the sample session. A failed, blocked, or unverified run can expand the structured CLI result.
 
-Allow and Deny answer an approval in this window. Stop ends the run by stopping the CLI process tree. Closing the window does the same. Model-list discovery, a production installer, signing, and auto-update are not in this build.
+Allow and Deny answer an approval in this window. Stop ends the run by stopping the CLI process tree. Closing the window does the same. Model-list discovery and code signing are not in this build.
+
+The right-hand **Runtime** panel reports the exact engine the host will run: Desktop version, CLI package version, CLI source commit and dirty state, origin (bundled, development checkout, or advanced entry), the effective `safe_repo` profile, provider/Docker readiness, and the update status of an explicit check. A source build adds **Update development CLI**, which refuses dirty/detached/diverged/untrusted checkouts, fetches the trusted upstream, fast-forwards only, reinstalls locked dependencies, rebuilds with the repository's own commands, validates the result, and keeps the previous build for rollback.
 
 ## Validation
 
