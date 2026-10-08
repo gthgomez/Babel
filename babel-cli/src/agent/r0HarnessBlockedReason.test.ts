@@ -284,11 +284,11 @@ async function drive(
 // ── Reproductions ────────────────────────────────────────────────────────────
 
 describe('R0/W7: harness-origin blocked reports carry a typed reason', () => {
-  test('text-only-loop hard stop is recovery_exhausted/harness → BLOCKED_POLICY (never BLOCKED_EXTERNAL)', async () => {
+  test('unsupported completion recovery is recovery_exhausted/harness → BLOCKED_POLICY', async () => {
     const fixture = makeFixture(false);
     try {
       // Every provider round is pure text with zero tool calls. After
-      // TEXT_ONLY_FORCE_BLOCKED_THRESHOLD (5) turns the harness force-blocks.
+      // the bounded completion recovery allowance, the harness stops honestly.
       const o = await drive(fixture, 'Fix the bug in parser.ts', [], {
         taskIntent: 'execute',
         maxTurns: 8,
@@ -300,7 +300,7 @@ describe('R0/W7: harness-origin blocked reports carry a typed reason', () => {
       assert.equal(o.causeClass, 'harness');
       assert.equal(o.blockedReasonCode, 'recovery_exhausted');
       assert.equal(o.blockedCauseClass, 'harness');
-      assert.match(o.blockedReason ?? '', /text responses without tool calls/i);
+      assert.match(o.blockedReason ?? '', /Completion recovery exhausted/i);
       // The harness-origin block must never fabricate external blame.
       assert.notEqual(o.outcome, 'BLOCKED_EXTERNAL');
     } finally {

@@ -29,7 +29,8 @@ import {
   buildProviderRetryCallbacks,
   type ChatUsageScope,
 } from './chatEngineProviderAccounting.js'
-import { filterReadOnlyChatTools, filterReadOnlyTaskTools, isReadOnlyChat } from './chatReadOnly.js'
+import { isReadOnlyChat } from './chatReadOnly.js'
+import { availableChatTools } from './chatToolAvailability.js'
 import type { TaskOperation } from '../config/chatTaskClass.js'
 import {
   nativeTurnFromStream,
@@ -438,6 +439,7 @@ export interface ChatDeliberationInput {
   tools: ChatEngineServices['tools']
   takeToolPolicy: () => NextTurnToolPolicy
   acceptedOperation?: TaskOperation | undefined
+  hostFallbackAllowed?: boolean | undefined
   requiredVerifierCommands?: readonly string[]
   systemPrompt: (mode: 'native' | 'text') => string
   useTextTools: () => boolean
@@ -472,13 +474,15 @@ export async function deliberateChatTurn(
   if (useNativeTools && typeof runner.executeWithToolsStream === 'function') {
     const nextTools = input.takeToolPolicy()
     const restrictTools = nextTools.restrict && !isReadOnlyChat() && input.acceptedOperation !== 'READ_ONLY'
-    const toolDefs = filterReadOnlyTaskTools(filterReadOnlyChatTools(
+    const toolDefs = availableChatTools(
       restrictTools
         ? input.tools.buildRestrictedDefinitions(
             nextTools.mode === 'full' ? 'act_or_verify' : nextTools.mode,
           )
         : input.tools.buildDefinitions(),
-    ), input.acceptedOperation, input.requiredVerifierCommands ?? [])
+      { operation: input.acceptedOperation,
+      requiredVerifiers: input.requiredVerifierCommands,
+      hostFallbackAllowed: input.hostFallbackAllowed })
     const nativeActions: ChatToolAction[] = []
     let answerText = ''
     let nativeFinishReason: string | undefined

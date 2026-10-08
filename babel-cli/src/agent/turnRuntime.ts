@@ -17,11 +17,12 @@
 import {
   getChatTaskTune,
   resolveChatTaskClass,
-  analyzeTaskShape,
+  resolveTaskShape,
   type ChatTaskClass,
   type TaskOperation,
   type VerificationPolicy,
   type TaskShape,
+  type RequestedTaskOperation,
 } from '../config/chatTaskClass.js';
 
 export type TurnTaskIntent = 'execute' | 'explain';
@@ -63,6 +64,10 @@ export interface TurnRuntimeSnapshot extends TurnRuntimeCounters {
   continuedTask: boolean;
   model?: string;
   projectRoot: string;
+  /** Accepted objective. Continuation and status questions do not replace it. */
+  durableObjective?: string;
+  /** Ordered amendments applied after the objective. */
+  amendments?: string[];
 }
 
 export interface BeginUserSubmissionInput {
@@ -71,6 +76,7 @@ export interface BeginUserSubmissionInput {
   model?: string;
   /** Explicit intent override from the caller. */
   taskIntent?: TurnTaskIntent;
+  operation?: RequestedTaskOperation | undefined;
   /**
    * Explicit continuation linkage: preserve counters/verifier-facing state
    * from the previous submission. Default false = isolate.
@@ -112,6 +118,17 @@ export function isContinuationPrompt(taskText: string): boolean {
   return CONTINUATION_PROMPT_RE.test(taskText.trim());
 }
 
+const STATUS_PROMPT_RE = /^(?:status\??|what(?:'s| is) (?:the )?status\??|where are we\??)$/i;
+const AMENDMENT_PROMPT_RE = /^(?:also|additionally|and)\b/i;
+
+export function isStatusPrompt(taskText: string): boolean {
+  return STATUS_PROMPT_RE.test(taskText.trim());
+}
+
+export function isAmendmentPrompt(taskText: string): boolean {
+  return AMENDMENT_PROMPT_RE.test(taskText.trim());
+}
+
 /**
  * Build the TurnRuntime for a new user submission.
  * Isolates counters by default; only continues when continueTask is true.
@@ -120,20 +137,42 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
   const prev = input.previous ?? null;
   const continueTask = input.continueTask === true && prev != null;
   const continuationGesture = !continueTask && prev != null && isContinuationPrompt(input.userInput);
+  const statusQuestion = !continueTask && prev != null && isStatusPrompt(input.userInput);
+  const amendment = !continueTask && prev != null && isAmendmentPrompt(input.userInput);
+  const durableObjective = (continueTask || continuationGesture || statusQuestion || amendment) && prev
+    ? prev.durableObjective ?? prev.taskText
+    : input.userInput;
+  const amendments = (continueTask || continuationGesture || statusQuestion || amendment) && prev
+    ? [...(prev.amendments ?? [])]
+    : [];
+  if (amendment) amendments.push(input.userInput.trim());
+  const taskText = amendments.length > 0 ? [durableObjective, ...amendments].join('\n') : durableObjective;
   // Operation/class freeze for explicit continuation and bare continuation
   // gestures; counters still isolate unless continueTask is true.
-  const carryOperation = continueTask || continuationGesture;
+  // An amendment is reclassified from the preserved objective plus the new text.
+  const carryOperation = (input.operation === undefined || input.operation === 'AUTO')
+    && (continueTask || continuationGesture || statusQuestion)
+    && !amendment;
   const submissionIndex = (prev?.submissionIndex ?? 0) + 1;
 
+  const taskShape = resolveTaskShape(taskText, input.operation);
+  const effectiveOperation: TaskOperation =
+    carryOperation && prev
+      ? prev.effectiveOperation ?? prev.taskShape?.operation ?? resolveTaskShape(prev.taskText).operation
+      : taskShape.operation;
+
   const taskIntent: TurnTaskIntent =
-    input.taskIntent ??
-    (continueTask && prev?.stickyIntent ? prev.stickyIntent : input.classifyIntent(input.userInput));
+    effectiveOperation === 'READ_ONLY' ? 'explain'
+      : input.operation === 'CHANGE' ? 'execute'
+      : input.taskIntent ??
+        (continueTask && prev?.stickyIntent ? prev.stickyIntent : input.classifyIntent(input.userInput));
 
   const taskClass = carryOperation && prev
     ? prev.taskClass
     : resolveChatTaskClass({
-        taskText: input.userInput,
+        taskText,
         autoClassify: true,
+        operation: input.operation,
       });
 
   const gatePolicy = getChatTaskTune(taskClass).verificationPolicy;
@@ -153,17 +192,11 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
       }
     : emptyTurnCounters();
 
-  const taskShape = analyzeTaskShape(input.userInput);
-  // Continuation (explicit or bare gesture) keeps the frozen operation from the
-  // prior submission; isolated submissions derive it fresh from TaskShape.
-  const effectiveOperation: TaskOperation =
-    carryOperation && prev?.effectiveOperation
-      ? prev.effectiveOperation
-      : taskShape.operation;
-
   return {
     submissionIndex,
-    taskText: input.userInput,
+    taskText,
+    durableObjective,
+    amendments,
     taskIntent,
     taskClass,
     taskShape,

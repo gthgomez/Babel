@@ -496,7 +496,6 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
       { suffix: 'background', action: { type: 'run_command' as const, command: 'echo babel-b2-background', background: true } },
       { suffix: 'web-search', action: { type: 'web_search' as const, query: 'Babel B2 harness' } },
       { suffix: 'web-fetch', action: { type: 'web_fetch' as const, url: 'https://example.test/b2' } },
-      { suffix: 'lsp', action: { type: 'lsp' as const, operation: 'workspaceSymbol' as const, filePath: 'src/agent/chatEngine.ts', query: 'ChatEngine' } },
       { suffix: 'await', action: { type: 'await_command' as const, task_id: 'set-at-runtime' } },
     ];
     for (const entry of cases) {

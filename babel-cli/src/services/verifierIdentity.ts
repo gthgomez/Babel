@@ -13,6 +13,8 @@
  * Pure helpers; no I/O.
  */
 
+import { parseCommandArgv } from '../utils/commandArgv.js';
+
 export type VerifierScope = 'full' | 'targeted' | 'unknown';
 
 export interface VerifierIdentity {
@@ -36,6 +38,7 @@ const FILTER_FLAGS_WITH_VALUE = new Set([
   '-g',
   '--grep',
   '-k',
+  '-m',
   '--testpathpattern',
   '--test-path-pattern',
   '-f',
@@ -86,7 +89,7 @@ const NON_EXECUTING_FLAGS = new Set([
 ]);
 // `-v` is ambiguous (verbose in some runners) and stays in BOOLEAN_RUNNER_FLAGS;
 // only unambiguous version/help/listing forms are treated as non-executing.
-const NON_EXECUTING_FLAG_PREFIXES = ['--list', '--collect-only', '--show-config', '--print-config'];
+const NON_EXECUTING_FLAG_PREFIXES = ['--list', '--collect-only', '--show-config', '--print-config', '--dry-run', '--dryrun'];
 
 /**
  * Classify structural scope of a verifier command.
@@ -108,17 +111,19 @@ export function classifyVerifierScope(command: string): VerifierScope {
  * case-folding of arguments.
  */
 export function verifierExecutionFingerprint(command: string): string {
-  const display = cleanCommand(command);
-  if (!display) return '';
-  const tokens = tokenizeCommand(display);
-  if (tokens.length === 0) return '';
-  return tokens
-    .map((token, index) => (index === 0 ? normalizeExecutable(token) : stripQuotes(token)))
+  const trimmed = command.trim();
+  if (!trimmed) return '';
+  // Identity is the argv the sandbox would execute. Coverage matching keeps
+  // its own collapsed tokenizer; do not run that cleanup first.
+  let argv: string[];
+  try {
+    argv = parseCommandArgv(trimmed);
+  } catch {
+    return `unparsed\u0000${trimmed}`;
+  }
+  return argv
+    .map((token, index) => (index === 0 ? normalizeExecutable(token) : token))
     .join('\u0000');
-}
-
-function stripQuotes(token: string): string {
-  return token.replace(/^['"]|['"]$/g, '');
 }
 
 /**
@@ -175,13 +180,20 @@ export function satisfiesVerifierRequirement(required: string, actual: string): 
   }
 
   if (req.family === 'unknown' || act.family === 'unknown') {
-    // Unknown families: only exact identity-key match (no directional promotion).
-    return req.identityKey === act.identityKey;
+    // Unknown families never share a key. Only the same argv fingerprint matches.
+    return req.family === act.family
+      && verifierExecutionFingerprint(req.displayCommand) === verifierExecutionFingerprint(act.displayCommand);
   }
 
   if (req.family !== act.family) {
     return false;
   }
+
+  if (hasUnknownRunnerOption(required) || hasUnknownRunnerOption(actual)) {
+    return verifierExecutionFingerprint(req.displayCommand) === verifierExecutionFingerprint(act.displayCommand);
+  }
+
+  if (!coverageFlagsCovered(required, actual)) return false;
 
   if (req.scope === 'full') {
     // Only a full-suite actual can satisfy a full-suite requirement.
@@ -192,7 +204,7 @@ export function satisfiesVerifierRequirement(required: string, actual: string): 
     // Directional coverage: full suite covers any targeted requirement in-family.
     if (act.scope === 'full') return true;
     if (act.scope !== 'targeted') return false;
-    return selectorsCovered(req.targetSelectors, act.targetSelectors);
+    return selectorsEqual(req.targetSelectors, act.targetSelectors);
   }
 
   // required unknown scope within known family: match same key only
@@ -219,8 +231,9 @@ function identityOf(
   displayCommand: string,
 ): VerifierIdentity {
   const selectors = [...new Set(targetSelectors.map((s) => s.toLowerCase()))].sort();
-  const identityKey =
-    scope === 'targeted'
+  const identityKey = family === 'unknown'
+    ? `unknown#${verifierExecutionFingerprint(displayCommand)}`
+    : scope === 'targeted'
       ? `${family}#targeted:${selectors.join(',')}`
       : `${family}#${scope}`;
   return {
@@ -373,11 +386,51 @@ function looksLikeTestSelector(token: string, family: string): boolean {
   return false;
 }
 
-function selectorsCovered(required: readonly string[], actual: readonly string[]): boolean {
-  if (required.length === 0) return true;
+function selectorsEqual(required: readonly string[], actual: readonly string[]): boolean {
+  if (required.length !== actual.length) return false;
   const actualSet = new Set(actual.map((s) => s.toLowerCase()));
-  // Every required selector must appear in actual (actual may be stricter / same).
   return required.every((sel) => actualSet.has(sel.toLowerCase()));
+}
+
+const COVERAGE_FLAGS = ['--coverage', '--collectcoverage', '--coverage=true'];
+
+/** Required instrumentation must still be present. Extra coverage on the actual run is allowed. */
+function coverageFlagsCovered(required: string, actual: string): boolean {
+  const actualFlags = commandFlagSet(actual);
+  for (const flag of commandFlagSet(required)) {
+    if (COVERAGE_FLAGS.includes(flag) && !actualFlags.has(flag)) return false;
+  }
+  return true;
+}
+
+function commandFlagSet(command: string): Set<string> {
+  return new Set(tokenizeCommand(cleanCommand(command)).map((token) => token.toLowerCase()));
+}
+
+function hasUnknownRunnerOption(command: string): boolean {
+  const display = cleanCommand(command);
+  const tokens = tokenizeCommand(display);
+  const stripped = stripLauncher(tokens);
+  if (stripped.length === 0) return false;
+  const executable = normalizeExecutable(stripped[0]!);
+  const args = stripped.slice(1).map(normalizeArg);
+  const family = resolveFamily(executable, args) ?? 'unknown';
+  const runnerArgs = family === 'unknown' ? args : argsAfterRunner(family, executable, args);
+  for (let i = 0; i < runnerArgs.length; i += 1) {
+    const token = runnerArgs[i]!;
+    if (token === '--') continue;
+    if (FILTER_FLAGS_WITH_VALUE.has(token)) {
+      i += 1;
+      continue;
+    }
+    const eqIndex = token.indexOf('=');
+    const flag = eqIndex > 0 ? token.slice(0, eqIndex) : token;
+    if (FILTER_FLAGS_WITH_VALUE.has(flag)) continue;
+    if (BOOLEAN_RUNNER_FLAGS.has(token) || BOOLEAN_RUNNER_FLAGS.has(flag)) continue;
+    if (NON_EXECUTING_FLAGS.has(flag) || NON_EXECUTING_FLAG_PREFIXES.some((prefix) => flag.startsWith(prefix))) continue;
+    if (token.startsWith('-')) return true;
+  }
+  return false;
 }
 
 function normalizeSelector(token: string): string {

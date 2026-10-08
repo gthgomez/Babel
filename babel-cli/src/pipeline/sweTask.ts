@@ -117,11 +117,17 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       const topLevelEntries = readdirSync(projectRoot, { withFileTypes: true })
         .sort((left, right) => left.name.localeCompare(right.name))
         .map((entry) => `${entry.isDirectory() ? 'dir' : 'file'} ${entry.name}`);
-      const hasExistingAndroidProject =
-        existsSync(join(projectRoot, 'app')) ||
+      const affirmativeAndroid =
+        existsSync(join(projectRoot, 'settings.gradle')) ||
         existsSync(join(projectRoot, 'settings.gradle.kts')) ||
+        existsSync(join(projectRoot, 'build.gradle')) ||
+        existsSync(join(projectRoot, 'build.gradle.kts')) ||
+        existsSync(join(projectRoot, 'app', 'build.gradle')) ||
         existsSync(join(projectRoot, 'app', 'build.gradle.kts')) ||
+        existsSync(join(projectRoot, 'gradlew')) ||
+        existsSync(join(projectRoot, 'gradlew.bat')) ||
         existsSync(join(projectRoot, 'app', 'src', 'main', 'AndroidManifest.xml'));
+      const hasExistingAndroidProject = affirmativeAndroid;
       const androidSourceOnlyWorkspace = isAndroidSourceOnlyWorkspace(projectRoot);
 
       projectRootLines.push(
@@ -174,6 +180,7 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       }
 
       if (
+        affirmativeAndroid &&
         !androidSourceOnlyWorkspace &&
         (!gradlewExists || !gradlewBatExists || !wrapperPropertiesExists)
       ) {
@@ -190,7 +197,7 @@ Your JSON output MUST include a "thinking" field. Use this field to:
         );
       }
 
-      if (!androidSourceOnlyWorkspace && !gradleRuntimeStatus.available && !wrapperJarExists) {
+      if (affirmativeAndroid && !androidSourceOnlyWorkspace && !gradleRuntimeStatus.available && !wrapperJarExists) {
         wrapperBootstrapLines.push(
           'Gradle bootstrap sequencing is REQUIRED because gradle-wrapper.jar is missing and global gradle is also missing.',
           'A deterministic executor bootstrap lane will provision Gradle and generate gradle-wrapper.jar before normal execution begins.',

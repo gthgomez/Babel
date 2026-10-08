@@ -59,13 +59,17 @@ test('fixture rejects injected credential environment before script execution', 
   assert.ok(!result.diagnostic.includes('synthetic-unapproved-canary'))
 })
 
-test('fixture accepts only numeric Node test-worker identity metadata', async () => {
-  const valid = await captureSyntheticChild("console.log('SCRIPT_EXECUTED')", { NODE_TEST_WORKER_ID: '1' })
+test('fixture permits numeric test worker identity but rejects arbitrary worker payloads', async () => {
+  const zero = await captureSyntheticChild("console.log('WORKER_ZERO_READY')", { NODE_TEST_WORKER_ID: '0' })
+  assert.equal(zero.code, 0)
+  assert.ok(zero.output.includes('WORKER_ZERO_READY'))
+  const valid = await captureSyntheticChild("console.log('WORKER_READY')", { NODE_TEST_WORKER_ID: '3' })
   assert.equal(valid.code, 0)
-  const invalid = await captureSyntheticChild("console.log('SCRIPT_EXECUTED')", { NODE_TEST_WORKER_ID: 'unexpected-field' })
+  assert.ok(valid.output.includes('WORKER_READY'))
+  const invalid = await captureSyntheticChild("console.log('SCRIPT_EXECUTED')", { NODE_TEST_WORKER_ID: 'not-a-worker-number' })
   assert.notEqual(invalid.code, 0)
-  assert.ok(!invalid.output.includes('SCRIPT_EXECUTED'))
   assert.ok(invalid.output.includes('SYNTHETIC_PROVIDER_FIXTURE_ISOLATION_INVALID'))
+  assert.ok(!invalid.output.includes('SCRIPT_EXECUTED'))
 })
 
 test('credential resolvers see only the synthetic helper and fresh home', async () => {
