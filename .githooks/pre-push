@@ -1,54 +1,12 @@
 #!/bin/bash
-# Babel pre-push hook — automates the push checks AGENTS.md already requires:
-#  1. Public content policy
-#  2. Policy integrity manifest (generate + verify) when host-protected or
-#     workflow files changed - the #1 avoidable CI failure is drift between
-#     .github edits and POLICY_MANIFEST.json, which otherwise only surfaces
-#     after a CI round-trip.
-#  3. Secret scan when gitleaks is available locally (CI remains authoritative).
-# Install: pwsh tools/install-hooks.ps1  (or git config core.hooksPath .githooks)
-# CI is the authoritative gate; this hook is optional convenience.
+# Optional feedback. Server-side checks remain authoritative.
+# Read actual ref/SHA records; never regenerate tracked files here.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-if ! command -v pwsh &>/dev/null; then
-  echo "pwsh not found - skipping pre-push checks (install PowerShell 7+ for local feedback)" >&2
-  exit 0
-fi
-
-# Determine the push range: every local commit that would be pushed.
-UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{push} 2>/dev/null || true)
-if [ -n "$UPSTREAM" ]; then
-  RANGE="${UPSTREAM}..HEAD"
-else
-  RANGE="HEAD~${GIT_PUSH_COUNT:-1}...HEAD" 2>/dev/null || RANGE="HEAD"
-fi
-CHANGED=$(git diff --name-only "$RANGE" 2>/dev/null || git diff --name-only HEAD~1..HEAD 2>/dev/null || true)
-
-HOST_PROTECTED=$(echo "$CHANGED" | grep -E '^(\.github/|config/|AGENTS\.md|\.agents/)' || true)
-
-echo "[pre-push] public content policy..."
-pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-content-policy.ps1 -RepoRoot .
-
-if [ -n "$HOST_PROTECTED" ]; then
-  echo "[pre-push] host-protected files changed: regenerating + verifying policy integrity manifest..."
-  node tools/policy-integrity-manifest.mjs generate >/dev/null
-  node tools/policy-integrity-manifest.mjs verify
-  if ! git diff --quiet POLICY_MANIFEST.json 2>/dev/null; then
-    echo "[pre-push] POLICY_MANIFEST.json changed - include it in your commit!" >&2
+for tool in node pwsh; do
+  if ! command -v "$tool" &>/dev/null; then
+    echo "[pre-push] required local tool unavailable: $tool" >&2
     exit 1
   fi
-fi
-
-if command -v gitleaks &>/dev/null; then
-  echo "[pre-push] gitleaks secret scan..."
-  gitleaks detect --no-git --no-banner 2>/dev/null || \
-  gitleaks detect --no-banner || {
-    echo "[pre-push] gitleaks reported findings - resolve before pushing" >&2
-    exit 1
-  }
-else
-  echo "[pre-push] gitleaks not installed locally; skipping (CI runs the strict scan)" >&2
-fi
-
-echo "[pre-push] OK"
+done
+node "$SCRIPT_DIR/../tools/validate-push-candidates.mjs" "${1:-origin}"

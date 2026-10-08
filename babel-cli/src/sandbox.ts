@@ -122,7 +122,8 @@ export interface ToolResultFailure {
     | 'mcp_tool_error'
     | 'mcp_rpc_error'
     | 'mcp_protocol_error'
-    | 'no_compatible_mcp_tool';
+    | 'no_compatible_mcp_tool'
+    | 'mcp_approval_required';
   category: 'output_contract' | 'tool_execution' | 'transport' | 'input_contract';
   tool: string;
 }
@@ -136,6 +137,11 @@ export interface ToolResult {
   checkpoint_ids?: string[];
   render_intent?: ToolRenderIntent;
   failure?: ToolResultFailure;
+  /**
+   * True when no process was started. A zero exit then means the command
+   * never ran, and it must not be recorded as verifier evidence.
+   */
+  simulated?: boolean;
 }
 
 /**
@@ -1325,16 +1331,17 @@ export class SafeExecutor {
     targetPath: string,
     enforceProjectRoot: boolean,
   ): void {
-    if (!existsSync(targetPath)) {
-      return;
+    let stats;
+    try {
+      stats = lstatSync(targetPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
     }
-
-    const stats = lstatSync(targetPath);
     if (stats.isSymbolicLink()) {
-      const symlinkTarget = realpathSync(targetPath);
       throw new Error(
         `[sandbox] Symlink traversal denied: "${inputPath}" targets symlink ` +
-          `"${targetPath}" → "${symlinkTarget}" during final file write.`,
+          `"${targetPath}" during final file write.`,
       );
     }
 
@@ -1664,6 +1671,10 @@ export class SafeExecutor {
     if (profileDenial) return profileDenial;
 
     try {
+      const requestedPath = this.resolveProjectPath(inputPath);
+      this.ensureWithinProjectRoot(inputPath, requestedPath);
+      // Check the caller's final target before resolveSafe follows an in-root alias.
+      this.assertSafeWritableTarget(inputPath, requestedPath, true);
       const safePath = this.ensureWritableParentExists(inputPath, this.resolveSafe(inputPath));
 
       let targetPath = safePath;

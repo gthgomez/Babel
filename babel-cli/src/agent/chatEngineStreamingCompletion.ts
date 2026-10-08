@@ -9,15 +9,15 @@ import type {
 } from "./chatEngine.js";
 import type { ChatTurn } from "./chatToolDefinitions.js";
 import {
-  AUTO_CONTINUE_REFUSAL_MSG,
-  buildAutoContinueBlockedReport,
+  buildCompletionEvidenceBlockedReport,
+  MAX_COMPLETION_RECOVERY_RETRIES,
   planCompletionGateReject,
   resolveVerificationPolicy,
+  hasInspectedNoChangeEvidence,
 } from "./completionGatePolicy.js";
 import { recordProgressRecovery } from "./sessionEvents.js";
 import { reconcileStreamedAnswer } from "./chatEngineStreamingProtocol.js";
-
-const MAX_GATE_STRIKES = 3;
+import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 
 /** Resolve completion gates and settle one completed streaming turn. */
 export async function* settleStreamingCompletion(input: {
@@ -58,37 +58,22 @@ export async function* settleStreamingCompletion(input: {
     host.gatePolicy = policyStream;
     const plan = planCompletionGateReject({
       hasWrites: host.hasAnyWrites(),
+      hasInspectedNoChange: hasInspectedNoChangeEvidence(host.toolCallLog),
       policy: policyStream,
       hardGate,
       hadToolCallsThisTurn: host._hadToolCallsThisTurn,
       gateStrikes: host.gateStrikes,
-      maxGateStrikes: MAX_GATE_STRIKES,
+      maxGateStrikes: MAX_COMPLETION_RECOVERY_RETRIES,
     });
-    if (plan.kind === "auto_continue_block") {
-      turnSpan.setAttribute("babel.chat.auto_continue_refused", "true");
-      endSpan(turnSpan, SpanStatusCode.OK);
-      turnSpan = null;
-      host.conversation.push({ role: "assistant", content: answer });
-      host.conversation.push({
-        role: "assistant",
-        content: AUTO_CONTINUE_REFUSAL_MSG,
-      });
-      if (!host.isSubmissionCurrent(submissionGeneration)) return "done";
-      yield host.streamDone(AUTO_CONTINUE_REFUSAL_MSG, {
-        blockedReport: buildAutoContinueBlockedReport(),
-        ...(host.verifierTampered
-          ? { verifierTampered: true as const }
-          : {}),
-      });
-      return "done";
-    }
     if (plan.kind === "blocked") {
       turnSpan.setAttribute("babel.chat.gate_blocked", "true");
       endSpan(turnSpan, SpanStatusCode.OK);
       turnSpan = null;
       if (!host.isSubmissionCurrent(submissionGeneration)) return "done";
       yield host.streamDone(`BLOCKED: ${plan.reason}`, {
-        blockedReport: host.buildVerifierBlockedReport(plan.reason),
+        blockedReport: plan.missingInspection
+          ? buildCompletionEvidenceBlockedReport(plan.reason)
+          : host.buildVerifierBlockedReport(plan.reason),
         ...(host.verifierTampered
           ? { verifierTampered: true as const }
           : {}),
@@ -126,12 +111,12 @@ export async function* settleStreamingCompletion(input: {
       }
 
       host.conversation.push({ role: "assistant", content: answer });
-      host.conversation.push({
-        role: "user",
-        content: plan.useGreenMessage
+      recordChatHarnessFeedback(
+        host,
+        plan.useGreenMessage
           ? host.buildGateRejectUserMessage()
           : host.buildRejectionMessage(),
-      });
+      );
       turnSpan.setAttribute(
         "babel.chat.gate_strike",
         host.gateStrikes,
@@ -178,9 +163,9 @@ export async function* settleStreamingCompletion(input: {
         .map((r, i) => `${i + 1}. ${r}`)
         .join("\n");
       host.conversation.push({ role: "assistant", content: answer });
-      host.conversation.push({
-        role: "user",
-        content: [
+      recordChatHarnessFeedback(
+        host,
+        [
           "## Diff critic rejected your patch",
           "",
           reasons,
@@ -194,7 +179,7 @@ export async function* settleStreamingCompletion(input: {
         ]
           .filter(Boolean)
           .join("\n"),
-      });
+      );
     }
     endSpan(turnSpan, SpanStatusCode.OK);
     turnSpan = null;

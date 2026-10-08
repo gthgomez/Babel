@@ -179,9 +179,8 @@ describe('BABEL.md project memory', () => {
     if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('injects BABEL.md content into system prompt when present', () => {
-    const content = '# Test Project\nnpm test\ndist/ is build output';
-    writeFileSync(join(tmpDir, 'BABEL.md'), content, 'utf8');
+  it('does not copy BABEL.md into the system prompt', () => {
+    writeFileSync(join(tmpDir, 'BABEL.md'), '# Test Project\nBABEL_MEMORY_SHOULD_NOT_LOAD\n', 'utf8');
 
     const engine = new ChatEngine({
       task: 'what command runs tests?',
@@ -189,46 +188,8 @@ describe('BABEL.md project memory', () => {
     });
 
     const sysPrompt = (engine as any).getOrBuildSystemPrompt(true);
-    assert.ok(
-      sysPrompt.includes('## Project Memory (BABEL.md)'),
-      'system prompt should include BABEL.md header',
-    );
-    assert.ok(
-      sysPrompt.includes('npm test'),
-      'system prompt should include BABEL.md content',
-    );
-  });
-
-  it('does not inject when BABEL.md is absent', () => {
-    // Ensure no BABEL.md exists
-    const mdPath = join(tmpDir, 'BABEL.md');
-    if (existsSync(mdPath)) rmSync(mdPath, { force: true });
-
-    const engine = new ChatEngine({
-      task: 'what command runs tests?',
-      projectRoot: tmpDir,
-    });
-
-    const sysPrompt = (engine as any).getOrBuildSystemPrompt(true);
-    assert.ok(
-      !sysPrompt.includes('## Project Memory (BABEL.md)'),
-      'system prompt should NOT include BABEL.md header when file absent',
-    );
-  });
-
-  it('does not inject when BABEL.md is empty', () => {
-    writeFileSync(join(tmpDir, 'BABEL.md'), '', 'utf8');
-
-    const engine = new ChatEngine({
-      task: 'what command runs tests?',
-      projectRoot: tmpDir,
-    });
-
-    const sysPrompt = (engine as any).getOrBuildSystemPrompt(true);
-    assert.ok(
-      !sysPrompt.includes('## Project Memory (BABEL.md)'),
-      'system prompt should NOT include BABEL.md header when file is empty',
-    );
+    assert.equal(sysPrompt.includes('## Project Memory (BABEL.md)'), false);
+    assert.equal(sysPrompt.includes('BABEL_MEMORY_SHOULD_NOT_LOAD'), false);
   });
 });
 
@@ -302,6 +263,8 @@ describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
       task: 'how many services exist in this project',
       projectRoot,
       maxTurns: 20,
+      // Qualify inspection/synthesis behavior independently of the quick-inspect wall cutoff.
+      maxWallMs: 120_000,
     });
 
     let toolCount = 0;
@@ -346,7 +309,7 @@ describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
 
     assert.ok(doneEvent, 'Stream must yield a done event');
     assert.equal(doneEvent.blockedReport ?? null, null, 'Must NOT be BLOCKED for reaching inspection budget');
-    assert.ok(doneEvent.answer.includes('Synthesized summary: The repository contains 10 modules and 4 services.'));
+    assert.ok(doneEvent.answer.includes('Synthesized summary: The repository contains 10 modules and 4 services.'), String(doneEvent.answer));
     assert.ok(!doneEvent.answer.includes('BLOCKED:'));
     assert.ok(!doneEvent.answer.includes('str_replace'));
     assert.ok(!doneEvent.answer.includes('write_file'));
@@ -359,6 +322,8 @@ describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
       task: 'how many services exist in this project',
       projectRoot,
       maxTurns: 20,
+      // Qualify inspection/synthesis behavior independently of the quick-inspect wall cutoff.
+      maxWallMs: 120_000,
     });
 
     let toolCount = 0;

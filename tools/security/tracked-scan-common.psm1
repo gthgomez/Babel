@@ -35,11 +35,21 @@ function Get-TrackedScanInventory {
     [Parameter(Mandatory = $true)][string]$RepoRoot,
     [object[]]$BinaryAllowlist = @(),
     [int64]$MaxFileBytes = 20971520,
-    [int]$MaxLineCharacters = 1048576
+    [int]$MaxLineCharacters = 1048576,
+    [AllowNull()][string[]]$CommittedPaths = $null
   )
   $records = @()
   $issues = @()
-  $trackedPaths = @(Get-TrackedPathList -RepoRoot $RepoRoot)
+  $trackedPaths = @(if ($null -eq $CommittedPaths) { Get-TrackedPathList -RepoRoot $RepoRoot } else { $CommittedPaths })
+  foreach ($relative in $trackedPaths) {
+    if ([string]::IsNullOrWhiteSpace($relative) -or [IO.Path]::IsPathRooted($relative) -or
+        $relative.Contains('\') -or $relative.Contains(':') -or $relative.Split('/') -contains '..' -or
+        $relative.Split('/') -contains '.' -or $relative.Contains([char]0)) { throw 'Invalid committed path inventory.' }
+    $leaf = ($relative -split '/')[-1]
+    if ($leaf -eq '.env' -or ($leaf -like '.env.*' -and $leaf -ne '.env.example') -or
+        $relative -match '(^|/)\.codex/(auth\.json|\.env)$') { throw 'Credential-class tracked path rejected before content access.' }
+  }
+  if (@($trackedPaths | Select-Object -Unique).Count -ne $trackedPaths.Count) { throw 'Duplicate committed path inventory.' }
   foreach ($relative in $trackedPaths) {
     $full = Join-Path $RepoRoot $relative
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {

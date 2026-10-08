@@ -9,6 +9,37 @@ import { commandCoverage, parseWorkflow } from '../ci-workflow-coverage.mjs';
 
 const workflow = parseWorkflow(readFileSync(new URL('../../.github/workflows/typecheck.yml', import.meta.url), 'utf8'));
 const command = 'npm run test:harness-acceptance';
+test('desktop has independent discovery and a blocking command on both platforms', () => {
+  assert.deepEqual(commandCoverage(workflow, 'npm run test'), {
+    'ubuntu-latest': ['desktop-tests'], 'windows-latest': ['desktop-tests'],
+  });
+  const job = workflow.jobs['desktop-tests'];
+  assert.ok(job.steps.some(s => s.run === 'node tools/check-desktop-test-inventory.mjs'));
+  assert.equal(job.steps.find(s => s.run === 'npm run test')['working-directory'], 'babel-desktop');
+});
+test('missing desktop discovery fails independently of the CLI inventory', async () => {
+  const { checkDesktopInventory } = await import('../check-desktop-test-inventory.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'babel-desktop-inventory-'));
+  try {
+    mkdirSync(join(root, 'test'));
+    for (const name of ['bundle', 'core', 'diagnostics', 'installed-runtime', 'native', 'package-windows-setup']) writeFileSync(join(root, 'test', name + '.test.mjs'), 'fixture');
+    writeFileSync(join(root, 'package.json'), JSON.stringify({scripts:{test:'node scripts/build.mjs && node --test test/*.test.mjs'}}));
+    const url = new URL('file:///' + root.replaceAll('\\', '/') + '/');
+    assert.equal(checkDesktopInventory(url).files.length, 6);
+    rmSync(join(root, 'test/package-windows-setup.test.mjs'));
+    assert.throws(() => checkDesktopInventory(url), /Desktop regression missing/);
+  } finally { rmSync(root, {recursive:true,force:true}); }
+});
+test('unique integrity and event-aware metadata fixtures block both aggregate gates', () => {
+  for (const gate of ['linux-validation', 'windows-portability']) {
+    assert.ok(workflow.jobs[gate].needs.includes('policy-integrity'));
+    assert.ok(workflow.jobs[gate].needs.includes('public-pr-metadata-tests'));
+  }
+  const job = workflow.jobs['public-pr-metadata-tests'];
+  assert.equal(job.if, undefined);
+  assert.equal(job.steps.find(s => s.run?.includes('test-public-pr-metadata.ps1')).if, "github.event_name == 'pull_request'");
+  assert.ok(job.steps.some(s => s.if === "github.event_name != 'pull_request'" && /not applicable/.test(s.run)));
+});
 test('matrix commands establish required Linux and Windows dependency coverage', () => {
   assert.deepEqual(commandCoverage(workflow, command), {
     'ubuntu-latest': ['platform-core'], 'windows-latest': ['platform-core'],
@@ -74,7 +105,7 @@ test('consumer guard blocks direct and normalized socket arguments without conta
   assert.equal(child.status, 0, child.stderr)
 });
 for (const [label, mutate] of [
-  ['quoted consumer command', w => { w.jobs['consumer-artifact'].steps.find(s => s.run === 'npm run test:consumer-artifact').run = "echo 'npm run test:consumer-artifact'"; }],
+  ['quoted consumer command', w => { w.jobs['consumer-artifact'].steps.find(s => s.run?.startsWith('npm run test:consumer-artifact')).run = "echo 'npm run test:consumer-artifact'"; }],
   ['consumer excludes Windows', w => { w.jobs['consumer-artifact'].strategy.matrix.exclude = [{ os: 'windows-latest' }]; }],
   ['consumer missing dependency', w => { w.jobs['windows-portability'].needs = w.jobs['windows-portability'].needs.filter(n => n !== 'consumer-artifact'); }],
 ]) test(label + ' fails closed', () => {

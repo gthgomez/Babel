@@ -1,11 +1,27 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { before, after } from 'node:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { CostTracker, usageDelta } from './costTracker.js';
 import { resetGlobalTokenHistoryDb, TokenHistoryDb } from './tokenHistoryDb.js';
+
+// Historical totals require an owned SQLite store, independent of ambient user state.
+let historyRoot = '';
+let priorHistoryPath: string | undefined;
+before(() => {
+  priorHistoryPath = process.env['BABEL_TOKEN_DB_PATH'];
+  historyRoot = mkdtempSync(join(tmpdir(), 'babel-cost-history-fixture-'));
+  resetGlobalTokenHistoryDb();
+  process.env['BABEL_TOKEN_DB_PATH'] = join(historyRoot, 'history.db');
+});
+after(() => {
+  resetGlobalTokenHistoryDb();
+  if (priorHistoryPath === undefined) delete process.env['BABEL_TOKEN_DB_PATH'];
+  else process.env['BABEL_TOKEN_DB_PATH'] = priorHistoryPath;
+  rmSync(historyRoot, { recursive: true, force: true });
+});
 
 test('Go peak-price estimates retain their basis and never claim an observed bill', () => {
   const tracker = new CostTracker();
@@ -1091,7 +1107,7 @@ test('a removed unrelated root cannot contribute to another project snapshot', (
   }
 });
 
-test('rooted project matching accepts Windows path case aliases', { skip: process.platform !== 'win32' }, () => {
+test('rooted project matching accepts Windows path case aliases', { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false }, () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-project-case-'));
   try {
     const tracker = new CostTracker(root);

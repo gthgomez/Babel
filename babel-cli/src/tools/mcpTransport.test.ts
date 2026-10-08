@@ -1,5 +1,5 @@
-import test from 'node:test';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import test, { mock } from 'node:test';
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
@@ -11,6 +11,7 @@ import {
   frameJsonRpcMessage,
   executeMcpMethod,
   handleMcpRequest,
+  runWithApprovedMcpJit,
   handleMcpToolCall,
   parseMcpToolCallResult,
   parseFramedMessages,
@@ -49,6 +50,7 @@ test('buildMcpToolCallParams prefers query-like schema fields', () => {
             query: { type: 'string' },
           },
         },
+        annotations: { readOnlyHint: true },
       },
     ],
     'find this',
@@ -61,7 +63,10 @@ test('buildMcpToolCallParams prefers query-like schema fields', () => {
 });
 
 test('buildMcpToolCallParams defaults to text argument when schema is opaque', () => {
-  const params = buildMcpToolCallParams([{ name: 'lookup' }], 'hello');
+  const params = buildMcpToolCallParams(
+    [{ name: 'lookup', annotations: { readOnlyHint: true } }],
+    'hello',
+  );
 
   assert.deepEqual(params, {
     name: 'lookup',
@@ -157,7 +162,7 @@ test('generic MCP request rejects a malformed live tools/call result without ech
     "process.stdin.on('data', (chunk) => {",
     "  input += chunk.toString();",
     "  if (!initialized && input.includes('\\\"id\\\":0')) { initialized = true; send({ jsonrpc: '2.0', id: 0, result: {} }); }",
-    "  if (!listed && input.includes('\\\"id\\\":1')) { listed = true; send({ jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }] } }); }",
+    "  if (!listed && input.includes('\\\"id\\\":1')) { listed = true; send({ jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } }, annotations: { readOnlyHint: true, destructiveHint: false } }] } }); }",
     "  if (!called && input.includes('\\\"id\\\":2')) { called = true; send({ jsonrpc: '2.0', id: 2, result: { leaked: 'MCP_SECRET_SENTINEL' } }); }",
     "});",
   ].join('\n');
@@ -175,7 +180,7 @@ test('generic MCP request rejects a malformed live tools/call result without ech
     assert.match(result.stderr, /MCP_RESULT_INVALID/);
     assert.doesNotMatch(result.stderr, new RegExp(sentinel));
   } finally {
-    rmSync(fixtureDir, { recursive: true, force: true });
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 test('generic MCP resource, prompt, and tool-list calls reject malformed live results', async () => {
@@ -206,7 +211,7 @@ test('generic MCP resource, prompt, and tool-list calls reject malformed live re
       assert.doesNotMatch(result.stderr, new RegExp(sentinel), method);
     }
   } finally {
-    rmSync(fixtureDir, { recursive: true, force: true });
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -293,7 +298,7 @@ test('shared MCP transport rejects live tools/call errors without returning remo
     assert.equal(result.mcp_lifecycle?.reason_code, 'tool_error');
     assert.doesNotMatch(result.stderr, new RegExp(sentinel));
   } finally {
-    rmSync(fixtureDir, { recursive: true, force: true });
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -308,7 +313,7 @@ test('generic MCP request rejects live tool-level errors without returning remot
     "process.stdin.on('data', (chunk) => {",
     "  input += chunk.toString();",
     "  if (!initialized && input.includes('\\\"id\\\":0')) { initialized = true; send({ jsonrpc: '2.0', id: 0, result: {} }); }",
-    "  if (!listed && input.includes('\\\"id\\\":1')) { listed = true; send({ jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }] } }); }",
+    "  if (!listed && input.includes('\\\"id\\\":1')) { listed = true; send({ jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } }, annotations: { readOnlyHint: true, destructiveHint: false } }] } }); }",
     "  if (!called && input.includes('\\\"id\\\":2')) { called = true; send({ jsonrpc: '2.0', id: 2, result: { content: [{ type: 'text', text: 'MCP_REQUEST_TOOL_ERROR_SECRET' }], isError: true } }); }",
     "});",
   ].join('\n');
@@ -328,7 +333,7 @@ test('generic MCP request rejects live tool-level errors without returning remot
     assert.equal(result.mcp_lifecycle?.reason_code, 'tool_error');
     assert.doesNotMatch(result.stderr, new RegExp(sentinel));
   } finally {
-    rmSync(fixtureDir, { recursive: true, force: true });
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -383,7 +388,7 @@ test('shared MCP transport redacts id=1 JSON-RPC errors and suppresses child std
     assert.doesNotMatch(result.stderr, new RegExp(rpcSentinel));
     assert.doesNotMatch(result.stderr, new RegExp(stderrSentinel));
   } finally {
-    rmSync(fixtureDir, { recursive: true, force: true });
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -410,7 +415,7 @@ test('generic MCP request redacts id=1 and id=2 JSON-RPC errors', async () => {
           "process.stdin.on('data', (chunk) => {",
           "  input += chunk.toString();",
           "  if (!initialized && input.includes('\\\"id\\\":0')) { initialized = true; send({ jsonrpc: '2.0', id: 0, result: {} }); }",
-          "  if (!listed && input.includes('\\\"id\\\":1')) { listed = true; send({ jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }] } }); }",
+          "  if (!listed && input.includes('\\\"id\\\":1')) { listed = true; send({ jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } }, annotations: { readOnlyHint: true, destructiveHint: false } }] } }); }",
           "  if (!replied && input.includes('\\\"id\\\":2')) { replied = true; send({ jsonrpc: '2.0', id: 2, error: { code: -32000, message: 'MCP_REQUEST_RPC_2_SENTINEL', data: { secret: 'MCP_REQUEST_RPC_2_SENTINEL' } } }); }",
           "});",
         ].join('\n');
@@ -430,7 +435,7 @@ test('generic MCP request redacts id=1 and id=2 JSON-RPC errors', async () => {
       assert.equal(result.mcp_lifecycle?.reason_code, 'rpc_error', `id=${failingId}`);
       assert.doesNotMatch(result.stderr, new RegExp(sentinel), `id=${failingId}`);
     } finally {
-      rmSync(fixtureDir, { recursive: true, force: true });
+      rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 });
@@ -492,7 +497,7 @@ test('MCP resource and prompt result schemas reject otherwise-valid unrecognized
       assert.equal(response.render_intent, 'tool_failure', method);
       assert.doesNotMatch(response.stderr, new RegExp(sentinel), method);
     } finally {
-      rmSync(fixtureDir, { recursive: true, force: true });
+      rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 });
@@ -501,8 +506,8 @@ test('MCP tool selector skips incompatible required schemas and uses a compatibl
   assert.deepEqual(
     buildMcpToolCallParams(
       [
-        { name: 'query', inputSchema: { properties: { query: {} }, required: ['query', 'api_key'] } },
-        { name: 'search', inputSchema: { properties: { text: {} }, required: ['text'] } },
+        { name: 'query', inputSchema: { properties: { query: {} }, required: ['query', 'api_key'] }, annotations: { readOnlyHint: true } },
+        { name: 'search', inputSchema: { properties: { text: {} }, required: ['text'] }, annotations: { readOnlyHint: true } },
       ],
       'find it',
     ),
@@ -543,7 +548,7 @@ test('generic MCP request returns typed no-compatible-tool before tools/call dis
     assert.equal(response.mcp_lifecycle?.reason_code, 'no_compatible_tool');
     assert.equal(existsSync(dispatchMarker), false);
   } finally {
-    rmSync(fixtureDir, { recursive: true, force: true });
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -580,7 +585,7 @@ test('MCP state machine rejects out-of-order and duplicate initialize responses 
       if (!duplicate) assert.doesNotMatch(response.stderr, /MCP_OUT_OF_ORDER_SENTINEL/);
       if (!duplicate) assert.equal(existsSync(dispatchMarker), false);
     } finally {
-      rmSync(fixtureDir, { recursive: true, force: true });
+      rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 });
@@ -613,7 +618,7 @@ test('handleMcpToolCall cannot convert a malformed transport result into success
     assert.equal(response.failure?.code, 'invalid_mcp_tool_result');
     assert.doesNotMatch(response.stderr, /MCP_HANDLE_TOOL_CALL_SENTINEL/);
   } finally {
-    rmSync(fixtureDir, { recursive: true, force: true });
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -713,7 +718,7 @@ test('generic MCP validates a complete response batch before writing a later pro
       assert.equal(response.mcp_lifecycle?.reason_code, 'response_protocol_error', stage);
       assert.equal(existsSync(dispatchMarker), false, stage);
     } finally {
-      rmSync(fixtureDir, { recursive: true, force: true });
+      rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 });
@@ -749,7 +754,83 @@ test('MCP discovery-list schemas reject unrecognised fields without returning th
       assert.equal(response.failure?.code, 'invalid_mcp_tool_result', method);
       assert.doesNotMatch(response.stderr, new RegExp(sentinel), method);
     } finally {
-      rmSync(fixtureDir, { recursive: true, force: true });
+      rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
+  }
+});
+
+test('protocol failure returns only after the owned MCP server closes', async () => {
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'babel-mcp-close-order-'));
+  const serverPath = join(fixtureDir, 'server.cjs');
+  const statePath = join(fixtureDir, 'pid.json');
+  const dispatchMarker = join(fixtureDir, 'dispatched');
+  let pid = 0;
+  try {
+    writeFileSync(serverPath, `
+const { writeFileSync } = require('node:fs');
+writeFileSync(process.argv[2], JSON.stringify({ pid: process.pid }));
+process.on('SIGTERM', () => setTimeout(() => process.exit(0), 150));
+let replied = false;
+process.stdin.on('data', (chunk) => {
+  if (chunk.toString().includes('tools/call')) writeFileSync(process.argv[3], 'dispatched');
+  if (replied) return;
+  replied = true;
+  setTimeout(() => {
+    const initialize = JSON.stringify({ jsonrpc: '2.0', id: 0, result: {} });
+    process.stdout.write('Content-Length: ' + Buffer.byteLength(initialize) + '\\r\\n\\r\\n' + initialize);
+  }, 25);
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} });
+  process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body);
+});
+setInterval(() => {}, 100);
+`);
+    const response = await executeMcpMethod('fixture', 'tools/call', { name: 'lookup', arguments: { query: 'find it' } },
+      undefined, { fixture: { command: 'node', args: [serverPath, statePath, dispatchMarker] } });
+    assert.equal(response.failure?.code, 'mcp_protocol_error', response.stderr);
+    pid = Number(JSON.parse(readFileSync(statePath, 'utf8')).pid);
+    assert.equal(response.mcp_lifecycle?.reason_code, 'response_protocol_error');
+    let alive = true;
+    try { process.kill(pid, 0); } catch (error) { alive = (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+    assert.equal(alive, false, 'owned MCP server must have exited before response settlement');
+    assert.equal(existsSync(dispatchMarker), false, 'late frames must not restart dispatch after protocol failure');
+  } finally {
+    if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* already closed */ } }
+    rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+
+test('MCP JIT capability is exact, once-only, expiring, and revoked when its dispatch ends', async () => {
+  const previousAsk = process.env['BABEL_ASK'];
+  const previousExpires = process.env['BABEL_MCP_APPROVAL_EXPIRES'];
+  const req = { tool: 'mcp_request' as const, server: 'approved-fixture', query: 'approved query' };
+  try {
+    process.env['BABEL_ASK'] = 'true';
+    delete process.env['BABEL_MCP_APPROVAL_EXPIRES'];
+    await runWithApprovedMcpJit(req, async () => {
+      for (const wrong of [{ ...req, query: 'another query' }, { ...req, server: 'another-server' }]) {
+        assert.equal((await handleMcpRequest(wrong, {})).failure?.code, 'mcp_approval_required');
+      }
+      const accepted = await handleMcpRequest(req, {});
+      assert.equal(accepted.mcp_lifecycle?.reason_code, 'unknown_server', 'exact approval passes only the approval gate, not server admission');
+      assert.equal((await handleMcpRequest(req, {})).failure?.code, 'mcp_approval_required', 'approval is consumed exactly once');
+    });
+    const now = Date.now();
+    await runWithApprovedMcpJit(req, async () => {
+      const clock = mock.method(Date, 'now', () => now + 60_001);
+      try { assert.equal((await handleMcpRequest(req, {})).failure?.code, 'mcp_approval_required'); }
+      finally { clock.mock.restore(); }
+    });
+    let release!: () => void;
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    let late!: Promise<Awaited<ReturnType<typeof handleMcpRequest>>>;
+    await runWithApprovedMcpJit(req, async () => {
+      late = (async () => { await wait; return handleMcpRequest(req, {}); })();
+    });
+    release();
+    assert.equal((await late).failure?.code, 'mcp_approval_required', 'inherited async context is revoked after dispatch settlement');
+    assert.equal((await handleMcpRequest(req, {})).failure?.code, 'mcp_approval_required', 'unrelated direct calls remain denied');
+  } finally {
+    if (previousAsk === undefined) delete process.env['BABEL_ASK']; else process.env['BABEL_ASK'] = previousAsk;
+    if (previousExpires === undefined) delete process.env['BABEL_MCP_APPROVAL_EXPIRES']; else process.env['BABEL_MCP_APPROVAL_EXPIRES'] = previousExpires;
   }
 });

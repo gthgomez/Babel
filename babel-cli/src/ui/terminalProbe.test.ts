@@ -365,7 +365,7 @@ test('terminalCapsCompat works without prior probe', () => {
 // 9. Windows Terminal DEC 2026 override
 // ═══════════════════════════════════════════════════════════════════════════════
 
-test('Windows Terminal defaults dec2026Sync to false', { skip: process.platform !== 'win32' }, () => {
+test('Windows Terminal defaults dec2026Sync to false', { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false }, () => {
   resetTerminalProbe();
   withEnv(
     {
@@ -387,7 +387,7 @@ test('Windows Terminal defaults dec2026Sync to false', { skip: process.platform 
   );
 });
 
-test('BABEL_WINTERM_SYNC=1 enables dec2026Sync on Windows Terminal', { skip: process.platform !== 'win32' }, () => {
+test('BABEL_WINTERM_SYNC=1 enables dec2026Sync on Windows Terminal', { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false }, () => {
   resetTerminalProbe();
   withEnv(
     {
@@ -406,7 +406,7 @@ test('BABEL_WINTERM_SYNC=1 enables dec2026Sync on Windows Terminal', { skip: pro
   );
 });
 
-test('Windows Terminal defaults scrollRegions to false', { skip: process.platform !== 'win32' }, () => {
+test('Windows Terminal defaults scrollRegions to false', { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false }, () => {
   resetTerminalProbe();
   withEnv(
     {
@@ -428,7 +428,7 @@ test('Windows Terminal defaults scrollRegions to false', { skip: process.platfor
   );
 });
 
-test('BABEL_SCROLL_REGIONS=1 enables scrollRegions on Windows Terminal', { skip: process.platform !== 'win32' }, () => {
+test('BABEL_SCROLL_REGIONS=1 enables scrollRegions on Windows Terminal', { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false }, () => {
   resetTerminalProbe();
   withEnv(
     {
@@ -446,7 +446,7 @@ test('BABEL_SCROLL_REGIONS=1 enables scrollRegions on Windows Terminal', { skip:
   );
 });
 
-test('BABEL_WINTERM_SYNC=0 overrides stays false on Windows Terminal', { skip: process.platform !== 'win32' }, () => {
+test('BABEL_WINTERM_SYNC=0 overrides stays false on Windows Terminal', { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false }, () => {
   resetTerminalProbe();
   withEnv(
     {
@@ -496,7 +496,7 @@ test('formatCapabilityReport includes DEC 2026 gated line', () => {
     'report should include DEC 2026 gated line');
 });
 
-test('formatCapabilityReport shows winterm hint when disabled', { skip: process.platform !== 'win32' }, () => {
+test('formatCapabilityReport shows winterm hint when disabled', { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false }, () => {
   resetTerminalProbe();
   withEnv(
     {

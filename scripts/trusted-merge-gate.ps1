@@ -29,7 +29,7 @@ New-Item -ItemType Directory -Path $materialized -Force | Out-Null
 $priorNoReplaceObjects = [Environment]::GetEnvironmentVariable('GIT_NO_REPLACE_OBJECTS', 'Process')
 try {
   $env:GIT_NO_REPLACE_OBJECTS = '1'
-  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-git-common.psm1', 'scripts/agent-review-evidence.ps1', 'config/review-risk-policy.json')) {
+  foreach ($relative in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-pr-gate-evidence.psm1', 'scripts/agent-git-common.psm1', 'scripts/agent-review-evidence.ps1', 'config/review-risk-policy.json')) {
     $target = Join-Path $materialized $relative
     New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
     $spec = '{0}:{1}' -f $BaseSha, $relative
@@ -41,7 +41,7 @@ try {
   }
   $args = @(
     '-NoProfile', '-NonInteractive', '-File', (Join-Path $materialized 'scripts/agent-pr-gate.ps1'),
-    '-PR', $PR, '-RepoRoot', $resolvedRepo, '-ReviewedHeadSha', $ReviewedHeadSha, '-RiskTier', $RiskTier,
+    '-ExpectedExecutionBaseSha', $BaseSha, '-PR', $PR, '-RepoRoot', $resolvedRepo, '-ReviewedHeadSha', $ReviewedHeadSha, '-RiskTier', $RiskTier,
     '-AutonomousReviewEvidencePath', $AutonomousReviewEvidencePath,
     '-BuilderIdentity', $BuilderIdentity, '-OutputFormat', $OutputFormat
   )

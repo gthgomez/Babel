@@ -1071,13 +1071,24 @@ test('buildPipelineV9OfflineFixtureResponse: OTel lane executor returns tool_cal
     assert.notEqual(firstResult, null);
     assert.equal(firstResult.type, 'tool_call');
     assert.equal(firstResult.tool, 'file_read');
-    assert.equal(firstResult.path, 'runs/latest/01_manifest.json');
+    assert.equal(firstResult.path, 'babel-cli/package.json');
+
+    for (const read of ['file_read babel-cli/package.json\nExit code: 1',
+      'file_read runs/latest/01_manifest.json\nExit code: 0']) {
+      const incomplete = buildPipelineV9OfflineFixtureResponse(
+        `OTel regression lane executor turn.\n### EXECUTION HISTORY\n[Step 1] ${read}`,
+        { stage: 'executor' },
+      ) as Record<string, unknown>;
+      assert.equal(incomplete.type, 'tool_call');
+      assert.equal(incomplete.tool, 'file_read');
+      assert.equal(incomplete.path, 'babel-cli/package.json');
+    }
 
     // Second executor call: file_read present in history → EXECUTION_COMPLETE
     const historyPrompt = [
       'OTel regression lane executor turn.',
       '### EXECUTION HISTORY',
-      '[Step 1] file_read runs/latest/01_manifest.json',
+      '[Step 1] file_read babel-cli/package.json',
       'Exit code: 0',
     ].join('\n');
     const secondResult = buildPipelineV9OfflineFixtureResponse(historyPrompt, {

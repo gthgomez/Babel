@@ -45,9 +45,9 @@ foreach ($required in @('reviewThreads\(first:100,after:\$after\)', 'pageInfo\{h
   if ($gate -notmatch $required) { throw "Base-rooted gate is missing full review-thread pagination: $required" }
 }
 foreach ($required in @(
-    'Get-AgentRulesetPolicy', 'RiskTier', 'AuditOnly', 'schemaVersion = 4', 'Invoke-AgentGh', '[object[]]$checkRuns',
-    'Wait-AgentRequiredChecksReady', 'MaxAttempts = 180', 'GITHUB_WORKFLOW', 'GITHUB_JOB',
-    'self_check_deferred_to_current_job_result', 'required_check_wait_timeout',
+    'Get-AgentRulesetPolicy', 'RiskTier', 'AuditOnly', 'schemaVersion = 4', 'Invoke-AgentGh', 'Get-AgentCurrentCISnapshot',
+    'Wait-AgentRequiredChecksReady', 'ExpectedExecutionBaseSha', 'GITHUB_WORKFLOW', 'GITHUB_JOB',
+    'self_check_deferred_to_current_job_result', 'FINAL_CANDIDATE_CURRENT',
     'Get-AgentRiskLane', 'baseDerivedLane', 'effectiveLane', 'minimumReviewCount',
     'Read-AgentAutonomousReviewEvidence', 'Test-AgentControllerReviewEvidenceBundle', 'Get-AgentNumstatDigest',
     'materializedCandidate', 'REMOTE_HEAD_MATCH')) {
@@ -76,7 +76,9 @@ foreach ($marker in @('owner.id', 'per_page=100&page=')) {
 foreach ($marker in @('babel-controller-ai-reviews-v2', 'github_host_review_bundle_v3', 'legacy_v2_review_unsupported')) {
   if ($evidenceValidator -notmatch [regex]::Escape($marker)) { throw "Immutable evidence validator is missing marker: $marker" }
 }
+if ($launcher -notmatch [regex]::Escape("'-ExpectedExecutionBaseSha', `$BaseSha")) { throw 'Trusted launcher must bind its execution base.' }
 $workflow = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot '.github/workflows/trusted-control-plane.yml')
+if ($workflow -match '(?m)^  issue_comment:') { throw 'Advisory comments must not cancel or restart audits.' }
 $trustedEvents = [regex]::Match($workflow, '(?ms)^  pull_request_target:\r?\n    types: \[(?<events>[^\]]+)\]')
 if (-not $trustedEvents.Success) { throw 'Trusted audit lifecycle events unavailable.' }
 $events = @($trustedEvents.Groups['events'].Value.Split(',') | ForEach-Object { $_.Trim() })

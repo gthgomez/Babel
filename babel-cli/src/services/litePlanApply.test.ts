@@ -34,19 +34,22 @@ test('lite-plan-apply fixture routes routine babel-cli maintenance to lite_fix',
   );
 });
 
-test('lite-plan-apply fixture detects dual-file scoped small fix', () => {
-  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-  const detected = detectSmallFix({
-    projectRoot: repoRoot,
-    task: scenario.task,
-  });
-
-  assert.ok(detected);
-  assert.equal(detected?.mode, 'dual');
-  if (detected?.mode === 'dual') {
+test('lite-plan-apply fixture detects exactly the two approved files in an isolated project', () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'babel-lite-plan-scope-'));
+  try {
+    for (const path of [scenario.source_file, scenario.test_file]) {
+      mkdirSync(dirname(join(repoRoot, path)), { recursive: true });
+      writeFileSync(join(repoRoot, path), 'export {};\n', 'utf8');
+    }
+    const detected = detectSmallFix({ projectRoot: repoRoot, task: scenario.task });
+    assert.ok(detected);
+    assert.equal(detected.mode, 'dual');
+    if (detected.mode !== 'dual') assert.fail('Expected exact source/test pair');
     assert.equal(detected.sourceFile, scenario.source_file);
     assert.equal(detected.testFile, scenario.test_file);
     assert.equal(detected.verifierCommand, scenario.verifier_command);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
   }
 });
 

@@ -5,7 +5,8 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const rootOption = process.argv.indexOf("--repo-root");
+const repoRoot = rootOption < 0 ? resolve(dirname(fileURLToPath(import.meta.url)), "..") : resolve(process.argv[rootOption + 1]);
 const manifestPath = join(repoRoot, "POLICY_MANIFEST.json");
 // Explicit snapshot reconciled with the promoted host-protected prefixes.
 // New protected files require a reviewed registration and regeneration.
@@ -66,6 +67,7 @@ const coveredPaths = [
   "babel-cli/src/services/candidateCollector.test.ts",
   "babel-cli/src/services/candidateCollector.ts",
   "babel-cli/src/services/candidateCollectorCli.ts",
+  "babel-cli/src/services/candidateCollectorCli.test.ts",
   "babel-cli/src/services/codexHarnessReview.test.ts",
   "babel-cli/src/services/codexHarnessReview.ts",
   "babel-cli/src/services/controllerMediatedHarnessReview.test.ts",
@@ -124,6 +126,7 @@ const coveredPaths = [
   "docs/guides/AGENT_GIT_OPERATIONS.md",
   "scripts/agent-git-common.psm1",
   "scripts/agent-pr-gate-common.psm1",
+  "scripts/agent-pr-gate-evidence.psm1",
   "scripts/agent-pr-gate.ps1",
   "scripts/agent-pr-merge.ps1",
   "scripts/agent-review-evidence.ps1",
@@ -134,6 +137,7 @@ const coveredPaths = [
   "tools/agent-host-review.ps1",
   "tools/babel-pr-orchestrate-opencode.mts",
   "tools/babel-pr-orchestrate.mts",
+  "tools/resolve-release-tag.mjs",
   "tools/host-review-worker.mts",
   "tools/policy-integrity-manifest.mjs"
 ].sort();

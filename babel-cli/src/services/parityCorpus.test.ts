@@ -69,7 +69,7 @@ test('parity corpus run modes resolve per repo_kind', () => {
 for (const taskId of ALL_TASK_IDS) {
   test(
     `parity babel cell records offline_demo evidence for ${taskId}`,
-    { skip: skipIfNoApiKeys, concurrency: false },
+    { skip: skipIfNoApiKeys ? 'Live-provider fixtures unavailable without authorized keys' : false, concurrency: false },
     async () => {
       const task = readParityCorpusTask(taskId);
       const expectedMode = resolveParityCorpusRunMode(task);

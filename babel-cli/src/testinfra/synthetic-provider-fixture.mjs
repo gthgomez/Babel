@@ -20,7 +20,7 @@ const allowedNames = new Set([
   'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'BABEL_ROOT', 'BABEL_CONFIG_DIR',
   'BABEL_STATE_DIR', 'BABEL_CACHE_DIR', 'BABEL_RUNS_DIR', 'BABEL_PROJECT_ROOT',
   'BABEL_OPENCODE_GO_HELPER', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY',
-  fixtureKey, 'NODE_TEST_CONTEXT', 'FORCE_COLOR',
+  fixtureKey, 'NODE_TEST_CONTEXT', 'NODE_TEST_WORKER_ID', 'FORCE_COLOR',
 ])
 
 /** Project only scalar test facts; arbitrary child output never reaches diagnostics. */
@@ -104,6 +104,10 @@ function installFixtureBoundary() {
     }
   }
   for (const name of Object.keys(process.env)) requireCondition(allowedNames.has(name.toUpperCase()))
+  // Node's test runner may add a numeric worker identity after the parent
+  // constructs the isolated environment. It carries no capability or secret.
+  const workerId = process.env['NODE_TEST_WORKER_ID']
+  requireCondition(workerId === undefined || /^\d+$/.test(workerId))
   const paths = {
     HOME: 'home', USERPROFILE: 'home', APPDATA: 'config', LOCALAPPDATA: 'state',
     XDG_CONFIG_HOME: 'config', XDG_STATE_HOME: 'state', XDG_CACHE_HOME: 'cache',

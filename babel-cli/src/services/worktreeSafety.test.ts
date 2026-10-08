@@ -83,7 +83,7 @@ test('nested directory restore restores tracked file changes', () => {
   }
 });
 
-test('dirty target detection refuses tracked user changes', { skip: !gitAvailable() }, () => {
+test('dirty target detection refuses tracked user changes', { skip: !gitAvailable() ? 'Git unavailable on this local host' : false }, () => {
   const root = tempRoot();
   try {
     mkdirSync(join(root, 'src'), { recursive: true });

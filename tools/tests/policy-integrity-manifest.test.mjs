@@ -14,6 +14,15 @@ const source = readFileSync(
   new URL("../policy-integrity-manifest.mjs", import.meta.url),
   "utf8",
 );
+test('every tracked host-protected path has a manifest registration', () => {
+  const root = new URL('../../', import.meta.url);
+  const policy = JSON.parse(readFileSync(new URL('config/review-risk-policy.json', root)));
+  const tracked = spawnSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' });
+  assert.equal(tracked.status, 0);
+  const registered = new Set([...source.matchAll(/^  "([^"]+)",?$/gm)].map(m => m[1]));
+  assert.deepEqual(tracked.stdout.trim().split('\n').filter(path =>
+    policy.hostProtectedPrefixes.some(prefix => path.startsWith(prefix)) && !registered.has(path)), []);
+});
 const paths = [
   ".github/workflows/public-pr-metadata.yml",
   ".github/workflows/publish-npm.yml",
@@ -71,6 +80,7 @@ const paths = [
   "babel-cli/src/services/candidateCollector.test.ts",
   "babel-cli/src/services/candidateCollector.ts",
   "babel-cli/src/services/candidateCollectorCli.ts",
+  "babel-cli/src/services/candidateCollectorCli.test.ts",
   "babel-cli/src/services/codexHarnessReview.test.ts",
   "babel-cli/src/services/codexHarnessReview.ts",
   "babel-cli/src/services/controllerMediatedHarnessReview.test.ts",
@@ -129,6 +139,7 @@ const paths = [
   "docs/guides/AGENT_GIT_OPERATIONS.md",
   "scripts/agent-git-common.psm1",
   "scripts/agent-pr-gate-common.psm1",
+  "scripts/agent-pr-gate-evidence.psm1",
   "scripts/agent-pr-gate.ps1",
   "scripts/agent-pr-merge.ps1",
   "scripts/agent-review-evidence.ps1",
@@ -139,6 +150,7 @@ const paths = [
   "tools/agent-host-review.ps1",
   "tools/babel-pr-orchestrate-opencode.mts",
   "tools/babel-pr-orchestrate.mts",
+  "tools/resolve-release-tag.mjs",
   "tools/host-review-worker.mts"
 ];
 function fixture(t, verifierSource = source) {

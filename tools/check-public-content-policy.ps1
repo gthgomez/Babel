@@ -4,7 +4,9 @@ param(
   [string]$PolicyPath = '',
   [ValidateSet('human', 'json')]
   [string]$OutputFormat = 'human',
-  [switch]$WarningsAsErrors
+  [switch]$WarningsAsErrors,
+  [string]$SourceRepository = '',
+  [string]$SourceCommit = ''
 )
 
 Set-StrictMode -Version Latest
@@ -22,7 +24,7 @@ try {
 } catch {
   throw "Public content policy is malformed: $PolicyPath"
 }
-$commonModule = Join-Path $RepoRoot 'tools/security/tracked-scan-common.psm1'
+$commonModule = Join-Path $PSScriptRoot 'security/tracked-scan-common.psm1'
 if (-not (Test-Path -LiteralPath $commonModule -PathType Leaf)) { throw "Tracked scan module not found: $commonModule" }
 Import-Module -Name $commonModule -Force
 
@@ -146,7 +148,15 @@ foreach ($entry in @($policy.generated_artifact_allowlist)) {
       -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validGeneratedAllowlist += $entry }
   else { Add-Finding -Id 'PCFG004' -Category 'invalid-generated-artifact-allowlist' -Path 'tools/security/public-content-policy.json' -Line 0 }
 }
-$inventory = Get-TrackedScanInventory -RepoRoot $RepoRoot -BinaryAllowlist @($validBinaryAllowlist)
+$committedPaths = $null
+if ($SourceRepository -or $SourceCommit) {
+  if (-not $SourceRepository -or $SourceCommit -notmatch '^[a-f0-9]{40}$') { throw 'Exact committed source identity required.' }
+  $pathOutput = @(& git -C $SourceRepository -c core.quotepath=false ls-tree -r --name-only -z $SourceCommit)
+  if ($LASTEXITCODE -ne 0) { throw 'Committed source inventory unavailable.' }
+  $committedPaths = @(($pathOutput -join "`n").Split([char]0, [StringSplitOptions]::RemoveEmptyEntries))
+  if ($committedPaths.Count -eq 0) { throw 'Committed source inventory is empty.' }
+}
+$inventory = Get-TrackedScanInventory -RepoRoot $RepoRoot -BinaryAllowlist @($validBinaryAllowlist) -CommittedPaths $committedPaths
 foreach ($issue in @($inventory.issues)) { Add-Finding -Id 'PCONT010' -Category ("unscannable-tracked-file:{0}" -f $issue.reason) -Path $issue.path -Line 0 }
 foreach ($record in @($inventory.records)) {
   $normalizedPath = ([string]$record.path).Replace('\', '/').TrimStart('/')

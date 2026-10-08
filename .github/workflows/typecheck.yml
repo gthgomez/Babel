@@ -60,44 +60,6 @@ jobs:
         run: node tools/check-campaign-status.mjs
       - name: Public policy runtime matrix
         run: pwsh -NoProfile -ExecutionPolicy Bypass -Command "& './tools/tests/test-public-content-policy-runtime.ps1'"
-  review-control-plane-contract:
-    name: review-control-plane-contract
-    runs-on: ubuntu-latest
-    env:
-      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          fetch-depth: 0
-      - name: Test trusted merge and evidence contracts
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          foreach ($test in @(
-            'tools/tests/test-agent-pr-gate-closure.ps1',
-            'tools/tests/test-review-evidence-taxonomy.ps1',
-            'tools/tests/test-agent-pr-merge.ps1'
-          )) {
-            pwsh -NoProfile -NonInteractive -File $test
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: babel-cli/package-lock.json
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-        working-directory: babel-cli
-      - name: Test review policy, provenance, and merge-readiness contracts
-        run: >
-          npx tsx --no-warnings=ExperimentalWarning --test src/services/reviewControlPlaneParity.test.ts
-          src/services/reviewPolicy.test.ts src/services/babelReviewSnapshot.test.ts
-          src/services/mergeReadinessBroker.test.ts src/services/reviewIndependence.test.ts
-          src/services/harnessReviewProtocol.test.ts src/services/independentReviewEvidenceV3.test.ts
-          src/services/codexHarnessReview.test.ts src/services/openCodeHarnessReview.test.ts
-          src/services/controllerMediatedHarnessReview.test.ts src/services/trustedReviewInstallation.test.ts
-        working-directory: babel-cli
   policy-integrity:
     name: policy-integrity
     strategy:
@@ -114,12 +76,62 @@ jobs:
         run: node tools/policy-integrity-manifest.mjs verify
   public-pr-metadata-tests:
     name: public-pr-metadata-tests
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Test public PR metadata policy
+        if: github.event_name == 'pull_request'
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-pr-metadata.ps1
+      - name: Non-PR metadata applicability
+        if: github.event_name != 'pull_request'
+        run: echo 'PR metadata fixtures not applicable to this non-PR event'
+  native-rg:
+    name: native-rg (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+      - name: Install pinned native ripgrep
+        run: pwsh -NoProfile -File tools/install-ci-ripgrep.ps1 -Destination '${{ runner.temp }}/ci-ripgrep'
+      - name: Install qualification dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Qualify native argv and security behavior
+        run: node scripts/run_ripgrep_qualification.mjs native
+        working-directory: babel-cli
+      - name: Qualify forced-absent fallback
+        run: node scripts/run_ripgrep_qualification.mjs fallback
+        working-directory: babel-cli
+      - name: Retain ripgrep TAP and file evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-rg-${{ matrix.os }}
+          path: babel-cli/artifacts/native-rg-*
+          if-no-files-found: error
+  desktop-tests:
+    name: desktop-tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+      - name: Check desktop discovery independently
+        run: node tools/check-desktop-test-inventory.mjs
+      - name: Run desktop regressions
+        run: npm run test
+        working-directory: babel-desktop
   architecture-regressions:
     name: architecture-regressions (${{ matrix.os }})
     strategy:
@@ -166,7 +178,7 @@ jobs:
           node --test --test-reporter=tap tools/tests/architectural-boundaries.test.mjs
           tools/tests/architectural-budget.test.mjs tools/tests/ci-package-coverage.test.mjs
           tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-unit-sharding.test.mjs tools/tests/ci-workflow-coverage.test.mjs
-          tools/tests/package-scripts-and-tests.test.mjs 2>&1 | Tee-Object
+          tools/tests/package-scripts-and-tests.test.mjs tools/tests/hook-redaction.test.mjs tools/tests/push-candidates.test.mjs tools/tests/committed-content-policy.test.mjs tools/tests/consumer-environment.test.mjs tools/tests/native-rg-setup.test.mjs tools/tests/required-tap-coverage.test.mjs tools/tests/required-skip-policy.test.mjs tools/tests/required-tap-reporter.test.mjs tools/tests/consumer-archive.test.mjs tools/tests/dist-content.test.mjs tools/tests/review-summary.test.mjs tools/tests/release-package-validation.test.mjs tools/tests/release-tag-identity.test.mjs tools/tests/release-workflow-contract.test.mjs 2>&1 | Tee-Object
           artifacts/architecture-regressions/full.tap
 
           exit $LASTEXITCODE
@@ -286,7 +298,12 @@ jobs:
       - public-content-policy
       - architecture-regressions
       - package-components
+      - desktop-tests
+      - native-rg
+      - policy-integrity
+      - public-pr-metadata-tests
       - consumer-artifact
+      - consumer-build-toolchains
       - unit-shards
       - docker-smoke
       - platform-core
@@ -384,7 +401,12 @@ jobs:
       - public-content-policy
       - architecture-regressions
       - package-components
+      - desktop-tests
+      - native-rg
+      - policy-integrity
+      - public-pr-metadata-tests
       - consumer-artifact
+      - consumer-build-toolchains
       - unit-shards
       - docker-smoke
       - platform-core
@@ -415,7 +437,7 @@ jobs:
           - windows-latest
     runs-on: ${{ matrix.os }}
     env:
-      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -447,6 +469,8 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
         working-directory: babel-cli
+      - name: Test producer-aware CI snapshot and identity
+        run: pwsh -NoProfile -File tools/tests/test-agent-ci-evidence.ps1
       - name: Run required review control-plane PowerShell contract
         shell: pwsh
         run: |
@@ -521,7 +545,7 @@ jobs:
           - windows-latest
     runs-on: ${{ matrix.os }}
     env:
-      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -558,6 +582,8 @@ jobs:
         working-directory: babel-cli
       - name: Run required harness runtime suite
         id: harness_runtime
+        env:
+          BABEL_TAP_EXECUTION_PATH: artifacts/harness-runtime/execution.json
         timeout-minutes: 15
         shell: pwsh
         run: >
@@ -616,7 +642,7 @@ jobs:
           - windows-latest
     runs-on: ${{ matrix.os }}
     env:
-      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -653,6 +679,8 @@ jobs:
         working-directory: babel-cli
       - name: Run required Chat truth suite
         id: chat_truth
+        env:
+          BABEL_TAP_EXECUTION_PATH: artifacts/chat-truth/execution.json
         shell: pwsh
         run: |
           npm run test:chat-truth 2>&1 | Tee-Object -FilePath artifacts/chat-truth/full.tap
@@ -896,6 +924,7 @@ jobs:
     timeout-minutes: 45
     env:
       FORCE_COLOR: '1'
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -940,6 +969,10 @@ jobs:
           artifacts/ci-unit/full.tap
 
           exit $LASTEXITCODE
+      - name: Validate complete unit TAP inventory
+        if: always() && steps.unit_shard.outcome != 'skipped' && steps.unit_shard.outcome != ''
+        run: node scripts/summarize_required_tap.mjs unit artifacts/ci-unit
+        working-directory: babel-cli
       - name: Upload complete unit selection and TAP
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -950,8 +983,63 @@ jobs:
             artifacts/ci-validation
           if-no-files-found: error
           retention-days: 7
+  consumer-candidate:
+    name: Build immutable npm candidate
+    runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.pack.outputs.sha256 }}
+      source: ${{ steps.pack.outputs.source_sha }}
+      archive: ${{ steps.pack.outputs.archive }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22.19.0'
+      - name: Install producer dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Validate, build and pack once
+        id: pack
+        run: npm run package:release
+        working-directory: babel-cli
+        env:
+          CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          RELEASE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      - name: Retain immutable candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: consumer-candidate
+          path: artifacts/consumer-candidate
+          if-no-files-found: error
+  consumer-build-toolchains:
+    name: Retained consumer build toolchain (${{ matrix.os }}, Node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['22.19.0', '24.13.1', '24']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: babel-cli/package-lock.json
+      - name: Install build dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Retain source-build contract on every previous consumer toolchain
+        run: npm run build
+        working-directory: babel-cli
   consumer-artifact:
     name: consumer-artifact (${{ matrix.os }}, Node ${{ matrix.node }})
+    needs: [consumer-candidate]
     strategy:
       fail-fast: false
       matrix:
@@ -969,11 +1057,18 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: babel-cli/package-lock.json
-      - name: Install build dependencies
-        run: npm ci --ignore-scripts
-        working-directory: babel-cli
+      - name: Retrieve the same immutable archive on every consumer
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: consumer-candidate
+          path: artifacts/consumer-candidate
       - name: Verify consumer artifact
-        run: npm run test:consumer-artifact
+        env:
+          CONSUMER_ARCHIVE: ../artifacts/consumer-candidate/${{ needs.consumer-candidate.outputs.archive }}
+          CONSUMER_DIGEST: ${{ needs.consumer-candidate.outputs.sha256 }}
+          CONSUMER_SOURCE: ${{ needs.consumer-candidate.outputs.source }}
+        shell: pwsh
+        run: npm run test:consumer-artifact -- --archive "$env:CONSUMER_ARCHIVE" --manifest ../artifacts/consumer-candidate/manifest.json --expected-sha256 "$env:CONSUMER_DIGEST" --expected-source "$env:CONSUMER_SOURCE"
         working-directory: babel-cli
       - name: Upload verified preview and provenance
         if: success()

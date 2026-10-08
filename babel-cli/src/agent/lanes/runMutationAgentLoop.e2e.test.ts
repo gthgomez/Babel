@@ -83,7 +83,7 @@ const E2E_TIMEOUT = 120_000;
 
 test(
   'completes a simple write task with the real LLM',
-  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -121,7 +121,7 @@ test(
 
 test(
   'performs a read-then-write flow with the real LLM',
-  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -171,7 +171,7 @@ test(
 
 test(
   'performs multi-round exploration with the real LLM',
-  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -225,7 +225,7 @@ test(
 
 test(
   'respects write scope when writing to allowed paths',
-  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -260,7 +260,7 @@ test(
 
 test(
   'blocks writes outside the declared write scope',
-  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -308,7 +308,7 @@ test(
 
 test(
   'cancels via AbortController with real LLM',
-  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -347,7 +347,7 @@ test(
 
 test(
   'handles read-only mode (empty writeScope) with real LLM',
-  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -388,7 +388,7 @@ test(
 
 test(
   'rollback function returns a valid summary after successful write',
-  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
