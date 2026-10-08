@@ -411,6 +411,36 @@ describe("compileChatStack shape invariants", () => {
   });
 });
 
+describe("canonical contributor policy admission", () => {
+  for (const [label, newline] of [["LF", "\n"], ["CRLF", "\r\n"]] as const) {
+    it(`admits the complete canonical policy with ${label} line endings`, () => {
+      const source = readFileSync(new URL("../../../AGENTS.md", import.meta.url), "utf8");
+      const policy = source.replace(/\r\n?/g, "\n").replace(/\n/g, newline);
+      const root = mkdtempSync(join(tmpdir(), "babel-canonical-policy-"));
+      const previousContext = process.env["BABEL_USER_CONTEXT"];
+      process.env["BABEL_USER_CONTEXT"] = join(root, "missing-user-context.md");
+      try {
+        assert.ok(policy.length <= INTERACTIVE_STACK_BUDGET,
+          "the complete canonical policy must fit the existing interactive budget");
+        writeFileSync(join(root, "AGENTS.md"), policy, "utf8");
+        const stack = compileChatStack({ projectRoot: root, babelRoot: root,
+          promptBudgetChars: INTERACTIVE_STACK_BUDGET, includeDomainSkill: false });
+        const identity = stack.selected_entries.find((entry) => entry.id === "identity:agents");
+        assert.ok(identity);
+        assert.equal(identity.source_truncated, false);
+        assert.equal(identity.source_length, policy.length);
+        assert.equal(identity.content_length, policy.length);
+        assert.equal(stack.system_context, policy);
+        assert.ok(stack.system_context.length <= INTERACTIVE_STACK_BUDGET);
+      } finally {
+        if (previousContext === undefined) delete process.env["BABEL_USER_CONTEXT"];
+        else process.env["BABEL_USER_CONTEXT"] = previousContext;
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
 describe("compileChatStack with real project root", () => {
   for (const promptBudgetChars of [12_000, 24_000]) {
     for (const target of ["root", "package"]) {
