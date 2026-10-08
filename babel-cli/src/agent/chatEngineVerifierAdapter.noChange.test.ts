@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
@@ -292,18 +292,37 @@ describe('complete fresh proof beyond the cache discovery file limit', { concurr
 
   test('metadata admission rejects unreadable inputs after41 files before content access', async () => {
     const root = largeProject()
-    const unreadable = join(root, 'zz-unreadable.txt')
-    writeFileSync(unreadable, 'synthetic unavailable input\n')
+    const unreadable = join(realpathSync.native(root), 'zz-unreadable.txt')
+    writeFileSync(join(root, 'zz-unreadable.txt'), 'synthetic unavailable input\n')
     initializeGit(root)
     const mutableFs = (fs as unknown as { default: typeof fs }).default
     const access = mutableFs.accessSync
+    const read = mutableFs.readFileSync
+    const open = mutableFs.openSync
+    let admissionDenied = false
+    let contentReads = 0
     mock.method(mutableFs, 'accessSync', ((file: fs.PathLike, mode?: number) => {
-      if (file === unreadable) throw Object.assign(new Error('synthetic admission denial'), { code: 'EACCES' })
+      if (file === unreadable) {
+        admissionDenied = true
+        throw Object.assign(new Error('synthetic admission denial'), { code: 'EACCES' })
+      }
       return access(file, mode)
     }) as typeof fs.accessSync)
+    const isProjectPath = (file: unknown): boolean =>
+      typeof file === 'string' && file.startsWith(`${realpathSync.native(root)}${sep}`)
+    mock.method(mutableFs, 'readFileSync', ((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+      if (isProjectPath(file)) contentReads++
+      return (read as (...values: unknown[]) => unknown)(file, ...args)
+    }) as typeof fs.readFileSync)
+    mock.method(mutableFs, 'openSync', ((file: fs.PathLike, ...args: unknown[]) => {
+      if (isProjectPath(file)) contentReads++
+      return (open as (...values: unknown[]) => unknown)(file, ...args)
+    }) as typeof fs.openSync)
     syncBuiltinESMExports()
     try {
       assert.equal(await captureChatVerifierReceipt(freshLargeInput(root)) === null, true)
+      assert.equal(admissionDenied, true, 'the unreadable physical path is denied during metadata admission')
+      assert.equal(contentReads, 0, 'metadata denial happens before any project content reads')
     } finally { mock.restoreAll(); syncBuiltinESMExports() }
   })
 

@@ -437,7 +437,8 @@ describe('ordinary coding-loop behaviors', () => {
         scripts: { test: 'node verify.mjs' },
       }));
       const beforeBytes = readFileSync(join(root, 'fixture.ts'), 'utf8');
-      const baseline = spawnSync('npm', ['test'], { cwd: root, encoding: 'utf8' });
+      const baseline = spawnSync(process.execPath, [join(root, 'verify.mjs')], { cwd: root, encoding: 'utf8' });
+      assert.equal(baseline.error, undefined, 'the fixture verifier starts successfully');
       assert.equal(baseline.status, 1, 'the real fixture verifier is red before the Chat task begins');
       assert.match(baseline.stderr, /pre-existing baseline failure/);
 
@@ -454,7 +455,8 @@ describe('ordinary coding-loop behaviors', () => {
       const runEntry = calls.find((entry) => entry.tool === 'run_command');
       assert.equal(runEntry?.exit_code, 1, 'the task records the actual red verifier result');
       assert.equal(readFileSync(join(root, 'fixture.ts'), 'utf8'), beforeBytes, 'the investigation performs no mutation');
-      const after = spawnSync('npm', ['test'], { cwd: root, encoding: 'utf8' });
+      const after = spawnSync(process.execPath, [join(root, 'verify.mjs')], { cwd: root, encoding: 'utf8' });
+      assert.equal(after.error, undefined, 'the fixture verifier starts successfully after the task');
       assert.equal(after.status, baseline.status, 'the real verifier remains at the same baseline result afterward');
       assert.match(after.stderr, /pre-existing baseline failure/);
       assert.equal(engine.getTurnRuntimeSnapshot()?.effectiveOperation, 'READ_ONLY');

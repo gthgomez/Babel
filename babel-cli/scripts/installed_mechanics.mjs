@@ -170,9 +170,19 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
     const repaired = await drive(fixing, fixTask, [read('fix-read'), verify('red'),
       read('repair-source'), tool('repair-assertion', 'read_file', { path: 'verify.mjs' }),
       repair, verify('green', 'test_run'), answer('Fixed the parser; npm test passed.')])
+    const diagnosticCodes = (call) => {
+      // Publish only fixed diagnostic labels; never tool text, paths, prompts or credentials.
+      const detail = `${call.error ?? ''} ${call.detail ?? ''}`
+      return ['RECOVERY_CANDIDATE_DRIFT', 'RECOVERY_STRATEGY_CHANGE_REQUIRED',
+        'RECOVERY_PLAN_REQUIRED', 'RECOVERY_EVIDENCE_REQUIRED',
+        'RECOVERY_STATE_PERSISTENCE_UNAVAILABLE', 'RECOVERY_RECONCILIATION_REQUIRED',
+        'LOCALIZATION_EXHAUSTED'].filter(code => detail.includes(`[${code}]`))
+    }
     assert.equal(readFileSync(join(fixture, 'parser.mjs'), 'utf8'), fixed,
       JSON.stringify({ status: repaired.terminal.status, calls: repaired.calls,
-        tools: repaired.terminal.toolCalls?.map((call) => ({ tool: call.tool, exitCode: call.exit_code })) }))
+        tools: repaired.terminal.toolCalls?.map((call) => ({
+          tool: call.tool, exitCode: call.exit_code, diagnosticCodes: diagnosticCodes(call),
+        })) }))
     const verifiers = fixing.getParityRuntime().eventLog.events.filter((event) =>
       event.kind === 'tool_result' && ['run_command', 'test_run'].includes(event.tool_name))
     assert.deepEqual(verifiers.map((call) => call.exit_code), [1, 0], `real red then green verifier exits: ${JSON.stringify(verifiers)}`)

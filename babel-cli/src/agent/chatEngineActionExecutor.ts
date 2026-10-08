@@ -65,7 +65,7 @@ import {
 } from "./chatEngineChildExecution.js";
 import { executeTool, renderGitDiff, type ToolContext } from "../localTools.js";
 import { classifyShellCapability } from "./progressController.js";
-import { canUseChatLsp } from "./chatLspPolicy.js";
+import { executeChatLspAction } from "./chatEngineLspAction.js";
 import { assessMutationEffect } from "./mutationTools.js";
 import {
   pinProjectRootEnv,
@@ -74,7 +74,6 @@ import {
   formatResultDetail,
   countPatchStats,
   primaryPatchPath,
-  executeLspChatToolAction,
 } from "./chatEngineSupport.js";
 import {
   isFatalWindowsProcessExit,
@@ -587,58 +586,11 @@ export class ChatEngineActionExecutor {
 
       // Gap-1: LSP tool — read-only code intelligence via localTools executor.
       if (action.type === "lsp") {
-        if (!canUseChatLsp({
-          hostFallbackAllowed: this.host.isolationBrokerFlags().hostFallbackAllowed,
-          ...(acceptedOperation !== undefined ? { operation: acceptedOperation } : {}),
-        })) {
-          const detail = "LSP denied: Chat has no lease-governed language-server process adapter.";
-          this.host.toolCallLog.push({
-            tool,
-            target,
-            detail,
-            error: "blocked",
-            index: meta.index,
-            exit_code: 1,
-          });
-          callbacks?.onToolComplete?.(toolId, detail, detail, 1);
-          return { index: meta.index, observation: detail };
-        }
-        const lsp = await executeLspChatToolAction({
-          action,
-          toolContext: {
-            ...toolContext,
-            onBeforeDispatch: () =>
-              this.host.persistToolStartedAtExecutorDispatch(action, meta),
-          },
-          executeTool,
+        return await executeChatLspAction({
+          host: this.host, action, toolContext, callbacks, meta,
+          ownerGeneration, tool, target, toolId,
+          ...(acceptedOperation !== undefined ? { acceptedOperation } : {}),
         });
-        // R0-8: an LSP call is a suspension point; a superseded submission must
-        // not append its result to the current task's tool log.
-        if (!this.host.isSubmissionCurrent(ownerGeneration)) {
-          return this.host.settleStaleActionResult(
-            tool,
-            target,
-            meta.index,
-            "parent submission superseded before the action settled",
-          );
-        }
-        this.host.toolCallLog.push({
-          tool,
-          target,
-          detail: lsp.detail,
-          index: meta.index,
-          ...(lsp.exit_code !== undefined ? { exit_code: lsp.exit_code } : {}),
-          ...(lsp.stdout !== undefined ? { stdout: lsp.stdout } : {}),
-          ...(lsp.stderr !== undefined ? { stderr: lsp.stderr } : {}),
-          ...(lsp.failed ? { error: "failed" as const } : {}),
-        });
-        callbacks?.onToolComplete?.(
-          toolId,
-          lsp.detail,
-          lsp.failed ? lsp.stderr || "failed" : undefined,
-          lsp.exit_code ?? (lsp.failed ? 1 : 0),
-        );
-        return { index: meta.index, observation: lsp.observation };
       }
 
       if (action.type === "finish") {
