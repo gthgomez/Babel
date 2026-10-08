@@ -1,5 +1,8 @@
 // License: Apache-2.0 — see LICENSE
 import assert from 'node:assert/strict'
+import { verifyConsumerArchive, verifyConsumerContents } from './consumer_archive.mjs'
+import { parseArgs } from 'node:util'
+import { consumerEnvironment } from './consumer_environment.mjs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -19,14 +22,9 @@ const guard = resolve(packageRoot, 'scripts/block_consumer_network.mjs')
 const npmCli = process.env.npm_execpath
 assert.ok(npmCli && existsSync(npmCli), 'Run through npm run test:consumer-artifact')
 const sha = bytes => createHash('sha256').update(bytes).digest('hex')
-const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-  !/^(?:BABEL_|OPENCODE_|.*(?:API_KEY|TOKEN|SECRET|PASSWORD)|NODE_OPTIONS|NODE_ENV|CI)$/i.test(key)))
-Object.assign(env, { HOME: user, USERPROFILE: user, NODE_ENV: 'production',
-  BABEL_CONFIG_DIR: join(scratch, 'config area ü'), BABEL_STATE_DIR: join(scratch, 'state area ü'),
-  BABEL_CACHE_DIR: join(scratch, 'cache area ü'), BABEL_DRY_RUN: '1',
-  BABEL_ROOT: join(scratch, 'invalid source override'), BABEL_SKIP_RESUME_PICKER: '1',
-  TMPDIR: scratch, TMP: scratch, TEMP: scratch })
-env.npm_config_cache = process.env.npm_config_cache || join(scratch, 'npm-cache')
+const env = consumerEnvironment(process.env, scratch)
+writeFileSync(env.npm_config_userconfig, '')
+writeFileSync(env.npm_config_globalconfig, '')
 const guardedEnv = { ...env, NODE_OPTIONS: `--import=${pathToFileURL(guard).href}` }
 const records = []
 function command(binary, args, options = {}) {
@@ -105,22 +103,21 @@ async function tui() {
   } finally { clearTimeout(timer); child.kill() }
 }
 try {
-  const packOutput = npm(['pack', '--json', '--pack-destination', output], { cwd: packageRoot }).stdout
-  const packed = JSON.parse(packOutput.slice(packOutput.indexOf('[\n')))[0]
-  const files = packed.files.map(file => file.path).sort()
-  for (const path of files) {
-    assert.match(path, /^(?:package\.json|README\.md|LICENSE|bin\/babel\.js|dist\/.*\.js|dist\/voice\/(?:audio-capture|vad)-worker\.mjs|dist\/services\/playbooks\/.*\.json|resources\/.*)$/)
-    assert.doesNotMatch(path, /(?:^|\/)(?:\.env[^/]*|node_modules|runs|cache|logs|testinfra|__snapshots__)(?:\/|$)|\.test\.js$|\.(?:map|ts|sqlite|log|tgz)$/)
+  const { values } = parseArgs({ options: Object.fromEntries(['archive', 'manifest', 'expected-sha256', 'expected-source'].map(key => [key, { type: 'string' }])) })
+  let artifact, identity
+  if (values.archive) {
+    artifact = resolve(values.archive)
+    const manifest = JSON.parse(readFileSync(resolve(values.manifest), 'utf8'))
+    identity = verifyConsumerArchive({ archive: artifact, manifest, expectedDigest: values['expected-sha256'], expectedSource: values['expected-source'], expectedVersion: pkg.version })
+  } else {
+    npm(['run', 'package:release', '--', output], { cwd: packageRoot })
+    identity = JSON.parse(readFileSync(join(output, 'manifest.json'), 'utf8'))
+    artifact = join(output, identity.tarball)
+    verifyConsumerArchive({archive: artifact, manifest: identity, expectedDigest: identity.sha256, expectedSource: identity.sourceSha, expectedVersion: pkg.version})
   }
-  assert.ok(files.includes('resources/prompt_catalog.yaml'))
-  assert.ok(files.includes('LICENSE'))
-  for (const worker of ['audio-capture-worker.mjs', 'vad-worker.mjs']) assert.ok(files.includes(`dist/voice/${worker}`), worker)
-  const artifact = join(output, packed.filename)
-  const identity = { sourceSha: command('git', ['rev-parse', 'HEAD'], { cwd: packageRoot }).stdout.trim(),
-    name: pkg.name, version: pkg.version, node: process.version, platform: process.platform, arch: process.arch,
-    tarball: packed.filename, sha256: sha(readFileSync(artifact)), manifest: packed.files }
-  writeFileSync(join(output, 'manifest.json'), JSON.stringify(identity, null, 2) + '\n')
-  writeFileSync(join(output, 'SHA256SUMS'), `${identity.sha256}  ${packed.filename}\n`)
+  verifyConsumerContents(identity.manifest)
+  writeFileSync(join(output, 'manifest.json'), JSON.stringify({...identity, consumerNode: process.version, consumerPlatform: process.platform, consumerArch: process.arch}, null, 2) + '\n')
+  writeFileSync(join(output, 'SHA256SUMS'), `${identity.sha256}  ${identity.tarball}\n`)
   npm(['install', '--prefix', prefix, '--omit=dev', '--no-audit', '--no-fund', artifact])
   assert.ok(!existsSync(join(prefix, 'node_modules/tsx')), 'No development runner installed')
   const original = treeDigest(installed)
@@ -180,6 +177,7 @@ try {
   const installedModule = relativePath => JSON.stringify(pathToFileURL(join(installed, relativePath)).href)
   writeFileSync(stateProbe, `
     import assert from 'node:assert/strict';
+
     import {saveSessionState,loadSessionState} from ${installedModule('dist/interactive/session.js')};
     import {resolveTokenDbPath,TokenHistoryDb} from ${installedModule('dist/services/tokenHistoryDb.js')};
     import {resolveMemoryRoot} from ${installedModule('dist/services/memory/memoryStore.js')};
@@ -226,7 +224,7 @@ try {
     { check: 'live-model quality', status: 'not run', reason: 'Scored provider route/credentials/protocol pending; scripted mechanics only' },
     { check: 'native vectors', status: 'optional', reason: 'sqlite-vec availability depends on OS/architecture' })
   writeFileSync(join(output, 'verification.json'), JSON.stringify({ ...identity, checks: records, doctor }, null, 2) + '\n')
-  console.log(JSON.stringify({ tarball: packed.filename, sha256: identity.sha256, sourceSha: identity.sourceSha, checks: records }, null, 2))
+  console.log(JSON.stringify({ tarball: identity.tarball, sha256: identity.sha256, sourceSha: identity.sourceSha, checks: records }, null, 2))
 } finally {
   if (existsSync(installed)) readonly(installed, false)
   rmSync(scratch, { recursive: true, force: true })
