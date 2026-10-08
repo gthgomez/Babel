@@ -803,14 +803,16 @@ test('every discovered source test belongs to canonical unit lane or an explicit
     .map(f => f.split(sep).join('/'))
     .sort();
 
-  assert.equal(allTests.length, 777, `Expected exactly 777 source test files, found ${allTests.length}`);
+  assert.ok(allTests.length > 0, 'Source test discovery must not be empty');
+  assert.equal(new Set(allTests).size, allTests.length, 'Source test discovery must be unique');
 
   // Load canonical unit shard inventory using repo helper
   const { prepareUnitShard } = await import('../../babel-cli/scripts/run_ci_unit_shard.mjs');
   const unitShard = prepareUnitShard(babelCliDir, 0, 1);
   const unitInventory = new Set(unitShard.inventory);
 
-  assert.equal(unitInventory.size, 758, `Expected exactly 758 unit shard test files, found ${unitInventory.size}`);
+  assert.ok(unitInventory.size > 0, 'Canonical unit inventory must not be empty');
+  assert.equal(unitInventory.size, unitShard.inventory.length, 'Canonical unit inventory must be unique');
   for (const path of ['src/agent/desktopApproval.test.ts', 'src/cli/chatStreamNdjson.test.ts', 'src/interactive/execution/chatResumeHeadless.test.ts']) {
     assert.ok(unitInventory.has(path), `Desktop integration test must be covered by the canonical unit lane: ${path}`);
   }
@@ -830,7 +832,9 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   assert.equal(specializedSet.size, 19);
   assert.equal(unclassified.length, 0);
   assert.equal(overlap.length, 0);
-  assert.equal(unitInventory.size + specializedSet.size, 777);
+  const classified = [...unitInventory, ...specializedSet].sort();
+  assert.equal(new Set(classified).size, classified.length, 'Unit and specialized lanes must form a unique partition');
+  assert.deepEqual(classified, allTests, 'Unit and specialized lanes must exhaust exactly the discovered source tests');
 });
 
 test('test classification negative fixtures (orphan file, deleted lane command, lane absent from CI, missing file, unjustified exclusion, empty commandsByFile, unrelated test match, masked CI, echo CI)', () => {
