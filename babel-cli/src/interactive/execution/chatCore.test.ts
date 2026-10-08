@@ -323,6 +323,17 @@ test('runChatEngineOnce reuses provided engine without calling factory', async (
 
 // ── C1/E3: Intent plan + first-move injection via runChatEngineOnce ────────
 
+async function withPreLoopPlan<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.env['BABEL_CHAT_PRELOOP_PLAN'];
+  process.env['BABEL_CHAT_PRELOOP_PLAN'] = '1';
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_PRELOOP_PLAN'];
+    else process.env['BABEL_CHAT_PRELOOP_PLAN'] = previous;
+  }
+}
+
 describe('intent plan injection via runChatEngineOnce', () => {
   function makeMockEngine() {
     return {
@@ -334,7 +345,7 @@ describe('intent plan injection via runChatEngineOnce', () => {
     } as unknown as ChatEngine;
   }
 
-  it('injects intentPlanUserMessage for vague execute task', async () => {
+  it('does not inject intentPlanUserMessage unless the preloop plan is enabled', async () => {
     const target = makeTarget('/tmp/project');
     let capturedOptions: ChatEngineOptions | undefined;
 
@@ -350,14 +361,36 @@ describe('intent plan injection via runChatEngineOnce', () => {
     });
 
     assert.equal(result.status, 'completed');
-    assert.ok(capturedOptions !== undefined, 'engineFactory should have been called');
-    const opts = capturedOptions!;
-    assert.ok(opts.intentPlanUserMessage, 'should inject intent plan for vague execute task');
-    assert.match(opts.intentPlanUserMessage!, /## Intent Plan/);
-    assert.match(opts.intentPlanUserMessage!, /histogram density range/);
+    assert.equal(capturedOptions?.intentPlanUserMessage, undefined);
+  });
+
+  it('injects intentPlanUserMessage for vague execute task when the plan is enabled', async () => {
+    await withPreLoopPlan(async () => {
+      const target = makeTarget('/tmp/project');
+      let capturedOptions: ChatEngineOptions | undefined;
+
+      const result = await runChatEngineOnce({
+        task: 'fix the histogram density range bug',
+        target,
+        engineFactory: (opts) => {
+          capturedOptions = opts;
+          return makeMockEngine();
+        },
+        useStreaming: false,
+        preflightContext: '',
+      });
+
+      assert.equal(result.status, 'completed');
+      assert.ok(capturedOptions !== undefined, 'engineFactory should have been called');
+      const opts = capturedOptions!;
+      assert.ok(opts.intentPlanUserMessage, 'should inject intent plan for vague execute task');
+      assert.match(opts.intentPlanUserMessage!, /## Intent Plan/);
+      assert.match(opts.intentPlanUserMessage!, /histogram density range/);
+    });
   });
 
   it('skips intentPlanUserMessage for FAIL_TO_PASS SWE task', async () => {
+    await withPreLoopPlan(async () => {
     const target = makeTarget('/tmp/project');
     let capturedOptions: ChatEngineOptions | undefined;
 
@@ -379,9 +412,11 @@ describe('intent plan injection via runChatEngineOnce', () => {
       undefined,
       'should NOT inject intent plan for FAIL_TO_PASS SWE task',
     );
+    });
   });
 
   it('skips intentPlanUserMessage for dataset test path tasks', async () => {
+    await withPreLoopPlan(async () => {
     const target = makeTarget('/tmp/project');
     let capturedOptions: ChatEngineOptions | undefined;
 
@@ -403,9 +438,11 @@ describe('intent plan injection via runChatEngineOnce', () => {
       undefined,
       'should NOT inject intent plan for task with explicit pytest path',
     );
+    });
   });
 
   it('includes first-move hint when test_command is detected from task', async () => {
+    await withPreLoopPlan(async () => {
     const target = makeTarget('/tmp/project');
     let capturedOptions: ChatEngineOptions | undefined;
 
@@ -429,9 +466,11 @@ describe('intent plan injection via runChatEngineOnce', () => {
     assert.match(opts.intentPlanUserMessage!, /## First Move/);
     assert.match(opts.intentPlanUserMessage!, /npm test/);
     assert.match(opts.intentPlanUserMessage!, /Mutate first, verify second/);
+    });
   });
 
   it('does NOT include first-move hint when no test command in task', async () => {
+    await withPreLoopPlan(async () => {
     const target = makeTarget('/tmp/project');
     let capturedOptions: ChatEngineOptions | undefined;
 
@@ -453,6 +492,7 @@ describe('intent plan injection via runChatEngineOnce', () => {
     assert.match(opts.intentPlanUserMessage!, /## Intent Plan/);
     // No test_command in task → no first-move hint
     assert.ok(!opts.intentPlanUserMessage!.includes('## First Move'));
+    });
   });
 
   it('skips intent plan for investigate task class', async () => {

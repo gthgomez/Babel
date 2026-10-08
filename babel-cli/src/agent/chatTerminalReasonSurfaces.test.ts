@@ -352,11 +352,12 @@ describe('D03 production engine: hard-cap reasons reach every surface', () => {
   });
   }
 
-  // D03 (I3): on the read-only hard-cap path, the outcome, persisted report
-  // and reason must agree across durable and public surfaces.
-  test('read-only hard cap reconciles outcome and reason without a blocked report', async () => {
+  // Ordinary Chat no longer ends productive inspection by read count. Repeated
+  // unchanged evidence still reaches bounded recovery with the same reason on
+  // durable and public surfaces.
+  test('read-only unchanged reads reconcile recovery outcome and reason', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'd03-readonly-'));
-    for (let i = 1; i <= 12; i++) writeFileSync(join(projectRoot, `hello_${i}.txt`), `hello ${i}\n`, 'utf-8');
+    writeFileSync(join(projectRoot, 'hello.txt'), 'hello\n', 'utf-8');
     const priorApprove = process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
     const priorTaskClass = process.env['BABEL_CHAT_TASK_CLASS'];
     process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
@@ -380,8 +381,8 @@ describe('D03 production engine: hard-cap reasons reach every surface', () => {
             yield {
               type: 'tool_use',
               id: `read_${++reads}`,
-              name: 'read_file',
-              input: { path: `hello_${reads}.txt` },
+              name: 'read_range',
+              input: { file_path: 'hello.txt', start_line: 1, end_line: 1 },
             };
             yield { type: 'done', finishReason: 'tool_calls' };
           },
@@ -398,29 +399,28 @@ describe('D03 production engine: hard-cap reasons reach every surface', () => {
         null,
       );
 
-      assert.equal(result.reason_code, 'budget_exhausted');
-      assert.equal(result.cause_class, 'harness');
-      assert.equal(result.outcome, 'BUDGET_EXHAUSTED');
-      assert.equal(result.blockedReport, undefined);
-      assert.equal(reads, 8, 'The reviewed quick-inspection hard cap must be the exercised terminal');
+      assert.equal(result.reason_code, 'recovery_exhausted');
+      assert.equal(result.cause_class, 'model');
+      assert.equal(result.outcome, 'BLOCKED_POLICY');
+      assert.ok(reads > 1 && reads < 40,
+        `unchanged inspection must recover/stop before the max-turn budget; served ${reads} reads`);
 
       const log = loadSessionEventLogFromDir(chatSessionDir(engine.getEngineRunId()));
       const ended = log?.events.filter((e) => e.kind === 'turn_ended').at(-1) as
         | { outcome?: string; reason_code?: string }
         | undefined;
-      assert.equal(ended?.outcome, 'BUDGET_EXHAUSTED');
-      assert.equal(ended?.reason_code, 'budget_exhausted');
+      assert.equal(ended?.outcome, 'BLOCKED_POLICY');
+      assert.equal(ended?.reason_code, 'recovery_exhausted');
       assert.ok((engine as unknown as {
         policyEventLog: { all(): ReadonlyArray<{ kind: string; detail?: string }> }
-      }).policyEventLog.all().some(event => event.kind === 'progress_terminal' && event.detail?.startsWith('read_only_hard_cap:')));
+      }).policyEventLog.all().some(event => event.kind === 'progress_terminal' && event.detail?.startsWith('progress_terminal:')));
 
       const payload = buildChatRunPayload(result, {
         task: 'investigate hello.txt',
         projectRoot,
       });
-      assert.equal(payload['terminal_outcome'], 'BUDGET_EXHAUSTED');
-      assert.equal(payload['reason_code'], 'budget_exhausted');
-      assert.equal(payload['blocked_report'], undefined);
+      assert.equal(payload['terminal_outcome'], 'BLOCKED_POLICY');
+      assert.equal(payload['reason_code'], 'recovery_exhausted');
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
       if (priorApprove === undefined) delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];

@@ -191,6 +191,12 @@ export interface ZeroWriteShadowDecision {
  */
 export function evaluateZeroWriteWithShadow(input: {
   executeIntent: boolean;
+  /**
+   * Live Chat's ProgressController owns progress and no-progress recovery. Keep
+   * legacy threshold metrics inspectable, but suppress this helper's nudge and
+   * terminal decisions when receipt-based progress is active.
+   */
+  evidenceBasedProgress?: boolean;
   completedTurns: number;
   hasAnyWrites: boolean;
   taskClass: ChatTaskClass;
@@ -219,6 +225,19 @@ export function evaluateZeroWriteWithShadow(input: {
   });
 
   const events: PolicyEvent[] = [];
+  if (input.evidenceBasedProgress === true) {
+    return {
+      mode,
+      liveThreshold,
+      shadowThreshold,
+      liveWouldFire,
+      shadowWouldFire,
+      arbiterMessage: null,
+      terminalMessage: null,
+      events,
+    };
+  }
+
   if (mode === 'off') {
     return {
       mode,

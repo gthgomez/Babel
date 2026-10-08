@@ -3,7 +3,7 @@
  * Pure helpers; no I/O.
  */
 
-import { isConfirmedMutation, isVerifierAttemptTool, type MutationEffectStatus } from './mutationTools.js';
+import { isConfirmedMutation, isDirectMutationTool, isVerifierAttemptTool, type MutationEffectStatus } from './mutationTools.js';
 import { getChatTaskTune, isStrictVerification, type ChatTaskClass, type VerificationPolicy } from '../config/chatTaskClass.js';
 import {
   buildGateRejectionMessage,
@@ -117,8 +117,16 @@ export function deriveAdversarialSignals(opts: {
 
 /** Known project/dataset test runners (prefixes; case-insensitive match on trimmed cmd). */
 const AUTHORITATIVE_VERIFIER_PREFIXES = [
+  'npm run typecheck',
+  'pnpm run typecheck',
+  'yarn run typecheck',
   'npm run test',
   'npm test',
+  'pnpm run test',
+  'pnpm test',
+  'yarn run test',
+  'yarn test',
+  'node --test',
   'npx jest',
   'npx vitest',
   'python -m pytest',
@@ -427,6 +435,10 @@ export function isAuthoritativeVerifierCommand(
     return false;
   }
 
+  // Help, version, list, collection, and dry-run exits are not executed proof.
+  const identity = analyzeVerifierIdentity(trimmed);
+  if (identity && identity.family !== 'unknown' && identity.scope === 'unknown') return false;
+
   // Deny-by-default: only allowlisted runners or session-bound commands
   return matchesAuthoritativeVerifierAllowlist(trimmed, boundCommands);
 }
@@ -454,6 +466,8 @@ export type VerifierReceipt = {
   authoritySource?: VerifierAuthoritySource;
   capturedAt?: number;
   argv?: string[];
+  tests_total?: number;
+  tests_skipped?: number;
 };
 
 export type GateToolLogEntry = {
@@ -465,6 +479,23 @@ export type GateToolLogEntry = {
   mutation_paths?: string[];
   effect_status?: MutationEffectStatus;
 };
+
+/** Recorded inspection can support a no-change conclusion, never patch certification. */
+export function hasInspectedNoChangeEvidence(log: GateToolLogEntry[]): boolean {
+  const unresolvedMutation = log.some(entry => entry.effect_status === 'indeterminate'
+    // Process success describes its exit, not its filesystem effects. In
+    // particular, background starts and awaits cannot prove an unchanged tree.
+    || ((isVerifierAttemptTool(entry.tool) || entry.tool === 'await_command')
+      && entry.effect_status !== 'confirmed_no_change')
+    || (isDirectMutationTool(entry.tool)
+      && (Boolean(entry.error) || entry.effect_status !== 'confirmed_no_change'))
+    || (entry.tool === 'sub_agent' && Boolean(entry.error)
+      && entry.effect_status !== 'confirmed_no_change'));
+  return !hasLoggedWrites(log) && !unresolvedMutation && log.some(entry =>
+    ['read_file', 'read_range', 'grep', 'glob', 'list_dir', 'search', 'semantic_search', 'git_context', 'lsp'].includes(entry.tool)
+    && !entry.error && (entry.exit_code === undefined || entry.exit_code === 0)
+    && Boolean(entry.detail?.trim()));
+}
 
 /**
  * Task text explicitly asks to run tests / verify before complete.
@@ -584,6 +615,8 @@ export function areAllRequiredVerifiersSatisfied(
  */
 export function evaluateExecuteCompletionHonesty(opts: {
   hasWrite: boolean;
+  /** Only non-certified no-change completion may use successful inspection instead of a mutation. */
+  allowInspectedNoChange?: boolean;
   policy: VerificationPolicy;
   lastVerifierReceipt?: VerifierReceipt | import('../executor/contracts.js').ExecutorVerifierReceipt | null;
   toolCallLog: GateToolLogEntry[];
@@ -599,7 +632,7 @@ export function evaluateExecuteCompletionHonesty(opts: {
     return { allow: false, reason: 'verifier_receipt_invalid' };
   }
 
-  if (!opts.hasWrite) {
+  if (!opts.hasWrite && !(opts.allowInspectedNoChange && hasInspectedNoChangeEvidence(opts.toolCallLog))) {
     return { allow: false, reason: 'no_writes' };
   }
   if (opts.policy === 'none') {
@@ -646,6 +679,12 @@ export function evaluateExecuteCompletionHonesty(opts: {
     if (opts.policy === 'strict' && activeAttempts.some((entry) => verifierExitCode(entry) !== 0)) {
       return { allow: false, reason: 'verifier_red' };
     }
+    if (
+      opts.policy === 'strict' &&
+      !activeAttempts.some((entry) => verifierExitCode(entry) === 0 && receiptProvesExecutedTests(entry))
+    ) {
+      return { allow: false, reason: 'verifier_missing' };
+    }
     return { allow: true, reason: null };
   }
 
@@ -673,6 +712,10 @@ export function evaluateExecuteCompletionHonesty(opts: {
     }
     if (isStaleVerifierEvidence(latest)) {
       hasStaleRequirement = true;
+      continue;
+    }
+    if (opts.policy === 'strict' && verifierExitCode(latest) === 0 && !receiptProvesExecutedTests(latest)) {
+      hasMissingRequirement = true;
       continue;
     }
     if (verifierExitCode(latest) !== 0) {
@@ -714,6 +757,212 @@ function verifierIdentityKey(command: string): string {
 
 function isAuthoritativeReceipt(entry: VerifierEvidence): boolean {
   return entry.authority === true && isAuthoritativeVerifierCommand(entry.command);
+}
+
+/**
+ * Count-free proof is an explicit list of non-test checks. Every other
+ * command, including `npm run test:unit` and the pnpm/yarn equivalents,
+ * requires a parsed executed-test count. Family keys stay unchanged:
+ * `test:unit` is not collapsed into `npm-test`.
+ */
+function strictCountPolicy(command: string): 'count_free' | 'requires_executed_count' {
+  const identity = analyzeVerifierIdentity(command);
+  if (!identity || identity.scope === 'unknown') return 'requires_executed_count';
+  if (identity.family === 'tsc' || identity.family === 'tsc-b') return 'count_free';
+  let argv: string[];
+  try {
+    argv = parseCommandArgv(identity.displayCommand);
+  } catch {
+    return 'requires_executed_count';
+  }
+  const executable = argv[0]
+    ?.replace(/^['"]|['"]$/g, '')
+    .split(/[\\/]/)
+    .at(-1)
+    ?.toLowerCase()
+    .replace(/\.(cmd|bat|exe)$/i, '');
+  const script = argv[2]?.replace(/^['"]|['"]$/g, '').toLowerCase();
+  if (
+    (executable === 'npm' || executable === 'pnpm' || executable === 'yarn')
+    && argv[1]?.toLowerCase() === 'run'
+    && script === 'typecheck'
+  ) {
+    return 'count_free';
+  }
+  return 'requires_executed_count';
+}
+
+function evidenceCommand(entry: VerifierEvidence | GateToolLogEntry): string | undefined {
+  if ('command' in entry && typeof entry.command === 'string') return entry.command;
+  if ('target' in entry && typeof entry.target === 'string') return entry.target;
+  return undefined;
+}
+
+function evidenceOutput(entry: VerifierEvidence | GateToolLogEntry): string {
+  const parts: string[] = [];
+  if ('summary' in entry && typeof entry.summary === 'string') parts.push(entry.summary);
+  if ('detail' in entry && typeof entry.detail === 'string') parts.push(entry.detail);
+  const raw = entry as { stdout?: unknown; stderr?: unknown };
+  if (typeof raw.stdout === 'string') parts.push(raw.stdout);
+  if (typeof raw.stderr === 'string') parts.push(raw.stderr);
+  return parts.join('\n');
+}
+
+function explicitExecutedTestCounts(
+  entry: VerifierEvidence | GateToolLogEntry,
+): { tests_total: number; tests_skipped: number } | null {
+  const counted = entry as { tests_total?: unknown; tests_skipped?: unknown };
+  if (typeof counted.tests_total !== 'number' || !Number.isFinite(counted.tests_total)) return null;
+  const testsSkipped = typeof counted.tests_skipped === 'number' && Number.isFinite(counted.tests_skipped)
+    ? counted.tests_skipped
+    : 0;
+  return { tests_total: counted.tests_total, tests_skipped: testsSkipped };
+}
+
+/**
+ * A green test command is proof only when captured or runner-reported counts
+ * show that a test actually ran. A non-test check such as `npm run typecheck`
+ * has no count and is proved by its own green exit.
+ */
+function receiptProvesExecutedTests(entry: VerifierEvidence | GateToolLogEntry): boolean {
+  const command = evidenceCommand(entry);
+  if (command && strictCountPolicy(command) === 'count_free') {
+    return verifierExitCode(entry) === 0;
+  }
+  const counts = explicitExecutedTestCounts(entry)
+    ?? parseExecutedTestCounts(evidenceOutput(entry), command);
+  if (!counts || !Number.isFinite(counts.tests_total) || counts.tests_total <= 0) return false;
+  if (counts.tests_skipped >= counts.tests_total) return false;
+  return true;
+}
+
+function integerCount(value: number): boolean {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function collectCountWords(phrase: string): Record<string, number> {
+  const found: Record<string, number> = {};
+  for (const match of phrase.matchAll(/(\d+)\s+([A-Za-z]+)/g)) {
+    const word = match[2];
+    if (!word) continue;
+    found[word.toLowerCase()] = Number(match[1]);
+  }
+  return found;
+}
+
+function parseNodeTestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const totals = [...text.matchAll(/^(?:ℹ|#)\s+tests\s+(\d+)\s*$/gm)];
+  const lastTotal = totals.at(-1)?.[1];
+  if (lastTotal === undefined) return null;
+  const testsTotal = Number(lastTotal);
+  const skipped = [...text.matchAll(/^(?:ℹ|#)\s+skipped\s+(\d+)\s*$/gm)].at(-1)?.[1];
+  const testsSkipped = skipped === undefined ? 0 : Number(skipped);
+  if (!integerCount(testsTotal) || !integerCount(testsSkipped)) return null;
+  return { tests_total: testsTotal, tests_skipped: testsSkipped };
+}
+
+function parsePytestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const token = String.raw`\d+\s+(?:failed|passed|skipped|errors?|xfailed|xpassed|warnings?|deselected|reruns?)`;
+  const line = new RegExp(
+    `^(?:=+\\s*)?((?:${token}(?:,\\s*)?)+)(?:\\s+in\\s+[\\d.]+s)?\\s*(?:=+)?\\s*$`,
+    'gim',
+  );
+  const phrase = [...text.matchAll(line)].at(-1)?.[1];
+  if (!phrase) return null;
+  const words = collectCountWords(phrase);
+  const testsSkipped = words.skipped ?? 0;
+  const testsTotal = (words.passed ?? 0)
+    + (words.failed ?? 0)
+    + (words.error ?? 0)
+    + (words.errors ?? 0)
+    + (words.xfailed ?? 0)
+    + (words.xpassed ?? 0)
+    + testsSkipped;
+  if (!integerCount(testsTotal) || !integerCount(testsSkipped)) return null;
+  if (
+    testsTotal === 0
+    && words.passed === undefined
+    && words.failed === undefined
+    && words.skipped === undefined
+    && words.error === undefined
+    && words.errors === undefined
+  ) {
+    return null;
+  }
+  return { tests_total: testsTotal, tests_skipped: testsSkipped };
+}
+
+function parseJestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const phrase = [...text.matchAll(/^Tests:\s+(.+)$/gim)].at(-1)?.[1];
+  if (!phrase) return null;
+  const words = collectCountWords(phrase);
+  const testsSkipped = (words.skipped ?? 0) + (words.todo ?? 0) + (words.pending ?? 0);
+  const testsTotal = words.total
+    ?? ((words.passed ?? 0) + (words.failed ?? 0) + testsSkipped);
+  if (!integerCount(testsTotal) || !integerCount(testsSkipped)) return null;
+  if (words.total === undefined && testsTotal === 0) return null;
+  return { tests_total: testsTotal, tests_skipped: testsSkipped };
+}
+
+function parseVitestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const phrase = [...text.matchAll(/^[ \t]*Tests[ \t]+([^:\n].*)$/gim)].at(-1)?.[1];
+  if (!phrase) return null;
+  const words = collectCountWords(phrase);
+  const testsSkipped = (words.skipped ?? 0) + (words.todo ?? 0);
+  const paren = phrase.match(/\((\d+)\)\s*$/);
+  const testsTotal = paren
+    ? Number(paren[1])
+    : (words.passed ?? 0) + (words.failed ?? 0) + testsSkipped;
+  if (!integerCount(testsTotal) || !integerCount(testsSkipped)) return null;
+  if (!paren && testsTotal === 0) return null;
+  return { tests_total: testsTotal, tests_skipped: testsSkipped };
+}
+
+function parseUnittestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const ran = [...text.matchAll(/^Ran (\d+) tests?\b/gim)].at(-1)?.[1];
+  if (ran === undefined) return null;
+  const skipped = [...text.matchAll(/\bskipped=(\d+)/gi)].at(-1)?.[1];
+  const testsTotal = Number(ran);
+  const testsSkipped = skipped === undefined ? 0 : Number(skipped);
+  if (!integerCount(testsTotal) || !integerCount(testsSkipped)) return null;
+  return { tests_total: testsTotal, tests_skipped: testsSkipped };
+}
+
+function parseMochaCounts(text: string): { tests_total: number; tests_skipped: number } | null {
+  const passing = [...text.matchAll(/^[ \t]*(\d+)\s+passing(?:\s+\([^)\n]*\))?\s*$/gim)].at(-1)?.[1];
+  if (passing === undefined) return null;
+  const pending = [...text.matchAll(/^[ \t]*(\d+)\s+pending\s*$/gim)].at(-1)?.[1];
+  const failing = [...text.matchAll(/^[ \t]*(\d+)\s+failing\s*$/gim)].at(-1)?.[1];
+  const passed = Number(passing);
+  const testsSkipped = pending === undefined ? 0 : Number(pending);
+  const failed = failing === undefined ? 0 : Number(failing);
+  if (!integerCount(passed) || !integerCount(testsSkipped) || !integerCount(failed)) return null;
+  return { tests_total: passed + testsSkipped + failed, tests_skipped: testsSkipped };
+}
+
+/**
+ * Counts from a runner's own report. Node's machine lines, pytest's summary,
+ * Jest's `Tests:` line, and Vitest's `Tests` line are accepted. A hand-written
+ * "ok" or "all pass" does not mint a count.
+ */
+export function parseExecutedTestCounts(
+  output: string,
+  command?: string,
+): { tests_total: number; tests_skipped: number } | null {
+  const text = output.replace(/\r/g, '').replace(/\u001b\[[0-9;]*m/g, '');
+  const family = command ? analyzeVerifierIdentity(command)?.family : undefined;
+  if (family === 'node-test') return parseNodeTestCounts(text);
+  if (family === 'pytest') return parsePytestCounts(text);
+  if (family === 'unittest') return parseUnittestCounts(text);
+  if (family === 'jest') return parseJestCounts(text);
+  if (family === 'vitest') return parseVitestCounts(text);
+  if (family === 'mocha') return parseMochaCounts(text);
+  return parseNodeTestCounts(text)
+    ?? parseJestCounts(text)
+    ?? parseVitestCounts(text)
+    ?? parsePytestCounts(text)
+    ?? parseUnittestCounts(text)
+    ?? parseMochaCounts(text);
 }
 
 function verifierExitCode(entry: VerifierEvidence | GateToolLogEntry): number {
@@ -887,16 +1136,14 @@ export function logHasSuccessfulWrite(
   );
 }
 
-/** Shared BLOCKED answer when completion has no writes and zero tools this turn. */
-export const AUTO_CONTINUE_REFUSAL_MSG = [
-  'BLOCKED: Completion rejected (no writes) and this turn had zero tool calls.',
-  'Auto-continue refused — the model produced text without using any tools.',
-  'The task may be impossible or the model does not understand how to proceed.',
-].join('\n');
+/** One bounded recovery allowance for unsupported completion claims. */
+export const MAX_COMPLETION_RECOVERY_RETRIES = 3;
 
-export function buildAutoContinueBlockedReport(): {
+export function buildCompletionEvidenceBlockedReport(reason: string): {
   schema_version: 1;
   status: 'BLOCKED';
+  reason_code: 'recovery_exhausted';
+  cause_class: 'harness';
   reason: string;
   missing: string;
   checked: Array<{ action: string; target: string; finding: string }>;
@@ -904,14 +1151,15 @@ export function buildAutoContinueBlockedReport(): {
   return {
     schema_version: 1,
     status: 'BLOCKED',
-    reason: 'Auto-continue refused: completion rejected with zero tool calls this turn',
-    missing: 'No tools were used — model produced text only',
+    reason_code: 'recovery_exhausted',
+    cause_class: 'harness',
+    reason,
+    missing: 'Successful inspection supporting a no-change conclusion, or a completed change with required evidence',
     checked: [
       {
-        action: 'auto_continue_refusal',
-        target: 'zero_tool_calls',
-        finding:
-          'Turn produced a completion without any tool calls; auto-continue refuses to restart',
+        action: 'completion_gate',
+        target: 'current_task',
+        finding: 'Repeated final answers did not satisfy the completion evidence contract',
       },
     ],
   };
@@ -927,9 +1175,8 @@ export function buildAutoContinueBlockedReport(): {
  * - Interactive (hardGate false): `required` may soft-allow; `strict` still enforces.
  */
 export type GateRejectPlan =
-  | { kind: 'auto_continue_block' }
   | { kind: 'reject_continue'; gateStrikesAfter: number; useGreenMessage: boolean }
-  | { kind: 'blocked'; reason: string }
+  | { kind: 'blocked'; reason: string; missingInspection?: true }
   | { kind: 'soft_allow'; gateStrikesAfter: number };
 
 /** Whether this reject must never soft-allow through (headless required/strict or any strict). */
@@ -945,6 +1192,7 @@ export function shouldHardBlockVerifierHonesty(opts: {
 
 export function planCompletionGateReject(opts: {
   hasWrites: boolean;
+  hasInspectedNoChange?: boolean;
   policy: VerificationPolicy;
   hardGate: boolean;
   hadToolCallsThisTurn: boolean;
@@ -956,31 +1204,20 @@ export function planCompletionGateReject(opts: {
     hardGate: opts.hardGate,
   });
 
-  if (!opts.hasWrites) {
-    if (!opts.hadToolCallsThisTurn) {
-      return { kind: 'auto_continue_block' };
-    }
+  if (!opts.hasWrites && !opts.hasInspectedNoChange) {
     const next = opts.gateStrikes + 1;
-    if (opts.hardGate && next <= opts.maxGateStrikes) {
+    if (next <= opts.maxGateStrikes) {
       return {
         kind: 'reject_continue',
         gateStrikesAfter: next,
         useGreenMessage: false,
       };
     }
-    // Bug B fix: hardGate + zero writes after max strikes → BLOCKED (not soft_allow).
-    // Headless/CI must never soft-allow empty-patch completions.
-    if (opts.hardGate) {
-      return {
-        kind: 'blocked',
-        reason: [
-          `Gate blocked after ${next} consecutive completion rejections with no successful file mutations.`,
-          'The agent made tool calls but produced zero successful file writes.',
-          'Headless/CI hard-block: will not soft-allow without file mutations.',
-        ].join(' '),
-      };
-    }
-    return { kind: 'soft_allow', gateStrikesAfter: 0 };
+    return {
+      kind: 'blocked',
+      missingInspection: true,
+      reason: `Completion recovery exhausted after ${next} unsupported final answers. No successful inspection supports a no-change conclusion and no completed change is recorded.`,
+    };
   }
 
   // Has writes but honesty failed (verifier missing/red under strict, missing under required, …)
@@ -1065,9 +1302,14 @@ export function evaluateCompletionGateForEngine(opts: {
       ? { requiredVerifierCommands: opts.requiredVerifierCommands }
       : {}),
   });
+  const noChange = hasInspectedNoChangeEvidence(log);
+  const noChangeNeedsVerification = requiredVerifierCommands.length > 0
+    || taskAsksForVerifier(opts.task) || policy === 'strict';
   const honesty = evaluateExecuteCompletionHonesty({
     hasWrite,
-    policy,
+    allowInspectedNoChange: noChange,
+    policy: noChange && !noChangeNeedsVerification ? 'none'
+      : noChangeNeedsVerification && policy === 'none' ? 'required' : policy,
     lastVerifierReceipt: opts.lastVerifierReceipt ?? null,
     toolCallLog: log,
     requiredVerifierCommands,
@@ -1240,7 +1482,7 @@ export function buildGateRejectUserMessageForEngine(opts: {
     task: opts.task,
   });
   const log = opts.toolCallLog;
-  if (!opts.hasAnyWrites) {
+  if (!opts.hasAnyWrites && !hasInspectedNoChangeEvidence(log)) {
     return buildGateRejectionMessage(log);
   }
   const requiredVerifierCommands = resolveHonestyRequiredVerifiers({
@@ -1253,7 +1495,8 @@ export function buildGateRejectUserMessageForEngine(opts: {
       : {}),
   });
   const honesty = evaluateExecuteCompletionHonesty({
-    hasWrite: true,
+    hasWrite: opts.hasAnyWrites,
+    allowInspectedNoChange: hasInspectedNoChangeEvidence(log),
     policy,
     lastVerifierReceipt: opts.lastVerifierReceipt ?? null,
     toolCallLog: log,
