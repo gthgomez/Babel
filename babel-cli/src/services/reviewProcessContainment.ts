@@ -15,7 +15,10 @@ export interface ReviewProcessContainment {
   release(): void
 }
 
-const WINDOWS_JOB_HELPER_TIMEOUT_MS = 5_000
+export const WINDOWS_JOB_HELPER_TIMEOUT_MS = 5_000
+// Compilation has a separate ceiling; the helper deadline only measures job
+// creation and assignment after PowerShell reports COMPILED.
+export const WINDOWS_JOB_COMPILE_TIMEOUT_MS = 60_000
 const POSIX_WATCHDOG_START_TIMEOUT_MS = 5_000
 
 /** @internal Select an installed system runtime without searching candidate PATH. */
@@ -296,22 +299,38 @@ export async function attachWindowsReviewJobObject(
     let stdout = ''
     let stderr = ''
     let stage = 'SPAWNED'
+    let compiledAt: number | null = null
+    let assignTimer: ReturnType<typeof setTimeout> | undefined
     const settle = (assigned: boolean, reason: string): void => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
+      clearTimeout(compileTimer)
+      if (assignTimer) clearTimeout(assignTimer)
+      const compileMs = compiledAt === null ? Date.now() - startedAt : compiledAt - startedAt
       resolveAssigned({ assigned, ...(!assigned ? {
-        error: `WINDOWS_JOB_ASSIGNMENT_${reason};elapsedMs=${Date.now() - startedAt};stage=${stage};stdoutPresent=${stdout.length > 0};stderrPresent=${stderr.trim().length > 0}`,
+        error: `WINDOWS_JOB_ASSIGNMENT_${reason};elapsedMs=${Date.now() - startedAt};compileMs=${compileMs};stage=${stage};stdoutPresent=${stdout.length > 0};stderrPresent=${stderr.trim().length > 0}`,
       } : {}) })
     }
-    const timer = setTimeout(() => settle(false, 'TIMEOUT'), WINDOWS_JOB_HELPER_TIMEOUT_MS)
-    timer.unref?.()
+    const armAssignmentDeadline = (): void => {
+      if (compiledAt !== null) return
+      compiledAt = Date.now()
+      clearTimeout(compileTimer)
+      assignTimer = setTimeout(() => settle(false, 'TIMEOUT'), WINDOWS_JOB_HELPER_TIMEOUT_MS)
+      assignTimer.unref?.()
+    }
+    const compileTimer = setTimeout(() => settle(false, 'COMPILE_TIMEOUT'), WINDOWS_JOB_COMPILE_TIMEOUT_MS)
+    compileTimer.unref?.()
     helper.stdout?.setEncoding('utf8')
     helper.stdout?.on('data', (chunk: string) => {
       stdout += chunk
       for (const line of stdout.split(/\r?\n/)) {
         const marker = /^BABEL_JOB_STAGE=(STARTED|MODULE_LOADING|COMPILING|COMPILED|CREATING_JOB|OPENING_WORKER|ASSIGNING_JOB)$/.exec(line)
-        if (marker) stage = marker[1]!
+        if (marker) {
+          stage = marker[1]!
+          if (stage !== 'STARTED' && stage !== 'MODULE_LOADING' && stage !== 'COMPILING') {
+            armAssignmentDeadline()
+          }
+        }
       }
       if (stdout.split(/\r?\n/).includes('ASSIGNED')) settle(true, 'ASSIGNED')
     })
