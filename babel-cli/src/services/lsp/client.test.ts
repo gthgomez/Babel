@@ -3,7 +3,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, test, afterEach } from 'node:test';
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createLspClient } from './client.js';
@@ -26,12 +26,14 @@ describe('LSP Client', () => {
    * Create a temporary mock LSP server script.
    * The script speaks Content-Length framed JSON-RPC 2.0 over stdio.
    */
-  function createMockScript(): string {
+  function createMockScript(captureEnv = false): string {
     tempDir = mkdtempSync(join(tmpdir(), 'lsp-test-'));
     const scriptPath = join(tempDir, 'mock-server.mjs');
+    const capturePath = join(tempDir, 'captured-env.txt');
 
     const scriptContent = `
 import { stdin, stdout } from 'node:process';
+${captureEnv ? `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(capturePath)}, [process.env.CODEX_TEST_SECRET ?? '', process.env.LSP_OPTION_SECRET ?? ''].join('|'));` : ''}
 
 let buffer = '';
 let initialized = false;
@@ -202,6 +204,30 @@ stdin.on('end', () => {
     assert.ok(result.capabilities.referencesProvider);
 
     await client.stop();
+  });
+
+  test('strips unknown inherited and per-server environment variables', async () => {
+    const scriptPath = createMockScript(true);
+    const capturePath = join(tempDir!, 'captured-env.txt');
+    const client = createLspClient('mock-safe-env');
+    const previousSecret = process.env.CODEX_TEST_SECRET;
+    process.env.CODEX_TEST_SECRET = 'synthetic-parent-secret';
+
+    try {
+      await client.start(process.execPath, [scriptPath], {
+        env: { LSP_OPTION_SECRET: 'synthetic-option-secret' },
+      });
+      await client.initialize({
+        processId: process.pid,
+        rootUri: 'file:///project',
+        capabilities: {},
+      });
+      assert.equal(readFileSync(capturePath, 'utf8'), '|');
+    } finally {
+      await client.stop();
+      if (previousSecret === undefined) delete process.env.CODEX_TEST_SECRET;
+      else process.env.CODEX_TEST_SECRET = previousSecret;
+    }
   });
 
   test('send hover request and receive response', async () => {

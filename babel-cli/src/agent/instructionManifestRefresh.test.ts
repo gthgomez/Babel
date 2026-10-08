@@ -45,7 +45,7 @@ describe('#216(#4) reused-engine manifest refresh', () => {
     const engine = new ChatEngine({ task: 'first task', projectRoot: rootA });
     const first = engine.getInstructionManifest();
     assert.ok(first, 'engine must expose an instruction manifest after construction');
-    const firstAgents = first!.fragments.find((f) => f.rule_id === 'session:agents');
+    const firstAgents = first!.fragments.find((f) => f.rule_id === 'identity:agents');
     assert.ok(firstAgents, 'construction manifest must include the delivered AGENTS.md');
     assert.ok(firstAgents!.source.startsWith(rootA));
     assert.match(firstAgents!.content_preview ?? '', /NONCE_A_ONLY/);
@@ -54,7 +54,7 @@ describe('#216(#4) reused-engine manifest refresh', () => {
 
     const refreshed = engine.getInstructionManifest();
     assert.ok(refreshed, 'refresh must preserve the manifest');
-    const refreshedAgents = refreshed!.fragments.find((f) => f.rule_id === 'session:agents');
+    const refreshedAgents = refreshed!.fragments.find((f) => f.rule_id === 'identity:agents');
     assert.ok(refreshedAgents, 'refreshed manifest must include the new AGENTS.md');
     assert.ok(
       refreshedAgents!.source.startsWith(rootB),
@@ -78,8 +78,8 @@ describe('#216(#4) reused-engine manifest refresh', () => {
     const after = engine.getInstructionManifest();
     assert.ok(before && after);
     assert.equal(
-      after!.fragments.find((f) => f.rule_id === 'session:agents')?.delivered_content_digest,
-      before!.fragments.find((f) => f.rule_id === 'session:agents')?.delivered_content_digest,
+      after!.fragments.find((f) => f.rule_id === 'identity:agents')?.source_hash,
+      before!.fragments.find((f) => f.rule_id === 'identity:agents')?.source_hash,
       'same root must refresh to the same delivered digest',
     );
   });

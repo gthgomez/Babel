@@ -93,6 +93,10 @@ export interface ExecutorVerifierReceipt {
   stale: boolean
   staleReason?: string
   scope?: 'full_suite' | 'targeted' | 'smoke' | 'property' | 'security'
+  tests_total?: number
+  tests_passed?: number
+  tests_failed?: number
+  tests_skipped?: number
 }
 
 /** Input used by the shared completion authority. */
