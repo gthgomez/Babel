@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, globSync, readFileSync } from 'node:fs';
+import { existsSync, globSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -805,6 +805,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
 
   assert.ok(allTests.length > 0, 'Source test discovery must not be empty');
   assert.equal(new Set(allTests).size, allTests.length, 'Source test discovery must be unique');
+  assert.deepEqual(allTests.filter(path => statSync(join(babelCliDir, path)).size === 0), [], 'Empty source test files cannot qualify coverage');
 
   // Load canonical unit shard inventory using repo helper
   const { prepareUnitShard } = await import('../../babel-cli/scripts/run_ci_unit_shard.mjs');
