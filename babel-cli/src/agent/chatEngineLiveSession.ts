@@ -27,6 +27,7 @@ import {
   type HumanEscalationResult,
 } from '../authority/taskClarity.js';
 import { join } from 'node:path';
+import type { ChatCompiledStack } from './chatStackCompile.js';
 
 /** Minimal options slice — avoids circular import with chatEngine.ts. */
 export interface LiveAuthorityOptionsSlice {
@@ -37,6 +38,7 @@ export interface LiveAuthorityOptionsSlice {
   model?: string;
   maxTurns?: number;
   requiredVerifierCommands?: readonly string[] | null;
+  compiledChatStack?: ChatCompiledStack;
 }
 
 export interface RefreshableAuthorityInput {
@@ -84,6 +86,7 @@ export function refreshEngineInstructionManifest(
     projectRoot: input.options.projectRoot,
     ...(input.options.instructionRoot ? { instructionRoot: input.options.instructionRoot } : {}),
     task: input.options.task,
+    ...(input.options.compiledChatStack ? { compiledChatStack: input.options.compiledChatStack } : {}),
     taskClass: input.taskClass,
     ...(input.options.model ? { modelId: input.options.model } : {}),
     ...(input.options.maxTurns !== undefined ? { maxTurns: input.options.maxTurns } : {}),

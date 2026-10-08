@@ -67,9 +67,8 @@ export async function executeTask(
       target_root: target.targetRoot,
       workspace_root: target.workspaceRoot,
     });
-    // Load session identity once per project root (AGENTS.md, CLAUDE.md,
-    // ENGINEERING.md, PROJECT_CONTEXT.md + cached repo map). This gives the
-    // agent immediate awareness of who it is, where it is, and how to work.
+    // Session identity no longer pastes instruction files. The chat stack
+    // delivers AGENTS.md, ENGINEERING.md, and the user-wide context.md.
     const systemContext = await resolveIdentity(ctx, target.targetRoot);
 
     const lane = explicitDailyCommand?.verb ?? Turn.classifyInteractiveLane(ctx, input);

@@ -321,6 +321,12 @@ export function resolveInvestigateHardCapObserveOnly(
  */
 export function applyExploreFuses(input: {
   executeIntent: boolean;
+  /**
+   * Live Chat supplies receipt-scored progress to ProgressController. When set,
+   * the legacy write/read-count heuristics are retained only as offline helpers
+   * and cannot nudge, restrict, or terminate the ordinary loop.
+   */
+  evidenceBasedProgress?: boolean;
   taskClass: ChatTaskClass;
   hasAnyWrites: boolean;
   state: ExploreFuseState;
@@ -341,6 +347,18 @@ export function applyExploreFuses(input: {
    */
   readOnlyOperation?: boolean;
 }): ExploreFuseResult {
+  if (input.evidenceBasedProgress === true) {
+    return {
+      labels: [],
+      forceMutateMessage: null,
+      readThrashMessage: null,
+      explorationFuseMessage: null,
+      shellSoftMessage: null,
+      investigateBudgetMessage: null,
+      investigateHardCapTerminal: null,
+    };
+  }
+
   const isReadOnlyInspection =
     input.readOnlyOperation === true ||
     (!input.executeIntent &&

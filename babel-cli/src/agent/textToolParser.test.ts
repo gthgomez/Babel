@@ -1,7 +1,75 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseTextToolTurn } from './textToolParser.js';
+import {
+  parseTextToolTurn,
+  buildTextToolProtocolSection,
+  TEXT_TOOL_ARGUMENT_SHAPES,
+  TEXT_TOOL_NAMES,
+  TEXT_TOOL_PROTOCOL_SECTION,
+} from './textToolParser.js';
+
+test('text protocol manual documents every parser tool and its accepted fields', () => {
+  assert.deepEqual(new Set(Object.keys(TEXT_TOOL_ARGUMENT_SHAPES)), TEXT_TOOL_NAMES);
+  for (const [name, fields] of Object.entries(TEXT_TOOL_ARGUMENT_SHAPES)) {
+    assert.ok(TEXT_TOOL_PROTOCOL_SECTION.includes(`- ${name}: ${fields}`));
+  }
+  assert.match(TEXT_TOOL_PROTOCOL_SECTION, /indent every value line by two spaces/);
+  assert.match(TEXT_TOOL_PROTOCOL_SECTION, /quote arguments containing spaces/);
+  assert.match(TEXT_TOOL_PROTOCOL_SECTION, /without a shell/);
+});
+
+test('documented text-tool shapes produce the corresponding supported actions', () => {
+  const examples: Array<[string, string]> = [
+    ['read_file', 'path: src/app.ts'],
+    ['write_file', 'path: src/app.ts\ncontent:\n  export const ok = true;'],
+    ['str_replace', 'file_path: src/app.ts\nold_str: old\nnew_str: new'],
+    ['grep', 'pattern: needle\npath: src/'],
+    ['glob', 'pattern: **/*.ts'],
+    ['run_command', 'command: node "scripts/test runner.mjs" --name "happy path"'],
+    ['finish', ''],
+    ['think', 'thought: inspect the current implementation'],
+    ['ask', 'question: Which runtime should be supported?'],
+    ['remember', 'key: package_manager\nvalue: npm'],
+    ['recall', 'key: package_manager'],
+    ['check', 'file_path: src/app.ts'],
+    ['plan', 'steps:\n  inspect\n  verify'],
+  ];
+
+  for (const [name, fields] of examples) {
+    assert.ok(TEXT_TOOL_NAMES.has(name));
+    const parsed = parseTextToolTurn(`[TOOL:${name}]${fields ? `\n${fields}` : ''}`);
+    assert.equal(parsed.type, 'tool_calls', name);
+    assert.equal(parsed.actions?.length, 1, name);
+    assert.equal(parsed.actions?.[0]?.type, name, name);
+  }
+});
+
+test('multiline text fields preserve blank lines and additional indentation', () => {
+  const parsed = parseTextToolTurn([
+    '[TOOL:write_file]',
+    'path: src/message.txt',
+    'content:',
+    '  first',
+    '  ',
+    '    indented third',
+  ].join('\n'));
+  assert.equal(parsed.type, 'tool_calls');
+  assert.equal((parsed.actions?.[0] as any).content, 'first\n\n  indented third');
+});
+
+test('scoped text manual omits disallowed tools and irrelevant usage guidance', () => {
+  const readOnly = buildTextToolProtocolSection(['read_file', 'grep']);
+  assert.match(readOnly, /- read_file: path/);
+  assert.match(readOnly, /- grep: pattern, path \(optional\)/);
+  assert.doesNotMatch(readOnly, /write_file|str_replace|run_command|multi-line field|shell operators/);
+
+  const writeOnly = buildTextToolProtocolSection(['write_file']);
+  assert.match(writeOnly, /path, content \(multiline\)/);
+  assert.match(writeOnly, /multi-line field/);
+  assert.match(writeOnly, /\[TOOL:write_file\]/);
+  assert.doesNotMatch(writeOnly, /\[TOOL:read_file\]|run_command|shell operators/);
+});
 
 // ─── read_file ────────────────────────────────────────────────────────────────
 

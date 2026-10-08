@@ -39,6 +39,27 @@ export function parseSha256Sums(text, zipName) {
   return line.trim().split(/\s+/)[0].replace(/^\*/, '').toLowerCase();
 }
 
+export function compileNsis({makensis, script, useArchive, nsisExtract}, runCommand, recordArtifacts, removeDirectory = rmSync) {
+  let primaryError;
+  try {
+    runCommand(makensis, ['-V2', script]);
+    return recordArtifacts();
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    if (useArchive) {
+      try {
+        removeDirectory(nsisExtract, {recursive: true, force: true});
+      } catch (cleanupError) {
+        // A locked extract directory (e.g. Windows EBUSY) must not mask the
+        // build error; a cleanup failure with no primary error still fails.
+        if (!primaryError) throw cleanupError;
+      }
+    }
+  }
+}
+
 export function renderNsis({version, stagedPayload, stagedSha, stagedInstall, stagedUninstall, stagedBootstrap, outFile}) {
   const fw = p => '"' + p + '"'; // NSIS File wants backslash paths, quoted when they contain spaces
   return `
@@ -156,8 +177,9 @@ const setupName = `Babel-Desktop-Setup-${version}-win-x64`;
 // --- NSIS toolchain ------------------------------------------------------------
 let makensis;
 let nsisProvenance;
+let nsisExtract;
 if (useArchive) {
-  const nsisExtract = join(output, `nsis-${sourceSha.slice(0, 12)}`);
+  nsisExtract = join(output, `nsis-${sourceSha.slice(0, 12)}`);
   mkdirSync(nsisExtract, {recursive: true});
   command(tarExe, ['-xf', nsisArchive, '-C', nsisExtract]);
   makensis = join(nsisExtract, `nsis-${nsisVersion}`, 'Bin', 'makensis.exe');
@@ -220,23 +242,27 @@ const nsi = renderNsis({
 writeFileSync(join(stage, 'setup.nsi'), nsi.endsWith('\n') ? nsi : nsi + '\n', 'utf8');
 
 // --- Build ------------------------------------------------------------------------
-command(makensis, ['-V2', join(stage, 'setup.nsi')]);
 const setupExe = join(output, setupName + '.exe');
-if (!existsSync(setupExe)) throw new Error('makensis reported success but the Setup executable is missing');
-
-const installerSha = sha(readFileSync(setupExe));
-writeFileSync(setupExe + '.sha256', installerSha + '\n', 'utf8');
-const installerMetadata = {
-  installerSourceSha: sourceSha,
-  payloadSourceSha: payloadBuildSourceSha,
-  payloadSha256: actualPayloadSha,
-  payloadVersion: version,
-  platform: 'win32-x64',
-  ...nsisProvenance,
-  signed: false,
-};
-writeFileSync(join(output, setupName + '.build.json'), JSON.stringify(installerMetadata, null, 2) + '\n', 'utf8');
-if (useArchive) rmSync(nsisExtract, {recursive: true, force: true});
+const installerSha = compileNsis(
+  {makensis, script: join(stage, 'setup.nsi'), useArchive, nsisExtract},
+  command,
+  () => {
+    if (!existsSync(setupExe)) throw new Error('makensis reported success but the Setup executable is missing');
+    const artifactSha = sha(readFileSync(setupExe));
+    writeFileSync(setupExe + '.sha256', artifactSha + '\n', 'utf8');
+    const installerMetadata = {
+      installerSourceSha: sourceSha,
+      payloadSourceSha: payloadBuildSourceSha,
+      payloadSha256: actualPayloadSha,
+      payloadVersion: version,
+      platform: 'win32-x64',
+      ...nsisProvenance,
+      signed: false,
+    };
+    writeFileSync(join(output, setupName + '.build.json'), JSON.stringify(installerMetadata, null, 2) + '\n', 'utf8');
+    return artifactSha;
+  },
+);
 
 console.log(JSON.stringify({setup: setupName + '.exe', sha256: installerSha, payloadVersion: version, signed: false}, null, 2));
 }
