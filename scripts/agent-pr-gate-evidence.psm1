@@ -63,6 +63,23 @@ function Get-AgentCISnapshot {
           @('workflow_run_id', 'id'), @('workflow_run_attempt', 'run_attempt'), @('started_at', 'created_at'))) {
           $metadata[$pair[0]] = [string](Get-CIProperty $run $pair[1])
         }
+        # The run endpoint describes its latest attempt, not this check's
+        # attempt. Reruns retain old checks; bind each to its own Actions job.
+        if ([string](Get-CIProperty $run 'run_attempt') -match '^[1-9]\d*$' -and [int64](Get-CIProperty $run 'run_attempt') -gt 1) {
+          $jobPattern = '^https://github\.com/' + [regex]::Escape($Repository) + '/actions/runs/' + $id + '/job/(?<jobId>[1-9]\d*)(?:[/?]|$)'
+          if ($url -notmatch $jobPattern) { throw 'workflow_check_attempt_unavailable' }
+          $jobId = $Matches.jobId
+          if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw 'github_snapshot_deadline_exceeded' }
+          $apiCalls++; $jobResult = & $ReadJson "repos/$Repository/actions/jobs/$jobId"
+          if (-not $jobResult.available) { throw 'workflow_check_attempt_unavailable' }
+          $job = $jobResult.value
+          $jobAttempt = [string](Get-CIProperty $job 'run_attempt')
+          $checkUrl = 'https://api.github.com/repos/' + $Repository + '/check-runs/' + [string](Get-CIProperty $check 'id')
+          if ([string](Get-CIProperty $job 'run_id') -ne $id -or
+              [string](Get-CIProperty $job 'check_run_url') -ne $checkUrl -or
+              $jobAttempt -notmatch '^[1-9]\d*$' -or [int64]$jobAttempt -gt [int64](Get-CIProperty $run 'run_attempt')) { throw 'workflow_check_attempt_unavailable' }
+          $metadata['workflow_run_attempt'] = $jobAttempt
+        }
       }
       $raw = [pscustomobject]@{}
       foreach ($name in @('name', 'head_sha', 'status', 'conclusion', 'started_at', 'completed_at', 'event',
@@ -79,7 +96,7 @@ function Get-AgentCISnapshot {
     return [pscustomobject]@{ available = $true; observations = @($observations); workflows = @($workflows); error = ''; apiCalls = $apiCalls }
   } catch {
     # No raw API error/body is retained: it may contain private diagnostics.
-    $reason = if ($_.Exception.Message -match '^(github_(api_(timeout|forbidden|rate_limited|server_error|unavailable)|json_malformed|source_unavailable|snapshot_(deadline_exceeded|shape_invalid|changed_during_pagination|incomplete|duplicate_or_invalid_observation))|workflow_metadata_unavailable)$') { $_.Exception.Message } else { 'github_snapshot_invalid' }
+    $reason = if ($_.Exception.Message -match '^(github_(api_(timeout|forbidden|rate_limited|server_error|unavailable)|json_malformed|source_unavailable|snapshot_(deadline_exceeded|shape_invalid|changed_during_pagination|incomplete|duplicate_or_invalid_observation))|workflow_metadata_unavailable|workflow_check_attempt_unavailable)$') { $_.Exception.Message } else { 'github_snapshot_invalid' }
     return [pscustomobject]@{ available = $false; observations = @(); workflows = @(); error = $reason; apiCalls = $apiCalls }
   }
 }

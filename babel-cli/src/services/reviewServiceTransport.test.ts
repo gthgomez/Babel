@@ -15,7 +15,10 @@ import {
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
-    return true
+    // A terminated owned Linux process can retain a PID until its parent reaps it.
+    // Zombies and dead tasks cannot execute the fixture's delayed write.
+    const state = ownedLinuxProcessState(pid)
+    return state !== 'Z' && state !== 'X'
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== 'ESRCH'
   }
