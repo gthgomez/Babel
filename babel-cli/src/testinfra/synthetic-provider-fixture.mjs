@@ -104,9 +104,10 @@ function installFixtureBoundary() {
     }
   }
   for (const name of Object.keys(process.env)) requireCondition(allowedNames.has(name.toUpperCase()))
-  if (process.env['NODE_TEST_WORKER_ID'] !== undefined) {
-    requireCondition(/^[1-9]\d*$/.test(process.env['NODE_TEST_WORKER_ID']))
-  }
+  // Node's test runner may add a numeric worker identity after the parent
+  // constructs the isolated environment. It carries no capability or secret.
+  const workerId = process.env['NODE_TEST_WORKER_ID']
+  requireCondition(workerId === undefined || /^\d+$/.test(workerId))
   const paths = {
     HOME: 'home', USERPROFILE: 'home', APPDATA: 'config', LOCALAPPDATA: 'state',
     XDG_CONFIG_HOME: 'config', XDG_STATE_HOME: 'state', XDG_CACHE_HOME: 'cache',

@@ -14,9 +14,11 @@ import { tmpdir } from 'node:os';
 import { executeActionWithPolicy, resetCircuitBreaker } from './toolExecutor.js';
 import { executeTool, refreshDryRunState } from '../localTools.js';
 import type { ToolContext } from '../localTools.js';
+import { ChatEngine } from './chatEngine.js';
+import { computeTerminalOutcome } from './chatEngineObservability.js';
 
 const REQUESTED = 'updated fixture\n';
-const MANAGED_ENV = ['BABEL_LIVE', 'BABEL_DRY_RUN', 'BABEL_SHADOW_ROOT', 'BABEL_CONFIG_DIR', 'BABEL_DRY_RUN_SOURCE'];
+const MANAGED_ENV = ['BABEL_LIVE', 'BABEL_DRY_RUN', 'BABEL_SHADOW_ROOT', 'BABEL_CONFIG_DIR', 'BABEL_DRY_RUN_SOURCE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_EXECUTION_PROFILE'];
 
 function ctx(runId: string, projectRoot: string): ToolContext {
   return {
@@ -134,5 +136,105 @@ describe('governed mutations carry an invocation-scoped live decision', { concur
     assert.equal(readFileSync(governedTarget, 'utf8'), REQUESTED, 'governed write lands');
     assert.equal(existsSync(dryTarget), false, 'ungoverned concurrent write stays dry');
     assert.equal(process.env['BABEL_LIVE'], snapshot['BABEL_LIVE'], 'no process-wide residue');
+  });
+
+  test('a failing verifier after an authorized write runs and cannot certify completion', async () => {
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+    refreshDryRunState();
+    const marker = join(root, 'ran.txt');
+    writeFileSync(join(root, 'fixture.txt'), 'initial fixture\n', 'utf8');
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ private: true, scripts: { test: 'node prove-fail.mjs' } }),
+      'utf8',
+    );
+    writeFileSync(
+      join(root, 'prove-fail.mjs'),
+      `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'ran');\nprocess.exit(1);\n`,
+      'utf8',
+    );
+    const engine = new ChatEngine({ task: 'update the fixture and verify it', projectRoot: root });
+    const context = { ...ctx('live-optin-verifier', root), runDir: root };
+    await (engine as unknown as {
+      executeOneAction: (...args: unknown[]) => Promise<{ observation: string }>;
+    }).executeOneAction(
+      { type: 'write_file', path: join(root, 'fixture.txt'), content: REQUESTED },
+      context,
+      {},
+      { index: 0, ownerGeneration: 0 },
+    );
+    assert.equal(readFileSync(join(root, 'fixture.txt'), 'utf8'), REQUESTED);
+    const verified = await (engine as unknown as {
+      executeOneAction: (...args: unknown[]) => Promise<{ observation: string }>;
+    }).executeOneAction(
+      { type: 'run_command', command: 'npm test' },
+      context,
+      {},
+      { index: 1, ownerGeneration: 0 },
+    );
+    assert.equal(existsSync(marker), true, `verifier process did not run: ${verified.observation}`);
+    const receipt = (engine as unknown as { lastVerifierReceipt: { exit_code: number } | null }).lastVerifierReceipt;
+    const outcome = computeTerminalOutcome({
+      finalStatus: 'completed',
+      budgetExceeded: false,
+      hasAnyWrites: true,
+      lastVerifierReceipt: receipt,
+    });
+    assert.notEqual(receipt?.exit_code, 0, 'a failing verifier must not be recorded as success');
+    assert.notEqual(outcome, 'VERIFIED_COMPLETE');
+    assert.equal(process.env['BABEL_LIVE'], snapshot['BABEL_LIVE']);
+  });
+
+  test('explicit dry-run stays simulated and cannot certify the workspace', async () => {
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+    refreshDryRunState();
+    const marker = join(root, 'ran.txt');
+    writeFileSync(join(root, 'fixture.txt'), 'initial fixture\n', 'utf8');
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ private: true, scripts: { test: 'node prove-fail.mjs' } }),
+      'utf8',
+    );
+    writeFileSync(
+      join(root, 'prove-fail.mjs'),
+      `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'ran');\nprocess.exit(1);\n`,
+      'utf8',
+    );
+    const engine = new ChatEngine({ task: 'update the fixture and verify it', projectRoot: root });
+    const context = { ...ctx('live-optin-dry-verifier', root), runDir: root };
+    const call = (engine as unknown as {
+      executeOneAction: (...args: unknown[]) => Promise<{ observation: string }>;
+    }).executeOneAction.bind(engine);
+    await call(
+      { type: 'write_file', path: join(root, 'fixture.txt'), content: REQUESTED },
+      context,
+      {},
+      { index: 0, ownerGeneration: 0 },
+    );
+    assert.equal(readFileSync(join(root, 'fixture.txt'), 'utf8'), REQUESTED);
+    process.env['BABEL_DRY_RUN'] = 'true';
+    refreshDryRunState();
+    const verified = await call(
+      { type: 'run_command', command: 'npm test' },
+      context,
+      {},
+      { index: 1, ownerGeneration: 0 },
+    );
+    assert.equal(existsSync(marker), false, 'explicit dry-run must not start the verifier');
+    assert.match(verified.observation, /\[DRY RUN\]/);
+    const receipt = (engine as unknown as { lastVerifierReceipt: { exit_code: number } | null }).lastVerifierReceipt;
+    const attempts = ((engine as unknown as {
+      parity: { sessionEvents: { events: Array<{ kind?: string; authoritative?: boolean }> } };
+    }).parity.sessionEvents.events).filter((event) => event.kind === 'verifier_attempt' && event.authoritative === true);
+    const outcome = computeTerminalOutcome({
+      finalStatus: 'completed',
+      budgetExceeded: false,
+      hasAnyWrites: true,
+      lastVerifierReceipt: receipt,
+    });
+    assert.equal(attempts.length, 0, 'a simulated verifier must not be recorded as authoritative');
+    assert.notEqual(receipt?.exit_code, 0);
+    assert.notEqual(outcome, 'VERIFIED_COMPLETE');
+    assert.equal(process.env['BABEL_LIVE'], snapshot['BABEL_LIVE']);
   });
 });

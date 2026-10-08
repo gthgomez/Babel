@@ -10,12 +10,13 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ChatEngine, formatTextToolResults } from './chatEngine.js';
 import type { ChatToolAction } from './chatToolDefinitions.js';
+import { buildDelegatedChildEnvelope } from './chatEngineChildExecution.js';
 import { buildMutationAgentTurnPrompt } from './lanes/runMutationAgentLoop.js';
 import { buildReadOnlyAgentTurnPrompt } from './lanes/readOnlyAgentLoop.js';
 
@@ -43,10 +44,21 @@ type SubAgentToolLogEntry = {
 async function dispatchSubAgent(
   task: string,
   action: Partial<ChatToolAction> = {},
+  capturePrompt?: (prompt: string) => void,
 ): Promise<{ engine: ChatEngine; observation: string; entry: SubAgentToolLogEntry }> {
   const root = mkdtempSync(join(tmpdir(), 'babel-child-dispatch-'));
   roots.push(root);
-  const engine = new ChatEngine({ task, projectRoot: root, model: 'deepseek-v4-flash' });
+  writeFileSync(join(root, 'AGENTS.md'), 'REPOSITORY_RULE_SENTINEL\n');
+  const engine = new ChatEngine({
+    task, projectRoot: root, model: 'deepseek-v4-flash',
+    ...(capturePrompt ? { testChildLaneOverrides: {
+      useDeterministicMock: false,
+      actionResolver: async (prompt: string) => {
+        capturePrompt(prompt);
+        return [{ type: 'finish' as const, summary: 'Envelope checked', verification: [] }];
+      },
+    } } : {}),
+  });
   const internals = engine as unknown as {
     executeOneAction: (
       action: ChatToolAction,
@@ -181,5 +193,59 @@ describe('S03/#213 production dispatch — resolved spec reaches the child', () 
     });
     assert.match(mutationPrompt, /# Additional Instructions/);
     assert.ok(mutationPrompt.includes(sentinel));
+  });
+});
+
+
+describe('mandatory delegation envelope survives caller instructions', () => {
+  for (const mutation of [false, true]) {
+    test(`${mutation ? 'mutation' : 'read-only'} runtime receives complete envelope`, async () => {
+      const keys = ['BABEL_LITE_OFFLINE', 'BABEL_IMPLEMENT_WORKTREE', 'BABEL_BENCHMARK_AUTO_APPROVE', 'BABEL_BENCHMARK_MODE', 'BABEL_EXECUTION_PROFILE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_AUTONOMY_LEASE'] as const;
+      const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+      delete process.env['BABEL_LITE_OFFLINE'];
+      delete process.env['BABEL_AUTONOMY_LEASE'];
+      process.env['BABEL_IMPLEMENT_WORKTREE'] = '0';
+      process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
+      process.env['BABEL_BENCHMARK_MODE'] = '1';
+      process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+      process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+      try {
+      const prompts: string[] = [];
+      const result = await dispatchSubAgent('Inspect the owned module', {
+        mutation, instructions: 'CALLER_RULE_SENTINEL', write_scope: ['src'],
+      } as Partial<ChatToolAction>, (prompt) => prompts.push(prompt));
+      assert.ok(prompts.length > 0, `real child prompt must be captured: ${result.observation}`);
+      for (const prompt of prompts) {
+        assert.match(prompt, /MANDATORY DELEGATION ENVELOPE/);
+        assert.match(prompt, /REPOSITORY_RULE_SENTINEL/);
+        assert.match(prompt, /CALLER_RULE_SENTINEL/);
+        assert.match(prompt, mutation ? /Capability: mutating/ : /Capability: read-only/);
+      }
+      } finally {
+        for (const key of keys) {
+          if (saved[key] === undefined) delete process.env[key];
+          else process.env[key] = saved[key];
+        }
+      }
+    });
+  }
+  test('rules beyond 4000 characters remain in the delegation envelope', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-child-rules-'));
+    roots.push(root);
+    writeFileSync(join(root, 'AGENTS.md'), 'prefix '.repeat(800) + '\nMANDATORY_RULE_TAIL\n');
+    const child = buildDelegatedChildEnvelope({
+      task: 'Inspect', projectRoot: root, parentReadOnly: false,
+      requestedMutation: false, requestedWriteScope: [], instructions: null, parentModel: null,
+    });
+    assert.match(child.envelope, /MANDATORY_RULE_TAIL/);
+  });
+  test('unrepresentable mandatory rules refuse delegation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-child-rules-'));
+    roots.push(root);
+    writeFileSync(join(root, 'AGENTS.md'), 'mandatory '.repeat(4000));
+    assert.throws(() => buildDelegatedChildEnvelope({
+      task: 'Inspect', projectRoot: root, parentReadOnly: false,
+      requestedMutation: false, requestedWriteScope: [], instructions: null, parentModel: null,
+    }), /required_instruction_exceeds_prompt_budget/);
   });
 });

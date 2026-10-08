@@ -445,6 +445,7 @@ describe('buildRestrictedChatToolDefinitions', () => {
     assert.ok(!names.has('run_command'), 'mutate_only must NOT include run_command');
     assert.ok(!names.has('await_command'), 'mutate_only must NOT include await_command');
     assert.ok(!names.has('test_run'), 'mutate_only must NOT include test_run');
+    assert.ok(!names.has('finish'), 'mutate_only must not re-advertise the legacy finish tool');
   });
 
   test('act_or_verify includes verifier/execution tools', () => {
@@ -453,13 +454,14 @@ describe('buildRestrictedChatToolDefinitions', () => {
     assert.ok(names.includes('run_command'), 'should include run_command');
     assert.ok(names.includes('await_command'), 'should include await_command (T2.2)');
     assert.ok(names.includes('test_run'), 'should include test_run');
+    assert.ok(!names.includes('finish'), 'act_or_verify must not re-advertise the legacy finish tool');
   });
 
-  test('includes planning and completion tools', () => {
+  test('includes planning tool but omits legacy completion tool', () => {
     const restricted = buildRestrictedChatToolDefinitions();
     const names = restricted.map((d) => d.function.name);
     assert.ok(names.includes('todo_write'), 'should include todo_write');
-    assert.ok(names.includes('finish'), 'should include finish');
+    assert.ok(!names.includes('finish'), 'native restricted schemas must omit finish');
   });
 
   test('excludes exploration/read tools', () => {
@@ -479,15 +481,15 @@ describe('buildRestrictedChatToolDefinitions', () => {
     assert.ok(!names.has('mcp_request'), 'should NOT include mcp_request');
   });
 
-  test('mutate_only set contains exactly 5 tools', () => {
-    // write_file, str_replace, apply_patch, todo_write, finish
+  test('mutate_only set contains exactly 4 native tools', () => {
+    // write_file, str_replace, apply_patch, todo_write
     const restricted = buildRestrictedChatToolDefinitions('mutate_only');
-    assert.equal(restricted.length, 5);
+    assert.equal(restricted.length, 4);
   });
 
-  test('act_or_verify set contains exactly 8 tools', () => {
+  test('act_or_verify set contains exactly 7 native tools', () => {
     // + run_command, await_command, test_run
     const restricted = buildRestrictedChatToolDefinitions('act_or_verify');
-    assert.equal(restricted.length, 8);
+    assert.equal(restricted.length, 7);
   });
 });

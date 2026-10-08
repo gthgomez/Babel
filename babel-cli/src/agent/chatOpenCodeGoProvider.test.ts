@@ -40,6 +40,7 @@ if (!isSyntheticProviderFixtureReady()) {
   })
 } else {
   // Dynamic imports happen only after environment, home, config and transport validation.
+  const { resolveChatEngineLimits } = await import('../config/chatEngineLimits.js')
   const { ChatEngine } = await import('./chatEngine.js')
   const { resolveChatModelPolicy } = await import('./chatModelPolicy.js')
   const {
@@ -301,10 +302,13 @@ if (!isSyntheticProviderFixtureReady()) {
       limits: { maxTurns: number; maxCostUsd: number; maxWallMs: number; stallTurns: number }
       runAsymmetricDiffCritic: (answer: string, callbacks: {}, intent: 'execute') => Promise<'allow' | 'reject' | 'block'>
     }
-    assert.equal(internal.limits.maxTurns, 200)
-    assert.equal(internal.limits.maxCostUsd, 2)
-    assert.equal(internal.limits.maxWallMs, 600000)
-    assert.equal(internal.limits.stallTurns, 8)
+    // Go follows the accepted task's native tune, including the constructor's
+    // task classification; the provider does not replace it with raw defaults.
+    const nativeLimits = resolveChatEngineLimits({}, undefined, { taskText: codingTask })
+    assert.equal(internal.limits.maxTurns, nativeLimits.maxTurns)
+    assert.equal(internal.limits.maxCostUsd, nativeLimits.maxCostUsd)
+    assert.equal(internal.limits.maxWallMs, nativeLimits.maxWallMs)
+    assert.equal(internal.limits.stallTurns, nativeLimits.stallTurns)
     const eventTypes: string[] = []
     let ownerCriticExercised = false
     for await (const event of engine.submitMessageStream(codingTask, 'execute')) {
@@ -374,12 +378,15 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.ok(runner instanceof OpenCodeGoApiRunner)
     internal._lastPhase = 'mutate'
     assert.ok(internal.resolveRoutedRunner() === runner, 'Go phases must retain the pinned runner')
-    assert.equal(internal.limits.maxTurns, 200)
-    assert.equal(internal.limits.maxCostUsd, 2)
-    assert.equal(internal.limits.maxWallMs, 600000)
+    // Go follows the accepted task's native tune, including the constructor's
+    // task classification; the provider does not replace it with raw defaults.
+    const nativeLimits = resolveChatEngineLimits({}, undefined, { taskText: codingTask })
+    assert.equal(internal.limits.maxTurns, nativeLimits.maxTurns)
+    assert.equal(internal.limits.maxCostUsd, nativeLimits.maxCostUsd)
+    assert.equal(internal.limits.maxWallMs, nativeLimits.maxWallMs)
     // Chat's constructor passes no model to native limit resolution; the CLI
     // preflight projection's DeepSeek scaling is not the engine's actual setting.
-    assert.equal(internal.limits.stallTurns, 8)
+    assert.equal(internal.limits.stallTurns, nativeLimits.stallTurns)
   })
 
   for (const [label, key, provider, expectedModel, endpoint] of [

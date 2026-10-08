@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { compileChatStack } from "./chatStackCompile.js";
 import { globalCostTracker } from "../services/costTracker.js";
 import { applyWorkingStateEvent } from "./codingLoop/index.js";
 import {
@@ -9,7 +10,7 @@ import {
   buildReadOnlyChildResult,
   renderReadOnlyChildResultSection,
 } from "./childConclusion.js";
-import { formatChildSpecReceipt, resolveChildSpec } from "./childSpec.js";
+import { formatChildSpecReceipt, resolveChildSpec, type EffectiveChildSpec } from "./childSpec.js";
 import { recordMutationBatch, operationFingerprint } from "./sessionEvents.js";
 import { getChatApprovalSession } from "./chatApproval.js";
 import { deriveSubagentApprovalSession } from "./approvalRequests.js";
@@ -141,6 +142,59 @@ export interface ChatEngineChildExecutionInput {
   toolId: number;
 }
 
+/** Drop write-scope entries that resolve outside the launched project root. */
+export function confineChildWriteScope(projectRoot: string, writeScope: readonly string[]): string[] {
+  const root = resolve(projectRoot);
+  const kept: string[] = [];
+  for (const entry of writeScope) {
+    if (typeof entry !== "string" || entry.length === 0 || entry.includes("\0")) continue;
+    const absolute = resolve(root, entry);
+    const rel = relative(root, absolute);
+    if (rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || isAbsolute(rel)) continue;
+    kept.push(entry);
+  }
+  return kept;
+}
+
+/** Delegation text and write boundary shared by mutation and read-only children. */
+export function buildDelegatedChildEnvelope(input: {
+  task: string;
+  projectRoot: string;
+  parentReadOnly: boolean;
+  requestedMutation: boolean;
+  requestedWriteScope: readonly string[];
+  instructions: string | null;
+  parentModel: string | null;
+  model?: string | null;
+  maxRounds?: number | null;
+}): { envelope: string; mutationEnabled: boolean; writeScope: string[]; spec: EffectiveChildSpec } {
+  const spec = resolveChildSpec({
+    mutation: input.requestedMutation,
+    writeScope: [...input.requestedWriteScope],
+    instructions: input.instructions,
+    model: input.model ?? null,
+    maxRounds: input.maxRounds ?? null,
+    parentModel: input.parentModel,
+  });
+  const mutationEnabled = input.parentReadOnly ? false : spec.mutation;
+  const writeScope = input.parentReadOnly ? [] : confineChildWriteScope(input.projectRoot, spec.writeScope);
+  const repositoryRules = compileChatStack({
+    projectRoot: input.projectRoot,
+    task: input.task,
+    includeDomainSkill: false,
+  }).system_context;
+  const envelope = [
+    "MANDATORY DELEGATION ENVELOPE",
+    `Objective: ${input.task}`,
+    `Capability: ${mutationEnabled ? "mutating" : "read-only"}`,
+    `Write scope: ${writeScope.join(", ") || "(none)"}`,
+    spec.instructions ? `Caller instructions: ${spec.instructions}` : "",
+    repositoryRules ? `Repository rules:\n${repositoryRules}` : "",
+    "The child cannot exceed this capability or the accepted objective.",
+  ].filter(Boolean).join("\n");
+  return { envelope, mutationEnabled, writeScope, spec };
+}
+
 export async function executeSubAgentAction(
   input: ChatEngineChildExecutionInput,
 ): Promise<{ index: number; observation: string; stop?: boolean }> {
@@ -175,16 +229,24 @@ export async function executeSubAgentAction(
   // S03/#213 slice 1: resolve ONE effective child spec. Every declared
   // option is honored, rejected, or clamped with a reason; the runtime
   // receipts and the advertised schema both derive from these semantics.
-  const spec = resolveChildSpec({
-    mutation: (action as { mutation?: boolean }).mutation === true,
-    writeScope: (action as { write_scope?: string[] }).write_scope ?? [],
+  const parentReadOnly =
+    (host as { lastTurnRuntime?: { effectiveOperation?: string } }).lastTurnRuntime
+      ?.effectiveOperation === "READ_ONLY";
+  const delegated = buildDelegatedChildEnvelope({
+    task: host.options.task,
+    projectRoot: host.options.projectRoot,
+    parentReadOnly,
+    requestedMutation: (action as { mutation?: boolean }).mutation === true,
+    requestedWriteScope: (action as { write_scope?: string[] }).write_scope ?? [],
     instructions: (action as { instructions?: string }).instructions ?? null,
+    parentModel: host.modelPolicy?.providerModelId ?? null,
     model: (action as { model?: string }).model ?? null,
     maxRounds: (action as { max_rounds?: number }).max_rounds ?? null,
-    parentModel: host.modelPolicy?.providerModelId ?? null,
   });
-  const mutationEnabled = spec.mutation;
-  const writeScope = spec.writeScope;
+  const spec = delegated.spec;
+  const mutationEnabled = delegated.mutationEnabled;
+  const writeScope = delegated.writeScope;
+  const childEnvelope = delegated.envelope;
   const specReceipt = formatChildSpecReceipt(spec);
   // Test-only deterministic lane overrides (never set in production).
   const childLane = host.options.testChildLaneOverrides;
@@ -449,6 +511,7 @@ export async function executeSubAgentAction(
             task: action.task,
             projectRoot: host.options.projectRoot,
             writeScope,
+            additionalInstructions: childEnvelope,
             ...(host.options.workspaceRoot
               ? { workspaceRoot: host.options.workspaceRoot }
               : {}),
@@ -509,9 +572,6 @@ export async function executeSubAgentAction(
               }
             },
             ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
-            ...(spec.instructions
-              ? { additionalInstructions: spec.instructions }
-              : {}),
           });
           // R0-7: a mutation child that resolves after the parent submission
           // was superseded must not mint a mutation batch, invalidate the new
@@ -640,6 +700,9 @@ export async function executeSubAgentAction(
             target,
             detail: `failed, attribution=${attribution}`,
             error: "error",
+            // A mutation child may throw after partial effects. Absence of a
+            // settled result is not evidence that the parent tree is unchanged.
+            effect_status: "indeterminate",
             index: meta.index,
             exit_code: 1,
           });
@@ -697,6 +760,7 @@ export async function executeSubAgentAction(
           verb: "ask",
           task: action.task,
           projectRoot: host.options.projectRoot,
+          additionalInstructions: childEnvelope,
           seedPaths: [],
           toolContext: {
             agentId: subId,
@@ -716,9 +780,6 @@ export async function executeSubAgentAction(
             : {}),
           ...(childLane?.executor ? { executor: childLane.executor } : {}),
           ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
-          ...(spec.instructions
-            ? { additionalInstructions: spec.instructions }
-            : {}),
           inheritedAllowance: readAllowance,
           onUsageRecorded: () => {
             if (readAllowance.parentTaskOwnerId) {

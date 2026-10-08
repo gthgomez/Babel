@@ -257,9 +257,6 @@ describe('chat preparation parity (actual provider-bound request)', () => {
         taskText: task,
       });
       const chatStack = compileChatStackForRun({ projectRoot: source, task });
-      const stackSystemContext = [systemContext, chatStack.system_context]
-        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-        .join('\n\n');
       const intentPlanUserMessage = compileIntentPlanUserMessage(
         task,
         intentClass,
@@ -268,7 +265,8 @@ describe('chat preparation parity (actual provider-bound request)', () => {
       const directEngine = new ChatEngine({
         task,
         projectRoot: source,
-        ...(stackSystemContext ? { systemContext: stackSystemContext } : {}),
+        systemContext,
+        compiledChatStack: chatStack,
         preflightContext,
         ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
         maxTurns: limits.maxTurns,
@@ -320,12 +318,11 @@ describe('chat preparation parity (actual provider-bound request)', () => {
         .map((message) => message.content)
         .join('\n');
       assert.match(userContents, /histogram density range/);
-      assert.ok(intentPlanUserMessage, 'frozen execute task must compile an intent plan');
-      assert.match(userContents, /## Intent Plan/);
-      assert.ok(
-        userContents.includes(intentPlanUserMessage!),
-        'actual provider request must contain the intent-plan user message',
-      );
+      assert.equal(intentPlanUserMessage, undefined);
+      assert.doesNotMatch(userContents, /## Intent Plan/);
+      assert.doesNotMatch(userContents, /## Before You Start/);
+      assert.doesNotMatch(systemPrompt, /## How You Work|## Recommended Workflow/);
+      assert.equal(systemPrompt.split('## How Babel works').length - 1, 1);
 
       assert.equal(headless.model, 'mimo-v2.5');
       assert.ok(headless.toolNames.length > 0, 'native request must declare tools');
@@ -343,8 +340,7 @@ describe('chat preparation parity (actual provider-bound request)', () => {
 
       const tuiIntent = (reusedEngine as unknown as { options: { intentPlanUserMessage?: string } }).options
         .intentPlanUserMessage;
-      assert.ok(tuiIntent);
-      assert.match(tuiIntent!, /## Intent Plan/);
+      assert.equal(tuiIntent, undefined);
     } finally {
       globalThis.fetch = originalFetch;
       for (const [key, value] of Object.entries(previous)) {

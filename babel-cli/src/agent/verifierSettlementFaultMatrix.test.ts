@@ -50,6 +50,7 @@ import {
   invalidateVerifierLedger,
   noteChatWorkspaceMutation,
 } from './chatEngineSupport.js';
+import { RevisionManager } from '../evidence/revisionBoundReceipt.js';
 
 const MANAGED_ENV = [
   'BABEL_RUNS_DIR',
@@ -204,34 +205,37 @@ function terminalEvents(events: readonly ChatEvent[]) {
 }
 
 describe('verifier settlement fault matrix', { concurrency: false }, () => {
-  test('receipt capture throws (authoritative verifier, empty mutation scope) degrades to exactly one terminal', async () => {
+  test('receipt capture throws after a mutation and degrades to exactly one terminal', async (t) => {
     const root = makeFixture();
     const runId = 'matrix-capture-throw';
     process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
+    // This bounded, offline transport fixture has no provider price. It must
+    // reach the capture fault rather than test the unrelated unknown-cost cap.
+    const priorCostAllowance = process.env['BABEL_CHAT_MAX_COST'];
+    process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
     const restore = installTurns([
+      { kind: 'tools', toolCalls: [{ id: 'call-edit', name: 'str_replace', args: {
+        file_path: 'parser.ts', old_str: 'x = 1', new_str: 'x = 2',
+      } }] },
       { kind: 'tools', toolCalls: [{ id: 'call-verify', name: 'run_command', args: { command: 'npm test' } }] },
       { kind: 'text', text: 'Verifier ran.' },
     ]);
     try {
-      // Precondition: capture really throws for an authoritative command with
-      // no bound mutation scope.
-      await assert.rejects(
-        () =>
-          captureChatVerifierReceipt({
-            projectRoot: root,
-            command: 'npm test',
-            exitCode: 0,
-            summary: 'ok',
-            mutationPaths: [],
-          }),
-        /Revision-bound file scope must not be empty/,
-      );
-
-      const engine = makeEngine(root, runId, 'Run npm test and report the result.');
+      // Empty pre-write scope now has a legitimate no-change route. Inject an
+      // actual capture failure after a real mutation instead of depending on
+      // that former limitation to exercise the settlement boundary.
+      let captureCalls = 0;
+      t.mock.method(RevisionManager, 'computeRevision', async () => {
+        captureCalls++;
+        throw new Error('FAULT_INJECTED_REVISION_CAPTURE');
+      });
+      const task = 'Change parser.ts to export x = 2. Run npm test and report the result.';
+      const engine = makeEngine(root, runId, task);
       const events: ChatEvent[] = [];
-      for await (const event of engine.submitMessageStream('Run npm test and report the result.')) {
+      for await (const event of engine.submitMessageStream(task)) {
         events.push(event);
       }
+      assert.ok(captureCalls > 0, 'the intended verifier capture fault was reached');
 
       const terminals = terminalEvents(events).filter(
         (event) => (event as { toolCallId?: string }).toolCallId === 'call-verify',
@@ -249,11 +253,14 @@ describe('verifier settlement fault matrix', { concurrency: false }, () => {
 
       const conversation = (engine as unknown as { conversation: Array<{ content?: string }> }).conversation;
       assert.ok(
-        conversation.some((message) => message.content?.includes('verifier_receipt_unavailable')),
+        conversation.some((message) => message.content?.includes('verifier_receipt_unavailable')
+          && message.content.includes('FAULT_INJECTED_REVISION_CAPTURE')),
         'degradation surfaces verifier_receipt_unavailable',
       );
     } finally {
       restore();
+      if (priorCostAllowance === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+      else process.env['BABEL_CHAT_MAX_COST'] = priorCostAllowance;
       rmSync(root, { recursive: true, force: true });
     }
   });
