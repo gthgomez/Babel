@@ -8,7 +8,7 @@ import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
 import {resolveEngineIdentity} from './identity.mjs';
-import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,resolveNpmInvocation,runDevelopmentUpdate,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
+import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
 import {listSavedChats,readSavedChat} from './sessions.mjs';
 import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose} from './lifecycle.mjs';
 
@@ -134,7 +134,7 @@ async function start(){
   handle('babel:check-cli-update',async()=>{
     assertIdle();
     if(app.isPackaged) return checkReleaseUpdate();
-    const inspection=inspectDevelopmentCheckout({git:createGitRunner({timeout:15000}),repoRoot:cliCheckoutRoot()??''});
+    const inspection=await inspectDevelopmentCheckout({git:createGitRunner({timeout:15000}),repoRoot:cliCheckoutRoot()??''});
     cliUpdate=updateStateFromInspection(inspection);
     return {...cliUpdate,inspection:publicInspection(inspection)};
   });
@@ -148,26 +148,26 @@ async function start(){
     const git=createGitRunner();
     updateBusy=true;
     try{
-      const before=inspectDevelopmentCheckout({git,repoRoot});
-      const pre=planDevelopmentUpdate({...before, behind:1});
+      const before=await inspectDevelopmentCheckout({git,repoRoot});
+      const pre=precheckSafety(before);
       if(!pre.allowed) throw new Error(updateBlockMessage(pre.reason));
       // Fetch the trusted upstream before presenting the incoming revision so the
       // user sees an accurate target, never a stale local ref.
-      const fetched=git(['fetch','origin','--prune'],repoRoot);
+      const fetched=await git(['fetch','origin','--prune'],repoRoot);
       if(!fetched.ok) throw new Error(updateBlockMessage('fetch_failed'));
-      const after=inspectDevelopmentCheckout({git,repoRoot});
+      const after=await inspectDevelopmentCheckout({git,repoRoot});
       const plan=planDevelopmentUpdate(after);
       if(!plan.allowed){
         if(plan.reason==='already_current') return {started:false,upToDate:true};
         throw new Error(updateBlockMessage(plan.reason));
       }
-      const consent=await dialog.showMessageBox(window,{type:'warning',title:'Update the development Babel CLI?',message:'Fetch, fast-forward, and rebuild the canonical CLI.',detail:`Checkout: ${after.repoRoot}\nRemote: ${after.remoteUrl}\nBranch: ${after.branch}\n\nCurrent: ${after.head.slice(0,12)}\nIncoming: ${plan.incomingSha.slice(0,12)} (${plan.incomingCount} commit(s))\n\nDependencies are reinstalled and the CLI rebuilt with the repository's own commands. Uncommitted work is refused, never overwritten.`,buttons:['Cancel','Update CLI'],defaultId:0,cancelId:0,noLink:true});
+      const consent=await dialog.showMessageBox(window,{type:'warning',title:'Update the development Babel CLI?',message:'Fetch, fast-forward, and rebuild the canonical CLI.',detail:`Checkout: ${after.repoRoot}\nRemote: ${after.remoteHost}/${after.remoteSlug}\nBranch: ${after.branch}\n\nCurrent: ${after.head.slice(0,12)}\nIncoming: ${plan.incomingSha.slice(0,12)} (${plan.incomingCount} commit(s))\n\nDependencies are reinstalled and the CLI rebuilt with the repository's own commands. Uncommitted work is refused, never overwritten.`,buttons:['Cancel','Update CLI'],defaultId:0,cancelId:0,noLink:true});
       if(consent.response!==1) return {started:false};
       const send=event=>{if(window&&!window.isDestroyed())window.webContents.send('babel:update-event',event);};
-      const result=runDevelopmentUpdate({git,run:createStepRunner(),repoRoot,cliDir:packageDir,nodeExe:officialRuntime().executable,nodeEnv:{ELECTRON_RUN_AS_NODE:'1'},npm:resolveNpmInvocation(),snapshotDir:join(app.getPath('userData'),'engine','rollback'),events:send});
+      const result=await runDevelopmentUpdate({git,run:createStepRunner(),repoRoot,cliDir:packageDir,nodeExe:officialRuntime().executable,nodeEnv:{ELECTRON_RUN_AS_NODE:'1'},npm:resolveNpmInvocation(),snapshotDir:join(app.getPath('userData'),'engine','rollback'),events:send});
       cliUpdate=result.ok
         ?{state:'current',channel:'development',currentSha:result.sourceSha,availableSha:result.sourceSha,detail:`Updated to ${result.sourceSha.slice(0,12)} (CLI ${result.version}).`}
-        :{state:'error',channel:'development',currentSha:result.previousSha??null,detail:`Update stopped at ${result.phase}: ${updateBlockMessage(result.reason)}`};
+        :{state:'error',channel:'development',currentSha:result.previousSha??null,detail:`Update stopped at ${result.phase}: ${updateBlockMessage(result.reason)}${result.treeAdvanced?'. The checkout is now at the fetched commit; the previous build was restored.' : ''}`};
       return {...result};
     }finally{updateBusy=false;}
   }));

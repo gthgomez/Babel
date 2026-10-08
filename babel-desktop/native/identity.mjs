@@ -28,7 +28,7 @@ export function parseBuildMetadata(text) {
     cliVersion: typeof value.cliVersion === 'string' ? value.cliVersion : null,
     sourceSha: SHA.test(String(value.sourceSha)) ? String(value.sourceSha) : null,
     platform: typeof value.platform === 'string' ? value.platform : null,
-    signed: value.signed === true,
+    signed: typeof value.signed === 'boolean' ? value.signed : null,
   };
 }
 

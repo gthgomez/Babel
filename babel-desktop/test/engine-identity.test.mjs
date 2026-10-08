@@ -1,6 +1,7 @@
 // License: Apache-2.0 - see LICENSE
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {dirname, resolve} from 'node:path';
 import {classifyOrigin, parseBuildMetadata, describeSource, normalizeUpdate, resolveEngineIdentity} from '../native/identity.mjs';
 
 const SHA_A = 'a'.repeat(40);
@@ -20,6 +21,7 @@ test('parseBuildMetadata reads only real provenance and never invents fields', (
   assert.deepEqual(parsed, {version:'0.1.1', cliVersion:'0.1.1', sourceSha:SHA_A, platform:'win32-x64', signed:false});
   assert.equal(parseBuildMetadata('not json'), null);
   assert.equal(parseBuildMetadata(JSON.stringify({version:'0.1.1'})).sourceSha, null);
+  assert.equal(parseBuildMetadata(JSON.stringify({version:'0.1.1'})).signed, null);
   assert.equal(parseBuildMetadata(JSON.stringify({sourceSha:'short'})).sourceSha, null);
 });
 
@@ -38,13 +40,14 @@ test('normalizeUpdate never reports current/available without a check', () => {
 });
 
 test('resolveEngineIdentity reports packaged provenance from BUILD.json', () => {
+  const resourcesPath = resolve('app', 'resources');
   const files = new Map([
-    ['/app/BUILD.json', JSON.stringify({version:'0.1.1', cliVersion:'0.1.1', sourceSha:SHA_A, platform:'win32-x64', signed:false})],
-    ['/app/resources/babel-runtime/cli/package.json', JSON.stringify({version:'0.1.1'})],
+    [resolve(resourcesPath, '..', 'BUILD.json'), JSON.stringify({version:'0.1.1', cliVersion:'0.1.1', sourceSha:SHA_A, platform:'win32-x64', signed:false})],
+    [resolve(resourcesPath, 'babel-runtime', 'cli', 'package.json'), JSON.stringify({version:'0.1.1'})],
   ]);
   const identity = resolveEngineIdentity({
-    isPackaged:true, resourcesPath:'/app/resources', desktopVersion:'0.1.1',
-    cliEntry:'/app/resources/babel-runtime/cli/dist/index.js', official:{ready:true, label:'Bundled Babel CLI', source:'bundled'},
+    isPackaged:true, resourcesPath, desktopVersion:'0.1.1',
+    cliEntry:resolve(resourcesPath, 'babel-runtime', 'cli', 'dist', 'index.js'), official:{ready:true, label:'Bundled Babel CLI', source:'bundled'},
     ready:true, executionProfile:'safe_repo', diagnostics:{provider:'configured', docker:'available'},
     readText:path => { if (!files.has(path)) throw new Error('missing'); return files.get(path); },
   });
@@ -57,7 +60,8 @@ test('resolveEngineIdentity reports packaged provenance from BUILD.json', () => 
 });
 
 test('resolveEngineIdentity reports the source commit and dirty state for a checkout', () => {
-  const files = new Map([['/repo/babel-cli/package.json', JSON.stringify({version:'0.1.1'})]]);
+  const cliEntry = resolve('repo', 'babel-cli', 'dist', 'index.js');
+  const files = new Map([[resolve(dirname(dirname(cliEntry)), 'package.json'), JSON.stringify({version:'0.1.1'})]]);
   const gitCalls = [];
   const git = (args, cwd) => {
     gitCalls.push([args.join(' '), cwd]);
@@ -67,7 +71,7 @@ test('resolveEngineIdentity reports the source commit and dirty state for a chec
     return {ok:false, stdout:''};
   };
   const identity = resolveEngineIdentity({
-    isPackaged:false, desktopVersion:'0.1.1', cliEntry:'/repo/babel-cli/dist/index.js',
+    isPackaged:false, desktopVersion:'0.1.1', cliEntry,
     official:{ready:true, label:'babel-cli/dist/index.js', source:'official'}, ready:true,
     readText:path => { if (!files.has(path)) throw new Error('missing'); return files.get(path); }, git,
   });
@@ -76,12 +80,12 @@ test('resolveEngineIdentity reports the source commit and dirty state for a chec
   assert.equal(identity.source.commitSha, SHA_B);
   assert.equal(identity.source.branch, 'main');
   assert.equal(identity.source.dirty, true);
-  assert.equal(gitCalls[0][1], '/repo/babel-cli/dist');
+  assert.equal(gitCalls[0][1], dirname(cliEntry));
 });
 
 test('resolveEngineIdentity stays unknown when git is unavailable', () => {
   const identity = resolveEngineIdentity({
-    isPackaged:false, desktopVersion:'0.1.1', cliEntry:'/elsewhere/cli/dist/index.js',
+    isPackaged:false, desktopVersion:'0.1.1', cliEntry:resolve('elsewhere', 'cli', 'dist', 'index.js'),
     official:{ready:false, label:null, source:null}, advancedEntry:true, ready:false,
     readText:() => { throw new Error('missing'); }, git:() => ({ok:false, stdout:''}),
   });

@@ -85,7 +85,7 @@ function runtimeUpdateText(update) {
   return 'Not checked';
 }
 function runtimeRow(label, value, extra) {
-  return `<div class="settings-row"><span>${e(label)}</span><span class="muted${extra ? ' ' + extra : ''}">${e(value)}</span></div>`;
+  return `<div class="settings-row"><span>${e(label)}</span><span class="muted${extra ? ' ' + e(extra) : ''}">${e(value)}</span></div>`;
 }
 function renderRuntime() {
   const panel = $('#runtime-panel');
