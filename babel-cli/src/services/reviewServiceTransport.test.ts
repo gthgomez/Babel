@@ -15,10 +15,22 @@ import {
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
-    return true
+    // A terminated owned Linux process can retain a PID until its parent reaps it.
+    // Zombies and dead tasks cannot execute the fixture's delayed write.
+    const state = ownedLinuxProcessState(pid)
+    return state !== 'Z' && state !== 'X'
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== 'ESRCH'
   }
+}
+
+function ownedLinuxProcessState(pid: number): string {
+  if (process.platform !== 'linux') return 'not-linux'
+  try {
+    // Read only this fixture's validated descendant state; never its command line.
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] ?? 'unknown'
+  } catch { return 'unavailable' }
 }
 
 function forceCleanup(pid: number): void {
@@ -198,7 +210,7 @@ setInterval(() => {}, 100);
     if (outcome.ok) assert.fail('Finite timeout unexpectedly resolved.')
     assert.ok(outcome.error instanceof Error)
     assert.equal(outcome.error.message, 'Trusted review service timed out.')
-    assert.equal(isAlive(descendantPid), false, 'service descendant must be dead when timeout is reported')
+    assert.equal(isAlive(descendantPid), false, `service descendant must be dead when timeout is reported; owned Linux state=${ownedLinuxProcessState(descendantPid)}`)
     assert.deepEqual(clock.counts(), { registered: 1, fired: 1, cleared: true })
     await pause(1_200)
     assert.equal(existsSync(marker), false, 'service descendant must not escape timeout cleanup')
