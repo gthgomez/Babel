@@ -40,7 +40,8 @@
     "babel-cli/src/services/trustedReviewInstallation", "babel-cli/src/services/orchestratorReviewAdapter",
     "babel-cli/src/services/structuredFinding", "babel-cli/src/authority/",
     "babel-cli/src/config/autonomyPolicy",
-    "tools/babel-pr-orchestrate", "tools/agent-host-review.ps1", "tools/host-review-worker.mts"
+    "tools/babel-pr-orchestrate", "tools/agent-host-review.ps1", "tools/host-review-worker.mts",
+    "tools/resolve-release-tag.mjs"
   ],
   "finalCertificationCount": {
     "TRIVIAL": 1, "NORMAL": 1, "ELEVATED": 2, "CRITICAL": 2, "AMBIGUOUS": 2

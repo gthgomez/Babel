@@ -150,6 +150,7 @@ const paths = [
   "tools/agent-host-review.ps1",
   "tools/babel-pr-orchestrate-opencode.mts",
   "tools/babel-pr-orchestrate.mts",
+  "tools/resolve-release-tag.mjs",
   "tools/host-review-worker.mts"
 ];
 function fixture(t, verifierSource = source) {
