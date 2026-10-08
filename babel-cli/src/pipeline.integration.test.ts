@@ -521,12 +521,13 @@ describe('OTEL regression fixture path', () => {
     assert.ok(result !== null);
     assert.equal(result.type, 'tool_call');
     assert.equal(result.tool, 'file_read');
+    assert.equal(result.path, 'babel-cli/package.json');
   });
 
-  it('OTEL executor prompt returns COMPLETE after manifest read', () => {
+  it('OTEL executor prompt returns COMPLETE after successful package metadata read', () => {
     const prompt =
       'otel regression autonomous lane. EXECUTION HISTORY\n' +
-      '[Step 1] file_read runs/latest/01_manifest.json\nExit code: 0\n{"orchestrator_version":"9.0"}';
+      '[Step 1] file_read babel-cli/package.json\nExit code: 0\n{"name":"@gthgomez/babel-cli"}';
     const result = buildPipelineV9OfflineFixtureResponse(prompt, executorOptions()) as Record<
       string,
       unknown

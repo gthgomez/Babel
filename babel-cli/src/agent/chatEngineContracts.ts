@@ -11,7 +11,8 @@ import type { OllamaApiRunner } from '../runners/ollamaApi.js'
 import type { OpenRouterApiRunner } from '../runners/openRouterApi.js'
 import type { ProviderMessage, RunnerCallbacks } from '../runners/base.js'
 import type { ChatRunLimiter } from '../config/chatEngineLimits.js'
-import type { ChatTaskClass } from '../config/chatTaskClass.js'
+import type { ChatTaskClass, RequestedTaskOperation } from '../config/chatTaskClass.js'
+import type { ChatCompiledStack } from './chatStackCompile.js'
 import type { WorkingState } from './codingLoop/index.js'
 import type { ChatEngineServices } from './chatEngineServices.js'
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js'
@@ -143,6 +144,10 @@ export interface SubmitMessageOptions {
  */
 
 export interface ChatEngineOptions {
+  /** Caller-selected intent only; never grants effects or bypasses admission. */
+  operation?: RequestedTaskOperation
+  /** Exact repository context selected by preparation; compiled locally when omitted. */
+  compiledChatStack?: ChatCompiledStack
   instructionRoot?: string
   /** Trusted embedding seam: pins all inference phases to one observed runner. */
   providerRunner?: DeepInfraApiRunner
@@ -220,6 +225,8 @@ export interface ChatEngineOptions {
 /** Shared TUI/headless/direct preparation applied to a live or reused engine. */
 export interface ChatEngineTurnPreparation {
   task: string
+  operation?: RequestedTaskOperation | undefined
+  compiledChatStack?: ChatCompiledStack | undefined
   projectRoot?: string | undefined
   instructionRoot?: string | undefined
   systemContext?: string | undefined
@@ -608,6 +615,8 @@ export interface ChatEngineStreamingLoopHost {
   readonly getOrBuildSystemPrompt: (
     mode?: 'native' | 'legacy' | 'text',
   ) => string
+  readonly getResolvedRequiredVerifiers: () => string[]
+  readonly isolationBrokerFlags: () => ReturnType<typeof import('./chatEngineIsolationFlags.js').resolveIsolationBrokerFlags>
   readonly handleBudgetKill: (
     reason: string,
     callbacks: ChatCallbacks,

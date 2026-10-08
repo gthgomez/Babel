@@ -122,7 +122,8 @@ export interface ToolResultFailure {
     | 'mcp_tool_error'
     | 'mcp_rpc_error'
     | 'mcp_protocol_error'
-    | 'no_compatible_mcp_tool';
+    | 'no_compatible_mcp_tool'
+    | 'mcp_approval_required';
   category: 'output_contract' | 'tool_execution' | 'transport' | 'input_contract';
   tool: string;
 }
@@ -136,6 +137,11 @@ export interface ToolResult {
   checkpoint_ids?: string[];
   render_intent?: ToolRenderIntent;
   failure?: ToolResultFailure;
+  /**
+   * True when no process was started. A zero exit then means the command
+   * never ran, and it must not be recorded as verifier evidence.
+   */
+  simulated?: boolean;
 }
 
 /**

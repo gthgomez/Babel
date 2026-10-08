@@ -610,11 +610,16 @@ describe('Compiled chat stack', () => {
       modelId: 'deepseek-v4-pro',
     });
     assert.ok(stack.manifest_hash.length >= 16);
-    assert.ok(stack.selected_entries.length >= 3);
+    const agents = stack.selected_entries.find((entry) => entry.id === 'identity:agents');
+    assert.ok(agents, 'root AGENTS is the required selected instruction entry');
     assert.equal(stack.deep_stages_excluded, true);
     assert.ok(chatStackExcludesDeepStages(stack));
-    assert.ok(stack.selected_entries.some((e) => e.layer === 'safety'));
-    assert.ok(stack.selected_entries.some((e) => e.layer === 'provider'));
+    assert.equal(stack.content_disposition.find((entry) => entry.id === 'identity:agents')?.status, 'included');
+    assert.equal(agents.source_truncated, false);
+    assert.equal(stack.selected_entries.some((entry) =>
+      ['safety', 'provider', 'verifier'].includes(entry.layer)), false,
+    'generic safety/provider/verifier prompt blocks are no longer compiled');
+    assert.match(stack.system_context, /# Babel contributor instructions/);
     assert.ok(stack.system_context.length > 50);
 
     // Catalog-ish path change alters hash
