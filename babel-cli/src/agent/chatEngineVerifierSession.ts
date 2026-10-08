@@ -2,6 +2,7 @@
  * Verifier command extraction + R9 tamper guard helpers (from ChatEngine).
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { hashVerifierTrackedContent } from './verifierIntegrity.js';
@@ -179,10 +180,7 @@ export function applyTamperEscalation(
   return null;
 }
 
-/** SHA-256-ish content fingerprint for caching (fast, not cryptographic). */
+/** Full content digest. Identical bytes still dedupe; a same-length interior edit does not. */
 export function hashContent(content: string): string {
-  const len = content.length;
-  const prefix = content.substring(0, 100);
-  const suffix = content.substring(Math.max(0, len - 100));
-  return `${len}:${prefix}:${suffix}`;
+  return createHash('sha256').update(content, 'utf8').digest('hex');
 }

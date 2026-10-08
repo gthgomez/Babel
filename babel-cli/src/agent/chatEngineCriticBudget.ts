@@ -88,7 +88,7 @@ export function buildGateRejectionMessage(toolCallLog: CriticToolLogEntry[]): st
     return [
       `Gate check: 0 file writes, 0 sub-agent mutations.`,
       `Last 3 actions: ${lastActions || 'none'}.`,
-      'You have not made any file changes. Use str_replace or write_file to apply the fix, then run the verifier before finishing.',
+      'Inspect the relevant code before concluding. If it already satisfies the request, explain the evidence without manufacturing a diff. Otherwise apply the necessary change and run the relevant verifier.',
     ].join(' ');
   }
   return [

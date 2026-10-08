@@ -317,7 +317,7 @@ describe('sub-agent mutation truthfulness (Astra Probe P11)', () => {
 
     const msg = buildGateRejectionMessage(noOpLog);
     assert.match(msg, /0 file writes, 0 sub-agent mutations/);
-    assert.match(msg, /You have not made any file changes/);
+    assert.match(msg, /Inspect the relevant code/);
   });
 
   test('positive changed counts are recognized as mutations', () => {

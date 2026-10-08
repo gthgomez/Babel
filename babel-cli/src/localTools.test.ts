@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -12,6 +12,8 @@ import {
   shouldJitApprove,
 } from './localTools.js';
 import { EXECUTOR_TOOL_NAMES } from './tools/toolContracts.js';
+import { ConfirmDialog } from './ui/dialog.js';
+import { handleMcpRequest } from './tools/mcpTransport.js';
 
 process.env['BABEL_UNIT_TEST'] = 'true';
 
@@ -397,6 +399,74 @@ describe('shouldJitApprove logic', () => {
       else process.env['BABEL_LIVE'] = prevLive;
       if (prevRecovery === undefined) delete process.env['BABEL_RECOVERY_LOOP'];
       else process.env['BABEL_RECOVERY_LOOP'] = prevRecovery;
+    }
+  });
+});
+
+
+describe('MCP operator approval handoff', () => {
+  it('executes only an explicitly approved JIT request and keeps unapproved direct requests denied', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-mcp-jit-'));
+    const keys = ['BABEL_CONFIG_DIR', 'BABEL_PROJECT_ROOT', 'BABEL_ROOT', 'BABEL_ASK', 'BABEL_LIVE', 'BABEL_DRY_RUN', 'BABEL_DAEMON', 'BABEL_MCP_APPROVAL_EXPIRES', 'CI', 'BABEL_NON_INTERACTIVE'] as const;
+    const saved = new Map(keys.map(key => [key, process.env[key]]));
+    const tty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    let prompts = 0;
+    let changedDuringApproval: Extract<import('./localTools.js').ToolCallRequest, { tool: 'mcp_request' }> | undefined;
+    const dialog = mock.method(ConfirmDialog, 'show', async () => {
+      prompts++;
+      if (prompts === 3 && changedDuringApproval) changedDuringApproval.query = 'substituted query';
+      return prompts !== 2;
+    });
+    const server = join(root, 'server.cjs');
+    writeFileSync(server, `
+let input = Buffer.alloc(0);
+function send(id, result) { const body = JSON.stringify({ jsonrpc: '2.0', id, result }); process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body); }
+process.stdin.on('data', chunk => {
+ input = Buffer.concat([input, chunk]);
+ while (true) {
+  const end = input.indexOf('\\r\\n\\r\\n'); if (end < 0) return;
+  const size = Number(/Content-Length: (\\d+)/i.exec(input.subarray(0, end).toString())[1]);
+  if (input.length < end + 4 + size) return;
+  const message = JSON.parse(input.subarray(end + 4, end + 4 + size).toString()); input = input.subarray(end + 4 + size);
+  if (message.method === 'initialize') send(message.id, {});
+  if (message.method === 'tools/list') send(message.id, { tools: [{ name: 'lookup', inputSchema: { properties: { query: {} } }, annotations: { readOnlyHint: true, destructiveHint: false } }] });
+  if (message.method === 'tools/call') send(message.id, { content: [{ type: 'text', text: 'approved fixture result' }] });
+ }
+});
+`);
+    writeFileSync(join(root, 'mcp_servers.json'), JSON.stringify({ servers: { fixture: { command: 'node', args: [server] } } }));
+    try {
+      for (const key of keys) delete process.env[key];
+      process.env['BABEL_CONFIG_DIR'] = root;
+      process.env['BABEL_PROJECT_ROOT'] = root;
+      process.env['BABEL_ROOT'] = root;
+      process.env['BABEL_ASK'] = 'true';
+      process.env['BABEL_LIVE'] = 'true';
+      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+      const result = await executeTool({ tool: 'mcp_request', server: 'fixture', query: 'approved query' }, { ...context, runId: 'mcp-jit', projectRoot: root, babelRoot: root });
+      assert.equal(prompts, 1);
+      assert.equal(result.exit_code, 0, result.stderr);
+      assert.match(result.stdout, /approved fixture result/);
+      assert.equal(process.env['BABEL_MCP_APPROVAL_EXPIRES'], undefined, 'JIT never grants process-wide approval');
+      const direct = await handleMcpRequest({ tool: 'mcp_request', server: 'fixture', query: 'approved query' });
+      assert.equal(direct.failure?.code, 'mcp_approval_required');
+      const denied = await executeTool({ tool: 'mcp_request', server: 'fixture', query: 'denied query' }, { ...context, runId: 'mcp-jit-denied', projectRoot: root, babelRoot: root });
+      assert.equal(prompts, 2);
+      assert.match(denied.stderr, /JIT_DENIED/);
+      delete process.env['BABEL_ASK'];
+      const seeded = await executeTool({ tool: 'mcp_request', server: 'fixture', query: 'substituted query' }, { ...context, runId: 'mcp-jit-cache', projectRoot: root, babelRoot: root });
+      assert.equal(seeded.exit_code, 0, seeded.stderr);
+      process.env['BABEL_ASK'] = 'true';
+      changedDuringApproval = { tool: 'mcp_request', server: 'fixture', query: 'presented query' };
+      const changed = await executeTool(changedDuringApproval, { ...context, runId: 'mcp-jit-changed', projectRoot: root, babelRoot: root });
+      assert.equal(prompts, 3);
+      assert.equal(changed.failure?.code, 'mcp_approval_required', 'request fields changed during approval cannot inherit the grant');
+    } finally {
+      dialog.mock.restore();
+      if (tty) Object.defineProperty(process.stdout, 'isTTY', tty);
+      else delete (process.stdout as { isTTY?: boolean }).isTTY;
+      for (const key of keys) { const value = saved.get(key); if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });
