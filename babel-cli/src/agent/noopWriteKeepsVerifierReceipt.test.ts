@@ -256,9 +256,17 @@ describe('proven no-op writes keep verifier receipts current', { concurrency: fa
       const changed = evaluateChatVerifierReceiptCurrencySync(root, receipt);
       assert.ok(changed);
       assert.equal(changed.stale, true, 'a changed bound scope is refused');
-      // No bound revision: unevaluable, caller falls back to the flag.
+      // Input closure independently proves the edit even without revision data.
       assert.equal(
-        evaluateChatVerifierReceiptCurrencySync(root, { ...receipt, boundRevision: undefined as never }),
+        evaluateChatVerifierReceiptCurrencySync(root, { ...receipt, boundRevision: undefined as never })?.stale,
+        true,
+      );
+      // No revision or input closure: unevaluable, caller falls back to the flag.
+      const unevaluable = { ...receipt };
+      delete unevaluable.boundRevision;
+      delete unevaluable.inputClosure;
+      assert.equal(
+        evaluateChatVerifierReceiptCurrencySync(root, unevaluable),
         null,
       );
     } finally {
@@ -268,7 +276,9 @@ describe('proven no-op writes keep verifier receipts current', { concurrency: fa
 
   test('a byte-identical write_file after a green verifier keeps the receipt authoritative', async () => {
     const { root, fixedContent } = makeFixture();
-    process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
+    // Runtime evidence changes during dispatch; keep it outside verifier inputs.
+    const runtimeRoot = mkdtempSync(join(tmpdir(), 'babel-noop-runtime-'));
+    process.env['BABEL_RUNS_DIR'] = runtimeRoot;
     // Submission 1: fix the file (a real change ends the submission in this profile).
     // Submission 2 (continued task): verify green, then the G01 wedge — rewrite
     // the file with its EXACT current content. The verifier's bound scope
@@ -309,6 +319,7 @@ describe('proven no-op writes keep verifier receipts current', { concurrency: fa
     } finally {
       restore();
       rmSync(root, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
     }
   });
 });

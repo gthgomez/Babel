@@ -15,6 +15,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 
 import { frameJsonRpcMessage, parseFramedMessages } from '../../tools/mcpTransport.js';
+import { getSafeEnv } from '../../utils/safeEnv.js';
 import type { InitializeParams, InitializeResult } from './types.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -195,7 +196,7 @@ export function createLspClient(
       try {
         childProcess = spawn(command, args, {
           stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env, ...options?.env },
+          env: getSafeEnv({ ...process.env, ...options?.env }),
           cwd: options?.cwd,
           windowsHide: true,
         });

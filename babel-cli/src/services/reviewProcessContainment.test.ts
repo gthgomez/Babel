@@ -143,8 +143,11 @@ setInterval(() => {}, 100);
   let workerPid = 0
   let grandchildPid = 0
   try {
-    // Allow the bounded native setup plus the controller loader startup.
-    const containment = await waitForJson(containmentState, WINDOWS_JOB_COMPILE_TIMEOUT_MS + WINDOWS_JOB_HELPER_TIMEOUT_MS + 5_000)
+    // Allow bounded native compilation, assignment, and controller loader startup.
+    const containment = await waitForJson(
+      containmentState,
+      WINDOWS_JOB_COMPILE_TIMEOUT_MS + WINDOWS_JOB_HELPER_TIMEOUT_MS + 5_000,
+    )
     assert.equal(
       containment['kind'],
       process.platform === 'win32' ? 'windows_job_object' : 'posix_process_group',

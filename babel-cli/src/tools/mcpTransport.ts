@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { trace, SpanStatusCode, type Span } from '@opentelemetry/api';
 import { z } from 'zod';
@@ -544,10 +545,78 @@ export function parseFramedMessages(buffer: Uint8Array): {
   return { messages, remainder };
 }
 
+interface McpToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  title?: string;
+}
+
 interface McpAdvertisedTool {
   name: string;
   inputSchema?: Record<string, unknown>;
+  annotations?: McpToolAnnotations;
   hasInvalidInputSchema?: boolean;
+}
+
+const DESTRUCTIVE_MCP_NAME = /(?:^|_)(?:delete|drop|remove|destroy|truncate|write|exec|mutate)(?:_|$)/i;
+
+/**
+ * Host read contract for a query-shaped MCP wrapper. Server annotations are
+ * hints: a missing, destructive, non-read-only, or contradictory annotation
+ * fails closed. A readOnly hint does not authorize a destructive name.
+ */
+export function mcpToolMatchesHostReadContract(tool: McpAdvertisedTool): boolean {
+  const annotations = tool.annotations;
+  if (!annotations || typeof annotations !== 'object') return false;
+  if (annotations.destructiveHint === true) return false;
+  if (annotations.readOnlyHint !== true) return false;
+  if (DESTRUCTIVE_MCP_NAME.test(tool.name)) return false;
+  return true;
+}
+
+/**
+ * When the operator asked for approval, a missing or expired approval cannot
+ * fall open. Unset BABEL_ASK leaves an already admitted read-contract tool
+ * dispatchable so ordinary annotated reads still run.
+ */
+export function mcpAutoDispatchDenied(env: NodeJS.ProcessEnv = process.env, now = Date.now()): string | null {
+  if (env['BABEL_ASK'] !== 'true') return null;
+  const raw = env['BABEL_MCP_APPROVAL_EXPIRES']?.trim();
+  const expires = raw ? Date.parse(raw) : Number.NaN;
+  if (!Number.isFinite(expires) || expires <= now) {
+    return 'MCP_APPROVAL_REQUIRED: missing or expired approval';
+  }
+  return null;
+}
+
+type McpRequest = Extract<ToolCallRequest, { tool: 'mcp_request' }>;
+interface McpJitApproval {
+  server: string;
+  query: string;
+  expiresAt: number;
+  consumed: boolean;
+  active: boolean;
+}
+const mcpJitApproval = new AsyncLocalStorage<McpJitApproval>();
+
+/** Internal host handoff after successful JIT; never exposed as a tool argument. */
+export async function runWithApprovedMcpJit<T>(req: McpRequest, dispatch: () => Promise<T>): Promise<T> {
+  const approval: McpJitApproval = {
+    server: req.server, query: req.query, expiresAt: Date.now() + 60_000,
+    consumed: false, active: true,
+  };
+  return mcpJitApproval.run(approval, async () => {
+    try { return await dispatch(); }
+    finally { approval.active = false; }
+  });
+}
+
+function consumeApprovedMcpJit(req: McpRequest): boolean {
+  const approval = mcpJitApproval.getStore();
+  if (!approval || !approval.active || approval.consumed || approval.expiresAt <= Date.now()
+    || approval.server !== req.server || approval.query !== req.query) return false;
+  approval.consumed = true;
+  return true;
 }
 
 function hasOnlyConstructibleRequiredArguments(
@@ -584,6 +653,7 @@ function buildCompatibleMcpToolCallParams(
   }
 
   if (!args || !hasOnlyConstructibleRequiredArguments(tool.inputSchema, args)) return null;
+  if (!mcpToolMatchesHostReadContract(tool)) return null;
   return { name: tool.name, arguments: args };
 }
 
@@ -1039,6 +1109,28 @@ export async function handleMcpRequest(
   req: Extract<ToolCallRequest, { tool: 'mcp_request' }>,
   serversOverride?: Record<string, McpServerConfig>,
 ): Promise<ToolResult> {
+  const approvalBlock = consumeApprovedMcpJit(req) ? null : mcpAutoDispatchDenied();
+  if (approvalBlock) {
+    return {
+      ...buildMcpResult(
+        req.server,
+        'server_lookup',
+        'failure',
+        1,
+        '',
+        `[MCP_APPROVAL_REQUIRED] ${approvalBlock}`,
+        'mcp_approval_required',
+        ['approval:missing_or_expired'],
+      ),
+      render_intent: 'tool_failure',
+      failure: {
+        code: 'mcp_approval_required',
+        category: 'input_contract',
+        tool: 'mcp_request',
+      },
+    };
+  }
+
   const _tracer = trace.getTracer('babel-cli', '1.0.0');
   const _span = _tracer.startSpan('babel.mcp.request', {
     attributes: {
@@ -1235,14 +1327,33 @@ export async function handleMcpRequest(
                   typeof (tool as Record<string, unknown>)['name'] === 'string',
               )
               .map((tool) => {
-                if (!Object.hasOwn(tool, 'inputSchema')) return { name: tool.name };
+                const rawAnnotations = (tool as { annotations?: unknown }).annotations;
+                const annotations =
+                  rawAnnotations && typeof rawAnnotations === 'object' && !Array.isArray(rawAnnotations)
+                    ? {
+                        readOnlyHint: (rawAnnotations as { readOnlyHint?: unknown }).readOnlyHint === true,
+                        destructiveHint: (rawAnnotations as { destructiveHint?: unknown }).destructiveHint === true,
+                        ...(typeof (rawAnnotations as { title?: unknown }).title === 'string'
+                          ? { title: (rawAnnotations as { title: string }).title }
+                          : {}),
+                      }
+                    : undefined;
+                if (!Object.hasOwn(tool, 'inputSchema')) {
+                  return annotations ? { name: tool.name, annotations } : { name: tool.name };
+                }
                 const inputSchema = tool.inputSchema;
                 if (
                   typeof inputSchema !== 'object' ||
                   inputSchema === null ||
                   Array.isArray(inputSchema)
-                ) return { name: tool.name, hasInvalidInputSchema: true };
-                return { name: tool.name, inputSchema };
+                ) {
+                  return annotations
+                    ? { name: tool.name, hasInvalidInputSchema: true, annotations }
+                    : { name: tool.name, hasInvalidInputSchema: true };
+                }
+                return annotations
+                  ? { name: tool.name, inputSchema, annotations }
+                  : { name: tool.name, inputSchema };
               })
           : [];
         if (tools.length === 0) {

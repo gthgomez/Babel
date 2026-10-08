@@ -132,15 +132,16 @@ test('read-only tool advertisement matches enforcement without changing normal c
   assert.equal(filterReadOnlyChatTools(definitions, {}), definitions);
 });
 
-test('accepted no-change scope denies mutation, shell expansion and delegated effects', () => {
+test('accepted no-change scope denies mutation and shell expansion while child dispatch clamps delegated mutation', () => {
   const required = ['npm test'];
   for (const action of [
     { type: 'write_file', path: 'fixture.txt', content: 'forbidden' },
     { type: 'run_command', command: 'npm test && node mutate.js' },
     { type: 'test_run', command: 'npm test -- --update' },
     { type: 'run_command', command: 'npm test', background: true },
-    { type: 'sub_agent', task: 'edit the fixture', mutation: true },
   ] as const) assert.equal(deniesReadOnlyTaskAction(action, 'READ_ONLY', required), true);
+  assert.equal(deniesReadOnlyTaskAction({ type: 'sub_agent', task: 'inspect', mutation: true }, 'READ_ONLY', []), false);
+  assert.equal(deniesReadOnlyChatAction('sub_agent', { BABEL_EXECUTION_PROFILE: 'read_only_audit' }), true);
   assert.equal(deniesReadOnlyTaskAction({ type: 'read_file', path: 'fixture.txt' }, 'READ_ONLY', []), false);
   assert.equal(deniesReadOnlyTaskAction({ type: 'write_file', path: 'fixture.txt', content: 'allowed' }, 'MUTATING', []), false);
 });
@@ -154,7 +155,7 @@ test('accepted no-change scope preserves exactly declared foreground verificatio
   const tools = ['read_file', 'semantic_search', 'write_file', 'run_command', 'test_run', 'sub_agent', 'finish'].map(name => ({
     type: 'function', function: { name, description: name, parameters: { type: 'object', properties: {} } },
   })) as ToolDefinition[];
-  assert.deepEqual(filterReadOnlyTaskTools(tools, 'READ_ONLY', []).map(tool => tool.function.name), ['read_file', 'semantic_search', 'finish']);
-  assert.deepEqual(filterReadOnlyTaskTools(tools, 'READ_ONLY', ['npm test']).map(tool => tool.function.name), ['read_file', 'semantic_search', 'run_command', 'test_run', 'finish']);
+  assert.deepEqual(filterReadOnlyTaskTools(tools, 'READ_ONLY', []).map(tool => tool.function.name), ['read_file', 'semantic_search', 'sub_agent', 'finish']);
+  assert.deepEqual(filterReadOnlyTaskTools(tools, 'READ_ONLY', ['npm test']).map(tool => tool.function.name), ['read_file', 'semantic_search', 'run_command', 'test_run', 'sub_agent', 'finish']);
   assert.equal(filterReadOnlyTaskTools(tools, 'MUTATING', []), tools);
 });

@@ -327,6 +327,9 @@ export function buildExecutorTask(
   const toolShapes = buildDynamicToolShapes(options.compactFileOnly ?? false);
 
   return [
+    'ACCEPTED USER REQUEST (authoritative; the plan is guidance and does not replace this request):',
+    rawTask,
+    '',
     'Execute the following approved SWE Plan.',
     'Respond with ONLY valid JSON wrapped in a `<|tool_start|>` and `<|tool_end|>` fence — no explanation, no prose outside the fence.',
     'Example:',
@@ -341,7 +344,7 @@ export function buildExecutorTask(
     '',
     'ACTIVATION STATUS:',
     '- The pipeline has already verified a QA PASS verdict for this plan.',
-    '- You are authorized to begin tool execution now.',
+    '- Propose the approved plan actions; runtime scope, leases and approvals still govern execution.',
     '- Do NOT refuse activation for missing QA approval unless the prompt explicitly says QA failed.',
     '- Execute the approved target paths exactly as written in the plan. Do NOT rename outputs, relocate them, or substitute generic report filenames.',
     '- Execute every approved minimal_action_set step in order. Do NOT emit EXECUTION_COMPLETE while any approved file_write step has not successfully run.',
@@ -354,7 +357,7 @@ export function buildExecutorTask(
           'FILE-SPECIFIC CONSTRAINTS DETECTED:',
           'This task includes file-specific exclusion constraints (e.g., "Do not modify src/dirty.txt").',
           'These are restrictions on SPECIFIC files only — they do NOT make the task read-only.',
-          'You ARE authorized to write to all files that are NOT explicitly listed as off-limits.',
+          'Write only the approved plan targets within runtime-granted scope; an unlisted file is not automatically authorized.',
           'Do not refuse activation or halt because of file-specific constraints. Execute normally,',
           'skipping only the files explicitly named as excluded.',
         ]
