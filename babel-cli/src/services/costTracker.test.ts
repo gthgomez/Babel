@@ -1091,7 +1091,7 @@ test('a removed unrelated root cannot contribute to another project snapshot', (
   }
 });
 
-test('rooted project matching accepts Windows path case aliases', { skip: process.platform !== 'win32' }, () => {
+test('rooted project matching accepts Windows path case aliases', { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false }, () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-project-case-'));
   try {
     const tracker = new CostTracker(root);

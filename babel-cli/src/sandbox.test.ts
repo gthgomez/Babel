@@ -4,7 +4,7 @@ import test from 'node:test';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { SafeExecutor, isTransientSpawnError, validateExecutorShellCommand } from './sandbox.js';
+import { SafeExecutor, awaitPendingProcessTerminations, spawnCommandAsync, isTransientSpawnError, validateExecutorShellCommand } from './sandbox.js';
 import { ProcessWitness } from './diagnostics/bdns/processWitness.js';
 import {
   setDockerAvailableForTest,
@@ -331,7 +331,7 @@ test('benchmark_container maps /app shell working directory to the project root 
 
 test(
   'final write target symlink to outside file is rejected',
-  { skip: process.platform === 'win32' },
+  { skip: process.platform === 'win32' ? 'POSIX file symlink fixture; Windows directory junction covered separately' : false },
   () => {
     const fixture = makeFixture();
     try {
@@ -353,11 +353,7 @@ test(
 
 test(
   'final write target symlink to in-root file is rejected to avoid TOCTOU swaps',
-  // Pending sandbox fix: resolveSymlinkAwarePath eagerly follows all symlinks
-  // including the final write target. By the time assertSafeWritableTarget runs,
-  // the path has already been resolved to the real file, defeating the TOCTOU
-  // guard. Tracked in sandbox.ts L696-L770.
-  { skip: true },
+  { skip: process.platform === 'win32' ? 'POSIX file symlink fixture; Windows directory junction covered separately' : false },
   () => {
     const fixture = makeFixture();
     try {
@@ -376,6 +372,17 @@ test(
     }
   },
 );
+
+test('fileWrite rejects a final in-root directory alias before resolving it', () => {
+  const fixture = makeFixture();
+  try {
+    const executor = new SafeExecutor(fixture.projectRoot);
+    expectPolicyDenial(executor.fileWrite('inside-link', 'blocked\n'), 'symlink_escape_rejected');
+    assert.equal(readFileSync(join(fixture.projectRoot, 'real-target', 'linked.txt'), 'utf8'), 'linked-inside\n');
+  } finally {
+    fixture.cleanup();
+  }
+});
 
 const allowedCommands = [
   'npm test',
@@ -683,26 +690,26 @@ test('workspace_manager allows exact dependency install after approval queue gra
 
 test(
   'windows env-prefix syntax is rejected on Windows',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false },
   () => {
     const issue = validateExecutorShellCommand('FOO=bar npm test', 'win32');
     assert.equal(issue?.reason_code, 'windows_env_prefix_unsupported');
   },
 );
 
-test('mkdir is explicitly rejected on Windows', { skip: process.platform !== 'win32' }, () => {
+test('mkdir is explicitly rejected on Windows', { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false }, () => {
   const issue = validateExecutorShellCommand('mkdir dist', 'win32');
   assert.equal(issue?.reason_code, 'command_allowlist_rejected');
 });
 
-test('chmod is explicitly rejected on Windows', { skip: process.platform !== 'win32' }, () => {
+test('chmod is explicitly rejected on Windows', { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false }, () => {
   const issue = validateExecutorShellCommand('chmod +x script.sh', 'win32');
   assert.equal(issue?.reason_code, 'command_allowlist_rejected');
 });
 
 test(
   'backslash absolute outside path is rejected on Windows',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false },
   () => {
     const fixture = makeFixture();
     try {
@@ -719,7 +726,7 @@ test(
 
 test(
   'cd path && allowed-cmd is not allowlist-rejected',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false },
   () => {
     const samples = [
       String.raw`cd /tmp/foo && python -m pytest --version 2>&1`,
@@ -740,7 +747,7 @@ test(
 
 test(
   'bare redirect and lone & still rejected',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false },
   () => {
     const dangerous = ['npm test > out.txt', 'ls >', 'echo hello & echo world', 'python test.py &'];
     for (const command of dangerous) {
@@ -752,7 +759,7 @@ test(
 
 test(
   'P2.1: 2>&1 on allowed commands passes without interpreter-eval env',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' ? 'Windows-specific fixture' : false },
   () => {
     assert.equal(
       validateExecutorShellCommand('python -m pytest --version 2>&1', 'win32', 'safe_repo'),
@@ -889,60 +896,57 @@ test('shellExecAsync preserves shellExec result shape for a successful command',
   }
 });
 
-test('shellExecAsync leaves the event loop responsive while a command is running', {
-  skip: 'host ping removed from the global surface; no remaining intrinsic long-running command',
-}, async () => {
+// The product shell policy denies project interpreters on an unisolated host.
+// Exercise its real process supervisor with fixed, owned fixture scripts.
+function superviseFixtureScript(fixture: ReturnType<typeof makeFixture>, name: string, timeoutMs: number, signal?: AbortSignal) {
+  return spawnCommandAsync(process.execPath, [join(fixture.projectRoot, name)], {
+    cwd: fixture.projectRoot, timeoutMs, ...(signal ? { signal } : {}),
+    env: { SystemRoot: process.env['SystemRoot'] },
+    processContext: { sessionId: fixture.projectRoot },
+  });
+}
+
+test('process supervisor leaves the event loop responsive while an owned fixture runs', async () => {
   const fixture = makeFixture();
+  const controller = new AbortController();
   try {
     writeFileSync(
       join(fixture.projectRoot, 'slow-command.mjs'),
       "await new Promise((resolve) => setTimeout(resolve, 800));\nconsole.log('finished');\n",
       'utf-8',
     );
-    const executor = new SafeExecutor(fixture.projectRoot);
     const startedAt = Date.now();
     const timerFired = new Promise<number>((resolveTimer) => {
       setTimeout(() => resolveTimer(Date.now() - startedAt), 25);
     });
-    const commandResult = executor.shellExecAsync(
-      process.platform === 'win32' ? 'ping -n 3 127.0.0.1' : 'ping -c 2 127.0.0.1',
-      '.',
-      5_000,
-    );
+    const commandResult = superviseFixtureScript(fixture, 'slow-command.mjs', 5_000, controller.signal);
     // Allow up to 5s on Windows CI; the product bar (250ms p95) targets Linux/macOS dev machines.
     const timerMs = await timerFired;
     assert.ok(timerMs < 5000, `event-loop timer should remain responsive, took ${timerMs}ms`);
     const result = await commandResult;
-    assert.equal(result.exit_code, 0, result.stderr);
+    assert.equal(result.status, 0, result.stderr);
   } finally {
+    controller.abort();
+    await awaitPendingProcessTerminations(fixture.projectRoot);
     fixture.cleanup();
   }
 });
 
-test('shellExecAsync cancels a running command without blocking the event loop', {
-  skip: 'host ping removed from the global surface; no remaining intrinsic long-running command',
-}, async () => {
+test('process supervisor cancels an owned fixture without blocking the event loop', async () => {
   const fixture = makeFixture();
+  const controller = new AbortController();
   try {
     writeFileSync(
       join(fixture.projectRoot, 'cancel-command.mjs'),
       "await new Promise((resolve) => setTimeout(resolve, 10_000));\nconsole.log('unexpected');\n",
       'utf-8',
     );
-    const executor = new SafeExecutor(fixture.projectRoot);
-    const controller = new AbortController();
     const startedAt = Date.now();
-    const pending = executor.shellExecAsync(
-      process.platform === 'win32' ? 'ping -n 20 127.0.0.1' : 'ping -c 20 127.0.0.1',
-      '.',
-      15_000,
-      'shell_exec',
-      controller.signal,
-    );
+    const pending = superviseFixtureScript(fixture, 'cancel-command.mjs', 15_000, controller.signal);
     setTimeout(() => controller.abort(), 50);
     const result = await pending;
-    assert.equal(result.exit_code, 1);
-    assert.match(result.stderr, /aborted/);
+    assert.equal(result.status, 1);
+    assert.equal(result.aborted, true);
     // W0.1 gate: cancel p95 under 250ms is the product bar.
     // Local/dev slack 500ms; CI self-hosted Windows under load needs more headroom (5s).
     const cancelBudgetMs = process.env['CI'] ? 5_000 : 500;
@@ -950,10 +954,10 @@ test('shellExecAsync cancels a running command without blocking the event loop',
       Date.now() - startedAt < cancelBudgetMs,
       `cancellation should settle quickly, took ${Date.now() - startedAt}ms (budget ${cancelBudgetMs}ms)`,
     );
-    // Tree-kill is deferred via setImmediate so the awaiter can settle first;
-    // wait briefly so Windows file locks release before fixture cleanup.
-    await new Promise((r) => setTimeout(r, 500));
+    await awaitPendingProcessTerminations(fixture.projectRoot);
   } finally {
+    controller.abort();
+    await awaitPendingProcessTerminations(fixture.projectRoot);
     fixture.cleanup();
   }
 });
@@ -986,8 +990,9 @@ test('shellExecAsync pre-aborted signal returns immediately without spawning lon
   }
 });
 
-test('shellExecAsync abort kills a descendant process tree', { skip: 'host node is project_code; tree-kill covered when Docker isolation is available' }, async () => {
+test('process supervisor abort terminates the owned fixture descendant tree', async () => {
   const fixture = makeFixture();
+  const controller = new AbortController();
   try {
     const childPidFile = join(fixture.projectRoot, 'grandchild.pid').replace(/\\/g, '/');
     // Embed absolute pid path — sandbox getSafeEnv may not forward arbitrary env.
@@ -1005,15 +1010,7 @@ await new Promise((resolve) => setTimeout(resolve, 60_000));
 `,
       'utf-8',
     );
-    const executor = new SafeExecutor(fixture.projectRoot);
-    const controller = new AbortController();
-    const pending = executor.shellExecAsync(
-      'node tree-parent.mjs',
-      '.',
-      30_000,
-      'shell_exec',
-      controller.signal,
-    );
+    const pending = superviseFixtureScript(fixture, 'tree-parent.mjs', 30_000, controller.signal);
     const waitPid = async () => {
       const { existsSync, readFileSync } = await import('node:fs');
       for (let i = 0; i < 80; i++) {
@@ -1029,10 +1026,9 @@ await new Promise((resolve) => setTimeout(resolve, 60_000));
     assert.ok(grandchildPid, 'grandchild pid should be recorded');
     controller.abort();
     const result = await pending;
-    assert.equal(result.exit_code, 1);
-    assert.match(result.stderr, /aborted/i);
-    // Allow tree kill to propagate (taskkill /T or process group).
-    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(result.status, 1);
+    assert.equal(result.aborted, true);
+    await awaitPendingProcessTerminations(fixture.projectRoot);
     let alive = true;
     try {
       process.kill(grandchildPid!, 0);
@@ -1041,6 +1037,8 @@ await new Promise((resolve) => setTimeout(resolve, 60_000));
     }
     assert.equal(alive, false, 'descendant process should be dead after tree kill');
   } finally {
+    controller.abort();
+    await awaitPendingProcessTerminations(fixture.projectRoot);
     fixture.cleanup();
   }
 });
@@ -1082,7 +1080,7 @@ test('sandbox denies credential-class files and requires explicit external read 
     fixture.cleanup();
   }
 });
-test('sandbox rejects credential-class shadow targets', { skip: process.platform === 'win32' }, () => {
+test('sandbox rejects credential-class shadow targets', { skip: process.platform === 'win32' ? 'POSIX file symlink fixture; Windows directory junction covered separately' : false }, () => {
   const fixture = makeFixture();
   const shadowRoot = mkdtempSync(join(tmpdir(), 'babel-sandbox-shadow-'));
   try {
@@ -1101,7 +1099,7 @@ test('sandbox rejects credential-class shadow targets', { skip: process.platform
     fixture.cleanup();
   }
 });
-test('sandbox rejects credential-class shadow directories', { skip: process.platform === 'win32' }, () => {
+test('sandbox rejects credential-class shadow directories', { skip: process.platform === 'win32' ? 'POSIX file symlink fixture; Windows directory junction covered separately' : false }, () => {
   const fixture = makeFixture();
   const shadowRoot = mkdtempSync(join(tmpdir(), 'babel-sandbox-shadow-dir-'));
   const secretRoot = mkdtempSync(join(tmpdir(), 'babel-sandbox-secret-dir-'));

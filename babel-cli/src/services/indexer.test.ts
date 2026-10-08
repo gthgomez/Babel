@@ -129,7 +129,9 @@ test('a same-path symlink replacement removes the earlier indexed source', async
     try {
       symlinkSync(external, path, 'file');
     } catch (error) {
-      t.skip(`file symlink unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!['EPERM', 'EACCES', 'ENOTSUP', 'EOPNOTSUPP'].includes(code ?? '')) throw error;
+      t.skip(`file symlink unavailable: ${code}`);
       return;
     }
     await indexer.indexProject(root);
@@ -162,7 +164,8 @@ test('index batch yield cannot admit a newly swapped outside-root symlink', asyn
       try {
         symlinkSync(external, last, 'file');
         swapped = true;
-      } catch {
+      } catch (error) {
+        if (!['EPERM', 'EACCES', 'ENOTSUP', 'EOPNOTSUPP'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
         unavailable = true;
       }
     } });

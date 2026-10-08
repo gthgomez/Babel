@@ -4,7 +4,7 @@ import test from 'node:test';
 import { runLiteFeatureScorecard } from './liteFeatureScorecard.js';
 import { skipIfLiveTestsNotAuthorized } from '../test-helpers/apiKeyCheck.js';
 
-test('lite feature scorecard covers Cursor-pattern dimensions', { skip: skipIfLiveTestsNotAuthorized }, async () => {
+test('lite feature scorecard covers Cursor-pattern dimensions', { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false }, async () => {
   const report = await runLiteFeatureScorecard();
   const dimensions = report.dimensions.map((score) => score.dimension);
   assert.deepEqual(dimensions, [

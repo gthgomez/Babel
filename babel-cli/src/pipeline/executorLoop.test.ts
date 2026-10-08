@@ -525,10 +525,8 @@ describe('scripted turn flow', () => {
 // 10. Coverage gap documentation
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('coverage gaps (documented)', () => {
-  it.todo('extract ExecutorLoopState class for full state machine coverage');
-  it.todo('test full loop with MockPipelineRunner');
-});
+// Planned state-machine extraction and a full MockPipelineRunner loop are
+// design work, not executed qualification. Focused runtime assertions follow.
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 11. Turn-limit enforcement

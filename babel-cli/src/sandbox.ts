@@ -1325,16 +1325,17 @@ export class SafeExecutor {
     targetPath: string,
     enforceProjectRoot: boolean,
   ): void {
-    if (!existsSync(targetPath)) {
-      return;
+    let stats;
+    try {
+      stats = lstatSync(targetPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
     }
-
-    const stats = lstatSync(targetPath);
     if (stats.isSymbolicLink()) {
-      const symlinkTarget = realpathSync(targetPath);
       throw new Error(
         `[sandbox] Symlink traversal denied: "${inputPath}" targets symlink ` +
-          `"${targetPath}" → "${symlinkTarget}" during final file write.`,
+          `"${targetPath}" during final file write.`,
       );
     }
 
@@ -1664,6 +1665,10 @@ export class SafeExecutor {
     if (profileDenial) return profileDenial;
 
     try {
+      const requestedPath = this.resolveProjectPath(inputPath);
+      this.ensureWithinProjectRoot(inputPath, requestedPath);
+      // Check the caller's final target before resolveSafe follows an in-root alias.
+      this.assertSafeWritableTarget(inputPath, requestedPath, true);
       const safePath = this.ensureWritableParentExists(inputPath, this.resolveSafe(inputPath));
 
       let targetPath = safePath;

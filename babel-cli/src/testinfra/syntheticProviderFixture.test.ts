@@ -59,6 +59,15 @@ test('fixture rejects injected credential environment before script execution', 
   assert.ok(!result.diagnostic.includes('synthetic-unapproved-canary'))
 })
 
+test('fixture accepts only numeric Node test-worker identity metadata', async () => {
+  const valid = await captureSyntheticChild("console.log('SCRIPT_EXECUTED')", { NODE_TEST_WORKER_ID: '1' })
+  assert.equal(valid.code, 0)
+  const invalid = await captureSyntheticChild("console.log('SCRIPT_EXECUTED')", { NODE_TEST_WORKER_ID: 'unexpected-field' })
+  assert.notEqual(invalid.code, 0)
+  assert.ok(!invalid.output.includes('SCRIPT_EXECUTED'))
+  assert.ok(invalid.output.includes('SYNTHETIC_PROVIDER_FIXTURE_ISOLATION_INVALID'))
+})
+
 test('credential resolvers see only the synthetic helper and fresh home', async () => {
   const goModule = new URL('../runners/openCodeGoCredential.ts', import.meta.url).href
   const hubModule = new URL('../runners/credentialHub.ts', import.meta.url).href
