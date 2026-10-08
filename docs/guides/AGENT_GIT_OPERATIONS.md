@@ -11,6 +11,16 @@ This non-authoritative technical reference describes Git/GitHub helper inputs
 and outputs. [AGENTS.md](../../AGENTS.md) alone owns contributor operating policy;
 examples here do not grant authorization. The scripts own executable behavior.
 
+## Resource-aware iteration
+
+Apply [AGENTS.md](../../AGENTS.md) on the machine running the tools. Inspect available physical memory and effective CPU capacity, including container/VM/job and parent limits; retain reserve for the coordinator, OS, background work, and uncertainty. Swap is not spare capacity. Use recent observed peak incremental costs from comparable required runs, including child processes and nested pools. Account for pending reservations and expected growth without subtracting usage already reflected in available memory twice. Unknown expensive work starts with one conservative useful run, not an extra benchmark.
+
+Hosted reasoning slots, model context/spend, and local process RAM/CPU/I/O are different budgets. More RAM can permit more memory-heavy jobs when CPU/I/O also fit; it cannot raise a hard runtime agent ceiling. Allow independent light reads or hosted reviews alongside heavy jobs when their own budgets fit. Coordinate heavy admissions across agents; an agent slot does not grant an unbudgeted build slot. Queue CPU-heavy validators under sustained pressure even on a RAM-rich host. Re-sample cheaply before new heavy admissions and after completions; back off on shrinking headroom, new swap/OOM events, or slower comparable work. Preserve unrelated processes and keep increased concurrency only when it improves correct end-to-end delivery.
+
+Read batches bound repository/path scope, total command count, in-flight concurrency, and output size. Reuse comparable batch bounds; label and inspect every result and failure before dependent follow-ups. Keep consistency-sensitive reads outside mutations. Shared Git mutations stay serialized with separate observation boundaries, regardless of hardware.
+
+Reuse evidence only under AGENTS.md's unchanged-input rules and required commands. Freeze source before final scans, reuse packaging's required build, deduplicate completed failure logs, and qualify shared repairs before propagation. Keep evidence outside public Git; prioritize the work that unblocks the next delivery. These portable instructions are maintained in Babel and workspace-root; either repository must remain usable without the other checkout. Never commit a device's resource snapshot or machine-specific paths as policy.
+
 ## Readiness diagnostics
 
 Readiness diagnostic:
