@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { z } from "zod";
+import { isCredentialTargetPath } from "../agent/autonomyEnforcement.js";
 
 export type RevisionScopeV1 =
   | { kind: "files"; paths: string[] }
@@ -216,6 +217,9 @@ function readGitTree(projectRoot: string): string | null {
     const contentDigests = divergent
       .sort()
       .map((relativePath) => {
+        // Private divergent paths cannot be content-bound without opening a
+        // credential store. Refuse the repository binding before content I/O.
+        if (isCredentialTargetPath(relativePath)) throw new Error("Repository revision includes a credential path.");
         const absolute = path.resolve(gitRoot, relativePath);
         const withinProject = path.relative(physicalProjectRoot, absolute);
         if (
@@ -274,14 +278,7 @@ const INPUT_CLOSURE_MAX_FILES = 40;
 const INPUT_CLOSURE_MAX_BYTES = 1_000_000;
 
 function closurePathIsCredential(relativePath: string): boolean {
-  const norm = relativePath.replace(/\\/g, "/").toLowerCase();
-  const base = norm.split("/").pop() ?? "";
-  if (/^\.env(?:\.[a-z0-9_-]+)?$/.test(base) && !base.startsWith(".env.example")) return true;
-  if (base === "credentials.json" || base === ".git-credentials" || base === ".npmrc") return true;
-  if (/\.(pem|p12|pfx|key)$/.test(base)) return true;
-  if (norm.split("/").includes("secrets") || norm.split("/").includes(".ssh")) return true;
-  if (norm.endsWith(".aws/credentials")) return true;
-  return false;
+  return isCredentialTargetPath(relativePath);
 }
 
 /**

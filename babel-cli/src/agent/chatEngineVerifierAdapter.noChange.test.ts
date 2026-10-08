@@ -192,3 +192,17 @@ describe('green verifier receipts for inspected no-change tasks', { concurrency:
     assert.deepEqual(receipt.boundRevision?.scope, { kind: 'files', paths: ['changed.txt'] })
   })
 })
+
+
+test('repository-scoped capture refuses divergent credential-class paths before content binding', async () => {
+  const root = project()
+  writeFileSync(join(root, 'input.txt'), 'public synthetic input\n')
+  initializeGit(root)
+  mkdirSync(join(root, 'secrets'))
+  writeFileSync(join(root, 'secrets', 'fixture.txt'), 'synthetic private input\n')
+  const receipt = await captureChatVerifierReceipt({
+    projectRoot: root, command: 'npm test', exitCode: 0, summary: 'green', mutationPaths: [],
+    allowRepositoryScopeForGreenNoChange: true,
+  })
+  assert.equal(receipt === null, true)
+})

@@ -3,12 +3,14 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "2edf196aa5e5e07cbb603d9a00ca8ceb3195720f576e253938d2479033fd0c95",
+  "policy_bundle_id": "a5fd84751a62cac1f531532785eaed66f12b1a4824ab2b4e02b77efc445fa16b",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
+    ".github/workflows/publish-npm.yml": "47921ef2675f0c51b25b52362b65650ecddd41e82e1a67c398f1efb2154a040f",
+    ".github/workflows/release.yml": "16b9e5e5ba2bf87bbdfd5c42f039d0892ab6052eedf933afaab913ce96575947",
     ".github/workflows/trusted-control-plane.yml": "276e2fe0ef7509e8751234ccbf0abe9e135b67c2436337b37ab393fe50e5cb0c",
-    ".github/workflows/typecheck.yml": "259f8fca377fbf179ec1c3675904ef7ff4bd790a0599710664ae38a15254fd11",
-    "AGENTS.md": "36c08f268eb9ff0f625d8ac69a710d5eb8b2aaf73d1e5df221d5580862220aed",
+    ".github/workflows/typecheck.yml": "cc7953b9b04644fa46f6a9dc7c2205d63def25084cb14ecc0d7e42475e0dc95a",
+    "AGENTS.md": "a9756009a766f97e89f77561c85e2571188ef431f6e8ee3612fcea2e266e65ce",
     "babel-cli/src/agent/autonomyEnforcement.ts": "48a487784b9c7c9e1f397760b5875cb2811be8ca787e7177d86365d44757f36f",
     "babel-cli/src/authority/actionRequest.ts": "e17df5cebed675ebfff4bc512d280d0a0bd38fd2b968fc9f19e5a397deda8335",
     "babel-cli/src/authority/authority.test.ts": "932606bc3f8c5e2d40d6fd47b4e9be8764eb04abc2f982816767428846f0829b",
@@ -128,6 +130,6 @@
     "tools/babel-pr-orchestrate-opencode.mts": "52b030c4ada9940ad8290872d453ef518bc5989475095787cc21ee579b62cf29",
     "tools/babel-pr-orchestrate.mts": "e2b8f541f807e5e7544534a3eb5804ec14395b05a6fc97a813c82269f7fc32a0",
     "tools/host-review-worker.mts": "751b80e69888ec098ff2e190bf487f1962bbb104ea87d7494b68e654009b336a",
-    "tools/policy-integrity-manifest.mjs": "ea9c57d7beb04f9d0ce58aac4eb0bc1e40aac6c40e7dbf5803756cf1a9a3e35c"
+    "tools/policy-integrity-manifest.mjs": "97d0403ef0209a83f484ba578c41dc3a1d7467b7196d7ea93e4ec3bd88a7d1f2"
   }
 }

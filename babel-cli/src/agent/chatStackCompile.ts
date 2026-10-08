@@ -7,6 +7,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { isCredentialTargetPath } from './autonomyEnforcement.js';
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { resolveRuntimeUserStateRoot } from '../config/runtimePaths.js';
@@ -145,6 +146,7 @@ export function instructionIntakeRoots(projectRoot: string, babelRoot: string): 
  * Deliberately selected user context does not use this gate.
  */
 function admitAutomaticInstruction(path: string, roots: readonly string[]): boolean {
+  if (isCredentialTargetPath(path)) return false;
   let stat;
   try {
     stat = lstatSync(path);
@@ -157,6 +159,7 @@ function admitAutomaticInstruction(path: string, roots: readonly string[]): bool
   let realRoots: string[];
   try {
     realTarget = realpathSync(path);
+    if (isCredentialTargetPath(realTarget)) return false;
     realRoots = roots.map((root) => {
       try {
         return realpathSync(root);

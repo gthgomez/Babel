@@ -11,6 +11,8 @@ const manifestPath = join(repoRoot, "POLICY_MANIFEST.json");
 // New protected files require a reviewed registration and regeneration.
 const coveredPaths = [
   ".github/workflows/public-pr-metadata.yml",
+  ".github/workflows/publish-npm.yml",
+  ".github/workflows/release.yml",
   ".github/workflows/trusted-control-plane.yml",
   ".github/workflows/typecheck.yml",
   "AGENTS.md",
