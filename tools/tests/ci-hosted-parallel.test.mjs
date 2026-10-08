@@ -68,10 +68,40 @@ test('every pre-optimization Linux and Windows command remains covered on its or
   }
 });
 
-test('security, public policy, review contracts, dual-OS manifest and metadata jobs remain semantically unchanged', () => {
-  for (const name of ['security', 'public-content-policy', 'review-control-plane-contract', 'policy-integrity', 'public-pr-metadata-tests']) {
+function assertRequiredReviewUnion(candidate) {
+  const job = candidate.jobs['platform-core'];
+  assert.ok(candidate.jobs['linux-validation'].needs.includes('platform-core'));
+  assert.ok(job.strategy.matrix.os.includes('ubuntu-latest'));
+  for (const original of baseline.jobs['review-control-plane-contract'].steps.filter(s => s.run?.includes('--test ') || s.run?.includes('foreach ($test'))) {
+    const expected = [...original.run.matchAll(/(?:tools\/tests\/[a-z0-9-]+\.ps1|src\/services\/[a-zA-Z0-9]+\.test\.ts)/g)].map(m => m[0]);
+    assert.ok(expected.length >= 3);
+    const provider = job.steps.find(step => expected.every(path => step.run?.includes(path)));
+    assert.ok(provider, 'Required Ubuntu path lost review contract files');
+    assert.equal(provider.if, "matrix.os == 'ubuntu-latest'");
+    assert.equal(provider['continue-on-error'], undefined);
+    if (original.run.includes('foreach')) assert.match(provider.run, /if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/);
+    else assert.equal(provider.run.replace(/\s+/g, ' ').trim(), original.run.replace(/\s+/g, ' ').trim());
+  }
+}
+test('standalone review contract can be removed only with the complete required Ubuntu union', () => {
+  assertRequiredReviewUnion(workflow);
+  const missing = structuredClone(workflow);
+  missing.jobs['platform-core'].steps.find(s => s.run?.includes('reviewControlPlaneParity.test.ts')).run = 'echo omitted';
+  assert.throws(() => assertRequiredReviewUnion(missing));
+});
+test('security, public policy, review contracts, dual-OS manifest and metadata retain coverage', () => {
+  for (const name of ['security', 'public-content-policy', 'policy-integrity']) {
     assert.deepEqual(workflow.jobs[name], baseline.jobs[name], `Protected coverage changed: ${name}`);
   }
+  assertRequiredReviewUnion(workflow);
+  const metadata = structuredClone(workflow.jobs['public-pr-metadata-tests']);
+  assert.equal(metadata.if, undefined);
+  assert.equal(metadata.steps[1].if, "github.event_name == 'pull_request'");
+  assert.ok(metadata.steps[2].run.includes('not applicable'));
+  delete metadata.steps[1].if;
+  metadata.steps.pop();
+  metadata.if = "github.event_name == 'pull_request'";
+  assert.deepEqual(metadata, baseline.jobs['public-pr-metadata-tests']);
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   assert.deepEqual(workflow.on, baseline.on);
   assert.deepEqual(workflow.concurrency, baseline.concurrency);
