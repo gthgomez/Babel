@@ -114,12 +114,32 @@ jobs:
         run: node tools/policy-integrity-manifest.mjs verify
   public-pr-metadata-tests:
     name: public-pr-metadata-tests
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Test public PR metadata policy
+        if: github.event_name == 'pull_request'
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-pr-metadata.ps1
+      - name: Non-PR metadata applicability
+        if: github.event_name != 'pull_request'
+        run: echo 'PR metadata fixtures not applicable to this non-PR event'
+  desktop-tests:
+    name: desktop-tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+      - name: Check desktop discovery independently
+        run: node tools/check-desktop-test-inventory.mjs
+      - name: Run desktop regressions
+        run: npm run test
+        working-directory: babel-desktop
   architecture-regressions:
     name: architecture-regressions (${{ matrix.os }})
     strategy:
@@ -166,7 +186,7 @@ jobs:
           node --test --test-reporter=tap tools/tests/architectural-boundaries.test.mjs
           tools/tests/architectural-budget.test.mjs tools/tests/ci-package-coverage.test.mjs
           tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-unit-sharding.test.mjs tools/tests/ci-workflow-coverage.test.mjs
-          tools/tests/package-scripts-and-tests.test.mjs 2>&1 | Tee-Object
+          tools/tests/package-scripts-and-tests.test.mjs tools/tests/hook-redaction.test.mjs tools/tests/push-candidates.test.mjs tools/tests/committed-content-policy.test.mjs tools/tests/review-summary.test.mjs 2>&1 | Tee-Object
           artifacts/architecture-regressions/full.tap
 
           exit $LASTEXITCODE
@@ -286,6 +306,9 @@ jobs:
       - public-content-policy
       - architecture-regressions
       - package-components
+      - desktop-tests
+      - policy-integrity
+      - public-pr-metadata-tests
       - consumer-artifact
       - unit-shards
       - docker-smoke
@@ -384,6 +407,9 @@ jobs:
       - public-content-policy
       - architecture-regressions
       - package-components
+      - desktop-tests
+      - policy-integrity
+      - public-pr-metadata-tests
       - consumer-artifact
       - unit-shards
       - docker-smoke
@@ -415,7 +441,7 @@ jobs:
           - windows-latest
     runs-on: ${{ matrix.os }}
     env:
-      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -447,6 +473,8 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
         working-directory: babel-cli
+      - name: Test producer-aware CI snapshot and identity
+        run: pwsh -NoProfile -File tools/tests/test-agent-ci-evidence.ps1
       - name: Run required review control-plane PowerShell contract
         shell: pwsh
         run: |
@@ -521,7 +549,7 @@ jobs:
           - windows-latest
     runs-on: ${{ matrix.os }}
     env:
-      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -616,7 +644,7 @@ jobs:
           - windows-latest
     runs-on: ${{ matrix.os }}
     env:
-      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -896,6 +924,7 @@ jobs:
     timeout-minutes: 45
     env:
       FORCE_COLOR: '1'
+      BABEL_TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
