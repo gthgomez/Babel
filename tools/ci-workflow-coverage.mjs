@@ -13,6 +13,7 @@ export const parseWorkflow = text => load(text);
 function directlyRuns(script, command) {
   const lines = String(script ?? '').split(/\r?\n/).filter(line => line.trim() && !line.startsWith('#'));
   const supported = [
+    /^npm run test:consumer-artifact -- --archive "\$env:CONSUMER_ARCHIVE" --manifest \.\.\/artifacts\/consumer-candidate\/manifest\.json --expected-sha256 "\$env:CONSUMER_DIGEST" --expected-source "\$env:CONSUMER_SOURCE"$/,
     /^npm run [a-z0-9:-]+(?: -- --test-timeout=[0-9]+)?(?: 2>&1 \| Tee-Object(?: -FilePath)? [a-zA-Z0-9_./-]+)?$/,
     /^node scripts\/[a-zA-Z0-9_.-]+\.mjs [a-z0-9-]+$/,
     /^pwsh -NoProfile -ExecutionPolicy Bypass -File tools\/check-harness-architecture\.ps1$/,

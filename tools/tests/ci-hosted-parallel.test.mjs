@@ -133,3 +133,57 @@ test('runtime and chat preserve required selection, raw TAP and fail-closed summ
     assert.ok(commands.includes(`npm run test:${name}`));
   }
 });
+
+function assertImmutableConsumerGraph(candidate) {
+  const jobs = candidate.jobs;
+  const producer = jobs['consumer-candidate'];
+  assert.ok(producer);
+  const exactSource = '${{ github.event.pull_request.head.sha || github.sha }}';
+  assert.equal(producer.steps[0].with.ref, exactSource);
+  assert.equal(producer.steps[0].with['persist-credentials'], false);
+  assert.equal(producer.outputs.sha256, '${{ steps.pack.outputs.sha256 }}');
+  assert.equal(producer.outputs.source, '${{ steps.pack.outputs.source_sha }}');
+  const pack = producer.steps.find(s => s.id === 'pack');
+  assert.equal(pack.run, 'npm run package:release');
+  assert.equal(pack.env.CANDIDATE_HEAD, exactSource);
+  assert.equal(pack.if, undefined);
+  const expectedMatrix = {os:['ubuntu-latest','windows-latest','macos-latest'], node:['22.19.0','24.13.1','24']};
+  for (const name of ['consumer-build-toolchains','consumer-artifact']) {
+    const job = jobs[name];
+    assert.deepEqual(job.strategy.matrix, expectedMatrix, name);
+    assert.equal(job.strategy['fail-fast'], false);
+    assert.equal(job.if, undefined);
+    assert.equal(job['continue-on-error'], undefined);
+    assert.equal(job.steps[0].with.ref, exactSource);
+    for (const gate of ['linux-validation','windows-portability']) assert.ok(jobs[gate].needs.includes(name));
+  }
+  const build = jobs['consumer-build-toolchains'].steps.find(s => s.run === 'npm run build');
+  assert.ok(build); assert.equal(build.if, undefined); assert.equal(build['continue-on-error'], undefined);
+  const consumer = jobs['consumer-artifact'];
+  assert.deepEqual(consumer.needs, ['consumer-candidate']);
+  const download = consumer.steps.find(s => s.uses?.startsWith('actions/download-artifact@'));
+  assert.equal(download.with.name, 'consumer-candidate');
+  assert.equal(download.if, undefined);
+  const verify = consumer.steps.find(s => s.name === 'Verify consumer artifact');
+  assert.equal(verify.env.CONSUMER_DIGEST, '${{ needs.consumer-candidate.outputs.sha256 }}');
+  assert.equal(verify.env.CONSUMER_SOURCE, '${{ needs.consumer-candidate.outputs.source }}');
+  assert.match(verify.run, /--expected-sha256 "\$env:CONSUMER_DIGEST" --expected-source "\$env:CONSUMER_SOURCE"/);
+  assert.equal(verify.if, undefined); assert.equal(verify['continue-on-error'], undefined);
+  assert.ok(!consumer.steps.some(s => /npm (?:ci|run build|pack)/.test(s.run ?? '')), 'Consumers must use the frozen archive without rebuilding');
+}
+
+test('all nine retained build and consumer rows bind the same independent archive and source outputs', () => {
+  assertImmutableConsumerGraph(workflow);
+  for (const mutate of [
+    w => { w.jobs['consumer-artifact'].strategy.matrix.node.pop(); },
+    w => { w.jobs['consumer-build-toolchains'].strategy.matrix.os.pop(); },
+    w => { w.jobs['consumer-artifact'].steps.find(s => s.name === 'Verify consumer artifact').env.CONSUMER_DIGEST = 'archive supplied digest'; },
+    w => { w.jobs['consumer-artifact'].steps.find(s => s.name === 'Verify consumer artifact').env.CONSUMER_SOURCE = '${{ github.sha }}'; },
+    w => { w.jobs['consumer-artifact'].steps.push({run:'npm run build'}); },
+    w => { w.jobs['consumer-candidate'].steps.find(s => s.id === 'pack').if = 'false'; },
+    w => { w.jobs['windows-portability'].needs = w.jobs['windows-portability'].needs.filter(n => n !== 'consumer-build-toolchains'); },
+  ]) {
+    const changed = structuredClone(workflow); mutate(changed);
+    assert.throws(() => assertImmutableConsumerGraph(changed));
+  }
+});
