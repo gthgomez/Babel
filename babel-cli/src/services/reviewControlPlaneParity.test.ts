@@ -125,7 +125,7 @@ const candidateFixture = {
   coverage: { diff_consumed: true, diff_sha256: 'f'.repeat(64), diff_lines_total: 2, diff_lines_read: 2, changed_paths: 1, source_paths_opened: [] },
 };
 
-test('immutable base preserves a supported V3 contract and rejects wrong-head and BLOCK evidence during migration', { skip: !trustedBaseSha }, () => {
+test('immutable base preserves a supported V3 contract and rejects wrong-head and BLOCK evidence during migration', { skip: !trustedBaseSha ? 'Immutable trusted base unavailable for local qualification' : false }, () => {
   // Versioned fixtures: test both existing V3 and the extended V3 contract.
   // Promotion must remain testable when a later base adopts the new contract.
   const legacy = evaluateContract(fixture, trustedBaseSha);

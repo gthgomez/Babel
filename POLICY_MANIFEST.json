@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "41ad8c3b6bd64db750992cee2d7fba2be8f4876f9aa5e08e04797d755a3842a0",
+  "policy_bundle_id": "d1edbe3a5c82ec76451c5b18d9673c51abeab6c1229be01f8d0aabac0ff18829",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "47921ef2675f0c51b25b52362b65650ecddd41e82e1a67c398f1efb2154a040f",
@@ -90,7 +90,7 @@
     "babel-cli/src/services/openCodeHarnessReview.ts": "09e368e689df1e4705dbfb88d225ce4d766c356e4641811d37f6a759da65bf91",
     "babel-cli/src/services/orchestratorReviewAdapter.test.ts": "52152c046a404fea8be880f2f09333a05d75feb604bfaa016c4b7f43abfd712e",
     "babel-cli/src/services/orchestratorReviewAdapter.ts": "b0b5ffa262a2486213f3ba5452759bfc981c93c713d9458417f65ae098e86abc",
-    "babel-cli/src/services/reviewControlPlaneParity.test.ts": "f68df117b083fa326c25c5d9ecf37985f0064d3f305db29fdd963702765bf4f5",
+    "babel-cli/src/services/reviewControlPlaneParity.test.ts": "b2b076e16b0a03e56574a455b75afd37c0440a16a0776cf3e6fe68750be9fbe2",
     "babel-cli/src/services/reviewCoverage.test.ts": "c031a11a2e92356a3ad861181b36c2c1e63b76fa6898d7c2a22fe8020050fddf",
     "babel-cli/src/services/reviewCoverage.ts": "cc2a1601e4482080911670d0f7bfcd34471af8bda4c2c26b625944df32927981",
     "babel-cli/src/services/reviewCustody.test.ts": "77206f0a8529082ab0f336e6a4454dea7cf20fba85e65f930f11cba9764692bc",

@@ -454,8 +454,9 @@ test('exact GLM ChatEngine C2/C3 path executes one read-only tool and correlates
 // required command through a POSIX-biased child process shape and fails
 // there (second `npm test` run exits 1 without stdout). Tracked as
 // Windows-portability debt for the authoritative verifier path.
-const describeExactGlm = process.platform === 'win32' ? test.skip : test;
-describeExactGlm('exact GLM ChatEngine path performs a bounded mutation and authoritative verification', async () => {
+test('exact GLM ChatEngine path performs a bounded mutation and authoritative verification', {
+  skip: process.platform === 'win32' ? 'Windows authoritative verifier fixture unsupported; Linux counterpart required' : false,
+}, async () => {
   const previousOffline = process.env['BABEL_OFFLINE'];
   const previousCompaction = process.env['BABEL_COMPACTION'];
   const previousCritic = process.env['BABEL_DIFF_CRITIC'];

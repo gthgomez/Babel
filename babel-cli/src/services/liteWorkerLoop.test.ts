@@ -69,7 +69,7 @@ function writeTrustDemoRepo(root: string, implementation: string, targetFile: st
 
 test(
   'lite worker loop harness runs plan propose fix review undo offline',
-  { concurrency: false, skip: skipIfCiWithoutKeys },
+  { concurrency: false, skip: skipIfCiWithoutKeys ? 'Legacy worker harness unavailable without authorized keys in CI' : false },
   async () => {
     const result = await runLiteWorkerLoopHarness();
     assert.equal(result.status, 'pass');

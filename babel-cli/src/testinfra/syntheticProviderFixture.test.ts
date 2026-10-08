@@ -60,6 +60,9 @@ test('fixture rejects injected credential environment before script execution', 
 })
 
 test('fixture permits numeric test worker identity but rejects arbitrary worker payloads', async () => {
+  const zero = await captureSyntheticChild("console.log('WORKER_ZERO_READY')", { NODE_TEST_WORKER_ID: '0' })
+  assert.equal(zero.code, 0)
+  assert.ok(zero.output.includes('WORKER_ZERO_READY'))
   const valid = await captureSyntheticChild("console.log('WORKER_READY')", { NODE_TEST_WORKER_ID: '3' })
   assert.equal(valid.code, 0)
   assert.ok(valid.output.includes('WORKER_READY'))

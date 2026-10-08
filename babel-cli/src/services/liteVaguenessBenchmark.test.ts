@@ -103,62 +103,7 @@ test('scoreVaguenessScenario requires tool exploration when expect_tools is set'
   assert.equal(withTools.pass, true);
 });
 
-test.skip(
-  'runVaguenessBenchmark executes mock seeded fix scenario offline',
-  { concurrency: false },
-  () => {
-    // SKIP: functionality consolidated into chat mode — 'daily' command removed
-    const scenariosPath = mkdtempSync(join(tmpdir(), 'babel-vagueness-scenarios-'));
-    const evidenceDir = mkdtempSync(join(tmpdir(), 'babel-vagueness-evidence-'));
-    try {
-      writeFileSync(
-        join(scenariosPath, 'scenarios.json'),
-        JSON.stringify(
-          {
-            schema_version: 1,
-            fixture_type: 'babel_vagueness_scenarios',
-            scenarios: [
-              {
-                id: 'mock_fix_only',
-                tier: 'L2_intent',
-                category: 'fix',
-                description: 'offline seeded fix',
-                target: 'seeded',
-                command: ['daily', '--json', 'fix failing tests'],
-                acceptable_statuses: ['FIX_COMPLETE', 'SMALL_FIX_COMPLETE', 'DO_COMPLETE'],
-                expect_lane: 'lite_fix',
-                read_only: false,
-              },
-            ],
-          },
-          null,
-          2,
-        ),
-        'utf-8',
-      );
-
-      const report = runVaguenessBenchmark({
-        provider: 'mock',
-        projectRoot: process.cwd(),
-        scenariosPath: join(scenariosPath, 'scenarios.json'),
-        evidenceDir,
-        minPassRate: 1,
-      });
-
-      assert.equal(report.totals.executed, 1);
-      assert.equal(report.scenarios[0]?.status, 'pass');
-      assert.ok(
-        ['FIX_COMPLETE', 'SMALL_FIX_COMPLETE', 'DO_COMPLETE'].includes(
-          report.scenarios[0]?.reported_status ?? '',
-        ),
-      );
-    } finally {
-      rmSync(scenariosPath, { recursive: true, force: true });
-      rmSync(evidenceDir, { recursive: true, force: true });
-    }
-  },
-);
-
+// Offline repair execution moved to the blocking ChatEngine and governed mutation suites.
 test('runVaguenessBenchmark skips optional missing repos without failing gate', () => {
   const manifestDir = mkdtempSync(join(tmpdir(), 'babel-vagueness-repos-'));
   const scenariosPath = mkdtempSync(join(tmpdir(), 'babel-vagueness-scenarios-'));

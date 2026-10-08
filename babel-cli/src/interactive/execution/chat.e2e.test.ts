@@ -59,7 +59,7 @@ const E2E_TIMEOUT = 180_000;
 
 test(
   'chat E2E: ≥2 turns with tool call, answer reaches stdout',
-  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -129,7 +129,7 @@ test(
 
 test(
   'chat E2E: tool use observable in conversation history',
-  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -165,7 +165,7 @@ test(
 
 test(
   'chat E2E: multi-turn context retention',
-  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized ? 'Live-provider execution is not authorized' : false, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {

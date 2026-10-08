@@ -972,7 +972,7 @@ describe('credential read boundaries', () => {
     }
   });
 });
-it('workspace identity rejects credential symlink targets', { skip: process.platform === 'win32' }, () => {
+it('workspace identity rejects credential symlink targets', { skip: process.platform === 'win32' ? 'POSIX file symlink fixture; Windows directory junction covered separately' : false }, () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-broker-credential-link-'));
   try {
     writeFileSync(join(root, '.env'), 'SYNTHETIC=only\n', 'utf-8');
