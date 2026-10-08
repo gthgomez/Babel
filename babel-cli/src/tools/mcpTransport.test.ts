@@ -1,5 +1,5 @@
 import test, { mock } from 'node:test';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
@@ -756,6 +756,46 @@ test('MCP discovery-list schemas reject unrecognised fields without returning th
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
+  }
+});
+
+test('protocol failure returns only after the owned MCP server closes', async () => {
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'babel-mcp-close-order-'));
+  const serverPath = join(fixtureDir, 'server.cjs');
+  const statePath = join(fixtureDir, 'pid.json');
+  const dispatchMarker = join(fixtureDir, 'dispatched');
+  let pid = 0;
+  try {
+    writeFileSync(serverPath, `
+const { writeFileSync } = require('node:fs');
+writeFileSync(process.argv[2], JSON.stringify({ pid: process.pid }));
+process.on('SIGTERM', () => setTimeout(() => process.exit(0), 150));
+let replied = false;
+process.stdin.on('data', (chunk) => {
+  if (chunk.toString().includes('tools/call')) writeFileSync(process.argv[3], 'dispatched');
+  if (replied) return;
+  replied = true;
+  setTimeout(() => {
+    const initialize = JSON.stringify({ jsonrpc: '2.0', id: 0, result: {} });
+    process.stdout.write('Content-Length: ' + Buffer.byteLength(initialize) + '\\r\\n\\r\\n' + initialize);
+  }, 25);
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} });
+  process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body);
+});
+setInterval(() => {}, 100);
+`);
+    const response = await executeMcpMethod('fixture', 'tools/call', { name: 'lookup', arguments: { query: 'find it' } },
+      undefined, { fixture: { command: 'node', args: [serverPath, statePath, dispatchMarker] } });
+    assert.equal(response.failure?.code, 'mcp_protocol_error', response.stderr);
+    pid = Number(JSON.parse(readFileSync(statePath, 'utf8')).pid);
+    assert.equal(response.mcp_lifecycle?.reason_code, 'response_protocol_error');
+    let alive = true;
+    try { process.kill(pid, 0); } catch (error) { alive = (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+    assert.equal(alive, false, 'owned MCP server must have exited before response settlement');
+    assert.equal(existsSync(dispatchMarker), false, 'late frames must not restart dispatch after protocol failure');
+  } finally {
+    if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* already closed */ } }
+    rmSync(fixtureDir, { recursive: true, force: true });
   }
 });
 

@@ -15,9 +15,38 @@ function Invoke-AgentProcess {
   param(
     [Parameter(Mandatory = $true)][string]$FilePath,
     [string[]]$Arguments = @(),
-    [Parameter(Mandatory = $true)][string]$WorkingDirectory
+    [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+    [int]$TimeoutSeconds = 0
   )
 
+  if ($TimeoutSeconds -gt 0) {
+    $process = [Diagnostics.Process]::new()
+    try {
+      $process.StartInfo = [Diagnostics.ProcessStartInfo]::new($FilePath)
+      if ([IO.Path]::GetExtension($FilePath) -eq '.ps1') {
+        $process.StartInfo.FileName = (Get-Process -Id $PID).Path
+        foreach ($argument in @('-NoProfile', '-NonInteractive', '-File', $FilePath)) { $process.StartInfo.ArgumentList.Add($argument) }
+      }
+      $process.StartInfo.WorkingDirectory = $WorkingDirectory
+      $process.StartInfo.UseShellExecute = $false
+      $process.StartInfo.CreateNoWindow = $true
+      $process.StartInfo.RedirectStandardOutput = $true
+      $process.StartInfo.RedirectStandardError = $true
+      foreach ($argument in $Arguments) { $process.StartInfo.ArgumentList.Add($argument) }
+      if (-not $process.Start()) { throw 'agent_process_start_failed' }
+      $stdout = $process.StandardOutput.ReadToEndAsync()
+      $stderr = $process.StandardError.ReadToEndAsync()
+      if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        $process.Kill($true)
+        $null = $process.WaitForExit(2000)
+        return [pscustomobject]@{ exitCode = 124; output = @(); text = 'agent_request_timeout' }
+      }
+      $text = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult()
+      return [pscustomobject]@{ exitCode = $process.ExitCode; output = @($text -split "`r?`n"); text = $text }
+    } catch {
+      return [pscustomobject]@{ exitCode = 127; output = @(); text = 'agent_process_unavailable' }
+    } finally { $process.Dispose() }
+  }
   $output = @()
   $exitCode = 127
   try {
@@ -74,9 +103,10 @@ function Invoke-AgentGh {
   param(
     [Parameter(Mandatory = $true)][string]$GhPath,
     [Parameter(Mandatory = $true)][string]$RepoRoot,
-    [Parameter(Mandatory = $true)][string[]]$Arguments
+    [Parameter(Mandatory = $true)][string[]]$Arguments,
+    [int]$TimeoutSeconds = 0
   )
-  return Invoke-AgentProcess -FilePath $GhPath -Arguments $Arguments -WorkingDirectory $RepoRoot
+  return Invoke-AgentProcess -FilePath $GhPath -Arguments $Arguments -WorkingDirectory $RepoRoot -TimeoutSeconds $TimeoutSeconds
 }
 
 function Get-AgentRemoteUrl {

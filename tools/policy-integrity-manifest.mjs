@@ -126,6 +126,7 @@ const coveredPaths = [
   "docs/guides/AGENT_GIT_OPERATIONS.md",
   "scripts/agent-git-common.psm1",
   "scripts/agent-pr-gate-common.psm1",
+  "scripts/agent-pr-gate-evidence.psm1",
   "scripts/agent-pr-gate.ps1",
   "scripts/agent-pr-merge.ps1",
   "scripts/agent-review-evidence.ps1",

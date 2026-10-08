@@ -816,6 +816,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   const unitInventory = new Set(unitShard.inventory);
 
   assert.ok(unitInventory.size > 0, 'Canonical unit inventory must not be empty');
+  assert.equal(unitInventory.size, unitShard.inventory.length, 'Canonical unit inventory must be unique');
   for (const path of ['src/agent/desktopApproval.test.ts', 'src/cli/chatStreamNdjson.test.ts', 'src/interactive/execution/chatResumeHeadless.test.ts',
     'src/agent/chatEngineVerifierAdapter.noChange.test.ts', 'src/agent/chatHarnessFeedback.test.ts',
     'src/agent/chatLspPolicy.test.ts', 'src/agent/chatOperationExplicit.test.ts',
@@ -839,8 +840,9 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   assert.equal(specializedSet.size, 21);
   assert.equal(unclassified.length, 0);
   assert.equal(overlap.length, 0);
-  assert.equal(unitInventory.size + specializedSet.size, allTests.length);
-  assert.deepEqual([...new Set([...unitInventory, ...specializedSet])].sort(), allTests);
+  const classified = [...unitInventory, ...specializedSet].sort();
+  assert.equal(new Set(classified).size, classified.length, 'Unit and specialized lanes must form a unique partition');
+  assert.deepEqual(classified, allTests, 'Unit and specialized lanes must exhaust exactly the discovered source tests');
 });
 
 test('test classification negative fixtures (orphan file, deleted lane command, lane absent from CI, missing file, unjustified exclusion, empty commandsByFile, unrelated test match, masked CI, echo CI)', () => {
