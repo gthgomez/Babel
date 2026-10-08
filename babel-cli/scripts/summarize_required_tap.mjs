@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { reviewedSkip, skipPolicySha256 } from './required_skip_policy.mjs'
 
 const FOOTER_FIELDS = ['tests', 'suites', 'pass', 'fail', 'cancelled', 'skipped', 'todo', 'duration_ms']
 
@@ -140,6 +141,8 @@ export function parseRequiredTapInventory(tap, suite) {
   }
   if (footer.cancelled > 0) errors.push('cancelled_tests')
   if (footer.todo > 0) errors.push('todo_tests')
+  if (!tests.some(item => item.result === 'passed')) errors.push('no_executed_tests')
+  if (tests.some(item => item.skipReason === 'unspecified')) errors.push('undocumented_skip')
 
   const failed = tests.filter((item) => item.result === 'failed').length
   const hasExecutionFailure = failed > 0 || (footer.fail ?? 0) > 0 || (footer.cancelled ?? 0) > 0 || (footer.todo ?? 0) > 0
@@ -194,6 +197,37 @@ export function summarizeRequiredTap(suite, artifactDirectory) {
         }
         paths.add(file.path)
       }
+      const executionPath = resolve(directory, 'execution.json')
+      if (!existsSync(executionPath)) summary.errors.push('missing_file_execution_evidence')
+      else {
+        const execution = JSON.parse(readFileSync(executionPath, 'utf8'))
+        if (execution.schemaVersion !== 1 || execution.complete !== true ||
+            execution.nodeVersion !== selection.nodeVersion || execution.platform !== selection.platform || execution.arch !== selection.arch ||
+            !Array.isArray(execution.files)) summary.errors.push('invalid_file_execution_evidence')
+        else for (const file of files) {
+          const matches = execution.files.filter(actual => actual.path === file.path && actual.sha256 === file.sha256)
+          if (matches.length !== 1) summary.errors.push('selected_file_not_completed:' + file.path)
+        }
+        const skipped = summary.tests.filter(test => test.result === 'skipped')
+        const records = execution.skips ?? []
+        summary.skipPolicySha256 = skipPolicySha256
+        summary.reviewedSkips = []
+        if (!Array.isArray(records) || records.length !== skipped.length) summary.errors.push('skip_execution_inventory_mismatch')
+        else {
+          const remaining = [...records]
+          for (const test of skipped) {
+            const matches = remaining.filter(record => record.reason === test.skipReason &&
+              (test.id === record.name || test.id.endsWith(' / ' + record.name)))
+            if (matches.length !== 1) { summary.errors.push('skip_identity_ambiguous_or_missing:' + test.id); continue }
+            const record = matches[0]
+            remaining.splice(remaining.indexOf(record), 1)
+            const waiver = reviewedSkip(record, selection.platform, suite)
+            if (!files.some(file => file.path === record.path && file.sha256 === record.sha256) || !waiver) {
+              summary.errors.push('unreviewed_skip:' + test.id)
+            } else summary.reviewedSkips.push({ ...record, ...waiver })
+          }
+        }
+      }
       summary.selectedFileCount = files.length
       summary.selectionManifestSha256 = createHash('sha256').update(selectionText).digest('hex')
       summary.selection = selection
@@ -212,8 +246,9 @@ export function summarizeRequiredTap(suite, artifactDirectory) {
   return summary
 }
 
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 const suite = process.argv[2] ?? 'chat-truth'
-if (!['chat-truth', 'harness-runtime'].includes(suite)) {
+if (!['chat-truth', 'harness-runtime', 'unit', 'native-rg'].includes(suite)) {
   throw new Error(`Unsupported required TAP suite: ${suite}`)
 }
 const artifactDirectory = process.argv[3] ?? fileURLToPath(new URL(`../artifacts/${suite}/`, import.meta.url))
@@ -222,3 +257,5 @@ console.log(`${suite} TAP inventory ${summary.status}: ${summary.testCount} test
   `${summary.passed} passed, ${summary.failed} failed, ${summary.skipped} skipped`)
 if (summary.errors.length > 0) console.error(`${suite} TAP inventory errors: ${summary.errors.join(', ')}`)
 if (summary.status !== 'complete') process.exitCode = 1
+
+}

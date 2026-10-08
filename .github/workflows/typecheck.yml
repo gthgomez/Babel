@@ -123,6 +123,36 @@ jobs:
       - name: Non-PR metadata applicability
         if: github.event_name != 'pull_request'
         run: echo 'PR metadata fixtures not applicable to this non-PR event'
+  native-rg:
+    name: native-rg (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+      - name: Install pinned native ripgrep
+        run: pwsh -NoProfile -File tools/install-ci-ripgrep.ps1 -Destination '${{ runner.temp }}/ci-ripgrep'
+      - name: Install qualification dependencies
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
+      - name: Qualify native argv and security behavior
+        run: node scripts/run_ripgrep_qualification.mjs native
+        working-directory: babel-cli
+      - name: Qualify forced-absent fallback
+        run: node scripts/run_ripgrep_qualification.mjs fallback
+        working-directory: babel-cli
+      - name: Retain ripgrep TAP and file evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-rg-${{ matrix.os }}
+          path: babel-cli/artifacts/native-rg-*
+          if-no-files-found: error
   desktop-tests:
     name: desktop-tests (${{ matrix.os }})
     strategy:
@@ -186,7 +216,7 @@ jobs:
           node --test --test-reporter=tap tools/tests/architectural-boundaries.test.mjs
           tools/tests/architectural-budget.test.mjs tools/tests/ci-package-coverage.test.mjs
           tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-unit-sharding.test.mjs tools/tests/ci-workflow-coverage.test.mjs
-          tools/tests/package-scripts-and-tests.test.mjs tools/tests/hook-redaction.test.mjs tools/tests/push-candidates.test.mjs tools/tests/committed-content-policy.test.mjs tools/tests/review-summary.test.mjs 2>&1 | Tee-Object
+          tools/tests/package-scripts-and-tests.test.mjs tools/tests/hook-redaction.test.mjs tools/tests/push-candidates.test.mjs tools/tests/committed-content-policy.test.mjs tools/tests/native-rg-setup.test.mjs tools/tests/required-tap-coverage.test.mjs tools/tests/required-skip-policy.test.mjs tools/tests/required-tap-reporter.test.mjs tools/tests/review-summary.test.mjs 2>&1 | Tee-Object
           artifacts/architecture-regressions/full.tap
 
           exit $LASTEXITCODE
@@ -307,6 +337,7 @@ jobs:
       - architecture-regressions
       - package-components
       - desktop-tests
+      - native-rg
       - policy-integrity
       - public-pr-metadata-tests
       - consumer-artifact
@@ -408,6 +439,7 @@ jobs:
       - architecture-regressions
       - package-components
       - desktop-tests
+      - native-rg
       - policy-integrity
       - public-pr-metadata-tests
       - consumer-artifact
@@ -586,6 +618,8 @@ jobs:
         working-directory: babel-cli
       - name: Run required harness runtime suite
         id: harness_runtime
+        env:
+          BABEL_TAP_EXECUTION_PATH: artifacts/harness-runtime/execution.json
         timeout-minutes: 15
         shell: pwsh
         run: >
@@ -681,6 +715,8 @@ jobs:
         working-directory: babel-cli
       - name: Run required Chat truth suite
         id: chat_truth
+        env:
+          BABEL_TAP_EXECUTION_PATH: artifacts/chat-truth/execution.json
         shell: pwsh
         run: |
           npm run test:chat-truth 2>&1 | Tee-Object -FilePath artifacts/chat-truth/full.tap
@@ -969,6 +1005,10 @@ jobs:
           artifacts/ci-unit/full.tap
 
           exit $LASTEXITCODE
+      - name: Validate complete unit TAP inventory
+        if: always() && steps.unit_shard.outcome != 'skipped' && steps.unit_shard.outcome != ''
+        run: node scripts/summarize_required_tap.mjs unit artifacts/ci-unit
+        working-directory: babel-cli
       - name: Upload complete unit selection and TAP
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

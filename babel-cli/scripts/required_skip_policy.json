@@ -1,0 +1,462 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "windows-specific",
+      "platforms": [
+        "linux",
+        "darwin"
+      ],
+      "reasons": [
+        "Windows-specific fixture",
+        "Native Windows SQLite contract",
+        "Native Windows SQLite boundary",
+        "Actual Windows SQLite reservation contract",
+        "Windows-only process qualification",
+        "Windows helper diagnostic"
+      ],
+      "rationale": "The complementary Windows lane executes these native Windows contracts.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "files": {
+        "src/sandbox.test.ts": [
+          "P2.1: 2>&1 on allowed commands passes without interpreter-eval env",
+          "backslash absolute outside path is rejected on Windows",
+          "bare redirect and lone & still rejected",
+          "cd path && allowed-cmd is not allowlist-rejected",
+          "chmod is explicitly rejected on Windows",
+          "mkdir is explicitly rejected on Windows",
+          "windows env-prefix syntax is rejected on Windows"
+        ],
+        "src/services/costTracker.test.ts": [
+          "rooted project matching accepts Windows path case aliases"
+        ],
+        "src/ui/terminalProbe.test.ts": [
+          "BABEL_SCROLL_REGIONS=1 enables scrollRegions on Windows Terminal",
+          "BABEL_WINTERM_SYNC=0 overrides stays false on Windows Terminal",
+          "BABEL_WINTERM_SYNC=1 enables dec2026Sync on Windows Terminal",
+          "Windows Terminal defaults dec2026Sync to false",
+          "Windows Terminal defaults scrollRegions to false",
+          "formatCapabilityReport shows winterm hint when disabled"
+        ],
+        "src/runners/openCodeGoApi.test.ts": [
+          "Windows Go corrupt reservation state denies transport without replacing evidence"
+        ],
+        "src/runners/openCodeGoBudget.test.ts": [
+          "Windows Go death during first-store creation cannot become an empty resume budget",
+          "Windows Go denies deleted, corrupt, moved, wrong-owner and reduced or stale grant state",
+          "Windows Go interrupted migration retains legacy evidence and refuses reinitialization",
+          "Windows Go migrates validated legacy bytes once without resetting reservations",
+          "Windows Go process contention cannot exceed the shared cap",
+          "Windows Go reservations commit before transport and remain debited after unknown usage",
+          "Windows Go survives real process deaths before commit, after commit and after an effect"
+        ],
+        "src/runners/providerEngine.test.ts": [
+          "Windows ProviderEngine Go commits a reservation before native network dispatch"
+        ],
+        "src/agent/windowsProcessQualification.test.ts": [
+          "Windows executes spaced .exe, .cmd, and .bat paths with exact child argv and cwd",
+          "Windows foreground shell preserves the same command identity for sync and async execution"
+        ],
+        "src/services/reviewProcessContainment.test.ts": [
+          "Windows assignment failures retain only bounded helper stage diagnostics"
+        ]
+      }
+    },
+    {
+      "id": "posix-symlink",
+      "platforms": [
+        "win32"
+      ],
+      "reasons": [
+        "POSIX file symlink fixture; Windows directory junction covered separately",
+        "POSIX scanner stub"
+      ],
+      "rationale": "Windows junction and credential-denial tests remain active; Linux executes file symlink and scanner contracts.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "files": {
+        "src/sandbox.test.ts": [
+          "final write target symlink to in-root file is rejected to avoid TOCTOU swaps",
+          "final write target symlink to outside file is rejected",
+          "sandbox rejects credential-class shadow directories",
+          "sandbox rejects credential-class shadow targets"
+        ],
+        "src/agent/harnessHardening.h3h7.test.ts": [
+          "workspace identity rejects credential symlink targets"
+        ],
+        "src/services/babelReviewSnapshot.test.ts": [
+          "review snapshot ignores local Git replacement refs when binding the exact diff"
+        ]
+      }
+    },
+    {
+      "id": "posix-durability",
+      "platforms": [
+        "win32"
+      ],
+      "reasons": [
+        "POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows",
+        "Native POSIX persistence contract; Windows remains denied"
+      ],
+      "rationale": "Durable POSIX Go behavior is platform-qualified; native Windows reservation and denial tests remain active.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "files": {
+        "src/runners/openCodeGoApi.test.ts": [
+          "Go budget persists reservations and rejects contention, exhaustion and job reuse",
+          "Go ledger shares a durable reservation with another process",
+          "Go reservations retain spent state across resume, respect a reduced task ceiling and refuse deleted state",
+          "V4.1 reserves the serialized-body estimate for every operation and never refunds unknown or cancelled usage",
+          "shared Go ledger prevents overspend across runner instances without network retry"
+        ],
+        "src/runners/providerEngine.test.ts": [
+          "ProviderEngine uses native standalone Go with shared budget and stable job session"
+        ]
+      }
+    },
+    {
+      "id": "windows-verifier-debt",
+      "platforms": [
+        "win32"
+      ],
+      "reasons": [
+        "Windows authoritative verifier fixture unsupported; Linux counterpart required"
+      ],
+      "rationale": "Preserves an existing documented Windows verifier-fixture limitation; no execution is claimed for this case.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "files": {
+        "src/agent/chatOpenCodeProvider.test.ts": [
+          "exact GLM ChatEngine path performs a bounded mutation and authoritative verification"
+        ]
+      }
+    },
+    {
+      "id": "case-sensitive-host",
+      "platforms": [
+        "win32",
+        "darwin"
+      ],
+      "reasons": [
+        "requires a case-sensitive filesystem"
+      ],
+      "rationale": "The default Windows/macOS filesystem cannot supply the case-sensitive fixture; Linux executes it.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "files": {
+        "src/agent/repoIdentityResume.test.ts": [
+          "distinct case-sensitive roots are not the same repository"
+        ],
+        "src/protocol/client/hostRepoIdentity.test.ts": [
+          "D04 protocol hydration identity",
+          "case-variant durable identity is a mismatch, not a lexical match"
+        ]
+      }
+    },
+    {
+      "id": "windows-physical-identity",
+      "platforms": [
+        "win32"
+      ],
+      "reasons": [
+        "symlink semantics differ on Windows",
+        "filesystem inode identity is unavailable on this platform"
+      ],
+      "rationale": "Preserves explicit physical-identity platform conditions alongside active mismatch/continuity cases.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "files": {
+        "src/agent/repoIdentityResume.test.ts": [
+          "a symlink alias of the same physical root is verified",
+          "a symlink to a different repository is rejected"
+        ],
+        "src/interactive/chatSessionResume.identity.test.ts": [
+          "D04 resume seam identity",
+          "symlink alias of the same physical repository resumes cleanly"
+        ],
+        "src/protocol/client/hostRepoIdentity.test.ts": [
+          "D04 protocol hydration identity",
+          "R0-4: the durable log records an advisory root fingerprint (canonical continuity)",
+          "symlink alias of the same physical root is not rejected lexically"
+        ]
+      }
+    },
+    {
+      "id": "host-symlink-capability",
+      "platforms": [
+        "linux",
+        "darwin",
+        "win32"
+      ],
+      "reasons": [
+        "symlink creation not permitted in this environment",
+        "symlink creation unavailable on this host: EPERM",
+        "symlink creation unavailable on this host: EACCES",
+        "symlink creation unavailable on this host: ENOTSUP",
+        "symlink creation unavailable on this host: EOPNOTSUPP",
+        "Host does not permit symlink creation",
+        "file symlink unavailable on this host",
+        "file symlink unavailable: EPERM",
+        "file symlink unavailable: EACCES",
+        "file symlink unavailable: ENOTSUP",
+        "file symlink unavailable: EOPNOTSUPP",
+        "the current Windows profile cannot create a test symlink",
+        "Creating a junction requires permission on this host",
+        "symlink creation unavailable: EPERM",
+        "symlink creation unavailable: EACCES"
+      ],
+      "rationale": "The fixture explicitly attempts link creation; permitted unavailable-capability reasons remain visible and are not counted as executed tests.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "files": {
+        "src/authority/convergence-integrity.regression-gate.test.ts": [
+          "P0-1: governance symlinks are recorded, never followed outside the repo",
+          "P0-1: regular file replaced by symlink is detected",
+          "P0-1: symlink target change is detected"
+        ],
+        "src/authority/governanceRestore.test.ts": [
+          "authority-session file -> symlink restores file and leaves canary unchanged",
+          "regular file -> symlink restores file and leaves canary unchanged"
+        ],
+        "src/evidence/observationStore.test.ts": [
+          "ancestor and root symlinks are rejected, not advertised as containment"
+        ],
+        "src/evidence/observationRecall.test.ts": [
+          "recall rejects symlinked object files and symlinked ancestor directories"
+        ],
+        "src/runtime/admission.test.ts": [
+          "P05: a dangling symlinked DB file is refused with no write outside the jail",
+          "P05: a symlinked intermediate that escapes the root is refused with no side effect"
+        ],
+        "src/research/reporting/sliceD.test.ts": [
+          "applicability scanner does not follow a symlink outside the target tree"
+        ],
+        "src/services/babelReviewRepair.test.ts": [
+          "rejects linked target paths when host symlink creation is available"
+        ],
+        "src/services/costTracker.test.ts": [
+          "legacy lexical root alias is resolved before receipt projection"
+        ],
+        "src/services/indexer.test.ts": [
+          "a same-path symlink replacement removes the earlier indexed source",
+          "index batch yield cannot admit a newly swapped outside-root symlink"
+        ],
+        "src/services/sourceManifest.test.ts": [
+          "source manifest rejects an in-root alias into a private directory",
+          "source manifest rejects ancestor and leaf symlink escapes"
+        ]
+      }
+    },
+    {
+      "id": "windows-chmod",
+      "platforms": [
+        "win32"
+      ],
+      "reasons": [
+        "POSIX chmod permission denial is not reproducible on Windows"
+      ],
+      "rationale": "Linux exercises real POSIX chmod denial.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "files": {
+        "src/agent/r0TerminalAuthority.test.ts": [
+          "R0-5: a typed permission denial + BLOCKED is a truthful typed block"
+        ]
+      }
+    },
+    {
+      "id": "optional-dataset",
+      "platforms": [
+        "linux",
+        "darwin",
+        "win32"
+      ],
+      "reasons": [
+        "optional SWE-Bench dataset is not provisioned; run the dataset provisioning command first"
+      ],
+      "rationale": "Normal unit qualification does not provision or run a paid benchmark campaign.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "files": {
+        "src/services/agentBenchmarkHarness.test.ts": [
+          "loadSwebenchInstance reads manifest SWE-A01 row from provisioned JSONL"
+        ]
+      }
+    },
+    {
+      "id": "optional-sqlite-vector",
+      "platforms": [
+        "linux",
+        "darwin",
+        "win32"
+      ],
+      "reasons": [
+        "sqlite-vec extension unavailable on this platform"
+      ],
+      "rationale": "Optional vector extension behavior has an explicit feature-dependent fixture.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "files": {
+        "src/services/indexer.test.ts": [
+          "an awaited vector query cannot publish a stale same-root revision",
+          "an awaited vector query cannot resolve hits from a replacement root"
+        ]
+      }
+    },
+    {
+      "id": "live-provider-not-authorized",
+      "platforms": [
+        "linux",
+        "darwin",
+        "win32"
+      ],
+      "reasons": [
+        "Live-provider execution is not authorized",
+        "Live-provider fixtures unavailable without authorized keys",
+        "Legacy worker harness unavailable without authorized keys in CI"
+      ],
+      "rationale": "Credentials do not authorize live-provider spending during default tests; offline contracts remain mandatory.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "files": {
+        "src/agent/lanes/runMutationAgentLoop.e2e.test.ts": [
+          "blocks writes outside the declared write scope",
+          "cancels via AbortController with real LLM",
+          "completes a simple write task with the real LLM",
+          "handles read-only mode (empty writeScope) with real LLM",
+          "performs a read-then-write flow with the real LLM",
+          "performs multi-round exploration with the real LLM",
+          "respects write scope when writing to allowed paths",
+          "rollback function returns a valid summary after successful write"
+        ],
+        "src/interactive/execution/chat.e2e.test.ts": [
+          "chat E2E: multi-turn context retention",
+          "chat E2E: tool use observable in conversation history",
+          "chat E2E: ≥2 turns with tool call, answer reaches stdout"
+        ],
+        "src/services/liteFeatureScorecard.test.ts": [
+          "lite feature scorecard covers Cursor-pattern dimensions"
+        ],
+        "src/services/parityCorpus.test.ts": [
+          "parity babel cell records offline_demo evidence for checkpoint_restore_recovery",
+          "parity babel cell records offline_demo evidence for docs_grounded_dependency_update",
+          "parity babel cell records offline_demo evidence for failing_test_repair",
+          "parity babel cell records offline_demo evidence for issue_pr_context_implementation",
+          "parity babel cell records offline_demo evidence for multi_file_refactor",
+          "parity babel cell records offline_demo evidence for read_only_subagent_review",
+          "parity babel cell records offline_demo evidence for small_bug_fix",
+          "parity babel cell records offline_demo evidence for ui_browser_inspection"
+        ],
+        "src/services/liteWorkerLoop.test.ts": [
+          "lite worker loop harness runs plan propose fix review undo offline"
+        ]
+      }
+    },
+    {
+      "id": "optional-local-rg",
+      "platforms": [
+        "linux",
+        "darwin",
+        "win32"
+      ],
+      "reasons": [
+        "Standalone rg unavailable",
+        "Standalone rg unavailable; qualified in the required native lane"
+      ],
+      "rationale": "Only local/general unit runs may omit rg; the dedicated native-rg lane rejects missing setup and skips.",
+      "suites": [
+        "unit"
+      ],
+      "files": {
+        "src/tools/ripgrep.test.ts": [
+          "ripgrep .gitignore exclusion — ignores files in .gitignore dirs",
+          "ripgrep basic match — finds known text in source files",
+          "ripgrep gitignoreRespect: false — overrides .gitignore",
+          "ripgrep max matches — respects limit and sets truncated flag",
+          "ripgrep no matches — returns empty for nonsense pattern",
+          "treats regex alternation, shell metacharacters and leading dashes as data"
+        ]
+      }
+    },
+    {
+      "id": "local-trusted-base",
+      "platforms": [
+        "linux",
+        "darwin",
+        "win32"
+      ],
+      "reasons": [
+        "Immutable trusted base unavailable for local qualification"
+      ],
+      "rationale": "Hosted qualification must supply the immutable base; only local runs may omit this migration comparison.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "localOnly": true,
+      "files": {
+        "src/services/reviewControlPlaneParity.test.ts": [
+          "immutable base preserves a supported V3 contract and rejects wrong-head and BLOCK evidence during migration"
+        ]
+      }
+    },
+    {
+      "id": "local-git-unavailable",
+      "platforms": [
+        "linux",
+        "darwin",
+        "win32"
+      ],
+      "reasons": [
+        "Git unavailable on this local host"
+      ],
+      "rationale": "Hosted qualification requires Git; an optional local host may report its absence.",
+      "suites": [
+        "unit",
+        "chat-truth",
+        "harness-runtime"
+      ],
+      "localOnly": true,
+      "files": {
+        "src/services/worktreeSafety.test.ts": [
+          "dirty target detection refuses tracked user changes"
+        ]
+      }
+    }
+  ]
+}

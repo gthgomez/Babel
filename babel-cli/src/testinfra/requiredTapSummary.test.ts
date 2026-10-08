@@ -18,13 +18,22 @@ type TapSummary = {
   tests: Array<{ skipReason?: string }>
 }
 
-function tapResult(directory: string, tap: string | null): { status: number | null; summary: TapSummary } {
+const allowedSkip = process.platform === 'win32' ? {
+  path: 'src/runners/providerEngine.test.ts',
+  name: 'ProviderEngine uses native standalone Go with shared budget and stable job session',
+  reason: 'POSIX directory fsync is required; durable Go reservations explicitly unsupported on Windows',
+} : {
+  path: 'src/ui/terminalProbe.test.ts', name: 'Windows Terminal defaults dec2026Sync to false', reason: 'Windows-specific fixture',
+}
+
+function tapResult(directory: string, tap: string | null, skips: Array<Record<string, string>> = []): { status: number | null; summary: TapSummary } {
   if (tap !== null) writeFileSync(join(directory, 'full.tap'), tap)
   writeFileSync(join(directory, 'selection.json'), JSON.stringify({
     schemaVersion: 1, suite: 'chat-truth', platform: process.platform, arch: process.arch,
     nodeVersion: process.version, packageScriptSha256: 'a'.repeat(64),
-    files: [{ path: 'src/fixture.test.ts', sha256: 'b'.repeat(64) }],
+    files: [{ path: allowedSkip.path, sha256: 'b'.repeat(64) }],
   }))
+  writeFileSync(join(directory, 'execution.json'), JSON.stringify({ schemaVersion: 1, complete: true, nodeVersion: process.version, platform: process.platform, arch: process.arch, files: [{ path: allowedSkip.path, sha256: 'b'.repeat(64) }], skips }))
   const result = spawnSync(process.execPath, [script, 'chat-truth', directory], {
     encoding: 'utf8',
   })
@@ -51,15 +60,15 @@ test('complete TAP inventories reconcile every outcome and retain skip reasons',
     'TAP version 13',
     'ok 1 - passes',
     '  ---', "  duration_ms: 1", "  type: 'test'", '  ...',
-    'ok 2 - skips # SKIP windows-only alternative',
+    `ok 2 - ${allowedSkip.name} # SKIP ${allowedSkip.reason}`,
     '  ---', "  duration_ms: 1", "  type: 'test'", '  ...',
     footer({ tests: 2, passed: 1, skipped: 1 }),
   ].join('\n')
-  const result = tapResult(directory, tap)
+  const result = tapResult(directory, tap, [{ ...allowedSkip, sha256: 'b'.repeat(64) }])
   assert.equal(result.status, 0)
   assert.equal(result.summary.status, 'complete')
   assert.equal(result.summary.testCount, 2)
-  assert.equal(result.summary.tests[1]?.skipReason, 'windows-only alternative')
+  assert.equal(result.summary.tests[1]?.skipReason, allowedSkip.reason)
 }))
 
 test('missing TAP output writes not_started evidence and exits nonzero', () => withDirectory((directory) => {
@@ -67,6 +76,36 @@ test('missing TAP output writes not_started evidence and exits nonzero', () => w
   assert.equal(result.status, 1)
   assert.equal(result.summary.status, 'not_started')
   assert.ok(result.summary.errors.includes('missing_full_tap'))
+}))
+
+for (const [label, override] of [
+  ['unknown source', { path: 'src/unregistered.test.ts' }],
+  ['different source hash', { sha256: 'c'.repeat(64) }],
+  ['unknown reason', { reason: 'optional' }],
+  ['unknown test', { name: 'new unapproved exclusion' }],
+] as const) {
+  test(`required TAP rejects a skip with ${label}`, () => withDirectory((directory) => {
+    const record = { ...allowedSkip, sha256: 'b'.repeat(64), ...override }
+    const tap = ['TAP version 13',
+      'ok 1 - passes', '  ---', "  type: 'test'", '  ...',
+      `ok 2 - ${record.name} # SKIP ${record.reason}`, '  ---', "  type: 'test'", '  ...',
+      footer({ tests: 2, passed: 1, skipped: 1 }),
+    ].join('\n')
+    const result = tapResult(directory, tap, [record])
+    assert.equal(result.status, 1)
+    assert.ok(result.summary.errors.some(error => error.startsWith('unreviewed_skip:')))
+  }))
+}
+
+test('required TAP rejects missing skip execution evidence', () => withDirectory((directory) => {
+  const tap = ['TAP version 13',
+    'ok 1 - passes', '  ---', "  type: 'test'", '  ...',
+    `ok 2 - ${allowedSkip.name} # SKIP ${allowedSkip.reason}`, '  ---', "  type: 'test'", '  ...',
+    footer({ tests: 2, passed: 1, skipped: 1 }),
+  ].join('\n')
+  const result = tapResult(directory, tap)
+  assert.equal(result.status, 1)
+  assert.ok(result.summary.errors.includes('skip_execution_inventory_mismatch'))
 }))
 
 test('a truncated run remains failed or incomplete and cannot publish complete status', () => withDirectory((directory) => {

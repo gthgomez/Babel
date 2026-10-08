@@ -37,7 +37,7 @@ export function prepareUnitShard(packageRoot, index, count) {
   const inventory = [...files].sort();
   if (count > inventory.length) throw new Error('Unit shard count would produce empty shards');
   const selected = inventory.filter((_, position) => position % count === index);
-  const args = [...tokens.slice(1, testIndex), '--test-reporter=tap', '--test-concurrency=1', '--test', ...selected];
+  const args = [...tokens.slice(1, testIndex), '--test-reporter=./scripts/required_tap_reporter.mjs', '--test-concurrency=1', '--test', ...selected];
   return { index, count, patterns, inventory, selected, args, inventoryHash: hash(inventory), selectionHash: hash(selected) };
 }
 
@@ -50,11 +50,11 @@ function main() {
   const selection = prepareUnitShard(packageRoot, Number(values['shard-index']), Number(values['shard-count']));
   const artifacts = join(packageRoot, 'artifacts', 'ci-unit');
   mkdirSync(artifacts, { recursive: true });
-  writeFileSync(join(artifacts, 'selection.json'), JSON.stringify(selection, null, 2) + '\n');
+  writeFileSync(join(artifacts, 'selection.json'), JSON.stringify({ ...selection, schemaVersion: 1, suite: 'unit', nodeVersion: process.version, platform: process.platform, arch: process.arch, packageScriptSha256: createHash('sha256').update(readFileSync(join(packageRoot, 'package.json'))).digest('hex'), files: selection.selected.map(path => ({ path, sha256: createHash('sha256').update(readFileSync(join(packageRoot, path))).digest('hex') })) }, null, 2) + '\n');
   console.log(`[ci-unit] shard ${selection.index + 1}/${selection.count}: ${selection.selected.length}/${selection.inventory.length} files; inventory ${selection.inventoryHash}`);
   if (values.list) return;
   const result = spawnSync(process.execPath, [join(packageRoot, 'node_modules/tsx/dist/cli.mjs'), ...selection.args], {
-    cwd: packageRoot, env: process.env, stdio: 'inherit', windowsHide: true,
+    cwd: packageRoot, env: { ...process.env, BABEL_TAP_EXECUTION_PATH: join(artifacts, 'execution.json') }, stdio: 'inherit', windowsHide: true,
   });
   if (result.error) throw result.error;
   if (result.signal || result.status === null) throw new Error(`Unit shard terminated without a successful exit: ${result.signal ?? 'unknown'}`);
