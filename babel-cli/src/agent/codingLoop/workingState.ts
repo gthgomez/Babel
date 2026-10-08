@@ -380,16 +380,13 @@ export function formatWorkingStateBlock(state: WorkingState): string {
     `  evidence: ${yamlList(state.evidence, 6)}`,
     `  files_of_interest: ${yamlList(state.filesOfInterest, 8)}`,
     `  last_mutation: ${state.lastMutation ? yamlScalar(`${state.lastMutation.path}`) : 'none'}`,
-    `  last_verifier: ${
-      state.lastVerifier
-        ? yamlScalar(
-            `${state.lastVerifier.identity} exit=${state.lastVerifier.exitCode} fresh=${state.lastVerifier.fresh} ${state.lastVerifier.summary}`,
-          )
-        : 'none'
-    }`,
+    `  last_verifier: ${state.lastVerifier ? yamlScalar(
+      `${state.lastVerifier.identity} exit=${state.lastVerifier.exitCode} fresh=${state.lastVerifier.fresh} ${state.lastVerifier.summary}`,
+    ) : 'none'}`,
+    ...(state.lastVerifier ? [`  last_verifier_identity: ${yamlIdentity(state.lastVerifier.identity)}`] : []),
     `  failure_surface: ${state.failureSurface ? state.failureSurface.kind : 'none'}`,
     `  failure_causality: ${state.failureSurface?.causality ?? 'unknown'}`,
-    `  baseline_failure_signature: ${state.baselineFailureSignature ?? 'none'}`,
+    `  baseline_failure_signature: ${state.baselineFailureSignature ? yamlIdentity(state.baselineFailureSignature) : 'none'}`,
     `  repair_diagnosis: ${state.repairDiagnosis ? state.repairDiagnosis.kind : 'none'}`,
     `  open_questions: ${yamlList(state.openQuestions, 4)}`,
     `  invalidated_assumptions: ${yamlList(state.invalidatedAssumptions, 4)}`,
@@ -400,8 +397,8 @@ export function formatWorkingStateBlock(state: WorkingState): string {
       .map((key) => createHash('sha256').update(key).digest('hex').slice(0, 16))
     lines.push(
       `  recovery_gate: ${state.recoveryGate.satisfied ? 'evidence_satisfied' : 'evidence_required'}`,
-      `  recovery_failure: ${yamlScalar(state.recoveryGate.failureSignature)}`,
-      `  recovery_revision: ${yamlScalar(state.recoveryGate.binding?.workspaceRevision ?? '')}`,
+      `  recovery_failure: ${yamlIdentity(state.recoveryGate.failureSignature)}`,
+      `  recovery_revision: ${yamlIdentity(state.recoveryGate.binding?.workspaceRevision ?? '')}`,
       `  recovery_evidence: ${yamlScalar(state.recoveryGate.requiredEvidence)}`,
       `  recovery_observation_keys: ${yamlList(observationIds, 4)}`,
       `  recovery_plan: ${state.recoveryGate.planAdmitted ? 'admitted' : 'required'}`,
@@ -632,6 +629,11 @@ function yamlScalar(value: string): string {
   if (!v) return '""'
   if (/[:#\n]/.test(v) || v.length > 80) return JSON.stringify(v.slice(0, 240))
   return v
+}
+
+/** Encode protocol identities without the prose display bound. */
+function yamlIdentity(value: string): string {
+  return JSON.stringify(value)
 }
 
 function yamlList(values: string[], max: number): string {

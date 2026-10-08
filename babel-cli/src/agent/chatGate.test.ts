@@ -360,11 +360,15 @@ function setTestVerifierReceipt(engine: ChatEngine, command: string, exit_code =
     verifierId: 'test-verifier',
     capturedAt: 1_700_000_000_000,
     scope: 'full_suite' as const,
+    tests_total: 1,
+    tests_skipped: 0,
     boundRevision: {
       gitCommitHash: null,
       compositeTreeHash: 'sha256:test-tree',
-      fileHashes: {},
+      fileHashes: { 'src/math.js': 'sha256:test-file' },
       capturedAt: 1_700_000_000_000,
+      scope: { kind: 'files' as const, paths: ['src/math.js'] },
+      gitBinding: 'optional' as const,
     },
   };
   (engine as any).lastVerifierReceipt = receipt;
@@ -692,10 +696,8 @@ describe('Gate helpers', () => {
     assert.ok(msg.includes('0 file writes'));
     assert.ok(msg.includes('0 sub-agent mutations'));
     assert.ok(msg.includes('read_file, grep'));
-    assert.ok(
-      msg.includes('str_replace') || msg.includes('write_file'),
-      'rejection should mention str_replace or write_file',
-    );
+    assert.ok(msg.includes('Inspect the relevant code'));
+    assert.ok(msg.includes('without manufacturing a diff'));
   });
 
   test('buildRejectionMessage with writes but no verifier', () => {
@@ -975,6 +977,8 @@ describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
       capturedAt: Date.now(),
     },
     scope: 'full_suite',
+    tests_total: 1,
+    tests_skipped: 0,
     ...overrides,
   });
 
@@ -1156,4 +1160,3 @@ describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
     assert.equal(decision, 'reject');
   });
 });
-
