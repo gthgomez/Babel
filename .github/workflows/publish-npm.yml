@@ -38,26 +38,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Check out trusted workflow source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ inputs.tag || github.ref }}
-
-      - name: Resolve release tag
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Resolve exact annotated release tag before project execution
         id: tag
         env:
           RAW_REF: ${{ inputs.tag || github.event.release.tag_name }}
-        shell: bash
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
         run: |
-          TAG="$RAW_REF"
-          # Full semver form: the error text and body promise v<semver>, and
-          # these outputs flow into later scripts via env only.
-          case "$TAG" in
-            v[0-9]*.[0-9]*.[0-9]*|v[0-9]*.[0-9]*.[0-9]*-*) ;;
-            *) echo "::error::Refusing non-release tag '$TAG' (expected v<semver>)"; exit 1 ;;
-          esac
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          Copy-Item tools/resolve-release-tag.mjs "$env:RUNNER_TEMP/resolve-release-tag.mjs"
+          node "$env:RUNNER_TEMP/resolve-release-tag.mjs" --repository "$env:GITHUB_REPOSITORY" --tag "$env:RAW_REF"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check out frozen tag commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ steps.tag.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Use Node.js 24
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -77,33 +78,78 @@ jobs:
           fi
           echo "version OK: $PKG_VERSION"
 
+      - name: Verify frozen source and package version before lifecycle code
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_OBJECT: ${{ steps.tag.outputs.tag_object_sha }}
+          RELEASE_SOURCE: ${{ steps.tag.outputs.source_sha }}
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:RELEASE_SOURCE) { throw 'Checkout does not match frozen release source' }
+          $package = Get-Content babel-cli/package.json -Raw | ConvertFrom-Json
+          if ($package.version -ne $env:RELEASE_VERSION) { throw 'Package version does not match exact tag' }
+          node "$env:RUNNER_TEMP/resolve-release-tag.mjs" --repository "$env:GITHUB_REPOSITORY" --tag "$env:RELEASE_TAG" --expect-object "$env:RELEASE_OBJECT" --expect-source "$env:RELEASE_SOURCE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Install CLI dependencies
         run: npm --prefix babel-cli ci
 
-      - name: Publish (or dry-run)
+      - name: Common validated package for dry run and publication
+        id: pack
+        shell: pwsh
+        run: |
+          npm --prefix babel-cli run package:release -- "$env:RUNNER_TEMP/npm-candidate"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        env:
+          RELEASE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+
+      - name: Revalidate tag object and source before promotion
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_OBJECT: ${{ steps.tag.outputs.tag_object_sha }}
+          RELEASE_SOURCE: ${{ steps.tag.outputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          node "$env:RUNNER_TEMP/resolve-release-tag.mjs" --repository "$env:GITHUB_REPOSITORY" --tag "$env:RELEASE_TAG" --expect-object "$env:RELEASE_OBJECT" --expect-source "$env:RELEASE_SOURCE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish the validated archive (or finish dry run)
         env:
           DRY_RUN: ${{ inputs.dry_run }}
+          ARCHIVE_NAME: ${{ steps.pack.outputs.archive }}
+          EXPECTED_DIGEST: ${{ steps.pack.outputs.sha256 }}
+          EXPECTED_SOURCE: ${{ steps.tag.outputs.source_sha }}
+          PACK_SOURCE: ${{ steps.pack.outputs.source_sha }}
+        shell: pwsh
         run: |
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "Dry run: packing only, nothing will be published."
-            npm --prefix babel-cli pack --dry-run
-          else
-            npm --prefix babel-cli publish --provenance --access public
-          fi
+          $ErrorActionPreference = 'Stop'
+          if ($env:PACK_SOURCE -ne $env:EXPECTED_SOURCE) { throw 'Package source does not match frozen tag' }
+          $archive = Join-Path "$env:RUNNER_TEMP/npm-candidate" $env:ARCHIVE_NAME
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -ne $env:EXPECTED_DIGEST) { throw 'Validated package bytes changed before promotion' }
+          if ($env:DRY_RUN -eq 'true') { Write-Output 'Common package validation complete; dry run performs no publication'; exit 0 }
+          npm publish $archive --provenance --access public --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify publication
         if: ${{ inputs.dry_run != true }}
         env:
           EXPECTED_VERSION: ${{ steps.tag.outputs.version }}
-        shell: bash
+          EXPECTED_INTEGRITY: ${{ steps.pack.outputs.integrity }}
+        shell: pwsh
         run: |
-          # Registry propagation can exceed a fixed sleep; retry bounded.
-          for attempt in 1 2 3 4 5 6; do
-            if npm view babel-harness@$EXPECTED_VERSION version dist.tarball --json; then
-              exit 0
-            fi
-            echo "attempt $attempt: not visible yet; retrying in 10s"
-            sleep 10
-          done
-          echo "::error::published version not visible on the registry after retries"
-          exit 1
+          $ErrorActionPreference = 'Stop'
+          for ($attempt = 1; $attempt -le 6; $attempt++) {
+            $observed = npm view "babel-harness@$env:EXPECTED_VERSION" version dist.integrity --json 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              $result = ($observed -join "`n") | ConvertFrom-Json
+              if ($result.version -eq $env:EXPECTED_VERSION -and $result.'dist.integrity' -eq $env:EXPECTED_INTEGRITY) { exit 0 }
+              throw 'Published version has different immutable package integrity'
+            }
+            if ($attempt -lt 6) { Start-Sleep -Seconds 10 }
+          }
+          throw 'Publication integrity unavailable after bounded retries'

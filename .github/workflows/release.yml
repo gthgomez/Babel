@@ -32,32 +32,49 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Check out trusted workflow source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ inputs.tag || github.ref }}
-          fetch-depth: 0
-
-      - name: Resolve release tag
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Resolve exact annotated release tag before project execution
         id: tag
         env:
-          # Env indirection: GitHub expressions must not interpolate into the
-          # shell script (a crafted tag input could otherwise inject script).
           RAW_REF: ${{ inputs.tag || github.ref_name }}
-        shell: bash
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
         run: |
-          TAG="$RAW_REF"
-          case "$TAG" in
-            v[0-9]*) ;;
-            *) echo "::error::Refusing non-release tag '$TAG' (expected v<semver>)"; exit 1 ;;
-          esac
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          Copy-Item tools/resolve-release-tag.mjs "$env:RUNNER_TEMP/resolve-release-tag.mjs"
+          node "$env:RUNNER_TEMP/resolve-release-tag.mjs" --repository "$env:GITHUB_REPOSITORY" --tag "$env:RAW_REF"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check out frozen tag commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ steps.tag.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Node.js 24.13.1 (pinned runtime required by the packager)
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "24.13.1"
+
+      - name: Verify frozen source and package version before lifecycle code
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_OBJECT: ${{ steps.tag.outputs.tag_object_sha }}
+          RELEASE_SOURCE: ${{ steps.tag.outputs.source_sha }}
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:RELEASE_SOURCE) { throw 'Checkout does not match frozen release source' }
+          $package = Get-Content babel-cli/package.json -Raw | ConvertFrom-Json
+          if ($package.version -ne $env:RELEASE_VERSION) { throw 'Package version does not match exact tag' }
+          node "$env:RUNNER_TEMP/resolve-release-tag.mjs" --repository "$env:GITHUB_REPOSITORY" --tag "$env:RELEASE_TAG" --expect-object "$env:RELEASE_OBJECT" --expect-source "$env:RELEASE_SOURCE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install desktop dependencies
         run: npm --prefix babel-desktop ci
@@ -88,28 +105,17 @@ jobs:
           "--electron-archive=$env:RUNNER_TEMP/electron-v44.5.1-win32-x64.zip"
           "--output=$env:RUNNER_TEMP/release-out"
 
-      - name: Verify build provenance against the tag
+      - name: Verify unique build provenance against frozen tag identity
         shell: pwsh
         env:
-          # Env indirection: no GitHub expressions interpolated into the script.
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
-          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
+          RELEASE_OBJECT: ${{ steps.tag.outputs.tag_object_sha }}
+          RELEASE_SOURCE: ${{ steps.tag.outputs.source_sha }}
+          RELEASE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $out = "$env:RUNNER_TEMP/release-out"
-          $tag = $env:RELEASE_TAG
-          $version = $env:RELEASE_VERSION
-          if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "Refusing unexpected tag '$tag'" }
-          foreach ($f in @('SHA256SUMS', 'manifest.json')) {
-            if (-not (Test-Path (Join-Path $out $f))) { throw "Missing build artifact: $f" }
-          }
-          $build = Get-ChildItem -Path $out -Recurse -Filter BUILD.json | Select-Object -First 1
-          if (-not $build) { throw "Missing BUILD.json in bundle" }
-          $meta = Get-Content $build.FullName -Raw | ConvertFrom-Json
-          if ($meta.version -ne $version) { throw "BUILD.json version $($meta.version) does not match tag $tag" }
-          if ($meta.signed -ne $false) { throw "Unexpected signed state in BUILD.json" }
-          if ($meta.platform -ne 'win32-x64') { throw "Unexpected platform $($meta.platform)" }
-          Write-Host "Provenance OK: version $version at source $($meta.sourceSha)"
+          node "$env:RUNNER_TEMP/resolve-release-tag.mjs" --repository "$env:GITHUB_REPOSITORY" --tag "$env:RELEASE_TAG" --expect-object "$env:RELEASE_OBJECT" --expect-source "$env:RELEASE_SOURCE" --build-directory "$env:RUNNER_TEMP/release-out"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Re-verify SHA256SUMS
         shell: pwsh
@@ -142,6 +148,17 @@ jobs:
           Copy-Item (Join-Path $out '*.tgz') release-dist/
           Get-ChildItem release-dist | ForEach-Object { Write-Host ("staged: " + $_.Name) }
 
+      - name: Revalidate tag object and source before promotion
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_OBJECT: ${{ steps.tag.outputs.tag_object_sha }}
+          RELEASE_SOURCE: ${{ steps.tag.outputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          node "$env:RUNNER_TEMP/resolve-release-tag.mjs" --repository "$env:GITHUB_REPOSITORY" --tag "$env:RELEASE_TAG" --expect-object "$env:RELEASE_OBJECT" --expect-source "$env:RELEASE_SOURCE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Create draft GitHub release with artifacts
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
@@ -156,11 +173,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload build evidence
-        if: always()
+        if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-build-evidence
           path: |
-            ${{ runner.temp }}/release-out/BUILD.json
-          if-no-files-found: ignore
+            ${{ runner.temp }}/release-out/release-evidence.json
+          if-no-files-found: error
           retention-days: 14
