@@ -10,6 +10,7 @@ import {
 import { prepareStreamingSubmission } from "./chatEngineStreamingPreparation.js";
 import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
+import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { realpathSync } from "node:fs";
 
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
@@ -17,9 +18,7 @@ import { endSpan } from "../telemetry/tracing.js";
 import { globalCostTracker } from "../services/costTracker.js";
 
 import {
-  detectEnvBlockedFromText,
   extractToolEnvBlockedSignal,
-  evaluateCompletionPrefersPatch,
 } from "./implementorPolicy.js";
 
 import { nativeTurnFromStream } from "./chatNativeTurn.js";
@@ -55,10 +54,6 @@ import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
 import { createHash } from "node:crypto";
 import {
   updateStallState,
-  isTextOnlyLoop,
-  buildTextOnlyLoopIntervention,
-  buildTextOnlyLoopBlockedMessage,
-  TEXT_ONLY_FORCE_BLOCKED_THRESHOLD,
 } from "./stallDetector.js";
 import type { ProgressSignal } from "./progressController.js";
 import {
@@ -67,8 +62,6 @@ import {
 } from "./progressReceipt.js";
 import {
   classifyPhase,
-  buildPhaseNudge,
-  shouldNudge,
 } from "./chatPhaseNudge.js";
 import { isConfirmedMutation } from "./mutationTools.js";
 
@@ -85,7 +78,8 @@ import {
   recordTurnToolObservability,
 } from "./chatEngineObservability.js";
 import { nativeToolUseToChatAction } from "./chatEngineSupport.js";
-import { filterReadOnlyChatTools, isReadOnlyChat } from "./chatReadOnly.js";
+import { isReadOnlyChat } from "./chatReadOnly.js";
+import { availableChatTools } from "./chatToolAvailability.js";
 
 import type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
 export type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
@@ -267,6 +261,13 @@ export class ChatEngineStreamingLoop {
       const runner = this.host.resolveRoutedRunner();
       const useNativeTools = this.host.shouldUseNativeTools(runner);
       const useTextTools = !useNativeTools && this.host.shouldUseTextTools();
+      const activeSystemPrompt = this.host.getOrBuildSystemPrompt(
+        useNativeTools ? "native" : useTextTools ? "text" : "legacy",
+      );
+      const installed = this.host.conversation[0];
+      if (installed?.role === "system" && installed.name !== "compaction_capsule") {
+        installed.content = activeSystemPrompt;
+      }
       const prompt = this.host.services.conversation.buildTurnPrompt({
         conversation: this.host.conversation,
         task: this.host.options.task,
@@ -288,9 +289,6 @@ export class ChatEngineStreamingLoop {
           },
         );
       }
-      const activeSystemPrompt = this.host.getOrBuildSystemPrompt(
-        useNativeTools ? "native" : useTextTools ? "text" : "legacy",
-      );
       const hadInstalledP11Context =
         this.host.parity.contextCheckpoint !== undefined;
       const usageScope = {
@@ -533,14 +531,16 @@ export class ChatEngineStreamingLoop {
         }
       } else if (useNativeTools) {
         const nextTools = this.host.nextTurnToolPolicy();
-        const restrictTools = nextTools.restrict && !isReadOnlyChat();
-        const toolDefs = filterReadOnlyChatTools(
+        const restrictTools = nextTools.restrict && !isReadOnlyChat() && !isReadOnlyInspection;
+        const toolDefs = availableChatTools(
           restrictTools
             ? this.host.services.tools.buildRestrictedDefinitions(
                 nextTools.mode === "full" ? "act_or_verify" : nextTools.mode,
               )
             : this.host.services.tools.buildDefinitions(),
-        );
+          { operation: effectiveOperation,
+          requiredVerifiers: isReadOnlyInspection ? this.host.getResolvedRequiredVerifiers() : [],
+          hostFallbackAllowed: this.host.isolationBrokerFlags().hostFallbackAllowed });
         const nativeActions: ChatToolAction[] = [];
         const nativeToolCallIds: string[] = [];
         const seenToolCallIds = new Set<string>();
@@ -872,7 +872,7 @@ export class ChatEngineStreamingLoop {
         try {
           for await (const chunk of runner.executeRawStream(
             prompt,
-            undefined,
+            activeSystemPrompt,
             this.host.abortController.signal,
             this.host.providerRetryCallbacks({
               deliveryMode: "text",
@@ -1165,10 +1165,10 @@ export class ChatEngineStreamingLoop {
         }
         const streamLoopResult = this.host.repetitionDetector.detect();
         if (streamLoopResult.loop) {
-          this.host.conversation.push({
-            role: "system",
-            content: `[SYSTEM] Detected repetition loop: ${streamLoopResult.message} Please proceed to the next step or use [TOOL:finish] if done.`,
-          });
+          // Target repetition is diagnostic, not proof that new evidence stopped.
+          // The receipt-backed arbiter below owns model-visible recovery advice.
+          recordPolicyEvent(this.host.policyEventLog, this.host._turnIndex,
+            "progress_policy", `repetition_observed: ${streamLoopResult.message ?? "Repeated tool targets"}`);
           this.host.repetitionDetector.reset();
         }
 
@@ -1281,7 +1281,9 @@ export class ChatEngineStreamingLoop {
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
         }
 
-        // P2: Update stall detector and inject phase nudge if needed
+        // Record tool progress and the compatibility routing phase. Instructional
+        // phase nudges are redundant with completion/progress recovery and can
+        // wrongly pressure productive investigation toward an unnecessary edit.
         const turnCallsStr = this.host.toolCallLog.slice(
           this.host._turnToolCallLogStart,
         );
@@ -1306,27 +1308,6 @@ export class ChatEngineStreamingLoop {
           );
         }
         this.host._lastPhase = streamPhase;
-        if (shouldNudge(this.host._lastPhase) && !isReadOnlyInspection) {
-          const hintsStr = turnCallsStr
-            .filter(
-              (e) =>
-                e.tool === "read_file" ||
-                e.tool === "read_range" ||
-                isConfirmedMutation({
-                  tool: e.tool,
-                  error: e.error,
-                  effectStatus: e.effect_status,
-                  mutationPaths: e.mutation_paths,
-                }),
-            )
-            .map((e) => e.target)
-            .filter(Boolean);
-          this.host.conversation.push({
-            role: "user",
-            content: buildPhaseNudge(this.host._lastPhase, hintsStr),
-          });
-        }
-
         // R9: Tamper-aware escalation — if verifier files were modified this
         // turn, accelerate intervention regardless of write-stall count.
         const tamperEscalation = this.host.applyTamperEscalation();
@@ -1373,43 +1354,6 @@ export class ChatEngineStreamingLoop {
             text: `[Tamper escalation: ${this.host.tamperCount} violations]`,
           };
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-        }
-
-        // R2: Escalating stall intervention — kill routed through parity arbiter
-        const stallIntervention =
-          this.host.checkStallIntervention(isReadOnlyInspection);
-        if (stallIntervention && stallIntervention.level !== "kill") {
-          recordPolicyEvent(
-            this.host.policyEventLog,
-            this.host._turnIndex,
-            "stall_intervention",
-            `level=${stallIntervention.level}`,
-          );
-          // I4: never latch a mutate-only tool restriction onto a read-only
-          // operation; the read-only stall path concludes or synthesizes.
-          if (
-            stallIntervention.level === "restrict_tools" &&
-            !isReadOnlyInspection
-          ) {
-            this.host.restrictToolsNextTurn = true;
-          }
-          this.host.conversation.push({
-            role: "user",
-            content: stallIntervention.message,
-          });
-          yield {
-            type: "thought",
-            text: `[Stall intervention: ${stallIntervention.level}]`,
-          };
-          if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-        }
-        if (stallIntervention?.level === "kill") {
-          recordPolicyEvent(
-            this.host.policyEventLog,
-            this.host._turnIndex,
-            "stall_intervention",
-            "level=kill",
-          );
         }
 
         // Record progress + durable tool results (contentHash for re-read fidelity).
@@ -1486,6 +1430,19 @@ export class ChatEngineStreamingLoop {
         this.host._streamNativeToolCallIds = [];
         this.host._activeToolBatchId = null;
 
+        // A repeated path can still yield new ranges or changed content. Only
+        // consider legacy stall escalation after the durable receipt sees no delta.
+        const stallIntervention = cycleReceipt?.hasDelta
+          ? null
+          : this.host.checkStallIntervention(isReadOnlyInspection);
+        if (stallIntervention) {
+          recordPolicyEvent(this.host.policyEventLog, this.host._turnIndex,
+            "stall_intervention", `level=${stallIntervention.level}`);
+          if (stallIntervention.level === "restrict_tools" && !isReadOnlyInspection) {
+            this.host.restrictToolsNextTurn = true;
+          }
+        }
+
         // D02: score the W3 progress/recovery controller from the same evidence
         // set as the durable receipt (confirmed mutation + receipt read-novelty)
         // instead of an empty mutation-only list. A read-only investigation with
@@ -1544,6 +1501,7 @@ export class ChatEngineStreamingLoop {
           .all()
           .some((e) => e.kind === "zero_write_shadow");
         const zeroWriteDecision = evaluateZeroWriteWithShadow({
+          evidenceBasedProgress: true,
           executeIntent: effectiveExecutePolicy,
           completedTurns: turn + 1,
           hasAnyWrites: this.host.hasAnyWrites(),
@@ -1759,10 +1717,7 @@ export class ChatEngineStreamingLoop {
           return;
         }
         if (arb.policyMessage) {
-          this.host.conversation.push({
-            role: "user",
-            content: arb.policyMessage,
-          });
+          recordChatHarnessFeedback(this.host, arb.policyMessage);
           yield { type: "thought", text: `[Policy: ${arb.policySource}]` };
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
         }
@@ -1854,117 +1809,9 @@ export class ChatEngineStreamingLoop {
           return;
         }
 
-        // R11: Text-only loop guard — detect when the model produces only
-        // text/completion responses without any tool calls. This must run
-        // BEFORE the implementor prefers-patch refusal below: the refusal
-        // continues unconditionally on every zero-write execute completion,
-        // which would starve this bounded escalation (force_status at 3,
-        // BLOCKED at 5) and re-query pure-text loops until maxTurns.
-        this.host.stallState = {
-          ...this.host.stallState,
-          textOnlyTurns: this.host.stallState.textOnlyTurns + 1,
-        };
-        if (isTextOnlyLoop(this.host.stallState)) {
-          const hasAnyWrites = this.host.hasAnyWrites();
-          if (
-            !hasAnyWrites &&
-            this.host.stallState.textOnlyTurns >=
-              TEXT_ONLY_FORCE_BLOCKED_THRESHOLD
-          ) {
-            // 5+ text-only turns with zero writes — force BLOCKED.
-            _turnSpan.setAttribute("babel.chat.text_only_blocked", "true");
-            endSpan(_turnSpan, SpanStatusCode.OK);
-            _turnSpan = null;
-            const textBlockedMsg = buildTextOnlyLoopBlockedMessage(
-              this.host.stallState,
-            );
-            this.host.conversation.push({ role: "assistant", content: answer });
-            this.host.conversation.push({
-              role: "assistant",
-              content: textBlockedMsg,
-            });
-            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-            yield this.host.streamDone(textBlockedMsg, {
-              blockedReport: {
-                schema_version: 1 as const,
-                status: "BLOCKED" as const,
-                // R0/W7: harness-origin stall/recovery terminal. Typed so
-                // computeTerminalOutcome cannot fabricate external blame.
-                reason_code: "recovery_exhausted" as const,
-                cause_class: "harness" as const,
-                reason:
-                  "Agent produced only text responses without tool calls or file changes",
-                missing: "Unable to determine — no tool calls were made",
-                checked: [
-                  {
-                    action: "chat_turn",
-                    target: "text_only_loop",
-                    finding: `${this.host.stallState.textOnlyTurns} consecutive turns with zero tool calls and zero writes`,
-                  },
-                ],
-              },
-              ...(this.host.verifierTampered
-                ? { verifierTampered: true as const }
-                : {}),
-            });
-            return;
-          }
-          // At threshold 3: inject force_status and continue the loop.
-          this.host.conversation.push({ role: "assistant", content: answer });
-          this.host.conversation.push({
-            role: "user",
-            content: buildTextOnlyLoopIntervention(this.host.stallState),
-          });
-          yield {
-            type: "thought",
-            text: `[Text-only loop: ${this.host.stallState.textOnlyTurns} turns, escalating]`,
-          };
-          if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          _turnSpan.setAttribute(
-            "babel.chat.text_only_turn",
-            this.host.stallState.textOnlyTurns,
-          );
-          endSpan(_turnSpan, SpanStatusCode.OK);
-          _turnSpan = null;
-          continue;
-        }
-
-        // Implementor I-03: refuse silent complete on execute with zero writes
-        // (allow env_blocked answers through). Import errors after writes are not host env.
-        const completionHasWrites = this.host.hasAnyWrites();
-        const envDetectOpts = { hasAnyWrites: completionHasWrites };
-        const envBlocked =
-          (!isReadOnlyChat() &&
-            detectEnvBlockedFromText(answer, envDetectOpts)) ||
-          this.host.toolCallLog.some(
-            (t) => extractToolEnvBlockedSignal(t, envDetectOpts) !== null,
-          );
-        const completionPref = evaluateCompletionPrefersPatch({
-          executeIntent: effectiveExecutePolicy,
-          hasAnyWrites: completionHasWrites,
-          envBlocked,
-        });
-        if (!completionPref.allowComplete && completionPref.message) {
-          this.host.conversation.push({ role: "assistant", content: answer });
-          this.host.conversation.push({
-            role: "user",
-            content: completionPref.message,
-          });
-          yield {
-            type: "thought",
-            text: "[Implementor: completion prefers patch — continuing]",
-          };
-          if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          this.host.policyEventLog.record({
-            at_turn: this.host._turnIndex,
-            kind: "progress_policy",
-            detail: "completion_prefers_patch",
-          });
-          endSpan(_turnSpan, SpanStatusCode.OK);
-          _turnSpan = null;
-          continue;
-        }
-
+        // Unsupported final answers use the same bounded completion recovery
+        // as missing verifier evidence. Successful inspection may finish with
+        // no change; a parallel write-count/text-only escalation is unnecessary.
         const disposition = yield* settleStreamingCompletion({
           host: this.host,
           answer,

@@ -12,8 +12,50 @@ import {
   resolveRestrictedToolMode,
   resolveZeroWriteHardStopTurns,
 } from './chatZeroWritePolicy.js';
+import { ProgressController } from './progressController.js';
 
 describe('chatZeroWritePolicy', () => {
+  test('evidence-based Chat progress does not pressure productive investigation by read/write count', () => {
+    const state = {
+      turnsWithoutWrite: 99,
+      consecutiveReadOnlyTools: 99,
+      cumulativeExplorationTools: 999,
+      restrictToolsNextTurn: false,
+      consecutiveNonMutatingShells: 99,
+      toolsWithoutWrite: 999,
+      phase: 'investigate' as const,
+    };
+    const pushed: string[] = [];
+    const result = applyExploreFuses({
+      executeIntent: true,
+      taskClass: 'governance',
+      hasAnyWrites: false,
+      state,
+      pushUser: (message) => pushed.push(message),
+      deferMessagesToArbiter: true,
+      evidenceBasedProgress: true,
+    });
+    assert.equal(result.forceMutateMessage, null);
+    assert.equal(result.readThrashMessage, null);
+    assert.equal(result.explorationFuseMessage, null);
+    assert.equal(result.shellSoftMessage, null);
+    assert.equal(result.investigateBudgetMessage, null);
+    assert.equal(result.investigateHardCapTerminal, null);
+    assert.equal(state.restrictToolsNextTurn, false);
+    assert.deepEqual(pushed, []);
+  });
+
+  test('evidence-based progress leaves no-progress recovery bounded by ProgressController', () => {
+    const controller = new ProgressController();
+    const first = controller.scoreTurn([], false, 0);
+    assert.equal(first.intervention, 'none');
+    let result = first;
+    for (let turn = 1; turn < 12; turn++) {
+      result = controller.scoreTurn([], false, 0);
+    }
+    assert.equal(result.intervention, 'terminal_blocked');
+  });
+
   test('resolveZeroWriteHardStopTurns uses task-class defaults', () => {
     assert.equal(resolveZeroWriteHardStopTurns('general_swe', {}), 0);
     assert.equal(resolveZeroWriteHardStopTurns('investigate', {}), 0);

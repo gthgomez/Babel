@@ -65,6 +65,7 @@ import {
 } from "./chatEngineChildExecution.js";
 import { executeTool, renderGitDiff, type ToolContext } from "../localTools.js";
 import { classifyShellCapability } from "./progressController.js";
+import { executeChatLspAction } from "./chatEngineLspAction.js";
 import { assessMutationEffect } from "./mutationTools.js";
 import {
   pinProjectRootEnv,
@@ -73,7 +74,6 @@ import {
   formatResultDetail,
   countPatchStats,
   primaryPatchPath,
-  executeLspChatToolAction,
 } from "./chatEngineSupport.js";
 import {
   isFatalWindowsProcessExit,
@@ -85,6 +85,7 @@ import {
   shouldReuseCachedVerifierReceipt,
 } from "./chatEngineVerifierAdapter.js";
 import {
+  admitProjectContentRead,
   deniesReadOnlyChatAction,
   deniesReadOnlyTaskAction,
   isReadOnlyChat,
@@ -585,42 +586,11 @@ export class ChatEngineActionExecutor {
 
       // Gap-1: LSP tool — read-only code intelligence via localTools executor.
       if (action.type === "lsp") {
-        const lsp = await executeLspChatToolAction({
-          action,
-          toolContext: {
-            ...toolContext,
-            onBeforeDispatch: () =>
-              this.host.persistToolStartedAtExecutorDispatch(action, meta),
-          },
-          executeTool,
+        return await executeChatLspAction({
+          host: this.host, action, toolContext, callbacks, meta,
+          ownerGeneration, tool, target, toolId,
+          ...(acceptedOperation !== undefined ? { acceptedOperation } : {}),
         });
-        // R0-8: an LSP call is a suspension point; a superseded submission must
-        // not append its result to the current task's tool log.
-        if (!this.host.isSubmissionCurrent(ownerGeneration)) {
-          return this.host.settleStaleActionResult(
-            tool,
-            target,
-            meta.index,
-            "parent submission superseded before the action settled",
-          );
-        }
-        this.host.toolCallLog.push({
-          tool,
-          target,
-          detail: lsp.detail,
-          index: meta.index,
-          ...(lsp.exit_code !== undefined ? { exit_code: lsp.exit_code } : {}),
-          ...(lsp.stdout !== undefined ? { stdout: lsp.stdout } : {}),
-          ...(lsp.stderr !== undefined ? { stderr: lsp.stderr } : {}),
-          ...(lsp.failed ? { error: "failed" as const } : {}),
-        });
-        callbacks?.onToolComplete?.(
-          toolId,
-          lsp.detail,
-          lsp.failed ? lsp.stderr || "failed" : undefined,
-          lsp.exit_code ?? (lsp.failed ? 1 : 0),
-        );
-        return { index: meta.index, observation: lsp.observation };
       }
 
       if (action.type === "finish") {
@@ -637,7 +607,32 @@ export class ChatEngineActionExecutor {
 
       // ── B2: Read dedupe cache — skip read_file if file unchanged ─────
       // Path-normalized keys so absolute/relative variants share one slot.
+      // Admission runs before the cache hash so a denied path is never opened.
       let fileReadCacheHash: string | undefined;
+      if (action.type === "read_file" || action.type === "read_range") {
+        const requestedPath =
+          action.type === "read_file" ? action.path : action.file_path;
+        const admitted = admitProjectContentRead(
+          this.host.options.projectRoot,
+          requestedPath,
+        );
+        if (!admitted.ok) {
+          const detail = `${admitted.code}: ${admitted.message}`;
+          this.host.toolCallLog.push({
+            tool,
+            target,
+            detail: "denied",
+            error: admitted.code,
+            index: meta.index,
+            exit_code: 1,
+          });
+          callbacks?.onToolComplete?.(toolId, "denied", admitted.code, 1);
+          return {
+            index: meta.index,
+            observation: `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n${detail}\n\`\`\``,
+          };
+        }
+      }
       if (action.type === "read_file") {
         if (isReadOnlyChat())
           resolveChatRangePath(this.host.options.projectRoot, action.path);
@@ -1261,6 +1256,8 @@ export class ChatEngineActionExecutor {
             index: meta.index,
             exit_code: cachedVerifier.receipt.exit_code,
             stdout: cachedVerifier.receipt.summary,
+            // Cache reuse executes no process and changes no workspace bytes.
+            effect_status: 'confirmed_no_change',
           });
           callbacks?.onToolComplete?.(
             toolId,
@@ -1287,11 +1284,8 @@ export class ChatEngineActionExecutor {
       });
       const result: PolicyGatedExecutionResult = await executeActionWithPolicy(
         agentAction,
-        // workspace_write = mutations auto-execute without user approval.
-        // Network-touching commands (curl, npm install) are still hard-denied.
-        // Future evolutions:
-        //   B — new 'auto' preset that allows everything (no approval, no denial)
-        //   C — BABEL_ALLOW_NETWORK_COMMANDS=1 env flag for graduated autonomy
+        // Task/profile scope only narrows capability; executor authority,
+        // isolation, network and approval decisions still govern dispatch.
         this.host.executionProfile === "plan" ||
           process.env["BABEL_READ_ONLY"] === "true" ||
           process.env["BABEL_EXECUTION_PROFILE"] === "read_only_audit"
@@ -1654,6 +1648,7 @@ export class ChatEngineActionExecutor {
               projectRoot: this.host.options.projectRoot,
               command: target,
               exitCode: lastResult.exit_code,
+              simulated: lastResult.simulated === true,
               summary: formatVerifierReceiptSummary({
                 verifierId: target,
                 command: target,
@@ -1661,10 +1656,14 @@ export class ChatEngineActionExecutor {
                 stdout: lastResult.stdout,
                 stderr: lastResult.stderr,
               }),
+              ...(lastResult.stdout !== undefined ? { stdout: lastResult.stdout } : {}),
+              ...(lastResult.stderr !== undefined ? { stderr: lastResult.stderr } : {}),
               mutationPaths: mutationPathsFromSessionEvents(
                 this.host.parity.sessionEvents.events,
               ),
               allowRepositoryScopeForRedRecovery: lastResult.exit_code !== 0,
+              allowRepositoryScopeForGreenNoChange:
+                lastResult.exit_code === 0 && this.host.writeCount === 0,
               sessionEvents: this.host.parity.sessionEvents,
               turnId: String(this.host.parity.turnId ?? this.host._turnIndex),
               ledger: this.host.executedVerifierLedger,
@@ -1800,7 +1799,11 @@ export class ChatEngineActionExecutor {
             );
             this.host.persistRecoveryWorkingState();
             this.host.lastVerifierFailed = true;
-          } else if (lastResult.exit_code === 0 && !confirmedShellMutation) {
+          } else if (
+            lastResult.exit_code === 0 &&
+            !confirmedShellMutation &&
+            lastResult.simulated !== true
+          ) {
             invalidateVerifierLedger(
               this.host as never,
               "non-verifier shell command executed",
@@ -1809,7 +1812,7 @@ export class ChatEngineActionExecutor {
 
           // A command can mutate files and then fail. Prefer the executor's
           // changed-path receipt; without one, invalidate conservatively.
-          if (!result.policyBlocked) {
+          if (!result.policyBlocked && lastResult.simulated !== true) {
             if (result.mutationPaths && result.mutationPaths.length > 0) {
               for (const changedPath of result.mutationPaths) {
                 const changedKey = this.host.readCacheKey(changedPath);

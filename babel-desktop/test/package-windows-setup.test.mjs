@@ -1,9 +1,62 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validatePayloadBuild, parseSha256Sums, renderNsis } from '../scripts/package-windows-setup.mjs';
+import { validatePayloadBuild, parseSha256Sums, renderNsis, compileNsis } from '../scripts/package-windows-setup.mjs';
 
 const validBuild = {platform: 'win32-x64', signed: false, version: '0.1.1', sourceSha: 'a'.repeat(40)};
 const B = String.fromCharCode(92); // path backslash, kept out of string escapes
+
+test('archive compiler stays available through artifact recording, then is removed', () => {
+  const events = [];
+  const result = compileNsis(
+    {makensis: 'archive/makensis.exe', script: 'setup.nsi', useArchive: true, nsisExtract: 'archive'},
+    (exe, args) => events.push(['compile', exe, args]),
+    () => { events.push(['record']); return 'sha'; },
+    (path, options) => events.push(['cleanup', path, options]),
+  );
+  assert.equal(result, 'sha');
+  assert.deepEqual(events.map(event => event[0]), ['compile', 'record', 'cleanup']);
+  assert.deepEqual(events[2], ['cleanup', 'archive', {recursive: true, force: true}]);
+});
+
+test('external compiler is not removed after artifact recording', () => {
+  const events = [];
+  compileNsis(
+    {makensis: 'system/makensis.exe', script: 'setup.nsi', useArchive: false},
+    () => events.push('compile'),
+    () => events.push('record'),
+    () => events.push('cleanup'),
+  );
+  assert.deepEqual(events, ['compile', 'record']);
+});
+
+test('archive cleanup runs when compilation fails', () => {
+  const events = [];
+  assert.throws(() => compileNsis(
+    {makensis: 'archive/makensis.exe', script: 'setup.nsi', useArchive: true, nsisExtract: 'archive'},
+    () => { throw new Error('compile failed'); },
+    () => assert.fail('failed compilation cannot record artifacts'),
+    path => events.push(path),
+  ), /compile failed/);
+  assert.deepEqual(events, ['archive']);
+});
+
+test('cleanup failure does not mask the original compile error', () => {
+  assert.throws(() => compileNsis(
+    {makensis: 'archive/makensis.exe', script: 'setup.nsi', useArchive: true, nsisExtract: 'archive'},
+    () => { throw new Error('compile failed'); },
+    () => assert.fail('unreachable'),
+    () => { throw new Error('EBUSY: resource busy or locked'); },
+  ), /compile failed/);
+});
+
+test('cleanup failure with no primary error still fails the build', () => {
+  assert.throws(() => compileNsis(
+    {makensis: 'archive/makensis.exe', script: 'setup.nsi', useArchive: true, nsisExtract: 'archive'},
+    () => {},
+    () => 'sha',
+    () => { throw new Error('EBUSY: resource busy or locked'); },
+  ), /EBUSY/);
+});
 
 test('payload gate accepts stable and preview versions on unsigned win32-x64', () => {
   assert.equal(validatePayloadBuild({...validBuild, version: '0.1.1'}), '0.1.1');

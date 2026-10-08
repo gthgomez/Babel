@@ -18,9 +18,12 @@ import {
 } from './completionEvidence.js';
 import { EvidenceGraph } from './evidenceGraph.js';
 import { independentVerifierProofErrors } from './independentVerifier.js';
+import { discoverVerifierInputClosure } from './revisionBoundReceipt.js';
+import { analyzeVerifierIdentity } from '../services/verifierIdentity.js';
 import {
   compareRevisions,
   RevisionManager,
+  type GitBindingModeV1,
   type RevisionBoundReceipt,
   type WorkspaceRevision,
 } from './revisionBoundReceipt.js';
@@ -54,6 +57,8 @@ export type BoundChatVerifierReceipt = {
   tests_passed?: number;
   tests_failed?: number;
   tests_skipped?: number;
+  /** Present only when capture established a relevant-input closure. */
+  inputClosure?: { mode: "bound"; paths: string[]; digests: Record<string, string>; reuseEligible?: false } | { mode: "unsupported"; reason: string };
 };
 
 /** Collect unique mutation paths from SessionEventV1 mutation_batch events. */
@@ -78,6 +83,7 @@ export async function bindChatVerifierReceipt(input: {
   summary: string;
   mutationPaths: string[];
   scopeKind?: 'files' | 'repository';
+  gitBinding?: GitBindingModeV1;
   structured?: {
     verifierId: string;
     authoritySource: VerifierAuthoritySource;
@@ -88,9 +94,18 @@ export async function bindChatVerifierReceipt(input: {
   const boundRevision = await RevisionManager.computeRevision(
     input.projectRoot,
     input.mutationPaths,
-    { scope_kind: input.scopeKind ?? 'files' },
+    {
+      scope_kind: input.scopeKind ?? 'files',
+      ...(input.gitBinding ? { git_binding: input.gitBinding } : {}),
+    },
   );
   const now = Date.now();
+  const identity = analyzeVerifierIdentity(input.command);
+  const executionScope = identity?.scope === 'full'
+    ? 'full_suite' as const
+    : identity?.scope === 'targeted'
+      ? 'targeted' as const
+      : undefined;
   return {
     command: input.command,
     exit_code: input.exit_code,
@@ -99,6 +114,7 @@ export async function bindChatVerifierReceipt(input: {
     stale: false,
     receiptId: `receipt-${now}`,
     capturedAt: now,
+    ...(executionScope ? { scope: executionScope } : {}),
     authority: input.structured !== undefined && input.structured !== null,
     boundRevision,
     ...(input.structured
@@ -153,17 +169,44 @@ export function evaluateChatVerifierReceiptCurrencySync(
   receipt: BoundChatVerifierReceipt | null | undefined,
 ): { stale: boolean; reason?: string } | null {
   if (!receipt) return null;
+  if (receipt.inputClosure?.mode === 'unsupported') {
+    return { stale: true, reason: receipt.inputClosure.reason || 'Verifier input closure is unsupported' };
+  }
+  if (receipt.inputClosure?.mode === 'bound') {
+    const freshClosure = discoverVerifierInputClosure(projectRoot, receipt.inputClosure.reuseEligible === false);
+    if (freshClosure.mode !== 'bound') {
+      return { stale: true, reason: freshClosure.reason };
+    }
+    if (freshClosure.paths.join('\n') !== receipt.inputClosure.paths.join('\n')) {
+      return { stale: true, reason: 'Verifier input closure changed' };
+    }
+    const boundDigests = receipt.inputClosure.digests;
+    if (!boundDigests) {
+      return { stale: true, reason: 'Verifier input closure has no content digests' };
+    }
+    for (const rel of freshClosure.paths) {
+      if (freshClosure.digests[rel] !== boundDigests[rel]) {
+        return { stale: true, reason: `Verifier input changed: ${rel}` };
+      }
+    }
+  }
   const bound = toRevisionBoundReceipt(receipt);
   const revision = receipt.boundRevision;
   if (!bound || !revision || !revision.scope || !revision.gitBinding) return null;
+  if (revision.scope.kind === 'repository' && revision.gitBinding !== 'required') {
+    return { stale: true, reason: 'Repository content revision is unavailable' };
+  }
   const paths = revision.scope.kind === 'files' ? revision.scope.paths : [];
   let fresh: WorkspaceRevision;
   try {
     fresh = RevisionManager.computeRevisionSync(projectRoot, paths, {
       scope_kind: revision.scope.kind,
-      git_binding: revision.gitBinding,
+      git_binding: revision.scope.kind === 'repository' ? 'required' : revision.gitBinding,
     });
   } catch {
+    if (revision.scope.kind === 'repository') {
+      return { stale: true, reason: 'Repository content revision is unavailable' };
+    }
     return null;
   }
   return compareRevisions(revision, fresh);
@@ -220,7 +263,24 @@ export function toExecutorVerifierReceipt(
   }
 
   const revision = chatReceipt.boundRevision;
+  const rawRevision = revision as unknown as Record<string, unknown> | undefined;
+  const rawScope = rawRevision?.['scope'];
+  if (
+    rawScope && typeof rawScope === 'object' && !Array.isArray(rawScope) &&
+    (rawScope as Record<string, unknown>)['kind'] === 'repository' &&
+    (rawRevision?.['gitCommitHash'] == null || rawRevision?.['gitBinding'] !== 'required')
+  ) {
+    errors.push('Repository-scoped verifier evidence requires a content-bound Git tree');
+  }
   const boundRevision = validateWorkspaceRevisionIdentity(revision, errors);
+  const counts: Pick<ExecutorVerifierReceipt, 'tests_total' | 'tests_passed' | 'tests_failed' | 'tests_skipped'> = {};
+  for (const key of ['tests_total', 'tests_passed', 'tests_failed', 'tests_skipped'] as const) {
+    const count = chatReceipt[key];
+    if (count === undefined) continue;
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+      errors.push(`Invalid ${key}: expected a nonnegative safe integer`);
+    } else counts[key] = count;
+  }
 
   if (errors.length > 0) {
     return { ok: false, errors };
@@ -240,6 +300,7 @@ export function toExecutorVerifierReceipt(
       stale: chatReceipt.stale === true,
       ...(chatReceipt.staleReason ? { staleReason: chatReceipt.staleReason } : {}),
       ...(chatReceipt.scope ? { scope: chatReceipt.scope } : {}),
+      ...counts,
     },
   };
 }
@@ -315,7 +376,10 @@ export function refreshChatVerifierReceiptStalenessSync(
   if (!receipt || receipt.stale) return receipt;
   const bound = toRevisionBoundReceipt(receipt);
   if (!bound) return receipt;
-  const result = RevisionManager.isReceiptStaleSync(bound, projectRoot);
+  const result = evaluateChatVerifierReceiptCurrencySync(projectRoot, receipt) ?? {
+    stale: true,
+    reason: 'Receipt has no evaluable revision scope or Git binding',
+  };
   if (result.stale) {
     receipt.stale = true;
     if (result.reason) receipt.staleReason = result.reason;

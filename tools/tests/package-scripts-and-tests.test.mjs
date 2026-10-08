@@ -813,8 +813,12 @@ test('every discovered source test belongs to canonical unit lane or an explicit
 
   assert.ok(unitInventory.size > 0, 'Canonical unit inventory must not be empty');
   assert.equal(unitInventory.size, unitShard.inventory.length, 'Canonical unit inventory must be unique');
-  for (const path of ['src/agent/desktopApproval.test.ts', 'src/cli/chatStreamNdjson.test.ts', 'src/interactive/execution/chatResumeHeadless.test.ts']) {
-    assert.ok(unitInventory.has(path), `Desktop integration test must be covered by the canonical unit lane: ${path}`);
+  for (const path of ['src/agent/desktopApproval.test.ts', 'src/cli/chatStreamNdjson.test.ts', 'src/interactive/execution/chatResumeHeadless.test.ts',
+    'src/agent/chatEngineVerifierAdapter.noChange.test.ts', 'src/agent/chatHarnessFeedback.test.ts',
+    'src/agent/chatLspPolicy.test.ts', 'src/agent/chatOperationExplicit.test.ts',
+    'src/agent/chatProductiveInvestigation.test.ts', 'src/agent/codingLoopRepair.test.ts',
+    'src/agent/codingLoopSimplification.test.ts', 'src/services/lsp/manager.test.ts']) {
+    assert.ok(unitInventory.has(path), `Regression test must be covered by the canonical unit lane: ${path}`);
   }
 
   const totalSpecializedFiles = Object.values(SPECIALIZED_LANES).reduce((acc, l) => acc + l.files.length, 0);

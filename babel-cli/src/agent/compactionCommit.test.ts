@@ -32,11 +32,16 @@ import {
 import {
   createThreadEventLog,
   rebuildProviderMessagesFromEvents,
+  recordAssistantMessage,
   recordUserMessage,
   startTurn,
   parseThreadEventLog,
   serializeThreadEventLog,
 } from './threadEventLog.js';
+import {
+  mapProviderMessagesToWire,
+  validateProviderMessageProtocol,
+} from '../runners/providerMessages.js';
 import { createSessionEventLog, parseSessionEventLog, recordUserSubmitted, serializeSessionEventLog } from './sessionEvents.js';
 import { captureApprovedObservation, readObservationPage, resolveObservation } from '../evidence/observationStore.js';
 import {
@@ -837,5 +842,212 @@ describe('H1 compaction lifecycle result', () => {
     assert.equal(result.beforeMessages, 5);
     assert.equal(result.afterMessages, 5);
     assert.notDeepEqual(host.conversation, prior);
+  });
+
+  it('heuristic compaction commits a capsule and shrinks the serialized request', async () => {
+    const task = 'DURABLE_TASK_keep_parser_constraint';
+    const threadLog = createThreadEventLog();
+    const sessionLog = createSessionEventLog();
+    const turnId = startTurn(threadLog, {
+      task, model: 'test-model', provider: 'deepseek',
+      projectRoot: tmpdir(), policyPreset: 'chat',
+    });
+    const dropped = `DROPPED_HISTORY_BLOCK ${'q'.repeat(3000)}`;
+    const conversation: ChatMessage[] = [{ role: 'system', content: 'current policy' }];
+    for (let index = 0; index < 8; index++) {
+      const user = `drop-user-${index} ${dropped}`;
+      const assistant = `drop-assistant-${index} ${dropped}`;
+      recordUserMessage(threadLog, turnId, user);
+      recordAssistantMessage(threadLog, turnId, assistant);
+      conversation.push({ role: 'user', content: user }, { role: 'assistant', content: assistant });
+    }
+    conversation.push(
+      { role: 'user', content: 'tail user stays' },
+      { role: 'assistant', content: 'tail assistant stays' },
+    );
+    recordUserMessage(threadLog, turnId, 'tail user stays');
+    recordAssistantMessage(threadLog, turnId, 'tail assistant stays');
+    const beforeRequest = JSON.stringify(mapProviderMessagesToWire(
+      rebuildProviderMessagesFromEvents(threadLog),
+      '',
+    ));
+    const host: ChatEngineCompactionHost = {
+      conversation,
+      compactionManager: {
+        compactWithResult: async () => {
+          throw new Error('llm unavailable');
+        },
+      },
+      options: { task, model: 'test-model' },
+      limits: { maxEstimatedTokens: 10 },
+      abortSignal: new AbortController().signal,
+      writeCount: 0, turnIndex: 2, toolCallLog: [],
+      progress: { receipts: [], consecutiveNoProgress: 0 },
+      threadLog, sessionLog, turnId,
+      shouldUseTextTools: () => false,
+      compactHeuristic: () => {
+        host.conversation = [
+          conversation[0]!,
+          { role: 'user', content: 'tail user stays' },
+          { role: 'assistant', content: 'tail assistant stays' },
+        ];
+      },
+      checkpoint: async () => undefined,
+      reserveTokens: 0, textToolsReserve: 0, forceCompaction: true,
+      resolveModel: () => 'test-model',
+      shouldCompactByTokens: () => true,
+      estimateTokens: (messages) => messages.reduce((sum, message) => sum + message.content.length, 0),
+    };
+
+    const result = await runChatEngineCompaction(host);
+    const rebuilt = rebuildProviderMessagesFromEvents(threadLog);
+    const afterRequest = JSON.stringify(mapProviderMessagesToWire(rebuilt, ''));
+
+    assert.equal(result?.mode, 'heuristic');
+    assert.equal(result?.changed, true);
+    assert.ok(threadLog.events.some((event) => event.kind === 'compaction_capsule'));
+    assert.deepEqual(validateProviderMessageProtocol(rebuilt), []);
+    assert.ok(afterRequest.length < beforeRequest.length);
+    assert.equal(afterRequest.includes(task), true);
+    assert.equal(afterRequest.includes('tail user stays'), true);
+    assert.equal(afterRequest.includes('DROPPED_HISTORY_BLOCK'), false);
+    assert.equal(beforeRequest.includes('DROPPED_HISTORY_BLOCK'), true);
+  });
+
+  for (const race of ['owner supersession', 'failed persistence', 'same-owner replacement']) {
+    const failure = race === 'failed persistence';
+    it(`heuristic rollback retains a newer submission during ${race}`, async () => {
+      const threadLog = createThreadEventLog();
+      const sessionLog = createSessionEventLog();
+      const turnId = startTurn(threadLog, {
+        task: 'old task', model: 'test-model', provider: 'deepseek',
+        projectRoot: tmpdir(), policyPreset: 'chat',
+      });
+      const conversation: ChatMessage[] = [{ role: 'system', content: 'current policy' }];
+      for (let index = 0; index < 8; index++) {
+        const user = `old user ${index} ${'x'.repeat(3000)}`;
+        const assistant = `old assistant ${index} ${'x'.repeat(3000)}`;
+        recordUserMessage(threadLog, turnId, user);
+        recordAssistantMessage(threadLog, turnId, assistant);
+        conversation.push({ role: 'user', content: user }, { role: 'assistant', content: assistant });
+      }
+      let current = true;
+      let checkpoints = 0;
+      let newThreadId = '';
+      let newSessionId = '';
+      const replacement: ChatMessage[] = [{ role: 'user', content: 'NEW MESSAGE' }];
+      const host: ChatEngineCompactionHost = {
+        conversation, options: { task: 'old task', model: 'test-model' },
+        limits: { maxEstimatedTokens: 10 }, abortSignal: new AbortController().signal,
+        writeCount: 0, turnIndex: 2, toolCallLog: [], progress: { receipts: [], consecutiveNoProgress: 0 },
+        threadLog, sessionLog, turnId, shouldUseTextTools: () => false,
+        compactHeuristic: () => { host.conversation = [conversation[0]!, ...conversation.slice(-2)]; },
+        checkpoint: async () => {
+          if (checkpoints++ !== 0) return;
+          const next = startTurn(threadLog, {
+            task: 'NEW TASK', model: 'test-model', provider: 'deepseek',
+            projectRoot: tmpdir(), policyPreset: 'chat',
+          });
+          recordUserMessage(threadLog, next, 'NEW MESSAGE');
+          newThreadId = threadLog.events.at(-1)!.event_id;
+          newSessionId = recordUserSubmitted(sessionLog, { turn_id: next, task: 'NEW TASK' }).event_id;
+          sessionLog.flushedThroughSeq = sessionLog.events.at(-1)!.seq;
+          host.conversation = replacement;
+          current = race === 'same-owner replacement';
+          if (failure) throw new Error('synthetic checkpoint failure');
+        },
+        reserveTokens: 0, textToolsReserve: 0, forceCompaction: true,
+        resolveModel: () => 'test-model', shouldCompactByTokens: () => true,
+        estimateTokens: (messages) => messages.reduce((sum, message) => sum + message.content.length, 0),
+        isOwnerCurrent: () => current,
+      };
+      if (failure) await assert.rejects(runChatEngineCompaction(host), /checkpoint failure/);
+      else assert.equal(await runChatEngineCompaction(host), null);
+      assert.ok(threadLog.events.some(event => event.event_id === newThreadId));
+      assert.ok(sessionLog.events.some(event => event.event_id === newSessionId));
+      assert.equal(host.conversation, replacement, 'the new owner retains its exact conversation');
+      assert.equal(threadLog.events.some(event => event.kind === 'compaction_capsule'), false);
+      assert.equal(sessionLog.events.some(event => event.kind.startsWith('compaction_')), false);
+      assert.equal(sessionLog.flushedThroughSeq, sessionLog.events.length - 1);
+      const restoredThread = parseThreadEventLog(serializeThreadEventLog(threadLog));
+      parseSessionEventLog(serializeSessionEventLog(sessionLog));
+      assert.ok(JSON.stringify(rebuildProviderMessagesFromEvents(restoredThread)).includes('NEW MESSAGE'));
+    });
+  }
+
+  it('nonshrinking heuristic compaction is not reported as compacted', async () => {
+    const task = 'DURABLE_TASK_keep_parser_constraint';
+    const threadLog = createThreadEventLog();
+    const sessionLog = createSessionEventLog();
+    const turnId = startTurn(threadLog, {
+      task, model: 'test-model', provider: 'deepseek',
+      projectRoot: tmpdir(), policyPreset: 'chat',
+    });
+    const original: ChatMessage[] = [
+      { role: 'system', content: 'current policy' },
+      { role: 'user', content: 'short' },
+    ];
+    const eventCount = threadLog.events.length;
+    const host: ChatEngineCompactionHost = {
+      conversation: original.map((message) => ({ ...message })),
+      options: { task, model: 'test-model' },
+      limits: { maxEstimatedTokens: 10 },
+      abortSignal: new AbortController().signal,
+      writeCount: 0, turnIndex: 1, toolCallLog: [],
+      progress: { receipts: [], consecutiveNoProgress: 0 },
+      threadLog, sessionLog, turnId,
+      shouldUseTextTools: () => false,
+      compactHeuristic: () => {
+        host.conversation = [
+          ...host.conversation,
+          { role: 'user', content: 'GROW'.repeat(5000) },
+        ];
+      },
+      checkpoint: async () => undefined,
+      reserveTokens: 0, textToolsReserve: 0, forceCompaction: true,
+      resolveModel: () => 'test-model',
+      shouldCompactByTokens: () => true,
+      estimateTokens: (messages) => messages.reduce((sum, message) => sum + message.content.length, 0),
+    };
+
+    const result = await runChatEngineCompaction(host);
+    const request = JSON.stringify(mapProviderMessagesToWire(
+      rebuildProviderMessagesFromEvents(threadLog),
+      '',
+    ));
+
+    assert.equal(result, null);
+    assert.equal(threadLog.events.some((event) => event.kind === 'compaction_capsule'), false);
+    assert.equal(threadLog.events.length, eventCount);
+    assert.deepEqual(host.conversation, original);
+    assert.equal(request.includes('GROWGROW'), false);
+    assert.equal(request.includes(task), true);
+  });
+
+  it('disabled compaction is not reported as compacted', async () => {
+    const threadLog = createThreadEventLog();
+    const sessionLog = createSessionEventLog();
+    const host: ChatEngineCompactionHost = {
+      conversation: [{ role: 'user', content: 'still small' }],
+      options: { task: 'DURABLE_TASK_keep_parser_constraint', model: 'test-model' },
+      limits: { maxEstimatedTokens: 100_000 },
+      abortSignal: new AbortController().signal,
+      writeCount: 0, turnIndex: 1, toolCallLog: [],
+      progress: { receipts: [], consecutiveNoProgress: 0 },
+      threadLog, sessionLog, turnId: null,
+      shouldUseTextTools: () => false,
+      compactHeuristic: () => { throw new Error('disabled compaction must not run'); },
+      checkpoint: async () => undefined,
+      reserveTokens: 0, textToolsReserve: 0,
+      resolveModel: () => 'test-model',
+      shouldCompactByTokens: () => false,
+      estimateTokens: () => 1,
+    };
+
+    const result = await runChatEngineCompaction(host);
+
+    assert.equal(result, null);
+    assert.equal(threadLog.events.length, 0);
+    assert.deepEqual(host.conversation, [{ role: 'user', content: 'still small' }]);
   });
 });

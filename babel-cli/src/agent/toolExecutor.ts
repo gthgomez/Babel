@@ -42,6 +42,7 @@ import {
   type ToolResult,
 } from '../localTools.js';
 import { resolveExecutorDryRun } from '../config/dryRun.js';
+import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js';
 import { isPathInside } from '../services/targetResolver.js';
 import type { AgentAction } from './actions.js';
 import { modelToolNameToExecutor } from './canonicalToolMapping.js';
@@ -131,12 +132,43 @@ function resetBlocks(runId: string): void {
   sessionBlocks.delete(runId);
 }
 
+/**
+ * Runs whose default-dry-run governed mutation was confirmed. A later
+ * authoritative verifier in the same run may execute without flipping the
+ * process-wide dry-run flag. Explicit dry-run and shadow capture never enter.
+ */
+const liveCertifiedRunIds = new Set<string>();
+const liveCertificationEpochs = new Map<string, symbol>();
+
+function certificationEpochForRun(runId: string): symbol {
+  let epoch = liveCertificationEpochs.get(runId);
+  if (!epoch) {
+    epoch = Symbol(runId);
+    liveCertificationEpochs.set(runId, epoch);
+  }
+  return epoch;
+}
+
 export function resetCircuitBreaker(): void {
   sessionBlocks.clear();
+  liveCertifiedRunIds.clear();
+  liveCertificationEpochs.clear();
 }
 
 export function resetCircuitBreakerForRun(runId: string): void {
   sessionBlocks.delete(runId);
+}
+
+/**
+ * Retire the same-task live-verifier handoff when a fresh task starts or the
+ * owning run is disposed. Kept separate from breaker reset because successful
+ * tool calls reset that counter between a governed mutation and its verifier.
+ *
+ * @param runId - engine/run identity whose task certification is no longer live
+ */
+export function retireLiveCertificationForRun(runId: string): void {
+  liveCertifiedRunIds.delete(runId);
+  liveCertificationEpochs.delete(runId);
 }
 
 export function getCircuitBreakerState(runId?: string): {
@@ -658,6 +690,11 @@ function resolveInvocationLiveDefault(): boolean {
   return resolveExecutorDryRun().source === 'default';
 }
 
+function isCertificationCommand(action: AgentAction): boolean {
+  if (action.type !== 'run_command' && action.type !== 'test_run') return false;
+  return isAuthoritativeVerifierCommand(action.command);
+}
+
 export async function executeActionWithPolicy(
   action: AgentAction,
   preset: PermissionPreset,
@@ -718,6 +755,10 @@ export async function executeActionWithPolicy(
     lockContext?: FileLockContext | undefined;
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
+  // Capture task identity before any asynchronous policy/approval/executor
+  // suspension. A completion from a retired task cannot hand certification
+  // to a later task that reuses the same engine run id.
+  const certificationEpoch = certificationEpochForRun(context.runId);
   const executor = deps.executor ?? defaultToolExecutor;
   // V2 authority: the default decision path consults the PDP when a lease is
   // active (env or explicit override). Additive — no lease → legacy behavior.
@@ -1183,9 +1224,16 @@ export async function executeActionWithPolicy(
     // process "live", and concurrent sessions with different decisions stay
     // isolated. An operator's explicit choice (persisted flags, BABEL_DRY_RUN,
     // BABEL_LIVE) and shadow capture runs are unaffected.
+    const defaultLive = resolveInvocationLiveDefault();
+    // The live override stays on this dispatch. After a confirmed governed
+    // mutation, a later authoritative verifier in the same run is also live;
+    // every other command, and any explicit dry-run or shadow session, is not.
     const invocationLive =
-      effectClass === 'reconcilable_mutation' &&
-      resolveInvocationLiveDefault();
+      (effectClass === 'reconcilable_mutation' && defaultLive) ||
+      (defaultLive &&
+        liveCertificationEpochs.get(context.runId) === certificationEpoch &&
+        liveCertifiedRunIds.has(context.runId) &&
+        isCertificationCommand(action));
     const executionContext: ToolContext = {
       ...context,
       sessionId: context.sessionId ?? context.runId,
@@ -1445,6 +1493,14 @@ export async function executeActionWithPolicy(
       }
     }
 
+    if (
+      invocationLive &&
+      effectClass === 'reconcilable_mutation' &&
+      context.runId &&
+      liveCertificationEpochs.get(context.runId) === certificationEpoch
+    ) {
+      liveCertifiedRunIds.add(context.runId);
+    }
     return {
       ...execution,
       policyDecision,
