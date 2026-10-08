@@ -39,11 +39,10 @@ aligned with the workflow when its job-selection rules change.
 
 ## Pre-push hook
 
-Hooks are optional and do not run unless installed. Install them with
-`pwsh tools/install-hooks.ps1` (or configure the equivalent repository-local
-setting with `git config core.hooksPath .githooks`). If PowerShell is absent,
-the hook scripts skip successfully. The pre-push hook runs the
-AGENTS.md-required content-policy check, regenerates and verifies the policy
-integrity manifest when host-protected files changed (failing if the manifest
-needs committing), and runs gitleaks when available locally. CI remains the
-authoritative gate.
+Install with `pwsh tools/install-hooks.ps1` (or
+`git config core.hooksPath .githooks`). The pre-push hook requires both Node.js
+and PowerShell and fails closed if either is unavailable. It validates the
+exact committed candidates being pushed against the content policy and
+policy-integrity manifest, then runs gitleaks when available. It does not
+regenerate tracked files. CI remains the authoritative gate; hooks are
+convenience.

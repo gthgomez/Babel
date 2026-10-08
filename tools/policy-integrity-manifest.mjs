@@ -5,7 +5,8 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const rootOption = process.argv.indexOf("--repo-root");
+const repoRoot = rootOption < 0 ? resolve(dirname(fileURLToPath(import.meta.url)), "..") : resolve(process.argv[rootOption + 1]);
 const manifestPath = join(repoRoot, "POLICY_MANIFEST.json");
 // Explicit snapshot reconciled with the promoted host-protected prefixes.
 // New protected files require a reviewed registration and regeneration.
@@ -66,6 +67,7 @@ const coveredPaths = [
   "babel-cli/src/services/candidateCollector.test.ts",
   "babel-cli/src/services/candidateCollector.ts",
   "babel-cli/src/services/candidateCollectorCli.ts",
+  "babel-cli/src/services/candidateCollectorCli.test.ts",
   "babel-cli/src/services/codexHarnessReview.test.ts",
   "babel-cli/src/services/codexHarnessReview.ts",
   "babel-cli/src/services/controllerMediatedHarnessReview.test.ts",
