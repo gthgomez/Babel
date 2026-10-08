@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
-import { attachWindowsReviewJobObject, resolveWindowsReviewHost } from './reviewProcessContainment.js'
+import {
+  attachWindowsReviewJobObject,
+  resolveWindowsReviewHost,
+  WINDOWS_JOB_COMPILE_TIMEOUT_MS,
+  WINDOWS_JOB_HELPER_TIMEOUT_MS,
+} from './reviewProcessContainment.js'
 
 test('Windows review host uses only the standard absolute system runtime', () => {
   const probes: string[] = []
@@ -89,6 +94,7 @@ test('abrupt controller death independently contains the real worker descendant 
   const root = mkdtempSync(join(tmpdir(), 'babel-review-controller-death-'))
   const state = join(root, 'worker.json')
   const containmentState = join(root, 'containment.json')
+  const ownershipState = join(root, 'ownership.json')
   const gate = join(root, 'start.gate')
   const marker = join(root, 'late-write.txt')
   const grandchild = join(root, 'grandchild.cjs')
@@ -121,6 +127,7 @@ const worker = spawn(process.execPath, [${JSON.stringify(worker)}], {
   windowsHide: true,
 });
 if (!worker.pid) throw new Error('fixture worker pid missing');
+writeFileSync(${JSON.stringify(ownershipState)}, JSON.stringify({ workerPid: worker.pid }));
 const containment = await attachReviewProcessContainment(worker.pid, process.pid);
 writeFileSync(${JSON.stringify(containmentState)}, JSON.stringify({ kind: containment.kind, error: containment.error }));
 writeFileSync(${JSON.stringify(gate)}, 'ready');
@@ -136,7 +143,8 @@ setInterval(() => {}, 100);
   let workerPid = 0
   let grandchildPid = 0
   try {
-    const containment = await waitForJson(containmentState)
+    // Allow the bounded native setup plus the controller loader startup.
+    const containment = await waitForJson(containmentState, WINDOWS_JOB_COMPILE_TIMEOUT_MS + WINDOWS_JOB_HELPER_TIMEOUT_MS + 5_000)
     assert.equal(
       containment['kind'],
       process.platform === 'win32' ? 'windows_job_object' : 'posix_process_group',
@@ -154,6 +162,14 @@ setInterval(() => {}, 100);
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_700))
     assert.equal(existsSync(marker), false, 'contained descendant must not perform a delayed write')
   } finally {
+    // Own the gated worker even when native setup fails before descendants start.
+    if (existsSync(ownershipState)) {
+      const current = JSON.parse(readFileSync(ownershipState, 'utf8')) as Record<string, unknown>
+      workerPid ||= Number(current['workerPid'])
+    }
+    // Stop the live controller tree before its helper can lose parent ownership.
+    forceCleanup(controller.pid ?? 0)
+    await closed
     // Recover tracked descendants if containment failed before the state read.
     if (existsSync(state)) {
       const current = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>
@@ -162,10 +178,9 @@ setInterval(() => {}, 100);
     }
     forceCleanup(workerPid)
     forceCleanup(grandchildPid)
-    if (isAlive(controller.pid ?? 0)) controller.kill('SIGKILL')
-    await closed
     if (workerPid > 0) assert.ok(await waitUntilDead(workerPid), 'worker must exit before fixture deletion')
     if (grandchildPid > 0) assert.ok(await waitUntilDead(grandchildPid), 'descendant must exit before fixture deletion')
-    rmSync(root, { recursive: true, force: true })
+    // Windows may retain the helper/compiler cwd briefly after process exit.
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   }
 })

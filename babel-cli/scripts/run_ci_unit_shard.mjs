@@ -30,7 +30,9 @@ export function prepareUnitShard(packageRoot, index, count) {
     const matches = globSync(pattern, { cwd: packageRoot });
     if (!matches.length) throw new Error(`Canonical pattern matched no test files: ${pattern}`);
     for (const file of matches) {
-      if (!statSync(join(packageRoot, file)).isFile()) throw new Error(`Canonical test pattern matched a non-file: ${file}`);
+      const stat = statSync(join(packageRoot, file));
+      if (!stat.isFile()) throw new Error(`Canonical test pattern matched a non-file: ${file}`);
+      if (stat.size === 0) throw new Error(`Canonical test pattern matched an empty test file: ${file}`);
       files.add(file.split(sep).join('/'));
     }
   }
