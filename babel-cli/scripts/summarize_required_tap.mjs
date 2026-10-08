@@ -87,6 +87,11 @@ export function parseRequiredTapInventory(tap, suite) {
       ...(todoReason !== null ? { todoReason } : {}),
     }
     const record = { depth, kind, sequence: Number(outcome[3]), scopeKey, outcome: outcome[2], result }
+    if (kind === 'suite') {
+      if (skipReason !== null) errors.push('unreviewed_suite_skip')
+      if (todoReason !== null) errors.push('todo_tests')
+      if (outcome[2] === 'not ok' && todoReason === null) errors.push('failed_suite')
+    }
     outcomes.push(record)
     if (kind === 'test') tests.push(result)
   }
@@ -145,7 +150,7 @@ export function parseRequiredTapInventory(tap, suite) {
   if (tests.some(item => item.skipReason === 'unspecified')) errors.push('undocumented_skip')
 
   const failed = tests.filter((item) => item.result === 'failed').length
-  const hasExecutionFailure = failed > 0 || (footer.fail ?? 0) > 0 || (footer.cancelled ?? 0) > 0 || (footer.todo ?? 0) > 0
+  const hasExecutionFailure = errors.includes('failed_suite') || errors.includes('todo_tests') || failed > 0 || (footer.fail ?? 0) > 0 || (footer.cancelled ?? 0) > 0 || (footer.todo ?? 0) > 0
   const hasTerminal = rootPlans.length === 1 && Object.keys(footer).length === FOOTER_FIELDS.length
   const status = hasExecutionFailure || errors.includes('duplicate_test_id') || errors.includes('invalid_tap_sequence') ? 'failed' :
     errors.length > 0 || !hasTerminal ? 'incomplete' : 'complete'
