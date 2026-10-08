@@ -235,7 +235,7 @@ describe('executor tool registry', () => {
       "process.stdin.on('data', (chunk) => {",
       "  input += chunk.toString();",
       "  if (!initialized && input.includes('\\\"id\\\":0')) { initialized = true; send({ jsonrpc: '2.0', id: 0, result: {} }); }",
-      "  if (!listed && input.includes('\\\"id\\\":1')) { listed = true; send({ jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }] } }); }",
+      "  if (!listed && input.includes('\\\"id\\\":1')) { listed = true; send({ jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'lookup', annotations: { readOnlyHint: true }, inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }] } }); }",
       "  if (!called && input.includes('\\\"id\\\":2')) { called = true; send({ jsonrpc: '2.0', id: 2, result: { content: [{ type: 'text', text: 'safe result', leaked: 'MCP_REGISTRY_NESTED_SENTINEL' }] } }); }",
       "});",
     ].join('\n');
@@ -248,7 +248,7 @@ describe('executor tool registry', () => {
     try {
       writeFileSync(serverPath, fixture, 'utf8');
       const result = await createExecutorToolRegistry([definition]).dispatch(
-        { tool: 'mcp_request', server: 'fixture', query: 'find it' },
+        { tool: 'mcp_request', server: 'fixture', query: 'lookup' },
         context,
       );
 

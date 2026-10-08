@@ -101,6 +101,22 @@ describe('policyShadow (P0-E)', () => {
     assert.equal(second.events.length, 0, 'must not re-log every turn after threshold');
   });
 
+  test('evidence-based Chat progress suppresses zero-write interventions even for enforced class policy', () => {
+    const decision = evaluateZeroWriteWithShadow({
+      executeIntent: true,
+      completedTurns: 50,
+      hasAnyWrites: false,
+      taskClass: 'governance',
+      env: {},
+      evidenceBasedProgress: true,
+    });
+    assert.equal(decision.mode, 'enforce', 'the policy mode is reported, not globally disabled');
+    assert.equal(decision.liveWouldFire, true, 'legacy scorecard signal remains available');
+    assert.equal(decision.terminalMessage, null);
+    assert.equal(decision.arbiterMessage, null);
+    assert.deepEqual(decision.events, []);
+  });
+
   test('general_swe with writes: no shadow kill', () => {
     const decision = evaluateZeroWriteWithShadow({
       executeIntent: true,

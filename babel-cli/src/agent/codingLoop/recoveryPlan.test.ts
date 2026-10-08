@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { applyWorkingStateEvent, createWorkingState, recordControllerRecoveryStrategy, restoreWorkingStateSnapshot } from './workingState.js'
+import { applyWorkingStateEvent, createWorkingState, formatWorkingStateBlock, recordControllerRecoveryStrategy, restoreWorkingStateSnapshot } from './workingState.js'
 import { actualRecoveryEdit, admitRecoveryPlan, recoveryObservationId } from './recoveryPlan.js'
 import { createSessionEventLog, parseSessionEventLog, recordWorkingStateSnapshot, serializeSessionEventLog } from '../sessionEvents.js'
 import { ChatToolActionSchema, buildChatToolDefinitions } from '../chatToolDefinitions.js'
@@ -75,6 +75,64 @@ test('controller admits only a scoped plan backed by the observed candidate', ()
   ]) {
     const denied = admitRecoveryPlan(state, { ...proposal(state), ...altered } as ReturnType<typeof proposal>, changedEdit, binding)
     assert.equal(denied.admitted, false, JSON.stringify(altered))
+  }
+})
+
+test('rendered recovery identities round-trip without truncation while prose stays bounded', () => {
+  const longFailure = `failure-${'f'.repeat(280)}`
+  const longRevision = `revision-${'r'.repeat(280)}`
+  const longVerifier = `verifier-${'v'.repeat(280)}`
+  const longBinding = { ...binding, workspaceRevision: longRevision }
+  let state = applyWorkingStateEvent(createWorkingState('x'.repeat(400)), {
+    type: 'verifier', identity: longVerifier, exitCode: 1, summary: 's'.repeat(400),
+  })
+  state = applyWorkingStateEvent(state, {
+    type: 'recovery_gate', failureSignature: longFailure, requiredEvidence: 'inspect parser',
+    failingTargets: ['src/parser.ts'], binding: longBinding, mutationFingerprint: 'failed-exact',
+  })
+  state = applyWorkingStateEvent(state, {
+    type: 'add_evidence', evidence: 'read_file:src/parser.ts#call-1', discriminating: true,
+    provenance: {
+      tool: 'read_file', target: 'src/parser.ts', failureSignature: longFailure,
+      binding: longBinding, observationDigest: 'parser-content',
+    },
+  })
+
+  const rendered = formatWorkingStateBlock(state)
+  const field = (name: string) => {
+    const line = rendered.split('\n').find((value) => value.startsWith(`  ${name}: `))
+    assert.ok(line, `missing ${name}`)
+    return JSON.parse(line.slice(name.length + 4)) as string
+  }
+  const parsedFailure = field('recovery_failure')
+  const parsedRevision = field('recovery_revision')
+  const parsedVerifier = field('last_verifier_identity')
+  assert.equal(parsedFailure, longFailure)
+  assert.equal(parsedRevision, longRevision)
+  assert.equal(parsedVerifier, longVerifier)
+  assert.ok(rendered.includes(JSON.stringify('x'.repeat(240))))
+  assert.ok(!rendered.includes('x'.repeat(241)))
+
+  const legacyState = applyWorkingStateEvent(createWorkingState(), {
+    type: 'verifier', identity: 'npm test', exitCode: 1, summary: 'parser red',
+  })
+  const legacyVerifier = formatWorkingStateBlock(legacyState).split('\n')
+    .find((line) => line.startsWith('  last_verifier: '))
+  assert.ok(legacyVerifier)
+  assert.equal(legacyVerifier.slice('  last_verifier: '.length).split(' exit=')[0], 'npm test')
+
+  const actual = { ...changedEdit }
+  const proposalFromRendered = {
+    ...proposal(state), failureSignature: parsedFailure, workspaceRevision: parsedRevision,
+    criterionId: parsedVerifier,
+  }
+  assert.equal(admitRecoveryPlan(state, proposalFromRendered, actual, longBinding).admitted, true)
+  for (const altered of [
+    { ...proposalFromRendered, failureSignature: `${parsedFailure}x` },
+    { ...proposalFromRendered, workspaceRevision: `${parsedRevision}x` },
+    { ...proposalFromRendered, criterionId: `${parsedVerifier}x` },
+  ]) {
+    assert.equal(admitRecoveryPlan(state, altered, actual, longBinding).admitted, false)
   }
 })
 

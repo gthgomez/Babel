@@ -18,7 +18,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChatEngine, reconcileStreamedAnswer, type ChatEvent } from './chatEngine.js';
-import { TEXT_ONLY_FORCE_BLOCKED_THRESHOLD } from './stallDetector.js';
+import { MAX_COMPLETION_RECOVERY_RETRIES } from './completionGatePolicy.js';
 import type { RunnerCallbacks } from '../runners/base.js';
 
 const roots: string[] = [];
@@ -139,7 +139,7 @@ describe('trivial text-only turns terminate normally', () => {
     assert.equal(done.outcome, 'NO_CHANGE_REQUIRED');
   });
 
-  test('execute-intent pure-text loops terminate at the bounded threshold', async () => {
+  test('unsupported final answers terminate through bounded completion recovery', async () => {
     const state = { calls: 0 };
     const engine = new ChatEngine({
       // Mutation-shaped fixture: the subject under test is the execute-intent
@@ -158,16 +158,18 @@ describe('trivial text-only turns terminate normally', () => {
 
     assert.equal(events.some((e) => e.type === 'failed'), false);
     assert.ok(
-      state.calls <= TEXT_ONLY_FORCE_BLOCKED_THRESHOLD,
-      `expected bounded rounds (<= ${TEXT_ONLY_FORCE_BLOCKED_THRESHOLD}), got ${state.calls}`,
+      state.calls <= (MAX_COMPLETION_RECOVERY_RETRIES + 1),
+      `expected bounded rounds (<= ${(MAX_COMPLETION_RECOVERY_RETRIES + 1)}), got ${state.calls}`,
     );
-    assert.equal(state.calls, TEXT_ONLY_FORCE_BLOCKED_THRESHOLD);
+    assert.equal(state.calls, (MAX_COMPLETION_RECOVERY_RETRIES + 1));
     const done = events.filter((e) => e.type === 'done').at(-1) as
       | Extract<ChatEvent, { type: 'done' }>
       | undefined;
     assert.ok(done, 'expected a terminal done event');
-    assert.ok(done.blockedReport, 'expected BLOCKED report from text-only loop guard');
+    assert.ok(done.blockedReport, 'expected typed BLOCKED report from completion recovery');
     assert.equal(done.blockedReport?.status, 'BLOCKED');
+    assert.equal(done.blockedReport?.reason_code, 'recovery_exhausted');
+    assert.equal(done.blockedReport?.cause_class, 'harness');
   });
 });
 
@@ -504,7 +506,7 @@ describe('non-streaming path preserves generation boundaries', () => {
     const { ConversationalRenderer } = await import('../ui/waterfall.js');
     const { runChatEngineOnce } = await import('../interactive/execution/chatCore.js');
     const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = ((chunk: unknown) => true) as typeof process.stdout.write;
+    // Preserve the test runner's stdout channel while exercising the renderer.
     try {
       const state = { calls: 0 };
       const wsRoot = makeRoot();
@@ -563,7 +565,7 @@ describe('non-streaming path preserves generation boundaries', () => {
 
         // R0-5: a missing file is a repairable failure, not blocking authority, so
         // the model's BLOCKED prose is ignored. The execute-intent run keeps going
-        // and ends at its bounded harness text-only-loop terminal, with a typed
+        // and ends at its bounded completion recovery terminal, with a typed
         // harness report. Exact values, not a tolerant disjunction.
         assert.equal(result.status, 'blocked', `unexpected status ${result.status}`);
         assert.equal(result.outcome, 'BLOCKED_POLICY');
@@ -572,8 +574,9 @@ describe('non-streaming path preserves generation boundaries', () => {
         assert.ok(result.blockedReport, 'the harness terminal carries a structured report');
         assert.equal(result.blockedReport?.reason_code, 'recovery_exhausted');
         assert.equal(result.blockedReport?.cause_class, 'harness');
-        // 2 rounds (text, tool) + 5 text-only rounds to the harness threshold.
-        assert.equal(state.calls, 7, `expected 7 provider rounds, got ${state.calls}`);
+        // One failed read plus four unsupported completions. Failed inspection
+        // does not erase a prior completion strike.
+        assert.equal(state.calls, 2 + MAX_COMPLETION_RECOVERY_RETRIES);
 
         // Real lifecycle first: stop() flushes the active generation-B cell.
         renderer.stop();
@@ -586,8 +589,6 @@ describe('non-streaming path preserves generation boundaries', () => {
           [
             'assistant_message',
             'tool_call',
-            'assistant_message',
-            'assistant_message',
             'assistant_message',
             'assistant_message',
             'assistant_message',

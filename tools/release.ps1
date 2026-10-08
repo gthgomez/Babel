@@ -131,14 +131,13 @@ if ($changelogText -match $pattern) {
 }
 
 # --- 4. Manual tagging instructions (policy: tagging stays manual) ------------
-$sha = (& git -C $Root rev-parse HEAD).Trim()
 Write-Host ""
 Write-Host "Release preparation complete. Review the working-tree changes, then commit:"
 Write-Host "  git add babel-cli/package.json babel-desktop/package.json $(if ($CatalogVersion -ge 0) { 'prompt_catalog.yaml ' })CHANGELOG.md"
 Write-Host "  git commit -m `"chore(release): v$Version`""
 Write-Host ""
 Write-Host "Then tag (annotated only, per docs/guides/RELEASE.md) and push:"
-Write-Host "  git tag -a v$Version -m `"Babel v$Version`" $sha"
+Write-Host "  git tag -a v$Version -m `"Babel v$Version`" HEAD"
 Write-Host "  git push origin v$Version"
 Write-Host ""
 Write-Host "The v* tag push triggers .github/workflows/release.yml, which builds the"

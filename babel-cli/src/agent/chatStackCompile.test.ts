@@ -2,7 +2,7 @@
  * U1.4: Slim interactive stack — budget-aware compilation tests.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,8 +73,8 @@ describe("compileChatStack budget behavior", () => {
       includeDomainSkill: false,
     });
 
-    assert.ok(stack.system_context.length <= 5_000 + 50); // small tolerance for trim marker
-    assert.ok(stack.selected_entries.length >= 3); // identity + safety + verifier at minimum
+    assert.ok(stack.system_context.length <= 5_000);
+    assert.ok(stack.selected_entries.length >= 1); // required identity
   });
 
   it("interactive budget (12_000) produces system_context ≤ 12_000", () => {
@@ -141,56 +141,75 @@ describe("compileChatStack budget behavior", () => {
     assert.equal(stack.estimated_tokens, expected);
   });
 
-  it("packs optional sections without dropping the mandatory safety core", () => {
-    const stack = compileChatStack({
-      projectRoot: process.cwd(),
-      task: "fix a cli shell bug",
-      promptBudgetChars: 2_000,
-    });
-    assert.ok(stack.system_context.length <= 2_000);
-    assert.match(stack.system_context, /# Chat safety adapter/);
-    assert.match(stack.system_context, /# Provider \/ model adapter/);
-    assert.match(stack.system_context, /# Task verifier guidance/);
-    assert.equal(stack.delivered_content_digest.length, 64);
-    assert.equal(stack.context_error, undefined);
-    assert.ok(stack.content_disposition.some((item) => item.status === "omitted" || item.status === "truncated"));
+  it("packs required policy before optional context and reports source disposition", () => {
+    const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-packing-"));
+    try {
+      const stack = compileChatStack({
+        projectRoot: root,
+        task: "fix a cli shell bug",
+        promptBudgetChars: 128,
+      });
+      assert.ok(stack.system_context.length <= 128);
+      assert.match(stack.system_context, /You are Babel/);
+      assert.equal(stack.delivered_content_digest.length, 64);
+      assert.equal(stack.context_error, undefined);
+      assert.equal(stack.content_disposition[0]?.status, "included");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  it("packs decisive project context before generic identity at a tight budget", () => {
+  it("keeps AGENTS.md ahead of engineering and user context at a tight budget", () => {
     const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-priority-"));
+    const previous = process.env["BABEL_USER_CONTEXT"];
+    const contextPath = join(root, "user-context.md");
+    process.env["BABEL_USER_CONTEXT"] = contextPath;
     try {
-      writeFileSync(join(root, "AGENTS.md"), "generic identity\n" + "x".repeat(8_000), "utf8");
-      writeFileSync(join(root, "PROJECT_CONTEXT.md"), "PROJECT_REQUIREMENT: preserve the public API\n", "utf8");
+      writeFileSync(join(root, "AGENTS.md"), "generic identity\n" + "x".repeat(1_800), "utf8");
+      writeFileSync(join(root, "ENGINEERING.md"), "ENGINEERING_REQUIREMENT: " + "e".repeat(400), "utf8");
+      writeFileSync(join(root, "CLAUDE.md"), "CLAUDE_SHOULD_NOT_LOAD\n", "utf8");
+      writeFileSync(join(root, "PROJECT_CONTEXT.md"), "PROJECT_CONTEXT_SHOULD_NOT_LOAD\n", "utf8");
+      writeFileSync(contextPath, "USER_CONTEXT_SHOULD_WAIT\n", "utf8");
       const stack = compileChatStack({
         projectRoot: root,
         promptBudgetChars: 2_000,
         includeDomainSkill: false,
       });
 
-      assert.match(stack.system_context, /PROJECT_REQUIREMENT: preserve the public API/);
+      assert.match(stack.system_context, /generic identity/);
+      assert.doesNotMatch(stack.system_context, /CLAUDE_SHOULD_NOT_LOAD/);
+      assert.doesNotMatch(stack.system_context, /PROJECT_CONTEXT_SHOULD_NOT_LOAD/);
       assert.equal(
-        stack.content_disposition.find((item) => item.id === "project:context")?.status,
+        stack.content_disposition.find((item) => item.id === "project:engineering")?.status,
+        "omitted",
+      );
+      assert.equal(
+        stack.content_disposition.find((item) => item.id === "user:context")?.status,
         "included",
       );
+      assert.match(stack.system_context, /USER_CONTEXT_SHOULD_WAIT/);
     } finally {
+      if (previous === undefined) delete process.env["BABEL_USER_CONTEXT"];
+      else process.env["BABEL_USER_CONTEXT"] = previous;
       rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("returns an explicit context error when mandatory content cannot fit", () => {
-    const stack = compileChatStack({
-      projectRoot: "/tmp/test",
-      promptBudgetChars: 1,
-      includeDomainSkill: false,
-    });
-    assert.equal(stack.context_error, "mandatory_instruction_core_exceeds_prompt_budget");
-    assert.equal(stack.system_context, "");
+    assert.throws(
+      () => compileChatStack({
+        projectRoot: "/tmp/test",
+        promptBudgetChars: 1,
+        includeDomainSkill: false,
+      }),
+      /required_instruction_exceeds_prompt_budget/,
+    );
   });
 
   it("honors the declared UTF-16 budget without overflowing on emoji", () => {
     const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-"));
     try {
-      writeFileSync(join(root, "AGENTS.md"), "😀".repeat(7_000), "utf8");
+      writeFileSync(join(root, "AGENTS.md"), "😀".repeat(800), "utf8");
       const stack = compileChatStack({
         projectRoot: root,
         promptBudgetChars: 2_000,
@@ -206,7 +225,56 @@ describe("compileChatStack budget behavior", () => {
     }
   });
 
-  it("records full source identity separately from a pre-read-truncated fragment", () => {
+  it("fails closed instead of truncating required AGENTS policy to fit", () => {
+    const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-required-overflow-"));
+    try {
+      const policy = `BEGIN_REQUIRED\n${"x".repeat(2_000)}\nEND_REQUIRED\n`;
+      writeFileSync(join(root, "AGENTS.md"), policy, "utf8");
+      assert.throws(
+        () => compileChatStack({ projectRoot: root, promptBudgetChars: 1_000 }),
+        /required_instruction_exceeds_prompt_budget/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports unreadable required AGENTS policy instead of treating it as absent", () => {
+    const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-required-read-error-"));
+    try {
+      mkdirSync(join(root, "AGENTS.md"));
+      assert.throws(
+        () => compileChatStack({ projectRoot: root }),
+        /required_instruction_read_failed/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("omits oversized optional sources atomically and continues to later context", () => {
+    const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-optional-atomic-"));
+    const previous = process.env["BABEL_USER_CONTEXT"];
+    const contextPath = join(root, "user-context.md");
+    process.env["BABEL_USER_CONTEXT"] = contextPath;
+    try {
+      writeFileSync(join(root, "AGENTS.md"), "REQUIRED_POLICY\n", "utf8");
+      writeFileSync(join(root, "ENGINEERING.md"), "ENGINEERING_START\n" + "e".repeat(3_000) + "\nENGINEERING_END", "utf8");
+      writeFileSync(contextPath, "LATER_USER_CONTEXT\n", "utf8");
+      const stack = compileChatStack({ projectRoot: root, promptBudgetChars: 256, includeDomainSkill: false });
+      assert.match(stack.system_context, /REQUIRED_POLICY/);
+      assert.doesNotMatch(stack.system_context, /ENGINEERING_START|ENGINEERING_END/);
+      assert.match(stack.system_context, /LATER_USER_CONTEXT/);
+      assert.equal(stack.content_disposition.find((entry) => entry.id === "project:engineering")?.status, "omitted");
+      assert.equal(stack.content_disposition.find((entry) => entry.id === "user:context")?.status, "included");
+    } finally {
+      if (previous === undefined) delete process.env["BABEL_USER_CONTEXT"];
+      else process.env["BABEL_USER_CONTEXT"] = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records full source identity without pre-read truncation", () => {
     const root = mkdtempSync(join(tmpdir(), "babel-chat-stack-"));
     try {
       const prefix = "# instructions\n" + "x".repeat(12_500);
@@ -218,12 +286,12 @@ describe("compileChatStack budget behavior", () => {
       const second = compileChatStack({ projectRoot: root, includeDomainSkill: false });
       const secondIdentity = second.selected_entries.find((entry) => entry.id === "identity:agents")!;
 
-      assert.equal(firstIdentity.source_truncated, true);
-      assert.equal(secondIdentity.source_truncated, true);
+      assert.equal(firstIdentity.source_truncated, false);
+      assert.equal(secondIdentity.source_truncated, false);
       assert.notEqual(firstIdentity.source_digest, secondIdentity.source_digest);
-      assert.equal(firstIdentity.content_digest, secondIdentity.content_digest);
+      assert.notEqual(firstIdentity.content_digest, secondIdentity.content_digest);
       assert.equal(firstIdentity.source_length, secondIdentity.source_length);
-      assert.ok((firstIdentity.source_length ?? 0) > (firstIdentity.content_length ?? 0));
+      assert.equal(firstIdentity.source_length, firstIdentity.content_length);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -240,7 +308,7 @@ describe("compileChatStack shape invariants", () => {
     assert.equal(stack.deep_stages_excluded, true);
   });
 
-  it("always includes identity, safety, provider, and verifier entries", () => {
+  it("includes required identity and does not duplicate generic prompt policy", () => {
     const stack = compileChatStack({
       projectRoot: "/tmp/test",
       task: "fix a bug",
@@ -249,9 +317,9 @@ describe("compileChatStack shape invariants", () => {
 
     const layers = new Set(stack.selected_entries.map((e) => e.layer));
     assert.ok(layers.has("identity"), "must have identity layer");
-    assert.ok(layers.has("safety"), "must have safety layer");
-    assert.ok(layers.has("provider"), "must have provider layer");
-    assert.ok(layers.has("verifier"), "must have verifier layer");
+    assert.ok(!layers.has("safety"), "generic safety prose belongs to the shared behavioral contract");
+    assert.ok(!layers.has("provider"), "transport choice belongs to the provider adapter");
+    assert.ok(!layers.has("verifier"), "verification prose belongs to the shared behavioral contract");
   });
 
   it("produces a stable manifest_hash for same inputs", () => {
@@ -311,10 +379,11 @@ describe("compileChatStack shape invariants", () => {
     assert.ok(stack.project_root.includes("test"));
   });
 
-  it("includes domain/skill hints when task matches and includeDomainSkill is default", () => {
+  it("includes domain/skill hints only when includeDomainSkill is set", () => {
     const stack = compileChatStack({
       projectRoot: "/tmp/test",
       task: "fix the React component rendering",
+      includeDomainSkill: true,
     });
 
     const domain = stack.selected_entries.find((e) => e.layer === "domain");
@@ -331,6 +400,15 @@ describe("compileChatStack shape invariants", () => {
     const domain = stack.selected_entries.find((e) => e.layer === "domain");
     assert.equal(domain, undefined);
   });
+
+  it("skips domain/skill when includeDomainSkill is omitted", () => {
+    const stack = compileChatStack({
+      projectRoot: "/tmp/test",
+      task: "fix the React component rendering",
+    });
+
+    assert.equal(stack.selected_entries.find((e) => e.layer === "domain" || e.layer === "skill"), undefined);
+  });
 });
 
 describe("compileChatStack with real project root", () => {
@@ -340,6 +418,9 @@ describe("compileChatStack with real project root", () => {
         // Bind the repository explicitly: package test runners start in babel-cli.
         const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
         const projectRoot = target === "root" ? repoRoot : join(repoRoot, "babel-cli");
+        const previousContext = process.env["BABEL_USER_CONTEXT"];
+        process.env["BABEL_USER_CONTEXT"] = join(repoRoot, "missing-user-context.md");
+        try {
         const stack = compileChatStack({
           projectRoot,
           task: "fix a bug",
@@ -350,20 +431,23 @@ describe("compileChatStack with real project root", () => {
         assert.ok(identity, "must have identity entry");
         assert.ok(identity.contentPreview, "identity should have content preview");
         const session = loadProjectSessionIdentityDispositionSync(projectRoot);
-        assert.equal(session.fragments.find((fragment) => fragment.id === "session:agents")?.source,
-          join(repoRoot, "AGENTS.md"), "session must discover the sole canonical source");
+        assert.deepEqual(session.fragments, [], "session identity must not deliver a second copy");
+        assert.equal(session.systemContext, "");
+        assert.equal(identity.id, "identity:agents");
+        assert.equal(identity.path, join(repoRoot, "AGENTS.md"),
+          "package runs use the repo AGENTS.md one directory up");
+        const source = readFileSync(identity.path, "utf8");
         if (target === "root") {
-          assert.equal(identity.path, join(repoRoot, "AGENTS.md"));
-          assert.equal(identity.source_truncated, false, "canonical policy must fit the source cap");
-          const source = readFileSync(identity.path, "utf8");
-          assert.ok(source.replace(/\r?\n/g, "\r\n").length <= 12_000,
-            "canonical policy must also fit the unchanged source cap on CRLF hosts");
+          assert.equal(identity.source_truncated, false, "canonical policy is read atomically");
+          assert.ok(source.length <= promptBudgetChars, "canonical policy fits the supplied stack budget");
+          assert.equal(identity.source_length, source.length,
+            "the source digest/length must identify the complete canonical policy");
         }
         const systemPrompt = buildChatSystemPrompt({
           projectRoot,
           nativeTools: true,
           executionFirst: true,
-          // Match chatCore: dispatch identity followed by the compiled target stack.
+          // Match chatCore: an empty session identity plus the compiled stack.
           systemContext: [session.systemContext, stack.system_context].join("\n\n"),
         });
         // Exercise the shared native request serializer without dispatching a provider.
@@ -372,33 +456,41 @@ describe("compileChatStack with real project root", () => {
         );
         const renderedSystem = request.find((message) => message.role === "system")?.content;
         assert.equal(typeof renderedSystem, "string");
-        for (const guard of [
-          "Read AGENTS.md in full once before repository work",
-          "Babel packages use this root file; workspace-template offers to save nested instructions do not apply.",
-          "AGENTS.md alone owns contributor policy",
-          "no host adapters/nested instructions/",
-          "Never read credential files",
-          "-Strict -RequireExternalScanner",
-          "-RequireSupplementalPolicy",
-          "BABEL_PRIVATE_SCRUB_POLICY_PATH",
-          "agent-pr-merge.ps1",
-          "-ReviewedHeadSha",
-          "hostProtectedPrefixes",
-          "Merges changing any path matched by",
-          "need explicit owner authorization",
-          "independent exact-head review",
-          "no admin bypass/candidate self-certification",
-        ]) {
-          if (target === "root") {
-            assert.ok(stack.system_context.includes(guard), `delivered stack must retain ${guard}`);
-          }
-          assert.ok(renderedSystem!.includes(guard), `rendered request must retain ${guard}`);
-        }
+        assert.ok(stack.system_context.includes(source), "delivered stack retains the complete current canonical policy");
+        assert.ok(renderedSystem!.includes(source), "rendered request retains the complete current canonical policy");
         if (target === "root" && promptBudgetChars === 24_000) {
           assert.equal(stack.content_disposition.find((entry) => entry.id === identity.id)?.status,
             "included", "SWE stack must deliver the complete canonical policy");
+        }
+        assert.equal(renderedSystem!.split(source).length - 1, 1,
+          "canonical policy is delivered once");
+        } finally {
+          if (previousContext === undefined) delete process.env["BABEL_USER_CONTEXT"];
+          else process.env["BABEL_USER_CONTEXT"] = previousContext;
         }
       });
     }
   }
 });
+
+
+describe('automatic instruction credential admission', () => {
+  it('does not follow an in-project instruction symlink into a credential store', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-stack-credential-link-'))
+    const previous = process.env['BABEL_USER_CONTEXT']
+    process.env['BABEL_USER_CONTEXT'] = join(root, 'absent-context.md')
+    try {
+      mkdirSync(join(root, '.git'))
+      const canary = 'SYNTHETIC_STACK_CREDENTIAL_CANARY'
+      writeFileSync(join(root, '.env'), canary)
+      symlinkSync(join(root, '.env'), join(root, 'AGENTS.md'), 'file')
+      const stack = compileChatStack({ projectRoot: root, babelRoot: root })
+      assert.equal(stack.system_context.includes(canary), false)
+      assert.equal(stack.selected_entries.some(entry => entry.path === join(root, 'AGENTS.md')), false)
+    } finally {
+      if (previous === undefined) delete process.env['BABEL_USER_CONTEXT']
+      else process.env['BABEL_USER_CONTEXT'] = previous
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})

@@ -149,13 +149,13 @@ function buildOtelOfflineSwePlan(): Record<string, unknown> {
       {
         step: 1,
         description:
-          'Inspect the compiled manifest artifact for trace coverage.',
+          'Inspect the CLI package metadata for trace coverage.',
         tool: 'file_read',
-        target: 'runs/latest/01_manifest.json',
+        target: 'babel-cli/package.json',
         rationale: 'Provides one safe executor step before completion.',
         reversible: true,
         verification:
-          'The manifest shows compilation_state = compiled and a populated prompt_manifest.',
+          'The CLI package metadata is readable and contains the package name.',
       },
     ],
     root_cause: 'N/A — tracing regression coverage',
@@ -410,16 +410,16 @@ export function buildPipelineV9OfflineFixtureResponse(
       const executionHistory =
         historyIndex >= 0 ? prompt.slice(historyIndex) : '';
       if (
-        !/\[Step 1\] file_read[^\n]*runs\/latest\/01_manifest\.json\r?\nExit code: 0/.test(
+        !/\[Step 1\] file_read[^\n]*babel-cli\/package\.json\r?\nExit code: 0/.test(
           executionHistory,
         )
       ) {
         return {
           type: 'tool_call',
           thinking:
-            'OTel offline fixture: read the compiled manifest before completing.',
+            'OTel offline fixture: read the CLI package metadata before completing.',
           tool: 'file_read',
-          path: 'runs/latest/01_manifest.json',
+          path: 'babel-cli/package.json',
         };
       }
       return {
