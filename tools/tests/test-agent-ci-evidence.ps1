@@ -59,6 +59,30 @@ $snapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJs
 Assert-CI ($snapshot.available -and $snapshot.observations.Count -eq 140) 'All pages must be present'
 Assert-CI ($counts.pages -eq 2 -and $counts.metadata -eq 1) 'Pagination and per-snapshot metadata cache must be bounded'
 Assert-CI ((Get-AgentCIState -Snapshot $snapshot -Policies $policy -TargetSha $head).state -eq 'complete') 'Page-two required check must pass'
+# Exercise real enrichment: REST check rows omit their workflow attempt.
+$rerunFixture = @{ status = 'queued'; checkAttempt = 1; jobRun = 8 }
+$rerun = [pscustomobject]@{ id = 8; workflow_id = 7; name = 'Public Release Gate'; event = 'pull_request';
+  head_sha = $head; run_attempt = 2; created_at = '2026-10-07T12:00:00Z'; status = 'queued' }
+$rerunRead = {
+  param($Endpoint)
+  if ($Endpoint -like '*check-runs*') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = 1; check_runs = @($raw[139]) }; error = '' } }
+  if ($Endpoint -like '*/actions/runs`?*') { $rerun.status = $rerunFixture.status; return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = 1; workflow_runs = @($rerun) }; error = '' } }
+  if ($Endpoint -like '*/actions/runs/8') { return [pscustomobject]@{ available = $true; value = $rerun; error = '' } }
+  if ($Endpoint -like '*/actions/jobs/1') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ run_id = $rerunFixture.jobRun; run_attempt = $rerunFixture.checkAttempt; check_run_url = 'https://api.github.com/repos/test/repo/check-runs/140' }; error = '' } }
+  throw 'Unexpected rerun fixture endpoint'
+}
+$rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
+$rerunState = Get-AgentCIState -Snapshot $rerunSnapshot -Policies $policy -TargetSha $head
+Assert-CI ($rerunSnapshot.available -and -not $rerunState.ready -and $rerunState.state -eq 'queued') 'Snapshot enrichment must not relabel an old success as a queued rerun attempt'
+$rerunFixture.status = 'completed'
+$rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
+Assert-CI ((Get-AgentCIState -Snapshot $rerunSnapshot -Policies $policy -TargetSha $head).state -eq 'failed') 'A completed newer attempt without its required check must block old success'
+$rerunFixture.checkAttempt = 2
+$rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
+Assert-CI ((Get-AgentCIState -Snapshot $rerunSnapshot -Policies $policy -TargetSha $head).ready) 'A successful check bound to the latest completed attempt must pass'
+$rerunFixture.jobRun = 99
+$rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
+Assert-CI (-not $rerunSnapshot.available -and $rerunSnapshot.error -eq 'workflow_check_attempt_unavailable') 'Mismatched job lineage must fail closed with a safe diagnostic'
 $foreign = $raw[139].PSObject.Copy()
 $foreign.id = 141
 $foreign.app = [pscustomobject]@{ id = 999 }
