@@ -436,8 +436,6 @@ export const SPECIALIZED_LANES = {
   'claude-babel-astra-lab': {
     files: [
       'src/claude-babel-astra-lab/claudeHarness.test.ts',
-      'src/claude-babel-astra-lab/comparison-contract-v3.test.ts',
-      'src/claude-babel-astra-lab/comparison-contract.test.ts',
       'src/claude-babel-astra-lab/comparison-runner.test.ts',
       'src/claude-babel-astra-lab/frozen-evaluator.test.ts',
       'src/claude-babel-astra-lab/lab.test.ts',
@@ -447,8 +445,6 @@ export const SPECIALIZED_LANES = {
     commandsByFile: {
       'src/claude-babel-astra-lab/claudeHarness.test.ts': 'npm run test:claude-babel-lab',
       'src/claude-babel-astra-lab/lab.test.ts': 'npm run test:claude-babel-lab',
-      'src/claude-babel-astra-lab/comparison-contract-v3.test.ts': 'npm run test:comparison',
-      'src/claude-babel-astra-lab/comparison-contract.test.ts': 'npm run test:comparison',
       'src/claude-babel-astra-lab/comparison-runner.test.ts': 'npm run test:comparison',
       'src/claude-babel-astra-lab/frozen-evaluator.test.ts': 'npm run test:comparison',
       'src/claude-babel-astra-lab/recovery-observation.test.ts': 'npm run test:comparison',
@@ -826,7 +822,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   }
 
   const totalSpecializedFiles = Object.values(SPECIALIZED_LANES).reduce((acc, l) => acc + l.files.length, 0);
-  assert.equal(totalSpecializedFiles, 21, `Expected exactly 21 specialized test files, found ${totalSpecializedFiles}`);
+  assert.equal(totalSpecializedFiles, 19, `Expected exactly 19 specialized test files, found ${totalSpecializedFiles}`);
 
   const { errors, specializedSet, unclassified, overlap } = validateTestClassification(
     allTests,
@@ -837,7 +833,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   );
 
   assert.equal(errors.length, 0, `Test classification errors:\n${errors.join('\n')}`);
-  assert.equal(specializedSet.size, 21);
+  assert.equal(specializedSet.size, 19);
   assert.equal(unclassified.length, 0);
   assert.equal(overlap.length, 0);
   const classified = [...unitInventory, ...specializedSet].sort();
