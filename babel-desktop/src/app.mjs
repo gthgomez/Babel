@@ -25,6 +25,7 @@ let nativeInfo = null;
 let liveModel = '';
 let liveTokens = null;
 let changedFiles = [];
+let updatePhase = '';
 const native = window.babelDesktop;
 const id = () => crypto.randomUUID ? crypto.randomUUID() : `preview-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const activeSession = () => state.sessions.find(s => s.id === state.activeId) ?? state.sessions[0];
@@ -69,7 +70,56 @@ function renderControls() {
   if (percent == null) $('#context-meter').removeAttribute('aria-valuenow'); else $('#context-meter').setAttribute('aria-valuenow',String(percent));
   $('#token-count').textContent = transport === 'preview' ? '42,318 / 112,000 tokens' : (liveTokens == null ? 'Not reported by CLI' : `${Number(liveTokens).toLocaleString('en-US')} tokens in the latest request`);
   $('#preview-badge').textContent = transport === 'preview' ? 'REFERENCE PREVIEW' : 'BABEL CLI';
+  renderRuntime();
   renderStatus();
+}
+function shortSha(sha) { return typeof sha === 'string' && sha ? sha.slice(0, 12) : 'unknown'; }
+function runtimeUpdateText(update) {
+  const u = update ?? {state:'unchecked'};
+  const name = u.channel === 'release' ? 'Release' : u.channel === 'development' ? 'Source' : 'Update';
+  if (u.state === 'available') return `${name}: update available · ${shortSha(u.availableSha)}`;
+  if (u.state === 'current') return `${name}: up to date (checked)`;
+  if (u.state === 'checking') return `${name}: checking…`;
+  if (u.state === 'error') return `${name}: check failed`;
+  if (u.state === 'unsupported') return `${name}: unavailable`;
+  return 'Not checked';
+}
+function runtimeRow(label, value, extra) {
+  return `<div class="settings-row"><span>${e(label)}</span><span class="muted${extra ? ' ' + e(extra) : ''}">${e(value)}</span></div>`;
+}
+function renderRuntime() {
+  const panel = $('#runtime-panel');
+  if (!panel) return;
+  const checkButton = $('#check-update');
+  const updateButton = $('#update-cli');
+  const setButtons = (check, update) => { checkButton.hidden = !check; updateButton.hidden = !update; };
+  if (!native) { panel.innerHTML = '<p class="fine-print">Runtime identity is available in the desktop application.</p>'; setButtons(false, false); return; }
+  const engine = nativeInfo?.engine;
+  if (!engine) { panel.innerHTML = '<p class="fine-print">Runtime identity not reported yet.</p>'; setButtons(false, false); return; }
+  if (engine.desktopVersion) $('#version').textContent = `v${engine.desktopVersion}`;
+  const originLabels = {bundled:'Bundled with Desktop', official:'Development checkout', advanced:'Advanced entry', missing:'Missing'};
+  const source = engine.source ?? {kind:'unknown'};
+  const sourceText = engine.origin === 'bundled'
+    ? `packaged · ${engine.buildVersion ?? 'version unknown'}`
+    : source.kind === 'git'
+      ? `${shortSha(source.commitSha)}${source.branch ? ' · ' + source.branch : ''}${source.dirty ? ' · dirty' : ''}`
+      : 'unknown';
+  const update = engine.update ?? {state:'unchecked'};
+  panel.innerHTML = [
+    runtimeRow('Desktop', engine.desktopVersion ? `v${engine.desktopVersion}` : 'unknown'),
+    runtimeRow('CLI version', engine.cliPackageVersion ?? engine.buildVersion ?? 'unknown'),
+    runtimeRow('CLI source', sourceText, source.dirty ? 'warn' : ''),
+    runtimeRow('Engine origin', originLabels[engine.origin] ?? engine.origin ?? 'unknown'),
+    runtimeRow('Execution profile', engine.executionProfile ?? 'unknown'),
+    runtimeRow('Provider', engine.readiness?.provider ?? 'unknown'),
+    runtimeRow('Docker', engine.readiness?.docker ?? 'unknown'),
+    runtimeRow('Readiness', engine.readiness?.ready ? 'Ready' : 'Not ready'),
+    runtimeRow('Update', runtimeUpdateText(update), update.state === 'available' ? 'warn' : ''),
+    updatePhase ? `<p class="fine-print">${e(updatePhase)}</p>` : '',
+    (update.state === 'error' || update.state === 'unsupported') ? `<p class="fine-print">${e(update.detail)}</p>` : ''
+  ].join('');
+  checkButton.textContent = engine.origin === 'bundled' ? 'Check for updates' : 'Check for CLI updates';
+  setButtons(true, engine.origin === 'official' || engine.origin === 'advanced');
 }
 function renderStatus(status) {
   const msg = activeSession().messages.filter(m => m.role === 'assistant').at(-1);
@@ -375,6 +425,28 @@ function handleNativeEvent(packet) {
   if(state.activeId===run.sessionId)renderConversation();
   renderControls();
 }
+async function checkForUpdates() {
+  if (!native) { toast('Update checks require the desktop application.'); return; }
+  const button = $('#check-update'); const label = button.textContent;
+  button.disabled = true; button.textContent = 'Checking…';
+  try { await native.checkCliUpdate(); nativeInfo = await native.getInfo(); }
+  catch (err) { toast(`Update check failed: ${err.message}`); }
+  finally { button.disabled = false; button.textContent = label; }
+  renderRuntime();
+}
+async function runUpdateCli() {
+  if (!native) return;
+  const button = $('#update-cli'); button.disabled = true; updatePhase = 'Starting…'; renderRuntime();
+  try {
+    const result = await native.updateDevCli();
+    if (result?.upToDate) toast('The CLI already matches the tracked upstream.');
+    else if (result?.started === false) toast('Update cancelled.');
+    else if (result?.ok) toast(`CLI updated to ${shortSha(result.sourceSha)} (${result.version}).`);
+    else toast(`Update stopped at ${result?.phase ?? 'update'}: ${result?.reason ?? 'unknown'}.`);
+    nativeInfo = await native.getInfo();
+  } catch (err) { toast(`Update failed: ${err.message}`); }
+  finally { button.disabled = false; updatePhase = ''; renderRuntime(); }
+}
 async function chooseProject() {
   if(!native){connectionDialog();return;}
   if(activeRun){toast('Wait for the active run before switching projects.');return;}
@@ -433,6 +505,8 @@ document.addEventListener('click',async event=>{
   else if(a==='settings')settingsDialog();
   else if(a==='connection')connectionDialog();
   else if(a==='refresh-diagnostics'){try{nativeInfo=await native.refreshDiagnostics();connectionDialog();}catch(err){toast(err.message);}}
+  else if(a==='check-update')await checkForUpdates();
+  else if(a==='update-cli')await runUpdateCli();
   else if(a==='open-project')await chooseProject();
   else if(a==='choose-cli'){try{const info=await native.chooseCli();if(info)nativeInfo=info;connectionDialog();}catch(err){toast(err.message);}}
   else if(a==='use-live'){try{await enableLive();}catch(err){toast(err.message);}}
@@ -458,8 +532,8 @@ document.addEventListener('keydown',ev=>{
 });
 try{if(localStorage.getItem('babel-preview-motion')==='reduce')document.body.classList.add('reduce-motion');}catch{}
 if(native){native.getInfo().then(info=>{
-  nativeInfo=info;
+  nativeInfo=info;renderRuntime();
   if(info?.packaged){state={version:1,mode:'chat',model:'',sessions:[],activeId:''};files=[];newSession();connectionDialog();}
-}).catch(error=>toast(`Connection unavailable: ${error.message}`));native.onEvent(handleNativeEvent);}
+}).catch(error=>toast(`Connection unavailable: ${error.message}`));native.onEvent(handleNativeEvent);native.onUpdateEvent?.(event=>{updatePhase=`${event.phase}: ${event.status}`;renderRuntime();});}
 setInterval(updateClock,30000);
 renderAll(true);

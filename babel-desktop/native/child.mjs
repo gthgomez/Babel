@@ -2,6 +2,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { isAbsolute, resolve } from 'node:path';
 import { JsonlDecoder } from './stream.mjs';
 
+/** The effective execution profile the Desktop launches the CLI with. */
+export const EXECUTION_PROFILE = 'safe_repo';
+
 function terminateChildTree(child) {
   if (process.platform === 'win32' && child.pid) {
     const windowsRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
@@ -19,7 +22,7 @@ export function buildRunArgs(entry, projectRoot, {task, mode, sessionId}) {
   if (typeof task !== 'string' || !task.trim() || task.length > 24000 || task.includes('\0')) throw new TypeError('Invalid task text');
   if (!['chat', 'plan', 'deep'].includes(mode)) throw new TypeError('Invalid Babel mode');
   const args = [entry, 'run', '--mode', mode, '--project-root', projectRoot,
-    '--output-format', 'stream-json', '--execution-profile', 'safe_repo'];
+    '--output-format', 'stream-json', '--execution-profile', EXECUTION_PROFILE];
   if (sessionId != null && sessionId !== '') {
     if (typeof sessionId !== 'string' || !/^[\w-]{1,80}$/.test(sessionId)) throw new TypeError('Invalid chat session id');
     args.push('--resume-chat', sessionId);

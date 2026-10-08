@@ -132,6 +132,43 @@ jobs:
           if ($actual -ne $expected.ToLowerInvariant()) { throw "SHA256SUMS mismatch for $file" }
           Write-Host "SHA256SUMS verified for $file"
 
+      # The public v0.1.1 release shipped only the portable ZIP because this
+      # workflow never built the NSIS installer. install-windows.ps1 and the
+      # Setup.exe builder are already qualified by the installer-lifecycle CI
+      # job; this step builds the same per-user Setup.exe for the release.
+      # NSIS comes from Chocolatey (SourceForge serves mirror-dependent bodies
+      # that defeat byte-pinning); the compiler's own version is recorded.
+      - name: Install pinned NSIS via Chocolatey
+        shell: pwsh
+        run: |
+          choco install nsis --version 3.11 --yes --no-progress
+          $makensis = "C:\Program Files (x86)\NSIS\Bin\makensis.exe"
+          if (-not (Test-Path -LiteralPath $makensis -PathType Leaf)) {
+            $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
+          }
+          if (-not $makensis -or -not (Test-Path -LiteralPath $makensis -PathType Leaf)) { throw "makensis.exe not found after choco install" }
+          $nsisVersion = (& $makensis -VERSION).Trim()
+          if ($nsisVersion -ne 'v3.11') { throw "Expected NSIS v3.11, got $nsisVersion" }
+          "RELEASE_MAKENSIS=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # Build the Setup.exe into a separate directory so the portable
+      # build-directory provenance check above still sees exactly one
+      # BUILD.json, one .zip and one .tgz.
+      - name: Build the per-user Setup.exe from the verified payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "$env:RUNNER_TEMP/release-out"
+          $version = (Get-Content babel-desktop/package.json -Raw | ConvertFrom-Json).version
+          $zip = Join-Path $out "Babel-Desktop-$version-win-x64.zip"
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw "Portable payload not found: $zip" }
+          npm --prefix babel-desktop run package:windows:setup -- `
+            "--payload-zip=$zip" `
+            "--payload-sha256s=$out/SHA256SUMS" `
+            "--makensis=$env:RELEASE_MAKENSIS" `
+            "--output=$env:RUNNER_TEMP/release-setup"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       # Stage exactly the distributable set into the workspace so the release
       # step uses plain relative paths. The CLI pack tarball produced by the
       # packager is attached for transparency; npm publishing is a separate
@@ -141,11 +178,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $out = "$env:RUNNER_TEMP/release-out"
+          $setup = "$env:RUNNER_TEMP/release-setup"
           New-Item -ItemType Directory -Path release-dist -Force | Out-Null
           Copy-Item (Join-Path $out '*.zip') release-dist/
           Copy-Item (Join-Path $out 'SHA256SUMS') release-dist/
           Copy-Item (Join-Path $out 'manifest.json') release-dist/
           Copy-Item (Join-Path $out '*.tgz') release-dist/
+          foreach ($pattern in '*.exe', '*.exe.sha256', '*.build.json') {
+            Get-ChildItem (Join-Path $setup $pattern) -ErrorAction Stop | Copy-Item -Destination release-dist/
+          }
           Get-ChildItem release-dist | ForEach-Object { Write-Host ("staged: " + $_.Name) }
 
       - name: Revalidate tag object and source before promotion

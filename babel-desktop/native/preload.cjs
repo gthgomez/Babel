@@ -4,6 +4,8 @@ const {contextBridge, ipcRenderer} = require('electron');
 contextBridge.exposeInMainWorld('babelDesktop',Object.freeze({
   getInfo:()=>ipcRenderer.invoke('babel:get-info'),
   refreshDiagnostics:()=>ipcRenderer.invoke('babel:refresh-diagnostics'),
+  checkCliUpdate:()=>ipcRenderer.invoke('babel:check-cli-update'),
+  updateDevCli:()=>ipcRenderer.invoke('babel:update-dev-cli'),
   chooseCli:()=>ipcRenderer.invoke('babel:choose-cli'),
   chooseProject:()=>ipcRenderer.invoke('babel:choose-project'),
   listSessions:()=>ipcRenderer.invoke('babel:list-sessions'),
@@ -19,5 +21,11 @@ contextBridge.exposeInMainWorld('babelDesktop',Object.freeze({
     const handler=(_event,packet)=>callback(packet);
     ipcRenderer.on('babel:event',handler);
     return ()=>ipcRenderer.removeListener('babel:event',handler);
+  },
+  onUpdateEvent:callback=>{
+    if(typeof callback!=='function') throw new TypeError('Expected an update callback');
+    const handler=(_event,event)=>callback(event);
+    ipcRenderer.on('babel:update-event',handler);
+    return ()=>ipcRenderer.removeListener('babel:update-event',handler);
   }
 }));

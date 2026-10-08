@@ -3,11 +3,11 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "39958f041eef5283c011b33e16ac6384cfcaef384b6ddd97d4aef4310967463b",
+  "policy_bundle_id": "17d3f7ad5bd038fcdf278c37bb38e304b438f34af377d8840858200261f02611",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "a7f2c867f97a2fc1cf7455fa8630a8361a3785f483858c2db59990b8de356a5e",
-    ".github/workflows/release.yml": "324c399c22aea6ecd25703c677dc3e995187d5804caa702b46d71429a997ead6",
+    ".github/workflows/release.yml": "6d0c4591f8c57497c9c8a33d2d069219d9fc02d05cae18f63d271f5ca839a20d",
     ".github/workflows/trusted-control-plane.yml": "393dd8a96539bb8b66e579972a4364da2ed1eeda58c6264b5b799cb6e84e8fbe",
     ".github/workflows/typecheck.yml": "adf806de2374de36092fa1b224ddf47ecde7028baa7a99bca06a2ee9b12e8f42",
     "AGENTS.md": "d8ac18573ddc1bc8f538d91adec66dfe078016beaa78ac54c612f8520e49fc34",
