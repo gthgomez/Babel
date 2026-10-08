@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 
 import { trace, SpanStatusCode, type Span } from '@opentelemetry/api';
 import { z } from 'zod';
@@ -8,9 +8,33 @@ import { readMcpServers, type McpServerConfig } from '../config/mcpServers.js';
 import type { ToolResult } from '../sandbox.js';
 import type { ToolCallRequest } from '../localTools.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
+import { terminateChildTree } from '../processTree.js';
 
 /** Hard limit (ms) for a single MCP server round-trip. */
 const MCP_TIMEOUT_MS = 15_000;
+
+/** Stop the owned server and bound both graceful close and forced cleanup. */
+async function closeMcpChild(child: ChildProcess, closed: Promise<void>, closeObserved: boolean): Promise<boolean> {
+  if (closeObserved) return true;
+  async function waitForClose(): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        closed.then(() => true),
+        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), 1_000); }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  // Windows owns a cmd.exe wrapper; terminate its server descendants as well.
+  if (process.platform === 'win32') terminateChildTree(child);
+  else { try { child.kill(); } catch { /* already closed */ } }
+  if (await waitForClose()) return true;
+  if (process.platform === 'win32') terminateChildTree(child);
+  else { try { child.kill('SIGKILL'); } catch { /* already closed */ } }
+  return waitForClose();
+}
 
 function buildMcpLifecycle(
   server: string,
@@ -710,6 +734,11 @@ async function executeMcpMethodImpl(
     // but never retain or surface that content in a ToolResult.
     child.stderr?.on('data', () => undefined);
 
+    let closeObserved = false;
+    const childClosed = new Promise<void>((resolveClosed) => child.once('close', () => {
+      closeObserved = true;
+      resolveClosed();
+    }));
     let stdoutBuf: Uint8Array = Buffer.alloc(0);
     let settled = false;
     let responseState: 'await_initialize' | 'await_method' = 'await_initialize';
@@ -718,12 +747,12 @@ async function executeMcpMethodImpl(
       if (settled) return;
       settled = true;
       clearTimeout(timeoutHandle);
-      try {
-        child.kill();
-      } catch {
-        /* already dead - ignore */
-      }
-      resolve(result);
+      void closeMcpChild(child, childClosed, closeObserved).then((closed) => {
+        if (!closed && result.mcp_lifecycle) {
+          result.mcp_lifecycle.evidence = [...(result.mcp_lifecycle.evidence ?? []), 'owned_child_close_timeout'];
+        }
+        resolve(result);
+      });
     }
 
     const effectiveTimeout = timeoutMs ?? MCP_TIMEOUT_MS;
@@ -743,6 +772,7 @@ async function executeMcpMethodImpl(
     }, effectiveTimeout);
 
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled) return;
       stdoutBuf = Buffer.concat([Buffer.from(stdoutBuf), chunk]);
 
       let parsedMessages: Array<Record<string, unknown>>;
@@ -1092,6 +1122,11 @@ export async function handleMcpRequest(
     // but never retain or surface that content in a ToolResult.
     child.stderr?.on('data', () => undefined);
 
+    let closeObserved = false;
+    const childClosed = new Promise<void>((resolveClosed) => child.once('close', () => {
+      closeObserved = true;
+      resolveClosed();
+    }));
     let stdoutBuf: Uint8Array = Buffer.alloc(0);
     let settled = false;
     let responseState: 'await_initialize' | 'await_tools_list' | 'await_tool_call' = 'await_initialize';
@@ -1100,13 +1135,13 @@ export async function handleMcpRequest(
       if (settled) return;
       settled = true;
       clearTimeout(timeoutHandle);
-      try {
-        child.kill();
-      } catch {
-        /* already dead - ignore */
-      }
-      endSpan(_span, result.exit_code === 0 ? SpanStatusCode.OK : SpanStatusCode.ERROR);
-      resolve(result);
+      void closeMcpChild(child, childClosed, closeObserved).then((closed) => {
+        if (!closed && result.mcp_lifecycle) {
+          result.mcp_lifecycle.evidence = [...(result.mcp_lifecycle.evidence ?? []), 'owned_child_close_timeout'];
+        }
+        endSpan(_span, result.exit_code === 0 ? SpanStatusCode.OK : SpanStatusCode.ERROR);
+        resolve(result);
+      });
     }
 
     const timeoutHandle = setTimeout(() => {
@@ -1126,6 +1161,7 @@ export async function handleMcpRequest(
     }, MCP_TIMEOUT_MS);
 
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled) return;
       stdoutBuf = Buffer.concat([Buffer.from(stdoutBuf), chunk]);
 
       let parsedMessages: Array<Record<string, unknown>>;
