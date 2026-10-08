@@ -302,6 +302,8 @@ describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
       task: 'how many services exist in this project',
       projectRoot,
       maxTurns: 20,
+      // Qualify inspection/synthesis behavior independently of the quick-inspect wall cutoff.
+      maxWallMs: 120_000,
     });
 
     let toolCount = 0;
@@ -346,7 +348,7 @@ describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
 
     assert.ok(doneEvent, 'Stream must yield a done event');
     assert.equal(doneEvent.blockedReport ?? null, null, 'Must NOT be BLOCKED for reaching inspection budget');
-    assert.ok(doneEvent.answer.includes('Synthesized summary: The repository contains 10 modules and 4 services.'));
+    assert.ok(doneEvent.answer.includes('Synthesized summary: The repository contains 10 modules and 4 services.'), String(doneEvent.answer));
     assert.ok(!doneEvent.answer.includes('BLOCKED:'));
     assert.ok(!doneEvent.answer.includes('str_replace'));
     assert.ok(!doneEvent.answer.includes('write_file'));
@@ -359,6 +361,8 @@ describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
       task: 'how many services exist in this project',
       projectRoot,
       maxTurns: 20,
+      // Qualify inspection/synthesis behavior independently of the quick-inspect wall cutoff.
+      maxWallMs: 120_000,
     });
 
     let toolCount = 0;

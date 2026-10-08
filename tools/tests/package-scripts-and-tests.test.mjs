@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, globSync, readFileSync } from 'node:fs';
+import { existsSync, globSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -803,14 +803,16 @@ test('every discovered source test belongs to canonical unit lane or an explicit
     .map(f => f.split(sep).join('/'))
     .sort();
 
-  assert.equal(allTests.length, 777, `Expected exactly 777 source test files, found ${allTests.length}`);
+  // The sole zero-byte helpers.test.ts was removed: it contained no behavioral invariant.
+  assert.equal(allTests.length, 776, `Expected exactly 776 source test files, found ${allTests.length}`);
+  assert.deepEqual(allTests.filter(path => statSync(join(babelCliDir, path)).size === 0), [], 'Empty source test files cannot qualify coverage');
 
   // Load canonical unit shard inventory using repo helper
   const { prepareUnitShard } = await import('../../babel-cli/scripts/run_ci_unit_shard.mjs');
   const unitShard = prepareUnitShard(babelCliDir, 0, 1);
   const unitInventory = new Set(unitShard.inventory);
 
-  assert.equal(unitInventory.size, 758, `Expected exactly 758 unit shard test files, found ${unitInventory.size}`);
+  assert.equal(unitInventory.size, 757, `Expected exactly 757 unit shard test files, found ${unitInventory.size}`);
   for (const path of ['src/agent/desktopApproval.test.ts', 'src/cli/chatStreamNdjson.test.ts', 'src/interactive/execution/chatResumeHeadless.test.ts']) {
     assert.ok(unitInventory.has(path), `Desktop integration test must be covered by the canonical unit lane: ${path}`);
   }
@@ -830,7 +832,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   assert.equal(specializedSet.size, 19);
   assert.equal(unclassified.length, 0);
   assert.equal(overlap.length, 0);
-  assert.equal(unitInventory.size + specializedSet.size, 777);
+  assert.equal(unitInventory.size + specializedSet.size, 776);
 });
 
 test('test classification negative fixtures (orphan file, deleted lane command, lane absent from CI, missing file, unjustified exclusion, empty commandsByFile, unrelated test match, masked CI, echo CI)', () => {

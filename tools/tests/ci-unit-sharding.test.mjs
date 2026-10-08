@@ -40,6 +40,13 @@ test('overlapping canonical globs never execute a file twice', async t => {
   assert.deepEqual(shard.selected, ['src/agent/a.test.ts', 'src/agent/b.test.ts']);
 });
 
+test('a zero-byte discovered test fails before launching a synthetic file-only result', async t => {
+  const { prepareUnitShard } = await api();
+  const root = fixture(t, ['src/a.test.ts'], ['src/*.test.ts']);
+  writeFileSync(join(root, 'src/a.test.ts'), '');
+  assert.throws(() => prepareUnitShard(root, 0, 1), /empty test file/);
+});
+
 test('canonical no-ambient inference loader and runner options survive sharding', async t => {
   const { prepareUnitShard } = await api();
   const root = fixture(t, ['src/a.test.ts'], ['src/*.test.ts']);
