@@ -130,7 +130,10 @@ function Get-AgentCurrentCandidateIdentity {
   if (-not $identity.valid) { return $identity }
   $main = Get-AgentJsonFromGh -Deadline $Deadline -Arguments @('api', "repos/$ExpectedRepository/git/ref/heads/$ExpectedBaseBranch")
   if (-not $main.available) { return [pscustomobject]@{ valid = $false; reason = 'base_source_unavailable' } }
-  if ([string]$main.value.object.sha -ne $executionBase) { return [pscustomobject]@{ valid = $false; reason = 'execution_base_superseded' } }
+  $mainObject = Get-AgentLocalValue -Object $main.value -Name 'object'
+  $mainSha = Get-AgentLocalValue -Object $mainObject -Name 'sha'
+  if ($mainSha -isnot [string] -or $mainSha -notmatch '^[a-f0-9]{40}$') { return [pscustomobject]@{ valid = $false; reason = 'base_source_unavailable' } }
+  if ($mainSha -ne $executionBase) { return [pscustomobject]@{ valid = $false; reason = 'execution_base_superseded' } }
   return $identity
 }
 

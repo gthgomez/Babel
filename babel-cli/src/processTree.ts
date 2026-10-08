@@ -13,15 +13,21 @@ export function terminateChildTree(child: ChildProcess): void {
   if (process.platform === 'win32' && child.pid) {
     const windowsRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows'
     const taskkillPath = resolve(windowsRoot, 'System32', 'taskkill.exe')
-    try {
-      spawnSync(taskkillPath, ['/pid', String(child.pid), '/T', '/F'], {
-        windowsHide: true,
-        stdio: 'ignore',
-        env: getSafeEnv(),
-        timeout: 1_500,
-      })
-    } catch {
-      // Fall through to direct child termination.
+    // A failed helper must not immediately sever the root ancestry: another
+    // tree-kill attempt still needs that root to locate its descendants.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (child.exitCode != null || child.signalCode != null) break
+      try {
+        const result = spawnSync(taskkillPath, ['/pid', String(child.pid), '/T', '/F'], {
+          windowsHide: true,
+          stdio: 'ignore',
+          env: getSafeEnv(),
+          timeout: 1_500,
+        })
+        if (result.status === 0 && !result.error) break
+      } catch {
+        // One bounded retry precedes the existing direct-child fallback.
+      }
     }
     try {
       child.kill()
