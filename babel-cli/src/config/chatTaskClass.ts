@@ -39,7 +39,8 @@ export const CHAT_TASK_CLASSES: readonly ChatTaskClass[] = [
  *             the result and decides. Appropriate for interactive / default use.
  * - strict:   Verifier must exit 0 before completion is allowed. Never
  *             soft-allows through a missing or red verifier. Appropriate for
- *             multi-file SWE and governance-sensitive work.
+ *             governance-sensitive work. General SWE uses required evidence
+ *             with a strict critic; a failed verifier never certifies a patch.
  */
 export type VerificationPolicy = 'none' | 'required' | 'strict';
 
@@ -315,6 +316,8 @@ export function getChatTaskTune(taskClass: ChatTaskClass): ChatTaskTune {
 }
 
 export type TaskOperation = 'READ_ONLY' | 'MUTATING' | 'HYBRID';
+/** Trusted caller intent, independent of execution-profile/lease authority. */
+export type RequestedTaskOperation = 'AUTO' | 'READ_ONLY' | 'CHANGE';
 export type TaskComplexity = 'TRIVIAL' | 'BOUNDED' | 'OPEN_ENDED';
 
 export interface TaskShape {
@@ -391,10 +394,16 @@ function stripInformationalFrames(text: string): string {
 // classification never depends on the caller rephrasing an ordinary edit
 // request. A keyword still grants nothing by itself — execution authority
 // remains with the policy/lease gates.
-const CHANGE_NOUN_GUARD =
-  '(?<!\\b(?:this|that|the|these|those|a|an|any|your|my|our|their|its|said|such|same|net)\\s)change';
+// Determiner-preceded nouns ("this patch", "the fix", "that update") are topics.
+// Ordinary edit verbs that are not in the historical list (optimize, bump,
+// convert, migrate) are still mutation intent. A keyword grants nothing by
+// itself — execution authority remains with the policy/lease gates.
+const NOUN_GUARD_PREFIX =
+  '(?<!\\b(?:this|that|the|these|those|a|an|any|your|my|our|their|its|said|such|same|net)\\s)';
+const GUARDED_MUTATION_VERBS =
+  `${NOUN_GUARD_PREFIX}(?:change|patch|fix|update|repair|optimize|bump|convert|migrate)`;
 const MUTATION_VERB_SOURCE =
-  `fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename|${CHANGE_NOUN_GUARD}`;
+  `implement|create|write|refactor|apply|modify|edit|add|replace|rename|${GUARDED_MUTATION_VERBS}`;
 const DESTRUCTIVE_VERB_SOURCE = 'delete|remove|rm|drop|erase|unlink';
 const READ_ONLY_VERB_SOURCE = `(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|change|touch|alter|clean)`;
 const READ_ONLY_VERB_GERUND_SOURCE =
@@ -406,6 +415,28 @@ const COORD_SEPARATOR = '\\s*(?:,?\\s*(?:or|nor|and)|,|/)\\s*';
 const READ_ONLY_VERB_LIST = `${READ_ONLY_VERB_SOURCE}(?:${COORD_SEPARATOR}${READ_ONLY_VERB_SOURCE})*`;
 const READ_ONLY_GERUND_LIST = `${READ_ONLY_VERB_GERUND_SOURCE}(?:${COORD_SEPARATOR}${READ_ONLY_VERB_GERUND_SOURCE})*`;
 const READ_ONLY_DIRECTIVE_SOURCE = `\\b(without (any )?${READ_ONLY_GERUND_LIST}|read-?only|(?:do\\s*not|don't|never)\\s+${READ_ONLY_VERB_LIST}|dry-?run)\\b`;
+const SEQUENCED_MUTATION_SOURCE =
+  '\\b(?:then|afterwards|and\\s+then)\\s+(?:fix|implement|repair|modify|update|apply|patch|change|edit|optimize|bump|convert|migrate)\\b';
+// Protecting these inputs is compatible with a production repair. Admit only
+// a complete known object list: unknown objects or trailing qualifications
+// remain global denials. This never supplies positive mutation intent.
+const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your)\\s+)?(?:tests?|test\\s+suite|package\\s+scripts?|unrelated\\s+files?)';
+const PROTECTED_EDIT_OBJECT_LIST = new RegExp(
+  `^${PROTECTED_EDIT_OBJECT}(?:${COORD_SEPARATOR}${PROTECTED_EDIT_OBJECT})*$`, 'i',
+);
+
+/** Explicit no-edit language, independent of topic nouns such as "patch" or "fix". */
+export function hasExplicitEditDenial(taskText: string): boolean {
+  const evidence = stripFencedCodeBodies(taskText);
+  if (new RegExp(SEQUENCED_MUTATION_SOURCE, 'i').test(evidence)) return false;
+  for (const directive of evidence.matchAll(new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'))) {
+    if (/^(?:read-?only|dry-?run)$/i.test(directive[0])) return true;
+    const objectClause = evidence.slice(directive.index + directive[0].length)
+      .split(/[.;!?\r\n]/, 1)[0]!.trim();
+    if (!PROTECTED_EDIT_OBJECT_LIST.test(objectClause)) return true;
+  }
+  return false;
+}
 
 /**
  * Lightweight multi-dimensional task-shape analysis.
@@ -446,10 +477,7 @@ export function analyzeTaskShape(taskText: string): TaskShape {
     /\b(find|search|list|check|inspect|investigate|research|discover|locate|scan|show|inventory|explain|analyze|review|compare|diagnose)\b/i.test(t);
 
   // 4. Sequenced mutation override (e.g. "review without changing anything, then fix the issue")
-  const hasSequencedMutationOverride =
-    /\b(?:then|afterwards|and\s+then)\s+(?:fix|implement|repair|modify|update|apply|patch|change|edit)\b/i.test(
-      t,
-    );
+  const hasSequencedMutationOverride = new RegExp(SEQUENCED_MUTATION_SOURCE, 'i').test(t);
 
   let operation: TaskOperation;
   if (hasReadOnlyDirective && !hasSequencedMutationOverride && !hasMutation) {
@@ -500,6 +528,18 @@ export function analyzeTaskShape(taskText: string): TaskShape {
   return { operation, complexity };
 }
 
+/** Resolve host intent before heuristic defaults; explicit user denials still narrow it. */
+export function resolveTaskShape(
+  taskText: string,
+  requested: RequestedTaskOperation = 'AUTO',
+): TaskShape {
+  const shape = analyzeTaskShape(taskText);
+  const denied = hasExplicitEditDenial(taskText);
+  if (denied) return { ...shape, operation: 'READ_ONLY' };
+  if (requested === 'AUTO') return shape;
+  return { ...shape, operation: requested === 'READ_ONLY' ? 'READ_ONLY' : 'MUTATING' };
+}
+
 /**
  * Map task shape into product task class.
  */
@@ -542,6 +582,28 @@ export function mapTaskShapeToClass(shape: TaskShape, taskText: string): ChatTas
 }
 
 /**
+ * Classes whose normal job is a code change. Questions, reviews, audits,
+ * and governance probes are outside this set.
+ */
+const MUTATION_EXECUTION_CLASSES: ReadonlySet<ChatTaskClass> = new Set([
+  'default',
+  'quick_fix',
+  'general_swe',
+]);
+
+/**
+ * The short fix procedure is for a mutation task only.
+ * A read-only operation stays off even when the class was forced onto a
+ * mutation tune, so an audit does not receive the fix frame.
+ */
+export function isMutationExecutionTask(
+  taskClass: ChatTaskClass,
+  operation: TaskOperation,
+): boolean {
+  return operation !== 'READ_ONLY' && MUTATION_EXECUTION_CLASSES.has(taskClass);
+}
+
+/**
  * Classify task text into a general work shape.
  * Multi-dimensional analysis: checks mutation intent, scope, and complexity.
  */
@@ -558,6 +620,7 @@ export function resolveChatTaskClass(opts?: {
    * Default true so interactive chat gets a useful tune without knobs.
    */
   autoClassify?: boolean;
+  operation?: RequestedTaskOperation | undefined;
 }): ChatTaskClass {
   const env = opts?.env ?? process.env;
   const auto = opts?.autoClassify !== false;
@@ -578,7 +641,7 @@ export function resolveChatTaskClass(opts?: {
   if (autonomyClass) return autonomyTaskClassFor(autonomyClass);
 
   if (auto && opts?.taskText && opts.taskText.trim()) {
-    return classifyChatTaskClassFromText(opts.taskText);
+    return mapTaskShapeToClass(resolveTaskShape(opts.taskText, opts.operation), opts.taskText);
   }
 
   return 'default';

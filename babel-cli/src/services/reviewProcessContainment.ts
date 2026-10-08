@@ -16,8 +16,10 @@ export interface ReviewProcessContainment {
 }
 
 export const WINDOWS_JOB_HELPER_TIMEOUT_MS = 5_000
-// Compilation has a separate ceiling; the helper deadline only measures job
-// creation and assignment after PowerShell reports COMPILED.
+// Hosted Windows shard 0 (run 37512030753) reached COMPILING and was killed at
+// 5001 ms with empty stderr. That deadline was measuring compiler startup, not
+// job assignment. Compilation has its own hang ceiling. The five-second budget
+// starts only after COMPILED and still covers job creation and assignment.
 export const WINDOWS_JOB_COMPILE_TIMEOUT_MS = 60_000
 const POSIX_WATCHDOG_START_TIMEOUT_MS = 5_000
 
@@ -202,7 +204,9 @@ process.stdout.write('READY\\n');`
 async function attachPosixReviewWatchdog(
   workerPid: number,
   controllerPid: number,
+  signal?: AbortSignal,
 ): Promise<ReviewProcessContainment> {
+  if (signal?.aborted) throw new Error('Review process containment aborted.')
   const helper = spawn(
     process.execPath,
     ['--eval', posixWatchdogScript(), String(workerPid), String(controllerPid)],
@@ -220,10 +224,17 @@ async function attachPosixReviewWatchdog(
       if (settled) return
       settled = true
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       resolveStarted({ ready, ...(stderr.trim() ? { error: stderr.trim().slice(-2_000) } : {}) })
+    }
+    const onAbort = (): void => {
+      settle(false)
+      stopHelper(helper)
     }
     const timer = setTimeout(() => settle(false), POSIX_WATCHDOG_START_TIMEOUT_MS)
     timer.unref?.()
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
     helper.stdout?.setEncoding('utf8')
     helper.stdout?.on('data', (chunk: string) => {
       stdout += chunk
@@ -257,11 +268,13 @@ async function attachPosixReviewWatchdog(
 export async function attachReviewProcessContainment(
   workerPid: number,
   controllerPid = process.pid,
+  signal?: AbortSignal,
 ): Promise<ReviewProcessContainment> {
+  if (signal?.aborted) throw new Error('Review process containment aborted.')
   if (process.platform === 'win32') {
-    return attachWindowsReviewJobObject(workerPid, controllerPid)
+    return attachWindowsReviewJobObject(workerPid, controllerPid, signal)
   }
-  return attachPosixReviewWatchdog(workerPid, controllerPid)
+  return attachPosixReviewWatchdog(workerPid, controllerPid, signal)
 }
 
 /**
@@ -272,10 +285,12 @@ export async function attachReviewProcessContainment(
 export async function attachWindowsReviewJobObject(
   workerPid: number,
   controllerPid = process.pid,
+  signal?: AbortSignal,
 ): Promise<ReviewProcessContainment> {
   if (process.platform !== 'win32') {
     return Object.freeze({ kind: 'posix_process_group' as const, release() {} })
   }
+  if (signal?.aborted) throw new Error('Review process containment aborted.')
   const encoded = Buffer.from(windowsJobHelperScript(workerPid, controllerPid), 'utf16le').toString('base64')
   const helperEnv = getSafeEnv()
   // Some host sandboxes virtualize C:\\Windows\\Temp for the controller but not
@@ -306,10 +321,15 @@ export async function attachWindowsReviewJobObject(
       settled = true
       clearTimeout(compileTimer)
       if (assignTimer) clearTimeout(assignTimer)
+      signal?.removeEventListener('abort', onAbort)
       const compileMs = compiledAt === null ? Date.now() - startedAt : compiledAt - startedAt
       resolveAssigned({ assigned, ...(!assigned ? {
         error: `WINDOWS_JOB_ASSIGNMENT_${reason};elapsedMs=${Date.now() - startedAt};compileMs=${compileMs};stage=${stage};stdoutPresent=${stdout.length > 0};stderrPresent=${stderr.trim().length > 0}`,
       } : {}) })
+    }
+    const onAbort = (): void => {
+      settle(false, 'ABORTED')
+      stopHelper(helper)
     }
     const armAssignmentDeadline = (): void => {
       if (compiledAt !== null) return
@@ -320,16 +340,17 @@ export async function attachWindowsReviewJobObject(
     }
     const compileTimer = setTimeout(() => settle(false, 'COMPILE_TIMEOUT'), WINDOWS_JOB_COMPILE_TIMEOUT_MS)
     compileTimer.unref?.()
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
     helper.stdout?.setEncoding('utf8')
     helper.stdout?.on('data', (chunk: string) => {
       stdout += chunk
       for (const line of stdout.split(/\r?\n/)) {
         const marker = /^BABEL_JOB_STAGE=(STARTED|MODULE_LOADING|COMPILING|COMPILED|CREATING_JOB|OPENING_WORKER|ASSIGNING_JOB)$/.exec(line)
-        if (marker) {
-          stage = marker[1]!
-          if (stage !== 'STARTED' && stage !== 'MODULE_LOADING' && stage !== 'COMPILING') {
-            armAssignmentDeadline()
-          }
+        if (!marker) continue
+        stage = marker[1]!
+        if (stage !== 'STARTED' && stage !== 'MODULE_LOADING' && stage !== 'COMPILING') {
+          armAssignmentDeadline()
         }
       }
       if (stdout.split(/\r?\n/).includes('ASSIGNED')) settle(true, 'ASSIGNED')
@@ -342,6 +363,7 @@ export async function attachWindowsReviewJobObject(
 
   if (!assignment.assigned) {
     stopHelper(helper)
+    if (signal?.aborted) throw new Error('Review process containment aborted.')
     return Object.freeze({
       kind: 'windows_taskkill_fallback' as const,
       ...(assignment.error ? { error: assignment.error } : {}),

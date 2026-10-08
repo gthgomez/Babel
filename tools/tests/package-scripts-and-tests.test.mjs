@@ -807,16 +807,21 @@ test('every discovered source test belongs to canonical unit lane or an explicit
     .map(f => f.split(sep).join('/'))
     .sort();
 
-  assert.equal(allTests.length, 777, `Expected exactly 777 source test files, found ${allTests.length}`);
+  assert.ok(allTests.length > 0, 'Source test discovery must not be empty');
+  assert.equal(new Set(allTests).size, allTests.length, 'Source test discovery must be unique');
 
   // Load canonical unit shard inventory using repo helper
   const { prepareUnitShard } = await import('../../babel-cli/scripts/run_ci_unit_shard.mjs');
   const unitShard = prepareUnitShard(babelCliDir, 0, 1);
   const unitInventory = new Set(unitShard.inventory);
 
-  assert.equal(unitInventory.size, 756, `Expected exactly 756 unit shard test files, found ${unitInventory.size}`);
-  for (const path of ['src/agent/desktopApproval.test.ts', 'src/cli/chatStreamNdjson.test.ts', 'src/interactive/execution/chatResumeHeadless.test.ts']) {
-    assert.ok(unitInventory.has(path), `Desktop integration test must be covered by the canonical unit lane: ${path}`);
+  assert.ok(unitInventory.size > 0, 'Canonical unit inventory must not be empty');
+  for (const path of ['src/agent/desktopApproval.test.ts', 'src/cli/chatStreamNdjson.test.ts', 'src/interactive/execution/chatResumeHeadless.test.ts',
+    'src/agent/chatEngineVerifierAdapter.noChange.test.ts', 'src/agent/chatHarnessFeedback.test.ts',
+    'src/agent/chatLspPolicy.test.ts', 'src/agent/chatOperationExplicit.test.ts',
+    'src/agent/chatProductiveInvestigation.test.ts', 'src/agent/codingLoopRepair.test.ts',
+    'src/agent/codingLoopSimplification.test.ts', 'src/services/lsp/manager.test.ts']) {
+    assert.ok(unitInventory.has(path), `Regression test must be covered by the canonical unit lane: ${path}`);
   }
 
   const totalSpecializedFiles = Object.values(SPECIALIZED_LANES).reduce((acc, l) => acc + l.files.length, 0);
@@ -834,7 +839,8 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   assert.equal(specializedSet.size, 21);
   assert.equal(unclassified.length, 0);
   assert.equal(overlap.length, 0);
-  assert.equal(unitInventory.size + specializedSet.size, 777);
+  assert.equal(unitInventory.size + specializedSet.size, allTests.length);
+  assert.deepEqual([...new Set([...unitInventory, ...specializedSet])].sort(), allTests);
 });
 
 test('test classification negative fixtures (orphan file, deleted lane command, lane absent from CI, missing file, unjustified exclusion, empty commandsByFile, unrelated test match, masked CI, echo CI)', () => {

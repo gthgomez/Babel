@@ -2,7 +2,9 @@
  * Verifier preparation and required-command resolution helper for ChatEngine.
  */
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
+import { isCredentialTargetPath } from './autonomyEnforcement.js';
 
 import {
   bindChatVerifierReceipt,
@@ -18,15 +20,19 @@ import {
   recordVerifierAttempt,
   type SessionEventLog,
 } from './sessionEvents.js';
+import { discoverVerifierInputClosure } from '../evidence/revisionBoundReceipt.js';
 import {
   analyzeVerifierIdentity,
   verifierExecutionFingerprint,
 } from '../services/verifierIdentity.js';
 import {
   isAuthoritativeVerifierCommand,
+  parseExecutedTestCounts,
   parseStructuredVerifierCommand,
   resolveHonestyRequiredVerifiers,
 } from './completionGatePolicy.js';
+
+export { parseExecutedTestCounts };
 
 export function resolveEngineRequiredVerifiers(input: {
   task: string;
@@ -42,9 +48,13 @@ export async function captureChatVerifierReceipt(input: {
   command: string;
   exitCode: number;
   summary: string;
+  stdout?: string;
+  stderr?: string;
   mutationPaths: string[];
   /** Explicit red-only baseline route; cannot satisfy a green completion. */
   allowRepositoryScopeForRedRecovery?: boolean;
+  /** Explicit no-patch route for a successful verifier after inspected no-change. */
+  allowRepositoryScopeForGreenNoChange?: boolean;
 }): Promise<BoundChatVerifierReceipt | null> {
   if (!isAuthoritativeVerifierCommand(input.command)) return null;
   const parsed = parseStructuredVerifierCommand(input.command, {
@@ -57,26 +67,66 @@ export async function captureChatVerifierReceipt(input: {
   // of throwing and corrupting the loop.
   const mutationPaths = toRepositoryRelativePaths(input.projectRoot, input.mutationPaths);
   if (mutationPaths === null) return null;
+  // Admission must precede closure and revision content reads, including paths
+  // the ordinary closure omits because they are credential-class inputs.
+  for (const mutation of mutationPaths) {
+    const absolute = path.resolve(input.projectRoot, mutation);
+    if (isCredentialTargetPath(mutation) || isCredentialTargetPath(absolute)) return null;
+    try {
+      if (isCredentialTargetPath(realpathSync(absolute))) return null;
+    } catch (error) {
+      // Deleted ordinary inputs can still bind their missing-file state.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+    }
+  }
+  let inputClosure = discoverVerifierInputClosure(input.projectRoot);
+  let freshProof = false;
+  if (inputClosure.mode === 'unsupported' && inputClosure.reason === 'Input closure exceeds the file cap') {
+    inputClosure = discoverVerifierInputClosure(input.projectRoot, true);
+    freshProof = inputClosure.mode === 'bound';
+  }
+  if (inputClosure.mode === 'unsupported') return null;
+  const boundMutationPaths = inputClosure.mode === 'bound' && mutationPaths.length > 0
+    ? [...new Set([...mutationPaths, ...inputClosure.paths])].sort()
+    : mutationPaths;
   const repositoryScopedRed = input.allowRepositoryScopeForRedRecovery === true &&
     input.exitCode !== 0 && mutationPaths.length === 0;
-  const receipt = await bindChatVerifierReceipt({
-    projectRoot: input.projectRoot,
-    command: input.command,
-    exit_code: input.exitCode,
-    summary: input.summary,
-    mutationPaths,
-    ...(repositoryScopedRed ? { scopeKind: 'repository' as const } : {}),
-    structured: {
-      verifierId: parsed.verifierId,
-      authoritySource: parsed.authoritySource,
-      executable: parsed.executable,
-      args: parsed.args,
-    },
-  });
-  // Repository scope falls back to a root-path digest without a Git commit.
-  // That is insufficient evidence for a red baseline repair candidate.
-  if (repositoryScopedRed && !receipt.boundRevision?.gitCommitHash) return null;
-  return receipt;
+  const repositoryScopedGreenNoChange = input.allowRepositoryScopeForGreenNoChange === true &&
+    input.exitCode === 0 && mutationPaths.length === 0;
+  if (freshProof && mutationPaths.length === 0 && !repositoryScopedRed && !repositoryScopedGreenNoChange) return null;
+  const repositoryScoped = repositoryScopedRed || repositoryScopedGreenNoChange || freshProof;
+  try {
+    const receipt = await bindChatVerifierReceipt({
+      projectRoot: input.projectRoot,
+      command: input.command,
+      exit_code: input.exitCode,
+      summary: input.summary,
+      mutationPaths: repositoryScoped ? [] : boundMutationPaths,
+      ...(repositoryScoped ? {
+        scopeKind: 'repository' as const,
+        gitBinding: 'required' as const,
+      } : {}),
+      structured: {
+        verifierId: parsed.verifierId,
+        authoritySource: parsed.authoritySource,
+        executable: parsed.executable,
+        args: parsed.args,
+      },
+    });
+    receipt.inputClosure = inputClosure;
+    const counts = parseExecutedTestCounts(
+      `${input.stdout ?? ''}\n${input.stderr ?? ''}`,
+      input.command,
+    );
+    if (counts) {
+      receipt.tests_total = counts.tests_total;
+      receipt.tests_skipped = counts.tests_skipped;
+    }
+    return receipt;
+  } catch (error) {
+    if (repositoryScoped) return null;
+    throw error;
+  }
 }
 
 /**
@@ -169,8 +219,11 @@ export async function captureAndRecordVerifierReceipt(input: {
   command: string;
   exitCode: number;
   summary: string;
+  stdout?: string;
+  stderr?: string;
   mutationPaths: string[];
   allowRepositoryScopeForRedRecovery?: boolean;
+  allowRepositoryScopeForGreenNoChange?: boolean;
   sessionEvents: SessionEventLog;
   turnId: string;
   ledger: BoundChatVerifierReceipt[];
@@ -182,8 +235,25 @@ export async function captureAndRecordVerifierReceipt(input: {
   toolCallId?: string;
   /** Composite cache slot identity; derived from command+cwd+env when omitted. */
   cacheIdentity?: { key: string; cwd: string; envKey: string };
+  /** The command was not started. A synthetic exit must not enter the ledger. */
+  simulated?: boolean;
 }): Promise<BoundChatVerifierReceipt | null> {
-  const receipt = await captureChatVerifierReceipt(input);
+  if (input.simulated === true) return null;
+  const receipt = await captureChatVerifierReceipt({
+    projectRoot: input.projectRoot,
+    command: input.command,
+    exitCode: input.exitCode,
+    summary: input.summary,
+    ...(input.stdout !== undefined ? { stdout: input.stdout } : {}),
+    ...(input.stderr !== undefined ? { stderr: input.stderr } : {}),
+    mutationPaths: input.mutationPaths,
+    ...(input.allowRepositoryScopeForRedRecovery !== undefined
+      ? { allowRepositoryScopeForRedRecovery: input.allowRepositoryScopeForRedRecovery }
+      : {}),
+    ...(input.allowRepositoryScopeForGreenNoChange !== undefined
+      ? { allowRepositoryScopeForGreenNoChange: input.allowRepositoryScopeForGreenNoChange }
+      : {}),
+  });
   if (!receipt) return null;
   const caveats = verifierEvidenceCaveats(receipt);
   if (caveats.length > 0 && !receipt.summary.includes(caveats[0]!)) {
@@ -270,6 +340,8 @@ export function shouldReuseCachedVerifierReceipt(
   projectRoot: string,
   receipt: BoundChatVerifierReceipt,
 ): boolean {
+  if (receipt.inputClosure?.mode === 'unsupported'
+    || receipt.inputClosure?.reuseEligible === false) return false;
   const currency = evaluateChatVerifierReceiptCurrencySync(projectRoot, receipt);
   return currency !== null && currency.stale === false;
 }

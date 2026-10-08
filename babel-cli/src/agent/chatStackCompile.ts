@@ -7,8 +7,10 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isCredentialTargetPath } from './autonomyEnforcement.js';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { resolveRuntimeUserStateRoot } from '../config/runtimePaths.js';
 
 export interface ChatStackEntry {
   id: string;
@@ -66,13 +68,13 @@ export interface ChatCompiledStack {
 
 export interface CompileChatStackOptions {
   projectRoot: string;
-  /** Repo root that holds AGENTS.md / CLAUDE.md when different from project. */
+  /** Repo root that holds AGENTS.md / ENGINEERING.md when different from project. */
   babelRoot?: string;
   task?: string;
   modelId?: string;
-  /** Max characters of system_context. Default 24_000. */
+  /** Maximum UTF-16 units of complete system_context. Default 24_000. */
   promptBudgetChars?: number;
-  /** Include domain/skill hints from task keywords. Default true. */
+  /** Include domain/skill hints from task keywords. Default false. */
   includeDomainSkill?: boolean;
   /** Gap-2: Pre-fetched memory context (typed memory search results).
    *  Injected as a project-memory entry before safety/provider layers. */
@@ -95,26 +97,8 @@ export function resolveStackBudgetForClass(taskClass?: string): number {
   return INTERACTIVE_STACK_BUDGET;
 }
 
-const IDENTITY_CANDIDATES = ['AGENTS.md', 'Claude.md', 'CLAUDE.md'];
-const PROJECT_CANDIDATES = [
-  'PROJECT_CONTEXT.md',
-  'babel-cli/CLAUDE.md',
-  'CLAUDE.md',
-];
-const SAFETY_SNIPPET = [
-  '# Chat safety adapter',
-  '- Prefer workspace-scoped tools; never escape the project root.',
-  '- Do not exfiltrate secrets; do not disable safety checks.',
-  '- Mutations go through governed tools (write_file / str_replace / apply_patch).',
-].join('\n');
-
-const VERIFIER_SNIPPET = [
-  '# Task verifier guidance',
-  '- After mutations, run the project test/lint command when known.',
-  '- Do not claim completion without verification evidence when required.',
-  '- "No discovered verifier" is not the same as verification passing.',
-].join('\n');
-
+const IDENTITY_CANDIDATES = ['AGENTS.md'];
+const ENGINEERING_CANDIDATES = ['ENGINEERING.md'];
 interface ReadContent {
   path: string;
   content: string;
@@ -123,46 +107,131 @@ interface ReadContent {
   source_truncated: boolean;
 }
 
-function truncateToUtf16Units(content: string, maxUnits: number): string {
-  if (maxUnits <= 0) return '';
-  if (content.length <= maxUnits) return content;
-
-  let usedUnits = 0;
-  let end = 0;
-  for (const codePoint of content) {
-    if (usedUnits + codePoint.length > maxUnits) break;
-    usedUnits += codePoint.length;
-    end += codePoint.length;
-  }
-  return content.slice(0, end);
+function pathEscapesRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === '..' || isAbsolute(rel) || rel.startsWith('../') || rel.startsWith('..\\');
 }
 
-function tryRead(path: string, maxChars: number): ReadContent | null {
+/** Roots that may supply automatic instruction files. Stops at the git root. */
+export function instructionIntakeRoots(projectRoot: string, babelRoot: string): string[] {
+  const project = resolve(projectRoot);
+  const babel = resolve(babelRoot);
+  const walked: string[] = [];
+  let dir = project;
+  let sawGit = false;
+  for (let i = 0; i < 8; i++) {
+    if (!walked.includes(dir)) walked.push(dir);
+    if (existsSync(join(dir, '.git'))) {
+      sawGit = true;
+      break;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (!sawGit) {
+    const parent = dirname(project);
+    const legacy = [project];
+    if (babel !== project) legacy.push(babel);
+    if (parent !== project && !legacy.includes(parent)) legacy.push(parent);
+    return legacy;
+  }
+  if (!walked.includes(babel)) walked.push(babel);
+  return walked;
+}
+
+/**
+ * Automatic instruction files must stay inside the approved intake roots.
+ * A symlink whose real path leaves those roots is refused before content I/O.
+ * Deliberately selected user context does not use this gate.
+ */
+function admitAutomaticInstruction(path: string, roots: readonly string[]): boolean {
+  if (isCredentialTargetPath(path)) return false;
+  let stat;
   try {
-    if (!existsSync(path)) return null;
-    const raw = readFileSync(path, 'utf-8');
-    const source_truncated = raw.length > maxChars;
-    return {
-      path,
-      content: source_truncated
-        ? truncateToUtf16Units(raw, maxChars) + '\n/* truncated */'
-        : raw,
-      source_digest: hashContent(raw),
-      source_length: raw.length,
-      source_truncated,
-    };
+    stat = lstatSync(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT';
+  }
+  if (!stat.isSymbolicLink()) return true;
+  let realTarget: string;
+  let realRoots: string[];
+  try {
+    realTarget = realpathSync(path);
+    if (isCredentialTargetPath(realTarget)) return false;
+    realRoots = roots.map((root) => {
+      try {
+        return realpathSync(root);
+      } catch {
+        return resolve(root);
+      }
+    });
   } catch {
+    return false;
+  }
+  return realRoots.some((root) => !pathEscapesRoot(root, realTarget));
+}
+
+function tryRead(path: string, required: boolean, intakeRoots?: readonly string[]): ReadContent | null {
+  if (intakeRoots && !admitAutomaticInstruction(path, intakeRoots)) return null;
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf-8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return null;
+    if (required) throw new Error('required_instruction_read_failed', { cause: error });
     return null;
   }
+  return {
+    path,
+    content: raw,
+    source_digest: hashContent(raw),
+    source_length: raw.length,
+    source_truncated: false,
+  };
 }
 
-function firstExisting(root: string, names: string[]): ReadContent | null {
+function firstExisting(
+  root: string,
+  names: string[],
+  required: boolean,
+  intakeRoots: readonly string[],
+): ReadContent | null {
   for (const name of names) {
     const p = resolve(root, name);
-    const content = tryRead(p, 12_000);
+    const content = tryRead(p, required, intakeRoots);
     if (content) return content;
   }
   return null;
+}
+
+/**
+ * Project instruction file. Walk from the project up to the git root so a
+ * nested package still sees repository AGENTS.md. Do not scan above that root
+ * or sibling repositories. When there is no git root, keep the historical
+ * project / babel-root / one-parent set.
+ */
+function readInstructionFile(
+  projectRoot: string,
+  babelRoot: string,
+  names: readonly string[],
+  required = false,
+): ReadContent | null {
+  const roots = instructionIntakeRoots(projectRoot, babelRoot);
+  for (const root of roots) {
+    const found = firstExisting(root, [...names], required, roots);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** User-wide context. Override with BABEL_USER_CONTEXT in tests. */
+export function resolveUserContextPath(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env['BABEL_USER_CONTEXT']?.trim();
+  if (override) return resolve(override);
+  return join(resolveRuntimeUserStateRoot(env), 'context.md');
 }
 
 function inferDomainSkill(task: string): { id: string; content: string } | null {
@@ -196,16 +265,6 @@ function inferDomainSkill(task: string): { id: string; content: string } | null 
     };
   }
   return null;
-}
-
-function providerAdapterSnippet(modelId?: string): string {
-  const model = modelId ?? 'auto';
-  return [
-    '# Provider / model adapter',
-    `Effective model: ${model}`,
-    '- Use native tool calling when the provider supports it.',
-    '- Do not flatten tool results into prose when structured results are available.',
-  ].join('\n');
 }
 
 function hashManifest(entries: ChatStackEntry[]): string {
@@ -249,10 +308,9 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     sections.push({ entry: entries[entries.length - 1]!, content });
   };
 
-  // Identity
-  const identity =
-    firstExisting(babelRoot, IDENTITY_CANDIDATES) ??
-    firstExisting(projectRoot, IDENTITY_CANDIDATES);
+  // Repository authority is atomic: a selected AGENTS.md is read completely or
+  // stack construction fails. CLAUDE.md is not an instruction source.
+  const identity = readInstructionFile(projectRoot, babelRoot, IDENTITY_CANDIDATES, true);
   if (identity) {
     push(
       { id: 'identity:agents', layer: 'identity', path: identity.path },
@@ -266,15 +324,21 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     );
   }
 
-  // Closest project instructions
-  const project =
-    firstExisting(projectRoot, PROJECT_CANDIDATES) ??
-    firstExisting(babelRoot, ['PROJECT_CONTEXT.md']);
-  if (project) {
+  const engineering = readInstructionFile(projectRoot, babelRoot, ENGINEERING_CANDIDATES);
+  if (engineering) {
     push(
-      { id: 'project:context', layer: 'project', path: project.path },
-      project.content,
-      project,
+      { id: 'project:engineering', layer: 'project', path: engineering.path },
+      engineering.content,
+      engineering,
+    );
+  }
+
+  const userContext = tryRead(resolveUserContextPath(), false);
+  if (userContext) {
+    push(
+      { id: 'user:context', layer: 'project', path: userContext.path },
+      `# User context\n${userContext.content}`,
+      userContext,
     );
   }
 
@@ -286,8 +350,8 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     );
   }
 
-  // Domain / skill (task-scoped, not full deep catalog)
-  if (options.includeDomainSkill !== false && options.task) {
+  // Domain / skill only when a caller asks. Keyword inference is not the default.
+  if (options.includeDomainSkill === true && options.task) {
     const domain = inferDomainSkill(options.task);
     if (domain) {
       push(
@@ -297,82 +361,40 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     }
   }
 
-  // Safety
-  push(
-    { id: 'safety:chat-adapter', layer: 'safety', path: '(builtin)' },
-    SAFETY_SNIPPET,
-  );
-
-  // Provider
-  push(
-    { id: 'provider:adapter', layer: 'provider', path: '(builtin)' },
-    providerAdapterSnippet(options.modelId),
-  );
-
-  // Verifier guidance
-  push(
-    { id: 'verifier:guidance', layer: 'verifier', path: '(builtin)' },
-    VERIFIER_SNIPPET,
-  );
-
-  const mandatoryIds = new Set([
-    'safety:chat-adapter',
-    'provider:adapter',
-    'verifier:guidance',
-  ]);
-  const mandatorySections = sections.filter(({ entry }) => mandatoryIds.has(entry.id));
-  // Project context is the task's decisive contract. Pack it before generic
-  // identity prose so a tight budget cannot silently evict the project rule
-  // while retaining only broad agent identity.
+  const requiredSections = sections.filter(({ entry }) => entry.id.startsWith('identity:'));
+  const requiredText = requiredSections.map(({ content }) => content).join('\n\n');
+  // Required AGENTS policy is never prefix-packed. Optional sources are each
+  // admitted whole or omitted; continue after an omission to try later inputs.
   const optionalSections = sections
-    .filter(({ entry }) => !mandatoryIds.has(entry.id))
+    .filter(({ entry }) => !entry.id.startsWith('identity:'))
     .sort((left, right) => {
       const priority = (id: string): number =>
-        id === 'project:context' ? 0 :
-          id === 'project:memory' ? 1 :
-            id.startsWith('identity:') ? 2 : 3;
+        id.startsWith('identity:') ? 0 :
+          id === 'project:engineering' ? 1 :
+            id === 'user:context' ? 2 :
+              id === 'project:memory' ? 3 : 4;
       return priority(left.entry.id) - priority(right.entry.id);
     });
-  const mandatoryText = mandatorySections.map(({ content }) => content).join('\n\n');
   const content_disposition: ChatStackContentDisposition[] = [];
   let system_context = '';
   let context_error: string | undefined;
 
-  if (mandatoryText.length > budget) {
-    context_error = 'mandatory_instruction_core_exceeds_prompt_budget';
-    for (const { entry } of sections) {
-      content_disposition.push({
-        id: entry.id,
-        status: 'omitted',
-        included_chars: 0,
-        delivered_content_digest: hashContent(''),
-      });
-    }
+  if (requiredText.length > budget) {
+    throw new Error('required_instruction_exceeds_prompt_budget');
   } else {
     const includedOptional: string[] = [];
+    let usedChars = requiredText.length;
     for (const { entry, content } of optionalSections) {
-      const separatorBeforeMandatory = mandatoryText.length > 0 ? 2 : 0;
-      const separatorBefore = includedOptional.length > 0 ? 2 : 0;
-      const available = budget - mandatoryText.length - separatorBeforeMandatory -
-        includedOptional.join('\n\n').length - separatorBefore;
-      if (content.length <= available) {
+      const separator = usedChars > 0 ? 2 : 0;
+      if (content.length + separator <= budget - usedChars) {
         includedOptional.push(content);
+        usedChars += separator + content.length;
         content_disposition.push({
           id: entry.id,
           status: 'included',
           included_chars: content.length,
           delivered_content_digest: hashContent(content),
         });
-      } else if (available > 0) {
-        const partial = truncateToUtf16Units(content, available);
-        if (partial.length > 0) includedOptional.push(partial);
-        content_disposition.push({
-          id: entry.id,
-          status: 'truncated',
-          included_chars: partial.length,
-          delivered_content_digest: hashContent(partial),
-        });
-        break;
       } else {
         content_disposition.push({
           id: entry.id,
@@ -394,16 +416,13 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
         });
       }
     }
-    system_context = [...includedOptional, mandatoryText].filter(Boolean).join('\n\n');
-    for (const { entry } of mandatorySections) {
+    system_context = [requiredText, ...includedOptional].filter(Boolean).join('\n\n');
+    for (const { entry, content } of requiredSections) {
       content_disposition.push({
         id: entry.id,
         status: 'included',
-        included_chars:
-          sections.find((section) => section.entry.id === entry.id)?.content.length ?? 0,
-        delivered_content_digest: hashContent(
-          sections.find((section) => section.entry.id === entry.id)?.content ?? '',
-        ),
+        included_chars: content.length,
+        delivered_content_digest: hashContent(content),
       });
     }
   }

@@ -9,8 +9,8 @@
  * execution profile, and cwd-within-project before startBackgroundShell.
  * This module applies getSafeEnv(), output caps, hard job timeout, and lifecycle.
  *
- * Argv contract matches sandbox shellExec: whitespace split only (no quoted
- * multi-arg shell syntax). Prefer simple commands (npm test, node script.js).
+ * Argv uses the shared quote-aware parser: quoted whitespace and empty arguments
+ * are preserved. No shell expansion or shell operators are supported.
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -147,7 +147,8 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
   const cwd = pathResolve(input.cwd);
   const id = `bg-${nextId++}`;
   const isWin = process.platform === 'win32';
-  // Whitespace split only — same tokenizer as sandbox shellExec (no quotes).
+  // Use the sandbox argv parser so quoted whitespace and empty args match the
+  // foreground shell contract; shell operators remain rejected by admission.
   const argv = parseCommandArgv(command, process.platform);
   const rawCmd = argv[0] ?? '';
   const normalizedRawCmd = isWin
