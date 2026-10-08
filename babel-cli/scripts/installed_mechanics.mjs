@@ -1,6 +1,7 @@
 // License: Apache-2.0 — see LICENSE
 import assert from 'node:assert/strict'
-import { mkdtempSync, realpathSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -25,9 +26,11 @@ const answer = (text) => [
 export async function runInstalledMechanics(packageRoot, projectRoot) {
   // macOS /var aliases /private/var; the lease must bind the same canonical
   // repository identity as runtime admission and the sandbox.
-  const fixture = realpathSync(mkdtempSync(join(projectRoot, 'mechanics-')))
+  const fixtureOwner = realpathSync(mkdtempSync(join(projectRoot, 'mechanics-')))
+  const fixture = join(fixtureOwner, 'project')
+  mkdirSync(fixture)
   const settings = {
-    BABEL_RUNS_DIR: join(fixture, 'runs'),
+    BABEL_RUNS_DIR: join(fixtureOwner, 'runs'),
     BABEL_BENCHMARK_AUTO_APPROVE: '1', BABEL_BENCHMARK_MODE: '1',
     BABEL_EXECUTION_PROFILE: 'dev_local', BABEL_ALLOW_HOST_FALLBACK: '1',
     BABEL_DRY_RUN: '0', BABEL_DRY_RUN_SOURCE: 'session', BABEL_COMPACTION: '0',
@@ -54,11 +57,17 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
     const fixed = 'export const add = (a, b) => a + b\n'
     writeFileSync(join(fixture, 'parser.mjs'), buggy)
     writeFileSync(join(fixture, 'verify.mjs'),
-      "import assert from 'node:assert/strict'\nimport { add } from './parser.mjs'\n" +
-      'for (const [a,b] of [[1,2],[7,4],[-2,5],[0,9]]) assert.equal(add(a,b),a+b)\n')
+      "import assert from 'node:assert/strict'\nimport test from 'node:test'\nimport { add } from './parser.mjs'\n" +
+      'for (const [a,b] of [[1,2],[7,4],[-2,5],[0,9]]) test(`add(${a},${b})`, () => assert.equal(add(a,b),a+b))\n')
     writeFileSync(join(fixture, 'package.json'), JSON.stringify({
-      name: 'installed-mechanics-fixture', private: true, scripts: { test: 'node verify.mjs' },
+      name: 'installed-mechanics-fixture', private: true, scripts: { test: 'node --test --test-reporter=tap verify.mjs' },
     }))
+    // Fresh repository evidence requires real Git state; seed only owned inputs.
+    for (const args of [['init', '--quiet'], ['config', 'user.email', 'fixture@example.test'],
+      ['config', 'user.name', 'fixture'], ['add', '-A'], ['commit', '--quiet', '-m', 'fixture baseline']]) {
+      const result = spawnSync('git', args, { cwd: fixture, encoding: 'utf8' })
+      assert.equal(result.status, 0, `fixture Git setup failed: ${result.stderr}`)
+    }
     let sequence = 0
     const create = (task) => {
       const engine = new ChatEngine({ task, projectRoot: fixture,
@@ -74,7 +83,8 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
         async *executeWithToolsStream(messages) {
           const index = calls++
           assert.ok(index < script.length, `unexpected provider round ${index}: ${JSON.stringify(messages?.slice(-2))}`)
-          for (const event of script[index]) {
+          const step = typeof script[index] === 'function' ? script[index](messages) : script[index]
+          for (const event of step) {
             yield event
             onYield?.(event, index)
           }
@@ -108,7 +118,7 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
     const replace = (id, old, next) => tool(id, 'str_replace', {
       file_path: 'parser.mjs', old_str: old, new_str: next,
     })
-    const verify = (id) => tool(id, 'run_command', { command: 'npm test' })
+    const verify = (id, name = 'run_command') => tool(id, name, { command: 'npm test' })
     const inspectTask = 'Review the parser and explain its defect. Do not modify files.'
     const inspection = create(inspectTask)
     const inspected = await drive(inspection, inspectTask, [read('inspect'), answer('The parser subtracts instead of adding.')])
@@ -132,14 +142,44 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
 
     const fixTask = 'Investigate why parser_test fails and fix it.'
     const fixing = create(fixTask)
+    const repair = (messages) => {
+      // The synthetic provider proposes from the ordinary advertised context.
+      // It never inspects private engine state or injects controller evidence.
+      const state = [...messages].reverse().find((message) =>
+        typeof message.content === 'string' && message.content.includes('<!-- BABEL_WORKING_STATE -->'))?.content
+      assert.ok(state)
+      const field = (name) => {
+        const value = state.match(new RegExp(`^  ${name}: (.+)$`, 'm'))?.[1]
+        assert.ok(value, `missing advertised recovery field ${name}`)
+        return value.startsWith('"') ? JSON.parse(value) : value
+      }
+      assert.equal(field('recovery_gate'), 'evidence_satisfied')
+      const observations = field('recovery_observation_keys').match(/[a-f0-9]{16}/g) ?? []
+      assert.ok(observations.length > 0)
+      return tool('fix-write', 'str_replace', {
+        file_path: 'parser.mjs', old_str: 'a - b', new_str: 'a + b',
+        repair_plan: {
+          schemaVersion: 1, failureSignature: field('recovery_failure'),
+          workspaceRevision: field('recovery_revision'), hypothesisClass: 'logic',
+          targetIdentities: ['parser.mjs'], actionFamily: 'str_replace',
+          criterionId: field('last_verifier').split(' exit=')[0],
+          supportingObservationIds: observations,
+        },
+      })
+    }
     const repaired = await drive(fixing, fixTask, [read('fix-read'), verify('red'),
-      replace('fix-write', 'a - b', 'a + b'), verify('green'), answer('Fixed the parser; npm test passed.')])
-    assert.equal(readFileSync(join(fixture, 'parser.mjs'), 'utf8'), fixed)
+      read('repair-source'), tool('repair-assertion', 'read_file', { path: 'verify.mjs' }),
+      repair, verify('green', 'test_run'), answer('Fixed the parser; npm test passed.')])
+    assert.equal(readFileSync(join(fixture, 'parser.mjs'), 'utf8'), fixed,
+      JSON.stringify({ status: repaired.terminal.status, calls: repaired.calls,
+        tools: repaired.terminal.toolCalls?.map((call) => ({ tool: call.tool, exitCode: call.exit_code })) }))
     const verifiers = fixing.getParityRuntime().eventLog.events.filter((event) =>
-      event.kind === 'tool_result' && event.tool_name === 'run_command')
+      event.kind === 'tool_result' && ['run_command', 'test_run'].includes(event.tool_name))
     assert.deepEqual(verifiers.map((call) => call.exit_code), [1, 0], `real red then green verifier exits: ${JSON.stringify(verifiers)}`)
     assert.ok(fixing.getWriteCount() > 0)
     assert.equal(fixing.lastVerifierReceipt?.exit_code, 0)
+    assert.equal(fixing.lastVerifierReceipt?.tests_total, 4)
+    assert.equal(fixing.lastVerifierReceipt?.tests_skipped, 0)
     assert.equal(repaired.terminal.status, 'completed', JSON.stringify({ terminal: repaired.terminal,
       events: repaired.events.filter((event) => !['answer_chunk', 'tool_start', 'tool_complete', 'tool_failed', 'failed'].includes(event.type)),
       receipt: fixing.lastVerifierReceipt }))
@@ -183,7 +223,7 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
     const evidence = (result) => ({ status: result.terminal.status ?? result.terminal.type,
       outcome: result.terminal.outcome ?? null, providerCalls: result.calls,
       durableEvents: result.durable.length })
-    return { fixtureRoot: fixture, execution: 'explicit dev_local fixture lease; actual local npm test; HTTP blocked by caller',
+    return { fixtureRoot: fixtureOwner, execution: 'explicit dev_local fixture lease; actual local npm test; HTTP blocked by caller',
       inspect: evidence(inspected), denied: evidence(denied), repair: evidence(repaired),
       verifierExitCodes: verifiers.map((call) => call.exit_code), cancel: evidence(cancelled),
       freshTask: evidence(fresh), resume: evidence(afterResume) }

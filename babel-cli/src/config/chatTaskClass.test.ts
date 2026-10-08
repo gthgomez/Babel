@@ -5,15 +5,50 @@ import {
   classifyChatTaskClassFromText,
   describeInteractiveCodingProfile,
   getChatTaskTune,
+  hasExplicitEditDenial,
   isMutationExecutionTask,
   listCodingProfileSummaries,
   normalizeChatTaskClass,
   resolveChatTaskClass,
   resolveChatTaskTune,
+  resolveTaskShape,
 } from './chatTaskClass.js';
 import { resolveChatEngineLimits, isSweChatProfileEnabled } from './chatEngineLimits.js';
 
 describe('chatTaskClass', () => {
+  test('protected test and package constraints preserve an explicit production repair', () => {
+    const task = "Fix `add(a, b)` so it returns the sum for the finite numeric inputs covered by this repository's tests. Inspect the implementation and tests, make the smallest production-code repair, run the required tests, and report the changed files and actual verification result. Do not change the tests, package scripts, or unrelated files. Do not install dependencies or use project network access.";
+    assert.equal(hasExplicitEditDenial(task), false);
+    assert.equal(resolveTaskShape(task, 'CHANGE').operation, 'MUTATING');
+    assert.notEqual(resolveTaskShape(task).operation, 'READ_ONLY');
+    for (const protectedObject of ['the tests', 'test suite', 'package scripts', 'unrelated files']) {
+      const scoped = `Fix the implementation. Do not edit or modify ${protectedObject}.`;
+      assert.equal(hasExplicitEditDenial(scoped), false, scoped);
+      assert.equal(resolveTaskShape(scoped, 'CHANGE').operation, 'MUTATING', scoped);
+      assert.equal(resolveTaskShape(`Do not edit or modify ${protectedObject}.`).operation, 'READ_ONLY');
+    }
+    for (const constraint of ["Don't change the tests", 'Never edit package scripts',
+      'Without modifying unrelated files', 'Without any editing of the tests']) {
+      // "of" is deliberately outside the admitted complete-object grammar.
+      const scoped = `Fix the implementation. ${constraint}.`;
+      assert.equal(hasExplicitEditDenial(scoped), constraint.includes(' of '), scoped);
+    }
+  });
+
+  test('global or ambiguous edit denials still narrow explicit change intent', () => {
+    for (const denial of ['Do not edit', 'Do not change files', 'Do not change the code',
+      'Do not change anything', 'Without editing', 'Without modifying code', 'Read-only', 'Dry-run',
+      'Do not edit the tests or any files', 'Do not edit the tests and code',
+      'Do not edit the tests beyond this point', 'Do not edit the tests except fixtures']) {
+      const task = `Fix the implementation. ${denial}.`;
+      assert.equal(hasExplicitEditDenial(task), true, task);
+      assert.equal(resolveTaskShape(task, 'CHANGE').operation, 'READ_ONLY', task);
+    }
+    const mixed = 'Fix the implementation. Do not edit the tests. Do not change any files.';
+    assert.equal(resolveTaskShape(mixed, 'CHANGE').operation, 'READ_ONLY');
+    assert.equal(resolveTaskShape('Fix the implementation. Do not edit the tests.', 'READ_ONLY').operation, 'READ_ONLY');
+  });
+
   test('aliases map legacy swe names to general_swe', () => {
     assert.equal(normalizeChatTaskClass('swe'), 'general_swe');
     assert.equal(normalizeChatTaskClass('swebench'), 'general_swe');

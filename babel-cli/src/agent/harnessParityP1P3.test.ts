@@ -619,7 +619,7 @@ describe('Compiled chat stack', () => {
     assert.equal(stack.selected_entries.some((entry) =>
       ['safety', 'provider', 'verifier'].includes(entry.layer)), false,
     'generic safety/provider/verifier prompt blocks are no longer compiled');
-    assert.match(stack.system_context, /# Babel contributor contract/);
+    assert.match(stack.system_context, /# Babel contributor instructions/);
     assert.ok(stack.system_context.length > 50);
 
     // Catalog-ish path change alters hash

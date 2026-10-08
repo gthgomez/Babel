@@ -153,6 +153,10 @@ function detectTypeScriptServer(): { command: string; args: string[] } | null {
     try {
       const absolute = resolve(candidate);
       if (!isAbsolute(absolute) || !statSync(absolute).isFile()) continue;
+      if (['.mjs', '.cjs', '.js'].includes(extname(absolute).toLowerCase())) {
+        accessSync(absolute, constants.R_OK);
+        return { command: process.execPath, args: [absolute, ...TYPESCRIPT_SERVER_ARGS] };
+      }
       if (process.platform !== 'win32') accessSync(absolute, constants.X_OK);
       return { command: absolute, args: TYPESCRIPT_SERVER_ARGS };
     } catch {

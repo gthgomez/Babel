@@ -914,6 +914,67 @@ describe('H1 compaction lifecycle result', () => {
     assert.equal(beforeRequest.includes('DROPPED_HISTORY_BLOCK'), true);
   });
 
+  for (const race of ['owner supersession', 'failed persistence', 'same-owner replacement']) {
+    const failure = race === 'failed persistence';
+    it(`heuristic rollback retains a newer submission during ${race}`, async () => {
+      const threadLog = createThreadEventLog();
+      const sessionLog = createSessionEventLog();
+      const turnId = startTurn(threadLog, {
+        task: 'old task', model: 'test-model', provider: 'deepseek',
+        projectRoot: tmpdir(), policyPreset: 'chat',
+      });
+      const conversation: ChatMessage[] = [{ role: 'system', content: 'current policy' }];
+      for (let index = 0; index < 8; index++) {
+        const user = `old user ${index} ${'x'.repeat(3000)}`;
+        const assistant = `old assistant ${index} ${'x'.repeat(3000)}`;
+        recordUserMessage(threadLog, turnId, user);
+        recordAssistantMessage(threadLog, turnId, assistant);
+        conversation.push({ role: 'user', content: user }, { role: 'assistant', content: assistant });
+      }
+      let current = true;
+      let checkpoints = 0;
+      let newThreadId = '';
+      let newSessionId = '';
+      const replacement: ChatMessage[] = [{ role: 'user', content: 'NEW MESSAGE' }];
+      const host: ChatEngineCompactionHost = {
+        conversation, options: { task: 'old task', model: 'test-model' },
+        limits: { maxEstimatedTokens: 10 }, abortSignal: new AbortController().signal,
+        writeCount: 0, turnIndex: 2, toolCallLog: [], progress: { receipts: [], consecutiveNoProgress: 0 },
+        threadLog, sessionLog, turnId, shouldUseTextTools: () => false,
+        compactHeuristic: () => { host.conversation = [conversation[0]!, ...conversation.slice(-2)]; },
+        checkpoint: async () => {
+          if (checkpoints++ !== 0) return;
+          const next = startTurn(threadLog, {
+            task: 'NEW TASK', model: 'test-model', provider: 'deepseek',
+            projectRoot: tmpdir(), policyPreset: 'chat',
+          });
+          recordUserMessage(threadLog, next, 'NEW MESSAGE');
+          newThreadId = threadLog.events.at(-1)!.event_id;
+          newSessionId = recordUserSubmitted(sessionLog, { turn_id: next, task: 'NEW TASK' }).event_id;
+          sessionLog.flushedThroughSeq = sessionLog.events.at(-1)!.seq;
+          host.conversation = replacement;
+          current = race === 'same-owner replacement';
+          if (failure) throw new Error('synthetic checkpoint failure');
+        },
+        reserveTokens: 0, textToolsReserve: 0, forceCompaction: true,
+        resolveModel: () => 'test-model', shouldCompactByTokens: () => true,
+        estimateTokens: (messages) => messages.reduce((sum, message) => sum + message.content.length, 0),
+        isOwnerCurrent: () => current,
+      };
+      if (failure) await assert.rejects(runChatEngineCompaction(host), /checkpoint failure/);
+      else assert.equal(await runChatEngineCompaction(host), null);
+      assert.ok(threadLog.events.some(event => event.event_id === newThreadId));
+      assert.ok(sessionLog.events.some(event => event.event_id === newSessionId));
+      assert.equal(host.conversation, replacement, 'the new owner retains its exact conversation');
+      assert.equal(threadLog.events.some(event => event.kind === 'compaction_capsule'), false);
+      assert.equal(sessionLog.events.some(event => event.kind.startsWith('compaction_')), false);
+      assert.equal(sessionLog.flushedThroughSeq, sessionLog.events.length - 1);
+      const restoredThread = parseThreadEventLog(serializeThreadEventLog(threadLog));
+      parseSessionEventLog(serializeSessionEventLog(sessionLog));
+      assert.ok(JSON.stringify(rebuildProviderMessagesFromEvents(restoredThread)).includes('NEW MESSAGE'));
+    });
+  }
+
   it('nonshrinking heuristic compaction is not reported as compacted', async () => {
     const task = 'DURABLE_TASK_keep_parser_constraint';
     const threadLog = createThreadEventLog();

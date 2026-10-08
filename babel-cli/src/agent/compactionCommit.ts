@@ -86,6 +86,8 @@ export interface CompactionCommitInput {
   blockOnPersistFailure?: boolean;
   /** Ownership fence checked before any live or durable mutation. */
   isOwnerCurrent?: () => boolean;
+  /** Synchronous acceptance check after event append, before persistence. */
+  validateCommit?: () => boolean;
 }
 
 export interface CompactionCommitResult {
@@ -679,6 +681,9 @@ export async function commitCompaction(
   const rollbackLocalEvents = (): void => {
     const ownedThreadIds = new Set(ownedThreadEventIds);
     const ownedSessionIds = new Set(ownedSessionEventIds);
+    const flushedSessionIds = new Set(input.sessionLog.events
+      .filter((event) => event.seq <= input.sessionLog.flushedThroughSeq)
+      .map((event) => event.event_id));
     input.threadLog.events.splice(
       0,
       input.threadLog.events.length,
@@ -705,9 +710,10 @@ export async function commitCompaction(
       input.sessionLog.events[index]!.seq = index;
     }
     input.sessionLog.nextSeq = input.sessionLog.events.length;
-    if (input.sessionLog.flushedThroughSeq > input.sessionLog.events.length - 1) {
-      input.sessionLog.flushedThroughSeq = input.sessionLog.events.length - 1;
-    }
+    input.sessionLog.flushedThroughSeq = input.sessionLog.events.reduce(
+      (last, event) => flushedSessionIds.has(event.event_id) ? event.seq : last,
+      -1,
+    );
   };
   const rollbackAndPersist = async (): Promise<boolean> => {
     rollbackLocalEvents();
@@ -793,6 +799,21 @@ export async function commitCompaction(
       tokens_after: tokensAfter,
       status: 'committed',
     }).event_id);
+    if (input.validateCommit && !input.validateCommit()) {
+      rollbackLocalEvents();
+      return {
+        status: 'noop',
+        conversation: input.priorConversation.map((message) => ({ ...message })),
+        strategy: input.strategy,
+        tokensBefore: input.tokensBefore,
+        tokensAfter,
+        budget,
+        capsule,
+        capsuleText: durableContent,
+        preservedToolCallIds,
+        evidenceRefs: rawRefs,
+      };
+    }
   } catch (err) {
     rollbackLocalEvents();
     const msg = err instanceof Error ? err.message : String(err);
@@ -1090,20 +1111,13 @@ export async function runChatEngineCompaction(
     if (!ownerIsCurrent()) return;
     const prior = host.conversation.map((message) => ({ ...message }));
     const priorFingerprint = JSON.stringify(host.conversation);
-    const priorThreadEvents = host.threadLog.events.map((event) => structuredClone(event));
-    const priorThreadNextSeq = host.threadLog.nextSeq;
-    const priorSessionEvents = host.sessionLog.events.map((event) => structuredClone(event));
-    const priorSessionNextSeq = host.sessionLog.nextSeq;
-    const priorFlushedThroughSeq = host.sessionLog.flushedThroughSeq;
+    let ownedConversation = host.conversation;
+    const ownsConversation = (): boolean => ownerIsCurrent() && host.conversation === ownedConversation;
     const restore = (): void => {
-      host.conversation = prior;
-      host.threadLog.events.splice(0, host.threadLog.events.length, ...priorThreadEvents);
-      host.threadLog.nextSeq = priorThreadNextSeq;
-      host.sessionLog.events.splice(0, host.sessionLog.events.length, ...priorSessionEvents);
-      host.sessionLog.nextSeq = priorSessionNextSeq;
-      host.sessionLog.flushedThroughSeq = priorFlushedThroughSeq;
+      if (ownsConversation()) host.conversation = prior;
     };
     host.compactHeuristic();
+    ownedConversation = host.conversation;
     try {
       if (!ownerIsCurrent()) {
         restore();
@@ -1130,7 +1144,13 @@ export async function runChatEngineCompaction(
           return true;
         },
         blockOnPersistFailure: true,
-        isOwnerCurrent: ownerIsCurrent,
+        isOwnerCurrent: ownsConversation,
+        validateCommit: () => {
+          const afterRequest = serializedProviderRequest(host.threadLog);
+          return ownsConversation()
+            && (host.options.task.length === 0 || afterRequest.includes(host.options.task))
+            && afterRequest.length < beforeRequest.length;
+        },
       });
       if (committed.status !== 'committed') {
         restore();
@@ -1139,19 +1159,7 @@ export async function runChatEngineCompaction(
           committed.error ?? 'Heuristic compaction persistence failed',
         );
       }
-      const afterRequest = serializedProviderRequest(host.threadLog);
-      const capsuleCommitted = host.threadLog.events.some((event) => event.kind === 'compaction_capsule');
-      const authorityKept = host.options.task.length === 0 || afterRequest.includes(host.options.task);
-      if (!capsuleCommitted || !authorityKept || afterRequest.length >= beforeRequest.length) {
-        restore();
-        await host.checkpoint();
-        return;
-      }
-      if (!ownerIsCurrent()) {
-        restore();
-        await host.checkpoint();
-        return;
-      }
+      if (!ownsConversation()) return;
       host.conversation = committed.conversation;
       mode = 'heuristic';
       changed = true;

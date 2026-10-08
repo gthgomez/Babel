@@ -41,6 +41,7 @@ import {
   handleMcpResourceRead,
   handleMcpToolSearch,
   mcpAutoDispatchDenied,
+  runWithApprovedMcpJit,
 } from './tools/mcpTransport.js';
 import { handleWebFetch, handleWebSearch } from './tools/webContext.js';
 import { handlePluginTool } from './services/plugins.js';
@@ -1760,7 +1761,10 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     return policyDenied;
   }
 
+  let approvedMcpRequest: Extract<ToolCallRequest, { tool: 'mcp_request' }> | undefined;
   if (shouldJitApprove(req)) {
+    // Bind approval to the exact fields presented, before the asynchronous dialog.
+    const presentedMcpRequest = req.tool === 'mcp_request' ? { ...req } : undefined;
     const bus = logContext.getStore()?.eventBus;
     if (bus) {
       bus.promptPause('tool_jit_approval');
@@ -1857,6 +1861,16 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
               : `[JIT_DENIED] Tool execution denied by operator.`,
         };
       }
+      if (presentedMcpRequest && (req.tool !== 'mcp_request'
+        || req.server !== presentedMcpRequest.server || req.query !== presentedMcpRequest.query)) {
+        return {
+          exit_code: 1, stdout: '',
+          stderr: '[MCP_APPROVAL_REQUIRED] Request changed during operator approval.',
+          render_intent: 'tool_failure',
+          failure: { code: 'mcp_approval_required', category: 'input_contract', tool: 'mcp_request' },
+        };
+      }
+      approvedMcpRequest = presentedMcpRequest;
     } finally {
       if (bus) {
         bus.promptResume();
@@ -1908,7 +1922,10 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     : null;
 
   context.onBeforeDispatch?.();
-  const result = await EXECUTOR_TOOL_REGISTRY.dispatch(req, context);
+  const dispatch = () => EXECUTOR_TOOL_REGISTRY.dispatch(req, context);
+  const result = approvedMcpRequest
+    ? await runWithApprovedMcpJit(approvedMcpRequest, dispatch)
+    : await dispatch();
 
   // ── Phase 4: Post-dispatch cache/gate updates ────────────────────────────
   gate.recordCall(req.tool, result.exit_code);

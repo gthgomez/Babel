@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "a5fd84751a62cac1f531532785eaed66f12b1a4824ab2b4e02b77efc445fa16b",
+  "policy_bundle_id": "316d4a0bc02de0b9ab69edc94dff4b5e1b01bb5ce869343a3f6b51d5416d57f3",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "47921ef2675f0c51b25b52362b65650ecddd41e82e1a67c398f1efb2154a040f",
@@ -102,7 +102,7 @@
     "babel-cli/src/services/reviewProcessContainment.test.ts": "be7d058aea0b2db865e0e42c2a981e7819c382f2137d785e7b699ce2144d3740",
     "babel-cli/src/services/reviewProcessContainment.ts": "cf83a3842bcc45a7acec7830866d21a703d277e88199e1a7d74023363cebc086",
     "babel-cli/src/services/reviewProvenance.ts": "2a65f812065679a9c1feb615a384f8e9d8b6d7a83a9106d6f53e87cd8ed3dcb2",
-    "babel-cli/src/services/reviewServiceTransport.test.ts": "196a2a8eb901a66991f3a65ce06572d5b6a3123b947d2befede4632f9659f8e0",
+    "babel-cli/src/services/reviewServiceTransport.test.ts": "f836835aab06d08cc099384847b177fd7cad11dac4f4c2205b666f7dfd3b5b36",
     "babel-cli/src/services/reviewServiceTransport.ts": "4006965d6c2d2df265321712daf9a0c44c5597fb640c74e52893dff29f6148c5",
     "babel-cli/src/services/reviewSupervisor.test.ts": "5699dbe95aac8c38fe55221e40fa34005e6f045ab59837bd844af0d48fb76d6a",
     "babel-cli/src/services/reviewSupervisor.ts": "1a893bf9d675f499221e11a870a92cca80de619a1ed128d79a78e7bc6b297d91",

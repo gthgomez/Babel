@@ -513,6 +513,7 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
 
   test('final prepared-request admission compacts once and retries the rebuilt request', async () => {
     const fixture = makeFixture();
+    let admissionStore: AdmissionStore | undefined;
     try {
       process.env['BABEL_COMPACTION'] = 'off';
       const overLimit = prepareProviderRequest({
@@ -539,7 +540,12 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
         async executeRaw() { return 'fixture complete'; },
         getLastInvocationMetadata() { return null; },
       };
+      mkdirSync(fixture.runs, { recursive: true });
+      const opened = openSessionAdmissionStore('prepared-admission');
+      if (!opened.ok) throw new Error(opened.detail);
+      admissionStore = opened.store;
       const engine = makeEngine(fixture.project, 'prepared-admission', runner, {
+        admissionStore,
         maxConversationMessages: 6,
         maxEstimatedTokens: 80,
       });
@@ -556,6 +562,7 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
       assert.ok(events.some((event) => event.type === 'context_compacted'));
       assert.ok(events.some((event) => event.type === 'done' && event.answer.includes('rebuilt request admitted')));
     } finally {
+      admissionStore?.close();
       fixture.cleanup();
     }
   });

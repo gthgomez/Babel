@@ -13,6 +13,8 @@ import { availableChatToolNames, availableChatTools } from './chatToolAvailabili
 
 const dirs: string[] = []
 const originalRuns = process.env['BABEL_RUNS_DIR']
+const managedPolicyEnv = ['BABEL_OFFLINE', 'BABEL_READ_ONLY', 'BABEL_EXECUTION_PROFILE'] as const
+const originalPolicyEnv = new Map(managedPolicyEnv.map(key => [key, process.env[key]]))
 function fixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'babel-explicit-operation-'))
   dirs.push(root)
@@ -21,6 +23,11 @@ function fixture(): string {
   return root
 }
 afterEach(() => {
+  for (const key of managedPolicyEnv) {
+    const value = originalPolicyEnv.get(key)
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
   if (originalRuns === undefined) delete process.env['BABEL_RUNS_DIR']
   else process.env['BABEL_RUNS_DIR'] = originalRuns
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
@@ -109,13 +116,22 @@ test('direct engines fail before dispatch when required policy cannot fit', () =
   assert.throws(() => new ChatEngine({ task: 'Explain the code.', projectRoot: root }), /required|mandatory|budget/i)
 })
 
-test('actual streamed read-only requests expose only their accepted task tools', async () => {
+for (const scenario of [
+  { name: 'online task', offline: false, profileReadOnly: false },
+  { name: 'offline task', offline: true, profileReadOnly: false },
+  { name: 'read-only profile', offline: false, profileReadOnly: true },
+]) test(`actual streamed read-only requests project accepted scope: ${scenario.name}`, async () => {
+  // Resolve the synthetic stream host without requiring a local Ollama policy.
+  process.env['BABEL_OFFLINE'] = '0'
+  delete process.env['BABEL_READ_ONLY']
+  process.env['BABEL_EXECUTION_PROFILE'] = scenario.profileReadOnly ? 'read_only_audit' : 'safe_repo'
   let advertised: string[] = []
   const engine = new ChatEngine({ task: 'Fix the parser.', projectRoot: fixture(), operation: 'READ_ONLY' })
   const host = engine as unknown as {
     shouldUseNativeTools: () => boolean
     deliberationRunner: unknown
   }
+  process.env['BABEL_OFFLINE'] = scenario.offline ? '1' : '0'
   host.shouldUseNativeTools = () => true
   host.deliberationRunner = {
     async *executeWithToolsStream(_messages: unknown, tools: ReturnType<typeof buildChatToolDefinitions>) {
@@ -127,8 +143,14 @@ test('actual streamed read-only requests expose only their accepted task tools',
   }
   for await (const _event of engine.submitMessageStream('Fix the parser.')) { /* exercise real request preparation */ }
   assert.ok(advertised.includes('read_file'))
-  for (const denied of ['write_file', 'str_replace', 'apply_patch', 'run_command', 'sub_agent', 'web_fetch', 'mcp_request', 'lsp', 'finish']) {
+  for (const denied of ['write_file', 'str_replace', 'apply_patch', 'run_command', 'test_run', 'mcp_request', 'lsp', 'finish']) {
     assert.ok(!advertised.includes(denied), denied)
+  }
+  // Task read-only scope permits a narrowed child and online external reads;
+  // the read-only execution profile independently withholds those capabilities.
+  assert.equal(advertised.includes('sub_agent'), !scenario.profileReadOnly)
+  for (const externalRead of ['web_fetch', 'web_search']) {
+    assert.equal(advertised.includes(externalRead), !scenario.offline && !scenario.profileReadOnly, externalRead)
   }
 })
 

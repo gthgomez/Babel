@@ -98,7 +98,8 @@ function toolNames(capture: Capture): string[] {
 }
 
 function assertReadOnlyProjection(capture: Capture, label: string): void {
-  const forbidden = ['write_file', 'file_write', 'str_replace', 'apply_patch', 'file_delete', 'run_command', 'test_run', 'sub_agent', 'lsp'];
+  assert.ok(toolNames(capture).includes('sub_agent'), `${label}: read-only delegation remains available`);
+  const forbidden = ['write_file', 'file_write', 'str_replace', 'apply_patch', 'file_delete', 'run_command', 'test_run', 'lsp'];
   for (const name of forbidden) {
     assert.ok(!toolNames(capture).includes(name), `${label}: ${name} must not be exposed for READ_ONLY`);
   }

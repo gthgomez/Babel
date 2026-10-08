@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { trace, SpanStatusCode, type Span } from '@opentelemetry/api';
 import { z } from 'zod';
@@ -564,6 +565,36 @@ export function mcpAutoDispatchDenied(env: NodeJS.ProcessEnv = process.env, now 
   return null;
 }
 
+type McpRequest = Extract<ToolCallRequest, { tool: 'mcp_request' }>;
+interface McpJitApproval {
+  server: string;
+  query: string;
+  expiresAt: number;
+  consumed: boolean;
+  active: boolean;
+}
+const mcpJitApproval = new AsyncLocalStorage<McpJitApproval>();
+
+/** Internal host handoff after successful JIT; never exposed as a tool argument. */
+export async function runWithApprovedMcpJit<T>(req: McpRequest, dispatch: () => Promise<T>): Promise<T> {
+  const approval: McpJitApproval = {
+    server: req.server, query: req.query, expiresAt: Date.now() + 60_000,
+    consumed: false, active: true,
+  };
+  return mcpJitApproval.run(approval, async () => {
+    try { return await dispatch(); }
+    finally { approval.active = false; }
+  });
+}
+
+function consumeApprovedMcpJit(req: McpRequest): boolean {
+  const approval = mcpJitApproval.getStore();
+  if (!approval || !approval.active || approval.consumed || approval.expiresAt <= Date.now()
+    || approval.server !== req.server || approval.query !== req.query) return false;
+  approval.consumed = true;
+  return true;
+}
+
 function hasOnlyConstructibleRequiredArguments(
   inputSchema: Record<string, unknown> | undefined,
   args: Record<string, unknown>,
@@ -1048,7 +1079,7 @@ export async function handleMcpRequest(
   req: Extract<ToolCallRequest, { tool: 'mcp_request' }>,
   serversOverride?: Record<string, McpServerConfig>,
 ): Promise<ToolResult> {
-  const approvalBlock = mcpAutoDispatchDenied();
+  const approvalBlock = consumeApprovedMcpJit(req) ? null : mcpAutoDispatchDenied();
   if (approvalBlock) {
     return {
       ...buildMcpResult(

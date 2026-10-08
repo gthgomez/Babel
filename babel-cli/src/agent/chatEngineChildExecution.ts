@@ -178,16 +178,11 @@ export function buildDelegatedChildEnvelope(input: {
   });
   const mutationEnabled = input.parentReadOnly ? false : spec.mutation;
   const writeScope = input.parentReadOnly ? [] : confineChildWriteScope(input.projectRoot, spec.writeScope);
-  let repositoryRules = "";
-  try {
-    repositoryRules = compileChatStack({
-      projectRoot: input.projectRoot,
-      task: input.task,
-      includeDomainSkill: false,
-    }).system_context.slice(0, 4000);
-  } catch {
-    repositoryRules = "";
-  }
+  const repositoryRules = compileChatStack({
+    projectRoot: input.projectRoot,
+    task: input.task,
+    includeDomainSkill: false,
+  }).system_context;
   const envelope = [
     "MANDATORY DELEGATION ENVELOPE",
     `Objective: ${input.task}`,
@@ -577,9 +572,6 @@ export async function executeSubAgentAction(
               }
             },
             ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
-            ...(spec.instructions
-              ? { additionalInstructions: spec.instructions }
-              : {}),
           });
           // R0-7: a mutation child that resolves after the parent submission
           // was superseded must not mint a mutation batch, invalidate the new
@@ -788,9 +780,6 @@ export async function executeSubAgentAction(
             : {}),
           ...(childLane?.executor ? { executor: childLane.executor } : {}),
           ...(spec.resolvedModel ? { model: spec.resolvedModel } : {}),
-          ...(spec.instructions
-            ? { additionalInstructions: spec.instructions }
-            : {}),
           inheritedAllowance: readAllowance,
           onUsageRecorded: () => {
             if (readAllowance.parentTaskOwnerId) {

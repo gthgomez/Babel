@@ -169,14 +169,16 @@ function readGitHead(projectRoot: string): string | null {
  */
 function readGitTree(projectRoot: string): string | null {
   try {
-    const gitRoot = fs.realpathSync(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    // Native resolution canonicalizes Windows filesystem aliases as well as
+    // symlinks, so Git and the caller compare the same physical directory.
+    const gitRoot = fs.realpathSync.native(execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: projectRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 10_000,
       windowsHide: true,
     }).trim());
-    const physicalProjectRoot = fs.realpathSync(projectRoot);
+    const physicalProjectRoot = fs.realpathSync.native(projectRoot);
     const projectPrefix = path.relative(gitRoot, physicalProjectRoot);
     if (
       path.isAbsolute(projectPrefix) || projectPrefix === ".." ||
@@ -246,7 +248,7 @@ function readGitTree(projectRoot: string): string | null {
           }
           if (parentStats.isSymbolicLink() || !parentStats.isDirectory())
             throw new Error("Git status path traverses a non-directory or symlink parent.");
-          const physicalParent = fs.realpathSync(parent);
+          const physicalParent = fs.realpathSync.native(parent);
           const physicalRelative = path.relative(physicalProjectRoot, physicalParent);
           if (
             path.isAbsolute(physicalRelative) || physicalRelative === ".." ||
@@ -282,62 +284,95 @@ function closurePathIsCredential(relativePath: string): boolean {
 }
 
 /**
- * Bounded relevant-input closure for verifier reuse. Credential paths are
- * skipped without a content read. Oversized or too-wide trees are unsupported,
- * which forbids reuse rather than pretending the tree was bound.
+ * Bind every eligible input, including ignored files. Cache discovery keeps its
+ * 40-file bound; fresh proof reallocates that same worst-case content envelope
+ * (40 x 1 MB) across files and path metadata, without granting cache reuse.
+ * Complete metadata admission precedes content I/O in either mode.
  */
-export function discoverVerifierInputClosure(projectRoot: string):
-  | { mode: "bound"; paths: string[]; digests: Record<string, string> }
+export function discoverVerifierInputClosure(projectRoot: string, freshProof = false):
+  | { mode: "bound"; paths: string[]; digests: Record<string, string>; reuseEligible?: false }
   | { mode: "unsupported"; reason: string } {
-  const root = path.resolve(projectRoot);
+  const unsupported = (reason: string): { mode: "unsupported"; reason: string } => ({ mode: "unsupported", reason });
+  let root: string;
+  try { root = fs.realpathSync.native(projectRoot); }
+  catch { return unsupported("Input root is not resolvable"); }
+  // Admit the physical root before opening a directory or any input content.
+  if (closurePathIsCredential(root)) return unsupported("Input closure includes a credential path");
   const paths: string[] = [];
   const digests: Record<string, string> = {};
+  const files: Array<{ absolute: string; relativePath: string; size: number }> = [];
   const stack = [root];
+  const maxBudgetBytes = INPUT_CLOSURE_MAX_FILES * INPUT_CLOSURE_MAX_BYTES;
+  const started = Date.now();
+  let budgetBytes = 0;
   while (stack.length > 0) {
+    if (Date.now() - started >= 10_000) return unsupported("Input closure proof deadline exceeded");
     const dir = stack.pop()!;
-    let entries: fs.Dirent[];
+    let directory: fs.Dir;
+    try { directory = fs.opendirSync(dir); }
+    catch { return unsupported("Input directory is not listable"); }
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return { mode: "unsupported", reason: "Input directory is not listable" };
-    }
-    for (const entry of entries) {
-      if (INPUT_CLOSURE_SKIP_DIRS.has(entry.name)) continue;
-      const absolute = path.join(dir, entry.name);
-      const relativePath = path.relative(root, absolute).split(path.sep).join("/");
-      if (closurePathIsCredential(relativePath)) continue;
-      let stats: fs.Stats;
-      try {
-        stats = fs.lstatSync(absolute);
-      } catch {
-        return { mode: "unsupported", reason: "Input path is not stat-able" };
+      let entry: fs.Dirent | null;
+      while ((entry = directory.readSync()) !== null) {
+        if (Date.now() - started >= 10_000) return unsupported("Input closure proof deadline exceeded");
+        if (INPUT_CLOSURE_SKIP_DIRS.has(entry.name)) continue;
+        const absolute = path.join(dir, entry.name);
+        const relativePath = path.relative(root, absolute).split(path.sep).join("/");
+        if (closurePathIsCredential(relativePath)) {
+          if (freshProof) return unsupported("Input closure includes a credential path");
+          continue;
+        }
+        let stats: fs.Stats;
+        try {
+          stats = fs.lstatSync(absolute);
+        } catch { return unsupported("Input path is not readable"); }
+        if (stats.isSymbolicLink()) return unsupported("Input closure cannot bind a symlink");
+        try { fs.accessSync(absolute, fs.constants.R_OK); }
+        catch { return unsupported("Input path is not readable"); }
+        budgetBytes += Buffer.byteLength(relativePath, "utf8") + 1;
+        if (stats.isDirectory()) stack.push(absolute);
+        else if (stats.isFile()) {
+          if (stats.size > INPUT_CLOSURE_MAX_BYTES) return unsupported("Input file exceeds the closure size cap");
+          budgetBytes += stats.size;
+          files.push({ absolute, relativePath, size: stats.size });
+          if (!freshProof && files.length > INPUT_CLOSURE_MAX_FILES) return unsupported("Input closure exceeds the file cap");
+        } else return unsupported("Input closure includes an unsupported filesystem entry");
+        if (budgetBytes > maxBudgetBytes) return unsupported("Input closure exceeds the proof byte budget");
       }
-      if (stats.isSymbolicLink()) {
-        return { mode: "unsupported", reason: "Input closure cannot bind a symlink" };
+    } catch { return unsupported("Input directory is not listable"); }
+    finally { directory.closeSync(); }
+  }
+  // Refuse growth or changed entry types between admission and content access.
+  for (const file of files) {
+    if (Date.now() - started >= 10_000) return unsupported("Input closure proof deadline exceeded");
+    let descriptor: number | undefined;
+    try {
+      let parent = root;
+      for (const part of path.dirname(file.relativePath).split("/").filter(part => part !== ".")) {
+        parent = path.join(parent, part);
+        if (!fs.lstatSync(parent).isDirectory()) return unsupported("Input changed after admission");
       }
-      if (stats.isDirectory()) {
-        stack.push(absolute);
-        continue;
+      if (!fs.lstatSync(file.absolute).isFile()) return unsupported("Input changed after admission");
+      descriptor = fs.openSync(file.absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      const stats = fs.fstatSync(descriptor);
+      if (!stats.isFile() || stats.size !== file.size) return unsupported("Input changed after admission");
+      // Bound allocation and reads even if a file grows after metadata admission.
+      const buffer = Buffer.alloc(file.size + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        const read = fs.readSync(descriptor, buffer, length, buffer.length - length, length);
+        if (read === 0) break;
+        length += read;
       }
-      if (!stats.isFile()) continue;
-      if (stats.size > INPUT_CLOSURE_MAX_BYTES) {
-        return { mode: "unsupported", reason: "Input file exceeds the closure size cap" };
-      }
-      let content: Buffer;
-      try {
-        content = fs.readFileSync(absolute);
-      } catch {
-        return { mode: "unsupported", reason: "Input file is not readable" };
-      }
-      paths.push(relativePath);
-      digests[relativePath] = hashFileContent(content);
-      if (paths.length > INPUT_CLOSURE_MAX_FILES) {
-        return { mode: "unsupported", reason: "Input closure exceeds the file cap" };
-      }
-    }
+      if (length !== file.size || Date.now() - started >= 10_000) return unsupported("Input changed after admission");
+      const content = buffer.subarray(0, length);
+      paths.push(file.relativePath);
+      digests[file.relativePath] = hashFileContent(content);
+    } catch { return unsupported("Input file is not readable"); }
+    finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
   }
   paths.sort();
-  return { mode: "bound", paths, digests };
+  return { mode: "bound", paths, digests, ...(freshProof ? { reuseEligible: false as const } : {}) };
 }
 
 export function compareRevisions(

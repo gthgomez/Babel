@@ -2,7 +2,9 @@
  * Verifier preparation and required-command resolution helper for ChatEngine.
  */
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
+import { isCredentialTargetPath } from './autonomyEnforcement.js';
 
 import {
   bindChatVerifierReceipt,
@@ -65,7 +67,25 @@ export async function captureChatVerifierReceipt(input: {
   // of throwing and corrupting the loop.
   const mutationPaths = toRepositoryRelativePaths(input.projectRoot, input.mutationPaths);
   if (mutationPaths === null) return null;
-  const inputClosure = discoverVerifierInputClosure(input.projectRoot);
+  // Admission must precede closure and revision content reads, including paths
+  // the ordinary closure omits because they are credential-class inputs.
+  for (const mutation of mutationPaths) {
+    const absolute = path.resolve(input.projectRoot, mutation);
+    if (isCredentialTargetPath(mutation) || isCredentialTargetPath(absolute)) return null;
+    try {
+      if (isCredentialTargetPath(realpathSync(absolute))) return null;
+    } catch (error) {
+      // Deleted ordinary inputs can still bind their missing-file state.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+    }
+  }
+  let inputClosure = discoverVerifierInputClosure(input.projectRoot);
+  let freshProof = false;
+  if (inputClosure.mode === 'unsupported' && inputClosure.reason === 'Input closure exceeds the file cap') {
+    inputClosure = discoverVerifierInputClosure(input.projectRoot, true);
+    freshProof = inputClosure.mode === 'bound';
+  }
+  if (inputClosure.mode === 'unsupported') return null;
   const boundMutationPaths = inputClosure.mode === 'bound' && mutationPaths.length > 0
     ? [...new Set([...mutationPaths, ...inputClosure.paths])].sort()
     : mutationPaths;
@@ -73,14 +93,15 @@ export async function captureChatVerifierReceipt(input: {
     input.exitCode !== 0 && mutationPaths.length === 0;
   const repositoryScopedGreenNoChange = input.allowRepositoryScopeForGreenNoChange === true &&
     input.exitCode === 0 && mutationPaths.length === 0;
-  const repositoryScoped = repositoryScopedRed || repositoryScopedGreenNoChange;
+  if (freshProof && mutationPaths.length === 0 && !repositoryScopedRed && !repositoryScopedGreenNoChange) return null;
+  const repositoryScoped = repositoryScopedRed || repositoryScopedGreenNoChange || freshProof;
   try {
     const receipt = await bindChatVerifierReceipt({
       projectRoot: input.projectRoot,
       command: input.command,
       exit_code: input.exitCode,
       summary: input.summary,
-      mutationPaths: repositoryScoped ? mutationPaths : boundMutationPaths,
+      mutationPaths: repositoryScoped ? [] : boundMutationPaths,
       ...(repositoryScoped ? {
         scopeKind: 'repository' as const,
         gitBinding: 'required' as const,
@@ -319,6 +340,8 @@ export function shouldReuseCachedVerifierReceipt(
   projectRoot: string,
   receipt: BoundChatVerifierReceipt,
 ): boolean {
+  if (receipt.inputClosure?.mode === 'unsupported'
+    || receipt.inputClosure?.reuseEligible === false) return false;
   const currency = evaluateChatVerifierReceiptCurrencySync(projectRoot, receipt);
   return currency !== null && currency.stale === false;
 }

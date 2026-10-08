@@ -270,6 +270,38 @@ describe('chatRevisionBinding', () => {
     }
   });
 
+  it('preserves executed counts without fabricating absent evidence and refuses invalid counts', () => {
+    const receipt = {
+      receiptId: 'count-proof', verifierId: 'npm-test', command: 'npm test',
+      exit_code: 0, authority: true, authoritySource: 'built_in_runner' as const,
+      capturedAt: 123456789, stale: false, summary: 'real test output',
+      boundRevision: {
+        gitCommitHash: null, fileHashes: { 'a.ts': 'hash1' },
+        compositeTreeHash: 'sha256:abc123', capturedAt: 123456789,
+      },
+    };
+    for (const count of [4, 0]) {
+      const result = toExecutorVerifierReceipt({ ...receipt, tests_total: count, tests_passed: count, tests_failed: 0, tests_skipped: 0 });
+      assert.equal(result.ok, true);
+      if (result.ok) {
+        assert.equal(result.receipt.tests_total, count);
+        assert.equal(result.receipt.tests_passed, count);
+        assert.equal(result.receipt.tests_failed, 0);
+        assert.equal(result.receipt.tests_skipped, 0);
+      }
+    }
+    const absent = toExecutorVerifierReceipt(receipt);
+    assert.equal(absent.ok, true);
+    if (absent.ok) assert.equal('tests_total' in absent.receipt, false);
+    for (const key of ['tests_total', 'tests_passed', 'tests_failed', 'tests_skipped']) {
+      for (const invalid of [-1, 0.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1, '4']) {
+        const result = toExecutorVerifierReceipt({ ...receipt, [key]: invalid });
+        assert.equal(result.ok, false, `${key} must reject ${invalid}`);
+        if (!result.ok) assert.ok(result.errors.some((error) => error.includes(key)));
+      }
+    }
+  });
+
   it('toExecutorVerifierReceipt performs strict validation without fabrication', () => {
     // Rejects null/undefined
     const nullRes = toExecutorVerifierReceipt(null);

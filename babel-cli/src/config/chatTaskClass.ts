@@ -417,12 +417,25 @@ const READ_ONLY_GERUND_LIST = `${READ_ONLY_VERB_GERUND_SOURCE}(?:${COORD_SEPARAT
 const READ_ONLY_DIRECTIVE_SOURCE = `\\b(without (any )?${READ_ONLY_GERUND_LIST}|read-?only|(?:do\\s*not|don't|never)\\s+${READ_ONLY_VERB_LIST}|dry-?run)\\b`;
 const SEQUENCED_MUTATION_SOURCE =
   '\\b(?:then|afterwards|and\\s+then)\\s+(?:fix|implement|repair|modify|update|apply|patch|change|edit|optimize|bump|convert|migrate)\\b';
+// Protecting these inputs is compatible with a production repair. Admit only
+// a complete known object list: unknown objects or trailing qualifications
+// remain global denials. This never supplies positive mutation intent.
+const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your)\\s+)?(?:tests?|test\\s+suite|package\\s+scripts?|unrelated\\s+files?)';
+const PROTECTED_EDIT_OBJECT_LIST = new RegExp(
+  `^${PROTECTED_EDIT_OBJECT}(?:${COORD_SEPARATOR}${PROTECTED_EDIT_OBJECT})*$`, 'i',
+);
 
 /** Explicit no-edit language, independent of topic nouns such as "patch" or "fix". */
 export function hasExplicitEditDenial(taskText: string): boolean {
   const evidence = stripFencedCodeBodies(taskText);
-  if (!new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'i').test(evidence)) return false;
-  return !new RegExp(SEQUENCED_MUTATION_SOURCE, 'i').test(evidence);
+  if (new RegExp(SEQUENCED_MUTATION_SOURCE, 'i').test(evidence)) return false;
+  for (const directive of evidence.matchAll(new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'))) {
+    if (/^(?:read-?only|dry-?run)$/i.test(directive[0])) return true;
+    const objectClause = evidence.slice(directive.index + directive[0].length)
+      .split(/[.;!?\r\n]/, 1)[0]!.trim();
+    if (!PROTECTED_EDIT_OBJECT_LIST.test(objectClause)) return true;
+  }
+  return false;
 }
 
 /**

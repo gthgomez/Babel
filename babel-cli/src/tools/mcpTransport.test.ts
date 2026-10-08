@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,7 @@ import {
   frameJsonRpcMessage,
   executeMcpMethod,
   handleMcpRequest,
+  runWithApprovedMcpJit,
   handleMcpToolCall,
   parseMcpToolCallResult,
   parseFramedMessages,
@@ -755,5 +756,41 @@ test('MCP discovery-list schemas reject unrecognised fields without returning th
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
+  }
+});
+
+test('MCP JIT capability is exact, once-only, expiring, and revoked when its dispatch ends', async () => {
+  const previousAsk = process.env['BABEL_ASK'];
+  const previousExpires = process.env['BABEL_MCP_APPROVAL_EXPIRES'];
+  const req = { tool: 'mcp_request' as const, server: 'approved-fixture', query: 'approved query' };
+  try {
+    process.env['BABEL_ASK'] = 'true';
+    delete process.env['BABEL_MCP_APPROVAL_EXPIRES'];
+    await runWithApprovedMcpJit(req, async () => {
+      for (const wrong of [{ ...req, query: 'another query' }, { ...req, server: 'another-server' }]) {
+        assert.equal((await handleMcpRequest(wrong, {})).failure?.code, 'mcp_approval_required');
+      }
+      const accepted = await handleMcpRequest(req, {});
+      assert.equal(accepted.mcp_lifecycle?.reason_code, 'unknown_server', 'exact approval passes only the approval gate, not server admission');
+      assert.equal((await handleMcpRequest(req, {})).failure?.code, 'mcp_approval_required', 'approval is consumed exactly once');
+    });
+    const now = Date.now();
+    await runWithApprovedMcpJit(req, async () => {
+      const clock = mock.method(Date, 'now', () => now + 60_001);
+      try { assert.equal((await handleMcpRequest(req, {})).failure?.code, 'mcp_approval_required'); }
+      finally { clock.mock.restore(); }
+    });
+    let release!: () => void;
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    let late!: Promise<Awaited<ReturnType<typeof handleMcpRequest>>>;
+    await runWithApprovedMcpJit(req, async () => {
+      late = (async () => { await wait; return handleMcpRequest(req, {}); })();
+    });
+    release();
+    assert.equal((await late).failure?.code, 'mcp_approval_required', 'inherited async context is revoked after dispatch settlement');
+    assert.equal((await handleMcpRequest(req, {})).failure?.code, 'mcp_approval_required', 'unrelated direct calls remain denied');
+  } finally {
+    if (previousAsk === undefined) delete process.env['BABEL_ASK']; else process.env['BABEL_ASK'] = previousAsk;
+    if (previousExpires === undefined) delete process.env['BABEL_MCP_APPROVAL_EXPIRES']; else process.env['BABEL_MCP_APPROVAL_EXPIRES'] = previousExpires;
   }
 });

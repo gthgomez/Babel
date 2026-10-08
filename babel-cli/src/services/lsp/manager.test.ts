@@ -75,8 +75,24 @@ describe('LSP server discovery', () => {
 
     assert.deepEqual([...manager.getAllServers().keys()], ['typescript'])
     const config = manager.getServer('typescript')?.config
-    assert.equal(config?.command, cli)
-    assert.deepEqual(config?.args, ['--stdio'])
+    assert.equal(config?.command, process.execPath)
+    assert.deepEqual(config?.args, [cli, '--stdio'])
+  })
+
+  test('launches an installed JavaScript CLI through Node with stdio preserved', async () => {
+    const root = project()
+    setProject(root)
+    const cli = join(root, 'node_modules', 'typescript-language-server', 'lib', 'cli.mjs')
+    mkdirSync(join(root, 'node_modules', 'typescript-language-server', 'lib'), { recursive: true })
+    writeFileSync(cli, "console.log(JSON.stringify({ ready: true, args: process.argv.slice(2) }))\n")
+    chmodSync(cli, 0o644)
+    const manager = createLspServerManager()
+    await manager.initialize()
+    const config = manager.getServer('typescript')?.config
+    assert.ok(config, 'an installed CLI does not need an executable bit or shell association')
+    const launched = childProcess.spawnSync(config.command, config.args, { encoding: 'utf8', timeout: 5000 })
+    assert.equal(launched.status, 0, launched.error?.message ?? launched.stderr)
+    assert.deepEqual(JSON.parse(launched.stdout), { ready: true, args: ['--stdio'] })
   })
 
   test('recognizes an already-installed PATH binary without running a version probe', async () => {

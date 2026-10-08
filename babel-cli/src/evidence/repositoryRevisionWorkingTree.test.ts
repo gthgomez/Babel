@@ -20,10 +20,42 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { after, before, describe, test } from 'node:test';
+import { join, resolve } from 'node:path';
+import { after, before, describe, mock, test } from 'node:test';
+import * as fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 
 import { RevisionManager } from './revisionBoundReceipt.js';
+
+test('repository identity canonicalizes filesystem aliases before comparing Git scope', () => {
+  const owner = mkdtempSync(join(tmpdir(), 'babel-revision-alias-'));
+  const physical = join(owner, 'physical');
+  const alias = join(owner, 'alias');
+  mkdirSync(physical);
+  const git = (args: string[]) => execFileSync('git', args, { cwd: physical, encoding: 'utf8' });
+  git(['init', '-q']);
+  git(['config', 'user.email', 'fixture@example.test']);
+  git(['config', 'user.name', 'fixture']);
+  writeFileSync(join(physical, 'input.txt'), 'baseline\n');
+  git(['add', '-A']);
+  git(['commit', '-q', '-m', 'baseline']);
+  symlinkSync(physical, alias, 'junction');
+  const mutableFs = (fs as unknown as { default: typeof fs }).default;
+  const original = mutableFs.realpathSync;
+  // The JS walk can retain Windows filesystem aliases (e.g. short names),
+  // while Git reports their canonical physical names. Native resolution owns
+  // this metadata-only seam; all actual input bytes remain public fixtures.
+  const preserveAlias = Object.assign((candidate: fs.PathLike) =>
+    resolve(String(candidate)) === alias ? alias : original(candidate), { native: original.native });
+  mock.method(mutableFs, 'realpathSync', preserveAlias as typeof fs.realpathSync);
+  syncBuiltinESMExports();
+  try {
+    const before = RevisionManager.computeRevisionSync(alias, [], { scope_kind: 'repository', git_binding: 'required' });
+    writeFileSync(join(physical, 'input.txt'), 'changed\n');
+    const after = RevisionManager.computeRevisionSync(alias, [], { scope_kind: 'repository', git_binding: 'required' });
+    assert.notEqual(after.compositeTreeHash, before.compositeTreeHash);
+  } finally { mock.restoreAll(); syncBuiltinESMExports(); rmSync(owner, { recursive: true, force: true }); }
+});
 
 describe('repository-scope revision vs the real working tree', () => {
   let root = '';

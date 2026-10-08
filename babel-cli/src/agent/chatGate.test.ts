@@ -360,11 +360,15 @@ function setTestVerifierReceipt(engine: ChatEngine, command: string, exit_code =
     verifierId: 'test-verifier',
     capturedAt: 1_700_000_000_000,
     scope: 'full_suite' as const,
+    tests_total: 1,
+    tests_skipped: 0,
     boundRevision: {
       gitCommitHash: null,
       compositeTreeHash: 'sha256:test-tree',
-      fileHashes: {},
+      fileHashes: { 'src/math.js': 'sha256:test-file' },
       capturedAt: 1_700_000_000_000,
+      scope: { kind: 'files' as const, paths: ['src/math.js'] },
+      gitBinding: 'optional' as const,
     },
   };
   (engine as any).lastVerifierReceipt = receipt;
@@ -973,6 +977,8 @@ describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
       capturedAt: Date.now(),
     },
     scope: 'full_suite',
+    tests_total: 1,
+    tests_skipped: 0,
     ...overrides,
   });
 

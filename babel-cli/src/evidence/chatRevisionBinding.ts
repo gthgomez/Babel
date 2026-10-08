@@ -58,7 +58,7 @@ export type BoundChatVerifierReceipt = {
   tests_failed?: number;
   tests_skipped?: number;
   /** Present only when capture established a relevant-input closure. */
-  inputClosure?: { mode: "bound"; paths: string[]; digests: Record<string, string> } | { mode: "unsupported"; reason: string };
+  inputClosure?: { mode: "bound"; paths: string[]; digests: Record<string, string>; reuseEligible?: false } | { mode: "unsupported"; reason: string };
 };
 
 /** Collect unique mutation paths from SessionEventV1 mutation_batch events. */
@@ -173,7 +173,7 @@ export function evaluateChatVerifierReceiptCurrencySync(
     return { stale: true, reason: receipt.inputClosure.reason || 'Verifier input closure is unsupported' };
   }
   if (receipt.inputClosure?.mode === 'bound') {
-    const freshClosure = discoverVerifierInputClosure(projectRoot);
+    const freshClosure = discoverVerifierInputClosure(projectRoot, receipt.inputClosure.reuseEligible === false);
     if (freshClosure.mode !== 'bound') {
       return { stale: true, reason: freshClosure.reason };
     }
@@ -273,6 +273,14 @@ export function toExecutorVerifierReceipt(
     errors.push('Repository-scoped verifier evidence requires a content-bound Git tree');
   }
   const boundRevision = validateWorkspaceRevisionIdentity(revision, errors);
+  const counts: Pick<ExecutorVerifierReceipt, 'tests_total' | 'tests_passed' | 'tests_failed' | 'tests_skipped'> = {};
+  for (const key of ['tests_total', 'tests_passed', 'tests_failed', 'tests_skipped'] as const) {
+    const count = chatReceipt[key];
+    if (count === undefined) continue;
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+      errors.push(`Invalid ${key}: expected a nonnegative safe integer`);
+    } else counts[key] = count;
+  }
 
   if (errors.length > 0) {
     return { ok: false, errors };
@@ -292,6 +300,7 @@ export function toExecutorVerifierReceipt(
       stale: chatReceipt.stale === true,
       ...(chatReceipt.staleReason ? { staleReason: chatReceipt.staleReason } : {}),
       ...(chatReceipt.scope ? { scope: chatReceipt.scope } : {}),
+      ...counts,
     },
   };
 }
