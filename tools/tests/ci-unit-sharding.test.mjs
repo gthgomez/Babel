@@ -53,7 +53,7 @@ test('canonical no-ambient inference loader and runner options survive sharding'
   const shard = prepareUnitShard(root, 0, 1);
   assert.deepEqual(shard.args, [
     '--no-warnings=ExperimentalWarning', '--import', './src/testinfra/register-no-ambient-inference.mjs',
-    '--test-reporter=tap', '--test-concurrency=1', '--test', 'src/a.test.ts',
+    '--test-reporter=./scripts/required_tap_reporter.mjs', '--test-concurrency=1', '--test', 'src/a.test.ts',
   ]);
 });
 

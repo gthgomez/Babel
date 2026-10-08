@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, it } from 'node:test';
+import { before, describe, it } from 'node:test';
 
 import {
   detectRipgrep,
@@ -55,6 +55,7 @@ describe('ripgrep detection', () => {
 });
 
 describe('ripgrep wrapper (when available)', () => {
+  before(() => { if (process.env.BABEL_REQUIRE_NATIVE_RG === '1') assert.ok(detectRipgrep(), 'Required native rg missing') })
   it('treats regex alternation, shell metacharacters and leading dashes as data', async t => {
     if (!detectRipgrep()) { t.skip('Standalone rg unavailable'); return; }
     const fixture = makeTempFixture();
@@ -69,10 +70,8 @@ describe('ripgrep wrapper (when available)', () => {
       await assert.rejects(ripgrep(fixture.root, { pattern: 'class', paths: [path.join(fixture.root, 'missing.ts')] }), /ripgrep failed/);
     } finally { fixture.cleanup(); }
   });
-  it('ripgrep basic match — finds known text in source files', async () => {
-    if (!detectRipgrep()) {
-      return;
-    }
+  it('ripgrep basic match — finds known text in source files', async t => {
+    if (!detectRipgrep()) { t.skip('Standalone rg unavailable; qualified in the required native lane'); return; }
 
     resetRipgrepDetection();
     const projectRoot = process.cwd();
@@ -87,10 +86,8 @@ describe('ripgrep wrapper (when available)', () => {
     assert.ok(result.elapsedMs >= 0);
   });
 
-  it('ripgrep no matches — returns empty for nonsense pattern', async () => {
-    if (!detectRipgrep()) {
-      return;
-    }
+  it('ripgrep no matches — returns empty for nonsense pattern', async t => {
+    if (!detectRipgrep()) { t.skip('Standalone rg unavailable; qualified in the required native lane'); return; }
 
     resetRipgrepDetection();
     const fixture = makeTempFixture();
@@ -104,10 +101,8 @@ describe('ripgrep wrapper (when available)', () => {
     }
   });
 
-  it('ripgrep max matches — respects limit and sets truncated flag', async () => {
-    if (!detectRipgrep()) {
-      return;
-    }
+  it('ripgrep max matches — respects limit and sets truncated flag', async t => {
+    if (!detectRipgrep()) { t.skip('Standalone rg unavailable; qualified in the required native lane'); return; }
 
     resetRipgrepDetection();
     const projectRoot = process.cwd();
@@ -117,10 +112,8 @@ describe('ripgrep wrapper (when available)', () => {
     assert.equal(result.truncated, true);
   });
 
-  it('ripgrep .gitignore exclusion — ignores files in .gitignore dirs', async () => {
-    if (!detectRipgrep()) {
-      return;
-    }
+  it('ripgrep .gitignore exclusion — ignores files in .gitignore dirs', async t => {
+    if (!detectRipgrep()) { t.skip('Standalone rg unavailable; qualified in the required native lane'); return; }
 
     resetRipgrepDetection();
     const fixture = makeTempFixture();
@@ -138,10 +131,8 @@ describe('ripgrep wrapper (when available)', () => {
     }
   });
 
-  it('ripgrep gitignoreRespect: false — overrides .gitignore', async () => {
-    if (!detectRipgrep()) {
-      return;
-    }
+  it('ripgrep gitignoreRespect: false — overrides .gitignore', async t => {
+    if (!detectRipgrep()) { t.skip('Standalone rg unavailable; qualified in the required native lane'); return; }
 
     resetRipgrepDetection();
     const fixture = makeTempFixture();
