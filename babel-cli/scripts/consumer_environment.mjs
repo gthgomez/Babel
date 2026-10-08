@@ -1,12 +1,28 @@
 // License: Apache-2.0 — see LICENSE
 import { join } from 'node:path'
 
+const inheritedRuntimeKeys = new Map([
+  ['PATH', 'PATH'], ['PATHEXT', 'PATHEXT'], ['COMSPEC', 'ComSpec'],
+  ['SYSTEMROOT', 'SystemRoot'], ['WINDIR', 'WINDIR'],
+  ['LANG', 'LANG'], ['LANGUAGE', 'LANGUAGE'], ['LC_ALL', 'LC_ALL'],
+  ['LC_CTYPE', 'LC_CTYPE'], ['LC_MESSAGES', 'LC_MESSAGES'],
+  ['PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITECTURE'],
+  ['PROCESSOR_IDENTIFIER', 'PROCESSOR_IDENTIFIER'], ['PROCESSOR_LEVEL', 'PROCESSOR_LEVEL'],
+  ['PROCESSOR_REVISION', 'PROCESSOR_REVISION'], ['NUMBER_OF_PROCESSORS', 'NUMBER_OF_PROCESSORS'],
+])
+
 /** Isolate installed-product children from inherited provider, config, credentials and preloads. */
 export function consumerEnvironment(inherited, scratch) {
-  const env = Object.fromEntries(Object.entries(inherited).filter(([key]) =>
-    !/^(?:BABEL_|OPENCODE_|NPM_CONFIG_|OPENAI_|ANTHROPIC_|OPENROUTER_|DEEPSEEK_|DEEPINFRA_|OLLAMA_|GEMINI_)/i.test(key) &&
-    !/(?:API_KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL)/i.test(key) &&
-    !/^(?:NODE_OPTIONS|NODE_PATH|NODE_ENV|CI|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|XDG_CONFIG_HOME|XDG_STATE_HOME|XDG_CACHE_HOME|TMPDIR|TMP|TEMP)$/i.test(key)))
+  const windows = process.platform === 'win32'
+  const env = {}
+  for (const [key, value] of Object.entries(inherited)) {
+    const allowedName = inheritedRuntimeKeys.get(key.toUpperCase())
+    if (!allowedName || (!windows && key !== allowedName)) continue
+    if (windows && Object.hasOwn(env, allowedName)) {
+      throw new Error(`Duplicate inherited runtime environment key: ${allowedName}`)
+    }
+    env[allowedName] = value
+  }
   const user = join(scratch, 'user space')
   Object.assign(env, { HOME: user, USERPROFILE: user, APPDATA: join(scratch, 'app-data'),
     LOCALAPPDATA: join(scratch, 'local-app-data'), NODE_ENV: 'production',
