@@ -177,12 +177,9 @@ function buildLiteProjectContextBase(options: ReadLiteProjectContextOptions): st
   }
 
   const defaultCandidates = [
-    'CLAUDE.md',
     'AGENTS.md',
-    'Agent.md',
     'ENGINEERING.md',
     'README.md',
-    'PROJECT_CONTEXT.md',
     'package.json',
   ];
   const requiredReads = options.requiredReads ?? [];
@@ -243,10 +240,9 @@ function buildWorkspaceContextSection(workspaceRoot: string, projectRoot: string
     ];
 
     for (const sibling of siblings) {
-      const hasClaude = sibling.markers.includes('CLAUDE.md') ? 'yes' : 'no';
       const hasAgents = sibling.markers.includes('AGENTS.md') ? 'yes' : 'no';
       lines.push(
-        `- **${sibling.name}** — root: \`${sibling.root}\`, CLAUDE.md: ${hasClaude}, AGENTS.md: ${hasAgents}`,
+        `- **${sibling.name}** — root: \`${sibling.root}\`, AGENTS.md: ${hasAgents}`,
       );
     }
 

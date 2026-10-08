@@ -1,15 +1,13 @@
 /**
- * I01 observation-mode proof (deterministic, no model access).
+ * I01 compatibility behavior (deterministic, no model access).
  *
- * Baseline: `general_swe` investigate hard cap (12 tools without a write)
- * terminates the run through the policy arbiter with BLOCKED_POLICY.
- * Intervention (BABEL_POLICY_I01_OBSERVE_ONLY=1): the identical counter and
- * terminal candidate are computed, a durable would-fire receipt is recorded,
- * ONLY that terminal candidate is withheld from the arbiter, and the run
- * continues past that cap until another safety limit. Novel read targets keep
- * the independent no-progress terminal from preempting this proof. An unchanged
- * read control separately exercises that terminal. All provider traffic is fake;
- * fetch is replaced for the whole run.
+ * Ordinary Chat now uses receipt-scored progress; its legacy read/write-count
+ * hard cap is intentionally bypassed, so BABEL_POLICY_I01_OBSERVE_ONLY cannot
+ * change ordinary loop behavior or emit a would-fire receipt there. Novel reads
+ * continue to the real turn budget; identical unchanged reads still terminate
+ * through progress recovery. The old observe-only branch remains in the loop but
+ * has no active nonordinary call site. All provider traffic is fake; fetch is
+ * replaced for the whole run.
  */
 
 import assert from 'node:assert/strict';
@@ -38,7 +36,7 @@ function makeI01Harness(readMode: 'novel' | 'unchanged' = 'novel'): I01Harness {
   const root = mkdtempSync(join(tmpdir(), 'babel-i01-'));
   const source = join(root, 'source');
   mkdirSync(source);
-  for (let i = 1; i <= 40; i++) {
+  for (let i = 1; i <= 60; i++) {
     writeFileSync(join(source, `fixture-${i}.txt`), 'fixture line\n');
   }
   mkdirSync(join(root, 'runs'));
@@ -141,61 +139,39 @@ function answerText(payload: Record<string, unknown>): string {
   return String(answer ?? '');
 }
 
-test('baseline: general_swe hard cap terminates through the arbiter with a budget outcome', async () => {
-  const harness = makeI01Harness();
-  try {
-    const { payload } = await harness.run('Fix the defect described in the fixture files by inspecting them first.');
-    // The run must terminate early via investigate_hard_cap, not run to maxTurns.
-    assert.ok(
-      harness.roundsServed.value < 40,
-      `expected early hard-cap termination, served ${harness.roundsServed.value} rounds`,
-    );
-    assert.match(answerText(payload), /hard cap 12/i);
-    assert.equal(payload['terminal_outcome'], 'BUDGET_EXHAUSTED');
-    assert.equal(new Set(harness.requestedPaths).size, harness.requestedPaths.length,
-      'I01 fixture must supply novel read targets so cached observation age cannot decide progress');
-  } finally {
-    harness.dispose();
+test('ordinary Chat ignores legacy I01 flag while novel reads continue to the real turn budget', async () => {
+  const observed: Array<{ rounds: number; outcome: unknown; reason: unknown }> = [];
+  for (const observeOnly of [false, true]) {
+    const harness = makeI01Harness();
+    try {
+      if (observeOnly) process.env['BABEL_POLICY_I01_OBSERVE_ONLY'] = '1';
+      const { payload, engine } = await harness.run(
+        'Fix the defect described in the fixture files by inspecting them first.',
+      );
+      assert.ok(harness.roundsServed.value > HARD_CAP,
+        `novel read progress must pass the legacy threshold; served ${harness.roundsServed.value}`);
+      assert.ok(harness.roundsServed.value <= 41,
+        `the real max-turn budget must remain bounded; served ${harness.roundsServed.value}`);
+      assert.equal(payload['terminal_outcome'], 'BUDGET_EXHAUSTED');
+      assert.equal(payload['reason_code'], 'budget_exhausted');
+      assert.equal(new Set(harness.requestedPaths).size, harness.requestedPaths.length,
+        'fixture must provide distinct successful read targets');
+      const sessionEvents = (engine as unknown as {
+        parity: { sessionEvents: { events: Array<{ kind: string; action?: string }> } };
+      }).parity.sessionEvents.events;
+      assert.equal(sessionEvents.filter(
+        (event) => event.kind === 'policy_intervened' && event.action === 'would_fire_observe_only',
+      ).length, 0, 'the ordinary evidence-progress path has no legacy I01 candidate');
+      observed.push({
+        rounds: harness.roundsServed.value,
+        outcome: payload['terminal_outcome'],
+        reason: payload['reason_code'],
+      });
+    } finally {
+      harness.dispose();
+    }
   }
-});
-
-test('I01 observe-only: terminal withheld, would-fire receipt recorded, run continues past cap', async () => {
-  const harness = makeI01Harness();
-  try {
-    process.env['BABEL_POLICY_I01_OBSERVE_ONLY'] = '1';
-    const { payload, engine } = await harness.run('Fix the defect described in the fixture files by inspecting them first.');
-    assert.equal(new Set(harness.requestedPaths).size, harness.requestedPaths.length,
-      'observe-only fixture must keep independent localization progress');
-    // Without the withheld hard-cap terminal, the run continues past the hard
-    // cap and can only end on a different (non-withheld) safety terminal.
-    assert.ok(
-      harness.roundsServed.value > HARD_CAP,
-      `expected the run to continue past the hard cap (served ${harness.roundsServed.value})`,
-    );
-    // Precisely guard the I01 invariant: the terminal must NOT be the withheld
-    // investigate hard cap. (A separate progress/recovery terminal is allowed
-    // and may legitimately classify as BLOCKED_POLICY.)
-    const blocked = payload['blocked_report'] as
-      | { checked?: Array<{ action?: string }> }
-      | undefined;
-    assert.notEqual(
-      blocked?.checked?.[0]?.action,
-      'investigate_hard_cap',
-      'observe-only must not terminal on the withheld investigate hard cap',
-    );
-    assert.doesNotMatch(answerText(payload), /hard cap 12/i);
-    // Durable would-fire receipt: the identical threshold was reached and logged.
-    const sessionEvents = (engine as unknown as {
-      parity: { sessionEvents: { events: Array<{ kind: string; source?: string; action?: string; detail?: string }> } };
-    }).parity.sessionEvents.events;
-    const receipts = sessionEvents.filter(
-      (event) => event.kind === 'policy_intervened' && event.action === 'would_fire_observe_only',
-    );
-    assert.ok(receipts.length >= 1, 'expected at least one durable would-fire receipt');
-    assert.match(String(receipts[0]!.detail), /tools_without_write=12/);
-  } finally {
-    harness.dispose();
-  }
+  assert.deepEqual(observed[1], observed[0], 'I01 compatibility flag must not alter ordinary Chat');
 });
 
 test('I01 observe-only preserves the real unchanged-read no-progress terminal', async () => {

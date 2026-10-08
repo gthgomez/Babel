@@ -45,9 +45,10 @@ function run(binary, args, root, label, timeout = 120000) {
 export function assertExportableCandidate(root, sha) {
   const paths = git(root, ['ls-tree', '-r', '--name-only', '-z', sha]).split('\0').filter(Boolean)
   for (const path of paths) {
-    const leaf = path.split('/').at(-1)
+    const foldedPath = path.toLowerCase()
+    const leaf = foldedPath.split('/').at(-1)
     if (leaf === '.env' || (leaf.startsWith('.env.') && leaf !== '.env.example') ||
-        /(^|\/)\.codex\/(auth\.json|\.env)$/.test(path)) {
+        /(^|\/)\.codex\/(auth\.json|\.env)$/.test(foldedPath)) {
       throw new Error('credential-class committed path rejected before export')
     }
   }

@@ -12,6 +12,8 @@ import { tmpdir } from 'node:os';
 import {
   executeActionWithPolicy,
   resetCircuitBreaker,
+  resetCircuitBreakerForRun,
+  retireLiveCertificationForRun,
   getCircuitBreakerState,
   targetPathFromAction,
   defaultIdempotencyKeyForAction,
@@ -19,6 +21,8 @@ import {
 } from './toolExecutor.js';
 import type { AgentAction } from './actions.js';
 import type { ToolContext } from '../localTools.js';
+import { isInvocationLive, refreshDryRunState } from '../localTools.js';
+import { resolveExecutorDryRun } from '../config/dryRun.js';
 
 function ctx(runId: string, projectRoot: string): ToolContext {
   return {
@@ -309,6 +313,172 @@ describe('H4 executeActionWithPolicy live capability gates', () => {
     assert.ok(tx.pre_revision);
     assert.ok(tx.post_revision);
     assert.ok(tx.policy_decision_id);
+  });
+});
+
+describe('task-scoped live certification', () => {
+  it('keeps mutation-to-verifier live in one task and retires it for a fresh task', async () => {
+    const managedEnv = [
+      'BABEL_DRY_RUN',
+      'BABEL_LIVE',
+      'BABEL_DRY_RUN_SOURCE',
+      'BABEL_SHADOW_ROOT',
+      'BABEL_CONFIG_DIR',
+    ] as const;
+    const savedEnv = Object.fromEntries(managedEnv.map((key) => [key, process.env[key]]));
+    const configDir = mkdtempSync(join(tmpdir(), 'babel-live-cert-config-'));
+    const projectRoot = mkdtempSync(join(tmpdir(), 'babel-live-cert-project-'));
+    const runId = 'task-certification-lifecycle';
+    const file = join(projectRoot, 'certified.txt');
+    writeFileSync(file, 'before', 'utf-8');
+    for (const key of managedEnv) delete process.env[key];
+    process.env['BABEL_CONFIG_DIR'] = configDir;
+    refreshDryRunState();
+    resetCircuitBreaker();
+
+    const liveObservations: boolean[] = [];
+    const writeAction: AgentAction = { type: 'write_file', path: file, content: 'after' };
+    const writeExecutor = {
+      mapAction() { return []; },
+      async execute() {
+        liveObservations.push(isInvocationLive());
+        writeFileSync(file, 'after', 'utf-8');
+        return { action: writeAction, terminal: false, results: [{ exit_code: 0, stdout: 'ok', stderr: '' }] };
+      },
+    } as unknown as ToolExecutor;
+    const verifierAction: AgentAction = { type: 'test_run', command: 'npm test' };
+    const verifierExecutor = {
+      mapAction() { return []; },
+      async execute() {
+        liveObservations.push(isInvocationLive());
+        return { action: verifierAction, terminal: false, results: [{ exit_code: 0, stdout: 'ok', stderr: '' }] };
+      },
+    } as unknown as ToolExecutor;
+
+    try {
+      const write = await executeActionWithPolicy(
+        writeAction,
+        'workspace_write',
+        ctx(runId, projectRoot),
+        { executor: writeExecutor, mode: 'chat' },
+      );
+      assert.equal(write.policyBlocked, false);
+      assert.equal(liveObservations.at(-1), true, 'governed default mutation is invocation-live');
+
+      resetCircuitBreakerForRun(runId);
+      await executeActionWithPolicy(
+        verifierAction,
+        'workspace_write',
+        ctx(runId, projectRoot),
+        { executor: verifierExecutor, mode: 'chat', isolationAvailable: true, hostFallbackAllowed: true },
+      );
+      assert.equal(liveObservations.at(-1), true, 'same-task authoritative verifier stays live');
+
+      retireLiveCertificationForRun(runId);
+      assert.equal(resolveExecutorDryRun().dryRun, true);
+      const retiredVerifier = await executeActionWithPolicy(
+        verifierAction,
+        'workspace_write',
+        ctx(runId, projectRoot),
+        { executor: verifierExecutor, mode: 'chat', isolationAvailable: true, hostFallbackAllowed: true },
+      );
+      assert.equal(retiredVerifier.policyBlocked, false, JSON.stringify(retiredVerifier.results));
+      assert.equal(liveObservations.length, 3);
+      assert.equal(liveObservations.at(-1), false, 'fresh-task verifier cannot inherit certification');
+    } finally {
+      resetCircuitBreakerForRun(runId);
+      resetCircuitBreaker();
+      rmSync(configDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+      for (const key of managedEnv) {
+        const value = savedEnv[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      refreshDryRunState();
+    }
+  });
+
+  it('does not let a suspended old mutation re-certify a retired task', async () => {
+    const managedEnv = [
+      'BABEL_DRY_RUN',
+      'BABEL_LIVE',
+      'BABEL_DRY_RUN_SOURCE',
+      'BABEL_SHADOW_ROOT',
+      'BABEL_CONFIG_DIR',
+    ] as const;
+    const savedEnv = Object.fromEntries(managedEnv.map((key) => [key, process.env[key]]));
+    const configDir = mkdtempSync(join(tmpdir(), 'babel-live-cert-race-config-'));
+    const projectRoot = mkdtempSync(join(tmpdir(), 'babel-live-cert-race-project-'));
+    const runId = 'task-certification-retirement-race';
+    const file = join(projectRoot, 'race.txt');
+    writeFileSync(file, 'before', 'utf-8');
+    for (const key of managedEnv) delete process.env[key];
+    process.env['BABEL_CONFIG_DIR'] = configDir;
+    refreshDryRunState();
+    resetCircuitBreaker();
+
+    let started!: () => void;
+    let release!: () => void;
+    const enteredExecutor = new Promise<void>((resolve) => { started = resolve; });
+    const executorPaused = new Promise<void>((resolve) => { release = resolve; });
+    const writeAction: AgentAction = { type: 'write_file', path: file, content: 'after' };
+    const liveObservations: boolean[] = [];
+    const writeExecutor = {
+      mapAction() { return []; },
+      async execute() {
+        liveObservations.push(isInvocationLive());
+        started();
+        await executorPaused;
+        writeFileSync(file, 'after', 'utf-8');
+        return { action: writeAction, terminal: false, results: [{ exit_code: 0, stdout: 'ok', stderr: '' }] };
+      },
+    } as unknown as ToolExecutor;
+    const verifierAction: AgentAction = { type: 'test_run', command: 'npm test' };
+    const verifierExecutor = {
+      mapAction() { return []; },
+      async execute() {
+        liveObservations.push(isInvocationLive());
+        return { action: verifierAction, terminal: false, results: [{ exit_code: 0, stdout: 'ok', stderr: '' }] };
+      },
+    } as unknown as ToolExecutor;
+
+    try {
+      const oldWrite = executeActionWithPolicy(
+        writeAction,
+        'workspace_write',
+        ctx(runId, projectRoot),
+        { executor: writeExecutor, mode: 'chat' },
+      );
+      await enteredExecutor;
+      assert.equal(liveObservations[0], true, 'the already-authorized mutation remains live in its invocation');
+      retireLiveCertificationForRun(runId);
+      release();
+      const settled = await oldWrite;
+      assert.equal(settled.policyBlocked, false);
+
+      const verifier = await executeActionWithPolicy(
+        verifierAction,
+        'workspace_write',
+        ctx(runId, projectRoot),
+        { executor: verifierExecutor, mode: 'chat', isolationAvailable: true, hostFallbackAllowed: true },
+      );
+      assert.equal(verifier.policyBlocked, false);
+      assert.deepEqual(liveObservations, [true, false],
+        'completion of a pre-retirement mutation must not restore later verifier authority');
+    } finally {
+      release();
+      retireLiveCertificationForRun(runId);
+      resetCircuitBreaker();
+      rmSync(configDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+      for (const key of managedEnv) {
+        const value = savedEnv[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      refreshDryRunState();
+    }
   });
 });
 

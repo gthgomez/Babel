@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { z } from "zod";
+import { isCredentialTargetPath } from "../agent/autonomyEnforcement.js";
 
 export type RevisionScopeV1 =
   | { kind: "files"; paths: string[] }
@@ -154,7 +155,7 @@ function readGitHead(projectRoot: string): string | null {
  * Hash the repository's ACTUAL verification-relevant state.
  *
  * `ls-files -s` contributes the blob hash of every clean tracked file. The
- * Git status (`--porcelain=v2 -z --untracked-files=all`) identifies the
+ * Git status (`--porcelain -z --untracked-files=all`) identifies the
  * divergent paths — worktree-modified tracked files and untracked files —
  * and for each of those the ACTUAL worktree bytes are hashed here, together
  * with existence and type. A metadata-only fingerprint (hashing the status
@@ -168,8 +169,24 @@ function readGitHead(projectRoot: string): string | null {
  */
 function readGitTree(projectRoot: string): string | null {
   try {
-    const index = execFileSync("git", ["ls-files", "-s", "--", "."], {
+    // Native resolution canonicalizes Windows filesystem aliases as well as
+    // symlinks, so Git and the caller compare the same physical directory.
+    const gitRoot = fs.realpathSync.native(execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: projectRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+      windowsHide: true,
+    }).trim());
+    const physicalProjectRoot = fs.realpathSync.native(projectRoot);
+    const projectPrefix = path.relative(gitRoot, physicalProjectRoot);
+    if (
+      path.isAbsolute(projectPrefix) || projectPrefix === ".." ||
+      projectPrefix.startsWith(`..${path.sep}`)
+    ) return null;
+    const scopePath = projectPrefix ? `:(top,literal)${projectPrefix.split(path.sep).join("/")}` : ".";
+    const index = execFileSync("git", ["ls-files", "-s", "--", scopePath], {
+      cwd: gitRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 10_000,
@@ -177,9 +194,9 @@ function readGitTree(projectRoot: string): string | null {
     });
     const status = execFileSync(
       "git",
-      ["status", "--porcelain", "-z", "--untracked-files=all"],
+      ["status", "--porcelain", "-z", "--untracked-files=all", "--", scopePath],
       {
-        cwd: projectRoot,
+        cwd: gitRoot,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 10_000,
@@ -202,7 +219,42 @@ function readGitTree(projectRoot: string): string | null {
     const contentDigests = divergent
       .sort()
       .map((relativePath) => {
-        const absolute = path.resolve(projectRoot, relativePath);
+        // Private divergent paths cannot be content-bound without opening a
+        // credential store. Refuse the repository binding before content I/O.
+        if (isCredentialTargetPath(relativePath)) throw new Error("Repository revision includes a credential path.");
+        const absolute = path.resolve(gitRoot, relativePath);
+        const withinProject = path.relative(physicalProjectRoot, absolute);
+        if (
+          path.isAbsolute(withinProject) || withinProject === ".." ||
+          withinProject.startsWith(`..${path.sep}`)
+        ) throw new Error("Git status returned a path outside the requested project scope.");
+        // The lexical check above is not enough: an in-project parent may be
+        // replaced by a symlink to an outside directory. Validate each parent
+        // physically before reading the leaf. The leaf itself is inspected
+        // with lstat below, so a final symlink is hashed as a link, not followed.
+        let parent = physicalProjectRoot;
+        const parentParts = path.dirname(withinProject).split(path.sep).filter(Boolean);
+        for (const part of parentParts) {
+          parent = path.resolve(parent, part);
+          let parentStats: fs.Stats;
+          try {
+            parentStats = fs.lstatSync(parent);
+          } catch (error) {
+            if (
+              error && typeof error === "object" && "code" in error &&
+              (error as { code?: string }).code === "ENOENT"
+            ) return `${relativePath}:missing`;
+            throw error;
+          }
+          if (parentStats.isSymbolicLink() || !parentStats.isDirectory())
+            throw new Error("Git status path traverses a non-directory or symlink parent.");
+          const physicalParent = fs.realpathSync.native(parent);
+          const physicalRelative = path.relative(physicalProjectRoot, physicalParent);
+          if (
+            path.isAbsolute(physicalRelative) || physicalRelative === ".." ||
+            physicalRelative.startsWith(`..${path.sep}`)
+          ) throw new Error("Git status path resolves outside the requested project scope.");
+        }
         let stats: fs.Stats;
         try {
           stats = fs.lstatSync(absolute);
@@ -219,6 +271,108 @@ function readGitTree(projectRoot: string): string | null {
   } catch {
     return null;
   }
+}
+
+const INPUT_CLOSURE_SKIP_DIRS = new Set([
+  "node_modules", ".git",
+]);
+const INPUT_CLOSURE_MAX_FILES = 40;
+const INPUT_CLOSURE_MAX_BYTES = 1_000_000;
+
+function closurePathIsCredential(relativePath: string): boolean {
+  return isCredentialTargetPath(relativePath);
+}
+
+/**
+ * Bind every eligible input, including ignored files. Cache discovery keeps its
+ * 40-file bound; fresh proof reallocates that same worst-case content envelope
+ * (40 x 1 MB) across files and path metadata, without granting cache reuse.
+ * Complete metadata admission precedes content I/O in either mode.
+ */
+export function discoverVerifierInputClosure(projectRoot: string, freshProof = false):
+  | { mode: "bound"; paths: string[]; digests: Record<string, string>; reuseEligible?: false }
+  | { mode: "unsupported"; reason: string } {
+  const unsupported = (reason: string): { mode: "unsupported"; reason: string } => ({ mode: "unsupported", reason });
+  let root: string;
+  try { root = fs.realpathSync.native(projectRoot); }
+  catch { return unsupported("Input root is not resolvable"); }
+  // Admit the physical root before opening a directory or any input content.
+  if (closurePathIsCredential(root)) return unsupported("Input closure includes a credential path");
+  const paths: string[] = [];
+  const digests: Record<string, string> = {};
+  const files: Array<{ absolute: string; relativePath: string; size: number }> = [];
+  const stack = [root];
+  const maxBudgetBytes = INPUT_CLOSURE_MAX_FILES * INPUT_CLOSURE_MAX_BYTES;
+  const started = Date.now();
+  let budgetBytes = 0;
+  while (stack.length > 0) {
+    if (Date.now() - started >= 10_000) return unsupported("Input closure proof deadline exceeded");
+    const dir = stack.pop()!;
+    let directory: fs.Dir;
+    try { directory = fs.opendirSync(dir); }
+    catch { return unsupported("Input directory is not listable"); }
+    try {
+      let entry: fs.Dirent | null;
+      while ((entry = directory.readSync()) !== null) {
+        if (Date.now() - started >= 10_000) return unsupported("Input closure proof deadline exceeded");
+        if (INPUT_CLOSURE_SKIP_DIRS.has(entry.name)) continue;
+        const absolute = path.join(dir, entry.name);
+        const relativePath = path.relative(root, absolute).split(path.sep).join("/");
+        if (closurePathIsCredential(relativePath)) {
+          if (freshProof) return unsupported("Input closure includes a credential path");
+          continue;
+        }
+        let stats: fs.Stats;
+        try {
+          stats = fs.lstatSync(absolute);
+        } catch { return unsupported("Input path is not readable"); }
+        if (stats.isSymbolicLink()) return unsupported("Input closure cannot bind a symlink");
+        try { fs.accessSync(absolute, fs.constants.R_OK); }
+        catch { return unsupported("Input path is not readable"); }
+        budgetBytes += Buffer.byteLength(relativePath, "utf8") + 1;
+        if (stats.isDirectory()) stack.push(absolute);
+        else if (stats.isFile()) {
+          if (stats.size > INPUT_CLOSURE_MAX_BYTES) return unsupported("Input file exceeds the closure size cap");
+          budgetBytes += stats.size;
+          files.push({ absolute, relativePath, size: stats.size });
+          if (!freshProof && files.length > INPUT_CLOSURE_MAX_FILES) return unsupported("Input closure exceeds the file cap");
+        } else return unsupported("Input closure includes an unsupported filesystem entry");
+        if (budgetBytes > maxBudgetBytes) return unsupported("Input closure exceeds the proof byte budget");
+      }
+    } catch { return unsupported("Input directory is not listable"); }
+    finally { directory.closeSync(); }
+  }
+  // Refuse growth or changed entry types between admission and content access.
+  for (const file of files) {
+    if (Date.now() - started >= 10_000) return unsupported("Input closure proof deadline exceeded");
+    let descriptor: number | undefined;
+    try {
+      let parent = root;
+      for (const part of path.dirname(file.relativePath).split("/").filter(part => part !== ".")) {
+        parent = path.join(parent, part);
+        if (!fs.lstatSync(parent).isDirectory()) return unsupported("Input changed after admission");
+      }
+      if (!fs.lstatSync(file.absolute).isFile()) return unsupported("Input changed after admission");
+      descriptor = fs.openSync(file.absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      const stats = fs.fstatSync(descriptor);
+      if (!stats.isFile() || stats.size !== file.size) return unsupported("Input changed after admission");
+      // Bound allocation and reads even if a file grows after metadata admission.
+      const buffer = Buffer.alloc(file.size + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        const read = fs.readSync(descriptor, buffer, length, buffer.length - length, length);
+        if (read === 0) break;
+        length += read;
+      }
+      if (length !== file.size || Date.now() - started >= 10_000) return unsupported("Input changed after admission");
+      const content = buffer.subarray(0, length);
+      paths.push(file.relativePath);
+      digests[file.relativePath] = hashFileContent(content);
+    } catch { return unsupported("Input file is not readable"); }
+    finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
+  }
+  paths.sort();
+  return { mode: "bound", paths, digests, ...(freshProof ? { reuseEligible: false as const } : {}) };
 }
 
 export function compareRevisions(

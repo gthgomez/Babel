@@ -40,6 +40,8 @@ import {
   handleMcpResourceList,
   handleMcpResourceRead,
   handleMcpToolSearch,
+  mcpAutoDispatchDenied,
+  runWithApprovedMcpJit,
 } from './tools/mcpTransport.js';
 import { handleWebFetch, handleWebSearch } from './tools/webContext.js';
 import { handlePluginTool } from './services/plugins.js';
@@ -686,6 +688,7 @@ async function handleShellExec(
       exit_code: 0,
       stdout: `[DRY RUN] Would execute: ${req.command}`,
       stderr: '',
+      simulated: true,
     };
   }
 
@@ -710,6 +713,7 @@ async function handleTestRun(
       exit_code: 0,
       stdout: `[DRY RUN] Would run tests: ${req.command}`,
       stderr: '',
+      simulated: true,
     };
   }
 
@@ -1567,7 +1571,10 @@ export function shouldJitApprove(req: ToolCallRequest): boolean {
   let needsApproval = false;
   if (process.env['BABEL_ASK'] === 'true') {
     const snap = EXECUTOR_TOOL_REGISTRY.getSnapshot(req.tool);
-    needsApproval =
+    if (req.tool === 'mcp_request' && mcpAutoDispatchDenied() !== null) {
+      needsApproval = true;
+    }
+    needsApproval = needsApproval ||
       req.tool === 'file_write' ||
       req.tool === 'shell_exec' ||
       req.tool === 'test_run' ||
@@ -1754,7 +1761,10 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     return policyDenied;
   }
 
+  let approvedMcpRequest: Extract<ToolCallRequest, { tool: 'mcp_request' }> | undefined;
   if (shouldJitApprove(req)) {
+    // Bind approval to the exact fields presented, before the asynchronous dialog.
+    const presentedMcpRequest = req.tool === 'mcp_request' ? { ...req } : undefined;
     const bus = logContext.getStore()?.eventBus;
     if (bus) {
       bus.promptPause('tool_jit_approval');
@@ -1851,6 +1861,16 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
               : `[JIT_DENIED] Tool execution denied by operator.`,
         };
       }
+      if (presentedMcpRequest && (req.tool !== 'mcp_request'
+        || req.server !== presentedMcpRequest.server || req.query !== presentedMcpRequest.query)) {
+        return {
+          exit_code: 1, stdout: '',
+          stderr: '[MCP_APPROVAL_REQUIRED] Request changed during operator approval.',
+          render_intent: 'tool_failure',
+          failure: { code: 'mcp_approval_required', category: 'input_contract', tool: 'mcp_request' },
+        };
+      }
+      approvedMcpRequest = presentedMcpRequest;
     } finally {
       if (bus) {
         bus.promptResume();
@@ -1902,7 +1922,10 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     : null;
 
   context.onBeforeDispatch?.();
-  const result = await EXECUTOR_TOOL_REGISTRY.dispatch(req, context);
+  const dispatch = () => EXECUTOR_TOOL_REGISTRY.dispatch(req, context);
+  const result = approvedMcpRequest
+    ? await runWithApprovedMcpJit(approvedMcpRequest, dispatch)
+    : await dispatch();
 
   // ── Phase 4: Post-dispatch cache/gate updates ────────────────────────────
   gate.recordCall(req.tool, result.exit_code);

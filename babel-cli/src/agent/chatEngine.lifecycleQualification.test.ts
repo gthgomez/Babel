@@ -513,6 +513,7 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
 
   test('final prepared-request admission compacts once and retries the rebuilt request', async () => {
     const fixture = makeFixture();
+    let admissionStore: AdmissionStore | undefined;
     try {
       process.env['BABEL_COMPACTION'] = 'off';
       const overLimit = prepareProviderRequest({
@@ -539,7 +540,12 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
         async executeRaw() { return 'fixture complete'; },
         getLastInvocationMetadata() { return null; },
       };
+      mkdirSync(fixture.runs, { recursive: true });
+      const opened = openSessionAdmissionStore('prepared-admission');
+      if (!opened.ok) throw new Error(opened.detail);
+      admissionStore = opened.store;
       const engine = makeEngine(fixture.project, 'prepared-admission', runner, {
+        admissionStore,
         maxConversationMessages: 6,
         maxEstimatedTokens: 80,
       });
@@ -556,6 +562,7 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
       assert.ok(events.some((event) => event.type === 'context_compacted'));
       assert.ok(events.some((event) => event.type === 'done' && event.answer.includes('rebuilt request admitted')));
     } finally {
+      admissionStore?.close();
       fixture.cleanup();
     }
   });
@@ -617,7 +624,7 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
       if (!opened.ok) throw new Error(opened.detail);
       admissionStore = opened.store;
       const runner = makeRunner((_call) => [
-        { type: 'text_delta', text: 'durable fact: lifecycle nonce retained' },
+        { type: 'text_delta', text: 'durable fact: lifecycle nonce retained\n' + 'synthetic conversation evidence. '.repeat(600) },
         { type: 'done', finishReason: 'stop' },
       ]);
       engine = makeEngine(fixture.project, runId, runner, {
@@ -625,14 +632,14 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
         maxConversationMessages: 6,
         maxEstimatedTokens: 50,
         maxTurns: 16,
+        operation: 'READ_ONLY',
       });
       let compactions = 0;
       for (let i = 0; i < 10; i += 1) {
-        // Mutation-intent fixture: the subject under test is repeated
-        // compaction, and a READ_ONLY-shaped prompt would (correctly) complete
-        // on turn one without growing the conversation to the compaction
-        // threshold.
-        const events = await collectStream(engine.submitMessageStream(`update the lifecycle fixture turn ${i}`));
+        // Explicit synthetic history exceeds the runtime's 4,000-token floor.
+        // Compaction must not rely on a bloated system prompt or artificial
+        // mutation retries to accumulate enough context.
+        const events = await collectStream(engine.submitMessageStream(`explain the lifecycle fixture turn ${i}`));
         assert.equal(events.at(-1)?.type, 'done', `compaction submission ${i} must finish`);
         compactions += events.filter((event) => event.type === 'context_compacted').length;
       }

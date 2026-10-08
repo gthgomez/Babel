@@ -268,7 +268,7 @@ export function formatIntentPlanUserMessage(plan: IntentPlan): string {
  * compensates for DeepSeek's inability to use thinking+tool_choice together.
  * Zero-cost: no extra LLM call, just a directive in the user message.
  *
- * Gated by BABEL_CHAT_PRELOOP_PLAN (default: on for execute-task classes).
+ * Appended only when the caller opts in through BABEL_CHAT_PRELOOP_PLAN.
  */
 export function buildPreLoopPlanningInstruction(opts?: {
   /** When true, add stronger language about mutate-before-env-pytest. */

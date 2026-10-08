@@ -75,14 +75,107 @@ export async function runJsonService<T>(service: JsonServiceCommand, input: unkn
     shell: false,
     detached: process.platform !== 'win32',
   });
-  if (!child.pid) {
+  const startupAbort = new AbortController();
+  let startupActive = true;
+  let startupCause: 'host_abort' | 'child_error' | 'child_close' | undefined;
+  let childError: Error | undefined;
+  let childCloseCode: number | null | undefined;
+  let onChildError: ((error: Error) => void) | undefined;
+  let onChildClose: ((code: number | null) => void) | undefined;
+  let resolveChildClosed!: () => void;
+  const childClosed = new Promise<void>((resolve) => { resolveChildClosed = resolve; });
+  const stopStartup = (cause: 'host_abort' | 'child_error' | 'child_close'): void => {
+    if (startupCause) return;
+    startupCause = cause;
+    startupAbort.abort();
     terminateChildTree(child);
-    throw new Error('Trusted review service could not be started.');
-  }
-  const containment = await attachReviewProcessContainment(child.pid).catch((error: unknown) => {
+  };
+  const cleanupStartup = async (
+    error: Error,
+    containment?: Awaited<ReturnType<typeof attachReviewProcessContainment>>,
+  ): Promise<never> => {
+    startupActive = false;
+    service.abortSignal?.removeEventListener('abort', onStartupAbort);
+    startupAbort.abort();
+    containment?.release();
     terminateChildTree(child);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        childClosed,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error(stopMessage('cleanup_timeout'))), lifetime.cleanupTimeoutMs);
+        }),
+      ]);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'Review service startup failed and child cleanup did not complete.');
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    try { unlinkSync(gate); } catch { /* gate has not been opened */ }
     throw error;
+  };
+  const onStartupAbort = (): void => {
+    if (startupActive) stopStartup('host_abort');
+  };
+  child.once('error', (error) => {
+    childError = error;
+    if (startupActive) stopStartup('child_error');
+    else onChildError?.(error);
   });
+  child.once('close', (code) => {
+    childCloseCode = code;
+    resolveChildClosed();
+    if (startupActive) stopStartup('child_close');
+    else onChildClose?.(code);
+  });
+  service.abortSignal?.addEventListener('abort', onStartupAbort, { once: true });
+  if (service.abortSignal?.aborted) onStartupAbort();
+
+  if (!child.pid) {
+    await cleanupStartup(new Error('Trusted review service could not be started.'));
+  }
+  let containment!: Awaited<ReturnType<typeof attachReviewProcessContainment>>;
+  try {
+    containment = await attachReviewProcessContainment(child.pid!, process.pid, startupAbort.signal);
+  } catch (error) {
+    if (startupCause === 'host_abort' || service.abortSignal?.aborted) {
+      await cleanupStartup(new Error(stopMessage('host_abort')));
+    }
+    if (childError || startupCause === 'child_error') {
+      await cleanupStartup(new Error('Trusted review service could not be started.'));
+    }
+    if (childCloseCode !== undefined || startupCause === 'child_close') {
+      await cleanupStartup(new Error(`Trusted review service exited with code ${childCloseCode ?? 'unknown'}.`));
+    }
+    await cleanupStartup(error instanceof Error ? error : new Error('Review service containment could not be attached.'));
+  }
+  if (lifetime.kind === 'follow_authority') {
+    let admission!: ReturnType<ReviewAuthorityMonitor['inspect']>;
+    try {
+      admission = service.authority!.inspect(service.candidate!);
+    } catch (error) {
+      await cleanupStartup(
+        error instanceof Error ? error : new Error('Review service authority inspection failed.'),
+        containment,
+      );
+    }
+    if (!admission.admitted) {
+      await cleanupStartup(new Error(stopMessage(admission.cause)), containment);
+    }
+  }
+  if (startupCause || childError || childCloseCode !== undefined || service.abortSignal?.aborted) {
+    if (startupCause === 'host_abort' || service.abortSignal?.aborted) {
+      await cleanupStartup(new Error(stopMessage('host_abort')), containment);
+    }
+    if (childError || startupCause === 'child_error') {
+      await cleanupStartup(new Error('Trusted review service could not be started.'), containment);
+    }
+    await cleanupStartup(
+      new Error(`Trusted review service exited with code ${childCloseCode ?? 'unknown'}.`),
+      containment,
+    );
+  }
 
   let lifetimeTimer: ReturnType<typeof setTimeout> | undefined;
   let authorityPoll: ReturnType<typeof setInterval> | undefined;
@@ -118,10 +211,10 @@ export async function runJsonService<T>(service: JsonServiceCommand, input: unkn
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => { stdout += chunk; });
     child.stderr.on('data', (chunk: string) => { stderr += chunk; });
-    child.once('error', () => {
+    onChildError = () => {
       settleReject(new Error('Trusted review service could not be started.'));
-    });
-    child.once('close', (code) => {
+    };
+    onChildClose = (code) => {
       closeObserved = true;
       if (settled) return;
       if (stopCause) {
@@ -138,7 +231,9 @@ export async function runJsonService<T>(service: JsonServiceCommand, input: unkn
       } catch {
         settleReject(new Error('Trusted review service returned invalid JSON.'));
       }
-    });
+    };
+    if (childError) onChildError(childError);
+    else if (childCloseCode !== undefined) onChildClose(childCloseCode);
 
     if (lifetime.kind === 'finite') {
       lifetimeTimer = setTimeout(() => requestStop('finite_timeout'), lifetime.timeoutMs);
@@ -151,6 +246,9 @@ export async function runJsonService<T>(service: JsonServiceCommand, input: unkn
       authorityPoll.unref?.();
     }
     service.abortSignal?.addEventListener('abort', onAbort, { once: true });
+    startupActive = false;
+    service.abortSignal?.removeEventListener('abort', onStartupAbort);
+    if (service.abortSignal?.aborted) onAbort();
     child.stdin.end(`${JSON.stringify(input)}\n`);
     try {
       writeFileSync(gate, 'ready\n', { encoding: 'utf8', mode: 0o600 });
