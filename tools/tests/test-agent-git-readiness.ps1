@@ -126,6 +126,7 @@ try {
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--local', '--add', 'credential.helper', '') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--local', '--add', 'credential.helper', '!gh auth git-credential') | Out-Null
 
+  $mainRefJson = '{"object":{"sha":"' + $mainSha + '"}}'
   @(
     'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)',
     'if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "--version") { Write-Output "gh version 2.97.0"; exit 0 }',
@@ -200,7 +201,8 @@ try {
   $checkItems += '{"app":{"id":15368,"slug":"github-actions","name":"GitHub Actions"},"id":103,"name":"linux-validation","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"103","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
   $checkItems += '{"app":{"id":15368,"slug":"github-actions","name":"GitHub Actions"},"id":104,"name":"public-pr-metadata","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request_target","workflow_name":"Public PR Metadata","workflow_id":"workflow-2","workflow_run_id":"104","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
   $checkItems += '{"app":{"id":15368,"slug":"github-actions","name":"GitHub Actions"},"id":105,"name":"windows-portability","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"105","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
-  $checkJson = '{"check_runs":[' + ($checkItems -join ',') + ']}'
+  $checkJson = '{"total_count":5,"check_runs":[' + ($checkItems -join ',') + ']}'
+  $workflowJson = '{"total_count":0,"workflow_runs":[]}'
   # GREEN candidates now need real-shaped owner-controller chat evidence too.
   # Keep it outside the candidate, bind its actual diff, and use the fixture's
   # merged base as the independently installed reviewer source.
@@ -271,7 +273,9 @@ try {
     'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "api" -and $Arguments[1] -eq "repos/gthgomez/Babel") { if ($Arguments -contains "--jq") { Write-Output "gthgomez/Babel" } else { Write-Output ''{"full_name":"gthgomez/Babel","owner":{"id":91163862,"type":"User"}}'' }; exit 0 }',
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -like 'repos/gthgomez/Babel/issues/42/comments?per_page=*') { Get-Content -Raw -LiteralPath '$($commentsPath -replace "'", "''")'; exit 0 }",
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'pr' -and `$Arguments[1] -eq 'view') { Write-Output '$prJson'; exit 0 }",
+    "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -eq 'repos/gthgomez/Babel/git/ref/heads/main') { Write-Output '$mainRefJson'; exit 0 }",
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -eq 'graphql') { Write-Output '$graphqlJson'; exit 0 }",
+    "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -like 'repos/gthgomez/Babel/actions/runs?head_sha=*') { Write-Output '$workflowJson'; exit 0 }",
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -like '*rulesets/19597161') { Write-Output '$rulesetDetail'; exit 0 }",
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -like '*rulesets?per_page=*') { Write-Output '$rulesetList'; exit 0 }",
     "if (`$Arguments.Count -gt 0 -and `$Arguments[0] -eq 'api') { Write-Output '$checkJson'; exit 0 }",
@@ -308,6 +312,16 @@ try {
   Assert-AgentTest (@($missingEvidence.reviewPolicy.independentReviewEvidenceErrors) -contains 'autonomous_review_evidence_missing') 'missing evidence diagnostic must remain visible'
 
   $fakeGhHealthy = Get-Content -Raw -LiteralPath $fakeGh
+  foreach ($malformedBase in @('{}', '{"object":{}}', '{"object":{"sha":"invalid"}}', 'null')) {
+    try {
+      $fakeGhHealthy.Replace("Write-Output '$mainRefJson'", "Write-Output '$malformedBase'") | Set-Content -LiteralPath $fakeGh -Encoding utf8
+      $baseRun = Invoke-TestScript -Script $prGateScript -Arguments $gateArguments
+      $baseResult = $baseRun.text | ConvertFrom-Json
+      Assert-AgentTest ($baseRun.exitCode -eq 1 -and -not $baseResult.mergeReady) 'malformed base evidence remains blocking'
+      Assert-AgentTest (@($baseResult.blockers) -notcontains 'pr_gate_exception') 'malformed base schema must produce a source-unavailable diagnosis'
+      Assert-AgentTest ($baseResult.ciEvidence.wait.reason -eq 'base_source_unavailable') 'malformed base must retain its unavailable source state'
+    } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
+  }
   try {
     $fakeGhHealthy.Replace('"conclusion":"success"', '"conclusion":"failure"') | Set-Content -LiteralPath $fakeGh -Encoding utf8
     $failedCiRun = Invoke-TestScript -Script $prGateScript -Arguments $gateArguments
@@ -350,6 +364,7 @@ try {
     $draftMergeRun = Invoke-TestScript -Script $prGateScript -Arguments $gateArguments
     $draftMerge = $draftMergeRun.text | ConvertFrom-Json
     Assert-AgentTest ($draftMergeRun.exitCode -eq 1 -and -not $draftMerge.mergeReady -and (Test-Path -LiteralPath $checkReadLog)) 'non-audit draft gate must retain full checks and still block'
+    Assert-AgentTest (@($draftMerge.blockers) -contains 'pr_is_draft' -and $draftMerge.ciEvidence.wait.attempts -eq 0) 'non-audit draft diagnostics must preserve the prerequisite blocker without waiting'
   } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
 
   foreach ($auditMode in @($false, $true)) {
