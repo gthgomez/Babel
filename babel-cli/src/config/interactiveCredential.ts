@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stderr as output } from 'node:process';
+import { once } from 'node:events';
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -16,6 +17,34 @@ function isMachineOutput(argv: string[]): boolean {
 
 function safeApiKey(key: string): boolean {
   return key.length >= 8 && key.length <= 4096 && /^[A-Za-z0-9_./:+==-]+$/.test(key);
+}
+
+async function readMaskedLine(): Promise<string> {
+  if (!input.isTTY) return '';
+  output.write('Paste API key (masked): ');
+  input.setRawMode(true);
+  input.resume();
+  input.setEncoding('utf8');
+  let value = '';
+  while (true) {
+    const [chunk] = (await once(input, 'data')) as [string];
+    for (const char of chunk) {
+      if (char === '\r' || char === '\n') {
+        input.setRawMode(false);
+        output.write('\n');
+        return value;
+      }
+      if (char === '\u0003') {
+        input.setRawMode(false);
+        throw new Error('Credential setup cancelled.');
+      }
+      if (char === '\u007f' || char === '\b') {
+        value = value.slice(0, -1);
+        continue;
+      }
+      value += char;
+    }
+  }
 }
 
 function appendCredential(envFile: string, name: string, key: string): void {
@@ -61,9 +90,7 @@ export async function maybePromptForMissingProviderCredential(
       output.write('Credential setup skipped.\n');
       return;
     }
-    output.write('Paste API key: ');
-    const key = (await rl.question('')).trim();
-    output.write('\n');
+    const key = (await readMaskedLine()).trim();
     if (!safeApiKey(key)) {
       output.write('Credential was not saved: invalid token format.\n');
       return;
