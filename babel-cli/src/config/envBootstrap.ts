@@ -67,6 +67,9 @@ export function loadOptedInProjectCredentials(env: NodeJS.ProcessEnv): boolean {
   if (!info.isFile() || info.isSymbolicLink() || info.nlink > 1 || info.size > 256 * 1024) {
     throw new Error('Project .env is not a safe regular file');
   }
+  if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) {
+    throw new Error('Project .env permissions are too broad');
+  }
   const values = dotenvParse(readFileSync(file, 'utf8'));
   // A project may supply only certified provider credentials, not arbitrary
   // NODE_OPTIONS, BABEL_ROOT, execution-policy or process-control variables.
