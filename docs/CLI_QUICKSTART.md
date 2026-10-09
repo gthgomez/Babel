@@ -45,9 +45,11 @@ Authoritative package root is `babel-cli/`. There is no root `package.json`.
 
 ## Provider credentials
 
-Copy the blank `babel-cli/.env.example` into your private `~/.babel/config/.env`
+Create `~/.babel/config` first and copy the blank `babel-cli/.env.example`
+into the private `~/.babel/config/.env`
 (or `%USERPROFILE%\.babel\config\.env` on Windows) and set only the
-provider keys you use. `BABEL_CONFIG_DIR` selects an explicit profile.
+provider keys you use. On macOS/Linux, set file permissions with
+`chmod 600 ~/.babel/config/.env` after copying. `BABEL_CONFIG_DIR` selects an explicit profile.
 Never put provider keys inside the target repository by default. Desktop provides
 masked setup in **Configure provider**; it only offers project-local `.env`
 with explicit opt-in, Git ignore and tracking checks. Host and CI environment
