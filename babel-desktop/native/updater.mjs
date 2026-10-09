@@ -89,10 +89,12 @@ export async function inspectDevelopmentCheckout({git, repoRoot}) {
   let countsOk = false;
   if (upstream.ok && SHA.test(upstream.stdout.trim())) {
     const counts = await git(['rev-list', '--left-right', '--count', `${upstreamRef}...HEAD`], repoRoot);
-    if (counts.ok) {
-      const [b, a] = counts.stdout.trim().split(/\s+/).map(Number);
-      behind = Number.isFinite(b) ? b : 0;
-      ahead = Number.isFinite(a) ? a : 0;
+    const [behindRaw, aheadRaw] = counts.ok ? counts.stdout.trim().split(/\s+/).map(Number) : [];
+    // countsOk requires a real, parseable two-integer result; a successful
+    // command with truncated/garbage output must not read as "not ahead".
+    if (Number.isFinite(behindRaw) && Number.isFinite(aheadRaw)) {
+      behind = behindRaw;
+      ahead = aheadRaw;
       countsOk = true;
     }
   }

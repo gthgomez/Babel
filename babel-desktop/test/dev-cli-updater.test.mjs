@@ -108,6 +108,21 @@ test('inspectDevelopmentCheckout reports failed probes so callers fail closed', 
   }, repoRoot:'/repo'});
   assert.equal(failedDivergence.countsOk, false);
   assert.equal(planDevelopmentUpdate(failedDivergence).reason, 'divergence_unavailable');
+
+  // A successful command with unparseable output must also fail closed.
+  const malformedCounts = await inspectDevelopmentCheckout({git:async (args) => {
+    const key = args.join(' ');
+    if (key === 'rev-parse HEAD') return {ok:true, stdout:`${SHA_A}\n`};
+    if (key === 'remote get-url origin') return {ok:true, stdout:'https://github.com/gthgomez/Babel.git\n'};
+    if (key === 'rev-parse --abbrev-ref HEAD') return {ok:true, stdout:'main\n'};
+    if (key === 'status --porcelain') return {ok:true, stdout:''};
+    if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return {ok:true, stdout:'origin/main\n'};
+    if (key === 'rev-parse origin/main') return {ok:true, stdout:`${SHA_B}\n`};
+    if (key === 'rev-list --left-right --count origin/main...HEAD') return {ok:true, stdout:'not-a-count\n'};
+    return {ok:true, stdout:''};
+  }, repoRoot:'/repo'});
+  assert.equal(malformedCounts.countsOk, false);
+  assert.equal(planDevelopmentUpdate(malformedCounts).reason, 'divergence_unavailable');
 });
 
 test('inspectDevelopmentCheckout fails closed without a git checkout', async () => {
