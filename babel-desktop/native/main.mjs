@@ -7,6 +7,8 @@ import {listDirectory,readProjectFile} from './workspace.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
+import {saveProviderCredential} from './credentials.mjs';
+import {applyProjectCredentialScope} from './childEnv.mjs';
 import {resolveEngineIdentity} from './identity.mjs';
 import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
 import {listSavedChats,readSavedChat} from './sessions.mjs';
@@ -20,12 +22,17 @@ if(profileArgument){
   app.setPath('userData',profile);
 }
 const officialRuntime=()=>resolveOfficialCli(packageRoot,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath});
-const runtimeEnvironment=()=>app.isPackaged?bundledEnvironment(app.getPath('userData')):{...process.env,ELECTRON_RUN_AS_NODE:'1'};
+function runtimeEnvironment() {
+  const profile=join(app.getPath('userData'),'engine','config');
+  const env=app.isPackaged?bundledEnvironment(app.getPath('userData')):{...process.env,ELECTRON_RUN_AS_NODE:'1',BABEL_CONFIG_DIR:profile};
+  // Project keys are never loaded merely because a repository contains .env.
+  return applyProjectCredentialScope(env,{projectCredentialRoot:preferences.projectCredentialRoot,projectRoot:preferences.projectRoot});
+}
 let diagnostics=null;
 let window=null;
 let closingWindow=false;
 let closeFinished=false;
-let preferences={cliEntry:null,projectRoot:null};
+let preferences={cliEntry:null,projectRoot:null,projectCredentialRoot:null};
 let runner=null;
 let runAdmission=false;
 let dialogBusy=false;
@@ -79,7 +86,8 @@ async function getInfo(){
     packaged:app.isPackaged,
     diagnostics,
     engine,
-    configDirectory:app.isPackaged?runtimeEnvironment().BABEL_CONFIG_DIR:null,
+    configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,
+    projectCredentialsSelected:preferences.projectCredentialRoot===preferences.projectRoot && Boolean(preferences.projectRoot),
   };
 }
 function validateSender(event){
@@ -181,6 +189,23 @@ async function start(){
     if(consent.response!==1)return getInfo();
     preferences.cliEntry=selected;await savePreferences();return getInfo();
   }));
+  handle('babel:save-provider-credential',async options=>{
+    assertIdle();
+    if(!options || typeof options!=='object' || (options.scope!=='private' && options.scope!=='project')) {
+      throw new Error('Select an explicit credential destination.');
+    }
+    if(options.scope==='project'&&!preferences.projectRoot) {
+      throw new Error('Select a project before choosing project-local credentials.');
+    }
+    const result=saveProviderCredential({
+      provider:options.provider,apiKey:options.apiKey,scope:options.scope,
+      configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,projectRoot:preferences.projectRoot,
+    });
+    preferences.projectCredentialRoot=options.scope==='project'?preferences.projectRoot:null;
+    await savePreferences();
+    diagnostics=null; // Next doctor reflects the saved file, without inspecting the key.
+    return result;
+  });
   handle('babel:choose-project',()=>withNativeDialog(async()=>{
     assertIdle();
     const selection=await dialog.showOpenDialog(window,{title:'Open project',properties:['openDirectory']});
