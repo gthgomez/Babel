@@ -9,7 +9,7 @@ The release workflow now builds and attaches the Setup.exe alongside the portabl
 1. Verify the ZIP's SHA256 against the supplied SHA256SUMS.
 2. Extract the **entire** ZIP to a writable directory, including one with spaces. Keep the directory structure intact. Do not launch from inside the ZIP.
 3. Open **Babel Desktop.exe**. First launch shows setup status. Choose your project with **Open project**.
-4. For the default OpenRouter route, create the configuration directory shown in Setup and create a `.env` file there yourself with `OPENROUTER_API_KEY=your-key`. Use your own account and approved model. Do not paste keys into chat, commit them, or share the file. Other supported provider configuration belongs in that same file. Desktop does not import credentials from other apps or checkouts. Explicit process environment credentials are respected.
+4. Click **Configure provider**, choose DeepSeek, OpenRouter, or DeepInfra, and enter your API key in the masked input. By default Babel creates a private `.env` under the Desktop profile's `engine/config` directory, **not** in the project. Existing provider values are not overwritten. The optional **Selected project .env** choice is explicit and available only after selecting a Git repository where `.env` is untracked and Git-ignored. Project-local secrets can be read by project code and are not recommended. Do not paste credentials into chat, Git commits, screenshots or logs. Desktop does not import secrets from other apps. Existing process environment variables take precedence.
 5. Install and start Docker separately for the default `safe_repo` execution profile. Desktop does not start Docker, change Windows policy, or switch to unrestricted host execution. Project commands may need their own language tools inside the execution environment; these are not installed by this preview.
 6. Click **Recheck setup**, then **Use Babel Harness**. Credential presence is not authentication; actual provider errors remain errors. A task may send project content to your configured provider and incur charges. Review Babel's normal run confirmation and tool approvals.
 
@@ -33,6 +33,14 @@ By default Desktop stores UI preferences under `%APPDATA%\babel-north-star-deskt
 ```
 
 Quit by closing the Desktop window. Closing requests cancellation before the application exits; active model-task shutdown is not qualified in this preview. Restart from the same extracted directory with the same profile. Saved chats are read from Babel's own state directory.
+
+## Credential security and project opt-in
+
+- Babel stores a plaintext `.env` inside its **private user profile** by default, never inside the packaged executable or the selected repository. File permissions are restricted where the platform permits; this is **not** OS-keychain encryption. Keep device and profile access secure.
+- Only explicitly selected, authority-qualified cloud provider credentials can be saved through Desktop. Existing provider entries are never overwritten automatically.
+- A project-local `.env` requires explicit user selection, a selected real Git project root, and verification that the file is Git-ignored and untracked. An unsafe existing file, symlink, or non-ignored target is rejected without writing.
+- A project-local file is not loaded merely because Babel opens a project. Only the explicitly opted-in project can supply recognized provider keys. Project application code may still read those bytes; use the private profile for safer defaults.
+- Legacy developer `babel-cli/.env` loading requires explicit `BABEL_LEGACY_CLI_ENV=1` opt-in. Never commit either credential file.
 
 ## Runtime identity and updates
 
