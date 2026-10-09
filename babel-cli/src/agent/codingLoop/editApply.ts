@@ -1,8 +1,10 @@
 /**
- * Unique-location edit apply: exact → unique whitespace-normalized → reject
- * ambiguity. Preserves line endings and a leading BOM. Surfaces the actual
- * changed range as a model-visible diff.
+ * Unique-location edit apply: exact → unique whitespace-normalized → fuzzy
+ * assist → reject ambiguity. Preserves line endings and a leading BOM.
+ * Surfaces the actual changed range as a model-visible diff.
  */
+
+import { findNearMissContext, fuzzyPatchAssist } from '../../services/editReliability.js'
 
 export type LineEnding = 'lf' | 'crlf' | 'cr'
 
@@ -11,9 +13,11 @@ export interface EditApplySuccess {
   content: string
   startLine: number
   endLine: number
-  matchKind: 'exact' | 'line_trim' | 'whitespace_normalized'
+  matchKind: 'exact' | 'line_trim' | 'whitespace_normalized' | 'fuzzy_assist'
   diff: string
   lineEnding: LineEnding
+  /** Similarity of the fuzzy-assisted match (present only for fuzzy_assist). */
+  fuzzySimilarity?: number
 }
 
 export interface EditApplyFailure {
@@ -21,6 +25,12 @@ export interface EditApplyFailure {
   reason: 'not_found' | 'ambiguous' | 'empty_old_str'
   message: string
   matchCount: number
+  /** Near-miss suggestion when the failure has a similar in-file candidate. */
+  fuzzySuggestion?: {
+    startLine: number
+    endLine: number
+    similarity: number
+  }
 }
 
 export type EditApplyResult = EditApplySuccess | EditApplyFailure
@@ -101,12 +111,13 @@ export function applyUniqueEdit(input: {
   }
 
   if (matchStart < 0) {
-    return {
-      ok: false,
-      reason: 'not_found',
-      message: 'str_replace: old_str not found in file',
-      matchCount: 0,
-    }
+    return applyFuzzyAssistOrNotFound({
+      body: normalizedBody,
+      oldStr: normalizedOld,
+      newStr: normalizedNew,
+      bom,
+      lineEnding,
+    })
   }
 
   const matchEnd = matchStart + matchedLength
@@ -132,6 +143,72 @@ export function applyUniqueEdit(input: {
     diff,
     lineEnding,
   }
+}
+
+/**
+ * Failure path for not_found: auto-apply a unique high-similarity (>= 0.90)
+ * fuzzy match; otherwise surface the top near-miss as a scored suggestion
+ * without applying anything. Below the 0.70 near-miss floor the failure is
+ * unchanged. Ambiguous equal-similarity candidates never auto-apply
+ * (fuzzyPatchAssist returns null unless exactly one >= 0.90 candidate exists).
+ */
+function applyFuzzyAssistOrNotFound(input: {
+  body: string
+  oldStr: string
+  newStr: string
+  bom: string
+  lineEnding: LineEnding
+}): EditApplyResult {
+  const assisted = fuzzyPatchAssist(input.body, input.oldStr, input.newStr)
+  if (assisted !== null) {
+    // fuzzyPatchAssist replaced the single non-overlapping >= 0.90 candidate's
+    // line range with newStr; candidates[0] is that highest-similarity match.
+    const top = findNearMissContext(input.body, input.oldStr)[0]
+    const before = input.body
+    const after = assisted
+    const lines = before.split('\n')
+    const startLine = top?.startLine ?? 1
+    const endLine = top?.endLine ?? startLine
+    let start = 0
+    for (let i = 0; i < startLine - 1 && i < lines.length; i++) {
+      start += lines[i]!.length + 1
+    }
+    const oldLength =
+      endLine >= startLine ? lines.slice(startLine - 1, endLine).join('\n').length : 0
+    return {
+      ok: true,
+      content: input.bom + restoreLineEnding(after, input.lineEnding),
+      startLine,
+      endLine: startLine + Math.max(1, input.newStr.split('\n').length) - 1,
+      matchKind: 'fuzzy_assist',
+      diff: formatChangedRangeDiff({
+        before,
+        after,
+        start,
+        oldLength,
+        newLength: input.newStr.length,
+      }),
+      lineEnding: input.lineEnding,
+      fuzzySimilarity: top?.similarity ?? 0,
+    }
+  }
+
+  const failure: EditApplyFailure = {
+    ok: false,
+    reason: 'not_found',
+    message: 'str_replace: old_str not found in file',
+    matchCount: 0,
+  }
+  const top = findNearMissContext(input.body, input.oldStr)[0]
+  if (top) {
+    failure.fuzzySuggestion = {
+      startLine: top.startLine,
+      endLine: top.endLine,
+      similarity: top.similarity,
+    }
+    failure.message += ` — did you mean lines ${top.startLine}-${top.endLine} (similarity ${top.similarity.toFixed(2)})?`
+  }
+  return failure
 }
 
 /**
