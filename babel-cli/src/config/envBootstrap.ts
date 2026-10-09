@@ -1,8 +1,8 @@
 import { resolveRuntimePaths } from './runtimePaths.js';
 import { config as dotenvConfig, parse as dotenvParse } from 'dotenv';
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
+import { runGitCommand } from '../utils/gitExec.js';
 import { listProviderSpecs } from '../runners/providerRegistry.js';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,10 +40,14 @@ export function parseEnvFileKeys(envFilePath: string): string[] {
     .map(([key]) => key);
 }
 
+/**
+ * Project credential eligibility uses Babel's trusted Git inspection helper
+ * (`utils/gitExec`) rather than a private child-process site, so repository
+ * checks stay inside the registered host-process authority boundary. Fixed
+ * arguments only; no shell string is ever constructed.
+ */
 function gitAllowsIgnoredProjectEnv(root: string): boolean {
-  const run = (args: string[]): number | null => spawnSync('git', ['-C', root, ...args], {
-    timeout: 4000, windowsHide: true, stdio: 'ignore',
-  }).status;
+  const run = (args: string[]): number | null => runGitCommand(args, root, { timeoutMs: 4000 }).status;
   return run(['rev-parse', '--is-inside-work-tree']) === 0 &&
     run(['ls-files', '--error-unmatch', '--', '.env']) !== 0 &&
     run(['check-ignore', '-q', '--', '.env']) === 0;

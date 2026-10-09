@@ -34,7 +34,8 @@ test('parseEnvFileKeys ignores comments and empty values', () => {
 test('loadBabelCliEnv applies file values without overriding existing env', () => {
   const dir = mkdtempSync(join(tmpdir(), 'babel-env-bootstrap-'));
   const envPath = join(dir, '.env');
-  writeFileSync(envPath, 'BABEL_ENV=from_file\nBABEL_ROOT=/from/file\n', 'utf8');
+  // Private credential files must be owner-only; the loader rejects group/world-readable ones.
+  writeFileSync(envPath, 'BABEL_ENV=from_file\nBABEL_ROOT=/from/file\n', { encoding: 'utf8', mode: 0o600 });
 
   const env: NodeJS.ProcessEnv = {
     BABEL_ENV: 'preset',
