@@ -9,7 +9,7 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 
-import { FileWriteMutex, findNearMissContext } from '../services/editReliability.js';
+import { FileWriteMutex } from '../services/editReliability.js';
 import { applyUniqueEdit, formatEditObservation } from './codingLoop/editApply.js';
 import { applyPatchInMemory, parseUnifiedDiff } from './codingLoop/patchApply.js';
 import type { ToolContext, ToolResult } from '../localTools.js';
@@ -49,6 +49,10 @@ export interface GovernedStrReplaceResult {
   effectTransaction?: PolicyGatedExecutionResult['effectTransaction'];
   /** Exact edit validation failed before any executor dispatch. */
   preDispatchNoEffect?: boolean;
+  /** Fuzzy assist auto-applied this write (similarity >= 0.90, unique candidate). */
+  fuzzyAssisted?: true | undefined;
+  /** Similarity of the fuzzy-assisted match, when fuzzyAssisted. */
+  fuzzySimilarity?: number | undefined;
 }
 
 function resolveProjectPath(projectRoot: string, filePath: string): string {
@@ -104,16 +108,10 @@ export async function governedStrReplace(
       newStr: input.new_str,
     });
     if (!applied.ok) {
-      let obsMsg = formatEditObservation(target, applied);
-      if (applied.reason === 'not_found') {
-        const candidates = findNearMissContext(content, input.old_str);
-        if (candidates.length > 0) {
-          const topCandidate = candidates[0]!;
-          obsMsg += `\n\nDiagnostic: Did you mean lines ${topCandidate.startLine}-${topCandidate.endLine}?\n\`\`\`\n${topCandidate.context}\n\`\`\``;
-        }
-      }
+      // editApply already surfaces the scored near-miss suggestion
+      // (did-you-mean lines X-Y with similarity) in the failure message.
       return {
-        observation: obsMsg,
+        observation: formatEditObservation(target, applied),
         exit_code: 1,
         error: applied.message,
         policyBlocked: false,
@@ -124,6 +122,12 @@ export async function governedStrReplace(
     }
     const newContent = applied.content;
     const lineNumber = applied.startLine;
+    const fuzzyAssisted = applied.matchKind === 'fuzzy_assist';
+    const fuzzySimilarity = fuzzyAssisted ? (applied.fuzzySimilarity ?? 0) : undefined;
+    const baseObservation = formatEditObservation(target, applied);
+    const observation = fuzzyAssisted
+      ? `${baseObservation}\nfuzzy_assist: similarity ${fuzzySimilarity?.toFixed(2)} — fuzzy-assisted write recorded in mutation receipt`
+      : baseObservation;
 
     const action: AgentAction = {
       type: 'write_file',
@@ -199,7 +203,7 @@ export async function governedStrReplace(
   }
 
     return {
-      observation: formatEditObservation(target, applied),
+      observation,
       exit_code: 0,
       policyBlocked: false,
       terminal: result.terminal === true,
@@ -210,6 +214,7 @@ export async function governedStrReplace(
       preBatchHash: result.preBatchHash,
       postBatchHash: result.postBatchHash,
       mutationReceipt: result.mutationReceipt,
+      ...(fuzzyAssisted ? { fuzzyAssisted: true, fuzzySimilarity } : {}),
       ...(result.effectTransaction ? { effectTransaction: result.effectTransaction } : {}),
     };
   });
