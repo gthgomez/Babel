@@ -174,7 +174,7 @@ node --env-file=.\babel-cli\.env .\babel-cli\dist\index.js run --project example
 
 ## Provider configuration
 
-**Credentials default to a private profile**, not the target project or the Babel source checkout. For standalone CLI use `~/.babel/config/.env` (or `%USERPROFILE%\\.babel\\config\\.env` on Windows); a configured `BABEL_CONFIG_DIR` selects another private profile. Desktop uses its private profile directory. Set only the provider keys you need; never commit them. Explicit process environment variables take precedence.
+**Credentials default to a private profile**, not the target project or the Babel source checkout. For standalone CLI use `~/.babel/config/.env` (or `%USERPROFILE%\.babel\config\.env` on Windows); a configured `BABEL_CONFIG_DIR` selects another private profile. Desktop uses its private profile directory. Set only the provider keys you need; never commit them. Explicit process environment variables take precedence.
 
 The older `babel-cli/.env` is not automatically loaded. Existing contributor setups can temporarily opt in with `BABEL_LEGACY_CLI_ENV=1` while migrating secrets to private configuration. A target project's `.env` is **never loaded automatically**: after explicitly choosing project-local storage in Desktop, only authority-certified provider key names are loaded from a Git-ignored, untracked project `.env`. CLI-only project opt-in is available through `BABEL_PROJECT_CREDENTIALS_DIR=<absolute project root>`; do not set it for untrusted repositories.
 
