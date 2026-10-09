@@ -330,7 +330,9 @@ test('P04: legacy adapters bound endless event iterables', () => {
   }
   const started = Date.now();
   const facts = sessionLogToFacts(endless() as unknown as SessionEvent[]);
-  assert.ok(facts.length <= 100_000, `bounded, got ${facts.length}`);
+  // A1: turn_ended emits run.settled plus a shadow run.status_changed, so the
+  // 100k-event bound surfaces as at most 2 facts per event.
+  assert.ok(facts.length <= 200_000, `bounded, got ${facts.length}`);
   assert.ok(Date.now() - started < 5000);
 });
 

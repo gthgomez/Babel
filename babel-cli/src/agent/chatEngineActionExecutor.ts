@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { resolveClassCGateDecision } from "./autonomyEnforcement.js";
 import { evaluatePlanThenExecuteGate } from "./planThenExecute.js";
 import { evaluateHardPlanModeGate } from "./planExecuteMode.js";
@@ -13,7 +12,6 @@ import {
 import {
   applyWorkingStateEvent,
   decideReadInjection,
-  evaluateReadRequest,
   formatReadFailureObservation,
   formatReadObservation,
   formatVerifierReceiptSummary,
@@ -49,6 +47,8 @@ import {
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
 import { governedStrReplace } from "./governedMutations.js";
+import { executeGovernedApplyPatchAction } from "./codingLoop/applyPatchExecutor.js";
+import { executeReadRangeAction } from "./codingLoop/readRangeExecutor.js";
 import { recordMutationBatch, operationFingerprint } from "./sessionEvents.js";
 import {
   remoteMcpFailClosedObservation,
@@ -962,131 +962,51 @@ export class ChatEngineActionExecutor {
         return { index: meta.index, observation: strObs };
       }
 
-      // ── B1: read_range — read specific lines ────────────────────────
-      if (action.type === "read_range") {
-        const rPath = resolveChatRangePath(
-          this.host.options.projectRoot,
-          action.file_path,
-        );
-        const rContent = await readFile(rPath, "utf-8");
-        // R0-8: the read is a suspension point; a superseded submission must not
-        // append its result for the new task.
-        if (!this.host.isSubmissionCurrent(ownerGeneration)) {
-          return this.host.settleStaleActionResult(
-            tool,
-            target,
-            meta.index,
-            "parent submission superseded before the action settled",
-          );
-        }
-        const rHash = this.host.hashContent(rContent);
-        const rKey = this.host.readCacheKey(rPath);
-        // read_range does not bump fullReadCounts (line windows allowed)
-        this.host.noteToolForReadThrash(tool);
-        const evaluated = evaluateReadRequest({
-          pathKey: rKey,
-          fileHash: rHash,
-          content: rContent,
-          request: {
-            kind: "range",
-            startLine: action.start_line,
-            endLine: action.end_line,
-          },
-          cache: this.host.readCache,
-          contextEpoch: this.host.readContextEpoch,
-        });
-        if (
-          evaluated.window.lines.length === 0 &&
-          action.start_line > evaluated.window.totalLines
-        ) {
-          this.host.toolCallLog.push({
-            tool,
-            target,
-            detail: "error",
-            error: "start_line out of range",
-            index: meta.index,
-            exit_code: 1,
-          });
-          callbacks?.onToolComplete?.(
-            toolId,
-            "error",
-            "start_line out of range",
-            1,
-          );
-          return {
-            index: meta.index,
-            observation: `### read_range ${target}\nError: start_line (${action.start_line}) exceeds file length (${evaluated.window.totalLines})`,
-          };
-        }
-        this.host.toolCallLog.push({
+      // ── apply_patch via governed mutation path (transactional hunk applier).
+      // Hunks are applied in memory first; any failed hunk means nothing is
+      // written. Each target file's new content is dispatched through the same
+      // write_file policy gate as str_replace. Extracted to
+      // codingLoop/applyPatchExecutor.ts to respect the file-size ratchet.
+      // Deliberately NOT a narrowing `action.type ===` comparison: a
+      // type-exhaustive branch here would exclude "apply_patch" from `action`
+      // for the remainder of this method and break downstream narrowing.
+      const applyPatchAction = action as ChatToolAction | undefined;
+      const isApplyPatch =
+        applyPatchAction !== undefined &&
+        (applyPatchAction as { type: string }).type === "apply_patch";
+      if (isApplyPatch) {
+        return executeGovernedApplyPatchAction({
+          host: this.host,
+          action: action as Extract<ChatToolAction, { type: "apply_patch" }>,
+          patchText: (action as Extract<ChatToolAction, { type: "apply_patch" }>).patch,
+          toolContext,
           tool,
           target,
-          detail: `${evaluated.window.lines.length} lines`,
-          index: meta.index,
-          exit_code: 0,
-        });
-        callbacks?.onToolComplete?.(
           toolId,
-          `${evaluated.window.lines.length} lines`,
-          undefined,
-          0,
-        );
-        if (this.host.isSubmissionCurrent(ownerGeneration)) {
-          const evidence = `${action.type}:${target}`;
-          const discrimination = isDiscriminatingInspectionEvidence(
-            this.host.workingState,
-            action,
-            recoveryTargetIdentity(
-              this.host.options.projectRoot,
-              action.file_path,
-            ),
-            this.host.workingState.recoveryGate
-              ? this.host.currentRecoveryBinding()
-              : null,
-            evaluated.window.lines.join("\n").trim()
-              ? createHash("sha256")
-                  .update(evaluated.window.lines.join("\n"))
-                  .digest("hex")
-              : "",
-          );
-          this.host.workingState = applyWorkingStateEvent(
-            this.host.workingState,
-            {
-              type: "add_evidence",
-              evidence,
-              file: action.file_path,
-              discriminating: discrimination.discriminating,
-              ...(discrimination.provenance
-                ? { provenance: discrimination.provenance }
-                : {}),
-            },
-          );
-          if (discrimination.discriminating) {
-            this.host.workingState = recordControllerRecoveryStrategy(
-              this.host.workingState,
-              {
-                target,
-                evidence,
-              },
-            );
-            this.host.persistRecoveryWorkingState();
-          }
-          this.host.finishRecoveryLocalizationInspection({
-            tool: "read_range",
-            rawTarget: action.file_path,
-            content: evaluated.window.lines.join("\n"),
-            succeeded: true,
-            startLine: evaluated.window.startLine,
-          });
-        }
-        return {
-          index: meta.index,
-          observation: formatReadObservation(
-            "read_range",
-            target,
-            evaluated.window,
-          ),
-        };
+          meta,
+          ownerGeneration,
+          dispatchTurnId,
+          recoveredAuthorization,
+          admittedThisAction,
+          proposedEdit,
+          callbacks,
+        });
+      }
+
+      // ── B1: read_range — read specific lines ────────────────────────
+      if (action.type === "read_range") {
+        // Extracted to codingLoop/readRangeExecutor.ts to respect the
+        // file-size ratchet (same pattern as the background-shell handlers).
+        return executeReadRangeAction({
+          host: this.host,
+          action,
+          tool,
+          target,
+          toolId,
+          meta,
+          ownerGeneration,
+          callbacks,
+        });
       }
 
       // ── B1: todo_write — merge-patch task list ─────────────────────
