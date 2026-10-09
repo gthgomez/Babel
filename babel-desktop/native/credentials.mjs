@@ -1,6 +1,6 @@
 // License: Apache-2.0
 // Credential writes live in the trusted Electron main process, never the renderer.
-import {closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync} from 'node:fs';
+import {closeSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {isAbsolute, join, resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -51,8 +51,9 @@ export function verifyProjectCredentialTarget(projectRoot, git = gitOk) {
     throw new Error('Project .env is not Git-ignored. Add .env to .gitignore first, or use private Babel storage.');
   }
   const target = join(root, '.env');
-  if (existsSync(target)) {
-    const info = lstatSync(target);
+  let info;
+  try { info = lstatSync(target); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (info) {
     if (!info.isFile() || info.isSymbolicLink() || info.nlink > 1) {
       throw new Error('Project .env is not a regular, unlinked file.');
     }
@@ -82,8 +83,9 @@ function safelyAddKey(target, name, key) {
   let temp = null;
   try {
     let existing = '';
-    if (existsSync(target)) {
-      const info = lstatSync(target);
+    let info;
+    try { info = lstatSync(target); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (info) {
       if (!info.isFile() || info.isSymbolicLink() || info.nlink > 1 || info.size > FILE_LIMIT) {
         throw new Error('Existing credential file is unsafe or too large. No changes were made.');
       }
