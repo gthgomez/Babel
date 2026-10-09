@@ -1,7 +1,10 @@
 import { resolveRuntimePaths } from './runtimePaths.js';
 import { config as dotenvConfig, parse as dotenvParse } from 'dotenv';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { runGitCommand } from '../utils/gitExec.js';
+import { listProviderSpecs } from '../runners/providerRegistry.js';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -9,7 +12,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /** Absolute path to the babel-cli package root (directory containing package.json and .env). */
 export const BABEL_CLI_PACKAGE_ROOT = resolve(__dirname, '../..');
 
-export const BABEL_CLI_ENV_FILE_PATH = resolve(resolveRuntimePaths().isInstalled ? resolveRuntimePaths().userConfigRoot : BABEL_CLI_PACKAGE_ROOT, '.env');
+/** Secrets default to a private user directory even for source-checkout runs. */
+export function resolvePrivateCredentialEnvPath(env: NodeJS.ProcessEnv = process.env): string {
+  const home = env['USERPROFILE'] || env['HOME'] || homedir();
+  return resolve(env['BABEL_CONFIG_DIR'] || join(home, '.babel', 'config'), '.env');
+}
+
+export const BABEL_CLI_ENV_FILE_PATH = resolvePrivateCredentialEnvPath();
 
 let envFileLoadAttempted = false;
 let envFileLoaded = false;
@@ -31,40 +40,101 @@ export function parseEnvFileKeys(envFilePath: string): string[] {
     .map(([key]) => key);
 }
 
-/** Load babel-cli/.env without overriding variables already set in the process environment. */
+/**
+ * Project credential eligibility uses Babel's trusted Git inspection helper
+ * (`utils/gitExec`) rather than a private child-process site, so repository
+ * checks stay inside the registered host-process authority boundary. Fixed
+ * arguments only; no shell string is ever constructed.
+ */
+function gitAllowsIgnoredProjectEnv(root: string): boolean {
+  const run = (args: string[]): number | null => runGitCommand(args, root, { timeoutMs: 4000 }).status;
+  return run(['rev-parse', '--is-inside-work-tree']) === 0 &&
+    run(['ls-files', '--error-unmatch', '--', '.env']) !== 0 &&
+    run(['check-ignore', '-q', '--', '.env']) === 0;
+}
+
+/** Never auto-load project .env: only a trusted client may opt in for one root. */
+export function loadOptedInProjectCredentials(env: NodeJS.ProcessEnv): boolean {
+  const selectedRoot = env['BABEL_PROJECT_CREDENTIALS_DIR'];
+  if (!selectedRoot) return false;
+  if (!isAbsolute(selectedRoot)) throw new Error('Project credential root must be absolute');
+  const root = resolve(selectedRoot);
+  const rootInfo = lstatSync(root);
+  const actualRoot = realpathSync(root);
+  const matchesRoot = process.platform === 'win32'
+    ? actualRoot.toLowerCase() === root.toLowerCase()
+    : actualRoot === root;
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || !matchesRoot) {
+    throw new Error('Project credential root must be a real, non-linked directory');
+  }
+  if (!gitAllowsIgnoredProjectEnv(root)) {
+    throw new Error('Project .env is not confirmed ignored and untracked');
+  }
+  const file = join(root, '.env');
+  const info = lstatSync(file);
+  if (!info.isFile() || info.isSymbolicLink() || info.nlink > 1 || info.size > 256 * 1024) {
+    throw new Error('Project .env is not a safe regular file');
+  }
+  if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) {
+    throw new Error('Project .env permissions are too broad');
+  }
+  const values = dotenvParse(readFileSync(file, 'utf8'));
+  // A project may supply only certified provider credentials, not arbitrary
+  // NODE_OPTIONS, BABEL_ROOT, execution-policy or process-control variables.
+  for (const spec of listProviderSpecs()) {
+    if (spec.authorityConformance !== 'certified' || !spec.credentialEnvVar) continue;
+    const name = spec.credentialEnvVar;
+    if (!env[name] && typeof values[name] === 'string' && values[name]) env[name] = values[name];
+  }
+  return true;
+}
+
+/** Precedence: explicit environment > explicitly opted-in project > private profile > explicitly enabled legacy CLI .env. */
 export function loadBabelCliEnv(
   env: NodeJS.ProcessEnv = process.env,
-  envFilePath: string = resolve(resolveRuntimePaths(env).isInstalled ? resolveRuntimePaths(env).userConfigRoot : BABEL_CLI_PACKAGE_ROOT, '.env'),
+  envFilePath?: string,
 ): {
   envFilePath: string;
   envFileExists: boolean;
   loaded: boolean;
 } {
-  const envFileExists = existsSync(envFilePath);
-
-  if (!envFileExists) {
-    envFileLoadAttempted = true;
-    envFileLoaded = false;
-    return { envFilePath, envFileExists, loaded: false };
+  const privatePath = envFilePath ?? resolvePrivateCredentialEnvPath(env);
+  if (envFilePath === undefined) loadOptedInProjectCredentials(env);
+  const files = envFilePath !== undefined ? [envFilePath] : [
+    privatePath,
+    ...(env['BABEL_LEGACY_CLI_ENV'] === '1' && !resolveRuntimePaths(env).isInstalled ? [resolve(BABEL_CLI_PACKAGE_ROOT, '.env')] : []),
+  ];
+  let loaded = false;
+  let found = false;
+  for (const file of files) {
+    if (!existsSync(file)) continue;
+    const info = lstatSync(file);
+    if (!info.isFile() || info.isSymbolicLink()) {
+      throw new Error('Credential configuration must be a regular file');
+    }
+    if (file === privatePath && process.platform !== 'win32' && (info.mode & 0o077) !== 0) {
+      throw new Error('Private credential file permissions are too broad');
+    }
+    found = true;
+    const result = dotenvConfig({
+      path: file,
+      override: false,
+      debug: false,
+      quiet: true,
+      processEnv: env,
+    });
+    if (result.error) throw new Error('Could not load credential configuration');
+    loaded = true;
   }
-
-  const result = dotenvConfig({
-    path: envFilePath,
-    override: false,
-    debug: false,
-    quiet: true,
-    processEnv: env,
-  });
-
   envFileLoadAttempted = true;
-  envFileLoaded = !result.error;
-  return { envFilePath, envFileExists, loaded: envFileLoaded };
+  envFileLoaded = loaded;
+  return { envFilePath: privatePath, envFileExists: found, loaded };
 }
 
 /** Keys declared in babel-cli/.env that are not active in the current process environment. */
 export function getEnvFileKeysNotActiveInProcess(
   env: NodeJS.ProcessEnv = process.env,
-  envFilePath: string = resolve(resolveRuntimePaths(env).isInstalled ? resolveRuntimePaths(env).userConfigRoot : BABEL_CLI_PACKAGE_ROOT, '.env'),
+  envFilePath: string = resolvePrivateCredentialEnvPath(env),
 ): string[] {
   if (!existsSync(envFilePath)) {
     return [];
@@ -105,10 +175,10 @@ export function formatEnvFileInactiveMessage(missingKeys: string[], envFilePath:
   const preview = missingKeys.slice(0, 8).join(', ');
   const suffix = missingKeys.length > 8 ? ` (+${missingKeys.length - 8} more)` : '';
   return [
-    `babel-cli/.env exists at "${envFilePath}" but ${missingKeys.length} variable(s) from that file are not active in this process: ${preview}${suffix}.`,
+    `Babel credential .env exists at "${envFilePath}" but ${missingKeys.length} variable(s) from that file are not active in this process: ${preview}${suffix}.`,
     'Env-gated CLI features may be silently disabled.',
     'Canonical invocations:',
-    '  node --env-file=./babel-cli/.env ./babel-cli/dist/index.js <command>',
+    '  Babel normally loads the private profile .env automatically.',
     '  babel <command>   (after npm --prefix ./babel-cli run build)',
     '  npm --prefix ./babel-cli run dev -- <command>',
     'Use --strict-env (or set BABEL_STRICT_ENV=true / CI=true) to fail instead of warn.',
