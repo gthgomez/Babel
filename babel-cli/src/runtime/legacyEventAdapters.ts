@@ -13,6 +13,7 @@
  */
 
 import type { SessionEvent } from '../agent/sessionEvents.js';
+import { conversationStatusFromLegacyStatus } from './conversationStatus.js';
 import {
   classifyFactType,
   RUNTIME_FACT_SCHEMA_VERSION,
@@ -234,8 +235,21 @@ export function sessionEventPayloads(
           },
         },
       ];
-    case 'turn_ended':
-      return [{ type: 'run.settled', status: event.outcome ?? 'UNKNOWN' }];
+    case 'turn_ended': {
+      // Packet A1 shadow pattern: the legacy `run.settled` fact keeps its exact
+      // shape; the consolidated `ConversationStatus` rides alongside as a
+      // `run.status_changed` observation. No legacy consumer is broken.
+      const legacyStatus = event.outcome ?? event.status ?? 'UNKNOWN';
+      const conversationStatus = conversationStatusFromLegacyStatus(event.status ?? legacyStatus);
+      return [
+        { type: 'run.settled', status: legacyStatus },
+        {
+          type: 'run.status_changed',
+          status: conversationStatus,
+          reason: 'turn_ended',
+        },
+      ];
+    }
     case 'compaction_committed':
       return [{ type: 'context.committed', checkpointId: event.operation_id }];
     case 'approval_decision':
