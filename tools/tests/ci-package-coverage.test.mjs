@@ -107,7 +107,8 @@ test('Docker image is immutable and scoped to the Ubuntu smoke step with no host
   assert.ok(smoke);
   assert.equal(job['runs-on'], 'ubuntu-latest');
   assert.equal(smoke.if, undefined, 'Dedicated smoke job always executes its smoke step');
-  assert.match(smoke.env.BABEL_BENCHMARK_DOCKER_IMAGE, /^node@sha256:[a-f0-9]{64}$/);
+  const immutableNodeImage = /^(?:public\.ecr\.aws\/docker\/library\/)?node@sha256:[a-f0-9]{64}$/;
+  assert.match(smoke.env.BABEL_BENCHMARK_DOCKER_IMAGE, immutableNodeImage);
   assert.equal(job.env?.BABEL_BENCHMARK_DOCKER_IMAGE, undefined);
   assert.equal(workflow.env?.BABEL_BENCHMARK_DOCKER_IMAGE, undefined);
   for (const step of job.steps.filter(step => step !== smoke)) {
@@ -115,7 +116,7 @@ test('Docker image is immutable and scoped to the Ubuntu smoke step with no host
   }
   const prepare = job.steps.find(step => step.id === 'docker_prepare');
   assert.match(prepare.run, /docker info/);
-  assert.match(prepare.run, /docker pull node@sha256:[a-f0-9]{64}/);
+  assert.match(prepare.run, /docker pull (?:public\.ecr\.aws\/docker\/library\/)?node@sha256:[a-f0-9]{64}/);
   assert.match(prepare.run, /echo "uid=\$\(id -u\)" >> "\$GITHUB_OUTPUT"/);
   assert.match(prepare.run, /echo "gid=\$\(id -g\)" >> "\$GITHUB_OUTPUT"/);
   assert.equal(smoke.env.BABEL_BENCHMARK_DOCKER_EXTRA_ARGS,

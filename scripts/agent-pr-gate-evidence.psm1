@@ -177,7 +177,8 @@ function Test-AgentCandidateIdentity {
 function Wait-AgentCIState {
   param([scriptblock]$ReadState, [scriptblock]$ReadCandidate,
     [scriptblock]$Now = { [DateTimeOffset]::UtcNow }, [scriptblock]$Sleep = { param($Seconds) Start-Sleep -Seconds $Seconds },
-    [ValidateRange(0, 3600)][int]$TimeoutSeconds = 120, [ValidateRange(1, 60)][int]$DelaySeconds = 5)
+    # Trusted-control-plane peer wait: 180 attempts at 10s (see docs/guides/REVIEW_MARKERS.md).
+    [ValidateRange(0, 3600)][int]$TimeoutSeconds = 1800, [ValidateRange(1, 60)][int]$DelaySeconds = 10)
   $deadline = (& $Now).AddSeconds($TimeoutSeconds); $attempts = 0; $last = $null
   while ($true) {
     if ((& $Now) -ge $deadline) { break }
