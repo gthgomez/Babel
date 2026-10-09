@@ -64,7 +64,7 @@ npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build
 node ./babel-cli/dist/index.js doctor
 ```
 
-1. Configure only the providers you use in the private CLI profile (`~/.babel/config/.env` or `%USERPROFILE%\\.babel\\config\\.env` on Windows). The old source-checkout `babel-cli/.env` requires explicit `BABEL_LEGACY_CLI_ENV=1` compatibility opt-in. Installed Desktop now provides a masked **Configure provider** action, saving outside the target project by default.
+1. Configure only the providers you use in the private CLI profile (`~/.babel/config/.env` or `%USERPROFILE%\.babel\config\.env` on Windows). The old source-checkout `babel-cli/.env` requires explicit `BABEL_LEGACY_CLI_ENV=1` compatibility opt-in. Installed Desktop now provides a masked **Configure provider** action, saving outside the target project by default.
 2. For ordinary host coding on repos you own, set `$env:BABEL_EXECUTION_PROFILE = 'dev_local'` (PowerShell) or `export BABEL_EXECUTION_PROFILE=dev_local`. The default `safe_repo` profile expects Docker and fail-closes without it.
 3. Start the TUI:
 
