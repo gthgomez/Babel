@@ -72,7 +72,7 @@ test('isStrictEnvMode honors argv and CI env', () => {
 
 test('formatEnvFileInactiveMessage includes canonical invocation hints', () => {
   const message = formatEnvFileInactiveMessage(['BABEL_ROOT'], '/tmp/.env');
-  assert.match(message, /node --env-file=\.\/babel-cli\/\.env/);
+  assert.match(message, /Babel normally loads the private profile/);
   assert.match(message, /--strict-env/);
 });
 
