@@ -66,7 +66,11 @@ test('symlink and dangling-symlink .env targets are rejected',()=>{
     const project=makeGitProject(root);
     const foreign=join(root,'foreign');
     writeFileSync(foreign,'foreign-file');
-    symlinkSync(foreign,join(project,'.env'));
+    try { symlinkSync(foreign,join(project,'.env')); }
+    catch(error) {
+      if(process.platform==='win32' && (error.code==='EPERM' || error.code==='EACCES')) return;
+      throw error;
+    }
     assert.throws(()=>saveProviderCredential({scope:'project',projectRoot:project,provider:'deepseek',apiKey:KEY}),/unlinked file/);
     rmSync(join(project,'.env'));
     symlinkSync(join(root,'absent'),join(project,'.env'));
