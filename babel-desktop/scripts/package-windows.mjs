@@ -60,6 +60,8 @@ command('tar.exe', ['-xf',archive,'-C',nodeExtract]);
 const nodeSource = join(nodeExtract, `node-v${nodeVersion}-win-x64`);
 mkdirSync(join(runtime,'node'));
 for (const name of ['node.exe','LICENSE']) cpSync(join(nodeSource,name),join(runtime,'node',name));
+const npmRoot = join(nodeSource,'node_modules','npm');
+if (existsSync(npmRoot)) cpSync(npmRoot, join(runtime,'npm'), {recursive:true});
 cpSync(join(desktop,'scripts','cli-launch.mjs'),join(runtime,'cli-launch.mjs'));
 const cliLauncher = '@echo off\r\n"%~dp0resources\\babel-runtime\\node\\node.exe" "%~dp0resources\\babel-runtime\\cli-launch.mjs" %*\r\nexit /b %errorlevel%\r\n';
 writeFileSync(join(bundle,'Babel Harness.cmd'),cliLauncher);

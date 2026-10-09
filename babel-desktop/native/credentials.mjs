@@ -9,6 +9,7 @@ const PROVIDERS = Object.freeze({
   deepseek: 'DEEPSEEK_API_KEY',
   deepinfra: 'DEEPINFRA_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  ollama: null,
 });
 const FILE_LIMIT = 256 * 1024;
 
@@ -119,8 +120,12 @@ export function saveProviderCredential({provider, apiKey, scope = 'private', con
   if (!Object.prototype.hasOwnProperty.call(PROVIDERS, provider)) {
     throw new Error('Select a supported, authority-qualified cloud provider.');
   }
-  if (!safeApiKey(apiKey)) {
+  const envName = PROVIDERS[provider];
+  if (envName && !safeApiKey(apiKey)) {
     throw new Error('API key must be one nonempty, single-line provider token.');
+  }
+  if (!envName) {
+    return {provider, scope, configured: true};
   }
   if (scope !== 'private' && scope !== 'project') {
     throw new Error('Credential destination must be private or explicitly project-local.');
@@ -128,6 +133,6 @@ export function saveProviderCredential({provider, apiKey, scope = 'private', con
   const target = scope === 'private'
     ? privateTarget(configDirectory)
     : verifyProjectCredentialTarget(projectRoot);
-  safelyAddKey(target, PROVIDERS[provider], apiKey);
+  safelyAddKey(target, envName, apiKey);
   return {provider, scope, configured:true};
 }

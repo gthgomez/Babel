@@ -76,7 +76,7 @@ function renderControls() {
 function shortSha(sha) { return typeof sha === 'string' && sha ? sha.slice(0, 12) : 'unknown'; }
 function runtimeUpdateText(update) {
   const u = update ?? {state:'unchecked'};
-  const name = u.channel === 'release' ? 'Release' : u.channel === 'development' ? 'Source' : 'Update';
+  const name = u.channel === 'release' ? 'Release' : u.channel === 'preview' ? 'Preview' : u.channel === 'stable' ? 'Stable' : u.channel === 'development' ? 'Source' : 'Update';
   if (u.state === 'available') return `${name}: update available · ${shortSha(u.availableSha)}`;
   if (u.state === 'current') return `${name}: up to date (checked)`;
   if (u.state === 'checking') return `${name}: checking…`;
@@ -114,12 +114,15 @@ function renderRuntime() {
     runtimeRow('Provider', engine.readiness?.provider ?? 'unknown'),
     runtimeRow('Docker', engine.readiness?.docker ?? 'unknown'),
     runtimeRow('Readiness', engine.readiness?.ready ? 'Ready' : 'Not ready'),
+    runtimeRow('Update channel', update.channel === 'preview' ? 'development preview' : update.channel === 'stable' ? 'stable release' : (update.channel ?? 'not set')),
     runtimeRow('Update', runtimeUpdateText(update), update.state === 'available' ? 'warn' : ''),
     updatePhase ? `<p class="fine-print">${e(updatePhase)}</p>` : '',
     (update.state === 'error' || update.state === 'unsupported') ? `<p class="fine-print">${e(update.detail)}</p>` : ''
   ].join('');
-  checkButton.textContent = engine.origin === 'bundled' ? 'Check for updates' : 'Check for CLI updates';
-  setButtons(true, engine.origin === 'official' || engine.origin === 'advanced');
+  checkButton.textContent = engine.origin === 'bundled' ? 'Check for CLI updates' : 'Check for CLI updates';
+  const canUpdate = update.state === 'available' && (engine.origin === 'bundled' || engine.origin === 'official' || engine.origin === 'advanced');
+  setButtons(true, canUpdate);
+  updateButton.textContent = engine.origin === 'bundled' ? 'Update CLI' : 'Update development CLI';
 }
 function renderStatus(status) {
   const msg = activeSession().messages.filter(m => m.role === 'assistant').at(-1);
@@ -250,15 +253,22 @@ function providerCredentialsDialog() {
   if(!native) {toast('Configure credentials in the installed or source Electron application.');return;}
   const hasProject=Boolean(nativeInfo?.projectName);
   const projectOption=hasProject?'<option value="project">Selected project .env (explicit opt-in)</option>':'';
-  openDialog('CONFIGURE AI PROVIDER',`<p>Save your provider key in Babel's private profile (recommended). Project-local .env is optional, requires an explicitly selected Git-ignored project, and may be read by project tools.</p>
+  openDialog('CONFIGURE AI PROVIDER',`<p>1. Select a qualified provider. 2. Enter an API key when required. 3. Choose a model route. 4. Save privately by default.</p>
     <label class="credential-label" for="credential-provider">Provider</label>
     <select class="credential-control" id="credential-provider">
-      <option value="deepseek">DeepSeek</option>
-      <option value="openrouter">OpenRouter</option>
-      <option value="deepinfra">DeepInfra</option>
+      <option value="deepseek">DeepSeek (cloud)</option>
+      <option value="openrouter">OpenRouter (cloud)</option>
+      <option value="deepinfra">DeepInfra (cloud)</option>
+      <option value="ollama">Ollama (local)</option>
+    </select>
+    <label class="credential-label" for="credential-model">Model route</label>
+    <select class="credential-control" id="credential-model">
+      <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+      <option value="deepseek-v4-pro-openrouter">deepseek-v4-pro-openrouter</option>
+      <option value="deepseek-v4-flash">deepseek-v4-flash</option>
     </select>
     <label class="credential-label" for="credential-key">API key</label>
-    <input class="credential-control" id="credential-key" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="off" placeholder="Paste your provider API key">
+    <input class="credential-control" id="credential-key" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="off" placeholder="Required for cloud providers">
     <label class="credential-label" for="credential-scope">Save to</label>
     <select class="credential-control" id="credential-scope">
       <option value="private">Private Babel profile (recommended)</option>
@@ -270,13 +280,14 @@ function providerCredentialsDialog() {
 async function saveProviderFromDialog(button) {
   const keyInput=$('#credential-key');
   const provider=$('#credential-provider')?.value;
+  const model=$('#credential-model')?.value;
   const scope=$('#credential-scope')?.value;
-  if(!keyInput?.value){toast('Enter a provider API key.');return;}
-  const apiKey=keyInput.value;
+  if(provider!=='ollama'&&!keyInput?.value){toast('Enter a provider API key.');return;}
+  const apiKey=keyInput?.value??'';
   keyInput.value=''; // Clear the DOM before crossing the narrow native bridge.
   button.disabled=true;
   try {
-    const result=await native.saveProviderCredential({provider,apiKey,scope});
+    const result=await native.saveProviderCredential({provider,apiKey,scope,model});
     nativeInfo=await native.refreshDiagnostics();
     closeDialog();
     toast(result.scope==='private'?'Credential saved in private Babel configuration.':'Project credential saved with explicit opt-in.');
@@ -479,7 +490,8 @@ async function runUpdateCli() {
   if (!native) return;
   const button = $('#update-cli'); button.disabled = true; updatePhase = 'Starting…'; renderRuntime();
   try {
-    const result = await native.updateDevCli();
+    const packaged = nativeInfo?.packaged === true;
+    const result = packaged ? await native.updatePackagedCli?.() : await native.updateDevCli();
     if (result?.upToDate) toast('The CLI already matches the tracked upstream.');
     else if (result?.started === false) toast('Update cancelled.');
     else if (result?.ok) toast(`CLI updated to ${shortSha(result.sourceSha)} (${result.version}).`);

@@ -16,10 +16,13 @@
  * @param {{projectCredentialRoot?: string|null, projectRoot?: string|null}} scope
  * @returns {NodeJS.ProcessEnv} the same env object, for convenience
  */
-export function applyProjectCredentialScope(env, {projectCredentialRoot = null, projectRoot = null} = {}) {
+import {applyProviderRoute} from './provider-routing.mjs';
+
+export function applyProjectCredentialScope(env, {projectCredentialRoot = null, projectRoot = null, configDirectory = null} = {}) {
   delete env.BABEL_PROJECT_CREDENTIALS_DIR;
   if (projectRoot && projectCredentialRoot === projectRoot) {
     env.BABEL_PROJECT_CREDENTIALS_DIR = projectRoot;
   }
+  if (configDirectory) applyProviderRoute(env, configDirectory);
   return env;
 }
