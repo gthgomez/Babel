@@ -45,9 +45,16 @@ Authoritative package root is `babel-cli/`. There is no root `package.json`.
 
 ## Provider credentials
 
-Copy `babel-cli/.env.example` to `babel-cli/.env` and set only the providers
-you use. Host and CI environment variables win over that file. Never commit
-the populated file.
+Create `~/.babel/config` first and copy the blank `babel-cli/.env.example`
+into the private `~/.babel/config/.env`
+(or `%USERPROFILE%\.babel\config\.env` on Windows) and set only the
+provider keys you use. On macOS/Linux, set file permissions with
+`chmod 600 ~/.babel/config/.env` after copying. `BABEL_CONFIG_DIR` selects an explicit profile.
+Never put provider keys inside the target repository by default. Desktop provides
+masked setup in **Configure provider**; it only offers project-local `.env`
+with explicit opt-in, Git ignore and tracking checks. Host and CI environment
+variables continue to take precedence. The old `babel-cli/.env` is read only
+when `BABEL_LEGACY_CLI_ENV=1` is explicitly set.
 
 Live provider-backed runs typically need `DEEPSEEK_API_KEY`. Other keys in
 the example file are optional.

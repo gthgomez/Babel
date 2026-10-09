@@ -15,7 +15,7 @@ to be on PATH).
 
 ## Requirements
 
-- Node.js **22.5+** (see `babel-cli/package.json` `engines.node`)
+- Node.js **22.19.0+ (22.x) or 24.13.1+ (24.x)** (see `babel-cli/package.json` `engines.node`)
 - A clone of this repository
 - For model-backed sessions: a provider key (see `babel-cli/.env.example`)
 - For host-side edits under the default execution profile: either Docker plus a
@@ -35,8 +35,12 @@ node .\babel-cli\dist\index.js doctor
 
 macOS/Linux equivalent: `git clone https://github.com/gthgomez/Babel.git && cd Babel && npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build && node ./babel-cli/dist/index.js doctor`
 
-Copy `babel-cli/.env.example` to `babel-cli/.env` and set only the providers
-you use. Host or CI environment variables take precedence over that file.
+For model-backed CLI use, create `~/.babel/config`, copy the blank
+`babel-cli/.env.example` into `~/.babel/config/.env`, and set only the provider
+keys you use. On macOS/Linux, run `chmod 600 ~/.babel/config/.env` after copying;
+Babel refuses a private credential file with broader permissions. On Windows,
+use `%USERPROFILE%\.babel\config\.env` or the masked Desktop setup.
+Host or CI environment variables take precedence.
 
 Before the first mutation, pick an execution profile. The default `safe_repo`
 profile expects Docker isolation and **fail-closes** without Docker and a

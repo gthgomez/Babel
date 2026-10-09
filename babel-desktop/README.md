@@ -55,7 +55,7 @@ npm start
 
 The package pins Electron 44.5.1. `npm install` writes `package-lock.json` for this package.
 
-In a source build the host resolves the official runtime at `../babel-cli/dist/index.js`. Build Babel with its own instructions first. If that file is missing, the connection dialog says the CLI is not built. Choosing a different entry is an advanced source setting. A packaged app uses only its bundled CLI and Node. Desktop never requests or stores an API key.
+In a source build the host resolves the official runtime at `../babel-cli/dist/index.js`. Build Babel with its own instructions first. If that file is missing, the connection dialog says the CLI is not built. Choosing a different entry is an advanced source setting. A packaged app uses only its bundled CLI and Node. Desktop now has a masked **Configure provider** dialog. By default it writes credentials into the private profile `engine/config/.env` outside selected projects. The optional project-local `.env` destination is explicit, requires a Git-ignored untracked target, and may expose the key to project code. No secret is stored in renderer preferences or app-provided chat history. This is plaintext .env storage, not OS-keychain encryption.
 
 The reference preview stays the opening screen. After you open a project and choose Use Babel CLI, a task runs `babel run` in the selected mode. The answer streams into the Babel bubble, and tool rows use the same read / search / run / edit layout as the reference. Files Babel reports as changed are listed above the project tree. Saved Babel chats from this checkout appear in the session list and can be opened. Allow and Deny answer Babel's approval requests. Stop asks the CLI to cancel, then ends the process if it is still running.
 
