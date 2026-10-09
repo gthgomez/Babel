@@ -8,6 +8,7 @@ import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
 import {saveProviderCredential} from './credentials.mjs';
+import {applyProjectCredentialScope} from './childEnv.mjs';
 import {resolveEngineIdentity} from './identity.mjs';
 import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
 import {listSavedChats,readSavedChat} from './sessions.mjs';
@@ -25,11 +26,7 @@ function runtimeEnvironment() {
   const profile=join(app.getPath('userData'),'engine','config');
   const env=app.isPackaged?bundledEnvironment(app.getPath('userData')):{...process.env,ELECTRON_RUN_AS_NODE:'1',BABEL_CONFIG_DIR:profile};
   // Project keys are never loaded merely because a repository contains .env.
-  delete env.BABEL_PROJECT_CREDENTIALS_DIR;
-  if (preferences.projectCredentialRoot && preferences.projectCredentialRoot===preferences.projectRoot) {
-    env.BABEL_PROJECT_CREDENTIALS_DIR=preferences.projectRoot;
-  }
-  return env;
+  return applyProjectCredentialScope(env,{projectCredentialRoot:preferences.projectCredentialRoot,projectRoot:preferences.projectRoot});
 }
 let diagnostics=null;
 let window=null;
