@@ -62,8 +62,11 @@ export function verifyProjectCredentialTarget(projectRoot, git = gitOk) {
 }
 
 function privateTarget(configDirectory) {
-  if (typeof configDirectory !== 'string' || !isAbsolute(configDirectory)) {
+  if (typeof configDirectory !== 'string' || configDirectory.length === 0) {
     throw new Error('Private Babel configuration directory is unavailable.');
+  }
+  if (!isAbsolute(configDirectory)) {
+    throw new Error('Private Babel configuration directory must be an absolute path.');
   }
   const dir = resolve(configDirectory);
   mkdirSync(dir, {recursive:true, mode:0o700});
