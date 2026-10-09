@@ -1,21 +1,44 @@
 import { existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import {resolvePackagedEngine} from './engine-manager.mjs';
 
 export const OFFICIAL_CLI_LABEL = 'babel-cli/dist/index.js';
 
-/** Development runtime: the Babel CLI built beside this package. */
-export function resolveOfficialCli(packageRoot, {isPackaged = false, resourcesPath, executable = process.execPath} = {}) {
+/** Bundled fallback runtime inside a packaged Desktop install. */
+export function resolveBundledCli(packageRoot, {resourcesPath, executable = process.execPath} = {}) {
   if (typeof packageRoot !== 'string' || packageRoot.length === 0) {
     throw new TypeError('packageRoot is required');
   }
-  const path = isPackaged ? resolve(resourcesPath, 'babel-runtime', 'cli', 'dist', 'index.js') : resolve(packageRoot, '..', 'babel-cli', 'dist', 'index.js');
-  const node = isPackaged ? resolve(resourcesPath, 'babel-runtime', 'node', 'node.exe') : executable;
+  const path = resolve(resourcesPath, 'babel-runtime', 'cli', 'dist', 'index.js');
+  const node = resolve(resourcesPath, 'babel-runtime', 'node', 'node.exe');
   const isFile = value => existsSync(value) && statSync(value).isFile();
   return {
     path,
-    label: isPackaged ? 'Bundled Babel CLI' : OFFICIAL_CLI_LABEL,
+    label: 'Bundled Babel CLI',
     executable: node,
-    source: isPackaged ? 'bundled' : 'official',
+    source: 'bundled',
+    ready: isFile(path) && isFile(node),
+  };
+}
+
+/** Development runtime: the Babel CLI built beside this package. */
+export function resolveOfficialCli(packageRoot, {isPackaged = false, resourcesPath, executable = process.execPath, userData = null} = {}) {
+  if (typeof packageRoot !== 'string' || packageRoot.length === 0) {
+    throw new TypeError('packageRoot is required');
+  }
+  if (isPackaged) {
+    const bundled = resolveBundledCli(packageRoot, {resourcesPath, executable});
+    if (!userData) return bundled;
+    return resolvePackagedEngine({userData, resourcesPath, bundled});
+  }
+  const path = resolve(packageRoot, '..', 'babel-cli', 'dist', 'index.js');
+  const node = executable;
+  const isFile = value => existsSync(value) && statSync(value).isFile();
+  return {
+    path,
+    label: OFFICIAL_CLI_LABEL,
+    executable: node,
+    source: 'official',
     ready: isFile(path) && isFile(node),
   };
 }

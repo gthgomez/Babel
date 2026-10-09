@@ -1,4 +1,5 @@
 import {app,BrowserWindow,dialog,ipcMain,protocol,session,shell} from 'electron';
+import {readFileSync} from 'node:fs';
 import {readFile,writeFile,rename,mkdir,stat,realpath} from 'node:fs/promises';
 import {basename,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -10,7 +11,11 @@ import {diagnoseRuntime} from './diagnostics.mjs';
 import {saveProviderCredential} from './credentials.mjs';
 import {applyProjectCredentialScope} from './childEnv.mjs';
 import {resolveEngineIdentity} from './identity.mjs';
-import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
+import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,runDevelopmentRebuild,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
+import {parseBuildMetadata} from './identity.mjs';
+import {readActiveEngine, writeActiveEngine} from './engine-manager.mjs';
+import {checkPackagedCliUpdate, installPreviewSourceBuild, installStableReleaseArchive, resolveBundledNpmCli} from './engine-artifact.mjs';
+import {qualifiedProviders, saveProviderRoute} from './provider-routing.mjs';
 import {listSavedChats,readSavedChat} from './sessions.mjs';
 import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose} from './lifecycle.mjs';
 
@@ -21,12 +26,16 @@ if(profileArgument){
   if(!isAbsolute(profile))throw new Error('--profile-dir must be an absolute directory');
   app.setPath('userData',profile);
 }
-const officialRuntime=()=>resolveOfficialCli(packageRoot,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath});
+const officialRuntime=()=>resolveOfficialCli(packageRoot,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath,userData:app.getPath('userData')});
+function bundledBuildRecord(){
+  if(!app.isPackaged)return null;
+  try{return parseBuildMetadata(readFileSync(join(process.resourcesPath,'..','BUILD.json'),'utf8'));}catch{return null;}
+}
 function runtimeEnvironment() {
   const profile=join(app.getPath('userData'),'engine','config');
   const env=app.isPackaged?bundledEnvironment(app.getPath('userData')):{...process.env,ELECTRON_RUN_AS_NODE:'1',BABEL_CONFIG_DIR:profile};
   // Project keys are never loaded merely because a repository contains .env.
-  return applyProjectCredentialScope(env,{projectCredentialRoot:preferences.projectCredentialRoot,projectRoot:preferences.projectRoot});
+  return applyProjectCredentialScope(env,{projectCredentialRoot:preferences.projectCredentialRoot,projectRoot:preferences.projectRoot,configDirectory:profile});
 }
 let diagnostics=null;
 let window=null;
@@ -76,6 +85,7 @@ async function getInfo(){
     cliEntry,official,advancedEntry:Boolean(!app.isPackaged&&preferences.cliEntry),ready,
     executionProfile:EXECUTION_PROFILE,diagnostics,update:cliUpdate,
   });
+  if(official.engineId&&official.engineId!=='bundled') engine.activeEngineId=official.engineId;
   return {
     cliName:cliEntry?basename(cliEntry):null,
     projectName:preferences.projectRoot?basename(preferences.projectRoot):null,
@@ -106,6 +116,24 @@ function updateStateFromInspection(inspection){
   if(plan.reason==='already_current') return {state:'current',channel:'development',currentSha:inspection.head,availableSha:inspection.head,detail:'No newer source was observed for the tracked upstream.'};
   return {state:plan.reason==='untrusted_remote'?'unsupported':'error',channel:'development',currentSha:inspection.head,availableSha:null,detail:updateBlockMessage(plan.reason)};
 }
+async function checkPackagedUpdate(){
+  const active=readActiveEngine(app.getPath('userData'))??{id:'bundled',channelPreference:'stable'};
+  const build=bundledBuildRecord();
+  try{
+    const result=await checkPackagedCliUpdate({userData:app.getPath('userData'),channel:active.channelPreference,bundledSourceSha:build?.sourceSha??null});
+    cliUpdate={
+      state:result.state??'error',
+      channel:result.channel??active.channelPreference,
+      currentSha:result.currentSha??build?.sourceSha??null,
+      availableSha:result.availableSha??null,
+      detail:result.detail??'',
+      candidate:result.candidate??null,
+    };
+  }catch{
+    cliUpdate={state:'error',channel:active.channelPreference,detail:'The CLI update check failed. Verify network access and retry.'};
+  }
+  return {...cliUpdate};
+}
 async function checkReleaseUpdate(){
   const current=app.getVersion();
   try{
@@ -114,11 +142,10 @@ async function checkReleaseUpdate(){
     const body=await response.json();
     const latest=typeof body?.tag_name==='string'?body.tag_name:'';
     const result=compareReleaseVersion(latest,current);
-    cliUpdate={state:result.state,channel:'release',detail:result.detail};
+    return {state:result.state,channel:'release',detail:result.detail};
   }catch{
-    cliUpdate={state:'error',channel:'release',detail:'The release check failed. Verify network access and retry.'};
+    return {state:'error',channel:'release',detail:'The Desktop release check failed. Verify network access and retry.'};
   }
-  return {...cliUpdate};
 }
 function handle(channel,fn){ipcMain.handle(channel,async(event,...args)=>{validateSender(event);return fn(...args);});}
 async function withNativeDialog(fn){
@@ -141,11 +168,47 @@ async function start(){
   handle('babel:refresh-diagnostics',async()=>{assertIdle();diagnostics=null;return getInfo();});
   handle('babel:check-cli-update',async()=>{
     assertIdle();
-    if(app.isPackaged) return checkReleaseUpdate();
-    const inspection=await inspectDevelopmentCheckout({git:createGitRunner({timeout:15000}),repoRoot:cliCheckoutRoot()??''});
+    if(app.isPackaged) return checkPackagedUpdate();
+    const git=createGitRunner({timeout:15000});
+    const repoRoot=cliCheckoutRoot()??'';
+    await git(['fetch','origin','--prune'],repoRoot);
+    const inspection=await inspectDevelopmentCheckout({git,repoRoot});
     cliUpdate=updateStateFromInspection(inspection);
-    return {...cliUpdate,inspection:publicInspection(inspection)};
+    return {...cliUpdate,inspection:publicInspection(inspection),desktopRelease:await checkReleaseUpdate()};
   });
+  handle('babel:set-update-channel',async channel=>{
+    assertIdle();
+    if(channel!=='stable'&&channel!=='preview') throw new Error('Update channel must be stable or preview.');
+    const active=readActiveEngine(app.getPath('userData'))??{id:'bundled',channelPreference:'stable'};
+    writeActiveEngine(app.getPath('userData'),{...active,channelPreference:channel});
+    return checkPackagedUpdate();
+  });
+  handle('babel:update-packaged-cli',()=>withNativeDialog(async()=>{
+    assertIdle();
+    if(!app.isPackaged) throw new Error('Packaged CLI updates are available only in the installed Desktop application.');
+    const check=await checkPackagedUpdate();
+    if(check.state!=='available'||!check.candidate) throw new Error(check.detail||'No qualified CLI update is available.');
+    const channel=check.channel??'stable';
+    const detail=channel==='preview'
+      ? `Channel: development preview (unsigned)\nIncoming: ${check.availableSha?.slice(0,12)}\nCurrent: ${check.currentSha?.slice(0,12)??'unknown'}\n\nThis builds the CLI from qualified main source using the bundled Node runtime. It is not publisher-signed.`
+      : `Channel: stable release\nIncoming: ${check.availableSha?.slice(0,12)}\nCurrent: ${check.currentSha?.slice(0,12)??'unknown'}\n\nThe installer downloads the official release archive and validates it before activation.`;
+    const consent=await dialog.showMessageBox(window,{type:'warning',title:'Update the Babel CLI?',message:'Download, verify, and activate a newer qualified CLI build.',detail,buttons:['Cancel','Update CLI'],defaultId:0,cancelId:0,noLink:true});
+    if(consent.response!==1) return {started:false};
+    const runtime=officialRuntime();
+    const npmCli=resolveBundledNpmCli(process.resourcesPath);
+    updateBusy=true;
+    try{
+      const send=event=>{if(window&&!window.isDestroyed())window.webContents.send('babel:update-event',event);};
+      const result=channel==='preview'
+        ? await installPreviewSourceBuild({userData:app.getPath('userData'),nodeExe:runtime.executable,npmCli,sourceSha:check.candidate.sourceSha,tarballUrl:check.candidate.tarballUrl,events:send})
+        : await installStableReleaseArchive({userData:app.getPath('userData'),nodeExe:runtime.executable,npmCli,tgzUrl:check.candidate.tgzUrl,sourceSha:check.candidate.sourceSha,events:send});
+      cliUpdate=result.ok
+        ?{state:'current',channel,detail:`Active CLI ${result.version} · ${result.sourceSha.slice(0,12)}`,currentSha:result.sourceSha,availableSha:result.sourceSha}
+        :{state:'error',channel,detail:`Update stopped at ${result.phase}: ${result.reason}`};
+      diagnostics=null;
+      return {...result};
+    }finally{updateBusy=false;}
+  }));
   handle('babel:update-dev-cli',()=>withNativeDialog(async()=>{
     assertIdle();
     if(app.isPackaged) throw new Error('Packaged builds update through the release channel; the source updater is available only in a development checkout.');
@@ -179,6 +242,22 @@ async function start(){
       return {...result};
     }finally{updateBusy=false;}
   }));
+  handle('babel:rebuild-dev-cli',()=>withNativeDialog(async()=>{
+    assertIdle();
+    if(app.isPackaged) throw new Error('Rebuild is available only in a source checkout.');
+    const entry=activeCliEntry();
+    if(!entry) throw new Error('No Babel CLI is selected.');
+    const packageDir=dirname(dirname(entry));
+    const repoRoot=dirname(packageDir);
+    const consent=await dialog.showMessageBox(window,{type:'warning',title:'Rebuild the development Babel CLI?',message:'Reinstall dependencies and rebuild the current checkout.',detail:`Checkout: ${repoRoot}\n\nThe previous dist is restored automatically if the rebuild fails.`,buttons:['Cancel','Rebuild CLI'],defaultId:0,cancelId:0,noLink:true});
+    if(consent.response!==1) return {started:false};
+    updateBusy=true;
+    try{
+      const send=event=>{if(window&&!window.isDestroyed())window.webContents.send('babel:update-event',event);};
+      const result=await runDevelopmentRebuild({run:createStepRunner(),repoRoot,cliDir:packageDir,nodeExe:officialRuntime().executable,nodeEnv:{ELECTRON_RUN_AS_NODE:'1'},npm:resolveNpmInvocation(),snapshotDir:join(app.getPath('userData'),'engine','rollback'),events:send});
+      return {...result};
+    }finally{updateBusy=false;}
+  }));
   handle('babel:choose-cli',()=>withNativeDialog(async()=>{
     assertIdle();
     if(app.isPackaged)throw new Error('This preview uses its bundled CLI. Other executable entries are available only in source builds.');
@@ -189,6 +268,7 @@ async function start(){
     if(consent.response!==1)return getInfo();
     preferences.cliEntry=selected;await savePreferences();return getInfo();
   }));
+  handle('babel:list-qualified-providers',()=>qualifiedProviders());
   handle('babel:save-provider-credential',async options=>{
     assertIdle();
     if(!options || typeof options!=='object' || (options.scope!=='private' && options.scope!=='project')) {
@@ -197,10 +277,12 @@ async function start(){
     if(options.scope==='project'&&!preferences.projectRoot) {
       throw new Error('Select a project before choosing project-local credentials.');
     }
+    const configDirectory=runtimeEnvironment().BABEL_CONFIG_DIR;
     const result=saveProviderCredential({
       provider:options.provider,apiKey:options.apiKey,scope:options.scope,
-      configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,projectRoot:preferences.projectRoot,
+      configDirectory,projectRoot:preferences.projectRoot,
     });
+    saveProviderRoute({configDirectory,provider:options.provider,model:options.model});
     preferences.projectCredentialRoot=options.scope==='project'?preferences.projectRoot:null;
     await savePreferences();
     diagnostics=null; // Next doctor reflects the saved file, without inspecting the key.

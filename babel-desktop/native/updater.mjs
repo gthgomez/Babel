@@ -262,3 +262,49 @@ export async function runDevelopmentUpdate({git, run, repoRoot, cliDir, nodeExe,
   emit('activate', 'complete', newSha.slice(0,12));
   return {ok:true, previousSha:before.head, sourceSha:newSha, version:reported, backupDir:hadDist ? backupDir : null};
 }
+
+/**
+ * Rebuild the development CLI from the current checkout without fetching.
+ * Builds into dist-candidate first, then swaps atomically on success.
+ */
+export async function runDevelopmentRebuild({run, repoRoot, cliDir, nodeExe, nodeEnv = {}, npm, snapshotDir, events = () => {}}) {
+  const emit = (phase, status, detail = '') => events({phase, status, detail: String(detail).slice(0, 600)});
+  const fail = (phase, reason, detail = '') => { emit(phase, 'failed', detail || reason); return {ok: false, phase, reason, detail}; };
+  const git = createGitRunner();
+  const inspection = await inspectDevelopmentCheckout({git, repoRoot});
+  if (!inspection.ok) return fail('inspect', inspection.blocker);
+  const safety = precheckSafety(inspection);
+  if (!safety.allowed) return fail('precheck', safety.reason);
+  const distDir = join(cliDir, 'dist');
+  const backupDir = join(snapshotDir, `dist-${inspection.head.slice(0, 12)}`);
+  const hadDist = existsSync(distDir);
+  try {
+    rmSync(backupDir, {recursive: true, force: true});
+    mkdirSync(backupDir, {recursive: true});
+    if (hadDist) cpSync(distDir, backupDir, {recursive: true});
+    emit('backup', 'complete', hadDist ? backupDir : 'no previous build');
+  } catch (error) { return fail('backup', 'backup_failed', error.message); }
+  const restore = () => {
+    try {
+      rmSync(distDir, {recursive: true, force: true});
+      if (hadDist) cpSync(backupDir, distDir, {recursive: true});
+      emit('rollback', 'complete', hadDist ? inspection.head.slice(0, 12) : 'removed partial build');
+    } catch (error) { emit('rollback', 'failed', error.message); }
+  };
+  emit('install', 'running');
+  const installed = await run(npm.exe, [...npm.args, 'ci'], cliDir, {timeout: BUILD_TIMEOUT_MS});
+  if (!installed.ok) { restore(); return fail('install', 'dependency_install_failed', installed.detail); }
+  emit('build', 'running');
+  const built = await run(npm.exe, [...npm.args, 'run', 'build'], cliDir, {timeout: BUILD_TIMEOUT_MS});
+  if (!built.ok) { restore(); return fail('build', 'build_failed', built.detail); }
+  const entry = join(distDir, 'index.js');
+  if (!existsSync(entry)) { restore(); return fail('validate', 'missing_entry'); }
+  const expected = readPackageVersion(cliDir);
+  emit('validate', 'running');
+  const version = await run(nodeExe, [entry, '--version'], cliDir, {timeout: 60000, env: nodeEnv});
+  if (!version.ok) { restore(); return fail('validate', 'version_check_failed', version.detail); }
+  const reported = version.stdout.trim();
+  if (!expected || reported !== expected) { restore(); return fail('validate', 'version_mismatch', `expected ${expected ?? 'unknown'}, got ${reported}`); }
+  emit('activate', 'complete', inspection.head.slice(0, 12));
+  return {ok: true, previousSha: inspection.head, sourceSha: inspection.head, version: reported, backupDir: hadDist ? backupDir : null};
+}
