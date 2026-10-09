@@ -78,7 +78,7 @@ export function loadOptedInProjectCredentials(env: NodeJS.ProcessEnv): boolean {
   return true;
 }
 
-/** Precedence: explicit environment > explicitly opted-in project > private profile > legacy CLI .env. */
+/** Precedence: explicit environment > explicitly opted-in project > private profile > explicitly enabled legacy CLI .env. */
 export function loadBabelCliEnv(
   env: NodeJS.ProcessEnv = process.env,
   envFilePath?: string,
@@ -91,7 +91,7 @@ export function loadBabelCliEnv(
   if (envFilePath === undefined) loadOptedInProjectCredentials(env);
   const files = envFilePath !== undefined ? [envFilePath] : [
     privatePath,
-    ...(resolveRuntimePaths(env).isInstalled ? [] : [resolve(BABEL_CLI_PACKAGE_ROOT, '.env')]),
+    ...(env['BABEL_LEGACY_CLI_ENV'] === '1' && !resolveRuntimePaths(env).isInstalled ? [resolve(BABEL_CLI_PACKAGE_ROOT, '.env')] : []),
   ];
   let loaded = false;
   let found = false;
