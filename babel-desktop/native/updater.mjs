@@ -86,12 +86,14 @@ export async function inspectDevelopmentCheckout({git, repoRoot}) {
   const upstream = await git(['rev-parse', upstreamRef], repoRoot);
   let ahead = 0;
   let behind = 0;
+  let countsOk = false;
   if (upstream.ok && SHA.test(upstream.stdout.trim())) {
     const counts = await git(['rev-list', '--left-right', '--count', `${upstreamRef}...HEAD`], repoRoot);
     if (counts.ok) {
       const [b, a] = counts.stdout.trim().split(/\s+/).map(Number);
       behind = Number.isFinite(b) ? b : 0;
       ahead = Number.isFinite(a) ? a : 0;
+      countsOk = true;
     }
   }
   return {
@@ -107,6 +109,12 @@ export async function inspectDevelopmentCheckout({git, repoRoot}) {
     head: head.stdout.trim(),
     upstream: upstream.ok && SHA.test(upstream.stdout.trim()) ? upstream.stdout.trim() : null,
     dirty,
+    // A failed worktree/branch/divergence probe is never silently read as
+    // "clean"/"attached"/"current": precheckSafety and planDevelopmentUpdate
+    // fail closed on these flags.
+    statusOk: status.ok,
+    branchOk: branchRef.ok,
+    countsOk,
     ahead,
     behind,
   };
@@ -116,6 +124,9 @@ export async function inspectDevelopmentCheckout({git, repoRoot}) {
 export function precheckSafety(inspection) {
   if (!inspection || inspection.ok !== true) return {allowed:false, reason:inspection?.blocker ?? 'not_inspected'};
   if (!inspection.trusted) return {allowed:false, reason:'untrusted_remote'};
+  // A failed `git status`/branch probe must never be read as "clean"/"attached".
+  if (!inspection.statusOk) return {allowed:false, reason:'status_unavailable'};
+  if (!inspection.branchOk) return {allowed:false, reason:'branch_unavailable'};
   if (inspection.detached) return {allowed:false, reason:'detached_head'};
   if (inspection.dirty) return {allowed:false, reason:'local_modifications'};
   if (inspection.ahead > 0) return {allowed:false, reason:'local_commits_ahead'};
@@ -127,6 +138,8 @@ export function planDevelopmentUpdate(inspection) {
   const safety = precheckSafety(inspection);
   if (!safety.allowed) return safety;
   if (!inspection.upstream) return {allowed:false, reason:'no_upstream_observed'};
+  // A failed divergence probe must never be read as "already current".
+  if (!inspection.countsOk) return {allowed:false, reason:'divergence_unavailable'};
   if (inspection.behind === 0) return {allowed:false, reason:'already_current'};
   return {allowed:true, reason:'fast_forward_available', currentSha:inspection.head, incomingSha:inspection.upstream, incomingCount:inspection.behind, upstreamRef:inspection.upstreamRef};
 }
