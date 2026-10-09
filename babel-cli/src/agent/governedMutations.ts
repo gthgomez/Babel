@@ -6,7 +6,7 @@
  * Callers must not bypass this with direct writeFile.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, rm } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 
 import { FileWriteMutex } from '../services/editReliability.js';
@@ -262,6 +262,28 @@ export interface ApplyPatchInput {
  * path as other mutations. Whole-patch semantics are transactional: hunks are
  * applied in memory first; any failed hunk means nothing is written.
  */
+async function rollbackWrittenPaths(
+  paths: string[],
+  originalContents: Map<string, string>,
+  createdPaths: Set<string>,
+): Promise<string[]> {
+  const rolledBack: string[] = [];
+  for (const path of paths) {
+    try {
+      if (createdPaths.has(path)) {
+        await rm(path, { force: true });
+      } else {
+        const original = originalContents.get(path) ?? '';
+        await writeFile(path, original, 'utf-8');
+      }
+      rolledBack.push(path);
+    } catch {
+      // best-effort rollback
+    }
+  }
+  return rolledBack;
+}
+
 export async function governedApplyPatch(
   input: ApplyPatchInput,
   options: {
@@ -298,12 +320,14 @@ export async function governedApplyPatch(
 
   // Phase A: read all target files.
   const contents = new Map<string, string>();
+  const createdPaths = new Set<string>();
   for (let i = 0; i < parsed.files.length; i++) {
     const file = parsed.files[i];
     const absolutePath = absolutePaths[i];
     if (!file || !absolutePath) continue;
     if (contents.has(absolutePath)) continue; // same file addressed twice
     if (file.createsFile) {
+      createdPaths.add(absolutePath);
       contents.set(absolutePath, '');
       continue;
     }
@@ -405,8 +429,9 @@ export async function governedApplyPatch(
 
       if (written.skipped) {
         if (writtenPaths.length > 0) {
+          const rolledBack = await rollbackWrittenPaths(writtenPaths, contents, createdPaths);
           const observation =
-            `${written.observation}\n\nFiles already written before this conflict: ${writtenPaths.join(', ')}`;
+            `${written.observation}\n\nRolled back ${rolledBack.length} file(s) to maintain transactional atomicity: ${rolledBack.join(', ')}`;
           return {
             observation,
             exit_code: 1,
@@ -414,7 +439,7 @@ export async function governedApplyPatch(
             policyBlocked: false,
             terminal: false,
             absolutePaths,
-            preDispatchNoEffect: false,
+            preDispatchNoEffect: true,
           };
         }
         return {
@@ -433,7 +458,11 @@ export async function governedApplyPatch(
       lastPolicyDecision = dispatch.policyDecision;
       if (dispatch.policyBlocked) {
         const stderr = dispatch.results[0]?.stderr ?? 'policy blocked';
-        const observation = `### apply_patch ${result.path}\nError: ${stderr}`;
+        let observation = `### apply_patch ${result.path}\nError: ${stderr}`;
+        if (writtenPaths.length > 0) {
+          const rolledBack = await rollbackWrittenPaths(writtenPaths, contents, createdPaths);
+          observation += `\n\nRolled back ${rolledBack.length} file(s) to maintain transactional atomicity: ${rolledBack.join(', ')}`;
+        }
         return {
           observation,
           exit_code: 1,
@@ -442,6 +471,7 @@ export async function governedApplyPatch(
           terminal: dispatch.terminal === true,
           absolutePaths,
           policyDecision: dispatch.policyDecision,
+          preDispatchNoEffect: writtenPaths.length === 0,
           ...(dispatch.mutationPaths ? { mutationPaths: dispatch.mutationPaths } : {}),
           ...(dispatch.preBatchHash ? { preBatchHash: dispatch.preBatchHash } : {}),
           ...(dispatch.postBatchHash ? { postBatchHash: dispatch.postBatchHash } : {}),
@@ -452,9 +482,11 @@ export async function governedApplyPatch(
       const last = dispatch.results[dispatch.results.length - 1];
       if ((last?.exit_code ?? 1) !== 0) {
         const stderr = last?.stderr ?? 'write failed';
-        const observation =
-          `### apply_patch ${result.path}\nError: ${stderr}` +
-          (writtenPaths.length > 0 ? `\nFiles already written before this failure: ${writtenPaths.join(', ')}` : '');
+        let observation = `### apply_patch ${result.path}\nError: ${stderr}`;
+        if (writtenPaths.length > 0) {
+          const rolledBack = await rollbackWrittenPaths(writtenPaths, contents, createdPaths);
+          observation += `\n\nRolled back ${rolledBack.length} file(s) to maintain transactional atomicity: ${rolledBack.join(', ')}`;
+        }
         return {
           observation,
           exit_code: last?.exit_code ?? 1,
@@ -462,6 +494,7 @@ export async function governedApplyPatch(
           policyBlocked: false,
           terminal: dispatch.terminal === true,
           absolutePaths,
+          preDispatchNoEffect: writtenPaths.length === 0,
           ...(dispatch.mutationPaths ? { mutationPaths: dispatch.mutationPaths } : {}),
           ...(dispatch.preBatchHash ? { preBatchHash: dispatch.preBatchHash } : {}),
           ...(dispatch.postBatchHash ? { postBatchHash: dispatch.postBatchHash } : {}),

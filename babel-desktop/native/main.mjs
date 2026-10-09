@@ -15,7 +15,7 @@ import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopm
 import {parseBuildMetadata} from './identity.mjs';
 import {readActiveEngine, writeActiveEngine} from './engine-manager.mjs';
 import {checkPackagedCliUpdate, installPreviewSourceBuild, installStableReleaseArchive, resolveBundledNpmCli} from './engine-artifact.mjs';
-import {qualifiedProviders, saveProviderRoute} from './provider-routing.mjs';
+import {qualifiedProviders, readProviderRoute, saveProviderRoute} from './provider-routing.mjs';
 import {listSavedChats,readSavedChat} from './sessions.mjs';
 import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose} from './lifecycle.mjs';
 
@@ -201,7 +201,7 @@ async function start(){
       const send=event=>{if(window&&!window.isDestroyed())window.webContents.send('babel:update-event',event);};
       const result=channel==='preview'
         ? await installPreviewSourceBuild({userData:app.getPath('userData'),nodeExe:runtime.executable,npmCli,sourceSha:check.candidate.sourceSha,tarballUrl:check.candidate.tarballUrl,events:send})
-        : await installStableReleaseArchive({userData:app.getPath('userData'),nodeExe:runtime.executable,npmCli,tgzUrl:check.candidate.tgzUrl,sourceSha:check.candidate.sourceSha,events:send});
+        : await installStableReleaseArchive({userData:app.getPath('userData'),nodeExe:runtime.executable,npmCli,tgzUrl:check.candidate.tgzUrl,sourceSha:check.candidate.sourceSha,resourcesPath:process.resourcesPath,events:send});
       cliUpdate=result.ok
         ?{state:'current',channel,detail:`Active CLI ${result.version} · ${result.sourceSha.slice(0,12)}`,currentSha:result.sourceSha,availableSha:result.sourceSha}
         :{state:'error',channel,detail:`Update stopped at ${result.phase}: ${result.reason}`};
@@ -315,12 +315,17 @@ async function start(){
       if(!diagnostics.ready)throw new Error('Execution prerequisites are missing or unverified. Open Connection, check runtime files and start Docker, then recheck setup.');
     }
     // Validate before presenting consent; renderer cannot provide arbitrary flags.
-    buildRunArgs(cliEntry,preferences.projectRoot,request);
-      const consent=await withNativeDialog(()=>dialog.showMessageBox(window,{type:'question',title:'Run with your existing Babel CLI?',message:`Start a ${request.mode} run with Babel?`,detail:`Project: ${preferences.projectRoot}\nCLI: ${cliEntry}\n\nTask: ${request.task.slice(0,1200)}${request.task.length>1200?'…':''}\n\nBabel may read and change files in this project, run commands, and send project content to your configured model provider. Approvals appear in this window. Stop ends the run.`,buttons:['Cancel','Run Babel'],defaultId:0,cancelId:0,noLink:true}));
-      if(consent.response!==1)return {started:false};
-      runner=new BabelChild({executable:officialRuntime().executable,entry:cliEntry,projectRoot:preferences.projectRoot,env:runtimeEnvironment(),inheritEnv:false});
-      runner.start(request,packet=>{if(window&&!window.isDestroyed())window.webContents.send('babel:event',packet);});
-      return {started:true};
+    const route = readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR);
+    const runRequest = {...request};
+    if (route?.model && !runRequest.model) {
+      runRequest.model = route.model;
+    }
+    buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
+    const consent = await withNativeDialog(() => dialog.showMessageBox(window, {type:'question', title:'Run with your existing Babel CLI?', message:`Start a ${request.mode} run with Babel?`, detail:`Project: ${preferences.projectRoot}\nCLI: ${cliEntry}\n\nTask: ${request.task.slice(0,1200)}${request.task.length>1200?'…':''}\n\nBabel may read and change files in this project, run commands, and send project content to your configured model provider. Approvals appear in this window. Stop ends the run.`, buttons:['Cancel','Run Babel'], defaultId:0, cancelId:0, noLink:true}));
+    if (consent.response !== 1) return {started:false};
+    runner = new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:preferences.projectRoot, env:runtimeEnvironment(), inheritEnv:false});
+    runner.start(runRequest, packet => {if(window&&!window.isDestroyed()) window.webContents.send('babel:event', packet);});
+    return {started:true};
     }finally{runAdmission=false;}
   });
   createWindow();
