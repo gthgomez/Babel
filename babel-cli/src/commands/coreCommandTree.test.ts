@@ -24,6 +24,17 @@ function commandTree(command: Command): CommandContract {
   };
 }
 
+function withoutIntentionalCommandExtensions(contract: CommandContract): CommandContract {
+  return {
+    ...contract,
+    children: contract.children
+      .filter(child => child.name !== 'research')
+      .map(child => child.name === 'evidence'
+        ? { ...child, children: child.children.filter(sub => sub.name !== 'replay') }
+        : child),
+  };
+}
+
 test('core registration preserves the complete existing command contract', () => {
   const program = new Command();
   registerCoreCommands(program);
@@ -31,9 +42,22 @@ test('core registration preserves the complete existing command contract', () =>
   const research = contract.children.filter(child => child.name === 'research');
   assert.equal(research.length, 1);
   assert.equal(contract.children.at(-1)?.name, 'research', 'the intentional new group is appended after the existing contract');
-  const legacy = { ...contract, children: contract.children.filter(child => child.name !== 'research') };
+  const evidence = contract.children.find(child => child.name === 'evidence');
+  assert.ok(evidence);
+  const replay = evidence.children.filter(child => child.name === 'replay');
+  assert.equal(replay.length, 1);
+  const legacy = withoutIntentionalCommandExtensions(contract);
   const digest = createHash('sha256').update(JSON.stringify(legacy)).digest('hex');
   assert.equal(digest, '5a7149653f90ac455439e49e107a93853b16c738aa04bf07674c23ceb0fa6541');
+  assert.deepEqual(replay[0], {
+    name: 'replay', aliases: [], description: 'Render the replay transcript of persisted action/observation evidence for a conversation',
+    args: [{ name: 'conversation-id', required: true, variadic: false, description: '' }],
+    options: [
+      { flags: '--run <path>', description: 'Run directory holding episode-events.jsonl (default: chat session dir for the id)', mandatory: false },
+      { flags: '--json', description: 'Emit structured JSON only', mandatory: false },
+    ],
+    children: [],
+  });
   assert.deepEqual(research[0], {
     name: 'research', aliases: [], description: 'Repo Hunt research missions (discover, inspect, and learn from OSS evidence)',
     args: [], options: [], children: [
