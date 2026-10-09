@@ -51,6 +51,8 @@ export type PolicyEventKind =
   | 'tool_dispatch'
   /** Filesystem apply of an edit/patch. */
   | 'write_apply'
+  /** C2: edit reflection cap reached — retries stopped, failure surfaced. */
+  | 'edit_reflection_cap'
   /** Write receipt recorded (pre-image / success). */
   | 'write_receipt'
   /** Git patch non-empty observation after writes. */
