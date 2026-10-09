@@ -322,7 +322,7 @@ SYMBOL_PATTERNS_BY_EXT['kts'] = SYMBOL_PATTERNS_BY_EXT['kt']!;
 SYMBOL_PATTERNS_BY_EXT['exs'] = SYMBOL_PATTERNS_BY_EXT['ex']!;
 SYMBOL_PATTERNS_BY_EXT['sc'] = SYMBOL_PATTERNS_BY_EXT['scala']!;
 
-function extractSymbols(content: string, extension: string): string[] {
+export function extractSymbols(content: string, extension: string): string[] {
   const ext = extension.toLowerCase().replace(/^\./, '');
   const patterns = SYMBOL_PATTERNS_BY_EXT[ext];
 
