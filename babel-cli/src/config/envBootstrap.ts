@@ -56,7 +56,11 @@ export function loadOptedInProjectCredentials(env: NodeJS.ProcessEnv): boolean {
   if (!isAbsolute(selectedRoot)) throw new Error('Project credential root must be absolute');
   const root = resolve(selectedRoot);
   const rootInfo = lstatSync(root);
-  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || realpathSync(root) !== root) {
+  const actualRoot = realpathSync(root);
+  const matchesRoot = process.platform === 'win32'
+    ? actualRoot.toLowerCase() === root.toLowerCase()
+    : actualRoot === root;
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || !matchesRoot) {
     throw new Error('Project credential root must be a real, non-linked directory');
   }
   if (!gitAllowsIgnoredProjectEnv(root)) {
