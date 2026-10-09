@@ -61,6 +61,18 @@ export type FactPayload =
       readonly status: string;
     }
   | {
+      /**
+       * Packet A1: conversation status shadow fact. Emitted in parallel with
+       * legacy status fields (never instead of them). `status` is a
+       * `ConversationStatus` value; observation-class only — it never
+       * replaces the authoritative `completion.decided` fact.
+       */
+      readonly type: 'run.status_changed';
+      readonly status: string;
+      readonly previous?: string;
+      readonly reason?: string;
+    }
+  | {
       readonly type: 'operation.prepared';
       readonly operationDigest: string;
       readonly operationId?: string;
@@ -124,6 +136,7 @@ export const KNOWN_FACT_TYPES: ReadonlySet<FactPayload['type']> = new Set([
   'run.started',
   'run.cancel_requested',
   'run.settled',
+  'run.status_changed',
   'operation.prepared',
   'operation.settled',
   'operation.indeterminate',
@@ -174,6 +187,7 @@ const REQUIRED_PAYLOAD_FIELDS: Record<string, readonly string[]> = {
   'run.started': ['ownerGeneration'],
   'run.cancel_requested': [],
   'run.settled': ['status'],
+  'run.status_changed': ['status'],
   'operation.prepared': ['operationDigest'],
   'operation.settled': ['receiptId'],
   'operation.indeterminate': ['operationDigest', 'reason'],
@@ -214,6 +228,12 @@ function payloadTypeError(type: string, payload: Record<string, unknown>): strin
       return optionalString(payload['commandId']) ? null : 'invalid_commandId';
     case 'run.settled':
       return isString(payload['status']) ? null : 'invalid_status';
+    case 'run.status_changed':
+      return isString(payload['status']) &&
+        optionalString(payload['previous']) &&
+        optionalString(payload['reason'])
+        ? null
+        : 'invalid_status_changed';
     case 'operation.prepared':
       return isString(payload['operationDigest']) &&
         optionalString(payload['operationId']) &&
