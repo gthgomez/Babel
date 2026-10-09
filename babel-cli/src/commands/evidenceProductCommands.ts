@@ -22,6 +22,8 @@ import {
   formatEvidenceOpenHuman,
   openEvidence,
 } from '../services/evidenceProduct.js';
+import { formatReplayTranscript, loadReplayIndexForConversation } from '../evidence/replayIndex.js';
+import { chatSessionDir } from '../cli/runsLayout.js';
 import { printJsonOrHuman } from './output.js';
 
 /**
@@ -108,6 +110,38 @@ export function registerEvidenceProductSubcommands(evidenceCommand: Command): vo
       printJsonOrHuman(
         report,
         formatShadowPrecisionRecallHuman(report),
+        options.json === true,
+      );
+    });
+
+  // Packet A3 — replay the persisted (redacted) action/observation stream.
+  evidenceCommand
+    .command('replay <conversation-id>')
+    .description('Render the replay transcript of persisted action/observation evidence for a conversation')
+    .option('--run <path>', 'Run directory holding episode-events.jsonl (default: chat session dir for the id)')
+    .option('--json', 'Emit structured JSON only')
+    .action((conversationId: string, options: { run?: string; json?: boolean }) => {
+      const runDir = options.run ?? chatSessionDir(conversationId);
+      const loaded = loadReplayIndexForConversation(runDir, conversationId);
+      if (!loaded.ok) {
+        printJsonOrHuman(
+          { status: loaded.reason, conversationId, runDir, detail: loaded.detail },
+          `evidence replay failed (${loaded.reason}): ${loaded.detail}`,
+          options.json === true,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      printJsonOrHuman(
+        {
+          status: 'ok',
+          conversationId,
+          runDir,
+          sessionId: loaded.index.sessionId,
+          pairs: loaded.index.pairs,
+          unpairedEvents: loaded.index.unpairedEvents,
+        },
+        formatReplayTranscript(loaded.index),
         options.json === true,
       );
     });
