@@ -251,7 +251,8 @@ import {
 import type { AdmissionStore } from "../runtime/admission.js";
 
 import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
-import { buildRepoMapPreamble } from "./repoMapPreamble.js";
+import { buildRepoMapPreamble, collectChatSeedFiles } from "./repoMapPreamble.js";
+import { invalidateRepoMapFile } from "../services/repoMap/graph.js";
 import { getChatApprovalSession } from "./chatApproval.js";
 
 import {
@@ -1748,6 +1749,12 @@ export class ChatEngine {
     // continuation during this submission (including before the lazy stream
     // body first runs) is bound to it.
     this.activeSubmissionGeneration = generation;
+
+    // Packet B1: refresh the repo map for this turn (cheap once the per-file
+    // tag cache is warm; nulled by runPostEditStaticCheck on writes).
+    if (this.repoMapCache === null) {
+      this.repoMapCache = await this.generateRepoMap(userInput);
+    }
 
     const cb: ChatCallbacks = {};
     if (callbacks.onAnswerChunk) {
@@ -3701,15 +3708,31 @@ export class ChatEngine {
   private async runPostEditStaticCheck(
     filePath: string,
   ): Promise<string | null> {
+    // Packet B1: a write event flowed through the coding loop — drop the
+    // per-file tag cache entry and force the repo map to refresh next turn.
+    invalidateRepoMapFile(filePath);
+    this.repoMapCache = null;
     return runPostEditStaticCheckFn(filePath, this.options.projectRoot);
   }
 
   /**
    * R4: Generate a compact repository map for model orientation.
-   * Lists top-level directories, key config files, and build/test commands.
+   * Packet B1: primary map is tree-sitter + personalized PageRank under a
+   * token budget, seeded with files already referenced in chat; the legacy
+   * directory listing remains the fallback (see repoMapPreamble.ts).
    */
-  private async generateRepoMap(): Promise<string> {
-    return buildRepoMapPreamble(this.options.projectRoot);
+  private async generateRepoMap(userInput?: string): Promise<string> {
+    const seedFiles = collectChatSeedFiles(
+      userInput
+        ? [...this.conversation, { content: userInput }]
+        : this.conversation,
+      this.options.projectRoot,
+    );
+    try {
+      return await buildRepoMapPreamble(this.options.projectRoot, { seedFiles });
+    } catch {
+      return "";
+    }
   }
   private async synthesizeAnswer(
     toolObservations: string,
