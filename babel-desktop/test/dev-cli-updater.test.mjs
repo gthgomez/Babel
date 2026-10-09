@@ -67,9 +67,62 @@ test('inspectDevelopmentCheckout reports trust, divergence and dirty state', asy
 });
 
 test('precheckSafety does not require an already-observed upstream (the fetch creates it)', () => {
-  const safety = precheckSafety({ok:true, trusted:true, detached:false, dirty:false, ahead:0, upstream:null, behind:0});
-  assert.equal(safety.allowed, true);
-  assert.equal(planDevelopmentUpdate({ok:true, trusted:true, detached:false, dirty:false, ahead:0, upstream:null, behind:0}).reason, 'no_upstream_observed');
+  const observed = {ok:true, trusted:true, detached:false, dirty:false, ahead:0, upstream:null, behind:0, statusOk:true, branchOk:true, countsOk:true};
+  assert.equal(precheckSafety(observed).allowed, true);
+  assert.equal(planDevelopmentUpdate(observed).reason, 'no_upstream_observed');
+});
+
+test('precheckSafety fails closed when the worktree or branch probe fails', () => {
+  const base = {ok:true, trusted:true, detached:false, dirty:false, ahead:0, upstream:null, behind:0, statusOk:true, branchOk:true, countsOk:true};
+  assert.equal(precheckSafety({...base, statusOk:false}).reason, 'status_unavailable');
+  assert.equal(precheckSafety({...base, branchOk:false}).reason, 'branch_unavailable');
+});
+
+test('planDevelopmentUpdate fails closed when the divergence probe fails', () => {
+  const observed = {ok:true, trusted:true, detached:false, dirty:false, ahead:0, upstream:SHA_B, behind:0, statusOk:true, branchOk:true, countsOk:false};
+  assert.equal(planDevelopmentUpdate(observed).reason, 'divergence_unavailable');
+});
+
+test('inspectDevelopmentCheckout reports failed probes so callers fail closed', async () => {
+  const failedStatus = await inspectDevelopmentCheckout({git:async (args) => {
+    const key = args.join(' ');
+    if (key === 'rev-parse HEAD') return {ok:true, stdout:`${SHA_A}\n`};
+    if (key === 'remote get-url origin') return {ok:true, stdout:'https://github.com/gthgomez/Babel.git\n'};
+    if (key === 'rev-parse --abbrev-ref HEAD') return {ok:true, stdout:'main\n'};
+    if (key === 'status --porcelain') return {ok:false, stdout:''};
+    return {ok:true, stdout:''};
+  }, repoRoot:'/repo'});
+  assert.equal(failedStatus.statusOk, false);
+  assert.equal(precheckSafety(failedStatus).reason, 'status_unavailable');
+
+  const failedDivergence = await inspectDevelopmentCheckout({git:async (args) => {
+    const key = args.join(' ');
+    if (key === 'rev-parse HEAD') return {ok:true, stdout:`${SHA_A}\n`};
+    if (key === 'remote get-url origin') return {ok:true, stdout:'https://github.com/gthgomez/Babel.git\n'};
+    if (key === 'rev-parse --abbrev-ref HEAD') return {ok:true, stdout:'main\n'};
+    if (key === 'status --porcelain') return {ok:true, stdout:''};
+    if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return {ok:true, stdout:'origin/main\n'};
+    if (key === 'rev-parse origin/main') return {ok:true, stdout:`${SHA_B}\n`};
+    if (key === 'rev-list --left-right --count origin/main...HEAD') return {ok:false, stdout:''};
+    return {ok:true, stdout:''};
+  }, repoRoot:'/repo'});
+  assert.equal(failedDivergence.countsOk, false);
+  assert.equal(planDevelopmentUpdate(failedDivergence).reason, 'divergence_unavailable');
+
+  // A successful command with unparseable output must also fail closed.
+  const malformedCounts = await inspectDevelopmentCheckout({git:async (args) => {
+    const key = args.join(' ');
+    if (key === 'rev-parse HEAD') return {ok:true, stdout:`${SHA_A}\n`};
+    if (key === 'remote get-url origin') return {ok:true, stdout:'https://github.com/gthgomez/Babel.git\n'};
+    if (key === 'rev-parse --abbrev-ref HEAD') return {ok:true, stdout:'main\n'};
+    if (key === 'status --porcelain') return {ok:true, stdout:''};
+    if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return {ok:true, stdout:'origin/main\n'};
+    if (key === 'rev-parse origin/main') return {ok:true, stdout:`${SHA_B}\n`};
+    if (key === 'rev-list --left-right --count origin/main...HEAD') return {ok:true, stdout:'not-a-count\n'};
+    return {ok:true, stdout:''};
+  }, repoRoot:'/repo'});
+  assert.equal(malformedCounts.countsOk, false);
+  assert.equal(planDevelopmentUpdate(malformedCounts).reason, 'divergence_unavailable');
 });
 
 test('inspectDevelopmentCheckout fails closed without a git checkout', async () => {
@@ -169,6 +222,26 @@ test('runDevelopmentUpdate refuses an untrusted remote host and never fetches', 
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'untrusted_remote');
   assert.equal(fetched, false, 'an untrusted host must never be fetched');
+  rmSync(root, {recursive:true, force:true});
+});
+
+test('runDevelopmentUpdate refuses to fetch when the worktree status probe fails', async () => {
+  const {root, cliDir, snapshotDir} = makeCheckout();
+  let fetched = false;
+  const git = async (args) => {
+    const key = args.join(' ');
+    if (key === 'fetch origin --prune') { fetched = true; return {ok:true, stdout:''}; }
+    if (key === 'rev-parse HEAD') return {ok:true, stdout:`${SHA_A}\n`};
+    if (key === 'remote get-url origin') return {ok:true, stdout:'https://github.com/gthgomez/Babel.git\n'};
+    if (key === 'rev-parse --abbrev-ref HEAD') return {ok:true, stdout:'main\n'};
+    if (key === 'status --porcelain') return {ok:false, stdout:''};
+    return {ok:true, stdout:''};
+  };
+  const result = await runDevelopmentUpdate({git, run:async () => ({ok:true, stdout:''}), repoRoot:root, cliDir, nodeExe:'node', npm:{exe:'npm', args:[]}, snapshotDir, events:() => {}});
+  assert.equal(result.ok, false);
+  assert.equal(result.phase, 'precheck');
+  assert.equal(result.reason, 'status_unavailable');
+  assert.equal(fetched, false, 'a failed status probe must not trigger a fetch');
   rmSync(root, {recursive:true, force:true});
 });
 
