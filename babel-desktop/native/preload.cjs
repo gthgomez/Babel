@@ -4,6 +4,7 @@ const {contextBridge, ipcRenderer} = require('electron');
 contextBridge.exposeInMainWorld('babelDesktop',Object.freeze({
   getInfo:()=>ipcRenderer.invoke('babel:get-info'),
   refreshDiagnostics:()=>ipcRenderer.invoke('babel:refresh-diagnostics'),
+  saveProviderCredential:options=>ipcRenderer.invoke('babel:save-provider-credential',options),
   checkCliUpdate:()=>ipcRenderer.invoke('babel:check-cli-update'),
   updateDevCli:()=>ipcRenderer.invoke('babel:update-dev-cli'),
   chooseCli:()=>ipcRenderer.invoke('babel:choose-cli'),
