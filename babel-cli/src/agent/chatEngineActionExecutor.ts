@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { resolveClassCGateDecision } from "./autonomyEnforcement.js";
 import { evaluatePlanThenExecuteGate } from "./planThenExecute.js";
 import { evaluateHardPlanModeGate } from "./planExecuteMode.js";
@@ -13,7 +12,6 @@ import {
 import {
   applyWorkingStateEvent,
   decideReadInjection,
-  evaluateReadRequest,
   formatReadFailureObservation,
   formatReadObservation,
   formatVerifierReceiptSummary,
@@ -48,7 +46,9 @@ import {
   defaultToolExecutor,
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
-import { governedStrReplace, governedApplyPatch } from "./governedMutations.js";
+import { governedStrReplace } from "./governedMutations.js";
+import { executeGovernedApplyPatchAction } from "./codingLoop/applyPatchExecutor.js";
+import { executeReadRangeAction } from "./codingLoop/readRangeExecutor.js";
 import { recordMutationBatch, operationFingerprint } from "./sessionEvents.js";
 import {
   remoteMcpFailClosedObservation,
@@ -965,7 +965,8 @@ export class ChatEngineActionExecutor {
       // ── apply_patch via governed mutation path (transactional hunk applier).
       // Hunks are applied in memory first; any failed hunk means nothing is
       // written. Each target file's new content is dispatched through the same
-      // write_file policy gate as str_replace.
+      // write_file policy gate as str_replace. Extracted to
+      // codingLoop/applyPatchExecutor.ts to respect the file-size ratchet.
       // Deliberately NOT a narrowing `action.type ===` comparison: a
       // type-exhaustive branch here would exclude "apply_patch" from `action`
       // for the remainder of this method and break downstream narrowing.
@@ -974,295 +975,38 @@ export class ChatEngineActionExecutor {
         applyPatchAction !== undefined &&
         (applyPatchAction as { type: string }).type === "apply_patch";
       if (isApplyPatch) {
-        const patchText = (action as Extract<ChatToolAction, { type: "apply_patch" }>).patch;
-        const classC = resolveClassCGateDecision({
-          executionProfile: this.host.executionProfile,
-        });
-        const gov = await governedApplyPatch(
-          { patch: patchText },
-          {
-            projectRoot: this.host.options.projectRoot,
-            context: toolContext,
-            preset: "workspace_write",
-            executor: defaultToolExecutor,
-            onDispatchAuthorized: () => recoveredAuthorization,
-            onBeforeExecutorExecute: () =>
-              this.host.persistToolStartedAtExecutorDispatch(action, meta),
-            ...(this.host.parity.authoritySession
-              ? { authoritySession: this.host.parity.authoritySession }
-              : {}),
-            ...(classC === "allow" ? { onAskApproval: async () => true } : {}),
-          },
-        );
-
-        // governedApplyPatch is a suspension point; a superseded submission
-        // must not record a mutation batch or write the current task's log.
-        if (!this.host.isSubmissionCurrent(ownerGeneration)) {
-          return this.host.settleStaleActionResult(
-            tool,
-            target,
-            meta.index,
-            "parent submission superseded before the action settled",
-          );
-        }
-        if (gov.mutationPaths && gov.mutationPaths.length > 0) {
-          recordMutationBatch(
-            this.host.parity.sessionEvents,
-            dispatchTurnId ?? "unknown",
-            {
-              paths: gov.mutationPaths,
-              pre_hash: Object.values(gov.preBatchHash ?? {}).join(","),
-              post_hash: Object.values(gov.postBatchHash ?? {}).join(","),
-              ...(gov.mutationReceipt
-                ? {
-                    batch_id: gov.mutationReceipt.batchId,
-                    starting_revision: gov.mutationReceipt.startingRevision,
-                    ...(gov.mutationReceipt.endingRevision
-                      ? { ending_revision: gov.mutationReceipt.endingRevision }
-                      : {}),
-                    changed_bytes: gov.mutationReceipt.changedBytes,
-                    status: gov.mutationReceipt.status,
-                    pre_image_hashes: gov.mutationReceipt.preImageHashes,
-                    post_image_hashes: gov.mutationReceipt.postImageHashes,
-                  }
-                : {}),
-            },
-          );
-        }
-
-        const patchEffect = assessMutationEffect({
-          tool: "apply_patch",
-          error: gov.error,
-          exitCode: gov.exit_code,
-          policyBlocked: gov.policyBlocked,
-          mutationPaths: gov.mutationPaths,
-          mutationReceipt: gov.mutationReceipt,
-          effectTransaction: gov.effectTransaction,
-          preDispatchNoEffect: gov.preDispatchNoEffect,
-        });
-
-        const effectPaths =
-          gov.absolutePaths.length > 0
-            ? gov.absolutePaths
-            : [primaryPatchPath(patchText)];
-        for (const effectPath of effectPaths) {
-          const effectKey = this.host.readCacheKey(effectPath);
-          invalidateReadCacheForPath(this.host.readCache, effectKey);
-          this.host.fullReadCounts.delete(effectKey);
-        }
-        if (patchEffect.status === "indeterminate") {
-          invalidateVerifierLedger(this.host as never, patchEffect.reason);
-        }
-
-        const primaryPath = gov.absolutePaths[0] ?? primaryPatchPath(patchText);
-        if (
-          admittedThisAction &&
-          proposedEdit &&
-          patchEffect.status === "confirmed_no_change" &&
-          this.host.isSubmissionCurrent(ownerGeneration)
-        ) {
-          this.host.workingState = applyWorkingStateEvent(
-            this.host.workingState,
-            {
-              type: "recovery_proven_no_effect",
-              fingerprint: proposedEdit.exactFingerprint,
-            },
-          );
-          this.host.persistRecoveryWorkingState();
-        }
-        if (gov.exit_code === 0 && patchEffect.status === "confirmed_change") {
-          const { adds, dels } = countPatchStats(patchText);
-          const edit = actualRecoveryEdit(
-            action as Extract<ChatToolAction, { type: "apply_patch" }>,
-            this.host.options.projectRoot,
-          );
-          this.host.workingState = applyWorkingStateEvent(
-            this.host.workingState,
-            {
-              type: "mutation",
-              path: primaryPath,
-              fingerprint:
-                edit?.exactFingerprint ??
-                operationFingerprint(chatActionToolName(action), action),
-              ...(edit ? { canonicalFingerprint: edit.editFingerprint } : {}),
-            },
-          );
-          noteChatWorkspaceMutation(this.host as never);
-          callbacks.onFileChanged?.(primaryPath, adds, dels, patchText);
-          appendPatchRecovery(
-            this.host.patchRecoveryPath ?? "",
-            "apply_patch",
-            primaryPath,
-            patchText,
-          );
-        }
-
-        this.host.toolCallLog.push({
+        return executeGovernedApplyPatchAction({
+          host: this.host,
+          action: action as Extract<ChatToolAction, { type: "apply_patch" }>,
+          patchText: (action as Extract<ChatToolAction, { type: "apply_patch" }>).patch,
+          toolContext,
           tool,
           target,
-          detail:
-            gov.exit_code === 0
-              ? `applied (${patchEffect.status})`
-              : patchEffect.status,
-          ...(gov.exit_code !== 0
-            ? { error: gov.error ?? "apply_patch failed" }
-            : {}),
-          index: meta.index,
-          exit_code: gov.exit_code,
-          effect_status: patchEffect.status,
-          ...(gov.mutationPaths && gov.mutationPaths.length > 0
-            ? { mutation_paths: [...gov.mutationPaths] }
-            : {}),
-        });
-        callbacks?.onToolComplete?.(
           toolId,
-          gov.exit_code === 0 ? "applied" : gov.policyBlocked ? "blocked" : "error",
-          gov.exit_code === 0 ? undefined : gov.error ?? "apply_patch failed",
-          gov.exit_code,
-        );
-        let patchObs = gov.observation;
-        if (gov.exit_code === 0) {
-          const staticResult = await this.host.runPostEditStaticCheck(primaryPath);
-          if (staticResult) patchObs += `\n\n### static_check ${target}\n${staticResult}`;
-          if (!this.host.isSubmissionCurrent(ownerGeneration)) {
-            return this.host.settleStaleActionResult(
-              tool,
-              target,
-              meta.index,
-              "parent submission superseded before the action settled",
-            );
-          }
-          const tamperWarning = this.host.checkVerifierTamper(primaryPath);
-          if (tamperWarning) patchObs += `\n\n### verifier_integrity\n${tamperWarning}`;
-        }
-        return { index: meta.index, observation: patchObs };
+          meta,
+          ownerGeneration,
+          dispatchTurnId,
+          recoveredAuthorization,
+          admittedThisAction,
+          proposedEdit,
+          callbacks,
+        });
       }
 
       // ── B1: read_range — read specific lines ────────────────────────
       if (action.type === "read_range") {
-        const rPath = resolveChatRangePath(
-          this.host.options.projectRoot,
-          action.file_path,
-        );
-        const rContent = await readFile(rPath, "utf-8");
-        // R0-8: the read is a suspension point; a superseded submission must not
-        // append its result for the new task.
-        if (!this.host.isSubmissionCurrent(ownerGeneration)) {
-          return this.host.settleStaleActionResult(
-            tool,
-            target,
-            meta.index,
-            "parent submission superseded before the action settled",
-          );
-        }
-        const rHash = this.host.hashContent(rContent);
-        const rKey = this.host.readCacheKey(rPath);
-        // read_range does not bump fullReadCounts (line windows allowed)
-        this.host.noteToolForReadThrash(tool);
-        const evaluated = evaluateReadRequest({
-          pathKey: rKey,
-          fileHash: rHash,
-          content: rContent,
-          request: {
-            kind: "range",
-            startLine: action.start_line,
-            endLine: action.end_line,
-          },
-          cache: this.host.readCache,
-          contextEpoch: this.host.readContextEpoch,
-        });
-        if (
-          evaluated.window.lines.length === 0 &&
-          action.start_line > evaluated.window.totalLines
-        ) {
-          this.host.toolCallLog.push({
-            tool,
-            target,
-            detail: "error",
-            error: "start_line out of range",
-            index: meta.index,
-            exit_code: 1,
-          });
-          callbacks?.onToolComplete?.(
-            toolId,
-            "error",
-            "start_line out of range",
-            1,
-          );
-          return {
-            index: meta.index,
-            observation: `### read_range ${target}\nError: start_line (${action.start_line}) exceeds file length (${evaluated.window.totalLines})`,
-          };
-        }
-        this.host.toolCallLog.push({
+        // Extracted to codingLoop/readRangeExecutor.ts to respect the
+        // file-size ratchet (same pattern as the background-shell handlers).
+        return executeReadRangeAction({
+          host: this.host,
+          action,
           tool,
           target,
-          detail: `${evaluated.window.lines.length} lines`,
-          index: meta.index,
-          exit_code: 0,
-        });
-        callbacks?.onToolComplete?.(
           toolId,
-          `${evaluated.window.lines.length} lines`,
-          undefined,
-          0,
-        );
-        if (this.host.isSubmissionCurrent(ownerGeneration)) {
-          const evidence = `${action.type}:${target}`;
-          const discrimination = isDiscriminatingInspectionEvidence(
-            this.host.workingState,
-            action,
-            recoveryTargetIdentity(
-              this.host.options.projectRoot,
-              action.file_path,
-            ),
-            this.host.workingState.recoveryGate
-              ? this.host.currentRecoveryBinding()
-              : null,
-            evaluated.window.lines.join("\n").trim()
-              ? createHash("sha256")
-                  .update(evaluated.window.lines.join("\n"))
-                  .digest("hex")
-              : "",
-          );
-          this.host.workingState = applyWorkingStateEvent(
-            this.host.workingState,
-            {
-              type: "add_evidence",
-              evidence,
-              file: action.file_path,
-              discriminating: discrimination.discriminating,
-              ...(discrimination.provenance
-                ? { provenance: discrimination.provenance }
-                : {}),
-            },
-          );
-          if (discrimination.discriminating) {
-            this.host.workingState = recordControllerRecoveryStrategy(
-              this.host.workingState,
-              {
-                target,
-                evidence,
-              },
-            );
-            this.host.persistRecoveryWorkingState();
-          }
-          this.host.finishRecoveryLocalizationInspection({
-            tool: "read_range",
-            rawTarget: action.file_path,
-            content: evaluated.window.lines.join("\n"),
-            succeeded: true,
-            startLine: evaluated.window.startLine,
-          });
-        }
-        return {
-          index: meta.index,
-          observation: formatReadObservation(
-            "read_range",
-            target,
-            evaluated.window,
-          ),
-        };
+          meta,
+          ownerGeneration,
+          callbacks,
+        });
       }
 
       // ── B1: todo_write — merge-patch task list ─────────────────────
