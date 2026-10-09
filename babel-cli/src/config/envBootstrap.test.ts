@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -10,6 +11,8 @@ import {
   isStrictEnvMode,
   loadBabelCliEnv,
   parseEnvFileKeys,
+  resolvePrivateCredentialEnvPath,
+  loadOptedInProjectCredentials,
 } from './envBootstrap.js';
 
 test('parseEnvFileKeys ignores comments and empty values', () => {
@@ -71,4 +74,47 @@ test('formatEnvFileInactiveMessage includes canonical invocation hints', () => {
   const message = formatEnvFileInactiveMessage(['BABEL_ROOT'], '/tmp/.env');
   assert.match(message, /node --env-file=\.\/babel-cli\/\.env/);
   assert.match(message, /--strict-env/);
+});
+
+test('source CLI defaults to a private user configuration path', () => {
+  const home = join(tmpdir(), 'babel-private-example');
+  assert.equal(resolvePrivateCredentialEnvPath({ HOME: home }), join(home, '.babel', 'config', '.env'));
+  assert.equal(resolvePrivateCredentialEnvPath({ BABEL_CONFIG_DIR: join(home, 'profile') }), join(home, 'profile', '.env'));
+});
+
+test('private profile keys load without automatically reading selected project files', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-private-env-'));
+  const configDir = join(root, 'private');
+  const project = join(root, 'project');
+  mkdirSync(configDir);
+  mkdirSync(project);
+  writeFileSync(join(configDir, '.env'), 'OPENROUTER_API_KEY=syntheticPrivateValue123\n', {mode:0o600});
+  writeFileSync(join(project, '.env'), 'BABEL_ROOT=untrusted\nDEEPSEEK_API_KEY=syntheticProjectValue123\n');
+  const env: NodeJS.ProcessEnv = { BABEL_CONFIG_DIR: configDir };
+  try {
+    const report = loadBabelCliEnv(env);
+    assert.equal(report.loaded, true);
+    assert.equal(env['OPENROUTER_API_KEY'], 'syntheticPrivateValue123');
+    assert.equal(env['DEEPSEEK_API_KEY'], undefined);
+    assert.equal(env['BABEL_ROOT'], undefined);
+  } finally { rmSync(root, {recursive:true, force:true}); }
+});
+
+test('project credential opt-in only reads certified key names from Git-ignored .env', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-project-credentials-'));
+  try {
+    execFileSync('git', ['init', '-q', root], {stdio:'ignore'});
+    writeFileSync(join(root, '.gitignore'), '.env\n');
+    writeFileSync(join(root, '.env'), 'BABEL_ROOT=untrusted\nNODE_OPTIONS=--inspect\nOPENROUTER_API_KEY=syntheticProjectKey123\n', {mode:0o600});
+    const env: NodeJS.ProcessEnv = {BABEL_PROJECT_CREDENTIALS_DIR:root};
+    assert.equal(loadOptedInProjectCredentials(env), true);
+    assert.equal(env['OPENROUTER_API_KEY'], 'syntheticProjectKey123');
+    assert.equal(env['BABEL_ROOT'], undefined);
+    assert.equal(env['NODE_OPTIONS'], undefined);
+    const envWithHigherPriority: NodeJS.ProcessEnv = {BABEL_PROJECT_CREDENTIALS_DIR:root, OPENROUTER_API_KEY:'from-environment'};
+    loadOptedInProjectCredentials(envWithHigherPriority);
+    assert.equal(envWithHigherPriority['OPENROUTER_API_KEY'], 'from-environment');
+    execFileSync('git', ['-C', root, 'add', '-f', '.env'], {stdio:'ignore'});
+    assert.throws(()=>loadOptedInProjectCredentials({BABEL_PROJECT_CREDENTIALS_DIR:root}), /not confirmed ignored and untracked/);
+  } finally { rmSync(root, {recursive:true, force:true}); }
 });
