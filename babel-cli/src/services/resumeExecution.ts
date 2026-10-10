@@ -4,7 +4,28 @@ import { join } from 'node:path';
 import { executeTool } from '../localTools.js';
 import { runAskAnswerPath } from './askAnswer.js';
 import { buildRecoveryAssessment, type RecoveryAssessment } from './recovery.js';
+import {
+  findRuntimeEventLogInRunDir,
+  RESUME_HEURISTIC_FALLBACK_FLAG,
+  resumeHeuristicFallbackEnabled,
+  resumeReplayFromLog,
+  type ResumeReplayResultV1,
+} from './resumeReplay.js';
 import { runSmallFixPath } from './smallFix.js';
+
+export interface ResumeExecutionReplayEvidence {
+  source: 'event_log';
+  path: string;
+  state_hash: string;
+  last_cursor_sequence: number;
+  torn_tail: boolean;
+  discarded_facts: number;
+  checkpoints: string[];
+  indeterminate_operations: string[];
+  operator_action_required: boolean;
+  /** Always false: automatic resume stays disabled (P06 operator gate). */
+  automatic_resume: false;
+}
 
 export interface ResumeExecutionResult {
   status:
@@ -26,6 +47,13 @@ export interface ResumeExecutionResult {
     failure_code: string | null;
     failed_command: string | null;
   };
+  /**
+   * Packet A4: replay-first hydration evidence. When a runtime EventLog was
+   * replayed, this carries the deterministic state hash and the P06
+   * classification of indeterminate effects; it is `null` when no replayable
+   * log exists (heuristic fallback) or when the fallback answered.
+   */
+  replay?: ResumeExecutionReplayEvidence | null;
 }
 
 export interface ResumeExecutionOptions {
@@ -270,28 +298,77 @@ export async function resumeExecution(
     run: options.run ?? 'latest',
     ...(options.project ? { project: options.project } : {}),
   });
+
+  // Packet A4: replay-first. Hydrate from the conversation's runtime EventLog
+  // when one exists; the pre-A4 artifact-availability heuristic remains only
+  // as a flag-guarded fallback (BABEL_RESUME_HEURISTIC_FALLBACK). Replay
+  // evidence never authorizes execution by itself: indeterminate effects are
+  // surfaced through the P06 restore report, and the action-taking decision
+  // below still runs through the existing recovery classification with
+  // automatic resume disabled.
+  const replay = assessment.run_dir
+    ? resumeReplayFromLog(findRuntimeEventLogInRunDir(assessment.run_dir) ?? '')
+    : null;
+  if (replay !== null && !replay.ok && !resumeHeuristicFallbackEnabled()) {
+    return {
+      ...nonResumable(
+        assessment,
+        'No replayable runtime EventLog exists for this run and the artifact heuristic ' +
+          `fallback is disabled (${RESUME_HEURISTIC_FALLBACK_FLAG}=off).`,
+      ),
+      replay: null,
+    };
+  }
+
+  let result: ResumeExecutionResult;
   if (assessment.status !== 'CONTINUE_READY') {
-    return nonResumable(assessment, assessment.reason);
-  }
-  if (!assessment.classification || !assessment.retryable) {
-    return nonResumable(assessment, assessment.reason);
-  }
-  if (assessment.classification === 'requires_user_decision') {
-    return nonResumable(assessment, assessment.reason);
-  }
-  if (assessment.classification === 'rerun_verifier') {
-    return resumeVerifierFailure(assessment);
-  }
-  if (
+    result = nonResumable(assessment, assessment.reason);
+  } else if (!assessment.classification || !assessment.retryable) {
+    result = nonResumable(assessment, assessment.reason);
+  } else if (assessment.classification === 'requires_user_decision') {
+    result = nonResumable(assessment, assessment.reason);
+  } else if (assessment.classification === 'rerun_verifier') {
+    result = await resumeVerifierFailure(assessment);
+  } else if (
     assessment.classification === 'retry_same_command' ||
     assessment.classification === 'retry_with_schema_repair'
   ) {
-    return retrySavedDirectPath(assessment, options);
+    result = await retrySavedDirectPath(assessment, options);
+  } else {
+    result = nonResumable(
+      assessment,
+      `No action-taking resume path exists for ${assessment.classification}.`,
+    );
   }
-  return nonResumable(
-    assessment,
-    `No action-taking resume path exists for ${assessment.classification}.`,
-  );
+  return withReplayEvidence(result, replay);
+}
+
+/** Attach replay hydration evidence to a resume result (never mutates status). */
+function withReplayEvidence(
+  result: ResumeExecutionResult,
+  replay: ResumeReplayResultV1 | null,
+): ResumeExecutionResult {
+  if (!replay || !replay.ok) {
+    return { ...result, replay: null };
+  }
+  const indeterminate = replay.state.operations
+    .filter((operation) => operation.indeterminateReason !== null)
+    .map((operation) => operation.operationId);
+  return {
+    ...result,
+    replay: {
+      source: 'event_log',
+      path: replay.path,
+      state_hash: replay.state.stateHash,
+      last_cursor_sequence: replay.state.lastCursorSequence,
+      torn_tail: replay.tornTail,
+      discarded_facts: replay.discarded,
+      checkpoints: [...replay.state.checkpointIds],
+      indeterminate_operations: indeterminate,
+      operator_action_required: replay.restore.operatorActionRequired,
+      automatic_resume: false,
+    },
+  };
 }
 
 export function formatResumeExecutionHuman(result: ResumeExecutionResult): string {
@@ -308,6 +385,16 @@ export function formatResumeExecutionHuman(result: ResumeExecutionResult): strin
   }
   if (result.resumed_run_dir) {
     lines.push(`New run: ${result.resumed_run_dir}`);
+  }
+  if (result.replay) {
+    lines.push(`Replay: event_log state ${result.replay.state_hash.slice(0, 12)}…` +
+      ` (cursor ${result.replay.last_cursor_sequence})` +
+      (result.replay.torn_tail ? ' [torn tail discarded]' : ''));
+    if (result.replay.indeterminate_operations.length > 0) {
+      lines.push(
+        `Indeterminate operations (operator review required): ${result.replay.indeterminate_operations.join(', ')}`,
+      );
+    }
   }
   if (result.checks.length > 0) {
     lines.push('');
