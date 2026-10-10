@@ -25,7 +25,7 @@ test('interactive credential entry masks API key and restores terminal mode', as
     CI: '0',
   };
   const term = new VirtualTerminal({ isTTY: true });
-  const secret = 'sk-or-v1-synthetic-test-key-never-echo-me-9876543210';
+  const secret = 'sk-or-test-NEVER-PRINT-MASKED-INPUT';
 
   const promptPromise = maybePromptForMissingProviderCredential(env, ['node', 'babel', 'run', 'hello'], {
     input: term.stdin,

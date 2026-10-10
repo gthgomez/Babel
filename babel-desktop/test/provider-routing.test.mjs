@@ -35,7 +35,7 @@ test('provider route is persisted and applied to child env for all supported pro
   env = applyProviderRoute({PATH: '/bin'}, config);
   assert.equal(env.BABEL_DESKTOP_PROVIDER, 'deepinfra');
   assert.equal(env.BABEL_DESKTOP_MODEL_ROUTE, 'deepseek-v4-flash');
-  assert.equal(env.BABEL_LITE_OFFLINE, '1');
+  assert.equal(env.BABEL_LITE_OFFLINE, undefined);
 
   // Ollama
   saveProviderRoute({configDirectory: config, provider: 'ollama', model: 'deepseek-v4-flash'});

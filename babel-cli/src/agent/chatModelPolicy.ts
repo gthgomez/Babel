@@ -32,9 +32,7 @@ export function isOfflineChatMode(): boolean {
   return (
     process.env['BABEL_OFFLINE'] === '1' ||
     process.env['BABEL_OFFLINE'] === 'true' ||
-    process.env['BABEL_LITE_OFFLINE'] === '1' ||
     process.env['BABEL_DESKTOP_PROVIDER'] === 'ollama' ||
-    process.env['BABEL_DESKTOP_PROVIDER'] === 'deepinfra' ||
     process.argv.includes('--offline')
   );
 }
@@ -56,9 +54,11 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const selectedModel = !offline
     ? (desktopProvider === 'deepseek'
         ? (explicitModel ?? 'deepseek-v4-pro')
-        : (resolveOpenRouterDeepSeekBackendKey(explicitModel ?? '') ??
-           (explicitModel === undefined ? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0] : explicitModel)))
-    : (explicitModel ?? (desktopProvider === 'ollama' || desktopProvider === 'deepinfra' ? 'deepseek-v4-flash' : undefined));
+        : desktopProvider === 'deepinfra'
+          ? (explicitModel ?? 'deepseek-v4-flash')
+          : (resolveOpenRouterDeepSeekBackendKey(explicitModel ?? '') ??
+             (explicitModel === undefined ? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0] : explicitModel)))
+    : (explicitModel ?? (desktopProvider === 'ollama' ? 'deepseek-v4-flash' : undefined));
 
   const requestedBackendKey = selectedModel === undefined
     ? undefined
@@ -81,7 +81,9 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const policy = requestedModelIsBackendKey
     ? resolveModelByKey({
         key: requestedBackendKey!,
-        ...(explicitOpenCodeRequest || explicitGoRequest || desktopProvider === 'deepseek' ? {} : { liveOnly: !offline }),
+        ...(explicitOpenCodeRequest || explicitGoRequest || desktopProvider === 'deepseek' || desktopProvider === 'deepinfra'
+          ? {}
+          : { liveOnly: !offline }),
         ...policyRootOptions,
       })
     : resolveFamilyModelPolicy({
