@@ -81,8 +81,9 @@ test('preview storage schema rejects malformed history', async () => {
 });
 
 test('terminal outcomes follow the inspected Babel status contract',async()=>{
- const {normalizeEvent}=await load();
+ const {normalizeEvent,statusFromTerminalOutcome}=await load();
  for(const [outcome,status] of Object.entries({VERIFIED_COMPLETE:'complete',NO_CHANGE_REQUIRED:'no_change',UNVERIFIED_PATCH:'unverified',BLOCKED_POLICY:'blocked',NEEDS_HUMAN_DECISION:'blocked',INVALID_TASK:'blocked',BUDGET_EXHAUSTED:'failed',VERIFIED_SUCCESS:'unverified'})){
+  assert.equal(statusFromTerminalOutcome(outcome),status,outcome);
   assert.equal(normalizeEvent({type:'run_complete',result:{terminal_outcome:outcome}}).status,status,outcome);
  }
  assert.equal(normalizeEvent({type:'command.completed',item:{exit_code:1}}).status,'failed');

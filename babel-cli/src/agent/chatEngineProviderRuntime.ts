@@ -85,8 +85,19 @@ export function resolveChatDeliberationRunner(
             `  Then pull a model: ollama pull gemma3:4b`,
         )
       }
+    } else if (provider === 'deepinfra' && modelId) {
+      try {
+        runner = new DeepInfraApiRunner(modelId)
+      } catch (err) {
+        throw new Error(
+          `Cannot start chat: DeepInfra runner failed to initialize.\n` +
+            `  ${err instanceof Error ? err.message : String(err)}\n` +
+            `  Set DEEPINFRA_API_KEY in your environment.\n` +
+            `  Use /model to see available providers.`,
+        )
+      }
     } else if (provider === 'deepseek' && modelId) {
-      if (!isOfflineChatMode()) {
+      if (!isOfflineChatMode() && process.env['BABEL_DESKTOP_PROVIDER'] !== 'deepseek') {
         throw new Error(
           '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
         )
@@ -94,7 +105,7 @@ export function resolveChatDeliberationRunner(
       try {
         runner = new DeepSeekApiRunner(modelId)
       } catch (err) {
-        if (!isOfflineChatMode()) {
+        if (!isOfflineChatMode() && process.env['BABEL_DESKTOP_PROVIDER'] !== 'deepseek') {
           throw new Error(
             'Cannot start live chat: DeepSeek runner is unavailable. ' +
               'Set DEEPSEEK_API_KEY in your environment.',
@@ -267,7 +278,7 @@ export function resolveChatSynthesisRunner(
     const modelId = modelPolicy?.providerModelId
     const offline = isOfflineChatMode()
     if (provider === 'ollama' && modelId) {
-      if (!offline)
+      if (!offline && process.env['BABEL_DESKTOP_PROVIDER'] !== 'ollama')
         throw new Error(
           '[LIVE_MODEL_POLICY] Ollama is not a valid live chat provider.',
         )
@@ -276,8 +287,14 @@ export function resolveChatSynthesisRunner(
       } catch {
         runner = new DeepInfraApiRunner(resolveFallbackModelId())
       }
+    } else if (provider === 'deepinfra' && modelId) {
+      try {
+        runner = new DeepInfraApiRunner(modelId)
+      } catch {
+        runner = new DeepInfraApiRunner(resolveFallbackModelId())
+      }
     } else if (provider === 'deepseek' && modelId) {
-      if (!offline) {
+      if (!offline && process.env['BABEL_DESKTOP_PROVIDER'] !== 'deepseek') {
         throw new Error(
           '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
         )
@@ -285,7 +302,7 @@ export function resolveChatSynthesisRunner(
       try {
         runner = new DeepSeekApiRunner(modelId)
       } catch {
-        if (!offline)
+        if (!offline && process.env['BABEL_DESKTOP_PROVIDER'] !== 'deepseek')
           throw new Error(
             'Cannot start live chat synthesis: DeepSeek runner is unavailable. Set DEEPSEEK_API_KEY in your environment.',
           )

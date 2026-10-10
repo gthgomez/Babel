@@ -6,10 +6,10 @@
  * Callers must not bypass this with direct writeFile.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, rm } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 
-import { FileWriteMutex } from '../services/editReliability.js';
+import { FileWriteMutex, canonicalizeLockPath, type FileLockHandle } from '../services/editReliability.js';
 import { applyUniqueEdit, formatEditObservation } from './codingLoop/editApply.js';
 import { applyPatchInMemory, parseUnifiedDiff } from './codingLoop/patchApply.js';
 import type { ToolContext, ToolResult } from '../localTools.js';
@@ -262,6 +262,51 @@ export interface ApplyPatchInput {
  * path as other mutations. Whole-patch semantics are transactional: hunks are
  * applied in memory first; any failed hunk means nothing is written.
  */
+async function rollbackWrittenPaths(
+  paths: string[],
+  originalContents: Map<string, string>,
+  createdPaths: Set<string>,
+): Promise<{ rolledBack: string[]; failures: string[] }> {
+  const rolledBack: string[] = [];
+  const failures: string[] = [];
+  for (const path of paths) {
+    try {
+      if (createdPaths.has(path)) {
+        await rm(path, { force: true });
+      } else {
+        const original = originalContents.get(path) ?? '';
+        await writeFile(path, original, 'utf-8');
+      }
+      rolledBack.push(path);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      failures.push(`${path}: ${msg}`);
+    }
+  }
+  return { rolledBack, failures };
+}
+
+async function runExclusivePaths<T>(
+  paths: string[],
+  fn: (handles: FileLockHandle[]) => Promise<T>,
+): Promise<T> {
+  const ordered = [...new Set(paths.map((path) => canonicalizeLockPath(path)))].sort();
+  const acquire = async (index: number, handles: FileLockHandle[]): Promise<T> => {
+    if (index >= ordered.length) return fn(handles);
+    const canonical = ordered[index];
+    const path = paths.find((candidate) => canonicalizeLockPath(candidate) === canonical);
+    if (!path) {
+      throw new Error(`patch lock path missing: ${canonical}`);
+    }
+    return FileWriteMutex.runExclusive(
+      path,
+      async (handle) => acquire(index + 1, [...handles, handle]),
+      { lockContext: handles },
+    );
+  };
+  return acquire(0, []);
+}
+
 export async function governedApplyPatch(
   input: ApplyPatchInput,
   options: {
@@ -298,12 +343,14 @@ export async function governedApplyPatch(
 
   // Phase A: read all target files.
   const contents = new Map<string, string>();
+  const createdPaths = new Set<string>();
   for (let i = 0; i < parsed.files.length; i++) {
     const file = parsed.files[i];
     const absolutePath = absolutePaths[i];
     if (!file || !absolutePath) continue;
     if (contents.has(absolutePath)) continue; // same file addressed twice
     if (file.createsFile) {
+      createdPaths.add(absolutePath);
       contents.set(absolutePath, '');
       continue;
     }
@@ -364,132 +411,157 @@ export async function governedApplyPatch(
   };
 
   const observations: string[] = [];
-  let lastPolicyDecision: string | undefined;
-  let lastResult: PolicyGatedExecutionResult | null = null;
+  const dispatchState: {
+    lastPolicyDecision?: string;
+    lastResult: PolicyGatedExecutionResult | null;
+  } = { lastResult: null };
   const writtenPaths: string[] = [];
 
   try {
-    for (const result of applied.results) {
-      const absolutePath = resolveProjectPath(options.projectRoot, result.path);
-      const fileSection = parsed.files.find((f) => (f.newPath || f.oldPath) === result.path);
-      const hunkCount = fileSection?.hunks.length ?? 0;
+    await runExclusivePaths(absolutePaths, async (lockHandles) => {
+      for (const result of applied.results) {
+        const absolutePath = resolveProjectPath(options.projectRoot, result.path);
+        const fileSection = parsed.files.find((f) => (f.newPath || f.oldPath) === result.path);
+        const hunkCount = fileSection?.hunks.length ?? 0;
 
-      const written = await FileWriteMutex.runExclusive(
-        absolutePath,
-        async (lockHandle) => {
-          let current: string;
-          try {
-            current = await readFile(absolutePath, 'utf-8');
-          } catch {
-            current = '';
-          }
-          const expected = contents.get(absolutePath) ?? '';
-          if (current !== expected) {
-            return {
-              skipped: true as const,
-              observation: `### apply_patch ${result.path}\nError: file changed since patch was computed — not applying this file`,
-            };
-          }
-          const action: AgentAction = {
-            type: 'write_file',
-            path: result.path,
-            content: result.content,
-          };
-          const dispatch = await executeActionWithPolicy(action, preset, options.context, {
-            ...dispatchOptions,
-            lockContext: lockHandle,
-          });
-          return { skipped: false as const, dispatch };
-        },
-      );
-
-      if (written.skipped) {
-        if (writtenPaths.length > 0) {
-          const observation =
-            `${written.observation}\n\nFiles already written before this conflict: ${writtenPaths.join(', ')}`;
-          return {
-            observation,
-            exit_code: 1,
-            error: 'patch target changed concurrently',
-            policyBlocked: false,
-            terminal: false,
-            absolutePaths,
-            preDispatchNoEffect: false,
-          };
+        let current: string;
+        try {
+          current = await readFile(absolutePath, 'utf-8');
+        } catch {
+          current = '';
         }
-        return {
-          observation: written.observation,
-          exit_code: 1,
-          error: 'patch target changed concurrently',
-          policyBlocked: false,
-          terminal: false,
-          absolutePaths,
-          preDispatchNoEffect: true,
-        };
-      }
+        const expected = contents.get(absolutePath) ?? '';
+        if (current !== expected) {
+          const conflictObservation =
+            `### apply_patch ${result.path}\nError: file changed since patch was computed — not applying this file`;
+          if (writtenPaths.length > 0) {
+            const rollback = await rollbackWrittenPaths(writtenPaths, contents, createdPaths);
+            let observation =
+              `${conflictObservation}\n\nRolled back ${rollback.rolledBack.length} file(s): ${rollback.rolledBack.join(', ')}`;
+            if (rollback.failures.length > 0) {
+              observation += `\n\nRollback failures: ${rollback.failures.join('; ')}`;
+            }
+            throw Object.assign(new Error('patch target changed concurrently'), {
+              governedPatchFailure: {
+                observation,
+                exit_code: 1,
+                error: 'patch target changed concurrently',
+                policyBlocked: false,
+                terminal: false,
+                absolutePaths,
+                preDispatchNoEffect: false,
+              } satisfies GovernedApplyPatchResult,
+            });
+          }
+          throw Object.assign(new Error('patch target changed concurrently'), {
+            governedPatchFailure: {
+              observation: conflictObservation,
+              exit_code: 1,
+              error: 'patch target changed concurrently',
+              policyBlocked: false,
+              terminal: false,
+              absolutePaths,
+              preDispatchNoEffect: true,
+            } satisfies GovernedApplyPatchResult,
+          });
+        }
 
-      const dispatch = written.dispatch;
-      lastResult = dispatch;
-      lastPolicyDecision = dispatch.policyDecision;
-      if (dispatch.policyBlocked) {
-        const stderr = dispatch.results[0]?.stderr ?? 'policy blocked';
-        const observation = `### apply_patch ${result.path}\nError: ${stderr}`;
-        return {
-          observation,
-          exit_code: 1,
-          error: 'blocked',
-          policyBlocked: true,
-          terminal: dispatch.terminal === true,
-          absolutePaths,
-          policyDecision: dispatch.policyDecision,
-          ...(dispatch.mutationPaths ? { mutationPaths: dispatch.mutationPaths } : {}),
-          ...(dispatch.preBatchHash ? { preBatchHash: dispatch.preBatchHash } : {}),
-          ...(dispatch.postBatchHash ? { postBatchHash: dispatch.postBatchHash } : {}),
-          ...(dispatch.mutationReceipt ? { mutationReceipt: dispatch.mutationReceipt } : {}),
-          ...(dispatch.effectTransaction ? { effectTransaction: dispatch.effectTransaction } : {}),
+        const action: AgentAction = {
+          type: 'write_file',
+          path: result.path,
+          content: result.content,
         };
+        const dispatch = await executeActionWithPolicy(action, preset, options.context, {
+          ...dispatchOptions,
+          lockContext: lockHandles,
+        });
+        dispatchState.lastResult = dispatch;
+        dispatchState.lastPolicyDecision = dispatch.policyDecision;
+        if (dispatch.policyBlocked) {
+          const stderr = dispatch.results[0]?.stderr ?? 'policy blocked';
+          let observation = `### apply_patch ${result.path}\nError: ${stderr}`;
+          if (writtenPaths.length > 0) {
+            const rollback = await rollbackWrittenPaths(writtenPaths, contents, createdPaths);
+            observation += `\n\nRolled back ${rollback.rolledBack.length} file(s): ${rollback.rolledBack.join(', ')}`;
+            if (rollback.failures.length > 0) {
+              observation += `\n\nRollback failures: ${rollback.failures.join('; ')}`;
+            }
+          }
+          throw Object.assign(new Error('blocked'), {
+            governedPatchFailure: {
+              observation,
+              exit_code: 1,
+              error: 'blocked',
+              policyBlocked: true,
+              terminal: dispatch.terminal === true,
+              absolutePaths,
+              policyDecision: dispatch.policyDecision,
+              preDispatchNoEffect: writtenPaths.length === 0,
+              ...(dispatch.mutationPaths ? { mutationPaths: dispatch.mutationPaths } : {}),
+              ...(dispatch.preBatchHash ? { preBatchHash: dispatch.preBatchHash } : {}),
+              ...(dispatch.postBatchHash ? { postBatchHash: dispatch.postBatchHash } : {}),
+              ...(dispatch.mutationReceipt ? { mutationReceipt: dispatch.mutationReceipt } : {}),
+              ...(dispatch.effectTransaction ? { effectTransaction: dispatch.effectTransaction } : {}),
+            } satisfies GovernedApplyPatchResult,
+          });
+        }
+        const last = dispatch.results[dispatch.results.length - 1];
+        if ((last?.exit_code ?? 1) !== 0) {
+          const stderr = last?.stderr ?? 'write failed';
+          let observation = `### apply_patch ${result.path}\nError: ${stderr}`;
+          if (writtenPaths.length > 0) {
+            const rollback = await rollbackWrittenPaths(writtenPaths, contents, createdPaths);
+            observation += `\n\nRolled back ${rollback.rolledBack.length} file(s): ${rollback.rolledBack.join(', ')}`;
+            if (rollback.failures.length > 0) {
+              observation += `\n\nRollback failures: ${rollback.failures.join('; ')}`;
+            }
+          }
+          throw Object.assign(new Error(stderr), {
+            governedPatchFailure: {
+              observation,
+              exit_code: last?.exit_code ?? 1,
+              error: stderr,
+              policyBlocked: false,
+              terminal: dispatch.terminal === true,
+              absolutePaths,
+              preDispatchNoEffect: writtenPaths.length === 0,
+              ...(dispatch.mutationPaths ? { mutationPaths: dispatch.mutationPaths } : {}),
+              ...(dispatch.preBatchHash ? { preBatchHash: dispatch.preBatchHash } : {}),
+              ...(dispatch.postBatchHash ? { postBatchHash: dispatch.postBatchHash } : {}),
+              ...(dispatch.mutationReceipt ? { mutationReceipt: dispatch.mutationReceipt } : {}),
+              ...(dispatch.effectTransaction ? { effectTransaction: dispatch.effectTransaction } : {}),
+            } satisfies GovernedApplyPatchResult,
+          });
+        }
+        writtenPaths.push(absolutePath);
+        observations.push(
+          `### apply_patch ${result.path}\nApplied ${hunkCount} hunk${hunkCount === 1 ? '' : 's'} (${result.strategies.join(' → ') || 'none'}).`,
+        );
       }
-      const last = dispatch.results[dispatch.results.length - 1];
-      if ((last?.exit_code ?? 1) !== 0) {
-        const stderr = last?.stderr ?? 'write failed';
-        const observation =
-          `### apply_patch ${result.path}\nError: ${stderr}` +
-          (writtenPaths.length > 0 ? `\nFiles already written before this failure: ${writtenPaths.join(', ')}` : '');
-        return {
-          observation,
-          exit_code: last?.exit_code ?? 1,
-          error: stderr,
-          policyBlocked: false,
-          terminal: dispatch.terminal === true,
-          absolutePaths,
-          ...(dispatch.mutationPaths ? { mutationPaths: dispatch.mutationPaths } : {}),
-          ...(dispatch.preBatchHash ? { preBatchHash: dispatch.preBatchHash } : {}),
-          ...(dispatch.postBatchHash ? { postBatchHash: dispatch.postBatchHash } : {}),
-          ...(dispatch.mutationReceipt ? { mutationReceipt: dispatch.mutationReceipt } : {}),
-          ...(dispatch.effectTransaction ? { effectTransaction: dispatch.effectTransaction } : {}),
-        };
-      }
-      writtenPaths.push(absolutePath);
-      observations.push(
-        `### apply_patch ${result.path}\nApplied ${hunkCount} hunk${hunkCount === 1 ? '' : 's'} (${result.strategies.join(' → ') || 'none'}).`,
-      );
-    }
+    });
+  } catch (err) {
+    const failure = (err as { governedPatchFailure?: GovernedApplyPatchResult }).governedPatchFailure;
+    if (failure) return failure;
+    throw err;
   } finally {
     if (prevRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
     else process.env['BABEL_PROJECT_ROOT'] = prevRoot;
   }
 
+  const completedDispatch = dispatchState.lastResult;
   return {
     observation: observations.join('\n\n'),
     exit_code: 0,
     policyBlocked: false,
-    terminal: lastResult?.terminal === true,
+    terminal: completedDispatch?.terminal === true,
     absolutePaths,
-    ...(lastPolicyDecision !== undefined ? { policyDecision: lastPolicyDecision } : {}),
-    ...(lastResult?.mutationPaths ? { mutationPaths: lastResult.mutationPaths } : {}),
-    ...(lastResult?.preBatchHash ? { preBatchHash: lastResult.preBatchHash } : {}),
-    ...(lastResult?.postBatchHash ? { postBatchHash: lastResult.postBatchHash } : {}),
-    ...(lastResult?.mutationReceipt ? { mutationReceipt: lastResult.mutationReceipt } : {}),
-    ...(lastResult?.effectTransaction ? { effectTransaction: lastResult.effectTransaction } : {}),
+    ...(dispatchState.lastPolicyDecision !== undefined
+      ? { policyDecision: dispatchState.lastPolicyDecision }
+      : {}),
+    ...(completedDispatch?.mutationPaths ? { mutationPaths: completedDispatch.mutationPaths } : {}),
+    ...(completedDispatch?.preBatchHash ? { preBatchHash: completedDispatch.preBatchHash } : {}),
+    ...(completedDispatch?.postBatchHash ? { postBatchHash: completedDispatch.postBatchHash } : {}),
+    ...(completedDispatch?.mutationReceipt ? { mutationReceipt: completedDispatch.mutationReceipt } : {}),
+    ...(completedDispatch?.effectTransaction ? { effectTransaction: completedDispatch.effectTransaction } : {}),
   };
 }

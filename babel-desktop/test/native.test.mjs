@@ -103,6 +103,11 @@ test('saved chats are read from Babel session transcripts only',async()=>{
  assert.equal(listed[0].title.includes('finish'),false);
  const opened=await readSavedChat(desktop,'chat-abc123');
  assert.equal(opened.messages[1].text,'I updated the controller.');
+ assert.equal(opened.messages[1].status,'unverified');
+ await writeFile(join(session,'session-events.jsonl'),`${JSON.stringify({kind:'turn_ended',turn_id:'1',outcome:'VERIFIED_COMPLETE',status:'ok'})}\n${JSON.stringify({kind:'turn_ended',turn_id:'2',outcome:'AGENT_FAILURE',status:'failed'})}\n`);
+ const withOutcomes=await readSavedChat(desktop,'chat-abc123');
+ assert.equal(withOutcomes.messages[1].status,'complete');
+ assert.equal(withOutcomes.messages.length,3);
  await assert.rejects(()=>readSavedChat(desktop,'../chat-abc123'));
  await rm(root,{recursive:true,force:true});
 });
