@@ -69,7 +69,7 @@ describe('governedApplyPatch multi-file transactional atomicity', () => {
       assert.equal(result.exit_code, 1);
       assert.match(result.observation, /file changed since patch was computed/);
       assert.match(result.observation, /Rolled back 1 file\(s\)/);
-      assert.equal(result.preDispatchNoEffect, true);
+      assert.equal(result.preDispatchNoEffect, false);
 
       // Verify file1.txt was rolled back to its original content!
       assert.equal(readFileSync(file1, 'utf8'), 'line 1\nline 2\n');
