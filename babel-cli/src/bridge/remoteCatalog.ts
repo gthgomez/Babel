@@ -2,8 +2,21 @@
  * Authoritative remote session catalog derived from the protocol host and thread store.
  */
 
+import { resolve, sep } from 'node:path';
+
 import type { ProtocolHostState } from '../protocol/client/host.js';
 import { listThreads } from '../services/threadStore/index.js';
+
+function workspaceRootMatches(projectRoot: string, registeredRoot: string): boolean {
+  const project = resolve(projectRoot);
+  const root = resolve(registeredRoot);
+  if (process.platform === 'win32') {
+    const projectLower = project.toLowerCase();
+    const rootLower = root.toLowerCase();
+    return projectLower === rootLower || projectLower.startsWith(`${rootLower}${sep}`);
+  }
+  return project === root || project.startsWith(`${root}${sep}`);
+}
 
 export type RemoteSessionStatus =
   | 'idle'
@@ -68,7 +81,7 @@ export async function buildRemoteCatalog(input: {
   const byId = new Map<string, RemoteSessionEntry>();
 
   for (const [threadId, descriptor] of input.state.descriptors) {
-    if (descriptor.projectRoot !== root && !descriptor.projectRoot.startsWith(root)) continue;
+    if (!workspaceRootMatches(descriptor.projectRoot, root)) continue;
     const owner = input.threadOwner?.(threadId);
     byId.set(threadId, {
       thread_id: threadId,
@@ -84,7 +97,7 @@ export async function buildRemoteCatalog(input: {
 
   const threads = await listThreads({ limit: 100 });
   for (const thread of threads) {
-    if (thread.project_root && thread.project_root !== root && !thread.project_root.startsWith(root)) {
+    if (thread.project_root && !workspaceRootMatches(thread.project_root, root)) {
       continue;
     }
     const existing = byId.get(thread.thread_id);

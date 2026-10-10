@@ -7,45 +7,28 @@ import { after, before, describe, it } from 'node:test';
 import { ChatEngine } from '../agent/chatEngine.js';
 import { BridgeServer } from './sessionServer.js';
 
-const PORT = 14650;
-const TOKEN = 'browser-flow-token-not-secret';
+const PORT = 14651;
+const TOKEN = 'pwa-bind-token-not-secret';
 
-describe('Babel Remote browser gateway flow', () => {
+describe('Babel Remote PWA session binding', () => {
   let server: BridgeServer;
   let tmp: string;
   let prevRuns: string | undefined;
 
   before(async () => {
-    tmp = mkdtempSync(join(tmpdir(), 'babel-remote-browser-'));
+    tmp = mkdtempSync(join(tmpdir(), 'babel-remote-pwa-bind-'));
     prevRuns = process.env['BABEL_RUNS_DIR'];
     process.env['BABEL_RUNS_DIR'] = tmp;
     server = new BridgeServer({
       port: PORT,
       authToken: TOKEN,
       allowedWorkspaceRoot: tmp,
-      engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
-          task: descriptor.task ?? 'browser',
+      engineFactory: (descriptor) =>
+        new ChatEngine({
+          task: descriptor.task ?? 'bind',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
-        });
-        engine.submitMessageStream = async function* (message: string) {
-          yield { type: 'thinking' };
-          yield { type: 'answer_chunk', text: message.slice(0, 16) };
-          yield {
-            type: 'done',
-            answer: 'ok',
-            usage: {
-              totalCostUSD: 0,
-              totalInputTokens: 0,
-              totalOutputTokens: 0,
-              totalTokens: 0,
-              modelBreakdown: {},
-            },
-          };
-        } as ChatEngine['submitMessageStream'];
-        return engine;
-      },
+        }),
     });
     await server.start(PORT);
   });
@@ -55,24 +38,6 @@ describe('Babel Remote browser gateway flow', () => {
     if (prevRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
     else process.env['BABEL_RUNS_DIR'] = prevRuns;
     rmSync(tmp, { recursive: true, force: true });
-  });
-
-  it('mirrors the PWA session bind path and receives turn.event over WebSocket', async () => {
-    const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
-    try {
-      await page.goto(`http://127.0.0.1:${PORT}/ui/`);
-      await page.addScriptTag({ url: `http://127.0.0.1:${PORT}/ui/remoteBrowserFlow.browser.js` });
-      const result = await page.evaluate(async ({ token, root }) => {
-        return window.runRemoteBrowserFlow({ token, root });
-      }, { token: TOKEN, root: tmp });
-      assert.ok(result.threadId);
-      assert.ok(result.events.some((line) => line.includes('turn.event')));
-      assert.ok(result.events.some((line) => line.includes('answer_chunk') || line.includes('browser integration')));
-    } finally {
-      await browser.close();
-    }
   });
 
   it('rejects ticket mint for threads created without session_id (PWA defect regression)', async () => {

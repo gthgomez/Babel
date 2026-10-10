@@ -14,7 +14,6 @@ export const REMOTE_UI_SHELL_PATHS = [
   '/ui/sw.js',
   '/ui/manifest.webmanifest',
   '/ui/icon.svg',
-  '/ui/remoteBrowserFlow.browser.js',
 ] as const;
 
 export const REMOTE_UI_NETWORK_ONLY_PREFIXES = [

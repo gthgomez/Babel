@@ -612,11 +612,16 @@ describe('Babel Remote V1 gateway', () => {
 
   it('remote.catalog lists protocol host sessions for the registered workspace', async () => {
     const created = await rpc('thread.create', { project_root: tmp }, 201);
+    assert.equal('error' in created.json, false);
     const threadId = (created.json['result'] as { thread_id: string }).thread_id;
+    assert.ok(server.protocolGateway.host.descriptors.has(threadId));
     const catalog = await rpc('remote.catalog', {}, 202);
     assert.equal(catalog.statusCode, 200);
     const sessions = (catalog.json['result'] as { sessions: Array<{ thread_id: string }> }).sessions;
-    assert.ok(sessions.some((s) => s.thread_id === threadId));
+    assert.ok(
+      sessions.some((s) => s.thread_id === threadId),
+      `catalog missing ${threadId}; got ${sessions.map((s) => s.thread_id).join(', ')}`,
+    );
   });
 
   it('legacy compatibility ON accepts header bearer only and does not subscribe', async () => {
