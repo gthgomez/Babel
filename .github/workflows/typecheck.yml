@@ -884,13 +884,25 @@ jobs:
         run: |
           set -euo pipefail
           docker info
-          docker pull public.ecr.aws/docker/library/node@sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
+          NODE_DIGEST=sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
+          IMAGE_REF=
+          for REGISTRY in public.ecr.aws/docker/library docker.io/library; do
+            if docker pull "${REGISTRY}/node@${NODE_DIGEST}"; then
+              IMAGE_REF="${REGISTRY}/node@${NODE_DIGEST}"
+              break
+            fi
+          done
+          if [ -z "$IMAGE_REF" ]; then
+            echo "Failed to pull pinned Node image from all registries" >&2
+            exit 1
+          fi
+          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
           echo "uid=$(id -u)" >> "$GITHUB_OUTPUT"
           echo "gid=$(id -g)" >> "$GITHUB_OUTPUT"
       - name: Run isolated Ubuntu smoke fixtures
         id: docker_smoke
         env:
-          BABEL_BENCHMARK_DOCKER_IMAGE: public.ecr.aws/docker/library/node@sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
+          BABEL_BENCHMARK_DOCKER_IMAGE: ${{ steps.docker_prepare.outputs.image_ref }}
           BABEL_BENCHMARK_DOCKER_EXTRA_ARGS: --user ${{ steps.docker_prepare.outputs.uid }}:${{ steps.docker_prepare.outputs.gid }}
         shell: pwsh
         run: |

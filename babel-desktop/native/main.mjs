@@ -4,6 +4,7 @@ import {readFile,writeFile,rename,mkdir,stat,realpath} from 'node:fs/promises';
 import {basename,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {BabelChild,buildRunArgs,EXECUTION_PROFILE} from './child.mjs';
+import {RemoteBridgeChild} from './remoteHost.mjs';
 import {listDirectory,readProjectFile} from './workspace.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
@@ -43,12 +44,13 @@ let closingWindow=false;
 let closeFinished=false;
 let preferences={cliEntry:null,projectRoot:null,projectCredentialRoot:null};
 let runner=null;
+let remoteBridge=null;
 let runAdmission=false;
 let dialogBusy=false;
 let updateBusy=false;
 let cliUpdate={state:'unchecked'};
 let preferencePath;
-const busy=()=>Boolean(runAdmission||runner?.busy||updateBusy);
+const busy=()=>Boolean(runAdmission||runner?.busy||remoteBridge?.running||updateBusy);
 
 protocol.registerSchemesAsPrivileged([{scheme:'babel',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 const singleInstance=app.requestSingleInstanceLock();
@@ -98,6 +100,16 @@ async function getInfo(){
     engine,
     configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,
     projectCredentialsSelected:preferences.projectCredentialRoot===preferences.projectRoot && Boolean(preferences.projectRoot),
+    remoteBridge:remoteBridge
+      ? {
+          running:remoteBridge.state==='ready',
+          state:remoteBridge.state,
+          port:remoteBridge.port,
+          url:remoteBridge.port?`http://127.0.0.1:${remoteBridge.port}`:null,
+          blocksLocalRuns:remoteBridge.running,
+          sharedSession:false,
+        }
+      : {running:false,state:'stopped',port:null,url:null,blocksLocalRuns:false,sharedSession:false},
   };
 }
 function validateSender(event){
@@ -301,6 +313,23 @@ async function start(){
   handle('babel:open-repository',()=>shell.openExternal(REPOSITORY_URL));
   handle('babel:decide',decision=>{if(runner)runner.reply(decision);return true;});
   handle('babel:cancel',()=>{runner?.cancel();return true;});
+  handle('babel:start-remote-bridge',async options=>{
+    assertIdle();
+    if(remoteBridge?.running)throw new Error('The loopback remote bridge is already running');
+    const cliEntry=activeCliEntry();
+    if(!cliEntry)throw new Error(app.isPackaged?'Bundled CLI or Node is missing.':'Build or select the official Babel CLI first');
+    if(!preferences.projectRoot)throw new Error('Open a project first');
+    const port=Number(options?.port??4545);
+    if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('Invalid remote bridge port');
+    remoteBridge=new RemoteBridgeChild({executable:officialRuntime().executable,entry:cliEntry,projectRoot:preferences.projectRoot,env:runtimeEnvironment(),inheritEnv:false});
+    try{
+      return await remoteBridge.start({port,onLine:({stream,text})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text});}});
+    }catch(error){
+      remoteBridge=null;
+      throw error;
+    }
+  });
+  handle('babel:stop-remote-bridge',()=>{remoteBridge?.stop();remoteBridge=null;return {stopped:true};});
   handle('babel:run',async request=>{
     assertIdle();
     runAdmission=true;
@@ -350,6 +379,8 @@ function createWindow(){
       return;
     }
     runner?.cancel();
+    remoteBridge?.stop();
+    remoteBridge=null;
   });
   window.on('closed',()=>{window=null;});
   window.loadURL(APP_URL);
@@ -360,5 +391,5 @@ function finishClosingWindow(){
   if(window&&!window.isDestroyed())window.destroy();
   app.quit();
 }
-app.on('before-quit',()=>{runner?.cancel();});
+app.on('before-quit',()=>{runner?.cancel();remoteBridge?.stop();});
 app.on('window-all-closed',()=>{if(decideLastWindow()==='quit')app.quit();});
