@@ -269,7 +269,8 @@ function captureVerifierInputClosure(
       let entry: fs.Dirent | null;
       while ((entry = directory.readSync()) !== null) {
         if (Date.now() - started >= 10_000) return unsupported("Input closure proof deadline exceeded");
-        if (INPUT_CLOSURE_SKIP_DIRS.has(entry.name)) continue;
+        // Git's metadata may be a directory or a linked-worktree pointer file.
+        if (entry.name === ".git") continue;
         const absolute = path.join(dir, entry.name);
         const relativePath = path.relative(root, absolute).split(path.sep).join("/");
         if (closurePathIsCredential(relativePath)) {
@@ -280,6 +281,7 @@ function captureVerifierInputClosure(
         try {
           stats = fs.lstatSync(absolute);
         } catch { return unsupported("Input path is not readable"); }
+        if (stats.isDirectory() && INPUT_CLOSURE_SKIP_DIRS.has(entry.name)) continue;
         if (stats.isSymbolicLink() && !requiredPaths) return unsupported("Input closure cannot bind a symlink");
         if (!stats.isSymbolicLink()) {
           try { fs.accessSync(absolute, fs.constants.R_OK); }

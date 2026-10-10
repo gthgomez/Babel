@@ -318,3 +318,43 @@ test('named file evidence preserves reserved keys for currency and refuses unsup
   fs.writeFileSync(join(root, '__proto__'), 'modified\n')
   assert.equal(compareRevisions(before, revision()).stale, true)
 }))
+
+test('a regular file named node_modules remains physically bound across addition and edits', () => fixture((root) => {
+  const before = repositoryRevision(root)
+  fs.writeFileSync(join(root, 'node_modules'), 'input A\n')
+  const added = repositoryRevision(root)
+  assert.equal(compareRevisions(before, added).stale, true)
+  assert.equal(validateRevisionBoundReceipt({
+    receiptId: 'fixture', command: 'check', exitCode: 0, boundRevision: added, stale: false,
+  }).length, 0)
+  fs.writeFileSync(join(root, 'node_modules'), 'input B\n')
+  assert.equal(compareRevisions(added, repositoryRevision(root)).stale, true)
+}))
+
+test('node_modules file to excluded directory transition changes physical evidence without scanning dependency bytes', () => fixture((root) => {
+  fs.writeFileSync(join(root, 'node_modules'), 'input\n')
+  const fileRevision = repositoryRevision(root)
+  fs.unlinkSync(join(root, 'node_modules'))
+  fs.mkdirSync(join(root, 'node_modules'))
+  fs.writeFileSync(join(root, 'node_modules', 'dependency.txt'), 'dependency A\n')
+  const directoryRevision = repositoryRevision(root)
+  assert.equal(compareRevisions(fileRevision, directoryRevision).stale, true)
+  fs.writeFileSync(join(root, 'node_modules', 'dependency.txt'), 'dependency B\n')
+  assert.equal(compareRevisions(directoryRevision, repositoryRevision(root)).stale, false)
+}))
+
+test('a leaf symlink named node_modules binds its target string without reading dependency content', { skip: platform() === 'win32' }, () => fixture((root) => {
+  const outside = fs.mkdtempSync(join(tmpdir(), 'babel-dependency-link-'))
+  try {
+    const before = repositoryRevision(root)
+    fs.writeFileSync(join(outside, 'input.txt'), 'outside input\n')
+    fs.symlinkSync(outside, join(root, 'node_modules'))
+    const linked = repositoryRevision(root)
+    assert.equal(compareRevisions(before, linked).stale, true)
+    fs.writeFileSync(join(outside, 'input.txt'), 'outside changed\n')
+    assert.equal(compareRevisions(linked, repositoryRevision(root)).stale, false)
+    fs.unlinkSync(join(root, 'node_modules'))
+    fs.symlinkSync(join(outside, 'other'), join(root, 'node_modules'))
+    assert.equal(compareRevisions(linked, repositoryRevision(root)).stale, true)
+  } finally { fs.rmSync(outside, { recursive: true, force: true }) }
+}))
