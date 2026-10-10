@@ -4,6 +4,7 @@ import {dirname, join} from 'node:path';
 import {execFile} from 'node:child_process';
 import {EXPECTED_ORIGIN, EXPECTED_HOST} from './updater.mjs';
 import {cliPackageRootForInstall, promoteStagedInstall, readInstallManifest, readActiveEngine, sha256File, stageDir, bundledInstallId} from './engine-manager.mjs';
+import {fetchAllCheckRuns, resolvePreviewMainRequiredChecks, summarizePreviewQualification} from './preview-ci-qualification.mjs';
 
 const SHA = /^[a-f0-9]{40}$/;
 const USER_AGENT = 'Babel-Desktop-Engine-Updater';
@@ -67,32 +68,39 @@ export function resolveBundledNpmCli(resourcesPath) {
   return existsSync(candidate) ? candidate : null;
 }
 
-export async function ensureLockfileForCli({cliRoot, resourcesPath, sourceSha}) {
+async function acquireLockfileFromSourceSha(cliRoot, sourceSha) {
+  const targetLock = join(cliRoot, 'package-lock.json');
+  const rawUrl = `https://raw.githubusercontent.com/${EXPECTED_ORIGIN}/${sourceSha}/babel-cli/package-lock.json`;
+  try {
+    await downloadFile(rawUrl, targetLock, {maxBytes: 10 * 1024 * 1024});
+    if (existsSync(targetLock)) return true;
+  } catch {
+    try {
+      const fileData = await githubJson(`/repos/${EXPECTED_ORIGIN}/contents/babel-cli/package-lock.json?ref=${sourceSha}`);
+      if (fileData?.content && fileData?.encoding === 'base64') {
+        const content = Buffer.from(fileData.content, 'base64').toString('utf8');
+        writeFileSync(targetLock, content, 'utf8');
+        return true;
+      }
+    } catch {
+      // failed
+    }
+  }
+  return false;
+}
+
+export async function ensureLockfileForCli({cliRoot, resourcesPath, sourceSha, allowBundledFallback = true}) {
   const targetLock = join(cliRoot, 'package-lock.json');
   if (existsSync(targetLock)) return true;
-  if (resourcesPath) {
+  if (sourceSha && SHA.test(sourceSha)) {
+    const fromSource = await acquireLockfileFromSourceSha(cliRoot, sourceSha);
+    if (fromSource) return true;
+  }
+  if (allowBundledFallback && resourcesPath) {
     const candidate = join(resourcesPath, 'babel-runtime', 'cli', 'package-lock.json');
     if (existsSync(candidate)) {
       cpSync(candidate, targetLock);
       return true;
-    }
-  }
-  if (sourceSha && SHA.test(sourceSha)) {
-    const rawUrl = `https://raw.githubusercontent.com/${EXPECTED_ORIGIN}/${sourceSha}/babel-cli/package-lock.json`;
-    try {
-      await downloadFile(rawUrl, targetLock, {maxBytes: 10 * 1024 * 1024});
-      if (existsSync(targetLock)) return true;
-    } catch {
-      try {
-        const fileData = await githubJson(`/repos/${EXPECTED_ORIGIN}/contents/babel-cli/package-lock.json?ref=${sourceSha}`);
-        if (fileData?.content && fileData?.encoding === 'base64') {
-          const content = Buffer.from(fileData.content, 'base64').toString('utf8');
-          writeFileSync(targetLock, content, 'utf8');
-          return true;
-        }
-      } catch {
-        // failed
-      }
     }
   }
   return false;
@@ -174,18 +182,22 @@ export async function resolvePreviewCandidate(currentSourceSha) {
   const commit = await githubJson(`/repos/${EXPECTED_ORIGIN}/commits/main`);
   const sha = typeof commit?.sha === 'string' ? commit.sha : '';
   if (!SHA.test(sha)) return {state: 'error', channel: 'preview', detail: 'Could not resolve the development branch head.'};
-  const checkRunsData = await githubJson(`/repos/${EXPECTED_ORIGIN}/commits/${sha}/check-runs`);
-  const runs = Array.isArray(checkRunsData?.check_runs) ? checkRunsData.check_runs : [];
+  let runs;
+  try {
+    runs = await fetchAllCheckRuns(githubJson, sha);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {state: 'error', channel: 'preview', detail: `Could not load CI check-runs for ${sha.slice(0, 12)}: ${detail}`};
+  }
   if (runs.length === 0) {
     return {state: 'unsupported', channel: 'preview', detail: `Main is at ${sha.slice(0, 12)} but no CI check-runs were found.`};
   }
-  const inProgress = runs.find(r => r.status !== 'completed');
-  if (inProgress) {
-    return {state: 'unsupported', channel: 'preview', detail: `Main is at ${sha.slice(0, 12)} but CI check "${inProgress.name ?? 'check'}" is in progress.`};
-  }
-  const failed = runs.find(r => r.conclusion !== 'success' && r.conclusion !== 'skipped');
-  if (failed) {
-    return {state: 'unsupported', channel: 'preview', detail: `Main is at ${sha.slice(0, 12)} but CI check "${failed.name ?? 'check'}" concluded with ${failed.conclusion ?? 'failure'}.`};
+  const qualification = summarizePreviewQualification(resolvePreviewMainRequiredChecks(runs, sha));
+  if (!qualification.ok) {
+    if (qualification.reason === 'pending') {
+      return {state: 'unsupported', channel: 'preview', detail: `Main is at ${sha.slice(0, 12)} but ${qualification.detail}`};
+    }
+    return {state: 'unsupported', channel: 'preview', detail: `Main is at ${sha.slice(0, 12)} but is not qualified: ${qualification.detail}`};
   }
   if (sha === currentSourceSha) {
     return {state: 'current', channel: 'preview', currentSha: sha, availableSha: sha, detail: 'Installed CLI already matches qualified main.'};
@@ -218,9 +230,9 @@ export async function installStableReleaseArchive({userData, nodeExe, npmCli, tg
   emit('extract', 'running');
   const extracted = await extractArchive(archive, cliRoot, ['--strip-components=1']);
   if (!extracted.ok) return fail('extract', 'extract_failed', extracted.detail);
-  const hasLock = await ensureLockfileForCli({cliRoot, resourcesPath, sourceSha});
+  const hasLock = await ensureLockfileForCli({cliRoot, sourceSha, allowBundledFallback: false});
   if (!hasLock && !existsSync(join(cliRoot, 'package-lock.json'))) {
-    return fail('install', 'missing_lockfile', 'The stable package archive lacks package-lock.json and it could not be resolved.');
+    return fail('install', 'missing_lockfile', 'The stable package archive lacks package-lock.json and it could not be resolved for the selected release commit.');
   }
   emit('install', 'running');
   const installed = await runNpmCi({nodeExe, npmCli, cwd: cliRoot, omitDev: true});

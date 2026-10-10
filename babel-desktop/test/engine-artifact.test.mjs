@@ -94,6 +94,22 @@ test('resolveStableReleaseCandidate returns unsupported when tag commit cannot b
   }
 });
 
+function qualifiedMainCheckRuns(sha, extra = []) {
+  const required = ['security', 'public-content-policy', 'linux-validation', 'windows-portability'];
+  const runs = required.map((name, index) => ({
+    id: String(1000 + index),
+    name,
+    head_sha: sha,
+    status: 'completed',
+    conclusion: 'success',
+    started_at: `2026-01-02T00:0${index}:00Z`,
+    completed_at: `2026-01-02T00:0${index}:00Z`,
+    app: {id: 15368},
+    details_url: `https://github.com/gthgomez/Babel/actions/runs/99/job/${index}`,
+  }));
+  return [...runs, ...extra];
+}
+
 test('resolvePreviewCandidate requires all GitHub Actions check-runs to succeed', async () => {
   const originalFetch = globalThis.fetch;
   try {
@@ -107,11 +123,12 @@ test('resolvePreviewCandidate requires all GitHub Actions check-runs to succeed'
         return {
           ok: true,
           json: async () => ({
-            total_count: 2,
-            check_runs: [
-              {name: 'ci-gate', status: 'completed', conclusion: 'success'},
-              {name: 'optional-audit', status: 'completed', conclusion: 'skipped'},
-            ],
+            total_count: qualifiedMainCheckRuns(SHA_B, [
+              {id: '2000', name: 'optional-audit', head_sha: SHA_B, status: 'completed', conclusion: 'failure', app: {id: 15368}, details_url: 'https://github.com/gthgomez/Babel/actions/runs/1/job/1'},
+            ]).length,
+            check_runs: qualifiedMainCheckRuns(SHA_B, [
+              {id: '2000', name: 'optional-audit', head_sha: SHA_B, status: 'completed', conclusion: 'failure', app: {id: 15368}, details_url: 'https://github.com/gthgomez/Babel/actions/runs/1/job/1'},
+            ]),
           }),
         };
       }
@@ -128,44 +145,32 @@ test('resolvePreviewCandidate requires all GitHub Actions check-runs to succeed'
       const u = String(url);
       if (u.includes('/commits/main')) return {ok: true, json: async () => ({sha: SHA_B})};
       if (u.includes(`/commits/${SHA_B}/check-runs`)) {
-        return {
-          ok: true,
-          json: async () => ({
-            total_count: 2,
-            check_runs: [
-              {name: 'ci-gate', status: 'in_progress', conclusion: null},
-            ],
-          }),
-        };
+        const runs = qualifiedMainCheckRuns(SHA_B);
+        runs[0] = {...runs[0], status: 'in_progress', conclusion: null};
+        return {ok: true, json: async () => ({total_count: runs.length, check_runs: runs})};
       }
       return {ok: false, status: 404};
     };
 
     const inProgressRes = await resolvePreviewCandidate(SHA_A);
     assert.equal(inProgressRes.state, 'unsupported');
-    assert.match(inProgressRes.detail, /in progress/);
+    assert.match(inProgressRes.detail, /in_progress/);
 
     // 3. Failed check
     globalThis.fetch = async (url) => {
       const u = String(url);
       if (u.includes('/commits/main')) return {ok: true, json: async () => ({sha: SHA_B})};
       if (u.includes(`/commits/${SHA_B}/check-runs`)) {
-        return {
-          ok: true,
-          json: async () => ({
-            total_count: 2,
-            check_runs: [
-              {name: 'ci-gate', status: 'completed', conclusion: 'failure'},
-            ],
-          }),
-        };
+        const runs = qualifiedMainCheckRuns(SHA_B);
+        runs[0] = {...runs[0], conclusion: 'failure'};
+        return {ok: true, json: async () => ({total_count: runs.length, check_runs: runs})};
       }
       return {ok: false, status: 404};
     };
 
     const failedRes = await resolvePreviewCandidate(SHA_A);
     assert.equal(failedRes.state, 'unsupported');
-    assert.match(failedRes.detail, /concluded with failure/);
+    assert.match(failedRes.detail, /not qualified/);
 
     // 4. Zero check-runs
     globalThis.fetch = async (url) => {
