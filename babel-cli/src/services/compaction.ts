@@ -1,7 +1,11 @@
 // (no node:fs imports needed — compaction telemetry is written via evidence.writeDebugFile)
+import { randomUUID } from 'node:crypto';
+
 import { EvidenceBundle } from '../evidence.js';
+import type { PrunedMessageRange } from '../runtime/events.js';
 import { type ToolCallLog } from '../schemas/agentContracts.js';
 import { formatHistoryEntry } from '../stages/executorHelpers.js';
+import { type CondensationFactChannel, prunedIndexesToRanges } from './condensationFacts.js';
 import { countTextTokens } from './tokenCounter.js';
 
 /**
@@ -34,12 +38,21 @@ export async function autoCompactIfNeeded(
   turn: number,
   toolCallLog: ToolCallLog[],
   evidence?: EvidenceBundle,
+  /**
+   * Packet A5: when provided, a strict condensation started/completed fact
+   * pair is built for every compaction and delivered through the channel.
+   * An interrupted compaction (the catch path below) leaves the started fact
+   * unpaired — a visible fail-closed gap — and no completed fact is minted.
+   */
+  condensation?: CondensationFactChannel,
 ): Promise<{
   compacted: boolean;
   newHistory: string;
   tokensBefore: number;
   tokensAfter: number;
   bytesPruned: number;
+  /** Condensation id of the emitted fact pair, when facts were emitted. */
+  condensationId?: string;
 }> {
   const tokensBefore = countTextTokens(history);
 
@@ -69,15 +82,31 @@ export async function autoCompactIfNeeded(
     `[compaction] Triggering context compaction for turn ${turn} (Steps: ${toolCallLog.length})`,
   );
 
+  // Packet A5: the started fact precedes any pruning work. Every failure path
+  // below leaves it unpaired — an explicitly visible interrupted compaction.
+  let condensationId: string | undefined;
+  if (condensation) {
+    condensationId = randomUUID();
+    const started = condensation.emitter.begin({
+      compactionId: condensationId,
+      path: 'pipeline_step_prune',
+      countBefore: tokensBefore,
+    });
+    if (started) condensation.emit(started);
+    else condensationId = undefined;
+  }
+
   try {
     let prunedBytes = 0;
     const newHistoryEntries: string[] = [];
+    const prunedSteps: number[] = [];
 
     for (const entry of toolCallLog) {
       const isRecent = entry.step > turn - 5;
       if (isRecent) {
         newHistoryEntries.push(formatHistoryEntry(entry));
       } else {
+        prunedSteps.push(entry.step);
         // Prune older history
         const originalStdoutLen = entry.stdout ? entry.stdout.length : 0;
         const originalStderrLen = entry.stderr ? entry.stderr.length : 0;
@@ -138,24 +167,41 @@ export async function autoCompactIfNeeded(
 
     compactionConsecutiveFailures = 0;
 
+    // Packet A5: completed fact carries the real token counts and the pruned
+    // step ranges derived from the actual pruning pass above.
+    if (condensation && condensationId !== undefined) {
+      const prunedMessageRanges: PrunedMessageRange[] = prunedIndexesToRanges(prunedSteps);
+      const completed = condensation.emitter.complete({
+        compactionId: condensationId,
+        countAfter: tokensAfter,
+        prunedMessageRanges,
+      });
+      if (completed) condensation.emit(completed);
+      else condensationId = undefined;
+    }
+
     return {
       compacted: true,
       newHistory,
       tokensBefore,
       tokensAfter,
       bytesPruned: prunedBytes,
+      ...(condensationId !== undefined ? { condensationId } : {}),
     };
   } catch (err) {
     compactionConsecutiveFailures++;
     console.warn(
       `[compaction] Compaction failed (${compactionConsecutiveFailures}/${MAX_COMPACTION_FAILURES}): ${err instanceof Error ? err.message : String(err)}`,
     );
+    // Packet A5: the started fact (if emitted) intentionally has no completed
+    // pair — `condensationId` surfaces the interrupted compaction to callers.
     return {
       compacted: false,
       newHistory: history,
       tokensBefore,
       tokensAfter: tokensBefore,
       bytesPruned: 0,
+      ...(condensationId !== undefined ? { condensationId } : {}),
     };
   }
 }

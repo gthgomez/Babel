@@ -21,6 +21,8 @@ import {
   type ThreadEventLog,
 } from './threadEventLog.js';
 import { mapProviderMessagesToWire } from '../runners/providerMessages.js';
+import type { PrunedMessageRange } from '../runtime/events.js';
+import type { CondensationFactChannel } from '../services/condensationFacts.js';
 import {
   recordCompactionCreated,
   recordCompactionStarted,
@@ -104,6 +106,18 @@ export interface CompactionCommitResult {
   threadEventId?: string;
   /** Session event id when written. */
   sessionEventId?: string;
+  /**
+   * Packet A5: the capsule/operation id of the committed compaction (the same
+   * id the `compaction_committed` session event carries, which the legacy
+   * adapter maps to a `context.committed` fact). Present only on
+   * `status: 'committed'`.
+   */
+  capsuleCheckpointId?: string;
+  /**
+   * Packet A5: inclusive message ranges of the prior conversation replaced by
+   * the compacted context. Present only on `status: 'committed'`.
+   */
+  prunedMessageRanges?: ReadonlyArray<PrunedMessageRange>;
   evidenceRefs: string[];
   error?: string;
 }
@@ -948,6 +962,11 @@ export async function commitCompaction(
     preservedToolCallIds,
     ...(threadEventId !== undefined ? { threadEventId } : {}),
     ...(sessionEventId !== undefined ? { sessionEventId } : {}),
+    // Packet A5: recoverability pointers for the condensation fact.
+    capsuleCheckpointId: operationId,
+    prunedMessageRanges: [
+      { from: 0, to: Math.max(input.priorConversation.length - 1, 0) },
+    ],
     evidenceRefs: [
       ...(threadEventId ? [threadEventId] : []),
       ...(sessionEventId ? [sessionEventId] : []),
@@ -1028,6 +1047,13 @@ export interface ChatEngineCompactionHost {
   /** Admission recovery may request one bounded compaction even before the normal token trigger. */
   forceCompaction?: boolean;
   isOwnerCurrent?: () => boolean;
+  /**
+   * Packet A5: when provided, every compaction attempt emits a strict
+   * `context.condensation.started` / `completed` fact pair through this
+   * channel. An interrupted compaction leaves started-without-completed — a
+   * visible fail-closed gap.
+   */
+  condensationFacts?: CondensationFactChannel;
 }
 
 export interface ChatEngineCompactInfo {
@@ -1107,6 +1133,36 @@ export async function runChatEngineCompaction(
     tokenTriggered ||
     tokenEstimate > host.limits.maxEstimatedTokens - reserve;
   const ownerIsCurrent = (): boolean => !host.isOwnerCurrent || host.isOwnerCurrent();
+  // ── Packet A5: condensation-as-event emission (strict started/completed) ──
+  const condensation = host.condensationFacts;
+  let condensationId = '';
+  const beginCondensationFact = (tokensBefore: number): void => {
+    if (!condensation) return;
+    condensationId = randomUUID();
+    const started = condensation.emitter.begin({
+      compactionId: condensationId,
+      path: 'chat_engine_inline',
+      countBefore: tokensBefore,
+    });
+    if (started) {
+      condensation.emit(started);
+      return;
+    }
+    condensationId = '';
+  };
+  const completeCondensationFact = (committed: CompactionCommitResult): void => {
+    if (!condensation || condensationId === '') return;
+    const completed = condensation.emitter.complete({
+      compactionId: condensationId,
+      countAfter: committed.tokensAfter,
+      prunedMessageRanges: committed.prunedMessageRanges ?? [],
+      ...(committed.capsuleCheckpointId !== undefined
+        ? { capsuleCheckpointId: committed.capsuleCheckpointId }
+        : {}),
+    });
+    condensationId = '';
+    if (completed) condensation.emit(completed);
+  };
   const applyHeuristic = async (): Promise<void> => {
     if (!ownerIsCurrent()) return;
     const prior = host.conversation.map((message) => ({ ...message }));
@@ -1127,6 +1183,9 @@ export async function runChatEngineCompaction(
         await host.checkpoint();
         return;
       }
+      // Started only once pruning is known to have changed the context: a
+      // noop never mints a started fact, so no spurious gap is possible.
+      beginCondensationFact(host.estimateTokens(prior));
       const beforeRequest = serializedProviderRequest(host.threadLog);
       const committed = await commitCompaction({
         strategyMessages: host.conversation.map((message) => ({ ...message })),
@@ -1159,6 +1218,7 @@ export async function runChatEngineCompaction(
           committed.error ?? 'Heuristic compaction persistence failed',
         );
       }
+      completeCondensationFact(committed);
       if (!ownsConversation()) return;
       host.conversation = committed.conversation;
       mode = 'heuristic';
@@ -1198,6 +1258,7 @@ export async function runChatEngineCompaction(
         });
         if (!ownerIsCurrent()) return null;
         if (mgr.changed) {
+          beginCondensationFact(mgr.tokensBefore);
           commit = await commitCompaction({
             strategyMessages: mgr.messages,
             priorConversation: host.conversation,
@@ -1222,6 +1283,7 @@ export async function runChatEngineCompaction(
               commit.error ?? 'Compaction persistence failed',
             )
           }
+          completeCondensationFact(commit);
           if (!ownerIsCurrent()) return null;
           host.conversation = commit.conversation;
           mode = strategyToCompactMode(commit.strategy);

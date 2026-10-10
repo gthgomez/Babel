@@ -93,6 +93,33 @@ export type FactPayload =
     }
   | { readonly type: 'context.committed'; readonly checkpointId: string }
   | { readonly type: 'context.degraded'; readonly reason: string }
+  | {
+      /**
+       * Packet A5: a context condensation (compaction) began. Every started
+       * fact must be paired with a `context.condensation.completed` fact; a
+       * started fact without its completed pair is a visible fail-closed gap
+       * (an interrupted compaction), never papered over.
+       */
+      readonly type: 'context.condensation.started';
+      readonly compactionId: string;
+      readonly path: CondensationPath;
+      readonly countBefore: number;
+    }
+  | {
+      /**
+       * Packet A5: a context condensation completed. Carries the token counts
+       * before/after, the pruned message ranges, and — when one was fenced —
+       * the P11 checkpoint capsule id so pre-compaction state stays
+       * recoverable from the fact stream alone.
+       */
+      readonly type: 'context.condensation.completed';
+      readonly compactionId: string;
+      readonly path: CondensationPath;
+      readonly countBefore: number;
+      readonly countAfter: number;
+      readonly prunedMessageRanges: ReadonlyArray<PrunedMessageRange>;
+      readonly capsuleCheckpointId?: string;
+    }
   | { readonly type: 'verification.recorded'; readonly receiptId: string; readonly authoritative: boolean }
   | { readonly type: 'completion.decided'; readonly decision: RuntimeCompletionDecision }
   | {
@@ -109,6 +136,15 @@ export interface RuntimeCompletionDecision {
   readonly reason: string;
   readonly evidenceRefs: readonly string[];
   readonly policyVersion: string;
+}
+
+/** Which compaction mechanism produced a condensation fact (packet A5). */
+export type CondensationPath = 'pipeline_step_prune' | 'chat_engine_inline';
+
+/** Inclusive index range of messages pruned by a condensation (packet A5). */
+export interface PrunedMessageRange {
+  readonly from: number;
+  readonly to: number;
 }
 
 /** Durable semantic fact envelope. */
@@ -142,6 +178,8 @@ export const KNOWN_FACT_TYPES: ReadonlySet<FactPayload['type']> = new Set([
   'operation.indeterminate',
   'context.committed',
   'context.degraded',
+  'context.condensation.started',
+  'context.condensation.completed',
   'verification.recorded',
   'completion.decided',
   'permission.decided',
@@ -193,6 +231,14 @@ const REQUIRED_PAYLOAD_FIELDS: Record<string, readonly string[]> = {
   'operation.indeterminate': ['operationDigest', 'reason'],
   'context.committed': ['checkpointId'],
   'context.degraded': ['reason'],
+  'context.condensation.started': ['compactionId', 'path', 'countBefore'],
+  'context.condensation.completed': [
+    'compactionId',
+    'path',
+    'countBefore',
+    'countAfter',
+    'prunedMessageRanges',
+  ],
   'verification.recorded': ['receiptId', 'authoritative'],
   'completion.decided': ['decision'],
   'permission.decided': ['decision'],
@@ -257,6 +303,32 @@ function payloadTypeError(type: string, payload: Record<string, unknown>): strin
       return isString(payload['checkpointId']) ? null : 'invalid_checkpointId';
     case 'context.degraded':
       return isString(payload['reason']) ? null : 'invalid_reason';
+    case 'context.condensation.started':
+    case 'context.condensation.completed': {
+      const completed = type === 'context.condensation.completed';
+      const pathOk =
+        payload['path'] === 'pipeline_step_prune' || payload['path'] === 'chat_engine_inline';
+      const countsOk =
+        typeof payload['countBefore'] === 'number' &&
+        Number.isFinite(payload['countBefore']) &&
+        (!completed ||
+          (typeof payload['countAfter'] === 'number' && Number.isFinite(payload['countAfter'])));
+      const rangesOk =
+        !completed ||
+        (Array.isArray(payload['prunedMessageRanges']) &&
+          payload['prunedMessageRanges'].every(
+            (range) =>
+              isRecord(range) &&
+              typeof range['from'] === 'number' &&
+              Number.isInteger(range['from']) &&
+              typeof range['to'] === 'number' &&
+              Number.isInteger(range['to']),
+          ));
+      const capsuleOk = !completed || optionalString(payload['capsuleCheckpointId']);
+      return isString(payload['compactionId']) && pathOk && countsOk && rangesOk && capsuleOk
+        ? null
+        : `invalid_${type}`;
+    }
     case 'verification.recorded':
       return isString(payload['receiptId']) && typeof payload['authoritative'] === 'boolean'
         ? null
