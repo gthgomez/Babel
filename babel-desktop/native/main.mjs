@@ -100,7 +100,16 @@ async function getInfo(){
     engine,
     configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,
     projectCredentialsSelected:preferences.projectCredentialRoot===preferences.projectRoot && Boolean(preferences.projectRoot),
-    remoteBridge:remoteBridge?.running?{running:true,port:remoteBridge.port,url:`http://127.0.0.1:${remoteBridge.port}`}:{running:false,port:null,url:null},
+    remoteBridge:remoteBridge
+      ? {
+          running:remoteBridge.state==='ready',
+          state:remoteBridge.state,
+          port:remoteBridge.port,
+          url:remoteBridge.port?`http://127.0.0.1:${remoteBridge.port}`:null,
+          blocksLocalRuns:remoteBridge.running,
+          sharedSession:false,
+        }
+      : {running:false,state:'stopped',port:null,url:null,blocksLocalRuns:false,sharedSession:false},
   };
 }
 function validateSender(event){
@@ -311,9 +320,14 @@ async function start(){
     if(!cliEntry)throw new Error(app.isPackaged?'Bundled CLI or Node is missing.':'Build or select the official Babel CLI first');
     if(!preferences.projectRoot)throw new Error('Open a project first');
     const port=Number(options?.port??4545);
+    if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('Invalid remote bridge port');
     remoteBridge=new RemoteBridgeChild({executable:officialRuntime().executable,entry:cliEntry,projectRoot:preferences.projectRoot,env:runtimeEnvironment(),inheritEnv:false});
-    remoteBridge.start({port,onLine:({stream,text})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text});}});
-    return {port,url:`http://127.0.0.1:${port}`,uiPath:'/ui'};
+    try{
+      return await remoteBridge.start({port,onLine:({stream,text})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text});}});
+    }catch(error){
+      remoteBridge=null;
+      throw error;
+    }
   });
   handle('babel:stop-remote-bridge',()=>{remoteBridge?.stop();remoteBridge=null;return {stopped:true};});
   handle('babel:run',async request=>{
