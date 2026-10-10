@@ -18,6 +18,7 @@ import { assertAllowedProjectRoot } from './workspaceBound.js';
 import { originAllowed as originAllowedStructured } from './originPolicy.js';
 import { ThreadOwnershipRegistry, type ThreadOwnershipError } from './threadOwnership.js';
 import { threadStoreExists } from '../services/threadStore/threadStore.js';
+import { buildRemoteCatalog } from './remoteCatalog.js';
 
 export const MAX_RPC_BYTES = 2 * 1024 * 1024;
 
@@ -36,6 +37,7 @@ function notificationThreadId(notification: object): string | undefined {
 export class ProtocolGateway {
   readonly host: ProtocolHostState;
   readonly threadOwnership = new ThreadOwnershipRegistry();
+  private readonly registeredWorkspaceRoot: string;
   private subscribers = new Set<GatewaySubscriber>();
 
   constructor(options: {
@@ -44,6 +46,7 @@ export class ProtocolGateway {
     remoteSurface?: boolean;
   }) {
     const allowedRoot = options.allowedWorkspaceRoot;
+    this.registeredWorkspaceRoot = allowedRoot;
     this.host = createProtocolHostState({
       executeWithoutNotifications: true,
       projectRootGuard: (projectRoot) => assertAllowedProjectRoot(projectRoot, allowedRoot),
@@ -96,6 +99,26 @@ export class ProtocolGateway {
         },
       };
     }
+    let parsedId: string | number | null = null;
+    try {
+      const envelope = JSON.parse(raw) as { method?: unknown; id?: unknown };
+      if (envelope.method === 'remote.catalog') {
+        parsedId =
+          typeof envelope.id === 'string' || typeof envelope.id === 'number' ? envelope.id : null;
+        const catalog = await buildRemoteCatalog({
+          state: this.host,
+          registeredWorkspaceRoot: this.registeredWorkspaceRoot,
+          threadOwner: (threadId) => this.threadOwnership.ownerOf(threadId)?.sessionId,
+        });
+        return {
+          jsonrpc: '2.0',
+          id: parsedId ?? 0,
+          result: catalog,
+        };
+      }
+    } catch {
+      /* fall through to standard parse */
+    }
     const parsed = parseProtocolRequest(raw);
     if (!parsed) {
       return {
@@ -114,15 +137,24 @@ export class ProtocolGateway {
         this.fanout(notification);
       },
     );
-    if (parsed.method === 'thread.create' && 'result' in response) {
+    if (
+      (parsed.method === 'thread.create' || parsed.method === 'thread.resume') &&
+      'result' in response
+    ) {
       const result = response.result as { thread_id?: unknown };
-      const params = (parsed as { params?: { session_id?: unknown } }).params;
+      const params = (parsed as { params?: { session_id?: unknown; thread_id?: unknown } }).params;
+      const threadId =
+        typeof result.thread_id === 'string'
+          ? result.thread_id
+          : typeof params?.thread_id === 'string'
+            ? params.thread_id
+            : undefined;
       if (
-        typeof result.thread_id === 'string' &&
+        typeof threadId === 'string' &&
         typeof params?.session_id === 'string' &&
         params.session_id.length > 0
       ) {
-        this.threadOwnership.bind(result.thread_id, params.session_id);
+        this.threadOwnership.bind(threadId, params.session_id);
       }
     }
     return response;

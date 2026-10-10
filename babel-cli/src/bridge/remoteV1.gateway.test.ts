@@ -610,6 +610,15 @@ describe('Babel Remote V1 gateway', () => {
     assert.match(wrongSession, /401|403/);
   });
 
+  it('remote.catalog lists protocol host sessions for the registered workspace', async () => {
+    const created = await rpc('thread.create', { project_root: tmp }, 201);
+    const threadId = (created.json['result'] as { thread_id: string }).thread_id;
+    const catalog = await rpc('remote.catalog', {}, 202);
+    assert.equal(catalog.statusCode, 200);
+    const sessions = (catalog.json['result'] as { sessions: Array<{ thread_id: string }> }).sessions;
+    assert.ok(sessions.some((s) => s.thread_id === threadId));
+  });
+
   it('legacy compatibility ON accepts header bearer only and does not subscribe', async () => {
     const prev = process.env['BABEL_REMOTE_ALLOW_LEGACY_WS_BEARER'];
     process.env['BABEL_REMOTE_ALLOW_LEGACY_WS_BEARER'] = '1';
