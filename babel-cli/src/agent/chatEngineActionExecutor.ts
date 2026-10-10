@@ -31,6 +31,7 @@ import {
   formatEditReflectionCapSurface,
   formatEditReflectionNote,
 } from "./codingLoop/reflection.js";
+import type { EditFormatId } from "./codingLoop/editFormatPolicy.js";
 import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
 import {
   actualRecoveryEdit,
@@ -109,8 +110,44 @@ export type { ChatEngineActionExecutorHost } from "./chatEngineContracts.js";
 export class ChatEngineActionExecutor {
   /** Bounded reflection counter on failed edits — per file per turn (C2). */
   private readonly editReflection = new EditReflectionTracker();
+  /** Packet D2: whether any edit-format outcome has been observed this session. */
+  private editFormatSawOutcome = false;
 
   constructor(private readonly host: ChatEngineActionExecutorHost) {}
+
+  /**
+   * Packet D2: feed one edit-format outcome into the per-session tracker and
+   * record the active format in the policy event log. A policy block is a
+   * gate decision, never format evidence. Demotion/promotion events and the
+   * first observed outcome each assert the active format in telemetry.
+   */
+  private recordEditFormatOutcome(
+    format: EditFormatId,
+    effect: { status: string },
+    policyBlocked: boolean,
+  ): void {
+    const session = this.host.editFormatSession;
+    if (!session) return;
+    const isFirstOutcome = !this.editFormatSawOutcome;
+    this.editFormatSawOutcome = true;
+    const applied = effect.status === "confirmed_change";
+    const events = session.recordOutcome(format, { applied, policyBlocked });
+    const detail =
+      `format=${format} applied=${applied} ` +
+      `active=${session.activeFormat()} family=${session.getFamily()}`;
+    if (isFirstOutcome || events.demotedNow || events.promotedNow) {
+      this.host.policyEventLog.record({
+        at_turn: this.host._turnIndex,
+        kind: "edit_format",
+        detail: events.demotedNow
+          ? `${detail} demoted=${events.demotedNow}`
+          : events.promotedNow
+            ? `${detail} promoted=${events.promotedNow}`
+            : detail,
+        tool: format,
+      });
+    }
+  }
 
   async executeOneAction(
     action: ChatToolAction,
@@ -788,6 +825,12 @@ export class ChatEngineActionExecutor {
           effectTransaction: gov.effectTransaction,
           preDispatchNoEffect: gov.preDispatchNoEffect,
         });
+        // Packet D2: outcome feeds per-model format demotion/promotion.
+        this.recordEditFormatOutcome(
+          "str_replace",
+          strReplaceEffect,
+          gov.policyBlocked === true,
+        );
         if (
           admittedThisAction &&
           proposedEdit &&
@@ -1418,6 +1461,14 @@ export class ChatEngineActionExecutor {
         mutationReceipt: result.mutationReceipt,
         effectTransaction: result.effectTransaction,
       });
+      // Packet D2: outcome feeds per-model format demotion/promotion.
+      if (directMutationAction) {
+        this.recordEditFormatOutcome(
+          action.type as EditFormatId,
+          mutationEffect,
+          result.policyBlocked === true,
+        );
+      }
       const detail = lastResult
         ? lastResult.exit_code === 0
           ? formatResultDetail(action, lastResult, mutationEffect)

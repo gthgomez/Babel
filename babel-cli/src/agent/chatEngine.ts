@@ -102,6 +102,7 @@ import {
   resolveCompactionModelId,
 } from "./chatCompaction.js";
 import { runChatEngineCompaction } from "./compactionCommit.js";
+import type { CondensationFactChannel } from "../services/condensationFacts.js";
 import { PreparedRequestAdmissionError } from "../runners/preparedProviderRequest.js";
 import {
   initLiveAuthorityOnEngine,
@@ -165,10 +166,14 @@ import {
 } from "./readThrashPolicy.js";
 import {
   applyWorkingStateEvent,
+  createEditFormatSession,
   createWorkingState,
+  formatEditFormatTelemetryLine,
   restoreWorkingStateSnapshot,
   sameRecoveryBinding,
   resetOneShotSnapshot,
+  resolveEditFormatFamily,
+  type EditFormatSession,
   type RecoveryCandidateBinding,
   resolveNextTurnToolAccess,
   snapshotOnce,
@@ -252,6 +257,11 @@ import type { AdmissionStore } from "../runtime/admission.js";
 
 import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
 import { buildRepoMapPreamble, collectChatSeedFiles } from "./repoMapPreamble.js";
+import {
+  computePreambleBudget,
+  describePreambleBudget,
+  enforcePreambleBudget,
+} from "./preambleBudget.js";
 import { invalidateRepoMapFile } from "../services/repoMap/graph.js";
 import { getChatApprovalSession } from "./chatApproval.js";
 
@@ -633,6 +643,13 @@ export class ChatEngine {
    */
   private compactionConsecutiveFailures = 0;
   private static readonly MAX_COMPACTION_FAILURES = 3;
+  /**
+   * Packet A5: optional condensation-fact channel. When a host injects one
+   * (bound to an A2 EventLog sink or FactBus), every inline compaction emits
+   * a strict started/completed fact pair; interrupted compactions stay
+   * visible as started-without-completed. Null by default (no sink wired).
+   */
+  private condensationFacts: CondensationFactChannel | null = null;
   private readCache: ReadInjectionCache = new Map();
   /** Read-injection generation; compaction and re-preparation start a new context. */
   private readContextEpoch = 0;
@@ -675,6 +692,8 @@ export class ChatEngine {
     | null = null;
   private repetitionDetector: RepetitionDetector;
   private policyEventLog = new PolicyEventLog(); // A2: policy event log
+  /** Packet D2: per-model edit-format selection; family set when model policy resolves. */
+  private editFormatSession: EditFormatSession | null = null;
   private blockedAttemptLedger = new BlockedAttemptLedger(); // B3
   private routingReceiptLog = new TurnRoutingReceiptLog(); // A3: turn routing
   /** Tier A5: Last-N tool observation tail buffer. */
@@ -1004,6 +1023,15 @@ export class ChatEngine {
               : {}),
           });
     this.modelPolicy = modelPolicy;
+    // Packet D2: resolve the per-model edit-format session deterministically
+    // from model identity; outcomes later adjust it within this session only.
+    this.editFormatSession = createEditFormatSession({
+      family: resolveEditFormatFamily({
+        policyFamily: modelPolicy.family,
+        provider: modelPolicy.provider,
+        modelId: modelPolicy.providerModelId,
+      }),
+    });
     if (options.providerRunner) {
       this.deliberationRunner =
         this.synthesisRunner =
@@ -2750,6 +2778,8 @@ export class ChatEngine {
     this._lastPhase = null;
     // Tier A: Reset observability logs
     this.policyEventLog.clear();
+    // Packet D2: demotion/promotion telemetry resets with the session.
+    this.editFormatSession?.reset();
     this.routingReceiptLog.clear();
     this.observationTails.clear();
     this.blockedAttemptLedger.clear();
@@ -3729,7 +3759,16 @@ export class ChatEngine {
       this.options.projectRoot,
     );
     try {
-      return await buildRepoMapPreamble(this.options.projectRoot, { seedFiles });
+      // Packet B5: scale the map's token budget to the current chat state
+      // (shrinks as the conversation fills the window, with a hard floor).
+      const mapBudget = computePreambleBudget({
+        historyTokens: this.apiTokenCount,
+        contextWindowTokens: this.limits.maxEstimatedTokens,
+      });
+      return await buildRepoMapPreamble(this.options.projectRoot, {
+        seedFiles,
+        budgetTokens: mapBudget.maxMapTokens,
+      });
     } catch {
       return "";
     }
@@ -3771,6 +3810,15 @@ export class ChatEngine {
     usageScope?: ChatUsageScope,
   ): void {
     trackProviderRunnerUsage(this.providerAccountingHost(), runner, usageScope);
+  }
+
+  /**
+   * Packet A5: inject the condensation-fact channel for inline compaction.
+   * Pass `null` to detach. Delivery (EventLog sink / FactBus) is owned by
+   * the caller; the engine only emits through the channel.
+   */
+  setCondensationFactChannel(channel: CondensationFactChannel | null): void {
+    this.condensationFacts = channel;
   }
 
   /** H1 compaction: delegates to runChatEngineCompaction (atomic commit path). */
@@ -3911,6 +3959,7 @@ export class ChatEngine {
       estimateTokens,
     };
     if (this.compactionManager) host.compactionManager = this.compactionManager;
+    if (this.condensationFacts) host.condensationFacts = this.condensationFacts;
     const result = await runChatEngineCompaction(host);
     if (!this.isSubmissionCurrent(ownerGeneration)) return null;
     this.conversation = host.conversation;
@@ -4231,6 +4280,13 @@ export class ChatEngine {
         "\n\nRead-only capability boundary: only read_file, read_range, list_dir, grep and glob are available. Do not request shell commands, writes, subagents or shared memory. If a read/search fails, use another available reading tool or report the missing evidence; unavailable tools cannot work around this boundary.";
     }
 
+    // Packet D2: the active edit format is visible in the preamble — format
+    // selection is deterministic given model + telemetry state, never silent.
+    if (this.editFormatSession) {
+      systemContent +=
+        "\n\n" + formatEditFormatTelemetryLine(this.editFormatSession.snapshot());
+    }
+
     // Caller policy applies to every protocol. Optional orientation stays lean
     // in text mode; required repository context was already compiled above.
     if (this.options.appendSystemPrompt) {
@@ -4243,9 +4299,17 @@ export class ChatEngine {
         systemContent += "\n\n" + this.options.preflightContext;
       }
 
-      // R4: Inject repo map for orientation
+      // R4 + Packet B5: inject the repo map for orientation, trimmed so the
+      // whole preamble stays under a budget scaled to the measured chat state.
       if (this.repoMapCache) {
-        systemContent += "\n\n" + this.repoMapCache;
+        const enforced = enforcePreambleBudget(systemContent, this.repoMapCache, {
+          historyTokens: this.apiTokenCount,
+          contextWindowTokens: this.limits.maxEstimatedTokens,
+        });
+        if (enforced.map) systemContent += "\n\n" + enforced.map;
+        console.error(
+          `[preamble-budget] ${JSON.stringify(describePreambleBudget(enforced))}`,
+        );
       }
 
     }

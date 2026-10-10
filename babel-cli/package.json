@@ -141,7 +141,7 @@
     "test:projection": "tsx --no-warnings=ExperimentalWarning --test src/interactive/projection/**/*.test.ts",
     "test:ui": "node scripts/run_ui_tests.mjs",
     "test:north-star": "node scripts/run_north_star_tests.mjs",
-    "test:remote-ui": "node scripts/remote_ui_visual.mjs",
+    "test:remote-ui": "node scripts/remote_ui_visual.mjs && tsx --no-warnings=ExperimentalWarning --import ./src/testinfra/register-no-ambient-inference.mjs --test src/bridge/e2e/remoteBrowser.gateway.test.ts",
     "test:ui:coverage": "node scripts/run_ui_tests.mjs --experimental-test-coverage",
     "test:ui:update": "UPDATE_SNAPSHOTS=1 npm run test:ui",
     "test:contrast": "tsx --no-warnings=ExperimentalWarning --test src/ui/contrast.test.ts",

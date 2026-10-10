@@ -783,6 +783,8 @@ export interface ChatEngineActionExecutorHost {
   dedupeHitCount: number
   engineRunDir: string
   engineRunId: string
+  /** Packet D2: per-model edit-format selection (null until model policy resolves). */
+  editFormatSession: import('./codingLoop/index.js').EditFormatSession | null
   executedVerifierLedger: BoundChatVerifierReceipt[]
   executionProfile: ChatExecutionProfile
   finishRecoveryLocalizationInspection: (input: {

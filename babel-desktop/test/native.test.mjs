@@ -33,6 +33,13 @@ test('decoder reports malformed data without treating it as successful output',a
  d.push(Buffer.from('not json\n[]\n{"type":"run_start"}'));d.end();
  assert.equal(errors.length,2);assert.deepEqual(events,[{type:'run_start'}]);
 });
+test('remote serve arguments stay absolute and loopback-scoped',async()=>{
+ const {buildRemoteServeArgs}=await load('remoteHost');assert.equal(typeof buildRemoteServeArgs,'function');
+ const entry=join(tmpdir(),'Babel Space','index.js');const root=join(tmpdir(),'project space');
+ const args=buildRemoteServeArgs(entry,root,{port:4545});
+ assert.deepEqual(args,[entry,'remote','serve','--port','4545','--project',root]);
+ assert.throws(()=>buildRemoteServeArgs('relative',root));
+});
 test('child arguments cannot turn task text into options or shell commands',async()=>{
  const {buildRunArgs}=await load('child');assert.equal(typeof buildRunArgs,'function');
  const entry=join(tmpdir(),'Babel Space','index.js');const root=join(tmpdir(),'project space');

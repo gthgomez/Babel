@@ -49,6 +49,11 @@ import { writeRemoteUiResponse } from './remoteUiAssets.js';
 import { WsTicketStore } from './wsTicket.js';
 import type { ProtocolHostState } from '../protocol/client/host.js';
 import { closeProtocolHostState } from '../protocol/client/host.js';
+import {
+  DevicePairingService,
+  REMOTE_PAIRING_COOKIE,
+} from './devicePairing.js';
+import { authorizeThreadScopedWsRpc } from './wsRpcAuthorization.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -76,6 +81,8 @@ export interface BridgeServerOptions {
   onListening?: (port: number) => void;
   onError?: (error: Error) => void;
   onSessionCreated?: (session: BridgeSession) => void;
+  /** Injected pairing service (tests). */
+  devicePairing?: DevicePairingService;
 }
 
 interface ParsedUrl {
@@ -106,14 +113,30 @@ function matchSessionPath(pathname: string): string | null {
 
 // ─── Authentication ────────────────────────────────────────────────────────────
 
+function pairingCookieToken(req: IncomingMessage): string | undefined {
+  const raw = req.headers['cookie'];
+  if (!raw || typeof raw !== 'string') return undefined;
+  for (const part of raw.split(';')) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(`${REMOTE_PAIRING_COOKIE}=`)) {
+      return decodeURIComponent(trimmed.slice(REMOTE_PAIRING_COOKIE.length + 1));
+    }
+  }
+  return undefined;
+}
+
 function isAuthenticated(
   req: IncomingMessage,
   authToken: string,
   parsedUrl?: ParsedUrl | null,
+  pairing?: DevicePairingService,
 ): boolean {
   // Check Authorization header first
   const headerToken = extractBearerToken(req.headers['authorization']);
   if (headerToken && verifyToken(headerToken, authToken)) return true;
+
+  const cookieToken = pairingCookieToken(req);
+  if (cookieToken && pairing?.verifySessionToken(cookieToken).ok) return true;
 
   // Check query parameter
   if (parsedUrl) {
@@ -193,6 +216,7 @@ export class BridgeServer {
   readonly protocolGateway: ProtocolGateway;
   private readonly listenHost = '127.0.0.1';
   readonly wsTickets = new WsTicketStore();
+  readonly devicePairing: DevicePairingService;
 
   /** Active WebSocket transports keyed by session ID. */
   private wsTransports = new Map<string, BridgeTransport>();
@@ -222,6 +246,8 @@ export class BridgeServer {
           ? { engineFactory: this.options.engineFactory }
           : {}),
       });
+    this.devicePairing =
+      this.options.devicePairing ?? new DevicePairingService(this.authToken);
 
     this.server = createServer((req, res) => this.handleRequest(req, res));
 
@@ -346,6 +372,11 @@ export class BridgeServer {
       return;
     }
 
+    if (pathname.startsWith('/pair')) {
+      void this.handlePairingRoute(req, res, parsedUrl);
+      return;
+    }
+
     // CORS preflight
     if (req.method === 'OPTIONS') {
       setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
@@ -355,7 +386,7 @@ export class BridgeServer {
     }
 
     // Authenticate all non-OPTIONS requests
-    if (!isAuthenticated(req, this.authToken, parsedUrl)) {
+    if (!isAuthenticated(req, this.authToken, parsedUrl, this.devicePairing)) {
       setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
       errorResponse(res, 401, 'Unauthorized — provide a valid Bearer token');
       return;
@@ -415,6 +446,138 @@ export class BridgeServer {
         break;
       }
     }
+  }
+
+  // ── Pairing endpoints ─────────────────────────────────────────────────────
+
+  private async handlePairingRoute(
+    req: IncomingMessage,
+    res: ServerResponse,
+    parsedUrl: ParsedUrl,
+  ): Promise<void> {
+    const { pathname } = parsedUrl;
+    setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
+    const origin = req.headers['origin'];
+    const originOk = originAllowed(origin, this.allowedOrigins, req.socket.remoteAddress);
+
+    if (pathname === '/pair/request' && req.method === 'POST') {
+      if (!originOk) {
+        errorResponse(res, 403, 'Origin not allowed');
+        return;
+      }
+      const body = await readLimitedBody(req, 16 * 1024);
+      if (!body.ok) {
+        errorResponse(res, 413, body.error);
+        return;
+      }
+      let parsed: { challenge_id?: unknown; device_label?: unknown };
+      try {
+        parsed = JSON.parse(body.body) as { challenge_id?: unknown; device_label?: unknown };
+      } catch {
+        errorResponse(res, 400, 'Invalid JSON');
+        return;
+      }
+      if (typeof parsed.challenge_id !== 'string' || typeof parsed.device_label !== 'string') {
+        errorResponse(res, 400, 'challenge_id and device_label are required');
+        return;
+      }
+      const result = this.devicePairing.requestPairing(parsed.challenge_id, parsed.device_label);
+      if (!result.ok) {
+        errorResponse(res, 400, result.error);
+        return;
+      }
+      jsonResponse(res, 200, { ok: true, state: 'awaiting_approval' });
+      return;
+    }
+
+    if (pathname === '/pair/status' && req.method === 'GET') {
+      const challengeId = parsedUrl.searchParams.get('challenge_id');
+      if (!challengeId) {
+        errorResponse(res, 400, 'challenge_id is required');
+        return;
+      }
+      const status = this.devicePairing.challengeStatus(challengeId);
+      if (status.state === 'approved') {
+        const exchanged = this.devicePairing.exchangeChallenge(challengeId);
+        if (!exchanged.ok) {
+          errorResponse(res, 400, exchanged.error);
+          return;
+        }
+        const secure = (req.headers['x-forwarded-proto'] ?? '').includes('https');
+        const cookieFlags = secure
+          ? 'HttpOnly; Secure; SameSite=Strict; Path=/'
+          : 'HttpOnly; SameSite=Lax; Path=/';
+        res.setHeader(
+          'Set-Cookie',
+          `${REMOTE_PAIRING_COOKIE}=${encodeURIComponent(exchanged.session.sessionToken)}; ${cookieFlags}`,
+        );
+        jsonResponse(res, 200, { ok: true, state: 'paired' });
+        return;
+      }
+      jsonResponse(res, 200, { ok: true, state: status.state, deviceLabel: status.deviceLabel });
+      return;
+    }
+
+    if (!isAuthenticated(req, this.authToken, parsedUrl, this.devicePairing)) {
+      errorResponse(res, 401, 'Unauthorized');
+      return;
+    }
+
+    if (pathname === '/pair/challenge' && req.method === 'POST') {
+      const challenge = this.devicePairing.createChallenge();
+      jsonResponse(res, 201, {
+        challengeId: challenge.challengeId,
+        expiresAt: new Date(challenge.expiresAtMs).toISOString(),
+        pairPath: `/pair?challenge_id=${encodeURIComponent(challenge.challengeId)}`,
+      });
+      return;
+    }
+
+    if (pathname === '/pair/approve' && req.method === 'POST') {
+      const body = await readLimitedBody(req, 16 * 1024);
+      if (!body.ok) {
+        errorResponse(res, 413, body.error);
+        return;
+      }
+      let parsed: { challenge_id?: unknown };
+      try {
+        parsed = JSON.parse(body.body) as { challenge_id?: unknown };
+      } catch {
+        errorResponse(res, 400, 'Invalid JSON');
+        return;
+      }
+      if (typeof parsed.challenge_id !== 'string') {
+        errorResponse(res, 400, 'challenge_id is required');
+        return;
+      }
+      const approved = this.devicePairing.approveChallenge(parsed.challenge_id);
+      if (!approved.ok) {
+        errorResponse(res, 400, approved.error);
+        return;
+      }
+      jsonResponse(res, 200, { ok: true, device: approved.device });
+      return;
+    }
+
+    if (pathname === '/pair/devices' && req.method === 'GET') {
+      jsonResponse(res, 200, { devices: this.devicePairing.listDevices() });
+      return;
+    }
+
+    const deviceId = pathname.startsWith('/pair/devices/')
+      ? pathname.slice('/pair/devices/'.length)
+      : null;
+    if (deviceId && req.method === 'DELETE') {
+      const revoked = this.devicePairing.revokeDevice(deviceId);
+      if (!revoked) {
+        errorResponse(res, 404, 'Device not found');
+        return;
+      }
+      jsonResponse(res, 200, { ok: true, deviceId });
+      return;
+    }
+
+    errorResponse(res, 404, 'Not found');
   }
 
   // ── Session endpoints ─────────────────────────────────────────────────────
@@ -688,6 +851,22 @@ export class BridgeServer {
 
     if (transport instanceof WebSocketTransport) {
       transport.onText((payload) => {
+        if (subscribedThreadId) {
+          const allowed = authorizeThreadScopedWsRpc(payload, {
+            bridgeSessionId: sessionId,
+            subscribedThreadId,
+          });
+          if (!allowed.ok) {
+            transport.sendText(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                id: null,
+                error: { code: -32001, message: allowed.message },
+              }),
+            );
+            return;
+          }
+        }
         void this.protocolGateway.dispatch(payload).then((response) => {
           transport.sendText(JSON.stringify(response));
         });
