@@ -114,3 +114,22 @@ export {
   snapshotOnce,
   type OneShotPolicySnapshot,
 } from './oneShotToolPolicy.js'
+
+export {
+  applyEditFormatOutcome,
+  createEditFormatSession,
+  formatEditFormatTelemetryLine,
+  resolveActiveEditFormat,
+  resolveEditFormatFailureStreakThreshold,
+  resolveEditFormatFamily,
+  resolveEditFormatLadder,
+  DEFAULT_EDIT_FORMAT_FAILURE_STREAK,
+  DEFAULT_EDIT_FORMAT_LADDER,
+  EDIT_FORMAT_REGISTRY,
+  type EditFormatId,
+  type EditFormatModelIdentity,
+  type EditFormatOutcome,
+  type EditFormatSession,
+  type EditFormatSessionState,
+  type EditFormatTelemetrySnapshot,
+} from './editFormatPolicy.js'

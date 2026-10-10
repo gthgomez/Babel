@@ -53,6 +53,8 @@ export type PolicyEventKind =
   | 'write_apply'
   /** C2: edit reflection cap reached — retries stopped, failure surfaced. */
   | 'edit_reflection_cap'
+  /** Packet D2: edit-format selection/demotion telemetry (detail asserts active format). */
+  | 'edit_format'
   /** Write receipt recorded (pre-image / success). */
   | 'write_receipt'
   /** Git patch non-empty observation after writes. */
