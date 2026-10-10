@@ -27,6 +27,12 @@ import { chatActionToolName, type ChatToolAction } from "../chatToolDefinitions.
 import type { ChatCallbacks } from "../chatEngineContracts.js";
 import type { ChatEngineActionExecutorHost } from "../chatEngineContracts.js";
 import { invalidateReadCacheForPath } from "./readWindow.js";
+import {
+  EDIT_REFLECTION_CAP_MARKER,
+  formatEditReflectionCapSurface,
+  formatEditReflectionNote,
+  type EditReflectionTracker,
+} from "./reflection.js";
 import type { ToolContext } from "../../localTools.js";
 
 export interface ApplyPatchActionContext {
@@ -45,6 +51,8 @@ export interface ApplyPatchActionContext {
   admittedThisAction: boolean;
   proposedEdit: { exactFingerprint: string } | null;
   callbacks: ChatCallbacks;
+  /** Bounded reflection counter on failed edits — per file per turn (C2). */
+  editReflection: EditReflectionTracker;
 }
 
 /**
@@ -53,7 +61,7 @@ export interface ApplyPatchActionContext {
  */
 export async function executeGovernedApplyPatchAction(
   ctx: ApplyPatchActionContext,
-): Promise<{ index: number; observation: string }> {
+): Promise<{ index: number; observation: string; stop?: boolean }> {
   const { host, action, patchText, toolContext, tool, target, toolId, meta } = ctx;
   const classC = resolveClassCGateDecision({
     executionProfile: host.executionProfile,
@@ -159,10 +167,36 @@ export async function executeGovernedApplyPatchAction(
     appendPatchRecovery(host.patchRecoveryPath ?? "", "apply_patch", primaryPath, patchText);
   }
 
+  let patchObs = gov.observation;
+  // C2: bounded reflection — failed-patch diagnostics already flow back to
+  // the model; count the round per primary file per turn and cap retries.
+  // A policy block is a gate decision, not an anchor failure.
+  let patchStop: boolean | undefined;
+  if (gov.exit_code !== 0 && !gov.policyBlocked) {
+    const decision = ctx.editReflection.recordFailure(ctx.ownerGeneration, primaryPath);
+    if (decision.capped) {
+      patchObs = formatEditReflectionCapSurface(target, gov.observation);
+      patchStop = true;
+      host.policyEventLog.record({
+        at_turn: host._turnIndex,
+        kind: "edit_reflection_cap",
+        detail:
+          `rounds=${decision.round} file=${primaryPath} ` +
+          `error=${(gov.error ?? "apply_patch failed").slice(0, 120)}`,
+        tool,
+      });
+    } else {
+      patchObs += `\n\n${formatEditReflectionNote(decision)}`;
+    }
+  }
   host.toolCallLog.push({
     tool,
     target,
-    detail: gov.exit_code === 0 ? `applied (${patchEffect.status})` : patchEffect.status,
+    detail: patchStop
+      ? EDIT_REFLECTION_CAP_MARKER
+      : gov.exit_code === 0
+        ? `applied (${patchEffect.status})`
+        : patchEffect.status,
     ...(gov.exit_code !== 0 ? { error: gov.error ?? "apply_patch failed" } : {}),
     index: meta.index,
     exit_code: gov.exit_code,
@@ -173,11 +207,16 @@ export async function executeGovernedApplyPatchAction(
   });
   ctx.callbacks?.onToolComplete?.(
     toolId,
-    gov.exit_code === 0 ? "applied" : gov.policyBlocked ? "blocked" : "error",
+    gov.exit_code === 0
+      ? "applied"
+      : patchStop
+        ? EDIT_REFLECTION_CAP_MARKER
+        : gov.policyBlocked
+          ? "blocked"
+          : "error",
     gov.exit_code === 0 ? undefined : gov.error ?? "apply_patch failed",
     gov.exit_code,
   );
-  let patchObs = gov.observation;
   if (gov.exit_code === 0) {
     const staticResult = await host.runPostEditStaticCheck(primaryPath);
     if (staticResult) patchObs += `\n\n### static_check ${target}\n${staticResult}`;
@@ -191,6 +230,12 @@ export async function executeGovernedApplyPatchAction(
     }
     const tamperWarning = host.checkVerifierTamper(primaryPath);
     if (tamperWarning) patchObs += `\n\n### verifier_integrity\n${tamperWarning}`;
+    // C2: a successful patch clears the file's reflection counter.
+    ctx.editReflection.recordSuccess(ctx.ownerGeneration, primaryPath);
   }
-  return { index: meta.index, observation: patchObs };
+  return {
+    index: meta.index,
+    observation: patchObs,
+    ...(patchStop ? { stop: true as const } : {}),
+  };
 }

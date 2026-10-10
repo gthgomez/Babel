@@ -25,6 +25,12 @@ import {
   ingestVerifierResult,
   rememberFullReadWindow,
 } from "./codingLoop/chatBindings.js";
+import {
+  EditReflectionTracker,
+  EDIT_REFLECTION_CAP_MARKER,
+  formatEditReflectionCapSurface,
+  formatEditReflectionNote,
+} from "./codingLoop/reflection.js";
 import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
 import {
   actualRecoveryEdit,
@@ -101,6 +107,9 @@ import type { ChatEngineActionExecutorHost } from "./chatEngineContracts.js";
 export type { ChatEngineActionExecutorHost } from "./chatEngineContracts.js";
 
 export class ChatEngineActionExecutor {
+  /** Bounded reflection counter on failed edits — per file per turn (C2). */
+  private readonly editReflection = new EditReflectionTracker();
+
   constructor(private readonly host: ChatEngineActionExecutorHost) {}
 
   async executeOneAction(
@@ -843,10 +852,41 @@ export class ChatEngineActionExecutor {
               `old=${action.old_str.slice(0, 200)}\nnew=${action.new_str.slice(0, 200)}`,
             );
           }
+          // C2: bounded reflection — the failed-edit diagnostics above already
+          // flow back to the model; count the round and cap retries per file
+          // per turn. A policy block is a gate decision, not an anchor
+          // failure, so it does not consume a reflection round.
+          let strReplaceReflectionObs = gov.observation;
+          let strReplaceReflectionStop: boolean | undefined;
+          if (!gov.policyBlocked) {
+            const decision = this.editReflection.recordFailure(
+              ownerGeneration,
+              gov.absolutePath,
+            );
+            if (decision.capped) {
+              strReplaceReflectionObs = formatEditReflectionCapSurface(
+                target,
+                gov.observation,
+              );
+              strReplaceReflectionStop = true;
+              this.host.policyEventLog.record({
+                at_turn: this.host._turnIndex,
+                kind: "edit_reflection_cap",
+                detail:
+                  `rounds=${decision.round} file=${target} ` +
+                  `error=${(gov.error ?? "str_replace failed").slice(0, 120)}`,
+                tool,
+              });
+            } else {
+              strReplaceReflectionObs += `\n\n${formatEditReflectionNote(decision)}`;
+            }
+          }
           this.host.toolCallLog.push({
             tool,
             target,
-            detail: "error",
+            detail: strReplaceReflectionStop
+              ? EDIT_REFLECTION_CAP_MARKER
+              : "error",
             error: gov.error ?? "str_replace failed",
             index: meta.index,
             exit_code: gov.exit_code,
@@ -857,11 +897,23 @@ export class ChatEngineActionExecutor {
           });
           callbacks?.onToolComplete?.(
             toolId,
-            gov.policyBlocked ? "blocked" : "error",
+            strReplaceReflectionStop
+              ? EDIT_REFLECTION_CAP_MARKER
+              : gov.policyBlocked
+                ? "blocked"
+                : "error",
             gov.error ?? (gov.policyBlocked ? "blocked" : "error"),
             gov.exit_code,
           );
-          return { index: meta.index, observation: gov.observation };
+          return {
+            index: meta.index,
+            observation: strReplaceReflectionObs,
+            ...(strReplaceReflectionStop ? { stop: true as const } : {}),
+          };
+        }
+        // C2: a successful edit clears the file's reflection counter.
+        if (gov.exit_code === 0) {
+          this.editReflection.recordSuccess(ownerGeneration, gov.absolutePath);
         }
         if (strReplaceEffect.status !== "confirmed_change") {
           invalidateReadCacheForPath(
@@ -990,6 +1042,7 @@ export class ChatEngineActionExecutor {
           admittedThisAction,
           proposedEdit,
           callbacks,
+          editReflection: this.editReflection,
         });
       }
 
