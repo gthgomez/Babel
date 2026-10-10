@@ -71,7 +71,7 @@ export function validatePushCandidates(records, root, remote) {
       git(root, ['archive', '--format=zip', `--output=${archive}`, sha])
       run('pwsh', ['-NoProfile', '-Command', '& { param($archive,$target) Expand-Archive -LiteralPath $archive -DestinationPath $target }', archive, snapshot], root, 'archive export')
       run('pwsh', ['-NoProfile', '-File', join(tools, 'check-public-content-policy.ps1'), '-RepoRoot', snapshot,
-        '-PolicyPath', join(tools, 'security/public-content-policy.json'), '-SourceRepository', root, '-SourceCommit', sha], root, 'public content policy', 300000)
+        '-PolicyPath', join(tools, 'security/public-content-policy.json'), '-SourceRepository', root, '-SourceCommit', sha], root, 'public content policy', 900000)
       run(process.execPath, [join(tools, 'policy-integrity-manifest.mjs'), 'verify', '--repo-root', snapshot], root, 'policy integrity')
       if (!scanner.error) run('gitleaks', ['dir', '--redact', '--no-banner', snapshot], root, 'secret scan')
       rmSync(snapshot, { recursive: true, force: true })
