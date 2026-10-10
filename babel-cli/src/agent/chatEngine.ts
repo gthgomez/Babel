@@ -102,6 +102,7 @@ import {
   resolveCompactionModelId,
 } from "./chatCompaction.js";
 import { runChatEngineCompaction } from "./compactionCommit.js";
+import type { CondensationFactChannel } from "../services/condensationFacts.js";
 import { PreparedRequestAdmissionError } from "../runners/preparedProviderRequest.js";
 import {
   initLiveAuthorityOnEngine,
@@ -642,6 +643,13 @@ export class ChatEngine {
    */
   private compactionConsecutiveFailures = 0;
   private static readonly MAX_COMPACTION_FAILURES = 3;
+  /**
+   * Packet A5: optional condensation-fact channel. When a host injects one
+   * (bound to an A2 EventLog sink or FactBus), every inline compaction emits
+   * a strict started/completed fact pair; interrupted compactions stay
+   * visible as started-without-completed. Null by default (no sink wired).
+   */
+  private condensationFacts: CondensationFactChannel | null = null;
   private readCache: ReadInjectionCache = new Map();
   /** Read-injection generation; compaction and re-preparation start a new context. */
   private readContextEpoch = 0;
@@ -3804,6 +3812,15 @@ export class ChatEngine {
     trackProviderRunnerUsage(this.providerAccountingHost(), runner, usageScope);
   }
 
+  /**
+   * Packet A5: inject the condensation-fact channel for inline compaction.
+   * Pass `null` to detach. Delivery (EventLog sink / FactBus) is owned by
+   * the caller; the engine only emits through the channel.
+   */
+  setCondensationFactChannel(channel: CondensationFactChannel | null): void {
+    this.condensationFacts = channel;
+  }
+
   /** H1 compaction: delegates to runChatEngineCompaction (atomic commit path). */
   private async compactIfNeeded(
     callbacks?: ChatCallbacks,
@@ -3942,6 +3959,7 @@ export class ChatEngine {
       estimateTokens,
     };
     if (this.compactionManager) host.compactionManager = this.compactionManager;
+    if (this.condensationFacts) host.condensationFacts = this.condensationFacts;
     const result = await runChatEngineCompaction(host);
     if (!this.isSubmissionCurrent(ownerGeneration)) return null;
     this.conversation = host.conversation;

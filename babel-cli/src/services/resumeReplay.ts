@@ -36,7 +36,12 @@ import {
   RUNTIME_EVENT_LOG_FILENAME,
   type RuntimeEventLogReadResult,
 } from '../runtime/eventLog.js';
-import type { FactPayload, RuntimeCompletionDecision, RuntimeFactV1 } from '../runtime/events.js';
+import type {
+  FactPayload,
+  PrunedMessageRange,
+  RuntimeCompletionDecision,
+  RuntimeFactV1,
+} from '../runtime/events.js';
 import {
   validateContextCheckpointInstalledLineage,
   type ContextCheckpointLineageEvidenceV1,
@@ -107,8 +112,30 @@ export interface ResumeReplayStateV1 {
   readonly checkpointIds: readonly string[];
   /** `context.degraded` reasons, in order, deduplicated. */
   readonly degradedReasons: readonly string[];
+  /**
+   * Packet A5: condensation facts observed in the stream, in started order.
+   * A record with `open: true` is a started fact with no completed pair —
+   * the fail-closed signature of an interrupted compaction, surfaced here
+   * and never repaired.
+   */
+  readonly condensations: readonly ResumeCondensationV1[];
   /** Digest of every field above except this one. */
   readonly stateHash: string;
+}
+
+/** One condensation observed in the fact stream (packet A5). */
+export interface ResumeCondensationV1 {
+  readonly compactionId: string;
+  readonly path: string;
+  /** Cursor sequence of the started fact. */
+  readonly startedSequence: number;
+  readonly countBefore: number | null;
+  readonly countAfter: number | null;
+  readonly prunedMessageRanges: ReadonlyArray<PrunedMessageRange>;
+  /** P11 checkpoint capsule id fenced by the completed compaction, if any. */
+  readonly capsuleCheckpointId: string | null;
+  /** True when no completed fact followed the started fact (visible gap). */
+  readonly open: boolean;
 }
 
 const EFFECT_CLASSES: ReadonlySet<string> = new Set<ToolEffectClass>([
@@ -132,6 +159,8 @@ export function hydrateResumeStateFromFacts(facts: readonly RuntimeFactV1[]): Re
   const operationOrder: string[] = [];
   const checkpointIds: string[] = [];
   const degradedReasons: string[] = [];
+  const condensations: ResumeCondensationV1[] = [];
+  const condensationIndex = new Map<string, ResumeCondensationV1>();
   let lastCursorSequence = -1;
   let completion: RuntimeCompletionDecision | null = null;
   let threadId = '';
@@ -199,6 +228,39 @@ export function hydrateResumeStateFromFacts(facts: readonly RuntimeFactV1[]): Re
       if (!degradedReasons.includes(payload.reason)) degradedReasons.push(payload.reason);
       continue;
     }
+    // Packet A5: project condensation facts; an unpaired started fact stays
+    // open (fail-closed), it is never dropped or silently closed.
+    if (payload.type === 'context.condensation.started') {
+      const record: ResumeCondensationV1 = {
+        compactionId: payload.compactionId,
+        path: payload.path,
+        startedSequence: seq,
+        countBefore: payload.countBefore,
+        countAfter: null,
+        prunedMessageRanges: [],
+        capsuleCheckpointId: null,
+        open: true,
+      };
+      condensations.push(record);
+      condensationIndex.set(payload.compactionId, record);
+      continue;
+    }
+    if (payload.type === 'context.condensation.completed') {
+      const existing = condensationIndex.get(payload.compactionId);
+      if (existing) {
+        const closed: ResumeCondensationV1 = {
+          ...existing,
+          countAfter: payload.countAfter,
+          prunedMessageRanges: [...payload.prunedMessageRanges],
+          capsuleCheckpointId: payload.capsuleCheckpointId ?? null,
+          open: false,
+        };
+        const index = condensations.indexOf(existing);
+        if (index >= 0) condensations[index] = closed;
+        condensationIndex.set(payload.compactionId, closed);
+      }
+      continue;
+    }
     if (payload.type === 'completion.decided' && fact.authority === 'authoritative') {
       completion = payload.decision;
     }
@@ -214,6 +276,7 @@ export function hydrateResumeStateFromFacts(facts: readonly RuntimeFactV1[]): Re
     operations: operationOrder.map((key) => operations.get(key)!),
     checkpointIds,
     degradedReasons,
+    condensations,
   };
   return {
     ...withoutHash,
@@ -363,6 +426,93 @@ export function resumeCapsuleContext(
     workspace: capsule.workspace ?? null,
     observations: capsule.observation_manifest ?? [],
     gaps,
+  };
+}
+
+// ─── Packet A5: pre-compaction view reconstruction ──────────────────────────
+
+export type PreCompactionReconstructionV1 =
+  | {
+      status: 'ready';
+      compactionId: string;
+      /** Real token count recorded by the started fact. */
+      countBefore: number;
+      /** Real token count recorded by the completed fact. */
+      countAfter: number;
+      /** Inclusive message ranges the compaction pruned. */
+      prunedMessageRanges: ReadonlyArray<PrunedMessageRange>;
+      /**
+       * Fenced P11 capsule context when the completed fact references a
+       * capsule and the caller supplied it; lineage fencing is enforced by
+       * the existing P11 validator (a blocked capsule is surfaced, never
+       * promoted). `null` when the fact names no capsule or none was supplied.
+       */
+      capsule: ResumeCapsuleContextResultV1 | null;
+      /** Capsule id the completed fact references, when one was fenced. */
+      capsuleCheckpointId: string | null;
+    }
+  | {
+      status: 'blocked';
+      compactionId: string;
+      reason: 'unknown_compaction' | 'incomplete_condensation';
+      detail: string;
+    };
+
+/**
+ * Reconstruct the context view that existed before a mid-run compaction from
+ * the fact stream alone (packet A5 task 3). The started fact supplies the
+ * pre-compaction token count and the completed fact supplies the pruned
+ * ranges plus the fenced P11 capsule id; when the caller also supplies the
+ * capsule object, its context is surfaced through the existing lineage
+ * fencing. Fail-closed: an unknown compaction, or a started fact without its
+ * completed pair (an interrupted compaction), blocks reconstruction instead
+ * of approximating.
+ */
+export function reconstructPreCompactionView(
+  facts: readonly RuntimeFactV1[],
+  compactionId: string,
+  capsule?: ContextCheckpointV1,
+  lineageEvidence?: ContextCheckpointLineageEvidenceV1,
+): PreCompactionReconstructionV1 {
+  let started: Extract<FactPayload, { type: 'context.condensation.started' }> | null = null;
+  let completed: Extract<FactPayload, { type: 'context.condensation.completed' }> | null = null;
+  for (const fact of facts) {
+    const payload = fact?.payload;
+    if (payload?.type === 'context.condensation.started' && payload.compactionId === compactionId) {
+      started = payload;
+      continue;
+    }
+    if (payload?.type === 'context.condensation.completed' && payload.compactionId === compactionId) {
+      completed = payload;
+    }
+  }
+  if (!started) {
+    return {
+      status: 'blocked',
+      compactionId,
+      reason: 'unknown_compaction',
+      detail: `No context.condensation.started fact for ${compactionId}.`,
+    };
+  }
+  if (!completed) {
+    return {
+      status: 'blocked',
+      compactionId,
+      reason: 'incomplete_condensation',
+      detail: `Condensation ${compactionId} has a started fact without a completed pair (interrupted compaction).`,
+    };
+  }
+  return {
+    status: 'ready',
+    compactionId,
+    countBefore: completed.countBefore,
+    countAfter: completed.countAfter,
+    prunedMessageRanges: [...completed.prunedMessageRanges],
+    capsuleCheckpointId: completed.capsuleCheckpointId ?? null,
+    capsule:
+      capsule !== undefined && completed.capsuleCheckpointId !== undefined
+        ? resumeCapsuleContext(capsule, lineageEvidence)
+        : null,
   };
 }
 
