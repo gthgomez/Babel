@@ -252,6 +252,11 @@ import type { AdmissionStore } from "../runtime/admission.js";
 
 import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
 import { buildRepoMapPreamble, collectChatSeedFiles } from "./repoMapPreamble.js";
+import {
+  computePreambleBudget,
+  describePreambleBudget,
+  enforcePreambleBudget,
+} from "./preambleBudget.js";
 import { invalidateRepoMapFile } from "../services/repoMap/graph.js";
 import { getChatApprovalSession } from "./chatApproval.js";
 
@@ -3729,7 +3734,16 @@ export class ChatEngine {
       this.options.projectRoot,
     );
     try {
-      return await buildRepoMapPreamble(this.options.projectRoot, { seedFiles });
+      // Packet B5: scale the map's token budget to the current chat state
+      // (shrinks as the conversation fills the window, with a hard floor).
+      const mapBudget = computePreambleBudget({
+        historyTokens: this.apiTokenCount,
+        contextWindowTokens: this.limits.maxEstimatedTokens,
+      });
+      return await buildRepoMapPreamble(this.options.projectRoot, {
+        seedFiles,
+        budgetTokens: mapBudget.maxMapTokens,
+      });
     } catch {
       return "";
     }
@@ -4243,9 +4257,17 @@ export class ChatEngine {
         systemContent += "\n\n" + this.options.preflightContext;
       }
 
-      // R4: Inject repo map for orientation
+      // R4 + Packet B5: inject the repo map for orientation, trimmed so the
+      // whole preamble stays under a budget scaled to the measured chat state.
       if (this.repoMapCache) {
-        systemContent += "\n\n" + this.repoMapCache;
+        const enforced = enforcePreambleBudget(systemContent, this.repoMapCache, {
+          historyTokens: this.apiTokenCount,
+          contextWindowTokens: this.limits.maxEstimatedTokens,
+        });
+        if (enforced.map) systemContent += "\n\n" + enforced.map;
+        console.error(
+          `[preamble-budget] ${JSON.stringify(describePreambleBudget(enforced))}`,
+        );
       }
 
     }
