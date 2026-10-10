@@ -8,7 +8,7 @@
   "required": [
     "schema_version", "task_id", "attempt_id", "harness_build", "adapter", "task_image", "task_revision",
     "requested_model", "sent_model", "observed_model", "terminal_status", "engine_terminal_outcome",
-    "completion_claimed", "completion_claim_evidence", "outcome", "error_class", "errors", "verifier", "diff",
+    "session_completed", "completion_claimed", "completion_claim_evidence", "outcome", "error_class", "errors", "verifier", "diff",
     "exposure", "usage", "started_at", "completed_at", "scripted_provider", "model_performance_claim", "model_routing"
   ],
   "properties": {
@@ -28,6 +28,10 @@
         { "type": "null" },
         { "enum": ["VERIFIED_COMPLETE", "UNVERIFIED_PATCH", "BLOCKED_EXTERNAL", "BLOCKED_POLICY", "BUDGET_EXHAUSTED", "CANCELLED", "INFRA_FAILURE", "AGENT_FAILURE", "NO_CHANGE_REQUIRED", "INVALID_TASK", "NEEDS_HUMAN_DECISION"] }
       ]
+    },
+    "session_completed": {
+      "type": ["boolean", "null"],
+      "description": "A completed session supported by the status and engine outcome; independent of patch correctness and claim truthfulness. Missing terminal evidence remains unknown."
     },
     "completion_claimed": { "type": "boolean" },
     "completion_claim_evidence": { "$ref": "#/$defs/stringOrNull" },

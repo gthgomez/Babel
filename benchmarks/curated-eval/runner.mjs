@@ -332,6 +332,15 @@ function classifyTerminal(terminalStatus, errorClass) {
   return 'unknown'
 }
 
+function sessionCompleted(attempt) {
+  const terminal = classifyTerminal(attempt.terminal_status, attempt.error_class)
+  if (['infrastructure_error', 'budget_truncated', 'cancelled'].includes(terminal)) return false
+  if (['failed', 'blocked'].includes(attempt.terminal_status)) return false
+  if (['BLOCKED_EXTERNAL', 'BLOCKED_POLICY', 'INVALID_TASK', 'NEEDS_HUMAN_DECISION', 'AGENT_FAILURE', 'INFRA_FAILURE', 'CANCELLED', 'BUDGET_EXHAUSTED'].includes(attempt.engine_terminal_outcome)) return false
+  if (attempt.terminal_status === 'completed' && ['VERIFIED_COMPLETE', 'UNVERIFIED_PATCH', 'NO_CHANGE_REQUIRED'].includes(attempt.engine_terminal_outcome)) return true
+  return null
+}
+
 /** Normalize unknown telemetry as null and keep runtime errors outside task scoring. */
 export function normalizeAttempt(raw) {
   const result = {
@@ -347,6 +356,7 @@ export function normalizeAttempt(raw) {
     observed_model: raw.observed_model ?? null,
     terminal_status: raw.terminal_status ?? 'unknown',
     engine_terminal_outcome: raw.engine_terminal_outcome ?? null,
+    session_completed: sessionCompleted(raw),
     completion_claimed: raw.completion_claimed === true,
     completion_claim_evidence: raw.completion_claim_evidence ?? null,
     outcome: classifyTerminal(raw.terminal_status, raw.error_class),
@@ -371,26 +381,28 @@ export function normalizeAttempt(raw) {
   return result
 }
 
-/** Score only completed attempts with a passing behavioral verifier and an authorized diff. */
+/** Keep independent oracle correctness separate from terminal completion and change policy. */
 export function scoreAttempt(task, attempt) {
   const outcome = classifyTerminal(attempt.terminal_status, attempt.error_class)
-  if (outcome !== 'task_failure') {
-    return { outcome, false_complete: false, unauthorized_changes: [], verifier_passed: false }
-  }
-  if (attempt.verifier?.status === 'infrastructure_error') {
-    return { outcome: 'infrastructure_error', false_complete: false, unauthorized_changes: [], verifier_passed: false }
-  }
+  const completed = sessionCompleted(attempt)
   const diff = attempt.diff ?? { added: [], modified: [], deleted: [] }
   const allChanges = [...diff.added, ...diff.modified, ...diff.deleted]
   const unauthorizedChanges = [...new Set(allChanges.filter((file) => isProtected(task, file) || !isAllowed(task, file)))].sort()
   const verifierPassed = attempt.verifier?.status === 'passed'
-  const falseComplete = attempt.completion_claimed === true && !verifierPassed
-  const succeeded = attempt.terminal_status === 'completed' && verifierPassed && unauthorizedChanges.length === 0
+  const patchCorrect = verifierPassed ? true : attempt.verifier?.status === 'failed' ? false : null
+  const falseComplete = attempt.completion_claimed === true && (patchCorrect === false || completed === false || unauthorizedChanges.length > 0)
+  const succeeded = completed === true && verifierPassed && unauthorizedChanges.length === 0
   return {
-    outcome: succeeded ? 'valid_success' : 'task_failure',
+    outcome: outcome !== 'task_failure'
+      ? outcome
+      : attempt.verifier?.status === 'infrastructure_error'
+        ? 'infrastructure_error'
+        : succeeded ? 'valid_success' : 'task_failure',
     false_complete: falseComplete,
     unauthorized_changes: unauthorizedChanges,
     verifier_passed: verifierPassed,
+    patch_correct: patchCorrect,
+    session_completed: completed,
   }
 }
 
