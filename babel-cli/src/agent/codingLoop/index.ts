@@ -101,6 +101,15 @@ export {
 export { decideProgressIntervention } from './progressSignals.js'
 
 export {
+  EditReflectionTracker,
+  EDIT_REFLECTION_CAP_MARKER,
+  MAX_EDIT_REFLECTION_ROUNDS,
+  formatEditReflectionCapSurface,
+  formatEditReflectionNote,
+  type EditReflectionDecision,
+} from './reflection.js'
+
+export {
   resetOneShotSnapshot,
   snapshotOnce,
   type OneShotPolicySnapshot,
