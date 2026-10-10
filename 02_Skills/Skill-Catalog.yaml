@@ -429,6 +429,10 @@ skills:
     path: Governance/Agent-Handoff-Protocol-v1.md
     tags: [governance:safety, skill, utility:handoff, utility:multi-agent]
 
+  - id: skill_session_retro
+    path: Governance/Session-Retro-v1.md
+    tags: [governance:evidence, governance:safety, skill, utility:postmortem, utility:retrospective, utility:memory, utility:quality]
+
   - id: skill_mcp_agentic_tooling
     path: Governance/MCP-Agentic-Tooling-v1.md
     tags: [governance:safety, skill, utility:mcp, utility:multi-agent, utility:tools]

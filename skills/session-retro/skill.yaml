@@ -1,0 +1,16 @@
+id: session-retro
+name: Session Retro
+version: 1.0.0
+status: reviewed
+description: Blameless, evidence-first agent retrospective for session ends and on-error postmortems; traces mistakes to a fixed root-cause taxonomy and persists actionable lessons to memory or instructions files.
+entrypoint: SKILL.md
+allowed_tools:
+  - shell_command
+  - apply_patch
+denied_tools: []
+inputs: null
+outputs: null
+tests: null
+owner: Babel Skill Forge
+created_at: 2026-10-10T00:00:00.000Z
+updated_at: 2026-10-10T00:00:00.000Z
