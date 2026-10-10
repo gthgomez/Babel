@@ -17,6 +17,8 @@
 
 export const READONLY_CHILD_CONCLUSION_MAX_CHARS = 2000;
 export const READONLY_CHILD_EVIDENCE_MAX_REFS = 12;
+/** Includes the visible truncation marker; targets may contain long search patterns. */
+export const READONLY_CHILD_EVIDENCE_TARGET_MAX_CHARS = 160;
 export const READONLY_CHILD_ERROR_MAX_CHARS = 500;
 
 /** Distinct child execution states. `policy_denied` covers ask_approval. */
@@ -113,6 +115,12 @@ function clip(text: string, maxChars: number): { text: string; truncated: boolea
   };
 }
 
+function clipEvidenceTarget(target: string): string {
+  if (target.length <= READONLY_CHILD_EVIDENCE_TARGET_MAX_CHARS) return target;
+  const marker = `… [child evidence target truncated: ${target.length} chars total]`;
+  return target.slice(0, READONLY_CHILD_EVIDENCE_TARGET_MAX_CHARS - marker.length) + marker;
+}
+
 export function buildReadOnlyChildResult(input: ReadOnlyChildResultInput): ReadOnlyChildResult {
   const finish = [...input.steps]
     .reverse()
@@ -148,7 +156,7 @@ export function buildReadOnlyChildResult(input: ReadOnlyChildResultInput): ReadO
   const evidenceSource = input.toolCallLog.slice(0, READONLY_CHILD_EVIDENCE_MAX_REFS);
   const evidence: ReadOnlyChildEvidenceRef[] = evidenceSource.map((entry) => ({
     tool: entry.tool,
-    target: entry.target,
+    target: clipEvidenceTarget(entry.target),
     exitCode: entry.exit_code,
     verified: entry.verified,
   }));

@@ -663,7 +663,7 @@ export async function runReadOnlyAgentLoop(
       if (inheritedBudgetLimiter) {
         break;
       }
-      if (effectiveAbortSignal.aborted || /abort/i.test(message)) {
+      if (effectiveAbortSignal.aborted) {
         blockedReason = blockedReason ?? 'Aborted by user or parent';
       } else {
         providerError = message;
