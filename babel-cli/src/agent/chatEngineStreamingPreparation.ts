@@ -132,7 +132,7 @@ export async function prepareStreamingSubmission(
   // `submitMessageStream` (scopeAsyncGenerator), so no context survives the
   // turn and no global turn id has to be set or restored here.
 
-  // R4: Fire-and-forget repo map generation, awaited before first LLM call
+  // Refresh optional repository context before either system-prompt path.
   const repoMapPromise =
     host.repoMapCache === null
       ? host
@@ -149,16 +149,17 @@ export async function prepareStreamingSubmission(
           })
       : Promise.resolve();
 
+  // A retained system message must not populate the prompt cache before the
+  // refreshed map is ready. Waiting later in the loop cannot repair that cache.
+  await repoMapPromise;
+  // A superseded preparation must not install context or begin execution.
+  if (!host.isSubmissionCurrent(submissionGeneration))
+    return { halted: true, haltEvent: null } as const;
+
   if (
     host.conversation.length === 1 ||
     host.conversation[0]?.role !== "system"
   ) {
-    // R4: Await repo map first so it's included in the system prompt
-    await repoMapPromise;
-    // R0-8: the repo-map await is a suspension point; a superseded generator
-    // must not install its system turn or active-execution ownership.
-    if (!host.isSubmissionCurrent(submissionGeneration))
-      return { halted: true, haltEvent: null } as const;
     const useNativeInit = host.shouldUseNativeTools(
       host.resolveDeliberationRunner(),
     );

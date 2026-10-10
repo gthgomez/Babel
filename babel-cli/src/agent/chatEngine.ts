@@ -3742,6 +3742,9 @@ export class ChatEngine {
     // per-file tag cache entry and force the repo map to refresh next turn.
     invalidateRepoMapFile(filePath);
     this.repoMapCache = null;
+    // The rendered prompt includes the map, so its cache must expire too.
+    // Otherwise continuation can retain repository context from before the edit.
+    this.clearSystemPromptCache();
     return runPostEditStaticCheckFn(filePath, this.options.projectRoot);
   }
 
