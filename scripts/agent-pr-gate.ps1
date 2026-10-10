@@ -153,7 +153,7 @@ function Wait-AgentRequiredChecksReady {
     param($Deadline)
     $snapshot = Get-AgentCurrentCISnapshot -Deadline $Deadline
     Get-AgentCIState -Snapshot $snapshot -Policies $peers -TargetSha $prHead
-  }
+  } -TimeoutSeconds 1800 -DelaySeconds 10
 }
 
 function Get-AgentReviewThreadStatus {

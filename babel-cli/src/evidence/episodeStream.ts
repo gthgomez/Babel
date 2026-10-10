@@ -431,6 +431,93 @@ export function flushEpisodeEventLog(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Action → observation pair capture (packet A3 — replayable evidence)
+// ---------------------------------------------------------------------------
+
+/**
+ * Full action→observation pair for one tool invocation. Arguments and results
+ * are persisted raw (redacted + capped at capture time via
+ * {@link redactAndCapEpisodePayload}, the same content-bound cap used for every
+ * episode payload) so a replay can reconstruct what the agent did and saw.
+ */
+export interface EpisodeActionObservationPairInput {
+  turnId?: string | null;
+  /** Executor tool-call identity; pairs stay correlated across both events. */
+  toolCallId: string;
+  toolName: string;
+  /** Existing receiptIndex identity, when the turn produced a receipt. */
+  receiptId?: string;
+  /** Action side: tool call arguments (object) and/or a raw invocation text. */
+  action?: { args?: Record<string, unknown>; text?: string };
+  /** Observation side: tool result content plus execution status. */
+  observation?: {
+    content?: string;
+    exitCode?: number;
+    failed?: boolean;
+    cancelled?: boolean;
+  };
+}
+
+/** SHA-256 hex of the serialized redacted observation content (content-bound ref). */
+export function deriveEpisodeObservationRef(content: unknown): string {
+  return createHash('sha256')
+    .update(JSON.stringify(content ?? null), 'utf8')
+    .digest('hex');
+}
+
+function pairIdFor(toolCallId: string, turnId?: string | null): string {
+  return createHash('sha256')
+    .update(JSON.stringify({ toolCallId, turnId: turnId ?? null }), 'utf8')
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/**
+ * Append one action→observation pair as two linked episode events
+ * (`tool/action_invoked` then `tool/observation_recorded`). Redaction and the
+ * {@link EPISODE_PAYLOAD_MAX_BYTES} cap are applied here — at capture time —
+ * never at read time. Returns both events in stream order.
+ */
+export function appendEpisodeActionObservationPair(
+  log: EpisodeEventLog,
+  input: EpisodeActionObservationPairInput,
+): { action: EpisodeEvent; observation: EpisodeEvent; pairId: string; observationRef: string } {
+  const turnId = input.turnId ?? null;
+  const pairId = pairIdFor(input.toolCallId, turnId);
+  const observationRef = deriveEpisodeObservationRef(input.observation ?? null);
+
+  const action = appendEpisodeEvent(log, {
+    kind: 'tool',
+    type: 'action_invoked',
+    turnId,
+    payload: {
+      pairId,
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      ...(input.receiptId !== undefined ? { receiptId: input.receiptId } : {}),
+      observationRef,
+      action: input.action ?? {},
+    },
+  });
+
+  const observation = appendEpisodeEvent(log, {
+    kind: 'tool',
+    type: 'observation_recorded',
+    turnId,
+    payload: {
+      pairId,
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      ...(input.receiptId !== undefined ? { receiptId: input.receiptId } : {}),
+      observationRef,
+      observation: input.observation ?? {},
+    },
+  });
+
+  return { action, observation, pairId, observationRef };
+}
+
 /**
  * Project pending session events then flush episode log. Primary dual-write helper
  * for parity finalize/checkpoint choke points.
