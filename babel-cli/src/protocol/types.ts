@@ -177,6 +177,8 @@ export interface ThreadCreateParams {
 export interface ThreadResumeParams {
   thread_id: ThreadId;
   project_root?: string;
+  /** Bridge session that owns this thread for /ws/ticket mint after resume/attach. */
+  session_id?: string;
 }
 
 export interface TurnSubmitParams {

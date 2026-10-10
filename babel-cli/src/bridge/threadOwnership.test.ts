@@ -24,3 +24,12 @@ test('mint fails closed until bind-at-create; other session and stale denied', (
   assert.equal(stale.ok, false);
   if (!stale.ok) assert.equal(stale.error, 'inactive_thread');
 });
+
+test('transfer moves WS ticket authority to the resuming transport session', () => {
+  const reg = new ThreadOwnershipRegistry();
+  reg.bind('t1', 'desktop');
+  assert.equal(reg.authorizeMint({ threadId: 't1', sessionId: 'remote', threadExists: true }).ok, false);
+  reg.transfer('t1', 'remote');
+  assert.equal(reg.authorizeMint({ threadId: 't1', sessionId: 'remote', threadExists: true }).ok, true);
+  assert.equal(reg.authorizeMint({ threadId: 't1', sessionId: 'desktop', threadExists: true }).ok, false);
+});

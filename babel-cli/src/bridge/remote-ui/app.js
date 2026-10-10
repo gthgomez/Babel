@@ -158,6 +158,13 @@
       host = transition('host', host, 'open');
       R.setText(byId('action-state'), 'Connected to Babel host');
       R.setText(byId('action-detail'), 'Create or resume a thread to begin.');
+      try {
+        const catalog = await rpc('remote.catalog', {});
+        const sessions = (catalog.result && catalog.result.sessions) || [];
+        if (sessions.length && byId('thread-id')) {
+          byId('thread-id').placeholder = sessions.length + ' session(s) on host';
+        }
+      } catch (catalogError) { /* catalog is optional during connect */ }
     } catch (error) {
       host = transition('host', host, 'error');
       appendEvent({ type: 'connection', error: 'Connection failed. Check the host and private route.' });
@@ -191,7 +198,8 @@
   async function createThread() {
     try {
       thread = transition('thread', thread, 'create');
-      const result = await rpc('thread.create', { project_root: rootEl.value });
+      const sessionId = await ensureSession();
+      const result = await rpc('thread.create', { project_root: rootEl.value, session_id: sessionId });
       memory.threadId = result.result && result.result.thread_id;
       threadInput.value = memory.threadId || '';
       thread = transition('thread', thread, 'ready');
@@ -204,7 +212,12 @@
     try {
       thread = transition('thread', thread, 'resume');
       memory.threadId = threadInput.value;
-      const result = await rpc('thread.resume', { thread_id: memory.threadId, project_root: rootEl.value });
+      const sessionId = await ensureSession();
+      const result = await rpc('thread.resume', {
+        thread_id: memory.threadId,
+        project_root: rootEl.value,
+        session_id: sessionId,
+      });
       if (result.error) throw new Error(result.error.message);
       thread = transition('thread', thread, 'ready');
       await observeThread();
