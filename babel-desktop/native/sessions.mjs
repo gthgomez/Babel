@@ -26,6 +26,7 @@ export function messagesFromTranscript(text) {
     messages.push({
       role: value.role,
       text: content,
+      ...(value.turn_id !== undefined && value.turn_id !== null ? {turn_id: value.turn_id} : {}),
       ...(value.role === 'assistant'
         ? {status: outcome ? statusFromTerminalOutcome(outcome) : 'unverified'}
         : {}),
@@ -41,26 +42,45 @@ export async function terminalOutcomesFromSessionEvents(sessionDir) {
   try {
     raw = await readFile(path, 'utf8');
   } catch {
-    return [];
+    return {ordered: [], byTurnId: new Map()};
   }
-  const outcomes = [];
+  const ordered = [];
+  const byTurnId = new Map();
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let event;
     try { event = JSON.parse(line); } catch { continue; }
     if (event?.kind === 'turn_ended' && typeof event.outcome === 'string') {
-      outcomes.push(event.outcome);
+      ordered.push(event.outcome);
+      if (event.turn_id !== undefined && event.turn_id !== null) {
+        byTurnId.set(String(event.turn_id), event.outcome);
+      }
     }
   }
-  return outcomes;
+  return {ordered, byTurnId};
 }
 
-function applySessionEventOutcomes(messages, outcomes) {
-  if (!outcomes.length) return messages;
+function applySessionEventOutcomes(messages, {ordered, byTurnId}) {
+  const assistantCount = messages.filter(message => message.role === 'assistant').length;
+  if (assistantCount === 0) return messages;
+  if (byTurnId.size > 0) {
+    let assistantOrdinal = 0;
+    return messages.map(message => {
+      if (message.role !== 'assistant') return message;
+      assistantOrdinal += 1;
+      const turnKey = message.turn_id !== undefined && message.turn_id !== null
+        ? String(message.turn_id)
+        : String(assistantOrdinal);
+      const outcome = byTurnId.get(turnKey);
+      if (typeof outcome !== 'string') return message;
+      return {...message, status: statusFromTerminalOutcome(outcome)};
+    });
+  }
+  if (!ordered.length || ordered.length !== assistantCount) return messages;
   let index = 0;
   return messages.map(message => {
     if (message.role !== 'assistant') return message;
-    const outcome = outcomes[index];
+    const outcome = ordered[index];
     index += 1;
     if (typeof outcome !== 'string') return message;
     return {...message, status: statusFromTerminalOutcome(outcome)};
@@ -94,9 +114,9 @@ export async function readSavedChat(packageRoot, sessionId, {runsDir} = {}) {
   if (!info.isFile() || info.size > 8 * 1024 * 1024) throw new Error('Saved chat is unavailable');
   const sessionDir = join(runsSessionsDir(packageRoot, runsDir), sessionId);
   const transcriptMessages = messagesFromTranscript(await readFile(transcript, 'utf8'));
-  const outcomes = await terminalOutcomesFromSessionEvents(sessionDir);
+  const outcomeIndex = await terminalOutcomesFromSessionEvents(sessionDir);
   return {
     id: sessionId,
-    messages: applySessionEventOutcomes(transcriptMessages, outcomes),
+    messages: applySessionEventOutcomes(transcriptMessages, outcomeIndex),
   };
 }
