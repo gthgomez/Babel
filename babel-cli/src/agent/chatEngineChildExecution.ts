@@ -825,18 +825,24 @@ export async function executeSubAgentAction(
             "parent submission/revision superseded before the child resolved",
           );
         }
+        const providerAttribution = classifySubagentFailure({
+          success: false,
+          error: subResult.providerError ?? null,
+          changedFilesCount: 0,
+          aborted: childController.signal.aborted,
+        });
         const attribution: SubagentAttribution =
           subResult.needsApproval || subResult.policyBlocked
             ? "child_policy_block"
             : subResult.inheritedBudgetExceeded
               ? childBudgetAttribution(subResult.inheritedBudgetLimiter)
               : subResult.providerError
-                ? classifySubagentFailure({
-                    success: false,
-                    error: subResult.providerError,
-                    changedFilesCount: 0,
-                    aborted: childController.signal.aborted,
-                  })
+                // A known provider failure may say "aborted" without the
+                // child being cancelled. Keep timeout/provider identities,
+                // but cancellation requires the actual child signal here.
+                ? providerAttribution === "child_cancellation" && !childController.signal.aborted
+                  ? "child_provider_failure"
+                  : providerAttribution
                 : subResult.roundExhausted
                   ? "child_round_exhaustion"
                   : childController.signal.aborted
