@@ -4,6 +4,7 @@
  */
 
 import type { IncomingMessage } from 'node:http';
+import { resolve } from 'node:path';
 
 import {
   createProtocolHostState,
@@ -14,7 +15,7 @@ import {
 import type { BabelProtocolRequest } from '../protocol/messages.js';
 import type { JsonRpcResponse } from '../protocol/jsonRpc.js';
 import { BabelProtocolErrorCode } from '../protocol/types.js';
-import { assertAllowedProjectRoot } from './workspaceBound.js';
+import { assertAllowedProjectRoot, canonicalizeContained } from './workspaceBound.js';
 import { originAllowed as originAllowedStructured } from './originPolicy.js';
 import { ThreadOwnershipRegistry, type ThreadOwnershipError } from './threadOwnership.js';
 import { threadStoreExists } from '../services/threadStore/threadStore.js';
@@ -46,7 +47,7 @@ export class ProtocolGateway {
     remoteSurface?: boolean;
   }) {
     const allowedRoot = options.allowedWorkspaceRoot;
-    this.registeredWorkspaceRoot = allowedRoot;
+    this.registeredWorkspaceRoot = canonicalizeContained(resolve(allowedRoot));
     this.host = createProtocolHostState({
       executeWithoutNotifications: true,
       projectRootGuard: (projectRoot) => assertAllowedProjectRoot(projectRoot, allowedRoot),
@@ -154,7 +155,11 @@ export class ProtocolGateway {
         typeof params?.session_id === 'string' &&
         params.session_id.length > 0
       ) {
-        this.threadOwnership.bind(threadId, params.session_id);
+        if (parsed.method === 'thread.resume') {
+          this.threadOwnership.transfer(threadId, params.session_id);
+        } else {
+          this.threadOwnership.bind(threadId, params.session_id);
+        }
       }
     }
     return response;

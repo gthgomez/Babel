@@ -6,7 +6,6 @@
  * scenario data, timestamps, IDs, and viewport names are used on every run.
  */
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -147,17 +146,3 @@ async function run() {
 }
 
 await run();
-
-const gateway = spawnSync(
-  process.execPath,
-  [
-    join(packageRoot, 'node_modules/tsx/dist/cli.mjs'),
-    '--no-warnings=ExperimentalWarning',
-    '--test',
-    'src/bridge/e2e/remoteBrowser.gateway.test.ts',
-  ],
-  { cwd: packageRoot, stdio: 'inherit', windowsHide: true },
-);
-if (gateway.status !== 0) {
-  process.exitCode = gateway.status ?? 1;
-}

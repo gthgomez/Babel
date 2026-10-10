@@ -433,6 +433,21 @@ export const SPECIALIZED_LANES = {
       restorationCriteria: 'Hermetic mock IPC socket transport without background PID locks, deterministically tested on Windows and Linux',
     },
   },
+  'remote-ui-browser': {
+    files: ['src/bridge/e2e/remoteBrowser.gateway.test.ts'],
+    command: 'npm run test:remote-ui',
+    loader: 'tsx',
+    environment: 'playwright-browser',
+    osCoverage: ['ubuntu-latest'],
+    requiredJob: null,
+    exclusion: {
+      reason:
+        'Playwright gateway e2e runs in the ubuntu-only remote-ui-browser workflow job; Windows portability aggregate does not host browser deps',
+      owner: 'remote-surface',
+      restorationCriteria:
+        'Deterministic Windows Playwright remote-ui-browser coverage or hermetic browser transport moved into unit shards',
+    },
+  },
   'claude-babel-astra-lab': {
     files: [
       'src/claude-babel-astra-lab/claudeHarness.test.ts',
@@ -823,7 +838,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   }
 
   const totalSpecializedFiles = Object.values(SPECIALIZED_LANES).reduce((acc, l) => acc + l.files.length, 0);
-  assert.equal(totalSpecializedFiles, 19, `Expected exactly 19 specialized test files, found ${totalSpecializedFiles}`);
+  assert.equal(totalSpecializedFiles, 20, `Expected exactly 20 specialized test files, found ${totalSpecializedFiles}`);
 
   const { errors, specializedSet, unclassified, overlap } = validateTestClassification(
     allTests,
@@ -834,7 +849,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   );
 
   assert.equal(errors.length, 0, `Test classification errors:\n${errors.join('\n')}`);
-  assert.equal(specializedSet.size, 19);
+  assert.equal(specializedSet.size, 20);
   assert.equal(unclassified.length, 0);
   assert.equal(overlap.length, 0);
   const classified = [...unitInventory, ...specializedSet].sort();

@@ -2,20 +2,12 @@
  * Authoritative remote session catalog derived from the protocol host and thread store.
  */
 
-import { resolve, sep } from 'node:path';
-
 import type { ProtocolHostState } from '../protocol/client/host.js';
 import { listThreads } from '../services/threadStore/index.js';
+import { isPathInsideRoot } from './workspaceBound.js';
 
 function workspaceRootMatches(projectRoot: string, registeredRoot: string): boolean {
-  const project = resolve(projectRoot);
-  const root = resolve(registeredRoot);
-  if (process.platform === 'win32') {
-    const projectLower = project.toLowerCase();
-    const rootLower = root.toLowerCase();
-    return projectLower === rootLower || projectLower.startsWith(`${rootLower}${sep}`);
-  }
-  return project === root || project.startsWith(`${root}${sep}`);
+  return isPathInsideRoot(registeredRoot, projectRoot);
 }
 
 export type RemoteSessionStatus =

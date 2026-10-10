@@ -29,6 +29,7 @@ describe('Babel Remote browser gateway flow (e2e)', () => {
       port: PORT,
       authToken: TOKEN,
       allowedWorkspaceRoot: tmp,
+      allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*', `http://127.0.0.1:${PORT}`],
       engineFactory: (descriptor) => {
         const engine = new ChatEngine({
           task: descriptor.task ?? 'browser',
