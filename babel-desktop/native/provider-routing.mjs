@@ -7,7 +7,7 @@ const ROUTE_FILE = 'desktop-routing.json';
 const PROVIDERS = Object.freeze({
   deepseek: {credential: 'DEEPSEEK_API_KEY', backendKey: 'deepseek-v4-pro'},
   openrouter: {credential: 'OPENROUTER_API_KEY', backendKey: 'deepseek-v4-pro-openrouter', openRouter: true},
-  deepinfra: {credential: 'DEEPINFRA_API_KEY', backendKey: 'deepseek-v4-flash', offline: true},
+  deepinfra: {credential: 'DEEPINFRA_API_KEY', backendKey: 'deepseek-v4-flash'},
   ollama: {credential: null, backendKey: 'deepseek-v4-flash', local: true},
 });
 
@@ -66,7 +66,6 @@ export function applyProviderRoute(env, configDirectory) {
     env.BABEL_COMPACTION_MODEL = 'deepseek/deepseek-v4-pro';
     env.BABEL_DIFF_CRITIC_MODEL = 'deepseek/deepseek-v4-pro';
   }
-  if (spec.offline) env.BABEL_LITE_OFFLINE = '1';
   if (spec.local) env.BABEL_LITE_OFFLINE = '1';
   env.BABEL_DESKTOP_PROVIDER = route.provider;
   env.BABEL_DESKTOP_MODEL_ROUTE = route.model;

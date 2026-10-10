@@ -32,6 +32,7 @@ export function isOfflineChatMode(): boolean {
   return (
     process.env['BABEL_OFFLINE'] === '1' ||
     process.env['BABEL_OFFLINE'] === 'true' ||
+    process.env['BABEL_DESKTOP_PROVIDER'] === 'ollama' ||
     process.argv.includes('--offline')
   );
 }
@@ -46,10 +47,19 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const offline = isOfflineChatMode();
   const policyRootOptions = options.babelRoot ? { babelRoot: options.babelRoot } : {};
   const configuredModels = loadModelPolicyConfig(options.babelRoot).config.models ?? {};
+  const desktopProvider = process.env['BABEL_DESKTOP_PROVIDER'];
+  const desktopModel = process.env['BABEL_DESKTOP_MODEL_ROUTE'];
+  const explicitModel = options.model ?? desktopModel;
+
   const selectedModel = !offline
-    ? resolveOpenRouterDeepSeekBackendKey(options.model ?? '') ??
-      (options.model === undefined ? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0] : options.model)
-    : options.model;
+    ? (desktopProvider === 'deepseek'
+        ? (explicitModel ?? 'deepseek-v4-pro')
+        : desktopProvider === 'deepinfra'
+          ? (explicitModel ?? 'deepseek-v4-flash')
+          : (resolveOpenRouterDeepSeekBackendKey(explicitModel ?? '') ??
+             (explicitModel === undefined ? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0] : explicitModel)))
+    : (explicitModel ?? (desktopProvider === 'ollama' ? 'deepseek-v4-flash' : undefined));
+
   const requestedBackendKey = selectedModel === undefined
     ? undefined
     : configuredModels[selectedModel]
@@ -71,16 +81,33 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const policy = requestedModelIsBackendKey
     ? resolveModelByKey({
         key: requestedBackendKey!,
-        ...(explicitOpenCodeRequest || explicitGoRequest ? {} : { liveOnly: !offline }),
+        ...(explicitOpenCodeRequest || explicitGoRequest || desktopProvider === 'deepseek' || desktopProvider === 'deepinfra'
+          ? {}
+          : { liveOnly: !offline }),
         ...policyRootOptions,
       })
     : resolveFamilyModelPolicy({
       family: offline ? 'Ollama' : (selectedModel ?? 'DeepSeek'),
         ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
         ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
-        liveOnly: !offline,
+        liveOnly: !offline && desktopProvider !== 'deepseek',
         ...policyRootOptions,
       });
+
+  if (desktopProvider === 'deepinfra' || desktopProvider === 'ollama') {
+    policy.provider = desktopProvider;
+    policy.stagePolicies = policy.stagePolicies.map(stage => ({
+      ...stage,
+      primaryProvider: desktopProvider,
+    }));
+  } else if (desktopProvider === 'deepseek') {
+    policy.provider = 'deepseek';
+    policy.stagePolicies = policy.stagePolicies.map(stage => ({
+      ...stage,
+      primaryProvider: 'deepseek',
+    }));
+  }
+
   if (explicitGoRequest) {
     const backend = policy.waterfall[0]!;
     policy.stagePolicies = policy.stagePolicies.map(stage => ({

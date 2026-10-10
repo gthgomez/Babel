@@ -7,8 +7,17 @@ import { randomUUID } from 'node:crypto';
 import { listProviderSpecs } from '../runners/providerRegistry.js';
 import { resolvePrivateCredentialEnvPath } from './envBootstrap.js';
 
-function isInteractive(): boolean {
-  return Boolean(process.stdin.isTTY && process.stderr.isTTY && process.env['CI'] !== 'true' && process.env['CI'] !== '1');
+export interface InteractiveCredentialOptions {
+  input?: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?: (mode: boolean) => void; isRaw?: boolean };
+  output?: NodeJS.WritableStream & { isTTY?: boolean };
+}
+
+function isInteractive(
+  inStream: { isTTY?: boolean } = input,
+  outStream: { isTTY?: boolean } = output,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return Boolean(inStream.isTTY && outStream.isTTY && env['CI'] !== 'true' && env['CI'] !== '1');
 }
 
 function isMachineOutput(argv: string[]): boolean {
@@ -19,30 +28,50 @@ function safeApiKey(key: string): boolean {
   return key.length >= 8 && key.length <= 4096 && /^[A-Za-z0-9_./:+==-]+$/.test(key);
 }
 
-async function readMaskedLine(): Promise<string> {
-  if (!input.isTTY) return '';
-  output.write('Paste API key (masked): ');
-  input.setRawMode(true);
-  input.resume();
-  input.setEncoding('utf8');
+export async function readMaskedLine(
+  inStream: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?: (mode: boolean) => void; isRaw?: boolean } = input,
+  outStream: NodeJS.WritableStream & { isTTY?: boolean } = output,
+): Promise<string> {
+  if (!inStream.isTTY) return '';
+  outStream.write('Paste API key (masked): ');
+  const canSetRaw = typeof inStream.setRawMode === 'function';
+  const prevRaw = Boolean(inStream.isRaw);
+  if (canSetRaw) {
+    inStream.setRawMode!(true);
+  }
+  if (typeof (inStream as any).resume === 'function') {
+    (inStream as any).resume();
+  }
+  if (typeof (inStream as any).setEncoding === 'function') {
+    (inStream as any).setEncoding('utf8');
+  }
   let value = '';
-  while (true) {
-    const [chunk] = (await once(input, 'data')) as [string];
-    for (const char of chunk) {
-      if (char === '\r' || char === '\n') {
-        input.setRawMode(false);
-        output.write('\n');
-        return value;
+  try {
+    while (true) {
+      const [chunk] = (await once(inStream, 'data')) as [string | Buffer];
+      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      for (const char of text) {
+        if (char === '\r' || char === '\n') {
+          outStream.write('\n');
+          return value;
+        }
+        if (char === '\u0003') {
+          throw new Error('Credential setup cancelled.');
+        }
+        if (char === '\u007f' || char === '\b') {
+          value = value.slice(0, -1);
+          continue;
+        }
+        value += char;
       }
-      if (char === '\u0003') {
-        input.setRawMode(false);
-        throw new Error('Credential setup cancelled.');
+    }
+  } finally {
+    if (canSetRaw) {
+      try {
+        inStream.setRawMode!(prevRaw);
+      } catch {
+        // Stream may have ended or closed
       }
-      if (char === '\u007f' || char === '\b') {
-        value = value.slice(0, -1);
-        continue;
-      }
-      value += char;
     }
   }
 }
@@ -71,34 +100,38 @@ function appendCredential(envFile: string, name: string, key: string): void {
 export async function maybePromptForMissingProviderCredential(
   env: NodeJS.ProcessEnv = process.env,
   argv: string[] = process.argv,
+  options?: InteractiveCredentialOptions,
 ): Promise<void> {
-  if (!isInteractive() || isMachineOutput(argv)) return;
+  const inStream = options?.input ?? input;
+  const outStream = options?.output ?? output;
+  if (!isInteractive(inStream, outStream, env) || isMachineOutput(argv)) return;
   const missing = listProviderSpecs()
     .filter(spec => spec.authorityConformance === 'certified' && spec.credentialEnvVar)
     .map(spec => spec.credentialEnvVar!)
     .filter(name => !env[name]);
   if (missing.length === 0) return;
   const target = resolvePrivateCredentialEnvPath(env);
-  output.write('\nBabel needs a provider credential for live model calls.\n');
-  output.write(`Supported variables: ${missing.join(', ')}\n`);
-  output.write(`Credentials are saved to your private profile: ${target}\n`);
-  const rl = createInterface({ input, output, terminal: true });
+  outStream.write('\nBabel needs a provider credential for live model calls.\n');
+  outStream.write(`Supported variables: ${missing.join(', ')}\n`);
+  outStream.write(`Credentials are saved to your private profile: ${target}\n`);
+  let name = '';
+  const rl = createInterface({ input: inStream, output: outStream, terminal: true });
   try {
-    output.write('Provider env variable to set (blank to skip): ');
-    const name = (await rl.question('')).trim();
-    if (!name || !missing.includes(name)) {
-      output.write('Credential setup skipped.\n');
-      return;
-    }
-    const key = (await readMaskedLine()).trim();
-    if (!safeApiKey(key)) {
-      output.write('Credential was not saved: invalid token format.\n');
-      return;
-    }
-    appendCredential(resolve(target), name, key);
-    env[name] = key;
-    output.write('Credential saved to your private Babel profile.\n');
+    outStream.write('Provider env variable to set (blank to skip): ');
+    name = (await rl.question('')).trim();
   } finally {
     rl.close();
   }
+  if (!name || !missing.includes(name)) {
+    outStream.write('Credential setup skipped.\n');
+    return;
+  }
+  const key = (await readMaskedLine(inStream, outStream)).trim();
+  if (!safeApiKey(key)) {
+    outStream.write('Credential was not saved: invalid token format.\n');
+    return;
+  }
+  appendCredential(resolve(target), name, key);
+  env[name] = key;
+  outStream.write('Credential saved to your private Babel profile.\n');
 }

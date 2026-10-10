@@ -160,10 +160,13 @@ export function promoteStagedInstall({userData, sourceSha, channel, cliVersion, 
   if (!existsSync(join(staging, 'cli', 'dist', 'index.js'))) {
     throw new Error('Staged CLI entry is missing');
   }
-  mkdirSync(installsDir(userData), {recursive: true});
-  rmSync(target, {recursive: true, force: true});
-  cpSync(staging, target, {recursive: true});
-  writeJsonAtomic(join(target, 'manifest.json'), {
+  const rootInstalls = installsDir(userData);
+  mkdirSync(rootInstalls, {recursive: true});
+
+  const tempTarget = join(rootInstalls, `.tmp-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  rmSync(tempTarget, {recursive: true, force: true});
+  cpSync(staging, tempTarget, {recursive: true});
+  writeJsonAtomic(join(tempTarget, 'manifest.json'), {
     id,
     channel,
     sourceSha,
@@ -171,6 +174,32 @@ export function promoteStagedInstall({userData, sourceSha, channel, cliVersion, 
     artifactSha256: typeof artifactSha256 === 'string' ? artifactSha256 : null,
     installedAt: new Date().toISOString(),
   });
+
+  const backup = existsSync(target)
+    ? join(rootInstalls, `.bak-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    : null;
+
+  if (backup) {
+    renameSync(target, backup);
+  }
+
+  try {
+    renameSync(tempTarget, target);
+    if (backup) {
+      rmSync(backup, {recursive: true, force: true});
+    }
+  } catch (error) {
+    if (backup && existsSync(backup)) {
+      try {
+        renameSync(backup, target);
+      } catch {
+        // preserve backup
+      }
+    }
+    rmSync(tempTarget, {recursive: true, force: true});
+    throw error;
+  }
+
   rmSync(staging, {recursive: true, force: true});
   if (activate) {
     const active = readActiveEngine(userData) ?? {id: bundledInstallId(), channelPreference: channel === 'preview' ? 'preview' : 'stable'};

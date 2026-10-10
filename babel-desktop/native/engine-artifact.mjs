@@ -1,9 +1,10 @@
 // License: Apache-2.0 - see LICENSE
-import {cpSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync} from 'node:fs';
+import {cpSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {execFile} from 'node:child_process';
 import {EXPECTED_ORIGIN, EXPECTED_HOST} from './updater.mjs';
 import {cliPackageRootForInstall, promoteStagedInstall, readInstallManifest, readActiveEngine, sha256File, stageDir, bundledInstallId} from './engine-manager.mjs';
+import {fetchAllCheckRuns, resolvePreviewMainRequiredChecks, summarizePreviewQualification} from './preview-ci-qualification.mjs';
 
 const SHA = /^[a-f0-9]{40}$/;
 const USER_AGENT = 'Babel-Desktop-Engine-Updater';
@@ -36,7 +37,11 @@ async function githubJson(path, {timeoutMs = 12000} = {}) {
 }
 
 async function downloadFile(url, dest, {timeoutMs = 600000, maxBytes = 256 * 1024 * 1024} = {}) {
-  if (!url.startsWith(`https://${EXPECTED_HOST}/`) && !url.startsWith('https://codeload.github.com/')) throw new Error('Refusing untrusted download host');
+  if (!url.startsWith(`https://${EXPECTED_HOST}/`) &&
+      !url.startsWith('https://codeload.github.com/') &&
+      !url.startsWith(`https://raw.githubusercontent.com/${EXPECTED_ORIGIN}/`)) {
+    throw new Error('Refusing untrusted download host');
+  }
   const response = await fetch(url, {headers: {'User-Agent': USER_AGENT}, signal: AbortSignal.timeout(timeoutMs)});
   if (!response.ok) throw new Error(`Download failed: HTTP ${response.status}`);
   mkdirSync(dirname(dest), {recursive: true});
@@ -63,8 +68,49 @@ export function resolveBundledNpmCli(resourcesPath) {
   return existsSync(candidate) ? candidate : null;
 }
 
-async function runNpmCi({nodeExe, npmCli, cwd, timeoutMs = 900000}) {
-  return capture(nodeExe, [npmCli, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {cwd, timeout: timeoutMs, env: {...process.env, ELECTRON_RUN_AS_NODE: '1'}});
+async function acquireLockfileFromSourceSha(cliRoot, sourceSha) {
+  const targetLock = join(cliRoot, 'package-lock.json');
+  const rawUrl = `https://raw.githubusercontent.com/${EXPECTED_ORIGIN}/${sourceSha}/babel-cli/package-lock.json`;
+  try {
+    await downloadFile(rawUrl, targetLock, {maxBytes: 10 * 1024 * 1024});
+    if (existsSync(targetLock)) return true;
+  } catch {
+    try {
+      const fileData = await githubJson(`/repos/${EXPECTED_ORIGIN}/contents/babel-cli/package-lock.json?ref=${sourceSha}`);
+      if (fileData?.content && fileData?.encoding === 'base64') {
+        const content = Buffer.from(fileData.content, 'base64').toString('utf8');
+        writeFileSync(targetLock, content, 'utf8');
+        return true;
+      }
+    } catch {
+      // failed
+    }
+  }
+  return false;
+}
+
+export async function ensureLockfileForCli({cliRoot, resourcesPath, sourceSha, allowBundledFallback = true}) {
+  const targetLock = join(cliRoot, 'package-lock.json');
+  if (existsSync(targetLock)) return true;
+  if (sourceSha && SHA.test(sourceSha)) {
+    const fromSource = await acquireLockfileFromSourceSha(cliRoot, sourceSha);
+    if (fromSource) return true;
+  }
+  if (allowBundledFallback && resourcesPath) {
+    const candidate = join(resourcesPath, 'babel-runtime', 'cli', 'package-lock.json');
+    if (existsSync(candidate)) {
+      cpSync(candidate, targetLock);
+      return true;
+    }
+  }
+  return false;
+}
+
+async function runNpmCi({nodeExe, npmCli, cwd, omitDev = true, timeoutMs = 900000}) {
+  const args = [npmCli, 'ci'];
+  if (omitDev) args.push('--omit=dev');
+  args.push('--ignore-scripts', '--no-audit', '--no-fund');
+  return capture(nodeExe, args, {cwd, timeout: timeoutMs, env: {...process.env, ELECTRON_RUN_AS_NODE: '1'}});
 }
 
 async function validateCliBuild({nodeExe, cliRoot, env = {}}) {
@@ -105,7 +151,17 @@ export async function resolveStableReleaseCandidate(currentSourceSha) {
   const release = await githubJson(`/repos/${EXPECTED_ORIGIN}/releases/latest`);
   const tag = typeof release?.tag_name === 'string' ? release.tag_name : '';
   const target = typeof release?.target_commitish === 'string' ? release.target_commitish : '';
-  const sourceSha = SHA.test(target) ? target : null;
+  let sourceSha = SHA.test(target) ? target : null;
+  if (!sourceSha && tag) {
+    try {
+      const commit = await githubJson(`/repos/${EXPECTED_ORIGIN}/commits/${encodeURIComponent(tag)}`);
+      if (typeof commit?.sha === 'string' && SHA.test(commit.sha)) {
+        sourceSha = commit.sha;
+      }
+    } catch {
+      sourceSha = null;
+    }
+  }
   const assets = Array.isArray(release?.assets) ? release.assets : [];
   const tgz = assets.find(a => typeof a?.name === 'string' && /^babel-(cli|harness)-.+\.tgz$/i.test(a.name) && a.browser_download_url?.startsWith(`https://${EXPECTED_HOST}/`));
   if (!tag || !tgz || !sourceSha) {
@@ -126,9 +182,22 @@ export async function resolvePreviewCandidate(currentSourceSha) {
   const commit = await githubJson(`/repos/${EXPECTED_ORIGIN}/commits/main`);
   const sha = typeof commit?.sha === 'string' ? commit.sha : '';
   if (!SHA.test(sha)) return {state: 'error', channel: 'preview', detail: 'Could not resolve the development branch head.'};
-  const status = await githubJson(`/repos/${EXPECTED_ORIGIN}/commits/${sha}/status`);
-  if (status?.state !== 'success') {
-    return {state: 'unsupported', channel: 'preview', detail: `Main is at ${sha.slice(0, 12)} but combined CI is ${status?.state ?? 'unknown'}.`};
+  let runs;
+  try {
+    runs = await fetchAllCheckRuns(githubJson, sha);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {state: 'error', channel: 'preview', detail: `Could not load CI check-runs for ${sha.slice(0, 12)}: ${detail}`};
+  }
+  if (runs.length === 0) {
+    return {state: 'unsupported', channel: 'preview', detail: `Main is at ${sha.slice(0, 12)} but no CI check-runs were found.`};
+  }
+  const qualification = summarizePreviewQualification(resolvePreviewMainRequiredChecks(runs, sha));
+  if (!qualification.ok) {
+    if (qualification.reason === 'pending') {
+      return {state: 'unsupported', channel: 'preview', detail: `Main is at ${sha.slice(0, 12)} but ${qualification.detail}`};
+    }
+    return {state: 'unsupported', channel: 'preview', detail: `Main is at ${sha.slice(0, 12)} but is not qualified: ${qualification.detail}`};
   }
   if (sha === currentSourceSha) {
     return {state: 'current', channel: 'preview', currentSha: sha, availableSha: sha, detail: 'Installed CLI already matches qualified main.'};
@@ -143,7 +212,7 @@ export async function resolvePreviewCandidate(currentSourceSha) {
   };
 }
 
-export async function installStableReleaseArchive({userData, nodeExe, npmCli, tgzUrl, sourceSha, events = () => {}}) {
+export async function installStableReleaseArchive({userData, nodeExe, npmCli, tgzUrl, sourceSha, resourcesPath, events = () => {}}) {
   const emit = (phase, status, detail = '') => events({phase, status, detail: String(detail).slice(0, 600)});
   const fail = (phase, reason, detail = '') => { emit(phase, 'failed', detail || reason); return {ok: false, phase, reason, detail}; };
   if (!SHA.test(String(sourceSha))) return fail('plan', 'invalid_source_sha');
@@ -161,8 +230,12 @@ export async function installStableReleaseArchive({userData, nodeExe, npmCli, tg
   emit('extract', 'running');
   const extracted = await extractArchive(archive, cliRoot, ['--strip-components=1']);
   if (!extracted.ok) return fail('extract', 'extract_failed', extracted.detail);
+  const hasLock = await ensureLockfileForCli({cliRoot, sourceSha, allowBundledFallback: false});
+  if (!hasLock && !existsSync(join(cliRoot, 'package-lock.json'))) {
+    return fail('install', 'missing_lockfile', 'The stable package archive lacks package-lock.json and it could not be resolved for the selected release commit.');
+  }
   emit('install', 'running');
-  const installed = await runNpmCi({nodeExe, npmCli, cwd: cliRoot});
+  const installed = await runNpmCi({nodeExe, npmCli, cwd: cliRoot, omitDev: true});
   if (!installed.ok) return fail('install', 'dependency_install_failed', installed.detail);
   emit('validate', 'running');
   const validated = await validateCliBuild({nodeExe, cliRoot});
@@ -194,7 +267,7 @@ export async function installPreviewSourceBuild({userData, nodeExe, npmCli, sour
   const cliDir = repoDir ? join(repoDir, 'babel-cli') : null;
   if (!cliDir || !existsSync(join(cliDir, 'package.json'))) return fail('extract', 'layout_failed');
   emit('install', 'running');
-  const installed = await runNpmCi({nodeExe, npmCli, cwd: cliDir});
+  const installed = await runNpmCi({nodeExe, npmCli, cwd: cliDir, omitDev: false});
   if (!installed.ok) return fail('install', 'dependency_install_failed', installed.detail);
   emit('build', 'running');
   const built = await capture(nodeExe, [npmCli, 'run', 'build'], {cwd: cliDir, timeout: 900000, env: {...process.env, ELECTRON_RUN_AS_NODE: '1'}});

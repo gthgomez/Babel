@@ -17,7 +17,7 @@ function terminateChildTree(child) {
 }
 
 /** No shell, interpolated command, automatic approval, or invented runtime flag. */
-export function buildRunArgs(entry, projectRoot, {task, mode, sessionId}) {
+export function buildRunArgs(entry, projectRoot, {task, mode, sessionId, model}) {
   if (typeof entry !== 'string' || !isAbsolute(entry) || typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) throw new TypeError('CLI and project paths must be absolute');
   if (typeof task !== 'string' || !task.trim() || task.length > 24000 || task.includes('\0')) throw new TypeError('Invalid task text');
   if (!['chat', 'plan', 'deep'].includes(mode)) throw new TypeError('Invalid Babel mode');
@@ -26,6 +26,10 @@ export function buildRunArgs(entry, projectRoot, {task, mode, sessionId}) {
   if (sessionId != null && sessionId !== '') {
     if (typeof sessionId !== 'string' || !/^[\w-]{1,80}$/.test(sessionId)) throw new TypeError('Invalid chat session id');
     args.push('--resume-chat', sessionId);
+  }
+  if (model != null && model !== '') {
+    if (typeof model !== 'string' || !/^[\w./:-]{1,120}$/.test(model)) throw new TypeError('Invalid model argument');
+    args.push('--model', model);
   }
   args.push('--', task);
   return args;

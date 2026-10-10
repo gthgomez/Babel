@@ -119,6 +119,24 @@ export function verifiedStatus(status, poisoned) {
   if (poisoned && status === 'complete') return 'unverified';
   return status;
 }
+/** Map authoritative Babel terminal outcomes to Desktop message status (unknown → unverified). */
+export function statusFromTerminalOutcome(outcome) {
+  if (typeof outcome !== 'string' || !outcome.trim()) return 'unverified';
+  const states = {
+    VERIFIED_COMPLETE: 'complete',
+    NO_CHANGE_REQUIRED: 'no_change',
+    UNVERIFIED_PATCH: 'unverified',
+    CANCELLED: 'cancelled',
+    BLOCKED_EXTERNAL: 'blocked',
+    BLOCKED_POLICY: 'blocked',
+    NEEDS_HUMAN_DECISION: 'blocked',
+    INVALID_TASK: 'blocked',
+    BUDGET_EXHAUSTED: 'failed',
+    AGENT_FAILURE: 'failed',
+    INFRA_FAILURE: 'failed',
+  };
+  return states[outcome] ?? 'unverified';
+}
 export function normalizeEvent(event) {
   if (!event || typeof event !== 'object') return {kind:'unknown'};
   if (event.type === 'assistant_chunk' && typeof event.chunk === 'string') return {kind:'delta',text:event.chunk};
@@ -145,8 +163,7 @@ export function normalizeEvent(event) {
     const result = event.result ?? {};
     const outcome = result.terminal_outcome ?? result.outcome ?? '';
     // Mirrors cli/userFacingStatus.ts at blob b7cf206; unknown outcomes never pass.
-    const states = {VERIFIED_COMPLETE:'complete',NO_CHANGE_REQUIRED:'no_change',UNVERIFIED_PATCH:'unverified',CANCELLED:'cancelled',BLOCKED_EXTERNAL:'blocked',BLOCKED_POLICY:'blocked',NEEDS_HUMAN_DECISION:'blocked',INVALID_TASK:'blocked',BUDGET_EXHAUSTED:'failed',AGENT_FAILURE:'failed',INFRA_FAILURE:'failed'};
-    let status = states[outcome] ?? 'unverified';
+    let status = statusFromTerminalOutcome(outcome);
     if (result.user_status === 'blocked' || result.approval_required === true) status = 'blocked';
     if (result.user_status === 'failed' || result.verification?.status === 'failed') status = 'failed';
     let text = [result.answer?.answer, result.answer, result.summary, result.response, result.output].find(v => typeof v === 'string') ?? '';

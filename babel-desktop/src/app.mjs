@@ -526,7 +526,13 @@ async function openSavedSession(session) {
   if (!session?.saved || session.messages.length || !session.babelSessionId) return;
   const loaded = await native.openSession(session.babelSessionId);
   session.messages = (loaded.messages ?? []).map(message => message.role === 'assistant'
-    ? { role: 'assistant', text: message.text, status: 'complete', tools: [], blocks: [{ kind: 'text', text: message.text }] }
+    ? {
+      role: 'assistant',
+      text: message.text,
+      status: message.status ?? 'unverified',
+      tools: [],
+      blocks: [{ kind: 'text', text: message.text }],
+    }
     : { role: 'user', text: message.text });
 }
 $('.skip-link').addEventListener('click',event=>{event.preventDefault();$('#composer-input').focus();});
