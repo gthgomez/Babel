@@ -34,6 +34,6 @@ Revoke devices with `DELETE /pair/devices/<deviceId>` (bearer required).
 | PWA + ADR-010 gateway | Implemented; gateway + browser integration tests |
 | `session_id` thread binding | Implemented |
 | Device pairing (cookie) | Implemented; not physically verified on Android |
-| Desktop unified live session | Partial — Desktop still uses CLI child by default |
+| Desktop unified live session | Partial — `remoteHost.mjs` + shared `HttpProtocolClient`; Desktop UI still launches CLI child by default |
 | Background host lifecycle | Partial — `babel remote serve` is the host; no Windows service yet |
 | Physical Android | **NOT VERIFIED** — use browser at 390px width as emulation only |

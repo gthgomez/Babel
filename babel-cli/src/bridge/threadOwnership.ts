@@ -26,6 +26,11 @@ export class ThreadOwnershipRegistry {
     }
   }
 
+  /** Re-bind owner after thread.resume on the shared protocol host (Desktop ↔ Remote handoff). */
+  transfer(threadId: string, sessionId: string): void {
+    this.owners.set(threadId, { sessionId, active: true });
+  }
+
   deactivate(threadId: string): void {
     const rec = this.owners.get(threadId);
     if (rec) rec.active = false;
