@@ -165,10 +165,14 @@ import {
 } from "./readThrashPolicy.js";
 import {
   applyWorkingStateEvent,
+  createEditFormatSession,
   createWorkingState,
+  formatEditFormatTelemetryLine,
   restoreWorkingStateSnapshot,
   sameRecoveryBinding,
   resetOneShotSnapshot,
+  resolveEditFormatFamily,
+  type EditFormatSession,
   type RecoveryCandidateBinding,
   resolveNextTurnToolAccess,
   snapshotOnce,
@@ -680,6 +684,8 @@ export class ChatEngine {
     | null = null;
   private repetitionDetector: RepetitionDetector;
   private policyEventLog = new PolicyEventLog(); // A2: policy event log
+  /** Packet D2: per-model edit-format selection; family set when model policy resolves. */
+  private editFormatSession: EditFormatSession | null = null;
   private blockedAttemptLedger = new BlockedAttemptLedger(); // B3
   private routingReceiptLog = new TurnRoutingReceiptLog(); // A3: turn routing
   /** Tier A5: Last-N tool observation tail buffer. */
@@ -1009,6 +1015,15 @@ export class ChatEngine {
               : {}),
           });
     this.modelPolicy = modelPolicy;
+    // Packet D2: resolve the per-model edit-format session deterministically
+    // from model identity; outcomes later adjust it within this session only.
+    this.editFormatSession = createEditFormatSession({
+      family: resolveEditFormatFamily({
+        policyFamily: modelPolicy.family,
+        provider: modelPolicy.provider,
+        modelId: modelPolicy.providerModelId,
+      }),
+    });
     if (options.providerRunner) {
       this.deliberationRunner =
         this.synthesisRunner =
@@ -2755,6 +2770,8 @@ export class ChatEngine {
     this._lastPhase = null;
     // Tier A: Reset observability logs
     this.policyEventLog.clear();
+    // Packet D2: demotion/promotion telemetry resets with the session.
+    this.editFormatSession?.reset();
     this.routingReceiptLog.clear();
     this.observationTails.clear();
     this.blockedAttemptLedger.clear();
@@ -4243,6 +4260,13 @@ export class ChatEngine {
     if (isReadOnlyChat()) {
       systemContent +=
         "\n\nRead-only capability boundary: only read_file, read_range, list_dir, grep and glob are available. Do not request shell commands, writes, subagents or shared memory. If a read/search fails, use another available reading tool or report the missing evidence; unavailable tools cannot work around this boundary.";
+    }
+
+    // Packet D2: the active edit format is visible in the preamble — format
+    // selection is deterministic given model + telemetry state, never silent.
+    if (this.editFormatSession) {
+      systemContent +=
+        "\n\n" + formatEditFormatTelemetryLine(this.editFormatSession.snapshot());
     }
 
     // Caller policy applies to every protocol. Optional orientation stays lean
