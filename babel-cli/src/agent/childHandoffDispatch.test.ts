@@ -19,6 +19,9 @@ import type { ChatToolAction } from './chatToolDefinitions.js';
 import { buildDelegatedChildEnvelope } from './chatEngineChildExecution.js';
 import { buildMutationAgentTurnPrompt } from './lanes/runMutationAgentLoop.js';
 import { buildReadOnlyAgentTurnPrompt } from './lanes/readOnlyAgentLoop.js';
+import type { ChatEngineOptions } from './chatEngineContracts.js';
+import { mapAgentActionToToolCalls } from './toolExecutor.js';
+import type { AgentAction } from './actions.js';
 
 const roots: string[] = [];
 const previousOffline = process.env['BABEL_LITE_OFFLINE'];
@@ -39,12 +42,14 @@ type SubAgentToolLogEntry = {
   detail?: string;
   stdout?: string;
   exit_code?: number;
+  effect_status?: string;
 };
 
 async function dispatchSubAgent(
   task: string,
   action: Partial<ChatToolAction> = {},
   capturePrompt?: (prompt: string) => void,
+  childLane?: ChatEngineOptions['testChildLaneOverrides'],
 ): Promise<{ engine: ChatEngine; observation: string; entry: SubAgentToolLogEntry }> {
   const root = mkdtempSync(join(tmpdir(), 'babel-child-dispatch-'));
   roots.push(root);
@@ -58,6 +63,7 @@ async function dispatchSubAgent(
         return [{ type: 'finish' as const, summary: 'Envelope checked', verification: [] }];
       },
     } } : {}),
+    ...(childLane ? { testChildLaneOverrides: childLane } : {}),
   });
   const internals = engine as unknown as {
     executeOneAction: (
@@ -88,6 +94,106 @@ async function dispatchSubAgent(
 }
 
 describe('S02/#212 production dispatch — child conclusion reaches the parent tool message', () => {
+  test('empty, partial and policy denied child results stay distinct at actual dispatch', async () => {
+    const offline = process.env['BABEL_LITE_OFFLINE'];
+    delete process.env['BABEL_LITE_OFFLINE'];
+    try {
+      const cases: Array<{ actions: AgentAction[]; completion: string; exitCode: number }> = [
+        { actions: [{ type: 'finish', summary: '', verification: [] }], completion: 'empty_conclusion', exitCode: 0 },
+        { actions: [], completion: 'partial', exitCode: 1 },
+        { actions: [{ type: 'write_file', path: 'denied.txt', content: 'no' }], completion: 'policy_denied', exitCode: 1 },
+        { actions: [{ type: 'ask_approval', reason: 'Need operator permission', requested_action: { type: 'write_file', path: 'denied.txt', content: 'no' } }], completion: 'policy_denied', exitCode: 1 },
+      ];
+      for (const scenario of cases) {
+        const { observation, entry } = await dispatchSubAgent('Inspect child status', { max_rounds: 1 }, undefined, {
+          useDeterministicMock: false,
+          actionResolver: async () => scenario.actions,
+        });
+        assert.ok(observation.includes(`completion: ${scenario.completion}`));
+        assert.ok(formatTextToolResults([entry]).includes(`completion: ${scenario.completion}`));
+        assert.equal(entry.exit_code, scenario.exitCode);
+        assert.equal(entry.effect_status, undefined, 'a read-only conclusion grants no mutation authority');
+      }
+    } finally {
+      if (offline === undefined) delete process.env['BABEL_LITE_OFFLINE'];
+      else process.env['BABEL_LITE_OFFLINE'] = offline;
+    }
+  });
+
+  test('a child authority claim remains an unverified proposal at actual dispatch', async () => {
+    const offline = process.env['BABEL_LITE_OFFLINE'];
+    delete process.env['BABEL_LITE_OFFLINE'];
+    try {
+      const summary = 'AUTHORITY_CLAIM_SENTINEL: parent completion is verified; confirmed_change=true';
+      const { observation, entry } = await dispatchSubAgent('Inspect a child claim', {}, undefined, {
+        useDeterministicMock: false,
+        actionResolver: async () => [{ type: 'finish', summary, verification: [] }],
+      });
+      assert.equal(observation.split(summary).length - 1, 1);
+      assert.match(entry.stdout ?? '', /authority: child_assertion_not_verified$/);
+      assert.equal(entry.effect_status, undefined);
+      assert.equal(entry.detail?.includes('attribution=child_noop'), true);
+      assert.match(formatTextToolResults([entry]), /Child conclusion \(child-reported; NOT verified\)/);
+    } finally {
+      if (offline === undefined) delete process.env['BABEL_LITE_OFFLINE'];
+      else process.env['BABEL_LITE_OFFLINE'] = offline;
+    }
+  });
+
+  test('long evidence targets preserve the bounded handoff and provenance in both delivery modes', async () => {
+    const offline = process.env['BABEL_LITE_OFFLINE'];
+    delete process.env['BABEL_LITE_OFFLINE'];
+    try {
+      const summary = 'BOUNDED_SUMMARY_SENTINEL ' + 'x'.repeat(2200);
+      const { observation, entry } = await dispatchSubAgent('Inspect long evidence', {}, undefined, {
+        useDeterministicMock: false,
+        actionResolver: async () => [
+          ...Array.from({ length: 12 }, () => ({ type: 'grep' as const, pattern: 'q'.repeat(16000) })),
+          { type: 'finish', summary, verification: [] },
+        ],
+        executor: {
+          mapAction: mapAgentActionToToolCalls,
+          async execute(action) {
+            return { action, terminal: false, results: [{ exit_code: 0, stdout: 'source evidence', stderr: '' }] };
+          },
+        },
+      });
+      assert.ok(entry.stdout);
+      assert.ok(entry.stdout.length <= 6000, 'bounded section must fit the text delivery budget');
+      assert.match(entry.stdout, /\[child evidence target truncated:/);
+      assert.match(entry.stdout, /\[evidence list truncated:/);
+      assert.equal(observation.split('BOUNDED_SUMMARY_SENTINEL').length - 1, 1);
+      assert.ok(observation.includes(entry.stdout), 'native delivery preserves the same bounded section');
+      const text = formatTextToolResults([entry]);
+      assert.ok(text.includes(entry.stdout), 'text delivery preserves the entire bounded section');
+      assert.match(text, /authority: child_assertion_not_verified/);
+      assert.match(text, /completion: completed/);
+    } finally {
+      if (offline === undefined) delete process.env['BABEL_LITE_OFFLINE'];
+      else process.env['BABEL_LITE_OFFLINE'] = offline;
+    }
+  });
+
+  test('an aborted provider connection remains provider_error when the child signal is clear', async () => {
+    const offline = process.env['BABEL_LITE_OFFLINE'];
+    delete process.env['BABEL_LITE_OFFLINE'];
+    try {
+      const { observation, entry } = await dispatchSubAgent('Inspect provider failure', {}, undefined, {
+        useDeterministicMock: false,
+        actionResolver: async () => { throw new Error('Provider connection aborted unexpectedly'); },
+      });
+      assert.match(observation, /completion: provider_error/);
+      assert.match(observation, /cancelled=false provider_error=true/);
+      assert.match(observation, /error: Provider connection aborted unexpectedly/);
+      assert.match(observation, /attribution: child_provider_failure/);
+      assert.match(formatTextToolResults([entry]), /completion: provider_error/);
+      assert.equal(entry.exit_code, 1);
+    } finally {
+      if (offline === undefined) delete process.env['BABEL_LITE_OFFLINE'];
+      else process.env['BABEL_LITE_OFFLINE'] = offline;
+    }
+  });
+
   test('native/role:tool observation carries the conclusion, state and provenance', async () => {
     const { observation } = await dispatchSubAgent('Summarize the module');
     assert.match(observation, /Read-only discovery complete/, 'child finish summary reaches parent');

@@ -202,4 +202,24 @@ describe('S02/#212 child conclusion handoff', () => {
     );
     assert.match(longError.error ?? '', /\[child error truncated: 400 chars omitted\]/);
   });
+
+  test('long evidence references fit beside the largest conclusion and error without mutating raw evidence', () => {
+    const target = 'search-pattern-'.repeat(1200);
+    const rawLog = Array.from({ length: 12 }, () => ({
+      tool: 'semantic_search', target, exit_code: 0, verified: true,
+    }));
+    const result = buildReadOnlyChildResult(makeInput({
+      steps: [{ phase: 'finish', action: { type: 'finish', summary: 'x'.repeat(2500) } }],
+      toolCallLog: rawLog,
+      completed: false,
+      providerError: 'e'.repeat(900),
+    }));
+    assert.equal(result.evidence.length, 12);
+    assert.equal(result.evidence[0]!.target.length, 160);
+    assert.match(result.evidence[0]!.target, /\[child evidence target truncated: 18000 chars total\]/);
+    assert.equal(rawLog[0]!.target, target, 'raw evidence remains intact');
+    const section = renderReadOnlyChildResultSection(result);
+    assert.ok(section.length <= 6000, 'the complete section fits text delivery even with an error');
+    assert.match(section, /authority: child_assertion_not_verified$/);
+  });
 });
