@@ -48,9 +48,13 @@ export function commandCoverage(workflow, command) {
     assert.match(guard?.run ?? '', /\$dependency\.Value\.result -ne 'success'/);
     assert.match(guard?.run ?? '', /throw/);
     const providers = [];
+    const fullLaneIf = "needs.detect-scope.outputs.full == 'true'";
     for (const name of needs) {
       const job = workflow.jobs[name];
-      if (!job || job.if !== undefined || job['continue-on-error'] !== undefined) continue;
+      // The fast lane skips heavy jobs. On the full lane they still run, and a
+      // skipped full-lane job fails the aggregate, so they remain coverage.
+      if (!job || job['continue-on-error'] !== undefined) continue;
+      if (job.if !== undefined && job.if !== fullLaneIf) continue;
       const matrix = job.strategy?.matrix;
       const platforms = job['runs-on'] === '${{ matrix.os }}'
         ? (!matrix?.include && !matrix?.exclude && Array.isArray(matrix?.os) ? matrix.os : [])
