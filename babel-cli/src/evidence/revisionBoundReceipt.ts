@@ -221,6 +221,13 @@ const INPUT_CLOSURE_SKIP_DIRS = new Set([
 ]);
 const INPUT_CLOSURE_MAX_FILES = 40;
 const INPUT_CLOSURE_MAX_BYTES = 1_000_000;
+/** Repository aggregate, decimal bytes, including UTF-8 path metadata. */
+const INPUT_CLOSURE_REPOSITORY_BYTE_BUDGET = 128_000_000;
+/**
+ * Repository admission cardinality (directories, files, and symlinks).
+ * Bounds how many entries are admitted, not resident memory or RSS.
+ */
+const INPUT_CLOSURE_REPOSITORY_MAX_ENTRIES = 20_000;
 
 function closurePathIsCredential(relativePath: string): boolean {
   return isCredentialTargetPath(relativePath);
@@ -242,7 +249,11 @@ export function discoverVerifierInputClosure(projectRoot: string, freshProof = f
 
 // Repository mode also binds directory types and leaf link strings. A tracked
 // path absent from independent enumeration is incomplete evidence, not deletion.
-function captureVerifierInputClosure(
+// requiredPaths selects the 128_000_000-byte aggregate and the 20_000-entry cap.
+// Cache and fresh verifier discovery leave it unset and keep 40 x 1 MB.
+// Exported so admission tests can select repository mode. Discovery callers
+// must not pass requiredPaths; that would widen fresh proof.
+export function captureVerifierInputClosure(
   projectRoot: string, freshProof: boolean, requiredPaths?: readonly string[],
 ): VerifierInputClosure {
   const unsupported = (reason: string): { mode: "unsupported"; reason: string } => ({ mode: "unsupported", reason });
@@ -256,7 +267,10 @@ function captureVerifierInputClosure(
   const files: Array<{ absolute: string; relativePath: string; size: number; kind: "file" | "symlink"; admittedStats: fs.Stats }> = [];
   const admitted = new Set<string>();
   const stack = [root];
-  const maxBudgetBytes = INPUT_CLOSURE_MAX_FILES * INPUT_CLOSURE_MAX_BYTES;
+  const repositoryCapture = requiredPaths !== undefined;
+  const maxBudgetBytes = repositoryCapture
+    ? INPUT_CLOSURE_REPOSITORY_BYTE_BUDGET
+    : INPUT_CLOSURE_MAX_FILES * INPUT_CLOSURE_MAX_BYTES;
   const started = Date.now();
   let budgetBytes = 0;
   while (stack.length > 0) {
@@ -296,8 +310,10 @@ function captureVerifierInputClosure(
           if (stats.size > INPUT_CLOSURE_MAX_BYTES) return unsupported("Input file exceeds the closure size cap");
           budgetBytes += stats.size;
           files.push({ absolute, relativePath, size: stats.size, kind: stats.isSymbolicLink() ? "symlink" : "file", admittedStats: stats });
-          if (!freshProof && files.length > INPUT_CLOSURE_MAX_FILES) return unsupported("Input closure exceeds the file cap");
+          if (!repositoryCapture && !freshProof && files.length > INPUT_CLOSURE_MAX_FILES) return unsupported("Input closure exceeds the file cap");
         } else return unsupported("Input closure includes an unsupported filesystem entry");
+        if (repositoryCapture && admitted.size > INPUT_CLOSURE_REPOSITORY_MAX_ENTRIES)
+          return unsupported("Input closure exceeds the repository entry cap");
         if (budgetBytes > maxBudgetBytes) return unsupported("Input closure exceeds the proof byte budget");
       }
     } catch { return unsupported("Input directory is not listable"); }
