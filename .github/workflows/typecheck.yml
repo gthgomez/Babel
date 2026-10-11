@@ -586,14 +586,19 @@ jobs:
           BABEL_TAP_EXECUTION_PATH: artifacts/harness-runtime/execution.json
         timeout-minutes: 15
         shell: pwsh
-        run: >
-          New-Item -ItemType Directory -Force artifacts/harness-runtime | Out-Null
-
-          npm run test:harness-runtime -- --test-timeout=60000 2>&1 | Tee-Object -FilePath
-          artifacts/harness-runtime/full.tap
-
+        run: |
+          New-Item -ItemType Directory -Force ../artifacts/harness-runtime | Out-Null
+          npm run test:harness-runtime -- --test-timeout=60000 2>&1 | Tee-Object -FilePath ../artifacts/harness-runtime/full.tap
           exit $LASTEXITCODE
         working-directory: babel-cli
+      - name: Stage harness runtime TAP
+        if: always() && steps.harness_runtime.outcome != 'skipped' && steps.harness_runtime.outcome != ''
+        shell: pwsh
+        working-directory: babel-cli
+        run: |
+          New-Item -ItemType Directory -Force artifacts/harness-runtime | Out-Null
+          Copy-Item -Force ../artifacts/harness-runtime/full.tap artifacts/harness-runtime/full.tap
+          exit $LASTEXITCODE
       - name: Summarize harness runtime TAP (Linux)
         if: >-
           matrix.os == 'ubuntu-latest' && (always() && steps.harness_runtime.outcome != 'skipped' &&
@@ -683,9 +688,18 @@ jobs:
           BABEL_TAP_EXECUTION_PATH: artifacts/chat-truth/execution.json
         shell: pwsh
         run: |
-          npm run test:chat-truth 2>&1 | Tee-Object -FilePath artifacts/chat-truth/full.tap
+          New-Item -ItemType Directory -Force ../artifacts/chat-truth | Out-Null
+          npm run test:chat-truth 2>&1 | Tee-Object -FilePath ../artifacts/chat-truth/full.tap
           exit $LASTEXITCODE
         working-directory: babel-cli
+      - name: Stage Chat truth TAP
+        if: always() && steps.chat_truth.outcome != 'skipped' && steps.chat_truth.outcome != ''
+        shell: pwsh
+        working-directory: babel-cli
+        run: |
+          New-Item -ItemType Directory -Force artifacts/chat-truth | Out-Null
+          Copy-Item -Force ../artifacts/chat-truth/full.tap artifacts/chat-truth/full.tap
+          exit $LASTEXITCODE
       - name: Summarize Chat truth TAP (Linux)
         if: >-
           matrix.os == 'ubuntu-latest' && (always() && steps.chat_truth.outcome != 'skipped' && steps.chat_truth.outcome
@@ -972,14 +986,18 @@ jobs:
         id: unit_shard
         shell: pwsh
         working-directory: babel-cli
-        run: >
+        run: |
           Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue
-
+          New-Item -ItemType Directory -Force ../artifacts/ci-unit | Out-Null
+          node scripts/run_ci_unit_shard.mjs --shard-index ${{ matrix.shard }} --shard-count 4 2>&1 | Tee-Object -FilePath ../artifacts/ci-unit/full.tap
+          exit $LASTEXITCODE
+      - name: Stage unit shard TAP
+        if: always() && steps.unit_shard.outcome != 'skipped' && steps.unit_shard.outcome != ''
+        shell: pwsh
+        working-directory: babel-cli
+        run: |
           New-Item -ItemType Directory -Force artifacts/ci-unit | Out-Null
-
-          node scripts/run_ci_unit_shard.mjs --shard-index ${{ matrix.shard }} --shard-count 4 2>&1 | Tee-Object
-          artifacts/ci-unit/full.tap
-
+          Copy-Item -Force ../artifacts/ci-unit/full.tap artifacts/ci-unit/full.tap
           exit $LASTEXITCODE
       - name: Validate complete unit TAP inventory
         if: always() && steps.unit_shard.outcome != 'skipped' && steps.unit_shard.outcome != ''

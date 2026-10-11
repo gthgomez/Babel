@@ -64,7 +64,27 @@ test('every pre-optimization Linux and Windows command remains covered on its or
         if (step.run) actual.push(JSON.stringify([step.name, step.run, step['working-directory'] ?? '', step.shell ?? '']));
       }
     }
-    for (const signature of expected) assert.ok(actual.includes(signature), `${name}: missing original command ${signature}`);
+    for (const signature of expected) {
+      // These suites still run under pwsh in babel-cli and still publish
+      // artifacts/<suite>/full.tap. The live Tee-Object target is outside that
+      // project so a growing log cannot change repository capture mid-run.
+      const relocated = signature.match(/npm run test:(harness-runtime|chat-truth)[^"]*artifacts\/\1\/full\.tap/);
+      if (relocated) {
+        const suite = relocated[1];
+        const stepName = suite === 'harness-runtime'
+          ? 'Run required harness runtime suite'
+          : 'Run required Chat truth suite';
+        const step = workflow.jobs[suite].steps.find(candidate => candidate.name === stepName);
+        assert.ok(step, `${name}: ${stepName} missing`);
+        assert.equal(step['working-directory'], 'babel-cli');
+        assert.equal(step.shell, 'pwsh');
+        assert.match(step.run, new RegExp(`New-Item -ItemType Directory -Force \\.\\./artifacts/${suite} \\| Out-Null`));
+        assert.match(step.run, new RegExp(`npm run test:${suite}[^\\n]*Tee-Object -FilePath \\.\\./artifacts/${suite}/full\\.tap`));
+        assert.match(step.run, /exit \$LASTEXITCODE/);
+        continue;
+      }
+      assert.ok(actual.includes(signature), `${name}: missing original command ${signature}`);
+    }
   }
 });
 
@@ -115,6 +135,8 @@ test('hosted unit shards retain exhaustive selection evidence with serial execut
   assert.equal(job.strategy['fail-fast'], false);
   const run = job.steps.find(step => step.id === 'unit_shard');
   assert.match(run.run, /run_ci_unit_shard\.mjs --shard-index \$\{\{ matrix\.shard \}\} --shard-count 4/);
+  // The live TAP must stay outside babel-cli while tests capture that project.
+  assert.match(run.run, /Tee-Object -FilePath \.\.\/artifacts\/ci-unit\/full\.tap/);
   assert.match(run.run, /exit \$LASTEXITCODE/);
   const upload = job.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(upload.if, 'always()');
@@ -129,6 +151,7 @@ test('runtime and chat preserve required selection, raw TAP and fail-closed summ
     const commands = job.steps.map(step => step.run ?? '').join('\n');
     assert.ok(commands.includes(`capture_required_tap_selection.mjs ${name}`));
     assert.ok(commands.includes(`summarize_required_tap.mjs ${name}`));
+    assert.ok(commands.includes(`../artifacts/${name}/full.tap`));
     assert.ok(commands.includes(`artifacts/${name}/full.tap`));
     assert.ok(commands.includes(`npm run test:${name}`));
   }
