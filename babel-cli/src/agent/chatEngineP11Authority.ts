@@ -423,10 +423,13 @@ export class ChatEngineP11Authority {
 
   private currentP11Workspace(): ReturnType<typeof RevisionManager.computeRevisionSync> | null {
     try {
-      return RevisionManager.computeRevisionSync(this.host.options.projectRoot, [], {
+      const workspace = RevisionManager.computeRevisionSync(this.host.options.projectRoot, [], {
         scope_kind: 'repository',
         git_binding: 'optional',
       });
+      // Optional capture returns unknown provenance when physical proof fails.
+      // Its nonce digest cannot authorize current workspace or coverage refs.
+      return workspace.gitCommitHash ? workspace : null;
     } catch {
       return null;
     }

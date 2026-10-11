@@ -1124,6 +1124,12 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
     let resumedEngine: ChatEngine | undefined;
     try {
       writeBigFile(fixture);
+      // The compaction capsule requires a captured Git commit for this project.
+      git(fixture.root, ['init', '-q']);
+      git(fixture.root, ['config', 'user.email', 'babel-test@example.com']);
+      git(fixture.root, ['config', 'user.name', 'Babel Test']);
+      git(fixture.root, ['add', '-A']);
+      git(fixture.root, ['commit', '-qm', 'fixture']);
       // Deterministic compaction strategy: drop the whole prior window and
       // leave only a summary, exercising the real commit/capsule path (no
       // network). This models an LLM summarize that discards raw observations.
