@@ -247,7 +247,7 @@ exit 0
   & $git -C $seedPath worktree add --detach $candidatePath $headSha 2>&1 | Out-Null
 
   function Invoke-Gate {
-    param([string]$Label, [hashtable]$Extra, [string]$EventName = 'pull_request_target')
+    param([string]$Label, [hashtable]$Extra, [string]$EventName = 'pull_request_target', [string]$OriginMainSha = $baseSha)
     $outputPath = Join-Path $root ("result-{0}.json" -f $Label)
     $argumentList = @(
       '-NoProfile', '-NonInteractive', '-File', (Join-Path $seedPath 'scripts/trusted-merge-gate.ps1'),
@@ -256,7 +256,7 @@ exit 0
     )
     foreach ($key in $Extra.Keys) { $argumentList += $key; $argumentList += $Extra[$key] }
     $env:TCP_TEST_ROOT = $root
-    $env:TCP_TEST_BASE = $baseSha
+    $env:TCP_TEST_BASE = $OriginMainSha
     $previousPath = $env:PATH
     $env:PATH = "$shimDir$([IO.Path]::PathSeparator)$previousPath"
     # Mirror the trusted workflow environment so the gate's self-check
@@ -406,16 +406,26 @@ exit 0
     }
   }
 
-  Invoke-Step 'non-strict-required-check-policy-blocked' {
+  Invoke-Step 'non-strict-required-check-policy-allows-stale-base' {
+    & $git -C $seedPath commit --allow-empty -m 'advance main after candidate opened' 2>&1 | Out-Null
+    $advancedMain = (& $git -C $seedPath rev-parse HEAD).Trim()
     $rulesetDetail.rules[1].parameters.strict_required_status_checks_policy = $false
     $rulesetDetail | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'ruleset.json') -Encoding utf8NoBOM
+    $stalePrView = $prView | ConvertTo-Json -Depth 10 -Compress | ConvertFrom-Json
+    $stalePrView.baseRefOid = $baseSha
+    $stalePrView | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'pr-view.json') -Encoding utf8NoBOM
     try {
-      $run = Invoke-Gate -Label 'non-strict-policy' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath }
+      $run = Invoke-Gate -Label 'non-strict-policy' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath } -OriginMainSha $advancedMain
     } finally {
       $rulesetDetail.rules[1].parameters.strict_required_status_checks_policy = $true
       $rulesetDetail | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'ruleset.json') -Encoding utf8NoBOM
+      $prView | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'pr-view.json') -Encoding utf8NoBOM
+      Remove-Item Env:TCP_TEST_BASE -ErrorAction SilentlyContinue
     }
-    if ($run.exitCode -eq 0 -or $run.result.blockers -notcontains 'required_status_checks_not_strict') { throw 'Non-strict required checks unexpectedly certified exact-base evidence.' }
+    if ($run.exitCode -ne 0 -or @($run.result.blockers) -contains 'pr_base_sha_is_stale') {
+      throw "Non-strict freshness must not block solely on stale base: $($run.result.blockers -join ',')"
+    }
+    if (-not [bool]$run.result.checks.STALE_BASE_INTEGRATION_CLEAR) { throw 'Stale-base integration clearance must be evaluated.' }
   }
 
   # A comment event cannot represent the required PR check. The separate

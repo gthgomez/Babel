@@ -162,10 +162,10 @@ function Get-AgentCIState {
 }
 
 function Test-AgentCandidateIdentity {
-  param([AllowNull()][object]$Candidate, [string]$HeadSha, [string]$BaseSha)
+  param([AllowNull()][object]$Candidate, [string]$HeadSha, [string]$BaseSha, [bool]$StrictBaseFreshness = $true)
   $reason = if ($null -eq $Candidate) { 'candidate_source_unavailable' }
     elseif ([string]$Candidate.headRefOid -ne $HeadSha) { 'candidate_head_superseded' }
-    elseif ([string]$Candidate.baseRefOid -ne $BaseSha) { 'execution_base_superseded' }
+    elseif ($StrictBaseFreshness -and [string]$Candidate.baseRefOid -ne $BaseSha) { 'execution_base_superseded' }
     elseif ([string]$Candidate.state -ne 'OPEN') { 'pr_not_open' }
     elseif ([bool]$Candidate.isDraft) { 'pr_is_draft' }
     elseif ([bool]$Candidate.isCrossRepository) { 'cross_repository_pr' }

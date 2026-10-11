@@ -39,6 +39,8 @@ $executionBase = ''
 $ciSnapshot = [pscustomobject]@{ available = $false; observations = @(); workflows = @(); error = 'not_checked'; apiCalls = 0 }
 $ciEvaluation = [pscustomobject]@{ state = 'not_checked'; results = @() }
 $requiredChecksReady = [pscustomobject]@{ ready = $false; attempts = 0; reason = 'not_checked' }
+$strictBaseFreshness = $true
+$integrationOverlap = [pscustomobject]@{ available = $false; overlap = @(); error = 'not_evaluated' }
 
 function Add-AgentCheck {
   param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][bool]$Passed, [string]$Blocker = '')
@@ -123,17 +125,22 @@ function Get-AgentRulesetPolicy {
 }
 
 function Get-AgentCurrentCandidateIdentity {
-  param([DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(30)))
+  param(
+    [DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(30)),
+    [bool]$StrictBaseFreshness = $true
+  )
   $current = Get-AgentJsonFromGh -Deadline $Deadline -Arguments @('pr', 'view', [string]$PR, '--repo', $ExpectedRepository, '--json', $prFields)
   if (-not $current.available) { return [pscustomobject]@{ valid = $false; reason = 'candidate_source_unavailable' } }
-  $identity = Test-AgentCandidateIdentity -Candidate $current.value -HeadSha $prHead -BaseSha $executionBase
+  $identity = Test-AgentCandidateIdentity -Candidate $current.value -HeadSha $prHead -BaseSha $executionBase -StrictBaseFreshness $StrictBaseFreshness
   if (-not $identity.valid) { return $identity }
-  $main = Get-AgentJsonFromGh -Deadline $Deadline -Arguments @('api', "repos/$ExpectedRepository/git/ref/heads/$ExpectedBaseBranch")
-  if (-not $main.available) { return [pscustomobject]@{ valid = $false; reason = 'base_source_unavailable' } }
-  $mainObject = Get-AgentLocalValue -Object $main.value -Name 'object'
-  $mainSha = Get-AgentLocalValue -Object $mainObject -Name 'sha'
-  if ($mainSha -isnot [string] -or $mainSha -notmatch '^[a-f0-9]{40}$') { return [pscustomobject]@{ valid = $false; reason = 'base_source_unavailable' } }
-  if ($mainSha -ne $executionBase) { return [pscustomobject]@{ valid = $false; reason = 'execution_base_superseded' } }
+  if ($StrictBaseFreshness) {
+    $main = Get-AgentJsonFromGh -Deadline $Deadline -Arguments @('api', "repos/$ExpectedRepository/git/ref/heads/$ExpectedBaseBranch")
+    if (-not $main.available) { return [pscustomobject]@{ valid = $false; reason = 'base_source_unavailable' } }
+    $mainObject = Get-AgentLocalValue -Object $main.value -Name 'object'
+    $mainSha = Get-AgentLocalValue -Object $mainObject -Name 'sha'
+    if ($mainSha -isnot [string] -or $mainSha -notmatch '^[a-f0-9]{40}$') { return [pscustomobject]@{ valid = $false; reason = 'base_source_unavailable' } }
+    if ($mainSha -ne $executionBase) { return [pscustomobject]@{ valid = $false; reason = 'execution_base_superseded' } }
+  }
   return $identity
 }
 
@@ -149,7 +156,7 @@ function Get-AgentCurrentCISnapshot {
 function Wait-AgentRequiredChecksReady {
   $peers = @($requiredCheckPolicies | Where-Object { $_.context -ine 'trusted-control-plane' })
   if ($peers.Count -eq 0) { return [pscustomobject]@{ ready = $true; attempts = 0; reason = 'no_peer_checks_to_wait_for' } }
-  Wait-AgentCIState -ReadCandidate { param($Deadline) Get-AgentCurrentCandidateIdentity -Deadline $Deadline } -ReadState {
+  Wait-AgentCIState -ReadCandidate { param($Deadline) Get-AgentCurrentCandidateIdentity -Deadline $Deadline -StrictBaseFreshness $strictBaseFreshness } -ReadState {
     param($Deadline)
     $snapshot = Get-AgentCurrentCISnapshot -Deadline $Deadline
     Get-AgentCIState -Snapshot $snapshot -Policies $peers -TargetSha $prHead
@@ -327,13 +334,42 @@ try {
   $prHead = if ($prAvailable) { [string]$prView.headRefOid } else { '' }
   $prBase = if ($prAvailable) { [string]$prView.baseRefOid } else { '' }
   $executionBase = if ([string]::IsNullOrWhiteSpace($ExpectedExecutionBaseSha)) { $originMain } else { $ExpectedExecutionBaseSha }
-  Add-AgentCheck -Name 'EXECUTION_BASE_CURRENT' -Passed ((Test-AgentShaValue $executionBase) -and $executionBase -eq $prBase -and $executionBase -eq $originMain) -Blocker 'execution_base_superseded'
+  $rulesetPolicy = if ($ghAvailable -and $authOk) { Get-AgentRulesetPolicy } else {
+    [pscustomobject]@{ available = $false; error = 'active_ruleset_unreadable'; required_review_thread_resolution = $false; required_approving_review_count = -1; required_status_checks = @(); required_status_check_policies = @(); strict_required_status_checks_policy = $null; id = $null; name = $null; enforcement = $null }
+  }
+  $strictBaseFreshness = $rulesetPolicy.available -and [bool]$rulesetPolicy.strict_required_status_checks_policy
+  $executionBaseValid = (Test-AgentShaValue $executionBase)
+  $trustedExecutionBaseBound = $executionBaseValid -and (
+    (-not $strictBaseFreshness) -or
+    ((Test-AgentShaValue $prBase) -and [string]::Equals($executionBase, $prBase, [StringComparison]::OrdinalIgnoreCase))
+  )
+  $executionBaseCurrent = $executionBaseValid -and (
+    (-not $strictBaseFreshness) -or
+    ((Test-AgentShaValue $prBase) -and (Test-AgentShaValue $originMain) -and
+      [string]::Equals($executionBase, $prBase, [StringComparison]::OrdinalIgnoreCase) -and
+      [string]::Equals($executionBase, $originMain, [StringComparison]::OrdinalIgnoreCase))
+  )
+  Add-AgentCheck -Name 'TRUSTED_EXECUTION_BASE_BOUND' -Passed $trustedExecutionBaseBound -Blocker 'execution_base_superseded'
+  Add-AgentCheck -Name 'EXECUTION_BASE_CURRENT' -Passed $executionBaseCurrent -Blocker 'execution_base_superseded'
   $prHeadBranch = if ($prAvailable) { [string]$prView.headRefName } else { '' }
   $prBaseBranch = if ($prAvailable) { [string]$prView.baseRefName } else { '' }
   Add-AgentCheck -Name 'PR_HEAD_REVIEWED' -Passed ((Test-AgentShaValue $reviewedHead) -and [string]::Equals($reviewedHead, $prHead, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'reviewed_head_does_not_match_pr_head'
   Add-AgentCheck -Name 'LOCAL_HEAD_MATCH' -Passed ((Test-AgentShaValue $localHead) -and [string]::Equals($localHead, $reviewedHead, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'local_head_differs_from_reviewed_head'
   Add-AgentCheck -Name 'EXPECTED_BASE_BRANCH' -Passed ($prAvailable -and [string]::Equals($prBaseBranch, $ExpectedBaseBranch, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'unexpected_pr_base_branch'
-  Add-AgentCheck -Name 'BASE_NOT_INVALIDATED' -Passed ((Test-AgentShaValue $originMain) -and (Test-AgentShaValue $prBase) -and [string]::Equals($originMain, $prBase, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'pr_base_sha_is_stale'
+  $baseFresh = (-not $strictBaseFreshness) -or (
+    (Test-AgentShaValue $originMain) -and (Test-AgentShaValue $prBase) -and
+    [string]::Equals($originMain, $prBase, [StringComparison]::OrdinalIgnoreCase)
+  )
+  Add-AgentCheck -Name 'BASE_NOT_INVALIDATED' -Passed $baseFresh -Blocker 'pr_base_sha_is_stale'
+  $integrationOverlap = [pscustomobject]@{ available = $false; overlap = @(); error = 'not_evaluated' }
+  if ($prAvailable -and -not $strictBaseFreshness -and -not $baseFresh) {
+    $integrationOverlap = Get-AgentStaleMainIntegrationOverlap -GitPath $GitPath -RepoRoot $resolvedRepoRoot -OriginMain $originMain -ReviewedHead $reviewedHead
+    $overlapClear = $integrationOverlap.available -and $integrationOverlap.overlap.Count -eq 0
+    Add-AgentCheck -Name 'STALE_BASE_INTEGRATION_CLEAR' -Passed $overlapClear -Blocker 'merge_integration_overlap_requires_qualification'
+    if (-not $integrationOverlap.available) { $warnings += ('stale_base_overlap:' + $integrationOverlap.error) }
+  } else {
+    Add-AgentCheck -Name 'STALE_BASE_INTEGRATION_CLEAR' -Passed $true
+  }
   Add-AgentCheck -Name 'NO_CROSS_REPO' -Passed ($prAvailable -and (-not [bool]$prView.isCrossRepository)) -Blocker 'cross_repository_pr'
   Add-AgentCheck -Name 'PR_OPEN' -Passed ($prAvailable -and [string]$prView.state -eq 'OPEN') -Blocker 'pr_not_open'
   Add-AgentCheck -Name 'NO_DRAFT' -Passed ($prAvailable -and -not [bool]$prView.isDraft) -Blocker 'pr_is_draft'
@@ -377,13 +413,8 @@ try {
     ($runningTrustedControlPlane -and $prAvailable -and [string]$prView.mergeable -eq 'MERGEABLE')
   Add-AgentCheck -Name 'MERGE_STATE_CLEAN' -Passed $mergeStateAcceptable -Blocker 'pr_merge_state_not_clean'
 
-  $rulesetPolicy = if ($ghAvailable -and $authOk) { Get-AgentRulesetPolicy } else {
-    [pscustomobject]@{ available = $false; error = 'active_ruleset_unreadable'; required_review_thread_resolution = $false; required_approving_review_count = -1; required_status_checks = @(); required_status_check_policies = @(); strict_required_status_checks_policy = $null; id = $null; name = $null; enforcement = $null }
-  }
   Add-AgentCheck -Name 'ACTIVE_RULESET_READABLE' -Passed ([bool]$rulesetPolicy.available) -Blocker 'active_ruleset_unreadable'
-  # Exact base/head evidence is only durable when GitHub refuses a merge after
-  # main advances. This closes the interval after this base-rooted run exits.
-  Add-AgentCheck -Name 'REQUIRED_STATUS_CHECKS_STRICT' -Passed ($rulesetPolicy.available -and [bool]$rulesetPolicy.strict_required_status_checks_policy) -Blocker 'required_status_checks_not_strict'
+  Add-AgentCheck -Name 'STATUS_CHECK_FRESHNESS_POLICY_READABLE' -Passed ([bool]$rulesetPolicy.available) -Blocker 'required_status_checks_policy_unreadable'
   # An empty @() emitted from an if-expression unrolls to $null on assignment,
   # so the fallback assignment is kept explicit to stay null-safe.
   $requiredChecks = @()
@@ -509,7 +540,7 @@ try {
     try { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $independentReviewSummary -ErrorAction Stop }
     catch { $warnings += 'gate_step_summary_write_failed' }
   }
-  $finalIdentity = if ($prAvailable -and $authOk) { Get-AgentCurrentCandidateIdentity } else { [pscustomobject]@{ valid = $false; reason = 'candidate_source_unavailable' } }
+  $finalIdentity = if ($prAvailable -and $authOk) { Get-AgentCurrentCandidateIdentity -StrictBaseFreshness $strictBaseFreshness } else { [pscustomobject]@{ valid = $false; reason = 'candidate_source_unavailable' } }
   Add-AgentCheck -Name 'FINAL_CANDIDATE_CURRENT' -Passed ([bool]$finalIdentity.valid) -Blocker $finalIdentity.reason
   $auditPassed = $blockers.Count -eq 0
   $mergeReady = $auditPassed
@@ -519,7 +550,7 @@ try {
     sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = if ($ciHeadMatch) { $prHead } else { $null }; baseHead = $prBase; currentOriginMain = $originMain; trustedPolicySha = $executionBase }
     branch = [ordered]@{ local = $localBranch; prHead = $prHeadBranch; prBase = $prBaseBranch }
     worktree = [ordered]@{ clean = $status.clean; dirtyPaths = @($status.dirtyPaths); isolated = $topology.isolated }
-    repositoryPolicy = [ordered]@{ source = 'github_ruleset'; rulesetId = if ($rulesetPolicy.available) { $rulesetPolicy.id } else { $null }; name = if ($rulesetPolicy.available) { $rulesetPolicy.name } else { $null }; enforcement = if ($rulesetPolicy.available) { $rulesetPolicy.enforcement } else { $null }; githubRequiredApprovalCount = $githubApprovalCount; requiredReviewThreadResolution = if ($rulesetPolicy.available) { $rulesetPolicy.required_review_thread_resolution } else { $null }; requiredStatusChecks = @($requiredChecks); requiredStatusCheckProducers = @($requiredCheckPolicies); requiredStatusCheckProducersBound = [bool]$producerBindingsComplete; strictRequiredStatusChecksPolicy = if ($rulesetPolicy.available) { $rulesetPolicy.strict_required_status_checks_policy } else { $null } }
+    repositoryPolicy = [ordered]@{ source = 'github_ruleset'; rulesetId = if ($rulesetPolicy.available) { $rulesetPolicy.id } else { $null }; name = if ($rulesetPolicy.available) { $rulesetPolicy.name } else { $null }; enforcement = if ($rulesetPolicy.available) { $rulesetPolicy.enforcement } else { $null }; githubRequiredApprovalCount = $githubApprovalCount; requiredReviewThreadResolution = if ($rulesetPolicy.available) { $rulesetPolicy.required_review_thread_resolution } else { $null }; requiredStatusChecks = @($requiredChecks); requiredStatusCheckProducers = @($requiredCheckPolicies); requiredStatusCheckProducersBound = [bool]$producerBindingsComplete; strictRequiredStatusChecksPolicy = if ($rulesetPolicy.available) { $rulesetPolicy.strict_required_status_checks_policy } else { $null }; staleBaseIntegrationOverlap = if ($integrationOverlap.available) { @($integrationOverlap.overlap) } else { @() } }
     reviewPolicy = [ordered]@{ requestedRiskLane = $requestedLane; baseDerivedRiskLane = $baseDerivedLane; effectiveRiskLane = $effectiveLane; githubApprovalSatisfied = [bool]$reviewPolicy.github_approval_satisfied; observedApprovalCount = $observedApprovalCount; reviewThreadsRequired = if ($rulesetPolicy.available) { [bool]$rulesetPolicy.required_review_thread_resolution } else { $null }; reviewThreadsSatisfied = [bool]$reviewPolicy.review_threads_satisfied; independentReviewRequired = $independentRequired; independentReviewMode = 'ADVISORY'; mergeAuthorizationSource = 'GITHUB_SERVER'; minimumIndependentReviewCount = $minimumReviewCount; independentReviewSatisfied = $independentReviewSatisfied; independentReviewTier = $independentReviewTier; independentReviewEvidence = $autonomousEvidenceResult.path; independentReviewEvidenceErrors = @($autonomousEvidenceResult.errors); observedIndependentReviewCount = $autonomousEvidenceResult.reviewCount; taskAuthorization = 'dispatch_scope'; auditOnly = [bool]$AuditOnly }
     checks = $checks; requiredChecks = @($requiredResults); diff = [ordered]@{ scopeBasis = 'reviewed_head_exact'; paths = @($diffPaths) }; environment = $envState; blockers = @($blockers | Select-Object -Unique); warnings = @($warnings | Select-Object -Unique)
   }

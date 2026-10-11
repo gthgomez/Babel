@@ -165,7 +165,13 @@ try {
   if (-not [string]::Equals([string](Get-BabelJsonProperty -Object $gate -Name 'repository'), 'gthgomez/Babel', [StringComparison]::OrdinalIgnoreCase)) { $gateBlockers += 'merge_gate_repository_mismatch' }
   $gatePr = Get-BabelJsonProperty -Object $gate -Name 'pr'
   if ([string](Get-BabelJsonProperty -Object $gatePr -Name 'number') -ne [string]$PR) { $gateBlockers += 'merge_gate_pr_mismatch' }
-  if (-not [string]::Equals([string](Get-BabelJsonProperty -Object $sha -Name 'baseHead'), $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $gateBlockers += 'merge_gate_base_mismatch' }
+  $repositoryPolicy = Get-BabelJsonProperty -Object $gate -Name 'repositoryPolicy'
+  $strictFreshness = $true
+  if ($null -ne $repositoryPolicy) {
+    $strictValue = Get-BabelJsonProperty -Object $repositoryPolicy -Name 'strictRequiredStatusChecksPolicy'
+    if ($null -ne $strictValue) { $strictFreshness = [bool]$strictValue }
+  }
+  if ($strictFreshness -and -not [string]::Equals([string](Get-BabelJsonProperty -Object $sha -Name 'baseHead'), $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $gateBlockers += 'merge_gate_base_mismatch' }
   foreach ($gateSha in @(
       (Get-BabelJsonProperty -Object $sha -Name 'reviewedHead'),
       (Get-BabelJsonProperty -Object $sha -Name 'prHead'),
@@ -203,7 +209,7 @@ try {
   $mergeState = [string](Get-BabelJsonProperty -Object $view -Name 'mergeStateStatus')
   if ($liveState -ne 'OPEN') { $viewBlockers += 'pr_not_open' }
   if (-not [string]::Equals($liveHead, [string]$ReviewedHeadSha, [StringComparison]::OrdinalIgnoreCase)) { $viewBlockers += 'pr_head_mismatch' }
-  if (-not [string]::Equals([string](Get-BabelJsonProperty -Object $view -Name 'baseRefOid'), $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $viewBlockers += 'pr_base_mismatch' }
+  if ($strictFreshness -and -not [string]::Equals([string](Get-BabelJsonProperty -Object $view -Name 'baseRefOid'), $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $viewBlockers += 'pr_base_mismatch' }
   if ($isDraft -ne $false) { $viewBlockers += 'pr_is_draft' }
   if ($mergeable -ne 'MERGEABLE') { $viewBlockers += 'pr_not_mergeable' }
   if ($mergeState -ne 'CLEAN') { $viewBlockers += 'pr_merge_state_not_clean' }
