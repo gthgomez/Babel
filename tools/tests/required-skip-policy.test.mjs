@@ -14,6 +14,22 @@ test('skip policy binds exact source, name, reason, platform and suite', () => {
   }
 })
 
+test('physical-state symlink skips are reviewed only on Windows unit lanes', () => {
+  const reason = 'POSIX symlink physical-state binding; Windows reparse points are outside this contract'
+  const names = [
+    'leaf symlink targets are metadata bound without reading their outside content',
+    'hidden tracked paths through a symlink parent refuse binding before input reads',
+    'a parent swapped during file opening cannot read outside bytes',
+    'a leaf symlink named node_modules binds its target string without reading dependency content',
+  ]
+  for (const name of names) {
+    const record = { path: 'src/evidence/repositoryPhysicalState.test.ts', name, reason }
+    assert.ok(reviewedSkip(record, 'win32', 'unit', true))
+    assert.equal(reviewedSkip(record, 'linux', 'unit', true), null)
+    assert.equal(reviewedSkip(record, 'win32', 'native-rg', true), null)
+  }
+})
+
 test('required native rg cannot use the optional unit-lane exclusion', () => {
   const record = { path: 'src/tools/ripgrep.test.ts', name: 'ripgrep basic match — finds known text in source files', reason: 'Standalone rg unavailable' }
   assert.ok(reviewedSkip(record, 'win32', 'unit', true))
