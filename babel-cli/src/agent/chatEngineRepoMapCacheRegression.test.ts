@@ -19,7 +19,7 @@ import {
   summarizeSyntheticProviderOutput,
 } from '../testinfra/synthetic-provider-fixture.mjs'
 
-const childTestCount = 10
+const childTestCount = 12
 
 if (!isSyntheticProviderFixtureReady()) {
   test('repo-map refresh is isolated in a synthetic-only subprocess', { timeout: 30_000 }, async t => {
@@ -52,6 +52,7 @@ if (!isSyntheticProviderFixtureReady()) {
       'refreshed map reaches provider boundary', 'obsolete map is absent',
       'invalidated rendered prompt omits obsolete map', 'superseded submission cannot dispatch',
       'superseded preparation cannot begin execution',
+      'pending refreshed map prevents the next provider request',
     ].filter(label => output.includes(label))
     if (knownFailures.length) t.diagnostic(JSON.stringify({ assertionFailures: knownFailures }))
     assert.equal(code, 0, 'isolated ChatEngine regression must pass')
@@ -143,7 +144,7 @@ if (!isSyntheticProviderFixtureReady()) {
       writeFileSync(target, `export const value = ${writes}\n`)
       await internals.runPostEditStaticCheck(target)
     }
-    return { engine, internals, dispatches, edit }
+    return { engine, internals, dispatches, edit, runner }
   }
 
   function assertMap(dispatch: Dispatch | undefined, current: string, obsolete: string[]) {
@@ -260,6 +261,61 @@ if (!isSyntheticProviderFixtureReady()) {
     for (const mode of ['native', 'legacy', 'text'] as const) {
       assert.equal(internals.getOrBuildSystemPrompt(mode).includes('FIXTURE_MAP_OBSOLETE'), false, 'invalidated rendered prompt omits obsolete map')
     }
+  })
+
+  test('native: prompt rebuilt without a map cannot hide the next refresh', { timeout: 10_000 }, async t => {
+    const { engine, internals, dispatches, edit } = makeFixture(t, 'native')
+    internals.generateRepoMap = async () => 'FIXTURE_MAP_OBSOLETE'
+    await drain(engine.submitMessageStream('Inspect the target source.', 'explain'))
+    await edit()
+    // The post-edit turn rebuilds every rendered mode while the map is still absent.
+    for (const mode of ['native', 'legacy', 'text'] as const) internals.getOrBuildSystemPrompt(mode)
+    internals.generateRepoMap = async () => 'FIXTURE_MAP_REFRESHED'
+    await drain(engine.submitMessageStream('Continue inspecting the updated source.', 'explain', { continueTask: true }))
+    assertMap(dispatches.at(-1), 'FIXTURE_MAP_REFRESHED', ['FIXTURE_MAP_OBSOLETE'])
+  })
+
+  test('native: later provider turn waits for the map refreshed after a completed edit', { timeout: 10_000 }, async t => {
+    const { engine, internals, dispatches, edit, runner } = makeFixture(t, 'native')
+    let maps = 0
+    const refreshed = deferred<string>()
+    internals.generateRepoMap = async () => {
+      maps += 1
+      if (maps === 1) return 'FIXTURE_MAP_INITIAL'
+      refreshed.markStarted()
+      return refreshed.promise
+    }
+    let providers = 0
+    const streamRunner = runner as {
+      executeWithToolsStream: (
+        messages: unknown[],
+        tools: unknown,
+        system: string,
+      ) => AsyncGenerator<unknown>
+    }
+    streamRunner.executeWithToolsStream = async function* (messages: unknown[], _tools: unknown, system: string) {
+      providers += 1
+      dispatches.push({ system, conversation: JSON.stringify(messages) })
+      if (providers === 1) {
+        await edit()
+        yield { type: 'tool_use' as const, id: 'read-target', name: 'read_file', input: { path: 'src/target.js' } }
+        yield { type: 'done' as const, finishReason: 'tool_calls' as const }
+        return
+      }
+      yield { type: 'text_delta' as const, text: 'Fixture inspection complete.' }
+      yield { type: 'done' as const, finishReason: 'stop' as const }
+    }
+    const run = drain(engine.submitMessageStream('Inspect the target source.', 'explain'))
+    await Promise.race([
+      refreshed.started,
+      run.then(() => { throw new Error('submission ended before refreshed map') }),
+    ])
+    assert.equal(dispatches.length, 1, 'pending refreshed map prevents the next provider request')
+    assertMap(dispatches[0], 'FIXTURE_MAP_INITIAL', [])
+    refreshed.resolve('FIXTURE_MAP_AFTER_EDIT')
+    await run
+    assert.equal(dispatches.length, 2)
+    assertMap(dispatches[1], 'FIXTURE_MAP_AFTER_EDIT', ['FIXTURE_MAP_INITIAL'])
   })
 
   test('text tools retain deliberate omission of optional repository context', { timeout: 10_000 }, async t => {

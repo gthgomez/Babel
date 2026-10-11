@@ -11,6 +11,37 @@ import { parityOnUserTurn } from "./chatEngineParityBridge.js";
 import { recordUserMessage } from "./threadEventLog.js";
 import { ChatTurnTelemetryCollector } from "./chatTurnTelemetry.js";
 
+/**
+ * Fill a missing repository map for this submission.
+ * Failures stay best-effort. A superseded generation must not install.
+ */
+export async function ensureRepositoryContext(
+  host: ChatEngineStreamingLoopHost,
+  submissionGeneration: number,
+): Promise<void> {
+  if (host.repoMapCache !== null) {
+    host.repoMapInvalidated = false;
+    return;
+  }
+  // Clear before the scan so a write during generation re-arms a refresh.
+  host.repoMapInvalidated = false;
+  try {
+    const map = await host.generateRepoMap();
+    // R0-8: a map produced for a superseded submission must not seed the
+    // current task. A write while this scan ran invalidated the result.
+    if (
+      map &&
+      host.repoMapCache === null &&
+      !host.repoMapInvalidated &&
+      host.isSubmissionCurrent(submissionGeneration)
+    ) {
+      host.repoMapCache = map;
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Prepare one user submission before its first streaming attempt. */
 export async function prepareStreamingSubmission(
   host: ChatEngineStreamingLoopHost,
@@ -133,25 +164,9 @@ export async function prepareStreamingSubmission(
   // turn and no global turn id has to be set or restored here.
 
   // Refresh optional repository context before either system-prompt path.
-  const repoMapPromise =
-    host.repoMapCache === null
-      ? host
-          .generateRepoMap()
-          .then((map) => {
-            // R0-8: a repository map produced for a superseded submission
-            // must not seed the current task's cached context.
-            if (map && host.isSubmissionCurrent(submissionGeneration)) {
-              host.repoMapCache = map;
-            }
-          })
-          .catch(() => {
-            /* best-effort */
-          })
-      : Promise.resolve();
-
   // A retained system message must not populate the prompt cache before the
   // refreshed map is ready. Waiting later in the loop cannot repair that cache.
-  await repoMapPromise;
+  await ensureRepositoryContext(host, submissionGeneration);
   // A superseded preparation must not install context or begin execution.
   if (!host.isSubmissionCurrent(submissionGeneration))
     return { halted: true, haltEvent: null } as const;
@@ -202,7 +217,6 @@ export async function prepareStreamingSubmission(
     effectiveIntent,
     modelName,
     providerName,
-    repoMapPromise,
     maxTurns,
   };
 }
