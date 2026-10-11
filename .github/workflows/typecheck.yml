@@ -587,12 +587,21 @@ jobs:
         timeout-minutes: 15
         shell: pwsh
         run: >
+          $tapDir = Join-Path $env:RUNNER_TEMP 'babel-harness-runtime'
+
+          New-Item -ItemType Directory -Force $tapDir | Out-Null
+
+          $tap = Join-Path $tapDir 'full.tap'
+
+          npm run test:harness-runtime -- --test-timeout=60000 2>&1 | Tee-Object -FilePath $tap
+
+          $code = $LASTEXITCODE
+
           New-Item -ItemType Directory -Force artifacts/harness-runtime | Out-Null
 
-          npm run test:harness-runtime -- --test-timeout=60000 2>&1 | Tee-Object -FilePath
-          artifacts/harness-runtime/full.tap
+          Copy-Item -Force $tap artifacts/harness-runtime/full.tap
 
-          exit $LASTEXITCODE
+          exit $code
         working-directory: babel-cli
       - name: Summarize harness runtime TAP (Linux)
         if: >-
@@ -683,8 +692,14 @@ jobs:
           BABEL_TAP_EXECUTION_PATH: artifacts/chat-truth/execution.json
         shell: pwsh
         run: |
-          npm run test:chat-truth 2>&1 | Tee-Object -FilePath artifacts/chat-truth/full.tap
-          exit $LASTEXITCODE
+          $tapDir = Join-Path $env:RUNNER_TEMP 'babel-chat-truth'
+          New-Item -ItemType Directory -Force $tapDir | Out-Null
+          $tap = Join-Path $tapDir 'full.tap'
+          npm run test:chat-truth 2>&1 | Tee-Object -FilePath $tap
+          $code = $LASTEXITCODE
+          New-Item -ItemType Directory -Force artifacts/chat-truth | Out-Null
+          Copy-Item -Force $tap artifacts/chat-truth/full.tap
+          exit $code
         working-directory: babel-cli
       - name: Summarize Chat truth TAP (Linux)
         if: >-
@@ -975,12 +990,21 @@ jobs:
         run: >
           Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue
 
+          $tapDir = Join-Path $env:RUNNER_TEMP 'babel-ci-unit'
+
+          New-Item -ItemType Directory -Force $tapDir | Out-Null
+
+          $tap = Join-Path $tapDir 'full.tap'
+
+          node scripts/run_ci_unit_shard.mjs --shard-index ${{ matrix.shard }} --shard-count 4 2>&1 | Tee-Object -FilePath $tap
+
+          $shardCode = $LASTEXITCODE
+
           New-Item -ItemType Directory -Force artifacts/ci-unit | Out-Null
 
-          node scripts/run_ci_unit_shard.mjs --shard-index ${{ matrix.shard }} --shard-count 4 2>&1 | Tee-Object
-          artifacts/ci-unit/full.tap
+          Copy-Item -Force $tap artifacts/ci-unit/full.tap
 
-          exit $LASTEXITCODE
+          exit $shardCode
       - name: Validate complete unit TAP inventory
         if: always() && steps.unit_shard.outcome != 'skipped' && steps.unit_shard.outcome != ''
         run: node scripts/summarize_required_tap.mjs unit artifacts/ci-unit
