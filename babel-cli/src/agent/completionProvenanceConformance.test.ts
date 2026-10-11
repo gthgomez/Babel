@@ -134,6 +134,22 @@ function openRecovery() {
   return state;
 }
 
+function withSpentLocalization(state: ReturnType<typeof openRecovery>) {
+  return applyWorkingStateEvent(state, {
+    type: 'localization_begin',
+    localization: {
+      phase: 'exhausted',
+      failureSignature: 'sig-1',
+      binding: BINDING,
+      candidates: [],
+      testHints: [],
+      calls: 4,
+      rounds: 2,
+      inspected: ['src/parser.ts'],
+    },
+  });
+}
+
 describe('completion authority is not answer text', () => {
   test('a read-only submission does not receive generated repair guidance', () => {
     assert.equal(shouldSkipIntentCompiler('hello', { operation: 'READ_ONLY' }), true);
@@ -490,7 +506,7 @@ describe('restore does not promote a failed or incomplete effect', () => {
 describe('recovery provenance', () => {
   test('a real green verifier exit clears the open recovery gate', () => {
     const cleared = ingestVerifierResult({
-      state: openRecovery(),
+      state: withSpentLocalization(openRecovery()),
       tool: 'test_run',
       target: 'npm test',
       exitCode: 0,
@@ -501,13 +517,14 @@ describe('recovery provenance', () => {
     assert.equal(cleared.lastVerifierFailed, false);
     assert.equal(cleared.state.recoveryGate, undefined);
     assert.equal(cleared.state.failureSurface, undefined);
+    assert.equal(cleared.state.localization, undefined);
   });
 
   test('a zero-test green exit must not erase an open recovery gate', () => {
     // verifierEvidenceCaveats appends this sentence when tests_total === 0.
     // That summary is not evidence, so the open gate stays unsatisfied.
     const kept = ingestVerifierResult({
-      state: openRecovery(),
+      state: withSpentLocalization(openRecovery()),
       tool: 'test_run',
       target: 'npm test',
       exitCode: 0,
@@ -518,6 +535,10 @@ describe('recovery provenance', () => {
     assert.equal(kept.state.recoveryGate?.failureSignature, 'sig-1');
     assert.equal(kept.state.recoveryGate?.satisfied, false);
     assert.equal(kept.state.failureSurface?.errorSignature, 'sig-1');
+    assert.equal(kept.state.localization?.calls, 4);
+    assert.equal(kept.state.localization?.phase, 'exhausted');
     assert.equal(kept.lastVerifierFailed, true);
+    assert.equal(kept.state.lastVerifier?.exitCode, 0);
+    assert.equal(kept.state.lastVerifier?.fresh, true);
   });
 });

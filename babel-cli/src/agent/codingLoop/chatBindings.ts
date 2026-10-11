@@ -124,6 +124,17 @@ export function ingestVerifierResult(input: {
         }
       }
     }
+  } else if (
+    !greenVerifierClearsRecoveryGate(input.exitCode, input.summary) &&
+    input.state.localization
+  ) {
+    // The verifier event drops localization along with a real green. A
+    // zero-test green is not a new episode and must not refill a spent
+    // localization allowance while the open gate stays in place.
+    state = applyWorkingStateEvent(state, {
+      type: 'localization_update',
+      localization: input.state.localization,
+    })
   }
   return { state, lastVerifierFailed: !greenVerifierClearsRecoveryGate(input.exitCode, input.summary) }
 }
