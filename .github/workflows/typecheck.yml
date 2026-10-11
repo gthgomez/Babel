@@ -1,4 +1,7 @@
 # Standard hosted workloads; stable required names aggregate every dependency fail closed.
+# Docs and skill pull requests take the fast lane: heavy jobs skip, and the aggregators
+# accept those skips. Runtime, desktop, packaging, workflow, and tool changes run the full matrix.
+# The installer lifecycle runs on pushes to main and on pull requests labeled full-ci.
 # Full architecture budgets are enforced on both operating systems after the combined owner split.
 # No baseline or process-boundary grant is increased.
 name: Public Release Gate
@@ -86,6 +89,9 @@ jobs:
         if: github.event_name != 'pull_request'
         run: echo 'PR metadata fixtures not applicable to this non-PR event'
   native-rg:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: native-rg (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -116,6 +122,9 @@ jobs:
           path: babel-cli/artifacts/native-rg-*
           if-no-files-found: error
   desktop-tests:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: desktop-tests (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -133,6 +142,9 @@ jobs:
         run: npm run test
         working-directory: babel-desktop
   architecture-regressions:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: architecture-regressions (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -195,6 +207,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   package-components:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: package-components (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -289,11 +304,45 @@ jobs:
             artifacts/ci-validation
           if-no-files-found: error
           retention-days: 7
+  detect-scope:
+    name: detect-scope
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+      installer: ${{ steps.scope.outputs.installer }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify merge lane
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: node tools/ci-merge-lane.mjs >> "$GITHUB_OUTPUT"
+
+  fast-validation:
+    name: fast-validation
+    runs-on: ubuntu-latest
+    needs:
+      - detect-scope
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Test merge-lane classification
+        run: node --test tools/tests/ci-merge-lane.test.mjs
+
   linux-validation:
     name: linux-validation
     if: always()
     runs-on: ubuntu-latest
     needs:
+      - detect-scope
+      - fast-validation
       - security
       - public-content-policy
       - architecture-regressions
@@ -314,16 +363,29 @@ jobs:
       - name: Require every coverage dependency to succeed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          MERGE_LANE: ${{ needs.detect-scope.outputs.full == 'true' && 'full' || 'fast' }}
+          INSTALLER_OPTIONAL: ${{ github.event_name == 'pull_request' && needs.detect-scope.outputs.installer != 'true' && 'true' || 'false' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $results = $env:NEEDS_JSON | ConvertFrom-Json
           $dependencies = @($results.PSObject.Properties)
           if ($dependencies.Count -eq 0) { throw 'Required CI dependencies are missing' }
+          $fastLane = $env:MERGE_LANE -eq 'fast'
+          $installerOptional = $env:INSTALLER_OPTIONAL -eq 'true'
+          $always = @('detect-scope', 'fast-validation', 'security', 'public-content-policy', 'policy-integrity', 'public-pr-metadata-tests')
           foreach ($dependency in $dependencies) {
-            if ($dependency.Value.result -ne 'success') { throw "Required CI dependency $($dependency.Name) concluded $($dependency.Value.result)" }
+            $result = [string]$dependency.Value.result
+            if ($dependency.Value.result -ne 'success') {
+              if ($result -eq 'skipped' -and $fastLane -and $always -notcontains $dependency.Name) { continue }
+              if ($result -eq 'skipped' -and $installerOptional -and $dependency.Name -eq 'installer-lifecycle') { continue }
+              throw "Required CI dependency $($dependency.Name) concluded $result"
+            }
           }
   installer-lifecycle:
+    needs:
+      - detect-scope
+    if: github.event_name == 'push' || needs.detect-scope.outputs.installer == 'true'
     name: installer-lifecycle
     runs-on: windows-latest
     timeout-minutes: 45
@@ -397,6 +459,8 @@ jobs:
     if: always()
     runs-on: windows-latest
     needs:
+      - detect-scope
+      - fast-validation
       - security
       - public-content-policy
       - architecture-regressions
@@ -418,16 +482,29 @@ jobs:
       - name: Require every coverage dependency to succeed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          MERGE_LANE: ${{ needs.detect-scope.outputs.full == 'true' && 'full' || 'fast' }}
+          INSTALLER_OPTIONAL: ${{ github.event_name == 'pull_request' && needs.detect-scope.outputs.installer != 'true' && 'true' || 'false' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $results = $env:NEEDS_JSON | ConvertFrom-Json
           $dependencies = @($results.PSObject.Properties)
           if ($dependencies.Count -eq 0) { throw 'Required CI dependencies are missing' }
+          $fastLane = $env:MERGE_LANE -eq 'fast'
+          $installerOptional = $env:INSTALLER_OPTIONAL -eq 'true'
+          $always = @('detect-scope', 'fast-validation', 'security', 'public-content-policy', 'policy-integrity', 'public-pr-metadata-tests')
           foreach ($dependency in $dependencies) {
-            if ($dependency.Value.result -ne 'success') { throw "Required CI dependency $($dependency.Name) concluded $($dependency.Value.result)" }
+            $result = [string]$dependency.Value.result
+            if ($dependency.Value.result -ne 'success') {
+              if ($result -eq 'skipped' -and $fastLane -and $always -notcontains $dependency.Name) { continue }
+              if ($result -eq 'skipped' -and $installerOptional -and $dependency.Name -eq 'installer-lifecycle') { continue }
+              throw "Required CI dependency $($dependency.Name) concluded $result"
+            }
           }
   platform-core:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: platform-core (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -536,6 +613,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   harness-runtime:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: harness-runtime (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -633,6 +713,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   chat-truth:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: chat-truth (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -725,6 +808,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   remote-ui-browser:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: remote-ui-browser
     runs-on: ubuntu-latest
     steps:
@@ -783,6 +869,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   windows-policy:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: windows-policy
     runs-on: windows-latest
     steps:
@@ -835,6 +924,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   docker-smoke:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: docker-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -920,6 +1012,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   unit-shards:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: unit-shards (${{ matrix.os }}, ${{ matrix.shard }})
     strategy:
       fail-fast: false
@@ -996,6 +1091,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   consumer-candidate:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: Build immutable npm candidate
     runs-on: ubuntu-latest
     outputs:
@@ -1027,6 +1125,9 @@ jobs:
           path: artifacts/consumer-candidate
           if-no-files-found: error
   consumer-build-toolchains:
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
     name: Retained consumer build toolchain (${{ matrix.os }}, Node ${{ matrix.node }})
     strategy:
       fail-fast: false
