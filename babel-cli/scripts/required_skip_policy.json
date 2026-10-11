@@ -73,9 +73,10 @@
       ],
       "reasons": [
         "POSIX file symlink fixture; Windows directory junction covered separately",
-        "POSIX scanner stub"
+        "POSIX scanner stub",
+        "POSIX symlink physical-state binding; Windows reparse points are outside this contract"
       ],
-      "rationale": "Windows junction and credential-denial tests remain active; Linux executes file symlink and scanner contracts.",
+      "rationale": "Windows junction and credential-denial tests remain active; Linux executes file symlink, scanner, and physical-state symlink contracts.",
       "suites": [
         "unit",
         "chat-truth",
@@ -93,6 +94,12 @@
         ],
         "src/services/babelReviewSnapshot.test.ts": [
           "review snapshot ignores local Git replacement refs when binding the exact diff"
+        ],
+        "src/evidence/repositoryPhysicalState.test.ts": [
+          "leaf symlink targets are metadata bound without reading their outside content",
+          "hidden tracked paths through a symlink parent refuse binding before input reads",
+          "a parent swapped during file opening cannot read outside bytes",
+          "a leaf symlink named node_modules binds its target string without reading dependency content"
         ]
       }
     },
