@@ -1,5 +1,9 @@
 name: Trusted Control Plane
 
+# The audit stays on pull_request_target so its check binds to the pull request
+# head. A workflow_run job would attach to main. The job waits until Public
+# Release Gate completes, so a check that is not posted yet stays in progress.
+# Drafts, stacked bases, and a stale main base are not failed tests.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
@@ -21,6 +25,7 @@ jobs:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout immutable base
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -28,22 +33,77 @@ jobs:
           ref: ${{ env.BASE_SHA }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Keep non-candidates out of the merge audit
+        id: eligibility
+        shell: pwsh
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Set-Eligibility([bool]$Eligible, [string]$Reason) {
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "eligible=$($Eligible.ToString().ToLowerInvariant())"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $Reason
+            Write-Output $Reason
+          }
+          if ($env:IS_DRAFT -eq 'true') {
+            Set-Eligibility $false 'Draft pull request: the merge audit stays off this head.'
+            exit 0
+          }
+          if ($env:BASE_REF -ne 'main') {
+            Set-Eligibility $false "Base is $env:BASE_REF, not main. Stacked pull requests stay out of this gate."
+            exit 0
+          }
+          git fetch --no-tags origin main
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $main = (git rev-parse origin/main).Trim()
+          if ($env:BASE_SHA -ne $main) {
+            Set-Eligibility $false 'Base SHA is behind current main. The strict ruleset blocks the merge; this is not a failed test.'
+            exit 0
+          }
+          Set-Eligibility $true 'Head is a main merge candidate. The audit waits for Public Release Gate.'
       - name: Fetch exact candidate object
+        if: steps.eligibility.outputs.eligible == 'true'
         shell: pwsh
         run: |
           git fetch --no-tags origin $env:HEAD_SHA
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Materialize candidate as data only
+        if: steps.eligibility.outputs.eligible == 'true'
         shell: pwsh
         run: |
           git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:HEAD_SHA
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Wait for Public Release Gate
+        if: steps.eligibility.outputs.eligible == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $deadline = (Get-Date).AddMinutes(100)
+          do {
+            $payload = gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/typecheck.yml/runs?event=pull_request&head_sha=$env:HEAD_SHA&per_page=20"
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to read Public Release Gate runs.' }
+            $parsed = $payload | ConvertFrom-Json
+            $runs = @($parsed.workflow_runs)
+            $active = @($runs | Where-Object { $_.status -ne 'completed' })
+            $finished = @($runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -ne 'cancelled' })
+            if ($finished.Count -gt 0 -and $active.Count -eq 0) {
+              Write-Output "Public Release Gate completed: $($finished[0].conclusion) run $($finished[0].id)"
+              exit 0
+            }
+            if ((Get-Date) -gt $deadline) { throw 'Public Release Gate did not finish before the audit wait ended.' }
+            Start-Sleep -Seconds 30
+          } while ($true)
       - name: Run base-rooted merge audit
+        if: steps.eligibility.outputs.eligible == 'true'
         shell: pwsh
         env:
           # Only the trusted base-rooted audit receives the GitHub token.
           GH_TOKEN: ${{ github.token }}
         run: |
+          $log = Join-Path $env:RUNNER_TEMP 'merge-audit.json'
           pwsh -NoProfile -NonInteractive -File scripts/trusted-merge-gate.ps1 `
             -PR ([int]$env:PR_NUMBER) `
             -BaseSha $env:BASE_SHA `
@@ -51,7 +111,21 @@ jobs:
             -ReviewedHeadSha $env:HEAD_SHA `
             -AuditOnly `
             -RequireIsolatedWorktree `
-            -OutputFormat json
+            -OutputFormat json > $log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath $log
+          if ($code -eq 0) { exit 0 }
+          $parsed = Get-Content -LiteralPath $log -Raw | ConvertFrom-Json
+          $benign = @('unexpected_pr_base_branch', 'pr_base_sha_is_stale', 'execution_base_superseded', 'pr_is_draft')
+          $blockers = @($parsed.blockers | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+          $serious = @($blockers | Where-Object { $benign -notcontains [string]$_ })
+          if ($blockers.Count -gt 0 -and $serious.Count -eq 0) {
+            $note = "Merge audit recorded no product failure: $($blockers -join ', ')."
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $note
+            Write-Output $note
+            exit 0
+          }
+          exit $code
       - name: Test trusted-root boundary
         shell: pwsh
         run: |
