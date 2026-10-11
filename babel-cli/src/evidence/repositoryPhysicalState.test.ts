@@ -8,6 +8,10 @@ import { join, resolve } from 'node:path'
 import { mock, test } from 'node:test'
 import { RevisionManager, compareRevisions, validateRevisionBoundReceipt } from './revisionBoundReceipt.js'
 
+const windowsPosixPhysicalSymlink = platform() === 'win32'
+  ? 'POSIX symlink physical-state binding; Windows reparse points are outside this contract'
+  : false
+
 function fixture(run: (root: string, git: (args: string[]) => string) => void): void {
   const root = fs.mkdtempSync(join(tmpdir(), 'babel-physical-state-'))
   const git = (args: string[]) => execFileSync('git', args, {
@@ -141,7 +145,7 @@ test('file scope stays narrow when unrelated repository input exceeds the physic
   assert.equal(compareRevisions(revision(), revision()).stale, false)
 }))
 
-test('leaf symlink targets are metadata bound without reading their outside content', { skip: platform() === 'win32' }, () => fixture((root) => {
+test('leaf symlink targets are metadata bound without reading their outside content', { skip: windowsPosixPhysicalSymlink }, () => fixture((root) => {
   const outside = fs.mkdtempSync(join(tmpdir(), 'babel-physical-outside-'))
   try {
     const target = join(outside, 'input.txt')
@@ -168,7 +172,7 @@ test('leaf symlink targets are metadata bound without reading their outside cont
   } finally { fs.rmSync(outside, { recursive: true, force: true }) }
 }))
 
-test('hidden tracked paths through a symlink parent refuse binding before input reads', { skip: platform() === 'win32' }, () => fixture((root, git) => {
+test('hidden tracked paths through a symlink parent refuse binding before input reads', { skip: windowsPosixPhysicalSymlink }, () => fixture((root, git) => {
   fs.mkdirSync(join(root, 'src'))
   fs.writeFileSync(join(root, 'src', 'input.txt'), 'input\n')
   git(['add', 'src/input.txt'])
@@ -239,7 +243,7 @@ test('physical root identity prevents repository proof reuse at a different root
   assert.equal(compareRevisions(before, after).stale, true)
 })))
 
-test('a parent swapped during file opening cannot read outside bytes', { skip: platform() === 'win32' }, () => fixture((root, git) => {
+test('a parent swapped during file opening cannot read outside bytes', { skip: windowsPosixPhysicalSymlink }, () => fixture((root, git) => {
   fs.mkdirSync(join(root, 'src'))
   fs.writeFileSync(join(root, 'src', 'input.txt'), 'input\n')
   git(['add', 'src/input.txt'])
@@ -344,7 +348,7 @@ test('node_modules file to excluded directory transition changes physical eviden
   assert.equal(compareRevisions(directoryRevision, repositoryRevision(root)).stale, false)
 }))
 
-test('a leaf symlink named node_modules binds its target string without reading dependency content', { skip: platform() === 'win32' }, () => fixture((root) => {
+test('a leaf symlink named node_modules binds its target string without reading dependency content', { skip: windowsPosixPhysicalSymlink }, () => fixture((root) => {
   const outside = fs.mkdtempSync(join(tmpdir(), 'babel-dependency-link-'))
   try {
     const before = repositoryRevision(root)
