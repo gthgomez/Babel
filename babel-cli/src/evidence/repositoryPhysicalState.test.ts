@@ -75,9 +75,10 @@ test('a tracked path inside an excluded dependency tree refuses complete reposit
 test('incomplete filesystem enumeration cannot hide an existing tracked file', () => fixture((root) => {
   const mutableFs = (fs as unknown as { default: typeof fs }).default
   const original = mutableFs.opendirSync
+  const expected = fs.realpathSync.native(root)
   mock.method(mutableFs, 'opendirSync', ((candidate: fs.PathLike) => {
     const directory = original(candidate)
-    if (resolve(String(candidate)) === root) {
+    if (fs.realpathSync.native(String(candidate)) === expected) {
       const read = directory.readSync.bind(directory)
       directory.readSync = () => {
         let entry: fs.Dirent | null
