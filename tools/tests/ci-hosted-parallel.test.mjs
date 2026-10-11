@@ -81,6 +81,7 @@ test('every pre-optimization Linux and Windows command remains covered on its or
         assert.match(step.run, new RegExp(`Join-Path \\$env:RUNNER_TEMP 'babel-${suite}'`));
         assert.match(step.run, new RegExp(`npm run test:${suite}[^\\n]*Tee-Object -FilePath \\$tap`));
         assert.match(step.run, new RegExp(`Copy-Item -Force \\$tap artifacts/${suite}/full\\.tap`));
+        assert.match(step.run, /\$code = \$LASTEXITCODE/);
         assert.match(step.run, /exit \$code/);
         continue;
       }
@@ -138,6 +139,7 @@ test('hosted unit shards retain exhaustive selection evidence with serial execut
   assert.match(run.run, /run_ci_unit_shard\.mjs --shard-index \$\{\{ matrix\.shard \}\} --shard-count 4/);
   // The live TAP must stay outside babel-cli while tests capture that project.
   assert.match(run.run, /Join-Path \$env:RUNNER_TEMP 'babel-ci-unit'/);
+  assert.match(run.run, /Tee-Object -FilePath \$tap/);
   assert.match(run.run, /\$shardCode = \$LASTEXITCODE/);
   assert.match(run.run, /Copy-Item -Force \$tap artifacts\/ci-unit\/full\.tap/);
   assert.match(run.run, /exit \$shardCode/);
