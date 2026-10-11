@@ -153,6 +153,21 @@ export type WorkingStateEvent =
     }
 
 /**
+ * Sentence `verifierEvidenceCaveats` appends when `tests_total === 0`.
+ * The verifier event only carries that summary, not the structured count.
+ */
+export const ZERO_TEST_GREEN_NON_EVIDENCE =
+  'verifier executed zero tests: a green exit with no tests is not test evidence'
+
+/**
+ * A real green exit may erase an open recovery gate. A zero-test green exit
+ * is not evidence that the open failure is gone.
+ */
+export function greenVerifierClearsRecoveryGate(exitCode: number, summary: string): boolean {
+  return exitCode === 0 && !summary.includes(ZERO_TEST_GREEN_NON_EVIDENCE)
+}
+
+/**
  * Apply an event. New evidence invalidates a stale red verifier and drops
  * an obsolete failure surface when the signature changes.
  */
@@ -284,7 +299,7 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         fresh: true,
       }
       delete next.localization
-      if (event.exitCode === 0) {
+      if (greenVerifierClearsRecoveryGate(event.exitCode, event.summary)) {
         delete next.failureSurface
         delete next.recoveryGate
       }
