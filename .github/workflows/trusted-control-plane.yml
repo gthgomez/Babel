@@ -178,9 +178,10 @@ jobs:
           $open = @($prs | Where-Object { $_.state -eq 'open' -and $_.base.ref -eq 'main' })
           if ($open.Count -ne 1) { throw 'Release gate head is not a unique open main pull request.' }
           $pr = $open[0]
+          if ([string]$pr.head.sha -ne [string]$env:HEAD_SHA) { throw 'PR head advanced past the release gate head; audit must re-run on the current head.' }
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "number=$($pr.number)"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "base_sha=$($pr.base.sha)"
-          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "head_sha=$($pr.head.sha)"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "head_sha=$env:HEAD_SHA"
           if ($pr.draft) { throw 'Draft pull requests stay out of the merge audit.' }
       - name: Checkout immutable base
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
