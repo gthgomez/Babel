@@ -100,6 +100,49 @@ test('real protected-job dependency guards reject failure, cancellation, skipped
   }
 });
 
+test('fast-lane guards accept skipped heavy jobs and still reject skipped policy checks', () => {
+  for (const name of ['linux-validation', 'windows-portability']) {
+    const guard = workflow.jobs[name].steps[0];
+    const needs = workflow.jobs[name].needs;
+    assert.ok(needs.includes('detect-scope') && needs.includes('fast-validation'), name);
+    const dependencies = Object.fromEntries(needs.map(dependency => [dependency, { result: 'skipped' }]));
+    for (const required of ['detect-scope', 'fast-validation', 'security', 'public-content-policy', 'policy-integrity', 'public-pr-metadata-tests']) {
+      if (dependencies[required]) dependencies[required] = { result: 'success' };
+    }
+    const fast = spawnSync('pwsh', ['-NoProfile', '-Command', guard.run], {
+      env: { ...process.env, NEEDS_JSON: JSON.stringify(dependencies), MERGE_LANE: 'fast', INSTALLER_OPTIONAL: 'false' },
+      encoding: 'utf8', timeout: 15000,
+    });
+    assert.ifError(fast.error);
+    assert.equal(fast.status, 0, `${name} fast lane: ${fast.stderr}`);
+    dependencies.security = { result: 'skipped' };
+    const skippedPolicy = spawnSync('pwsh', ['-NoProfile', '-Command', guard.run], {
+      env: { ...process.env, NEEDS_JSON: JSON.stringify(dependencies), MERGE_LANE: 'fast' },
+      encoding: 'utf8', timeout: 15000,
+    });
+    assert.ifError(skippedPolicy.error);
+    assert.notEqual(skippedPolicy.status, 0, `${name}: fast lane must still reject a skipped policy check`);
+  }
+});
+
+test('installer skip is allowed on a full pull request and rejected on main', () => {
+  const guard = workflow.jobs['windows-portability'].steps[0];
+  const dependencies = Object.fromEntries(workflow.jobs['windows-portability'].needs.map(dependency => [dependency, { result: 'success' }]));
+  dependencies['installer-lifecycle'].result = 'skipped';
+  const optional = spawnSync('pwsh', ['-NoProfile', '-Command', guard.run], {
+    env: { ...process.env, NEEDS_JSON: JSON.stringify(dependencies), MERGE_LANE: 'full', INSTALLER_OPTIONAL: 'true' },
+    encoding: 'utf8', timeout: 15000,
+  });
+  assert.ifError(optional.error);
+  assert.equal(optional.status, 0, optional.stderr);
+  const required = spawnSync('pwsh', ['-NoProfile', '-Command', guard.run], {
+    env: { ...process.env, NEEDS_JSON: JSON.stringify(dependencies), MERGE_LANE: 'full', INSTALLER_OPTIONAL: 'false' },
+    encoding: 'utf8', timeout: 15000,
+  });
+  assert.ifError(required.error);
+  assert.notEqual(required.status, 0, 'main must reject a skipped installer');
+});
+
 test('Docker image is immutable and scoped to the Ubuntu smoke step with no host fallback', () => {
   const job = workflow.jobs['docker-smoke'];
   assert.ok(job, 'Missing isolated hosted smoke job');

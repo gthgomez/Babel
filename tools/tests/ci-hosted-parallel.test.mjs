@@ -39,11 +39,11 @@ test('required stable platform names are explicit fail-closed aggregates', () =>
   }
 });
 
-test('independent hosted workloads start without security-policy or other workload serialization', () => {
+test('hosted workloads wait only for lane classification, not for each other', () => {
   for (const name of ['architecture-regressions', 'package-components', 'unit-shards', 'docker-smoke', 'platform-core', 'harness-runtime', 'chat-truth', 'remote-ui-browser', 'windows-policy']) {
     const job = workflow.jobs[name];
     assert.ok(job, `Missing ${name}`);
-    assert.equal(job.needs, undefined, `${name} must run independently behind the aggregates`);
+    assert.deepEqual(job.needs, ['detect-scope'], `${name} must not serialize behind another workload`);
     assert.equal(job['continue-on-error'], undefined);
     assert.ok(['ubuntu-latest', 'windows-latest', '${{ matrix.os }}'].includes(job['runs-on']));
     assert.equal(job.permissions, undefined, 'Job must inherit contents:read');
@@ -175,7 +175,7 @@ function assertImmutableConsumerGraph(candidate) {
     const job = jobs[name];
     assert.deepEqual(job.strategy.matrix, expectedMatrix, name);
     assert.equal(job.strategy['fail-fast'], false);
-    assert.equal(job.if, undefined);
+    assert.equal(job.if, name === 'consumer-build-toolchains' ? "needs.detect-scope.outputs.full == 'true'" : undefined);
     assert.equal(job['continue-on-error'], undefined);
     assert.equal(job.steps[0].with.ref, exactSource);
     for (const gate of ['linux-validation','windows-portability']) assert.ok(jobs[gate].needs.includes(name));
@@ -209,4 +209,19 @@ test('all nine retained build and consumer rows bind the same independent archiv
     const changed = structuredClone(workflow); mutate(changed);
     assert.throws(() => assertImmutableConsumerGraph(changed));
   }
+});
+
+test('heavy jobs wait for the merge lane and the installer is not on every pull request', () => {
+  const slow = ['native-rg','desktop-tests','architecture-regressions','package-components','platform-core','harness-runtime','chat-truth','remote-ui-browser','windows-policy','docker-smoke','unit-shards','consumer-candidate','consumer-build-toolchains'];
+  for (const name of slow) {
+    assert.deepEqual(workflow.jobs[name].needs, ['detect-scope'], name);
+    assert.equal(workflow.jobs[name].if, "needs.detect-scope.outputs.full == 'true'", name);
+  }
+  assert.deepEqual(workflow.jobs['installer-lifecycle'].needs, ['detect-scope']);
+  assert.equal(workflow.jobs['installer-lifecycle'].if, "github.event_name == 'push' || needs.detect-scope.outputs.installer == 'true'");
+  for (const always of ['security','public-content-policy','policy-integrity','public-pr-metadata-tests','fast-validation']) {
+    assert.equal(workflow.jobs[always].if, undefined, always);
+  }
+  assert.equal(workflow.jobs['detect-scope'].outputs.full, '${{ steps.scope.outputs.full }}');
+  assert.equal(workflow.jobs['detect-scope'].outputs.installer, '${{ steps.scope.outputs.installer }}');
 });
