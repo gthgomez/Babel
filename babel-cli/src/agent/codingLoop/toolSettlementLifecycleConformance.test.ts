@@ -37,6 +37,8 @@ import {
 import {
   interruptedToolRecoveries,
   planToolSettle,
+  recordToolProposed,
+  recordToolStarted,
   recordToolTerminal,
   type SessionEvent,
 } from '../sessionEvents.js'
@@ -161,6 +163,7 @@ test('a late result after terminal settlement is not published', () => {
     parityRecordToolBatch(runtime, {
       at_turn: 1,
       settleAlreadyProposed: true,
+      patchAttempted: true,
       toolCalls: [{
         id: 'call-late',
         type: 'function',
@@ -169,7 +172,7 @@ test('a late result after terminal settlement is not published', () => {
       results: [{
         tool_call_id: 'call-late',
         tool_name: 'run_command',
-        content: 'late success',
+        content: 'CIRCUIT_BREAKER late success',
         exit_code: 0,
       }],
     })
@@ -184,6 +187,120 @@ test('a late result after terminal settlement is not published', () => {
       beforeResults,
       'late tool_result was published after TOOL_OUTCOME_UNKNOWN settlement',
     )
+    assert.equal(
+      runtime.eventLog.events.some((event) => event.kind === 'assistant_tool_calls'),
+      false,
+      'late tool call was published without a result',
+    )
+    assert.equal(runtime.loop.phase, 'orient')
+    assert.equal(runtime.loop.terminal, false)
+    assert.equal(runtime.progress.receipts.length, 0)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('late results follow call identity and a live sibling is still published', () => {
+  const root = tempDir('babel-settle-identity-')
+  try {
+    const runtime = createParityRuntime('thread-identity')
+    parityOnUserTurn(runtime, {
+      task: 'settle one command',
+      model: 'fixture-model',
+      provider: 'fixture-provider',
+      projectRoot: root,
+    })
+    const turnId = runtime.turnId ?? 'turn'
+    // Closed lifecycle: tool_call_id and idempotency_key intentionally differ.
+    recordToolProposed(runtime.sessionEvents, {
+      turn_id: turnId,
+      tool_call_id: 'call-closed',
+      tool_name: 'run_command',
+      idempotency_key: 'call-live',
+      effect_class: 'non_idempotent_local_effect',
+    })
+    recordToolStarted(runtime.sessionEvents, {
+      turn_id: turnId,
+      tool_call_id: 'call-closed',
+      tool_name: 'run_command',
+      idempotency_key: 'call-live',
+      effect_class: 'non_idempotent_local_effect',
+    })
+    recordToolTerminal(runtime.sessionEvents, {
+      turn_id: turnId,
+      tool_call_id: 'call-closed',
+      tool_name: 'run_command',
+      idempotency_key: 'call-live',
+      cancelled: true,
+      reason: 'interrupted_mid_tool',
+      recovery_state: 'TOOL_OUTCOME_UNKNOWN',
+      effect_class: 'non_idempotent_local_effect',
+    })
+    // Live lifecycle whose call id equals the closed lifecycle's idempotency key.
+    recordToolProposed(runtime.sessionEvents, {
+      turn_id: turnId,
+      tool_call_id: 'call-live',
+      tool_name: 'read_file',
+      idempotency_key: 'call-live',
+      effect_class: 'read_only',
+    })
+    recordToolStarted(runtime.sessionEvents, {
+      turn_id: turnId,
+      tool_call_id: 'call-live',
+      tool_name: 'read_file',
+      idempotency_key: 'call-live',
+      effect_class: 'read_only',
+    })
+
+    parityRecordToolBatch(runtime, {
+      at_turn: 1,
+      settleAlreadyProposed: true,
+      patchAttempted: true,
+      toolCalls: [
+        {
+          id: 'call-closed',
+          type: 'function',
+          function: { name: 'run_command', arguments: '{}' },
+        },
+        {
+          id: 'call-live',
+          type: 'function',
+          function: { name: 'read_file', arguments: '{}' },
+        },
+      ],
+      results: [
+        {
+          tool_call_id: 'call-closed',
+          tool_name: 'run_command',
+          content: 'CIRCUIT_BREAKER late success',
+          exit_code: 0,
+        },
+        {
+          tool_call_id: 'call-live',
+          tool_name: 'read_file',
+          content: 'live bytes',
+          exit_code: 0,
+          target: 'a.txt',
+          contentHash: 'hash-live',
+        },
+      ],
+    })
+
+    const results = runtime.eventLog.events.filter((event) => event.kind === 'tool_result')
+    assert.equal(results.some((event) => event.tool_call_id === 'call-closed'), false)
+    assert.equal(results.some((event) => event.tool_call_id === 'call-live' && event.content === 'live bytes'), true)
+    const calls = runtime.eventLog.events.filter((event) => event.kind === 'assistant_tool_calls')
+    assert.equal(calls.length, 1)
+    assert.deepEqual(calls[0]?.tool_calls.map((call) => call.id), ['call-live'])
+    assert.equal(runtime.loop.terminal, false)
+    assert.notEqual(runtime.loop.phase, 'verify')
+    const liveTerminals = terminals(runtime.sessionEvents.events).filter((event) => event.tool_call_id === 'call-live')
+    assert.equal(liveTerminals.length, 1)
+    assert.equal(liveTerminals[0]?.kind, 'tool_completed')
+    const closedTerminals = terminals(runtime.sessionEvents.events).filter((event) => event.tool_call_id === 'call-closed')
+    assert.equal(closedTerminals.length, 1)
+    assert.equal(closedTerminals[0]?.kind, 'tool_cancelled')
+    assert.equal(runtime.progress.receipts.some((receipt) => receipt.targetsRead.includes('a.txt')), true)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

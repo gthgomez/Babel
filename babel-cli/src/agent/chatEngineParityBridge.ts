@@ -471,6 +471,35 @@ export function paritySettleUnexecutedTools(
   return paritySettleInterruptedOnResume(rt, runDir, reason);
 }
 
+/**
+ * A late executor result belongs to a lifecycle only when tool_call_id and
+ * tool_name match. Idempotency keys can name a different call, so matching
+ * the key alone both republishes closed calls and drops live ones.
+ * TOOL_NOT_STARTED still accepts its first durable observation.
+ */
+function lateExecutorResultClosed(
+  rt: ParityRuntime,
+  result: { tool_call_id: string; tool_name: string },
+  earlierAccepted: ReadonlyArray<{ tool_call_id: string; tool_name: string }>,
+): boolean {
+  const sameCall = (toolCallId: string, toolName: string): boolean =>
+    toolCallId === result.tool_call_id && toolName === result.tool_name;
+  const priorTerminals = rt.sessionEvents.events.filter((event) =>
+    (event.kind === 'tool_completed' || event.kind === 'tool_failed' || event.kind === 'tool_cancelled') &&
+    sameCall(event.tool_call_id, event.tool_name));
+  if (priorTerminals.length === 0) return false;
+  const hasDurableResult = earlierAccepted.some((earlier) => sameCall(earlier.tool_call_id, earlier.tool_name))
+    || rt.eventLog.events.some((event) =>
+      event.kind === 'tool_result' && sameCall(event.tool_call_id, event.tool_name));
+  const notStartedObservation = !hasDurableResult && priorTerminals.every((event) =>
+    event.kind === 'tool_cancelled' && event.recovery_state === 'TOOL_NOT_STARTED');
+  return !notStartedObservation;
+}
+
+function resultIdentityKey(toolCallId: string, toolName: string): string {
+  return `${toolCallId}\0${toolName}`;
+}
+
 export function parityRecordToolBatch(
   rt: ParityRuntime,
   input: {
@@ -497,20 +526,36 @@ export function parityRecordToolBatch(
     settleAlreadyProposed?: boolean;
   },
 ): ProgressReceipt {
+  const acceptedResults: typeof input.results = [];
+  const rejectedResultKeys = new Set<string>();
+  for (const result of input.results) {
+    if (lateExecutorResultClosed(rt, result, acceptedResults)) {
+      rejectedResultKeys.add(resultIdentityKey(result.tool_call_id, result.tool_name));
+      continue;
+    }
+    acceptedResults.push(result);
+  }
+  const acceptedToolCalls = input.toolCalls.filter((call) =>
+    !rejectedResultKeys.has(resultIdentityKey(call.id, call.function.name)));
+  const droppedClosedResult = rejectedResultKeys.size > 0;
+
   if (rt.turnId && input.toolCalls.length > 0) {
-    recordAssistantToolCalls(
-      rt.eventLog,
-      rt.turnId,
-      input.thinking ?? 'Using tools…',
-      input.toolCalls,
-    );
+    if (acceptedToolCalls.length > 0) {
+      recordAssistantToolCalls(
+        rt.eventLog,
+        rt.turnId,
+        input.thinking ?? 'Using tools…',
+        acceptedToolCalls,
+      );
+    }
     // W2.2: if settle propose did not run, still propose+start here (compat).
     if (!input.settleAlreadyProposed) {
-      for (const tc of input.toolCalls) {
+      for (const tc of acceptedToolCalls) {
         const already = rt.sessionEvents.events.some(
           (e) =>
             (e.kind === 'tool_proposed' || e.kind === 'tool_started') &&
-            e.idempotency_key === tc.id,
+            e.tool_call_id === tc.id &&
+            e.tool_name === tc.function.name,
         );
         if (!already) {
           recordToolProposed(rt.sessionEvents, {
@@ -523,21 +568,7 @@ export function parityRecordToolBatch(
         }
       }
     }
-    for (const r of input.results) {
-      const priorTerminals = rt.sessionEvents.events.filter((event) =>
-        (event.kind === 'tool_completed' || event.kind === 'tool_failed' || event.kind === 'tool_cancelled') &&
-        event.idempotency_key === r.tool_call_id);
-      const hasDurableResult = rt.eventLog.events.some((event) =>
-        event.kind === 'tool_result' && event.tool_call_id === r.tool_call_id);
-      // TOOL_NOT_STARTED is closed as a lifecycle, but the denial observation is
-      // the first durable tool_result. Unknown, completed, and failed lifecycles
-      // reject a late executor result instead of publishing it as success.
-      const notStartedObservation = !hasDurableResult && priorTerminals.length > 0 &&
-        priorTerminals.every((event) =>
-          event.kind === 'tool_cancelled' && event.recovery_state === 'TOOL_NOT_STARTED');
-      if (priorTerminals.length > 0 && !notStartedObservation) {
-        continue;
-      }
+    for (const r of acceptedResults) {
       recordToolResult(rt.eventLog, rt.turnId, {
         tool_call_id: r.tool_call_id,
         tool_name: r.tool_name,
@@ -548,7 +579,9 @@ export function parityRecordToolBatch(
       // live dispatch hook. Materialize the same proposal → start evidence before
       // terminal settlement so resume never consumes a malformed lifecycle.
       const hasProposal = rt.sessionEvents.events.some(
-        (event) => event.kind === 'tool_proposed' && event.idempotency_key === r.tool_call_id,
+        (event) => event.kind === 'tool_proposed' &&
+          event.tool_call_id === r.tool_call_id &&
+          event.tool_name === r.tool_name,
       );
       if (!hasProposal) {
         recordToolProposed(rt.sessionEvents, {
@@ -563,7 +596,9 @@ export function parityRecordToolBatch(
         });
       }
       const hasStart = rt.sessionEvents.events.some(
-        (event) => event.kind === 'tool_started' && event.idempotency_key === r.tool_call_id,
+        (event) => event.kind === 'tool_started' &&
+          event.tool_call_id === r.tool_call_id &&
+          event.tool_name === r.tool_name,
       );
       // Only the legacy compatibility lane may materialize a start after receiving
       // an already-executed result. The live lane has already proposed the action:
@@ -581,8 +616,12 @@ export function parityRecordToolBatch(
           ...(r.target !== undefined ? { target_summary: r.target } : {}),
         });
       }
-      // Terminal settle — skip if already terminal (resume double-complete guard).
-      if (!completedToolIdempotencyKeys(rt.sessionEvents).has(r.tool_call_id)) {
+      // Terminal settle — skip this call, not a different call that reused its key.
+      const alreadyTerminal = rt.sessionEvents.events.some((event) =>
+        (event.kind === 'tool_completed' || event.kind === 'tool_failed' || event.kind === 'tool_cancelled') &&
+        event.tool_call_id === r.tool_call_id &&
+        event.tool_name === r.tool_name);
+      if (!alreadyTerminal) {
         const dispatched = hasStart || materializeCompatibilityStart;
         recordToolTerminal(rt.sessionEvents, {
           turn_id: rt.turnId,
@@ -608,23 +647,42 @@ export function parityRecordToolBatch(
     }
   }
 
-  parityReduce(rt, {
-    type: 'tool_calls',
-    tools: input.toolCalls.map((tc) => ({
-      id: tc.id,
-      name: tc.function.name,
-      mutating: isMutatingToolName(tc.function.name),
-    })),
-  });
-  parityReduce(rt, {
-    type: 'tool_results',
-    results: input.results.map((r) => ({
-      id: r.tool_call_id,
-      name: r.tool_name,
-      exitCode: r.exit_code ?? 0,
-      terminal: /\bCIRCUIT_BREAKER\b/.test(r.content),
-    })),
-  });
+  const callsForLoop = droppedClosedResult ? acceptedToolCalls : input.toolCalls;
+  const resultsForLoop = droppedClosedResult ? acceptedResults : input.results;
+  if (!droppedClosedResult || callsForLoop.length > 0) {
+    parityReduce(rt, {
+      type: 'tool_calls',
+      tools: callsForLoop.map((tc) => ({
+        id: tc.id,
+        name: tc.function.name,
+        mutating: isMutatingToolName(tc.function.name),
+      })),
+    });
+  }
+  if (!droppedClosedResult || resultsForLoop.length > 0) {
+    parityReduce(rt, {
+      type: 'tool_results',
+      results: resultsForLoop.map((r) => ({
+        id: r.tool_call_id,
+        name: r.tool_name,
+        exitCode: r.exit_code ?? 0,
+        terminal: /\bCIRCUIT_BREAKER\b/.test(r.content),
+      })),
+    });
+  }
+
+  if (droppedClosedResult && acceptedResults.length === 0 && acceptedToolCalls.length === 0) {
+    return {
+      cycle: rt.progress.receipts.length,
+      at_turn: input.at_turn,
+      deltas: ['no_progress'],
+      evidence: [],
+      targetsRead: [],
+      hypothesisKey: rt.progress.lastHypothesisKey,
+      hasDelta: false,
+      noProgressReason: 'no_semantic_delta',
+    };
+  }
 
   const receipt = recordProgressCycle(rt.progress, {
     at_turn: input.at_turn,
@@ -633,7 +691,7 @@ export function parityRecordToolBatch(
     ...(input.patchFailed ? { patchFailed: true } : {}),
     ...(input.verifierChanged ? { verifierChanged: true } : {}),
     ...(input.contextEpoch !== undefined ? { contextEpoch: input.contextEpoch } : {}),
-    reads: input.results
+    reads: acceptedResults
       .filter(
         (r) =>
           r.tool_name === 'read_file' ||
