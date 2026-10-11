@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
-import { tmpdir } from 'node:os'
+import { platform, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, mock, test } from 'node:test'
 import { RevisionManager, captureVerifierInputClosure, compareRevisions, discoverVerifierInputClosure } from './revisionBoundReceipt.js'
@@ -137,10 +137,28 @@ describe('repository capture budget', { concurrency: false }, () => {
     names.push(last)
     writeContribution(root, last, PER_FILE_CAP - 1)
     fs.mkdirSync(join(root, 'd'))
-    execFileSync('mkfifo', [join(root, 'd', 'p')])
-    assert.equal(fs.lstatSync(join(root, 'd', 'p')).isFIFO(), true)
+    const canary = join(root, 'd', 'p')
+    if (platform() === 'win32') {
+      // Windows mkfifo exits without a directory entry. An empty child still
+      // proves the over-budget return did not open content. Linux keeps a FIFO
+      // so a descent reports an unsupported entry instead of the byte budget.
+      fs.writeFileSync(canary, '')
+      assert.equal(fs.lstatSync(canary).isFile(), true)
+    } else {
+      execFileSync('mkfifo', [canary])
+      assert.equal(fs.lstatSync(canary).isFIFO(), true)
+    }
     assert.equal(pathCost('d'), 2)
+    const mutableFs = (fs as unknown as { default: typeof fs }).default
+    const original = mutableFs.openSync
+    let opened = false
+    mock.method(mutableFs, 'openSync', ((...args: Parameters<typeof fs.openSync>) => {
+      opened = true
+      return original(...args)
+    }) as typeof fs.openSync)
+    syncBuiltinESMExports()
     const result = captureVerifierInputClosure(root, true, [...names, 'd'])
+    assert.equal(opened, false)
     assert.deepEqual(result, { mode: 'unsupported', reason: BYTE_BUDGET_REASON })
   }))
 
