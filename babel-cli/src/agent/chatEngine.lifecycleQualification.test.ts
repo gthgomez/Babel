@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -117,6 +117,25 @@ function readEvents(runId: string): SessionEvent[] {
   const loaded = inspectSessionEventLogFromDir(chatSessionDir(runId), runId);
   assert.equal(loaded.kind, 'valid', loaded.kind === 'invalid' ? loaded.error.message : 'session event log missing');
   return loaded.kind === 'valid' ? loaded.log.events : [];
+}
+
+/** Compaction installs P11 only when the project has a captured Git commit. */
+function commitCapturedProject(project: string): void {
+  writeFileSync(join(project, 'fixture.txt'), 'lifecycle fixture\n');
+  for (const args of [
+    ['init', '-q'],
+    ['config', 'user.email', 'fixture@example.invalid'],
+    ['config', 'user.name', 'Fixture'],
+    ['add', 'fixture.txt'],
+    ['commit', '-q', '-m', 'fixture'],
+  ]) {
+    const git = spawnSync('git', args, {
+      cwd: project,
+      windowsHide: true,
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(project, 'absent-global-git-config') },
+    });
+    assert.equal(git.status, 0, git.stderr?.toString());
+  }
 }
 
 function makeFixture() {
@@ -513,6 +532,7 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
 
   test('final prepared-request admission compacts once and retries the rebuilt request', async () => {
     const fixture = makeFixture();
+    commitCapturedProject(fixture.project);
     let admissionStore: AdmissionStore | undefined;
     try {
       process.env['BABEL_COMPACTION'] = 'off';
@@ -607,6 +627,7 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
 
   test('repeated real-engine compaction persists a resumable boundary', async () => {
     const fixture = makeFixture();
+    commitCapturedProject(fixture.project);
     let engine: ChatEngine | undefined;
     let restored: ChatEngine | undefined;
     let admissionStore: AdmissionStore | undefined;

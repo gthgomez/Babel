@@ -105,10 +105,12 @@ for (const failure of ['oversized input', 'credential metadata', 'unreadable inp
       // Presence alone must reject capture; no credential content is created or read.
       writeFileSync(join(projectRoot, '.env'), '')
     } else {
-      const denied = join(projectRoot, 'source.ts')
+      const denied = fs.realpathSync.native(join(projectRoot, 'source.ts'))
       const access = fs.accessSync
       const mocked = t.mock.method(fs, 'accessSync', (path: fs.PathLike, mode?: number) => {
-        if (String(path) === denied) throw Object.assign(new Error('fixture denied input access'), { code: 'EACCES' })
+        if (fs.realpathSync.native(String(path)) === denied) {
+          throw Object.assign(new Error('fixture denied input access'), { code: 'EACCES' })
+        }
         access(path, mode)
       })
       syncBuiltinESMExports()
