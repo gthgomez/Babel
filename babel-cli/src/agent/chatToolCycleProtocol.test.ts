@@ -12,6 +12,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -74,6 +75,22 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const source = join(root, 'source');
   mkdirSync(source);
   writeFileSync(join(source, 'fixture.txt'), options.fixtureContent ?? 'fixture-alpha\nfixture-beta\nfixture-gamma\n');
+  // P11 installs only a captured Git commit. A bare temp directory has no
+  // physical workspace revision, so compaction is refused before the next round.
+  for (const args of [
+    ['init', '-q'],
+    ['config', 'user.email', 'fixture@example.invalid'],
+    ['config', 'user.name', 'Fixture'],
+    ['add', 'fixture.txt'],
+    ['commit', '-q', '-m', 'fixture'],
+  ]) {
+    const git = spawnSync('git', args, {
+      cwd: source,
+      windowsHide: true,
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(source, 'absent-global-git-config') },
+    });
+    assert.equal(git.status, 0, git.stderr?.toString());
+  }
   const runsDir = join(root, 'runs');
   mkdirSync(runsDir);
   const keys: Record<string, string> = {

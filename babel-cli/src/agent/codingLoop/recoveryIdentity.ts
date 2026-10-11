@@ -25,9 +25,12 @@ export function recoveryWorkspaceRevision(projectRoot: string): string | null {
       cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true, timeout: 10_000, maxBuffer: 8 * 1024 * 1024,
     }).split('\0').filter(Boolean)
-    const indexed = RevisionManager.computeRevisionSync(projectRoot, [], {
+    const capture = RevisionManager.computeRevisionSync(projectRoot, [], {
       scope_kind: 'repository', git_binding: 'optional',
-    }).compositeTreeHash
+    })
+    // Unknown physical capture cannot establish a candidate recovery identity.
+    if (!capture.gitCommitHash) return null
+    const indexed = capture.compositeTreeHash
     const paths = [...new Set([
       ...gitPaths(['diff', '--name-only', '--no-ext-diff', '-z']),
       ...gitPaths(['ls-files', '-o', '--exclude-standard', '-z']),

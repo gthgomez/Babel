@@ -54,6 +54,13 @@ function driveToTerminalBlocked(engine: ChatEngine, turns = 12): void {
   // level is the task-local punishment state this fixture needs to assert.
 }
 
+// Recovery candidates need a physically captured repository with a committed HEAD.
+function commitFixture(root: string): void {
+  execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], {
+    cwd: root, windowsHide: true,
+  });
+}
+
 function redRecoveryState(engine: ChatEngine) {
   let state = createWorkingState('repair the parser failure');
   state = applyWorkingStateEvent(state, {
@@ -201,6 +208,7 @@ test('R1 recovery permit is invalidated by external workspace drift before mutat
     const marker = join(root, 'executed.txt');
     writeFileSync(file, 'export const value = 1\n');
     execFileSync('git', ['add', 'src/parser.ts'], { cwd: root, windowsHide: true });
+    commitFixture(root);
     const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
     let state = applyWorkingStateEvent(createWorkingState('repair parser'), {
       type: 'mutation', path: 'src/parser.ts', fingerprint: 'failed-patch',
@@ -239,6 +247,7 @@ test('R1 repair plan rejects a repeated edit and admits one changed scoped edit'
     const file = join(root, 'src', 'parser.ts');
     writeFileSync(file, 'export const value = 2\n');
     execFileSync('git', ['add', 'src/parser.ts'], { cwd: root, windowsHide: true });
+    commitFixture(root);
     const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
     const failedAction = { type: 'str_replace' as const, file_path: 'src/parser.ts', old_str: 'value = 1', new_str: 'value = 2' };
     const failedEdit = actualRecoveryEdit(failedAction, root)!;
@@ -424,6 +433,7 @@ test('R1 no-target red localizes through a related read before admitting a plan'
     const file = join(root, 'src', 'parser.js');
     writeFileSync(file, 'export function parseToken() {\n  return 1\n}\n');
     execFileSync('git', ['add', 'src/parser.js'], { cwd: root, windowsHide: true });
+    commitFixture(root);
     const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
     const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
     (engine as any).workingState = ingestVerifierResult({
@@ -469,6 +479,7 @@ test('PR242: proven old_str mismatch permits one fresh corrected repair through 
     const file = join(root, 'src', 'parser.js');
     writeFileSync(file, 'export function parseToken() {\n  return 1\n}\n');
     execFileSync('git', ['add', 'src/parser.js'], { cwd: root, windowsHide: true });
+    commitFixture(root);
     const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
     const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
     (engine as any).workingState = ingestVerifierResult({
@@ -517,6 +528,7 @@ test('R1 no-target test name needs a bounded glob followed by a corroborating re
     mkdirSync(join(root, 'tests'));
     writeFileSync(join(root, 'tests', 'parser.test.ts'), 'test("parser handles tokens", () => {})\n');
     execFileSync('git', ['add', 'tests/parser.test.ts'], { cwd: root, windowsHide: true });
+    commitFixture(root);
     const engine = new ChatEngine({ task: 'repair parser test', projectRoot: root });
     (engine as any).workingState = ingestVerifierResult({
       state: createWorkingState('repair parser test'), tool: 'test_run',

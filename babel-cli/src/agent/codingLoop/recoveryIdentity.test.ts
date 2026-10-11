@@ -13,6 +13,9 @@ test('candidate binding changes with tracked edits and untracked content', () =>
     mkdirSync(join(root, 'src'))
     writeFileSync(join(root, 'src', 'Foo.ts'), 'export const answer = 1\n')
     execFileSync('git', ['add', 'src/Foo.ts'], { cwd: root, windowsHide: true })
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], {
+      cwd: root, windowsHide: true,
+    })
     const indexed = recoveryWorkspaceRevision(root)
     assert.ok(indexed)
     writeFileSync(join(root, 'src', 'Foo.ts'), 'export const answer = 2\n')
@@ -62,3 +65,30 @@ test('target identity resolves dot segments and rejects an escaping symlink', (t
     rmSync(external, { recursive: true, force: true })
   }
 })
+
+for (const captureFailure of ['oversized input', 'credential metadata', 'unborn HEAD', 'non-Git workspace'] as const) {
+  test(`${captureFailure} cannot produce a recovery workspace revision`, () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-recovery-capture-truth-'))
+    try {
+      writeFileSync(join(root, 'source.ts'), 'export const value = 1\n')
+      if (captureFailure !== 'non-Git workspace') {
+        execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true })
+        execFileSync('git', ['add', 'source.ts'], { cwd: root, windowsHide: true })
+        if (captureFailure !== 'unborn HEAD') {
+          execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], {
+            cwd: root, windowsHide: true,
+          })
+          assert.ok(recoveryWorkspaceRevision(root), 'committed fixture supplies positive physical capture')
+        }
+      }
+      if (captureFailure === 'oversized input') writeFileSync(join(root, 'large.bin'), Buffer.alloc(1_000_001))
+      if (captureFailure === 'credential metadata') {
+        writeFileSync(join(root, '.env'), '')
+        execFileSync('git', ['add', '.env'], { cwd: root, windowsHide: true })
+      }
+      assert.equal(recoveryWorkspaceRevision(root), null, 'unknown physical capture cannot grant a usable recovery revision')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+}

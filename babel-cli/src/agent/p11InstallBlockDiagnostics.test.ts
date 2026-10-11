@@ -19,7 +19,8 @@
  *  - ownership semantics are unchanged: a changed durable owner still refuses.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -145,6 +146,13 @@ interface Harness {
 
 function makeHarness(): Harness {
   const root = mkdtempSync(join(tmpdir(), 'p11-install-diagnostics-'));
+  // A present workspace prerequisite must supply actual physical Git proof.
+  writeFileSync(join(root, 'README.md'), 'fixture repository\n');
+  execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
+  execFileSync('git', ['add', 'README.md'], { cwd: root, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], {
+    cwd: root, windowsHide: true,
+  });
   const captured = captureApprovedObservation(captureInput(), storage(root));
   assert.equal(captured.status, 'captured');
   const observation = captured.observation;
