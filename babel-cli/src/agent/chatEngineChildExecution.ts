@@ -195,6 +195,45 @@ export function buildDelegatedChildEnvelope(input: {
   return { envelope, mutationEnabled, writeScope, spec };
 }
 
+/**
+ * Resolver throws are provider failures. Words like "aborted" or "cancelled"
+ * are not cancellation unless the child signal aborted. Timeout and other
+ * specific classes still win over that wording.
+ */
+function classifyReadOnlyProviderFailure(
+  error: string,
+  aborted: boolean,
+): SubagentAttribution {
+  if (aborted) return "child_cancellation";
+  const classify = (value: string): SubagentAttribution =>
+    classifySubagentFailure({
+      success: false,
+      error: value,
+      changedFilesCount: 0,
+      aborted: false,
+    });
+  let attribution = classify(error);
+  if (attribution === "child_cancellation") {
+    attribution = classify(
+      error
+        .replace(/abort(?:ed|ing|s)?/gi, " ")
+        .replace(/cancell(?:ed|ation)/gi, " ")
+        .replace(/canceled/gi, " "),
+    );
+  }
+  if (
+    attribution === "child_timeout" ||
+    attribution === "child_provider_failure" ||
+    attribution === "child_policy_block" ||
+    attribution === "child_round_exhaustion" ||
+    attribution === "child_wall_exhaustion" ||
+    attribution === "child_cost_exhaustion"
+  ) {
+    return attribution;
+  }
+  return "child_provider_failure";
+}
+
 export async function executeSubAgentAction(
   input: ChatEngineChildExecutionInput,
 ): Promise<{ index: number; observation: string; stop?: boolean }> {
@@ -825,24 +864,16 @@ export async function executeSubAgentAction(
             "parent submission/revision superseded before the child resolved",
           );
         }
-        const providerAttribution = classifySubagentFailure({
-          success: false,
-          error: subResult.providerError ?? null,
-          changedFilesCount: 0,
-          aborted: childController.signal.aborted,
-        });
         const attribution: SubagentAttribution =
           subResult.needsApproval || subResult.policyBlocked
             ? "child_policy_block"
             : subResult.inheritedBudgetExceeded
               ? childBudgetAttribution(subResult.inheritedBudgetLimiter)
               : subResult.providerError
-                // A known provider failure may say "aborted" without the
-                // child being cancelled. Keep timeout/provider identities,
-                // but cancellation requires the actual child signal here.
-                ? providerAttribution === "child_cancellation" && !childController.signal.aborted
-                  ? "child_provider_failure"
-                  : providerAttribution
+                ? classifyReadOnlyProviderFailure(
+                    subResult.providerError,
+                    childController.signal.aborted,
+                  )
                 : subResult.roundExhausted
                   ? "child_round_exhaustion"
                   : childController.signal.aborted
@@ -901,7 +932,7 @@ export async function executeSubAgentAction(
           `round_exhausted: ${subResult.roundExhausted}`,
           ...(subResult.needsApproval ? ["needs_approval: true"] : []),
           ...(subResult.providerError
-            ? [`provider_error: ${subResult.providerError}`]
+            ? [`provider_error: ${childResult.error ?? subResult.providerError}`]
             : []),
         ].join("\n");
         host.toolCallLog.push({

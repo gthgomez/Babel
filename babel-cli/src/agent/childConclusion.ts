@@ -115,10 +115,23 @@ function clip(text: string, maxChars: number): { text: string; truncated: boolea
   };
 }
 
-function clipEvidenceTarget(target: string): string {
+/** Bound a search target. The marker is included in the cap; raw logs stay intact. */
+export function clipReadOnlyEvidenceTarget(target: string): string {
   if (target.length <= READONLY_CHILD_EVIDENCE_TARGET_MAX_CHARS) return target;
   const marker = `… [child evidence target truncated: ${target.length} chars total]`;
-  return target.slice(0, READONLY_CHILD_EVIDENCE_TARGET_MAX_CHARS - marker.length) + marker;
+  const keep = READONLY_CHILD_EVIDENCE_TARGET_MAX_CHARS - marker.length;
+  // A pathological marker longer than the cap must not use a negative slice
+  // (which would keep almost the entire target).
+  if (keep <= 0) return marker.slice(0, READONLY_CHILD_EVIDENCE_TARGET_MAX_CHARS);
+  return target.slice(0, keep) + marker;
+}
+
+export function clipReadOnlyChildError(rawError: string): string {
+  if (rawError.length <= READONLY_CHILD_ERROR_MAX_CHARS) return rawError;
+  return (
+    rawError.slice(0, READONLY_CHILD_ERROR_MAX_CHARS) +
+    `… [child error truncated: ${rawError.length - READONLY_CHILD_ERROR_MAX_CHARS} chars omitted]`
+  );
 }
 
 export function buildReadOnlyChildResult(input: ReadOnlyChildResultInput): ReadOnlyChildResult {
@@ -156,19 +169,14 @@ export function buildReadOnlyChildResult(input: ReadOnlyChildResultInput): ReadO
   const evidenceSource = input.toolCallLog.slice(0, READONLY_CHILD_EVIDENCE_MAX_REFS);
   const evidence: ReadOnlyChildEvidenceRef[] = evidenceSource.map((entry) => ({
     tool: entry.tool,
-    target: clipEvidenceTarget(entry.target),
+    target: clipReadOnlyEvidenceTarget(entry.target),
     exitCode: entry.exit_code,
     verified: entry.verified,
   }));
 
   const rawError = input.providerError ?? input.blockedReason ?? undefined;
   const error =
-    rawError && rawError.trim().length > 0
-      ? rawError.length > READONLY_CHILD_ERROR_MAX_CHARS
-        ? rawError.slice(0, READONLY_CHILD_ERROR_MAX_CHARS) +
-          `… [child error truncated: ${rawError.length - READONLY_CHILD_ERROR_MAX_CHARS} chars omitted]`
-        : rawError
-      : undefined;
+    rawError && rawError.trim().length > 0 ? clipReadOnlyChildError(rawError) : undefined;
 
   return {
     schema: 'babel.readonly_child_result.v1',

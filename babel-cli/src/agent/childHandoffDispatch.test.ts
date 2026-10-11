@@ -162,12 +162,44 @@ describe('S02/#212 production dispatch — child conclusion reaches the parent t
       assert.ok(entry.stdout.length <= 6000, 'bounded section must fit the text delivery budget');
       assert.match(entry.stdout, /\[child evidence target truncated:/);
       assert.match(entry.stdout, /\[evidence list truncated:/);
+      assert.equal(/q{500}/.test(observation), false, 'raw evidence targets are not forwarded unbounded');
       assert.equal(observation.split('BOUNDED_SUMMARY_SENTINEL').length - 1, 1);
       assert.ok(observation.includes(entry.stdout), 'native delivery preserves the same bounded section');
       const text = formatTextToolResults([entry]);
       assert.ok(text.includes(entry.stdout), 'text delivery preserves the entire bounded section');
       assert.match(text, /authority: child_assertion_not_verified/);
       assert.match(text, /completion: completed/);
+    } finally {
+      if (offline === undefined) delete process.env['BABEL_LITE_OFFLINE'];
+      else process.env['BABEL_LITE_OFFLINE'] = offline;
+    }
+  });
+
+  test('resolver failures keep timeout and provider classes when the child signal is clear', async () => {
+    const offline = process.env['BABEL_LITE_OFFLINE'];
+    delete process.env['BABEL_LITE_OFFLINE'];
+    try {
+      const timeoutMessage = `The operation was aborted due to timeout ${'e'.repeat(800)} TAIL_SHOULD_BE_OMITTED`;
+      const cases: Array<{ message: string; attribution: string }> = [
+        { message: timeoutMessage, attribution: 'child_timeout' },
+        { message: 'fetch failed: ECONNRESET', attribution: 'child_provider_failure' },
+      ];
+      for (const scenario of cases) {
+        const { observation, entry } = await dispatchSubAgent('Inspect provider failure', {}, undefined, {
+          useDeterministicMock: false,
+          actionResolver: async () => { throw new Error(scenario.message); },
+        });
+        assert.match(observation, /completion: provider_error/);
+        assert.match(observation, /cancelled=false provider_error=true/);
+        assert.match(observation, new RegExp(`attribution: ${scenario.attribution}`));
+        assert.doesNotMatch(observation, /attribution: child_cancellation/);
+        assert.doesNotMatch(observation, /attribution: child_environment_failure/);
+        assert.equal(entry.exit_code, 1);
+        if (scenario.message === timeoutMessage) {
+          assert.match(observation, /\[child error truncated:/);
+          assert.equal(observation.includes('TAIL_SHOULD_BE_OMITTED'), false);
+        }
+      }
     } finally {
       if (offline === undefined) delete process.env['BABEL_LITE_OFFLINE'];
       else process.env['BABEL_LITE_OFFLINE'] = offline;
