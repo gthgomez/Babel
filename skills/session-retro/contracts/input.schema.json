@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["on-error", "session-end"],
+      "description": "on-error is a single failure; session-end caps at 3 lessons."
+    },
+    "trigger": {
+      "type": "string",
+      "description": "What started the retro: the error, false report, or session close."
+    },
+    "transcript_available": {
+      "type": "boolean",
+      "description": "False when the transcript or command output was not retained."
+    }
+  },
+  "required": ["mode", "trigger"]
+}

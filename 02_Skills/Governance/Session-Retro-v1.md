@@ -5,6 +5,13 @@ skill_package: skills/session-retro/
 -->
 # Session Retro (v1.0)
 
+## Package bridge
+
+- **Canonical package:** `skills/session-retro/` (`SKILL.md`, `skill.yaml`, `contracts/`, `examples/`, `tests/`, `references/`)
+- **Catalog id:** `skill_session_retro`
+- **This file:** Babel prompt routing and layer behavior only
+- Do not duplicate the worked example here; use `skills/session-retro/references/example-retro.md`
+
 ## Purpose
 A blameless, evidence-first retrospective performed by the agent on its own
 work. Triggered (a) at the end of every coding session, or (b) immediately

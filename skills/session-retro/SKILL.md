@@ -79,8 +79,8 @@ remedies differ.
 
 ## 4. Write the retro output
 
-Keep it bounded: on-error mode covers 1–3 issues; session-end mode caps at 3
-lessons and ~30 lines total. Use this per-issue format:
+Keep it bounded: on-error mode covers the single failure that triggered it;
+session-end mode caps at 3 lessons and ~30 lines total. Use this per-issue format:
 
 ```markdown
 ### [P1] <short title>  (category: V, tactical)
@@ -93,8 +93,8 @@ lessons and ~30 lines total. Use this per-issue format:
 
 Severity: P1 = produced or nearly produced a false report or data loss;
 P2 = wasted meaningful time or caused rework; P3 = friction worth a habit
-change. Include a one-line **"what went well / what got lucky"** pair in
-session-end mode (SRE triad: went well / went poorly / got lucky).
+change. In session-end mode, include the SRE triad — what went well, what
+went poorly, and what got lucky — one line each.
 
 ## 5. Persist lessons — the whole point
 
@@ -106,26 +106,30 @@ A retro that only lives in chat is a diary entry. For each issue, write a
   declaring a deploy missing; validate the verifier against a known-present
   marker first."
 
-Where to persist, in order of preference:
+Where to persist:
 
-1. **Agent memory system** (if available): one `feedback`-type memory per
-   transferable lesson, with `**Why:**` and `**How to apply:**` lines, and
-   update the memory index.
-2. **Project instructions file** (`AGENTS.md`/`CLAUDE.md`-equivalent) for
-   lessons that apply to this repo every session — but check the file's
-   policy on amendments first; do not commit instruction changes without
-   authorization.
-3. **Retro log** (`docs/retros/` or similar, if the project keeps one): the
-   full per-issue records, with a greppable header line
+1. **Actionable lessons** go to one primary store, not both:
+   - **Agent memory system** (preferred when available): one `feedback`-type
+     memory per transferable lesson, with `**Why:**` and `**How to apply:**`
+     lines, and update the memory index.
+   - **Project instructions file** (`AGENTS.md`/`CLAUDE.md`-equivalent) only
+     when the lesson applies to this repo every session. Check that file's
+     amendment policy first; do not commit instruction changes without
+     authorization. This skill does not authorize policy-file edits by itself.
+2. **Full per-issue records** also go to the retro log (`docs/retros/` or the
+   project's equivalent), with a greppable header line
    (`category: V severity: P1 date: YYYY-MM-DD`) so recurrence can be
-   detected.
+   detected. If the project has no retro log, say so in the retro; do not
+   invent a new docs tree.
+3. A lesson that cannot be phrased as a directive is an observation: retro
+   log only. Do not write it to memory or instructions files.
 
 **Recurrence check (do this before writing any new lesson):** search existing
-memory/lessons for the same root-cause category or pattern. If this is a
-repeat (2nd+ occurrence), escalate the remedy: promote the prose lesson to a
-mechanical guard — a lint rule, a pre-commit check, a CI step, or a checklist
-item in the project's instructions. Lessons that keep recurring as prose are
-retro failures.
+memory, lessons, and the retro log for the same root-cause pattern. If this
+is a repeat (2nd+ occurrence), do not add another prose lesson. Promote the
+remedy to a mechanical guard — a lint rule, a pre-commit check, a CI step, or
+a checklist item in the project's instructions — and build that guard in this
+session. Lessons that keep recurring as prose are retro failures.
 
 ## 6. Close the loop immediately
 

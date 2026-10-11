@@ -8,9 +8,9 @@ allowed_tools:
   - shell_command
   - apply_patch
 denied_tools: []
-inputs: null
-outputs: null
-tests: null
+inputs: contracts/input.schema.json
+outputs: contracts/output.schema.json
+tests: tests/
 owner: Babel Skill Forge
 created_at: 2026-10-10T00:00:00.000Z
-updated_at: 2026-10-10T00:00:00.000Z
+updated_at: 2026-10-11T00:00:00.000Z

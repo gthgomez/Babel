@@ -1,9 +1,11 @@
 # Worked example: real retrospective from 2026-10-10 (Prismatix UI/UX campaign)
 
 This is the format applied to an actual session. Note the properties: every
-finding quotes an artifact, every "why" trace lands in a taxonomy category,
+finding quotes an artifact, every "why" trace lands in exactly one taxonomy
+category (a compounding category may be named, but the root is one code),
 each lesson is a directive, and one fix was mechanical (a script patch) rather
-than prose.
+than prose. The source session had five findings; a session-end retro keeps
+only the three highest-severity lessons. On-error mode would cover one failure.
 
 ---
 

@@ -25,8 +25,11 @@ checks, script fixes) instead of prose.
 
 - `SKILL.md` — the operating procedure (modes, evidence rules, taxonomy,
   output format, persistence targets, anti-patterns).
+- `contracts/` — input and output JSON Schemas.
+- `examples/example.md` — short expected-behavior fixture.
 - `references/example-retro.md` — fully worked example applied to a real
   session, including the recurrence-escalation note.
+- `tests/validation.test.md` — static validation checks for this package.
 
 ## Prompt bridge
 
