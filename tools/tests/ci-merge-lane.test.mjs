@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   classifyMergeLane,
+  combineMergeLanes,
   trustedPathForcesFullLane,
   installerSensitiveChange,
 } from "../ci-merge-lane.mjs";
@@ -73,4 +78,44 @@ test("prompt_catalog changes stay on the full lane", () => {
     classifyMergeLane({ event: "pull_request", files: ["prompt_catalog.yaml"] }),
     { full: true, installer: false },
   );
+});
+
+test("combineMergeLanes keeps the stricter of head and base classifiers", () => {
+  assert.deepEqual(
+    combineMergeLanes({ full: false, installer: false }, { full: true, installer: false }),
+    { full: true, installer: false },
+  );
+  assert.deepEqual(
+    combineMergeLanes({ full: true, installer: false }, { full: false, installer: true }),
+    { full: true, installer: true },
+  );
+});
+
+test("rename detection cannot hide runtime paths moved into docs prefixes", () => {
+  const root = mkdtempSync(join(tmpdir(), "babel-lane-rename-"));
+  execFileSync("git", ["init"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "lane@test"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "lane"], { cwd: root });
+  mkdirSync(join(root, "babel-cli", "src"), { recursive: true });
+  writeFileSync(join(root, "babel-cli", "src", "agent.ts"), "export {}\n");
+  execFileSync("git", ["add", "."], { cwd: root });
+  execFileSync("git", ["commit", "-m", "base"], { cwd: root });
+  const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  mkdirSync(join(root, "docs"), { recursive: true });
+  execFileSync("git", ["mv", "babel-cli/src/agent.ts", "docs/agent.ts"], { cwd: root });
+  execFileSync("git", ["commit", "-am", "rename into docs"], { cwd: root });
+  const withRename = execFileSync(
+    "git",
+    ["diff", "--name-only", `${baseSha}...HEAD`],
+    { cwd: root, encoding: "utf8" },
+  ).trim();
+  const withoutRename = execFileSync(
+    "git",
+    ["diff", "--no-renames", "--name-only", `${baseSha}...HEAD`],
+    { cwd: root, encoding: "utf8" },
+  ).trim().split("\n").filter(Boolean);
+  assert.equal(withRename, "docs/agent.ts");
+  assert.deepEqual(withoutRename, ["babel-cli/src/agent.ts", "docs/agent.ts"]);
+  const lane = classifyMergeLane({ event: "pull_request", files: withoutRename });
+  assert.equal(lane.full, true);
 });
