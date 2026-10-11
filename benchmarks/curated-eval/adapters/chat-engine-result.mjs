@@ -9,6 +9,8 @@ function engineTerminal(result) {
   if (result.status === 'cancelled' || result.outcome === 'CANCELLED') return 'cancelled'
   if (result.status === 'budget_exhausted' || result.outcome === 'BUDGET_EXHAUSTED') return 'limit_reached'
   if (result.outcome === 'INFRA_FAILURE') return 'infra_failed'
+  if (['BLOCKED_EXTERNAL', 'BLOCKED_POLICY', 'INVALID_TASK', 'NEEDS_HUMAN_DECISION'].includes(result.outcome)) return 'blocked'
+  if (result.outcome === 'AGENT_FAILURE') return 'failed'
   if (['completed', 'failed', 'blocked'].includes(result.status)) return result.status
   return 'unknown'
 }
