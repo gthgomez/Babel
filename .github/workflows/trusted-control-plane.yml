@@ -6,7 +6,7 @@ name: Trusted Control Plane
 # Drafts, stacked bases, and a stale main base are not failed tests.
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -86,11 +86,15 @@ jobs:
             $payload = gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/typecheck.yml/runs?event=pull_request&head_sha=$env:HEAD_SHA&per_page=20"
             if ($LASTEXITCODE -ne 0) { throw 'Unable to read Public Release Gate runs.' }
             $parsed = $payload | ConvertFrom-Json
-            $runs = @($parsed.workflow_runs)
+            $runs = @($parsed.workflow_runs | Sort-Object { [datetime]$_.updated_at } -Descending)
             $active = @($runs | Where-Object { $_.status -ne 'completed' })
             $finished = @($runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -ne 'cancelled' })
             if ($finished.Count -gt 0 -and $active.Count -eq 0) {
-              Write-Output "Public Release Gate completed: $($finished[0].conclusion) run $($finished[0].id)"
+              $latest = $finished[0]
+              if ($latest.conclusion -ne 'success') {
+                throw "Public Release Gate concluded $($latest.conclusion) on run $($latest.id)"
+              }
+              Write-Output "Public Release Gate completed: $($latest.conclusion) run $($latest.id)"
               exit 0
             }
             if ((Get-Date) -gt $deadline) { throw 'Public Release Gate did not finish before the audit wait ended.' }
