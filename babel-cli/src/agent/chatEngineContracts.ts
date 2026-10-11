@@ -683,6 +683,8 @@ export interface ChatEngineStreamingLoopHost {
   ) => Promise<ContextCompactedInfo | null>
   readonly repetitionDetector: RepetitionDetector
   repoMapCache: string | null
+  /** Set when a write drops repoMapCache; cleared once a refresh is attempted. */
+  repoMapInvalidated: boolean
   readonly resolveDeliberationRunner: () =>
     | DeepInfraApiRunner
     | DeepSeekApiRunner

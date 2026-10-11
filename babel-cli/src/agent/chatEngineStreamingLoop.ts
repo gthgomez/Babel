@@ -7,7 +7,10 @@ import {
   canonicalizeToolCallId,
   reconcileStreamedAnswer,
 } from "./chatEngineStreamingProtocol.js";
-import { prepareStreamingSubmission } from "./chatEngineStreamingPreparation.js";
+import {
+  ensureRepositoryContext,
+  prepareStreamingSubmission,
+} from "./chatEngineStreamingPreparation.js";
 import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
@@ -117,7 +120,6 @@ export class ChatEngineStreamingLoop {
       effectiveIntent,
       modelName,
       providerName,
-      repoMapPromise,
       maxTurns,
     } = prepared;
     let allToolObservations = "";
@@ -141,8 +143,12 @@ export class ChatEngineStreamingLoop {
       // R11: Reset per-turn tool-call flag for auto-continue refusal
       this.host._hadToolCallsThisTurn = false;
 
-      // Ensure repo map is available for subsequent turns that may rebuild system prompt
-      if (turn === 0) await repoMapPromise;
+      // An edit invalidates the map mid-submission. Refresh before this turn's
+      // provider request so a prompt rebuilt after the edit is not map-less.
+      // A failed attempt stays best-effort until the next invalidation or submission.
+      if (this.host.repoMapInvalidated) {
+        await ensureRepositoryContext(this.host, submissionGeneration);
+      }
       // R0-8: the repo-map await is a suspension point; re-check ownership.
       if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
       if (this.host._cancelled || this.host.abortController.signal.aborted) {
