@@ -6,6 +6,7 @@ import { classifyFailureSurface } from './failureSurface.js'
 import { compileObservation } from './observationCompiler.js'
 import {
   applyWorkingStateEvent,
+  greenVerifierClearsRecoveryGate,
   sameRecoveryBinding,
   type WorkingState,
   type RecoveryCandidateBinding,
@@ -124,7 +125,7 @@ export function ingestVerifierResult(input: {
       }
     }
   }
-  return { state, lastVerifierFailed: input.exitCode !== 0 }
+  return { state, lastVerifierFailed: !greenVerifierClearsRecoveryGate(input.exitCode, input.summary) }
 }
 
 /**
