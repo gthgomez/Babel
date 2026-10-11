@@ -17,7 +17,7 @@ function directlyRuns(script, command) {
     /^npm run [a-z0-9:-]+(?: -- --test-timeout=[0-9]+)?(?: 2>&1 \| Tee-Object(?: -FilePath)? [a-zA-Z0-9_./-]+)?$/,
     /^node scripts\/[a-zA-Z0-9_.-]+\.mjs [a-z0-9-]+$/,
     /^pwsh -NoProfile -ExecutionPolicy Bypass -File tools\/check-harness-architecture\.ps1$/,
-    /^New-Item -ItemType Directory -Force artifacts\/[a-z0-9-]+ \| Out-Null$/,
+    /^New-Item -ItemType Directory -Force (?:\.\.\/)?artifacts\/[a-z0-9-]+ \| Out-Null$/,
     /^exit \$LASTEXITCODE$/,
   ];
   if (!lines.length || lines.some(line => !supported.some(pattern => pattern.test(line)))) return false;
