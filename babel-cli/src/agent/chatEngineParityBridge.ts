@@ -524,6 +524,20 @@ export function parityRecordToolBatch(
       }
     }
     for (const r of input.results) {
+      const priorTerminals = rt.sessionEvents.events.filter((event) =>
+        (event.kind === 'tool_completed' || event.kind === 'tool_failed' || event.kind === 'tool_cancelled') &&
+        event.idempotency_key === r.tool_call_id);
+      const hasDurableResult = rt.eventLog.events.some((event) =>
+        event.kind === 'tool_result' && event.tool_call_id === r.tool_call_id);
+      // TOOL_NOT_STARTED is closed as a lifecycle, but the denial observation is
+      // the first durable tool_result. Unknown, completed, and failed lifecycles
+      // reject a late executor result instead of publishing it as success.
+      const notStartedObservation = !hasDurableResult && priorTerminals.length > 0 &&
+        priorTerminals.every((event) =>
+          event.kind === 'tool_cancelled' && event.recovery_state === 'TOOL_NOT_STARTED');
+      if (priorTerminals.length > 0 && !notStartedObservation) {
+        continue;
+      }
       recordToolResult(rt.eventLog, rt.turnId, {
         tool_call_id: r.tool_call_id,
         tool_name: r.tool_name,
