@@ -27,6 +27,10 @@ import {
   type ExecutionContext,
 } from '../executionContext.js';
 import {
+  clipReadOnlyChildError,
+  clipReadOnlyEvidenceTarget,
+} from '../childConclusion.js';
+import {
   compileObservation,
   formatCompiledObservation,
 } from '../codingLoop/observationCompiler.js';
@@ -161,7 +165,7 @@ function formatToolResultObservation(
   return formatCompiledObservation(
     compileObservation({
       tool: agentActionToolName(action),
-      target: agentActionTarget(action),
+      target: clipReadOnlyEvidenceTarget(agentActionTarget(action)),
       exitCode: result.exit_code,
       stdout: result.stdout,
       stderr: result.stderr,
@@ -663,7 +667,7 @@ export async function runReadOnlyAgentLoop(
       if (inheritedBudgetLimiter) {
         break;
       }
-      if (effectiveAbortSignal.aborted || /abort/i.test(message)) {
+      if (effectiveAbortSignal.aborted) {
         blockedReason = blockedReason ?? 'Aborted by user or parent';
       } else {
         providerError = message;
@@ -740,7 +744,7 @@ export async function runReadOnlyAgentLoop(
   const finalObservations = [
     baseObservations,
     roundExhausted ? '[Discovery incomplete: round limit reached without finish]' : '',
-    providerError ? `[Provider error: ${providerError}]` : '',
+    providerError ? `[Provider error: ${clipReadOnlyChildError(providerError)}]` : '',
   ]
     .filter((part) => part && part.trim().length > 0)
     .join('\n');

@@ -310,7 +310,11 @@ export function captureVerifierInputClosure(
           if (stats.size > INPUT_CLOSURE_MAX_BYTES) return unsupported("Input file exceeds the closure size cap");
           budgetBytes += stats.size;
           files.push({ absolute, relativePath, size: stats.size, kind: stats.isSymbolicLink() ? "symlink" : "file", admittedStats: stats });
+<<<<<<< HEAD
           if (!repositoryCapture && !freshProof && files.length > INPUT_CLOSURE_MAX_FILES) return unsupported("Input closure exceeds the file cap");
+=======
+          if (!freshProof && files.length > INPUT_CLOSURE_MAX_FILES) return unsupported("Input closure exceeds the file cap");
+>>>>>>> origin/main
         } else return unsupported("Input closure includes an unsupported filesystem entry");
         if (repositoryCapture && admitted.size > INPUT_CLOSURE_REPOSITORY_MAX_ENTRIES)
           return unsupported("Input closure exceeds the repository entry cap");
