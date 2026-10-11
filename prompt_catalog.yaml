@@ -2385,6 +2385,21 @@ entries:
     conflicts: []
     token_budget: 325
 
+  - id: skill_session_retro
+    layer: skill
+    path: 02_Skills/Governance/Session-Retro-v1.md
+    description: >
+      Blameless, evidence-first retrospective on the agent's own session.
+      Trigger at session end, or immediately after an agent error, failed run,
+      wasted effort, or false report ("retro", "postmortem", "why did that
+      happen"). Traces each issue into one taxonomy category and persists
+      actionable lessons; repeat causes become mechanical guards.
+    status: active
+    tags: [governance:evidence, governance:safety, skill, utility:postmortem, utility:retrospective, utility:memory, utility:quality]
+    dependencies: []
+    conflicts: []
+    token_budget: 300
+
   - id: skill_mcp_agentic_tooling
     layer: skill
     path: 02_Skills/Governance/MCP-Agentic-Tooling-v2.md
