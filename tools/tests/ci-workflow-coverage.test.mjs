@@ -40,6 +40,20 @@ test('unique integrity and event-aware metadata fixtures block both aggregate ga
   assert.equal(job.steps.find(s => s.run?.includes('test-public-pr-metadata.ps1')).if, "github.event_name == 'pull_request'");
   assert.ok(job.steps.some(s => s.if === "github.event_name != 'pull_request'" && /not applicable/.test(s.run)));
 });
+test('chat and harness live TAP stays outside the captured babel-cli project', () => {
+  assert.deepEqual(commandCoverage(workflow, 'npm run test:chat-truth 2>&1'), {
+    'ubuntu-latest': ['chat-truth'], 'windows-latest': ['chat-truth'],
+  });
+  assert.deepEqual(commandCoverage(workflow, 'npm run test:harness-runtime -- --test-timeout=60000 2>&1'), {
+    'ubuntu-latest': ['harness-runtime'], 'windows-latest': ['harness-runtime'],
+  });
+  for (const jobName of ['chat-truth', 'harness-runtime']) {
+    const run = workflow.jobs[jobName].steps.find(step => step.run?.includes(`npm run test:${jobName}`));
+    assert.ok(run);
+    assert.match(run.run, new RegExp(`Tee-Object -FilePath \\.\\./artifacts/${jobName}/full\\.tap`));
+    assert.equal(/Tee-Object(?: -FilePath)? artifacts\//.test(run.run), false);
+  }
+});
 test('matrix commands establish required Linux and Windows dependency coverage', () => {
   assert.deepEqual(commandCoverage(workflow, command), {
     'ubuntu-latest': ['platform-core'], 'windows-latest': ['platform-core'],

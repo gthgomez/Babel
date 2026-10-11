@@ -78,11 +78,9 @@ test('every pre-optimization Linux and Windows command remains covered on its or
         assert.ok(step, `${name}: ${stepName} missing`);
         assert.equal(step['working-directory'], 'babel-cli');
         assert.equal(step.shell, 'pwsh');
-        assert.match(step.run, new RegExp(`Join-Path \\$env:RUNNER_TEMP 'babel-${suite}'`));
-        assert.match(step.run, new RegExp(`npm run test:${suite}[^\\n]*Tee-Object -FilePath \\$tap`));
-        assert.match(step.run, new RegExp(`Copy-Item -Force \\$tap artifacts/${suite}/full\\.tap`));
-        assert.match(step.run, /\$code = \$LASTEXITCODE/);
-        assert.match(step.run, /exit \$code/);
+        assert.match(step.run, new RegExp(`New-Item -ItemType Directory -Force \\.\\./artifacts/${suite} \\| Out-Null`));
+        assert.match(step.run, new RegExp(`npm run test:${suite}[^\\n]*Tee-Object -FilePath \\.\\./artifacts/${suite}/full\\.tap`));
+        assert.match(step.run, /exit \$LASTEXITCODE/);
         continue;
       }
       assert.ok(actual.includes(signature), `${name}: missing original command ${signature}`);
@@ -138,11 +136,8 @@ test('hosted unit shards retain exhaustive selection evidence with serial execut
   const run = job.steps.find(step => step.id === 'unit_shard');
   assert.match(run.run, /run_ci_unit_shard\.mjs --shard-index \$\{\{ matrix\.shard \}\} --shard-count 4/);
   // The live TAP must stay outside babel-cli while tests capture that project.
-  assert.match(run.run, /Join-Path \$env:RUNNER_TEMP 'babel-ci-unit'/);
-  assert.match(run.run, /Tee-Object -FilePath \$tap/);
-  assert.match(run.run, /\$shardCode = \$LASTEXITCODE/);
-  assert.match(run.run, /Copy-Item -Force \$tap artifacts\/ci-unit\/full\.tap/);
-  assert.match(run.run, /exit \$shardCode/);
+  assert.match(run.run, /Tee-Object -FilePath \.\.\/artifacts\/ci-unit\/full\.tap/);
+  assert.match(run.run, /exit \$LASTEXITCODE/);
   const upload = job.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(upload.if, 'always()');
   assert.ok(upload.with.path.includes('babel-cli/artifacts/ci-unit'));
@@ -156,7 +151,7 @@ test('runtime and chat preserve required selection, raw TAP and fail-closed summ
     const commands = job.steps.map(step => step.run ?? '').join('\n');
     assert.ok(commands.includes(`capture_required_tap_selection.mjs ${name}`));
     assert.ok(commands.includes(`summarize_required_tap.mjs ${name}`));
-    assert.ok(commands.includes(`Join-Path $env:RUNNER_TEMP 'babel-${name}'`));
+    assert.ok(commands.includes(`../artifacts/${name}/full.tap`));
     assert.ok(commands.includes(`artifacts/${name}/full.tap`));
     assert.ok(commands.includes(`npm run test:${name}`));
   }
