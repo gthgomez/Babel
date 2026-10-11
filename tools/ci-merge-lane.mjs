@@ -1,21 +1,65 @@
 #!/usr/bin/env node
 // Classify a Public Release Gate run as the fast docs lane or the full matrix.
-// Docs-only pull requests skip the heavy jobs. The installer runs on main
-// and on pull requests labeled full-ci. Anything unrecognized stays full.
+// Docs-only pull requests skip the heavy jobs. The installer runs on main,
+// on pull requests labeled full-ci, and when installer-sensitive paths change.
+// Anything unrecognized stays full. Trusted path rules cannot be weakened by
+// edits to this classifier alone on the candidate branch.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const FAST_PREFIXES = ["docs/", "skills/", "02_Skills/", ".agents/skills/"];
 const FAST_FILES = new Set(["README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md"]);
 
+/** Paths that always force the full matrix (trusted; evaluated before lane logic). */
+export const TRUSTED_ALWAYS_FULL_PREFIXES = [
+  ".github/",
+  "config/review-risk-policy.json",
+  "POLICY_MANIFEST.json",
+  "scripts/agent-pr-gate",
+  "scripts/trusted-merge-gate",
+  "tools/ci-merge-lane",
+  "tools/ci-workflow-coverage",
+  "tools/run-public-secret-scan",
+  "tools/check-public-content-policy",
+  "babel-cli/src/",
+  "babel-desktop/",
+  "prompt_catalog.yaml",
+];
+
+/** Changes here require installer-lifecycle on pull requests. */
+export const INSTALLER_SENSITIVE_PREFIXES = [
+  "babel-desktop/test/installer-lifecycle/",
+  "babel-desktop/scripts/package-windows",
+  "babel-desktop/scripts/package-windows-setup",
+  ".github/workflows/release.yml",
+];
+
+function fileMatchesPrefix(file, prefixes) {
+  return prefixes.some((prefix) => file === prefix || file.startsWith(prefix));
+}
+
+export function trustedPathForcesFullLane(files) {
+  const meaningful = files.filter((file) => file && !file.endsWith("/"));
+  return meaningful.some((file) => fileMatchesPrefix(file, TRUSTED_ALWAYS_FULL_PREFIXES));
+}
+
+export function installerSensitiveChange(files) {
+  const meaningful = files.filter((file) => file && !file.endsWith("/"));
+  return meaningful.some((file) => fileMatchesPrefix(file, INSTALLER_SENSITIVE_PREFIXES));
+}
+
 export function classifyMergeLane({ event, labels = [], files = [] }) {
   const labelSet = new Set(labels.map((label) => String(label).trim()).filter(Boolean));
   if (event !== "pull_request") return { full: true, installer: true };
   const meaningful = files.filter((file) => file && !file.endsWith("/"));
+  const fullCi = labelSet.has("full-ci");
+  const installerFromPaths = installerSensitiveChange(meaningful);
+  if (trustedPathForcesFullLane(meaningful)) {
+    return { full: true, installer: fullCi || installerFromPaths };
+  }
   const docsOnly = meaningful.length > 0 && meaningful.every((file) =>
     FAST_FILES.has(file) || FAST_PREFIXES.some((prefix) => file.startsWith(prefix)));
-  const fullCi = labelSet.has("full-ci");
-  return { full: fullCi || !docsOnly, installer: fullCi };
+  return { full: fullCi || !docsOnly, installer: fullCi || installerFromPaths };
 }
 
 function changedFiles() {
