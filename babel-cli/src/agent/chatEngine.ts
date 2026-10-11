@@ -605,6 +605,10 @@ export class ChatEngine {
   private cachedSystemPromptNative: string | null = null;
   private cachedSystemPromptText: string | null = null;
   private repoMapCache: string | null = null;
+  /** Map value baked into the rendered prompt caches. Null means no map. */
+  private renderedRepoMapIdentity: string | null = null;
+  /** True after a write drops repoMapCache until the next refresh attempt. */
+  private repoMapInvalidated = false;
   /**
    * Monotonically increasing generation counter. Incremented at the start
    * of each submission (submitMessage and, on the direct streaming path,
@@ -1780,8 +1784,12 @@ export class ChatEngine {
 
     // Packet B1: refresh the repo map for this turn (cheap once the per-file
     // tag cache is warm; nulled by runPostEditStaticCheck on writes).
+    // A superseded submission must not publish its map into the new task.
     if (this.repoMapCache === null) {
-      this.repoMapCache = await this.generateRepoMap(userInput);
+      const map = await this.generateRepoMap(userInput);
+      if (this.isSubmissionCurrent(generation) && this.repoMapCache === null) {
+        this.repoMapCache = map;
+      }
     }
 
     const cb: ChatCallbacks = {};
@@ -3742,6 +3750,10 @@ export class ChatEngine {
     // per-file tag cache entry and force the repo map to refresh next turn.
     invalidateRepoMapFile(filePath);
     this.repoMapCache = null;
+    this.repoMapInvalidated = true;
+    // The rendered prompt includes the map, so its cache must expire too.
+    // Otherwise continuation can retain repository context from before the edit.
+    this.clearSystemPromptCache();
     return runPostEditStaticCheckFn(filePath, this.options.projectRoot);
   }
 
@@ -4239,6 +4251,12 @@ export class ChatEngine {
   private getOrBuildSystemPrompt(
     mode: "native" | "legacy" | "text" = "legacy",
   ): string {
+    // The rendered prompt embeds repoMapCache, including when the map is absent.
+    // A later refresh must not reuse a prompt built for a different identity.
+    if (this.renderedRepoMapIdentity !== this.repoMapCache) {
+      this.clearSystemPromptCache();
+      this.renderedRepoMapIdentity = this.repoMapCache;
+    }
     if (mode === "native" && this.cachedSystemPromptNative !== null) {
       return this.cachedSystemPromptNative;
     }

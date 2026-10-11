@@ -116,6 +116,7 @@ test('score needs a passing oracle and rejects test/config changes', async () =>
   const task = catalog.tasks.find((item) => item.id === 'csv-rollup-cli')
   assert.equal(scoreAttempt(task, {
     terminal_status: 'completed',
+    engine_terminal_outcome: 'VERIFIED_COMPLETE',
     completion_claimed: true,
     verifier: { status: 'passed', assertions: 2 },
     diff: { added: ['output/summary.csv'], modified: ['src/summarize.mjs'], deleted: [] },
