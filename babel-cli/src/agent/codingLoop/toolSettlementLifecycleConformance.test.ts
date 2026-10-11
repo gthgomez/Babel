@@ -65,8 +65,10 @@ function toolResults(events: readonly { kind: string }[]): number {
   return events.filter((event) => event.kind === 'tool_result').length
 }
 
-function terminals(events: readonly SessionEvent[]): SessionEvent[] {
-  return events.filter((event) =>
+type ToolTerminalEvent = Extract<SessionEvent, { kind: 'tool_completed' | 'tool_failed' | 'tool_cancelled' }>
+
+function terminals(events: readonly SessionEvent[]): ToolTerminalEvent[] {
+  return events.filter((event): event is ToolTerminalEvent =>
     event.kind === 'tool_completed' || event.kind === 'tool_failed' || event.kind === 'tool_cancelled',
   )
 }
