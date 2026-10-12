@@ -16,6 +16,7 @@ import type { AgentJob } from '../services/agentJobs.js';
 export interface CrashRecoveryReport {
   stalePidCleaned: boolean;
   orphanSocketCleaned: boolean;
+  /** Jobs left in a failed state requiring an explicit recovery decision. */
   abandonedJobsReturned: number;
   tmpFilesCleaned: number;
 }
@@ -73,10 +74,23 @@ export function runCrashRecovery(): CrashRecoveryReport {
       const updatedAt = new Date(job.updated_at).getTime();
       if (updatedAt < abandonedThreshold) {
         try {
-          updateAgentJob(job.id, {
-            status: 'queued',
-            error: 'Abandoned by crashed daemon. Re-enqueued for retry.',
-          });
+          const maxRetries = job.max_retries ?? 0;
+          const priorRetries = job.retry_count ?? 0;
+          const recoveryError =
+            'Daemon restart detected an interrupted run with unknown effects. ' +
+            'Manual recovery decision required before re-execution; automatic replay is not performed.';
+          if (priorRetries >= maxRetries) {
+            updateAgentJob(job.id, {
+              status: 'failed',
+              error: `[Recovery required] ${recoveryError}`,
+            });
+          } else {
+            updateAgentJob(job.id, {
+              status: 'failed',
+              error: `[Recovery required] ${recoveryError} ` +
+                `(retry policy ${priorRetries}/${maxRetries} was not applied on crash recovery).`,
+            });
+          }
           report.abandonedJobsReturned++;
         } catch {
           /* best effort */

@@ -7,6 +7,7 @@ import { isPathInside } from '../services/targetResolver.js';
 import {
   detectRipgrep,
   ripgrep,
+  RipgrepAbortedError,
   rgGlobFiles,
   rgListFiles,
   sortPathsByDepth,
@@ -26,6 +27,7 @@ export interface GrepContentOptions {
   maxMatches?: number;
   ignoreCase?: boolean;
   contextLines?: number;
+  signal?: AbortSignal;
 }
 
 const DEFAULT_MAX_GREP_MATCHES = 50;
@@ -147,6 +149,7 @@ export async function grepContent(
       maxMatches: Math.max(1, options.maxMatches ?? DEFAULT_MAX_GREP_MATCHES),
       ...(options.ignoreCase !== undefined ? { ignoreCase: options.ignoreCase } : {}),
       ...(options.contextLines !== undefined ? { contextLines: options.contextLines } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
     };
     rgOptions.paths = searchPaths;
     try {
@@ -159,9 +162,16 @@ export async function grepContent(
         })),
         truncated: result.truncated,
       };
-    } catch {
-      // Fall through to pure-JS fallback
+    } catch (error) {
+      if (error instanceof RipgrepAbortedError) {
+        throw error;
+      }
+      // Fall through to pure-JS fallback for rg failures only.
     }
+  }
+
+  if (options.signal?.aborted) {
+    throw new RipgrepAbortedError();
   }
 
   // Pure-JS fallback
@@ -187,6 +197,9 @@ export async function grepContent(
     else files.push(...await collectTextFiles(searchPath, [], collectOptions));
   }
   for (const filePath of files) {
+    if (options.signal?.aborted) {
+      throw new RipgrepAbortedError();
+    }
     const relativePath = relative(root, filePath).replace(/\\/g, '/');
 
     let content: string;
@@ -320,6 +333,7 @@ export async function handleGrepTool(
     max_matches?: number;
     output_format?: 'text' | 'json';
     context_lines?: number;
+    signal?: AbortSignal;
   },
   approvedReadRoots?: string[],
 ): Promise<{ exit_code: number; stdout: string; stderr: string }> {
@@ -333,6 +347,7 @@ export async function handleGrepTool(
         ...(input.ignore_case === true ? { ignoreCase: true } : {}),
         ...(input.max_matches !== undefined ? { maxMatches: input.max_matches } : {}),
         contextLines: input.context_lines ?? 2,
+        ...(input.signal ? { signal: input.signal } : {}),
       },
       approvedReadRoots,
     );

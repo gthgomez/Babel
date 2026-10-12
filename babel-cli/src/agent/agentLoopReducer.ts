@@ -1,9 +1,9 @@
 /**
- * Unified agent-loop reducer/state machine.
+ * Agent-loop state projection for parity and observability.
  *
- * One pure reducer owns loop semantics for streamed, non-streamed, headless,
- * and benchmark surfaces. Presentation is a subscriber; it never owns agent
- * semantics. Terminal tool / circuit-breaker results stop the loop immediately.
+ * The imperative Chat streaming loop remains authoritative for tool execution,
+ * cancellation fences, and terminal settlement. This reducer records phase and
+ * progress snapshots; `parityReduce` does not interpret returned effects.
  */
 
 import type { TerminalOutcome } from '../schemas/agentContracts.js';

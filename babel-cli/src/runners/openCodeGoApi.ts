@@ -11,6 +11,7 @@ import type {
   ToolStreamEvent,
 } from './base.js'
 import { DeepInfraApiRunner, type FetchRedirectPolicy } from './deepInfraApi.js'
+import { PreparedRequestAdmissionError } from './preparedProviderRequest.js'
 import {
   resolveOpenCodeGoCredential,
   type OpenCodeGoCredentialSource,
@@ -244,6 +245,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       return await super.execute(prompt, schema, callbacks, systemPrompt, signal)
     } catch (error) {
+      if (error instanceof PreparedRequestAdmissionError) throw error
       throw classifyError(error)
     }
   }
@@ -258,6 +260,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       return await super.executeRaw(prompt, callbacks, systemPrompt, signal)
     } catch (error) {
+      if (error instanceof PreparedRequestAdmissionError) throw error
       throw classifyError(error)
     }
   }
@@ -272,6 +275,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       yield* super.executeRawStream(prompt, systemPrompt, signal, callbacks)
     } catch (error) {
+      if (error instanceof PreparedRequestAdmissionError) throw error
       throw classifyError(error)
     }
   }
@@ -288,6 +292,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       yield* super.executeWithToolsStream(messages, tools, systemPrompt, signal, toolChoice, callbacks)
     } catch (error) {
+      if (error instanceof PreparedRequestAdmissionError) throw error
       throw classifyError(error)
     }
   }

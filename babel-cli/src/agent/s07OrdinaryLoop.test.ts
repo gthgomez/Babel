@@ -30,7 +30,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { ChatEngine, type ChatEvent, type ChatResult } from './chatEngine.js';
-import type { ToolStreamEvent } from '../runners/base.js';
+import type { ProviderMessage, ToolDefinition, ToolStreamEvent } from '../runners/base.js';
 import { chatSessionDir, openSessionAdmissionStore } from '../cli/runsLayout.js';
 import { resumeChatSession } from '../interactive/chatSessionResume.js';
 import type { ReplContext } from '../interactive/context.js';
@@ -62,6 +62,30 @@ import { recoveryObservationId } from './codingLoop/recoveryPlan.js';
 import { recoveryTargetIdentity } from './codingLoop/recoveryIdentity.js';
 
 const MODEL = 'deepseek-v4-flash';
+const S07_NATIVE_WIRE_RESERVED_TOKENS = 4_096;
+
+/** Scripted-runner hooks so compaction admission can serialize native wire (not transport parity). */
+const s07ScriptedNativeWireHooks = {
+  buildNativeToolsWireBody(
+    messages: ProviderMessage[],
+    tools: ToolDefinition[],
+    _systemPrompt?: string,
+    options: { stream?: boolean; toolChoice?: 'auto' | 'required' } = {},
+  ): string {
+    return JSON.stringify({
+      model: MODEL,
+      stream: options.stream ?? true,
+      max_tokens: S07_NATIVE_WIRE_RESERVED_TOKENS,
+      temperature: 0,
+      tools,
+      tool_choice: options.toolChoice ?? 'auto',
+      messages,
+    });
+  },
+  getNativeRequestReservedCompletionTokens(): number {
+    return S07_NATIVE_WIRE_RESERVED_TOKENS;
+  },
+};
 
 // ── Environment fixture ──────────────────────────────────────────────────────
 
@@ -398,6 +422,13 @@ interface ScriptedRunner {
   execute: () => Promise<{ type: string; answer: string }>;
   executeRaw: () => Promise<string>;
   getLastInvocationMetadata: () => null;
+  buildNativeToolsWireBody: (
+    messages: ProviderMessage[],
+    tools: ToolDefinition[],
+    systemPrompt?: string,
+    options?: { stream?: boolean; toolChoice?: 'auto' | 'required' },
+  ) => string;
+  getNativeRequestReservedCompletionTokens: () => number;
   calls(): number;
   requests(): ProviderRequestRecord[];
 }
@@ -487,6 +518,7 @@ function makeRunner(
     getLastInvocationMetadata() {
       return null;
     },
+    ...s07ScriptedNativeWireHooks,
   };
 }
 
@@ -549,6 +581,7 @@ function makeMutableRunner(): MutableRunner {
     getLastInvocationMetadata() {
       return null;
     },
+    ...s07ScriptedNativeWireHooks,
     onYield: undefined as
       | ((event: ToolStreamEvent, call: number, engine: ChatEngine) => void)
       | undefined,

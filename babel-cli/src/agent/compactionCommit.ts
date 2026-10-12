@@ -11,7 +11,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { ChatMessage } from './chatCompaction.js';
-import { estimateTokens } from './chatCompaction.js';
+import { estimateTokens, resolveCompactionModelId } from './chatCompaction.js';
 import type { ProviderToolCall, RunnerCallbacks } from '../runners/base.js';
 import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js';
 import {
@@ -21,6 +21,11 @@ import {
   type ThreadEventLog,
 } from './threadEventLog.js';
 import { mapProviderMessagesToWire } from '../runners/providerMessages.js';
+import {
+  prepareProviderRequest,
+  type PreparedRequestAdmission,
+} from '../runners/preparedProviderRequest.js';
+import type { LlmCompactionProvider } from './chatCompaction.js';
 import type { PrunedMessageRange } from '../runtime/events.js';
 import type { CondensationFactChannel } from '../services/condensationFacts.js';
 import {
@@ -38,6 +43,9 @@ import {
   type CompactionCapsule,
   type ContextBudgetSnapshot,
 } from './providerCapabilities.js';
+import type { ToolDefinition } from '../runners/base.js';
+import { buildOpenAiCompatibleNativeWireBody } from '../runners/openAiCompatibleNativeWire.js';
+import { mapProviderMessages } from '../runners/providerResponseStream.js';
 
 export type CompactionCommitStatus =
   | 'committed'
@@ -991,24 +999,15 @@ export interface ChatEngineCompactionHost {
   compactionManager?: {
     compactWithResult(
       messages: ChatMessage[],
-      options: {
-        model: string;
-        maxTokens: number;
-        signal?: AbortSignal;
-        callbacks?: RunnerCallbacks;
-      },
-    ): Promise<{
-      messages: ChatMessage[];
-      strategy: string;
-      tokensBefore: number;
-      tokensAfter: number;
-      changed: boolean;
-    }>;
+      options: import('./chatCompaction.js').CompactionOptions,
+    ): Promise<import('./chatCompaction.js').CompactionManagerResult>;
   };
   options: { task: string; model?: string };
   modelPolicy?: {
     providerModelId?: string;
     family?: string;
+    contextWindow?: number;
+    contextLimit?: number;
   } | null;
   limits: { maxEstimatedTokens: number };
   abortSignal: AbortSignal;
@@ -1054,6 +1053,17 @@ export interface ChatEngineCompactionHost {
    * visible fail-closed gap.
    */
   condensationFacts?: CondensationFactChannel;
+  /** Provider id used for final prepared-request admission after compaction. */
+  compactionProviderId?: string;
+  /** Reserved completion tokens for admission accounting (runner output budget). */
+  providerReservedCompletionTokens?: number | null;
+  /** Injected summarization route (same provider family as Chat when configured). */
+  summarizationProvider?: LlmCompactionProvider;
+  /**
+   * When set, admission uses the same native wire body the Chat runner would
+   * POST (messages, system prompt, tools), not message-only JSON.
+   */
+  serializeNativeProviderRequestBody?: () => string;
 }
 
 export interface ChatEngineCompactInfo {
@@ -1075,11 +1085,121 @@ export class CompactionPersistenceError extends Error {
   }
 }
 
-/** Native next-request body. Shrink is measured here, not by message count. */
+/** Message-only wire snapshot (fallback when no native serializer is wired). */
 function serializedProviderRequest(threadLog: ThreadEventLog): string {
   return JSON.stringify(
     mapProviderMessagesToWire(rebuildProviderMessagesFromEvents(threadLog), ''),
   );
+}
+
+function serializedProviderRequestForAdmission(host: ChatEngineCompactionHost): string {
+  return host.serializeNativeProviderRequestBody?.() ?? serializedProviderRequest(host.threadLog);
+}
+
+export function resolveCompactionAdmissionContext(
+  host: ChatEngineCompactionHost,
+  modelId: string,
+): { contextWindowTokens: number; reservedCompletionTokens: number } {
+  const caps = resolveProviderCapabilities(modelId);
+  const harnessReserve = host.shouldUseTextTools()
+    ? host.textToolsReserve
+    : host.reserveTokens;
+  const policyContextWindow =
+    host.modelPolicy?.contextWindow ?? host.modelPolicy?.contextLimit ?? 0;
+  const contextWindowTokens =
+    caps.contextWindow > 0
+      ? caps.contextWindow
+      : policyContextWindow > 0
+        ? policyContextWindow
+        : host.limits.maxEstimatedTokens;
+  const reservedCompletionTokens =
+    host.providerReservedCompletionTokens != null &&
+    host.providerReservedCompletionTokens > 0
+      ? host.providerReservedCompletionTokens
+      : caps.maxOutputTokens > 0
+        ? caps.maxOutputTokens
+        : harnessReserve;
+  return { contextWindowTokens, reservedCompletionTokens };
+}
+
+/** Provider admission model id — matches live native runner pinning (providerModelId first). */
+export function resolveCompactionProviderAdmissionModelId(
+  host: Pick<ChatEngineCompactionHost, 'options' | 'modelPolicy'>,
+): string {
+  const compactionModelId = resolveCompactionModelId({
+    ...(host.options.model ? { explicitModel: host.options.model } : {}),
+    ...(host.modelPolicy?.providerModelId
+      ? { providerModelId: host.modelPolicy.providerModelId }
+      : {}),
+    ...(host.modelPolicy?.family ? { family: host.modelPolicy.family } : {}),
+  });
+  const pinned = host.modelPolicy?.providerModelId?.trim();
+  if (pinned) return pinned;
+  const configured = host.options.model?.trim();
+  if (configured) return configured;
+  return compactionModelId;
+}
+
+/** Build the native runner JSON body (same helper as DeepInfra `buildNativeToolsWireBody`). */
+export function buildNativeProviderRequestBodyForAdmission(input: {
+  threadLog: ThreadEventLog;
+  systemPrompt: string;
+  modelId: string;
+  tools: ToolDefinition[];
+  maxOutputTokens: number | null;
+  stream?: boolean;
+  temperature?: number;
+}): string {
+  const messages = rebuildProviderMessagesFromEvents(input.threadLog, {
+    systemPrompt: input.systemPrompt,
+  });
+  return buildOpenAiCompatibleNativeWireBody({
+    model: input.modelId,
+    maxTokens: input.maxOutputTokens,
+    temperature: input.temperature ?? 0,
+    messages,
+    tools: input.tools,
+    systemPrompt: input.systemPrompt,
+    stream: input.stream ?? true,
+    mapMessages: (msgs, defaultSystem, override) =>
+      mapProviderMessages(msgs, defaultSystem, override) as unknown[],
+  });
+}
+
+export function evaluateCompactionSerializedAdmission(
+  serializedBody: string,
+  input: {
+    modelId: string;
+    providerId: string;
+    contextWindowTokens: number;
+    reservedCompletionTokens: number;
+  },
+): PreparedRequestAdmission {
+  return prepareProviderRequest({
+    body: serializedBody,
+    mode: 'native',
+    provider: input.providerId,
+    requestedModelId: input.modelId,
+    contextLimitTokens: input.contextWindowTokens,
+    reservedCompletionTokens: input.reservedCompletionTokens,
+  }).admission;
+}
+
+function compactionCommitAcceptsSerializedRequest(
+  host: ChatEngineCompactionHost,
+  modelId: string,
+  beforeSerialized: string,
+  afterSerialized: string,
+): boolean {
+  if (afterSerialized === beforeSerialized) return false;
+  const admissionContext = resolveCompactionAdmissionContext(host, modelId);
+  const admission = evaluateCompactionSerializedAdmission(afterSerialized, {
+    modelId,
+    providerId: host.compactionProviderId ?? 'deepinfra',
+    contextWindowTokens: admissionContext.contextWindowTokens,
+    reservedCompletionTokens: admissionContext.reservedCompletionTokens,
+  });
+  return admission === 'qualified';
 }
 
 function operationalStateFor(host: ChatEngineCompactionHost): CompactionOperationalState {
@@ -1119,11 +1239,7 @@ export async function runChatEngineCompaction(
   let changed = false;
   let commit: CompactionCommitResult | undefined;
   const tokenEstimate = host.estimateTokens(host.conversation);
-  const modelId =
-    host.options.model ??
-    host.modelPolicy?.providerModelId ??
-    host.modelPolicy?.family ??
-    'deepseek-v4-pro';
+  const modelId = resolveCompactionProviderAdmissionModelId(host);
   const tokenTriggered = host.shouldCompactByTokens(tokenEstimate, modelId);
   const reserve = host.shouldUseTextTools()
     ? host.textToolsReserve
@@ -1186,7 +1302,7 @@ export async function runChatEngineCompaction(
       // Started only once pruning is known to have changed the context: a
       // noop never mints a started fact, so no spurious gap is possible.
       beginCondensationFact(host.estimateTokens(prior));
-      const beforeRequest = serializedProviderRequest(host.threadLog);
+      const beforeRequest = serializedProviderRequestForAdmission(host);
       const committed = await commitCompaction({
         strategyMessages: host.conversation.map((message) => ({ ...message })),
         priorConversation: prior,
@@ -1205,10 +1321,21 @@ export async function runChatEngineCompaction(
         blockOnPersistFailure: true,
         isOwnerCurrent: ownsConversation,
         validateCommit: () => {
-          const afterRequest = serializedProviderRequest(host.threadLog);
+          const afterRequest = serializedProviderRequestForAdmission(host);
+          const tokensBeforeCommit = host.estimateTokens(prior);
+          const tokensAfterCommit = host.estimateTokens(host.conversation);
           return ownsConversation()
             && (host.options.task.length === 0 || afterRequest.includes(host.options.task))
-            && afterRequest.length < beforeRequest.length;
+            && compactionCommitAcceptsSerializedRequest(
+              host,
+              modelId,
+              beforeRequest,
+              afterRequest,
+            )
+            && !(
+              afterRequest.length > beforeRequest.length
+              && tokensAfterCommit >= tokensBeforeCommit
+            );
         },
       });
       if (committed.status !== 'committed') {
@@ -1239,6 +1366,15 @@ export async function runChatEngineCompaction(
       try {
         const exactLockedGlm =
           host.modelPolicy?.providerModelId === LIVE_OPENROUTER_MODEL_ID;
+        const eligibilityTokenCap = Math.max(
+          0,
+          host.limits.maxEstimatedTokens - reserve,
+        );
+        const compactionReason = host.forceCompaction === true
+          ? 'force'
+          : tokenTriggered
+            ? 'token_threshold'
+            : 'reserve_headroom';
         const mgr = await host.compactionManager.compactWithResult(host.conversation, {
           model: host.resolveModel({
             ...(host.modelPolicy?.providerModelId
@@ -1252,13 +1388,40 @@ export async function runChatEngineCompaction(
                 : {}),
           }),
           maxTokens: host.limits.maxEstimatedTokens,
+          requestContext: {
+            reason: compactionReason,
+            historyTokenEstimate: tokenEstimate,
+            eligibilityTokenCap,
+            maxTokens: host.limits.maxEstimatedTokens,
+            compactionRequested: true,
+          },
           signal: host.abortSignal,
           ...(host.providerCallbacks ? { callbacks: host.providerCallbacks } : {}),
           ...(host.onCompactionUsage ? { onUsageRecorded: host.onCompactionUsage } : {}),
+          ...(host.summarizationProvider
+            ? { summarizationProvider: host.summarizationProvider }
+            : {}),
         });
         if (!ownerIsCurrent()) return null;
+        if (!mgr.changed && (mgr.status === 'noop' || mgr.status === 'cannot_fit')) {
+          await applyHeuristic();
+          if (!ownerIsCurrent()) return null;
+          const afterHeuristic = host.conversation.length;
+          if (mode != null && changed) {
+            return {
+              mode,
+              beforeMessages: before,
+              afterMessages: afterHeuristic,
+              changed,
+              message: `[Context compacted…] ${before}→${afterHeuristic} messages (${mode})`,
+              ...(commit ? { commit } : {}),
+            };
+          }
+          return null;
+        }
         if (mgr.changed) {
           beginCondensationFact(mgr.tokensBefore);
+          const beforeRequest = serializedProviderRequestForAdmission(host);
           commit = await commitCompaction({
             strategyMessages: mgr.messages,
             priorConversation: host.conversation,
@@ -1276,6 +1439,18 @@ export async function runChatEngineCompaction(
             },
             blockOnPersistFailure: true,
             isOwnerCurrent: ownerIsCurrent,
+            validateCommit: () => {
+              const afterRequest = serializedProviderRequestForAdmission(host);
+              return ownerIsCurrent()
+                && (host.options.task.length === 0 || afterRequest.includes(host.options.task))
+                && compactionCommitAcceptsSerializedRequest(
+                  host,
+                  modelId,
+                  beforeRequest,
+                  afterRequest,
+                )
+                && mgr.tokensAfter < mgr.tokensBefore;
+            },
           });
           if (commit.status !== 'committed') {
             if (commit.status === 'noop') return null;

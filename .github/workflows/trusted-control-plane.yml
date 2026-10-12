@@ -139,7 +139,16 @@ jobs:
           Get-Content -LiteralPath $log
           if ($code -eq 0) { exit 0 }
           $parsed = Get-Content -LiteralPath $log -Raw | ConvertFrom-Json
-          $benign = @('unexpected_pr_base_branch', 'pr_base_sha_is_stale', 'execution_base_superseded', 'pr_is_draft')
+          # Benign blockers are single-sourced in the reviewed policy file; an
+          # unreadable or invalid policy fails closed to an empty allowlist so
+          # every blocker stays serious.
+          $benign = @()
+          try {
+            $auditPolicy = Get-Content -Raw -LiteralPath 'config/review-risk-policy.json' | ConvertFrom-Json
+            $candidates = @($auditPolicy.auditBenignBlockers)
+            $valid = $candidates.Count -gt 0 -and @($candidates | Where-Object { [string]$_ -notmatch '^[a-z_]+$' }).Count -eq 0
+            if ($valid) { $benign = @($candidates | ForEach-Object { [string]$_ }) }
+          } catch { $benign = @() }
           $blockers = @($parsed.blockers | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
           $serious = @($blockers | Where-Object { $benign -notcontains [string]$_ })
           if ($blockers.Count -gt 0 -and $serious.Count -eq 0) {
@@ -203,7 +212,36 @@ jobs:
         run: |
           git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:HEAD_SHA
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Skip when the inline audit already covered this head
+        id: dedupe
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A fast-completing release gate lets the pull_request_target run audit
+          # inline; this listener then fires for the same head. Only an inline
+          # run whose actual audit step succeeded counts as coverage — a skipped
+          # audit still concludes the workflow successfully.
+          $runs = gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/trusted-control-plane.yml/runs?event=pull_request_target&head_sha=$env:HEAD_SHA&per_page=20" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to read trusted-control-plane runs for dedupe.' }
+          $inline = @($runs.workflow_runs | Where-Object { $_.event -eq 'pull_request_target' -and $_.head_sha -eq $env:HEAD_SHA -and $_.conclusion -eq 'success' })
+          foreach ($run in $inline) {
+            $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($run.id)/jobs?per_page=100" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "Unable to read jobs of inline audit run $($run.id)." }
+            $audited = @($jobs.jobs | ForEach-Object { $_ } | Where-Object {
+              @($_.steps | ForEach-Object { $_ } | Where-Object { $_.name -eq 'Run base-rooted merge audit' -and $_.conclusion -eq 'success' }).Count -gt 0
+            })
+            if ($audited.Count -gt 0) {
+              Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'skip=true'
+              Write-Output "Inline audit already succeeded for this head (run $($run.id)); skipping duplicate audit."
+              exit 0
+            }
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'skip=false'
       - name: Run base-rooted merge audit
+        if: steps.dedupe.outputs.skip != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -224,7 +262,16 @@ jobs:
           Get-Content -LiteralPath $log
           if ($code -eq 0) { exit 0 }
           $parsed = Get-Content -LiteralPath $log -Raw | ConvertFrom-Json
-          $benign = @('unexpected_pr_base_branch', 'pr_base_sha_is_stale', 'execution_base_superseded', 'pr_is_draft')
+          # Benign blockers are single-sourced in the reviewed policy file; an
+          # unreadable or invalid policy fails closed to an empty allowlist so
+          # every blocker stays serious.
+          $benign = @()
+          try {
+            $auditPolicy = Get-Content -Raw -LiteralPath 'config/review-risk-policy.json' | ConvertFrom-Json
+            $candidates = @($auditPolicy.auditBenignBlockers)
+            $valid = $candidates.Count -gt 0 -and @($candidates | Where-Object { [string]$_ -notmatch '^[a-z_]+$' }).Count -eq 0
+            if ($valid) { $benign = @($candidates | ForEach-Object { [string]$_ }) }
+          } catch { $benign = @() }
           $blockers = @($parsed.blockers | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
           $serious = @($blockers | Where-Object { $benign -notcontains [string]$_ })
           if ($blockers.Count -gt 0 -and $serious.Count -eq 0) {

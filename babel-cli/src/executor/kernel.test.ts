@@ -61,6 +61,16 @@ test("executor kernel downgrades verified completion until proof is complete", (
   assert.equal(decision.allowed, false);
 });
 
+test("plan kernel denies mutation tools at the shared dispatch boundary", async () => {
+  const kernel = createExecutorKernel("plan");
+  const result = await kernel.tools.execute(
+    { tool: "file_write", path: "src/example.ts", content: "x" },
+    { agentId: "plan-test", runId: "plan-test", babelRoot: process.cwd() },
+  );
+  assert.equal(result.exit_code, 1);
+  assert.match(result.stderr ?? "", /plan_read_only/i);
+});
+
 test("executor kernel exposes sync evaluateEvidence twin", () => {
   const kernel = createExecutorKernel("chat");
   assert.equal(typeof kernel.completion.evaluateEvidenceSync, "function");

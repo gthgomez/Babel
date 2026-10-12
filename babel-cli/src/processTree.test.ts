@@ -13,7 +13,17 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { describe, it } from 'node:test';
 
-import { isProcessAlive, terminateChildTree, waitForProcessGroupExit } from './processTree.js';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
+import {
+  isProcessAlive,
+  isProcessGroupAlive,
+  terminateChildTree,
+  waitForProcessExit,
+  waitForProcessGroupExit,
+} from './processTree.js';
 
 function isAlive(pid: number): boolean {
   try {
@@ -51,6 +61,18 @@ describe('isProcessAlive', () => {
     assert.ok(pid);
     terminateChildTree(child);
     await waitUntilDead(pid);
+    assert.equal(isProcessAlive(pid), false);
+  });
+});
+
+describe('waitForProcessExit', () => {
+  it('returns true after a terminated child exits', async () => {
+    const child = spawnSleeper();
+    const pid = child.pid;
+    assert.ok(pid);
+    terminateChildTree(child);
+    const exited = await waitForProcessExit(pid, 10_000);
+    assert.equal(exited, true);
     assert.equal(isProcessAlive(pid), false);
   });
 });
@@ -97,5 +119,55 @@ describe('waitForProcessGroupExit', () => {
     const elapsed = Date.now() - start;
     assert.equal(exited, true);
     assert.ok(elapsed < 5_000, `group wait must resolve after termination, took ${elapsed}ms`);
+  });
+
+  it('returns false when the leader died but a same-group descendant remains (POSIX)', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('POSIX process-group semantics only');
+      return;
+    }
+    const root = mkdtempSync(join(tmpdir(), 'babel-pgid-straggler-'));
+    const statePath = join(root, 'state.json');
+    const leaderScript = join(root, 'leader.mjs');
+    writeFileSync(
+      leaderScript,
+      `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+writeFileSync(${JSON.stringify(statePath)}, JSON.stringify({ leaderPid: process.pid, childPid: child.pid }));
+await new Promise(() => {});
+`,
+    );
+    const leader = spawn(process.execPath, [leaderScript], { detached: true, stdio: 'ignore' });
+    const leaderPid = leader.pid;
+    assert.ok(leaderPid);
+    let childPid = 0;
+    for (let i = 0; i < 100; i++) {
+      try {
+        const state = JSON.parse(readFileSync(statePath, 'utf8')) as { childPid?: number };
+        if (state.childPid && state.childPid > 0) {
+          childPid = state.childPid;
+          break;
+        }
+      } catch {
+        // leader still starting
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(childPid > 0, 'fixture child pid must be recorded');
+    assert.equal(isProcessGroupAlive(leaderPid), true);
+    process.kill(leaderPid, 'SIGKILL');
+    await waitUntilDead(leaderPid);
+    assert.equal(isProcessAlive(leaderPid), false);
+    assert.equal(isProcessAlive(childPid), true, 'descendant must survive leader-only kill');
+    assert.equal(isProcessGroupAlive(leaderPid), true, 'group must still be alive');
+    const exited = await waitForProcessGroupExit(leaderPid, 200);
+    assert.equal(exited, false, 'must fail closed, not treat dead leader as empty group');
+    try {
+      process.kill(-leaderPid, 'SIGKILL');
+    } catch {
+      process.kill(childPid, 'SIGKILL');
+    }
+    await waitUntilDead(childPid);
   });
 });

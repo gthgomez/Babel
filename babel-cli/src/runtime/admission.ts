@@ -368,28 +368,37 @@ function enforceOwnerOnlyWindowsAcl(path: string, directory: boolean): { ok: boo
     const code = applyError?.code === 'ETIMEDOUT' ? 'acl_apply_timeout' : applyError?.code ?? 'acl_apply_failed';
     return { ok: false, code };
   }
-  const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_ACL_VERIFY_SCRIPT], {
-    encoding: 'utf8',
-    env: {
-      ...safeEnvironment,
-      BABEL_ADMISSION_ACL_PATH: path,
-      BABEL_ADMISSION_ACL_DIRECTORY: directory ? '1' : '0',
-      BABEL_ADMISSION_USER_SID: windowsUserSid,
-    },
-    timeout: 10_000,
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'ignore'],
-  });
-  const diagnostic = result.stdout?.trim();
-  const safeDiagnostic = diagnostic && /^acl_check_[a-z0-9_]+$/.test(diagnostic) ? diagnostic : null;
-  const verificationError = result.error as NodeJS.ErrnoException | undefined;
-  const code =
-    verificationError?.code === 'ETIMEDOUT'
-      ? 'acl_verification_timeout'
-      : verificationError?.code ?? (safeDiagnostic ? `acl_verification_failed:${safeDiagnostic}` : 'acl_verification_failed');
+  const verifyArgs = ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_ACL_VERIFY_SCRIPT];
+  const verifyEnv = {
+    ...safeEnvironment,
+    BABEL_ADMISSION_ACL_PATH: path,
+    BABEL_ADMISSION_ACL_DIRECTORY: directory ? '1' : '0',
+    BABEL_ADMISSION_USER_SID: windowsUserSid,
+  };
+  let lastCode = 'acl_verification_failed';
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = spawnSync(powershell, verifyArgs, {
+      encoding: 'utf8',
+      env: verifyEnv,
+      timeout: attempt === 0 ? 10_000 : 20_000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (result.status === 0) {
+      return { ok: true, code: 'ok' };
+    }
+    const diagnostic = result.stdout?.trim();
+    const safeDiagnostic = diagnostic && /^acl_check_[a-z0-9_]+$/.test(diagnostic) ? diagnostic : null;
+    const verificationError = result.error as NodeJS.ErrnoException | undefined;
+    lastCode =
+      verificationError?.code === 'ETIMEDOUT'
+        ? 'acl_verification_timeout'
+        : verificationError?.code ?? (safeDiagnostic ? `acl_verification_failed:${safeDiagnostic}` : 'acl_verification_failed');
+    if (lastCode !== 'acl_verification_timeout') break;
+  }
   return {
-    ok: result.status === 0,
-    code,
+    ok: false,
+    code: lastCode,
   };
 }
 

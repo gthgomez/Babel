@@ -14,6 +14,34 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
+/** Poll until `pid` is no longer alive or the timeout elapses. */
+export async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true
+    await new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, 10) })
+  }
+  return !isProcessAlive(pid)
+}
+
+/**
+ * Whether any process remains in the supervised group. POSIX uses `kill(-pgid, 0)` so
+ * a dead group leader with a live same-group descendant still reads as alive.
+ */
+export function isProcessGroupAlive(groupLeaderPid: number): boolean {
+  if (process.platform === 'win32') {
+    return isProcessAlive(groupLeaderPid)
+  }
+  try {
+    process.kill(-groupLeaderPid, 0)
+    return true
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    if (code === 'ESRCH') return false
+    return true
+  }
+}
+
 export async function waitForProcessGroupExit(groupLeaderPid: number, timeoutMs: number): Promise<boolean> {
   // Windows has no process-group signal semantics: libuv rejects negative PIDs
   // with EINVAL rather than ESRCH, so group probing would spin the full
@@ -36,7 +64,7 @@ export async function waitForProcessGroupExit(groupLeaderPid: number, timeoutMs:
     }
     await new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, 10) })
   }
-  return !isProcessAlive(groupLeaderPid)
+  return !isProcessGroupAlive(groupLeaderPid)
 }
 
 /**

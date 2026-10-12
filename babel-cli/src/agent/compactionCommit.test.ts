@@ -27,8 +27,11 @@ import {
   collectPreservedToolCallIds,
   buildRawObservationRefs,
   runChatEngineCompaction,
+  buildNativeProviderRequestBodyForAdmission,
   type ChatEngineCompactionHost,
 } from './compactionCommit.js';
+import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
+import type { ToolDefinition } from '../runners/base.js';
 import {
   createThreadEventLog,
   rebuildProviderMessagesFromEvents,
@@ -727,11 +730,13 @@ describe('H1 compaction lifecycle result', () => {
                 content: 'A and C remain visible', provenance: 'model', authoritative: false,
               }],
               strategy: 'llm-summarize', tokensBefore: 100, tokensAfter: 20, changed: true,
+              status: 'applied', strategyErrors: [],
             };
           },
         },
         options: { task: 'retain A and C', model: 'test-model' },
-        limits: { maxEstimatedTokens: 10 },
+        compactionProviderId: 'deepinfra',
+        limits: { maxEstimatedTokens: 128_000 },
         abortSignal: new AbortController().signal,
         writeCount: 0, turnIndex: 1, toolCallLog: [],
         progress: { receipts: [], consecutiveNoProgress: 0 },
@@ -802,6 +807,17 @@ describe('H1 compaction lifecycle result', () => {
     ];
     const threadLog = createThreadEventLog();
     const sessionLog = createSessionEventLog();
+    const turnId = startTurn(threadLog, {
+      task: 'preserve context',
+      model: 'm',
+      provider: 'deepseek',
+      projectRoot: tmpdir(),
+      policyPreset: 'chat',
+    });
+    for (const message of prior) {
+      if (message.role === 'user') recordUserMessage(threadLog, turnId, message.content);
+      if (message.role === 'assistant') recordAssistantMessage(threadLog, turnId, message.content);
+    }
     const host: ChatEngineCompactionHost = {
       conversation: prior,
       compactionManager: {
@@ -811,10 +827,13 @@ describe('H1 compaction lifecycle result', () => {
           tokensBefore: 100,
           tokensAfter: 80,
           changed: true,
+          status: 'applied',
+          strategyErrors: [],
         }),
       },
       options: { task: 'preserve context', model: 'm' },
-      limits: { maxEstimatedTokens: 10 },
+      compactionProviderId: 'deepinfra',
+      limits: { maxEstimatedTokens: 128_000 },
       abortSignal: new AbortController().signal,
       writeCount: 0,
       turnIndex: 1,
@@ -822,7 +841,7 @@ describe('H1 compaction lifecycle result', () => {
       progress: { receipts: [], consecutiveNoProgress: 0 },
       threadLog,
       sessionLog,
-      turnId: 'turn-1',
+      turnId,
       shouldUseTextTools: () => false,
       compactHeuristic: () => {
         throw new Error('heuristic fallback should not run');
@@ -879,7 +898,8 @@ describe('H1 compaction lifecycle result', () => {
         },
       },
       options: { task, model: 'test-model' },
-      limits: { maxEstimatedTokens: 10 },
+      compactionProviderId: 'deepinfra',
+      limits: { maxEstimatedTokens: 128_000 },
       abortSignal: new AbortController().signal,
       writeCount: 0, turnIndex: 2, toolCallLog: [],
       progress: { receipts: [], consecutiveNoProgress: 0 },
@@ -914,6 +934,128 @@ describe('H1 compaction lifecycle result', () => {
     assert.equal(beforeRequest.includes('DROPPED_HISTORY_BLOCK'), true);
   });
 
+  it('compaction admission probes tool-heavy native wire bodies (not message-only JSON)', async () => {
+    const heavyTools: ToolDefinition[] = Array.from({ length: 24 }, (_, index) => ({
+      type: 'function',
+      function: {
+        name: `heavy_tool_${index}`,
+        description: 'd'.repeat(3000),
+        parameters: {
+          type: 'object',
+          properties: { blob: { type: 'string' } },
+          required: ['blob'],
+        },
+      },
+    }));
+    const runner = new DeepInfraApiRunner(
+      'deepseek-v4-flash',
+      'DEEPINFRA_API_KEY',
+      {},
+      { provider: 'deepinfra', explicitCredential: 'fixture-only' },
+    );
+    const task = 'NATIVE_WIRE_TASK_marker';
+    const threadLog = createThreadEventLog();
+    const sessionLog = createSessionEventLog();
+    const turnId = startTurn(threadLog, {
+      task,
+      model: 'deepseek-v4-flash',
+      provider: 'deepinfra',
+      projectRoot: tmpdir(),
+      policyPreset: 'chat',
+    });
+    const dropped = `DROPPED_NATIVE_BLOCK ${'z'.repeat(2500)}`;
+    const conversation: ChatMessage[] = [{ role: 'system', content: 'current policy' }];
+    for (let index = 0; index < 6; index++) {
+      const user = `drop-user-${index} ${dropped}`;
+      const assistant = `drop-assistant-${index} ${dropped}`;
+      recordUserMessage(threadLog, turnId, user);
+      recordAssistantMessage(threadLog, turnId, assistant);
+      conversation.push({ role: 'user', content: user }, { role: 'assistant', content: assistant });
+    }
+    conversation.push(
+      { role: 'user', content: 'tail user stays' },
+      { role: 'assistant', content: 'tail assistant stays' },
+    );
+    recordUserMessage(threadLog, turnId, 'tail user stays');
+    recordAssistantMessage(threadLog, turnId, 'tail assistant stays');
+    const systemPrompt = 'native compaction admission policy preamble';
+    const messageOnly = JSON.stringify(
+      mapProviderMessagesToWire(
+        rebuildProviderMessagesFromEvents(threadLog, { systemPrompt }),
+        systemPrompt,
+        systemPrompt,
+      ),
+    );
+    let serializerCalls = 0;
+    const serializeNativeProviderRequestBody = () => {
+      serializerCalls += 1;
+      const messages = rebuildProviderMessagesFromEvents(threadLog, { systemPrompt });
+      return runner.buildNativeToolsWireBody(messages, heavyTools, systemPrompt, { stream: true });
+    };
+    const messages = rebuildProviderMessagesFromEvents(threadLog, { systemPrompt });
+    const nativeProbe = runner.buildNativeToolsWireBody(
+      messages,
+      heavyTools,
+      systemPrompt,
+      { stream: true },
+    );
+    assert.ok(nativeProbe.length > messageOnly.length * 2);
+    assert.equal(JSON.parse(nativeProbe).tools.length, heavyTools.length);
+    assert.equal(
+      nativeProbe,
+      buildNativeProviderRequestBodyForAdmission({
+        threadLog,
+        systemPrompt,
+        modelId: 'deepseek-v4-flash',
+        tools: heavyTools,
+        maxOutputTokens: 32_000,
+        temperature: 0,
+        stream: true,
+      }),
+    );
+
+    const host: ChatEngineCompactionHost = {
+      conversation,
+      compactionManager: {
+        compactWithResult: async () => {
+          throw new Error('llm unavailable');
+        },
+      },
+      options: { task, model: 'deepseek-v4-flash' },
+      compactionProviderId: 'deepinfra',
+      limits: { maxEstimatedTokens: 128_000 },
+      abortSignal: new AbortController().signal,
+      writeCount: 0,
+      turnIndex: 2,
+      toolCallLog: [],
+      progress: { receipts: [], consecutiveNoProgress: 0 },
+      threadLog,
+      sessionLog,
+      turnId,
+      shouldUseTextTools: () => false,
+      serializeNativeProviderRequestBody,
+      compactHeuristic: () => {
+        host.conversation = [
+          conversation[0]!,
+          { role: 'user', content: 'tail user stays' },
+          { role: 'assistant', content: 'tail assistant stays' },
+        ];
+      },
+      checkpoint: async () => undefined,
+      reserveTokens: 0,
+      textToolsReserve: 0,
+      forceCompaction: true,
+      resolveModel: () => 'deepseek-v4-flash',
+      shouldCompactByTokens: () => true,
+      estimateTokens: (messages) =>
+        messages.reduce((sum, message) => sum + message.content.length, 0),
+    };
+
+    const result = await runChatEngineCompaction(host);
+    assert.equal(result?.mode, 'heuristic');
+    assert.ok(serializerCalls >= 2, 'validateCommit must probe native wire before and after');
+  });
+
   for (const race of ['owner supersession', 'failed persistence', 'same-owner replacement']) {
     const failure = race === 'failed persistence';
     it(`heuristic rollback retains a newer submission during ${race}`, async () => {
@@ -938,7 +1080,8 @@ describe('H1 compaction lifecycle result', () => {
       const replacement: ChatMessage[] = [{ role: 'user', content: 'NEW MESSAGE' }];
       const host: ChatEngineCompactionHost = {
         conversation, options: { task: 'old task', model: 'test-model' },
-        limits: { maxEstimatedTokens: 10 }, abortSignal: new AbortController().signal,
+        compactionProviderId: 'deepinfra',
+        limits: { maxEstimatedTokens: 128_000 }, abortSignal: new AbortController().signal,
         writeCount: 0, turnIndex: 2, toolCallLog: [], progress: { receipts: [], consecutiveNoProgress: 0 },
         threadLog, sessionLog, turnId, shouldUseTextTools: () => false,
         compactHeuristic: () => { host.conversation = [conversation[0]!, ...conversation.slice(-2)]; },
@@ -991,7 +1134,8 @@ describe('H1 compaction lifecycle result', () => {
     const host: ChatEngineCompactionHost = {
       conversation: original.map((message) => ({ ...message })),
       options: { task, model: 'test-model' },
-      limits: { maxEstimatedTokens: 10 },
+      compactionProviderId: 'deepinfra',
+      limits: { maxEstimatedTokens: 128_000 },
       abortSignal: new AbortController().signal,
       writeCount: 0, turnIndex: 1, toolCallLog: [],
       progress: { receipts: [], consecutiveNoProgress: 0 },

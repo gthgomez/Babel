@@ -51,6 +51,12 @@
     "babel-desktop/package.json",
     ".github/workflows/release.yml"
   ],
+  "auditBenignBlockers": [
+    "unexpected_pr_base_branch",
+    "pr_base_sha_is_stale",
+    "execution_base_superseded",
+    "pr_is_draft"
+  ],
   "finalCertificationCount": {
     "TRIVIAL": 1, "NORMAL": 1, "ELEVATED": 2, "CRITICAL": 2, "AMBIGUOUS": 2
   }

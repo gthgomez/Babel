@@ -22,7 +22,13 @@ import {
   runChatEngineCompaction,
   type ChatEngineCompactionHost,
 } from '../agent/compactionCommit.js';
-import { createThreadEventLog, recordUserMessage, startTurn } from '../agent/threadEventLog.js';
+import {
+  createThreadEventLog,
+  rebuildProviderMessagesFromEvents,
+  recordUserMessage,
+  startTurn,
+} from '../agent/threadEventLog.js';
+import { mapProviderMessagesToWire } from '../runners/providerMessages.js';
 import { createSessionEventLog } from '../agent/sessionEvents.js';
 import { autoCompactIfNeeded } from './compaction.js';
 import { countTextTokens } from './tokenCounter.js';
@@ -325,10 +331,19 @@ function chatEngineFixture(
     { role: 'user', content: 'earlier context' },
     { role: 'user', content: 'current request' },
   ];
+  const systemPrompt = 'System instructions';
   const host: ChatEngineCompactionHost = {
     conversation,
     ...(compactWithResult ? { compactionManager: compactWithResult } : {}),
     options: { task: 'a5 condensation', model: 'test-model' },
+    compactionProviderId: 'deepseek',
+    modelPolicy: {
+      family: 'test-fixture',
+      providerModelId: 'test-model',
+      contextWindow: 32_000,
+      contextLimit: 32_000,
+    },
+    providerReservedCompletionTokens: 1_024,
     limits: { maxEstimatedTokens: 10 },
     abortSignal: new AbortController().signal,
     writeCount: 0,
@@ -350,6 +365,14 @@ function chatEngineFixture(
     shouldCompactByTokens: () => true,
     estimateTokens: (messages) => messages.length * 10,
     condensationFacts: channel,
+    serializeNativeProviderRequestBody: () =>
+      JSON.stringify(
+        mapProviderMessagesToWire(
+          rebuildProviderMessagesFromEvents(threadLog, { systemPrompt }),
+          systemPrompt,
+          systemPrompt,
+        ),
+      ),
   };
   return { facts, host };
 }
@@ -365,6 +388,8 @@ test('A5: ChatEngine inline compaction emits a paired fact pair with the fenced 
       tokensBefore: 300,
       tokensAfter: 20,
       changed: true,
+      status: 'applied',
+      strategyErrors: [],
     }),
   });
 
@@ -407,6 +432,8 @@ test('A5: interrupted ChatEngine compaction leaves the started fact visibly unpa
         tokensBefore: 300,
         tokensAfter: 20,
         changed: true,
+        status: 'applied',
+        strategyErrors: [],
       }),
     },
   );

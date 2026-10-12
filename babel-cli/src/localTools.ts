@@ -66,7 +66,10 @@ import {
 } from './tools/astTools.js';
 import { handleLspTool, LspToolInputSchema } from './tools/lspTool.js';
 import { getManifestSnapshot } from './tools/toolManifest.js';
-import { getSessionCache } from './tools/toolResultCache.js';
+import {
+  getSessionCache,
+  TOOL_RESULT_CACHE_MUTATING_TOOLS,
+} from './tools/toolResultCache.js';
 import { getSessionGate } from './services/searchDepthGate.js';
 import {
   createExecutorToolRegistry,
@@ -1209,7 +1212,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
       required: ['pattern'],
       optional: ['path', 'ignore_case', 'max_matches', 'output_format', 'context_lines'],
     },
-    handler: (req) => {
+    handler: (req, context) => {
       const typedReq = req as Extract<ToolCallRequest, { tool: 'grep' }>;
       const approvedReadRoots = getApprovedReadRoots(getExecutorProjectRoot());
       return handleGrepTool(
@@ -1224,6 +1227,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
           ...(typedReq.context_lines !== undefined
             ? { context_lines: typedReq.context_lines }
             : {}),
+          ...(context.signal ? { signal: context.signal } : {}),
         },
         approvedReadRoots,
       );
@@ -1890,8 +1894,7 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
   }
 
   // ── Phase 4: Tool result cache (read-only tools only) ────────────────────
-  const MUTATION_TOOLS = new Set(['file_write', 'shell_exec', 'test_run']);
-  if (!MUTATION_TOOLS.has(req.tool)) {
+  if (!TOOL_RESULT_CACHE_MUTATING_TOOLS.has(req.tool)) {
     const cache = getSessionCache();
     const cacheInput = extractCacheInput(req, context);
     const cached = cache.get(req.tool, cacheInput);
@@ -1930,7 +1933,7 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
   // ── Phase 4: Post-dispatch cache/gate updates ────────────────────────────
   gate.recordCall(req.tool, result.exit_code);
 
-  if (!MUTATION_TOOLS.has(req.tool)) {
+  if (!TOOL_RESULT_CACHE_MUTATING_TOOLS.has(req.tool)) {
     const cache = getSessionCache();
     const cacheInput = extractCacheInput(req, context);
     cache.set(req.tool, cacheInput, result);

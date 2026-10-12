@@ -47,3 +47,31 @@ test('cancel settles promptly but process exit witness waits for physical close'
   await sandbox.awaitPendingProcessTerminations('pr242-cancel-witness')
   assert.equal(exits, 1)
 })
+
+test('cancel records process_exited before process_killed on the witness bus', async () => {
+  const witness = new ProcessWitness()
+  const events: string[] = []
+  const recordExit = witness.exited.bind(witness)
+  const recordKilled = witness.killed.bind(witness)
+  witness.exited = (...args) => {
+    events.push('exited')
+    recordExit(...args)
+  }
+  witness.killed = (...args) => {
+    events.push('killed')
+    recordKilled(...args)
+  }
+  const controller = new AbortController()
+  const pending = sandbox.spawnCommandAsync(process.execPath, [
+    '-e', 'setTimeout(() => {}, 10_000)',
+  ], {
+    cwd: process.cwd(), timeoutMs: 15_000, env: process.env,
+    signal: controller.signal, processWitness: witness,
+    processContext: { sessionId: 'pr242-cancel-witness-order' },
+  })
+  controller.abort()
+  assert.equal((await pending).aborted, true)
+  assert.deepEqual(events, [], 'witness must not fire before physical close and latch drain')
+  await sandbox.awaitPendingProcessTerminations('pr242-cancel-witness-order')
+  assert.deepEqual(events, ['exited', 'killed'], 'exited must precede killed')
+})

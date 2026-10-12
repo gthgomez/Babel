@@ -64,6 +64,10 @@ import {
   type FetchRedirectPolicy,
 } from './providerResponsePolicy.js';
 import {
+  buildOpenAiCompatibleNativeWireBody,
+  CHAT_NATIVE_DEFAULT_SYSTEM_PROMPT,
+} from './openAiCompatibleNativeWire.js';
+import {
   getStreamIdleTimeoutMs,
   getStreamMaxRetries,
   isStreamIdleTimeoutError,
@@ -100,12 +104,7 @@ const SYSTEM_PROMPT =
   'no markdown, no explanation, no code fences. ' +
   'Output only raw JSON.';
 
-const CHAT_SYSTEM_PROMPT =
-  'You are an expert software engineer in a terminal chat session. ' +
-  'Answer the user conversationally in natural language. ' +
-  'Use tools to read files and gather context as needed. ' +
-  'Be concise but thorough. Use markdown for formatting. ' +
-  'Do NOT output JSON — respond in plain natural language.';
+const CHAT_SYSTEM_PROMPT = CHAT_NATIVE_DEFAULT_SYSTEM_PROMPT;
 
 // ─── Runner implementation ────────────────────────────────────────────────────
 
@@ -204,6 +203,37 @@ export class DeepInfraApiRunner implements LlmRunner {
   /** Provider-specific request fields, empty for generic OpenAI-compatible APIs. */
   protected getRequestBodyExtras(): Record<string, unknown> {
     return {};
+  }
+
+  /**
+   * Exact native tool-stream JSON body (shared with compaction admission).
+   * Matches `executeWithToolsStream` before transport.
+   */
+  /** Output budget reserved on the wire (matches `prepareProviderRequest`). */
+  getNativeRequestReservedCompletionTokens(): number | null {
+    return this.executionEnvelope?.output.effective ?? this.maxTokens;
+  }
+
+  buildNativeToolsWireBody(
+    messages: ProviderMessage[],
+    tools: ToolDefinition[],
+    systemPrompt?: string,
+    options: { stream?: boolean; toolChoice?: 'auto' | 'required' } = {},
+  ): string {
+    return buildOpenAiCompatibleNativeWireBody({
+      model: this.model,
+      maxTokens: this.maxTokens,
+      temperature: this.temperature,
+      ...(this.executionEnvelope ? { executionEnvelope: this.executionEnvelope } : {}),
+      messages,
+      tools,
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      stream: options.stream ?? true,
+      toolChoice: options.toolChoice ?? 'auto',
+      requestBodyExtras: this.getRequestBodyExtras(),
+      mapMessages: (msgs, defaultSystem, override) =>
+        mapProviderMessages(msgs, defaultSystem, override),
+    });
   }
 
   /** Provider-specific request headers, empty for generic APIs. */
@@ -1116,34 +1146,11 @@ export class DeepInfraApiRunner implements LlmRunner {
     const streamIdleTimeoutMs = getStreamIdleTimeoutMs();
     const maxAttempts = requestMaxRetries;
 
-    if (this.executionEnvelope && !this.executionEnvelope.tools.effective) {
-      throw new Error('[deepInfraApi] tools were requested but the resolved envelope disabled tools.');
-    }
-    const buildBody = () => {
-      const envelopeBody = this.executionEnvelope
-        ? buildWireRequestFromEnvelope(this.executionEnvelope, {
-            stream: true,
-            messages,
-            tools,
-            toolChoice: toolChoice ?? 'auto',
-          })
-        : {
-            model: this.model,
-            ...(this.maxTokens === null ? {} : { max_tokens: this.maxTokens }),
-            temperature: this.temperature,
-            tools,
-            tool_choice: (toolChoice ?? 'auto') as 'auto' | 'required',
-            messages: mapProviderMessages(messages, CHAT_SYSTEM_PROMPT, systemPrompt),
-          };
-      return JSON.stringify({
-        ...envelopeBody,
+    const buildBody = () =>
+      this.buildNativeToolsWireBody(messages, tools, systemPrompt, {
         stream: true,
-        ...this.getRequestBodyExtras(),
-        messages: this.executionEnvelope
-          ? envelopeBody.messages
-          : mapProviderMessages(messages, CHAT_SYSTEM_PROMPT, systemPrompt),
+        toolChoice: toolChoice ?? 'auto',
       });
-    };
     const inferenceId = randomUUID();
     const preparedRequest = prepareProviderRequest({
       body: buildBody(),

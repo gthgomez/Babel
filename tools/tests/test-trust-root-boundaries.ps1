@@ -104,6 +104,21 @@ if ($workflow -match 'BABEL_REVIEW_CONTROLLER_(LOGIN|APP_ID)') { throw 'Trusted 
 if ($workflow -notmatch [regex]::Escape('github.event.repository.owner.id')) { throw 'Trusted workflow is missing owner-controller provenance binding.' }
 if ($workflow -match [regex]::Escape('persist-credentials: true')) { throw 'Trusted workflow must not persist credentials.' }
 
+# Benign audit blockers are registered in config/review-risk-policy.json and
+# read from there by every audit step. The workflow must hold no inline copy:
+# additions to the allowlist require a policy-file change plus this reviewed
+# assertion, never a quiet workflow edit that would silently pass new blockers.
+$policyJson = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'config/review-risk-policy.json') | ConvertFrom-Json
+$reviewedBenign = @('unexpected_pr_base_branch', 'pr_base_sha_is_stale', 'execution_base_superseded', 'pr_is_draft')
+if (@($policyJson.auditBenignBlockers).Count -ne $reviewedBenign.Count -or
+  @($reviewedBenign | Where-Object { @($policyJson.auditBenignBlockers) -notcontains $_ }).Count -ne 0) {
+  throw 'auditBenignBlockers drifted from the reviewed set; update this assertion only with owner review.'
+}
+if ($workflow -match [regex]::Escape("@('unexpected_pr_base_branch'")) { throw 'Trusted workflow must not inline the benign-blocker allowlist.' }
+if (@([regex]::Matches($workflow, [regex]::Escape('auditBenignBlockers'))).Count -lt 2) {
+  throw 'Both audit steps (inline and workflow_run listener) must read auditBenignBlockers from the policy.'
+}
+
 # Execute the actual no-checkout refresh body with GitHub and sleep mocked.
 # This keeps lifecycle regressions covered without credentials or API writes.
 $refreshJob = ($workflow -split '(?m)^  rerun-after-review:\r?$')[1]
