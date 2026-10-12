@@ -5,10 +5,10 @@
 // On pull requests the candidate classifier is unioned with the merge-base copy
 // of this module so a PR cannot weaken lane requirements by editing this file.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 
 const FAST_PREFIXES = ["docs/", "skills/", "02_Skills/", ".agents/skills/"];
 const FAST_FILES = new Set(["README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md"]);
@@ -29,15 +29,26 @@ export const TRUSTED_ALWAYS_FULL_PREFIXES = [
   "prompt_catalog.yaml",
 ];
 
-/** Changes here require installer-lifecycle on pull requests. */
-export const INSTALLER_SENSITIVE_PREFIXES = [
-  "babel-desktop/test/installer-lifecycle/",
-  "babel-desktop/scripts/package-windows",
-  "babel-desktop/scripts/install-windows.ps1",
-  "babel-desktop/scripts/uninstall-windows.ps1",
-  "babel-desktop/package.json",
-  ".github/workflows/release.yml",
-];
+/**
+ * Changes here require installer-lifecycle on pull requests. Single-sourced in
+ * config/review-risk-policy.json (shared with the PowerShell gate). A missing
+ * or unreadable policy fails closed to a catch-all so lane classification can
+ * never silently skip the installer.
+ */
+const POLICY_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "config", "review-risk-policy.json");
+const INSTALLER_SENSITIVE_FALLBACK = [""];
+
+export const INSTALLER_SENSITIVE_PREFIXES = (() => {
+  try {
+    const prefixes = JSON.parse(readFileSync(POLICY_PATH, "utf8")).installerSensitivePrefixes;
+    if (!Array.isArray(prefixes) || prefixes.length === 0 || prefixes.some((p) => typeof p !== "string" || !p)) {
+      return INSTALLER_SENSITIVE_FALLBACK;
+    }
+    return prefixes;
+  } catch {
+    return INSTALLER_SENSITIVE_FALLBACK;
+  }
+})();
 
 function fileMatchesPrefix(file, prefixes) {
   return prefixes.some((prefix) => file === prefix || file.startsWith(prefix));
