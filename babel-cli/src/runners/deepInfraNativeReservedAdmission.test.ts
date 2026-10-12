@@ -54,7 +54,7 @@ function fixtureExecutionEnvelope(effective: number): ResolvedExecutionEnvelope 
       aliasTarget: null,
     },
     provider: { gateway: 'deepinfra' },
-    protocol: 'openai_chat_completions',
+    protocol: 'chat_completions',
     context: {},
     output: {
       effective,
@@ -92,23 +92,29 @@ function fixtureExecutionEnvelope(effective: number): ResolvedExecutionEnvelope 
       source: 'fixture',
     },
     affordability: { status: 'unknown' },
-  } as ResolvedExecutionEnvelope
+  } as unknown as ResolvedExecutionEnvelope
 }
 
-type RunnerInternals = DeepInfraApiRunner & {
+/** Access runner fields used by transport admission (private on `DeepInfraApiRunner`). */
+function runnerInternals(runner: DeepInfraApiRunner): {
   executionEnvelope?: ResolvedExecutionEnvelope
   maxTokens: number | null
+} {
+  return runner as unknown as {
+    executionEnvelope?: ResolvedExecutionEnvelope
+    maxTokens: number | null
+  }
 }
 
 /** Mirrors `executeWithToolsStream` → `prepareProviderRequest` reserved budget. */
 function transportReservedCompletionTokens(runner: DeepInfraApiRunner): number | null {
-  const internal = runner as RunnerInternals
+  const internal = runnerInternals(runner)
   return internal.executionEnvelope?.output.effective ?? internal.maxTokens
 }
 
 /** Pre-b4dcc8d getter behavior (maxTokens only). */
 function legacyGetterReservedCompletionTokens(runner: DeepInfraApiRunner): number | null {
-  return (runner as RunnerInternals).maxTokens
+  return runnerInternals(runner).maxTokens
 }
 
 test('envelope effective output budget drives compaction and transport admission when maxTokens is stale', () => {
@@ -122,7 +128,7 @@ test('envelope effective output budget drives compaction and transport admission
       executionEnvelope: fixtureExecutionEnvelope(ENVELOPE_EFFECTIVE),
     },
   )
-  const internal = runner as RunnerInternals
+  const internal = runnerInternals(runner)
   assert.equal(internal.maxTokens, ENVELOPE_EFFECTIVE)
   internal.maxTokens = STALE_MAX_TOKENS
 
