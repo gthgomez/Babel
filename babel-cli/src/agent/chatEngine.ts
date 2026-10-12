@@ -3826,6 +3826,13 @@ export class ChatEngine {
    * Exact native tool-stream JSON for compaction admission.
    * Uses the live deliberation runner wire builder (tools, preamble, envelope extras).
    */
+  /** Exposed for compaction host wiring (reserved output budget + wire serializer). */
+  resolveDeliberationRunnerForCompaction(): ReturnType<
+    ChatEngine["resolveDeliberationRunner"]
+  > {
+    return this.resolveDeliberationRunner();
+  }
+
   buildNativeCompactionAdmissionWireBody(): string {
     const runner = this.resolveDeliberationRunner();
     const buildNative = (

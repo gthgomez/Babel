@@ -209,6 +209,11 @@ export class DeepInfraApiRunner implements LlmRunner {
    * Exact native tool-stream JSON body (shared with compaction admission).
    * Matches `executeWithToolsStream` before transport.
    */
+  /** Output budget reserved on the wire (matches `prepareProviderRequest`). */
+  getNativeRequestReservedCompletionTokens(): number | null {
+    return this.maxTokens;
+  }
+
   buildNativeToolsWireBody(
     messages: ProviderMessage[],
     tools: ToolDefinition[],

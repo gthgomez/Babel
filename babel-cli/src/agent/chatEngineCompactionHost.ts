@@ -76,6 +76,7 @@ export interface ChatEngineCompactionBinding {
   getResolvedRequiredVerifiers(): readonly string[];
   /** Exact native POST JSON for compaction admission (live deliberation runner). */
   buildNativeCompactionAdmissionWireBody(): string;
+  resolveDeliberationRunnerForCompaction(): unknown;
 }
 
 export async function runChatEngineCompactionFor(
@@ -123,11 +124,16 @@ export async function runChatEngineCompactionFor(
     chatProvider: engine.modelPolicy?.provider ?? null,
     compactionModel: compactionModelId,
   });
+  const deliberationRunner = engine.resolveDeliberationRunnerForCompaction();
+  const runnerReserved = (
+    deliberationRunner as { getNativeRequestReservedCompletionTokens?: () => number | null }
+  ).getNativeRequestReservedCompletionTokens?.() ?? null;
   const host: ChatEngineCompactionHost = {
     conversation: engine.conversation,
     options: engine.options,
     ...(engine.modelPolicy ? { modelPolicy: engine.modelPolicy } : {}),
     compactionProviderId: engine.modelPolicy?.provider ?? 'deepinfra',
+    ...(runnerReserved !== null ? { providerReservedCompletionTokens: runnerReserved } : {}),
     ...(summarizationProvider ? { summarizationProvider } : {}),
     limits: engine.limits,
     abortSignal: engine.abortController.signal,

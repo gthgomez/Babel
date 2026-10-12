@@ -1055,6 +1055,8 @@ export interface ChatEngineCompactionHost {
   condensationFacts?: CondensationFactChannel;
   /** Provider id used for final prepared-request admission after compaction. */
   compactionProviderId?: string;
+  /** Reserved completion tokens for admission accounting (runner output budget). */
+  providerReservedCompletionTokens?: number | null;
   /** Injected summarization route (same provider family as Chat when configured). */
   summarizationProvider?: LlmCompactionProvider;
   /**
@@ -1111,7 +1113,12 @@ export function resolveCompactionAdmissionContext(
         ? policyContextWindow
         : host.limits.maxEstimatedTokens;
   const reservedCompletionTokens =
-    caps.maxOutputTokens > 0 ? caps.maxOutputTokens : harnessReserve;
+    host.providerReservedCompletionTokens != null &&
+    host.providerReservedCompletionTokens > 0
+      ? host.providerReservedCompletionTokens
+      : caps.maxOutputTokens > 0
+        ? caps.maxOutputTokens
+        : harnessReserve;
   return { contextWindowTokens, reservedCompletionTokens };
 }
 
