@@ -125,6 +125,14 @@ try {
   Assert-That 'uninstall registration points at the install root' { $state1.Registry -and ([IO.Path]::GetFullPath($state1.Registry.Location).TrimEnd('\') -eq [IO.Path]::GetFullPath($installRoot).TrimEnd('\')) }
   $v1 = $state1.Registry.Version
 
+  # --- 3b. Packaged Electron GUI (real main/preload/renderer) -------------------------
+  Write-Host "[3b/8] Packaged Electron GUI acceptance"
+  $sourceSha = ''
+  try { $sourceSha = (git -C $repo rev-parse HEAD).Trim() } catch { }
+  & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $desktop 'test/packaged-electron-acceptance/run-packaged-gui.ps1') `
+    -InstallRoot $installRoot -SourceSha $sourceSha
+  if ($LASTEXITCODE -ne 0) { throw "packaged Electron GUI acceptance failed with exit $LASTEXITCODE" }
+
   # --- 4. Bundled CLI smoke ----------------------------------------------------------
   if (-not $SkipCliSmoke) {
     Write-Host "[4/8] Bundled CLI smoke launch"

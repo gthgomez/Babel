@@ -54,30 +54,40 @@ test('scanTranscriptHead uses the first user message for title, not the tail win
   assert.notEqual(tail.messages.find(message => message.role === 'user')?.text, 'TRUE-FIRST-TITLE');
 });
 
-test('ordinal session outcomes use global assistant index inside a truncated window', async () => {
+test('ordinal session outcomes bind turn_id across a 160-message truncated window', async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-sessions-ordinal-'));
   const desktop = join(root, 'babel-desktop');
   const session = join(root, 'runs', 'chat-sessions', 'chat-ordinal');
   await mkdir(desktop, {recursive: true});
   await mkdir(session, {recursive: true});
   const lines = [];
-  for (let turn = 1; turn <= 6; turn += 1) {
-    lines.push(JSON.stringify({role: 'user', content: `user-${turn}`}));
-    lines.push(JSON.stringify({role: 'assistant', content: `assistant-${turn}`}));
+  let assistantTurn = 0;
+  for (let i = 0; i < 160; i += 1) {
+    if (i % 2 === 0) {
+      lines.push(JSON.stringify({role: 'user', content: `user-${i}`}));
+    } else {
+      assistantTurn += 1;
+      lines.push(JSON.stringify({role: 'assistant', content: `assistant-${assistantTurn}`, turn_id: assistantTurn}));
+    }
   }
   await writeFile(join(session, 'transcript.jsonl'), lines.join('\n') + '\n');
-  await writeFile(join(session, 'session-events.jsonl'), [
-    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
-    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
-    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
-    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
-    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
-    JSON.stringify({kind: 'turn_ended', outcome: 'VERIFIED_COMPLETE'}),
-  ].join('\n') + '\n');
-  const opened = await readSavedChat(desktop, 'chat-ordinal', {runsDir: join(root, 'runs')});
-  const lastAssistant = opened.messages.filter(message => message.role === 'assistant').at(-1);
-  assert.equal(lastAssistant?.text, 'assistant-6');
-  assert.equal(lastAssistant?.status, 'complete');
+  const events = [];
+  for (let turn = 1; turn <= 80; turn += 1) {
+    const outcome = turn === 6 ? 'VERIFIED_COMPLETE' : turn < 6 ? 'AGENT_FAILURE' : 'UNVERIFIED';
+    events.push(JSON.stringify({kind: 'turn_ended', turn_id: turn, outcome}));
+  }
+  await writeFile(join(session, 'session-events.jsonl'), events.join('\n') + '\n');
+  const olderOffset = 10;
+  const opened = await readSavedChat(desktop, 'chat-ordinal', {runsDir: join(root, 'runs'), olderOffset});
+  assert.equal(opened.history.windowStart, 0);
+  assert.equal(opened.messages.length, 150);
+  const visible11 = opened.messages[11];
+  assert.equal(visible11?.role, 'assistant');
+  assert.equal(visible11?.text, 'assistant-6');
+  assert.equal(visible11?.status, 'complete');
+  const tail = await readSavedChat(desktop, 'chat-ordinal', {runsDir: join(root, 'runs'), olderOffset: 0});
+  const older = await readSavedChat(desktop, 'chat-ordinal', {runsDir: join(root, 'runs'), olderOffset: 150});
+  assertNoOverlap(tail.messages, older.messages);
   await rm(root, {recursive: true, force: true});
 });
 
@@ -105,15 +115,17 @@ test('oversize malformed unicode and partial-line transcripts remain discoverabl
   const session = join(root, 'runs', 'chat-sessions', 'chat-big');
   await mkdir(desktop, {recursive: true});
   await mkdir(session, {recursive: true});
+  const tailMarker = JSON.stringify({role: 'assistant', content: 'TAIL-MARKER-OVERSIZE-FINAL-LINE'});
   const prefix = `${JSON.stringify({role: 'user', content: 'Оversize-unicode-title-🙂'})}\n{broken json\n`;
-  const padding = 'x'.repeat(MAX_TRANSCRIPT_BYTES - Buffer.byteLength(prefix, 'utf8') + 1024);
-  await writeFile(join(session, 'transcript.jsonl'), prefix + padding + '\n', 'utf8');
+  const padding = 'x'.repeat(MAX_TRANSCRIPT_BYTES - Buffer.byteLength(prefix + tailMarker + '\n', 'utf8') + 1024);
+  await writeFile(join(session, 'transcript.jsonl'), prefix + padding + '\n' + tailMarker + '\n', 'utf8');
   const listed = await listSavedChats(desktop, {runsDir: join(root, 'runs')});
   assert.equal(listed.sessions.length, 1);
   assert.equal(listed.sessions[0].oversize, true);
   assert.match(listed.sessions[0].title, /Оversize-unicode-title/);
   const opened = await readSavedChat(desktop, 'chat-big', {runsDir: join(root, 'runs')});
   assert.equal(opened.history.tailOnly, true);
+  assert.ok(opened.messages.some(message => message.text === 'TAIL-MARKER-OVERSIZE-FINAL-LINE'));
   await rm(root, {recursive: true, force: true});
 });
 

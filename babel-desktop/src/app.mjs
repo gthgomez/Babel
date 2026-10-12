@@ -153,7 +153,7 @@ function renderSessions() {
   $('#sessions').innerHTML = visible.map(s => `<button class="session-button ${s.id === state.activeId ? 'active' : ''}" data-action="session" data-id="${e(s.id)}" aria-current="${s.id === state.activeId ? 'page' : 'false'}" title="${e(s.title)}${transport === 'preview' ? ' · local preview' : ' · one-shot run history'}"><span>${e(s.title)}</span></button>`).join('');
   const moreOnDisk=savedSessionList.total > state.sessions.filter(s => s.saved).length;
   const canExpandLocal=state.sessions.length > visible.length;
-  $('#show-more').hidden = !moreOnDisk && !canExpandLocal;
+  $('#show-more').hidden = !moreOnDisk && !canExpandLocal && !showAllSessions;
   $('#show-more').textContent = moreOnDisk
     ? `Load more saved chats (${savedSessionList.total} on disk)...`
     : (showAllSessions ? 'Show less...' : 'Show more...');
@@ -219,7 +219,8 @@ function renderConversation(forceBottom = false, reset = false) {
   if (!session.fixture && session.messages.length === 0) {
     scroller.innerHTML = `<div class="empty-state"><img src="${LOGO}" alt=""><h1>Run. Verify. Understand.</h1><p>${transport === 'preview' ? 'A clear view of your agent’s work.<br>Start a conversation to try the North Star interface.' : 'Babel CLI is connected.<br>Send a task and the reply, tool rows, and status fill in here.'}</p><div class="empty-actions"><button data-action="draft" data-text="Investigate the review timeout behavior.">Investigate a problem</button><button data-action="draft" data-text="Review the current project architecture.">Explore the project</button></div><div class="preview-note">${icon('info')}${transport === 'preview' ? 'Interactive preview · no model or tool execution' : 'Live session · Babel CLI owns the work'}</div></div>`;
   } else {
-    const historyBanner=session.history?.hasOlder ? `<div class="history-banner"><p class="muted">Showing ${session.messages.length} of ${session.history.totalMessages ?? 'unknown'} messages.</p><button class="button" data-action="load-older-messages">Load earlier messages</button></div>` : (session.history?.tailOnly || session.history?.oversize ? `<p class="fine-print history-banner">Large saved transcript · showing the latest bounded tail window only.</p>` : (session.history?.outcomesBounded ? `<p class="fine-print history-banner">Terminal outcomes unavailable for this bounded session-events file; assistant status may stay unverified.</p>` : ''));
+    const viewingOlder=(session.history?.olderOffset ?? 0) > 0;
+    const historyBanner=session.history?.hasOlder || viewingOlder ? `<div class="history-banner"><p class="muted">Showing ${session.messages.length} of ${session.history.totalMessages ?? 'unknown'} messages.</p><div class="dialog-actions">${session.history?.hasOlder ? '<button class="button" data-action="load-older-messages">Load earlier messages</button>' : ''}${viewingOlder ? '<button class="button" data-action="load-latest-messages">Return to latest messages</button>' : ''}</div></div>` : (session.history?.tailOnly || session.history?.oversize ? `<p class="fine-print history-banner">Large saved transcript · showing the latest bounded tail window only.</p>` : (session.history?.outcomesBounded ? `<p class="fine-print history-banner">Terminal outcomes unavailable for this bounded session-events file; assistant status may stay unverified.</p>` : ''));
     scroller.innerHTML = `${historyBanner}${session.fixture ? referenceMarkup() : ''}${session.messages.map(messageMarkup).join('')}`;
   }
   if (reset) scroller.scrollTop = 0;
@@ -574,9 +575,10 @@ function mapLoadedMessages(messages) {
     }
     : { role: 'user', text: message.text });
 }
-async function openSavedSession(session, {olderOffset = 0} = {}) {
+async function openSavedSession(session, {olderOffset = 0, forceReload = false} = {}) {
   if (!session?.saved || !session.babelSessionId) return;
-  if (!olderOffset && session.messages.length) return;
+  const atLatestWindow = olderOffset === 0 && (session.history?.olderOffset ?? 0) === 0;
+  if (!forceReload && atLatestWindow && session.messages.length) return;
   const loaded = await native.openSession(session.babelSessionId, {olderOffset});
   session.messages = mapLoadedMessages(loaded.messages);
   session.history = loaded.history ?? null;
@@ -619,11 +621,12 @@ document.addEventListener('click',async event=>{
   else if(a==='session'||a==='search-session'){
     if(activeRun){toast('Wait for the active run before switching sessions.');return;}
     state.activeId=button.dataset.id;
-    try{await openSavedSession(activeSession());}catch(err){toast(err.message);}
+    try{await openSavedSession(activeSession(), {forceReload: true});}catch(err){toast(err.message);}
     persist();closeDialog();renderAll(true);$('.workspace').classList.remove('show-left');
   }
   else if(a==='show-more'){try{await loadMoreSavedSessions();}catch(err){toast(err.message);}}
-  else if(a==='load-older-messages'){const session=activeSession(); if(!session?.babelSessionId || session.history?.tailOnly){toast('Earlier messages are not available for this large transcript tail window.');return;} const step=session.history?.messageLimit ?? 150; const next=(session.history?.olderOffset ?? 0)+step; try{await openSavedSession(session,{olderOffset:next}); persist(); renderAll(true);}catch(err){toast(err.message);}}
+  else if(a==='load-older-messages'){const session=activeSession(); if(!session?.babelSessionId || session.history?.tailOnly){toast('Earlier messages are not available for this large transcript tail window.');return;} const step=session.history?.messageLimit ?? 150; const next=(session.history?.olderOffset ?? 0)+step; try{await openSavedSession(session,{olderOffset:next, forceReload:true}); persist(); renderAll(true);}catch(err){toast(err.message);}}
+  else if(a==='load-latest-messages'){const session=activeSession(); if(!session?.babelSessionId){return;} try{await openSavedSession(session,{olderOffset:0, forceReload:true}); persist(); renderAll(true);}catch(err){toast(err.message);}}
   else if(a==='start-remote-bridge'){try{if(activeRun){toast('Stop the active run before starting the remote bridge.');return;} await native.startRemoteBridge({port:4545}); nativeInfo=await native.getInfo(); settingsDialog(); toast('Remote bridge starting on loopback.');}catch(err){toast(err.message);}}
   else if(a==='stop-remote-bridge'){try{await native.stopRemoteBridge(); nativeInfo=await native.getInfo(); settingsDialog(); toast('Remote bridge stopped. Local runs are available again.');}catch(err){toast(err.message);}}
   else if(a==='folder')await toggleFolder(button.dataset.path);
