@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { SafeExecutor, awaitPendingProcessTerminations, spawnCommandAsync, isTransientSpawnError, validateExecutorShellCommand } from './sandbox.js';
+import { waitForProcessExit } from './processTree.js';
 import { ProcessWitness } from './diagnostics/bdns/processWitness.js';
 import {
   setDockerAvailableForTest,
@@ -1029,13 +1030,8 @@ await new Promise((resolve) => setTimeout(resolve, 60_000));
     assert.equal(result.status, 1);
     assert.equal(result.aborted, true);
     await awaitPendingProcessTerminations(fixture.projectRoot);
-    let alive = true;
-    try {
-      process.kill(grandchildPid!, 0);
-    } catch {
-      alive = false;
-    }
-    assert.equal(alive, false, 'descendant process should be dead after tree kill');
+    const descendantExited = await waitForProcessExit(grandchildPid!, 5_000);
+    assert.equal(descendantExited, true, 'descendant process should be dead after tree kill');
   } finally {
     controller.abort();
     await awaitPendingProcessTerminations(fixture.projectRoot);

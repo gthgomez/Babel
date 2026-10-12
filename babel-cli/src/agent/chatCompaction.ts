@@ -52,15 +52,40 @@ export interface ChatMessage {
   compactionCandidate?: true;
 }
 
+export type CompactionTriggerReason =
+  | 'force'
+  | 'token_threshold'
+  | 'reserve_headroom';
+
+/** Shared trigger/eligibility contract between the outer gate and strategies. */
+export interface CompactionRequestContext {
+  reason: CompactionTriggerReason;
+  /** History-only estimate at the outer trigger. */
+  historyTokenEstimate: number;
+  /**
+   * Effective history cap for strategy eligibility (may be below maxTokens when
+   * compaction fires in the native-tool reserve band).
+   */
+  eligibilityTokenCap: number;
+  /** Full configured context window cap. */
+  maxTokens: number;
+  /** Outer loop explicitly requested compaction (force, threshold, or reserve). */
+  compactionRequested: boolean;
+}
+
 export interface CompactionOptions {
   /** Model ID to use for summarization (e.g. 'Qwen/Qwen3-32B-Instruct') */
   model: string;
   /** Maximum tokens for the compacted context */
   maxTokens: number;
+  /** Unified outer trigger and strategy eligibility (when compaction was requested). */
+  requestContext?: CompactionRequestContext;
   /** Target tokens for the summary message itself */
   targetTokens?: number;
   /** Abort signal for cancellation */
   signal?: AbortSignal;
+  /** Optional injected summarization provider (selected route; no ambient fallback). */
+  summarizationProvider?: LlmCompactionProvider;
   /** Bounded provider lifecycle receipts for the summarizer inference. */
   callbacks?: RunnerCallbacks;
   /** Billed inference usage is recorded even if its summary is later discarded. */
@@ -72,6 +97,18 @@ export interface CompactionOptions {
   }) => void;
 }
 
+function strategyHistoryEligible(
+  estimatedTokens: number,
+  maxTokens: number,
+  options?: CompactionOptions,
+): boolean {
+  const ctx = options?.requestContext;
+  if (ctx?.compactionRequested) {
+    return estimatedTokens > ctx.eligibilityTokenCap;
+  }
+  return estimatedTokens > maxTokens;
+}
+
 export interface CompactionStrategy {
   /** Human-readable strategy name for logging and debugging */
   name: string;
@@ -80,7 +117,7 @@ export interface CompactionStrategy {
     messages: ChatMessage[],
     estimatedTokens: number,
     maxTokens: number,
-    options?: { model?: string },
+    options?: CompactionOptions,
   ): boolean;
   /** Apply compaction and return the compacted message list */
   compact(messages: ChatMessage[], options: CompactionOptions): Promise<ChatMessage[]>;
@@ -245,8 +282,13 @@ export class HeuristicTruncationStrategy implements CompactionStrategy {
     this.keepRecentMessages = keepRecentMessages ?? DEFAULT_COMPACTION_CONFIG.keepRecentMessages;
   }
 
-  canApply(_messages: ChatMessage[], estimatedTokens: number, maxTokens: number): boolean {
-    return estimatedTokens > maxTokens;
+  canApply(
+    _messages: ChatMessage[],
+    estimatedTokens: number,
+    maxTokens: number,
+    options?: CompactionOptions,
+  ): boolean {
+    return strategyHistoryEligible(estimatedTokens, maxTokens, options);
   }
 
   async compact(messages: ChatMessage[], _options: CompactionOptions): Promise<ChatMessage[]> {
@@ -410,22 +452,23 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     _messages: ChatMessage[],
     estimatedTokens: number,
     maxTokens: number,
-    options?: { model?: string },
+    options?: CompactionOptions,
   ): boolean {
     // Check env var override
     if (process.env['BABEL_COMPACTION'] === 'off') return false;
 
-    // Check that a coherent provider+model target is available (the caller's
-    // explicit model counts; ambient keys alone must not select one).
-    if (this.resolveCompactionTarget(options ?? {}) === null) return false;
+    // Injected route wins; otherwise resolve from explicit configuration only.
+    if (!options?.summarizationProvider &&
+      this.resolveCompactionTarget(options ?? {}) === null) {
+      return false;
+    }
 
     // Circuit breaker: skip after too many consecutive failures
     if (this.consecutiveFailures >= LLMSummarizeCompaction.MAX_CONSECUTIVE_FAILURES) {
       return false;
     }
 
-    // Only apply when we actually need compaction
-    return estimatedTokens > maxTokens;
+    return strategyHistoryEligible(estimatedTokens, maxTokens, options);
   }
 
   async compact(messages: ChatMessage[], options: CompactionOptions): Promise<ChatMessage[]> {
@@ -542,7 +585,14 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     targetTokens: number,
     options: CompactionOptions,
   ): Promise<CompactionApiResult> {
-    const target = this.resolveCompactionTarget(options);
+    const injected = options.summarizationProvider;
+    const target = injected
+      ? {
+          apiKey: injected.apiKey,
+          baseUrl: injected.baseUrl,
+          model: options.model || injected.defaultModel,
+        }
+      : this.resolveCompactionTarget(options);
     if (!target) {
       // No coherent provider+model pairing: refuse instead of guessing.
       throw new Error('COMPACTION_PROVIDER_TARGET_UNRESOLVED');
@@ -881,6 +931,7 @@ export type CompactionStrategyId = 'llm-summarize' | 'heuristic-truncation' | 'n
 export type CompactionRunStatus =
   | 'applied'
   | 'noop'
+  | 'cannot_fit'
   | 'all_strategies_failed';
 
 export interface CompactionManagerResult {
@@ -969,10 +1020,15 @@ export class CompactionManager {
     if (errors.length > 0) {
       console.warn(`[CompactionManager] All strategies failed:\n  ${errors.join('\n  ')}`);
     }
+    const requested = options.requestContext?.compactionRequested === true;
     return {
       messages,
       strategy: 'none',
-      status: errors.length > 0 ? 'all_strategies_failed' : 'noop',
+      status: errors.length > 0
+        ? 'all_strategies_failed'
+        : requested
+          ? 'cannot_fit'
+          : 'noop',
       tokensBefore,
       tokensAfter: tokensBefore,
       strategyErrors: errors,
@@ -1008,6 +1064,54 @@ export class CompactionManager {
  * Priority: explicit override > BABEL_COMPACTION_MODEL > providerModelId > default.
  * Never pass a bare model-family label (e.g. "DeepSeek") as the API model id.
  */
+/**
+ * Resolve an explicit compaction summarization route aligned with the active
+ * Chat provider family. Never pairs an OpenCode-Go-only configuration with
+ * ambient OpenRouter/DeepInfra keys.
+ */
+export function resolveCompactionSummarizationProvider(input: {
+  chatProvider?: string | null;
+  compactionModel: string;
+}): LlmCompactionProvider | null {
+  const explicitKey = process.env['BABEL_COMPACTION_API_KEY']?.trim();
+  const explicitBase = process.env['BABEL_COMPACTION_API_BASE']?.trim();
+  if (explicitKey && explicitBase) {
+    return {
+      apiKey: explicitKey,
+      baseUrl: explicitBase,
+      defaultModel: input.compactionModel,
+    };
+  }
+
+  const provider = (input.chatProvider ?? '').toLowerCase();
+  const model = input.compactionModel.trim();
+  if (!model) return null;
+
+  if (provider === 'openrouter' && process.env['OPENROUTER_API_KEY']?.trim()) {
+    return {
+      apiKey: process.env['OPENROUTER_API_KEY']!.trim(),
+      baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
+      defaultModel: model,
+    };
+  }
+  if (provider === 'deepinfra' && process.env['DEEPINFRA_API_KEY']?.trim()) {
+    return {
+      apiKey: process.env['DEEPINFRA_API_KEY']!.trim(),
+      baseUrl: 'https://api.deepinfra.com/v1/openai/chat/completions',
+      defaultModel: model,
+    };
+  }
+  if (provider === 'anthropic' && process.env['ANTHROPIC_API_KEY']?.trim()) {
+    return {
+      apiKey: process.env['ANTHROPIC_API_KEY']!.trim(),
+      baseUrl: 'https://api.anthropic.com',
+      defaultModel: model,
+    };
+  }
+  // OpenCode Go and other explicit-only routes: no ambient cross-provider fallback.
+  return null;
+}
+
 export function resolveCompactionModelId(input: {
   explicitModel?: string | null;
   providerModelId?: string | null;

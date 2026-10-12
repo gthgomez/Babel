@@ -43,8 +43,8 @@ interface MutationReceiptEvidence {
 interface EffectTransactionEvidence {
   status?: string;
   rollback_result?: string;
-  pre_revision?: { compositeTreeHash?: string };
-  post_revision?: { compositeTreeHash?: string };
+  pre_revision?: { compositeTreeHash?: string; snapshotComplete?: boolean };
+  post_revision?: { compositeTreeHash?: string; snapshotComplete?: boolean };
 }
 
 const SHELL_MUTATION_TOOLS = new Set(['run_command', 'test_run', 'shell_exec']);
@@ -113,9 +113,17 @@ export function assessMutationEffect(input: {
 
   const preRevision = transaction?.pre_revision?.compositeTreeHash;
   const postRevision = transaction?.post_revision?.compositeTreeHash;
+  const preComplete = transaction?.pre_revision?.snapshotComplete !== false;
+  const postComplete = transaction?.post_revision?.snapshotComplete !== false;
   let transactionEffect: MutationEffectStatus | undefined;
   if (transaction?.status === 'commit' && preRevision && postRevision) {
-    transactionEffect = preRevision === postRevision ? 'confirmed_no_change' : 'confirmed_change';
+    if (preRevision === postRevision) {
+      transactionEffect = preComplete && postComplete
+        ? 'confirmed_no_change'
+        : undefined;
+    } else {
+      transactionEffect = 'confirmed_change';
+    }
   }
   if (transaction?.status === 'rollback') {
     if (

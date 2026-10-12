@@ -37,6 +37,7 @@ import {
   providerRequestIdFromResponse,
   type ProviderFailureDetails,
 } from './providerFailureReceipt.js';
+import { buildDeepSeekNativeToolsWireBody } from './deepSeekNativeWire.js';
 
 const MAX_TOKENS = readPositiveIntEnv('BABEL_DEEPSEEK_TOKENS', 32000);
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
@@ -1177,6 +1178,27 @@ export class DeepSeekApiRunner implements LlmRunner {
    * as `tool_use` events followed by a `done` event. When it is 'stop', only
    * a `done` event is yielded (text content arrived via `text_delta`).
    */
+  getNativeRequestReservedCompletionTokens(): number | null {
+    return MAX_TOKENS;
+  }
+
+  buildNativeToolsWireBody(
+    messages: ProviderMessage[],
+    tools: ToolDefinition[],
+    systemPrompt?: string,
+    options: { stream?: boolean; toolChoice?: 'auto' | 'required' } = {},
+  ): string {
+    return buildDeepSeekNativeToolsWireBody({
+      model: this.model,
+      maxTokens: MAX_TOKENS,
+      messages,
+      tools,
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      stream: options.stream ?? true,
+      toolChoice: options.toolChoice ?? 'auto',
+    });
+  }
+
   async *executeWithToolsStream(
     messages: ProviderMessage[],
     tools: ToolDefinition[],
@@ -1193,41 +1215,22 @@ export class DeepSeekApiRunner implements LlmRunner {
 
     // Track thinking routing for lastInvocationMetadata (P0-B honesty).
     let thinkingDisabledReason: string | null = null;
+    const wantThinking = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
+    const allowThinkingWithTools =
+      process.env['BABEL_DEEPSEEK_THINKING_WITH_TOOLS'] === '1';
+    const thinkingEnabled = wantThinking && allowThinkingWithTools;
+    if (wantThinking && !allowThinkingWithTools) {
+      thinkingDisabledReason =
+        'thinkingWithTools=unsupported: DeepSeek rejects tool_choice with thinking; set BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 to force experimental path';
+    } else if (!wantThinking) {
+      thinkingDisabledReason = 'BABEL_DEEPSEEK_THINKING=disabled';
+    }
 
-    const buildBody = () => {
-      const effort = resolveReasoningEffort();
-      // DeepSeek API: "Thinking mode does not support this tool_choice" (HTTP 400).
-      // Capability matrix says thinkingWithTools is 'unsupported' for DeepSeek.
-      // Override: BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 (experimental; may 400).
-      const wantThinking = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
-      const allowThinkingWithTools =
-        process.env['BABEL_DEEPSEEK_THINKING_WITH_TOOLS'] === '1';
-      // resolveProviderCapabilities('deepseek-*').thinkingWithTools === 'unsupported'
-      // unless experimental env forces the interleaved path.
-      const thinkingEnabled = wantThinking && allowThinkingWithTools;
-      if (wantThinking && !allowThinkingWithTools) {
-        thinkingDisabledReason =
-          'thinkingWithTools=unsupported: DeepSeek rejects tool_choice with thinking; set BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 to force experimental path';
-      } else if (!wantThinking) {
-        thinkingDisabledReason = 'BABEL_DEEPSEEK_THINKING=disabled';
-      } else {
-        thinkingDisabledReason = null;
-      }
-      const choice = (toolChoice ?? 'auto') as 'auto' | 'required';
-      return JSON.stringify({
-        model: this.model,
-        max_tokens: MAX_TOKENS,
-        temperature: 0,
+    const buildBody = () =>
+      this.buildNativeToolsWireBody(messages, tools, systemPrompt, {
         stream: true,
-        ...{ stream_options: { include_usage: true } },
-        tools,
-        // When thinking is forced on with tools, omit tool_choice (API rejects it).
-        ...(thinkingEnabled ? {} : { tool_choice: choice }),
-        ...(effort ? { reasoning_effort: effort } : {}),
-        thinking: { type: thinkingEnabled ? 'enabled' as const : 'disabled' as const },
-        messages: mapProviderMessagesToWire(messages, CHAT_SYSTEM_PROMPT, systemPrompt),
+        toolChoice: toolChoice ?? 'auto',
       });
-    };
 
     const inferenceId = randomUUID();
     const preparedRequest = prepareProviderRequest({

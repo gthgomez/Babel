@@ -38,7 +38,7 @@ assert.equal(result.status, 0, result.stderr)
 assert.equal(summary.status, 'complete', summary.errors.join(', '))
 if (mode === 'native') {
   const cases = summary.tests.filter(t => t.id.startsWith('ripgrep wrapper (when available) /'))
-  assert.equal(cases.length, 6, 'All six native cases must execute')
+  assert.equal(cases.length, 7, 'All seven native cases must execute')
   assert.ok(cases.every(t => t.result === 'passed'), 'Native cases must assert, rather than skip')
 }
 console.log(JSON.stringify({ mode, passed: summary.passed, skipped: summary.skipped }))

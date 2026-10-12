@@ -63,8 +63,12 @@ export function captureWorkspaceRevisionIdentity(projectRoot: string): Workspace
       const gitCommitHash = String(head.stdout ?? '').trim() || null
       const fileHashes: Record<string, string> = {}
       const paths = String(files.stdout ?? '').split('\0').filter(Boolean)
+      let snapshotComplete = true
       for (const rel of paths) {
-        if (Object.keys(fileHashes).length >= 5000) break
+        if (Object.keys(fileHashes).length >= 5000) {
+          snapshotComplete = false
+          break
+        }
         if (isCredentialReadPath(rel)) continue
         try {
           const absolute = join(projectRoot, rel)
@@ -91,6 +95,7 @@ export function captureWorkspaceRevisionIdentity(projectRoot: string): Workspace
         compositeTreeHash: createHash('sha256').update(state).digest('hex').slice(0, 32),
         fileHashes,
         capturedAt,
+        snapshotComplete,
       }
     }
   } catch {
@@ -98,6 +103,7 @@ export function captureWorkspaceRevisionIdentity(projectRoot: string): Workspace
   }
 
   const fileHashes: Record<string, string> = {}
+  let snapshotComplete = true
   const queue = [projectRoot]
   while (queue.length > 0 && Object.keys(fileHashes).length < 5000) {
     const dir = queue.shift()!
@@ -126,14 +132,17 @@ export function captureWorkspaceRevisionIdentity(projectRoot: string): Workspace
           // A concurrently changed file is represented by its absence.
         }
       }
-      if (Object.keys(fileHashes).length >= 5000) break
+      if (Object.keys(fileHashes).length >= 5000) {
+        snapshotComplete = false
+        break
+      }
     }
   }
   const compositeTreeHash = createHash('sha256')
     .update(Object.entries(fileHashes).sort().map(([path, hash]) => `${path}:${hash}`).join('\n'))
     .digest('hex')
     .slice(0, 32)
-  return { gitCommitHash: null, compositeTreeHash, fileHashes, capturedAt }
+  return { gitCommitHash: null, compositeTreeHash, fileHashes, capturedAt, snapshotComplete }
 }
 
 export type CapabilityDenialReason =

@@ -38,6 +38,14 @@ type TestRunner = {
   execute: () => Promise<{ type: 'completion'; answer: string }>;
   executeRaw: () => Promise<string>;
   getLastInvocationMetadata: () => null;
+  /** Fixture-only: satisfies compaction admission without implying production wire parity. */
+  buildNativeToolsWireBody: (
+    messages: Array<{ role: string; content?: unknown }>,
+    tools: unknown[],
+    systemPrompt?: string,
+    options?: { stream?: boolean },
+  ) => string;
+  getNativeRequestReservedCompletionTokens: () => number;
 };
 
 const FIXTURE_PROVIDER_POLICY: ResolvedModelPolicy = {
@@ -60,6 +68,29 @@ const FIXTURE_PROVIDER_POLICY: ResolvedModelPolicy = {
   contextLimit: 128_000,
   maxOutputTokens: 4_096,
   nativeToolUse: true,
+};
+
+/** Fixture-only compaction admission wire (not production transport parity). */
+const fixtureNativeWireHooks = {
+  buildNativeToolsWireBody(
+    messages: Array<{ role: string; content?: unknown }>,
+    tools: unknown[],
+    _systemPrompt?: string,
+    options: { stream?: boolean } = {},
+  ): string {
+    return JSON.stringify({
+      model: FIXTURE_PROVIDER_POLICY.providerModelId,
+      stream: options.stream ?? true,
+      max_tokens: FIXTURE_PROVIDER_POLICY.maxOutputTokens ?? 4_096,
+      temperature: 0,
+      tools,
+      tool_choice: 'auto',
+      messages,
+    });
+  },
+  getNativeRequestReservedCompletionTokens(): number {
+    return FIXTURE_PROVIDER_POLICY.maxOutputTokens ?? 4_096;
+  },
 };
 
 const require = createRequire(import.meta.url);
@@ -91,6 +122,7 @@ function makeRunner(
     getLastInvocationMetadata() {
       return null;
     },
+    ...fixtureNativeWireHooks,
   };
 }
 
@@ -502,6 +534,7 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
         getLastInvocationMetadata() {
           return null;
         },
+        ...fixtureNativeWireHooks,
       };
       const engine = makeEngine(fixture.project, runId, runner);
       const events = await collectStream(engine.submitMessageStream('exercise provider interruption'));
@@ -559,6 +592,7 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
         async execute() { return { type: 'completion', answer: 'fixture complete' }; },
         async executeRaw() { return 'fixture complete'; },
         getLastInvocationMetadata() { return null; },
+        ...fixtureNativeWireHooks,
       };
       mkdirSync(fixture.runs, { recursive: true });
       const opened = openSessionAdmissionStore('prepared-admission');

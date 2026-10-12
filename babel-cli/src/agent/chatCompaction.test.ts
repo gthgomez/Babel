@@ -354,17 +354,17 @@ describe('LLMSummarizeCompaction', () => {
       // (CompactionManager always passes the resolved model).
       assert.strictEqual(strategy.canApply(messages, 10000, 100), false);
       assert.strictEqual(
-        strategy.canApply(messages, 10000, 100, { model: 'Qwen/Qwen3-32B-Instruct' }),
+        strategy.canApply(messages, 10000, 100, { model: 'Qwen/Qwen3-32B-Instruct', maxTokens: 100 }),
         false,
       );
       assert.strictEqual(
-        strategy.canApply(messages, 10000, 100, { model: resolveCompactionModelId({}) }),
+        strategy.canApply(messages, 10000, 100, { model: resolveCompactionModelId({}), maxTokens: 100 }),
         false,
       );
 
       // A coherent Anthropic model is allowed against the Anthropic endpoint.
       assert.strictEqual(
-        strategy.canApply(messages, 10000, 100, { model: 'claude-3-5-haiku-latest' }),
+        strategy.canApply(messages, 10000, 100, { model: 'claude-3-5-haiku-latest', maxTokens: 100 }),
         true,
       );
 
@@ -372,12 +372,12 @@ describe('LLMSummarizeCompaction', () => {
       // model coherent again...
       process.env['BABEL_COMPACTION_API_BASE'] = 'https://api.deepinfra.com/v1/openai/chat/completions';
       assert.strictEqual(
-        strategy.canApply(messages, 10000, 100, { model: 'Qwen/Qwen3-32B-Instruct' }),
+        strategy.canApply(messages, 10000, 100, { model: 'Qwen/Qwen3-32B-Instruct', maxTokens: 100 }),
         true,
       );
       // ...but an Anthropic model must never be sent to it.
       assert.strictEqual(
-        strategy.canApply(messages, 10000, 100, { model: 'claude-3-5-haiku-latest' }),
+        strategy.canApply(messages, 10000, 100, { model: 'claude-3-5-haiku-latest', maxTokens: 100 }),
         false,
       );
     } finally {
@@ -699,7 +699,7 @@ describe('CompactionManager integration', () => {
       delete process.env['ANTHROPIC_API_KEY'];
       const onlyRouter = new LLMSummarizeCompaction({ keepRecentMessages: 2 });
       assert.strictEqual(
-        onlyRouter.canApply(messages, 10000, 100, { model: 'claude-3-5-haiku-latest' }),
+        onlyRouter.canApply(messages, 10000, 100, { model: 'claude-3-5-haiku-latest', maxTokens: 100 }),
         false,
       );
     } finally {

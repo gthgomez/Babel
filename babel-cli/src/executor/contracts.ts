@@ -49,6 +49,8 @@ export interface WorkspaceRevisionIdentity {
   compositeTreeHash: string
   fileHashes: Record<string, string>
   capturedAt: number
+  /** False when the snapshot hit a file cap or omitted unreadable paths. */
+  snapshotComplete?: boolean
 }
 
 /** Runtime-authoritative sources that may grant verifier authority. */
