@@ -113,8 +113,9 @@ Section "Install"
 SectionEnd
 
 ; A silent install (/S) must not linger: close the details window as soon as
-; the install succeeds instead of waiting on a user who is not there.
-Function .onInstSuccess
+; the install completes instead of waiting on a user who is not there.
+; SetAutoClose must be set before the install finishes, so .onInit is the hook.
+Function .onInit
   IfSilent silent_autoclose
   Goto autoclose_done
 silent_autoclose:
