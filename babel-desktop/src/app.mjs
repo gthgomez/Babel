@@ -12,6 +12,7 @@ let state = validPreview(saved) ? saved : createReference();
 state.model = MODEL_OPTIONS.includes(state.model) ? state.model : MODEL_OPTIONS[0];
 let transport = 'preview';
 let showAllSessions = false;
+let sessionsVisibleLimit = 8;
 let expandedFolders = new Set(['.']);
 let expandedTools = new Set();
 let activeFile = '';
@@ -147,11 +148,15 @@ function renderStatus(status) {
   if (activeRun) $('.composer-hints').style.display = 'none'; else $('.composer-hints').style.removeProperty('display');
 }
 function renderSessions() {
-  const visible = showAllSessions ? state.sessions : state.sessions.slice(0,8);
+  const cap = showAllSessions ? state.sessions.length : Math.max(sessionsVisibleLimit, 8);
+  const visible = state.sessions.slice(0, cap);
   $('#sessions').innerHTML = visible.map(s => `<button class="session-button ${s.id === state.activeId ? 'active' : ''}" data-action="session" data-id="${e(s.id)}" aria-current="${s.id === state.activeId ? 'page' : 'false'}" title="${e(s.title)}${transport === 'preview' ? ' · local preview' : ' · one-shot run history'}"><span>${e(s.title)}</span></button>`).join('');
-  const moreOnDisk=savedSessionList.total > state.sessions.length;
-  $('#show-more').hidden = state.sessions.length <= 8 && !moreOnDisk;
-  $('#show-more').textContent = moreOnDisk ? `Load more saved chats (${savedSessionList.total} on disk)...` : (showAllSessions ? 'Show less...' : 'Show more...');
+  const moreOnDisk=savedSessionList.total > state.sessions.filter(s => s.saved).length;
+  const canExpandLocal=state.sessions.length > visible.length;
+  $('#show-more').hidden = !moreOnDisk && !canExpandLocal;
+  $('#show-more').textContent = moreOnDisk
+    ? `Load more saved chats (${savedSessionList.total} on disk)...`
+    : (showAllSessions ? 'Show less...' : 'Show more...');
 }
 function treeMarkup(nodes, parent = '') {
   return nodes.map(n => {
@@ -577,15 +582,27 @@ async function openSavedSession(session, {olderOffset = 0} = {}) {
   session.history = loaded.history ?? null;
 }
 async function loadMoreSavedSessions() {
-  if (!native || transport !== 'live') { showAllSessions = !showAllSessions; renderSessions(); return; }
-  if (savedSessionList.total <= state.sessions.filter(s => s.saved).length) { showAllSessions = !showAllSessions; renderSessions(); return; }
-  const nextOffset = state.sessions.filter(s => s.saved).length;
-  const saved = await native.listSessions({limit: savedSessionList.limit, offset: nextOffset});
-  for (const item of saved.sessions ?? []) {
-    if (state.sessions.some(session => session.babelSessionId === item.id)) continue;
-    state.sessions.push({ id: id(), title: item.title || 'Saved chat', messages: [], babelSessionId: item.id, saved: true, messageCount: item.messages });
+  if (!native || transport !== 'live') {
+    showAllSessions = !showAllSessions;
+    sessionsVisibleLimit = showAllSessions ? state.sessions.length : 8;
+    renderSessions();
+    return;
   }
-  savedSessionList.total = saved.total ?? savedSessionList.total;
+  const savedCount = state.sessions.filter(s => s.saved).length;
+  if (savedSessionList.total > savedCount) {
+    const saved = await native.listSessions({limit: savedSessionList.limit, offset: savedCount});
+    for (const item of saved.sessions ?? []) {
+      if (state.sessions.some(session => session.babelSessionId === item.id)) continue;
+      state.sessions.push({ id: id(), title: item.title || 'Saved chat', messages: [], babelSessionId: item.id, saved: true, messageCount: item.messages });
+    }
+    savedSessionList.total = saved.total ?? savedSessionList.total;
+    sessionsVisibleLimit = state.sessions.length;
+    showAllSessions = true;
+    renderSessions();
+    return;
+  }
+  showAllSessions = !showAllSessions;
+  sessionsVisibleLimit = showAllSessions ? state.sessions.length : 8;
   renderSessions();
 }
 $('.skip-link').addEventListener('click',event=>{event.preventDefault();$('#composer-input').focus();});

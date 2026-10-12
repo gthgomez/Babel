@@ -63,6 +63,44 @@ def main():
         emit(run_id,kind='exit',code=0)
         assert page.locator('#main-status').inner_text()=='Unverified'
         checks.append('incomplete event stream cannot report verified completion')
+        page.evaluate('''() => {
+          window.babelDesktop.listQualifiedProviders = async () => ([
+            {id:'deepseek',label:'DeepSeek',requiresApiKey:true,local:false,routes:[{id:'deepseek-v4-pro',label:'deepseek-v4-pro'}]},
+            {id:'ollama',label:'Ollama',requiresApiKey:false,local:true,routes:[{id:'deepseek-v4-flash',label:'local flash'}]}
+          ]);
+          window.babelDesktop.readProviderRoute = async () => ({provider:'deepseek',model:'deepseek-v4-pro'});
+          window.babelDesktop.saveProviderRoute = async () => ({route:{provider:'deepseek',model:'deepseek-v4-pro'},credentialUpdated:false});
+          window.babelDesktop.listSessions = async (options) => ({
+            sessions:[{id:'chat-1',title:'One',messages:3},{id:'chat-2',title:'Two',messages:1}],
+            total:4, offset:(options&&options.offset)||0, limit:(options&&options.limit)||30
+          });
+          window.babelDesktop.openSession = async (sessionId, options) => ({
+            id:sessionId,
+            messages:[{role:'user',text:'hello'},{role:'assistant',text:'world',status:'unverified'}],
+            history:{totalMessages:2,hasOlder:false,olderOffset:(options&&options.olderOffset)||0,messageLimit:150}
+          });
+        }''')
+        page.locator('[data-action="configure-provider"]').click()
+        assert 'CONFIGURE AI PROVIDER' in page.locator('#dialog-title').inner_text()
+        page.locator('[data-action="close-dialog"]').click()
+        assert page.locator('#dialog').is_hidden()
+        checks.append('provider dialog can cancel without saving')
+        page.evaluate('''async () => {
+          window.__sessionCalls = [];
+          const native = window.babelDesktop;
+          window.babelDesktop.listSessions = async (options) => {
+            window.__sessionCalls.push(options||{});
+            const offset = options?.offset||0;
+            const batch = offset===0 ? [{id:'chat-1',title:'One',messages:3}] : [{id:'chat-3',title:'Three',messages:2}];
+            return {sessions:batch,total:2,offset,limit:30};
+          };
+          window.babelDesktop.readProviderRoute = async () => ({provider:'deepseek',model:'deepseek-v4-pro'});
+          await native.getInfo();
+        }''')
+        page.locator('[data-action="use-live"]').click()
+        page.locator('#show-more').click()
+        assert page.evaluate('window.__sessionCalls.length') >= 1
+        checks.append('session list requests paging options from native bridge')
         assert not errors,errors
         browser.close()
     report={'passed':len(checks),'basis':'Native API test double; not a real Babel or Electron execution','checks':checks,'errors':errors}

@@ -37,27 +37,48 @@ function parseTranscriptLine(line) {
   };
 }
 
-/**
- * Parse transcript text into messages with optional tail/offset windows.
- * @returns {{messages:object[], total:number, windowStart:number, hasOlder:boolean, partialTail:boolean}}
- */
-export function messagesFromTranscript(text, {limit = HISTORY_MESSAGE_WINDOW, olderOffset = 0} = {}) {
-  const all = [];
+export function parseTranscriptMessages(text) {
+  const messages = [];
   for (const line of String(text ?? '').split('\n')) {
     const message = parseTranscriptLine(line);
-    if (message) all.push(message);
+    if (message) messages.push(message);
   }
+  return messages;
+}
+
+/** Head scan for titles and counts without tail biasing. */
+export function scanTranscriptHead(text) {
+  const messages = parseTranscriptMessages(text);
+  const firstUser = messages.find(message => message.role === 'user');
+  const title = (firstUser?.text || 'Saved chat').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Saved chat';
+  return {title, total: messages.length, firstUserText: firstUser?.text ?? null};
+}
+
+/**
+ * Slice a parsed transcript: newest page at olderOffset=0; olderOffset skips that many messages from the end.
+ * @returns {{messages:object[], total:number, windowStart:number, windowEnd:number, hasOlder:boolean, assistantsBefore:number, totalAssistants:number}}
+ */
+export function sliceTranscriptWindow(all, {limit = HISTORY_MESSAGE_WINDOW, olderOffset = 0} = {}) {
   const total = all.length;
-  const skipFromStart = Math.max(0, total - olderOffset - limit);
-  const windowEnd = Math.min(total, skipFromStart + limit);
-  const messages = all.slice(skipFromStart, windowEnd);
+  const end = Math.max(0, total - olderOffset);
+  const start = Math.max(0, end - limit);
+  const messages = all.slice(start, end);
+  const assistantsBefore = all.slice(0, start).filter(message => message.role === 'assistant').length;
+  const totalAssistants = all.filter(message => message.role === 'assistant').length;
   return {
     messages,
     total,
-    windowStart: skipFromStart,
-    hasOlder: skipFromStart > 0,
+    windowStart: start,
+    windowEnd: end,
+    hasOlder: start > 0,
+    assistantsBefore,
+    totalAssistants,
     partialTail: false,
   };
+}
+
+export function messagesFromTranscript(text, options = {}) {
+  return sliceTranscriptWindow(parseTranscriptMessages(text), options);
 }
 
 async function readTranscriptText(transcriptPath, fileSize) {
@@ -84,10 +105,7 @@ async function titleFromTranscript(transcriptPath, fileSize) {
   const buffer = Buffer.alloc(scanBytes);
   await handle.read(buffer, 0, scanBytes, 0);
   await handle.close();
-  const messages = messagesFromTranscript(buffer.toString('utf8'), {limit: HISTORY_MESSAGE_WINDOW, olderOffset: 0});
-  const firstUser = messages.messages.find(message => message.role === 'user');
-  const title = (firstUser?.text || 'Saved chat').replace(/\s+/g, ' ').trim().slice(0, 80);
-  return title || 'Saved chat';
+  return scanTranscriptHead(buffer.toString('utf8')).title;
 }
 
 /** Ordered terminal outcomes from durable session-events.jsonl when present. */
@@ -124,7 +142,7 @@ export async function terminalOutcomesFromSessionEvents(sessionDir) {
   return {ordered, byTurnId};
 }
 
-function applySessionEventOutcomes(messages, {ordered, byTurnId}) {
+function applySessionEventOutcomes(messages, {ordered, byTurnId}, {assistantIndexOffset = 0, totalAssistantsInTranscript = null} = {}) {
   const assistantCount = messages.filter(message => message.role === 'assistant').length;
   if (assistantCount === 0) return messages;
   if (byTurnId.size > 0) {
@@ -132,20 +150,31 @@ function applySessionEventOutcomes(messages, {ordered, byTurnId}) {
     return messages.map(message => {
       if (message.role !== 'assistant') return message;
       assistantOrdinal += 1;
-      const turnKey = message.turn_id !== undefined && message.turn_id !== null
-        ? String(message.turn_id)
-        : String(assistantOrdinal);
-      const outcome = byTurnId.get(turnKey);
-      if (typeof outcome !== 'string') return message;
-      return {...message, status: statusFromTerminalOutcome(outcome)};
+      if (message.turn_id !== undefined && message.turn_id !== null) {
+        const outcome = byTurnId.get(String(message.turn_id));
+        if (typeof outcome === 'string') {
+          return {...message, status: statusFromTerminalOutcome(outcome)};
+        }
+        return message;
+      }
+      const globalOrdinal = assistantIndexOffset + assistantOrdinal;
+      const outcome = byTurnId.get(String(globalOrdinal));
+      if (typeof outcome === 'string') {
+        return {...message, status: statusFromTerminalOutcome(outcome)};
+      }
+      return message;
     });
   }
-  if (!ordered.length || ordered.length !== assistantCount) return messages;
-  let index = 0;
+  if (!ordered.length) return messages;
+  if (totalAssistantsInTranscript !== null && ordered.length !== totalAssistantsInTranscript) {
+    return messages;
+  }
+  let assistantOrdinal = 0;
   return messages.map(message => {
     if (message.role !== 'assistant') return message;
-    const outcome = ordered[index];
-    index += 1;
+    assistantOrdinal += 1;
+    const globalIndex = assistantIndexOffset + assistantOrdinal - 1;
+    const outcome = ordered[globalIndex];
     if (typeof outcome !== 'string') return message;
     return {...message, status: statusFromTerminalOutcome(outcome)};
   });
@@ -165,10 +194,9 @@ export async function listSavedChats(packageRoot, { limit = HISTORY_SESSION_PAGE
       let messageCount = null;
       let title = 'Saved chat';
       if (!oversize) {
-        const parsed = messagesFromTranscript(await readFile(transcript, 'utf8'));
-        messageCount = parsed.total;
-        const firstUser = parsed.messages.find(message => message.role === 'user');
-        title = (firstUser?.text || 'Saved chat').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Saved chat';
+        const head = scanTranscriptHead(await readFile(transcript, 'utf8'));
+        messageCount = head.total;
+        title = head.title;
       } else {
         title = await titleFromTranscript(transcript, info.size);
       }
@@ -193,25 +221,39 @@ export async function readSavedChat(packageRoot, sessionId, {runsDir, olderOffse
   const info = await stat(transcript);
   if (!info.isFile()) throw new Error('Saved chat is unavailable');
   const {text, partialTail} = await readTranscriptText(transcript, info.size);
-  const window = messagesFromTranscript(text, {limit: messageLimit, olderOffset});
+  const all = parseTranscriptMessages(text);
+  const window = partialTail
+    ? {
+      ...sliceTranscriptWindow(all, {limit: messageLimit, olderOffset: 0}),
+      hasOlder: false,
+      assistantsBefore: 0,
+      totalAssistants: all.filter(message => message.role === 'assistant').length,
+      partialTail: true,
+      total: null,
+    }
+    : sliceTranscriptWindow(all, {limit: messageLimit, olderOffset});
   const sessionDir = join(runsSessionsDir(packageRoot, runsDir), sessionId);
   const outcomeIndex = await terminalOutcomesFromSessionEvents(sessionDir);
-  const messages = applySessionEventOutcomes(window.messages, outcomeIndex);
+  const messages = partialTail
+    ? window.messages
+    : applySessionEventOutcomes(window.messages, outcomeIndex, {
+      assistantIndexOffset: window.assistantsBefore,
+      totalAssistantsInTranscript: window.totalAssistants,
+    });
   return {
     id: sessionId,
     messages,
     history: {
       totalMessages: partialTail ? null : window.total,
       windowStart: window.windowStart,
+      windowEnd: window.windowEnd,
       hasOlder: window.hasOlder && !partialTail,
       tailOnly: partialTail,
       olderOffset,
       messageLimit,
       transcriptBytes: info.size,
       oversize: info.size > MAX_TRANSCRIPT_BYTES,
-      partialTail,
       outcomesBounded: Boolean(outcomeIndex.bounded),
-      messageLimit,
     },
   };
 }

@@ -5,23 +5,80 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {
   HISTORY_MESSAGE_WINDOW,
+  MAX_TRANSCRIPT_BYTES,
   listSavedChats,
   messagesFromTranscript,
   readSavedChat,
+  scanTranscriptHead,
 } from '../native/sessions.mjs';
 
-test('messagesFromTranscript keeps the latest window and exposes older navigation', () => {
+function messageTexts(messages) {
+  return messages.map(message => message.text);
+}
+
+function assertNoOverlap(a, b) {
+  const setB = new Set(messageTexts(b));
+  const overlap = messageTexts(a).filter(text => setB.has(text));
+  assert.equal(overlap.length, 0, `overlap: ${overlap.join(', ')}`);
+}
+
+test('160-message transcript: tail is 10–159 and olderOffset 150 is 0–9 without overlap', () => {
   const lines = [];
   for (let i = 0; i < 160; i += 1) {
     lines.push(JSON.stringify({role: i % 2 === 0 ? 'user' : 'assistant', content: `turn-${i}`}));
   }
-  const tail = messagesFromTranscript(lines.join('\n'), {limit: HISTORY_MESSAGE_WINDOW, olderOffset: 0});
-  assert.equal(tail.total, 160);
-  assert.equal(tail.messages.length, HISTORY_MESSAGE_WINDOW);
-  assert.equal(tail.messages.at(-1).text, 'turn-159');
-  assert.equal(tail.hasOlder, true);
-  const older = messagesFromTranscript(lines.join('\n'), {limit: HISTORY_MESSAGE_WINDOW, olderOffset: 150});
-  assert.equal(older.messages[0].text, 'turn-0');
+  const text = lines.join('\n');
+  const tail = messagesFromTranscript(text, {limit: HISTORY_MESSAGE_WINDOW, olderOffset: 0});
+  assert.equal(tail.windowStart, 10);
+  assert.equal(tail.windowEnd, 160);
+  assert.equal(messageTexts(tail.messages).at(-1), 'turn-159');
+  assert.equal(messageTexts(tail.messages)[0], 'turn-10');
+  const older = messagesFromTranscript(text, {limit: HISTORY_MESSAGE_WINDOW, olderOffset: 150});
+  assert.equal(older.windowStart, 0);
+  assert.equal(older.windowEnd, 10);
+  assert.equal(older.messages.length, 10);
+  assert.equal(messageTexts(older.messages)[0], 'turn-0');
+  assert.equal(messageTexts(older.messages).at(-1), 'turn-9');
+  assertNoOverlap(tail.messages, older.messages);
+});
+
+test('scanTranscriptHead uses the first user message for title, not the tail window', () => {
+  const lines = [];
+  lines.push(JSON.stringify({role: 'user', content: 'TRUE-FIRST-TITLE'}));
+  for (let i = 1; i < 160; i += 1) {
+    lines.push(JSON.stringify({role: i % 2 === 0 ? 'user' : 'assistant', content: `turn-${i}`}));
+  }
+  const head = scanTranscriptHead(lines.join('\n'));
+  assert.equal(head.title, 'TRUE-FIRST-TITLE');
+  const tail = messagesFromTranscript(lines.join('\n'));
+  assert.notEqual(tail.messages.find(message => message.role === 'user')?.text, 'TRUE-FIRST-TITLE');
+});
+
+test('ordinal session outcomes use global assistant index inside a truncated window', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-sessions-ordinal-'));
+  const desktop = join(root, 'babel-desktop');
+  const session = join(root, 'runs', 'chat-sessions', 'chat-ordinal');
+  await mkdir(desktop, {recursive: true});
+  await mkdir(session, {recursive: true});
+  const lines = [];
+  for (let turn = 1; turn <= 6; turn += 1) {
+    lines.push(JSON.stringify({role: 'user', content: `user-${turn}`}));
+    lines.push(JSON.stringify({role: 'assistant', content: `assistant-${turn}`}));
+  }
+  await writeFile(join(session, 'transcript.jsonl'), lines.join('\n') + '\n');
+  await writeFile(join(session, 'session-events.jsonl'), [
+    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
+    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
+    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
+    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
+    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
+    JSON.stringify({kind: 'turn_ended', outcome: 'VERIFIED_COMPLETE'}),
+  ].join('\n') + '\n');
+  const opened = await readSavedChat(desktop, 'chat-ordinal', {runsDir: join(root, 'runs')});
+  const lastAssistant = opened.messages.filter(message => message.role === 'assistant').at(-1);
+  assert.equal(lastAssistant?.text, 'assistant-6');
+  assert.equal(lastAssistant?.status, 'complete');
+  await rm(root, {recursive: true, force: true});
 });
 
 test('listSavedChats paginates sessions and keeps oversize transcripts discoverable', async () => {
@@ -42,20 +99,38 @@ test('listSavedChats paginates sessions and keeps oversize transcripts discovera
   await rm(root, {recursive: true, force: true});
 });
 
-test('readSavedChat can load a distinctive final turn from a long transcript', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'babel-sessions-long-'));
+test('oversize malformed unicode and partial-line transcripts remain discoverable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-sessions-oversize-'));
   const desktop = join(root, 'babel-desktop');
-  const session = join(root, 'runs', 'chat-sessions', 'chat-long');
+  const session = join(root, 'runs', 'chat-sessions', 'chat-big');
+  await mkdir(desktop, {recursive: true});
+  await mkdir(session, {recursive: true});
+  const prefix = `${JSON.stringify({role: 'user', content: 'Оversize-unicode-title-🙂'})}\n{broken json\n`;
+  const padding = 'x'.repeat(MAX_TRANSCRIPT_BYTES - Buffer.byteLength(prefix, 'utf8') + 1024);
+  await writeFile(join(session, 'transcript.jsonl'), prefix + padding + '\n', 'utf8');
+  const listed = await listSavedChats(desktop, {runsDir: join(root, 'runs')});
+  assert.equal(listed.sessions.length, 1);
+  assert.equal(listed.sessions[0].oversize, true);
+  assert.match(listed.sessions[0].title, /Оversize-unicode-title/);
+  const opened = await readSavedChat(desktop, 'chat-big', {runsDir: join(root, 'runs')});
+  assert.equal(opened.history.tailOnly, true);
+  await rm(root, {recursive: true, force: true});
+});
+
+test('readSavedChat pages earlier windows without duplicating the tail', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-sessions-dup-'));
+  const desktop = join(root, 'babel-desktop');
+  const session = join(root, 'runs', 'chat-sessions', 'chat-dup');
   await mkdir(desktop, {recursive: true});
   await mkdir(session, {recursive: true});
   const lines = [];
-  for (let i = 0; i < 155; i += 1) {
+  for (let i = 0; i < 200; i += 1) {
     lines.push(JSON.stringify({role: 'user', content: `msg-${i}`}));
   }
-  lines.push(JSON.stringify({role: 'user', content: 'DISTINCTIVE-FINAL-TURN'}));
   await writeFile(join(session, 'transcript.jsonl'), lines.join('\n') + '\n');
-  const opened = await readSavedChat(desktop, 'chat-long', {runsDir: join(root, 'runs')});
-  assert.ok(opened.messages.some(message => message.text === 'DISTINCTIVE-FINAL-TURN'));
-  assert.equal(opened.history.hasOlder, true);
+  const tail = await readSavedChat(desktop, 'chat-dup', {runsDir: join(root, 'runs'), olderOffset: 0});
+  const older = await readSavedChat(desktop, 'chat-dup', {runsDir: join(root, 'runs'), olderOffset: 150});
+  assertNoOverlap(tail.messages, older.messages);
+  assert.ok(older.messages.some(message => message.text === 'msg-0'));
   await rm(root, {recursive: true, force: true});
 });
