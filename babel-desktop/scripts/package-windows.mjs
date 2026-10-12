@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {homedir} from 'node:os';
+import {assertAppImportsResolve} from './lib/verify-app-imports.mjs';
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(desktop, '..');
@@ -47,6 +48,7 @@ const app = join(bundle, 'resources', 'app');
 mkdirSync(app, {recursive:true});
 for (const name of ['native','src','dist','assets','LICENSE','NOTICE']) cpSync(join(desktop,name), join(app,name), {recursive:true});
 writeFileSync(join(app,'package.json'), JSON.stringify({name:'babel-north-star-desktop',version,main:'native/main.mjs',type:'module',private:true},null,2));
+assertAppImportsResolve(app);
 const runtime = join(bundle,'resources','babel-runtime');
 const cli = join(runtime,'cli');
 mkdirSync(cli, {recursive:true});
