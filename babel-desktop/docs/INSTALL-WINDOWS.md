@@ -51,6 +51,8 @@ The right-hand **Runtime** panel shows the exact engine: Desktop version, CLI pa
 
 Checksum verification is not publisher authentication, and neither channel silently installs unsigned code.
 
+As of 2026-10-12 the GitHub release `v0.1.1` ships the portable ZIP and npm tarball evidence but **does not include a Setup.exe asset**; install guidance must not promise an installer that is absent from the published release. Future owner-authorized releases should attach the qualified Setup.exe produced by the packaging workflow.
+
 This is an **unsigned private preview**, not a public release or a signed installer. Windows SmartScreen may flag an unfamiliar unsigned application. No code-signing identity or SmartScreen reputation is provided. The portable ZIP has no Start Menu entry or uninstaller; the Setup.exe provides both, plus staged upgrade and rollback. Automated in-place updates of a packaged install are not implemented. Do not disable Windows security settings to run it. If your policy blocks unsigned software, retain the artifact for review and wait for a signed distribution.
 
 To remove the portable application, quit it and delete its extracted directory. Profile data persists separately; remove it only if you intentionally want to erase settings and sessions. To update, extract a newer verified preview into a separate directory, keep the same profile, and retain the old build for rollback. Cross-version profile migration is not qualified.

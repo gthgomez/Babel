@@ -20,6 +20,12 @@ System typography follows Cascadia Code / Cascadia Mono / Consolas / Liberation 
 
 ## Validation discipline
 
+Evidence kinds are distinct:
+
+- **Source/fixture tests** (`native_ui_test.py`, renderer unit tests) use a native API double or fixtures; they do not prove a real installed Electron session.
+- **Packaged-native acceptance** requires launching the actual Electron main/preload/renderer against a built Windows artifact (installer lifecycle and bootstrap probes). That path is runnable in CI on `windows-latest` but may be blocked in environments without a Windows GUI runner; a renderer-double pass never substitutes for packaged-native proof.
+- **Live-provider** journeys require separately authorized credentials and are out of scope for ordinary CI qualification.
+
 The screenshots in `artifacts/` are actual Chromium renders of this implementation. The whole reference is never used as the application's background: text, controls, cards, rows, and panels are real DOM elements. Only the logo crop is a raster image.
 
 Layout dimensions and the presence of both cards and all four tool rows are checked in the browser test. Exact pixel-diff thresholds are not claimed; different source-font rendering and the documented honesty corrections would need masking before a useful automated image comparison.
