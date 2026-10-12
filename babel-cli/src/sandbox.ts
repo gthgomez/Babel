@@ -509,6 +509,10 @@ export function spawnCommandAsync(
     let witnessTerminalRecorded = false;
     let timeout: NodeJS.Timeout | null = null;
     let abortSettle: NodeJS.Timeout | null = null;
+    let releaseAbortPhysicalClose: (() => void) | undefined;
+    const abortPhysicalClose = new Promise<void>((resolveAbortPhysicalClose) => {
+      releaseAbortPhysicalClose = resolveAbortPhysicalClose;
+    });
 
     const recordWitnessTerminal = (status: number | null, error?: Error) => {
       if (witnessTerminalRecorded || !executionId) return;
@@ -570,17 +574,10 @@ export function spawnCommandAsync(
               if (!groupExited) {
                 throw new Error(`Aborted process group ${pid} did not exit after tree termination`);
               }
-              await new Promise<void>((resolveClose) => {
-                if (child.exitCode != null || child.signalCode != null) {
-                  resolveClose();
-                  return;
-                }
-                child.once('close', () => resolveClose());
-              });
+              await abortPhysicalClose;
               if (complete) return;
               complete = true;
               clearTimeout(closeTimeout);
-              if (executionId) options.processWitness?.killed(processInput, executionId);
               resolveTermination();
             } catch (error) {
               if (complete) return;
@@ -634,6 +631,8 @@ export function spawnCommandAsync(
     child.once('close', (code) => {
       if (aborted) {
         recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} aborted`));
+        if (executionId) options.processWitness?.killed(processInput, executionId);
+        releaseAbortPhysicalClose?.();
         finish(code ?? 1, new Error(`spawn ${executable} aborted`));
       } else if (timedOut) {
         recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} ETIMEDOUT`));
