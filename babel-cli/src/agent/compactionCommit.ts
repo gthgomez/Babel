@@ -991,19 +991,8 @@ export interface ChatEngineCompactionHost {
   compactionManager?: {
     compactWithResult(
       messages: ChatMessage[],
-      options: {
-        model: string;
-        maxTokens: number;
-        signal?: AbortSignal;
-        callbacks?: RunnerCallbacks;
-      },
-    ): Promise<{
-      messages: ChatMessage[];
-      strategy: string;
-      tokensBefore: number;
-      tokensAfter: number;
-      changed: boolean;
-    }>;
+      options: import('./chatCompaction.js').CompactionOptions,
+    ): Promise<import('./chatCompaction.js').CompactionManagerResult>;
   };
   options: { task: string; model?: string };
   modelPolicy?: {
@@ -1239,6 +1228,15 @@ export async function runChatEngineCompaction(
       try {
         const exactLockedGlm =
           host.modelPolicy?.providerModelId === LIVE_OPENROUTER_MODEL_ID;
+        const eligibilityTokenCap = Math.max(
+          0,
+          host.limits.maxEstimatedTokens - reserve,
+        );
+        const compactionReason = host.forceCompaction === true
+          ? 'force'
+          : tokenTriggered
+            ? 'token_threshold'
+            : 'reserve_headroom';
         const mgr = await host.compactionManager.compactWithResult(host.conversation, {
           model: host.resolveModel({
             ...(host.modelPolicy?.providerModelId
@@ -1252,13 +1250,37 @@ export async function runChatEngineCompaction(
                 : {}),
           }),
           maxTokens: host.limits.maxEstimatedTokens,
+          requestContext: {
+            reason: compactionReason,
+            historyTokenEstimate: tokenEstimate,
+            eligibilityTokenCap,
+            maxTokens: host.limits.maxEstimatedTokens,
+            compactionRequested: true,
+          },
           signal: host.abortSignal,
           ...(host.providerCallbacks ? { callbacks: host.providerCallbacks } : {}),
           ...(host.onCompactionUsage ? { onUsageRecorded: host.onCompactionUsage } : {}),
         });
         if (!ownerIsCurrent()) return null;
+        if (!mgr.changed && (mgr.status === 'noop' || mgr.status === 'cannot_fit')) {
+          await applyHeuristic();
+          if (!ownerIsCurrent()) return null;
+          const afterHeuristic = host.conversation.length;
+          if (mode != null && changed) {
+            return {
+              mode,
+              beforeMessages: before,
+              afterMessages: afterHeuristic,
+              changed,
+              message: `[Context compacted…] ${before}→${afterHeuristic} messages (${mode})`,
+              ...(commit ? { commit } : {}),
+            };
+          }
+          return null;
+        }
         if (mgr.changed) {
           beginCondensationFact(mgr.tokensBefore);
+          const beforeRequest = serializedProviderRequest(host.threadLog);
           commit = await commitCompaction({
             strategyMessages: mgr.messages,
             priorConversation: host.conversation,
@@ -1276,6 +1298,13 @@ export async function runChatEngineCompaction(
             },
             blockOnPersistFailure: true,
             isOwnerCurrent: ownerIsCurrent,
+            validateCommit: () => {
+              const afterRequest = serializedProviderRequest(host.threadLog);
+              const tokenShrink = mgr.tokensAfter < mgr.tokensBefore;
+              return ownerIsCurrent()
+                && (host.options.task.length === 0 || afterRequest.includes(host.options.task))
+                && (afterRequest.length < beforeRequest.length || tokenShrink);
+            },
           });
           if (commit.status !== 'committed') {
             if (commit.status === 'noop') return null;

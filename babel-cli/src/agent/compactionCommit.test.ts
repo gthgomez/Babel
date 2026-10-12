@@ -727,6 +727,7 @@ describe('H1 compaction lifecycle result', () => {
                 content: 'A and C remain visible', provenance: 'model', authoritative: false,
               }],
               strategy: 'llm-summarize', tokensBefore: 100, tokensAfter: 20, changed: true,
+              status: 'applied', strategyErrors: [],
             };
           },
         },
@@ -811,6 +812,8 @@ describe('H1 compaction lifecycle result', () => {
           tokensBefore: 100,
           tokensAfter: 80,
           changed: true,
+          status: 'applied',
+          strategyErrors: [],
         }),
       },
       options: { task: 'preserve context', model: 'm' },

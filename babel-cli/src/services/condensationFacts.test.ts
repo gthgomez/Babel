@@ -365,6 +365,8 @@ test('A5: ChatEngine inline compaction emits a paired fact pair with the fenced 
       tokensBefore: 300,
       tokensAfter: 20,
       changed: true,
+      status: 'applied',
+      strategyErrors: [],
     }),
   });
 
@@ -407,6 +409,8 @@ test('A5: interrupted ChatEngine compaction leaves the started fact visibly unpa
         tokensBefore: 300,
         tokensAfter: 20,
         changed: true,
+        status: 'applied',
+        strategyErrors: [],
       }),
     },
   );

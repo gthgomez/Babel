@@ -318,6 +318,8 @@ test('P11 stale compaction is discarded before live or durable application', asy
           tokensBefore: 100,
           tokensAfter: 20,
           changed: true,
+          status: 'applied',
+          strategyErrors: [],
         };
       },
     },
