@@ -119,8 +119,5 @@ test('silent installs auto-close the details window', () => {
     stagedBootstrap: `C:${B}b`,
     outFile: `C:${B}o${B}setup.exe`,
   });
-  assert.match(nsi, /Function \.onInit/, 'must hook installer init');
-  const hook = nsi.slice(nsi.indexOf('Function .onInit'));
-  assert.ok(hook.includes('IfSilent'), 'auto-close must be gated on silent mode');
-  assert.ok(hook.indexOf('IfSilent') < hook.indexOf('SetAutoClose true'), 'silent runs must set SetAutoClose true');
+  assert.match(nsi, /AutoCloseWindow true/, 'install window must auto-close when done (silent /S must not linger)');
 });

@@ -67,6 +67,9 @@ Unicode true
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 SilentInstall normal
+; Close the install window as soon as the install completes, in silent (/S)
+; mode and interactive alike; the same transcript is written to install-log.txt.
+AutoCloseWindow true
 
 !define PRODUCT_NAME "Babel Desktop"
 !define PRODUCT_VERSION "${version}"
@@ -111,17 +114,6 @@ Section "Install"
   DetailPrint "Installation complete. Use the Babel Desktop Start Menu shortcut to launch."
   SetErrorLevel 0
 SectionEnd
-
-; A silent install (/S) must not linger: close the details window as soon as
-; the install completes instead of waiting on a user who is not there.
-; SetAutoClose must be set before the install finishes, so .onInit is the hook.
-Function .onInit
-  IfSilent silent_autoclose
-  Goto autoclose_done
-silent_autoclose:
-  SetAutoClose true
-autoclose_done:
-FunctionEnd
 `.trimStart();
 }
 
