@@ -202,15 +202,22 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
   };
 }
 
+const KERNEL_MUTATION_TOOLS = new Set([
+  "file_write",
+  "shell_exec",
+  "test_run",
+]);
+
 /** Create the mode-neutral executor substrate without selecting an orchestrator. */
 export function createExecutorKernel(
   mode: BabelMode = "chat",
   services: ChatEngineServices = createChatEngineServices(),
 ): ExecutorKernel {
+  const policy = modePolicyFor(mode);
   return {
     version: EXECUTOR_KERNEL_VERSION,
     contractVersion: EXECUTOR_CONTRACT_VERSION,
-    policy: modePolicyFor(mode),
+    policy,
     services,
     completion: {
       decide: decideCompletion,
@@ -219,6 +226,16 @@ export function createExecutorKernel(
     },
     tools: {
       async execute(request, context) {
+        if (
+          policy.mutationPolicy === "read_only" &&
+          KERNEL_MUTATION_TOOLS.has(request.tool)
+        ) {
+          return {
+            exit_code: 1,
+            stdout: "",
+            stderr: "plan_read_only: mutation tools are denied in Plan mode at the executor kernel boundary.",
+          };
+        }
         const result = await executeActionWithPolicy(
           requestToAgentAction(request),
           "workspace_write",

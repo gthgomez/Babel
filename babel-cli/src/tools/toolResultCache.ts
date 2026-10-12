@@ -33,7 +33,15 @@ const TOOL_CATEGORY: Record<string, string> = {
 };
 
 /** Tools whose execution may invalidate cached observations, including partial failures. */
-const MUTATING_TOOLS = new Set(['file_write', 'shell_exec', 'test_run']);
+const MUTATING_TOOLS = new Set([
+  'file_write',
+  'apply_patch',
+  'shell_exec',
+  'test_run',
+  'run_command',
+  'file_delete',
+  'file_move',
+]);
 
 function getTtlMs(toolName: string): number {
   const category = TOOL_CATEGORY[toolName];
