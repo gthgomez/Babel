@@ -3835,16 +3835,6 @@ export class ChatEngine {
 
   buildNativeCompactionAdmissionWireBody(): string {
     const runner = this.resolveDeliberationRunner();
-    const buildNative = (
-      runner as {
-        buildNativeToolsWireBody?: (
-          messages: ProviderMessage[],
-          tools: import("../runners/base.js").ToolDefinition[],
-          systemPrompt?: string,
-          options?: { stream?: boolean; toolChoice?: "auto" | "required" },
-        ) => string;
-      }
-    ).buildNativeToolsWireBody;
     const systemPrompt = this.getOrBuildSystemPrompt("native");
     const operation = this.lastTurnRuntime?.effectiveOperation
       ?? resolveTaskShape(this.options.task, this.options.operation).operation;
@@ -3853,11 +3843,24 @@ export class ChatEngine {
       requiredVerifiers: this.getResolvedRequiredVerifiers(),
       hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed,
     });
-    if (typeof buildNative === "function") {
+    const nativeWireRunner = runner as {
+      buildNativeToolsWireBody?: (
+        messages: ProviderMessage[],
+        tools: import("../runners/base.js").ToolDefinition[],
+        systemPrompt?: string,
+        options?: { stream?: boolean; toolChoice?: "auto" | "required" },
+      ) => string;
+    };
+    if (typeof nativeWireRunner.buildNativeToolsWireBody === "function") {
       const messages = rebuildProviderMessagesFromEvents(this.parity.eventLog, {
         systemPrompt,
       });
-      return buildNative(messages, toolDefs, systemPrompt, { stream: true });
+      return nativeWireRunner.buildNativeToolsWireBody(
+        messages,
+        toolDefs,
+        systemPrompt,
+        { stream: true },
+      );
     }
     const admissionModelId = resolveCompactionProviderAdmissionModelId({
       options: this.options,
