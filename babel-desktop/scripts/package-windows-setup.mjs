@@ -102,17 +102,25 @@ Section "Install"
   ExecWait '"$TEMP\\BabelDesktopSetup\\run-install.cmd"' $R0
   ; If the bootstrap could not launch, ExecWait sets the error flag while $R0
   ; stays 0 - fail loudly instead of reporting a false success.
-  IfErrors 0 +3
-    DetailPrint "Failed to launch the installer bootstrap."
-    SetErrorLevel 98
-    Return
+  IfErrors launch_failed
   IntCmp $R0 0 setup_ok
     DetailPrint "Installation failed (exit code $R0). See install-log.txt. No changes were kept."
+    IfSilent silent_bootstrap_exit
+    MessageBox MB_ICONSTOP|MB_OK "Babel Desktop setup failed (exit code $R0).$\r$\nSee install-log.txt in the staging folder."
+  silent_bootstrap_exit:
     SetErrorLevel $R0
     Return
   setup_ok:
   DetailPrint "Installation complete. Use the Babel Desktop Start Menu shortcut to launch."
   SetErrorLevel 0
+  Return
+  launch_failed:
+  DetailPrint "Failed to launch the installer bootstrap."
+  IfSilent silent_launch_failed
+  MessageBox MB_ICONSTOP|MB_OK "Babel Desktop setup could not start the installer bootstrap."
+  silent_launch_failed:
+  SetErrorLevel 98
+  Return
 SectionEnd
 `.trimStart();
 }

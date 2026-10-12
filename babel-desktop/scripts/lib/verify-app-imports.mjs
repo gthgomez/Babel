@@ -5,8 +5,10 @@
 // without src/ being packaged — the failure mode that made packaged installs
 // crash at launch while source checkouts worked.
 import {readdirSync, readFileSync, statSync} from 'node:fs';
-import {join, sep} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {join, resolve, sep} from 'node:path';
+import {fileURLToPath, pathToFileURL} from 'node:url';
+
+const ESM_EXTENSION_RE = /\.(mjs|cjs|js)(?:\?[^'"#]*)?(?:#.*)?$/i;
 
 function* walk(dir) {
   for (const entry of readdirSync(dir, {withFileTypes: true})) {
@@ -23,7 +25,7 @@ function relativeSpecifiers(source) {
   return specs;
 }
 
-function fileExists(path) {
+function pathExistsAsFile(path) {
   try {
     return statSync(path).isFile();
   } catch {
@@ -31,12 +33,61 @@ function fileExists(path) {
   }
 }
 
-function importTarget(file, spec) {
-  // new URL(spec, base) normalizes '.'/'..' segments; pathname of a file URL
-  // on Windows is /C:/... so strip the leading slash and restore separators.
+function pathExistsAsDirectory(path) {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isInsideAppRoot(resolvedPath, appDir) {
+  const root = resolve(appDir);
+  const candidate = resolve(resolvedPath);
+  if (candidate === root) return true;
+  return candidate.startsWith(root + sep);
+}
+
+/**
+ * Resolve a relative import specifier from a packaged module file.
+ * @returns {string | null} absolute filesystem path, or null when the URL is not a file:
+ */
+function resolveRelativeTarget(file, spec) {
   const url = new URL(spec, pathToFileURL(file));
   if (url.protocol !== 'file:') return null;
-  return decodeURIComponent(url.pathname).slice(1).replace(/\//g, sep);
+  return fileURLToPath(url);
+}
+
+/**
+ * @param {string} file
+ * @param {string} spec
+ * @param {string} appDir
+ * @returns {{file: string, spec: string, target: string, reason: string} | null}
+ */
+function classifyRelativeImport(file, spec, appDir) {
+  let target;
+  try {
+    target = resolveRelativeTarget(file, spec);
+  } catch {
+    return {file, spec, target: spec, reason: 'invalid-specifier'};
+  }
+  if (target === null) return null;
+
+  if (!isInsideAppRoot(target, appDir)) {
+    return {file, spec, target, reason: 'outside-app-root'};
+  }
+
+  const trailingSlash = spec.endsWith('/');
+  if (trailingSlash || pathExistsAsDirectory(target)) {
+    return {file, spec, target, reason: 'directory-import'};
+  }
+
+  if (!ESM_EXTENSION_RE.test(spec)) {
+    return {file, spec, target, reason: 'extensionless-import'};
+  }
+
+  if (pathExistsAsFile(target)) return null;
+  return {file, spec, target, reason: 'missing-module'};
 }
 
 /**
@@ -44,24 +95,22 @@ function importTarget(file, spec) {
  * whose target file is missing from the bundle. Directory imports (no
  * extension) are reported too — packaged ESM needs explicit file extensions.
  * @param {string} appDir packaged resources/app root
- * @returns {Array<{file: string, spec: string, target: string}>}
+ * @returns {Array<{file: string, spec: string, target: string, reason?: string}>}
  */
 export function findUnresolvedRelativeImports(appDir) {
   const unresolved = [];
-  for (const file of walk(appDir)) {
+  const appRoot = resolve(appDir);
+  for (const file of walk(appRoot)) {
     let source;
     try {
       source = readFileSync(file, 'utf8');
     } catch (error) {
-      unresolved.push({file, spec: '<unreadable>', target: String(error.message)});
+      unresolved.push({file, spec: '<unreadable>', target: String(error.message), reason: 'unreadable'});
       continue;
     }
     for (const spec of relativeSpecifiers(source)) {
-      const target = importTarget(file, spec);
-      if (target === null) continue;
-      if (fileExists(target)) continue;
-      if (!/\.[cm]?js$/i.test(spec) && fileExists(`${target}.mjs`)) continue;
-      unresolved.push({file, spec, target});
+      const issue = classifyRelativeImport(file, spec, appRoot);
+      if (issue) unresolved.push(issue);
     }
   }
   return unresolved;
@@ -74,7 +123,7 @@ export function findUnresolvedRelativeImports(appDir) {
 export function assertAppImportsResolve(appDir) {
   const unresolved = findUnresolvedRelativeImports(appDir);
   if (unresolved.length) {
-    const shown = unresolved.slice(0, 10).map(u => `  ${u.file}: '${u.spec}' -> ${u.target}`).join('\n');
+    const shown = unresolved.slice(0, 10).map(u => `  ${u.file}: '${u.spec}' -> ${u.target} (${u.reason ?? 'unresolved'})`).join('\n');
     throw new Error(`Packaged app has ${unresolved.length} unresolved relative import(s); the bundle would crash at launch:\n${shown}`);
   }
 }

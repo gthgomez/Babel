@@ -96,8 +96,42 @@ test('NSIS script is per-user, silent-capable, and runs the qualified installer'
   assert.match(nsi, /File \/oname=Babel-Desktop-payload\.zip "C:/);
   assert.match(nsi, /install-windows\.ps1/, 'must run the qualified PowerShell installer');
   assert.match(nsi, /SetErrorLevel \$R0/, 'must propagate installer failure exit codes');
+  assert.match(nsi, /IfErrors launch_failed/, 'must use a named label for bootstrap launch errors');
+  assert.match(nsi, /IntCmp \$R0 0 setup_ok/, 'must inspect bootstrap exit code before success path');
+  assert.doesNotMatch(nsi, /IfErrors 0 \+/, 'relative IfErrors offsets must not skip exit-code checks');
   assert.doesNotMatch(nsi, /iexpress/i, 'the abandoned IExpress approach must not return');
   assert.doesNotMatch(nsi, /RequireAdmin|SetShellVarContext all/, 'must not install machine-wide');
+});
+
+test('NSIS script surfaces bootstrap nonzero exits before the success path', () => {
+  const nsi = renderNsis({
+    version: '0.1.1',
+    stagedPayload: `C:${B}p`, stagedSha: `C:${B}s`,
+    stagedInstall: `C:${B}i`, stagedUninstall: `C:${B}u`,
+    stagedBootstrap: `C:${B}b`,
+    outFile: `C:${B}o${B}setup.exe`,
+  });
+  const execIdx = nsi.indexOf('ExecWait');
+  const intCmpIdx = nsi.indexOf('IntCmp $R0 0 setup_ok');
+  const setupOkIdx = nsi.indexOf('setup_ok:');
+  const completeIdx = nsi.indexOf('Installation complete');
+  assert.ok(execIdx >= 0 && intCmpIdx > execIdx, 'ExecWait must precede bootstrap exit inspection');
+  assert.ok(setupOkIdx > intCmpIdx, 'setup_ok must follow IntCmp');
+  assert.ok(completeIdx > setupOkIdx, 'success message must only appear on setup_ok');
+  assert.match(nsi, /IfSilent silent_bootstrap_exit/, 'nonzero bootstrap exit must stay silent-safe');
+});
+
+test('NSIS script keeps interactive failure visible when AutoCloseWindow is enabled', () => {
+  const nsi = renderNsis({
+    version: '0.1.1',
+    stagedPayload: `C:${B}p`, stagedSha: `C:${B}s`,
+    stagedInstall: `C:${B}i`, stagedUninstall: `C:${B}u`,
+    stagedBootstrap: `C:${B}b`,
+    outFile: `C:${B}o${B}setup.exe`,
+  });
+  assert.match(nsi, /launch_failed:/);
+  assert.match(nsi, /MessageBox MB_ICONSTOP/, 'interactive failures need a blocking dialog before auto-close');
+  assert.match(nsi, /SetErrorLevel 98/, 'bootstrap launch failure must exit nonzero for silent /S');
 });
 
 test('NSIS script quotes Windows paths containing spaces', () => {

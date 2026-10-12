@@ -37,6 +37,7 @@ test('reports a missing allowlist target like native importing ../src/core.mjs',
     const unresolved = findUnresolvedRelativeImports(app);
     assert.equal(unresolved.length, 1);
     assert.match(unresolved[0].spec, /src\/core\.mjs/);
+    assert.equal(unresolved[0].reason, 'missing-module');
     assert.throws(() => assertAppImportsResolve(app), /unresolved relative import/);
   } finally {
     rmSync(app, {recursive: true, force: true});
@@ -52,6 +53,94 @@ test('normalizes .. segments and rejects extensionless imports', () => {
     const unresolved = findUnresolvedRelativeImports(app);
     assert.equal(unresolved.length, 1);
     assert.equal(unresolved[0].spec, '../src/c.mjs');
+    assert.equal(unresolved[0].reason, 'missing-module');
+  } finally {
+    rmSync(app, {recursive: true, force: true});
+  }
+});
+
+test('rejects extensionless imports even when a .mjs sibling exists', () => {
+  const app = makeApp({
+    'native/main.mjs': "import {h} from './helper';\n",
+    'native/helper.mjs': "export const h = 1;\n",
+  });
+  try {
+    const unresolved = findUnresolvedRelativeImports(app);
+    assert.equal(unresolved.length, 1);
+    assert.equal(unresolved[0].spec, './helper');
+    assert.equal(unresolved[0].reason, 'extensionless-import');
+  } finally {
+    rmSync(app, {recursive: true, force: true});
+  }
+});
+
+test('rejects directory imports even when index.mjs exists', () => {
+  const app = makeApp({
+    'native/main.mjs': "import {x} from './pkg';\n",
+    'native/pkg/index.mjs': "export const x = 1;\n",
+  });
+  try {
+    const unresolved = findUnresolvedRelativeImports(app);
+    assert.equal(unresolved.length, 1);
+    assert.ok(
+      unresolved[0].reason === 'extensionless-import' || unresolved[0].reason === 'directory-import',
+      `expected extensionless or directory import rejection, got ${unresolved[0].reason}`,
+    );
+  } finally {
+    rmSync(app, {recursive: true, force: true});
+  }
+});
+
+test('rejects trailing-slash directory imports', () => {
+  const app = makeApp({
+    'native/main.mjs': "import {x} from './pkg/';\n",
+    'native/pkg/index.mjs': "export const x = 1;\n",
+  });
+  try {
+    const unresolved = findUnresolvedRelativeImports(app);
+    assert.equal(unresolved.length, 1);
+    assert.equal(unresolved[0].reason, 'directory-import');
+  } finally {
+    rmSync(app, {recursive: true, force: true});
+  }
+});
+
+test('accepts file URL query and hash suffixes on relative imports', () => {
+  const app = makeApp({
+    'native/main.mjs': "import {a} from './mod.mjs?v=1';\nimport {b} from './other.mjs#fragment';\n",
+    'native/mod.mjs': "export const a = 1;\n",
+    'native/other.mjs': "export const b = 2;\n",
+  });
+  try {
+    assert.deepEqual(findUnresolvedRelativeImports(app), []);
+  } finally {
+    rmSync(app, {recursive: true, force: true});
+  }
+});
+
+test('resolves percent-encoded spaces and Unicode in relative paths', () => {
+  const app = makeApp({
+    'native/main.mjs': "import {x} from './spaced%20file.mjs';\nimport {y} from './caf%C3%A9.mjs';\n",
+    'native/spaced file.mjs': "export const x = 1;\n",
+    'native/café.mjs': "export const y = 2;\n",
+  });
+  try {
+    assert.deepEqual(findUnresolvedRelativeImports(app), []);
+  } finally {
+    rmSync(app, {recursive: true, force: true});
+  }
+});
+
+test('allows in-app .. imports and rejects escapes outside the packaged root', () => {
+  const app = makeApp({
+    'native/deep/nested.mjs': "import {ok} from '../../src/ok.mjs';\nimport {bad} from '../../../../outside.mjs';\n",
+    'src/ok.mjs': "export const ok = 1;\n",
+  });
+  try {
+    const unresolved = findUnresolvedRelativeImports(app);
+    assert.equal(unresolved.length, 1);
+    assert.match(unresolved[0].spec, /outside\.mjs/);
+    assert.equal(unresolved[0].reason, 'outside-app-root');
   } finally {
     rmSync(app, {recursive: true, force: true});
   }
