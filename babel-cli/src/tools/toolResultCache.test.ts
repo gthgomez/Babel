@@ -12,6 +12,14 @@ test('failed mutating commands invalidate prior read/search results', () => {
   assert.equal(cache.size, 0);
 });
 
+test('apply_patch invalidates cached read observations on success', () => {
+  const cache = new ToolResultCache();
+  const input = { path: 'src/example.ts', project_root: 'C:/project' };
+  cache.set('file_read', input, { exit_code: 0, stdout: 'old', stderr: '' });
+  cache.invalidateOnMutation('apply_patch', 0);
+  assert.equal(cache.size, 0);
+});
+
 test('non-mutating failures do not evict unrelated cached observations', () => {
   const cache = new ToolResultCache();
   const input = { path: 'src/example.ts', project_root: 'C:/project' };

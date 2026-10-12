@@ -732,7 +732,8 @@ describe('H1 compaction lifecycle result', () => {
           },
         },
         options: { task: 'retain A and C', model: 'test-model' },
-        limits: { maxEstimatedTokens: 10 },
+        compactionProviderId: 'deepinfra',
+        limits: { maxEstimatedTokens: 128_000 },
         abortSignal: new AbortController().signal,
         writeCount: 0, turnIndex: 1, toolCallLog: [],
         progress: { receipts: [], consecutiveNoProgress: 0 },
@@ -803,6 +804,17 @@ describe('H1 compaction lifecycle result', () => {
     ];
     const threadLog = createThreadEventLog();
     const sessionLog = createSessionEventLog();
+    const turnId = startTurn(threadLog, {
+      task: 'preserve context',
+      model: 'm',
+      provider: 'deepseek',
+      projectRoot: tmpdir(),
+      policyPreset: 'chat',
+    });
+    for (const message of prior) {
+      if (message.role === 'user') recordUserMessage(threadLog, turnId, message.content);
+      if (message.role === 'assistant') recordAssistantMessage(threadLog, turnId, message.content);
+    }
     const host: ChatEngineCompactionHost = {
       conversation: prior,
       compactionManager: {
@@ -817,7 +829,8 @@ describe('H1 compaction lifecycle result', () => {
         }),
       },
       options: { task: 'preserve context', model: 'm' },
-      limits: { maxEstimatedTokens: 10 },
+      compactionProviderId: 'deepinfra',
+      limits: { maxEstimatedTokens: 128_000 },
       abortSignal: new AbortController().signal,
       writeCount: 0,
       turnIndex: 1,
@@ -825,7 +838,7 @@ describe('H1 compaction lifecycle result', () => {
       progress: { receipts: [], consecutiveNoProgress: 0 },
       threadLog,
       sessionLog,
-      turnId: 'turn-1',
+      turnId,
       shouldUseTextTools: () => false,
       compactHeuristic: () => {
         throw new Error('heuristic fallback should not run');
@@ -882,7 +895,8 @@ describe('H1 compaction lifecycle result', () => {
         },
       },
       options: { task, model: 'test-model' },
-      limits: { maxEstimatedTokens: 10 },
+      compactionProviderId: 'deepinfra',
+      limits: { maxEstimatedTokens: 128_000 },
       abortSignal: new AbortController().signal,
       writeCount: 0, turnIndex: 2, toolCallLog: [],
       progress: { receipts: [], consecutiveNoProgress: 0 },
@@ -941,7 +955,8 @@ describe('H1 compaction lifecycle result', () => {
       const replacement: ChatMessage[] = [{ role: 'user', content: 'NEW MESSAGE' }];
       const host: ChatEngineCompactionHost = {
         conversation, options: { task: 'old task', model: 'test-model' },
-        limits: { maxEstimatedTokens: 10 }, abortSignal: new AbortController().signal,
+        compactionProviderId: 'deepinfra',
+        limits: { maxEstimatedTokens: 128_000 }, abortSignal: new AbortController().signal,
         writeCount: 0, turnIndex: 2, toolCallLog: [], progress: { receipts: [], consecutiveNoProgress: 0 },
         threadLog, sessionLog, turnId, shouldUseTextTools: () => false,
         compactHeuristic: () => { host.conversation = [conversation[0]!, ...conversation.slice(-2)]; },
@@ -994,7 +1009,8 @@ describe('H1 compaction lifecycle result', () => {
     const host: ChatEngineCompactionHost = {
       conversation: original.map((message) => ({ ...message })),
       options: { task, model: 'test-model' },
-      limits: { maxEstimatedTokens: 10 },
+      compactionProviderId: 'deepinfra',
+      limits: { maxEstimatedTokens: 128_000 },
       abortSignal: new AbortController().signal,
       writeCount: 0, turnIndex: 1, toolCallLog: [],
       progress: { receipts: [], consecutiveNoProgress: 0 },

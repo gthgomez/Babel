@@ -19,6 +19,31 @@ import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js'
 import { computePreambleBudget } from './preambleBudget.js'
 import { createAgentJob, getAgentJob, updateAgentJob } from '../services/agentJobs.js'
 import { runCrashRecovery } from '../daemon/recovery.js'
+import {
+  evaluateCompactionSerializedAdmission,
+} from './compactionCommit.js'
+import {
+  resolveCompactionSummarizationProvider,
+} from './chatCompaction.js'
+import { grepContent } from '../tools/repoSearch.js'
+import { RipgrepAbortedError } from '../tools/ripgrep.js'
+import { normalizeProviderFailureClass } from '../runners/providerFailureReceipt.js'
+import { createExecutorKernel } from '../executor/kernel.js'
+import {
+  decideReadInjection,
+  rememberReadInjection,
+} from './codingLoop/readWindow.js'
+import {
+  createRunAllowanceReport,
+  resolveChatEngineLimits,
+} from '../config/chatEngineLimits.js'
+import {
+  createSessionEventLog,
+  interruptedToolIdempotencyKeys,
+  recordToolProposed,
+  recordToolStarted,
+} from './sessionEvents.js'
+import { terminalReasonFromClassification } from './chatTerminalReason.js'
 
 test('I01: default manager is eligible in the native-tool reserve band', async () => {
   const maxTokens = 128_000
@@ -190,4 +215,138 @@ test('I08: daemon crash recovery requires explicit recovery instead of silent re
   else delete process.env['BABEL_JOBS_REGISTRY_PATH']
   if (priorRuns) process.env['BABEL_RUNS_DIR'] = priorRuns
   else delete process.env['BABEL_RUNS_DIR']
+})
+
+test('I04: OpenCode-Go-only Chat does not resolve ambient cross-provider compaction route', () => {
+  const priorOr = process.env['OPENROUTER_API_KEY']
+  const priorDi = process.env['DEEPINFRA_API_KEY']
+  delete process.env['OPENROUTER_API_KEY']
+  delete process.env['DEEPINFRA_API_KEY']
+  try {
+    assert.equal(
+      resolveCompactionSummarizationProvider({
+        chatProvider: 'opencode-go',
+        compactionModel: 'mimo-v2.5',
+      }),
+      null,
+    )
+  } finally {
+    if (priorOr) process.env['OPENROUTER_API_KEY'] = priorOr
+    if (priorDi) process.env['DEEPINFRA_API_KEY'] = priorDi
+  }
+})
+
+test('I05: compaction admission requires qualified final serialized provider body', () => {
+  const small = JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] })
+  const huge = JSON.stringify({ messages: [{ role: 'user', content: 'x'.repeat(8_000) }] })
+  const cfg = {
+    modelId: 'test-model',
+    providerId: 'deepinfra',
+    contextWindowTokens: 128_000,
+    reservedCompletionTokens: 8_000,
+  }
+  const tight = {
+    ...cfg,
+    contextWindowTokens: 32,
+    reservedCompletionTokens: 8,
+  }
+  assert.equal(evaluateCompactionSerializedAdmission(small, cfg), 'qualified')
+  assert.equal(evaluateCompactionSerializedAdmission(huge, tight), 'over_limit')
+})
+
+test('I09: cancelled grep does not launch pure-JS fallback', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-grep-cancel-'))
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'src', 'a.ts'), 'needle\n')
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(
+    () => grepContent(root, 'needle', { signal: controller.signal }),
+    (error: unknown) => error instanceof RipgrepAbortedError,
+  )
+})
+
+test('I11: plan kernel dispatch denies file_write at the shared boundary', async () => {
+  const kernel = createExecutorKernel('plan')
+  const result = await kernel.tools.execute(
+    { tool: 'file_write', path: 'src/x.ts', content: 'y' },
+    { agentId: 'i11', runId: 'i11', babelRoot: process.cwd() },
+  )
+  assert.equal(result.exit_code, 1)
+  assert.match(result.stderr ?? '', /plan_read_only/i)
+})
+
+test('I16: provider failure taxonomy normalizes transport classes', () => {
+  assert.equal(normalizeProviderFailureClass({ httpStatus: 429 }), 'HTTP_429')
+  assert.equal(
+    normalizeProviderFailureClass({ message: 'read timeout while waiting for provider body' }),
+    'READ_TIMEOUT',
+  )
+})
+
+test('I13: read dedupe skips identical full reads within an epoch only', () => {
+  const cache = new Map()
+  const pathKey = 'src/a.ts'
+  const request = { kind: 'full' as const }
+  rememberReadInjection(cache, `${pathKey}::full::epoch=0`, 'hash-v1')
+  const skip = decideReadInjection({
+    pathKey,
+    fileHash: 'hash-v1',
+    request,
+    cache,
+    contextEpoch: 0,
+  })
+  assert.equal(skip.skip, true)
+  const epochBump = decideReadInjection({
+    pathKey,
+    fileHash: 'hash-v1',
+    request,
+    cache,
+    contextEpoch: 1,
+  })
+  assert.equal(epochBump.skip, false)
+  const range = decideReadInjection({
+    pathKey,
+    fileHash: 'hash-v1',
+    request: { kind: 'range', startLine: 1, endLine: 5 },
+    cache,
+    contextEpoch: 0,
+  })
+  assert.equal(range.skip, false)
+})
+
+test('I14: missing cost allowance stays unknown instead of zero', () => {
+  const finite = resolveChatEngineLimits({ maxCostUsd: 10 })
+  const unknownLimits = { ...finite, maxCostUsd: Number.NaN }
+  delete unknownLimits.costBudget
+  const report = createRunAllowanceReport(unknownLimits)
+  assert.equal(report.costAllowance.kind, 'unknown')
+})
+
+test('I15: interrupted tool attempts stay visible until explicitly settled', () => {
+  const log = createSessionEventLog('i15')
+  recordToolProposed(log, {
+    turn_id: 't1',
+    tool_call_id: 'call_run',
+    tool_name: 'run_command',
+  })
+  recordToolStarted(log, {
+    turn_id: 't1',
+    tool_call_id: 'call_run',
+    tool_name: 'run_command',
+  })
+  assert.deepEqual(interruptedToolIdempotencyKeys(log), ['call_run'])
+  assert.ok(
+    !log.events.some(
+      (event) => event.kind === 'tool_completed' && event.idempotency_key === 'call_run',
+    ),
+  )
+})
+
+test('I16: harness wall limit classifies as budget exhaustion, not success', () => {
+  const wall = terminalReasonFromClassification('limit_wall')
+  assert.ok(wall)
+  assert.equal(wall?.code, 'budget_exhausted')
+  assert.equal(wall?.cause_class, 'harness')
+  assert.equal(terminalReasonFromClassification(null), undefined)
 })

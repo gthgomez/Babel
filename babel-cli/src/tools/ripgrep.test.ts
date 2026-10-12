@@ -70,6 +70,20 @@ describe('ripgrep wrapper (when available)', () => {
       await assert.rejects(ripgrep(fixture.root, { pattern: 'class', paths: [path.join(fixture.root, 'missing.ts')] }), /ripgrep failed/);
     } finally { fixture.cleanup(); }
   });
+  it('aborted ripgrep rejects without falling back to pure JS search', async t => {
+    if (!detectRipgrep()) { t.skip('Standalone rg unavailable'); return; }
+    const fixture = makeTempFixture();
+    try {
+      const controller = new AbortController();
+      controller.abort();
+      const { RipgrepAbortedError } = await import('./ripgrep.js');
+      await assert.rejects(
+        ripgrep(fixture.root, { pattern: 'hello', signal: controller.signal }),
+        (error: unknown) => error instanceof RipgrepAbortedError,
+      );
+    } finally { fixture.cleanup(); }
+  });
+
   it('ripgrep basic match — finds known text in source files', async t => {
     if (!detectRipgrep()) { t.skip('Standalone rg unavailable; qualified in the required native lane'); return; }
 
