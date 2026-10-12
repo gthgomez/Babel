@@ -97,12 +97,8 @@ import type {
 } from "../schemas/agentContracts.js";
 import {
   CompactionManager,
-  DEFAULT_COMPACTION_CONFIG,
   estimateTokens,
-  resolveCompactionModelId,
-  resolveCompactionSummarizationProvider,
 } from "./chatCompaction.js";
-import { runChatEngineCompaction } from "./compactionCommit.js";
 import type { CondensationFactChannel } from "../services/condensationFacts.js";
 import { PreparedRequestAdmissionError } from "../runners/preparedProviderRequest.js";
 import {
@@ -228,11 +224,9 @@ import {
   paritySettleToolStarted,
   paritySettleToolNotStarted,
   parityAuthorizeRecoveredOutcomeRetry,
-  parityShouldCompact,
   parityTryFailover,
   finalizeParityTurnSync,
   finalizeParityCancel,
-  checkpointParityEventLogStrict,
   type ParityRuntime,
 } from "./chatEngineParityBridge.js";
 import { loadThreadEventLogFromDir } from "./threadEventLog.js";
@@ -257,9 +251,9 @@ import {
 import type { AdmissionStore } from "../runtime/admission.js";
 
 import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
-import { buildRepoMapPreamble, collectChatSeedFiles } from "./repoMapPreamble.js";
+import { buildChatEngineRepoMapPreamble } from "./repoMapPreamble.js";
+import { runChatEngineCompactionFor } from "./chatEngineCompactionHost.js";
 import {
-  computePreambleBudget,
   describePreambleBudget,
   enforcePreambleBudget,
 } from "./preambleBudget.js";
@@ -3765,26 +3759,12 @@ export class ChatEngine {
    * directory listing remains the fallback (see repoMapPreamble.ts).
    */
   private async generateRepoMap(userInput?: string): Promise<string> {
-    const seedFiles = collectChatSeedFiles(
-      userInput
-        ? [...this.conversation, { content: userInput }]
-        : this.conversation,
+    return buildChatEngineRepoMapPreamble(
       this.options.projectRoot,
+      this.conversation,
+      this.limits.maxEstimatedTokens,
+      userInput,
     );
-    try {
-      // Packet B5: scale the map's token budget to the current chat state
-      // (shrinks as the conversation fills the window, with a hard floor).
-      const mapBudget = computePreambleBudget({
-        historyTokens: estimateTokens(this.conversation),
-        contextWindowTokens: this.limits.maxEstimatedTokens,
-      });
-      return await buildRepoMapPreamble(this.options.projectRoot, {
-        seedFiles,
-        budgetTokens: mapBudget.maxMapTokens,
-      });
-    } catch {
-      return "";
-    }
   }
   private async synthesizeAnswer(
     toolObservations: string,
@@ -3840,175 +3820,11 @@ export class ChatEngine {
     forceCompaction = false,
     ownerGeneration = this.activeSubmissionGeneration,
   ): Promise<ContextCompactedInfo | null> {
-    const compactionParity = this.parity;
-    const compactionRunDir = this.engineRunDir;
-    const compactionOwnerId = this.taskAllowance?.taskOwnerId ?? null;
-    const compactionEpoch = globalCostTracker.getAccountingEpoch();
-    const compactionTurnId = this.parity.turnId;
-    const usageScope: {
-      taskOwnerId: string | null;
-      projectRoot: string;
-      accountingEpoch: string;
-      turnId: string | null;
-      chargeId: string | null;
-      provider?: string | null;
-      requestId?: string;
-      attemptId?: string;
-      runDir?: string;
-      ownerGeneration: number;
-    } = {
-      taskOwnerId: compactionOwnerId,
-      projectRoot: realpathSync(this.options.projectRoot),
-      accountingEpoch: compactionEpoch,
-      turnId: compactionTurnId,
-      chargeId: null as string | null,
-      ownerGeneration,
-    };
-    const compactionModelId = resolveCompactionModelId({
-      ...(this.modelPolicy?.providerModelId
-        ? { providerModelId: this.modelPolicy.providerModelId }
-        : {}),
-      ...(this.modelPolicy?.family ? { family: this.modelPolicy.family } : {}),
-    });
-    const summarizationProvider = resolveCompactionSummarizationProvider({
-      chatProvider: this.modelPolicy?.provider ?? null,
-      compactionModel: compactionModelId,
-    });
-    const host: import("./compactionCommit.js").ChatEngineCompactionHost = {
-      conversation: this.conversation,
-      options: this.options,
-      ...(this.modelPolicy ? { modelPolicy: this.modelPolicy } : {}),
-      compactionProviderId: this.modelPolicy?.provider ?? "deepinfra",
-      ...(summarizationProvider ? { summarizationProvider } : {}),
-      limits: this.limits,
-      abortSignal: this.abortController.signal,
-      writeCount: this.writeCount,
-      turnIndex: this._turnIndex,
-      toolCallLog: this.toolCallLog,
-      ...(this.lastVerifierReceipt
-        ? { lastVerifierReceipt: this.lastVerifierReceipt }
-        : {}),
-      progress: this.parity.progress,
-      threadLog: this.parity.eventLog,
-      sessionLog: this.parity.sessionEvents,
-      turnId: this.parity.turnId,
-      providerCallbacks: this.providerRetryCallbacks({
-        deliveryMode: this.shouldUseTextTools() ? "text" : "native",
-        executionStage: "compaction",
-        usageScope,
-        isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
-      }),
-      onCompactionUsage: (usage) => {
-        const attribution = compactionOwnerId
-          ? captureUsageAttribution(
-              usageScope,
-              usage.inferenceId,
-              usageScope.chargeId === usage.inferenceId
-                ? usageScope.requestId
-                : undefined,
-              usageScope.chargeId === usage.inferenceId
-                ? usageScope.attemptId
-                : undefined,
-            )
-          : undefined;
-        const update = globalCostTracker.settleUsage(
-          usage.modelId,
-          usage.inputTokens ?? 0,
-          usage.outputTokens ?? 0,
-          null,
-          null,
-          attribution,
-          usage.inputTokens !== null && usage.outputTokens !== null,
-          usageScope.provider ?? null,
-        );
-        if (update.kind === "conflict") {
-          this.recordOwnerAccountingFault(
-            { ...usageScope, chargeId: usage.inferenceId },
-            "settlement-conflict",
-            update.reason,
-            compactionOwnerId === this.taskAllowance?.taskOwnerId &&
-              this.isSubmissionCurrent(ownerGeneration),
-          );
-          try {
-            if (compactionOwnerId)
-              this.persistOwnerCharges(compactionOwnerId, compactionRunDir);
-          } catch (error) {
-            this.recordOwnerAccountingFault(
-              { ...usageScope, chargeId: usage.inferenceId },
-              "persistence-failure",
-              error instanceof Error ? error.message : String(error),
-              compactionOwnerId === this.taskAllowance?.taskOwnerId &&
-                this.isSubmissionCurrent(ownerGeneration),
-            );
-          }
-          return;
-        }
-        if (compactionOwnerId && update.kind !== "duplicate") {
-          try {
-            this.persistOwnerCharges(compactionOwnerId, compactionRunDir);
-          } catch (error) {
-            this.recordOwnerAccountingFault(
-              { ...usageScope, chargeId: usage.inferenceId },
-              "persistence-failure",
-              error instanceof Error ? error.message : String(error),
-              compactionOwnerId === this.taskAllowance?.taskOwnerId &&
-                this.isSubmissionCurrent(ownerGeneration),
-            );
-          }
-        }
-        if (this.isSubmissionCurrent(ownerGeneration))
-          this.persistTaskCostBaseline();
-      },
-      shouldUseTextTools: () => this.shouldUseTextTools(),
-      compactHeuristic: () => {
-        if (!this.isSubmissionCurrent(ownerGeneration)) return;
-        this.compactConversation();
-        host.conversation = this.conversation;
-      },
-      checkpoint: async () => {
-        if (!this.isSubmissionCurrent(ownerGeneration)) return;
-        const receipt = await checkpointParityEventLogStrict(
-          compactionParity,
-          compactionRunDir,
-        );
-        if (receipt.status !== "committed") {
-          throw new Error(receipt.error ?? "checkpoint persistence blocked");
-        }
-      },
-      reserveTokens: DEFAULT_COMPACTION_CONFIG.reserveTokens,
-      textToolsReserve: 1024,
+    return runChatEngineCompactionFor(this as unknown as import("./chatEngineCompactionHost.js").ChatEngineCompactionBinding, {
+      ...(callbacks !== undefined ? { callbacks } : {}),
       forceCompaction,
-      isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
-      resolveModel: resolveCompactionModelId,
-      shouldCompactByTokens: parityShouldCompact,
-      estimateTokens,
-    };
-    if (this.compactionManager) host.compactionManager = this.compactionManager;
-    if (this.condensationFacts) host.condensationFacts = this.condensationFacts;
-    const result = await runChatEngineCompaction(host);
-    if (!this.isSubmissionCurrent(ownerGeneration)) return null;
-    this.conversation = host.conversation;
-    if (!result) return null;
-    if (this.lastLogicalRequestId !== null) {
-      this.pendingParentRequestId = this.lastLogicalRequestId;
-    }
-    // A compaction changes which facts are retained by the model. Any prior
-    // read injection may be absent from the new context even when file bytes
-    // are unchanged, so force explicit reacquisition on the next request.
-    this.resetReadInjectionContext();
-    const info: ContextCompactedInfo = {
-      mode: result.mode,
-      beforeMessages: result.beforeMessages,
-      afterMessages: result.afterMessages,
-      message: result.message,
-    };
-    if (this.shouldUseTextTools()) {
-      console.error(
-        `[compaction] text-tools: ${info.beforeMessages}→${info.afterMessages} msgs (${info.mode}), token estimate was ~${this.apiTokenCount}`,
-      );
-    }
-    callbacks?.onContextCompacted?.(info);
-    return info;
+      ownerGeneration,
+    });
   }
 
   /** Rebuild one over-limit final request after a durable, bounded compaction. */

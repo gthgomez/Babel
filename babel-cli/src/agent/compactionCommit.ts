@@ -43,6 +43,7 @@ import {
   type CompactionCapsule,
   type ContextBudgetSnapshot,
 } from './providerCapabilities.js';
+import type { ToolDefinition } from '../runners/base.js';
 
 export type CompactionCommitStatus =
   | 'committed'
@@ -1052,6 +1053,11 @@ export interface ChatEngineCompactionHost {
   compactionProviderId?: string;
   /** Injected summarization route (same provider family as Chat when configured). */
   summarizationProvider?: LlmCompactionProvider;
+  /**
+   * When set, admission uses the same native wire body the Chat runner would
+   * POST (messages, system prompt, tools), not message-only JSON.
+   */
+  serializeNativeProviderRequestBody?: () => string;
 }
 
 export interface ChatEngineCompactInfo {
@@ -1073,11 +1079,54 @@ export class CompactionPersistenceError extends Error {
   }
 }
 
-/** Native next-request body. Shrink is measured here, not by message count. */
+/** Message-only wire snapshot (fallback when no native serializer is wired). */
 function serializedProviderRequest(threadLog: ThreadEventLog): string {
   return JSON.stringify(
     mapProviderMessagesToWire(rebuildProviderMessagesFromEvents(threadLog), ''),
   );
+}
+
+function serializedProviderRequestForAdmission(host: ChatEngineCompactionHost): string {
+  return host.serializeNativeProviderRequestBody?.() ?? serializedProviderRequest(host.threadLog);
+}
+
+export function resolveCompactionAdmissionContext(
+  host: ChatEngineCompactionHost,
+  modelId: string,
+): { contextWindowTokens: number; reservedCompletionTokens: number } {
+  const caps = resolveProviderCapabilities(modelId);
+  const harnessReserve = host.shouldUseTextTools()
+    ? host.textToolsReserve
+    : host.reserveTokens;
+  const contextWindowTokens =
+    caps.contextWindow > 0 ? caps.contextWindow : host.limits.maxEstimatedTokens;
+  const reservedCompletionTokens =
+    caps.maxOutputTokens > 0 ? caps.maxOutputTokens : harnessReserve;
+  return { contextWindowTokens, reservedCompletionTokens };
+}
+
+/** Build the native runner JSON body used for prepared-request admission probes. */
+export function buildNativeProviderRequestBodyForAdmission(input: {
+  threadLog: ThreadEventLog;
+  systemPrompt: string;
+  modelId: string;
+  tools: ToolDefinition[];
+  maxOutputTokens: number | null;
+  stream?: boolean;
+}): string {
+  const messages = rebuildProviderMessagesFromEvents(input.threadLog, {
+    systemPrompt: input.systemPrompt,
+  });
+  const wireMessages = mapProviderMessagesToWire(messages, input.systemPrompt, input.systemPrompt);
+  return JSON.stringify({
+    model: input.modelId,
+    ...(input.maxOutputTokens === null ? {} : { max_tokens: input.maxOutputTokens }),
+    temperature: 0,
+    tools: input.tools,
+    tool_choice: 'auto' as const,
+    stream: input.stream ?? true,
+    messages: wireMessages,
+  });
 }
 
 export function evaluateCompactionSerializedAdmission(
@@ -1102,16 +1151,16 @@ export function evaluateCompactionSerializedAdmission(
 function compactionCommitAcceptsSerializedRequest(
   host: ChatEngineCompactionHost,
   modelId: string,
-  reserve: number,
   beforeSerialized: string,
   afterSerialized: string,
 ): boolean {
   if (afterSerialized === beforeSerialized) return false;
+  const admissionContext = resolveCompactionAdmissionContext(host, modelId);
   const admission = evaluateCompactionSerializedAdmission(afterSerialized, {
     modelId,
     providerId: host.compactionProviderId ?? 'deepinfra',
-    contextWindowTokens: host.limits.maxEstimatedTokens,
-    reservedCompletionTokens: reserve,
+    contextWindowTokens: admissionContext.contextWindowTokens,
+    reservedCompletionTokens: admissionContext.reservedCompletionTokens,
   });
   return admission === 'qualified';
 }
@@ -1220,7 +1269,7 @@ export async function runChatEngineCompaction(
       // Started only once pruning is known to have changed the context: a
       // noop never mints a started fact, so no spurious gap is possible.
       beginCondensationFact(host.estimateTokens(prior));
-      const beforeRequest = serializedProviderRequest(host.threadLog);
+      const beforeRequest = serializedProviderRequestForAdmission(host);
       const committed = await commitCompaction({
         strategyMessages: host.conversation.map((message) => ({ ...message })),
         priorConversation: prior,
@@ -1239,7 +1288,7 @@ export async function runChatEngineCompaction(
         blockOnPersistFailure: true,
         isOwnerCurrent: ownsConversation,
         validateCommit: () => {
-          const afterRequest = serializedProviderRequest(host.threadLog);
+          const afterRequest = serializedProviderRequestForAdmission(host);
           const tokensBeforeCommit = host.estimateTokens(prior);
           const tokensAfterCommit = host.estimateTokens(host.conversation);
           return ownsConversation()
@@ -1247,7 +1296,6 @@ export async function runChatEngineCompaction(
             && compactionCommitAcceptsSerializedRequest(
               host,
               modelId,
-              reserve,
               beforeRequest,
               afterRequest,
             )
@@ -1340,7 +1388,7 @@ export async function runChatEngineCompaction(
         }
         if (mgr.changed) {
           beginCondensationFact(mgr.tokensBefore);
-          const beforeRequest = serializedProviderRequest(host.threadLog);
+          const beforeRequest = serializedProviderRequestForAdmission(host);
           commit = await commitCompaction({
             strategyMessages: mgr.messages,
             priorConversation: host.conversation,
@@ -1359,13 +1407,12 @@ export async function runChatEngineCompaction(
             blockOnPersistFailure: true,
             isOwnerCurrent: ownerIsCurrent,
             validateCommit: () => {
-              const afterRequest = serializedProviderRequest(host.threadLog);
+              const afterRequest = serializedProviderRequestForAdmission(host);
               return ownerIsCurrent()
                 && (host.options.task.length === 0 || afterRequest.includes(host.options.task))
                 && compactionCommitAcceptsSerializedRequest(
                   host,
                   modelId,
-                  reserve,
                   beforeRequest,
                   afterRequest,
                 )
