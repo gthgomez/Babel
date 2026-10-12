@@ -12,6 +12,8 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { buildRepoMapGraph } from '../services/repoMap/graph.js';
+import { estimateTokens, type ChatMessage } from './chatCompaction.js';
+import { computePreambleBudget } from './preambleBudget.js';
 
 export interface RepoMapPreambleOptions {
   /** Token budget for the rendered map (default 1_000; expanded when no seeds). */
@@ -179,6 +181,33 @@ export async function buildLegacyRepoMapPreamble(projectRoot: string): Promise<s
     }
 
     return lines.join('\n');
+  } catch {
+    return '';
+  }
+}
+
+/** Packet B5 repo-map preamble sized from resident conversation history. */
+export async function buildChatEngineRepoMapPreamble(
+  projectRoot: string,
+  conversation: ReadonlyArray<{ role: string; content: string }>,
+  contextWindowTokens: number,
+  userInput?: string,
+): Promise<string> {
+  const seedFiles = collectChatSeedFiles(
+    userInput
+      ? [...conversation, { role: 'user', content: userInput }]
+      : conversation,
+    projectRoot,
+  );
+  try {
+    const mapBudget = computePreambleBudget({
+      historyTokens: estimateTokens(conversation as ChatMessage[]),
+      contextWindowTokens,
+    });
+    return await buildRepoMapPreamble(projectRoot, {
+      seedFiles,
+      budgetTokens: mapBudget.maxMapTokens,
+    });
   } catch {
     return '';
   }

@@ -16,11 +16,12 @@ import {
   prepareProviderRequest,
 } from '../runners/preparedProviderRequest.js'
 import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js'
-import { computePreambleBudget } from './preambleBudget.js'
-import { createAgentJob, getAgentJob, updateAgentJob } from '../services/agentJobs.js'
+import { createAgentJob, getAgentJob } from '../services/agentJobs.js'
 import { runCrashRecovery } from '../daemon/recovery.js'
 import {
+  buildNativeProviderRequestBodyForAdmission,
   evaluateCompactionSerializedAdmission,
+  resolveCompactionAdmissionContext,
 } from './compactionCommit.js'
 import {
   resolveCompactionSummarizationProvider,
@@ -43,7 +44,18 @@ import {
   recordToolProposed,
   recordToolStarted,
 } from './sessionEvents.js'
+import { createThreadEventLog, recordUserMessage, startTurn } from './threadEventLog.js'
 import { terminalReasonFromClassification } from './chatTerminalReason.js'
+import type { ToolDefinition } from '../runners/base.js'
+
+const stubTools: ToolDefinition[] = [{
+  type: 'function',
+  function: {
+    name: 'read_range',
+    description: 'fixture',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+  },
+}]
 
 test('I01: default manager is eligible in the native-tool reserve band', async () => {
   const maxTokens = 128_000
@@ -81,47 +93,67 @@ test('I01: default manager is eligible in the native-tool reserve band', async (
   assert.ok(withContext.tokensAfter < withContext.tokensBefore)
 })
 
-test('I02: OpenCode Go preserves PreparedRequestAdmissionError identity', async () => {
-  const overLimit = prepareProviderRequest({
-    body: JSON.stringify({ messages: [{ role: 'user', content: 'x'.repeat(8000) }] }),
-    mode: 'native',
-    provider: 'opencode-go',
-    requestedModelId: 'mimo-v2.5',
-    contextLimitTokens: 1,
-    reservedCompletionTokens: 1,
-    requestId: 'req-admission',
-    attemptId: 'attempt-admission',
-  })
-  const admission = new PreparedRequestAdmissionError(overLimit)
-  const runner = new OpenCodeGoApiRunner('mimo-v2.5', {}, {
-    credentialSource: 'explicit-test',
-    explicitCredential: 'fixture-only',
-  })
-  const original = runner.executeRaw.bind(runner)
-  runner.executeRaw = async () => {
-    throw admission
+test('I02: OpenCode Go adapter preserves PreparedRequestAdmissionError before transport', async () => {
+  const priorFetch = globalThis.fetch
+  let fetchCalls = 0
+  globalThis.fetch = async () => {
+    fetchCalls += 1
+    throw new Error('transport must not run when prepared-request admission fails')
   }
-  await assert.rejects(
-    () => runner.executeRaw('prompt'),
-    (error: unknown) => error instanceof PreparedRequestAdmissionError,
-  )
-  runner.executeRaw = original
+  try {
+    const runner = new OpenCodeGoApiRunner('deepseek-v4-flash', {}, {
+      credentialSource: 'explicit-test',
+      explicitCredential: 'fixture-only',
+    })
+    const hugePrompt = 'x'.repeat(4_000_000)
+    await assert.rejects(
+      () => runner.executeRaw(hugePrompt, undefined, 'fixture system'),
+      (error: unknown) => error instanceof PreparedRequestAdmissionError,
+    )
+    assert.equal(fetchCalls, 0)
+  } finally {
+    globalThis.fetch = priorFetch
+  }
 })
 
-test('I03: cumulative usage does not shrink map budget when resident history is stable', () => {
-  const window = 128_000
-  const resident = 20_000
-  const withLowCumulative = computePreambleBudget({
-    historyTokens: resident,
-    contextWindowTokens: window,
+test('I03: repeated Chat repo-map requests ignore inflated cumulative api usage', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-i03-map-'))
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'src', 'seed.ts'), 'export const seed = 1\n')
+  const { ChatEngine } = await import('./chatEngine.js')
+  const { computePreambleBudget } = await import('./preambleBudget.js')
+  const engine = new ChatEngine({
+    task: 'inspect seed.ts',
+    projectRoot: root,
+    maxEstimatedTokens: 128_000,
   })
-  const withHighCumulative = computePreambleBudget({
-    historyTokens: 200_000,
-    contextWindowTokens: window,
-  })
-  assert.ok(
-    withLowCumulative.maxMapTokens > withHighCumulative.maxMapTokens,
-    'resident history must not be replaced by inflated cumulative usage when sizing the map',
+  engine.replaceConversation([
+    { role: 'user', content: 'inspect seed.ts' },
+    { role: 'assistant', content: 'ok' },
+  ])
+  const budgets: number[] = []
+  const internal = engine as unknown as {
+    apiTokenCount: number
+    generateRepoMap: (userInput?: string) => Promise<string>
+    getConversation: () => ChatMessage[]
+  }
+  const original = internal.generateRepoMap.bind(engine)
+  internal.generateRepoMap = async (userInput?: string) => {
+    const mapBudget = computePreambleBudget({
+      historyTokens: estimateTokens(internal.getConversation()),
+      contextWindowTokens: 128_000,
+    })
+    budgets.push(mapBudget.maxMapTokens)
+    return original(userInput)
+  }
+  await internal.generateRepoMap('first provider round')
+  internal.apiTokenCount = 400_000
+  await internal.generateRepoMap('second provider round')
+  assert.equal(budgets.length, 2)
+  assert.equal(budgets[0], budgets[1])
+  assert.notEqual(
+    computePreambleBudget({ historyTokens: 400_000, contextWindowTokens: 128_000 }).maxMapTokens,
+    budgets[0],
   )
 })
 
@@ -236,22 +268,65 @@ test('I04: OpenCode-Go-only Chat does not resolve ambient cross-provider compact
   }
 })
 
-test('I05: compaction admission requires qualified final serialized provider body', () => {
-  const small = JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] })
-  const huge = JSON.stringify({ messages: [{ role: 'user', content: 'x'.repeat(8_000) }] })
-  const cfg = {
-    modelId: 'test-model',
+test('I05: native wire body with tools is over_limit when it cannot fit provider window', () => {
+  const threadLog = createThreadEventLog('i05')
+  const turnId = startTurn(threadLog, {
+    task: 'fit probe',
+    model: 'deepseek-v4-flash',
+    provider: 'deepinfra',
+    projectRoot: tmpdir(),
+    policyPreset: 'chat',
+  })
+  recordUserMessage(threadLog, turnId, 'x'.repeat(4_000_000))
+  const body = buildNativeProviderRequestBodyForAdmission({
+    threadLog,
+    systemPrompt: 'policy preamble '.repeat(200),
+    modelId: 'deepseek-v4-flash',
+    tools: stubTools,
+    maxOutputTokens: 8192,
+  })
+  const admission = evaluateCompactionSerializedAdmission(body, {
+    modelId: 'deepseek-v4-flash',
     providerId: 'deepinfra',
-    contextWindowTokens: 128_000,
-    reservedCompletionTokens: 8_000,
-  }
-  const tight = {
-    ...cfg,
-    contextWindowTokens: 32,
-    reservedCompletionTokens: 8,
-  }
-  assert.equal(evaluateCompactionSerializedAdmission(small, cfg), 'qualified')
-  assert.equal(evaluateCompactionSerializedAdmission(huge, tight), 'over_limit')
+    ...resolveCompactionAdmissionContext({
+      conversation: [],
+      options: { task: 'fit probe' },
+      limits: { maxEstimatedTokens: 80 },
+      abortSignal: new AbortController().signal,
+      writeCount: 0,
+      turnIndex: 0,
+      toolCallLog: [],
+      progress: { receipts: [], consecutiveNoProgress: 0 },
+      threadLog,
+      sessionLog: createSessionEventLog('i05'),
+      turnId,
+      shouldUseTextTools: () => false,
+      compactHeuristic: () => undefined,
+      checkpoint: async () => undefined,
+      reserveTokens: 0,
+      textToolsReserve: 0,
+      resolveModel: () => 'deepseek-v4-flash',
+      shouldCompactByTokens: () => true,
+      estimateTokens: () => 0,
+    }, 'deepseek-v4-flash'),
+  })
+  assert.equal(admission, 'over_limit')
+  const smallBody = buildNativeProviderRequestBodyForAdmission({
+    threadLog: createThreadEventLog('i05-small'),
+    systemPrompt: 'small',
+    modelId: 'deepseek-v4-flash',
+    tools: stubTools,
+    maxOutputTokens: 8192,
+  })
+  assert.equal(
+    evaluateCompactionSerializedAdmission(smallBody, {
+      modelId: 'deepseek-v4-flash',
+      providerId: 'deepinfra',
+      contextWindowTokens: 1_000_000,
+      reservedCompletionTokens: 8192,
+    }),
+    'qualified',
+  )
 })
 
 test('I09: cancelled grep does not launch pure-JS fallback', async () => {
@@ -276,8 +351,12 @@ test('I11: plan kernel dispatch denies file_write at the shared boundary', async
   assert.match(result.stderr ?? '', /plan_read_only/i)
 })
 
-test('I16: provider failure taxonomy normalizes transport classes', () => {
+test('I16: provider failure taxonomy separates connect vs read timeouts', () => {
   assert.equal(normalizeProviderFailureClass({ httpStatus: 429 }), 'HTTP_429')
+  assert.equal(
+    normalizeProviderFailureClass({ message: 'connection timed out' }),
+    'CONNECT_TIMEOUT',
+  )
   assert.equal(
     normalizeProviderFailureClass({ message: 'read timeout while waiting for provider body' }),
     'READ_TIMEOUT',
