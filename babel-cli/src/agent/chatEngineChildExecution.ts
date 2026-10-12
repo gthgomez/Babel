@@ -479,13 +479,18 @@ export async function executeSubAgentAction(
             }
             const attribution: SubagentAttribution = implResult.attribution;
             const clean = subagentFinishedCleanly(attribution);
+            const confirmedChanges = implResult.changedFiles.filter(
+              (file) =>
+                file.after_hash.length > 0 &&
+                file.before_hash !== file.after_hash,
+            );
             const details = clean
-              ? `${implResult.stepsExecuted} steps, ${implResult.changedFiles.length} changed, attribution=${attribution} (worktree ${implResult.worktree.name})`
+              ? `${implResult.stepsExecuted} steps, ${confirmedChanges.length} changed, attribution=${attribution} (worktree ${implResult.worktree.name})`
               : `failed: ${implResult.error || "unknown error"}, attribution=${attribution}`;
-            if (implResult.changedFiles.length > 0) {
+            if (clean && confirmedChanges.length > 0) {
               host.workingState = applyWorkingStateEvent(host.workingState, {
                 type: "mutation",
-                path: implResult.changedFiles[0]!.path,
+                path: confirmedChanges[0]!.path,
                 fingerprint: operationFingerprint(
                   chatActionToolName(action),
                   action,
@@ -499,10 +504,10 @@ export async function executeSubAgentAction(
               index: meta.index,
               exit_code: clean ? 0 : 1,
               ...(clean ? {} : { error: implResult.error || attribution }),
-              ...(implResult.changedFiles.length > 0
+              ...(clean && confirmedChanges.length > 0
                 ? {
                     effect_status: "confirmed_change" as const,
-                    mutation_paths: implResult.changedFiles.map(
+                    mutation_paths: confirmedChanges.map(
                       (file) => file.path,
                     ),
                   }

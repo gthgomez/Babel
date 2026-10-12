@@ -28,6 +28,7 @@ import {
   type ChildBudgetLimiter,
   type InheritedChildAllowance,
 } from '../childBudget.js';
+import { extractPatchRawTargets } from '../../authority/patchTargets.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -247,10 +248,19 @@ function isMutationAction(action: AgentAction): boolean {
   return MUTATION_TOOL_TYPES.has(action.type);
 }
 
+function mutationTargetPaths(action: AgentAction): string[] {
+  if (action.type === 'write_file') return [action.path];
+  if (action.type === 'apply_patch') return extractPatchRawTargets(action.patch);
+  return [];
+}
+
 function actionTargetPath(action: AgentAction): string | null {
   if (action.type === 'write_file' || action.type === 'read_file') return action.path;
   if (action.type === 'list_dir') return action.path;
-  if (action.type === 'apply_patch') return null;
+  if (action.type === 'apply_patch') {
+    const targets = mutationTargetPaths(action);
+    return targets[0] ?? null;
+  }
   if (action.type === 'grep') return action.path ?? null;
   if (action.type === 'glob') return null;
   if (action.type === 'search') return null;
@@ -659,10 +669,17 @@ export async function runMutationAgentLoop(
           (action.type === 'write_file' || action.type === 'apply_patch') &&
           !isReadOnly
         ) {
-          const targetPath =
-            action.type === 'write_file' ? action.path : '.babel-lite/apply.patch';
-          if (!isPathInScope(targetPath, writeScope, projectRoot)) {
-            error = `Write blocked: "${targetPath}" is outside write scope [${writeScope.join(', ')}] for agent ${agentId}.`;
+          const targetPaths = mutationTargetPaths(action);
+          if (targetPaths.length === 0) {
+            error = `Write blocked: apply_patch has no parseable targets for agent ${agentId}.`;
+            success = false;
+            break;
+          }
+          const outOfScope = targetPaths.find(
+            (targetPath) => !isPathInScope(targetPath, writeScope, projectRoot),
+          );
+          if (outOfScope) {
+            error = `Write blocked: "${outOfScope}" is outside write scope [${writeScope.join(', ')}] for agent ${agentId}.`;
             success = false;
             break;
           }
@@ -677,6 +694,13 @@ export async function runMutationAgentLoop(
           safetyController.snapshotBeforeWrite(action.path, round);
         }
 
+        const preMutationHashes = new Map<string, string | null>();
+        if (!isReadOnly && (action.type === 'write_file' || action.type === 'apply_patch')) {
+          for (const rel of mutationTargetPaths(action)) {
+            preMutationHashes.set(rel, readFileHash(resolve(projectRoot, rel)));
+          }
+        }
+
         // Execute the action through the policy gate
         const execution = await executeActionWithPolicy(action, 'workspace_write', {
           ...input.toolContext,
@@ -688,19 +712,6 @@ export async function runMutationAgentLoop(
         const lastResult = execution.results[execution.results.length - 1];
         if (!lastResult) {
           continue;
-        }
-
-        // Track changed files for mutation actions
-        if (action.type === 'write_file') {
-          const afterHash = readFileHash(resolve(projectRoot, action.path));
-          const beforeHash = readFileHash(resolve(projectRoot, action.path));
-          changedFiles.push({
-            path: action.path,
-            rationale: `Write by sub-agent ${agentId}`,
-            before_hash: beforeHash,
-            after_hash: afterHash ?? hashContent(action.content),
-            bytes: action.content.length,
-          });
         }
 
         if (execution.policyBlocked) {
@@ -721,6 +732,26 @@ export async function runMutationAgentLoop(
 
         // Log the tool call
         toolCallLog.push(buildToolCallLogEntry(toolCallLog.length + 1, action, lastResult));
+        if (
+          !execution.policyBlocked &&
+          (action.type === 'write_file' || action.type === 'apply_patch')
+        ) {
+          for (const rel of mutationTargetPaths(action)) {
+            const beforeHash = preMutationHashes.get(rel) ?? null;
+            const afterHash = readFileHash(resolve(projectRoot, rel));
+            const effectiveAfter = afterHash ??
+              (action.type === 'write_file' ? hashContent(action.content) : null);
+            if (beforeHash === effectiveAfter && effectiveAfter !== null) continue;
+            if (effectiveAfter === null) continue;
+            changedFiles.push({
+              path: rel,
+              rationale: `${action.type} by sub-agent ${agentId}`,
+              before_hash: beforeHash,
+              after_hash: effectiveAfter,
+              bytes: action.type === 'write_file' ? action.content.length : 0,
+            });
+          }
+        }
         priorObservations +=
           '\n' + formatMutationObservation(action, lastResult);
 
