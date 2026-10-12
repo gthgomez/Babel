@@ -85,10 +85,20 @@ $events = @($trustedEvents.Groups['events'].Value.Split(',') | ForEach-Object { 
 foreach ($event in @('opened', 'synchronize', 'reopened', 'ready_for_review', 'converted_to_draft')) {
   if ($events -notcontains $event) { throw "Trusted audit must refresh mutable readiness on $event." }
 }
-# Product work runs for source events; changing readiness alone must not cause
-# a second full product pipeline. The default pull_request lifecycle excludes it.
+# Product work runs for source events. Readiness transitions (ready_for_review,
+# converted_to_draft, labeled) deliberately re-run product CI since #365: a
+# draft leaving ready_for_review or gaining full-ci must be qualified on the
+# exact head. The waste the old ban prevented is instead bounded by the
+# PR-scoped concurrency group, which cancels the superseded run — so the
+# boundary now requires that group to exist rather than banning the events.
 $productWorkflow = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot '.github/workflows/typecheck.yml')
-if ($productWorkflow -match 'ready_for_review|converted_to_draft') { throw 'Readiness refresh must not trigger full product CI.' }
+foreach ($event in @('ready_for_review', 'converted_to_draft')) {
+  if ($productWorkflow -notmatch [regex]::Escape($event)) { throw "Product CI must re-qualify on $event (fast-iteration merge workflow)." }
+}
+$productConcurrency = [regex]::Match($productWorkflow, '(?ms)^concurrency:\r?\n(?<body>  .*(?:\r?\n|$))*')
+if (-not $productConcurrency.Success -or $productConcurrency.Value -notmatch [regex]::Escape('github.event.pull_request.number')) {
+  throw 'Product CI readiness triggers require a PR-scoped concurrency group to cancel superseded runs.'
+}
 if ($workflow -match [regex]::Escape('materialize-independent-review-receipt.ps1')) { throw 'Advisory certification must not be a workflow prerequisite.' }
 if ($workflow -match 'BABEL_REVIEW_CONTROLLER_(LOGIN|APP_ID)') { throw 'Trusted workflow must not retain App-controller configuration.' }
 if ($workflow -notmatch [regex]::Escape('github.event.repository.owner.id')) { throw 'Trusted workflow is missing owner-controller provenance binding.' }

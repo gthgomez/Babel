@@ -340,14 +340,12 @@ function Get-AgentStaleMainIntegrationOverlap {
   $overlap = @($mainPaths | Where-Object { $headPathSet.ContainsKey($_.Replace('\', '/')) })
   $policyPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'config/review-risk-policy.json'
   $policy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json -Depth 10
+  # Installer-sensitive entries are single-sourced in the policy file (shared
+  # with tools/ci-merge-lane.mjs); only gate-specific extras stay inline.
   $sensitivePrefixes = @($policy.criticalPrefixes) + @($policy.hostProtectedPrefixes) + @(
     '.github/workflows/typecheck.yml',
-    'tools/ci-merge-lane',
-    'babel-desktop/scripts/install-windows.ps1',
-    'babel-desktop/scripts/uninstall-windows.ps1',
-    'babel-desktop/scripts/package-windows',
-    'babel-desktop/package.json'
-  )
+    'tools/ci-merge-lane'
+  ) + @($policy.installerSensitivePrefixes)
   $riskyOverlap = @($overlap | Where-Object { Test-AgentPathMatchesPolicyPrefixes -Path $_ -Prefixes $sensitivePrefixes })
   return [pscustomobject]@{ available = $true; overlap = @($riskyOverlap); error = '' }
 }

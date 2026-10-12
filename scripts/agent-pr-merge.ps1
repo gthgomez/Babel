@@ -71,6 +71,46 @@ function Get-BabelLastExitCode {
   return [int]$variable.Value
 }
 
+# Read the live strict-freshness flag from GitHub at merge time. The gate's
+# snapshot proves what the gate evaluated; only the live value may decide
+# whether a stale base is tolerated at the moment of merge. Any ambiguity
+# (unreadable ruleset, missing or duplicate protect-main, missing flag) fails
+# closed to strict, which can only block a merge, never wrongly allow one.
+function Get-BabelStrictFreshness {
+  param([Parameter(Mandatory = $true)][string]$Repository)
+  $listExit = 0
+  $listText = ''
+  try {
+    $listCaptured = & $ghCommand api "repos/$Repository/rulesets?per_page=100" 2>&1
+    $listExit = Get-BabelLastExitCode
+    $listText = (@($listCaptured) | ForEach-Object { [string]$_ }) -join "`n"
+  } catch { return $true }
+  if ($listExit -ne 0) { return $true }
+  $list = $null
+  try { $list = $listText | ConvertFrom-Json -ErrorAction Stop } catch { return $true }
+  $candidates = @(@($list) | Where-Object { [string](Get-BabelJsonProperty -Object $_ -Name 'name') -eq 'protect-main' -and [string](Get-BabelJsonProperty -Object $_ -Name 'enforcement') -eq 'active' })
+  if ($candidates.Count -ne 1) { return $true }
+  $rulesetId = [string](Get-BabelJsonProperty -Object $candidates[0] -Name 'id')
+  if ([string]::IsNullOrWhiteSpace($rulesetId)) { return $true }
+  $detailExit = 0
+  $detailText = ''
+  try {
+    $detailCaptured = & $ghCommand api "repos/$Repository/rulesets/$rulesetId" 2>&1
+    $detailExit = Get-BabelLastExitCode
+    $detailText = (@($detailCaptured) | ForEach-Object { [string]$_ }) -join "`n"
+  } catch { return $true }
+  if ($detailExit -ne 0) { return $true }
+  $detail = $null
+  try { $detail = $detailText | ConvertFrom-Json -ErrorAction Stop } catch { return $true }
+  $allRules = @((Get-BabelJsonProperty -Object $detail -Name 'rules') | ForEach-Object { $_ })
+  $statusRules = @($allRules | Where-Object { [string](Get-BabelJsonProperty -Object $_ -Name 'type') -eq 'required_status_checks' })
+  if ($statusRules.Count -ne 1) { return $true }
+  $parameters = Get-BabelJsonProperty -Object $statusRules[0] -Name 'parameters'
+  $strictValue = Get-BabelJsonProperty -Object $parameters -Name 'strict_required_status_checks_policy'
+  if ($null -eq $strictValue) { return $true }
+  return [bool]$strictValue
+}
+
 function Write-BabelBlocked {
   param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Blockers)
   $unique = @($Blockers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
@@ -165,12 +205,10 @@ try {
   if (-not [string]::Equals([string](Get-BabelJsonProperty -Object $gate -Name 'repository'), 'gthgomez/Babel', [StringComparison]::OrdinalIgnoreCase)) { $gateBlockers += 'merge_gate_repository_mismatch' }
   $gatePr = Get-BabelJsonProperty -Object $gate -Name 'pr'
   if ([string](Get-BabelJsonProperty -Object $gatePr -Name 'number') -ne [string]$PR) { $gateBlockers += 'merge_gate_pr_mismatch' }
-  $repositoryPolicy = Get-BabelJsonProperty -Object $gate -Name 'repositoryPolicy'
-  $strictFreshness = $true
-  if ($null -ne $repositoryPolicy) {
-    $strictValue = Get-BabelJsonProperty -Object $repositoryPolicy -Name 'strictRequiredStatusChecksPolicy'
-    if ($null -ne $strictValue) { $strictFreshness = [bool]$strictValue }
-  }
+  # Strict freshness is read live, not from the gate's snapshot: a ruleset
+  # flip between gate run and merge must be honored at the moment of merge.
+  # The gate's own repositoryPolicy remains in the evidence JSON for audit.
+  $strictFreshness = Get-BabelStrictFreshness -Repository 'gthgomez/Babel'
   if ($strictFreshness -and -not [string]::Equals([string](Get-BabelJsonProperty -Object $sha -Name 'baseHead'), $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $gateBlockers += 'merge_gate_base_mismatch' }
   foreach ($gateSha in @(
       (Get-BabelJsonProperty -Object $sha -Name 'reviewedHead'),

@@ -15,6 +15,18 @@ export function isProcessAlive(pid: number): boolean {
 }
 
 export async function waitForProcessGroupExit(groupLeaderPid: number, timeoutMs: number): Promise<boolean> {
+  // Windows has no process-group signal semantics: libuv rejects negative PIDs
+  // with EINVAL rather than ESRCH, so group probing would spin the full
+  // timeout before the leader-only fallback ever fired. Probe the leader
+  // directly there; POSIX keeps the group-wide ESRCH check.
+  if (process.platform === 'win32') {
+    const windowsDeadline = Date.now() + timeoutMs
+    while (Date.now() < windowsDeadline) {
+      if (!isProcessAlive(groupLeaderPid)) return true
+      await new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, 10) })
+    }
+    return !isProcessAlive(groupLeaderPid)
+  }
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
