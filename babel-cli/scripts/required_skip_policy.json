@@ -415,7 +415,8 @@
           "ripgrep gitignoreRespect: false — overrides .gitignore",
           "ripgrep max matches — respects limit and sets truncated flag",
           "ripgrep no matches — returns empty for nonsense pattern",
-          "treats regex alternation, shell metacharacters and leading dashes as data"
+          "treats regex alternation, shell metacharacters and leading dashes as data",
+          "aborted ripgrep rejects without falling back to pure JS search"
         ]
       }
     },
