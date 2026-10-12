@@ -65,7 +65,7 @@ export function renderBootstrapPostExec(ifErrorsStyle = 'named') {
   IntCmp $R0 0 setup_ok
     DetailPrint "Installation failed (exit code $R0). See install-log.txt. No changes were kept."
     IfSilent silent_bootstrap_exit
-    MessageBox MB_ICONSTOP|MB_OK "Babel Desktop setup failed (exit code $R0).$\r$\nSee install-log.txt in the staging folder."
+    MessageBox MB_ICONSTOP|MB_OK "Babel Desktop setup failed (exit code $R0).$\\r$\\nSee install-log.txt in the staging folder."
   silent_bootstrap_exit:
     SetErrorLevel $R0
     Return

@@ -163,6 +163,7 @@ test('NSIS script keeps interactive failure visible when AutoCloseWindow is enab
   });
   assert.match(nsi, /launch_failed:/);
   assert.match(nsi, /MessageBox MB_ICONSTOP/, 'interactive failures need a blocking dialog before auto-close');
+  assert.match(nsi, /\$\\r\$\\nSee install-log\.txt/, 'MessageBox newline must be NSIS escapes, not a broken physical line');
   assert.match(nsi, /SetErrorLevel 98/, 'bootstrap launch failure must exit nonzero for silent /S');
 });
 
