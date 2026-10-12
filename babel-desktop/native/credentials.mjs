@@ -9,12 +9,41 @@ const PROVIDERS = Object.freeze({
   deepseek: 'DEEPSEEK_API_KEY',
   deepinfra: 'DEEPINFRA_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  opencode: 'OPENCODE_API_KEY',
   ollama: null,
 });
 const FILE_LIMIT = 256 * 1024;
 
 export function credentialProviders() {
   return Object.keys(PROVIDERS);
+}
+
+function credentialPresentInFile(target, envName) {
+  let existing = '';
+  try {
+    const info = lstatSync(target);
+    if (!info.isFile() || info.isSymbolicLink() || info.size > FILE_LIMIT) return false;
+    existing = readFileSync(target, 'utf8');
+  } catch {
+    return false;
+  }
+  return new RegExp('(?:^|\\n)\\s*' + envName + '\\s*=', 'm').test(existing);
+}
+
+/** True when the selected destination already defines this provider variable (no secret read). */
+export function hasProviderCredential({configDirectory, provider, scope = 'private', projectRoot = null} = {}) {
+  if (!Object.prototype.hasOwnProperty.call(PROVIDERS, provider)) return false;
+  const envName = PROVIDERS[provider];
+  if (!envName) return true;
+  if (scope === 'project') {
+    try {
+      return credentialPresentInFile(verifyProjectCredentialTarget(projectRoot), envName);
+    } catch {
+      return false;
+    }
+  }
+  if (typeof configDirectory !== 'string' || !configDirectory) return false;
+  return credentialPresentInFile(privateTarget(configDirectory), envName);
 }
 
 function safeApiKey(key) {

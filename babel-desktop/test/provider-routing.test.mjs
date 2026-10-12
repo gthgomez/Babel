@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {applyProviderRoute, qualifiedProviders, readProviderRoute, saveProviderRoute} from '../native/provider-routing.mjs';
+import {applyProviderRoute, qualifiedProviders, readProviderRoute, saveProviderRoute, validateProviderRoute} from '../native/provider-routing.mjs';
 import {buildRunArgs} from '../native/child.mjs';
 
 test('qualified providers lists certified providers', () => {
   const providers = qualifiedProviders();
   const ids = providers.map(p => p.id);
-  assert.deepEqual(ids.sort(), ['deepinfra', 'deepseek', 'ollama', 'openrouter']);
+  assert.deepEqual(ids.sort(), ['deepinfra', 'deepseek', 'ollama', 'opencode', 'openrouter']);
 });
 
 test('provider route is persisted and applied to child env for all supported providers', () => {
@@ -45,6 +45,20 @@ test('provider route is persisted and applied to child env for all supported pro
   assert.equal(env.BABEL_DESKTOP_MODEL_ROUTE, 'deepseek-v4-flash');
   assert.equal(env.BABEL_LITE_OFFLINE, '1');
 
+  // OpenCode Go route
+  saveProviderRoute({configDirectory: config, provider: 'opencode', model: 'opencode-go/deepseek-v4.1-flash'});
+  assert.deepEqual(readProviderRoute(config), {provider: 'opencode', model: 'opencode-go/deepseek-v4.1-flash'});
+  env = applyProviderRoute({PATH: '/bin'}, config);
+  assert.equal(env.BABEL_DESKTOP_PROVIDER, 'opencode');
+  assert.equal(env.BABEL_DESKTOP_MODEL_ROUTE, 'opencode-go/deepseek-v4.1-flash');
+
+  rmSync(config, {recursive: true, force: true});
+});
+
+test('invalid provider/model pairs are rejected before persistence', () => {
+  assert.throws(() => validateProviderRoute({provider: 'deepseek', model: 'deepseek-v4-flash'}), /not supported/);
+  const config = mkdtempSync(join(tmpdir(), 'babel-route-invalid-'));
+  assert.throws(() => saveProviderRoute({configDirectory: config, provider: 'ollama', model: 'deepseek-v4-pro'}), /not supported/);
   rmSync(config, {recursive: true, force: true});
 });
 

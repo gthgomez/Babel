@@ -9,14 +9,14 @@ import {listDirectory,readProjectFile} from './workspace.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
-import {saveProviderCredential} from './credentials.mjs';
+import {hasProviderCredential, saveProviderCredential} from './credentials.mjs';
 import {applyProjectCredentialScope} from './childEnv.mjs';
 import {resolveEngineIdentity} from './identity.mjs';
 import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,runDevelopmentRebuild,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
 import {parseBuildMetadata} from './identity.mjs';
 import {readActiveEngine, writeActiveEngine} from './engine-manager.mjs';
 import {checkPackagedCliUpdate, installPreviewSourceBuild, installStableReleaseArchive, resolveBundledNpmCli} from './engine-artifact.mjs';
-import {qualifiedProviders, readProviderRoute, saveProviderRoute} from './provider-routing.mjs';
+import {qualifiedProviders, readProviderRoute, saveProviderRoute, validateProviderRoute} from './provider-routing.mjs';
 import {listSavedChats,readSavedChat} from './sessions.mjs';
 import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose} from './lifecycle.mjs';
 
@@ -106,7 +106,7 @@ async function getInfo(){
           state:remoteBridge.state,
           port:remoteBridge.port,
           url:remoteBridge.port?`http://127.0.0.1:${remoteBridge.port}`:null,
-          blocksLocalRuns:remoteBridge.running,
+          blocksLocalRuns:remoteBridge.state==='ready' || remoteBridge.state==='starting',
           sharedSession:false,
         }
       : {running:false,state:'stopped',port:null,url:null,blocksLocalRuns:false,sharedSession:false},
@@ -281,6 +281,38 @@ async function start(){
     preferences.cliEntry=selected;await savePreferences();return getInfo();
   }));
   handle('babel:list-qualified-providers',()=>qualifiedProviders());
+  handle('babel:read-provider-route',()=>readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR));
+  handle('babel:save-provider-route',async options=>{
+    assertIdle();
+    if(!options || typeof options!=='object') throw new Error('Invalid provider route request.');
+    const configDirectory=runtimeEnvironment().BABEL_CONFIG_DIR;
+    const route=validateProviderRoute({provider:options.provider, model:options.model});
+    const descriptor=qualifiedProviders().find(entry=>entry.id===route.provider);
+    const requiresKey=Boolean(descriptor?.requiresApiKey);
+    const apiKey=typeof options.apiKey==='string'?options.apiKey:'';
+    if(requiresKey && !apiKey && !hasProviderCredential({
+      configDirectory, provider: route.provider, scope: options.scope ?? 'private', projectRoot: preferences.projectRoot,
+    })) {
+      throw new Error('Enter a provider API key or keep the existing saved credential.');
+    }
+    if(apiKey) {
+      if(!options.scope || (options.scope!=='private' && options.scope!=='project')) {
+        throw new Error('Select an explicit credential destination.');
+      }
+      if(options.scope==='project'&&!preferences.projectRoot) {
+        throw new Error('Select a project before choosing project-local credentials.');
+      }
+      saveProviderCredential({
+        provider:route.provider, apiKey, scope:options.scope,
+        configDirectory, projectRoot:preferences.projectRoot,
+      });
+      preferences.projectCredentialRoot=options.scope==='project'?preferences.projectRoot:null;
+    }
+    saveProviderRoute({configDirectory, ...route});
+    await savePreferences();
+    diagnostics=null;
+    return {route, credentialUpdated:Boolean(apiKey)};
+  });
   handle('babel:save-provider-credential',async options=>{
     assertIdle();
     if(!options || typeof options!=='object' || (options.scope!=='private' && options.scope!=='project')) {
@@ -290,11 +322,23 @@ async function start(){
       throw new Error('Select a project before choosing project-local credentials.');
     }
     const configDirectory=runtimeEnvironment().BABEL_CONFIG_DIR;
-    const result=saveProviderCredential({
-      provider:options.provider,apiKey:options.apiKey,scope:options.scope,
-      configDirectory,projectRoot:preferences.projectRoot,
-    });
-    saveProviderRoute({configDirectory,provider:options.provider,model:options.model});
+    const route=validateProviderRoute({provider:options.provider, model:options.model});
+    const descriptor=qualifiedProviders().find(entry=>entry.id===route.provider);
+    const requiresKey=Boolean(descriptor?.requiresApiKey);
+    const apiKey=typeof options.apiKey==='string'?options.apiKey:'';
+    if(requiresKey && !apiKey && !hasProviderCredential({
+      configDirectory, provider: route.provider, scope: options.scope, projectRoot: preferences.projectRoot,
+    })) {
+      throw new Error('Enter a provider API key.');
+    }
+    let result={provider:route.provider, scope:options.scope, configured:true};
+    if(requiresKey && apiKey) {
+      result=saveProviderCredential({
+        provider:route.provider, apiKey, scope:options.scope,
+        configDirectory, projectRoot:preferences.projectRoot,
+      });
+    }
+    saveProviderRoute({configDirectory, ...route});
     preferences.projectCredentialRoot=options.scope==='project'?preferences.projectRoot:null;
     await savePreferences();
     diagnostics=null; // Next doctor reflects the saved file, without inspecting the key.
@@ -306,8 +350,16 @@ async function start(){
     if(!selection.canceled){preferences.projectRoot=await realpath(selection.filePaths[0]);await savePreferences();}
     return getInfo();
   }));
-  handle('babel:list-sessions',()=>listSavedChats(packageRoot,{runsDir:runtimeEnvironment().BABEL_RUNS_DIR}));
-  handle('babel:open-session',id=>readSavedChat(packageRoot,id,{runsDir:runtimeEnvironment().BABEL_RUNS_DIR}));
+  handle('babel:list-sessions',options=>listSavedChats(packageRoot,{
+    runsDir:runtimeEnvironment().BABEL_RUNS_DIR,
+    limit:Number(options?.limit) > 0 ? Number(options.limit) : undefined,
+    offset:Number(options?.offset) >= 0 ? Number(options.offset) : undefined,
+  }));
+  handle('babel:open-session',(id, options)=>readSavedChat(packageRoot,id,{
+    runsDir:runtimeEnvironment().BABEL_RUNS_DIR,
+    olderOffset:Number(options?.olderOffset) >= 0 ? Number(options.olderOffset) : undefined,
+    messageLimit:Number(options?.messageLimit) > 0 ? Number(options.messageLimit) : undefined,
+  }));
   handle('babel:list-directory',relative=>listDirectory(preferences.projectRoot,relative));
   handle('babel:read-file',relative=>readProjectFile(preferences.projectRoot,relative));
   handle('babel:open-repository',()=>shell.openExternal(REPOSITORY_URL));
