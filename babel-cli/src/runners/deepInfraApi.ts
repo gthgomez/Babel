@@ -211,7 +211,7 @@ export class DeepInfraApiRunner implements LlmRunner {
    */
   /** Output budget reserved on the wire (matches `prepareProviderRequest`). */
   getNativeRequestReservedCompletionTokens(): number | null {
-    return this.maxTokens;
+    return this.executionEnvelope?.output.effective ?? this.maxTokens;
   }
 
   buildNativeToolsWireBody(
