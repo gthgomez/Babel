@@ -10,7 +10,7 @@ Repair branch: `cursor/architecture-integration-repair-73b4` (PR #370).
 | I02 | Confirmed | `OpenCodeGoApiRunner` execute/executeRaw/stream wrappers rethrow `PreparedRequestAdmissionError` before transport | Worker A + Bugbot (Composer 2.5 Fast; findings retained) | `architectureIntegrationRepair.test.ts` (I02): real adapter + mocked `fetch`, no `executeRaw` stub |
 | I03 | Confirmed | Repo-map / preamble budget uses resident `estimateTokens(conversation)` (not cumulative `apiTokenCount`) | Worker A | `architectureIntegrationRepair.test.ts` (I03): `ensureRepositoryContext` + `getOrBuildSystemPrompt` twice with inflated `apiTokenCount`; `repoMapPreamble.ts` |
 | I04 | Confirmed | `resolveCompactionSummarizationProvider` + engine wiring; no ambient cross-route for OpenCode Go | Worker A | `architectureIntegrationRepair.test.ts` (I04) |
-| I05 | Confirmed | Compaction admission uses **runner-bound** `buildNativeToolsWireBody` only (OpenAI-compatible via `openAiCompatibleNativeWire`, DeepSeek-direct via `deepSeekNativeWire`); no OpenAI-shaped fallback when bytes would differ; provider context + runner reserved output via `prepareProviderRequest` | Worker A | `openAiCompatibleNativeWire.test.ts`, `deepSeekNativeWire.test.ts`, `chatEngineNativeWireAdmission.test.ts` (full-byte DeepInfra + DeepSeek), `architectureIntegrationRepair.test.ts` (I05), `compactionCommit.test.ts`, lifecycle/S07 |
+| I05 | Confirmed | Compaction admission serializes via **runner-bound** `buildNativeToolsWireBody` on the live deliberation runner (DeepInfra/OpenCode-Go family → `openAiCompatibleNativeWire`; DeepSeek-direct → `deepSeekNativeWire`). Unsupported runners fail closed in `buildNativeCompactionAdmissionWireBody` (no OpenAI-shaped substitute). `buildNativeProviderRequestBodyForAdmission` remains a **test/helper** for OpenAI-compatible shape only—not production transport for DeepSeek or admission closure. Reserved output + provider window via `prepareProviderRequest` / `resolveCompactionAdmissionContext`. | Worker A | `openAiCompatibleNativeWire.test.ts`, `deepSeekNativeWire.test.ts`, `chatEngineNativeWireAdmission.test.ts` (full-byte DeepInfra + DeepSeek receiver path), `architectureIntegrationRepair.test.ts` (I05 admission math), `compactionCommit.test.ts`, lifecycle/S07 |
 | I06 | Confirmed | `runMutationAgentLoop` patch target authorization | Worker B | `architectureIntegrationRepair.test.ts` (I06) |
 | I07 | Confirmed | Child effect receipts / hash-delta promotion | Worker B | mutation + child tests (prior slice) |
 | I08 | Confirmed | Daemon crash recovery explicit `failed` (no silent requeue) | Worker B | `architectureIntegrationRepair.test.ts` (I08) |
@@ -32,11 +32,11 @@ Repair branch: `cursor/architecture-integration-repair-73b4` (PR #370).
 ## Review receipts
 
 - **Bugbot** (Composer 2.5 Fast, not user-requested model): ripgrep timeout + cache invalidation wiring — addressed in branch.
-- **Independent review**: Composer 2.5 re-review pending after native-wire parity commit (non-Fast).
+- **Independent review**: Composer 2.5 (non-Fast) re-review after lifecycle fixture typecheck fix + I05 ledger tightening (exact head SHA in PR).
 
 ## Honest limitations (not claimed complete)
 
-- **I05 scope:** Native compaction admission byte parity is implemented for deliberation runners exposing `buildNativeToolsWireBody` (DeepInfra family + DeepSeek direct). Other providers (e.g. Ollama text/native) are unsupported for native wire admission and fail closed in `buildNativeCompactionAdmissionWireBody`.
+- **I05 scope:** Byte parity between compaction admission and transport is **proven** for DeepInfra (incl. OpenCode Go subclass), DeepSeek-direct, and the ChatEngine receiver path (`chatEngineNativeWireAdmission.test.ts`). Runners without `buildNativeToolsWireBody` (e.g. Ollama native) are **unsupported**—admission throws rather than approximating another provider’s JSON. Not claimed: every catalog provider or host-port deliberation route.
 - Broad host-port / reducer migration programs beyond documented projection boundaries and public-entry tests are **out of scope** for this PR.
 - Full process-tree settlement under load for search cancellation is covered at abort/timeout seams, not exhaustive stress harnesses.
 - Paid provider evaluations and release deployment were not authorized.

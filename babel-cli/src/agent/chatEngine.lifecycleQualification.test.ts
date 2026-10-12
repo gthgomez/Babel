@@ -81,7 +81,7 @@ const fixtureNativeWireHooks = {
     return JSON.stringify({
       model: FIXTURE_PROVIDER_POLICY.providerModelId,
       stream: options.stream ?? true,
-      max_tokens: FIXTURE_PROVIDER_POLICY.maxOutputTokens,
+      max_tokens: FIXTURE_PROVIDER_POLICY.maxOutputTokens ?? 4_096,
       temperature: 0,
       tools,
       tool_choice: 'auto',
@@ -89,7 +89,7 @@ const fixtureNativeWireHooks = {
     });
   },
   getNativeRequestReservedCompletionTokens(): number {
-    return FIXTURE_PROVIDER_POLICY.maxOutputTokens;
+    return FIXTURE_PROVIDER_POLICY.maxOutputTokens ?? 4_096;
   },
 };
 
