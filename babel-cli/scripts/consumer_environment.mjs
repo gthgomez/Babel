@@ -11,7 +11,9 @@ const inheritedRuntimeKeys = new Map([
   ['PROCESSOR_REVISION', 'PROCESSOR_REVISION'], ['NUMBER_OF_PROCESSORS', 'NUMBER_OF_PROCESSORS'],
 ])
 
-/** Isolate installed-product children from inherited provider, config, credentials and preloads. */
+/** Isolate installed-product children from inherited provider, config, credentials and preloads.
+ *  Inherited proxy/registry/provider URLs are intentionally dropped; corporate install
+ *  environments must document prerequisites instead of inheriting ambient transport. */
 export function consumerEnvironment(inherited, scratch) {
   const windows = process.platform === 'win32'
   const env = {}

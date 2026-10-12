@@ -21,7 +21,7 @@ Deeper references:
 
 ## Installed preview package
 
-The local preview package is `babel-harness`, version `0.1.1-preview.20261004`.
+The local preview package is `babel-harness`, version `0.1.1` (as declared in `package.json`; public registry availability is owner-controlled and may still return E404 until an authorized publish succeeds).
 It provides the preferred `babel-harness` command and the compatible
 `babel-agent` command. The package is not currently installable from the public
 npm registry; the registry returned E404 for this name on 2026-10-04. The
@@ -31,12 +31,12 @@ Source-checkout wrappers remain available; retired Lite wrappers retain their
 deprecation behavior and are omitted from the tarball. The July `v0.1.0`
 release/tag is not reused.
 
-Build or obtain the private candidate tarball `babel-harness-0.1.1-preview.20261004.tgz`,
+Build or obtain the private candidate tarball `babel-harness-0.1.1.tgz`,
 verify it against its accompanying `SHA256SUMS`, then install it from a local
 path and run from any target project:
 
 ```sh
-npm install --prefix ./babel-preview --omit=dev ./babel-harness-0.1.1-preview.20261004.tgz
+npm install --prefix ./babel-preview --omit=dev ./babel-harness-0.1.1.tgz
 ./babel-preview/node_modules/.bin/babel-harness --version
 ./babel-preview/node_modules/.bin/babel-harness setup --json
 ./babel-preview/node_modules/.bin/babel-harness doctor --json
