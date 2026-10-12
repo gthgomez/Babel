@@ -3774,7 +3774,7 @@ export class ChatEngine {
       // Packet B5: scale the map's token budget to the current chat state
       // (shrinks as the conversation fills the window, with a hard floor).
       const mapBudget = computePreambleBudget({
-        historyTokens: this.apiTokenCount,
+        historyTokens: estimateTokens(this.conversation),
         contextWindowTokens: this.limits.maxEstimatedTokens,
       });
       return await buildRepoMapPreamble(this.options.projectRoot, {
@@ -4321,7 +4321,7 @@ export class ChatEngine {
       // whole preamble stays under a budget scaled to the measured chat state.
       if (this.repoMapCache) {
         const enforced = enforcePreambleBudget(systemContent, this.repoMapCache, {
-          historyTokens: this.apiTokenCount,
+          historyTokens: estimateTokens(this.conversation),
           contextWindowTokens: this.limits.maxEstimatedTokens,
         });
         if (enforced.map) systemContent += "\n\n" + enforced.map;
