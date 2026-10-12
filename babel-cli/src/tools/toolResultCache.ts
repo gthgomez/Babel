@@ -33,7 +33,7 @@ const TOOL_CATEGORY: Record<string, string> = {
 };
 
 /** Tools whose execution may invalidate cached observations, including partial failures. */
-const MUTATING_TOOLS = new Set([
+export const TOOL_RESULT_CACHE_MUTATING_TOOLS = new Set([
   'file_write',
   'apply_patch',
   'shell_exec',
@@ -126,7 +126,7 @@ export class ToolResultCache {
    * write files and then fail; exit code is not proof of no effect.
    */
   invalidateOnMutation(toolName: string, exitCode: number): void {
-    if (MUTATING_TOOLS.has(toolName)) {
+    if (TOOL_RESULT_CACHE_MUTATING_TOOLS.has(toolName)) {
       this.invalidate();
     }
     void exitCode;

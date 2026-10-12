@@ -8,7 +8,7 @@
  * Output is capped at 5 MB (same as MAX_SHELL_OUTPUT_BYTES in sandbox.ts).
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
@@ -32,6 +32,15 @@ export interface RipgrepOptions {
   multiline?: boolean;
   gitignoreRespect?: boolean;
   type?: string;
+  /** When aborted, rejects with RipgrepAbortedError (no JS fallback). */
+  signal?: AbortSignal;
+}
+
+export class RipgrepAbortedError extends Error {
+  constructor() {
+    super('ripgrep aborted');
+    this.name = 'RipgrepAbortedError';
+  }
 }
 
 export interface RipgrepResult {
@@ -90,6 +99,63 @@ export function sortPathsByDepth(paths: string[]): void {
 const MAX_RIPGREP_OUTPUT_BYTES = 5 * 1024 * 1024; // 5 MB
 const DEFAULT_RIPGREP_TIMEOUT_MS = 30_000;
 
+function runRipgrepProcess(
+  projectRoot: string,
+  args: string[],
+  signal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string; status: number | null }> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new RipgrepAbortedError());
+      return;
+    }
+    const child = spawn('rg', args, {
+      cwd: projectRoot,
+      shell: false,
+      windowsHide: true,
+      env: process.env,
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+    const onAbort = (): void => {
+      child.kill();
+      finish(() => reject(new RipgrepAbortedError()));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(() => reject(new Error(`ripgrep timed out after ${DEFAULT_RIPGREP_TIMEOUT_MS}ms`)));
+    }, DEFAULT_RIPGREP_TIMEOUT_MS);
+    child.stdout?.setEncoding('utf-8');
+    child.stderr?.setEncoding('utf-8');
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk;
+      if (Buffer.byteLength(stdout, 'utf8') > MAX_RIPGREP_OUTPUT_BYTES) {
+        child.kill();
+      }
+    });
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      finish(() => reject(error));
+    });
+    child.on('close', (status) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      finish(() => resolve({ stdout, stderr, status }));
+    });
+  });
+}
+
 /**
  * Run ripgrep with `--json` output and parse the results into typed matches.
  *
@@ -143,22 +209,12 @@ export async function ripgrep(
 
   const startTime = Date.now();
 
-  const result = spawnSync('rg', args, {
-    cwd: projectRoot,
-    shell: false,
-    windowsHide: true,
-    encoding: 'utf-8',
-    maxBuffer: MAX_RIPGREP_OUTPUT_BYTES,
-    timeout: DEFAULT_RIPGREP_TIMEOUT_MS,
-  });
+  const result = await runRipgrepProcess(projectRoot, args, options.signal);
 
   const elapsedMs = Date.now() - startTime;
 
-  if (result.error && !result.stdout) {
-    throw result.error;
-  }
   if (result.status !== 0 && result.status !== 1) {
-    throw new Error(`ripgrep failed: ${result.stderr?.trim() || result.error?.message || `exit ${result.status}`}`);
+    throw new Error(`ripgrep failed: ${result.stderr?.trim() || `exit ${result.status}`}`);
   }
 
   const matches: RipgrepMatch[] = [];
