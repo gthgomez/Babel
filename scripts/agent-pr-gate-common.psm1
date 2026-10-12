@@ -309,6 +309,12 @@ function Test-AgentPathMatchesPolicyPrefixes {
   return $false
 }
 
+# Detect exact-path overlap between the stale main advance and the reviewed
+# head. Limitation (accepted heuristic): only paths changed on BOTH sides are
+# flagged. Same-directory semantic conflicts where main and the head touch
+# different files under one sensitive prefix are NOT detected here — they are
+# caught by normal CI on the combined tree after merge. A stronger check would
+# need per-file semantic analysis and is deliberately out of scope.
 function Get-AgentStaleMainIntegrationOverlap {
   param(
     [Parameter(Mandatory = $true)][string]$GitPath,
