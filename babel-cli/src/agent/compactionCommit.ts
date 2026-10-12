@@ -11,7 +11,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { ChatMessage } from './chatCompaction.js';
-import { estimateTokens } from './chatCompaction.js';
+import { estimateTokens, resolveCompactionModelId } from './chatCompaction.js';
 import type { ProviderToolCall, RunnerCallbacks } from '../runners/base.js';
 import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js';
 import {
@@ -1105,6 +1105,22 @@ export function resolveCompactionAdmissionContext(
   return { contextWindowTokens, reservedCompletionTokens };
 }
 
+/** Provider admission model id — matches live native runner pinning (providerModelId first). */
+export function resolveCompactionProviderAdmissionModelId(
+  host: Pick<ChatEngineCompactionHost, 'options' | 'modelPolicy'>,
+): string {
+  const compactionModelId = resolveCompactionModelId({
+    explicitModel: host.options.model,
+    providerModelId: host.modelPolicy?.providerModelId,
+    family: host.modelPolicy?.family,
+  });
+  const pinned = host.modelPolicy?.providerModelId?.trim();
+  if (pinned) return pinned;
+  const configured = host.options.model?.trim();
+  if (configured) return configured;
+  return compactionModelId;
+}
+
 /** Build the native runner JSON body used for prepared-request admission probes. */
 export function buildNativeProviderRequestBodyForAdmission(input: {
   threadLog: ThreadEventLog;
@@ -1202,11 +1218,7 @@ export async function runChatEngineCompaction(
   let changed = false;
   let commit: CompactionCommitResult | undefined;
   const tokenEstimate = host.estimateTokens(host.conversation);
-  const modelId =
-    host.options.model ??
-    host.modelPolicy?.providerModelId ??
-    host.modelPolicy?.family ??
-    'deepseek-v4-pro';
+  const modelId = resolveCompactionProviderAdmissionModelId(host);
   const tokenTriggered = host.shouldCompactByTokens(tokenEstimate, modelId);
   const reserve = host.shouldUseTextTools()
     ? host.textToolsReserve

@@ -21,6 +21,7 @@ import { checkpointParityEventLogStrict } from './chatEngineParityBridge.js';
 import { parityShouldCompact } from './chatEngineParityBridge.js';
 import {
   buildNativeProviderRequestBodyForAdmission,
+  resolveCompactionProviderAdmissionModelId,
   runChatEngineCompaction,
   type ChatEngineCompactionHost,
 } from './compactionCommit.js';
@@ -125,10 +126,10 @@ export async function runChatEngineCompactionFor(
     chatProvider: engine.modelPolicy?.provider ?? null,
     compactionModel: compactionModelId,
   });
-  const admissionModelId =
-    engine.modelPolicy?.providerModelId ??
-    engine.options.model ??
-    compactionModelId;
+  const admissionModelId = resolveCompactionProviderAdmissionModelId({
+    options: engine.options,
+    ...(engine.modelPolicy ? { modelPolicy: engine.modelPolicy } : {}),
+  });
   const admissionCaps = resolveProviderCapabilities(admissionModelId);
   const host: ChatEngineCompactionHost = {
     conversation: engine.conversation,
