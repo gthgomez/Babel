@@ -100,6 +100,7 @@ import {
   DEFAULT_COMPACTION_CONFIG,
   estimateTokens,
   resolveCompactionModelId,
+  resolveCompactionSummarizationProvider,
 } from "./chatCompaction.js";
 import { runChatEngineCompaction } from "./compactionCommit.js";
 import type { CondensationFactChannel } from "../services/condensationFacts.js";
@@ -3863,10 +3864,22 @@ export class ChatEngine {
       chargeId: null as string | null,
       ownerGeneration,
     };
+    const compactionModelId = resolveCompactionModelId({
+      ...(this.modelPolicy?.providerModelId
+        ? { providerModelId: this.modelPolicy.providerModelId }
+        : {}),
+      ...(this.modelPolicy?.family ? { family: this.modelPolicy.family } : {}),
+    });
+    const summarizationProvider = resolveCompactionSummarizationProvider({
+      chatProvider: this.modelPolicy?.provider ?? null,
+      compactionModel: compactionModelId,
+    });
     const host: import("./compactionCommit.js").ChatEngineCompactionHost = {
       conversation: this.conversation,
       options: this.options,
       ...(this.modelPolicy ? { modelPolicy: this.modelPolicy } : {}),
+      compactionProviderId: this.modelPolicy?.provider ?? "deepinfra",
+      ...(summarizationProvider ? { summarizationProvider } : {}),
       limits: this.limits,
       abortSignal: this.abortController.signal,
       writeCount: this.writeCount,

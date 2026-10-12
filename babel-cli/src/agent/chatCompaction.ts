@@ -1064,6 +1064,54 @@ export class CompactionManager {
  * Priority: explicit override > BABEL_COMPACTION_MODEL > providerModelId > default.
  * Never pass a bare model-family label (e.g. "DeepSeek") as the API model id.
  */
+/**
+ * Resolve an explicit compaction summarization route aligned with the active
+ * Chat provider family. Never pairs an OpenCode-Go-only configuration with
+ * ambient OpenRouter/DeepInfra keys.
+ */
+export function resolveCompactionSummarizationProvider(input: {
+  chatProvider?: string | null;
+  compactionModel: string;
+}): LlmCompactionProvider | null {
+  const explicitKey = process.env['BABEL_COMPACTION_API_KEY']?.trim();
+  const explicitBase = process.env['BABEL_COMPACTION_API_BASE']?.trim();
+  if (explicitKey && explicitBase) {
+    return {
+      apiKey: explicitKey,
+      baseUrl: explicitBase,
+      defaultModel: input.compactionModel,
+    };
+  }
+
+  const provider = (input.chatProvider ?? '').toLowerCase();
+  const model = input.compactionModel.trim();
+  if (!model) return null;
+
+  if (provider === 'openrouter' && process.env['OPENROUTER_API_KEY']?.trim()) {
+    return {
+      apiKey: process.env['OPENROUTER_API_KEY']!.trim(),
+      baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
+      defaultModel: model,
+    };
+  }
+  if (provider === 'deepinfra' && process.env['DEEPINFRA_API_KEY']?.trim()) {
+    return {
+      apiKey: process.env['DEEPINFRA_API_KEY']!.trim(),
+      baseUrl: 'https://api.deepinfra.com/v1/openai/chat/completions',
+      defaultModel: model,
+    };
+  }
+  if (provider === 'anthropic' && process.env['ANTHROPIC_API_KEY']?.trim()) {
+    return {
+      apiKey: process.env['ANTHROPIC_API_KEY']!.trim(),
+      baseUrl: 'https://api.anthropic.com',
+      defaultModel: model,
+    };
+  }
+  // OpenCode Go and other explicit-only routes: no ambient cross-provider fallback.
+  return null;
+}
+
 export function resolveCompactionModelId(input: {
   explicitModel?: string | null;
   providerModelId?: string | null;

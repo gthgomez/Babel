@@ -21,6 +21,11 @@ import {
   type ThreadEventLog,
 } from './threadEventLog.js';
 import { mapProviderMessagesToWire } from '../runners/providerMessages.js';
+import {
+  prepareProviderRequest,
+  type PreparedRequestAdmission,
+} from '../runners/preparedProviderRequest.js';
+import type { LlmCompactionProvider } from './chatCompaction.js';
 import type { PrunedMessageRange } from '../runtime/events.js';
 import type { CondensationFactChannel } from '../services/condensationFacts.js';
 import {
@@ -1043,6 +1048,10 @@ export interface ChatEngineCompactionHost {
    * visible fail-closed gap.
    */
   condensationFacts?: CondensationFactChannel;
+  /** Provider id used for final prepared-request admission after compaction. */
+  compactionProviderId?: string;
+  /** Injected summarization route (same provider family as Chat when configured). */
+  summarizationProvider?: LlmCompactionProvider;
 }
 
 export interface ChatEngineCompactInfo {
@@ -1069,6 +1078,42 @@ function serializedProviderRequest(threadLog: ThreadEventLog): string {
   return JSON.stringify(
     mapProviderMessagesToWire(rebuildProviderMessagesFromEvents(threadLog), ''),
   );
+}
+
+export function evaluateCompactionSerializedAdmission(
+  serializedBody: string,
+  input: {
+    modelId: string;
+    providerId: string;
+    contextWindowTokens: number;
+    reservedCompletionTokens: number;
+  },
+): PreparedRequestAdmission {
+  return prepareProviderRequest({
+    body: serializedBody,
+    mode: 'native',
+    provider: input.providerId,
+    requestedModelId: input.modelId,
+    contextLimitTokens: input.contextWindowTokens,
+    reservedCompletionTokens: input.reservedCompletionTokens,
+  }).admission;
+}
+
+function compactionCommitAcceptsSerializedRequest(
+  host: ChatEngineCompactionHost,
+  modelId: string,
+  reserve: number,
+  beforeSerialized: string,
+  afterSerialized: string,
+): boolean {
+  if (afterSerialized === beforeSerialized) return false;
+  const admission = evaluateCompactionSerializedAdmission(afterSerialized, {
+    modelId,
+    providerId: host.compactionProviderId ?? 'deepinfra',
+    contextWindowTokens: host.limits.maxEstimatedTokens,
+    reservedCompletionTokens: reserve,
+  });
+  return admission === 'qualified';
 }
 
 function operationalStateFor(host: ChatEngineCompactionHost): CompactionOperationalState {
@@ -1195,9 +1240,21 @@ export async function runChatEngineCompaction(
         isOwnerCurrent: ownsConversation,
         validateCommit: () => {
           const afterRequest = serializedProviderRequest(host.threadLog);
+          const tokensBeforeCommit = host.estimateTokens(prior);
+          const tokensAfterCommit = host.estimateTokens(host.conversation);
           return ownsConversation()
             && (host.options.task.length === 0 || afterRequest.includes(host.options.task))
-            && afterRequest.length < beforeRequest.length;
+            && compactionCommitAcceptsSerializedRequest(
+              host,
+              modelId,
+              reserve,
+              beforeRequest,
+              afterRequest,
+            )
+            && !(
+              afterRequest.length > beforeRequest.length
+              && tokensAfterCommit >= tokensBeforeCommit
+            );
         },
       });
       if (committed.status !== 'committed') {
@@ -1260,6 +1317,9 @@ export async function runChatEngineCompaction(
           signal: host.abortSignal,
           ...(host.providerCallbacks ? { callbacks: host.providerCallbacks } : {}),
           ...(host.onCompactionUsage ? { onUsageRecorded: host.onCompactionUsage } : {}),
+          ...(host.summarizationProvider
+            ? { summarizationProvider: host.summarizationProvider }
+            : {}),
         });
         if (!ownerIsCurrent()) return null;
         if (!mgr.changed && (mgr.status === 'noop' || mgr.status === 'cannot_fit')) {
@@ -1300,10 +1360,16 @@ export async function runChatEngineCompaction(
             isOwnerCurrent: ownerIsCurrent,
             validateCommit: () => {
               const afterRequest = serializedProviderRequest(host.threadLog);
-              const tokenShrink = mgr.tokensAfter < mgr.tokensBefore;
               return ownerIsCurrent()
                 && (host.options.task.length === 0 || afterRequest.includes(host.options.task))
-                && (afterRequest.length < beforeRequest.length || tokenShrink);
+                && compactionCommitAcceptsSerializedRequest(
+                  host,
+                  modelId,
+                  reserve,
+                  beforeRequest,
+                  afterRequest,
+                )
+                && mgr.tokensAfter < mgr.tokensBefore;
             },
           });
           if (commit.status !== 'committed') {
