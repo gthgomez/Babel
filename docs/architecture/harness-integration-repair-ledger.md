@@ -10,7 +10,7 @@ Repair branch: `cursor/architecture-integration-repair-73b4` (PR #370).
 | I02 | Confirmed | `OpenCodeGoApiRunner` execute/executeRaw/stream wrappers rethrow `PreparedRequestAdmissionError` before transport | Worker A + Bugbot (Composer 2.5 Fast; findings retained) | `architectureIntegrationRepair.test.ts` (I02): real adapter + mocked `fetch`, no `executeRaw` stub |
 | I03 | Confirmed | Repo-map / preamble budget uses resident `estimateTokens(conversation)` (not cumulative `apiTokenCount`) | Worker A | `architectureIntegrationRepair.test.ts` (I03): `ensureRepositoryContext` + `getOrBuildSystemPrompt` twice with inflated `apiTokenCount`; `repoMapPreamble.ts` |
 | I04 | Confirmed | `resolveCompactionSummarizationProvider` + engine wiring; no ambient cross-route for OpenCode Go | Worker A | `architectureIntegrationRepair.test.ts` (I04) |
-| I05 | Confirmed | Compaction admission serializes the **same JSON** as native transport (`openAiCompatibleNativeWire` + runner-bound `buildNativeToolsWireBody` via `ChatEngine.buildNativeCompactionAdmissionWireBody`); provider context window + runner reserved output via `prepareProviderRequest` | Worker A | `openAiCompatibleNativeWire.test.ts`, `chatEngineNativeWireAdmission.test.ts` (receiver), `architectureIntegrationRepair.test.ts` (I05), `compactionCommit.test.ts` (tool-heavy), lifecycle/S07 |
+| I05 | Confirmed | Compaction admission uses **runner-bound** `buildNativeToolsWireBody` only (OpenAI-compatible via `openAiCompatibleNativeWire`, DeepSeek-direct via `deepSeekNativeWire`); no OpenAI-shaped fallback when bytes would differ; provider context + runner reserved output via `prepareProviderRequest` | Worker A | `openAiCompatibleNativeWire.test.ts`, `deepSeekNativeWire.test.ts`, `chatEngineNativeWireAdmission.test.ts` (full-byte DeepInfra + DeepSeek), `architectureIntegrationRepair.test.ts` (I05), `compactionCommit.test.ts`, lifecycle/S07 |
 | I06 | Confirmed | `runMutationAgentLoop` patch target authorization | Worker B | `architectureIntegrationRepair.test.ts` (I06) |
 | I07 | Confirmed | Child effect receipts / hash-delta promotion | Worker B | mutation + child tests (prior slice) |
 | I08 | Confirmed | Daemon crash recovery explicit `failed` (no silent requeue) | Worker B | `architectureIntegrationRepair.test.ts` (I08) |
@@ -36,6 +36,7 @@ Repair branch: `cursor/architecture-integration-repair-73b4` (PR #370).
 
 ## Honest limitations (not claimed complete)
 
+- **I05 scope:** Native compaction admission byte parity is implemented for deliberation runners exposing `buildNativeToolsWireBody` (DeepInfra family + DeepSeek direct). Other providers (e.g. Ollama text/native) are unsupported for native wire admission and fail closed in `buildNativeCompactionAdmissionWireBody`.
 - Broad host-port / reducer migration programs beyond documented projection boundaries and public-entry tests are **out of scope** for this PR.
 - Full process-tree settlement under load for search cancellation is covered at abort/timeout seams, not exhaustive stress harnesses.
 - Paid provider evaluations and release deployment were not authorized.

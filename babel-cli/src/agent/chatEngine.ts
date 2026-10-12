@@ -257,11 +257,6 @@ import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
 import { buildChatEngineRepoMapPreamble } from "./repoMapPreamble.js";
 import { runChatEngineCompactionFor } from "./chatEngineCompactionHost.js";
 import {
-  buildNativeProviderRequestBodyForAdmission,
-  resolveCompactionProviderAdmissionModelId,
-} from "./compactionCommit.js";
-import { resolveProviderCapabilities } from "./providerCapabilities.js";
-import {
   describePreambleBudget,
   enforcePreambleBudget,
 } from "./preambleBudget.js";
@@ -3851,31 +3846,23 @@ export class ChatEngine {
         options?: { stream?: boolean; toolChoice?: "auto" | "required" },
       ) => string;
     };
-    if (typeof nativeWireRunner.buildNativeToolsWireBody === "function") {
-      const messages = rebuildProviderMessagesFromEvents(this.parity.eventLog, {
-        systemPrompt,
-      });
-      return nativeWireRunner.buildNativeToolsWireBody(
-        messages,
-        toolDefs,
-        systemPrompt,
-        { stream: true },
+    if (typeof nativeWireRunner.buildNativeToolsWireBody !== "function") {
+      const provider = this.modelPolicy?.provider ?? "unknown";
+      throw new Error(
+        `[compaction] Native admission requires a deliberation runner with ` +
+          `buildNativeToolsWireBody (OpenAI-compatible or DeepSeek-direct). ` +
+          `Provider "${provider}" has no shared transport wire builder on this runner.`,
       );
     }
-    const admissionModelId = resolveCompactionProviderAdmissionModelId({
-      options: this.options,
-      ...(this.modelPolicy ? { modelPolicy: this.modelPolicy } : {}),
-    });
-    const caps = resolveProviderCapabilities(admissionModelId);
-    return buildNativeProviderRequestBodyForAdmission({
-      threadLog: this.parity.eventLog,
+    const messages = rebuildProviderMessagesFromEvents(this.parity.eventLog, {
       systemPrompt,
-      modelId: admissionModelId,
-      tools: toolDefs,
-      maxOutputTokens: caps.maxOutputTokens ?? null,
-      temperature: 0,
-      stream: true,
     });
+    return nativeWireRunner.buildNativeToolsWireBody(
+      messages,
+      toolDefs,
+      systemPrompt,
+      { stream: true },
+    );
   }
 
   /** H1 compaction: delegates to runChatEngineCompaction (atomic commit path). */
