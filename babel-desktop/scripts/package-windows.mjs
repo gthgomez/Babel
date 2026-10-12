@@ -45,7 +45,7 @@ if (readFileSync(join(bundle,'version'),'utf8').trim() !== electronVersion) thro
 renameSync(join(bundle,'electron.exe'), join(bundle,'Babel Desktop.exe'));
 const app = join(bundle, 'resources', 'app');
 mkdirSync(app, {recursive:true});
-for (const name of ['native','dist','assets','LICENSE','NOTICE']) cpSync(join(desktop,name), join(app,name), {recursive:true});
+for (const name of ['native','src','dist','assets','LICENSE','NOTICE']) cpSync(join(desktop,name), join(app,name), {recursive:true});
 writeFileSync(join(app,'package.json'), JSON.stringify({name:'babel-north-star-desktop',version,main:'native/main.mjs',type:'module',private:true},null,2));
 const runtime = join(bundle,'resources','babel-runtime');
 const cli = join(runtime,'cli');
