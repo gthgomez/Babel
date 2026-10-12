@@ -33,6 +33,9 @@ export const TRUSTED_ALWAYS_FULL_PREFIXES = [
 export const INSTALLER_SENSITIVE_PREFIXES = [
   "babel-desktop/test/installer-lifecycle/",
   "babel-desktop/scripts/package-windows",
+  "babel-desktop/scripts/install-windows.ps1",
+  "babel-desktop/scripts/uninstall-windows.ps1",
+  "babel-desktop/package.json",
   ".github/workflows/release.yml",
 ];
 

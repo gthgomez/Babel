@@ -7,7 +7,15 @@
 # No baseline or process-boundary grant is increased.
 name: Public Release Gate
 'on':
-  pull_request: null
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - converted_to_draft
+      - labeled
+      - unlabeled
   push:
     branches:
       - main

@@ -20,16 +20,23 @@ test("docs and skill pull requests use the fast lane", () => {
 });
 
 test("runtime, desktop, workflow, and tool changes use the full lane", () => {
-  for (const file of ["babel-cli/src/agent/chatEngine.ts", "babel-desktop/package.json", ".github/workflows/typecheck.yml", "tools/ci-merge-lane.mjs", "AGENTS.md"]) {
+  for (const file of ["babel-cli/src/agent/chatEngine.ts", ".github/workflows/typecheck.yml", "tools/ci-merge-lane.mjs", "AGENTS.md"]) {
     const lane = classifyMergeLane({ event: "pull_request", files: ["README.md", file] });
     assert.equal(lane.full, true, file);
     assert.equal(lane.installer, false, file);
   }
+  assert.deepEqual(
+    classifyMergeLane({ event: "pull_request", files: ["babel-desktop/package.json"] }),
+    { full: true, installer: true },
+  );
 });
 
 test("installer-sensitive desktop paths require installer qualification", () => {
   for (const file of [
     "babel-desktop/scripts/package-windows-setup.mjs",
+    "babel-desktop/scripts/install-windows.ps1",
+    "babel-desktop/scripts/uninstall-windows.ps1",
+    "babel-desktop/package.json",
     "babel-desktop/test/installer-lifecycle/run-lifecycle.ps1",
     ".github/workflows/release.yml",
   ]) {

@@ -3,6 +3,30 @@ import { resolve } from 'node:path'
 
 import { getSafeEnv } from './utils/safeEnv.js'
 
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    if (code === 'ESRCH') return false
+    return true
+  }
+}
+
+export async function waitForProcessGroupExit(groupLeaderPid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      process.kill(-groupLeaderPid, 0)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ESRCH') return true
+    }
+    await new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, 10) })
+  }
+  return !isProcessAlive(groupLeaderPid)
+}
+
 /**
  * Kill a spawned process and its descendants.
  *

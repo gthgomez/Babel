@@ -123,7 +123,14 @@ test('security, public policy, review contracts, dual-OS manifest and metadata r
   metadata.if = "github.event_name == 'pull_request'";
   assert.deepEqual(metadata, baseline.jobs['public-pr-metadata-tests']);
   assert.deepEqual(workflow.permissions, { contents: 'read' });
-  assert.deepEqual(workflow.on, baseline.on);
+  // Triggers deliberately expanded by the fast-iteration-merge-workflow review:
+  // qualification must re-run when a draft leaves ready_for_review or full-ci labels flip.
+  assert.deepEqual(workflow.on, {
+    pull_request: {
+      types: ['opened', 'synchronize', 'reopened', 'ready_for_review', 'converted_to_draft', 'labeled', 'unlabeled'],
+    },
+    push: { branches: ['main'] },
+  });
   assert.deepEqual(workflow.concurrency, baseline.concurrency);
 });
 

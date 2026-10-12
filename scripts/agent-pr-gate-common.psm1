@@ -294,6 +294,64 @@ function Get-AgentExactDiffCoverage {
   } finally { $process.Dispose() }
 }
 
+function Test-AgentPathMatchesPolicyPrefixes {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Prefixes
+  )
+  $normalized = $Path.Replace('\', '/')
+  foreach ($prefix in $Prefixes) {
+    $candidate = [string]$prefix
+    if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+    $trimmed = $candidate.TrimEnd('/')
+    if ($normalized -ieq $trimmed -or $normalized.StartsWith("$trimmed/", [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
+}
+
+function Get-AgentStaleMainIntegrationOverlap {
+  param(
+    [Parameter(Mandatory = $true)][string]$GitPath,
+    [Parameter(Mandatory = $true)][string]$RepoRoot,
+    [Parameter(Mandatory = $true)][string]$OriginMain,
+    [Parameter(Mandatory = $true)][string]$ReviewedHead
+  )
+  if (-not (Test-AgentShaValue $OriginMain) -or -not (Test-AgentShaValue $ReviewedHead)) {
+    return [pscustomobject]@{ available = $false; overlap = @(); error = 'sha_invalid' }
+  }
+  $mergeBaseResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $RepoRoot -Arguments @('merge-base', $OriginMain, $ReviewedHead)
+  if ($mergeBaseResult.exitCode -ne 0) {
+    return [pscustomobject]@{ available = $false; overlap = @(); error = 'merge_base_unavailable' }
+  }
+  $mergeBase = ($mergeBaseResult.text -split "`n")[0].Trim()
+  if (-not (Test-AgentShaValue $mergeBase)) {
+    return [pscustomobject]@{ available = $false; overlap = @(); error = 'merge_base_unavailable' }
+  }
+  $mainDiff = Invoke-AgentGit -GitPath $GitPath -RepoRoot $RepoRoot -Arguments @('diff', '--name-only', "$mergeBase..$OriginMain")
+  $headDiff = Invoke-AgentGit -GitPath $GitPath -RepoRoot $RepoRoot -Arguments @('diff', '--name-only', "$mergeBase..$ReviewedHead")
+  if ($mainDiff.exitCode -ne 0 -or $headDiff.exitCode -ne 0) {
+    return [pscustomobject]@{ available = $false; overlap = @(); error = 'diff_unavailable' }
+  }
+  $mainPaths = @($mainDiff.output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $headPathSet = @{}
+  foreach ($path in @($headDiff.output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+    $headPathSet[$path.Replace('\', '/')] = $true
+  }
+  $overlap = @($mainPaths | Where-Object { $headPathSet.ContainsKey($_.Replace('\', '/')) })
+  $policyPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'config/review-risk-policy.json'
+  $policy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json -Depth 10
+  $sensitivePrefixes = @($policy.criticalPrefixes) + @($policy.hostProtectedPrefixes) + @(
+    '.github/workflows/typecheck.yml',
+    'tools/ci-merge-lane',
+    'babel-desktop/scripts/install-windows.ps1',
+    'babel-desktop/scripts/uninstall-windows.ps1',
+    'babel-desktop/scripts/package-windows',
+    'babel-desktop/package.json'
+  )
+  $riskyOverlap = @($overlap | Where-Object { Test-AgentPathMatchesPolicyPrefixes -Path $_ -Prefixes $sensitivePrefixes })
+  return [pscustomobject]@{ available = $true; overlap = @($riskyOverlap); error = '' }
+}
+
 function Get-AgentRiskLane {
   param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$ChangedPaths)
   # The installed base gate and TypeScript read the same risk table.
@@ -400,4 +458,4 @@ function Get-AgentReviewPolicyVerdict {
   }
 }
 
-Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Get-AgentExactDiffCoverage, Get-AgentRiskLane, Get-AgentMinimumReviewCount, Test-AgentAutonomousReviewEvidence, Test-AgentControllerReviewEvidenceBundle, Test-AgentIndependentReviewEvidenceV3, Test-AgentHostReviewBundleV3, Get-AgentPropertyNames, Get-AgentRequiredCheckAuthority, Test-AgentEvidenceTransportStub, Get-AgentEvidenceTransportError, Get-AgentIndependentReviewSummary, Select-AgentHostReviewBundle
+Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Get-AgentExactDiffCoverage, Test-AgentPathMatchesPolicyPrefixes, Get-AgentStaleMainIntegrationOverlap, Get-AgentRiskLane, Get-AgentMinimumReviewCount, Test-AgentAutonomousReviewEvidence, Test-AgentControllerReviewEvidenceBundle, Test-AgentIndependentReviewEvidenceV3, Test-AgentHostReviewBundleV3, Get-AgentPropertyNames, Get-AgentRequiredCheckAuthority, Test-AgentEvidenceTransportStub, Get-AgentEvidenceTransportError, Get-AgentIndependentReviewSummary, Select-AgentHostReviewBundle

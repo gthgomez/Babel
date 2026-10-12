@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import type { IndependentReviewReceiptV2 } from '../evidence/independentReview.js';
-import { terminateChildTree } from '../processTree.js';
+import { terminateChildTree, waitForProcessGroupExit } from '../processTree.js';
 import type { IndependentReviewCandidate, IndependentReviewVerdict, TrustedReviewIssuer, TrustedReviewVerifier } from './independentReviewBroker.js';
 import { attachReviewProcessContainment } from './reviewProcessContainment.js';
 import type { ReviewExecutionAttestation } from './reviewProvenance.js';
@@ -196,8 +196,8 @@ export async function runJsonService<T>(service: JsonServiceCommand, input: unkn
       if (stopCause) return;
       stopCause = cause;
       if (cause === 'finite_timeout' || cause === 'host_abort') service.authority?.recordTerminal(cause);
-      containment.release();
       terminateChildTree(child);
+      containment.release();
       cleanupTimer = setTimeout(() => {
         if (closeObserved) return;
         service.authority?.recordTerminal('cleanup_timeout');
@@ -215,9 +215,13 @@ export async function runJsonService<T>(service: JsonServiceCommand, input: unkn
       settleReject(new Error('Trusted review service could not be started.'));
     };
     onChildClose = (code) => {
+      void (async () => {
       closeObserved = true;
       if (settled) return;
       if (stopCause) {
+        if (child.pid) {
+          await waitForProcessGroupExit(child.pid, lifetime.cleanupTimeoutMs);
+        }
         settleReject(new Error(stopMessage(stopCause)));
         return;
       }
@@ -231,6 +235,7 @@ export async function runJsonService<T>(service: JsonServiceCommand, input: unkn
       } catch {
         settleReject(new Error('Trusted review service returned invalid JSON.'));
       }
+      })();
     };
     if (childError) onChildError(childError);
     else if (childCloseCode !== undefined) onChildClose(childCloseCode);
