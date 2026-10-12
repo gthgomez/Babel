@@ -40,19 +40,81 @@ export function parseSha256Sums(text, zipName) {
 }
 
 /**
- * Mirrors the NSIS bootstrap section after ExecWait (IfErrors / IntCmp / labels).
- * Keep in sync with renderNsis install section control flow.
- * @param {{launchError: boolean, exitCode: number}} input
- * @returns {{label: 'setup_ok' | 'bootstrap_exit' | 'launch_failed', errorLevel: number, showsInteractiveFailureDialog: boolean}}
+ * NSIS instructions after staging run-install.cmd (ExecWait through SectionEnd).
+ * @param {'named' | 'legacyOffset'} ifErrorsStyle `legacyOffset` reproduces the pre-fix
+ *   `IfErrors 0 +3` bug for Windows fault-injection probes only.
  */
-export function resolveBootstrapInstallResult({launchError, exitCode}) {
-  if (launchError) {
-    return {label: 'launch_failed', errorLevel: 98, showsInteractiveFailureDialog: true};
+export function renderBootstrapPostExec(ifErrorsStyle = 'named') {
+  if (ifErrorsStyle === 'legacyOffset') {
+    return `  IfErrors 0 +3
+    DetailPrint "Failed to launch the installer bootstrap."
+    SetErrorLevel 98
+    Return
+  IntCmp $R0 0 setup_ok
+    DetailPrint "Installation failed (exit code $R0). See install-log.txt. No changes were kept."
+    SetErrorLevel $R0
+    Return
+  setup_ok:
+  DetailPrint "Installation complete. Use the Babel Desktop Start Menu shortcut to launch."
+  SetErrorLevel 0
+  Return`;
   }
-  if (exitCode !== 0) {
-    return {label: 'bootstrap_exit', errorLevel: exitCode, showsInteractiveFailureDialog: true};
-  }
-  return {label: 'setup_ok', errorLevel: 0, showsInteractiveFailureDialog: false};
+  return `  ; If the bootstrap could not launch, ExecWait sets the error flag while $R0
+  ; stays 0 - fail loudly instead of reporting a false success.
+  IfErrors launch_failed
+  IntCmp $R0 0 setup_ok
+    DetailPrint "Installation failed (exit code $R0). See install-log.txt. No changes were kept."
+    IfSilent silent_bootstrap_exit
+    MessageBox MB_ICONSTOP|MB_OK "Babel Desktop setup failed (exit code $R0).$\r$\nSee install-log.txt in the staging folder."
+  silent_bootstrap_exit:
+    SetErrorLevel $R0
+    Return
+  setup_ok:
+  DetailPrint "Installation complete. Use the Babel Desktop Start Menu shortcut to launch."
+  SetErrorLevel 0
+  Return
+  launch_failed:
+  DetailPrint "Failed to launch the installer bootstrap."
+  IfSilent silent_launch_failed
+  MessageBox MB_ICONSTOP|MB_OK "Babel Desktop setup could not start the installer bootstrap."
+  silent_launch_failed:
+  SetErrorLevel 98
+  Return`;
+}
+
+export function renderBootstrapExecSection(ifErrorsStyle = 'named') {
+  return `  ExecWait '"$TEMP\\BabelDesktopSetup\\run-install.cmd"' $R0
+${renderBootstrapPostExec(ifErrorsStyle)}`;
+}
+
+/**
+ * Minimal NSIS harness for Windows bootstrap control-flow probes (CI only).
+ * @param {{ifErrorsStyle: 'named' | 'legacyOffset', stagedBootstrap: string, outFile: string, launchFailure?: boolean}} opts
+ */
+export function renderBootstrapProbeNsi({ifErrorsStyle, stagedBootstrap, outFile, launchFailure = false}) {
+  const fw = p => '"' + p + '"';
+  const execTarget = launchFailure
+    ? '$TEMP\\BabelDesktopSetup\\missing-bootstrap.cmd'
+    : '$TEMP\\BabelDesktopSetup\\run-install.cmd';
+  const execBlock = `  ExecWait '"${execTarget}"' $R0
+${renderBootstrapPostExec(ifErrorsStyle)}`;
+  const fileLine = launchFailure
+    ? ''
+    : `  File /oname=run-install.cmd ${fw(stagedBootstrap)}\n`;
+  return `
+Unicode true
+RequestExecutionLevel user
+SilentInstall normal
+AutoCloseWindow true
+OutFile ${fw(outFile)}
+InstallDir "$TEMP\\BabelProbe"
+ShowInstDetails show
+Page instfiles
+Section "Install"
+  SetOutPath "$TEMP\\BabelDesktopSetup"
+${fileLine}${execBlock}
+SectionEnd
+`.trimStart();
 }
 
 export function compileNsis({makensis, script, useArchive, nsisExtract}, runCommand, recordArtifacts, removeDirectory = rmSync) {
@@ -115,28 +177,7 @@ Section "Install"
   ; selects the 64-bit Windows PowerShell via the $WINDIR\Sysnative alias
   ; (the WOW64 view of the real System32, which only exists from 32-bit
   ; processes) and captures the transcript for diagnosability.
-  ExecWait '"$TEMP\\BabelDesktopSetup\\run-install.cmd"' $R0
-  ; If the bootstrap could not launch, ExecWait sets the error flag while $R0
-  ; stays 0 - fail loudly instead of reporting a false success.
-  IfErrors launch_failed
-  IntCmp $R0 0 setup_ok
-    DetailPrint "Installation failed (exit code $R0). See install-log.txt. No changes were kept."
-    IfSilent silent_bootstrap_exit
-    MessageBox MB_ICONSTOP|MB_OK "Babel Desktop setup failed (exit code $R0).$\r$\nSee install-log.txt in the staging folder."
-  silent_bootstrap_exit:
-    SetErrorLevel $R0
-    Return
-  setup_ok:
-  DetailPrint "Installation complete. Use the Babel Desktop Start Menu shortcut to launch."
-  SetErrorLevel 0
-  Return
-  launch_failed:
-  DetailPrint "Failed to launch the installer bootstrap."
-  IfSilent silent_launch_failed
-  MessageBox MB_ICONSTOP|MB_OK "Babel Desktop setup could not start the installer bootstrap."
-  silent_launch_failed:
-  SetErrorLevel 98
-  Return
+${renderBootstrapExecSection('named')}
 SectionEnd
 `.trimStart();
 }

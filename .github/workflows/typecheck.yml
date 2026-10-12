@@ -455,6 +455,11 @@ jobs:
           "--node-archive=$env:LIFECYCLE_NODE_ARCHIVE"
           "--electron-archive=$env:LIFECYCLE_ELECTRON_ARCHIVE"
           "--output=$env:RUNNER_TEMP\lifecycle-payload"
+      - name: Run NSIS bootstrap control probes
+        shell: pwsh
+        run: >
+          pwsh -NoProfile -ExecutionPolicy Bypass -File babel-desktop/test/installer-bootstrap-control/run-bootstrap-control.ps1
+          -MakensisPath "$env:LIFECYCLE_MAKENSIS"
       - name: Run installer lifecycle qualification
         shell: pwsh
         run: >
