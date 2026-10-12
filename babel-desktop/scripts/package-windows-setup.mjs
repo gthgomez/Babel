@@ -111,6 +111,16 @@ Section "Install"
   DetailPrint "Installation complete. Use the Babel Desktop Start Menu shortcut to launch."
   SetErrorLevel 0
 SectionEnd
+
+; A silent install (/S) must not linger: close the details window as soon as
+; the install succeeds instead of waiting on a user who is not there.
+Function .onInstSuccess
+  IfSilent silent_autoclose
+  Goto autoclose_done
+silent_autoclose:
+  SetAutoClose true
+autoclose_done:
+FunctionEnd
 `.trimStart();
 }
 

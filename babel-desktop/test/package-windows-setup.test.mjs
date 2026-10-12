@@ -110,3 +110,17 @@ test('NSIS script quotes Windows paths containing spaces', () => {
   });
   assert.ok(nsi.includes(`"${spaced}"`), 'the spaced path must appear quoted verbatim');
 });
+
+test('silent installs auto-close the details window', () => {
+  const nsi = renderNsis({
+    version: '0.1.1',
+    stagedPayload: `C:${B}p`, stagedSha: `C:${B}s`,
+    stagedInstall: `C:${B}i`, stagedUninstall: `C:${B}u`,
+    stagedBootstrap: `C:${B}b`,
+    outFile: `C:${B}o${B}setup.exe`,
+  });
+  assert.match(nsi, /Function \.onInstSuccess/, 'must hook install success');
+  const hook = nsi.slice(nsi.indexOf('Function .onInstSuccess'));
+  assert.ok(hook.includes('IfSilent'), 'auto-close must be gated on silent mode');
+  assert.ok(hook.indexOf('IfSilent') < hook.indexOf('SetAutoClose true'), 'silent runs must set SetAutoClose true');
+});
