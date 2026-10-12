@@ -39,6 +39,22 @@ export function parseSha256Sums(text, zipName) {
   return line.trim().split(/\s+/)[0].replace(/^\*/, '').toLowerCase();
 }
 
+/**
+ * Mirrors the NSIS bootstrap section after ExecWait (IfErrors / IntCmp / labels).
+ * Keep in sync with renderNsis install section control flow.
+ * @param {{launchError: boolean, exitCode: number}} input
+ * @returns {{label: 'setup_ok' | 'bootstrap_exit' | 'launch_failed', errorLevel: number, showsInteractiveFailureDialog: boolean}}
+ */
+export function resolveBootstrapInstallResult({launchError, exitCode}) {
+  if (launchError) {
+    return {label: 'launch_failed', errorLevel: 98, showsInteractiveFailureDialog: true};
+  }
+  if (exitCode !== 0) {
+    return {label: 'bootstrap_exit', errorLevel: exitCode, showsInteractiveFailureDialog: true};
+  }
+  return {label: 'setup_ok', errorLevel: 0, showsInteractiveFailureDialog: false};
+}
+
 export function compileNsis({makensis, script, useArchive, nsisExtract}, runCommand, recordArtifacts, removeDirectory = rmSync) {
   let primaryError;
   try {

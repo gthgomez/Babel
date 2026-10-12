@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validatePayloadBuild, parseSha256Sums, renderNsis, compileNsis } from '../scripts/package-windows-setup.mjs';
+import { validatePayloadBuild, parseSha256Sums, renderNsis, compileNsis, resolveBootstrapInstallResult } from '../scripts/package-windows-setup.mjs';
 
 const validBuild = {platform: 'win32-x64', signed: false, version: '0.1.1', sourceSha: 'a'.repeat(40)};
 const B = String.fromCharCode(92); // path backslash, kept out of string escapes
@@ -101,6 +101,17 @@ test('NSIS script is per-user, silent-capable, and runs the qualified installer'
   assert.doesNotMatch(nsi, /IfErrors 0 \+/, 'relative IfErrors offsets must not skip exit-code checks');
   assert.doesNotMatch(nsi, /iexpress/i, 'the abandoned IExpress approach must not return');
   assert.doesNotMatch(nsi, /RequireAdmin|SetShellVarContext all/, 'must not install machine-wide');
+});
+
+test('bootstrap control flow treats injected exit 7 as failure before setup_ok', () => {
+  const success = resolveBootstrapInstallResult({launchError: false, exitCode: 0});
+  const exitSeven = resolveBootstrapInstallResult({launchError: false, exitCode: 7});
+  const launchFailed = resolveBootstrapInstallResult({launchError: true, exitCode: 0});
+  assert.deepEqual(success, {label: 'setup_ok', errorLevel: 0, showsInteractiveFailureDialog: false});
+  assert.deepEqual(exitSeven, {label: 'bootstrap_exit', errorLevel: 7, showsInteractiveFailureDialog: true});
+  assert.deepEqual(launchFailed, {label: 'launch_failed', errorLevel: 98, showsInteractiveFailureDialog: true});
+  assert.notEqual(exitSeven.label, success.label);
+  assert.notEqual(launchFailed.label, success.label);
 });
 
 test('NSIS script surfaces bootstrap nonzero exits before the success path', () => {
