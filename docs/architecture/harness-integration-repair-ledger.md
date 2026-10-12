@@ -8,9 +8,9 @@ Repair branch: `cursor/architecture-integration-repair-73b4` (PR #370).
 |----|----------|----------------|--------|--------------|
 | I01 | Confirmed | `CompactionRequestContext`; manager/heuristic eligibility; heuristic fallback on noop/cannot_fit | Lead + worker A | `architectureIntegrationRepair.test.ts` (I01), `chatCompaction.test.ts` |
 | I02 | Confirmed | `OpenCodeGoApiRunner` execute/executeRaw/stream wrappers rethrow `PreparedRequestAdmissionError` before transport | Worker A + Bugbot (Composer 2.5 Fast; findings retained) | `architectureIntegrationRepair.test.ts` (I02): real adapter + mocked `fetch`, no `executeRaw` stub |
-| I03 | Confirmed | Repo-map preamble uses `estimateTokens(conversation)` via `buildChatEngineRepoMapPreamble` | Worker A | `architectureIntegrationRepair.test.ts` (I03): repeated map requests; `chatEngine.ts` → `repoMapPreamble.ts` |
+| I03 | Confirmed | Repo-map / preamble budget uses resident `estimateTokens(conversation)` (not cumulative `apiTokenCount`) | Worker A | `architectureIntegrationRepair.test.ts` (I03): `ensureRepositoryContext` + `getOrBuildSystemPrompt` twice with inflated `apiTokenCount`; `repoMapPreamble.ts` |
 | I04 | Confirmed | `resolveCompactionSummarizationProvider` + engine wiring; no ambient cross-route for OpenCode Go | Worker A | `architectureIntegrationRepair.test.ts` (I04) |
-| I05 | Confirmed | Compaction commit validates **native wire body** (messages + system + tools) against **provider** context window via `prepareProviderRequest`; harness `maxEstimatedTokens` is trigger-only | Worker A | `architectureIntegrationRepair.test.ts` (I05), `compactionCommit.test.ts`, `chatEngine.lifecycleQualification.test.ts` (admission recovery) |
+| I05 | Confirmed | Compaction admission serializes the **same JSON** as native transport (`openAiCompatibleNativeWire` + `DeepInfraApiRunner.buildNativeToolsWireBody` / `ChatEngine.buildNativeCompactionAdmissionWireBody`); provider context window via `prepareProviderRequest` | Worker A | `openAiCompatibleNativeWire.test.ts`, `architectureIntegrationRepair.test.ts` (I05), `compactionCommit.test.ts` (tool-heavy native serializer), lifecycle/S07 compaction cases |
 | I06 | Confirmed | `runMutationAgentLoop` patch target authorization | Worker B | `architectureIntegrationRepair.test.ts` (I06) |
 | I07 | Confirmed | Child effect receipts / hash-delta promotion | Worker B | mutation + child tests (prior slice) |
 | I08 | Confirmed | Daemon crash recovery explicit `failed` (no silent requeue) | Worker B | `architectureIntegrationRepair.test.ts` (I08) |
@@ -25,14 +25,14 @@ Repair branch: `cursor/architecture-integration-repair-73b4` (PR #370).
 
 ## CI notes
 
-- **ecaaa25** (prior head): lifecycle compaction/S07 failures traced to compaction admission using harness `maxEstimatedTokens` as provider ceiling — fixed by `resolveCompactionAdmissionContext` + native wire serializer (`chatEngineCompactionHost.ts`).
+- **ecaaa25** / **ae90805**: lifecycle compaction/S07 failures traced to harness-token ceiling + message-only admission probes — fixed by provider-window admission and shared native wire builder (`openAiCompatibleNativeWire.ts`, `buildNativeCompactionAdmissionWireBody`).
 - **Windows ACL** (`acl_verification_timeout` at prior head): environment-sensitive; `runtime/admission.ts` adds one extended ACL verify retry. Not attributed to integration diff.
 - **native-rg**: qualification script updated to **7** cases after abort-path test (coverage retained).
 
 ## Review receipts
 
 - **Bugbot** (Composer 2.5 Fast, not user-requested model): ripgrep timeout + cache invalidation wiring — addressed in branch.
-- **Independent review**: pending exact-head re-review after verification-gap commit (non-Fast Composer 2.5 lead).
+- **Independent review**: Composer 2.5 re-review pending after native-wire parity commit (non-Fast).
 
 ## Honest limitations (not claimed complete)
 

@@ -16,17 +16,12 @@ import type {
   ChatEngineOptions,
   ContextCompactedInfo,
 } from './chatEngineContracts.js';
-import type { TaskOperation } from '../config/chatTaskClass.js';
 import { checkpointParityEventLogStrict } from './chatEngineParityBridge.js';
 import { parityShouldCompact } from './chatEngineParityBridge.js';
 import {
-  buildNativeProviderRequestBodyForAdmission,
-  resolveCompactionProviderAdmissionModelId,
   runChatEngineCompaction,
   type ChatEngineCompactionHost,
 } from './compactionCommit.js';
-import { availableChatTools } from './chatToolAvailability.js';
-import { resolveProviderCapabilities } from './providerCapabilities.js';
 import { captureUsageAttribution } from './chatEngineProviderAccounting.js';
 import { globalCostTracker } from '../services/costTracker.js';
 
@@ -79,6 +74,8 @@ export interface ChatEngineCompactionBinding {
   resetReadInjectionContext(): void;
   isolationBrokerFlags(): { hostFallbackAllowed: boolean };
   getResolvedRequiredVerifiers(): readonly string[];
+  /** Exact native POST JSON for compaction admission (live deliberation runner). */
+  buildNativeCompactionAdmissionWireBody(): string;
 }
 
 export async function runChatEngineCompactionFor(
@@ -126,11 +123,6 @@ export async function runChatEngineCompactionFor(
     chatProvider: engine.modelPolicy?.provider ?? null,
     compactionModel: compactionModelId,
   });
-  const admissionModelId = resolveCompactionProviderAdmissionModelId({
-    options: engine.options,
-    ...(engine.modelPolicy ? { modelPolicy: engine.modelPolicy } : {}),
-  });
-  const admissionCaps = resolveProviderCapabilities(admissionModelId);
   const host: ChatEngineCompactionHost = {
     conversation: engine.conversation,
     options: engine.options,
@@ -237,22 +229,8 @@ export async function runChatEngineCompactionFor(
     resolveModel: resolveCompactionModelId,
     shouldCompactByTokens: parityShouldCompact,
     estimateTokens,
-    serializeNativeProviderRequestBody: () => {
-      const systemPrompt = engine.getOrBuildSystemPrompt('native');
-      const operation = engine.options.operation as TaskOperation | undefined;
-      const toolDefs = availableChatTools(engine.services.tools.buildDefinitions(), {
-        ...(operation !== undefined ? { operation } : {}),
-        requiredVerifiers: engine.getResolvedRequiredVerifiers(),
-        hostFallbackAllowed: engine.isolationBrokerFlags().hostFallbackAllowed,
-      });
-      return buildNativeProviderRequestBodyForAdmission({
-        threadLog: engine.parity.eventLog,
-        systemPrompt,
-        modelId: admissionModelId,
-        tools: toolDefs,
-        maxOutputTokens: admissionCaps.maxOutputTokens ?? null,
-      });
-    },
+    serializeNativeProviderRequestBody: () =>
+      engine.buildNativeCompactionAdmissionWireBody(),
   };
   if (engine.compactionManager) host.compactionManager = engine.compactionManager;
   if (engine.condensationFacts) host.condensationFacts = engine.condensationFacts;

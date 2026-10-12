@@ -116,7 +116,7 @@ test('I02: OpenCode Go adapter preserves PreparedRequestAdmissionError before tr
   }
 })
 
-test('I03: repeated Chat repo-map requests ignore inflated cumulative api usage', async () => {
+test('I03: repeated Chat preamble budget uses resident history not apiTokenCount', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-i03-map-'))
   mkdirSync(join(root, 'src'), { recursive: true })
   writeFileSync(join(root, 'src', 'seed.ts'), 'export const seed = 1\n')
@@ -131,30 +131,47 @@ test('I03: repeated Chat repo-map requests ignore inflated cumulative api usage'
     { role: 'user', content: 'inspect seed.ts' },
     { role: 'assistant', content: 'ok' },
   ])
-  const budgets: number[] = []
-  const internal = engine as unknown as {
-    apiTokenCount: number
-    generateRepoMap: (userInput?: string) => Promise<string>
-    getConversation: () => ChatMessage[]
+  const host = engine as unknown as import('./chatEngineContracts.js').ChatEngineStreamingLoopHost & {
+    repoMapCache: string | null
   }
-  const original = internal.generateRepoMap.bind(engine)
-  internal.generateRepoMap = async (userInput?: string) => {
-    const mapBudget = computePreambleBudget({
-      historyTokens: estimateTokens(internal.getConversation()),
-      contextWindowTokens: 128_000,
-    })
-    budgets.push(mapBudget.maxMapTokens)
-    return original(userInput)
+  const tokenUsage = engine as unknown as { apiTokenCount: number }
+  const mapBudgets: number[] = []
+  const priorErr = console.error
+  console.error = (msg: unknown, ...rest: unknown[]) => {
+    const text = [msg, ...rest].map(String).join(' ')
+    const marker = '[preamble-budget] '
+    if (text.includes(marker)) {
+      const jsonStart = text.indexOf('{', text.indexOf(marker))
+      if (jsonStart >= 0) {
+        const parsed = JSON.parse(text.slice(jsonStart)) as { maxMapTokens?: number }
+        if (typeof parsed.maxMapTokens === 'number') mapBudgets.push(parsed.maxMapTokens)
+      }
+    }
+    priorErr(msg, ...rest)
   }
-  await internal.generateRepoMap('first provider round')
-  internal.apiTokenCount = 400_000
-  await internal.generateRepoMap('second provider round')
-  assert.equal(budgets.length, 2)
-  assert.equal(budgets[0], budgets[1])
-  assert.notEqual(
-    computePreambleBudget({ historyTokens: 400_000, contextWindowTokens: 128_000 }).maxMapTokens,
-    budgets[0],
-  )
+  try {
+    const mapRound1 =
+      (await host.generateRepoMap()) ||
+      '## Project map (fixture)\n- src/seed.ts\n'
+    host.repoMapCache = mapRound1
+    host.getOrBuildSystemPrompt('legacy')
+    tokenUsage.apiTokenCount = 400_000
+    host.repoMapCache = null
+    const mapRound2 =
+      (await host.generateRepoMap()) ||
+      '## Project map (fixture round 2)\n- src/seed.ts\n'
+    host.repoMapCache = mapRound2
+    ;(engine as { clearSystemPromptCache(): void }).clearSystemPromptCache()
+    host.getOrBuildSystemPrompt('legacy')
+    assert.equal(mapBudgets.length, 2)
+    assert.equal(mapBudgets[0], mapBudgets[1])
+    assert.notEqual(
+      computePreambleBudget({ historyTokens: 400_000, contextWindowTokens: 128_000 }).maxMapTokens,
+      mapBudgets[0],
+    )
+  } finally {
+    console.error = priorErr
+  }
 })
 
 test('I06: apply_patch scope checks parsed targets, not staging path', async () => {

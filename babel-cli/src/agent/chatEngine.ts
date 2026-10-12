@@ -229,7 +229,10 @@ import {
   finalizeParityCancel,
   type ParityRuntime,
 } from "./chatEngineParityBridge.js";
-import { loadThreadEventLogFromDir } from "./threadEventLog.js";
+import {
+  loadThreadEventLogFromDir,
+  rebuildProviderMessagesFromEvents,
+} from "./threadEventLog.js";
 import { isOperatorAbortError } from "./operatorAbort.js";
 import {
   loadSessionEventLogForResume,
@@ -253,6 +256,11 @@ import type { AdmissionStore } from "../runtime/admission.js";
 import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
 import { buildChatEngineRepoMapPreamble } from "./repoMapPreamble.js";
 import { runChatEngineCompactionFor } from "./chatEngineCompactionHost.js";
+import {
+  buildNativeProviderRequestBodyForAdmission,
+  resolveCompactionProviderAdmissionModelId,
+} from "./compactionCommit.js";
+import { resolveProviderCapabilities } from "./providerCapabilities.js";
 import {
   describePreambleBudget,
   enforcePreambleBudget,
@@ -3812,6 +3820,52 @@ export class ChatEngine {
    */
   setCondensationFactChannel(channel: CondensationFactChannel | null): void {
     this.condensationFacts = channel;
+  }
+
+  /**
+   * Exact native tool-stream JSON for compaction admission.
+   * Uses the live deliberation runner wire builder (tools, preamble, envelope extras).
+   */
+  buildNativeCompactionAdmissionWireBody(): string {
+    const runner = this.resolveDeliberationRunner();
+    const buildNative = (
+      runner as {
+        buildNativeToolsWireBody?: (
+          messages: ProviderMessage[],
+          tools: import("../runners/base.js").ToolDefinition[],
+          systemPrompt?: string,
+          options?: { stream?: boolean; toolChoice?: "auto" | "required" },
+        ) => string;
+      }
+    ).buildNativeToolsWireBody;
+    const systemPrompt = this.getOrBuildSystemPrompt("native");
+    const operation = this.lastTurnRuntime?.effectiveOperation
+      ?? resolveTaskShape(this.options.task, this.options.operation).operation;
+    const toolDefs = availableChatTools(this.services.tools.buildDefinitions(), {
+      operation,
+      requiredVerifiers: this.getResolvedRequiredVerifiers(),
+      hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed,
+    });
+    if (typeof buildNative === "function") {
+      const messages = rebuildProviderMessagesFromEvents(this.parity.eventLog, {
+        systemPrompt,
+      });
+      return buildNative(messages, toolDefs, systemPrompt, { stream: true });
+    }
+    const admissionModelId = resolveCompactionProviderAdmissionModelId({
+      options: this.options,
+      ...(this.modelPolicy ? { modelPolicy: this.modelPolicy } : {}),
+    });
+    const caps = resolveProviderCapabilities(admissionModelId);
+    return buildNativeProviderRequestBodyForAdmission({
+      threadLog: this.parity.eventLog,
+      systemPrompt,
+      modelId: admissionModelId,
+      tools: toolDefs,
+      maxOutputTokens: caps.maxOutputTokens ?? null,
+      temperature: 0,
+      stream: true,
+    });
   }
 
   /** H1 compaction: delegates to runChatEngineCompaction (atomic commit path). */

@@ -44,6 +44,8 @@ import {
   type ContextBudgetSnapshot,
 } from './providerCapabilities.js';
 import type { ToolDefinition } from '../runners/base.js';
+import { buildOpenAiCompatibleNativeWireBody } from '../runners/openAiCompatibleNativeWire.js';
+import { mapProviderMessages } from '../runners/providerResponseStream.js';
 
 export type CompactionCommitStatus =
   | 'committed'
@@ -1004,6 +1006,8 @@ export interface ChatEngineCompactionHost {
   modelPolicy?: {
     providerModelId?: string;
     family?: string;
+    contextWindow?: number;
+    contextLimit?: number;
   } | null;
   limits: { maxEstimatedTokens: number };
   abortSignal: AbortSignal;
@@ -1098,8 +1102,14 @@ export function resolveCompactionAdmissionContext(
   const harnessReserve = host.shouldUseTextTools()
     ? host.textToolsReserve
     : host.reserveTokens;
+  const policyContextWindow =
+    host.modelPolicy?.contextWindow ?? host.modelPolicy?.contextLimit ?? 0;
   const contextWindowTokens =
-    caps.contextWindow > 0 ? caps.contextWindow : host.limits.maxEstimatedTokens;
+    caps.contextWindow > 0
+      ? caps.contextWindow
+      : policyContextWindow > 0
+        ? policyContextWindow
+        : host.limits.maxEstimatedTokens;
   const reservedCompletionTokens =
     caps.maxOutputTokens > 0 ? caps.maxOutputTokens : harnessReserve;
   return { contextWindowTokens, reservedCompletionTokens };
@@ -1110,9 +1120,11 @@ export function resolveCompactionProviderAdmissionModelId(
   host: Pick<ChatEngineCompactionHost, 'options' | 'modelPolicy'>,
 ): string {
   const compactionModelId = resolveCompactionModelId({
-    explicitModel: host.options.model,
-    providerModelId: host.modelPolicy?.providerModelId,
-    family: host.modelPolicy?.family,
+    ...(host.options.model ? { explicitModel: host.options.model } : {}),
+    ...(host.modelPolicy?.providerModelId
+      ? { providerModelId: host.modelPolicy.providerModelId }
+      : {}),
+    ...(host.modelPolicy?.family ? { family: host.modelPolicy.family } : {}),
   });
   const pinned = host.modelPolicy?.providerModelId?.trim();
   if (pinned) return pinned;
@@ -1121,7 +1133,7 @@ export function resolveCompactionProviderAdmissionModelId(
   return compactionModelId;
 }
 
-/** Build the native runner JSON body used for prepared-request admission probes. */
+/** Build the native runner JSON body (same helper as DeepInfra `buildNativeToolsWireBody`). */
 export function buildNativeProviderRequestBodyForAdmission(input: {
   threadLog: ThreadEventLog;
   systemPrompt: string;
@@ -1129,19 +1141,21 @@ export function buildNativeProviderRequestBodyForAdmission(input: {
   tools: ToolDefinition[];
   maxOutputTokens: number | null;
   stream?: boolean;
+  temperature?: number;
 }): string {
   const messages = rebuildProviderMessagesFromEvents(input.threadLog, {
     systemPrompt: input.systemPrompt,
   });
-  const wireMessages = mapProviderMessagesToWire(messages, input.systemPrompt, input.systemPrompt);
-  return JSON.stringify({
+  return buildOpenAiCompatibleNativeWireBody({
     model: input.modelId,
-    ...(input.maxOutputTokens === null ? {} : { max_tokens: input.maxOutputTokens }),
-    temperature: 0,
+    maxTokens: input.maxOutputTokens,
+    temperature: input.temperature ?? 0,
+    messages,
     tools: input.tools,
-    tool_choice: 'auto' as const,
+    systemPrompt: input.systemPrompt,
     stream: input.stream ?? true,
-    messages: wireMessages,
+    mapMessages: (msgs, defaultSystem, override) =>
+      mapProviderMessages(msgs, defaultSystem, override) as unknown[],
   });
 }
 
