@@ -13,7 +13,12 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { describe, it } from 'node:test';
 
-import { isProcessAlive, terminateChildTree, waitForProcessGroupExit } from './processTree.js';
+import {
+  isProcessAlive,
+  terminateChildTree,
+  waitForProcessExit,
+  waitForProcessGroupExit,
+} from './processTree.js';
 
 function isAlive(pid: number): boolean {
   try {
@@ -51,6 +56,18 @@ describe('isProcessAlive', () => {
     assert.ok(pid);
     terminateChildTree(child);
     await waitUntilDead(pid);
+    assert.equal(isProcessAlive(pid), false);
+  });
+});
+
+describe('waitForProcessExit', () => {
+  it('returns true after a terminated child exits', async () => {
+    const child = spawnSleeper();
+    const pid = child.pid;
+    assert.ok(pid);
+    terminateChildTree(child);
+    const exited = await waitForProcessExit(pid, 10_000);
+    assert.equal(exited, true);
     assert.equal(isProcessAlive(pid), false);
   });
 });

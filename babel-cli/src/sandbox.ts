@@ -33,7 +33,10 @@ import {
   type ChildProcessWithoutNullStreams,
   type SpawnSyncReturns,
 } from 'node:child_process';
-import { terminateChildTree as terminateChildTreeShared } from './processTree.js';
+import {
+  terminateChildTree as terminateChildTreeShared,
+  waitForProcessGroupExit,
+} from './processTree.js';
 import {
   mkdirSync,
   readFileSync,
@@ -549,39 +552,43 @@ export function spawnCommandAsync(
       // by AbortSignal delivery.
       finish(1, new Error(`spawn ${executable} aborted`));
       const termination = new Promise<void>((resolveTermination, rejectTermination) => {
-        let killIssued = false;
-        let childClosed = false;
         let complete = false;
-        const finishTermination = () => {
-          if (complete || !killIssued || !childClosed) return;
-          complete = true;
-          clearTimeout(closeTimeout);
-          if (executionId) options.processWitness?.killed(processInput, executionId);
-          resolveTermination();
-        };
-        const onClose = () => {
-          childClosed = true;
-          finishTermination();
-        };
         const closeTimeout = setTimeout(() => {
           if (complete) return;
           complete = true;
-          child.removeListener('close', onClose);
           rejectTermination(new Error(`Aborted process ${executable} did not close after tree termination`));
         }, 5_000);
-        child.once('close', onClose);
         setImmediate(() => {
-          try {
-            terminateChildTree(child);
-            killIssued = true;
-            finishTermination();
-          } catch (error) {
-            if (complete) return;
-            complete = true;
-            clearTimeout(closeTimeout);
-            child.removeListener('close', onClose);
-            rejectTermination(error);
-          }
+          void (async () => {
+            try {
+              const pid = child.pid;
+              if (!pid) {
+                throw new Error(`Aborted spawn missing child pid for ${executable}`);
+              }
+              terminateChildTree(child);
+              const groupExited = await waitForProcessGroupExit(pid, 5_000);
+              if (!groupExited) {
+                throw new Error(`Aborted process group ${pid} did not exit after tree termination`);
+              }
+              await new Promise<void>((resolveClose) => {
+                if (child.exitCode != null || child.signalCode != null) {
+                  resolveClose();
+                  return;
+                }
+                child.once('close', () => resolveClose());
+              });
+              if (complete) return;
+              complete = true;
+              clearTimeout(closeTimeout);
+              if (executionId) options.processWitness?.killed(processInput, executionId);
+              resolveTermination();
+            } catch (error) {
+              if (complete) return;
+              complete = true;
+              clearTimeout(closeTimeout);
+              rejectTermination(error);
+            }
+          })();
         });
       });
       registerPendingProcessTermination(
