@@ -30,6 +30,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
   id-token: write
 
 jobs:
@@ -60,10 +61,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Use Node.js 24
+      - name: Use Node.js 24.13.1
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 24
+          node-version: '24.13.1'
           registry-url: https://registry.npmjs.org
 
       - name: Verify package version matches the tag
@@ -95,17 +96,24 @@ jobs:
           node "$env:RUNNER_TEMP/resolve-release-tag.mjs" --repository "$env:GITHUB_REPOSITORY" --tag "$env:RELEASE_TAG" --expect-object "$env:RELEASE_OBJECT" --expect-source "$env:RELEASE_SOURCE"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Install CLI dependencies
-        run: npm --prefix babel-cli ci
+      - name: Verify npm trusted publishing support
+        run: node tools/check-npm-trusted-publishing.mjs
 
-      - name: Common validated package for dry run and publication
+      - name: Promote the qualified immutable consumer candidate
         id: pack
+        env:
+          RELEASE_SOURCE: ${{ steps.tag.outputs.source_sha }}
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          npm --prefix babel-cli run package:release -- "$env:RUNNER_TEMP/npm-candidate"
+          $ErrorActionPreference = 'Stop'
+          $candidateRoot = Join-Path $env:RUNNER_TEMP 'qualified-consumer-candidate'
+          New-Item -ItemType Directory -Force -Path $candidateRoot | Out-Null
+          node tools/qualified-consumer-promotion.mjs --download --repository "$env:GITHUB_REPOSITORY" --source-sha "$env:RELEASE_SOURCE" --output "$candidateRoot"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        env:
-          RELEASE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          node tools/qualified-consumer-promotion.mjs --stage --candidate-dir "$candidateRoot" --output "$env:RUNNER_TEMP/npm-candidate" --expected-source "$env:RELEASE_SOURCE" --expected-version "$env:RELEASE_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Revalidate tag object and source before promotion
         env:

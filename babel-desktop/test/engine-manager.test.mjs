@@ -27,6 +27,39 @@ test('resolvePackagedEngine prefers an installed build when present', () => {
   const resolved = manager.resolvePackagedEngine({userData, resourcesPath: resources, bundled});
   assert.equal(resolved.path, installedEntry);
   assert.equal(resolved.source, 'installed');
+  assert.equal(resolved.ready, true);
+  rmSync(userData, {recursive: true, force: true});
+});
+
+test('resolvePackagedEngine reports ready on bundled fallback when install is invalid', () => {
+  const userData = mkdtempSync(join(tmpdir(), 'babel-engine-fallback-'));
+  const resources = join(userData, 'resources');
+  const bundledCli = join(resources, 'babel-runtime', 'cli', 'dist', 'index.js');
+  const node = join(resources, 'babel-runtime', 'node', 'node.exe');
+  mkdirSync(dirname(bundledCli), {recursive: true});
+  mkdirSync(dirname(node), {recursive: true});
+  writeFileSync(bundledCli, 'bundled');
+  writeFileSync(node, '');
+  manager.writeActiveEngine(userData, {id: 'missing-install', channelPreference: 'stable'});
+  const bundled = {path: bundledCli, label: 'Bundled', executable: node, ready: true, source: 'bundled'};
+  const resolved = manager.resolvePackagedEngine({userData, resourcesPath: resources, bundled});
+  assert.equal(resolved.ready, true);
+  assert.equal(resolved.path, bundledCli);
+  assert.equal(resolved.source, 'bundled');
+  assert.equal(resolved.fallbackFrom, 'missing-install');
+  rmSync(userData, {recursive: true, force: true});
+});
+
+test('resolvePackagedEngine is not ready when bundled runtime files are missing', () => {
+  const userData = mkdtempSync(join(tmpdir(), 'babel-engine-missing-'));
+  const resources = join(userData, 'resources');
+  const bundledCli = join(resources, 'babel-runtime', 'cli', 'dist', 'index.js');
+  const node = join(resources, 'babel-runtime', 'node', 'node.exe');
+  manager.writeActiveEngine(userData, {id: manager.bundledInstallId(), channelPreference: 'stable'});
+  const bundled = {path: bundledCli, label: 'Bundled', executable: node, ready: false, source: 'bundled'};
+  const resolved = manager.resolvePackagedEngine({userData, resourcesPath: resources, bundled});
+  assert.equal(resolved.ready, false);
+  assert.equal(resolved.source, 'missing');
   rmSync(userData, {recursive: true, force: true});
 });
 

@@ -120,15 +120,25 @@ export function resolvePackagedEngine(input) {
   const node = bundled.executable;
   const ready = Boolean(entry && existsSync(entry) && lstatSync(entry).isFile() && bundled.executable && existsSync(node));
   if (!ready) {
+    const bundledReady = Boolean(
+      bundled.ready &&
+      bundled.path &&
+      bundled.executable &&
+      existsSync(bundled.path) &&
+      lstatSync(bundled.path).isFile() &&
+      existsSync(bundled.executable) &&
+      lstatSync(bundled.executable).isFile(),
+    );
     return {
       path: bundled.path,
       label: bundled.label,
       executable: bundled.executable,
+      ready: bundledReady,
       engineId: bundledInstallId(),
       channelPreference: active.channelPreference,
       installRoot: null,
       manifest,
-      source: bundled.ready ? 'bundled' : 'missing',
+      source: bundledReady ? 'bundled' : 'missing',
       fallbackFrom: active.id,
     };
   }
@@ -136,6 +146,7 @@ export function resolvePackagedEngine(input) {
     path: entry,
     label: `Installed CLI (${active.id})`,
     executable: node,
+    ready: true,
     engineId: active.id,
     channelPreference: active.channelPreference,
     installRoot: root,

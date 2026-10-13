@@ -88,7 +88,7 @@ test('read-only child transport emits fixture events and rejects concurrent exec
 test('saved chats are read from Babel session transcripts only',async()=>{
  const {listSavedChats,readSavedChat,messagesFromTranscript}=await load('sessions');
  assert.equal(typeof listSavedChats,'function');
- assert.equal(messagesFromTranscript('{"role":"system","content":"hidden"}\n{"role":"user","content":"Fix the timeout"}\n{"role":"tool","content":"skip"}\n{"role":"assistant","content":"Done."}\n').map(m=>m.role).join(','), 'user,assistant');
+ assert.equal(messagesFromTranscript('{"role":"system","content":"hidden"}\n{"role":"user","content":"Fix the timeout"}\n{"role":"tool","content":"skip"}\n{"role":"assistant","content":"Done."}\n').messages.map(m=>m.role).join(','), 'user,assistant');
  const root=await mkdtemp(join(tmpdir(),'babel-desktop-sessions-'));
  const desktop=join(root,'babel-desktop');
  const session=join(root,'runs','chat-sessions','chat-abc123');
@@ -97,10 +97,10 @@ test('saved chats are read from Babel session transcripts only',async()=>{
  await writeFile(join(session,'transcript.jsonl'),'{"role":"user","content":"Fix the timeout"}\n{"role":"assistant","content":"I updated the controller."}\n{"role":"user","content":"finish"}\n');
  await writeFile(join(root,'runs','chat-sessions','..bad','transcript.jsonl'),'{"role":"user","content":"no"}\n').catch(()=>{});
  const listed=await listSavedChats(desktop);
- assert.equal(listed.length,1);
- assert.equal(listed[0].id,'chat-abc123');
- assert.equal(listed[0].title,'Fix the timeout');
- assert.equal(listed[0].title.includes('finish'),false);
+ assert.equal(listed.sessions.length,1);
+ assert.equal(listed.sessions[0].id,'chat-abc123');
+ assert.equal(listed.sessions[0].title,'Fix the timeout');
+ assert.equal(listed.sessions[0].title.includes('finish'),false);
  const opened=await readSavedChat(desktop,'chat-abc123');
  assert.equal(opened.messages[1].text,'I updated the controller.');
  assert.equal(opened.messages[1].status,'unverified');

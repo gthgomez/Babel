@@ -9,14 +9,15 @@ import {listDirectory,readProjectFile} from './workspace.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
-import {saveProviderCredential} from './credentials.mjs';
+import {hasProviderCredential, saveProviderCredential} from './credentials.mjs';
+import {saveDesktopProviderRoute} from './provider-route-save.mjs';
 import {applyProjectCredentialScope} from './childEnv.mjs';
 import {resolveEngineIdentity} from './identity.mjs';
 import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,runDevelopmentRebuild,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
 import {parseBuildMetadata} from './identity.mjs';
 import {readActiveEngine, writeActiveEngine} from './engine-manager.mjs';
 import {checkPackagedCliUpdate, installPreviewSourceBuild, installStableReleaseArchive, resolveBundledNpmCli} from './engine-artifact.mjs';
-import {qualifiedProviders, readProviderRoute, saveProviderRoute} from './provider-routing.mjs';
+import {qualifiedProviders, readProviderRoute, saveProviderRoute, validateProviderRoute} from './provider-routing.mjs';
 import {listSavedChats,readSavedChat} from './sessions.mjs';
 import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose} from './lifecycle.mjs';
 
@@ -48,9 +49,10 @@ let remoteBridge=null;
 let runAdmission=false;
 let dialogBusy=false;
 let updateBusy=false;
+let connectionChangeBusy=false;
 let cliUpdate={state:'unchecked'};
 let preferencePath;
-const busy=()=>Boolean(runAdmission||runner?.busy||remoteBridge?.running||updateBusy);
+const busy=()=>Boolean(runAdmission||runner?.busy||remoteBridge?.running||updateBusy||connectionChangeBusy);
 
 protocol.registerSchemesAsPrivileged([{scheme:'babel',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 const singleInstance=app.requestSingleInstanceLock();
@@ -106,7 +108,7 @@ async function getInfo(){
           state:remoteBridge.state,
           port:remoteBridge.port,
           url:remoteBridge.port?`http://127.0.0.1:${remoteBridge.port}`:null,
-          blocksLocalRuns:remoteBridge.running,
+          blocksLocalRuns:remoteBridge.state==='ready' || remoteBridge.state==='starting',
           sharedSession:false,
         }
       : {running:false,state:'stopped',port:null,url:null,blocksLocalRuns:false,sharedSession:false},
@@ -166,6 +168,11 @@ async function withNativeDialog(fn){
   try{return await fn();}finally{dialogBusy=false;}
 }
 function assertIdle(){if(busy())throw new Error('Wait for the current Babel run to finish before changing its connection');}
+async function withConnectionChange(fn){
+  assertIdle();
+  connectionChangeBusy=true;
+  try{return await fn();}finally{connectionChangeBusy=false;}
+}
 async function start(){
   await mkdir(app.getPath('userData'),{recursive:true});
   preferencePath=join(app.getPath('userData'),'ui-connection.json');
@@ -270,8 +277,7 @@ async function start(){
       return {...result};
     }finally{updateBusy=false;}
   }));
-  handle('babel:choose-cli',()=>withNativeDialog(async()=>{
-    assertIdle();
+  handle('babel:choose-cli',()=>withNativeDialog(()=>withConnectionChange(async()=>{
     if(app.isPackaged)throw new Error('This preview uses its bundled CLI. Other executable entries are available only in source builds.');
     const selection=await dialog.showOpenDialog(window,{title:'Select your trusted Babel build: babel-cli/dist/index.js',properties:['openFile'],filters:[{name:'JavaScript entry point',extensions:['js','mjs','cjs']}]});
     if(selection.canceled) return getInfo();
@@ -279,10 +285,20 @@ async function start(){
     const consent=await dialog.showMessageBox(window,{type:'warning',title:'Trust this Babel entry point?',message:'This file is executable code.',detail:`${selected}\n\nOnly select the built CLI from your trusted Babel checkout. This application does not verify the provenance of that build.`,buttons:['Cancel','Trust this build'],defaultId:0,cancelId:0,noLink:true});
     if(consent.response!==1)return getInfo();
     preferences.cliEntry=selected;await savePreferences();return getInfo();
-  }));
+  })));
   handle('babel:list-qualified-providers',()=>qualifiedProviders());
+  handle('babel:read-provider-route',()=>readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR));
+  handle('babel:save-provider-route',async options=>{
+    return withConnectionChange(async()=>{
+    const result=await saveDesktopProviderRoute({
+      options, configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR, preferences, savePreferences,
+    });
+    diagnostics=null;
+    return result;
+    });
+  });
   handle('babel:save-provider-credential',async options=>{
-    assertIdle();
+    return withConnectionChange(async()=>{
     if(!options || typeof options!=='object' || (options.scope!=='private' && options.scope!=='project')) {
       throw new Error('Select an explicit credential destination.');
     }
@@ -290,24 +306,46 @@ async function start(){
       throw new Error('Select a project before choosing project-local credentials.');
     }
     const configDirectory=runtimeEnvironment().BABEL_CONFIG_DIR;
-    const result=saveProviderCredential({
-      provider:options.provider,apiKey:options.apiKey,scope:options.scope,
-      configDirectory,projectRoot:preferences.projectRoot,
-    });
-    saveProviderRoute({configDirectory,provider:options.provider,model:options.model});
+    const route=validateProviderRoute({provider:options.provider, model:options.model});
+    const descriptor=qualifiedProviders().find(entry=>entry.id===route.provider);
+    const requiresKey=Boolean(descriptor?.requiresApiKey);
+    const apiKey=typeof options.apiKey==='string'?options.apiKey:'';
+    if(requiresKey && !apiKey && !hasProviderCredential({
+      configDirectory, provider: route.provider, scope: options.scope, projectRoot: preferences.projectRoot,
+    })) {
+      throw new Error('Enter a provider API key.');
+    }
+    let result={provider:route.provider, scope:options.scope, configured:true};
+    if(requiresKey && apiKey) {
+      result=saveProviderCredential({
+        provider:route.provider, apiKey, scope:options.scope,
+        configDirectory, projectRoot:preferences.projectRoot,
+      });
+    }
+    saveProviderRoute({configDirectory, ...route});
+    const previousRoot=preferences.projectCredentialRoot;
     preferences.projectCredentialRoot=options.scope==='project'?preferences.projectRoot:null;
-    await savePreferences();
+    try{await savePreferences();}
+    catch(error){preferences.projectCredentialRoot=previousRoot;throw error;}
     diagnostics=null; // Next doctor reflects the saved file, without inspecting the key.
     return result;
+    });
   });
-  handle('babel:choose-project',()=>withNativeDialog(async()=>{
-    assertIdle();
+  handle('babel:choose-project',()=>withNativeDialog(()=>withConnectionChange(async()=>{
     const selection=await dialog.showOpenDialog(window,{title:'Open project',properties:['openDirectory']});
     if(!selection.canceled){preferences.projectRoot=await realpath(selection.filePaths[0]);await savePreferences();}
     return getInfo();
+  })));
+  handle('babel:list-sessions',options=>listSavedChats(packageRoot,{
+    runsDir:runtimeEnvironment().BABEL_RUNS_DIR,
+    limit:Number(options?.limit) > 0 ? Number(options.limit) : undefined,
+    offset:Number(options?.offset) >= 0 ? Number(options.offset) : undefined,
   }));
-  handle('babel:list-sessions',()=>listSavedChats(packageRoot,{runsDir:runtimeEnvironment().BABEL_RUNS_DIR}));
-  handle('babel:open-session',id=>readSavedChat(packageRoot,id,{runsDir:runtimeEnvironment().BABEL_RUNS_DIR}));
+  handle('babel:open-session',(id, options)=>readSavedChat(packageRoot,id,{
+    runsDir:runtimeEnvironment().BABEL_RUNS_DIR,
+    olderOffset:Number(options?.olderOffset) >= 0 ? Number(options.olderOffset) : undefined,
+    messageLimit:Number(options?.messageLimit) > 0 ? Number(options.messageLimit) : undefined,
+  }));
   handle('babel:list-directory',relative=>listDirectory(preferences.projectRoot,relative));
   handle('babel:read-file',relative=>readProjectFile(preferences.projectRoot,relative));
   handle('babel:open-repository',()=>shell.openExternal(REPOSITORY_URL));

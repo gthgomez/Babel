@@ -147,6 +147,12 @@ jobs:
           node-version: '22'
       - name: Check desktop discovery independently
         run: node tools/check-desktop-test-inventory.mjs
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: babel-desktop
+      - name: Install Playwright Chromium for packaged driver contract
+        run: npx playwright install --with-deps chromium
+        working-directory: babel-desktop
       - name: Run desktop regressions
         run: npm run test
         working-directory: babel-desktop
@@ -196,7 +202,7 @@ jobs:
       - name: Test scanner, real budget checker, and CI coverage contracts
         shell: pwsh
         run: >
-          node --test --test-reporter=tap tools/tests/architectural-boundaries.test.mjs
+          node --test --test-reporter=tap tools/tests/qualified-consumer-promotion.test.mjs tools/tests/package-metadata-drift.test.mjs tools/tests/architectural-boundaries.test.mjs
           tools/tests/architectural-budget.test.mjs tools/tests/ci-package-coverage.test.mjs
           tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-unit-sharding.test.mjs tools/tests/ci-workflow-coverage.test.mjs
           tools/tests/package-scripts-and-tests.test.mjs tools/tests/hook-redaction.test.mjs tools/tests/push-candidates.test.mjs tools/tests/committed-content-policy.test.mjs tools/tests/consumer-environment.test.mjs tools/tests/native-rg-setup.test.mjs tools/tests/required-tap-coverage.test.mjs tools/tests/required-skip-policy.test.mjs tools/tests/required-tap-reporter.test.mjs tools/tests/consumer-archive.test.mjs tools/tests/dist-content.test.mjs tools/tests/review-summary.test.mjs tools/tests/release-package-validation.test.mjs tools/tests/release-tag-identity.test.mjs tools/tests/release-workflow-contract.test.mjs 2>&1 | Tee-Object
@@ -467,6 +473,14 @@ jobs:
           -PayloadZip "$env:RUNNER_TEMP\lifecycle-payload\Babel-Desktop-$((Get-Content babel-desktop/package.json -Raw | ConvertFrom-Json).version)-win-x64.zip"
           -Sha256Sums "$env:RUNNER_TEMP\lifecycle-payload\SHA256SUMS"
           -MakensisPath "$env:LIFECYCLE_MAKENSIS"
+      - name: Upload packaged Electron acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: packaged-electron-acceptance
+          path: babel-desktop/artifacts/packaged-electron/**
+          if-no-files-found: warn
+          retention-days: 14
 
   windows-portability:
     name: windows-portability

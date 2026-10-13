@@ -1,6 +1,23 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
+test('consumer environment strips proxy and registry transport variables', async () => {
+  const { consumerEnvironment } = await import('../../babel-cli/scripts/consumer_environment.mjs')
+  const inherited = {
+    PATH: 'fixture-path',
+    HTTP_PROXY: 'http://proxy.example:8080',
+    HTTPS_PROXY: 'http://proxy.example:8443',
+    ALL_PROXY: 'socks5://proxy.example:1080',
+    NO_PROXY: 'localhost',
+    npm_config_proxy: 'http://proxy.example:8080',
+    npm_config_https_proxy: 'http://proxy.example:8443',
+  }
+  const env = consumerEnvironment(inherited, '/private-fixture')
+  for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'npm_config_proxy', 'npm_config_https_proxy']) {
+    assert.equal(Object.hasOwn(env, key), false, key)
+  }
+})
+
 test('consumer environment strips provider prefixes, preloads and credential configuration', async () => {
   const { consumerEnvironment } = await import('../../babel-cli/scripts/consumer_environment.mjs')
   const canary = 'fixture-inherited-sentinel'

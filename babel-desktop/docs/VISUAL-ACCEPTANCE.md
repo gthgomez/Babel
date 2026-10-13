@@ -20,6 +20,40 @@ System typography follows Cascadia Code / Cascadia Mono / Consolas / Liberation 
 
 ## Validation discipline
 
+The optional native Windows folder-picker journey uses the actual installed
+Electron dialog and a controller restricted to its process ID. From a qualified
+checkout whose source matches the installed artifact:
+
+```powershell
+pwsh -NoProfile -File babel-desktop/test/packaged-electron-acceptance/run-packaged-gui.ps1 `
+  -InstallRoot "$env:LOCALAPPDATA\Programs\Babel Desktop" `
+  -SourceSha (git rev-parse HEAD) `
+  -ArtifactDir "$env:TEMP\babel-native-acceptance" `
+  -NativeProjectPicker
+```
+
+Normal packaged history/fallback acceptance runs first; either failure propagates.
+The picker records its own JSON and screenshot in the artifact directory and uses
+a separate temporary profile, without credentials or task execution. Its dialog
+title/control assumptions require actual Windows execution, including locale
+qualification; syntax checks are insufficient. A synthetic PR merge build is valid
+when its BUILD source is bound to the recorded PR head and base; supply that exact
+source SHA when the installed artifact was built from it.
+
+The required history journey seeds a missing selected engine in the isolated
+profile and navigates latest → older → latest using production bundled fallback.
+Connection permits read-only history without Docker; task admission still requires
+execution diagnostics. This does not establish update recovery with a working task,
+provider authentication, remote shared sessions, or release qualification.
+
+Evidence kinds are distinct:
+
+- **Source/fixture tests** (`native_ui_test.py`, renderer unit tests) use a native API double or fixtures; they do not prove a real installed Electron session.
+- **Packaged-native acceptance** launches the installed `Babel Desktop.exe` with Node Playwright `_electron.launch({ executablePath })` after silent NSIS install (`installer-lifecycle` step 3b). The harness asserts on-disk `BUILD.json`/executable identity, `window.babelDesktop.getInfo()` packaged engine truth (not a falsely “ready” connection), collects renderer `pageerror`/console errors, and uploads JSON plus screenshots as CI artifacts. It is not satisfied by bootstrap file probes, CLI `--version` smoke, or installer-only regex guards.
+- **Installer lifecycle probes** (silent `/S`, registry state, upgrade/rollback/uninstall) validate packaging mechanics but do not replace the Electron GUI acceptance above.
+- The packaged lane seeds fixture project/history under an isolated profile, then exercises history paging, ollama route-only provider configuration, and project tree IPC without `babel:run` or credentials. Interactive NSIS failure dialogs are not automated in the Electron harness.
+- **Live-provider** journeys require separately authorized credentials and are out of scope for ordinary CI qualification.
+
 The screenshots in `artifacts/` are actual Chromium renders of this implementation. The whole reference is never used as the application's background: text, controls, cards, rows, and panels are real DOM elements. Only the logo crop is a raster image.
 
 Layout dimensions and the presence of both cards and all four tool rows are checked in the browser test. Exact pixel-diff thresholds are not claimed; different source-font rendering and the documented honesty corrections would need masking before a useful automated image comparison.

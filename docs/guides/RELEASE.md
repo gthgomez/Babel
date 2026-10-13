@@ -88,8 +88,7 @@ It validates source provenance, builds once, stages runtime assets and packs
 once with lifecycle scripts disabled. It compares every archive member to the
 validated distribution bytes, including ignored `dist/` files, and records
 source SHA, package version, SHA256, SHA512 integrity and package file manifest.
-Publication uses this archive and rechecks its digest; it does not repack.
-Registry verification compares the published version's immutable integrity.
+Publication promotes the **same immutable `consumer-candidate` archive** that passed the nine-row matrix for the frozen source commit. The `publish-npm.yml` workflow downloads that qualified artifact (or fails closed when retention expired) and rechecks digest and source identity; it does not run `package:release` on the publish runner. Registry verification compares the published version's immutable integrity.
 
 Consumer CI transports one frozen archive to all nine OS/Node rows. Each row
 checks source and digest supplied independently of the downloaded manifest

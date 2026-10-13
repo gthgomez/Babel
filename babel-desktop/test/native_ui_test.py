@@ -63,6 +63,88 @@ def main():
         emit(run_id,kind='exit',code=0)
         assert page.locator('#main-status').inner_text()=='Unverified'
         checks.append('incomplete event stream cannot report verified completion')
+        page.evaluate('''() => {
+          window.babelDesktop.listQualifiedProviders = async () => ([
+            {id:'deepseek',label:'DeepSeek',requiresApiKey:true,local:false,routes:[{id:'deepseek-v4-pro',label:'deepseek-v4-pro'}]},
+            {id:'ollama',label:'Ollama',requiresApiKey:false,local:true,routes:[{id:'deepseek-v4-flash',label:'local flash'}]}
+          ]);
+          window.babelDesktop.readProviderRoute = async () => ({provider:'deepseek',model:'deepseek-v4-pro'});
+          window.babelDesktop.saveProviderRoute = async () => ({route:{provider:'deepseek',model:'deepseek-v4-pro'},credentialUpdated:false});
+          window.babelDesktop.listSessions = async (options) => ({
+            sessions:[{id:'chat-1',title:'One',messages:3},{id:'chat-2',title:'Two',messages:1}],
+            total:4, offset:(options&&options.offset)||0, limit:(options&&options.limit)||30
+          });
+          window.babelDesktop.openSession = async (sessionId, options) => ({
+            id:sessionId,
+            messages:[{role:'user',text:'hello'},{role:'assistant',text:'world',status:'unverified'}],
+            history:{totalMessages:2,hasOlder:false,olderOffset:(options&&options.olderOffset)||0,messageLimit:150}
+          });
+        }''')
+        page.locator('[data-action="settings"]').click()
+        page.locator('[data-action="configure-provider"]').click()
+        assert 'CONFIGURE AI PROVIDER' in page.locator('#dialog-title').inner_text()
+        page.locator('#dialog [data-action="close-dialog"].button').click()
+        assert page.locator('#dialog').is_hidden()
+        checks.append('provider dialog can cancel without saving')
+        page.evaluate('''() => {
+          window.__sessionCalls = [];
+          window.__openCalls = [];
+          window.babelDesktop={
+            getInfo:async()=>({cliName:'index.js',projectName:'fixture-project',ready:true}),
+            listDirectory:async()=>[{name:'README.md',type:'file'}],
+            readFile:async()=>({text:'',truncated:false}),
+            onEvent:()=>{},
+            run:async()=>({started:true}),
+            openRepository:async()=>{}
+          };
+          const makeMessages = (olderOffset) => {
+            const total = 160;
+            const end = Math.max(0, total - olderOffset);
+            const start = Math.max(0, end - 150);
+            const messages = [];
+            for (let i = start; i < end; i += 1) {
+              const label = `m-${String(i).padStart(3, '0')}`;
+              messages.push({role: i % 2 === 0 ? 'user' : 'assistant', text: label, status: 'unverified'});
+            }
+            return {messages, history:{totalMessages:total, hasOlder:start>0, olderOffset, messageLimit:150}};
+          };
+          window.babelDesktop.listSessions = async (options) => {
+            window.__sessionCalls.push(options||{});
+            const offset = options?.offset||0;
+            const batch = offset===0
+              ? [{id:'chat-paged',title:'Paged chat',messages:160}]
+              : [{id:'chat-extra',title:'Extra chat',messages:2}];
+            return {sessions:batch,total:2,offset,limit:30};
+          };
+          window.babelDesktop.openSession = async (sessionId, options) => {
+            const olderOffset = (options&&options.olderOffset)||0;
+            window.__openCalls.push({sessionId, olderOffset});
+            const payload = makeMessages(olderOffset);
+            return {id:sessionId, ...payload};
+          };
+          window.babelDesktop.readProviderRoute = async () => ({provider:'deepseek',model:'deepseek-v4-pro'});
+        }''')
+        page.set_content((ROOT/'dist/index.html').read_text())
+        page.locator('#preview-badge').click()
+        page.locator('[data-action="use-live"]').click()
+        page.locator('button.session-button[data-action="session"]', has_text='Paged chat').click()
+        conv = page.locator('#conversation')
+        assert 'm-159' in conv.inner_text()
+        assert 'm-009' not in conv.inner_text()
+        page.locator('[data-action="load-older-messages"]').click()
+        assert 'm-009' in conv.inner_text()
+        assert 'm-159' not in conv.inner_text()
+        page.locator('[data-action="load-latest-messages"]').click()
+        assert 'm-159' in conv.inner_text()
+        page.locator('[data-action="load-older-messages"]').click()
+        page.locator('button.session-button[data-action="session"]', has_text='Paged chat').click()
+        assert 'm-159' in conv.inner_text()
+        assert page.evaluate('window.__openCalls.at(-1).olderOffset') == 0
+        page.locator('#show-more').click()
+        assert page.evaluate('window.__sessionCalls.some(call => call.offset === 1)') is True
+        assert page.locator('#show-more').is_visible()
+        assert 'Show less' in page.locator('#show-more').inner_text()
+        checks.append('saved-chat paging requests offsets and latest→older→latest navigation stays readable')
         assert not errors,errors
         browser.close()
     report={'passed':len(checks),'basis':'Native API test double; not a real Babel or Electron execution','checks':checks,'errors':errors}
