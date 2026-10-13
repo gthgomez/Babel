@@ -147,6 +147,12 @@ jobs:
           node-version: '22'
       - name: Check desktop discovery independently
         run: node tools/check-desktop-test-inventory.mjs
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: babel-desktop
+      - name: Install Playwright Chromium for packaged driver contract
+        run: npx playwright install --with-deps chromium
+        working-directory: babel-desktop
       - name: Run desktop regressions
         run: npm run test
         working-directory: babel-desktop

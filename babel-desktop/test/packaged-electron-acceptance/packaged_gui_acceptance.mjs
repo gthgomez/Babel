@@ -107,11 +107,11 @@ async function main() {
     }
     checks.push('preload IPC getInfo reports packaged bundled engine with truthful not-ready connection');
     await window.waitForSelector('#preview-badge', {timeout: 30_000});
-    const badge = await window.locator('#preview-badge').inner_text();
+    const badge = await window.locator('#preview-badge').innerText();
     if (badge !== 'REFERENCE PREVIEW') throw new Error(`unexpected preview badge: ${badge}`);
     checks.push('renderer shows REFERENCE PREVIEW before live connection');
     await mkdir(artifacts, {recursive: true});
-    await window.screenshot({path: join(artifacts, 'packaged-electron-window.png'), full_page: true});
+    await window.screenshot({path: join(artifacts, 'packaged-electron-window.png'), fullPage: true});
     checks.push('screenshot captured from packaged Electron window');
   } catch (error) {
     errors.push(String(error?.message ?? error));
