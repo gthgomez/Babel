@@ -26,7 +26,10 @@ async function writeReport(dir, report) {
 async function dismissPackagedSetupDialog(window) {
   const dialog = window.locator('#dialog');
   await dialog.click({position: {x: 8, y: 8}});
-  await window.waitForSelector('#dialog:not([open])', {timeout: 15_000});
+  // Closed <dialog> stays in the DOM without [open] but is not visible; do not waitForSelector visible.
+  await dialog.waitFor({state: 'hidden', timeout: 15_000});
+  const closed = await dialog.evaluate(el => !el.open);
+  if (!closed) throw new Error('expected #dialog closed after backdrop dismiss');
 }
 
 /**

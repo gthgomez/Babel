@@ -28,11 +28,38 @@ test('packaged GUI acceptance uses startup BABEL SETUP modal for harness (not fo
   assert.match(acceptanceSource, /waitForSelector\([^)]*#dialog\[open\]/);
   assert.match(acceptanceSource, /connectLiveFromPackagedStartupDialog/);
   assert.match(acceptanceSource, /#dialog \[data-action="use-live"\]/);
+  assert.doesNotMatch(acceptanceSource, /#dialog:not\(\[open\]\)/);
+  assert.match(acceptanceSource, /waitFor\(\{state:\s*'hidden'/);
   const afterProvider = acceptanceSource.split('journeys.provider')[1] ?? '';
   assert.doesNotMatch(afterProvider, /locator\('#preview-badge'\)\.click\(\)/);
   const appStartup = readFileSync(join(desktopRoot, 'src/app.mjs'), 'utf8');
   assert.match(appStartup, /info\?\.packaged.*connectionDialog\(\)/s);
   assert.match(appStartup, /data-action="use-live"/);
+});
+
+test('playwright driver contract: closed HTML dialog is hidden (not visible without [open])', async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox'],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(
+      '<dialog id="dialog" open><div style="padding:2rem">BABEL SETUP</div></dialog>',
+    );
+    const dialog = page.locator('#dialog');
+    await dialog.waitFor({state: 'visible', timeout: 5_000});
+    assert.equal(await page.evaluate(() => document.querySelector('#dialog').open), true);
+    await page.evaluate(() => document.querySelector('#dialog').close());
+    await dialog.waitFor({state: 'hidden', timeout: 5_000});
+    assert.equal(await page.evaluate(() => document.querySelector('#dialog').open), false);
+    await assert.rejects(
+      () => page.waitForSelector('#dialog:not([open])', {timeout: 500}),
+      /Timeout|waiting for selector/,
+    );
+  } finally {
+    await browser.close();
+  }
 });
 
 test('playwright driver contract: locator.innerText and screenshot fullPage', async () => {
