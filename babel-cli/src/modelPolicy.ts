@@ -20,6 +20,7 @@ export type ModelPolicyStage = (typeof MODEL_POLICY_STAGES)[number];
 
 export const LIVE_DEEPSEEK_BACKEND_KEYS = [
   'deepseek-v4-flash',
+  'deepseek-flash',
   'deepseek-v4-pro',
 ] as const;
 
@@ -32,10 +33,12 @@ export const LIVE_OPENROUTER_MODEL_ID = 'z-ai/glm-5.3-flash' as const;
 export const LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS = [
   'deepseek-v4-flash-openrouter',
   'deepseek-v4-pro-openrouter',
+  'deepseek-v4.1-flash-openrouter',
 ] as const;
 export const LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS = [
   'deepseek/deepseek-v4-flash-0731',
   'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4.1-flash',
 ] as const;
 export const LIVE_OPENROUTER_API_BASE = 'https://openrouter.ai/api/v1/chat/completions' as const;
 
@@ -54,6 +57,10 @@ export function resolveOpenRouterDeepSeekBackendKey(modelId: string):
     case 'deepseek/deepseek-v4-flash-0731':
     case 'deepseek-v4-flash-openrouter':
       return 'deepseek-v4-flash-openrouter';
+    case 'deepseek-flash':
+    case 'deepseek/deepseek-v4.1-flash':
+    case 'deepseek-v4.1-flash-openrouter':
+      return 'deepseek-v4.1-flash-openrouter';
     default:
       return null;
   }
@@ -62,9 +69,14 @@ export function resolveOpenRouterDeepSeekBackendKey(modelId: string):
 export function resolveOpenRouterDeepSeekModelId(modelId: string): string | null {
   const backendKey = resolveOpenRouterDeepSeekBackendKey(modelId);
   if (!backendKey) return null;
-  return backendKey === 'deepseek-v4-pro-openrouter'
-    ? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1]
-    : LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
+  switch (backendKey) {
+    case 'deepseek-v4-pro-openrouter':
+      return LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1];
+    case 'deepseek-v4.1-flash-openrouter':
+      return LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[2];
+    default:
+      return LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
+  }
 }
 
 /**
