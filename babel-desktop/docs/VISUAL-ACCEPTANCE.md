@@ -23,7 +23,7 @@ System typography follows Cascadia Code / Cascadia Mono / Consolas / Liberation 
 Evidence kinds are distinct:
 
 - **Source/fixture tests** (`native_ui_test.py`, renderer unit tests) use a native API double or fixtures; they do not prove a real installed Electron session.
-- **Packaged-native acceptance** launches the installed `Babel Desktop.exe` through Playwright’s Electron driver after silent NSIS install (`installer-lifecycle` step 3b). That exercises real main/preload/renderer code against the qualified artifact and records a window screenshot plus `BUILD.json` source identity. It is not satisfied by bootstrap file probes, CLI `--version` smoke, or installer-only regex guards.
+- **Packaged-native acceptance** launches the installed `Babel Desktop.exe` with Node Playwright `_electron.launch({ executablePath })` after silent NSIS install (`installer-lifecycle` step 3b). The harness asserts on-disk `BUILD.json`/executable identity, `window.babelDesktop.getInfo()` packaged engine truth (not a falsely “ready” connection), collects renderer `pageerror`/console errors, and uploads JSON plus screenshots as CI artifacts. It is not satisfied by bootstrap file probes, CLI `--version` smoke, or installer-only regex guards.
 - **Installer lifecycle probes** (silent `/S`, registry state, upgrade/rollback/uninstall) validate packaging mechanics but do not replace the Electron GUI acceptance above.
 - **Live-provider** journeys require separately authorized credentials and are out of scope for ordinary CI qualification.
 

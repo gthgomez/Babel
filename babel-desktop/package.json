@@ -16,7 +16,8 @@
     "package:windows:setup": "node scripts/package-windows-setup.mjs"
   },
   "devDependencies": {
-    "electron": "44.5.1"
+    "electron": "44.5.1",
+    "playwright": "1.61.1"
   },
   "engines": {
     "node": ">=22"

@@ -54,7 +54,7 @@ test('scanTranscriptHead uses the first user message for title, not the tail win
   assert.notEqual(tail.messages.find(message => message.role === 'user')?.text, 'TRUE-FIRST-TITLE');
 });
 
-test('ordinal session outcomes bind turn_id across a 160-message truncated window', async () => {
+test('ordinal session outcomes map event turn_id without transcript turn_id in the latest tail window', async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-sessions-ordinal-'));
   const desktop = join(root, 'babel-desktop');
   const session = join(root, 'runs', 'chat-sessions', 'chat-ordinal');
@@ -67,27 +67,57 @@ test('ordinal session outcomes bind turn_id across a 160-message truncated windo
       lines.push(JSON.stringify({role: 'user', content: `user-${i}`}));
     } else {
       assistantTurn += 1;
-      lines.push(JSON.stringify({role: 'assistant', content: `assistant-${assistantTurn}`, turn_id: assistantTurn}));
+      lines.push(JSON.stringify({role: 'assistant', content: `assistant-${assistantTurn}`}));
     }
   }
   await writeFile(join(session, 'transcript.jsonl'), lines.join('\n') + '\n');
   const events = [];
   for (let turn = 1; turn <= 80; turn += 1) {
-    const outcome = turn === 6 ? 'VERIFIED_COMPLETE' : turn < 6 ? 'AGENT_FAILURE' : 'UNVERIFIED';
+    const outcome = turn === 6 ? 'VERIFIED_COMPLETE' : turn === 1 ? 'AGENT_FAILURE' : 'UNVERIFIED_PATCH';
     events.push(JSON.stringify({kind: 'turn_ended', turn_id: turn, outcome}));
   }
   await writeFile(join(session, 'session-events.jsonl'), events.join('\n') + '\n');
-  const olderOffset = 10;
-  const opened = await readSavedChat(desktop, 'chat-ordinal', {runsDir: join(root, 'runs'), olderOffset});
-  assert.equal(opened.history.windowStart, 0);
-  assert.equal(opened.messages.length, 150);
-  const visible11 = opened.messages[11];
-  assert.equal(visible11?.role, 'assistant');
-  assert.equal(visible11?.text, 'assistant-6');
-  assert.equal(visible11?.status, 'complete');
   const tail = await readSavedChat(desktop, 'chat-ordinal', {runsDir: join(root, 'runs'), olderOffset: 0});
+  assert.equal(tail.history.windowStart, 10);
+  assert.equal(tail.messages.length, 150);
+  assert.equal(tail.history.windowStart + 1, 11);
+  const globalMessage11 = tail.messages[1];
+  assert.equal(globalMessage11?.role, 'assistant');
+  assert.equal(globalMessage11?.text, 'assistant-6');
+  assert.equal(globalMessage11?.status, 'complete');
+  const visibleIndex11 = tail.messages[11];
+  assert.equal(visibleIndex11?.text, 'assistant-11');
+  assert.equal(visibleIndex11?.status, 'unverified');
   const older = await readSavedChat(desktop, 'chat-ordinal', {runsDir: join(root, 'runs'), olderOffset: 150});
+  const turnOneAssistant = older.messages.find(message => message.text === 'assistant-1');
+  assert.equal(turnOneAssistant?.status, 'failed');
   assertNoOverlap(tail.messages, older.messages);
+  await rm(root, {recursive: true, force: true});
+});
+
+test('ordinal session outcomes fall back to ordered events when turn_id is absent from events', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-sessions-ordinal-ordered-'));
+  const desktop = join(root, 'babel-desktop');
+  const session = join(root, 'runs', 'chat-sessions', 'chat-ordered');
+  await mkdir(desktop, {recursive: true});
+  await mkdir(session, {recursive: true});
+  const lines = [];
+  for (let turn = 1; turn <= 6; turn += 1) {
+    lines.push(JSON.stringify({role: 'user', content: `user-${turn}`}));
+    lines.push(JSON.stringify({role: 'assistant', content: `assistant-${turn}`}));
+  }
+  await writeFile(join(session, 'transcript.jsonl'), lines.join('\n') + '\n');
+  await writeFile(join(session, 'session-events.jsonl'), [
+    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
+    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
+    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
+    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
+    JSON.stringify({kind: 'turn_ended', outcome: 'AGENT_FAILURE'}),
+    JSON.stringify({kind: 'turn_ended', outcome: 'VERIFIED_COMPLETE'}),
+  ].join('\n') + '\n');
+  const opened = await readSavedChat(desktop, 'chat-ordered', {runsDir: join(root, 'runs')});
+  const lastAssistant = opened.messages.filter(message => message.role === 'assistant').at(-1);
+  assert.equal(lastAssistant?.status, 'complete');
   await rm(root, {recursive: true, force: true});
 });
 

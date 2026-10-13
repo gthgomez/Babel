@@ -467,6 +467,14 @@ jobs:
           -PayloadZip "$env:RUNNER_TEMP\lifecycle-payload\Babel-Desktop-$((Get-Content babel-desktop/package.json -Raw | ConvertFrom-Json).version)-win-x64.zip"
           -Sha256Sums "$env:RUNNER_TEMP\lifecycle-payload\SHA256SUMS"
           -MakensisPath "$env:LIFECYCLE_MAKENSIS"
+      - name: Upload packaged Electron acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: packaged-electron-acceptance
+          path: babel-desktop/artifacts/packaged-electron/**
+          if-no-files-found: warn
+          retention-days: 14
 
   windows-portability:
     name: windows-portability
