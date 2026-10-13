@@ -1,5 +1,10 @@
 # Babel curated evaluation core
 
+
+## Experimental recovery status
+
+This run-contract prototype enforces helper-level path restrictions. It does not demonstrate an operating-system sandbox or independent isolation of grading data. The `grading_root_inaccessible` field describes the helper interface and is not sandbox proof. Passing fixture tests does not qualify real provider runs. Recursive grading traversal still needs a file-count bound before use with untrusted external trees.
+
 This initial slice is a reusable behavioral harness, not a leaderboard or a model-performance result.
 
 | Task | Source | Category | Check |
