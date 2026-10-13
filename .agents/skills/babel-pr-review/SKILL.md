@@ -1,16 +1,16 @@
-<!--
-Babel — Prompt Operating System
-Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the Apache License, Version 2.0
-Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
--->
-
 ---
 name: babel-pr-review
 description: >-
   Routes independent exact-head PR review and optional Babel certification,
   candidate collection, readiness evaluation, and outcome adjudication.
 ---
+
+<!--
+Babel — Prompt Operating System
+Copyright © 2025–2026 Jonathan Gomez Aguilar
+Licensed under the Apache License, Version 2.0
+Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
+-->
 
 # /babel-pr-review
 

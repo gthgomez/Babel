@@ -1,3 +1,8 @@
+---
+name: assemble-babel-stack
+description: Assembles the correct Babel instruction stack for a task. Use when deciding which Behavioral OS, Domain Architect, Skills, adapters, and overlays should be loaded before implementation.
+---
+
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
@@ -6,11 +11,6 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
 -->
-
----
-name: assemble-babel-stack
-description: Assembles the correct Babel instruction stack for a task. Use when deciding which Behavioral OS, Domain Architect, Skills, adapters, and overlays should be loaded before implementation.
----
 
 # Assemble Babel Stack (Agent Skill)
 

@@ -1,10 +1,3 @@
-<!--
-Babel — Prompt Operating System
-Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the Apache License, Version 2.0
-Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
--->
-
 ---
 name: code-review-structure
 description: >-
@@ -14,6 +7,13 @@ description: >-
   --structure. Never the default review. Read-only.
 disable-model-invocation: true
 ---
+
+<!--
+Babel — Prompt Operating System
+Copyright © 2025–2026 Jonathan Gomez Aguilar
+Licensed under the Apache License, Version 2.0
+Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
+-->
 
 # code-review-structure
 

@@ -1,10 +1,3 @@
-<!--
-Babel — Prompt Operating System
-Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the Apache License, Version 2.0
-Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
--->
-
 ---
 name: code-review
 description: >-
@@ -12,6 +5,13 @@ description: >-
   untracked. Use for /code-review, /cr, "review this diff", "review my
   changes", or a specified path/range/PR. Read-only review; publication follows AGENTS.md.
 ---
+
+<!--
+Babel — Prompt Operating System
+Copyright © 2025–2026 Jonathan Gomez Aguilar
+Licensed under the Apache License, Version 2.0
+Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
+-->
 
 # /code-review
 

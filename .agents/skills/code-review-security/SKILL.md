@@ -1,10 +1,3 @@
-<!--
-Babel — Prompt Operating System
-Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the Apache License, Version 2.0
-Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
--->
-
 ---
 name: code-review-security
 description: >-
@@ -12,6 +5,13 @@ description: >-
   Use when the collector lists security, SECRET_HINTS is non-empty, or the user
   runs /code-review-security. Read-only. Does not post to GitHub.
 ---
+
+<!--
+Babel — Prompt Operating System
+Copyright © 2025–2026 Jonathan Gomez Aguilar
+Licensed under the Apache License, Version 2.0
+Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
+-->
 
 # /code-review-security
 
