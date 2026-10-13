@@ -43,6 +43,7 @@ test('packaged GUI acceptance uses startup BABEL SETUP modal for harness (not fo
 test('playwright driver contract: closed HTML dialog is hidden (not visible without [open])', async () => {
   const browser = await chromium.launch({
     headless: true,
+    executablePath: process.env.CHROMIUM_EXECUTABLE,
     args: ['--no-sandbox'],
   });
   try {
@@ -70,6 +71,7 @@ test('playwright driver contract: locator.innerText and screenshot fullPage', as
   const shot = join(outDir, 'contract.png');
   const browser = await chromium.launch({
     headless: true,
+    executablePath: process.env.CHROMIUM_EXECUTABLE,
     args: ['--no-sandbox'],
   });
   try {

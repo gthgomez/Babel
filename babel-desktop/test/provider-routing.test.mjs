@@ -1,10 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdtempSync, rmSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {applyProviderRoute, qualifiedProviders, readProviderRoute, saveProviderRoute, validateProviderRoute} from '../native/provider-routing.mjs';
 import {buildRunArgs} from '../native/child.mjs';
+
+test('ordinary Desktop credentials support Zen, reject Go and ignore stale Go selections', () => {
+  const config = mkdtempSync(join(tmpdir(), 'babel-route-go-rejection-'));
+  try {
+    saveProviderRoute({configDirectory: config, provider: 'opencode', model: 'ox-alpha-free'});
+    const file = join(config, 'desktop-routing.json');
+    const before = readFileSync(file);
+    assert.throws(() => saveProviderRoute({configDirectory: config, provider: 'opencode', model: 'opencode-go/deepseek-v4.1-flash'}), /not supported/);
+    assert.deepEqual(readFileSync(file), before);
+    assert.ok(qualifiedProviders().flatMap(provider => provider.routes).every(route => !route.id.startsWith('opencode-go/')));
+    writeFileSync(file, JSON.stringify({provider: 'opencode', model: 'opencode-go/deepseek-v4.1-flash'}));
+    assert.equal(readProviderRoute(config), null);
+    assert.deepEqual(applyProviderRoute({PATH: '/bin'}, config), {PATH: '/bin'});
+  } finally { rmSync(config, {recursive: true, force: true}); }
+});
 
 test('qualified providers lists certified providers', () => {
   const providers = qualifiedProviders();
@@ -45,12 +60,12 @@ test('provider route is persisted and applied to child env for all supported pro
   assert.equal(env.BABEL_DESKTOP_MODEL_ROUTE, 'deepseek-v4-flash');
   assert.equal(env.BABEL_LITE_OFFLINE, '1');
 
-  // OpenCode Go route
-  saveProviderRoute({configDirectory: config, provider: 'opencode', model: 'opencode-go/deepseek-v4.1-flash'});
-  assert.deepEqual(readProviderRoute(config), {provider: 'opencode', model: 'opencode-go/deepseek-v4.1-flash'});
+  // OpenCode Zen route
+  saveProviderRoute({configDirectory: config, provider: 'opencode', model: 'ox-alpha-free'});
+  assert.deepEqual(readProviderRoute(config), {provider: 'opencode', model: 'ox-alpha-free'});
   env = applyProviderRoute({PATH: '/bin'}, config);
   assert.equal(env.BABEL_DESKTOP_PROVIDER, 'opencode');
-  assert.equal(env.BABEL_DESKTOP_MODEL_ROUTE, 'opencode-go/deepseek-v4.1-flash');
+  assert.equal(env.BABEL_DESKTOP_MODEL_ROUTE, 'ox-alpha-free');
 
   rmSync(config, {recursive: true, force: true});
 });

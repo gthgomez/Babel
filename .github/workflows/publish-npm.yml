@@ -61,10 +61,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Use Node.js 22.19.0
+      - name: Use Node.js 24.13.1
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: '22.19.0'
+          node-version: '24.13.1'
           registry-url: https://registry.npmjs.org
 
       - name: Verify package version matches the tag
@@ -95,6 +95,9 @@ jobs:
           if ($package.version -ne $env:RELEASE_VERSION) { throw 'Package version does not match exact tag' }
           node "$env:RUNNER_TEMP/resolve-release-tag.mjs" --repository "$env:GITHUB_REPOSITORY" --tag "$env:RELEASE_TAG" --expect-object "$env:RELEASE_OBJECT" --expect-source "$env:RELEASE_SOURCE"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify npm trusted publishing support
+        run: node tools/check-npm-trusted-publishing.mjs
 
       - name: Promote the qualified immutable consumer candidate
         id: pack

@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
 import {_electron as electron} from 'playwright';
 import {parseBuildMetadata} from '../../native/identity.mjs';
-import {HISTORY_SESSION_ID, writePackagedAcceptanceProfile} from './packaged-fixture-lane.mjs';
+import {HISTORY_SESSION_ID, assertAcceptanceSource, writePackagedAcceptanceProfile} from './packaged-fixture-lane.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = join(scriptDir, '..', '..');
@@ -46,14 +46,10 @@ async function connectLiveFromPackagedStartupDialog(window) {
   const useLive = window.locator('#dialog [data-action="use-live"]');
   await useLive.waitFor({state: 'visible', timeout: 15_000});
   const enabled = await useLive.isEnabled();
-  if (!enabled) {
-    await dismissPackagedSetupDialog(window);
-    return {
-      connected: false,
-      reason: 'Use Babel Harness disabled until execution diagnostics report ready (Docker); connection validated via IPC',
-    };
-  }
+  if (!enabled) throw new Error('Connection/history must not require Docker readiness');
   await useLive.click();
+  await window.locator('#dialog').waitFor({state: 'hidden', timeout: 15_000});
+  if (!await window.locator('#dialog').evaluate(el => !el.open)) throw new Error('Setup dialog remained open');
   await window.locator('#preview-badge').waitFor({timeout: 30_000});
   const badge = await window.locator('#preview-badge').innerText();
   if (badge !== 'BABEL CLI') throw new Error(`expected BABEL CLI badge after harness, got: ${badge}`);
@@ -133,6 +129,7 @@ async function main() {
     identity.build = parseBuildMetadata(buildText);
     identity.executableSha256 = createHash('sha256').update(await readFile(exe)).digest('hex');
     const expectedSha = String(process.env.BABEL_DESKTOP_SOURCE_SHA || '').trim();
+    assertAcceptanceSource(identity.build, expectedSha);
     if (expectedSha && identity.build?.sourceSha) {
       if (identity.build.sourceSha.toLowerCase() !== expectedSha.toLowerCase()) {
         throw new Error(`BUILD.json sourceSha ${identity.build.sourceSha} != checkout ${expectedSha}`);
@@ -152,6 +149,7 @@ async function main() {
   await mkdir(profile, {recursive: true});
   const fixtures = await writePackagedAcceptanceProfile(profile);
   identity.fixtureProjectRoot = fixtures.projectRoot;
+  identity.fixtureMissingInstallId = fixtures.missingInstallId;
 
   let app;
   try {
@@ -180,12 +178,15 @@ async function main() {
       buildVersion: info?.engine?.buildVersion,
       sourceCommit: info?.engine?.source?.commitSha,
       connectionReady: info?.ready,
+      executionReady: info?.diagnostics?.ready,
+      docker: info?.diagnostics?.docker,
       engineReadinessReady: info?.engine?.readiness?.ready,
       projectName: info?.projectName,
     };
     if (info?.preloadMissing) throw new Error('window.babelDesktop.getInfo is unavailable (preload not wired)');
     if (info.packaged !== true) throw new Error(`getInfo().packaged expected true, got ${info.packaged}`);
     if (info.officialCliReady !== true) throw new Error('packaged install must report officialCliReady true');
+    if (info.runtimeSource !== 'bundled') throw new Error('Missing selected install must resolve through actual bundled runtime fallback');
     if (info.engine?.origin !== 'bundled') throw new Error(`engine.origin expected bundled, got ${info.engine?.origin}`);
     if (identity.build?.sourceSha && info.engine?.source?.commitSha !== identity.build.sourceSha) {
       throw new Error('engine.source.commitSha must match BUILD.json sourceSha');
@@ -255,7 +256,9 @@ async function main() {
     journeys.provider = {status: 'executed', note: 'route-only; no credential file or model call'};
 
     const harness = await connectLiveFromPackagedStartupDialog(window);
-    if (harness.connected) {
+    if (!harness.connected) throw new Error('Installed history connection failed');
+    journeys.connection = {status: 'executed', executionReady: info.diagnostics?.ready === true, docker: info.diagnostics?.docker ?? null};
+    {
       checks.push('startup BABEL SETUP modal connects live harness via enabled Use Babel Harness');
       await window.waitForSelector('button.session-button[data-action="session"]', {timeout: 30_000});
       await window.locator('button.session-button[data-action="session"]', {hasText: 'PACKAGED-HISTORY'}).click();
@@ -267,11 +270,19 @@ async function main() {
       if (await conv.locator('text=m-159').count()) throw new Error('older view should not include m-159');
       await window.locator('[data-action="load-latest-messages"]').click();
       await conv.locator('text=m-159').waitFor({timeout: 30_000});
+      if (await conv.locator('text=m-009').count()) throw new Error('latest view should not include m-009');
       checks.push('renderer history navigation latest→older→latest on installed transport');
       journeys.historyUi = {status: 'executed'};
-    } else {
-      journeys.historyUi = {status: 'blocked', reason: harness.reason};
     }
+    const selection = JSON.parse(await readFile(join(profile, 'engine', 'active-engine.json'), 'utf8'));
+    if (selection.id !== fixtures.missingInstallId) throw new Error('Read-only fallback must preserve the missing engine selection on disk');
+    journeys.engineFallback = {status: 'executed', missingInstallId: fixtures.missingInstallId, origin: info.engine.origin, runtimeSource: info.runtimeSource, selectionPreserved: true, note: 'Read-only history; no task execution.'};
+    if (info.diagnostics?.ready !== true) {
+      if (!await window.locator('#send-button').isDisabled()) throw new Error('Execution must remain blocked without ready diagnostics');
+      journeys.executionAdmission = {status: 'blocked correctly', note: 'No task execution.'};
+    }
+    await mkdir(artifacts, {recursive: true});
+    await window.screenshot({path: join(artifacts, 'packaged-electron-history.png'), fullPage: true});
 
     await window.locator('[data-action="settings"]').click();
     await window.locator('[data-action="configure-provider"]').click();
@@ -284,12 +295,14 @@ async function main() {
 
     await mkdir(artifacts, {recursive: true});
     await window.screenshot({path: join(artifacts, 'packaged-electron-window.png'), fullPage: true});
-    await window.screenshot({path: join(artifacts, 'packaged-electron-history.png'), fullPage: true});
     checks.push('screenshots captured from packaged Electron window');
   } catch (error) {
     errors.push(String(error?.message ?? error));
   } finally {
-    if (app) await app.close().catch(() => {});
+    if (app) {
+      try { await app.close(); }
+      catch (error) { errors.push(`Owned Electron cleanup: ${error.message}`); }
+    }
   }
 
   untestedJourneys.push(

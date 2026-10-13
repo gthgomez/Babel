@@ -16,6 +16,28 @@ function messageTexts(messages) {
   return messages.map(message => message.text);
 }
 
+test('unknown truncated legacy ordinals cannot borrow early terminal evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-history-truncated-'));
+  const session = join(root, 'runs', 'chat-sessions', 'chat-truncated');
+  try {
+    await mkdir(session, {recursive: true});
+    const lines = [JSON.stringify({role: 'user', content: 'Truncated title'}), 'x'.repeat(MAX_TRANSCRIPT_BYTES)];
+    for (let turn = 40; turn <= 45; turn++) {
+      lines.push(JSON.stringify({role: 'user', content: `user-${turn}`}));
+      lines.push(JSON.stringify({role: 'assistant', content: `assistant-${turn}`}));
+    }
+    lines.push(JSON.stringify({role: 'assistant', content: 'Inline terminal', terminal_outcome: 'NO_CHANGE_REQUIRED'}));
+    await writeFile(join(session, 'transcript.jsonl'), lines.join('\n') + '\n');
+    await writeFile(join(session, 'session-events.jsonl'), JSON.stringify({kind: 'turn_ended', turn_id: 1, outcome: 'VERIFIED_COMPLETE'}) + '\n');
+    const opened = await readSavedChat(join(root, 'babel-desktop'), 'chat-truncated', {runsDir: join(root, 'runs')});
+    assert.equal(opened.history.tailOnly, true);
+    assert.equal(opened.history.hasOlder, false);
+    assert.equal(opened.history.totalMessages, null);
+    assert.equal(opened.messages.find(message => message.text === 'assistant-40')?.status, 'unverified');
+    assert.equal(opened.messages.find(message => message.text === 'Inline terminal')?.status, 'no_change');
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
 function assertNoOverlap(a, b) {
   const setB = new Set(messageTexts(b));
   const overlap = messageTexts(a).filter(text => setB.has(text));

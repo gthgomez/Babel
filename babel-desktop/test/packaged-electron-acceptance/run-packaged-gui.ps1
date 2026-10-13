@@ -2,7 +2,8 @@
 param(
   [Parameter(Mandatory = $true)][string]$InstallRoot,
   [string]$SourceSha = '',
-  [string]$ArtifactDir = ''
+  [string]$ArtifactDir = '',
+  [switch]$NativeProjectPicker
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +14,7 @@ if (-not (Test-Path -LiteralPath $acceptance -PathType Leaf)) { throw "Missing a
 Push-Location $desktop
 try {
   npm exec -- playwright install chromium | Out-Null
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally { Pop-Location }
 
 $env:BABEL_DESKTOP_INSTALL_ROOT = (Resolve-Path -LiteralPath $InstallRoot).Path
@@ -31,3 +33,8 @@ if ($ArtifactDir) {
 
 node $acceptance
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+if ($NativeProjectPicker) {
+  node (Join-Path $PSScriptRoot 'native_project_picker.mjs')
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}

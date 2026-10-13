@@ -4,29 +4,58 @@ import assert from 'node:assert/strict';
 import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {hasProviderCredential, saveProviderCredential} from '../native/credentials.mjs';
-import {readProviderRoute, saveProviderRoute, validateProviderRoute} from '../native/provider-routing.mjs';
+import {saveProviderCredential} from '../native/credentials.mjs';
+import {readProviderRoute, saveProviderRoute} from '../native/provider-routing.mjs';
+
+import {saveDesktopProviderRoute} from '../native/provider-route-save.mjs';
+import {applyProjectCredentialScope} from '../native/childEnv.mjs';
+import {execFileSync} from 'node:child_process';
 
 const FIXTURE_VALUE = 'BabelTestCredentialPlaceholder0000';
 
-function simulateTrustedSave({configDirectory, provider, model, apiKey, scope, projectRoot}) {
-  const route = validateProviderRoute({provider, model});
-  const requiresKey = route.provider !== 'ollama';
-  if (requiresKey && !apiKey && !hasProviderCredential({configDirectory, provider: route.provider, scope, projectRoot})) {
-    throw new Error('Enter a provider API key.');
-  }
-  if (apiKey) {
-    saveProviderCredential({provider: route.provider, apiKey, scope, configDirectory, projectRoot});
-  }
-  saveProviderRoute({configDirectory, ...route});
-  return route;
+test('route-only scope changes load the chosen existing credential and clear prior opt-in', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-provider-scope-'));
+  const project = join(root, 'project');
+  const config = join(root, 'private');
+  mkdirSync(project);
+  execFileSync('git', ['init', project], {stdio: 'ignore'});
+  writeFileSync(join(project, '.gitignore'), '.env\n');
+  const preferences = {projectRoot: project, projectCredentialRoot: null};
+  const persisted = [];
+  const savePreferences = async () => { persisted.push({...preferences}); };
+  const route = {provider: 'deepseek', model: 'deepseek-v4-pro', apiKey: ''};
+  try {
+    saveProviderCredential({provider: 'deepseek', apiKey: FIXTURE_VALUE, scope: 'project', projectRoot: project});
+    saveProviderCredential({provider: 'deepseek', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
+    const saveScope = scope => saveDesktopProviderRoute({options: {...route, scope}, configDirectory: config, preferences, savePreferences});
+    assert.equal((await saveScope('project')).credentialUpdated, false);
+    assert.equal(persisted.at(-1).projectCredentialRoot, project);
+    assert.equal(applyProjectCredentialScope({}, preferences).BABEL_PROJECT_CREDENTIALS_DIR, project);
+    assert.equal((await saveScope('private')).credentialUpdated, false);
+    assert.equal(persisted.at(-1).projectCredentialRoot, null);
+    assert.equal(applyProjectCredentialScope({BABEL_PROJECT_CREDENTIALS_DIR: project}, preferences).BABEL_PROJECT_CREDENTIALS_DIR, undefined);
+    await assert.rejects(() => saveScope('invalid'), /explicit credential destination/);
+    assert.equal(preferences.projectCredentialRoot, null);
+    assert.equal(persisted.length, 2);
+    await assert.rejects(() => saveDesktopProviderRoute({options: {...route, scope: 'project'}, configDirectory: config, preferences, savePreferences: async () => { throw new Error('fixture persistence failure'); }}), /fixture persistence failure/);
+    assert.equal(preferences.projectCredentialRoot, null);
+    assert.deepEqual(readProviderRoute(config), {provider: route.provider, model: route.model});
+  } finally { rmSync(root, {recursive: true, force: true}); }
+});
+
+function save(options) {
+  return saveDesktopProviderRoute({
+    options, configDirectory: options.configDirectory,
+    preferences: {projectRoot: options.projectRoot, projectCredentialRoot: null},
+    savePreferences: async () => {},
+  });
 }
 
-test('invalid model is rejected before any credential file mutation', () => {
+test('invalid model is rejected before any credential file mutation', async () => {
   const config = mkdtempSync(join(tmpdir(), 'babel-provider-boundary-'));
   try {
-    assert.throws(
-      () => simulateTrustedSave({configDirectory: config, provider: 'deepseek', model: 'deepseek-v4-flash', apiKey: FIXTURE_VALUE, scope: 'private'}),
+    await assert.rejects(
+      () => save({configDirectory: config, provider: 'deepseek', model: 'deepseek-v4-flash', apiKey: FIXTURE_VALUE, scope: 'private'}),
       /not supported/,
     );
     assert.equal(existsSync(join(config, '.env')), false);
@@ -36,11 +65,11 @@ test('invalid model is rejected before any credential file mutation', () => {
   }
 });
 
-test('route-only save succeeds when private credential already exists', () => {
+test('route-only save succeeds when private credential already exists', async () => {
   const config = mkdtempSync(join(tmpdir(), 'babel-provider-route-only-'));
   try {
     saveProviderCredential({provider: 'deepseek', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
-    const route = simulateTrustedSave({configDirectory: config, provider: 'deepseek', model: 'deepseek-v4-pro', apiKey: '', scope: 'private'});
+    const {route} = await save({configDirectory: config, provider: 'deepseek', model: 'deepseek-v4-pro', apiKey: '', scope: 'private'});
     assert.deepEqual(route, {provider: 'deepseek', model: 'deepseek-v4-pro'});
     assert.equal(readFileSync(join(config, '.env'), 'utf8').match(/DEEPSEEK_API_KEY=/g)?.length, 1);
   } finally {
@@ -48,12 +77,12 @@ test('route-only save succeeds when private credential already exists', () => {
   }
 });
 
-test('opencode route persists without deepseek provider alias', () => {
+test('opencode route persists without deepseek provider alias', async () => {
   const config = mkdtempSync(join(tmpdir(), 'babel-provider-opencode-'));
   try {
     saveProviderCredential({provider: 'opencode', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
-    saveProviderRoute({configDirectory: config, provider: 'opencode', model: 'opencode-go/deepseek-v4.1-flash'});
-    assert.deepEqual(readProviderRoute(config), {provider: 'opencode', model: 'opencode-go/deepseek-v4.1-flash'});
+    saveProviderRoute({configDirectory: config, provider: 'opencode', model: 'ox-alpha-free'});
+    assert.deepEqual(readProviderRoute(config), {provider: 'opencode', model: 'ox-alpha-free'});
     assert.match(readFileSync(join(config, '.env'), 'utf8'), /^OPENCODE_API_KEY=/);
   } finally {
     rmSync(config, {recursive: true, force: true});

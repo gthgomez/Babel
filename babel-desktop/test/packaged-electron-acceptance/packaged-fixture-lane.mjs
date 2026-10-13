@@ -2,8 +2,15 @@
 import {mkdir, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
+export const MISSING_INSTALL_ID = 'acceptance-missing-install';
 export const HISTORY_SESSION_ID = 'packaged-history';
 export const PROJECT_DIR_NAME = 'acceptance-project';
+
+/** Installed acceptance cannot qualify an unknown or mismatched BUILD source. */
+export function assertAcceptanceSource(build, expectedSha = '') {
+  if (!/^[a-f0-9]{40}$/.test(build?.sourceSha ?? '')) throw new Error('Installed BUILD source is missing or invalid');
+  if (expectedSha && build.sourceSha !== expectedSha) throw new Error('Installed source does not match requested source');
+}
 
 /** Seed non-paid fixtures under an isolated Electron profile directory (Windows packaged lane). */
 export async function writePackagedAcceptanceProfile(profile) {
@@ -23,5 +30,6 @@ export async function writePackagedAcceptanceProfile(profile) {
     projectRoot,
     projectCredentialRoot: null,
   }) + '\n', 'utf8');
-  return {projectRoot, runsRoot};
+  await writeFile(join(profile, 'engine', 'active-engine.json'), JSON.stringify({id: MISSING_INSTALL_ID, channelPreference: 'stable'}) + '\n', 'utf8');
+  return {projectRoot, runsRoot, missingInstallId: MISSING_INSTALL_ID};
 }

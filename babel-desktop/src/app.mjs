@@ -131,6 +131,12 @@ function renderRuntime() {
   setButtons(true, canUpdate);
   updateButton.textContent = engine.origin === 'bundled' ? 'Update CLI' : 'Update development CLI';
 }
+function executionBlocked() {
+  // A slow or rejected native handshake cannot admit synthetic preview tasks.
+  if (native && !nativeInfo) return true;
+  return nativeInfo?.packaged === true &&
+    (transport !== 'live' || nativeInfo.diagnostics?.ready !== true);
+}
 function renderStatus(status) {
   const msg = activeSession().messages.filter(m => m.role === 'assistant').at(-1);
   const s = status ?? (activeRun ? 'running' : msg?.status ?? 'ready');
@@ -141,8 +147,8 @@ function renderStatus(status) {
   const changedNote = transport === 'live' && changedFiles.length ? ` ${changedFiles.length} changed file${changedFiles.length === 1 ? '' : 's'}.` : '';
   const liveRunning = activeRun?.stopping ? 'Stopping the Babel CLI.' : (messageHasWork(msg) ? `Babel CLI is working on this task.${changedNote}` : 'Starting the Babel CLI.');
   const detail = transport === 'preview' ? (s === 'running' ? 'Simulated stream · no provider call.' : s === 'failed' ? 'Example failure · no tools executed.' : s === 'cancelled' ? 'Preview stream stopped.' : 'Sample session · no engine connected.') : s === 'running' ? liveRunning : s === 'unverified' ? 'Run ended; verification not established.' : s === 'failed' ? 'See the run details in the conversation.' : s === 'blocked' ? 'Babel is waiting for a decision.' : `Connected to the Babel CLI.${changedNote}`;
-  $('#status-detail').textContent = detail;
-  $('#send-button').disabled = Boolean(activeRun);
+  $('#status-detail').textContent = executionBlocked() ? (transport !== 'live' ? 'Connect to the Babel CLI to browse saved history or run tasks.' : 'Saved history is available. Recheck execution setup before running tasks.') : detail;
+  $('#send-button').disabled = Boolean(activeRun) || executionBlocked();
   $('#composer-input').disabled = Boolean(activeRun);
   $('.stop-button').hidden = !activeRun;
   if (activeRun) $('.composer-hints').style.display = 'none'; else $('.composer-hints').style.removeProperty('display');
@@ -260,7 +266,7 @@ $('#dialog').addEventListener('click',ev=>{if(ev.target === $('#dialog')) { cons
 function connectionDialog() {
   if(nativeInfo?.packaged){
     const d=nativeInfo.diagnostics;
-    openDialog('BABEL SETUP',`<p>Babel Desktop includes its CLI, Node runtime, and prompt assets. Choose a project when you are ready.</p><div class="settings-row"><span>Bundled runtime</span><span>${nativeInfo.officialCliReady?'Available':'Missing files — extract the complete ZIP again'}</span></div><div class="settings-row"><span>Provider</span><span>${d?.provider==='configured'?'Credential present; authentication unverified':'No cloud credential detected; local routes use CLI configuration'}</span></div><div class="settings-row"><span>Docker / safe_repo</span><span>${d?.docker==='available'?'Available':'Unavailable — start Docker before running tasks'}</span></div><div class="settings-row"><span>Project</span><span>${e(nativeInfo.projectName??'Not selected')}</span></div><h3>FIRST LAUNCH</h3><p>Choose a supported provider and save its API key using <strong>Configure provider</strong>. The default destination is Babel's private profile, not the project repository.</p><pre>${e(nativeInfo.configDirectory??'Configuration directory unavailable')}</pre><p>Other supported provider settings belong in the same file. Credential-free local providers do not need a cloud key; Babel validates the selected route when a task starts. Model reference controls do not configure a provider. Desktop does not import credentials from other apps or checkouts. Environment credentials you explicitly supply are also accepted by Babel.</p><p>Install and start Docker separately. The default <code>safe_repo</code> profile requires it; Desktop does not start Docker or switch to unrestricted host execution.</p>${d?.error?`<p>${e(d.error)}</p>`:''}<div class="dialog-actions"><button class="button" data-action="refresh-diagnostics">Recheck setup</button><button class="button" data-action="configure-provider">Configure provider</button><button class="button" data-action="open-project">Open project</button><button class="button primary" data-action="use-live" ${nativeInfo.ready&&d?.ready?'':'disabled'}>Use Babel Harness</button></div><p class="fine-print">Diagnostics make no model calls. A present credential has not been authenticated. See INSTALL.md and use Babel Harness.cmd doctor --json for local details.</p>`);
+    openDialog('BABEL SETUP',`<p>Babel Desktop includes its CLI, Node runtime, and prompt assets. Choose a project when you are ready.</p><div class="settings-row"><span>Bundled runtime</span><span>${nativeInfo.officialCliReady?'Available':'Missing files — extract the complete ZIP again'}</span></div><div class="settings-row"><span>Provider</span><span>${d?.provider==='configured'?'Credential present; authentication unverified':'No cloud credential detected; local routes use CLI configuration'}</span></div><div class="settings-row"><span>Docker / safe_repo</span><span>${d?.docker==='available'?'Available':'Unavailable — start Docker before running tasks'}</span></div><div class="settings-row"><span>Project</span><span>${e(nativeInfo.projectName??'Not selected')}</span></div><h3>FIRST LAUNCH</h3><p>Choose a supported provider and save its API key using <strong>Configure provider</strong>. The default destination is Babel's private profile, not the project repository.</p><pre>${e(nativeInfo.configDirectory??'Configuration directory unavailable')}</pre><p>Other supported provider settings belong in the same file. Credential-free local providers do not need a cloud key; Babel validates the selected route when a task starts. Model reference controls do not configure a provider. Desktop does not import credentials from other apps or checkouts. Environment credentials you explicitly supply are also accepted by Babel.</p><p>Install and start Docker separately. The default <code>safe_repo</code> profile requires it; Desktop does not start Docker or switch to unrestricted host execution.</p>${d?.error?`<p>${e(d.error)}</p>`:''}<div class="dialog-actions"><button class="button" data-action="refresh-diagnostics">Recheck setup</button><button class="button" data-action="configure-provider">Configure provider</button><button class="button" data-action="open-project">Open project</button><button class="button primary" data-action="use-live" ${nativeInfo.ready?'':'disabled'}>Use Babel Harness</button></div><p class="fine-print">Diagnostics make no model calls. A present credential has not been authenticated. See INSTALL.md and use Babel Harness.cmd doctor --json for local details.</p>`);
     return;
   }
   openDialog('BABEL CONNECTION',`<div class="connection-label">${icon('terminal')}${transport === 'preview' ? 'Reference preview' : 'Babel CLI'}</div><p>${transport === 'preview' ? 'This is a working UI preview, not a running agent. The initial conversation, model names, tool activity, and token count reproduce the supplied reference.' : 'Tasks run through the Babel CLI. Replies, tool rows, and status on this screen come from that run.'}</p><p>${native ? 'Startup uses the sibling babel-cli build when that file exists. Open a project, then send a task. Another CLI entry is an advanced setting.' : 'The browser preview has no access to your CLI. Use the Electron app for a live run. No keys are requested or stored here.'}</p>${nativeInfo ? `<div class="settings-row"><span>Official CLI</span><span class="muted">${nativeInfo.officialCliReady === true ? e(nativeInfo.officialCliLabel || 'babel-cli/dist/index.js') : nativeInfo.officialCliReady === false ? 'Not built' : 'Not reported'}</span></div><div class="settings-row"><span>CLI</span><span class="muted">${e(nativeInfo.cliName ?? 'Not selected')}</span></div><div class="settings-row"><span>Project</span><span class="muted">${e(nativeInfo.projectName ?? 'Not selected')}</span></div>` : ''}<div class="dialog-actions">${native ? `<button class="button" data-action="choose-cli">Advanced: other CLI</button><button class="button" data-action="configure-provider">Configure provider</button><button class="button" data-action="open-project">Open project</button><button class="button primary" data-action="use-live" ${nativeInfo?.ready ? '' : 'disabled'}>Use Babel Harness</button>` : '<button class="button primary" data-action="close-dialog">Continue preview</button>'}</div><p class="fine-print">File changes and commands follow Babel's own approval rules. Allow or deny them in this window. Stop ends the current run.</p>`);
@@ -428,6 +434,7 @@ function upsertLiveTool(message, tool) {
 async function sendMessage() {
   const input=$('#composer-input');const text=input.value.trim();
   if(!text||activeRun)return;
+  if(executionBlocked()){toast('Recheck execution setup before running tasks. Saved history is still available.');return;}
   if(text.length>24000){toast('Please keep a single message under 24,000 characters.');return;}
   const session=activeSession();
   if(session.messages.length>145){toast('Start a new session to keep this preview responsive.');return;}
@@ -641,7 +648,7 @@ document.addEventListener('click',async event=>{
   else if(a==='connection')connectionDialog();
   else if(a==='configure-provider')providerCredentialsDialog();
   else if(a==='save-provider-credential')await saveProviderFromDialog(button);
-  else if(a==='refresh-diagnostics'){try{nativeInfo=await native.refreshDiagnostics();connectionDialog();}catch(err){toast(err.message);}}
+  else if(a==='refresh-diagnostics'){try{nativeInfo=await native.refreshDiagnostics();renderControls();connectionDialog();}catch(err){toast(err.message);}}
   else if(a==='check-update')await checkForUpdates();
   else if(a==='update-cli')await runUpdateCli();
   else if(a==='open-project')await chooseProject();
@@ -669,7 +676,7 @@ document.addEventListener('keydown',ev=>{
 });
 try{if(localStorage.getItem('babel-preview-motion')==='reduce')document.body.classList.add('reduce-motion');}catch{}
 if(native){native.getInfo().then(info=>{
-  nativeInfo=info;renderRuntime();
+  nativeInfo=info;renderControls();
   if(info?.packaged){state={version:1,mode:'chat',model:'',sessions:[],activeId:''};files=[];newSession();connectionDialog();}
 }).catch(error=>toast(`Connection unavailable: ${error.message}`));native.onEvent(handleNativeEvent);native.onUpdateEvent?.(event=>{updatePhase=`${event.phase}: ${event.status}`;renderRuntime();});}
 setInterval(updateClock,30000);

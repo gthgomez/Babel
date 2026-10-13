@@ -49,7 +49,6 @@ export const DESKTOP_ROUTE_CATALOG = Object.freeze({
     requiresApiKey: true,
     routes: Object.freeze([
       {id: 'ox-alpha-free', label: 'ox-alpha-free (OpenCode Zen preview)'},
-      {id: 'opencode-go/deepseek-v4.1-flash', label: 'opencode-go/deepseek-v4.1-flash (OpenCode Go)'},
     ]),
   }),
 });
