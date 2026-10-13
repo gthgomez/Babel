@@ -32,6 +32,7 @@ test('packaged GUI acceptance uses startup BABEL SETUP modal for harness (not fo
   assert.match(acceptanceSource, /waitFor\(\{state:\s*'hidden'/);
   assert.match(acceptanceSource, /evaluateInPackagedWindow/);
   assert.match(acceptanceSource, /waitForPackagedPreload/);
+  assert.match(acceptanceSource, /#dialog \[data-action="close-dialog"\]/);
   const afterProvider = acceptanceSource.split('journeys.provider')[1] ?? '';
   assert.doesNotMatch(afterProvider, /locator\('#preview-badge'\)\.click\(\)/);
   const appStartup = readFileSync(join(desktopRoot, 'src/app.mjs'), 'utf8');

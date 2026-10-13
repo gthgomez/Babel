@@ -22,14 +22,15 @@ async function writeReport(dir, report) {
   await writeFile(join(dir, 'packaged-electron-acceptance.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 }
 
-/** Packaged startup opens BABEL SETUP over the footer; dismiss via backdrop only. */
+/** Packaged startup opens BABEL SETUP over the footer; use the dialog chrome close control. */
 async function dismissPackagedSetupDialog(window) {
   const dialog = window.locator('#dialog');
-  await dialog.click({position: {x: 8, y: 8}});
+  const close = window.locator('#dialog [data-action="close-dialog"]');
+  await close.click();
   // Closed <dialog> stays in the DOM without [open] but is not visible; do not waitForSelector visible.
   await dialog.waitFor({state: 'hidden', timeout: 15_000});
   const closed = await dialog.evaluate(el => !el.open);
-  if (!closed) throw new Error('expected #dialog closed after backdrop dismiss');
+  if (!closed) throw new Error('expected #dialog closed after close-dialog');
 }
 
 /**
