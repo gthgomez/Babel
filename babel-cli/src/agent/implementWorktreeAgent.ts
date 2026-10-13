@@ -11,6 +11,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { resolveIsolationBrokerFlags } from './chatEngineIsolationFlags.js';
 import {
   copyFileSync,
   existsSync,
@@ -33,6 +34,7 @@ import {
   classifySubagentFailure,
   runMutationAgentLoop,
   type MutationAgentLoopResult,
+  type ChildExecutionEnvelope,
   type SubagentAttribution,
 } from './lanes/runMutationAgentLoop.js';
 import {
@@ -70,6 +72,8 @@ export interface ImplementWorktreeAgentOptions {
   cleanupWorktree?: boolean;
   abortSignal?: AbortSignal;
   executor?: ToolExecutor;
+  /** Validated controller constraints; never infer an OS sandbox from a Git worktree. */
+  executionEnvelope?: ChildExecutionEnvelope;
   useDeterministicMock?: boolean;
   /** Partial tool context; runDir/agentId filled by the runner. */
   toolContext?: Partial<ToolContext>;
@@ -91,6 +95,7 @@ export interface ImplementWorktreeAgentResult {
   parentStatusBefore: string;
   parentStatusAfter: string;
   changedFiles: MutationAgentLoopResult['changedFiles'];
+  indeterminatePaths?: string[];
   stepsExecuted: number;
   error: string | null;
   mutation: MutationAgentLoopResult;
@@ -439,6 +444,7 @@ export async function runImplementWorktreeAgent(
       runMutationAgentLoop({
         agentId: spec.id,
         task: spec.task,
+        executionEnvelope: options.executionEnvelope ?? resolveIsolationBrokerFlags(worktree.path),
         projectRoot: worktree.path,
         writeScope: scopeValidation.normalizedScope,
         workspaceRoot: worktree.path,
@@ -539,6 +545,7 @@ export async function runImplementWorktreeAgent(
     parentStatusBefore,
     parentStatusAfter,
     changedFiles: mutation.changedFiles,
+    ...(mutation.indeterminatePaths ? { indeterminatePaths: mutation.indeterminatePaths } : {}),
     stepsExecuted: mutation.stepsExecuted,
     error: success ? null : (mutation.error ?? diagnostics.map((d) => d.message).join('; ')),
     mutation,

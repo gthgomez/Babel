@@ -11,7 +11,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
 import type { WorktreeRollbackSummary } from '../../services/worktreeSafety.js';
@@ -28,6 +28,7 @@ import {
   type ChildBudgetLimiter,
   type InheritedChildAllowance,
 } from '../childBudget.js';
+import { WorkspaceTransactionManager } from '../../services/workspaceTransactions.js';
 import { extractPatchRawTargets } from '../../authority/patchTargets.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -41,6 +42,12 @@ const MUTATION_TOOL_TYPES = new Set<AgentAction['type']>([
 ]);
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
+
+/** Controller-owned execution constraints; a worktree alone is not an OS sandbox. */
+export type ChildExecutionEnvelope = Pick<
+  NonNullable<Parameters<typeof executeActionWithPolicy>[3]>,
+  'isolationRequired' | 'isolationAvailable' | 'hostFallbackAllowed' | 'authoritySession' | 'mode'
+>;
 
 export interface MutationAgentLoopInput {
   /** Agent identifier for logging and TUI registration */
@@ -65,12 +72,14 @@ export interface MutationAgentLoopInput {
   model?: string;
   /** Permission preset for tool execution */
   preset?: PermissionPreset;
+  /** Validated parent/controller constraints, never supplied by the model. */
+  executionEnvelope?: ChildExecutionEnvelope;
   /** Optional runDir for WorktreeSafetyController backup root */
   runDir?: string;
   /** If true, use deterministic mock actions instead of calling the LLM */
   useDeterministicMock?: boolean;
   /** Optional model-boundary resolver for deterministic integration tests. */
-  actionResolver?: (prompt: string) => Promise<AgentAction[]>;
+  actionResolver?: (prompt: string, signal: AbortSignal) => Promise<AgentAction[]>;
   /** S03: extra instructions from the advertised sub_agent contract. */
   additionalInstructions?: string;
   /** Optional wall-clock timeout for the child loop (child_timeout). */
@@ -123,6 +132,8 @@ export interface MutationAgentLoopResult {
     after_hash: string;
     bytes: number;
   }>;
+  /** Attempted paths whose remaining effects cannot be certified or ruled out. */
+  indeterminatePaths?: string[];
   /** Tool call log for evidence collection */
   toolCallLog: ToolCallLog[];
   /** Steps executed count */
@@ -195,15 +206,18 @@ export function subagentFinishedCleanly(attribution: SubagentAttribution): boole
   return attribution === 'child_success' || attribution === 'child_noop';
 }
 
-function waitForAbort(signal: AbortSignal): Promise<never> {
-  return new Promise((_, reject) => {
-    const fail = () => reject(new Error('Aborted by user or parent'));
-    if (signal.aborted) {
-      fail();
-      return;
-    }
-    signal.addEventListener('abort', fail, { once: true });
+async function resolveUntilAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  let onAbort: () => void = () => {};
+  const abort = new Promise<never>((_, reject) => {
+    onAbort = () => reject(new Error('Aborted by user or parent'));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
   });
+  try {
+    return await Promise.race([promise, abort]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 // ─── Doterministic Mock Actions ──────────────────────────────────────────────
@@ -231,17 +245,49 @@ function buildDeterministicMockActions(writeScope: string[]): AgentAction[] {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function hashContent(content: string): string {
+function hashContent(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-function readFileHash(path: string): string | null {
-  if (!existsSync(path)) return null;
+/** null is an observed absent path; undefined is an unreadable/unknown postimage. */
+function readFilePostimage(path: string): { hash: string | null; bytes: number } | undefined {
   try {
-    return hashContent(readFileSync(path, 'utf-8'));
-  } catch {
-    return null;
+    const bytes = readFileSync(path);
+    return { hash: hashContent(bytes), bytes: bytes.byteLength };
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { hash: null, bytes: 0 } : undefined;
   }
+}
+
+function reconcileChangedFiles(
+  changedFiles: MutationAgentLoopResult['changedFiles'],
+  projectRoot: string,
+): boolean {
+  let determinate = true;
+  for (let index = changedFiles.length - 1; index >= 0; index--) {
+    const file = changedFiles[index]!;
+    const observed = readFilePostimage(resolve(projectRoot, file.path));
+    const afterHash = observed?.hash === null ? WorkspaceTransactionManager.missingPathDigest() : observed?.hash;
+    const unknown = observed === undefined || (observed.hash !== file.before_hash && afterHash !== file.after_hash);
+    if (unknown) determinate = false;
+    if (unknown || observed?.hash === file.before_hash) {
+      changedFiles.splice(index, 1);
+    } else {
+      file.after_hash = observed.hash ?? WorkspaceTransactionManager.missingPathDigest();
+      file.bytes = observed.bytes;
+    }
+  }
+  return determinate;
+}
+
+function rollbackChildChanges(
+  controller: WorktreeSafetyController,
+  changedFiles: MutationAgentLoopResult['changedFiles'],
+  reason: string,
+): WorktreeRollbackSummary {
+  const summary = controller.rollbackTouchedFiles(reason);
+  if (controller.projectRoot) reconcileChangedFiles(changedFiles, controller.projectRoot);
+  return summary;
 }
 
 function isMutationAction(action: AgentAction): boolean {
@@ -394,19 +440,127 @@ export async function runMutationAgentLoop(
   const budgetController = createChildBudgetController(
     input.inheritedAllowance,
     input.abortSignal,
+    input.timeoutMs,
   );
   const effectiveAbortSignal = budgetController.signal;
+  const preset = input.preset ?? 'workspace_write';
+  const normalizeMutationPath = (path: string): string => relative(projectRoot, resolve(projectRoot, path)).replace(/\\/g, '/');
+  const attemptedPaths = new Set<string>();
+  const confirmedPostimages = new Map<string, string | null>();
+  const indeterminatePaths: string[] = [];
+  const refreshUncertainty = (): string[] => {
+    indeterminatePaths.length = 0;
+    const snapshots = safetyController?.buildSummary().snapshots ?? [];
+    for (const path of attemptedPaths) {
+      const snapshot = snapshots.find((entry) => entry.relative_path === path);
+      const observed = readFilePostimage(resolve(projectRoot, path));
+      if (!snapshot || observed === undefined ||
+        (observed.hash !== snapshot.hash_before &&
+          (!confirmedPostimages.has(path) || observed.hash !== confirmedPostimages.get(path)))) {
+        indeterminatePaths.push(path);
+      }
+    }
+    return indeterminatePaths;
+  };
+  const withMutationState = (result: MutationAgentLoopResult): MutationAgentLoopResult => {
+    refreshUncertainty();
+    result.indeterminatePaths = indeterminatePaths;
+    if (result.success && indeterminatePaths.length > 0) {
+      result.success = false;
+      result.attribution = 'child_environment_failure';
+      result.error = 'Mutation postimages are indeterminate';
+      result.summary = `Sub-agent ${agentId} failed: ${result.error}`;
+      backgroundTaskRegistry.fail(taskId, result.error);
+    }
+    const rollback = result.rollback;
+    result.rollback = async () => {
+      const summary = await rollback();
+      refreshUncertainty();
+      return summary;
+    };
+    return result;
+  };
+  const prepareMutation = (action: AgentAction, attempt: number): string | null => {
+    if (action.type !== 'write_file' && action.type !== 'apply_patch') return null;
+    for (const target of mutationTargetPaths(action)) {
+      const snapshot = safetyController?.snapshotBeforeWrite(target, attempt);
+      if (snapshot && !snapshot.ok) return `Policy blocked: ${snapshot.reason ?? snapshot.status}`;
+      const path = normalizeMutationPath(target);
+      if (safetyController && !attemptedPaths.has(path)) {
+        const initial = safetyController.buildSummary().snapshots.find(entry => entry.relative_path === path);
+        if (!initial || !safetyController.recordConfirmedPostimage(target, initial.hash_before)) {
+          return `Policy blocked: target changed before dispatch: ${target}`;
+        }
+      }
+    }
+    for (const target of mutationTargetPaths(action)) attemptedPaths.add(normalizeMutationPath(target));
+    return null;
+  };
+  const bindFailedWriteForRollback = (action: AgentAction, execution: Awaited<ReturnType<typeof executeActionWithPolicy>>): void => {
+    if (action.type !== 'write_file' || !safetyController) return;
+    const transaction = execution.effectTransaction;
+    if (transaction?.status !== 'rollback_failed' && transaction?.status !== 'reconcile_needed') return;
+    const absolute = resolve(projectRoot, action.path);
+    if (!transaction.paths.includes(absolute)) return;
+    const observed = readFilePostimage(absolute);
+    // This grants rollback ownership only: a failed effect never enters the
+    // successful change list. Unbound partial bytes remain indeterminate.
+    if (observed?.hash === hashContent(action.content)) {
+      safetyController.recordConfirmedPostimage(action.path, observed.hash);
+    }
+  };
+  const recordMutation = (action: AgentAction, execution: Awaited<ReturnType<typeof executeActionWithPolicy>>): void => {
+    if (action.type !== 'write_file' && action.type !== 'apply_patch') return;
+    if (execution.policyBlocked || execution.results.length === 0 || execution.results.some((result) => result.exit_code !== 0)) return;
+    const receipt = execution.mutationReceipt;
+    if (receipt?.status !== 'committed' || execution.effectTransaction?.status !== 'commit') {
+      throw new Error('Mutation effect is indeterminate: committed executor evidence is missing');
+    }
+    for (const rawPath of mutationTargetPaths(action)) {
+      const path = normalizeMutationPath(rawPath);
+      const absolute = resolve(projectRoot, path);
+      const observed = readFilePostimage(absolute);
+      if (observed === undefined) throw new Error(`Mutation postimage is indeterminate: ${path}`);
+      const afterHash = observed.hash ?? WorkspaceTransactionManager.missingPathDigest();
+      if (receipt.postImageHashes[absolute] !== afterHash) {
+        throw new Error(`Mutation postimage disagrees with committed receipt: ${path}`);
+      }
+      const beforeHash = receipt.preImageHashes[absolute];
+      if (beforeHash === undefined) throw new Error(`Mutation preimage is indeterminate: ${path}`);
+      if (safetyController && !safetyController.recordConfirmedPostimage(path, observed.hash)) {
+        throw new Error(`Mutation postimage changed during reconciliation: ${path}`);
+      }
+      confirmedPostimages.set(path, observed.hash);
+      if (beforeHash === afterHash) continue;
+      const existing = changedFiles.find((file) => file.path === path);
+      if (existing) {
+        existing.after_hash = afterHash;
+        existing.bytes = observed.bytes;
+      } else {
+        changedFiles.push({
+          path,
+          rationale: `${action.type} by sub-agent ${agentId}`,
+          before_hash: beforeHash === WorkspaceTransactionManager.missingPathDigest() ? null : beforeHash,
+          after_hash: afterHash,
+          bytes: observed.bytes,
+        });
+      }
+    }
+    if (!reconcileChangedFiles(changedFiles, projectRoot)) {
+      throw new Error('Mutation postimages are indeterminate');
+    }
+  };
   const inheritedBudgetResult = (limiter: ChildBudgetLimiter): MutationAgentLoopResult => {
     backgroundTaskRegistry.fail(taskId, `Inherited parent ${limiter} budget exhausted`);
     budgetController.dispose();
-    return buildInheritedBudgetResult(
+    return withMutationState(buildInheritedBudgetResult(
       agentId,
       limiter,
       changedFiles,
       toolCallLog,
       safetyController,
       roundForBudgetResult,
-    );
+    ));
   };
 
   // ─── Deterministic mock path ────────────────────────────────────────────
@@ -427,7 +581,7 @@ export async function runMutationAgentLoop(
       if (effectiveAbortSignal.aborted) {
         backgroundTaskRegistry.fail(taskId, 'Aborted');
         budgetController.dispose();
-        return buildAbortedResult(agentId, null, changedFiles, toolCallLog, 0, safetyController);
+        return withMutationState(buildAbortedResult(agentId, null, changedFiles, toolCallLog, 0, safetyController, budgetController.timedOut()));
       }
       if (action.type === 'finish') {
         toolCallLog.push({
@@ -456,17 +610,20 @@ export async function runMutationAgentLoop(
           break;
         }
         if (safetyController) {
-          safetyController.snapshotBeforeWrite(action.path);
+          const refusal = prepareMutation(action, 0);
+          if (refusal) { mockError = refusal; mockSuccess = false; break; }
         }
       }
 
       // Execute via the tool executor
       let execution: Awaited<ReturnType<typeof executeActionWithPolicy>>;
       try {
-        execution = await executeActionWithPolicy(action, 'workspace_write', {
+        execution = await executeActionWithPolicy(action, preset, {
           ...input.toolContext,
+          projectRoot,
           signal: effectiveAbortSignal,
         }, {
+          ...input.executionEnvelope,
           executor,
         });
       } catch (err) {
@@ -474,32 +631,40 @@ export async function runMutationAgentLoop(
         mockSuccess = false;
         break;
       }
+      bindFailedWriteForRollback(action, execution);
       const lastResult = execution.results[execution.results.length - 1];
-      if (!lastResult) continue;
+      if (!lastResult) { mockError = 'Tool execution returned no settlement result'; mockSuccess = false; break; }
 
-      if (action.type === 'write_file') {
-        const afterHash = readFileHash(resolve(projectRoot, action.path));
-        const beforeHash = readFileHash(resolve(projectRoot, action.path));
-        changedFiles.push({
-          path: action.path,
-          rationale: `Write by sub-agent ${agentId} (mock)`,
-          before_hash: beforeHash,
-          after_hash: afterHash ?? hashContent(action.content),
-          bytes: action.content.length,
-        });
+      try {
+        recordMutation(action, execution);
+      } catch (error) {
+        mockError = error instanceof Error ? error.message : String(error);
+        mockSuccess = false;
+        break;
       }
 
       toolCallLog.push(buildToolCallLogEntry(toolCallLog.length + 1, action, lastResult));
       priorObservations += '\n' + formatMutationObservation(action, lastResult);
+      if (execution.policyBlocked || execution.results.some((result) => result.exit_code !== 0)) {
+        mockError = execution.policyBlocked ? `Policy blocked: ${lastResult.stderr}` : lastResult.stderr || 'Tool execution failed';
+        mockSuccess = false;
+        break;
+      }
 
       const postActionLimiter = budgetController.limiter();
       if (postActionLimiter) return inheritedBudgetResult(postActionLimiter);
     }
 
-    const mockAttribution = classifySubagentFailure({
+    if (!mockSuccess && safetyController && refreshUncertainty().length > 0) {
+      rollbackChildChanges(safetyController, changedFiles, `Rollback on failed mock mutation for ${agentId}`);
+    }
+    if (budgetController.timedOut()) { mockSuccess = false; mockError = 'Child timed out at local deadline'; }
+    if (!reconcileChangedFiles(changedFiles, projectRoot)) { mockSuccess = false; mockError = 'Mutation postimages are indeterminate'; }
+    const mockAttribution = budgetController.timedOut() ? 'child_timeout' : classifySubagentFailure({
       success: mockSuccess,
       error: mockError,
       changedFilesCount: changedFiles.length,
+      aborted: effectiveAbortSignal.aborted && budgetController.limiter() === null,
     });
 
     if (mockSuccess) {
@@ -509,7 +674,7 @@ export async function runMutationAgentLoop(
     }
 
     budgetController.dispose();
-    return {
+    return withMutationState({
       success: mockSuccess,
       attribution: mockAttribution,
       summary: mockSuccess
@@ -524,9 +689,9 @@ export async function runMutationAgentLoop(
       rollbackSummary: null,
       rollback: async () =>
         safetyController
-          ? safetyController.rollbackTouchedFiles('mock mode — no changes made')
+          ? rollbackChildChanges(safetyController, changedFiles, `Manual rollback for sub-agent ${agentId} (mock)`)
           : createEmptyRollbackSummary('No safety controller — no rollback needed'),
-    };
+    });
   }
 
   // ─── Main loop ──────────────────────────────────────────────────────────
@@ -535,7 +700,6 @@ export async function runMutationAgentLoop(
   let rollbackSummary: WorktreeRollbackSummary | null = null;
   let round = 0;
   let finished = false;
-  const startedAt = Date.now();
 
   try {
     while (round < maxRounds) {
@@ -546,12 +710,7 @@ export async function runMutationAgentLoop(
       if (effectiveAbortSignal.aborted) {
         backgroundTaskRegistry.fail(taskId, 'Aborted');
         budgetController.dispose();
-        return buildAbortedResult(agentId, error, changedFiles, toolCallLog, round, safetyController);
-      }
-      if (input.timeoutMs != null && Date.now() - startedAt >= input.timeoutMs) {
-        success = false;
-        error = `Child timed out after ${input.timeoutMs}ms`;
-        break;
+        return withMutationState(buildAbortedResult(agentId, error, changedFiles, toolCallLog, round, safetyController, budgetController.timedOut()));
       }
 
       round += 1;
@@ -575,7 +734,7 @@ export async function runMutationAgentLoop(
       let actions: AgentAction[];
       try {
         const resolvePromise = input.actionResolver
-          ? input.actionResolver(prompt).then((resolved) =>
+          ? input.actionResolver(prompt, effectiveAbortSignal).then((resolved) =>
               AgentActionsEnvelopeSchema.parse({ actions: resolved }),
             )
           : runWithPrimaryOnlyFallback(prompt, AgentActionsEnvelopeSchema, {
@@ -599,7 +758,7 @@ export async function runMutationAgentLoop(
               ...(input.model ? { model: input.model } : {}),
             });
         const envelope = effectiveAbortSignal
-          ? await Promise.race([resolvePromise, waitForAbort(effectiveAbortSignal)])
+          ? await resolveUntilAbort(resolvePromise, effectiveAbortSignal)
           : await resolvePromise;
         actions = envelope.actions;
       } catch (err) {
@@ -609,7 +768,7 @@ export async function runMutationAgentLoop(
         if (effectiveAbortSignal.aborted || /abort/i.test(message)) {
           backgroundTaskRegistry.fail(taskId, 'Aborted');
           budgetController.dispose();
-          return buildAbortedResult(agentId, message, changedFiles, toolCallLog, round, safetyController);
+          return withMutationState(buildAbortedResult(agentId, message, changedFiles, toolCallLog, round, safetyController, budgetController.timedOut()));
         }
         error = `Failed to resolve agent actions: ${message}`;
         success = false;
@@ -624,7 +783,7 @@ export async function runMutationAgentLoop(
         if (effectiveAbortSignal.aborted) {
           backgroundTaskRegistry.fail(taskId, 'Aborted');
           budgetController.dispose();
-          return buildAbortedResult(agentId, error, changedFiles, toolCallLog, round, safetyController);
+          return withMutationState(buildAbortedResult(agentId, error, changedFiles, toolCallLog, round, safetyController, budgetController.timedOut()));
         }
 
         // Terminal actions
@@ -685,33 +844,26 @@ export async function runMutationAgentLoop(
           }
         }
 
-        // Snapshot before mutation for rollback
-        if (
-          isMutationAction(action) &&
-          safetyController &&
-          action.type === 'write_file'
-        ) {
-          safetyController.snapshotBeforeWrite(action.path, round);
-        }
-
-        const preMutationHashes = new Map<string, string | null>();
-        if (!isReadOnly && (action.type === 'write_file' || action.type === 'apply_patch')) {
-          for (const rel of mutationTargetPaths(action)) {
-            preMutationHashes.set(rel, readFileHash(resolve(projectRoot, rel)));
-          }
-        }
+        // Every parsed file target participates in whole-child rollback.
+        const refusal = prepareMutation(action, round);
+        if (refusal) { error = refusal; success = false; break; }
 
         // Execute the action through the policy gate
-        const execution = await executeActionWithPolicy(action, 'workspace_write', {
+        const execution = await executeActionWithPolicy(action, preset, {
           ...input.toolContext,
+          projectRoot,
           signal: effectiveAbortSignal,
         }, {
+          ...input.executionEnvelope,
           executor,
         });
 
+        bindFailedWriteForRollback(action, execution);
         const lastResult = execution.results[execution.results.length - 1];
         if (!lastResult) {
-          continue;
+          error = 'Tool execution returned no settlement result';
+          success = false;
+          break;
         }
 
         if (execution.policyBlocked) {
@@ -732,25 +884,11 @@ export async function runMutationAgentLoop(
 
         // Log the tool call
         toolCallLog.push(buildToolCallLogEntry(toolCallLog.length + 1, action, lastResult));
-        if (
-          !execution.policyBlocked &&
-          (action.type === 'write_file' || action.type === 'apply_patch')
-        ) {
-          for (const rel of mutationTargetPaths(action)) {
-            const beforeHash = preMutationHashes.get(rel) ?? null;
-            const afterHash = readFileHash(resolve(projectRoot, rel));
-            const effectiveAfter = afterHash ??
-              (action.type === 'write_file' ? hashContent(action.content) : null);
-            if (beforeHash === effectiveAfter && effectiveAfter !== null) continue;
-            if (effectiveAfter === null) continue;
-            changedFiles.push({
-              path: rel,
-              rationale: `${action.type} by sub-agent ${agentId}`,
-              before_hash: beforeHash,
-              after_hash: effectiveAfter,
-              bytes: action.type === 'write_file' ? action.content.length : 0,
-            });
-          }
+        recordMutation(action, execution);
+        if (execution.results.some((result) => result.exit_code !== 0)) {
+          error = lastResult.stderr || 'Tool execution failed';
+          success = false;
+          break;
         }
         priorObservations +=
           '\n' + formatMutationObservation(action, lastResult);
@@ -762,19 +900,14 @@ export async function runMutationAgentLoop(
       // If we broke out of the inner loop with an error or terminal action, exit the outer loop
       if (error !== null || !success) break;
 
-      // Check if the last action was a finish
-      const lastAction = actions[actions.length - 1];
-      if (lastAction?.type === 'finish') {
-        finished = true;
-        break;
-      }
+      if (finished) break;
     }
 
     if (!finished && error === null) {
       success = false;
       error = 'Round limit reached without finish';
       if (safetyController && changedFiles.length > 0 && rollbackSummary === null) {
-        rollbackSummary = safetyController.rollbackTouchedFiles(
+        rollbackSummary = rollbackChildChanges(safetyController, changedFiles,
           `Rollback on sub-agent ${agentId} failure: ${error}`,
         );
       }
@@ -789,22 +922,27 @@ export async function runMutationAgentLoop(
     const inheritedLimiter = budgetController.limiter();
     if (inheritedLimiter) return inheritedBudgetResult(inheritedLimiter);
     success = false;
-    error = err instanceof Error ? err.message : String(err);
+    error = budgetController.timedOut() ? 'Child timed out at local deadline' : err instanceof Error ? err.message : String(err);
     backgroundTaskRegistry.fail(taskId, error);
 
     // Auto-rollback on failure
     if (safetyController && changedFiles.length > 0) {
-      rollbackSummary = safetyController.rollbackTouchedFiles(
+      rollbackSummary = rollbackChildChanges(safetyController, changedFiles,
         `Rollback on sub-agent ${agentId} failure: ${error}`,
       );
     }
   }
 
-  const attribution = classifySubagentFailure({
+  if (!success && safetyController && refreshUncertainty().length > 0 && rollbackSummary === null) {
+    rollbackSummary = rollbackChildChanges(safetyController, changedFiles, `Rollback on failed mutation for ${agentId}`);
+  }
+  if (budgetController.timedOut()) { success = false; error = 'Child timed out at local deadline'; }
+  if (!reconcileChangedFiles(changedFiles, projectRoot)) { success = false; error = 'Mutation postimages are indeterminate'; }
+  const attribution = budgetController.timedOut() ? 'child_timeout' : classifySubagentFailure({
     success,
     error,
     changedFilesCount: changedFiles.length,
-    aborted: effectiveAbortSignal.aborted && budgetController.limiter() === null,
+    aborted: effectiveAbortSignal.aborted && !budgetController.timedOut() && budgetController.limiter() === null,
   });
 
   // Build the result
@@ -823,7 +961,7 @@ export async function runMutationAgentLoop(
     rollbackSummary,
     rollback: async () => {
       if (safetyController) {
-        const summary = safetyController.rollbackTouchedFiles(
+        const summary = rollbackChildChanges(safetyController, changedFiles,
           `Manual rollback for sub-agent ${agentId}`,
         );
         rollbackSummary = summary;
@@ -835,7 +973,7 @@ export async function runMutationAgentLoop(
 
   budgetController.dispose();
 
-  return result;
+  return withMutationState(result);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -847,19 +985,20 @@ function buildAbortedResult(
   toolCallLog: ToolCallLog[],
   round: number,
   safetyController: WorktreeSafetyController | null,
+  timedOut = false,
 ): MutationAgentLoopResult {
   return {
     success: false,
-    attribution: 'child_cancellation',
+    attribution: timedOut ? 'child_timeout' : 'child_cancellation',
     summary: `Sub-agent ${agentId} was aborted after ${round} round(s).`,
     changedFiles,
     toolCallLog,
     stepsExecuted: toolCallLog.length,
-    error: error ?? 'Aborted by user or parent',
+    error: timedOut ? 'Child timed out at local deadline' : error ?? 'Aborted by user or parent',
     rollbackSummary: null,
     rollback: async () => {
       if (safetyController) {
-        return safetyController.rollbackTouchedFiles(
+        return rollbackChildChanges(safetyController, changedFiles,
           `Rollback on abort for sub-agent ${agentId}`,
         );
       }
@@ -893,7 +1032,7 @@ function buildInheritedBudgetResult(
     inheritedBudgetLimiter: limiter,
     rollback: async () => {
       if (safetyController) {
-        return safetyController.rollbackTouchedFiles(
+        return rollbackChildChanges(safetyController, changedFiles,
           `Manual rollback for inherited-budget stop of sub-agent ${agentId}`,
         );
       }

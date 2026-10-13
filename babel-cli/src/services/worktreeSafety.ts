@@ -87,6 +87,25 @@ export class WorktreeSafetyController {
   readonly git: WorktreeGitSummary;
 
   private readonly snapshots = new Map<string, WorktreeSnapshotRecord>();
+  private readonly confirmedChildPostimages = new Map<string, string | null>();
+
+  private matchesConfirmedPostimage(relativePath: string): boolean {
+    if (!this.confirmedChildPostimages.has(relativePath)) return false;
+    const absolutePath = this.absolutePathFor(relativePath);
+    if (!absolutePath) return false;
+    const expected = this.confirmedChildPostimages.get(relativePath);
+    return expected === null ? !existsSync(absolutePath) : hashFileIfExists(absolutePath) === expected;
+  }
+
+  /** Record controller-verified bytes so later rescans can distinguish child edits. */
+  recordConfirmedPostimage(target: string, hash: string | null): boolean {
+    const resolved = resolveTargetPath(this.projectRoot, target);
+    if (!resolved || !this.snapshots.has(resolved.relativePath)) return false;
+    const matches = hash === null ? !existsSync(resolved.absolutePath) : hashFileIfExists(resolved.absolutePath) === hash;
+    if (!matches) return false;
+    this.confirmedChildPostimages.set(resolved.relativePath, hash);
+    return true;
+  }
   private readonly refusedTargetDirtyConflicts = new Set<string>();
   private readonly refusedProtectedPathConflicts = new Set<string>();
   private rollbackSummaryPath: string | null = null;
@@ -102,11 +121,13 @@ export class WorktreeSafetyController {
     // Merge newly-dirty files into the existing set. Files that were already
     // dirty at construction stay flagged; only new additions are appended.
     for (const f of fresh.dirty_files_before_run) {
+      if (this.matchesConfirmedPostimage(f)) continue;
       if (!this.git.dirty_files_before_run.includes(f)) {
         this.git.dirty_files_before_run.push(f);
       }
     }
     for (const f of fresh.untracked_files_before_run) {
+      if (this.matchesConfirmedPostimage(f)) continue;
       if (!this.git.untracked_files_before_run.includes(f)) {
         this.git.untracked_files_before_run.push(f);
       }
@@ -152,7 +173,8 @@ export class WorktreeSafetyController {
         reason,
       };
     }
-    const dirtyBeforeRun = this.isDirtyBeforeRun(relativePath);
+    const dirtyBeforeRun = this.isDirtyBeforeRun(relativePath) ||
+      (this.confirmedChildPostimages.has(relativePath) && !this.matchesConfirmedPostimage(relativePath));
     if (dirtyBeforeRun) {
       this.refusedTargetDirtyConflicts.add(relativePath);
       return {
@@ -179,6 +201,15 @@ export class WorktreeSafetyController {
   }
 
   rollbackTouchedFiles(reason: string): WorktreeRollbackSummary {
+    // A later owner edit may arrive without another snapshot/rescan. Restore
+    // only a bound child postimage or a target already back at its original bytes.
+    for (const snapshot of this.snapshots.values()) {
+      if (!this.confirmedChildPostimages.has(snapshot.relative_path) || this.matchesConfirmedPostimage(snapshot.relative_path)) continue;
+      const path = this.absolutePathFor(snapshot.relative_path);
+      const restored = path !== null && (snapshot.hash_before === null
+        ? !existsSync(path) : hashFileIfExists(path) === snapshot.hash_before);
+      if (!restored) this.refusedTargetDirtyConflicts.add(snapshot.relative_path);
+    }
     const changedBefore = this.changedTouchedFiles();
     const restoredFiles: string[] = [];
     const removedFiles: string[] = [];

@@ -33,6 +33,7 @@ import {
   runMutationAgentLoop,
   subagentFinishedCleanly,
   type SubagentAttribution,
+  type ChildExecutionEnvelope,
 } from "./lanes/runMutationAgentLoop.js";
 import { runImplementWorktreeAgent } from "./implementWorktreeAgent.js";
 import { invalidateVerifierLedger } from "./chatEngineSupport.js";
@@ -75,6 +76,8 @@ export interface ChatSubAgentToolLogEntry {
 }
 
 export interface ChatEngineChildExecutionHost {
+  readonly executionProfile?: 'chat' | 'plan' | 'deep';
+  isolationBrokerFlags?: () => ReturnType<typeof import('./chatEngineIsolationFlags.js').resolveIsolationBrokerFlags>;
   _turnIndex: number;
   abortController: AbortController;
   childAttempts: Map<string, number>;
@@ -129,6 +132,7 @@ export interface ChatEngineChildExecutionHost {
 }
 
 export interface ChatEngineChildExecutionInput {
+  executionEnvelope?: ChildExecutionEnvelope;
   host: ChatEngineChildExecutionHost;
   action: ChatToolAction;
   toolContext: ToolContext;
@@ -252,6 +256,12 @@ export async function executeSubAgentAction(
   } = input;
   if (action.type !== "sub_agent")
     throw new Error("executeSubAgentAction requires a sub_agent action");
+
+  const executionEnvelope: ChildExecutionEnvelope = input.executionEnvelope ?? {
+    ...host.isolationBrokerFlags?.(),
+    mode: host.executionProfile ?? 'chat',
+    ...(host.parity.authoritySession ? { authoritySession: host.parity.authoritySession } : {}),
+  };
 
   // S03/#213 slice 2: stable delegation id + per-attempt evidence dir.
   //
@@ -408,6 +418,7 @@ export async function executeSubAgentAction(
                 runDir: childRunDir,
                 abortSignal: childController.signal,
                 cleanupWorktree: false,
+                executionEnvelope,
                 ...(childLane?.useDeterministicMock !== undefined
                   ? { useDeterministicMock: childLane.useDeterministicMock }
                   : {}),
@@ -553,6 +564,7 @@ export async function executeSubAgentAction(
           const mutResult = await runMutationAgentLoop({
             agentId: subId,
             task: action.task,
+            executionEnvelope,
             projectRoot: host.options.projectRoot,
             writeScope,
             additionalInstructions: childEnvelope,
@@ -621,7 +633,9 @@ export async function executeSubAgentAction(
           // was superseded must not mint a mutation batch, invalidate the new
           // task's verifier receipt, or be treated as incorporated into the
           // current candidate. Its disk effects remain real and historical.
-          if (childResultIsStale(mutResult.changedFiles.length)) {
+          const uncertainPaths = mutResult.indeterminatePaths ?? [];
+          const affectedPaths = [...new Set([...mutResult.changedFiles.map(file => file.path), ...uncertainPaths])];
+          if (childResultIsStale(affectedPaths.length)) {
             return host.settleStaleChildResult(
               tool,
               target,
@@ -635,10 +649,10 @@ export async function executeSubAgentAction(
           const details = clean
             ? `${mutResult.stepsExecuted} steps, ${mutResult.changedFiles.length} changed, attribution=${attribution}`
             : `failed: ${mutResult.error || "unknown error"}, attribution=${attribution}`;
-          if (mutResult.changedFiles.length > 0) {
+          if (affectedPaths.length > 0) {
             host.workingState = applyWorkingStateEvent(host.workingState, {
               type: "mutation",
-              path: mutResult.changedFiles[0]!.path,
+              path: affectedPaths[0]!,
               fingerprint: operationFingerprint(
                 chatActionToolName(action),
                 action,
@@ -652,7 +666,9 @@ export async function executeSubAgentAction(
             index: meta.index,
             exit_code: clean ? 0 : 1,
             ...(clean ? {} : { error: mutResult.error || attribution }),
-            ...(mutResult.changedFiles.length > 0
+            ...(uncertainPaths.length > 0
+              ? { effect_status: "indeterminate" as const, mutation_paths: affectedPaths }
+              : mutResult.changedFiles.length > 0
               ? {
                   effect_status: "confirmed_change" as const,
                   mutation_paths: mutResult.changedFiles.map(
@@ -672,7 +688,7 @@ export async function executeSubAgentAction(
               mutResult.error ?? "child inherited allowance exhausted",
             );
           }
-          if (mutResult.changedFiles.length > 0) {
+          if (affectedPaths.length > 0) {
             // R0-11: the in-tree mutation lane writes directly into the PARENT
             // candidate. A prior green parent verifier receipt is revision-
             // bound to the parent's earlier mutation scope; it must not remain
@@ -689,7 +705,7 @@ export async function executeSubAgentAction(
               // R0-7: attribute the child's change to the turn that
               // dispatched it, never to a turn that started afterwards.
               dispatchTurnId ?? String(host._turnIndex),
-              { paths: mutResult.changedFiles.map((file) => file.path) },
+              { paths: affectedPaths },
             );
           }
           callbacks?.onToolComplete?.(
@@ -713,6 +729,7 @@ export async function executeSubAgentAction(
             `child_spec: ${specReceipt}`,
             `steps: ${mutResult.stepsExecuted}`,
             `changed_files: ${mutResult.changedFiles.map((f) => f.path).join(", ") || "none"}`,
+            `indeterminate_paths: ${uncertainPaths.join(", ") || "none"}`,
             mutResult.summary,
           ].join("\n");
           return {

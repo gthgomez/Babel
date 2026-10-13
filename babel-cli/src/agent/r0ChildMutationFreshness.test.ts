@@ -13,13 +13,14 @@
  */
 
 import assert from 'node:assert/strict';
-import { after, before, describe, test } from 'node:test';
+import { after, before, describe, test, mock } from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ChatEngine } from './chatEngine.js';
+import { WorkspaceTransactionManager } from '../services/workspaceTransactions.js';
 
 const MODEL = 'deepseek-v4-flash';
 
@@ -135,6 +136,76 @@ async function dispatchMutationChild(
 }
 
 describe('R0-11 child mutation vs parent verifier freshness', () => {
+  test('an unresolved failed child write invalidates parent verification without confirmed-change evidence', async () => {
+    const root = createGitProject();
+    process.env['BABEL_IMPLEMENT_WORKTREE'] = '0';
+    process.env['BABEL_LITE_OFFLINE'] = '0';
+    process.env['BABEL_SIMULATE_ROLLBACK_FAILURE_FOR'] = 'src/uncertain.txt';
+    const undo = mock.method(WorkspaceTransactionManager, 'undoLastMutationBatch', async () => {
+      throw new Error('Fixture transaction rollback unavailable');
+    });
+    try {
+      const engine = new ChatEngine({
+        task: 'parent task', projectRoot: root, model: MODEL,
+        testChildLaneOverrides: {
+          actionResolver: async () => [
+            { type: 'write_file', path: 'src/uncertain.txt', content: 'partial' },
+            { type: 'finish', summary: 'done', verification: [] },
+          ],
+          executor: {
+            mapAction: () => [],
+            execute: async action => {
+              writeFileSync(join(root, 'src/uncertain.txt'), 'partial');
+              return { action, terminal: false, results: [{ exit_code: 1, stdout: '', stderr: 'Fixture partial write' }] };
+            },
+          },
+        },
+      });
+      seedGreenReceipt(engine);
+      const { observation } = await dispatchMutationChild(engine, root);
+      assert.match(observation, /indeterminate_paths: src\/uncertain.txt/);
+      const internals = engine as unknown as EngineInternals;
+      assert.equal(internals.lastVerifierReceipt?.stale, true);
+      assert.equal(internals.toolCallLog.at(-1)?.effect_status, 'indeterminate');
+      assert.deepEqual(internals.toolCallLog.at(-1)?.mutation_paths, ['src/uncertain.txt']);
+    } finally {
+      undo.mock.restore();
+      delete process.env['BABEL_SIMULATE_ROLLBACK_FAILURE_FOR'];
+      process.env['BABEL_LITE_OFFLINE'] = '1';
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('the production parent forwards its permitted host verification envelope', async () => {
+    const root = createGitProject();
+    process.env['BABEL_IMPLEMENT_WORKTREE'] = '0';
+    process.env['BABEL_LITE_OFFLINE'] = '0';
+    let verifierDispatched = false;
+    try {
+      const engine = new ChatEngine({
+        task: 'parent task', projectRoot: root, model: MODEL,
+        testChildLaneOverrides: {
+          actionResolver: async () => [
+            { type: 'test_run', command: 'npm test' },
+            { type: 'finish', summary: 'done', verification: [] },
+          ],
+          executor: {
+            mapAction: () => [],
+            execute: async action => {
+              verifierDispatched = action.type === 'test_run';
+              return { action, terminal: false, results: [{ exit_code: 0, stdout: 'fixture', stderr: '' }] };
+            },
+          },
+        },
+      });
+      await dispatchMutationChild(engine, root);
+      assert.equal(verifierDispatched, true);
+    } finally {
+      process.env['BABEL_LITE_OFFLINE'] = '1';
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('an in-tree mutation child invalidates a prior green parent receipt', async () => {
     const root = createGitProject();
     process.env['BABEL_IMPLEMENT_WORKTREE'] = '0';

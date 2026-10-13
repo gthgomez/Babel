@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 
 import type { ToolContext, ToolResult } from '../../localTools.js';
@@ -112,6 +112,12 @@ function mockExecutor(results: MockResults): import('../toolExecutor.js').ToolEx
         stdout: 'ok',
         stderr: '',
       };
+      // An exit-zero write fixture must produce the postimage it claims.
+      if (action.type === 'write_file' && result.exit_code === 0) {
+        const target = resolve(_context.projectRoot!, action.path);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, action.content);
+      }
       return { action, terminal: false, results: [result] };
     },
   };

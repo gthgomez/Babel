@@ -1092,6 +1092,11 @@ function serializedProviderRequest(threadLog: ThreadEventLog): string {
   );
 }
 
+function retainedTaskIsPresent(host: ChatEngineCompactionHost): boolean {
+  return host.options.task.length === 0 || rebuildProviderMessagesFromEvents(host.threadLog)
+    .some((message) => message.content?.includes(host.options.task));
+}
+
 function serializedProviderRequestForAdmission(host: ChatEngineCompactionHost): string {
   return host.serializeNativeProviderRequestBody?.() ?? serializedProviderRequest(host.threadLog);
 }
@@ -1325,7 +1330,7 @@ export async function runChatEngineCompaction(
           const tokensBeforeCommit = host.estimateTokens(prior);
           const tokensAfterCommit = host.estimateTokens(host.conversation);
           return ownsConversation()
-            && (host.options.task.length === 0 || afterRequest.includes(host.options.task))
+            && retainedTaskIsPresent(host)
             && compactionCommitAcceptsSerializedRequest(
               host,
               modelId,
@@ -1442,7 +1447,7 @@ export async function runChatEngineCompaction(
             validateCommit: () => {
               const afterRequest = serializedProviderRequestForAdmission(host);
               return ownerIsCurrent()
-                && (host.options.task.length === 0 || afterRequest.includes(host.options.task))
+                && retainedTaskIsPresent(host)
                 && compactionCommitAcceptsSerializedRequest(
                   host,
                   modelId,

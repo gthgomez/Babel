@@ -99,41 +99,49 @@ export function inheritedChildBudgetLimiter(
 export function createChildBudgetController(
   allowance: InheritedChildAllowance | undefined,
   parentSignal?: AbortSignal,
+  localTimeoutMs?: number,
 ): {
   signal: AbortSignal;
   limiter: () => ChildBudgetLimiter | null;
+  timedOut: () => boolean;
   dispose: () => void;
 } {
   const controller = new AbortController();
-  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-  let expiredLimiter: ChildBudgetLimiter | null = null;
-
-  const expireAtDeadline = (): void => {
-    expiredLimiter = 'wall';
+  type StopCause = 'parent' | 'local' | ChildBudgetLimiter;
+  let stopCause: StopCause | null = null;
+  const localDeadline = localTimeoutMs === undefined ? null : Date.now() + Math.max(0, localTimeoutMs);
+  const inheritedDeadline = allowance?.deadlineAtMs ?? null;
+  const firstDeadline = inheritedDeadline === null
+    ? localDeadline
+    : localDeadline === null ? inheritedDeadline : Math.min(inheritedDeadline, localDeadline);
+  const deadlineCause: StopCause = inheritedDeadline !== null && firstDeadline === inheritedDeadline ? 'wall' : 'local';
+  const stop = (cause: StopCause): void => {
+    if (stopCause !== null) return;
+    stopCause = cause;
     controller.abort();
   };
-  if (allowance?.deadlineAtMs !== null && allowance?.deadlineAtMs !== undefined) {
-    const delayMs = Math.max(0, allowance.deadlineAtMs - Date.now());
-    deadlineTimer = setTimeout(expireAtDeadline, delayMs);
-    // A completed child must not keep the process alive until its parent
-    // deadline. The controller is still cleared by dispose on normal exits.
-    deadlineTimer.unref?.();
-  }
-
-  const onParentAbort = (): void => controller.abort();
+  const checkStop = (): void => {
+    if (stopCause !== null) return;
+    if (parentSignal?.aborted) { stop('parent'); return; }
+    if (firstDeadline !== null && Date.now() >= firstDeadline) { stop(deadlineCause); return; }
+    const inherited = inheritedChildBudgetLimiter(allowance);
+    if (inherited) stop(inherited);
+  };
+  const onParentAbort = (): void => stop('parent');
   parentSignal?.addEventListener('abort', onParentAbort, { once: true });
-  if (parentSignal?.aborted) controller.abort();
+  checkStop();
+  const deadlineTimer = firstDeadline === null || stopCause !== null
+    ? undefined
+    : setTimeout(() => stop(deadlineCause), Math.max(0, firstDeadline - Date.now()));
+  // An explicit local timeout bounds even a never-settling standalone child.
+  if (localTimeoutMs === undefined) deadlineTimer?.unref?.();
 
   return {
     signal: controller.signal,
+    timedOut: () => { checkStop(); return stopCause === 'local'; },
     limiter: () => {
-      if (expiredLimiter) return expiredLimiter;
-      const current = inheritedChildBudgetLimiter(allowance);
-      if (current) {
-        expiredLimiter = current;
-        controller.abort();
-      }
-      return expiredLimiter;
+      checkStop();
+      return stopCause === 'wall' || stopCause === 'cost' ? stopCause : null;
     },
     dispose: () => {
       if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
