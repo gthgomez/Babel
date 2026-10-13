@@ -59,6 +59,41 @@ async function connectLiveFromPackagedStartupDialog(window) {
   return {connected: true};
 }
 
+const NAVIGATION_RETRY_MS = 60_000;
+
+function isDestroyedContextError(error) {
+  const msg = String(error?.message ?? error);
+  return /Execution context was destroyed|most likely because of a navigation/i.test(msg);
+}
+
+/** Electron may reload once after first paint; retry evaluate until the preload bridge is stable. */
+async function evaluateInPackagedWindow(window, pageFunction, arg) {
+  const deadline = Date.now() + NAVIGATION_RETRY_MS;
+  for (;;) {
+    try {
+      if (arg !== undefined) return await window.evaluate(pageFunction, arg);
+      return await window.evaluate(pageFunction);
+    } catch (error) {
+      if (!isDestroyedContextError(error) || Date.now() >= deadline) throw error;
+      await window.waitForLoadState('domcontentloaded', {timeout: 15_000}).catch(() => {});
+      await window.waitForFunction(
+        () => typeof window.babelDesktop?.getInfo === 'function',
+        null,
+        {timeout: 15_000},
+      ).catch(() => {});
+    }
+  }
+}
+
+async function waitForPackagedPreload(window) {
+  await window.waitForLoadState('load', {timeout: 60_000}).catch(() => {});
+  await window.waitForFunction(
+    () => typeof window.babelDesktop?.getInfo === 'function',
+    null,
+    {timeout: 60_000},
+  );
+}
+
 async function main() {
   const artifacts = artifactDir();
   const untestedJourneys = [];
@@ -129,9 +164,9 @@ async function main() {
     window.on('console', message => {
       if (message.type() === 'error') errors.push(`console: ${message.text()}`);
     });
-    await window.waitForLoadState('domcontentloaded', {timeout: 60_000});
+    await waitForPackagedPreload(window);
 
-    const info = await window.evaluate(async () => {
+    const info = await evaluateInPackagedWindow(window, async () => {
       if (!window.babelDesktop?.getInfo) return {preloadMissing: true};
       return await window.babelDesktop.getInfo();
     });
@@ -169,7 +204,7 @@ async function main() {
     checks.push('fixture-backed project connects with truthful ready state (no model run)');
     journeys.project = {status: 'executed', transport: 'preload IPC getInfo + listDirectory'};
 
-    const tree = await window.evaluate(async () => {
+    const tree = await evaluateInPackagedWindow(window, async () => {
       const entries = await window.babelDesktop.listDirectory('.');
       return entries.map(entry => entry.name);
     });
@@ -177,7 +212,7 @@ async function main() {
     checks.push('listDirectory IPC reads the fixture project through main process');
     journeys.projectTree = {status: 'executed'};
 
-    const historyIpc = await window.evaluate(async sessionId => {
+    const historyIpc = await evaluateInPackagedWindow(window, async sessionId => {
       const listed = await window.babelDesktop.listSessions({limit: 30, offset: 0});
       const tail = await window.babelDesktop.openSession(sessionId, {olderOffset: 0});
       const older = await window.babelDesktop.openSession(sessionId, {olderOffset: 150});
@@ -200,7 +235,7 @@ async function main() {
     checks.push('installed history IPC pages tail and older windows without overlap');
     journeys.historyIpc = {status: 'executed'};
 
-    const provider = await window.evaluate(async () => {
+    const provider = await evaluateInPackagedWindow(window, async () => {
       const providers = await window.babelDesktop.listQualifiedProviders();
       const saved = await window.babelDesktop.saveProviderRoute({provider: 'ollama', model: 'deepseek-v4-flash'});
       const route = await window.babelDesktop.readProviderRoute();
