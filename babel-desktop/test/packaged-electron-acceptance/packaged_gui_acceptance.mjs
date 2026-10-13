@@ -22,6 +22,40 @@ async function writeReport(dir, report) {
   await writeFile(join(dir, 'packaged-electron-acceptance.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 }
 
+/** Packaged startup opens BABEL SETUP over the footer; dismiss via backdrop only. */
+async function dismissPackagedSetupDialog(window) {
+  const dialog = window.locator('#dialog');
+  await dialog.click({position: {x: 8, y: 8}});
+  await window.waitForSelector('#dialog:not([open])', {timeout: 15_000});
+}
+
+/**
+ * Use the startup modal's harness control (never #preview-badge while #dialog is open).
+ * @returns {Promise<{connected: boolean, reason?: string}>}
+ */
+async function connectLiveFromPackagedStartupDialog(window) {
+  await window.waitForSelector('#dialog[open]', {timeout: 30_000});
+  const title = await window.locator('#dialog-title').innerText();
+  if (!title.includes('BABEL SETUP')) {
+    throw new Error(`expected packaged startup BABEL SETUP dialog, got: ${title}`);
+  }
+  const useLive = window.locator('#dialog [data-action="use-live"]');
+  await useLive.waitFor({state: 'visible', timeout: 15_000});
+  const enabled = await useLive.isEnabled();
+  if (!enabled) {
+    await dismissPackagedSetupDialog(window);
+    return {
+      connected: false,
+      reason: 'Use Babel Harness disabled until execution diagnostics report ready (Docker); connection validated via IPC',
+    };
+  }
+  await useLive.click();
+  await window.locator('#preview-badge').waitFor({timeout: 30_000});
+  const badge = await window.locator('#preview-badge').innerText();
+  if (badge !== 'BABEL CLI') throw new Error(`expected BABEL CLI badge after harness, got: ${badge}`);
+  return {connected: true};
+}
+
 async function main() {
   const artifacts = artifactDir();
   const untestedJourneys = [];
@@ -181,20 +215,24 @@ async function main() {
     checks.push('provider route saves via IPC without API credentials (ollama local route)');
     journeys.provider = {status: 'executed', note: 'route-only; no credential file or model call'};
 
-    await window.locator('#preview-badge').click();
-    await window.locator('[data-action="use-live"]').click();
-    await window.waitForSelector('button.session-button[data-action="session"]', {timeout: 30_000});
-    await window.locator('button.session-button[data-action="session"]', {hasText: 'PACKAGED-HISTORY'}).click();
-    const conv = window.locator('#conversation');
-    await conv.locator('text=m-159').waitFor({timeout: 30_000});
-    if (await conv.locator('text=m-009').count()) throw new Error('tail view should not include m-009');
-    await window.locator('[data-action="load-older-messages"]').click();
-    await conv.locator('text=m-009').waitFor({timeout: 30_000});
-    if (await conv.locator('text=m-159').count()) throw new Error('older view should not include m-159');
-    await window.locator('[data-action="load-latest-messages"]').click();
-    await conv.locator('text=m-159').waitFor({timeout: 30_000});
-    checks.push('renderer history navigation latest→older→latest on installed transport');
-    journeys.historyUi = {status: 'executed'};
+    const harness = await connectLiveFromPackagedStartupDialog(window);
+    if (harness.connected) {
+      checks.push('startup BABEL SETUP modal connects live harness via enabled Use Babel Harness');
+      await window.waitForSelector('button.session-button[data-action="session"]', {timeout: 30_000});
+      await window.locator('button.session-button[data-action="session"]', {hasText: 'PACKAGED-HISTORY'}).click();
+      const conv = window.locator('#conversation');
+      await conv.locator('text=m-159').waitFor({timeout: 30_000});
+      if (await conv.locator('text=m-009').count()) throw new Error('tail view should not include m-009');
+      await window.locator('[data-action="load-older-messages"]').click();
+      await conv.locator('text=m-009').waitFor({timeout: 30_000});
+      if (await conv.locator('text=m-159').count()) throw new Error('older view should not include m-159');
+      await window.locator('[data-action="load-latest-messages"]').click();
+      await conv.locator('text=m-159').waitFor({timeout: 30_000});
+      checks.push('renderer history navigation latest→older→latest on installed transport');
+      journeys.historyUi = {status: 'executed'};
+    } else {
+      journeys.historyUi = {status: 'blocked', reason: harness.reason};
+    }
 
     await window.locator('[data-action="settings"]').click();
     await window.locator('[data-action="configure-provider"]').click();

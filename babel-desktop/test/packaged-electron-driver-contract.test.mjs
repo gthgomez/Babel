@@ -24,6 +24,17 @@ test('packaged GUI acceptance source uses Node Playwright APIs only', () => {
   assert.match(readFileSync(join(desktopRoot, 'test/packaged-electron-acceptance/packaged-fixture-lane.mjs'), 'utf8'), /PACKAGED-HISTORY-FIXTURE/);
 });
 
+test('packaged GUI acceptance uses startup BABEL SETUP modal for harness (not footer badge under modal)', () => {
+  assert.match(acceptanceSource, /waitForSelector\([^)]*#dialog\[open\]/);
+  assert.match(acceptanceSource, /connectLiveFromPackagedStartupDialog/);
+  assert.match(acceptanceSource, /#dialog \[data-action="use-live"\]/);
+  const afterProvider = acceptanceSource.split('journeys.provider')[1] ?? '';
+  assert.doesNotMatch(afterProvider, /locator\('#preview-badge'\)\.click\(\)/);
+  const appStartup = readFileSync(join(desktopRoot, 'src/app.mjs'), 'utf8');
+  assert.match(appStartup, /info\?\.packaged.*connectionDialog\(\)/s);
+  assert.match(appStartup, /data-action="use-live"/);
+});
+
 test('playwright driver contract: locator.innerText and screenshot fullPage', async () => {
   const outDir = mkdtempSync(join(tmpdir(), 'babel-pw-contract-'));
   const shot = join(outDir, 'contract.png');
