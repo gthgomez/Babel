@@ -218,7 +218,10 @@ test('I06: apply_patch scope checks parsed targets, not staging path', async () 
       babelRoot: root,
     },
     executor: {
-      execute: async () => ({ results: [{ exit_code: 0, stdout: '', stderr: '' }], policyBlocked: false }),
+      execute: async () => {
+        writeFileSync(join(root, 'src', 'ok.ts'), 'in scope\n')
+        return { results: [{ exit_code: 0, stdout: '', stderr: '' }], policyBlocked: false }
+      },
     } as never,
     actionResolver: async () => [{
       type: 'apply_patch',
@@ -227,6 +230,7 @@ test('I06: apply_patch scope checks parsed targets, not staging path', async () 
         '--- a/src/ok.ts',
         '+++ b/src/ok.ts',
         '@@ -1 +1 @@',
+        '-before',
         '+in scope',
       ].join('\n'),
     }, { type: 'finish', summary: 'done', verification: [] }],

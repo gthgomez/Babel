@@ -32,7 +32,7 @@ const TOOL_CATEGORY: Record<string, string> = {
   web_fetch: 'web',
 };
 
-/** Tools whose execution may invalidate cached observations, including partial failures. */
+/** Compatibility helper for direct cache users; executeTool uses registry metadata. */
 export const TOOL_RESULT_CACHE_MUTATING_TOOLS = new Set([
   'file_write',
   'apply_patch',
@@ -41,6 +41,15 @@ export const TOOL_RESULT_CACHE_MUTATING_TOOLS = new Set([
   'run_command',
   'file_delete',
   'file_move',
+  'git_reset',
+  'git_push',
+  'memory_store',
+  'enter_plan_mode',
+  'exit_plan_mode',
+  'acquire_lock',
+  'release_lock',
+  'plugin_tool',
+  'mcp_request',
 ]);
 
 function getTtlMs(toolName: string): number {

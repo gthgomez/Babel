@@ -78,13 +78,13 @@ test('formatEnvFileInactiveMessage includes canonical invocation hints', () => {
 });
 
 test('source CLI defaults to a private user configuration path', () => {
-  const home = join(tmpdir(), 'babel-private-example');
+  const home = join(tmpdir(), 'env-home-fixture');
   assert.equal(resolvePrivateCredentialEnvPath({ HOME: home }), join(home, '.babel', 'config', '.env'));
   assert.equal(resolvePrivateCredentialEnvPath({ BABEL_CONFIG_DIR: join(home, 'profile') }), join(home, 'profile', '.env'));
 });
 
 test('private profile keys load without automatically reading selected project files', () => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-private-env-'));
+  const root = mkdtempSync(join(tmpdir(), 'env-source-fixture-'));
   const configDir = join(root, 'private');
   const project = join(root, 'project');
   mkdirSync(configDir);

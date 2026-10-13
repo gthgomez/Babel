@@ -309,14 +309,6 @@ async function executeActionBatch(
     if (!action) {
       continue;
     }
-    if (signal?.aborted) {
-      return {
-        terminal: true,
-        policyBlocked: false,
-        blockedReason: 'Aborted by user or parent',
-        needsApproval: false,
-      };
-    }
     const inheritedLimiter = budgetLimiter?.();
     if (inheritedLimiter) {
       return {
@@ -325,6 +317,14 @@ async function executeActionBatch(
         blockedReason: null,
         needsApproval: false,
         inheritedBudgetLimiter: inheritedLimiter,
+      };
+    }
+    if (signal?.aborted) {
+      return {
+        terminal: true,
+        policyBlocked: false,
+        blockedReason: 'Aborted by user or parent',
+        needsApproval: false,
       };
     }
     if (isTerminalAgentAction(action)) {
@@ -576,7 +576,7 @@ export async function runReadOnlyAgentLoop(
     effectiveAbortSignal,
     () => budgetController.limiter(),
   );
-  inheritedBudgetLimiter = warmupBatch.inheritedBudgetLimiter;
+  inheritedBudgetLimiter = warmupBatch.inheritedBudgetLimiter ?? budgetController.limiter() ?? undefined;
   if (inheritedBudgetLimiter) {
     return {
       steps,

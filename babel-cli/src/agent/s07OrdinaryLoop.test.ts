@@ -301,6 +301,7 @@ function createGitProject(): string {
 
 /** Minimal executor so `actionResolver` scripts can run without a provider. */
 function mockChildExecutor(
+  projectRoot: string,
   results: Record<string, ToolResult>,
 ): {
   mapAction(action: AgentAction): Array<{ kind: 'execute' | 'terminal'; request?: unknown }>;
@@ -325,10 +326,14 @@ function mockChildExecutor(
       if (action.type === 'finish' || action.type === 'ask_approval') {
         return { action, terminal: true, results: [] };
       }
+      const result = results[keyFor(action)] ?? { exit_code: 0, stdout: '', stderr: '' };
+      if (action.type === 'write_file' && result.exit_code === 0) {
+        writeFileSync(join(projectRoot, action.path), action.content, 'utf-8');
+      }
       return {
         action,
         terminal: false,
-        results: [results[keyFor(action)] ?? { exit_code: 0, stdout: '', stderr: '' }],
+        results: [result],
       };
     },
   };
@@ -1568,7 +1573,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       writeScope: ['src'],
       projectRoot: root,
       toolContext: { agentId: 's07-mut-escape', runId: 's07-mut-escape', runDir: root, babelRoot: root },
-      executor: mockChildExecutor({}) as never,
+      executor: mockChildExecutor(root, {}) as never,
       actionResolver: async () => [
         { type: 'write_file', path: 'lib/out.ts', content: 'escaped\n' },
         { type: 'finish', summary: 'attempted escape', verification: [] },
@@ -1589,7 +1594,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       writeScope: ['src'],
       projectRoot: root,
       toolContext: { agentId: 's07-mut-scoped', runId: 's07-mut-scoped', runDir: root, babelRoot: root },
-      executor: mockChildExecutor({}) as never,
+      executor: mockChildExecutor(root, {}) as never,
       actionResolver: async () => [
         { type: 'write_file', path: 'src/ok.ts', content: 'in scope\n' },
         { type: 'finish', summary: 'scoped write', verification: [] },
@@ -1601,6 +1606,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       'in-scope write is allowed',
     );
     assert.equal(scoped.attribution, 'child_success');
+    assert.equal(readFileSync(join(root, 'src/ok.ts'), 'utf-8'), 'in scope\n');
 
     // The production worktree lane keeps the parent revision physically clean.
     const impl = await runImplementWorktreeAgent(

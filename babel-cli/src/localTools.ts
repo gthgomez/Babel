@@ -68,7 +68,6 @@ import { handleLspTool, LspToolInputSchema } from './tools/lspTool.js';
 import { getManifestSnapshot } from './tools/toolManifest.js';
 import {
   getSessionCache,
-  TOOL_RESULT_CACHE_MUTATING_TOOLS,
 } from './tools/toolResultCache.js';
 import { getSessionGate } from './services/searchDepthGate.js';
 import {
@@ -1893,8 +1892,13 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     };
   }
 
+  // Registry metadata owns cache eligibility. Plugin and MCP requests have argument-dependent
+  // effects, so treat their observations as unsafe to replay or retain.
+  const cacheable = EXECUTOR_TOOL_REGISTRY.get(req.tool)?.mutating === false
+    && req.tool !== 'plugin_tool' && req.tool !== 'mcp_request';
+
   // ── Phase 4: Tool result cache (read-only tools only) ────────────────────
-  if (!TOOL_RESULT_CACHE_MUTATING_TOOLS.has(req.tool)) {
+  if (cacheable) {
     const cache = getSessionCache();
     const cacheInput = extractCacheInput(req, context);
     const cached = cache.get(req.tool, cacheInput);
@@ -1926,21 +1930,28 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
 
   context.onBeforeDispatch?.();
   const dispatch = () => EXECUTOR_TOOL_REGISTRY.dispatch(req, context);
-  const result = approvedMcpRequest
-    ? await runWithApprovedMcpJit(approvedMcpRequest, dispatch)
-    : await dispatch();
+  if (!cacheable) getSessionCache().invalidate();
+  let result: ToolResult;
+  try {
+    result = approvedMcpRequest
+      ? await runWithApprovedMcpJit(approvedMcpRequest, dispatch)
+      : await dispatch();
+  } finally {
+    // A throwing or partially failed mutation can still change observations.
+    if (!cacheable) getSessionCache().invalidate();
+  }
 
   // ── Phase 4: Post-dispatch cache/gate updates ────────────────────────────
   gate.recordCall(req.tool, result.exit_code);
 
-  if (!TOOL_RESULT_CACHE_MUTATING_TOOLS.has(req.tool)) {
+  if (cacheable) {
     const cache = getSessionCache();
     const cacheInput = extractCacheInput(req, context);
     cache.set(req.tool, cacheInput, result);
   } else {
     // Mutations invalidate the entire cache
     const cache = getSessionCache();
-    cache.invalidateOnMutation(req.tool, result.exit_code);
+    cache.invalidate();
   }
 
   // ── Finalize ─────────────────────────────────────────────────────────────

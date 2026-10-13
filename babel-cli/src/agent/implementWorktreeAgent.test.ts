@@ -176,6 +176,21 @@ describe('runImplementWorktreeAgent', () => {
     });
   });
 
+  it('preserves the controller plan ceiling through the worktree runner', async () => {
+    const root = createGitProject();
+    const result = await runImplementWorktreeAgent(
+      { id: 'plan-ceiling', task: 'Inspect src', writeScope: ['src'], maxRounds: 2 },
+      {
+        projectRoot: root, useDeterministicMock: true, cleanupWorktree: true,
+        executionEnvelope: { mode: 'plan', hostFallbackAllowed: true },
+      },
+    );
+    assert.equal(result.success, false);
+    assert.equal(result.attribution, 'child_policy_block');
+    assert.equal(result.changedFiles.length, 0);
+    assert.equal(existsSync(join(root, 'src/result.txt')), false);
+  });
+
   it('blocks fan-out when write scopes overlap', async () => {
     const root = createGitProject();
     const results = await runImplementWorktreeAgents(
