@@ -21,6 +21,7 @@ test('packaged GUI acceptance source uses Node Playwright APIs only', () => {
   assert.match(acceptanceSource, /_electron\s+as\s+electron/);
   assert.match(acceptanceSource, /executablePath:\s*exe/);
   assert.doesNotMatch(acceptanceSource, /args:\s*\[\s*str\(exe\)/);
+  assert.match(readFileSync(join(desktopRoot, 'test/packaged-electron-acceptance/packaged-fixture-lane.mjs'), 'utf8'), /PACKAGED-HISTORY-FIXTURE/);
 });
 
 test('playwright driver contract: locator.innerText and screenshot fullPage', async () => {
