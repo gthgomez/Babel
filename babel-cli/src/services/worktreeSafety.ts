@@ -256,23 +256,14 @@ export class WorktreeSafetyController {
           rollbackNotNeededFiles.push(snapshot.relative_path);
           continue;
         }
-        if (snapshot.existed_before) {
-          if (!snapshot.backup_path || !existsSync(snapshot.backup_path)) {
-            failedFiles.push({
-              path: snapshot.relative_path,
-              error: 'Snapshot backup is missing.',
-            });
-            continue;
-          }
-          mkdirSync(dirname(absolutePath), { recursive: true });
-          copyFileSync(snapshot.backup_path, absolutePath);
-          restoredFiles.push(snapshot.relative_path);
-        } else if (existsSync(absolutePath)) {
-          rmSync(absolutePath, { force: true });
-          removedFiles.push(snapshot.relative_path);
-        } else {
-          rollbackNotNeededFiles.push(snapshot.relative_path);
-        }
+        // This helper cannot exclude humans or external processes between a
+        // comparison and restore/delete. A matching postimage is evidence of
+        // bytes, not exclusive writer ownership. Preserve the current target
+        // and retained snapshot; integration/recovery must be separately governed.
+        failedFiles.push({
+          path: snapshot.relative_path,
+          error: 'Destructive rollback refused: exclusive writer ownership is not established. Current bytes and snapshot are preserved.',
+        });
       } catch (error) {
         failedFiles.push({
           path: snapshot.relative_path,

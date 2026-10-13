@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -7,6 +10,94 @@ import { checkpointParityEventLogStrict, createParityRuntime, CONTEXT_CHECKPOINT
 import { prepareContextCheckpoint } from '../runtime/contextCheckpoints.js'
 import { CHECKPOINT_JOURNAL_FILENAME, recoverCheckpointArtifacts, resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import { persistThreadEventLog, recordAssistantMessage, serializeThreadEventLog, THREAD_EVENT_LOG_FILENAME } from './threadEventLog.js'
+
+// The child parks at an observed filesystem publication boundary. The parent
+// kills that exact process; no exception or graceful cleanup simulates death.
+test('actual process kills preserve a coherent checkpoint generation across publication boundaries', { timeout: 240_000 }, async () => {
+  const require = createRequire(import.meta.url)
+  for (const phase of ['prepare', 'partial', 'install', 'commit', 'restore']) {
+    const { root, runtime } = fixture()
+    const ready = join(root, 'kill-ready')
+    const expected = join(root, 'expected-next.json')
+    const driver = join(root, 'kill-driver.mjs')
+    let child: ReturnType<typeof spawn> | undefined
+    let closed: Promise<number | null> | undefined
+    try {
+      runtime.contextCheckpoint = installableContext(runtime.eventLog.thread_id)
+      const first = await checkpointParityEventLogStrict(runtime, root)
+      assert.equal(first.status, 'committed')
+      const before = first.artifacts.map(a => ({ path: a.path!, bytes: readFileSync(a.path!, 'utf8') }))
+      const bridge = new URL('./chatEngineParityBridge.ts', import.meta.url).href
+      const live = new URL('./liveSessionBridge.ts', import.meta.url).href
+      const thread = new URL('./threadEventLog.ts', import.meta.url).href
+      const context = new URL('../runtime/contextCheckpoints.ts', import.meta.url).href
+      writeFileSync(driver, `
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const { checkpointParityEventLogStrict, createParityRuntime } = await import(${JSON.stringify(bridge)});
+const { resolveLiveSessionAuthority, CHECKPOINT_JOURNAL_FILENAME } = await import(${JSON.stringify(live)});
+const { recordAssistantMessage } = await import(${JSON.stringify(thread)});
+const { prepareContextCheckpoint } = await import(${JSON.stringify(context)});
+const root = ${JSON.stringify(root)};
+const phase = ${JSON.stringify(phase)};
+const runtime = createParityRuntime('fixture-thread');
+runtime.liveAuthority = resolveLiveSessionAuthority({ mode: 'chat', projectRoot: root, task: 'checkpoint fixture' });
+runtime.contextCheckpoint = (${installableContext.toString()})(runtime.eventLog.thread_id);
+runtime.contextCheckpoint = { ...runtime.contextCheckpoint, checkpointId: 'checkpoint-test-2' };
+recordAssistantMessage(runtime.eventLog, 'turn', 'next durable generation');
+const originalWrite = fs.writeFileSync;
+const originalRename = fs.renameSync;
+let renames = 0;
+const park = () => { originalWrite(${JSON.stringify(ready)}, phase); for (;;) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000); };
+fs.renameSync = function(source, destination) {
+  const result = originalRename.call(this, source, destination);
+  if (String(destination).endsWith(CHECKPOINT_JOURNAL_FILENAME)) {
+    const journal = JSON.parse(fs.readFileSync(destination, 'utf8'));
+    if (phase === 'prepare' && journal.status === 'prepared' && !journal.backups_ready) park();
+    if (journal.status === 'prepared' && journal.backups_ready) {
+      originalWrite(${JSON.stringify(expected)}, JSON.stringify(journal.targets.map(filename => ({ filename, bytes: fs.readFileSync(root + '/' + filename + '.' + journal.batch_id + '.tmp', 'utf8') }))));
+    }
+    if (phase === 'commit' && journal.status === 'committed') park();
+    return result;
+  }
+  renames++;
+  if ((phase === 'partial' && renames === 2) || (phase === 'install' && String(destination).endsWith('context-checkpoint.json')) || (phase === 'restore' && renames === 4)) park();
+  return result;
+};
+syncBuiltinESMExports();
+await checkpointParityEventLogStrict(runtime, root, phase === 'restore' ? { injectCommitFailureAfter: 3 } : undefined);
+throw Error('publication boundary not reached');
+`)
+      child = spawn(process.execPath, ['--import', pathToFileURL(require.resolve('tsx')).href, driver], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+      let stderr = ''
+      child.stderr?.on('data', bytes => { stderr += String(bytes) })
+      closed = new Promise((resolve, reject) => { child!.once('error', reject); child!.once('close', code => resolve(code)) })
+      const deadline = Date.now() + 45_000
+      while (!existsSync(ready) && child.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25))
+      assert.ok(existsSync(ready), `${phase} boundary not reached: ${stderr}`)
+      assert.equal(readFileSync(ready, 'utf8'), phase)
+      assert.equal(child.kill('SIGKILL'), true)
+      await closed
+      recoverCheckpointArtifacts(root)
+      const next = phase === 'commit' ? JSON.parse(readFileSync(expected, 'utf8')) as Array<{ filename: string; bytes: string }> : []
+      if (phase === 'commit') {
+        assert.equal(JSON.parse(next.find(a => a.filename === CONTEXT_CHECKPOINT_FILENAME)!.bytes).checkpointId, 'checkpoint-test-2')
+        assert.ok(next.find(a => a.filename === THREAD_EVENT_LOG_FILENAME)!.bytes.includes('next durable generation'))
+      }
+      for (const old of before) {
+        const wanted = phase === 'commit' ? next.find(a => old.path.endsWith(a.filename))!.bytes : old.bytes
+        assert.equal(readFileSync(old.path, 'utf8'), wanted, `${phase}: mixed generation at ${old.path}`)
+      }
+      assert.equal(existsSync(join(root, CHECKPOINT_JOURNAL_FILENAME)), false)
+      assert.equal(readdirSync(root).some(name => /\.(tmp|bak)$/.test(name)), false)
+    } finally {
+      if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      if (closed) await closed
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'babel-windows-checkpoint-'))

@@ -498,6 +498,7 @@ test('a superseded Task A handleBudgetKill cannot finalize Task B', async () => 
           target: 'src/main.ts',
           index: 0,
           effect_status: 'confirmed_change',
+          effect_scope: 'parent_candidate',
           mutation_paths: ['src/main.ts'],
         });
         return { ok: false, reason: 'r0 budget kill', limiter: 'cost' };

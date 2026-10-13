@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -10,11 +10,14 @@ import {
   describeCanaryPlan,
   runCodingCanary,
 } from "./runner.js";
-import { uncertaintyForTrials } from "./score.js";
+import { uncertaintyForTrials, scoreCanaryTrials } from "./score.js";
 import { CANARY_TASKS, getCanaryTask } from "./tasks.js";
 import { verifyCanaryTaskValidity } from "./validity.js";
 import { isLiveSuccessScope } from "../evalTypes.js";
 import type { CanaryTaskSpec } from "./types.js";
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import childProcess from 'node:child_process';
 
 /** Oracle intentionally contradicts the gold behavior → reference never verifies. */
 function makeIneligibleSpec(): CanaryTaskSpec {
@@ -39,6 +42,93 @@ function makeIneligibleSpec(): CanaryTaskSpec {
 test("n=1 uncertainty is null", () => {
   assert.equal(uncertaintyForTrials(1), null);
   assert.ok(typeof uncertaintyForTrials(3) === "number");
+});
+
+test('every scheduled preflight refusal remains in the attempt ledger', () => {
+  const report = runCodingCanary({ provider: 'mock', specs: [makeIneligibleSpec()], trials: 3 });
+  assert.equal(report.trials.length, 3);
+  assert.deepEqual(report.trials.map(row => row.trial_index), [1, 2, 3]);
+  assert.equal(report.trials.every(row => row.invalid_task && !row.contract_success), true);
+  assert.equal(report.attempt_accounting?.scheduled, 3);
+  assert.equal(report.attempt_accounting?.not_launched, 3);
+  assert.equal(report.attempt_accounting?.cost_complete, false);
+  assert.equal(report.attempt_accounting?.cost_per_success_usd, null);
+});
+
+test('preflight filesystem failure preserves unlaunched schedule', t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-canary-launch-failure-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const blockedParent = join(root, 'not-a-directory');
+  writeFileSync(blockedParent, 'fixture');
+  let report: ReturnType<typeof runCodingCanary> | undefined;
+  assert.doesNotThrow(() => { report = runCodingCanary({ provider: 'mock', taskId: 'C01', trials: 3, tempRoot: blockedParent }); });
+  assert.equal(report?.trials.length, 3);
+  assert.equal(report?.trials.every(row => row.launch_status === 'not_launched' && row.grading_status === 'not_run'), true);
+  assert.equal(report?.trials.every(row => !row.contract_success && row.cost_usd === null), true);
+});
+
+test('unsettled solver exception keeps its row and stops later launches without replay', t => {
+  const original = fs.mkdtempSync;
+  let launches = 0;
+  t.mock.method(fs, 'mkdtempSync', ((prefix: string, options?: never) => {
+    if (String(prefix).includes('babel-canary-agent-')) { launches++; throw new Error('Controlled solver setup fault'); }
+    return original(prefix, options);
+  }) as typeof fs.mkdtempSync);
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const report = runCodingCanary({ provider: 'mock', taskId: 'C01', trials: 3 });
+  assert.equal(launches, 1);
+  assert.deepEqual(report.trials.map(row => row.launch_status), ['unknown', 'not_launched', 'not_launched']);
+  assert.deepEqual(report.trials.map(row => row.grading_status), ['unknown', 'not_run', 'not_run']);
+  assert.equal(report.attempt_accounting?.scheduled, 3);
+  assert.equal(report.attempt_accounting?.task_successes, 0);
+});
+
+test('unavailable solver grading is unknown rather than measured false completion', t => {
+  const originalDirectory = fs.mkdtempSync;
+  const originalSpawn = childProcess.spawnSync;
+  let solverStarted = false;
+  t.mock.method(fs, 'mkdtempSync', ((prefix: string, options?: never) => {
+    if (String(prefix).includes('babel-canary-agent-')) solverStarted = true;
+    return originalDirectory(prefix, options);
+  }) as typeof fs.mkdtempSync);
+  t.mock.method(childProcess, 'spawnSync', ((...args: Parameters<typeof childProcess.spawnSync>) => {
+    if (solverStarted) return { status: null, error: Object.assign(new Error('Controlled missing grader'), { code: 'ENOENT' }), stdout: '', stderr: '', output: [], pid: 0, signal: null };
+    return originalSpawn(...args);
+  }) as typeof childProcess.spawnSync);
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const report = runCodingCanary({ provider: 'mock', taskId: 'C01', trials: 1 });
+  assert.equal(report.trials[0]?.claimed_complete, true);
+  assert.equal(report.trials[0]?.grading_status, 'unknown');
+  assert.equal(report.trials[0]?.false_completion_assessment, 'unknown');
+  assert.equal(report.trials[0]?.false_complete, false);
+  assert.equal(report.trials[0]?.contract_success, false);
+  assert.equal(report.false_complete_rate, 0);
+  assert.equal(report.false_completion_assessment_counts?.unknown, 1);
+});
+
+test('attempt accounting includes failed costs, retains unknown launch and supports oracle-correct no-op', () => {
+  const noOp = runCodingCanary({ provider: 'mock', taskId: 'C08', trials: 1 }).trials[0]!;
+  const failed = { ...noOp, task_id: 'failed', hidden_ok: false, contract_success: false, code_fix_success: false, cost_usd: 2 };
+  const report = scoreCanaryTrials([{ ...noOp, cost_usd: 1 }, failed], 'MOCK_ORCHESTRATION');
+  assert.equal(report.attempt_accounting?.scheduled, 2);
+  assert.equal(report.attempt_accounting?.task_successes, 1);
+  assert.equal(report.attempt_accounting?.task_success_rate, 0.5);
+  assert.equal(report.attempt_accounting?.cost_per_success_usd, 3);
+  const hung = { ...noOp, contract_success: false, status: 'running' };
+  assert.equal(scoreCanaryTrials([hung], 'MOCK_ORCHESTRATION').attempt_accounting?.task_successes, 0);
+  const ungraded = { ...noOp, grading_status: 'unknown' as const, cost_usd: null };
+  const unknown = scoreCanaryTrials([ungraded], 'MOCK_ORCHESTRATION');
+  assert.equal(unknown.attempt_accounting?.task_successes, 0);
+  assert.equal(unknown.attempt_accounting?.known_cost_usd, null);
+  assert.equal(unknown.grading_counts?.unknown, 1);
+  const legacy = { ...failed };
+  delete legacy.launch_status;
+  legacy.cost_usd = null as never;
+  const incomplete = scoreCanaryTrials([noOp, legacy], 'MOCK_ORCHESTRATION');
+  assert.equal(incomplete.attempt_accounting?.launch_unknown, 1);
+  assert.equal(incomplete.attempt_accounting?.cost_per_success_usd, null);
 });
 
 test("interleave alternates arm order", () => {
@@ -361,8 +451,8 @@ test("invalid tasks fail closed: never executed, never aggregated", () => {
   );
   assert.equal(
     report.trials.length,
-    1,
-    "exactly one sentinel row for transparency",
+    2,
+    "each scheduled refusal has its own transparent row",
   );
   const sentinel = report.trials[0]!;
   assert.equal(sentinel.invalid_task, true);

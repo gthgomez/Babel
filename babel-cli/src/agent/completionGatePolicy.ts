@@ -478,6 +478,7 @@ export type GateToolLogEntry = {
   exit_code?: number;
   mutation_paths?: string[];
   effect_status?: MutationEffectStatus;
+  effect_scope?: import('./mutationTools.js').MutationEffectScope;
 };
 
 /** Recorded inspection can support a no-change conclusion, never patch certification. */
@@ -1130,6 +1131,7 @@ export function logHasSuccessfulWrite(
       tool: e.tool,
       error: e.error,
       effectStatus: e.effect_status,
+      effectScope: e.effect_scope,
       mutationPaths: e.mutation_paths,
     })) ||
     hasSubAgentWrites(toolCallLog)

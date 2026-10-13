@@ -61,7 +61,7 @@ function commitFixture(root: string): void {
   });
 }
 
-function redRecoveryState(engine: ChatEngine) {
+function redRecoveryState(engine: ChatEngine, projectRoot = process.cwd()) {
   let state = createWorkingState('repair the parser failure');
   state = applyWorkingStateEvent(state, {
     type: 'set_hypothesis',
@@ -75,7 +75,7 @@ function redRecoveryState(engine: ChatEngine) {
   return ingestVerifierResult({
     state,
     recoveryBinding: (engine as any).currentRecoveryBinding(),
-    recoveryProjectRoot: process.cwd(),
+    recoveryProjectRoot: projectRoot,
     tool: 'test_run',
     target: 'npm test -- parser',
     exitCode: 1,
@@ -85,118 +85,150 @@ function redRecoveryState(engine: ChatEngine) {
   }).state;
 }
 
+function recoveryInspectionFixture() {
+  const storage = mkdtempSync(join(tmpdir(), 'babel-r1-inspection-'));
+  const root = join(storage, 'project');
+  const runDir = join(storage, 'runtime');
+  const target = 'src/agent/codingLoop/workingState.ts';
+  mkdirSync(join(root, 'src/agent/codingLoop'), { recursive: true });
+  mkdirSync(runDir);
+  writeFileSync(join(root, target), readFileSync(new URL('./codingLoop/workingState.ts', import.meta.url)));
+  writeFileSync(join(root, 'package.json'), '{"name":"r1-inspection-fixture","private":true}\n');
+  writeFileSync(join(root, 'src/agent/unrelated.ts'), 'export const unrelated = true;\n');
+  execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
+  execFileSync('git', ['add', 'package.json', target, 'src/agent/unrelated.ts'], { cwd: root, windowsHide: true });
+  commitFixture(root);
+  const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: root });
+  const binding = (engine as any).currentRecoveryBinding();
+  assert.ok(binding?.workspaceRevision, 'fixture requires a physically captured committed candidate');
+  (engine as any).workingState = redRecoveryState(engine, root);
+  const context = { agentId: 'test', runId: 'test', runDir, babelRoot: root, projectRoot: root };
+  return {
+    root, target, engine, context,
+    assertUnchanged() {
+      assert.equal((engine as any).currentRecoveryBinding()?.workspaceRevision, binding.workspaceRevision,
+        'effect-free inspections must retain the captured candidate identity');
+    },
+    cleanup() { rmSync(storage, { recursive: true, force: true }); },
+  };
+}
+
 test('R1 production path blocks arbitrary shell mutation before execution', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-r1-shell-'));
+  const fixture = recoveryInspectionFixture();
+  const { root, engine, context } = fixture;
   const target = join(root, 'must-not-exist.txt');
   try {
-    const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
-    (engine as any).workingState = redRecoveryState(engine);
     const result = await (engine as any).executeOneAction(
       {
         type: 'run_command',
         command: `node -e "require('fs').writeFileSync('${target.replaceAll('\\', '/')}', 'mutated')"`,
       },
-      { agentId: 'test', runId: 'test', runDir: root, babelRoot: root },
+      context,
       {},
       { index: 0, ownerGeneration: 0 },
     );
     assert.match(result.observation, /RECOVERY_EVIDENCE_REQUIRED|RECOVERY_CANDIDATE_DRIFT/);
     assert.equal(existsSync(target), false, 'the shell mutation must not reach the executor');
+    fixture.assertUnchanged();
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    fixture.cleanup();
   }
 });
 
 test('R1 production path rejects unrelated reads and accepts implicated-file evidence', async () => {
-  const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
-  (engine as any).workingState = redRecoveryState(engine);
-  const context = { agentId: 'test', runId: 'test', runDir: process.cwd(), babelRoot: process.cwd() };
+  const fixture = recoveryInspectionFixture();
+  const { engine, context, root, target } = fixture;
+  try {
 
-  await (engine as any).executeOneAction(
-    { type: 'read_file', path: 'package.json' },
-    context,
-    {},
-    { index: 0, ownerGeneration: 0 },
-  );
-  assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
+    await (engine as any).executeOneAction(
+      { type: 'read_file', path: 'package.json' },
+      context,
+      {},
+      { index: 0, ownerGeneration: 0 },
+    );
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
 
-  const target = 'src/agent/codingLoop/workingState.ts';
-  await (engine as any).executeOneAction(
-    { type: 'read_file', path: target },
-    context,
-    {},
-    { index: 1, ownerGeneration: 0 },
-  );
-  assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
-  assert.match(readFileSync(target, 'utf8'), /recoveryGate/);
+    await (engine as any).executeOneAction(
+      { type: 'read_file', path: target },
+      context,
+      {},
+      { index: 1, ownerGeneration: 0 },
+    );
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+    assert.match(readFileSync(join(root, target), 'utf8'), /recoveryGate/);
+    fixture.assertUnchanged();
+  } finally { fixture.cleanup(); }
 });
 
 test('R1 production path rejects content-free inspections as recovery evidence', async () => {
-  const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
-  (engine as any).workingState = redRecoveryState(engine);
-  const context = { agentId: 'test', runId: 'test', runDir: process.cwd(), babelRoot: process.cwd() };
+  const fixture = recoveryInspectionFixture();
+  const { engine, context } = fixture;
+  try {
 
-  const denied: Array<Record<string, unknown>> = [
-    { type: 'list_dir', path: '.' },
-    { type: 'glob', pattern: '**/*.ts' },
-    { type: 'grep', pattern: '.' },
-    // An ancestor directory is a repository-wide search, not a localization.
-    { type: 'grep', pattern: 'recoveryGate', path: 'src/agent' },
-  ];
-  let index = 0;
-  for (const action of denied) {
-    await (engine as any).executeOneAction(action, context, {}, { index: index++, ownerGeneration: 0 });
-    assert.equal(
-      (engine as any).workingState.recoveryGate.satisfied,
-      false,
-      `${String(action.type)} must not clear the recovery gate`,
+    const denied: Array<Record<string, unknown>> = [
+      { type: 'list_dir', path: '.' },
+      { type: 'glob', pattern: '**/*.ts' },
+      { type: 'grep', pattern: '.' },
+      // An ancestor directory is a repository-wide search, not a localization.
+      { type: 'grep', pattern: 'recoveryGate', path: 'src/agent' },
+    ];
+    let index = 0;
+    for (const action of denied) {
+      await (engine as any).executeOneAction(action, context, {}, { index: index++, ownerGeneration: 0 });
+      assert.equal(
+        (engine as any).workingState.recoveryGate.satisfied,
+        false,
+        `${String(action.type)} must not clear the recovery gate`,
+      );
+    }
+
+    // A search scoped to the implicated file is content-bearing and localizes the failure.
+    await (engine as any).executeOneAction(
+      { type: 'grep', pattern: 'recoveryGate', path: 'src/agent/codingLoop/workingState.ts' },
+      context,
+      {},
+      { index: index++, ownerGeneration: 0 },
     );
-  }
-
-  // A search scoped to the implicated file is content-bearing and localizes the failure.
-  await (engine as any).executeOneAction(
-    { type: 'grep', pattern: 'recoveryGate', path: 'src/agent/codingLoop/workingState.ts' },
-    context,
-    {},
-    { index: index++, ownerGeneration: 0 },
-  );
-  assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+    fixture.assertUnchanged();
+  } finally { fixture.cleanup(); }
 });
 
 test('R1 production path does not accept a repeated read as new evidence for the same failure', async () => {
-  const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: process.cwd() });
-  (engine as any).workingState = redRecoveryState(engine);
-  const context = { agentId: 'test', runId: 'test', runDir: process.cwd(), babelRoot: process.cwd() };
-  const target = 'src/agent/codingLoop/workingState.ts';
+  const fixture = recoveryInspectionFixture();
+  const { engine, context, target } = fixture;
+  try {
 
-  await (engine as any).executeOneAction(
-    { type: 'read_file', path: target },
-    context,
-    {},
-    { index: 0, ownerGeneration: 0 },
-  );
-  assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+    await (engine as any).executeOneAction(
+      { type: 'read_file', path: target },
+      context,
+      {},
+      { index: 0, ownerGeneration: 0 },
+    );
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
 
-  // Arm a fresh gate for the *same* failure signature, as happens after another
-  // equivalent red. The target was already consumed, so re-reading it is not new
-  // discriminating evidence.
-  const state = (engine as any).workingState;
-  const signature = state.recoveryGate.failureSignature;
-  (engine as any).workingState = applyWorkingStateEvent(state, {
-    type: 'recovery_gate',
-    failureSignature: signature,
-    requiredEvidence: 'reread the failing assertion',
-    failingTargets: state.recoveryGate.failingTargets,
-    binding: state.recoveryGate.binding,
-  });
+    // Arm a fresh gate for the *same* failure signature, as happens after another
+    // equivalent red. The target was already consumed, so re-reading it is not new
+    // discriminating evidence.
+    const state = (engine as any).workingState;
+    const signature = state.recoveryGate.failureSignature;
+    (engine as any).workingState = applyWorkingStateEvent(state, {
+      type: 'recovery_gate',
+      failureSignature: signature,
+      requiredEvidence: 'reread the failing assertion',
+      failingTargets: state.recoveryGate.failingTargets,
+      binding: state.recoveryGate.binding,
+    });
 
-  await (engine as any).executeOneAction(
-    { type: 'read_file', path: target },
-    context,
-    {},
-    { index: 1, ownerGeneration: 0 },
-  );
-  assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
+    await (engine as any).executeOneAction(
+      { type: 'read_file', path: target },
+      context,
+      {},
+      { index: 1, ownerGeneration: 0 },
+    );
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
+    fixture.assertUnchanged();
+  } finally { fixture.cleanup(); }
 });
 
 test('R1 recovery permit is invalidated by external workspace drift before mutation', async () => {
@@ -387,7 +419,7 @@ test('R1 snapshot persistence failure blocks mutation without running the shell'
 test('R1 red command without verifier receipt closes recovery until a bound rerun', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-r1-unbound-red-'));
   const marker = join(root, 'blocked.txt');
-  const envKeys = ['BABEL_BENCHMARK_AUTO_APPROVE', 'BABEL_BENCHMARK_MODE', 'BABEL_AUTONOMY_LEASE', 'BABEL_EXECUTION_PROFILE', 'BABEL_ALLOW_HOST_FALLBACK'] as const;
+  const envKeys = ['BABEL_BENCHMARK_AUTO_APPROVE', 'BABEL_BENCHMARK_MODE', 'BABEL_AUTONOMY_LEASE', 'BABEL_EXECUTION_PROFILE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_DRY_RUN', 'BABEL_DRY_RUN_SOURCE'] as const;
   const prior = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   try {
     process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
@@ -400,6 +432,8 @@ test('R1 red command without verifier receipt closes recovery until a bound reru
     process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
     process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
     const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+    process.env['BABEL_DRY_RUN'] = 'false';
+    process.env['BABEL_DRY_RUN_SOURCE'] = 'session';
     (engine as any).workingState = applyWorkingStateEvent(createWorkingState('repair parser'), {
       type: 'mutation', path: 'src/parser.ts', fingerprint: 'first-edit',
     });

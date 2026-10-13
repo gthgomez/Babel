@@ -3,6 +3,15 @@ import test from 'node:test'
 
 import { gradeInCleanRoom } from './cleanRoomGrade.js'
 
+test('unavailable grader remains distinct from an observed failed oracle', () => {
+  const unavailable = gradeInCleanRoom({ startFiles: [], candidateDiffFiles: [], oracleFiles: [], verifierCommand: ['babel-nonexistent-grader-fixture'] })
+  assert.equal(unavailable.execution_status, 'not_started')
+  assert.equal(unavailable.hidden_ok, false)
+  const failed = gradeInCleanRoom({ startFiles: [], candidateDiffFiles: [], oracleFiles: [], verifierCommand: [process.execPath, '-e', 'process.exit(1)'] })
+  assert.equal(failed.execution_status, 'completed')
+  assert.equal(failed.hidden_ok, false)
+})
+
 test('clean-room hidden tests fail on baseline and pass after gold production edit', () => {
   const start = [
     { relativePath: 'add.js', contents: 'export function add(a, b) { return a - b }\n' },

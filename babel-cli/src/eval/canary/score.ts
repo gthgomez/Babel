@@ -38,6 +38,9 @@ export function scoreCanaryTrials(
   const passAt1 = tasks.reduce((s, t) => s + t.single_trial_success_rate, 0) / n
   const passHat3 = tasks.filter((t) => t.all_trials_reliable).length / n
   const allTrials = validTrials
+  const taskSuccesses = trials.filter(t => !t.invalid_task && t.grading_status === 'complete' && t.contract_success && t.hidden_ok && !t.false_complete).length
+  const costComplete = trials.every(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0)
+  const knownCost = trials.reduce((sum, t) => sum + (t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0 ? t.cost_usd : 0), 0)
   return {
     schema_version: 1,
     evidence_scope,
@@ -58,5 +61,32 @@ export function scoreCanaryTrials(
     tasks,
     trials,
     invalid_task_ids: invalidTaskIds,
+    grading_counts: {
+      complete: trials.filter(t => t.grading_status === 'complete').length,
+      not_run: trials.filter(t => t.grading_status === 'not_run').length,
+      unknown: trials.filter(t => t.grading_status === undefined || t.grading_status === 'unknown').length,
+    },
+    false_completion_assessment_counts: {
+      confirmed: trials.filter(t => t.false_completion_assessment === 'confirmed').length,
+      not_observed: trials.filter(t => t.false_completion_assessment === 'not_observed').length,
+      unknown: trials.filter(t => t.false_completion_assessment === undefined || t.false_completion_assessment === 'unknown').length,
+    },
+    verification_prose_counts: {
+      supported: trials.filter(t => t.verification_prose === 'supported').length,
+      unsupported: trials.filter(t => t.verification_prose === 'unsupported').length,
+      no_claim: trials.filter(t => t.verification_prose === 'no_claim').length,
+      unknown: trials.filter(t => t.verification_prose === undefined || t.verification_prose === 'unknown').length,
+    },
+    attempt_accounting: {
+      scheduled: trials.length,
+      launched: trials.filter(t => t.launch_status === 'launched').length,
+      not_launched: trials.filter(t => t.launch_status === 'not_launched').length,
+      launch_unknown: trials.filter(t => t.launch_status === undefined || t.launch_status === 'unknown').length,
+      task_successes: taskSuccesses,
+      task_success_rate: trials.length === 0 ? null : taskSuccesses / trials.length,
+      cost_complete: costComplete,
+      known_cost_usd: trials.some(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0) ? knownCost : null,
+      cost_per_success_usd: costComplete && taskSuccesses > 0 ? knownCost / taskSuccesses : null,
+    },
   }
 }

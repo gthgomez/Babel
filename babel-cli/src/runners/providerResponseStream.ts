@@ -200,6 +200,7 @@ export async function readStreamingResponse(
   vcrRecorder?: VcrRecorder,
   onFirstByte?: () => void,
   onStreamProgress?: (bytes: number) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!response.body) {
     throw new Error('[deepInfraApi] Streaming response had no body.');
@@ -240,6 +241,18 @@ export async function readStreamingResponse(
   };
 
   while (true) {
+    if (signal?.aborted) {
+      reader.cancel().catch(() => {});
+      throw new DOMException('Request cancelled', 'AbortError');
+    }
+    let onAbort: (() => void) | undefined;
+    const cancelled = new Promise<never>((_, reject) => {
+      onAbort = () => {
+        reject(new DOMException('Request cancelled', 'AbortError'));
+        reader.cancel().catch(() => {});
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
     let timeout: ReturnType<typeof setTimeout> | null = null;
     const read = reader.read();
     const idle = new Promise<never>((_, reject) => {
@@ -251,7 +264,8 @@ export async function readStreamingResponse(
         reader.cancel().catch(() => {});
       }, idleTimeoutMs);
     });
-    const { done, value } = await Promise.race([read, idle]).finally(() => {
+    const { done, value } = await Promise.race([read, idle, cancelled]).finally(() => {
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
       if (timeout) {
         clearTimeout(timeout);
       }

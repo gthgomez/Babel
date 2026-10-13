@@ -260,7 +260,7 @@ import {
   describePreambleBudget,
   enforcePreambleBudget,
 } from "./preambleBudget.js";
-import { invalidateRepoMapFile } from "../services/repoMap/graph.js";
+import { invalidateRepoMapFile, invalidateRepoMapCache } from "../services/repoMap/graph.js";
 import { getChatApprovalSession } from "./chatApproval.js";
 
 import {
@@ -389,6 +389,7 @@ import {
   runPostEditStaticCheck as runPostEditStaticCheckFn,
   summarizeDroppedTurns as summarizeDroppedTurnsFn,
   compactHeuristicConversation,
+  invalidateChatPathReads,
 } from "./chatEngineSupport.js";
 import {
   applyTamperEscalation as applyTamperEscalationFn,
@@ -479,6 +480,7 @@ export class ChatEngine {
     verified?: boolean;
     mutation_paths?: string[];
     effect_status?: MutationEffectStatus;
+    effect_scope?: import('./mutationTools.js').MutationEffectScope;
   }> = [];
   private lastVerifierReceipt: BoundChatVerifierReceipt | null = null;
   private executedVerifierLedger: BoundChatVerifierReceipt[] = [];
@@ -1784,8 +1786,9 @@ export class ChatEngine {
     // tag cache is warm; nulled by runPostEditStaticCheck on writes).
     // A superseded submission must not publish its map into the new task.
     if (this.repoMapCache === null) {
+      this.repoMapInvalidated = false;
       const map = await this.generateRepoMap(userInput);
-      if (this.isSubmissionCurrent(generation) && this.repoMapCache === null) {
+      if (this.isSubmissionCurrent(generation) && this.repoMapCache === null && !this.repoMapInvalidated) {
         this.repoMapCache = map;
       }
     }
@@ -3741,17 +3744,25 @@ export class ChatEngine {
     return formatTextToolResults(this.toolCallLog.slice(startIndex));
   }
 
+  /** Expire model-facing derived context after observed or uncertain parent effects. */
+  invalidateRepositoryContext(paths: readonly string[], _reason: string): void {
+    invalidateChatPathReads({ readCache: this.readCache, fullReadCounts: this.fullReadCounts,
+      readCacheKey: path => this.readCacheKey(path) }, paths);
+    if (paths.length === 0) invalidateRepoMapCache();
+    for (const path of paths) {
+      invalidateRepoMapFile(resolve(this.options.projectRoot, path));
+    }
+    this.repoMapCache = null;
+    this.repoMapInvalidated = true;
+    this.clearSystemPromptCache();
+  }
+
   private async runPostEditStaticCheck(
     filePath: string,
   ): Promise<string | null> {
-    // Packet B1: a write event flowed through the coding loop — drop the
-    // per-file tag cache entry and force the repo map to refresh next turn.
-    invalidateRepoMapFile(filePath);
-    this.repoMapCache = null;
-    this.repoMapInvalidated = true;
-    // The rendered prompt includes the map, so its cache must expire too.
-    // Otherwise continuation can retain repository context from before the edit.
-    this.clearSystemPromptCache();
+    // Existing post-edit callers are mutation notifications too. Keep that
+    // contract while sharing the boundary with shell/child/failed settlements.
+    this.invalidateRepositoryContext([filePath], "post-edit notification");
     return runPostEditStaticCheckFn(filePath, this.options.projectRoot);
   }
 

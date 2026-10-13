@@ -18,6 +18,7 @@ import { describe, test } from 'node:test';
 import { ChatEngine } from './chatEngine.js';
 import type { ChatEvent } from './chatEngine.js';
 import { persistTranscriptToDisk } from './chatEngineObservability.js';
+import { getBackgroundShellJob, killAllBackgroundShells } from './backgroundShell.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import type { ResolvedModelPolicy } from '../modelPolicy.js';
 import { buildProviderFailureReceipt } from '../runners/providerFailureReceipt.js';
@@ -263,16 +264,20 @@ async function runChildProcess(
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
     });
+    let timedOut = false;
     const timeout = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`lifecycle child timed out: ${stderr}`));
-    }, 15_000);
+      timedOut = true;
+      if (process.platform === 'win32' && child.pid) {
+        spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+      } else child.kill('SIGKILL');
+    }, 45_000);
     child.once('error', (error) => {
       clearTimeout(timeout);
       reject(error);
     });
     child.once('close', (code, signal) => {
       clearTimeout(timeout);
+      if (timedOut) { reject(new Error(`lifecycle child timed out: ${stderr}`)); return; }
       resolve({ code, signal, stderr });
     });
   });
@@ -328,6 +333,97 @@ await engine.submitMessage('Create the marker with the crash-after-effect lifecy
 }
 
 describe('ChatEngine lifecycle and crash qualification', { concurrency: false }, () => {
+  test('cancellation with prior real proof preserves a detached late effect and requires fresh resumed verification', async () => {
+    const fixture = makeFixture();
+    const runId = 'late-effect-cancel';
+    const release = join(fixture.project, 'release.txt');
+    const target = join(fixture.project, 'result.txt');
+    const script = writeNodeFixture(fixture.root, 'detached-late-writer.mjs',
+      `import { existsSync, writeFileSync } from 'node:fs'; const timer = setInterval(() => { if (existsSync(process.argv[2])) { writeFileSync(process.argv[3], 'late'); clearInterval(timer); } }, 20); setTimeout(() => process.exit(0), 10000);`);
+    writeFileSync(target, 'red');
+    writeFileSync(join(fixture.project, 'fixture.test.mjs'), `import assert from 'node:assert/strict'; import { readFileSync } from 'node:fs'; assert.equal(readFileSync('result.txt', 'utf8'), 'green');`);
+    let engine: ChatEngine;
+    let sawRealProof = false;
+    let observedProof: any;
+    const runner = makeRunner(call => {
+      if (call === 2) {
+        const receipt = (engine as any).lastVerifierReceipt;
+        const proofCall = (engine as any).toolCallLog.find((entry: { toolCallId?: string }) => entry.toolCallId === 'parent-proof');
+        observedProof = receipt ? { command: receipt.command, exit_code: receipt.exit_code, stale: receipt.stale, tests_total: receipt.tests_total } : null;
+        sawRealProof = receipt?.exit_code === 0 && !receipt?.stale && receipt?.tests_total > 0 && /# pass 1\b/.test(proofCall?.stdout ?? '');
+      }
+      if (call === 3) engine.cancel();
+      const actions = [
+        { id: 'parent-repair', name: 'write_file', input: { path: 'result.txt', content: 'green' } },
+        { id: 'parent-proof', name: 'run_command', input: { command: 'node --test --test-reporter=tap fixture.test.mjs' } },
+        { id: 'late-writer', name: 'run_command', input: { command: `node ${shellArg(script)} ${shellArg(release)} ${shellArg(target)}`, background: true, detached: true } },
+        { id: 'cancelled-finish', name: 'finish', input: { summary: 'complete', verification: [] } },
+      ];
+      return [{ type: 'tool_use', ...actions[Math.min(call, 3)] }, { type: 'done', finishReason: 'tool_calls' }];
+    });
+    engine = makeEngine(fixture.project, runId, runner);
+    let job: ReturnType<typeof getBackgroundShellJob>;
+    try {
+      await persistTranscriptToDisk(chatSessionDir(runId), [{ role: 'user', content: 'Repair result.txt and run node --test fixture.test.mjs' }]);
+      const events: ChatEvent[] = [];
+      for await (const event of engine.submitMessageStream('Repair result.txt and run node --test fixture.test.mjs')) events.push(event);
+      assert.equal(sawRealProof, true, `the cancellation scenario must first execute a current passing parent test: ${JSON.stringify(observedProof)}`);
+      assert.equal(events.filter(event => ['done', 'failed', 'cancelled'].includes(event.type)).length, 1);
+      assert.ok(events.every(event => !('outcome' in event) || event.outcome !== 'VERIFIED_COMPLETE'));
+      const call = (engine as any).toolCallLog.find((entry: { detail?: string }) => entry.detail?.startsWith('background started '));
+      assert.ok(call, 'the actual owned writer was launched');
+      job = getBackgroundShellJob(call.detail.match(/bg-\d+/)[0]);
+      assert.equal(job?.status, 'running', 'cancellation alone does not settle an explicitly detached process');
+      assert.equal(readFileSync(target, 'utf8'), 'green');
+      writeFileSync(release, 'release');
+      await job!.done;
+      assert.equal(getBackgroundShellJob(job!.id)?.status, 'completed', 'quiescence is checked only after actual process exit');
+      assert.equal(readFileSync(target, 'utf8'), 'late', 'the real late effect is retained');
+      const resumed = await ChatEngine.restore(runId, {
+        task: 'Repair result.txt and run node --test fixture.test.mjs', projectRoot: fixture.project,
+        model: 'deepseek-v4-flash', maxTurns: 4, providerPolicy: FIXTURE_PROVIDER_POLICY,
+        providerRunner: makeRunner(call => call === 0
+          ? [{ type: 'tool_use', id: 'fresh-red-proof', name: 'run_command', input: { command: 'node --test --test-reporter=tap fixture.test.mjs' } }, { type: 'done', finishReason: 'tool_calls' }]
+          : [{ type: 'text_delta', text: 'The current test fails after the late effect.' }, { type: 'done', finishReason: 'stop' }]) as never,
+      });
+      const result = await resumed.submitMessage('Inspect and test the actual resumed parent result', {});
+      assert.notEqual(result.outcome, 'VERIFIED_COMPLETE');
+      assert.notEqual((resumed as any).lastVerifierReceipt?.exit_code, 0, 'resume cannot reuse the earlier green receipt across the unresolved late effect');
+      assert.equal(readFileSync(target, 'utf8'), 'late');
+      // Run the assertion module directly: inherited node:test selection must
+      // not turn a fixture oracle into an empty filtered test run.
+      const independent = spawnSync(process.execPath, ['fixture.test.mjs'], { cwd: fixture.project, env: process.env, windowsHide: true, timeout: 10_000 });
+      assert.equal(independent.status, 1, `the independent current-byte oracle must observe the late effect as red: ${independent.stderr?.toString()}`);
+      assert.equal(readEvents(runId).filter(event => event.kind === 'tool_started' && event.tool_call_id === 'late-writer').length, 1, 'resume must not replay the writer');
+    } finally {
+      const killed = killAllBackgroundShells({ ownerId: (engine as any).engineRunId, includeDetached: true });
+      engine.cancel();
+      await Promise.all(killed.killed.map(id => getBackgroundShellJob(id)?.done));
+      fixture.cleanup();
+    }
+  });
+  test('an outstanding background writer cannot certify a completed parent deliverable', async () => {
+    const fixture = makeFixture();
+    const release = join(fixture.project, 'release.txt');
+    const marker = join(fixture.project, 'late.txt');
+    const script = writeNodeFixture(fixture.root, 'pending-writer.mjs',
+      `import { existsSync, writeFileSync } from 'node:fs'; const timer = setInterval(() => { if (existsSync(process.argv[2])) { writeFileSync(process.argv[3], 'late effect'); clearInterval(timer); } }, 20); setTimeout(() => process.exit(0), 5000);`);
+    const runner = makeRunner(call => call === 0
+      ? [{ type: 'tool_use', id: 'pending-writer', name: 'run_command', input: { command: `node ${shellArg(script)} ${shellArg(release)} ${shellArg(marker)}`, background: true } }, { type: 'done', finishReason: 'tool_calls' }]
+      : [{ type: 'text_delta', text: 'The requested background result is complete.' }, { type: 'done', finishReason: 'stop' }]);
+    const engine = makeEngine(fixture.project, 'pending-writer', runner);
+    try {
+      const result = await engine.submitMessage('Write the late.txt deliverable and verify it before completing', {});
+      assert.notEqual(result.outcome, 'VERIFIED_COMPLETE');
+      assert.ok(result.toolCalls?.some(call => call.tool === 'run_command'));
+      assert.equal(existsSync(marker), false, 'the blocked writer has not applied the deliverable');
+    } finally {
+      const killed = killAllBackgroundShells({ ownerId: (engine as any).engineRunId });
+      engine.cancel();
+      await Promise.all(killed.killed.map(id => getBackgroundShellJob(id)?.done));
+      fixture.cleanup();
+    }
+  });
   test('write-then-fail records process failure while preserving the real filesystem effect', async () => {
     const fixture = makeFixture();
     try {

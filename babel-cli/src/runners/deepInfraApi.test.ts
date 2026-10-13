@@ -385,3 +385,39 @@ test('DeepInfra API runner executeWithToolsStream yields error on HTTP failure',
   assert.equal(events[0]!.type, 'error');
   assert.match(events[0]!.message, /HTTP 401/);
 });
+
+test('raw provider cancellation after headers aborts pending body without a retry', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env['DEEPINFRA_API_KEY'];
+  const originalIdle = process.env['BABEL_DEEPINFRA_STREAM_IDLE_TIMEOUT_MS'];
+  const originalRetries = process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES'];
+  process.env['DEEPINFRA_API_KEY'] = 'synthetic-offline-fixture';
+  process.env['BABEL_DEEPINFRA_STREAM_IDLE_TIMEOUT_MS'] = '2000';
+  process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES'] = '0';
+  let calls = 0;
+  let cancelled = false;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(new ReadableStream({ cancel() { cancelled = true; } }), {
+      status: 200, headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 50);
+  const startedAt = Date.now();
+  try {
+    const { DeepInfraApiRunner } = await import('./deepInfraApi.js');
+    const runner = new DeepInfraApiRunner('deepseek-ai/DeepSeek-V3-0324');
+    await assert.rejects(runner.executeRaw('offline fixture', { onChunk() {} }, 'offline fixture', controller.signal), { name: 'AbortError' });
+    assert.equal(cancelled, true);
+    assert.equal(calls, 1);
+    assert.ok(Date.now() - startedAt < 1000, 'abort must settle before the idle limit');
+  } finally {
+    clearTimeout(timer);
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of [['DEEPINFRA_API_KEY', originalKey], ['BABEL_DEEPINFRA_STREAM_IDLE_TIMEOUT_MS', originalIdle], ['BABEL_DEEPINFRA_STREAM_MAX_RETRIES', originalRetries]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});

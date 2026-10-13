@@ -1623,7 +1623,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
 
   test('Scenario 7d — old child evidence cannot satisfy current parent progress/verification', async () => {
     // A child attribution only counts as mutation progress when the engine
-    // observed a confirmed_change effect; a child's own summary never does.
+    // observed a confirmed parent effect; a child's own summary never does.
     assert.equal(
       (await import('./chatEngineCriticBudget.js')).hasSubAgentWrites([
         { tool: 'sub_agent', target: 's07-child', detail: '3 steps, 1 changed, attribution=child_success' },
@@ -1633,6 +1633,12 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
     assert.equal(
       (await import('./chatEngineCriticBudget.js')).hasSubAgentWrites([
         { tool: 'sub_agent', target: 's07-child', detail: '3 steps, 1 changed', effect_status: 'confirmed_change' },
+      ]),
+      false,
+    );
+    assert.equal(
+      (await import('./chatEngineCriticBudget.js')).hasSubAgentWrites([
+        { tool: 'sub_agent', target: 's07-child', effect_status: 'confirmed_change', effect_scope: 'parent_candidate' },
       ]),
       true,
     );

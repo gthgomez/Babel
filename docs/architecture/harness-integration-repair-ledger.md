@@ -40,3 +40,58 @@ Repair branch: `cursor/architecture-integration-repair-73b4` (PR #370).
 - Broad host-port / reducer migration programs beyond documented projection boundaries and public-entry tests are **out of scope** for this PR.
 - Full process-tree settlement under load for search cancellation is covered at abort/timeout seams, not exhaustive stress harnesses.
 - Paid provider evaluations and release deployment were not authorized.
+
+## Request context and workspace effect qualification
+
+The following contracts extend the historical repair coverage. Source conformance,
+deterministic fixtures, installed consumers and provider-backed task correctness
+are separate evidence scopes. Hosted success does not establish a task-level
+reliability rate.
+
+| Boundary | Contract | Regression owner |
+| --- | --- | --- |
+| Raw fallback | Preserve the selected compiled system context. A native-to-legacy downgrade reconstructs both prompts with the destination protocol and retains retry lineage. | `chatEngineFallbackContext.test.ts` captures serialized receiver bodies for ordinary raw, both fallbacks and exact Go refusal. |
+| Announced native calls | A provider failure after announcing calls settles them as failed before dispatch. It cannot create executable calls by retrying a different response protocol. | `chatEngineFallbackContext.test.ts`, `toolSettlementIdentity.test.ts` |
+| Repository freshness | Confirmed or uncertain parent mutations expire graph tags, the map and rendered prompt caches before the next compiled request. Byte-equal/no-effect and isolated-child results preserve parent context. Superseded scans cannot install. | `chatEngineRepositoryContextFreshness.test.ts`, `r0ChildMutationFreshness.test.ts`, existing owner-fence fixtures |
+| Child effect scope | `effect_status` describes certainty; additive `effect_scope` describes `parent_candidate`, `isolated_child`, or `unknown`. Only explicit parent scope contributes child effects to parent writes, progress and changed-file projection. Missing legacy scope is unknown. | `r0ChildMutationFreshness.test.ts`, `chatEngineCriticBudget.test.ts`, `toolCallExport.test.ts` |
+| Recovery ownership | A hash comparison cannot exclude external writers during restore/delete. `WorktreeSafetyController` preserves current bytes and snapshots and returns `rollback_failed` when destructive recovery lacks exclusive writer evidence. It does not promise shared-checkout atomicity. | `worktreeSafety.test.ts` comparison interleaving; `codingLoopInvestigation.test.ts` patch, creation, deletion and external-writer controls |
+| Pending writers | A pending background job does not prove a completed parent deliverable. Cancellation requests are separate from observed process exit. | `chatEngine.lifecycleQualification.test.ts`, `processTreeTermination.test.ts` |
+| Late effects and resume | A prior passing parent test cannot certify bytes changed later by a detached owned writer. Cancellation retains that effect, process exit is observed, and resumed authority cannot reuse the old green receipt. | `chatEngine.lifecycleQualification.test.ts` connects real repair/test, cancellation, late write, observed exit and an independent red current-byte oracle. |
+| Checkpoint process death | Actual process death during prepared journal, partial publication, context installation, committed journal and partial restore must recover one coherent generation. This does not establish power-loss durability. | `checkpointWindowsPersistence.test.ts` kills the exact child at observed publication boundaries and checks resumed bytes and intended context/thread state. |
+| Scheduled attempts | Every scheduled preflight refusal has a distinct trial row. `attempt_accounting` includes those rows and distinguishes launched, not launched and unknown launch. Legacy validity-qualified rates remain separate. Missing cost is incomplete; cost per success is null when incomplete. | `eval/canary/canary.test.ts` |
+| Grader and prose evidence | Grader unavailability is distinct from an observed oracle failure. Task success requires completed grading, hidden correctness and contract success; a hung correct patch is separate. Bounded English verification claims are graded against current parent receipts; incomplete, ambiguous or quoted claims remain unknown. | `eval/cleanRoomGrade.test.ts`, `eval/diagnostics/verification.test.ts`, `eval/canary/canary.test.ts` |
+| Provider billing | OpenRouter's reported `usage.cost` is accepted only as a finite nonnegative amount; a malformed reported amount stays unknown. Missing reports retain the existing pricing estimate or unknown result. Buffered, structured streaming and native streaming preserve captured usage through normalization. | `providerResponseMetadata.test.ts`, `openRouterApi.test.ts` |
+
+The changed log and metric fields are additive, but their semantics are **RISKY**
+for consumers that inferred parent effects from child detail strings. In-repo
+projections migrate together; external consumers must honor scope before treating
+child paths as applied. Rollback requires reverting the scope migration together,
+without upgrading old unknown-scope rows. Recovery refusal changes are also
+**RISKY**: callers must preserve affected/indeterminate paths rather than report an
+assumed restoration. The retained snapshots are evidence for a separately governed
+recovery decision.
+
+Isolated child findings remain reportable artifacts with workspace, parent
+dispatch revision, actual committed child base and observed candidate postimages; they are explicitly unapplied.
+Child success grants no parent incorporation permission. The legacy promotion
+utility is not a production Chat transaction or fresh parent verifier receipt.
+Authorized application through the parent executor invalidates prior proof and requires
+a new parent verifier receipt (`r0ChildMutationFreshness.test.ts`). Supported finish
+actions are synchronous and effect-free; deadline qualification belongs to preceding
+nonterminal tools and their effects. Automatic promotion, exhaustive pending/late
+reconciliation and checkpoint crash boundaries, general natural-language
+claim grading, every provider transport and load behavior need their own connected
+production-entry evidence before broader qualification claims.
+
+On Windows without file-symlink creation privileges, the compiler fixture reports
+that capability unavailable. Linux still requires the real symlink rejection;
+`BABEL_REQUIRE_SYMLINK_FIXTURE=1` makes capability refusal fatal on a capable Windows
+lane. The portable non-file intake case is a separate fail-closed check and does
+not qualify Windows file symlinks.
+
+Mock canary controls distinguish visible verification, hidden-oracle correctness,
+no-op success, honest blocks and false completion. They do not measure a live model
+or justify changing production budgets. Provider-backed paired campaigns require
+frozen task/route/configuration/grader identities, declared spending scope and all
+scheduled attempts. Comparative source inventories and supplied historical CI
+counts do not establish installed behavior or comparative task reliability.

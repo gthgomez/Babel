@@ -23,6 +23,7 @@ export interface ToolCallRecord {
   exit_code?: number;
   duration_ms?: number;
   effect_status?: MutationEffectStatus;
+  effect_scope?: import('./mutationTools.js').MutationEffectScope;
   mutation_paths?: string[];
 }
 
@@ -52,6 +53,7 @@ export function enrichToolCallLog(
     tool: string; target: string; detail?: string; error?: string;
     index: number; exit_code?: number; stdout?: string; stderr?: string; verified?: boolean;
     effect_status?: MutationEffectStatus;
+    effect_scope?: import('./mutationTools.js').MutationEffectScope;
     mutation_paths?: string[];
   }>,
   turnMap: Map<number, number>,  // logIndex → turn number
@@ -66,6 +68,7 @@ export function enrichToolCallLog(
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.exit_code !== undefined ? { exit_code: entry.exit_code } : {}),
     ...(durationMap?.has(entry.index) ? { duration_ms: durationMap.get(entry.index)! } : {}),
+    ...(entry.effect_scope !== undefined ? { effect_scope: entry.effect_scope } : {}),
     ...(entry.effect_status !== undefined ? { effect_status: entry.effect_status } : {}),
     ...(entry.mutation_paths !== undefined ? { mutation_paths: [...entry.mutation_paths] } : {}),
   }));
@@ -83,6 +86,7 @@ export function computeToolCallAggregates(
     error?: string;
     verified?: boolean;
     effect_status?: MutationEffectStatus;
+    effect_scope?: import('./mutationTools.js').MutationEffectScope;
     mutation_paths?: string[];
   }>,
 ): ToolCallAggregates {
@@ -90,6 +94,7 @@ export function computeToolCallAggregates(
     tool: e.tool,
     error: e.error,
     effectStatus: e.effect_status,
+    effectScope: e.effect_scope,
     mutationPaths: e.mutation_paths,
   })).length;
   const verifierCount = rawLog.filter((e) => VERIFIER_TOOLS.has(e.tool)).length;
@@ -111,6 +116,7 @@ export function exportEnrichedToolCallLog(
     tool: string; target: string; detail?: string; error?: string;
     index: number; exit_code?: number; stdout?: string; stderr?: string; verified?: boolean;
     effect_status?: MutationEffectStatus;
+    effect_scope?: import('./mutationTools.js').MutationEffectScope;
     mutation_paths?: string[];
   }>,
   turnMap: Map<number, number>,

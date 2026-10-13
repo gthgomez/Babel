@@ -26,7 +26,7 @@ import {
   type DiffCriticVerdict,
 } from './diffCritic.js';
 import { formatBudgetExceededAnswer } from './budgetKillPolicy.js';
-import { isConfirmedMutation, type MutationEffectStatus } from './mutationTools.js';
+import { isConfirmedMutation, isConfirmedParentChildMutation, type MutationEffectStatus, type MutationEffectScope } from './mutationTools.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { isChatOpenCodeGoRoute, isOfflineChatMode } from './chatModelPolicy.js';
 import {
@@ -44,6 +44,7 @@ export type CriticToolLogEntry = {
   error?: string;
   mutation_paths?: string[];
   effect_status?: MutationEffectStatus;
+  effect_scope?: MutationEffectScope;
 };
 
 export type CriticGateDecision = 'allow' | 'reject' | 'block';
@@ -52,12 +53,7 @@ export const MAX_CRITIC_STRIKES = 2;
 
 /** Session has an explicitly confirmed sub-agent mutation effect. */
 export function hasSubAgentWrites(toolCallLog: CriticToolLogEntry[]): boolean {
-  return toolCallLog.some(
-    (e) =>
-      e.tool === 'sub_agent' &&
-      e.error !== 'blocked' &&
-      e.effect_status === 'confirmed_change',
-  );
+  return toolCallLog.some(isConfirmedParentChildMutation);
 }
 
 /** Successful direct file writes or sub-agent mutations. */
@@ -67,6 +63,7 @@ export function hasAnyWrites(toolCallLog: CriticToolLogEntry[]): boolean {
       tool: e.tool,
       error: e.error,
       effectStatus: e.effect_status,
+      effectScope: e.effect_scope,
       mutationPaths: e.mutation_paths,
     })) ||
     hasSubAgentWrites(toolCallLog)
@@ -74,14 +71,15 @@ export function hasAnyWrites(toolCallLog: CriticToolLogEntry[]): boolean {
 }
 
 export function buildGateRejectionMessage(toolCallLog: CriticToolLogEntry[]): string {
-  const writeCount = toolCallLog.filter((e) => isConfirmedMutation({
+  const writeCount = toolCallLog.filter((e) => e.tool !== 'sub_agent' && isConfirmedMutation({
     tool: e.tool,
     error: e.error,
     effectStatus: e.effect_status,
+    effectScope: e.effect_scope,
     mutationPaths: e.mutation_paths,
   })).length;
   const subAgentCount = toolCallLog.filter(
-    (e) => e.tool === 'sub_agent' && e.effect_status === 'confirmed_change',
+    isConfirmedParentChildMutation,
   ).length;
   const lastActions = toolCallLog.slice(-3).map((e) => e.tool).join(', ');
   if (writeCount + subAgentCount === 0) {
@@ -108,11 +106,10 @@ export function currentTurnHasMutation(
         tool: e.tool,
         error: e.error,
         effectStatus: e.effect_status,
+        effectScope: e.effect_scope,
         mutationPaths: e.mutation_paths,
       }) ||
-      (e.tool === 'sub_agent' &&
-        e.error !== 'blocked' &&
-        /[1-9]\d*\s+changed/.test(e.detail ?? '')),
+      isConfirmedParentChildMutation(e),
   );
 }
 
@@ -316,6 +313,7 @@ export function mutationTargetsFromLog(toolCallLog: CriticToolLogEntry[]): strin
       tool: entry.tool,
       error: entry.error,
       effectStatus: entry.effect_status,
+      effectScope: entry.effect_scope,
       mutationPaths: entry.mutation_paths,
     })) continue;
     if (entry.mutation_paths) targets.push(...entry.mutation_paths);

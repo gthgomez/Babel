@@ -439,6 +439,7 @@ export async function consumeChatStream(
           target: event.target,
           ...(event.detail !== undefined ? { detail: event.detail } : {}),
           ...(event.error !== undefined ? { error: event.error } : {}),
+          ...(event.effect_scope !== undefined ? { effect_scope: event.effect_scope } : {}),
           ...(event.effect_status !== undefined ? { effect_status: event.effect_status } : {}),
           ...(event.mutation_paths !== undefined ? { mutation_paths: [...event.mutation_paths] } : {}),
         });
@@ -1251,6 +1252,7 @@ export function buildChatRunPayload(
       result.toolCalls.map(tc => ({
         tool: tc.tool,
         ...(tc.error !== undefined ? { error: tc.error } : {}),
+        ...(tc.effect_scope !== undefined ? { effect_scope: tc.effect_scope } : {}),
         ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
       }))
     );
@@ -1262,6 +1264,7 @@ export function buildChatRunPayload(
       result.toolCalls.map(tc => ({
         tool: tc.tool,
         ...(tc.error !== undefined ? { error: tc.error } : {}),
+        ...(tc.effect_scope !== undefined ? { effect_scope: tc.effect_scope } : {}),
         ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
       }))
     );
@@ -1278,6 +1281,7 @@ export function buildChatRunPayload(
       tool: tc.tool,
       error: tc.error,
       effectStatus: tc.effect_status,
+      effectScope: tc.effect_scope,
       mutationPaths: tc.mutation_paths,
     })).length
     : 0;
@@ -1289,6 +1293,7 @@ export function buildChatRunPayload(
             target: tc.target,
             error: tc.error,
             effectStatus: tc.effect_status,
+            effectScope: tc.effect_scope,
             mutationPaths: tc.mutation_paths,
           }))
           .filter((t): t is string => typeof t === 'string' && t.length > 0)
@@ -1315,6 +1320,7 @@ export function buildChatRunPayload(
           target: tc.target,
           error: tc.error,
           effectStatus: tc.effect_status,
+          effectScope: tc.effect_scope,
           mutationPaths: tc.mutation_paths,
         }))
         .filter((t): t is string => typeof t === 'string' && t.length > 0)

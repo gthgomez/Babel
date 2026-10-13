@@ -39,6 +39,8 @@ async function withExecutionAuthority<T>(run: () => Promise<T>): Promise<T> {
     'BABEL_AUTONOMY_LEASE',
     'BABEL_EXECUTION_PROFILE',
     'BABEL_ALLOW_HOST_FALLBACK',
+    'BABEL_DRY_RUN',
+    'BABEL_DRY_RUN_SOURCE',
   ] as const;
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null]));
   const runsDir = mkdtempSync(join(tmpdir(), 'babel-a2-runs-'));
@@ -54,6 +56,8 @@ async function withExecutionAuthority<T>(run: () => Promise<T>): Promise<T> {
   process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify(lease.lease);
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+  process.env['BABEL_DRY_RUN'] = 'false';
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session';
   try {
     return await run();
   } finally {

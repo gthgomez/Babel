@@ -502,6 +502,7 @@ describe('Completion gate — positive paths', () => {
       tool: 'sub_agent',
       target: 'fix the thing',
       detail: '3 steps, 2 changed, attribution=child_success',
+      effect_scope: 'parent_candidate',
       effect_status: 'confirmed_change',
       mutation_paths: ['src/math.js', 'src/math.test.js'],
     });
@@ -627,6 +628,7 @@ describe('Gate helpers', () => {
           tool: 'sub_agent',
           target: 'fix',
           detail: '5 steps, 3 changed, attribution=child_success',
+          effect_scope: 'parent_candidate',
           effect_status: 'confirmed_change',
           mutation_paths: ['src/fix.ts'],
         },
@@ -670,6 +672,7 @@ describe('Gate helpers', () => {
       tool: 'sub_agent',
       target: 'fix',
       detail: '2 changed, attribution=child_success',
+      effect_scope: 'parent_candidate',
       effect_status: 'confirmed_change',
       mutation_paths: ['src/fix.ts'],
     });

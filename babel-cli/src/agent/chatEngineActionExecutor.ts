@@ -76,6 +76,7 @@ import { executeChatLspAction } from "./chatEngineLspAction.js";
 import { assessMutationEffect } from "./mutationTools.js";
 import {
   pinProjectRootEnv,
+  invalidateChatPathReads,
   noteChatWorkspaceMutation,
   invalidateVerifierLedger,
   formatResultDetail,
@@ -847,6 +848,9 @@ export class ChatEngineActionExecutor {
           this.host.persistRecoveryWorkingState();
         }
 
+        if (!gov.policyBlocked && strReplaceEffect.status !== "confirmed_no_change" && strReplaceEffect.status !== "not_applicable") {
+          this.host.invalidateRepositoryContext(gov.mutationPaths ?? [gov.absolutePath], "governed string replacement settlement");
+        }
         if (gov.exit_code !== 0) {
           // Process failure does not erase an independently proven workspace
           // effect.  Invalidate reads conservatively for every attempted target
@@ -1511,10 +1515,9 @@ export class ChatEngineActionExecutor {
                   ? action.path
                   : primaryPatchPath(action.patch),
               ];
-        for (const possiblePath of possiblePaths) {
-          const possibleKey = this.host.readCacheKey(possiblePath);
-          invalidateReadCacheForPath(this.host.readCache, possibleKey);
-          this.host.fullReadCounts.delete(possibleKey);
+        invalidateChatPathReads(this.host, possiblePaths);
+        if (mutationEffect.status !== "confirmed_no_change") {
+          this.host.invalidateRepositoryContext(possiblePaths, "direct parent mutation settlement");
         }
         if (
           !confirmedDirectMutation &&
@@ -1837,16 +1840,10 @@ export class ChatEngineActionExecutor {
           // A command can mutate files and then fail. Prefer the executor's
           // changed-path receipt; without one, invalidate conservatively.
           if (!result.policyBlocked && lastResult.simulated !== true) {
-            if (result.mutationPaths && result.mutationPaths.length > 0) {
-              for (const changedPath of result.mutationPaths) {
-                const changedKey = this.host.readCacheKey(changedPath);
-                invalidateReadCacheForPath(this.host.readCache, changedKey);
-                this.host.fullReadCounts.delete(changedKey);
-              }
-            } else {
-              this.host.readCache.clear();
-              this.host.fullReadCounts.clear();
+            if (mutationEffect.status !== "confirmed_no_change") {
+              this.host.invalidateRepositoryContext(result.mutationPaths ?? [], "shell parent mutation settlement");
             }
+            invalidateChatPathReads(this.host, result.mutationPaths ?? []);
           }
         }
 
@@ -1950,7 +1947,8 @@ export class ChatEngineActionExecutor {
       if (
         (action.type === "write_file" || action.type === "apply_patch") &&
         !result.policyBlocked &&
-        lastResult?.exit_code === 0
+        lastResult?.exit_code === 0 &&
+        confirmedDirectMutation
       ) {
         const editPath =
           action.type === "write_file"

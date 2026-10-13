@@ -66,7 +66,7 @@ import {
 import {
   classifyPhase,
 } from "./chatPhaseNudge.js";
-import { isConfirmedMutation } from "./mutationTools.js";
+import { isConfirmedMutation, isConfirmedParentChildMutation } from "./mutationTools.js";
 
 import { evaluateTokenExplosionAfterTurn } from "./budgetKillPolicy.js";
 import {
@@ -550,6 +550,28 @@ export class ChatEngineStreamingLoop {
         const nativeActions: ChatToolAction[] = [];
         const nativeToolCallIds: string[] = [];
         const seenToolCallIds = new Set<string>();
+        let nativeProtocolInvalid = false;
+        const decodeNativeCall = (event: { id: string; name: string; input: Record<string, unknown> }): ChatToolAction => {
+          try {
+            if (typeof event.id !== "string" || event.id.trim().length === 0 || seenToolCallIds.has(event.id)) {
+              throw new Error("NATIVE_TOOL_CALL_ID_INVALID");
+            }
+            return nativeToolUseToChatAction(event.name, event.input);
+          } catch {
+            nativeProtocolInvalid = true;
+            throw new Error("NATIVE_TOOL_PROTOCOL_INVALID");
+          }
+        };
+        const settleUnexecutedNativeCalls = (): ChatEvent[] => nativeActions.map((action, index) => {
+          const toolCallId = nativeToolCallIds[index]!;
+          const tool = chatActionToolName(action);
+          const target = chatActionTarget(action);
+          this.host.toolCallLog.push({ toolCallId, tool, target, index,
+            error: "provider_stream_failed", exit_code: 1, effect_status: "not_applicable",
+            detail: "Provider stream failed before executor dispatch; action was not executed." });
+          return { type: "tool_failed", toolCallId, tool, target,
+            error: "provider_stream_failed", exitCode: 1, effect_status: "not_applicable" };
+        });
         let answerText = "";
         let nativeFinishReason: string | undefined;
         const systemPrompt = this.host.getOrBuildSystemPrompt("native");
@@ -594,10 +616,7 @@ export class ChatEngineStreamingLoop {
                 yield { type: "thought", text: event.text };
                 break;
               case "tool_use": {
-                const action = nativeToolUseToChatAction(
-                  event.name,
-                  event.input,
-                );
+                const action = decodeNativeCall(event);
                 nativeActions.push(action);
                 nativeToolCallIds.push(
                   canonicalizeToolCallId(
@@ -655,6 +674,15 @@ export class ChatEngineStreamingLoop {
             providerEnd,
           );
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          if (nativeProtocolInvalid || nativeToolCallIds.length > 0) {
+            yield* settleUnexecutedNativeCalls();
+            endSpan(_turnSpan, SpanStatusCode.ERROR);
+            _turnSpan = null;
+            yield this.host.streamFailed(nativeProtocolInvalid
+              ? "Native stream contained invalid arguments or call identities; no action was dispatched."
+              : "Native stream failed after announcing tools; no action was dispatched.");
+            return;
+          }
           const admissionRecovery =
             await this.host.recoverPreparedRequestAdmission(
               err,
@@ -743,10 +771,7 @@ export class ChatEngineStreamingLoop {
                   yield { type: "thought", text: event.text };
                   break;
                 case "tool_use": {
-                  const action = nativeToolUseToChatAction(
-                    event.name,
-                    event.input,
-                  );
+                  const action = decodeNativeCall(event);
                   nativeActions.push(action);
                   nativeToolCallIds.push(
                     canonicalizeToolCallId(
@@ -803,20 +828,37 @@ export class ChatEngineStreamingLoop {
               fbStart,
               fbEnd,
             );
+            if (nativeProtocolInvalid || nativeToolCallIds.length > 0) {
+              yield* settleUnexecutedNativeCalls();
+              endSpan(_turnSpan, SpanStatusCode.ERROR);
+              _turnSpan = null;
+              yield this.host.streamFailed(nativeProtocolInvalid
+                ? "Native fallback contained invalid arguments or call identities; no action was dispatched."
+                : "Native fallback failed after announcing tools; no action was dispatched.");
+              return;
+            }
             // If tools still fail, degrade to raw-text (buffered — the lenient
             // parser may transform the final answer; not append-compatible).
             yield { type: "thought", text: "Retrying without tools…" };
             if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
             let rawText = "";
+            const legacySystemPrompt = this.host.getOrBuildSystemPrompt("legacy");
+            const legacyPrompt = this.host.services.conversation.buildTurnPrompt({
+              conversation: this.host.conversation,
+              task: this.host.options.task,
+              nativeTools: false,
+              textTools: false,
+            });
             const rawFbStart = performance.now();
             try {
               for await (const chunk of fb.executeRawStream(
-                prompt,
-                undefined,
+                legacyPrompt,
+                legacySystemPrompt,
                 this.host.abortController.signal,
                 this.host.providerRetryCallbacks({
                   deliveryMode: "text",
-                  conversationState: prompt,
+                  conversationState: legacyPrompt,
+                  systemPolicyPrompt: legacySystemPrompt,
                   executionStage: "chat",
                   substitutionOrFallback: true,
                   usageScope,
@@ -945,11 +987,12 @@ export class ChatEngineStreamingLoop {
           try {
             for await (const chunk of fb.executeRawStream(
               prompt,
-              undefined,
+              activeSystemPrompt,
               this.host.abortController.signal,
               this.host.providerRetryCallbacks({
                 deliveryMode: "text",
                 conversationState: prompt,
+                systemPolicyPrompt: activeSystemPrompt,
                 executionStage: "chat",
                 substitutionOrFallback: true,
                 usageScope,
@@ -1220,11 +1263,17 @@ export class ChatEngineStreamingLoop {
         // Yield tool complete events (slice from this turn's start, sorted by
         // original action index so tool_complete order matches tool_start order
         // even when read tools complete concurrently in a different order).
-        for (const [settlementIndex, tc] of this.host.toolCallLog
+        for (const tc of this.host.toolCallLog
           .slice(this.host._turnToolCallLogStart)
-          .sort((a, b) => a.index - b.index)
-          .entries()) {
-          tc.toolCallId = settleCallIds[settlementIndex]!;
+          .sort((a, b) => a.index - b.index)) {
+          const toolCallId = settleCallIds[tc.index];
+          if (!toolCallId) {
+            endSpan(_turnSpan, SpanStatusCode.ERROR);
+            _turnSpan = null;
+            yield this.host.streamFailed("Settled tool has no matching action identity.");
+            return;
+          }
+          tc.toolCallId = toolCallId;
           yield {
             type:
               tc.error || (tc.exit_code !== undefined && tc.exit_code !== 0)
@@ -1236,6 +1285,7 @@ export class ChatEngineStreamingLoop {
             ...(tc.detail ? { detail: tc.detail } : {}),
             ...(tc.error ? { error: tc.error } : {}),
             ...(tc.exit_code !== undefined ? { exitCode: tc.exit_code } : {}),
+            ...(tc.effect_scope !== undefined ? { effect_scope: tc.effect_scope } : {}),
             ...(tc.effect_status !== undefined
               ? { effect_status: tc.effect_status }
               : {}),
@@ -1403,6 +1453,7 @@ export class ChatEngineStreamingLoop {
                 tool: t.tool,
                 error: t.error,
                 effectStatus: t.effect_status,
+                effectScope: t.effect_scope,
                 mutationPaths: t.mutation_paths,
               }),
             ),
@@ -1462,10 +1513,10 @@ export class ChatEngineStreamingLoop {
                 tool: tc.tool,
                 error: tc.error,
                 effectStatus: tc.effect_status,
+                effectScope: tc.effect_scope,
                 mutationPaths: tc.mutation_paths,
               }) ||
-              (tc.tool === "sub_agent" &&
-                tc.effect_status === "confirmed_change"),
+              isConfirmedParentChildMutation(tc),
           )
         ) {
           progressSignals.push("production_mutation");

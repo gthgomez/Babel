@@ -150,7 +150,7 @@ test('F6b: memory mutation must invalidate reads and never replay a stale write 
   delete process.env.BABEL_LIVE
   assert.ok(actual.stdout.includes('first'), `actual value: ${actual.stdout}`)
 })
-test('F7: apply_patch edits must be covered by child rollback', async () => {
+test('F7: apply_patch effects remain covered when unowned child rollback is refused', async () => {
   const { root, input } = fixture('patch-rollback')
   const target = join(root, 'src/a.txt')
   writeFileSync(target, 'before\n')
@@ -165,7 +165,9 @@ test('F7: apply_patch edits must be covered by child rollback', async () => {
   assert.equal(result.success, false)
   assert.equal(result.changedFiles.length, 1, result.error ?? result.attribution)
   const rollback = await result.rollback()
-  assert.equal(readFileSync(target, 'utf8'), 'before\n', `rollback claimed ${rollback.status}`)
+  assert.equal(rollback.status, 'rollback_failed')
+  assert.equal(readFileSync(target, 'utf8'), 'after\n')
+  assert.deepEqual(rollback.failed_files.map(file => file.path), ['src/a.txt'])
 })
 test('F8: explicit read_only preset must deny child writes', async () => {
   const { root, input } = fixture('readonly-preset')
@@ -251,7 +253,7 @@ test('F8: ask_before_mutation cannot silently dispatch a child write', async () 
   assert.equal(result.success, false)
 })
 
-test('F2/F7: mixed write and patch effects roll back creations, edits and deletions', async () => {
+test('F2/F7: mixed write and patch effects are retained when writer ownership is unknown', async () => {
   const { root, input } = fixture('mixed-rollback')
   writeFileSync(join(root, 'src/edit.txt'), 'before\n')
   writeFileSync(join(root, 'src/delete.txt'), 'delete\n')
@@ -276,12 +278,14 @@ test('F2/F7: mixed write and patch effects roll back creations, edits and deleti
   assert.equal(result.success, true, result.error ?? '')
   assert.equal(result.changedFiles.length, 4)
   assert.equal(result.changedFiles.find(file => file.path === 'src/delete.txt')?.bytes, 0)
-  assert.equal((await result.rollback()).status, 'rollback_applied')
-  assert.equal(result.changedFiles.length, 0)
-  assert.equal(readFileSync(join(root, 'src/edit.txt'), 'utf8'), 'before\n')
-  assert.equal(readFileSync(join(root, 'src/delete.txt'), 'utf8'), 'delete\n')
-  assert.equal(existsSync(join(root, 'src/write-new.txt')), false)
-  assert.equal(existsSync(join(root, 'src/patch-new.txt')), false)
+  const rollback = await result.rollback()
+  assert.equal(rollback.status, 'rollback_failed')
+  assert.equal(rollback.failed_files.length, 4)
+  assert.equal(result.changedFiles.length, 4)
+  assert.equal(readFileSync(join(root, 'src/edit.txt'), 'utf8'), 'after\n')
+  assert.equal(existsSync(join(root, 'src/delete.txt')), false)
+  assert.equal(existsSync(join(root, 'src/write-new.txt')), true)
+  assert.equal(existsSync(join(root, 'src/patch-new.txt')), true)
 })
 
 test('F2: change and restoration within one child leave no net mutation evidence', async () => {
@@ -299,6 +303,37 @@ test('F2: change and restoration within one child leave no net mutation evidence
   })
   assert.equal(result.attribution, 'child_noop')
   assert.equal(result.changedFiles.length, 0)
+})
+
+test('budget controls distinguish productive exhaustion, repetition, completed change and no-op', async () => {
+  for (const scenario of ['productive_limit', 'stuck_limit', 'correct_finish', 'noop_finish'] as const) {
+    const { root, input } = fixture(scenario)
+    let round = 0
+    const result = await runMutationAgentLoop({ ...input, maxRounds: 2,
+      actionResolver: async () => {
+        round++
+        if (scenario === 'noop_finish') return [finish]
+        if (scenario === 'stuck_limit') return [{ type: 'read_file', path: 'src/missing.txt' }]
+        const write: import('./actions.js').AgentAction = { type: 'write_file', path: `src/round-${round}.txt`, content: `useful-${round}` }
+        return scenario === 'correct_finish' ? [write, finish] : [write]
+      },
+      executor: executorFor(action => {
+        if (action.type === 'write_file') writeFileSync(join(root, action.path), action.content)
+        return ok
+      }),
+    })
+    const expectedChanges = scenario === 'productive_limit' ? 2 : scenario === 'correct_finish' ? 1 : 0
+    assert.equal(result.changedFiles.length, expectedChanges)
+    for (const file of result.changedFiles) assert.match(readFileSync(join(root, file.path), 'utf8'), /^useful-/)
+    if (scenario.endsWith('limit')) {
+      assert.equal(result.attribution, 'child_round_exhaustion')
+      assert.equal(result.success, false)
+      if (expectedChanges > 0) assert.equal(result.rollbackSummary?.status, 'rollback_failed')
+    } else {
+      assert.equal(result.success, true)
+      assert.equal(result.attribution, scenario === 'noop_finish' ? 'child_noop' : 'child_success')
+    }
+  }
 })
 
 test('F5: local deadline cancels a resolver that never settles', async () => {
@@ -395,7 +430,7 @@ test('F5: the earlier local or inherited deadline determines attribution', async
   }
 })
 
-test('F7: deterministic mock rollback reconciles its returned changes', async () => {
+test('F7: deterministic mock retains returned changes after unowned rollback refusal', async () => {
   const { root, input } = fixture('mock-rollback')
   const result = await runMutationAgentLoop({ ...input, useDeterministicMock: true,
     executor: executorFor(action => {
@@ -404,9 +439,9 @@ test('F7: deterministic mock rollback reconciles its returned changes', async ()
     }),
   })
   assert.equal(result.changedFiles.length, 1)
-  assert.equal((await result.rollback()).status, 'rollback_applied')
-  assert.equal(result.changedFiles.length, 0)
-  assert.equal(existsSync(join(root, 'src/result.txt')), false)
+  assert.equal((await result.rollback()).status, 'rollback_failed')
+  assert.equal(result.changedFiles.length, 1)
+  assert.equal(existsSync(join(root, 'src/result.txt')), true)
 })
 
 test('review: safety rescans distinguish confirmed child edits from external edits', async () => {
@@ -437,8 +472,9 @@ test('review: safety rescans distinguish confirmed child edits from external edi
       })
       assert.equal(result.success, !external, result.error ?? '')
       assert.equal(readFileSync(target, 'utf8'), external ? 'owner edits' : 'child second')
-      await result.rollback()
-      assert.equal(readFileSync(target, 'utf8'), external ? 'owner edits' : 'original')
+      const rollback = await result.rollback()
+      assert.equal(rollback.status, external ? 'rollback_skipped_user_dirty_target' : 'rollback_failed')
+      assert.equal(readFileSync(target, 'utf8'), external ? 'owner edits' : 'child second')
     } finally {
       clock.mock.restore()
     }
@@ -464,8 +500,8 @@ test('review: failed writes reconcile partial rollback without inventing success
       })
       assert.equal(result.success, false)
       assert.equal(result.changedFiles.length, 0)
-      assert.equal(existsSync(target), safetyFails)
-      assert.deepEqual(result.indeterminatePaths ?? [], safetyFails ? ['src/a.txt'] : [])
+      assert.equal(existsSync(target), true)
+      assert.deepEqual(result.indeterminatePaths ?? [], ['src/a.txt'])
     }
   } finally {
     undo.mock.restore()

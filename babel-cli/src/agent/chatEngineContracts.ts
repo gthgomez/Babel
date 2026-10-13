@@ -311,6 +311,7 @@ export type ChatEvent =
       error?: string
       exitCode?: number
       effect_status?: MutationEffectStatus
+      effect_scope?: import('./mutationTools.js').MutationEffectScope
       mutation_paths?: string[]
     }
   | {
@@ -322,6 +323,7 @@ export type ChatEvent =
       error?: string
       exitCode?: number
       effect_status?: MutationEffectStatus
+      effect_scope?: import('./mutationTools.js').MutationEffectScope
       mutation_paths?: string[]
     }
   | { type: 'thought'; text: string }
@@ -359,6 +361,7 @@ export type ChatEvent =
         detail?: string
         error?: string
         effect_status?: MutationEffectStatus
+        effect_scope?: import('./mutationTools.js').MutationEffectScope
         mutation_paths?: string[]
       }>
       runDir?: string
@@ -406,6 +409,7 @@ export type ChatEvent =
         detail?: string
         error?: string
         effect_status?: MutationEffectStatus
+        effect_scope?: import('./mutationTools.js').MutationEffectScope
         mutation_paths?: string[]
       }>
       runDir?: string
@@ -464,6 +468,7 @@ export interface ChatResult {
     detail?: string
     error?: string
     effect_status?: MutationEffectStatus
+    effect_scope?: import('./mutationTools.js').MutationEffectScope
     mutation_paths?: string[]
   }>
   runDir?: string
@@ -750,6 +755,7 @@ export interface ChatEngineStreamingLoopHost {
     verified?: boolean
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus
+    effect_scope?: import('./mutationTools.js').MutationEffectScope
   }[]
   toolsWithoutWrite: number
   readonly trackRunnerUsage: (
@@ -842,6 +848,7 @@ export interface ChatEngineActionExecutorHost {
   recoveryStatePersistenceUnavailable: boolean
   requireTodoBeforeMutate: boolean
   runPostEditStaticCheck: (filePath: string) => Promise<string | null>
+  invalidateRepositoryContext: (paths: readonly string[], reason: string) => void
   settleStaleActionResult: (
     tool: string,
     target: string,
@@ -863,6 +870,7 @@ export interface ChatEngineActionExecutorHost {
     verified?: boolean
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus
+    effect_scope?: import('./mutationTools.js').MutationEffectScope
   }[]
   verifierReceiptCache: Map<
     string,

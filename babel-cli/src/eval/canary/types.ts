@@ -29,6 +29,12 @@ export interface CanaryTaskSpec {
 }
 
 export interface CanaryTrialResult {
+  /** Legacy hidden_ok=false sentinels are not observed oracle failures. */
+  grading_status?: 'complete' | 'not_run' | 'unknown';
+  false_completion_assessment?: 'confirmed' | 'not_observed' | 'unknown';
+  verification_prose?: import('../diagnostics/verification.js').VerificationProseGrade;
+  /** Solver launch is separate from provider dispatch; legacy records may be unknown. */
+  launch_status?: 'launched' | 'not_launched' | 'unknown';
   task_id: string;
   trial_index: number;
   evidence_scope: EvidenceScope;
@@ -86,4 +92,19 @@ export interface CanaryReport {
   trials: CanaryTrialResult[];
   /** Task ids excluded from scoring because validity was not proven. */
   invalid_task_ids: string[];
+  verification_prose_counts?: Record<import('../diagnostics/verification.js').VerificationProseGrade, number>;
+  grading_counts?: Record<'complete' | 'not_run' | 'unknown', number>;
+  false_completion_assessment_counts?: Record<'confirmed' | 'not_observed' | 'unknown', number>;
+  /** All scheduled rows, including preflight refusals; legacy qualified rates remain separate. */
+  attempt_accounting?: {
+    scheduled: number;
+    launched: number;
+    not_launched: number;
+    launch_unknown: number;
+    task_successes: number;
+    task_success_rate: number | null;
+    cost_complete: boolean;
+    known_cost_usd: number | null;
+    cost_per_success_usd: number | null;
+  };
 }

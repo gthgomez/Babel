@@ -308,6 +308,16 @@ describe('runAsymmetricDiffCritic early paths (C1)', () => {
 });
 
 describe('sub-agent mutation truthfulness (Astra Probe P11)', () => {
+  test('isolated and legacy unknown child effects never become parent mutation evidence', () => {
+    for (const effect_scope of [undefined, 'isolated_child', 'unknown'] as const) {
+      const log = [{ tool: 'sub_agent', target: 'child', detail: '4 steps, 2 changed',
+        effect_status: 'confirmed_change' as const, ...(effect_scope ? { effect_scope } : {}) }];
+      assert.equal(hasSubAgentWrites(log), false);
+      assert.equal(hasAnyWrites(log), false);
+      assert.equal(currentTurnHasMutation(log, 0), false);
+      assert.match(buildGateRejectionMessage(log), /0 file writes, 0 sub-agent mutations/);
+    }
+  });
   test('0 changed is never counted as a successful mutation or progress', () => {
     const noOpLog = [
       { tool: 'sub_agent', target: 'sub1', detail: '3 steps, 0 changed' },
@@ -326,6 +336,7 @@ describe('sub-agent mutation truthfulness (Astra Probe P11)', () => {
         tool: 'sub_agent',
         target: 'sub1',
         detail: '5 steps, 2 changed, attribution=child_success',
+        effect_scope: 'parent_candidate' as const,
         effect_status: 'confirmed_change' as const,
         mutation_paths: ['src/fix.ts'],
       },

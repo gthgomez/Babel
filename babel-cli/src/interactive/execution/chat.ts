@@ -61,6 +61,7 @@ function collectChangedFiles(result: {
     error?: string;
     exit_code?: number;
     effect_status?: import('../../agent/mutationTools.js').MutationEffectStatus;
+    effect_scope?: import('../../agent/mutationTools.js').MutationEffectScope;
     mutation_paths?: string[];
   }>;
 }): string[] {
@@ -72,15 +73,10 @@ function collectChangedFiles(result: {
       target: tc.target,
       error: tc.error,
       effectStatus: tc.effect_status,
+      effectScope: tc.effect_scope,
       mutationPaths: tc.mutation_paths,
     })) {
       seen.add(changedPath);
-    }
-  }
-  // Also pick up sub-agent writes from detail
-  for (const tc of result.toolCalls) {
-    if (tc.tool === 'sub_agent' && tc.detail && /[1-9]\d*\s+changed/.test(tc.detail)) {
-      // Sub-agent targets are agent labels, not file paths — skip
     }
   }
   return [...seen].sort();
@@ -377,6 +373,7 @@ export async function executeChatTask(
         tool: t.tool,
         error: t.error,
         effectStatus: t.effect_status,
+        effectScope: t.effect_scope,
         mutationPaths: t.mutation_paths,
       }),
     );

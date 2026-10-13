@@ -742,6 +742,7 @@ export class DeepInfraApiRunner implements LlmRunner {
                 notifyPhase('stream_progress', undefined, `bytes=${bytes}`);
               }
             },
+            signal,
           );
           vcrRecorder?.close();
           break;
@@ -870,6 +871,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         rawDataText = await response.text();
         if (rawDataText.length > 0) notifyPhase('first_byte');
         data = JSON.parse(rawDataText) as ChatResponse;
+        streamState.usage = data.usage ?? null;
         this.lastInvocationMetadata = buildInvocationMetadata(
           this.providerId,
           this.model,
@@ -979,29 +981,11 @@ export class DeepInfraApiRunner implements LlmRunner {
     const result = schema.safeParse(parsed);
     const validationMs = Date.now() - validationStartedAt;
 
-    const isStreaming = !!callbacks?.onChunk;
     this.lastInvocationMetadata = buildInvocationMetadata(
       this.providerId,
       this.model,
       Date.now() - startedAt,
-      isStreaming
-        ? undefined
-        : this.lastInvocationMetadata?.total_tokens
-          ? {
-              ...(this.lastInvocationMetadata.prompt_tokens !== null &&
-              this.lastInvocationMetadata.prompt_tokens !== undefined
-                ? { prompt_tokens: this.lastInvocationMetadata.prompt_tokens }
-                : {}),
-              ...(this.lastInvocationMetadata.completion_tokens !== null &&
-              this.lastInvocationMetadata.completion_tokens !== undefined
-                ? { completion_tokens: this.lastInvocationMetadata.completion_tokens }
-                : {}),
-              ...(this.lastInvocationMetadata.total_tokens !== null &&
-              this.lastInvocationMetadata.total_tokens !== undefined
-                ? { total_tokens: this.lastInvocationMetadata.total_tokens }
-                : {}),
-            }
-          : undefined,
+      streamState.usage ?? undefined,
       streamState.ttftMs,
       streamState.generationMs,
       validationMs,

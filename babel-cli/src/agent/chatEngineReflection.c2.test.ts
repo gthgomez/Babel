@@ -85,6 +85,7 @@ function makeHost(projectRoot: string): ChatEngineActionExecutorHost {
       observation: `stale ${tool} ${target}: ${reason}`,
     }),
     runPostEditStaticCheck: async () => null,
+    invalidateRepositoryContext: () => {},
   } as unknown as ChatEngineActionExecutorHost;
 }
 
