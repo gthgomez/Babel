@@ -51,6 +51,20 @@ function fallbackInput(
   }
 }
 
+test('Desktop initialization failures cannot substitute a synthesis provider or deliberation model', () => {
+  const names=['BABEL_DESKTOP_PROVIDER','DEEPSEEK_API_KEY','DEEPINFRA_API_KEY']
+  const prior=Object.fromEntries(names.map(name=>[name,process.env[name]]))
+  process.env['BABEL_DESKTOP_PROVIDER']='deepseek'
+  process.env['DEEPSEEK_API_KEY']='sk-synthetic'
+  process.env['DEEPINFRA_API_KEY']='synthetic'
+  try {
+    const policy={provider:'deepseek',providerModelId:'unsupported-selected-model'} as ResolvedModelPolicy
+    for(const factory of [resolveChatDeliberationRunner,resolveChatSynthesisRunner])assert.throws(()=>factory(null,policy))
+    delete process.env['DEEPSEEK_API_KEY']
+    assert.throws(()=>resolveChatSynthesisRunner(null,{provider:'deepseek',providerModelId:'deepseek-v4-pro'} as ResolvedModelPolicy),/DEEPSEEK_API_KEY.*not set/)
+  } finally {for(const name of names){if(prior[name]===undefined)delete process.env[name];else process.env[name]=prior[name]}}
+})
+
 test('stops obsolete provider work without emitting another task terminal', async () => {
   const stream = resolveChatFallbackOrFail(
     fallbackInput({
