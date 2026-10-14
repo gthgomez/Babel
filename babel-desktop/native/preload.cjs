@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('babelDesktop',Object.freeze({
   rebuildDevCli:()=>ipcRenderer.invoke('babel:rebuild-dev-cli'),
   setUpdateChannel:channel=>ipcRenderer.invoke('babel:set-update-channel',channel),
   listQualifiedProviders:()=>ipcRenderer.invoke('babel:list-qualified-providers'),
+  refreshModels:provider=>ipcRenderer.invoke('babel:refresh-models',provider),
   chooseCli:()=>ipcRenderer.invoke('babel:choose-cli'),
   chooseProject:()=>ipcRenderer.invoke('babel:choose-project'),
   listSessions:options=>ipcRenderer.invoke('babel:list-sessions',options),

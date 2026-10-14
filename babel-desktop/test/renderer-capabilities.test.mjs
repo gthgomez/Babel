@@ -25,7 +25,7 @@ async function renderer(diagnostics, body, handshake = 'ready') {
         refreshDiagnostics: async () => window.__info,
         listDirectory: async () => [{name: 'README.md', type: 'file'}],
         listSessions: async () => ({sessions: [{id: 'history', title: 'Saved history fixture'}], total: 1}),
-        readProviderRoute: async () => null,
+        readProviderRoute: async () => ({provider:'openrouter',model:'fixture-openrouter'}),
         openSession: async (id, {olderOffset = 0} = {}) => {
           const end = Math.max(0, 160 - olderOffset);
           const start = Math.max(0, end - 150);
@@ -37,18 +37,16 @@ async function renderer(diagnostics, body, handshake = 'ready') {
       };
     }, {diagnostics, handshake});
     await page.setContent(html);
-    if (handshake === 'ready') await page.locator('#dialog[open]').waitFor();
+    if (handshake === 'ready') await page.waitForFunction(()=>!document.querySelector('#status-detail').textContent.includes('Connecting'));
     await body(page);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 }
 
 async function connect(page) {
-  const button = page.locator('#dialog [data-action="use-live"]');
-  assert.equal(await button.isEnabled(), true);
-  await button.click();
-  await page.locator('#dialog').waitFor({state: 'hidden'});
-  assert.equal(await page.locator('#preview-badge').innerText(), 'BABEL CLI');
+  if(await page.locator('#dialog[open]').count())await page.locator('#dialog [data-action="use-live"]').click();
+  await page.locator('#dialog').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#preview-badge').innerText(),'BABEL CLI');
 }
 
 async function blockedSubmissions(page) {
@@ -81,8 +79,8 @@ test('packaged connection permits latest → older → latest history with faile
 for (const [name, diagnostics] of [['missing', undefined], ['failed', {ready: false, docker: 'unavailable'}]]) {
   test(`packaged ${name} diagnostics block keyboard and form submissions before and after connection`, async () => {
     await renderer(diagnostics, async page => {
-      await page.locator('#dialog [data-action="close-dialog"]').click();
       await blockedSubmissions(page);
+      await page.locator('#dialog [data-action="close-dialog"]').click();
       await page.locator('#preview-badge').click();
       await connect(page);
       await blockedSubmissions(page);
@@ -90,9 +88,8 @@ for (const [name, diagnostics] of [['missing', undefined], ['failed', {ready: fa
   });
 }
 
-test('healthy packaged diagnostics still require connection before a real native request', async () => {
+test('healthy packaged diagnostics enter the real harness automatically', async () => {
   await renderer({ready: true, docker: 'available'}, async page => {
-    assert.equal(await page.locator('#send-button').isDisabled(), true);
     await connect(page);
     assert.equal(await page.locator('#send-button').isEnabled(), true);
     await page.locator('#composer-input').fill('Read project documentation');
@@ -114,8 +111,8 @@ for (const handshake of ['pending', 'rejected']) {
       assert.equal(await page.evaluate(() => window.__runs.length), 0);
       if (handshake === 'pending') {
         await page.evaluate(() => window.__resolveInfo());
-        await page.locator('#dialog[open]').waitFor();
-        assert.equal(await page.locator('#send-button').isDisabled(), true);
+        await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
+        assert.equal(await page.evaluate(()=>window.__runs.length),0);
       }
     }, handshake);
   });

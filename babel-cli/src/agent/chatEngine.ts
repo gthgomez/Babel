@@ -1190,7 +1190,16 @@ export class ChatEngine {
       abortController: this.abortController,
       turnTimeoutMs: TURN_TIMEOUT_MS,
       ...(this.modelPolicy?.providerModelId
-        ? { primaryModel: this.modelPolicy.providerModelId, primaryProvider: this.modelPolicy.provider }
+        ? {
+            primaryModel: this.modelPolicy.providerModelId,
+            // Offline CLI compatibility keeps its injected/cached critic. Desktop
+            // (including local Ollama), live calls and Go still bind the provider.
+            ...(!isOfflineChatMode() || process.env['BABEL_DESKTOP_IPC'] === '1' ||
+                Boolean(process.env['BABEL_DESKTOP_PROVIDER']) ||
+                this.modelPolicy.provider === 'opencode-go'
+              ? { primaryProvider: this.modelPolicy.provider }
+              : {}),
+          }
         : {}),
       resolveDeliberationRunner: () => this.resolveDeliberationRunner(),
       providerCallbacks: this.providerRetryCallbacks({
@@ -4395,6 +4404,9 @@ export class ChatEngine {
     | DeepSeekApiRunner
     | OllamaApiRunner
     | OpenRouterApiRunner {
+    // Desktop settings admit one primary route. Legacy phase overrides loaded
+    // during CLI bootstrap cannot replace it, including after a task reset.
+    if (process.env["BABEL_DESKTOP_PROVIDER"]) return this.resolveDeliberationRunner();
     const modelName = this.modelPolicy?.provider === "opencode-go" ? undefined : resolvePhaseModelName(this._lastPhase, {
       investigateModel: this.limits.investigateModel,
       mutateModel: this.limits.mutateModel,

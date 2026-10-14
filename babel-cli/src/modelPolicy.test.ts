@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -188,6 +188,18 @@ test('stage policy routes filter disabled backends', () => {
     planning?.orderedBackends.map((backend) => backend.backendKey),
     ['scout', 'qwen3'],
   );
+});
+
+test('disabled stage primaries cannot reenter the waterfall', () => {
+  const root = createModelPolicyRoot();
+  const path = join(root, 'config', 'model-policy.json');
+  const config = JSON.parse(readFileSync(path, 'utf8'));
+  config.models.qwen3.enabled = false;
+  writeFileSync(path, JSON.stringify(config));
+  assert.deepEqual(resolveStagePolicyRoutes({ babelRoot: root })[0]?.orderedBackends.map(entry => entry.backendKey), ['step-flash']);
+  config.models['step-flash'].enabled = false;
+  writeFileSync(path, JSON.stringify(config));
+  assert.throws(() => resolveStagePolicyRoutes({ babelRoot: root }), /No .*model backends remain/);
 });
 
 test('model metadata freshness rejects missing, expired, and future-dated pricing provenance', () => {

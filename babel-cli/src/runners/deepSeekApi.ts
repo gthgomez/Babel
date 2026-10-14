@@ -799,6 +799,7 @@ export class DeepSeekApiRunner implements LlmRunner {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
         response = await fetch(API_URL, {
           method: 'POST',
+          redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
           signal: controller.signal,
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
@@ -1401,6 +1402,7 @@ export class DeepSeekApiRunner implements LlmRunner {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
         response = await fetch(API_URL, {
           method: 'POST',
+          redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
           signal: controller.signal,
           headers: {
             Authorization: `Bearer ${this.apiKey}`,

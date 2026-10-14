@@ -35,7 +35,7 @@ import {
   getValidatorTierIndex,
   isConfidenceGateEnabled,
 } from './confidenceGate.js';
-import { runWithFallback, clearRoutingCache } from './execute.js';
+import { runWithFallback, clearRoutingCache, withPipelineModelRoute } from './execute.js';
 import { withExclusiveTerminalSurface } from './ui/inputCoordinator.js';
 import { resolveMode, type ValidMode } from './cli/constants.js';
 import {
@@ -44,7 +44,7 @@ import {
   resolveExecutionProfile,
   type ExecutionProfileName,
 } from './config/executionProfiles.js';
-import { resolveFamilyModelPolicy, loadModelPolicyConfig } from './modelPolicy.js';
+import { resolveFamilyModelPolicy, resolveModelByKey, loadModelPolicyConfig } from './modelPolicy.js';
 import { connect } from 'node:net';
 import { confirmCost, ConfirmDialog } from './ui/dialog.js';
 import { isRunningInDaemon } from './daemon/client.js';
@@ -799,7 +799,19 @@ export async function runBabelPipeline(
   task: string,
   options: PipelineOptions = {},
 ): Promise<PipelineResult> {
-  const daemonEnabled = process.env['BABEL_DAEMON_ENABLED'] !== 'false' && process.env['BABEL_DAEMON_ENABLED'] !== '0';
+  const profileModel = process.env['BABEL_DESKTOP_PROVIDER'] ? process.env['BABEL_DESKTOP_MODEL_ROUTE'] : undefined;
+  if (!options.modelOverride && profileModel) options = {...options,modelOverride:profileModel};
+  if (options.modelOverride) {
+    return withPipelineModelRoute(options.modelOverride, () => runBabelPipelineLocal(task, options), {
+      ...(options.allowExpensive !== undefined ? {allowExpensive:options.allowExpensive} : {}),
+    });
+  }
+  return runBabelPipelineLocal(task, options);
+}
+
+async function runBabelPipelineLocal(task: string, options: PipelineOptions): Promise<PipelineResult> {
+  // Daemon transport does not carry the selected route or private Desktop profile.
+  const daemonEnabled = !options.modelOverride && process.env['BABEL_DESKTOP_IPC'] !== '1' && process.env['BABEL_DAEMON_ENABLED'] !== 'false' && process.env['BABEL_DAEMON_ENABLED'] !== '0';
   const isDaemonProcess = isRunningInDaemon();
 
   if (daemonEnabled && !isDaemonProcess) {
@@ -1723,7 +1735,11 @@ export async function _runBabelPipelineInternal(
       .join('\n\n');
     const javaRuntimeStatus = detectJavaRuntimeStatus();
     const gradleRuntimeStatus = detectCommandOnPath('gradle');
-    resolvedModelPolicy = resolveFamilyModelPolicy({
+    resolvedModelPolicy = options.modelOverride ? resolveModelByKey({
+      key:options.modelOverride, bindStagesToSelectedModel:true,
+      ...(options.allowExpensive === true ? {allowExpensive:true} : {}),
+      liveOnly:process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1', babelRoot:BABEL_ROOT,
+    }) : resolveFamilyModelPolicy({
       family: effectiveModel,
       ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
       ...(options.allowExpensive === true ? { allowExpensive: true } : {}),

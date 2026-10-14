@@ -1,19 +1,19 @@
-# Babel Desktop — private Windows preview
+# Babel Desktop — Windows installation
 
-This portable preview includes Babel Desktop, the authoritative Babel CLI, prompt assets, production dependencies, and Node 24.13.1. It requires Windows x64. You do not need Node, npm, a source checkout, or a separate CLI build to launch it.
+This portable package includes Babel Desktop, the authoritative Babel CLI, prompt assets, production dependencies, and Node 24.13.1. It requires Windows x64. You do not need Node, npm, a source checkout, or a separate CLI build to launch it.
 
-## Install with Setup.exe (per-user, unsigned preview)
+## Install with Setup.exe (per-user, unsigned package)
 
-The release workflow now builds and attaches the Setup.exe alongside the portable ZIP, so a published release carries both. It performs the same per-user install without manual extraction: Start Menu shortcut, upgrade with rollback, and an entry under Settings -> Apps -> Installed apps -> Babel Desktop for uninstall. It installs only for the current Windows user, requires no administrator rights, and verifies the payload SHA256 before anything is written. Checksum verification confirms the payload bytes, not the publisher: this is still an **unsigned preview** (SmartScreen will warn; see the signing note below). Silent install: run the Setup.exe with the /S switch from a command prompt.
+The release workflow now builds and attaches the Setup.exe alongside the portable ZIP, so a published release carries both. It performs the same per-user install without manual extraction: Start Menu shortcut, upgrade with rollback, and an entry under Settings -> Apps -> Installed apps -> Babel Desktop for uninstall. It installs only for the current Windows user, requires no administrator rights, and verifies the payload SHA256 before anything is written. Checksum verification confirms the payload bytes, not the publisher: this is still an **unsigned package** (SmartScreen will warn; see the signing note below). Silent install: run the Setup.exe with the /S switch from a command prompt.
 
 1. Verify the ZIP's SHA256 against the supplied SHA256SUMS.
 2. Extract the **entire** ZIP to a writable directory, including one with spaces. Keep the directory structure intact. Do not launch from inside the ZIP.
 3. Open **Babel Desktop.exe**. First launch shows setup status. Choose your project with **Open project**.
-4. Click **Configure provider**, choose DeepSeek, OpenRouter, or DeepInfra, and enter your API key in the masked input. By default Babel creates a private `.env` under the Desktop profile's `engine/config` directory, **not** in the project. Existing provider values are not overwritten. The optional **Selected project .env** choice is explicit and available only after selecting a Git repository where `.env` is untracked and Git-ignored. Project-local secrets can be read by project code and are not recommended. Do not paste credentials into chat, Git commits, screenshots or logs. Desktop does not import secrets from other apps. Existing process environment variables take precedence.
-5. Install and start Docker separately for the default `safe_repo` execution profile. Desktop does not start Docker, change Windows policy, or switch to unrestricted host execution. Project commands may need their own language tools inside the execution environment; these are not installed by this preview.
-6. Click **Recheck setup**, then **Use Babel Harness**. Credential presence is not authentication; actual provider errors remain errors. A task may send project content to your configured provider and incur charges. Review Babel's normal run confirmation and tool approvals.
+4. Open **Providers and models**, choose DeepSeek, OpenRouter, DeepInfra, or OpenCode Go, and enter your API key in the masked input. By default Babel creates a private `.env` under the Desktop profile's `engine/config` directory, **not** in the project. Existing provider values are not overwritten. The optional **Selected project .env** choice is explicit and available only after selecting a Git repository where `.env` is untracked and Git-ignored. Project-local secrets can be read by project code and are not recommended. Do not paste credentials into chat, Git commits, screenshots or logs. Desktop does not import secrets from other apps. Existing process environment variables take precedence.
+5. Install and start Docker separately for the default `safe_repo` execution profile. Desktop does not start Docker, change Windows policy, or switch to unrestricted host execution. Project commands may need their own language tools inside the execution environment; these are not installed by this build.
+6. Enable your models, choose a default, and save. The app connects to the harness automatically. Use **Recheck setup** if prerequisites need attention. Credential presence is not authentication; actual provider errors remain errors. A task may send project content to your configured provider and incur charges. Review Babel's normal run confirmation and tool approvals.
 
-Credential-free local Ollama routes do not require a cloud key. Configure a local model and route separately through Babel's CLI configuration; model reference controls in Desktop do not configure a provider.
+Credential-free Ollama routes do not require a cloud key. Start Ollama, choose Ollama in Providers and models, refresh its installed models, then enable and select a default.
 
 For diagnostics without a provider call, open Command Prompt in the extracted folder and run:
 
@@ -28,11 +28,11 @@ For diagnostics without a provider call, open Command Prompt in the extracted fo
 By default Desktop stores UI preferences under `%APPDATA%\babel-north-star-desktop`, and CLI configuration/state/cache under its `engine` directory. Nothing is written back to bundled resources. Existing CLI profiles and saved sessions elsewhere are not imported. To use a separate profile, launch:
 
 ```bat
-"Babel Desktop.exe" "--profile-dir=C:\Babel Profiles\Preview One"
-"Babel Harness.cmd" "--profile-dir=C:\Babel Profiles\Preview One" doctor --json
+"Babel Desktop.exe" "--profile-dir=C:\Babel Profiles\Test One"
+"Babel Harness.cmd" "--profile-dir=C:\Babel Profiles\Test One" doctor --json
 ```
 
-Quit by closing the Desktop window. Closing requests cancellation before the application exits; active model-task shutdown is not qualified in this preview. Restart from the same extracted directory with the same profile. Saved chats are read from Babel's own state directory.
+Quit by closing the Desktop window. Closing requests cancellation before the application exits; active model-task shutdown is not qualified in this build. Restart from the same extracted directory with the same profile. Saved chats are read from Babel's own state directory.
 
 ## Credential security and project opt-in
 
@@ -51,10 +51,10 @@ The right-hand **Runtime** panel shows the exact engine: Desktop version, CLI pa
 
 Checksum verification is not publisher authentication, and neither channel silently installs unsigned code.
 
-As of 2026-10-12 the GitHub release `v0.1.1` ships the portable ZIP and npm tarball evidence but **does not include a Setup.exe asset**; install guidance must not promise an installer that is absent from the published release. Future owner-authorized releases should attach the qualified Setup.exe produced by the packaging workflow.
+The release workflow attaches versioned Setup.exe and portable ZIP assets with checksums and build metadata. Use the assets actually listed for your chosen release; older releases may provide only the portable ZIP.
 
-This is an **unsigned private preview**, not a public release or a signed installer. Windows SmartScreen may flag an unfamiliar unsigned application. No code-signing identity or SmartScreen reputation is provided. The portable ZIP has no Start Menu entry or uninstaller; the Setup.exe provides both, plus staged upgrade and rollback. Automated in-place updates of a packaged install are not implemented. Do not disable Windows security settings to run it. If your policy blocks unsigned software, retain the artifact for review and wait for a signed distribution.
+This is an **unsigned application**. Windows SmartScreen may flag an unfamiliar unsigned application. No code-signing identity or SmartScreen reputation is provided. The portable ZIP has no Start Menu entry or uninstaller; the Setup.exe provides both, plus staged upgrade and rollback. Automated in-place Desktop updates are not implemented. Do not disable Windows security settings to run it. If your policy blocks unsigned software, retain the artifact for review and wait for a signed distribution.
 
-To remove the portable application, quit it and delete its extracted directory. Profile data persists separately; remove it only if you intentionally want to erase settings and sessions. To update, extract a newer verified preview into a separate directory, keep the same profile, and retain the old build for rollback. Cross-version profile migration is not qualified.
+To remove the portable application, quit it and delete its extracted directory. Profile data persists separately; remove it only if you intentionally want to erase settings and sessions. To update, extract a newer verified package into a separate directory, keep the same profile, and retain the old build for rollback. Cross-version profile migration is not qualified.
 
 `BUILD.json` identifies the exact source commit and runtime versions. The accompanying qualification note distinguishes tests performed from unqualified behavior. Model inference and paid provider calls are not part of bundle qualification.

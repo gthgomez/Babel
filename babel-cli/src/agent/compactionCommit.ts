@@ -1381,6 +1381,7 @@ export async function runChatEngineCompaction(
             ? 'token_threshold'
             : 'reserve_headroom';
         const mgr = await host.compactionManager.compactWithResult(host.conversation, {
+          allowAmbientProvider: false,
           model: host.resolveModel({
             ...(host.modelPolicy?.providerModelId
               ? { providerModelId: host.modelPolicy.providerModelId }

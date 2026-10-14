@@ -17,6 +17,9 @@
  * @returns {NodeJS.ProcessEnv} the same env object, for convenience
  */
 import {applyProviderRoute} from './provider-routing.mjs';
+import {isAbsolute,resolve} from 'node:path';
+
+export {applySelectedModelEnvironment} from './provider-routing.mjs';
 
 export function applyProjectCredentialScope(env, {projectCredentialRoot = null, projectRoot = null, configDirectory = null} = {}) {
   delete env.BABEL_PROJECT_CREDENTIALS_DIR;
@@ -24,5 +27,28 @@ export function applyProjectCredentialScope(env, {projectCredentialRoot = null, 
     env.BABEL_PROJECT_CREDENTIALS_DIR = projectRoot;
   }
   if (configDirectory) applyProviderRoute(env, configDirectory);
+  // Local inference needs no project credentials, including an absent project .env.
+  if (env.BABEL_DESKTOP_PROVIDER==='ollama') delete env.BABEL_PROJECT_CREDENTIALS_DIR;
   return env;
+}
+
+/** Bind installed CLI credentials to its requested root, never task text or another named project. */
+export function applyCliCredentialScope(env, {args = [], cwd = process.cwd(), preferences = {}, configDirectory = null} = {}) {
+  const separator = args.indexOf('--');
+  const options = separator < 0 ? args : args.slice(0,separator);
+  let requested = cwd, explicitRoot = false, namedProject = false;
+  for (let index=0;index<options.length;index++) {
+    const arg=options[index];
+    if(arg==='--project-root') {explicitRoot=true;requested=options[++index];}
+    else if(arg.startsWith('--project-root=')) {explicitRoot=true;requested=arg.slice('--project-root='.length);}
+    else if(arg==='--project'||arg.startsWith('--project=')||arg.startsWith('-p')) namedProject=true;
+  }
+  const valid = typeof requested==='string' && requested.length>0 && requested.length<2048 && !requested.includes('\0') && !requested.startsWith('-');
+  // Legacy plan/deep/ask positional syntax can name another project. Require
+  // an explicit root for those commands rather than guessing from their task.
+  const cwdUnambiguous = options.length===0 || ['run','interactive','doctor'].includes(options[0]);
+  const projectRoot = valid && (explicitRoot || (!namedProject&&cwdUnambiguous)) ? resolve(cwd,requested) : null;
+  const opted = preferences.projectCredentialRoot;
+  const projectCredentialRoot = typeof opted==='string' && isAbsolute(opted) ? resolve(opted) : null;
+  return applyProjectCredentialScope(env,{projectRoot,projectCredentialRoot,configDirectory});
 }

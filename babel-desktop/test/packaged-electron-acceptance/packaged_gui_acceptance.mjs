@@ -38,7 +38,8 @@ async function dismissPackagedSetupDialog(window) {
  * @returns {Promise<{connected: boolean, reason?: string}>}
  */
 async function connectLiveFromPackagedStartupDialog(window) {
-  await window.waitForSelector('#dialog[open]', {timeout: 30_000});
+  await window.waitForFunction(()=>document.querySelector('#preview-badge')?.textContent==='BABEL CLI', {timeout: 30_000});
+  if (!await window.locator('#dialog').evaluate(el=>el.open)) return {connected:true};
   const title = await window.locator('#dialog-title').innerText();
   if (!title.includes('BABEL SETUP')) {
     throw new Error(`expected packaged startup BABEL SETUP dialog, got: ${title}`);
@@ -153,9 +154,15 @@ async function main() {
 
   let app;
   try {
+    const launchEnv={...process.env};
+    for(const name of Object.keys(launchEnv))if(/(?:API_KEY|TOKEN|SECRET)$/.test(name))delete launchEnv[name];
+    delete launchEnv.BABEL_MODEL_POLICY_PATH;
+    launchEnv.USERPROFILE=profile;launchEnv.HOME=profile;
+    launchEnv.BABEL_OPENCODE_GO_HELPER=join(profile,'absent-fixture-helper.cjs');
     app = await electron.launch({
       executablePath: exe,
       args: [`--profile-dir=${profile}`],
+      env:launchEnv,
       timeout: 120_000,
     });
     const window = await app.firstWindow();
@@ -194,8 +201,9 @@ async function main() {
     checks.push('preload IPC getInfo reports packaged bundled engine');
     await window.waitForSelector('#preview-badge', {timeout: 30_000});
     const badge = await window.locator('#preview-badge').innerText();
-    if (badge !== 'REFERENCE PREVIEW') throw new Error(`unexpected preview badge: ${badge}`);
-    checks.push('renderer shows REFERENCE PREVIEW before live connection');
+    if (badge !== 'BABEL CLI') throw new Error(`unexpected harness badge: ${badge}`);
+    if (await window.locator('.reference-answer').count()) throw new Error('Packaged app must not show a simulated reference conversation');
+    checks.push('renderer starts on the real harness without simulated reference content');
 
     if (info.ready !== true || info.projectName !== 'acceptance-project') {
       throw new Error(`fixture project not connected (ready=${info.ready}, project=${info.projectName})`);
@@ -239,7 +247,7 @@ async function main() {
 
     const provider = await evaluateInPackagedWindow(window, async () => {
       const providers = await window.babelDesktop.listQualifiedProviders();
-      const saved = await window.babelDesktop.saveProviderRoute({provider: 'ollama', model: 'deepseek-v4-flash'});
+      const saved = await window.babelDesktop.saveProviderRoute({provider: 'ollama', model: 'ollama/local-fixture'});
       const route = await window.babelDesktop.readProviderRoute();
       return {
         providerCount: providers.length,
@@ -255,11 +263,19 @@ async function main() {
     checks.push('provider route saves via IPC without API credentials (ollama local route)');
     journeys.provider = {status: 'executed', note: 'route-only; no credential file or model call'};
 
+    // Exercise the renderer save transition too; this profile has a synthetic local catalog only.
+    await window.locator('[data-action="models"]').click();
+    await window.locator('#credential-provider').selectOption('ollama');
+    await window.locator('#credential-model').selectOption('ollama/local-fixture');
+    await window.locator('#dialog [data-action="save-provider-credential"]').click();
+    await window.locator('#dialog').waitFor({state:'hidden',timeout:30_000});
+    if (!await window.locator('#model-controls').innerText().then(text=>text.includes('Local acceptance fixture'))) throw new Error('Saved provider did not update renderer model selection');
+
     const harness = await connectLiveFromPackagedStartupDialog(window);
     if (!harness.connected) throw new Error('Installed history connection failed');
     journeys.connection = {status: 'executed', executionReady: info.diagnostics?.ready === true, docker: info.diagnostics?.docker ?? null};
     {
-      checks.push('startup BABEL SETUP modal connects live harness via enabled Use Babel Harness');
+      checks.push('startup automatically connects the real harness; incomplete setup remains accessible');
       await window.waitForSelector('button.session-button[data-action="session"]', {timeout: 30_000});
       await window.locator('button.session-button[data-action="session"]', {hasText: 'PACKAGED-HISTORY'}).click();
       const conv = window.locator('#conversation');
@@ -288,7 +304,7 @@ async function main() {
     await window.locator('[data-action="configure-provider"]').click();
     await window.waitForSelector('#dialog-title', {timeout: 15_000});
     const dialogTitle = await window.locator('#dialog-title').innerText();
-    if (!dialogTitle.includes('CONFIGURE AI PROVIDER')) throw new Error(`unexpected provider dialog: ${dialogTitle}`);
+    if (!dialogTitle.includes('PROVIDERS AND MODELS')) throw new Error(`unexpected provider dialog: ${dialogTitle}`);
     await window.locator('#dialog [data-action="close-dialog"].button').click();
     checks.push('provider configuration dialog opens from settings on installed renderer');
     journeys.providerUi = {status: 'executed', note: 'dialog open/cancel only; no credential entry'};

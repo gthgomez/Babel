@@ -62,7 +62,7 @@ export class OpenCodeGoError extends Error {
 }
 
 export interface OpenCodeGoRunnerOptions {
-  /** Default production source; never falls back to an environment key. */
+  /** Explicit source wins; otherwise a configured Go key selects network-secret. */
   budget?: OpenCodeGoBudget
   env?: NodeJS.ProcessEnv
   executionEnvelope?: ResolvedExecutionEnvelope
@@ -143,7 +143,8 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       throw new OpenCodeGoError('MODEL_UNAVAILABLE', `OpenCode Go does not allow model "${model}".`)
     }
     if (model === 'deepseek-v4.1-flash' && !options.budget) throw new OpenCodeGoBudgetError()
-    const credentialSource = options.credentialSource ?? 'opencode-auth-helper'
+    const credentialSource = options.credentialSource ?? (options.explicitCredential ? 'explicit-test' :
+      (options.env ?? process.env)['BABEL_OPENCODE_GO_API_KEY']?.trim() ? 'network-secret' : 'opencode-auth-helper')
     const resolvedCredential = credentialSource === 'network-secret' ? undefined : options.resolvedCredential?.trim()
     const resolution = resolvedCredential
       ? { credential: resolvedCredential }

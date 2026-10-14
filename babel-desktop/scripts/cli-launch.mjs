@@ -1,13 +1,17 @@
 // License: Apache-2.0
 import {spawn} from 'node:child_process';
+import {lstatSync,readFileSync} from 'node:fs';
 import {dirname, isAbsolute, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {bundledEnvironment} from '../app/native/runtime.mjs';
 import {resolvePackagedEngine} from '../app/native/engine-manager.mjs';
+import {applyCliCredentialScope} from '../app/native/childEnv.mjs';
+import {parsePreferences} from '../app/native/security.mjs';
 
 const runtime = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
-const profileArg = args.findIndex(arg => arg.startsWith('--profile-dir='));
+const separator = args.indexOf('--');
+const profileArg = args.findIndex((arg,index) => (separator<0||index<separator) && arg.startsWith('--profile-dir='));
 const profile = profileArg < 0 ? join(process.env.APPDATA || process.env.USERPROFILE, 'babel-north-star-desktop') : args.splice(profileArg, 1)[0].slice('--profile-dir='.length);
 if (!isAbsolute(profile)) throw new Error('--profile-dir must be an absolute directory');
 
@@ -32,6 +36,16 @@ try {
   entryPath = bundledEntry;
 }
 
-const child = spawn(nodeExe, [entryPath, ...args], {env: bundledEnvironment(profile), stdio: 'inherit', windowsHide: true, shell: false});
+const env=bundledEnvironment(profile);
+let preferences={};
+try {
+  const path=join(profile,'ui-connection.json');
+  const info=lstatSync(path);
+  if(info.isFile()&&!info.isSymbolicLink()&&info.nlink===1&&info.size<=64*1024) {
+    preferences=parsePreferences(JSON.parse(readFileSync(path,'utf8')));
+  }
+} catch { /* An absent or unsafe preference file never grants project credential access. */ }
+applyCliCredentialScope(env,{args,cwd:process.cwd(),preferences,configDirectory:env.BABEL_CONFIG_DIR});
+const child = spawn(nodeExe, [entryPath, ...args], {env, stdio: 'inherit', windowsHide: true, shell: false});
 child.on('error', error => { console.error(`Babel CLI could not start: ${error.message}`); process.exitCode = 1; });
 child.on('close', code => { process.exitCode = code ?? 1; });

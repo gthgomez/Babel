@@ -105,6 +105,7 @@ export function resolveChatDeliberationRunner(
       try {
         runner = new DeepSeekApiRunner(modelId)
       } catch (err) {
+        if (process.env['BABEL_DESKTOP_PROVIDER']) throw err
         if (!isOfflineChatMode() && process.env['BABEL_DESKTOP_PROVIDER'] !== 'deepseek') {
           throw new Error(
             'Cannot start live chat: DeepSeek runner is unavailable. ' +
@@ -284,13 +285,15 @@ export function resolveChatSynthesisRunner(
         )
       try {
         runner = new OllamaApiRunner(modelId)
-      } catch {
+      } catch (err) {
+        if (process.env['BABEL_DESKTOP_PROVIDER']) throw err
         runner = new DeepInfraApiRunner(resolveFallbackModelId())
       }
     } else if (provider === 'deepinfra' && modelId) {
       try {
         runner = new DeepInfraApiRunner(modelId)
-      } catch {
+      } catch (err) {
+        if (process.env['BABEL_DESKTOP_PROVIDER']) throw err
         runner = new DeepInfraApiRunner(resolveFallbackModelId())
       }
     } else if (provider === 'deepseek' && modelId) {
@@ -301,7 +304,8 @@ export function resolveChatSynthesisRunner(
       }
       try {
         runner = new DeepSeekApiRunner(modelId)
-      } catch {
+      } catch (err) {
+        if (process.env['BABEL_DESKTOP_PROVIDER']) throw err
         if (!offline && process.env['BABEL_DESKTOP_PROVIDER'] !== 'deepseek')
           throw new Error(
             'Cannot start live chat synthesis: DeepSeek runner is unavailable. Set DEEPSEEK_API_KEY in your environment.',
@@ -679,6 +683,10 @@ export async function* resolveChatFallbackOrFail(
   }
   if (turn > 0) {
     yield input.failed(err.message)
+    return null
+  }
+  if (process.env['BABEL_DESKTOP_PROVIDER']) {
+    yield input.failed(`${err.message} [LIVE_MODEL_POLICY] The selected Desktop route failed; automatic provider or model substitution is disabled. Retry or choose another enabled model in Settings.`)
     return null
   }
   if (input.modelPolicy?.provider === 'opencode-go') {

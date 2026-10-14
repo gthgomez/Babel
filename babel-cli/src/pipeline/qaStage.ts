@@ -2,7 +2,7 @@
  * qaStage.ts — Stage 3 QA Review processing
  *
  * Extracted from pipeline.ts (P1.2 decomposition). Encapsulates:
- * - Adversarial QA gate — second-pass review with a different model
+ * - Adversarial QA gate — second-pass review with a different enabled model
  * - QA rejection state population
  *
  * The QA model invocation itself stays in pipeline.ts (tightly coupled to
@@ -22,8 +22,8 @@ import {
 } from '../agent/lanes/adversarialQALane.js';
 import type { AdversarialQAInput } from '../agent/lanes/adversarialQALane.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
-import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
-import { LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS } from '../modelPolicy.js';
+import {runWithFallback, getPipelineSelectedModel, withPipelineModelRoute} from '../execute.js';
+import {getAvailableModels, resolveStagePolicyRoutes, isLiveModelId} from '../modelPolicy.js';
 import { QaVerdictSchema } from '../schemas/agentContracts.js';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
 import type { z } from 'zod';
@@ -66,29 +66,32 @@ export async function runAdversarialQaGate(
     return { passed: true };
   }
 
+  const primaryModel = getPipelineSelectedModel();
+  const legacyOffline = process.env['BABEL_PIPELINE_V9_OFFLINE'] === '1' && !primaryModel;
   const adversaryModel = pickAdversarialModel(originalQaModel);
-  if (!adversaryModel) {
-    console.warn('[ADVERSARIAL_QA] No adversarial model available; skipping adversarial review.');
-    return { passed: true };
+  if (legacyOffline && !adversaryModel) {
+    console.warn('[ADVERSARIAL_QA] No adversarial model available; skipping legacy offline review.');
+    return {passed:true};
   }
-
-  const modelId = ADVERSARIAL_MODEL_ID[adversaryModel] ?? adversaryModel;
-  logDetail(`Running adversarial QA review with model: ${adversaryModel}`);
+  const modelId = ADVERSARIAL_MODEL_ID[adversaryModel ?? ''] ?? adversaryModel ?? '';
 
   const advInput: AdversarialQAInput = {
     swePlan,
     originalQaVerdict: originalVerdict,
     rawTask,
-    originalQaModel,
+    originalQaModel:primaryModel ?? originalQaModel,
   };
   const advPrompt = buildAdversarialReviewPrompt(advInput);
 
   try {
-    const advRunner =
-      process.env['BABEL_PIPELINE_V9_OFFLINE'] === '1'
-        ? new DeepInfraApiRunner(modelId)
-        : new OpenRouterApiRunner(LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1]);
-    const advVerdict = await advRunner.execute(advPrompt, QaVerdictSchema);
+    const originalBackend = primaryModel ?? (legacyOffline ? undefined : resolveStagePolicyRoutes({liveOnly:true}).find(route => route.stage === 'qa')?.primaryBackendKey);
+    const reviewBackend = legacyOffline ? undefined : getAvailableModels().find(({key,entry}) =>
+      key !== originalBackend && entry.enabled !== false && entry.provider === 'openrouter' && isLiveModelId(key));
+    if (!legacyOffline && !reviewBackend) throw new Error('Independent adversarial review requires another enabled OpenRouter model. Enable a second model before using adversarial review.');
+    logDetail(`Running independent adversarial QA with model: ${reviewBackend?.key ?? adversaryModel}`);
+    const advVerdict = legacyOffline
+      ? await new DeepInfraApiRunner(modelId).execute(advPrompt, QaVerdictSchema)
+      : await withPipelineModelRoute(reviewBackend!.key, () => runWithFallback(advPrompt, QaVerdictSchema, {stage:'qa',schemaName:'AdversarialQaVerdict',fallbackPolicy:'primary_only'}));
 
     // Write adversarial verdict to evidence directory
     try {
@@ -159,6 +162,7 @@ export async function runAdversarialQaGate(
     );
     return {
       passed: false,
+      allFailures: [{tag:'EVIDENCE-GATE', confidence:5, condition:`Adversarial review unavailable: ${message}`, fix_hint:'Enable a qualified independent review model and retry.'}],
       reason: `Adversarial QA runner failed: ${message}`,
       qaRejections: [`[adversarial_qa] Adversarial review unavailable: ${message}`],
       proposedFixStrategy: 'Re-run with a different adversarial model or fix the underlying error.',

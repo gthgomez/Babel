@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -81,6 +81,45 @@ function makeSwePlan(overrides: Partial<SwePlan> = {}): SwePlan {
 function makePassVerdict(): QaVerdictPass {
   return { verdict: 'PASS', overall_confidence: 4, notes: 'Looks correct.' };
 }
+
+test('adversarial review requires a different enabled model and records its route', async () => {
+  const {withPipelineModelRoute} = await import('../execute.js');
+  const {runAdversarialQaGate} = await import('./qaStage.js');
+  const previousKey = process.env['OPENROUTER_API_KEY'];
+  const previousPolicy = process.env['BABEL_MODEL_POLICY_PATH'];
+  const root = mkdtempSync(join(tmpdir(), 'babel-adversarial-route-'));
+  const policy = JSON.parse(readFileSync(new URL('../../../config/model-policy.json',import.meta.url),'utf8'));
+  for(const [key,entry] of Object.entries(policy.models) as [string,{enabled:boolean}][]) entry.enabled=key==='deepseek-v4-flash-openrouter';
+  const policyPath=join(root,'model-policy.json');
+  writeFileSync(policyPath,JSON.stringify(policy));
+  process.env['BABEL_MODEL_POLICY_PATH']=policyPath;
+  const models: string[] = [];
+  process.env['OPENROUTER_API_KEY']='synthetic';
+  process.env['BABEL_ADVERSARIAL_REVIEW']='true';
+  delete process.env['BABEL_PIPELINE_V9_OFFLINE'];
+  globalThis.fetch = (async (_url, init) => {
+    models.push(JSON.parse(String(init?.body)).model);
+    return new Response(`data: ${JSON.stringify({model:'deepseek/deepseek-v4-pro',choices:[{delta:{content:JSON.stringify(makePassVerdict())}}]})}\n\ndata: [DONE]\n\n`,{status:200});
+  }) as typeof fetch;
+  try {
+    const result = await withPipelineModelRoute('deepseek-v4-flash-openrouter', () => runAdversarialQaGate(makeSwePlan(),makePassVerdict(),'public fixture',1,root,()=>{}));
+    assert.equal(result.passed,false);
+    assert.match(result.reason??'',/another enabled OpenRouter model/);
+    assert.equal(result.allFailures?.length,1);
+    assert.deepEqual(models,[]);
+    policy.models['deepseek-v4-pro-openrouter'].enabled=true;
+    writeFileSync(policyPath,JSON.stringify(policy));
+    const logs:string[]=[];
+    const allowed=await withPipelineModelRoute('deepseek-v4-flash-openrouter', () => runAdversarialQaGate(makeSwePlan(),makePassVerdict(),'public fixture',1,root,message=>logs.push(message)));
+    assert.equal(allowed.passed,true);
+    assert.deepEqual(models,['deepseek/deepseek-v4-pro']);
+    assert.match(logs.join('\n'),/deepseek-v4-pro-openrouter/);
+  } finally {
+    if(previousKey === undefined) delete process.env['OPENROUTER_API_KEY']; else process.env['OPENROUTER_API_KEY']=previousKey;
+    if(previousPolicy === undefined) delete process.env['BABEL_MODEL_POLICY_PATH']; else process.env['BABEL_MODEL_POLICY_PATH']=previousPolicy;
+    rmSync(root,{recursive:true,force:true});
+  }
+});
 
 function makeRejectVerdict(): QaVerdictReject {
   return {

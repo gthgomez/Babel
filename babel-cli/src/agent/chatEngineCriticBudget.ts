@@ -7,6 +7,7 @@ import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
+import {OllamaApiRunner} from '../runners/ollamaApi.js';
 import type { BlockedReport } from '../schemas/agentContracts.js';
 import {
   isSweChatProfileEnabled,
@@ -341,6 +342,18 @@ export function resolveOrCreateCriticRunner(
     }
     return { runner, cache: runner }
   }
+  // Explicit provider selection wins over model-name heuristics and ambient keys.
+  if (primaryProvider && primaryProvider !== 'openrouter') {
+    const runner = primaryProvider === 'deepseek'
+      ? new DeepSeekApiRunner(modelId)
+      : primaryProvider === 'deepinfra'
+        ? new DeepInfraApiRunner(modelId)
+        : primaryProvider === 'ollama'
+          ? new OllamaApiRunner(modelId)
+          : null;
+    if (!runner) throw new Error(`[LIVE_MODEL_POLICY] Unsupported critic provider "${primaryProvider}"; refusing provider substitution.`);
+    return {runner,cache:runner};
+  }
   if (cached) return { runner: cached, cache: cached };
   if (!isOfflineChatMode()) assertLiveModelId(modelId, 'live chat diff critic');
   const lower = modelId.toLowerCase();
@@ -381,7 +394,7 @@ export function resolveOrCreateCriticProRunner(
   flashFallback: () => CriticRunner,
   primaryProvider?: string,
 ): { runner: CriticRunner; cache: CriticRunner } {
-  if (primaryProvider === 'opencode-go') {
+  if (primaryProvider) {
     return resolveOrCreateCriticRunner(modelId, cached, flashFallback, primaryProvider)
   }
   if (cached) return { runner: cached, cache: cached };

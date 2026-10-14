@@ -86,6 +86,8 @@ export interface CompactionOptions {
   signal?: AbortSignal;
   /** Optional injected summarization provider (selected route; no ambient fallback). */
   summarizationProvider?: LlmCompactionProvider;
+  /** Provider-aware Chat callers require an admitted route and forbid ambient fallback. */
+  allowAmbientProvider?: boolean;
   /** Bounded provider lifecycle receipts for the summarizer inference. */
   callbacks?: RunnerCallbacks;
   /** Billed inference usage is recorded even if its summary is later discarded. */
@@ -407,11 +409,12 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
    * to another provider's API. Returns null when no coherent target exists;
    * the caller then falls back to heuristic truncation instead of guessing.
    */
-  private resolveCompactionTarget(options: { model?: string }): {
+  private resolveCompactionTarget(options: { model?: string; allowAmbientProvider?: boolean }): {
     apiKey: string;
     baseUrl: string;
     model: string;
   } | null {
+    if (options.allowAmbientProvider === false) return null;
     const { baseUrl } = this.resolveCompactionConfig();
     const isAnthropic = baseUrl.includes('anthropic.com');
 
@@ -688,6 +691,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     try {
       const response = await fetch(baseUrl, {
         method: 'POST',
+        redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
         signal: controller.signal,
         headers: {
           'Authorization': `Bearer ${apiKey}`,
@@ -832,6 +836,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     try {
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
+        redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
         signal: controller.signal,
         headers: {
           'x-api-key': apiKey,
@@ -1062,6 +1067,7 @@ export class CompactionManager {
 /**
  * Resolve the model ID for the compaction summarizer (H1 provider-aware).
  * Priority: explicit override > BABEL_COMPACTION_MODEL > providerModelId > default.
+ * Desktop-profile execution pins the admitted current provider model, including CLI overrides.
  * Never pass a bare model-family label (e.g. "DeepSeek") as the API model id.
  */
 /**
@@ -1075,7 +1081,10 @@ export function resolveCompactionSummarizationProvider(input: {
 }): LlmCompactionProvider | null {
   const explicitKey = process.env['BABEL_COMPACTION_API_KEY']?.trim();
   const explicitBase = process.env['BABEL_COMPACTION_API_BASE']?.trim();
-  if (explicitKey && explicitBase) {
+  // Bootstrap may reload auxiliary overrides from a private profile after the
+  // launcher sanitizes its environment. Desktop routes use only their admitted
+  // provider endpoint and credential, including after that bootstrap.
+  if (!process.env['BABEL_DESKTOP_PROVIDER'] && explicitKey && explicitBase) {
     return {
       apiKey: explicitKey,
       baseUrl: explicitBase,
@@ -1117,6 +1126,7 @@ export function resolveCompactionModelId(input: {
   providerModelId?: string | null;
   family?: string | null;
 }): string {
+  if (process.env['BABEL_DESKTOP_PROVIDER'] && input.providerModelId?.trim()) return input.providerModelId.trim();
   if (input.explicitModel && input.explicitModel.trim()) {
     return input.explicitModel.trim();
   }

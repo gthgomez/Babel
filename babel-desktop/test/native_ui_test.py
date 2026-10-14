@@ -14,6 +14,7 @@ def main():
           window.__requests=[];
           window.babelDesktop={
             getInfo:async()=>({cliName:'index.js',projectName:'fixture-project',ready:true}),
+            readProviderRoute:async()=>({provider:'openrouter',model:'fixture-route'}),
             listDirectory:async()=>[{name:'README.md',type:'file'}],
             readFile:async()=>({text:'<script>not executable</script>',truncated:false}),
             onEvent:callback=>{window.__emit=callback;},
@@ -22,13 +23,13 @@ def main():
           };
         }''')
         page.set_content((ROOT/'dist/index.html').read_text())
-        page.locator('#preview-badge').click()
-        page.locator('[data-action="use-live"]').click()
+        page.wait_for_function("document.querySelector('#preview-badge').textContent === 'BABEL CLI'")
         assert page.locator('#preview-badge').inner_text()=='BABEL CLI'
         assert page.locator('.reference-answer').count()==0
         assert page.locator('#context-value').inner_text()=='—'
         assert page.locator('.model-option').count()==1
-        assert page.locator('.tool-toggle:disabled').count()==5
+        assert page.locator('.model-option').inner_text()=='openrouter · fixture-route'
+        assert page.locator('[role="switch"]').count()==0
         checks.append('live mode removes fixtures and leaves unreported telemetry unknown')
         page.locator('[data-action="file"]').click()
         assert '<script>not executable</script>' in page.locator('#dialog-content').inner_text()
@@ -82,7 +83,7 @@ def main():
         }''')
         page.locator('[data-action="settings"]').click()
         page.locator('[data-action="configure-provider"]').click()
-        assert 'CONFIGURE AI PROVIDER' in page.locator('#dialog-title').inner_text()
+        assert 'PROVIDERS AND MODELS' in page.locator('#dialog-title').inner_text()
         page.locator('#dialog [data-action="close-dialog"].button').click()
         assert page.locator('#dialog').is_hidden()
         checks.append('provider dialog can cancel without saving')
@@ -125,8 +126,7 @@ def main():
           window.babelDesktop.readProviderRoute = async () => ({provider:'deepseek',model:'deepseek-v4-pro'});
         }''')
         page.set_content((ROOT/'dist/index.html').read_text())
-        page.locator('#preview-badge').click()
-        page.locator('[data-action="use-live"]').click()
+        page.wait_for_function("document.querySelector('#preview-badge').textContent === 'BABEL CLI'")
         page.locator('button.session-button[data-action="session"]', has_text='Paged chat').click()
         conv = page.locator('#conversation')
         assert 'm-159' in conv.inner_text()

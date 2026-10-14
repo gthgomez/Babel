@@ -73,14 +73,17 @@ test('workspace reader rejects traversal, secrets, binary files and symlink esca
 test('read-only child transport emits fixture events and rejects concurrent execution',async()=>{
  const {BabelChild}=await load('child');assert.equal(typeof BabelChild,'function');
  const events=[];const entry=fileURLToPath(new URL('./fixture-cli.mjs',import.meta.url));
- const child=new BabelChild({executable:process.execPath,entry,projectRoot:tmpdir()});
+ const child=new BabelChild({executable:process.execPath,entry,projectRoot:tmpdir(),env:(await load('childEnv')).applySelectedModelEnvironment({BABEL_COMPACTION_MODEL:'saved-default',BABEL_DIFF_CRITIC_MODEL:'saved-default'},{modelId:'deepseek/deepseek-v4-flash-0731'})});
  await new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(new Error('Fixture child failed to finish')),4000);
-  child.start({runId:'test-run',task:'Read a fixture',mode:'chat'},packet=>{events.push(packet);if(packet.kind==='exit'){clearTimeout(timer);resolve();}});
+  child.start({runId:'test-run',task:'Read a fixture',mode:'chat',model:'selected-model'},packet=>{events.push(packet);if(packet.kind==='exit'){clearTimeout(timer);resolve();}});
   assert.throws(()=>child.start({runId:'two',task:'another',mode:'chat'},()=>{}),/already running/);
  });
  assert.equal(child.busy,false);
  assert.ok(events.some(p=>p.kind==='event'&&p.event.type==='assistant_chunk'));
+ assert.equal(events.find(p=>p.event?.type==='fixture_environment')?.event.daemonEnabled,'false');
+ assert.equal(events.find(p=>p.event?.type==='fixture_route')?.event.compactionModel,'deepseek/deepseek-v4-flash-0731');
+ assert.equal(events.find(p=>p.event?.type==='fixture_route')?.event.criticModel,'deepseek/deepseek-v4-flash-0731');
  assert.ok(events.every(p=>p.runId==='test-run'));
  assert.equal(events.at(-1).code,0);
 });

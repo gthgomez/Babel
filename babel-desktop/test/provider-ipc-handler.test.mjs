@@ -2,7 +2,7 @@
 // Real registered callback/import evidence with isolated Electron lifecycle bindings.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync, mkdtempSync, rmSync} from 'node:fs';
+import {readFileSync, mkdtempSync, rmSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {runInNewContext} from 'node:vm';
@@ -10,6 +10,7 @@ import {saveProviderCredential} from '../native/credentials.mjs';
 const FIXTURE_VALUE = 'BabelTestCredentialPlaceholder0000';
 
 async function registeredHandler(source, config, channel = 'babel:save-provider-credential', lifecycle = {}) {
+  writeFileSync(join(config,'desktop-model-catalog.json'),JSON.stringify({models:[{id:'ollama/local-fixture',provider:'ollama',modelId:'local-fixture',label:'Local fixture',enabled:true}]}));
   const channels = Array.isArray(channel) ? channel : [channel];
   const callbacks = channels.map(name => {
     const callback = source.match(new RegExp(`handle\\('${name}',([\\s\\S]+?)\\n  \\}\\);`))?.[1];
@@ -48,7 +49,7 @@ test('registered route save rejects concurrent connection changes until persiste
     const preferences = {projectRoot: null, projectCredentialRoot: null};
     saveProviderCredential({provider: 'deepseek', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
     const [handler, legacy] = await registeredHandler(source, config, ['babel:save-provider-route', 'babel:save-provider-credential'], {preferences, savePreferences: () => persisted});
-    const options = {provider: 'ollama', model: 'deepseek-v4-flash', scope: 'private', apiKey: ''};
+    const options = {provider: 'ollama', model: 'ollama/local-fixture', scope: 'private', apiKey: ''};
     const first = handler(options);
     const releaseDeadline = setTimeout(release, 50);
     try {
@@ -83,7 +84,7 @@ test('registered legacy handler restores the last persisted scope after preferen
     const handler = await registeredHandler(source, config, 'babel:save-provider-credential', {
       preferences, savePreferences: async () => { throw new Error('Fixture preferences rejected'); },
     });
-    await assert.rejects(() => handler({provider: 'ollama', model: 'deepseek-v4-flash', scope: 'project', apiKey: ''}), /Fixture preferences rejected/);
+    await assert.rejects(() => handler({provider: 'ollama', model: 'ollama/local-fixture', scope: 'project', apiKey: ''}), /Fixture preferences rejected/);
     assert.equal(preferences.projectCredentialRoot, null);
   } finally { rmSync(config, {recursive: true, force: true}); }
 });

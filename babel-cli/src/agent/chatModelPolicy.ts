@@ -70,6 +70,12 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const requestedBackendEntry = requestedBackendKey
     ? configuredModels[requestedBackendKey]
     : undefined;
+  const assertSelectedProvider = (provider: string): void => {
+    if (desktopProvider && provider !== desktopProvider) {
+      throw new Error('The requested model does not belong to the selected provider. Choose its provider in Desktop Settings before running this profile.');
+    }
+  };
+  if (requestedBackendEntry) assertSelectedProvider(requestedBackendEntry.provider);
   const requestedModelIsBackendKey = Boolean(requestedBackendEntry);
   // Explicit opencode requests skip the DeepSeek-only live assertion: naming
   // the backend key IS the opt-in (operator supplies OPENCODE_API_KEY).
@@ -81,6 +87,7 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const policy = requestedModelIsBackendKey
     ? resolveModelByKey({
         key: requestedBackendKey!,
+        bindStagesToSelectedModel: true,
         ...(explicitOpenCodeRequest || explicitGoRequest || desktopProvider === 'deepseek' || desktopProvider === 'deepinfra'
           ? {}
           : { liveOnly: !offline }),
@@ -94,19 +101,7 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
         ...policyRootOptions,
       });
 
-  if (desktopProvider === 'deepinfra' || desktopProvider === 'ollama') {
-    policy.provider = desktopProvider;
-    policy.stagePolicies = policy.stagePolicies.map(stage => ({
-      ...stage,
-      primaryProvider: desktopProvider,
-    }));
-  } else if (desktopProvider === 'deepseek') {
-    policy.provider = 'deepseek';
-    policy.stagePolicies = policy.stagePolicies.map(stage => ({
-      ...stage,
-      primaryProvider: 'deepseek',
-    }));
-  }
+  assertSelectedProvider(policy.provider);
 
   if (explicitGoRequest) {
     const backend = policy.waterfall[0]!;

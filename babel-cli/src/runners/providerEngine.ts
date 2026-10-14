@@ -96,7 +96,8 @@ function createAdapter(options: ProviderEngineOptions): RawLlmRunner {
         ...(options.budget ? { budget: options.budget } : {}),
         ...(options.env ? { env: options.env } : {}),
         ...(options.executionEnvelope ? { executionEnvelope: options.executionEnvelope } : {}),
-        credentialSource: options.credentialSource ?? (options.explicitCredential ? 'explicit-test' : 'opencode-auth-helper'),
+        credentialSource: options.credentialSource ?? (options.explicitCredential ? 'explicit-test' :
+          (options.env ?? process.env)['BABEL_OPENCODE_GO_API_KEY']?.trim() ? 'network-secret' : 'opencode-auth-helper'),
         ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}),
         ...(options.benchmarkRunId ? { benchmarkRunId: options.benchmarkRunId } : {}),
         ...(options.requestTimeoutMs ? { requestTimeoutMs: options.requestTimeoutMs } : {}),

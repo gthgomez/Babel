@@ -1,8 +1,8 @@
 {
   "name": "babel-north-star-desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
-  "description": "North Star desktop shell for the Babel coding agent",
+  "description": "Desktop workspace for the Babel coding-agent harness",
   "type": "module",
   "main": "native/main.mjs",
   "license": "Apache-2.0",

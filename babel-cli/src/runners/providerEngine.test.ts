@@ -7,6 +7,23 @@ import { OpenCodeGoError } from './openCodeGoApi.js'
 
 const schema = z.object({ ok: z.boolean() })
 
+test('Go provider uses an explicitly supplied environment credential without an auth helper', async (t) => {
+  const {mkdtemp,rm,writeFile}=await import('node:fs/promises')
+  const {join}=await import('node:path')
+  const {tmpdir}=await import('node:os')
+  const {OpenCodeGoBudget}=await import('./openCodeGoBudget.js')
+  const dir=await mkdtemp(join(tmpdir(),'babel-go-selected-credential-'))
+  t.after(()=>rm(dir,{recursive:true,force:true}))
+  const helper=join(dir,'rejected-helper.cjs')
+  await writeFile(helper,'process.exit(17)\n')
+  const previousHelper=process.env['BABEL_OPENCODE_GO_HELPER']
+  process.env['BABEL_OPENCODE_GO_HELPER']=helper
+  t.after(()=>{if(previousHelper===undefined)delete process.env['BABEL_OPENCODE_GO_HELPER'];else process.env['BABEL_OPENCODE_GO_HELPER']=previousHelper})
+  assert.doesNotThrow(()=>createProviderRunner({provider:'opencode-go',modelId:'deepseek-v4.1-flash',
+    env:{BABEL_OPENCODE_GO_API_KEY:'synthetic',BABEL_OPENCODE_GO_HELPER:helper},
+    budget:new OpenCodeGoBudget({statePath:join(dir,'budget.json'),jobId:'desktop-credential',limitUsd:1})}))
+})
+
 test('ProviderEngine keeps OpenAI model and sampling controls in its protocol body', async (t) => {
   const priorFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = priorFetch })

@@ -1,3 +1,4 @@
+import {modeUnavailableReason} from '../src/core.mjs';
 import {app,BrowserWindow,dialog,ipcMain,protocol,session,shell} from 'electron';
 import {readFileSync} from 'node:fs';
 import {readFile,writeFile,rename,mkdir,stat,realpath} from 'node:fs/promises';
@@ -11,13 +12,13 @@ import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
 import {hasProviderCredential, saveProviderCredential} from './credentials.mjs';
 import {saveDesktopProviderRoute} from './provider-route-save.mjs';
-import {applyProjectCredentialScope} from './childEnv.mjs';
+import {applyProjectCredentialScope,applySelectedModelEnvironment} from './childEnv.mjs';
 import {resolveEngineIdentity} from './identity.mjs';
 import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,runDevelopmentRebuild,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
 import {parseBuildMetadata} from './identity.mjs';
 import {readActiveEngine, writeActiveEngine} from './engine-manager.mjs';
 import {checkPackagedCliUpdate, installPreviewSourceBuild, installStableReleaseArchive, resolveBundledNpmCli} from './engine-artifact.mjs';
-import {qualifiedProviders, readProviderRoute, saveProviderRoute, validateProviderRoute} from './provider-routing.mjs';
+import {qualifiedProviders, readProviderRoute, saveProviderRoute, validateProviderRoute,refreshModelCatalog} from './provider-routing.mjs';
 import {listSavedChats,readSavedChat} from './sessions.mjs';
 import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose} from './lifecycle.mjs';
 
@@ -93,6 +94,7 @@ async function getInfo(){
   return {
     cliName:cliEntry?basename(cliEntry):null,
     projectName:preferences.projectRoot?basename(preferences.projectRoot):null,
+    projectRoot:preferences.projectRoot,
     ready,
     officialCliLabel:official.label,
     officialCliReady:official.ready,
@@ -278,7 +280,7 @@ async function start(){
     }finally{updateBusy=false;}
   }));
   handle('babel:choose-cli',()=>withNativeDialog(()=>withConnectionChange(async()=>{
-    if(app.isPackaged)throw new Error('This preview uses its bundled CLI. Other executable entries are available only in source builds.');
+    if(app.isPackaged)throw new Error('Babel Desktop uses its bundled CLI. Other executable entries are available only in source builds.');
     const selection=await dialog.showOpenDialog(window,{title:'Select your trusted Babel build: babel-cli/dist/index.js',properties:['openFile'],filters:[{name:'JavaScript entry point',extensions:['js','mjs','cjs']}]});
     if(selection.canceled) return getInfo();
     const selected=await realpath(selection.filePaths[0]);
@@ -286,7 +288,8 @@ async function start(){
     if(consent.response!==1)return getInfo();
     preferences.cliEntry=selected;await savePreferences();return getInfo();
   })));
-  handle('babel:list-qualified-providers',()=>qualifiedProviders());
+  handle('babel:list-qualified-providers',()=>qualifiedProviders(runtimeEnvironment().BABEL_CONFIG_DIR));
+  handle('babel:refresh-models',provider=>withConnectionChange(()=>refreshModelCatalog({provider,configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR})));
   handle('babel:read-provider-route',()=>readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR));
   handle('babel:save-provider-route',async options=>{
     return withConnectionChange(async()=>{
@@ -306,7 +309,7 @@ async function start(){
       throw new Error('Select a project before choosing project-local credentials.');
     }
     const configDirectory=runtimeEnvironment().BABEL_CONFIG_DIR;
-    const route=validateProviderRoute({provider:options.provider, model:options.model});
+    const route=validateProviderRoute({provider:options.provider, model:options.model},configDirectory);
     const descriptor=qualifiedProviders().find(entry=>entry.id===route.provider);
     const requiresKey=Boolean(descriptor?.requiresApiKey);
     const apiKey=typeof options.apiKey==='string'?options.apiKey:'';
@@ -387,10 +390,16 @@ async function start(){
     if (route?.model && !runRequest.model) {
       runRequest.model = route.model;
     }
+    if(!route)throw new Error('Choose a provider and default model in Settings before sending a task.');
+    const unavailableMode=modeUnavailableReason(runRequest.mode,route.provider);
+    if(unavailableMode)throw new Error(unavailableMode);
+    const models=qualifiedProviders(runtimeEnvironment().BABEL_CONFIG_DIR).find(p=>p.id===route.provider)?.routes??[];
+    const selectedModel=models.find(model=>model.id===runRequest.model&&model.enabled!==false);
+    if(!selectedModel)throw new Error('The selected model is disabled or belongs to another provider. Choose an enabled model.');
     buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
     const consent = await withNativeDialog(() => dialog.showMessageBox(window, {type:'question', title:'Run with your existing Babel CLI?', message:`Start a ${request.mode} run with Babel?`, detail:`Project: ${preferences.projectRoot}\nCLI: ${cliEntry}\n\nTask: ${request.task.slice(0,1200)}${request.task.length>1200?'…':''}\n\nBabel may read and change files in this project, run commands, and send project content to your configured model provider. Approvals appear in this window. Stop ends the run.`, buttons:['Cancel','Run Babel'], defaultId:0, cancelId:0, noLink:true}));
     if (consent.response !== 1) return {started:false};
-    runner = new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:preferences.projectRoot, env:runtimeEnvironment(), inheritEnv:false});
+    runner = new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:preferences.projectRoot, env:applySelectedModelEnvironment(runtimeEnvironment(),selectedModel), inheritEnv:false});
     runner.start(runRequest, packet => {if(window&&!window.isDestroyed()) window.webContents.send('babel:event', packet);});
     return {started:true};
     }finally{runAdmission=false;}
