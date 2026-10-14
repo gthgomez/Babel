@@ -84,7 +84,7 @@ test('native startup is a real harness and provider save makes the selected rout
     await page.evaluate(() => {
       window.__runs=[]; window.__saved=null;
       window.babelDesktop={
-        getInfo:async()=>({packaged:true,ready:true,officialCliReady:true,projectName:'test-project',diagnostics:{ready:true,node:'ready',resources:'ready',provider:'configured',docker:'available'}}),
+        getInfo:async()=>({packaged:true,ready:true,officialCliReady:true,projectName:'test-project',projectCredentialsSelected:true,diagnostics:{ready:true,node:'ready',resources:'ready',provider:'configured',docker:'available'}}),
         refreshDiagnostics:async()=>window.babelDesktop.getInfo(),
         listDirectory:async()=>[{name:'README.md',type:'file'}],listSessions:async()=>({sessions:[],total:0}),
         listQualifiedProviders:async()=>[{id:'openrouter',label:'OpenRouter',requiresApiKey:true,routes:[{id:'openrouter/model-a',label:'Model A',enabled:true},{id:'openrouter/model-b',label:'Model B',enabled:true}]}],
@@ -102,6 +102,7 @@ test('native startup is a real harness and provider save makes the selected rout
     assert.equal(await page.locator('#top-context').innerText(),'—');
     assert.equal(await page.getByRole('switch').count(),0);
     await page.locator('[data-action="models"]').click();
+    assert.equal(await page.locator('#credential-scope').inputValue(),'project');
     await page.getByLabel('Default model',{exact:true}).selectOption('openrouter/model-b');
     await page.getByRole('button',{name:'Save provider',exact:true}).click();
     await page.locator('#dialog').waitFor({state:'hidden'});
@@ -115,6 +116,13 @@ test('native startup is a real harness and provider save makes the selected rout
     assert.equal(request.model,'openrouter/model-b');
     assert.equal(request.mode,'chat');
     assert.deepEqual(await page.evaluate(()=>window.__saved.options.enabledModels),['openrouter/model-a','openrouter/model-b']);
+    await page.locator('[data-action="models"]').click();
+    assert.equal(await page.locator('#credential-scope').inputValue(),'project');
+    await page.locator('#enabled-models input[value="openrouter/model-a"]').uncheck();
+    await page.getByRole('button',{name:'Save provider',exact:true}).click();
+    await page.locator('#dialog').waitFor({state:'hidden'});
+    assert.equal(await page.evaluate(()=>window.__saved.options.scope),'project');
+    assert.equal(await page.evaluate(()=>window.__saved.options.apiKey),'');
   } finally {await browser.close();}
 });
 

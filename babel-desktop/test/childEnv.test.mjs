@@ -35,3 +35,8 @@ test('no selected project exposes no project credential directory',()=>{
   );
   assert.equal(env.BABEL_PROJECT_CREDENTIALS_DIR,undefined);
 });
+
+test('local Ollama never requires or exposes a project credential file',()=>{
+  const env=applyProjectCredentialScope({BABEL_DESKTOP_PROVIDER:'ollama'},{projectCredentialRoot:'/projects/a',projectRoot:'/projects/a'});
+  assert.equal(env.BABEL_PROJECT_CREDENTIALS_DIR,undefined);
+});

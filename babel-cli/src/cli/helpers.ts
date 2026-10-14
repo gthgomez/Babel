@@ -49,7 +49,11 @@ export function normalizeModelName(value: string | undefined): string | undefine
   if (!value) {
     return undefined;
   }
-  return value.trim().toLowerCase();
+  const trimmed=value.trim();
+  // Local model names are case-sensitive identifiers, unlike family aliases.
+  if(trimmed.toLowerCase().startsWith('ollama/')) return `ollama/${trimmed.slice(7)}`;
+  if(trimmed.includes(':')) return trimmed;
+  return trimmed.toLowerCase();
 }
 
 export function parseCommaSeparatedFiles(value: string | undefined): string[] {

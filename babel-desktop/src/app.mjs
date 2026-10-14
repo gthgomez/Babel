@@ -293,9 +293,10 @@ async function providerCredentialsDialog() {
     <label class="credential-label" for="model-search">Enabled models</label><input class="credential-control" id="model-search" type="search" placeholder="Search models">
     <div id="enabled-models" class="enabled-model-list"></div>
     <p id="provider-error" class="provider-error" role="alert"></p>
-    <details><summary>Credential storage</summary><label class="credential-label" for="credential-scope">Save to</label><select class="credential-control" id="credential-scope"><option value="private">Private Babel profile</option>${nativeInfo?.projectName?'<option value="project">Selected project (Git-ignored .env only)</option>':''}</select><p class="fine-print">Existing credentials are retained when the key field is blank. Project storage is optional and requires an ignored, untracked file.</p></details>
+    <details><summary>Credential storage</summary><label class="credential-label" for="credential-scope">Save to</label><select class="credential-control" id="credential-scope"><option value="private">Private Babel profile</option>${nativeInfo?.projectName?'<option value="project">Selected project (Git-ignored .env only)</option>':''}</select><p class="fine-print">Existing credentials are retained when the key field is blank. Project storage requires an ignored, untracked file. In the CLI, pass --project-root with this project’s path.</p></details>
     <div class="dialog-actions provider-save-actions"><button class="button primary" data-action="save-provider-credential">Save provider</button><button class="button" data-action="close-dialog">Cancel</button></div>`,'#credential-provider');
   const providerSelect=$('#credential-provider'),modelSelect=$('#credential-model');
+  $('#credential-scope').value=nativeInfo?.projectCredentialsSelected&&nativeInfo?.projectName?'project':'private';
   providerSelect.value=selectedProvider;
   const renderModels=()=>{
     const spec=providers.find(spec=>spec.id===providerSelect.value);
@@ -305,6 +306,7 @@ async function providerCredentialsDialog() {
     if(defaultId)modelSelect.value=defaultId;
     $('#enabled-models').innerHTML=routes.map(route=>`<label class="enabled-model" data-model-label="${e((route.label+' '+route.id).toLowerCase())}"><input type="checkbox" value="${e(route.id)}" ${route.enabled!==false||route.id===defaultId?'checked':''}><span>${e(route.label)}<small>${e(route.modelId??route.id)}</small></span></label>`).join('')||'<p class="fine-print">Refresh available models to load this provider’s catalog.</p>';
     $('#credential-key').disabled=spec?.requiresApiKey===false;
+    $('#credential-scope').disabled=spec?.requiresApiKey===false;
     $('#provider-key-hint').textContent=spec?.local?'Connect to Ollama on this computer and refresh its installed models.':'Leave the key blank to keep an existing saved credential. Keys are stored privately.';
     $('#provider-error').textContent='';
     $('#refresh-models').disabled=!native.refreshModels||!['openrouter','opencode-go','ollama'].includes(spec?.id);

@@ -4,6 +4,7 @@ import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveChatModelPolicy } from './chatModelPolicy.js'
+import { normalizeModelName } from '../cli/helpers.js'
 
 test('Desktop investigation and mutation keep the admitted runner across independent tasks', async (t) => {
   const config = await mkdtemp(join(tmpdir(), 'babel-desktop-phase-boundary-'))
@@ -72,8 +73,8 @@ test('Desktop discovery and saves resolve through the actual Chat policy with ex
   delete process.env['BABEL_OFFLINE']
   await routing.refreshModelCatalog({configDirectory:config,provider:'openrouter',fetchImpl:async()=>({ok:true,text:async()=>JSON.stringify({data:[{id:'deepseek/deepseek-v4-pro',supported_parameters:['tools']},{id:'vendor/unqualified',supported_parameters:['tools']}]})})})
   assert.throws(()=>routing.saveProviderRoute({configDirectory:config,provider:'openrouter',model:'openrouter/vendor/unqualified'}),/not supported/)
-  await routing.refreshModelCatalog({configDirectory:config,provider:'ollama',fetchImpl:async()=>({ok:true,text:async()=>JSON.stringify({models:[{name:'qwen3:latest'}]})})})
-  for(const [provider,key,model] of [['opencode-go','opencode-go/deepseek-v4.1-flash','deepseek-v4.1-flash'],['openrouter','deepseek-v4-pro-openrouter','deepseek/deepseek-v4-pro'],['deepinfra','qwen3','Qwen/Qwen3-235B-A22B-Instruct-2507'],['deepseek','deepseek-v4-pro','deepseek-v4-pro'],['ollama','ollama/qwen3:latest','qwen3:latest']] as const){
+  await routing.refreshModelCatalog({configDirectory:config,provider:'ollama',fetchImpl:async()=>({ok:true,text:async()=>JSON.stringify({models:[{name:'qwen3:latest'},{name:'MyModel:latest'}]})})})
+  for(const [provider,key,model] of [['opencode-go','opencode-go/deepseek-v4.1-flash','deepseek-v4.1-flash'],['openrouter','deepseek-v4-pro-openrouter','deepseek/deepseek-v4-pro'],['deepinfra','qwen3','Qwen/Qwen3-235B-A22B-Instruct-2507'],['deepseek','deepseek-v4-pro','deepseek-v4-pro'],['ollama','ollama/qwen3:latest','qwen3:latest'],['ollama','ollama/MyModel:latest','MyModel:latest']] as const){
     routing.saveProviderRoute({configDirectory:config,provider,model:key,enabledModels:[key]})
     const policyPath=join(config,'model-policy.json')
     const policy=JSON.parse(await readFile(policyPath,'utf8'))
@@ -83,7 +84,7 @@ test('Desktop discovery and saves resolve through the actual Chat policy with ex
     process.env['BABEL_MODEL_POLICY_PATH']=join(config,'unrelated-policy.json')
     routing.applyProviderRoute(process.env,config)
     assert.equal(process.env['BABEL_MODEL_POLICY_PATH'],join(config,'model-policy.json'))
-    const result=resolveChatModelPolicy({model:key})
+    const result=resolveChatModelPolicy({model:normalizeModelName(key)!})
     assert.equal(result.policy.provider,provider)
     assert.equal(result.policy.providerModelId,model)
   }

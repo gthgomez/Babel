@@ -787,13 +787,14 @@ export function resolveModelByKey(options: {
   const { path: policyPath, config } = loadModelPolicyConfig(options.babelRoot);
   const hardFail = config.hard_fail_on_unknown_model !== false;
 
-  const normalizedRequestedKey = options.key.trim().toLowerCase();
+  const requestedKey = options.key.trim();
+  const normalizedRequestedKey = requestedKey.toLowerCase();
   const liveMappedKey = options.liveOnly === true
     ? resolveOpenRouterDeepSeekBackendKey(normalizedRequestedKey)
     : null;
   const candidateKey = liveMappedKey && config.models?.[liveMappedKey]
     ? liveMappedKey
-    : normalizedRequestedKey;
+    : config.models?.[requestedKey] ? requestedKey : normalizedRequestedKey;
   const modelKey = config.models?.[candidateKey]
     ? candidateKey
     : resolveVendorAliasKey(config, candidateKey);

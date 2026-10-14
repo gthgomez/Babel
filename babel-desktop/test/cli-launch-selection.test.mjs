@@ -1,12 +1,14 @@
 // License: Apache-2.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, writeFileSync, rmSync,readFileSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, writeFileSync, rmSync,readFileSync,lstatSync} from 'node:fs';
 import {dirname, join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Script} from 'node:vm';
 import {bundledEnvironment} from '../native/runtime.mjs';
 import {applyProviderRoute,saveProviderRoute} from '../native/provider-routing.mjs';
+import {applyCliCredentialScope} from '../native/childEnv.mjs';
+import {parsePreferences} from '../native/security.mjs';
 import {tmpdir} from 'node:os';
 import {resolvePackagedEngine, buildInstallId, writeActiveEngine, installDir} from '../native/engine-manager.mjs';
 
@@ -23,8 +25,8 @@ test('installed launcher pins both critic tiers and excludes inherited summarize
       const inherited={APPDATA:profile,BABEL_COMPACTION_API_KEY:'synthetic',BABEL_COMPACTION_API_BASE:'https://other.invalid',BABEL_DIFF_CRITIC_PRO_MODEL:'disabled-model'};
       let launch;
       new Script(source).runInNewContext({scriptUrl,dirname,join,isAbsolute,fileURLToPath,resolvePackagedEngine,
-        bundledEnvironment:userData=>bundledEnvironment(userData,inherited),applyProviderRoute,
-        process:{argv:['node','launcher',`--profile-dir=${profile}`,'doctor'],env:inherited},
+        bundledEnvironment:userData=>bundledEnvironment(userData,inherited),applyProviderRoute,applyCliCredentialScope,parsePreferences,lstatSync,readFileSync,
+        process:{argv:['node','launcher',`--profile-dir=${profile}`,'doctor'],env:inherited,cwd:()=>profile},
         spawn:(exe,args,options)=>{launch={exe,args,options};return {on(){}};},console});
       for(const key of ['BABEL_COMPACTION_MODEL','BABEL_DIFF_CRITIC_MODEL','BABEL_DIFF_CRITIC_PRO_MODEL'])assert.equal(launch.options.env[key],modelId);
       assert.equal(launch.options.env.BABEL_COMPACTION_API_KEY,undefined);
@@ -42,8 +44,8 @@ test('actual installed launcher consumes the same saved provider/default/private
     const source=readFileSync(new URL(scriptUrl),'utf8').replace(/^import .*;\r?\n/gm,'').replaceAll('import.meta.url','scriptUrl');
     let launch;
     new Script(source).runInNewContext({scriptUrl,dirname,join,isAbsolute,fileURLToPath,resolvePackagedEngine,
-      bundledEnvironment:userData=>bundledEnvironment(userData,{APPDATA:profile}),applyProviderRoute,
-      process:{argv:['node','launcher',`--profile-dir=${profile}`,'doctor','--json'],env:{APPDATA:profile}},
+      bundledEnvironment:userData=>bundledEnvironment(userData,{APPDATA:profile}),applyProviderRoute,applyCliCredentialScope,parsePreferences,lstatSync,readFileSync,
+      process:{argv:['node','launcher',`--profile-dir=${profile}`,'doctor','--json'],env:{APPDATA:profile},cwd:()=>profile},
       spawn:(exe,args,options)=>{launch={exe,args,options};return {on(){}};},console});
     assert.equal(launch.options.env.BABEL_DESKTOP_PROVIDER,'opencode-go');
     assert.equal(launch.options.env.BABEL_DESKTOP_MODEL_ROUTE,'opencode-go/deepseek-v4.1-flash');
