@@ -21,10 +21,9 @@
 import type { ChatToolAction, ChatTurn } from './chatToolDefinitions.js';
 import { RecoveryPlanProposalSchema } from './codingLoop/recoveryPlan.js';
 
-/** The 13 tools exposed to text-tool models. */
+/** The seven executable tools exposed to text-tool models. */
 export const TEXT_TOOL_NAMES = new Set([
   'read_file', 'write_file', 'str_replace', 'grep', 'glob', 'run_command', 'finish',
-  'think', 'ask', 'remember', 'recall', 'check', 'plan',
 ]);
 
 /** Canonical fields accepted by the text parser's action builders. */
@@ -36,12 +35,6 @@ export const TEXT_TOOL_ARGUMENT_SHAPES: Readonly<Record<string, string>> = {
   glob: 'pattern',
   run_command: 'command',
   finish: '(no fields; compatibility only)',
-  think: 'thought',
-  ask: 'question',
-  remember: 'key, value (multiline)',
-  recall: 'key',
-  check: 'file_path',
-  plan: 'steps (multiline)',
 };
 
 /** Behavioral guidance shared by native, legacy JSON, and text-tool turns. */
@@ -54,7 +47,10 @@ export const CHAT_BEHAVIORAL_CONTRACT = [
   '- Follow repository instructions and granted scope; tool availability does not grant authorization.',
 ].join('\n');
 
-export function buildTextToolProtocolSection(availableToolNames?: readonly string[]): string {
+export function buildTextToolProtocolSection(
+  availableToolNames?: readonly string[],
+  verifierCommands?: readonly string[],
+): string {
   const available = availableToolNames === undefined
     ? [...TEXT_TOOL_NAMES]
     : [...TEXT_TOOL_NAMES].filter((name) => availableToolNames.includes(name));
@@ -70,7 +66,7 @@ export function buildTextToolProtocolSection(availableToolNames?: readonly strin
     'Fields accepted by each available text tool:',
     ...available.map((name) => `- ${name}: ${TEXT_TOOL_ARGUMENT_SHAPES[name]}`),
   ];
-  const multiLineNames = ['write_file', 'str_replace', 'remember', 'plan', 'think'];
+  const multiLineNames = ['write_file', 'str_replace'];
   if (available.some((name) => multiLineNames.includes(name))) {
     sections.push(
       '',
@@ -83,6 +79,11 @@ export function buildTextToolProtocolSection(availableToolNames?: readonly strin
   if (available.includes('run_command')) {
     sections.push(
       'For `run_command`, quote arguments containing spaces (for example `command: node "scripts/test runner.mjs" --name "happy path"`); quotes group arguments and are removed by the parser. Arguments are parsed without a shell, so shell operators are not supported.',
+    );
+  }
+  if (available.includes('run_command') && verifierCommands && verifierCommands.length > 0) {
+    sections.push(
+      `In this task you may run only these exact foreground commands: ${verifierCommands.map((command) => `\`${command}\``).join(', ')}. Background and detached execution are not available.`,
     );
   }
 
@@ -114,6 +115,30 @@ export const TEXT_TOOL_PROMPT_SECTION = [
   CHAT_BEHAVIORAL_CONTRACT,
   TEXT_TOOL_PROTOCOL_SECTION,
 ].join('\n\n');
+
+/** Matches a text-mode tool marker anywhere in a model reply. */
+export const TEXT_TOOL_MARKER_RE = /\[TOOL:[a-z_]+\]/i;
+
+/**
+ * True when a model reply attempted a text tool call (it contains a `[TOOL:]`
+ * marker) but produced no executable action — an unknown or malformed tool.
+ * Such a reply must not be accepted as a final answer; the streaming loop feeds
+ * it back to the model instead of terminating silently.
+ */
+export function isUnresolvedTextToolAttempt(rawText: string): boolean {
+  return TEXT_TOOL_MARKER_RE.test(rawText) && parseTextToolTurn(rawText).type === 'completion';
+}
+
+/** Controller feedback shown to a small model that emitted an unrecognized text tool call. */
+export function buildTextToolProtocolRejectMessage(): string {
+  return [
+    '## Your last reply was not a valid tool call',
+    '',
+    'It contained a `[TOOL:...]` marker but no recognized tool, so nothing was executed.',
+    `Use only these tools: ${[...TEXT_TOOL_NAMES].join(', ')}.`,
+    'Write a call as `[TOOL:name]` followed by `key: value` lines, or answer in plain text.',
+  ].join('\n');
+}
 
 // ─── Parser ────────────────────────────────────────────────────────────────────
 
@@ -242,34 +267,6 @@ function buildAction(toolName: string, params: Record<string, string>): ChatTool
     }
     case 'finish':
       return { type: 'finish' } as ChatToolAction;
-    case 'think': {
-      // Lenient: bare [TOOL:think] without params is valid for small models
-      return { type: 'think', thought: params['thought'] || '(thinking)' } as any;
-    }
-    case 'ask': {
-      return { type: 'ask', question: params['question'] || 'What should I do next?' } as any;
-    }
-    case 'remember': {
-      const key = params['key'];
-      const value = params['value'];
-      if (!key || value === undefined) return null;
-      return { type: 'remember', key, value } as any;
-    }
-    case 'recall': {
-      const key = params['key'];
-      if (!key) return null;
-      return { type: 'recall', key } as any;
-    }
-    case 'check': {
-      const fp = params['file_path'];
-      if (!fp) return null;
-      return { type: 'check', file_path: fp } as any;
-    }
-    case 'plan': {
-      const steps = params['steps'];
-      if (!steps) return null;
-      return { type: 'plan', steps } as any;
-    }
     default:
       return null;
   }

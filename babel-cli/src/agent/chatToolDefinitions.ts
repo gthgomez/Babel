@@ -306,7 +306,12 @@ export function buildChatSystemPrompt(options: ChatSystemPromptOptions): string 
   const runtimeMode = options.runtimeMode ?? 'unknown';
   const sections = [CHAT_BEHAVIORAL_CONTRACT, `Runtime mode: ${runtimeMode}.`];
   if (options.textTools) {
-    sections.push(buildTextToolProtocolSection(options.availableToolNames));
+    sections.push(
+      buildTextToolProtocolSection(
+        options.availableToolNames,
+        extractVerifierCommands(options.availableToolDefinitions),
+      ),
+    );
   } else if (options.nativeTools) {
     sections.push(
       'Use the available function tools when useful. You may answer the user directly in natural language when ready; no completion tool call is required.',
@@ -328,6 +333,19 @@ export function buildChatSystemPrompt(options: ChatSystemPromptOptions): string 
     sections.push('Configured MCP servers are available through the MCP tool definitions.');
   }
   return sections.join('\n\n');
+}
+
+/**
+ * Read the effective read-only verifier command choices projected onto the
+ * run_command schema so the text-tool manual can mirror native/legacy guidance.
+ */
+function extractVerifierCommands(tools: ToolDefinition[] | undefined): readonly string[] {
+  if (!tools) return [];
+  const runCommand = tools.find((tool) => tool.function.name === 'run_command');
+  if (!runCommand) return [];
+  const properties = (runCommand.function.parameters as { properties?: Record<string, unknown> }).properties;
+  const command = properties?.['command'] as { enum?: unknown[] } | undefined;
+  return Array.isArray(command?.enum) ? command.enum.map((value) => String(value)) : [];
 }
 
 function formatLegacyToolManual(

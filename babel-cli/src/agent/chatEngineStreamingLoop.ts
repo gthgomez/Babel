@@ -32,7 +32,11 @@ import {
   resetOneShotSnapshot,
   upsertWorkingStateMessage,
 } from "./codingLoop/index.js";
-import { parseTextToolTurn } from "./textToolParser.js";
+import {
+  parseTextToolTurn,
+  isUnresolvedTextToolAttempt,
+  buildTextToolProtocolRejectMessage,
+} from "./textToolParser.js";
 import {
   chatActionToolName,
   chatActionTarget,
@@ -125,6 +129,8 @@ export class ChatEngineStreamingLoop {
     let allToolObservations = "";
     let _turnSpan: Span | null = null;
     let sameRouteTransportRetryUsed = false;
+    // Bounded once-per-submission repair for an unrecognized text tool call.
+    let textToolProtocolRepairUsed = false;
 
     for (let turn = 0; turn < maxTurns; turn++) {
       // R0-8: a superseded generator must stop before it executes another
@@ -1864,6 +1870,31 @@ export class ChatEngineStreamingLoop {
               : {}),
           });
           return;
+        }
+
+        // Text-tool protocol: a reply that contains a [TOOL:] marker but no
+        // recognized tool is not a valid final answer. Feed it back once so the
+        // model can correct the call instead of terminating with raw marker text.
+        if (
+          useTextTools &&
+          !textToolProtocolRepairUsed &&
+          isUnresolvedTextToolAttempt(answer)
+        ) {
+          textToolProtocolRepairUsed = true;
+          this.host.conversation.push({ role: "assistant", content: answer });
+          recordChatHarnessFeedback(
+            this.host,
+            buildTextToolProtocolRejectMessage(),
+          );
+          _turnSpan.setAttribute("babel.chat.text_tool_protocol_repair", true);
+          endSpan(_turnSpan, SpanStatusCode.OK);
+          _turnSpan = null;
+          yield {
+            type: "thought",
+            text: "[Text tool protocol: unrecognized tool call]",
+          };
+          if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          continue;
         }
 
         // Unsupported final answers use the same bounded completion recovery
