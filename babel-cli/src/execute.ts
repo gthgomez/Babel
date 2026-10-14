@@ -107,6 +107,10 @@ export function getPipelineSelectedModel(): string | undefined {
 function explicitModelTier(model: string, liveOnly: boolean, allowExpensive = false): TierSpec {
   if (liveOnly) assertLiveModelId(model, 'live pipeline selection');
   const resolved = resolveModelByKey({key:model, liveOnly, allowExpensive, bindStagesToSelectedModel:true});
+  const selectedProvider = process.env['BABEL_DESKTOP_PROVIDER'];
+  if (selectedProvider && resolved.provider !== selectedProvider) {
+    throw new Error('The requested pipeline model does not belong to the selected provider. Choose its provider in Desktop Settings before running this profile.');
+  }
   if (!['openrouter', 'deepseek', 'deepinfra'].includes(resolved.provider)) {
     throw new Error(`Provider "${resolved.provider}" is not supported in Plan or Deep. Use Chat mode.`);
   }

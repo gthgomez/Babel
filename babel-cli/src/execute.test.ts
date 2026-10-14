@@ -33,6 +33,35 @@ import type { RunOptions, PipelineStage } from './execute.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
+test('profiled pipeline rejects foreign model overrides before entering execution', async () => {
+  const names = ['BABEL_DESKTOP_PROVIDER', 'BABEL_DESKTOP_MODEL_ROUTE', 'BABEL_PIPELINE_V9_OFFLINE'];
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  const previousFetch = globalThis.fetch;
+  let entered = 0;
+  let requests = 0;
+  delete process.env['BABEL_PIPELINE_V9_OFFLINE'];
+  globalThis.fetch = (async () => { requests++; throw new Error('Network forbidden in admission test'); }) as typeof fetch;
+  try {
+    for (const provider of ['opencode-go', 'deepseek', 'deepinfra', 'ollama']) {
+      process.env['BABEL_DESKTOP_PROVIDER'] = provider;
+      await assert.rejects(() => withPipelineModelRoute('glm-5.3-flash', async () => { entered++; }), /selected provider/);
+    }
+    const { runBabelPipeline } = await import('./pipeline.js');
+    await assert.rejects(() => runBabelPipeline('Public admission fixture', { modelOverride: 'glm-5.3-flash' }), /selected provider/);
+    assert.equal(entered, 0);
+    assert.equal(requests, 0);
+    process.env['BABEL_DESKTOP_PROVIDER'] = 'openrouter';
+    await withPipelineModelRoute('glm-5.3-flash', async () => { entered++; });
+    assert.equal(entered, 1);
+    delete process.env['BABEL_DESKTOP_PROVIDER'];
+    await withPipelineModelRoute('glm-5.3-flash', async () => { entered++; });
+    assert.equal(entered, 2);
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; }
+  }
+});
+
 function withEnv<K extends string, V extends string | undefined>(
   key: K,
   value: V,
